@@ -147,9 +147,17 @@ fn genuinely_sub_rule_gap_still_fires() {
 "#;
     let report = drc(items);
     assert_eq!(report.short_count(), 0, "not a short");
-    assert_eq!(report.clearance_violations().count(), 1, "a real clearance violation fires");
+    assert_eq!(
+        report.clearance_violations().count(),
+        1,
+        "a real clearance violation fires"
+    );
     let f = report.clearance_violations().next().unwrap();
-    assert!((f.gap_mm - 0.15).abs() < 1e-6, "gap ~0.15 mm, got {}", f.gap_mm);
+    assert!(
+        (f.gap_mm - 0.15).abs() < 1e-6,
+        "gap ~0.15 mm, got {}",
+        f.gap_mm
+    );
 }
 
 #[test]
@@ -436,11 +444,9 @@ fn diff_pair_class_with_inherited_clearance_is_kept() {
         ]
       }
     }"#;
-    let rules = hauksbee_extract::clearance_rules_from_kicad_pro(
-        pro,
-        ["/USB/USB_D+", "/USB/USB_D-"],
-    )
-    .expect("project rules parse");
+    let rules =
+        hauksbee_extract::clearance_rules_from_kicad_pro(pro, ["/USB/USB_D+", "/USB/USB_D-"])
+            .expect("project rules parse");
     // The class is retained: its nets got assigned and use the diff-pair gap.
     assert!(
         (rules.effective_clearance("/USB/USB_D+", "/USB/USB_D-") - 0.1).abs() < 1e-9,

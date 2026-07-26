@@ -170,8 +170,8 @@ fn contention_lint_fires_on_a_real_board_with_an_injected_fight() {
     let lib = ModelLibrary::builtin();
 
     let path = root.join("kicad-demos-src/demos/pic_programmer/pic_programmer.kicad_sch");
-    let mut board = ExtractedBoard::from_kicad_schematic_path(&path)
-        .expect("pic_programmer schematic loads");
+    let mut board =
+        ExtractedBoard::from_kicad_schematic_path(&path).expect("pic_programmer schematic loads");
     assert!(
         contention_lint(&board, &lib).findings.is_empty(),
         "pic_programmer is a known-good board and must start silent"

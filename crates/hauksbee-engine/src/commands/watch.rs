@@ -61,8 +61,22 @@ pub enum Target {
 /// Gerber layers (`.gbr` and the classic per-layer suffixes) and Excellon drill
 /// files count too, since the extractor sniffs them.
 const BOARD_EXTS: &[&str] = &[
-    "kicad_pcb", "brd", "d356", "net", "pcbdoc", // layouts / netlists
-    "gbr", "gtl", "gbl", "gto", "gbo", "gts", "gbs", "gko", "gm1", "drl", "xln", // gerbers / drill
+    "kicad_pcb",
+    "brd",
+    "d356",
+    "net",
+    "pcbdoc", // layouts / netlists
+    "gbr",
+    "gtl",
+    "gbl",
+    "gto",
+    "gbo",
+    "gts",
+    "gbs",
+    "gko",
+    "gm1",
+    "drl",
+    "xln", // gerbers / drill
 ];
 
 impl Target {
@@ -265,7 +279,11 @@ impl WatchSet {
                 }
             }
         }
-        WatchSet { files, dirs, display }
+        WatchSet {
+            files,
+            dirs,
+            display,
+        }
     }
 
     /// Does a filesystem event on `path` fall inside the watched set? Compared on
@@ -514,7 +532,11 @@ fn execute(target: Target, path: &Path, plain: bool, run_number: u64, changed: &
         Err(e) => {
             println!(
                 "  ERROR  could not launch the check ({e}). Is the hauksbee{} binary on PATH?",
-                if matches!(target, Target::Spec) { "-ci" } else { "" }
+                if matches!(target, Target::Spec) {
+                    "-ci"
+                } else {
+                    ""
+                }
             );
             Outcome { code: 1 }
         }
@@ -547,7 +569,10 @@ fn print_banner(target: Target, path: &Path, set: &WatchSet) {
         Target::Spec => "hauksbee-ci spec",
     };
     println!("hauksbee watch: {} ({})", path.display(), kind);
-    println!("watching {} file(s) for changes (Ctrl-C to stop):", set.display.len());
+    println!(
+        "watching {} file(s) for changes (Ctrl-C to stop):",
+        set.display.len()
+    );
     for p in &set.display {
         println!("  - {}", p.display());
     }
@@ -580,7 +605,12 @@ fn clock() -> String {
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let secs = now % 86_400;
-    format!("{:02}:{:02}:{:02}", secs / 3600, (secs % 3600) / 60, secs % 60)
+    format!(
+        "{:02}:{:02}:{:02}",
+        secs / 3600,
+        (secs % 3600) / 60,
+        secs % 60
+    )
 }
 
 #[cfg(test)]
@@ -589,24 +619,38 @@ mod tests {
 
     #[test]
     fn detects_board_layouts() {
-        assert_eq!(Target::detect(Path::new("b.kicad_pcb")).unwrap(), Target::Board);
+        assert_eq!(
+            Target::detect(Path::new("b.kicad_pcb")).unwrap(),
+            Target::Board
+        );
         assert_eq!(Target::detect(Path::new("b.brd")).unwrap(), Target::Board);
         assert_eq!(Target::detect(Path::new("b.net")).unwrap(), Target::Board);
         assert_eq!(Target::detect(Path::new("top.gtl")).unwrap(), Target::Board);
         // Case-insensitive extension.
-        assert_eq!(Target::detect(Path::new("B.KICAD_PCB")).unwrap(), Target::Board);
+        assert_eq!(
+            Target::detect(Path::new("B.KICAD_PCB")).unwrap(),
+            Target::Board
+        );
     }
 
     #[test]
     fn detects_schematic_boardcode_and_spec() {
-        assert_eq!(Target::detect(Path::new("b.kicad_sch")).unwrap(), Target::Schematic);
-        assert_eq!(Target::detect(Path::new("b.board")).unwrap(), Target::BoardCode);
+        assert_eq!(
+            Target::detect(Path::new("b.kicad_sch")).unwrap(),
+            Target::Schematic
+        );
+        assert_eq!(
+            Target::detect(Path::new("b.board")).unwrap(),
+            Target::BoardCode
+        );
         assert_eq!(Target::detect(Path::new("ci.toml")).unwrap(), Target::Spec);
     }
 
     #[test]
     fn refuses_unknown_target_with_accepted_list() {
-        let err = Target::detect(Path::new("notes.txt")).unwrap_err().to_string();
+        let err = Target::detect(Path::new("notes.txt"))
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("don't know how to watch"), "{err}");
         assert!(err.contains(".kicad_pcb"), "{err}");
         assert!(err.contains(".board"), "{err}");
@@ -639,7 +683,10 @@ mod tests {
 
         let set = WatchSet::derive(Target::Board, &board);
         assert!(set.matches(&board), "the board file must match");
-        assert!(!set.matches(&unrelated), "an unrelated sibling must not match");
+        assert!(
+            !set.matches(&unrelated),
+            "an unrelated sibling must not match"
+        );
         // The .kicad_pro companion is in the set even before it exists on disk
         // (its parent dir does), so creating it later triggers a run.
         let pro = dir.path().join("b.kicad_pro");
@@ -672,7 +719,11 @@ mod tests {
         assert!(set.matches(&board), "the referenced board");
         assert!(set.matches(&firmware), "the referenced firmware");
         // Board and firmware live in different dirs, so both are watched.
-        assert!(set.dirs().len() >= 2, "distinct dirs watched: {:?}", set.dirs());
+        assert!(
+            set.dirs().len() >= 2,
+            "distinct dirs watched: {:?}",
+            set.dirs()
+        );
     }
 
     #[test]

@@ -463,8 +463,17 @@ mod render_tests {
             ("Q7".into(), "2N3906".into()),
         ];
         let s = render_check_report(&r);
-        assert!(s.contains("U3") && s.contains("ATmega328P"), "names the MCU: {s}");
-        assert!(s.contains("Q7") && s.contains("2N3906"), "names the transistor: {s}");
-        assert!(s.contains("simulated as OPEN"), "explains the consequence: {s}");
+        assert!(
+            s.contains("U3") && s.contains("ATmega328P"),
+            "names the MCU: {s}"
+        );
+        assert!(
+            s.contains("Q7") && s.contains("2N3906"),
+            "names the transistor: {s}"
+        );
+        assert!(
+            s.contains("simulated as OPEN"),
+            "explains the consequence: {s}"
+        );
     }
 }

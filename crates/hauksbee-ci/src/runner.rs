@@ -687,8 +687,11 @@ fn check_trackable_assert_refs(spec: &Spec, bound: &BoundBoard) -> Result<(), Sp
     // "RN1". Accept a bare ref whose units are tracked, matching thermally_tracked
     // below, otherwise a package-level max_current on an array is wrongly rejected
     // as untrackable while the identical max_temp is accepted.
-    let is_current_tracked =
-        |r: &str| current_tracked.iter().any(|name| ref_or_unit_matches(r, name));
+    let is_current_tracked = |r: &str| {
+        current_tracked
+            .iter()
+            .any(|name| ref_or_unit_matches(r, name))
+    };
     // Thermal tracking covers every stress-monitored device. Multi-unit
     // packages stamp per-unit metas ("IC3906_q0"), so accept a ref whose units
     // are monitored too.
@@ -706,7 +709,9 @@ fn check_trackable_assert_refs(spec: &Spec, bound: &BoundBoard) -> Result<(), Sp
         })
     };
     for a in &spec.asserts {
-        let Some(reference) = &a.reference else { continue };
+        let Some(reference) = &a.reference else {
+            continue;
+        };
         match a.kind.as_str() {
             "max_current" if !is_current_tracked(reference.as_str()) => {
                 return Err(SpecError::Invalid(format!(
@@ -1040,7 +1045,8 @@ fn run_one(
         // solve, and faults already only arise on converged chunks (the scheduler
         // skips the stress monitor on a failed chunk).
         let frame_start_s = (frame.t - frame_dt).max(0.0);
-        let analog_ok = !windows_overlap(engine.scheduler().failed_windows(), frame_start_s, frame.t);
+        let analog_ok =
+            !windows_overlap(engine.scheduler().failed_windows(), frame_start_s, frame.t);
 
         // UART accumulation.
         for (mcu, bytes) in &frame.uart {
@@ -1110,7 +1116,10 @@ fn run_one(
             // frame cadence, for feature extraction against the captured trace.
             for net in &hwtrace_nets {
                 if let Some(&v) = frame.net_voltages.get(net) {
-                    net_series.entry(net.clone()).or_default().push((frame.t, v));
+                    net_series
+                        .entry(net.clone())
+                        .or_default()
+                        .push((frame.t, v));
                 }
             }
 
@@ -1185,7 +1194,10 @@ fn run_one(
             let prev_now = prot_prev_tripped.get(net).copied().unwrap_or(false);
             let prev_ever = prot_prev_ever.get(net).copied().unwrap_or(false);
             if (now && !prev_now) || (ever && !prev_ever) {
-                protection_trip_t.entry(net.clone()).or_default().push(frame.t);
+                protection_trip_t
+                    .entry(net.clone())
+                    .or_default()
+                    .push(frame.t);
             }
             prot_prev_tripped.insert(net.clone(), now);
             prot_prev_ever.insert(net.clone(), ever);
@@ -1248,8 +1260,11 @@ fn run_one(
     // backend can once its SoC descriptor maps every polled port's direction
     // register (MODER / CRL+CRH / DIR, see db/mcu/*.soc.toml); QEMU and
     // unmapped Renode parts cannot, and stay conservative.
-    let driven_nets: std::collections::HashSet<String> =
-        engine.scheduler().firmware_driven_nets().into_iter().collect();
+    let driven_nets: std::collections::HashSet<String> = engine
+        .scheduler()
+        .firmware_driven_nets()
+        .into_iter()
+        .collect();
     let drive_direction_observable = engine.scheduler().drive_direction_observable();
 
     let protection_tripped_scoped = scope_protection_trips(&protection_trip_t, &scenario_windows);
@@ -1369,9 +1384,7 @@ fn time_in_window(t: f64, start_s: f64, end_s: f64) -> bool {
 /// gate a frame's aggregates and (via the outcome) to mark overlapping assertions
 /// INVALID. Standard half-open interval overlap: `start < w.end && w.start < end`.
 fn windows_overlap(windows: &[(f64, f64)], start_s: f64, end_s: f64) -> bool {
-    windows
-        .iter()
-        .any(|&(ws, we)| start_s < we && ws < end_s)
+    windows.iter().any(|&(ws, we)| start_s < we && ws < end_s)
 }
 
 /// Update the boot-coverage reach record for one watched net at one frame.
@@ -2009,15 +2022,17 @@ pub(crate) fn qemu_bus_slave_warnings(spec: &Spec, qemu_backends: &[String]) -> 
         return Vec::new();
     }
 
-    const BUS_SLAVE_KINDS: &[&str] = &[
-        "i2c_eeprom", "i2c_lm75", "spi_eeprom", "spi_mcp3008",
-    ];
+    const BUS_SLAVE_KINDS: &[&str] = &["i2c_eeprom", "i2c_lm75", "spi_eeprom", "spi_mcp3008"];
     let backend_str = qemu_backends.join(", ");
     let mut warnings = Vec::new();
 
     for p in &spec.peripherals {
         if BUS_SLAVE_KINDS.contains(&p.kind.as_str()) {
-            let bus_kind = if p.kind.starts_with("i2c") { "I2C" } else { "SPI" };
+            let bus_kind = if p.kind.starts_with("i2c") {
+                "I2C"
+            } else {
+                "SPI"
+            };
             warnings.push(format!(
                 "WARNING: peripheral '{}' ({} {}) is a NO-OP on backend {}; \
                  I2C/SPI bus-slave co-sim is supported on AVR (simavr) and \
@@ -2408,9 +2423,10 @@ fn main {
         merge_protection_trip_nets(&mut windows, std::slice::from_ref(&assert));
         assert_eq!(windows[0].nets.iter().filter(|n| *n == "BATT").count(), 1);
         // An UNSCOPED protection_trip (no scenario) is not merged into any window.
-        let unscoped: crate::spec::Assertion =
-            toml::from_str("kind = \"protection_trip\"\nsupply_net = \"OTHER\"\nexpect_trip = true\n")
-                .expect("parses");
+        let unscoped: crate::spec::Assertion = toml::from_str(
+            "kind = \"protection_trip\"\nsupply_net = \"OTHER\"\nexpect_trip = true\n",
+        )
+        .expect("parses");
         merge_protection_trip_nets(&mut windows, std::slice::from_ref(&unscoped));
         assert!(!windows[0].nets.contains(&"OTHER".to_string()));
     }
@@ -2426,7 +2442,7 @@ fn main {
         assert!(ref_or_unit_matches("RN1", "RN1_e12"));
         assert!(ref_or_unit_matches("SW1", "SW1_s0")); // switch bank unit
         assert!(ref_or_unit_matches("Q3", "Q3_q2")); // transistor array unit
-        // Not a match: a different ref, or a non-unit suffix.
+                                                     // Not a match: a different ref, or a non-unit suffix.
         assert!(!ref_or_unit_matches("RN1", "RN10_e1"));
         assert!(!ref_or_unit_matches("RN1", "RN1_heater"));
         assert!(!ref_or_unit_matches("RN1", "RN2_e1"));
@@ -2441,13 +2457,25 @@ fn main {
         // latching at 0.15 s (during steady): steady must see the trip, inrush
         // must NOT (no false RED blaming inrush; no false GREEN either).
         let trip = Some(0.15);
-        assert!(!trip_in_window(trip, 0.0, 0.1), "inrush must not own steady's trip");
-        assert!(trip_in_window(trip, 0.1, f64::INFINITY), "steady owns its own trip");
+        assert!(
+            !trip_in_window(trip, 0.0, 0.1),
+            "inrush must not own steady's trip"
+        );
+        assert!(
+            trip_in_window(trip, 0.1, f64::INFINITY),
+            "steady owns its own trip"
+        );
         // A trip before a scenario begins is excluded by the lower bound.
-        assert!(!trip_in_window(Some(0.05), 0.1, f64::INFINITY), "pre-start trip excluded");
+        assert!(
+            !trip_in_window(Some(0.05), 0.1, f64::INFINITY),
+            "pre-start trip excluded"
+        );
         // A trip exactly at the next scenario's start belongs to the later phase
         // (half-open [start, end)).
-        assert!(!trip_in_window(Some(0.1), 0.0, 0.1), "boundary trip is the later phase's");
+        assert!(
+            !trip_in_window(Some(0.1), 0.0, 0.1),
+            "boundary trip is the later phase's"
+        );
         assert!(trip_in_window(Some(0.1), 0.1, f64::INFINITY));
         // No trip at all is never in any window.
         assert!(!trip_in_window(None, 0.0, f64::INFINITY));
@@ -2507,9 +2535,18 @@ fn main {
         // end-of-run and a LATER phase's excursion bled into the earlier verdict.
         // With inrush=[0, 0.05) and steady=[0.05, +inf): a steady-phase sample at
         // 0.06 s must be sampled by steady, NOT by inrush.
-        assert!(time_in_window(0.02, 0.0, 0.05), "inrush samples its own phase");
-        assert!(!time_in_window(0.06, 0.0, 0.05), "steady-phase sample excluded from inrush");
-        assert!(time_in_window(0.06, 0.05, f64::INFINITY), "steady samples its own phase");
+        assert!(
+            time_in_window(0.02, 0.0, 0.05),
+            "inrush samples its own phase"
+        );
+        assert!(
+            !time_in_window(0.06, 0.0, 0.05),
+            "steady-phase sample excluded from inrush"
+        );
+        assert!(
+            time_in_window(0.06, 0.05, f64::INFINITY),
+            "steady samples its own phase"
+        );
         // The boundary sample belongs to the later phase (half-open).
         assert!(!time_in_window(0.05, 0.0, 0.05));
         assert!(time_in_window(0.05, 0.05, f64::INFINITY));
@@ -2688,11 +2725,7 @@ esr_ohms = 0.5
 
         // Build the spec TOML: board path first (required field), then the
         // caller-supplied body. Use a unique file name per test.
-        let full_spec = format!(
-            "board = \"{}\"\n{}",
-            board_path.display(),
-            spec_toml
-        );
+        let full_spec = format!("board = \"{}\"\n{}", board_path.display(), spec_toml);
         let spec_path = dir.join(format!("{test_name}.toml"));
         std::fs::write(&spec_path, &full_spec).unwrap();
 
@@ -2723,13 +2756,15 @@ min = 3.0
     /// QEMU backend + i2c_lm75 peripheral -> warning produced naming both.
     #[test]
     fn qemu_backend_with_i2c_lm75_warns() {
-        let body = format!(r#"duration_ms = 10
+        let body = format!(
+            r#"duration_ms = 10
 
 [[peripheral]]
 id = "BME280"
 type = "i2c_lm75"
 address = 0x76
-{MINIMAL_ASSERT}"#);
+{MINIMAL_ASSERT}"#
+        );
         let spec = load_spec_str("i2c_lm75_qemu", &body);
         let backends = vec!["qemu:esp32c3".to_string()];
         let warnings = qemu_bus_slave_warnings(&spec, &backends);
@@ -2745,13 +2780,15 @@ address = 0x76
     /// QEMU backend + spi_mcp3008 peripheral -> warning produced.
     #[test]
     fn qemu_backend_with_spi_mcp3008_warns() {
-        let body = format!(r#"duration_ms = 10
+        let body = format!(
+            r#"duration_ms = 10
 
 [[peripheral]]
 id = "ADC1"
 type = "spi_mcp3008"
 vref = 3.3
-{MINIMAL_ASSERT}"#);
+{MINIMAL_ASSERT}"#
+        );
         let spec = load_spec_str("spi_mcp3008_qemu", &body);
         let backends = vec!["qemu:esp32".to_string()];
         let warnings = qemu_bus_slave_warnings(&spec, &backends);
@@ -2766,7 +2803,8 @@ vref = 3.3
     /// QEMU backend + declarative [[sensor]] -> warning produced.
     #[test]
     fn qemu_backend_with_declarative_sensor_warns() {
-        let body = format!(r#"duration_ms = 10
+        let body = format!(
+            r#"duration_ms = 10
 
 [[sensor]]
 id = "U2_bme280"
@@ -2776,7 +2814,8 @@ name = "BME280_stub"
 bus  = "i2c"
 i2c_address = 0x76
 """
-{MINIMAL_ASSERT}"#);
+{MINIMAL_ASSERT}"#
+        );
         let spec = load_spec_str("sensor_qemu", &body);
         let backends = vec!["qemu:esp32c3".to_string()];
         let warnings = qemu_bus_slave_warnings(&spec, &backends);
@@ -2791,13 +2830,15 @@ i2c_address = 0x76
     /// QEMU backend must NOT produce warnings.
     #[test]
     fn qemu_backend_non_bus_slave_no_warning() {
-        let body = format!(r#"duration_ms = 10
+        let body = format!(
+            r#"duration_ms = 10
 
 [[peripheral]]
 id = "BTN1"
 type = "pushbutton"
 net  = "+3V3"
-{MINIMAL_ASSERT}"#);
+{MINIMAL_ASSERT}"#
+        );
         let spec = load_spec_str("pushbutton_qemu", &body);
         let backends = vec!["qemu:esp32c3".to_string()];
         let warnings = qemu_bus_slave_warnings(&spec, &backends);
@@ -2810,7 +2851,8 @@ net  = "+3V3"
     /// Multiple bus-slave items -> one warning per item.
     #[test]
     fn qemu_backend_multiple_slaves_warn_per_item() {
-        let body = format!(r#"duration_ms = 10
+        let body = format!(
+            r#"duration_ms = 10
 
 [[peripheral]]
 id = "EEPROM1"
@@ -2821,11 +2863,16 @@ address = 0x50
 id = "ADC1"
 type = "spi_mcp3008"
 vref = 3.3
-{MINIMAL_ASSERT}"#);
+{MINIMAL_ASSERT}"#
+        );
         let spec = load_spec_str("multi_slave_qemu", &body);
         let backends = vec!["qemu:esp32s3".to_string()];
         let warnings = qemu_bus_slave_warnings(&spec, &backends);
-        assert_eq!(warnings.len(), 2, "one warning per bus slave, got: {warnings:?}");
+        assert_eq!(
+            warnings.len(),
+            2,
+            "one warning per bus slave, got: {warnings:?}"
+        );
         assert!(warnings.iter().any(|w| w.contains("EEPROM1")));
         assert!(warnings.iter().any(|w| w.contains("ADC1")));
     }
@@ -2836,13 +2883,15 @@ vref = 3.3
     /// or AVR), so no warnings should fire.
     #[test]
     fn renode_backend_no_warning() {
-        let body = format!(r#"duration_ms = 10
+        let body = format!(
+            r#"duration_ms = 10
 
 [[peripheral]]
 id = "TEMP_SENSOR"
 type = "i2c_lm75"
 address = 0x48
-{MINIMAL_ASSERT}"#);
+{MINIMAL_ASSERT}"#
+        );
         let spec = load_spec_str("renode_no_warn", &body);
         // Empty list = no QEMU backends (Renode/AVR boards).
         let backends: Vec<String> = vec![];

@@ -104,7 +104,10 @@ pub enum PackError {
 
     /// Filesystem trouble, wrapped with the operation that hit it.
     #[error("pack I/O error {context}: {error}")]
-    Io { context: String, error: std::io::Error },
+    Io {
+        context: String,
+        error: std::io::Error,
+    },
 }
 
 fn io_err(context: impl Into<String>) -> impl FnOnce(std::io::Error) -> PackError {
@@ -169,7 +172,10 @@ struct RawManifest {
 
 /// Parse `x.y.z` (digits only) into a comparable triple.
 fn parse_version(field: &'static str, v: &str) -> Result<(u64, u64, u64), PackError> {
-    let bad = || PackError::InvalidVersion { field, value: v.to_string() };
+    let bad = || PackError::InvalidVersion {
+        field,
+        value: v.to_string(),
+    };
     let parts: Vec<&str> = v.split('.').collect();
     if parts.len() != 3 {
         return Err(bad());
@@ -295,7 +301,10 @@ mod behavioral_gate_tests {
             in_pin = \"in\"\nvout_setpoint = 3.3\nefficiency = 0.9\n";
         let dir = base.join("good");
         write_pack(&dir, good);
-        assert!(Pack::load(&dir).is_ok(), "a valid behavioural converter must load");
+        assert!(
+            Pack::load(&dir).is_ok(),
+            "a valid behavioural converter must load"
+        );
 
         let _ = std::fs::remove_dir_all(&base);
     }
@@ -411,7 +420,11 @@ impl Pack {
             }
         }
 
-        Ok(Pack { manifest, dir: dir.to_path_buf(), model_files })
+        Ok(Pack {
+            manifest,
+            dir: dir.to_path_buf(),
+            model_files,
+        })
     }
 }
 
@@ -449,7 +462,10 @@ impl PackStore {
     /// CLI passes `$HOME`). Nothing is created until the first install.
     pub fn in_home(home: &Path) -> PackStore {
         let base = home.join(".hauksbee");
-        PackStore { root: base.join("packs"), record: base.join("packs.toml") }
+        PackStore {
+            root: base.join("packs"),
+            record: base.join("packs.toml"),
+        }
     }
 
     /// The store for the current user (`$HOME`), or `None` when HOME is unset.
@@ -512,7 +528,9 @@ impl PackStore {
             .position(|r| r.name == name)
             .ok_or_else(|| PackError::NotInstalled(name.to_string()))?;
         let record = file.packs.remove(idx);
-        let dir = self.root.join(format!("{}@{}", record.name, record.version));
+        let dir = self
+            .root
+            .join(format!("{}@{}", record.name, record.version));
         if dir.exists() {
             std::fs::remove_dir_all(&dir)
                 .map_err(io_err(format!("removing '{}'", dir.display())))?;
@@ -528,7 +546,8 @@ impl PackStore {
 
     /// The install directory of a recorded pack.
     pub fn pack_dir(&self, record: &PackRecord) -> PathBuf {
-        self.root.join(format!("{}@{}", record.name, record.version))
+        self.root
+            .join(format!("{}@{}", record.name, record.version))
     }
 
     fn read_record(&self) -> Result<PacksFile, PackError> {
@@ -563,12 +582,13 @@ fn copy_dir(src: &Path, dest: &Path) -> Result<(), PackError> {
     {
         let from = e.path();
         let to = dest.join(e.file_name());
-        let ty = e.file_type().map_err(io_err(format!("stat '{}'", from.display())))?;
+        let ty = e
+            .file_type()
+            .map_err(io_err(format!("stat '{}'", from.display())))?;
         if ty.is_dir() {
             copy_dir(&from, &to)?;
         } else if ty.is_file() {
-            std::fs::copy(&from, &to)
-                .map_err(io_err(format!("copying '{}'", from.display())))?;
+            std::fs::copy(&from, &to).map_err(io_err(format!("copying '{}'", from.display())))?;
         }
         // Symlinks and specials are skipped: nothing in a pack needs them.
     }

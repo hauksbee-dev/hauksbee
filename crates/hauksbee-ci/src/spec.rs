@@ -580,7 +580,10 @@ impl SensorAttach {
         if let Some(inline) = &self.spec {
             return Ok(inline.clone());
         }
-        let rel = self.spec_file.as_deref().expect("validated: one must be set");
+        let rel = self
+            .spec_file
+            .as_deref()
+            .expect("validated: one must be set");
         let path = if Path::new(rel).is_absolute() {
             PathBuf::from(rel)
         } else {
@@ -910,13 +913,17 @@ impl Spec {
         // runs zero frames so every assertion fails "never sampled" (confusing
         // all-RED). Check finiteness before the sign.
         if !self.duration_ms.is_finite() || self.duration_ms <= 0.0 {
-            return Err(SpecError::Invalid("duration_ms must be a positive, finite number".into()));
+            return Err(SpecError::Invalid(
+                "duration_ms must be a positive, finite number".into(),
+            ));
         }
         // A non-positive frame_ms (a typo, or "as fine as possible") was silently
         // clamped to 1 µs downstream, running ~1000x more frames than any real
         // cadence and hanging a fast CI check with no explanation. Name it.
         if !self.frame_ms.is_finite() || self.frame_ms <= 0.0 {
-            return Err(SpecError::Invalid("frame_ms must be a positive, finite number".into()));
+            return Err(SpecError::Invalid(
+                "frame_ms must be a positive, finite number".into(),
+            ));
         }
         for s in &self.supplies {
             s.validate()?;
@@ -934,12 +941,18 @@ impl Spec {
         // never fails the way the spec author intended. Same fail-loud pattern
         // as the unknown-net / unknown-profile validation.
         for a in &self.asserts {
-            let Some(scope) = a.scenario.as_deref() else { continue };
+            let Some(scope) = a.scenario.as_deref() else {
+                continue;
+            };
             if scope.is_empty() {
                 // Explicit "" means the run-wide window, same as leaving it unset.
                 continue;
             }
-            if !self.scenarios.iter().any(|s| s.id.as_deref() == Some(scope)) {
+            if !self
+                .scenarios
+                .iter()
+                .any(|s| s.id.as_deref() == Some(scope))
+            {
                 let ids: Vec<&str> = self
                     .scenarios
                     .iter()
@@ -1285,7 +1298,10 @@ impl Assertion {
         // a NaN `after_ms` makes the threshold-bucket sort's `partial_cmp` return
         // None, so its `.unwrap()` PANICS (a crash, not the crate's fail-loud
         // SpecError). Check both window fields up front.
-        for (field, val) in [("after_ms", self.after_ms), ("deadline_ms", self.deadline_ms)] {
+        for (field, val) in [
+            ("after_ms", self.after_ms),
+            ("deadline_ms", self.deadline_ms),
+        ] {
             if let Some(v) = val {
                 if !v.is_finite() {
                     return Err(SpecError::Invalid(format!(
@@ -1619,10 +1635,7 @@ impl Assertion {
                 format!("{net} protection {want}")
             }
             "hwtrace" => {
-                format!(
-                    "hardware trace {}",
-                    self.trace.clone().unwrap_or_default()
-                )
+                format!("hardware trace {}", self.trace.clone().unwrap_or_default())
             }
             "boot-coverage" => {
                 let net = self.net.clone().unwrap_or_default();
@@ -1703,7 +1716,10 @@ min = 3.0
         };
         for bad in ["100", "120", "250"] {
             let err = spec(bad).validate().unwrap_err().to_string();
-            assert!(err.contains("percent"), "percent {bad} must be rejected: {err}");
+            assert!(
+                err.contains("percent"),
+                "percent {bad} must be rejected: {err}"
+            );
         }
         // A realistic tolerance still validates.
         assert!(spec("5").validate().is_ok(), "5% must pass");
@@ -1726,16 +1742,25 @@ min = 3.0
         };
         let cases = [
             ("kind = \"ideal\"\nvolts = nan", "volts"),
-            ("kind = \"bench\"\ncurrent_limit_a = -1.0", "current_limit_a"),
+            (
+                "kind = \"bench\"\ncurrent_limit_a = -1.0",
+                "current_limit_a",
+            ),
             ("kind = \"bench\"\ncurrent_limit_a = 0.0", "current_limit_a"),
             ("kind = \"wall\"\nripple_hz = inf", "ripple_hz"),
             ("kind = \"battery\"\nsoc = 5.0", "soc"),
             ("kind = \"battery\"\nsoc = -0.1", "soc"),
             ("kind = \"battery\"\ncells = 0", "cells"),
             ("kind = \"battery\"\ncapacity_mah = 0.0", "capacity_mah"),
-            ("kind = \"battery\"\nprotection_trip_a = 0.0", "protection_trip_a"),
+            (
+                "kind = \"battery\"\nprotection_trip_a = 0.0",
+                "protection_trip_a",
+            ),
             ("kind = \"usb\"\nusb = \"5v9a\"", "usb profile"),
-            ("kind = \"battery\"\nchemistry = \"unobtainium\"", "chemistry"),
+            (
+                "kind = \"battery\"\nchemistry = \"unobtainium\"",
+                "chemistry",
+            ),
         ];
         for (body, needle) in cases {
             let err = supply(body).validate().unwrap_err().to_string();
@@ -1799,7 +1824,10 @@ min = 3.0
         );
         // With the correct net present it passes.
         let known_ok = vec!["CS1".to_string(), "VCC".to_string()];
-        assert!(spec.check_nets(&known_ok).is_ok(), "the correct cs_net validates");
+        assert!(
+            spec.check_nets(&known_ok).is_ok(),
+            "the correct cs_net validates"
+        );
     }
 
     #[test]
@@ -1832,7 +1860,10 @@ min_toggles = 1
             let src = format!(
                 "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=0.1\n\n[[assert]]\nkind=\"toggle\"\nnet=\"D13\"\n{one}\n"
             );
-            assert!(spec_from(&src).validate().is_ok(), "one field is valid: {one}");
+            assert!(
+                spec_from(&src).validate().is_ok(),
+                "one field is valid: {one}"
+            );
         }
     }
 
@@ -2020,7 +2051,10 @@ dip_below = 3.2
 for_max_ms = 2.0
 "#,
         );
-        assert!(ok.validate().is_ok(), "dip_below with a for_max_ms partner must pass");
+        assert!(
+            ok.validate().is_ok(),
+            "dip_below with a for_max_ms partner must pass"
+        );
     }
 
     #[test]
@@ -2029,8 +2063,7 @@ for_max_ms = 2.0
         // `p.nets`. A singular `net = "CLK"` (the natural mistake, every other
         // control uses `net`) validated clean and then logged an EMPTY waveform
         // with no diagnostic. vcd_sink must require `nets`.
-        let assert_block =
-            "\n[[assert]]\nkind=\"voltage\"\nnet=\"VCC\"\nmin=3.0\n";
+        let assert_block = "\n[[assert]]\nkind=\"voltage\"\nnet=\"VCC\"\nmin=3.0\n";
         let bad = spec_from(&format!(
             "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n[[peripheral]]\nid=\"scope\"\ntype=\"vcd_sink\"\nnet=\"CLK\"\nvcd_path=\"w.vcd\"\n{assert_block}"
         ));
@@ -2045,7 +2078,11 @@ for_max_ms = 2.0
         let ok = spec_from(&format!(
             "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n[[peripheral]]\nid=\"scope\"\ntype=\"vcd_sink\"\nnets=[\"CLK\"]\nvcd_path=\"w.vcd\"\n{assert_block}"
         ));
-        assert!(ok.validate().is_ok(), "a vcd_sink with `nets = [...]` must pass: {:?}", ok.validate());
+        assert!(
+            ok.validate().is_ok(),
+            "a vcd_sink with `nets = [...]` must pass: {:?}",
+            ok.validate()
+        );
     }
 
     #[test]
@@ -2073,9 +2110,9 @@ field = "writes"
 min = 5
 "#,
         );
-        let err = spec
-            .validate()
-            .expect_err("a peripheral with both bytes and field must fail, not silently drop field");
+        let err = spec.validate().expect_err(
+            "a peripheral with both bytes and field must fail, not silently drop field",
+        );
         assert!(
             matches!(&err, SpecError::Invalid(m) if m.contains("bytes") && m.contains("field")),
             "expected a bytes/field mutual-exclusion error, got {err:?}"
@@ -2086,11 +2123,17 @@ min = 5
         let bytes_only = spec_from(&format!(
             "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n{decl}[[assert]]\nkind=\"peripheral\"\nid=\"EE1\"\nbytes=\"48 69\"\n",
         ));
-        assert!(bytes_only.validate().is_ok(), "bytes-only peripheral must pass");
+        assert!(
+            bytes_only.validate().is_ok(),
+            "bytes-only peripheral must pass"
+        );
         let field_only = spec_from(&format!(
             "name=\"t\"\nboard=\"b.kicad_pcb\"\nduration_ms=10\nframe_ms=1.0\n\n{decl}[[assert]]\nkind=\"peripheral\"\nid=\"EE1\"\nfield=\"writes\"\nmin=5\n",
         ));
-        assert!(field_only.validate().is_ok(), "field-only peripheral must pass");
+        assert!(
+            field_only.validate().is_ok(),
+            "field-only peripheral must pass"
+        );
     }
 
     #[test]
@@ -2103,7 +2146,9 @@ min = 5
              [[peripheral]]\nid=\"EE1\"\ntype=\"i2c_eeprom\"\n\n\
              [[assert]]\nkind=\"peripheral\"\nid=\"TYPO\"\nfield=\"writes\"\nmin=1\n",
         );
-        let err = spec.validate().expect_err("an unknown peripheral id must be rejected");
+        let err = spec
+            .validate()
+            .expect_err("an unknown peripheral id must be rejected");
         assert!(
             matches!(&err, SpecError::Invalid(m) if m.contains("TYPO") && m.contains("EE1")),
             "the error must name the bad id and the declared ids: {err:?}"
@@ -2136,9 +2181,9 @@ net = "VCC"
 min = 3.0
 "#
             );
-            spec_from(&src)
-                .validate()
-                .expect_err(&format!("a non-finite AC bound (fstart={fstart}, fstop={fstop}) must fail"));
+            spec_from(&src).validate().expect_err(&format!(
+                "a non-finite AC bound (fstart={fstart}, fstop={fstop}) must fail"
+            ));
         }
         // Concretely check the message on the inf case.
         let err = spec_from(

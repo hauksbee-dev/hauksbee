@@ -83,7 +83,10 @@ fn hwtrace_corpus() {
             any_failed |= !r.passed;
         }
     }
-    assert!(!any_failed, "hwtrace corpus has features over tolerance (see lines above)");
+    assert!(
+        !any_failed,
+        "hwtrace corpus has features over tolerance (see lines above)"
+    );
 }
 
 /// Gate (b): a deliberate mismatch must FAIL and the failure must name the
@@ -96,7 +99,8 @@ fn hwtrace_corpus() {
 #[cfg(feature = "avr")]
 #[test]
 fn hwtrace_deliberate_mismatch_names_feature_and_values() {
-    let dir = std::env::temp_dir().join(format!("hauksbee_hwtrace_mismatch_{}", std::process::id()));
+    let dir =
+        std::env::temp_dir().join(format!("hauksbee_hwtrace_mismatch_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("mkdir");
 
     // A clean 300 ms-period square-wave "capture", 1 s at 1 kSa/s.
@@ -167,10 +171,22 @@ trace = "trace.toml"
         .find(|r| r.label.contains("period"))
         .expect("a period feature result");
     eprintln!("mismatch detail: {}", period.detail);
-    assert!(!period.passed, "a 200-vs-300 ms period must fail: {}", period.detail);
+    assert!(
+        !period.passed,
+        "a 200-vs-300 ms period must fail: {}",
+        period.detail
+    );
     assert!(period.detail.contains("period"), "{}", period.detail);
-    assert!(period.detail.contains("300"), "captured value missing: {}", period.detail);
-    assert!(period.detail.contains("20"), "sim value missing: {}", period.detail);
+    assert!(
+        period.detail.contains("300"),
+        "captured value missing: {}",
+        period.detail
+    );
+    assert!(
+        period.detail.contains("20"),
+        "sim value missing: {}",
+        period.detail
+    );
     assert!(period.detail.contains("EXCEEDS"), "{}", period.detail);
     assert!(
         period.detail.contains("SYNTHETIC"),

@@ -69,7 +69,10 @@ fn attribute_currents(
                     a.citation = citation.clone();
                 }
             })
-            .or_insert(Attribution { current_a, citation });
+            .or_insert(Attribution {
+                current_a,
+                citation,
+            });
     };
 
     for comp in &board.components {
@@ -129,7 +132,9 @@ fn attribute_currents(
         }
     }
 
-    out.into_iter().map(|(k, a)| (k, (a.current_a, a.citation))).collect()
+    out.into_iter()
+        .map(|(k, a)| (k, (a.current_a, a.citation)))
+        .collect()
 }
 
 /// Whether a part kind delivers its rated continuous current onto a board rail
@@ -154,7 +159,10 @@ fn pin_net_for_role(
         .iter()
         .find(|(_, r)| r.eq_ignore_ascii_case(role))
         .map(|(pad, _)| pad.clone())?;
-    comp.pins.iter().find(|p| p.number == pad).and_then(|p| p.net)
+    comp.pins
+        .iter()
+        .find(|p| p.number == pad)
+        .and_then(|p| p.net)
 }
 
 /// The *rail-carrying* power nets of a part: only the pads whose model pin role
@@ -352,27 +360,50 @@ mod tests {
         let board = ExtractedBoard {
             name: "t".into(),
             nets: vec![
-                Net { id: 10, name: "VIN".into() },
-                Net { id: 11, name: "GND".into() },
-                Net { id: 12, name: "EN".into() },
-                Net { id: 13, name: "BYP".into() },
-                Net { id: 14, name: "+3V3".into() },
+                Net {
+                    id: 10,
+                    name: "VIN".into(),
+                },
+                Net {
+                    id: 11,
+                    name: "GND".into(),
+                },
+                Net {
+                    id: 12,
+                    name: "EN".into(),
+                },
+                Net {
+                    id: 13,
+                    name: "BYP".into(),
+                },
+                Net {
+                    id: 14,
+                    name: "+3V3".into(),
+                },
             ],
             components: vec![comp.clone()],
         };
         let nets = power_nets_of(&board, &comp, &model);
         assert_eq!(nets, vec![10, 14], "only the in/out rails carry the rating");
         assert!(!nets.contains(&11), "GND excluded");
-        assert!(!nets.contains(&12), "EN must not be charged the rail current");
-        assert!(!nets.contains(&13), "bypass must not be charged the rail current");
+        assert!(
+            !nets.contains(&12),
+            "EN must not be charged the rail current"
+        );
+        assert!(
+            !nets.contains(&13),
+            "bypass must not be charged the rail current"
+        );
     }
 
     #[test]
     fn power_nets_of_untyped_part_falls_back_to_all_nonground() {
         // A connector with no pin roles: every non-ground contact is a through
         // terminal, so the fallback keeps the prior conservative behaviour.
-        let model = model_from_toml(r#"id = "conn"
-kind = "connector""#);
+        let model = model_from_toml(
+            r#"id = "conn"
+kind = "connector""#,
+        );
         let comp = hauksbee_extract::Component {
             reference: "J1".into(),
             value: String::new(),
@@ -387,8 +418,14 @@ kind = "connector""#);
         let board = ExtractedBoard {
             name: "t".into(),
             nets: vec![
-                Net { id: 20, name: "VBUS".into() },
-                Net { id: 21, name: "GND".into() },
+                Net {
+                    id: 20,
+                    name: "VBUS".into(),
+                },
+                Net {
+                    id: 21,
+                    name: "GND".into(),
+                },
             ],
             components: vec![comp.clone()],
         };
@@ -397,10 +434,30 @@ kind = "connector""#);
 
     #[test]
     fn rail_roles_recognised_signal_roles_not() {
-        for r in ["in", "out", "vbus", "vin", "vout", "bat", "pvin", "vsys", "in_out_1a"] {
+        for r in [
+            "in",
+            "out",
+            "vbus",
+            "vin",
+            "vout",
+            "bat",
+            "pvin",
+            "vsys",
+            "in_out_1a",
+        ] {
             assert!(is_rail_role(r), "{r} should be a rail role");
         }
-        for r in ["en", "fb", "noise_bypass", "ss", "sda", "scl", "ref", "gnd", "data"] {
+        for r in [
+            "en",
+            "fb",
+            "noise_bypass",
+            "ss",
+            "sda",
+            "scl",
+            "ref",
+            "gnd",
+            "data",
+        ] {
             assert!(!is_rail_role(r), "{r} must not be a rail role");
         }
     }

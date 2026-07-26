@@ -106,12 +106,7 @@ impl StageDag {
                 // has no island to pull the signal into; nothing to stage.
                 continue;
             };
-            let Some(up) = graph
-                .node_island
-                .get(e.node.0 as usize)
-                .copied()
-                .flatten()
-            else {
+            let Some(up) = graph.node_island.get(e.node.0 as usize).copied().flatten() else {
                 // Sensed node nobody conducts: an exogenous boundary input,
                 // not an inter-island coupling.
                 continue;

@@ -25,7 +25,9 @@ pub fn tarski_board() -> hauksbee_extract::ExtractedBoard {
     let text = std::fs::read_to_string(testdata("tarski_inputsystem.net"))
         .expect("tarski netlist present");
     let mut board = hauksbee_extract::ExtractedBoard::from_auto(&text).expect("parse netlist");
-    let fitted = board.fit(&["A101".to_string()]).expect("A101 is on the board");
+    let fitted = board
+        .fit(&["A101".to_string()])
+        .expect("A101 is on the board");
     assert_eq!(fitted, 1, "A101 should have been DNP and is now fitted");
     board
 }

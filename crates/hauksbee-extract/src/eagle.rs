@@ -55,10 +55,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                                 .unescape_value()
                                 .map(|c| c.into_owned())
                                 .unwrap_or_else(|_| String::from_utf8_lossy(&a.value).into_owned());
-                            (
-                                String::from_utf8_lossy(a.key.as_ref()).into_owned(),
-                                value,
-                            )
+                            (String::from_utf8_lossy(a.key.as_ref()).into_owned(), value)
                         })
                         .collect()
                 };

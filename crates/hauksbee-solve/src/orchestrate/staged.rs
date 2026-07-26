@@ -79,10 +79,10 @@ use crate::decompose::rails::BalanceTearCandidate;
 use crate::decompose::verify::{
     Decomposition, Evidence, RefusedAnalysis, TearKind, TearRecord, ToleranceClaim,
 };
+use crate::options::{DcInit, Partitioning, SolverOptions, StepControl, Strategy};
 use crate::orchestrate::capture::{
     execute_composed_group, execute_stiff_group, BoundaryKind, ComposedPolicy, StiffOutcome,
 };
-use crate::options::{DcInit, Partitioning, SolverOptions, StepControl, Strategy};
 use crate::partition::{Partition, RailTear};
 use crate::partitioned::PartitionedTransient;
 use crate::transient::{Transient, Waveforms};
@@ -410,7 +410,13 @@ pub fn run_staged(
                             let gnode = NodeId(l2g[&o.node.0]);
                             certificate_stiff.push(composed_tear_record(o, gnode));
                             refused_nodes.push(gnode);
-                            stiff_outcomes.push((g, StiffOutcome { node: gnode, ..o.clone() }));
+                            stiff_outcomes.push((
+                                g,
+                                StiffOutcome {
+                                    node: gnode,
+                                    ..o.clone()
+                                },
+                            ));
                         }
                         certificate_refused_nodes.extend(refused_nodes);
                         stiff_run = Some(exec.waveforms);
@@ -447,7 +453,13 @@ pub fn run_staged(
                                 downstream: None,
                             });
                             refused_nodes.push(gnode);
-                            stiff_outcomes.push((g, StiffOutcome { node: gnode, ..o.clone() }));
+                            stiff_outcomes.push((
+                                g,
+                                StiffOutcome {
+                                    node: gnode,
+                                    ..o.clone()
+                                },
+                            ));
                         }
                         certificate_refused_nodes.extend(refused_nodes);
                         stiff_run = Some(exec.waveforms);
@@ -474,8 +486,7 @@ pub fn run_staged(
                     // says only "group 3" costs another half-hour run to
                     // learn what group 3 is. Devices and a name sample turn
                     // the next failure into a standalone fixture.
-                    let sample: Vec<&str> =
-                        sub.devices.iter().take(6).map(|d| d.name()).collect();
+                    let sample: Vec<&str> = sub.devices.iter().take(6).map(|d| d.name()).collect();
                     let stiff_note = if stiff_refusal_note.is_empty() {
                         String::new()
                     } else {
@@ -536,13 +547,7 @@ pub fn run_staged(
     };
 
     for node in 1..n_nodes {
-        let Some(isl) = decomp
-            .graph
-            .node_island
-            .get(node)
-            .copied()
-            .flatten()
-        else {
+        let Some(isl) = decomp.graph.node_island.get(node).copied().flatten() else {
             continue; // conducted by nobody; sound() proved nothing senses it
         };
         let mut owner = island_group[isl];
@@ -938,9 +943,26 @@ mod tests {
         let mut lin = Circuit::new();
         let a = lin.node("a");
         let b = lin.node("b");
-        lin.add(Device::Vsource { name: "V".into(), p: a, n: NodeId::GROUND, kind: SourceKind::Dc(5.0) });
-        lin.add(Device::Resistor { name: "R1".into(), a, b, ohms: 1e3, tc1: None });
-        lin.add(Device::Resistor { name: "R2".into(), a: b, b: NodeId::GROUND, ohms: 1e3, tc1: None });
+        lin.add(Device::Vsource {
+            name: "V".into(),
+            p: a,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(5.0),
+        });
+        lin.add(Device::Resistor {
+            name: "R1".into(),
+            a,
+            b,
+            ohms: 1e3,
+            tc1: None,
+        });
+        lin.add(Device::Resistor {
+            name: "R2".into(),
+            a: b,
+            b: NodeId::GROUND,
+            ohms: 1e3,
+            tc1: None,
+        });
         let sel = select_group_ladder(&lin, &full);
         assert!(!sel.ladder.has(Strategy::LineSearch));
         assert!(!sel.ladder.has(Strategy::EventFreeze));
@@ -955,8 +977,19 @@ mod tests {
         // LineSearch stays (Newton is live).
         let mut dio = lin.clone();
         let c = dio.node("c");
-        dio.add(Device::Diode { name: "D".into(), a: b, k: c, model: Default::default() });
-        dio.add(Device::Resistor { name: "R3".into(), a: c, b: NodeId::GROUND, ohms: 1e3, tc1: None });
+        dio.add(Device::Diode {
+            name: "D".into(),
+            a: b,
+            k: c,
+            model: Default::default(),
+        });
+        dio.add(Device::Resistor {
+            name: "R3".into(),
+            a: c,
+            b: NodeId::GROUND,
+            ohms: 1e3,
+            tc1: None,
+        });
         let sel = select_group_ladder(&dio, &full);
         assert!(sel.ladder.has(Strategy::LineSearch));
         assert!(!sel.ladder.has(Strategy::EventFreeze));
@@ -965,8 +998,13 @@ mod tests {
         let mut cmp = dio.clone();
         let o = cmp.node("o");
         cmp.add(Device::Comparator {
-            name: "K".into(), out: o, inp: b, inn: c,
-            out_lo: 0.0, out_hi: 5.0, hysteresis: 0.1,
+            name: "K".into(),
+            out: o,
+            inp: b,
+            inn: c,
+            out_lo: 0.0,
+            out_hi: 5.0,
+            hysteresis: 0.1,
         });
         let sel = select_group_ladder(&cmp, &full);
         assert!(sel.ladder.has(Strategy::EventFreeze));
@@ -1152,7 +1190,10 @@ mod tests {
         let staged = run_staged(&c, &d, &opts, tstop).expect("staged run");
         let mono = monolith(&c, dt, tstop);
         let err = max_error(&c, &staged, &mono);
-        assert!(err <= 1e-9, "DC boundaries must be round-off exact: {err:.3e}");
+        assert!(
+            err <= 1e-9,
+            "DC boundaries must be round-off exact: {err:.3e}"
+        );
     }
 
     /// Refuse-rather-than-fake: an unsound decomposition (floating sense
@@ -1475,7 +1516,11 @@ mod tests {
         let last = staged.waveforms.time.len() - 1;
         for node in 1..c.node_count() {
             let sv = staged.waveforms.node_voltages[node][last];
-            let mv = lerp_at(&mono.time, &mono.node_voltages[node], staged.waveforms.time[last]);
+            let mv = lerp_at(
+                &mono.time,
+                &mono.node_voltages[node],
+                staged.waveforms.time[last],
+            );
             assert!(
                 (sv - mv).abs() <= 1e-9,
                 "DC-settled cascade must be round-off exact: node {} staged {sv:.12} vs mono {mv:.12}",
@@ -1635,7 +1680,10 @@ mod tests {
         let vr = staged.waveforms.node(&c, "ANALOG_VDD").unwrap();
         let swing = vr.iter().cloned().fold(f64::MIN, f64::max)
             - vr.iter().cloned().fold(f64::MAX, f64::min);
-        assert!(swing > 1e-3, "rail never moved; the gate is vacuous: {swing}");
+        assert!(
+            swing > 1e-3,
+            "rail never moved; the gate is vacuous: {swing}"
+        );
     }
 
     /// The composition the review flagged as unexercised: a group with BOTH
@@ -1921,10 +1969,7 @@ mod tests {
             .permits(crate::decompose::verify::RefusedAnalysis::SupplyIntegrityOnTornRail)
             .is_err());
 
-        let max_sag = accepted
-            .iter()
-            .map(|(_, o)| o.sag_v)
-            .fold(0.0f64, f64::max);
+        let max_sag = accepted.iter().map(|(_, o)| o.sag_v).fold(0.0f64, f64::max);
         let mono = monolith(&c, dt, tstop);
         let tol = (3.0 * max_sag).max(2e-6);
         for node in 1..c.node_count() {
@@ -1963,8 +2008,10 @@ mod tests {
         };
         let n = NodeId(42);
 
-        let balanced =
-            composed_tear_record(&outcome(BoundaryKind::BalancedRail, 0.0, "balanced rail"), n);
+        let balanced = composed_tear_record(
+            &outcome(BoundaryKind::BalancedRail, 0.0, "balanced rail"),
+            n,
+        );
         assert_eq!(balanced.kind, TearKind::Balance);
         assert_eq!(balanced.evidence, Evidence::BalanceEquation);
         assert_eq!(balanced.tolerance, ToleranceClaim::RoundOff);
@@ -1974,7 +2021,11 @@ mod tests {
             &outcome(BoundaryKind::HeldRail, 0.0, "held rail (stiff-supply feed)"),
             n,
         );
-        assert_eq!(held.kind, TearKind::Stiff, "a held rail is not a balance tear");
+        assert_eq!(
+            held.kind,
+            TearKind::Stiff,
+            "a held rail is not a balance tear"
+        );
         assert_eq!(held.evidence, Evidence::AssumedFeedHold);
         assert_eq!(held.tolerance, ToleranceClaim::Unmeasured);
 
@@ -1994,7 +2045,10 @@ mod tests {
                 tol_v: 1e-2
             }
         );
-        assert_eq!(signal.tolerance, ToleranceClaim::Stiffness { sag_v: 3.5e-7 });
+        assert_eq!(
+            signal.tolerance,
+            ToleranceClaim::Stiffness { sag_v: 3.5e-7 }
+        );
     }
 
     /// Absorption exactness: the drivers.rs Thevenin shape, replicated into

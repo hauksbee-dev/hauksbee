@@ -217,7 +217,9 @@ pub fn replay_components_on_edges(
             // needs nothing special).
             for &ci in which {
                 let d = &components[ci];
-                let Some(logic) = d.logic.as_ref() else { continue };
+                let Some(logic) = d.logic.as_ref() else {
+                    continue;
+                };
                 for (name, level, enabled) in logic.outputs() {
                     if !enabled {
                         continue;
@@ -414,8 +416,7 @@ impl DigitalComponent {
         roles: HashMap<String, NodeId>,
         drivers: HashMap<String, PinDriver>,
     ) -> Self {
-        let spec: Logic =
-            toml::from_str(NOR_LATCH_SPEC).expect("builtin NOR latch spec parses");
+        let spec: Logic = toml::from_str(NOR_LATCH_SPEC).expect("builtin NOR latch spec parses");
         let logic = LogicComponent::compile(NOR_LATCH_SPEC_ID, &spec)
             .expect("builtin NOR latch spec compiles");
         DigitalComponent {
@@ -436,9 +437,7 @@ impl DigitalComponent {
         };
         let roles = &self.roles;
         let levels = self.levels;
-        logic.tick(&mut |name, prev| {
-            roles.get(name).map(|&n| levels.decide(node_v(n), prev))
-        });
+        logic.tick(&mut |name, prev| roles.get(name).map(|&n| levels.decide(node_v(n), prev)));
         self.drive_outputs(circuit);
     }
 
@@ -495,7 +494,12 @@ impl DigitalComponent {
     /// tick skips, their transitions were accumulated on the edge path).
     /// No-op for parts without a supply leg. While the rail reads below
     /// [`SupplyDraw::POWERED_THRESHOLD_V`] the draw is zero.
-    pub fn update_supply(&mut self, circuit: &mut Circuit, dt: f64, node_v: &dyn Fn(NodeId) -> f64) {
+    pub fn update_supply(
+        &mut self,
+        circuit: &mut Circuit,
+        dt: f64,
+        node_v: &dyn Fn(NodeId) -> f64,
+    ) {
         let Some(s) = self.supply.as_mut() else {
             return;
         };
@@ -506,9 +510,7 @@ impl DigitalComponent {
         } else {
             0.0
         };
-        if let Some(Device::Isource { kind, .. }) =
-            circuit.devices.get_mut(s.isource.0 as usize)
-        {
+        if let Some(Device::Isource { kind, .. }) = circuit.devices.get_mut(s.isource.0 as usize) {
             *kind = SourceKind::Dc(amps);
         }
     }
@@ -571,7 +573,10 @@ impl DigitalComponent {
     /// True when the part has at least one clocked register (edge-replay
     /// candidacy, see the scheduler's generalized replay).
     pub fn is_sequential(&self) -> bool {
-        self.logic.as_ref().map(|l| l.is_sequential()).unwrap_or(false)
+        self.logic
+            .as_ref()
+            .map(|l| l.is_sequential())
+            .unwrap_or(false)
     }
 
     /// Input pins whose edge timing matters (register clocks / resets /
@@ -762,9 +767,7 @@ impl Hc595Chain {
             let ok = chip
                 .logic
                 .as_ref()
-                .map(|l| {
-                    l.register_bits("shift") == Some(8) && l.register_bits("store") == Some(8)
-                })
+                .map(|l| l.register_bits("shift") == Some(8) && l.register_bits("store") == Some(8))
                 .unwrap_or(false);
             if !ok {
                 eprintln!(
@@ -772,7 +775,10 @@ impl Hc595Chain {
                      'shift' and 'store' registers to ride the edge-driven chain; \
                      falling back to once-per-chunk sampling for this chain",
                     chip.reference,
-                    chip.logic.as_ref().map(|l| l.spec_id()).unwrap_or("no logic"),
+                    chip.logic
+                        .as_ref()
+                        .map(|l| l.spec_id())
+                        .unwrap_or("no logic"),
                 );
                 return None;
             }
@@ -844,7 +850,7 @@ impl Hc595Chain {
         let mut carry = self.lvl_ser as u8;
         for s in self.shift.iter_mut() {
             let out_bit = (*s >> 7) & 1; // stage 7 = qh_serial
-            // u8 wraps to 8 bits on shift, so no explicit & 0xFF mask is needed.
+                                         // u8 wraps to 8 bits on shift, so no explicit & 0xFF mask is needed.
             *s = (*s << 1) | carry;
             carry = out_bit;
         }
@@ -1196,7 +1202,10 @@ mod tests {
             // This chip's serial output net (feeds the next chip).
             let qh = circuit.node(&format!("QHS{k}"));
             roles.insert("qh_serial".into(), qh);
-            for (i, q) in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"].iter().enumerate() {
+            for (i, q) in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"]
+                .iter()
+                .enumerate()
+            {
                 roles.insert((*q).into(), circuit.node(&format!("Q{k}_{i}")));
             }
             chips.push(
@@ -1242,7 +1251,9 @@ mod tests {
     /// SRCLK on PB5, RCLK on PD6 (no daisy chain, so it is NOT an `Hc595Chain`;
     /// it is exactly the standalone GPIO-clocked shift register the generalized
     /// path exists to drive).
-    fn build_standalone_595(circuit: &mut Circuit) -> (Vec<DigitalComponent>, HashMap<(char, u8), NodeId>) {
+    fn build_standalone_595(
+        circuit: &mut Circuit,
+    ) -> (Vec<DigitalComponent>, HashMap<(char, u8), NodeId>) {
         let model = hc595_model();
         let n_ser = circuit.node("SS_SER");
         let n_srclk = circuit.node("SS_SRCLK");
@@ -1265,11 +1276,26 @@ mod tests {
     fn stamped_shift_out(log: &mut Vec<PinEdge>, cyc: &mut u64, byte: u8) {
         for bit in (0..8).rev() {
             let b = ((byte >> bit) & 1) == 1;
-            log.push(PinEdge { cycle: *cyc, port: 'B', bit: 3, level: b });
+            log.push(PinEdge {
+                cycle: *cyc,
+                port: 'B',
+                bit: 3,
+                level: b,
+            });
             *cyc += 1;
-            log.push(PinEdge { cycle: *cyc, port: 'B', bit: 5, level: true });
+            log.push(PinEdge {
+                cycle: *cyc,
+                port: 'B',
+                bit: 5,
+                level: true,
+            });
             *cyc += 1;
-            log.push(PinEdge { cycle: *cyc, port: 'B', bit: 5, level: false });
+            log.push(PinEdge {
+                cycle: *cyc,
+                port: 'B',
+                bit: 5,
+                level: false,
+            });
             *cyc += 1;
         }
     }
@@ -1324,13 +1350,30 @@ mod tests {
         let mut cyc = 0u64;
         stamped_shift_out(&mut log, &mut cyc, first);
         stamped_shift_out(&mut log, &mut cyc, second);
-        log.push(PinEdge { cycle: cyc, port: 'D', bit: 6, level: true });
+        log.push(PinEdge {
+            cycle: cyc,
+            port: 'D',
+            bit: 6,
+            level: true,
+        });
         cyc += 1;
-        log.push(PinEdge { cycle: cyc, port: 'D', bit: 6, level: false });
+        log.push(PinEdge {
+            cycle: cyc,
+            port: 'D',
+            bit: 6,
+            level: false,
+        });
 
         let base = vec![0.0; circuit.node_count()];
         let ticks = replay_components_on_edges(
-            &mut comps, &[0, 1], &pin_nets, &log, &base, 5.0, 0.0, &mut circuit,
+            &mut comps,
+            &[0, 1],
+            &pin_nets,
+            &log,
+            &base,
+            5.0,
+            0.0,
+            &mut circuit,
         );
         assert_eq!(ticks, log.len(), "one micro-tick per distinct-cycle edge");
         assert_eq!(
@@ -1339,7 +1382,11 @@ mod tests {
             "PATH B: the FIRST-sent byte crossed the qh_serial->ser boundary \
              into the downstream chip"
         );
-        assert_eq!(pack_out(&comps[0]), second, "the second byte stays in the head chip");
+        assert_eq!(
+            pack_out(&comps[0]),
+            second,
+            "the second byte stays in the head chip"
+        );
     }
 
     /// The generalized-path proof (05 §1.2): a cycle-stamped `shiftOut` burst
@@ -1358,13 +1405,30 @@ mod tests {
         let byte = 0xA6u8;
         stamped_shift_out(&mut log, &mut cyc, byte);
         // RCLK latch pulse (two more distinct-cycle edges).
-        log.push(PinEdge { cycle: cyc, port: 'D', bit: 6, level: true });
+        log.push(PinEdge {
+            cycle: cyc,
+            port: 'D',
+            bit: 6,
+            level: true,
+        });
         cyc += 1;
-        log.push(PinEdge { cycle: cyc, port: 'D', bit: 6, level: false });
+        log.push(PinEdge {
+            cycle: cyc,
+            port: 'D',
+            bit: 6,
+            level: false,
+        });
 
         let n_edges = log.len();
         let ticks = replay_components_on_edges(
-            &mut comps, &which, &pin_nets, &log, &base, 5.0, 0.0, &mut circuit,
+            &mut comps,
+            &which,
+            &pin_nets,
+            &log,
+            &base,
+            5.0,
+            0.0,
+            &mut circuit,
         );
         assert_eq!(
             ticks, n_edges,
@@ -1386,13 +1450,33 @@ mod tests {
         let base = vec![0.0; circuit.node_count()];
         // SER high and SRCLK high at the SAME cycle -> one group -> one micro-tick.
         let log = vec![
-            PinEdge { cycle: 5, port: 'B', bit: 3, level: true },
-            PinEdge { cycle: 5, port: 'B', bit: 5, level: true },
+            PinEdge {
+                cycle: 5,
+                port: 'B',
+                bit: 3,
+                level: true,
+            },
+            PinEdge {
+                cycle: 5,
+                port: 'B',
+                bit: 5,
+                level: true,
+            },
         ];
         let ticks = replay_components_on_edges(
-            &mut comps, &[0], &pin_nets, &log, &base, 5.0, 0.0, &mut circuit,
+            &mut comps,
+            &[0],
+            &pin_nets,
+            &log,
+            &base,
+            5.0,
+            0.0,
+            &mut circuit,
         );
-        assert_eq!(ticks, 1, "two edges on one cycle collapse to a single micro-tick");
+        assert_eq!(
+            ticks, 1,
+            "two edges on one cycle collapse to a single micro-tick"
+        );
     }
 
     /// Cycle monotonicity per pin: `pin_edges_by_pin` yields, for each pin, an
@@ -1401,11 +1485,36 @@ mod tests {
     #[test]
     fn pin_edges_are_cycle_monotonic_per_pin() {
         let log = vec![
-            PinEdge { cycle: 0, port: 'B', bit: 5, level: true },
-            PinEdge { cycle: 1, port: 'B', bit: 3, level: true },
-            PinEdge { cycle: 2, port: 'B', bit: 5, level: false },
-            PinEdge { cycle: 5, port: 'B', bit: 5, level: true },
-            PinEdge { cycle: 7, port: 'B', bit: 3, level: false },
+            PinEdge {
+                cycle: 0,
+                port: 'B',
+                bit: 5,
+                level: true,
+            },
+            PinEdge {
+                cycle: 1,
+                port: 'B',
+                bit: 3,
+                level: true,
+            },
+            PinEdge {
+                cycle: 2,
+                port: 'B',
+                bit: 5,
+                level: false,
+            },
+            PinEdge {
+                cycle: 5,
+                port: 'B',
+                bit: 5,
+                level: true,
+            },
+            PinEdge {
+                cycle: 7,
+                port: 'B',
+                bit: 3,
+                level: false,
+            },
         ];
         let by_pin = pin_edges_by_pin(&log);
         for (pin, series) in &by_pin {
@@ -1433,9 +1542,21 @@ mod tests {
         let ser_net = pin_nets[&('B', 3)];
         let mut base = vec![0.0; circuit.node_count()];
         base[ser_net.0 as usize] = 5.0;
-        let log = vec![PinEdge { cycle: 10, port: 'B', bit: 5, level: true }];
+        let log = vec![PinEdge {
+            cycle: 10,
+            port: 'B',
+            bit: 5,
+            level: true,
+        }];
         let ticks = replay_components_on_edges(
-            &mut comps, &[0], &pin_nets, &log, &base, 5.0, 0.0, &mut circuit,
+            &mut comps,
+            &[0],
+            &pin_nets,
+            &log,
+            &base,
+            5.0,
+            0.0,
+            &mut circuit,
         );
         assert_eq!(ticks, 1);
         let replay_shift = comps[0].register("shift").expect("shift register");
@@ -1492,7 +1613,8 @@ mod tests {
         for p in 0..n {
             let want = weights[n - 1 - p];
             assert_eq!(
-                chain.latched[p], want,
+                chain.latched[p],
+                want,
                 "chip at chain position {p} should latch weights[{}] = 0x{want:02X}, got 0x{:02X}",
                 n - 1 - p,
                 chain.latched[p]
@@ -1577,7 +1699,11 @@ mod tests {
         make(&mut chips, "B", &mut circuit);
 
         let chains = order_595_chains(&chips);
-        assert_eq!(chains.len(), 2, "two independent chains, not one merged list");
+        assert_eq!(
+            chains.len(),
+            2,
+            "two independent chains, not one merged list"
+        );
         for ch in &chains {
             assert_eq!(ch.len(), 2, "each chain has its own 2 chips");
         }
@@ -1605,10 +1731,10 @@ mod tests {
                 .cloned()
                 .expect("chain present")
         };
-        let mut chain_a = Hc595Chain::build(&chips, find("U_A0", &chains), &gpio_a)
-            .expect("chain A binds");
-        let mut chain_b = Hc595Chain::build(&chips, find("U_B0", &chains), &gpio_b)
-            .expect("chain B binds");
+        let mut chain_a =
+            Hc595Chain::build(&chips, find("U_A0", &chains), &gpio_a).expect("chain A binds");
+        let mut chain_b =
+            Hc595Chain::build(&chips, find("U_B0", &chains), &gpio_b).expect("chain B binds");
 
         // Clock 16 ones into A while feeding the SAME pulse train to B.
         let mut log = Vec::new();
@@ -1657,10 +1783,8 @@ mod tests {
             let drv = PinDriver::stamp(&mut circuit, net, q, &format!("U_{q}"), DEFAULT_RO);
             drivers.insert(q.into(), drv);
         }
-        let mut chips = vec![
-            DigitalComponent::new("U0".into(), &model, roles, drivers)
-                .expect("builtin 595 logic compiles"),
-        ];
+        let mut chips = vec![DigitalComponent::new("U0".into(), &model, roles, drivers)
+            .expect("builtin 595 logic compiles")];
 
         let mut gpio: HashMap<i64, (char, u8)> = HashMap::new();
         gpio.insert(srclk.0 as i64, ('B', 5));
@@ -1757,7 +1881,10 @@ mod tests {
         let order = order_165_chains(&chips);
         assert_eq!(order.len(), 1, "one 165 chain recovered");
         // Head-first: U15002 (feeds MISO) before U15001 (upstream).
-        let refs: Vec<&str> = order[0].iter().map(|&i| chips[i].reference.as_str()).collect();
+        let refs: Vec<&str> = order[0]
+            .iter()
+            .map(|&i| chips[i].reference.as_str())
+            .collect();
         assert_eq!(refs, vec!["U15002", "U15001"], "head-first chain order");
 
         let chain = Hc165Chain::build(&chips, order.into_iter().next().unwrap(), &gpio, &gpio)
@@ -1806,15 +1933,27 @@ mod tests {
                 *miso = lvl;
             }
         };
-        apply(chain.on_edge(('D', 4), false, &node_v, &levels), &mut miso_level); // PL low
-        apply(chain.on_edge(('D', 4), true, &node_v, &levels), &mut miso_level); // PL high
+        apply(
+            chain.on_edge(('D', 4), false, &node_v, &levels),
+            &mut miso_level,
+        ); // PL low
+        apply(
+            chain.on_edge(('D', 4), true, &node_v, &levels),
+            &mut miso_level,
+        ); // PL high
 
         // _ReadShiftRegisterWord: 16 × { value<<=1; value|=read(MISO); pulse SCLK }
         for _ in 0..16 {
             value <<= 1;
             value |= miso_level as u16;
-            apply(chain.on_edge(('B', 5), true, &node_v, &levels), &mut miso_level); // SCLK rise
-            apply(chain.on_edge(('B', 5), false, &node_v, &levels), &mut miso_level); // SCLK fall
+            apply(
+                chain.on_edge(('B', 5), true, &node_v, &levels),
+                &mut miso_level,
+            ); // SCLK rise
+            apply(
+                chain.on_edge(('B', 5), false, &node_v, &levels),
+                &mut miso_level,
+            ); // SCLK fall
         }
 
         // Expected MSB-first word: L10 L9 L8 L7 L6 L5 L4 L3 | L2 L1 . . . . . .
@@ -1827,7 +1966,11 @@ mod tests {
             "165 readback word 0x{value:04X} should match known latch pattern 0x{expected:04X}"
         );
         // The model-level loaded_word must agree with the bit-banged readback.
-        assert_eq!(chain.loaded_word(), expected, "loaded_word matches readback");
+        assert_eq!(
+            chain.loaded_word(),
+            expected,
+            "loaded_word matches readback"
+        );
     }
 
     /// Regression guard: a single SCLK edge (the collapsed once-per-chunk view)
@@ -1836,18 +1979,24 @@ mod tests {
     #[test]
     fn hc165_collapsed_single_edge_does_not_read_full_word() {
         let mut circuit = Circuit::new();
-        let (_chips, mut chain) =
-            build_165_chain(&mut circuit, &["a", "h"], &["a"]);
+        let (_chips, mut chain) = build_165_chain(&mut circuit, &["a", "h"], &["a"]);
         let levels = LogicLevels::from_params(&hc165_model());
         let node_v = |_n: NodeId| 0.0; // collapsed: never re-sample
-        // One PL + one SCLK edge, no full pulse train.
+                                       // One PL + one SCLK edge, no full pulse train.
         let _ = chain.on_edge(('D', 4), false, &node_v, &levels);
         let _ = chain.on_edge(('D', 4), true, &node_v, &levels);
         let before = chain.pos;
         let _ = chain.on_edge(('B', 5), true, &node_v, &levels);
-        assert_eq!(chain.pos, before + 1, "a single SCLK rise advances exactly one bit");
+        assert_eq!(
+            chain.pos,
+            before + 1,
+            "a single SCLK rise advances exactly one bit"
+        );
         // With only one clocked bit you cannot have walked all 16 stages.
-        assert!(chain.pos < 16, "collapsed single edge cannot shift the whole word");
+        assert!(
+            chain.pos < 16,
+            "collapsed single edge cannot shift the whole word"
+        );
     }
 
     /// 74HC02 NOR SR spike latch: the truth table the firmware-driven readback
@@ -1881,9 +2030,17 @@ mod tests {
         let make_v = |set_hi: bool, reset_hi: bool| {
             move |n: NodeId| -> f64 {
                 if n == set_n {
-                    if set_hi { 4.5 } else { 0.0 }
+                    if set_hi {
+                        4.5
+                    } else {
+                        0.0
+                    }
                 } else if n == reset_n {
-                    if reset_hi { 4.5 } else { 0.0 }
+                    if reset_hi {
+                        4.5
+                    } else {
+                        0.0
+                    }
                 } else {
                     0.0
                 }
@@ -1893,7 +2050,10 @@ mod tests {
         let q = |l: &DigitalComponent| l.output_level("q").expect("latch q output");
 
         // 1. Power-on idle: Q HIGH.
-        assert!(q(&latch), "power-on idle latch Q must be HIGH (cleared/idle)");
+        assert!(
+            q(&latch),
+            "power-on idle latch Q must be HIGH (cleared/idle)"
+        );
 
         // 2. Assert RESET_SR (set low): Q stays HIGH (the cleared level).
         latch.tick(&mut circuit, &make_v(false, true));
@@ -1909,7 +2069,10 @@ mod tests {
 
         // 5. Spike clears (SET low), no reset: Q HELD LOW (the latch memory).
         latch.tick(&mut circuit, &make_v(false, false));
-        assert!(!q(&latch), "Q stays LOW after the spike clears (held by cross-couple)");
+        assert!(
+            !q(&latch),
+            "Q stays LOW after the spike clears (held by cross-couple)"
+        );
 
         // 6. RESET_SR pulse: Q back HIGH (idle).
         latch.tick(&mut circuit, &make_v(false, true));

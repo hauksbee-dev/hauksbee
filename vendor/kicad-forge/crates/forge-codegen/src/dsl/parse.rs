@@ -7,7 +7,9 @@
 //! malformed line returns a [`ParseError`] with the line number, so an editor
 //! can point at the mistake.
 
-use crate::dsl::model::{Block, Comp, Edge, Instance, Outline, Pad, Program, SlotSpec, Space, Stmt};
+use crate::dsl::model::{
+    Block, Comp, Edge, Instance, Outline, Pad, Program, SlotSpec, Space, Stmt,
+};
 
 /// A parse error with a 1-based line number.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -133,9 +135,7 @@ impl<'a> Parser<'a> {
                         blocks.push(self.parse_block(name)?);
                     }
                 }
-                Some(other) => {
-                    return Err(err(ln, &format!("unexpected `{other}` at top level")))
-                }
+                Some(other) => return Err(err(ln, &format!("unexpected `{other}` at top level"))),
                 None => {
                     self.next();
                 }
@@ -168,9 +168,7 @@ impl<'a> Parser<'a> {
         }
         let mut slots = Vec::new();
         loop {
-            let (ln, line) = self
-                .next()
-                .ok_or_else(|| err(ln, "unterminated block"))?;
+            let (ln, line) = self.next().ok_or_else(|| err(ln, "unterminated block"))?;
             let toks = tokenize(line, ln)?;
             match toks.first().map(|s| s.as_str()) {
                 Some("}") => break,
@@ -207,9 +205,7 @@ impl<'a> Parser<'a> {
         }
         let mut body = Vec::new();
         loop {
-            let (ln, line) = self
-                .peek()
-                .ok_or_else(|| err(ln, "unterminated fn main"))?;
+            let (ln, line) = self.peek().ok_or_else(|| err(ln, "unterminated fn main"))?;
             let toks = tokenize(line, ln)?;
             match toks.first().map(|s| s.as_str()) {
                 Some("}") => {
@@ -254,9 +250,7 @@ impl<'a> Parser<'a> {
                         .get(3)
                         .map(|s| unq(s))
                         .and_then(|s| Edge::parse(&s))
-                        .ok_or_else(|| {
-                            err(ln, "pin edge: expected left|right|top|bottom")
-                        })?;
+                        .ok_or_else(|| err(ln, "pin edge: expected left|right|top|bottom"))?;
                     body.push(Stmt::Pin { reference, edge });
                 }
                 Some("lock") => {
@@ -274,12 +268,7 @@ impl<'a> Parser<'a> {
                 Some("comp") => {
                     body.push(Stmt::Single(self.parse_comp()?));
                 }
-                _ => {
-                    return Err(err(
-                        ln,
-                        "expected net/space/pin/lock/instance/comp or `}`",
-                    ))
-                }
+                _ => return Err(err(ln, "expected net/space/pin/lock/instance/comp or `}`")),
             }
         }
         Ok(body)
@@ -337,9 +326,7 @@ impl<'a> Parser<'a> {
         let mut space = None;
         let mut pads = Vec::new();
         loop {
-            let (ln2, line2) = self
-                .next()
-                .ok_or_else(|| err(ln, "unterminated comp"))?;
+            let (ln2, line2) = self.next().ok_or_else(|| err(ln, "unterminated comp"))?;
             let toks2 = tokenize(line2, ln2)?;
             match toks2.first().map(|s| s.as_str()) {
                 Some("}") => break,
@@ -522,8 +509,13 @@ fn tokenize(line: &str, ln: usize) -> Result<Vec<String>, ParseError> {
             _ => {
                 let mut s = String::new();
                 while let Some(&c) = chars.peek() {
-                    if c.is_whitespace() || c == '"' || c == '[' || c == ']' || c == '{'
-                        || c == '}' || c == '#'
+                    if c.is_whitespace()
+                        || c == '"'
+                        || c == '['
+                        || c == ']'
+                        || c == '{'
+                        || c == '}'
+                        || c == '#'
                     {
                         break;
                     }

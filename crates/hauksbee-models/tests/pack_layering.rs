@@ -88,7 +88,11 @@ fn user_dir_beats_pack() {
     store.install(src.path(), "test").unwrap();
 
     let user_dir = tempfile::tempdir().unwrap();
-    std::fs::write(user_dir.path().join("mine.toml"), footprint_diode("user_diode")).unwrap();
+    std::fs::write(
+        user_dir.path().join("mine.toml"),
+        footprint_diode("user_diode"),
+    )
+    .unwrap();
 
     let mut lib = ModelLibrary::builtin();
     lib.load_packs(&store);
@@ -103,14 +107,26 @@ fn user_dir_beats_pack() {
 #[test]
 fn models_dir_flag_beats_user_dir() {
     let user_dir = tempfile::tempdir().unwrap();
-    std::fs::write(user_dir.path().join("mine.toml"), footprint_diode("user_diode")).unwrap();
+    std::fs::write(
+        user_dir.path().join("mine.toml"),
+        footprint_diode("user_diode"),
+    )
+    .unwrap();
     let flag_dir = tempfile::tempdir().unwrap();
-    std::fs::write(flag_dir.path().join("flag.toml"), footprint_diode("flag_diode")).unwrap();
+    std::fs::write(
+        flag_dir.path().join("flag.toml"),
+        footprint_diode("flag_diode"),
+    )
+    .unwrap();
 
     let mut lib = ModelLibrary::builtin();
     // Load the HIGHER layer first: insertion order must not matter.
-    assert!(lib.load_dir_layer(flag_dir.path(), SourceLayer::ModelsDirFlag).is_empty());
-    assert!(lib.load_dir_layer(user_dir.path(), SourceLayer::UserDir).is_empty());
+    assert!(lib
+        .load_dir_layer(flag_dir.path(), SourceLayer::ModelsDirFlag)
+        .is_empty());
+    assert!(lib
+        .load_dir_layer(user_dir.path(), SourceLayer::UserDir)
+        .is_empty());
 
     let r = lib.resolve(&query());
     assert_eq!(r.model.as_ref().unwrap().id, "flag_diode");
@@ -134,9 +150,18 @@ fn same_layer_conflict_between_packs_is_reported_naming_both() {
         .iter()
         .find(|w| w.contains("same-layer conflict"))
         .unwrap_or_else(|| panic!("no conflict reported; warnings: {warnings:?}"));
-    assert!(conflict.contains("shared_widget"), "names the id: {conflict}");
-    assert!(conflict.contains("pack-alpha@1.0.0"), "names pack one: {conflict}");
-    assert!(conflict.contains("pack-beta@1.0.0"), "names pack two: {conflict}");
+    assert!(
+        conflict.contains("shared_widget"),
+        "names the id: {conflict}"
+    );
+    assert!(
+        conflict.contains("pack-alpha@1.0.0"),
+        "names pack one: {conflict}"
+    );
+    assert!(
+        conflict.contains("pack-beta@1.0.0"),
+        "names pack two: {conflict}"
+    );
 }
 
 #[test]

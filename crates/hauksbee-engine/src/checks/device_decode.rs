@@ -170,7 +170,9 @@ fn resistor_ohms(c: &Component) -> Option<f64> {
     if !is_r_ref || connected != 2 || lib.contains("ferrite") || lib.contains("inductor") {
         return None;
     }
-    parse_value(&c.value).map(|p| p.si).filter(|o| o.is_finite() && *o >= 0.0)
+    parse_value(&c.value)
+        .map(|p| p.si)
+        .filter(|o| o.is_finite() && *o >= 0.0)
 }
 
 // ── Net-name helpers (local copies; extract versions are private) ──
@@ -183,8 +185,10 @@ fn norm(name: &str) -> String {
 
 fn is_ground_name(name: &str) -> bool {
     let n = norm(name);
-    matches!(n.as_str(), "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "PGND" | "VSS" | "GNDIO" | "0")
-        || n.starts_with("GND")
+    matches!(
+        n.as_str(),
+        "GND" | "GNDA" | "GNDD" | "AGND" | "DGND" | "PGND" | "VSS" | "GNDIO" | "0"
+    ) || n.starts_with("GND")
 }
 
 /// Is this the 3.3 V reference rail (VDDD)? The CYPD3177 dividers reference VDDD,
@@ -250,7 +254,9 @@ fn resolve_fixed_divider(board: &ExtractedBoard, net_id: i64) -> FixedDivider {
     let mut pu: Option<(String, f64)> = None;
     let mut pd: Option<(String, f64)> = None;
     for (c, _p) in board.net_members(net_id) {
-        let Some(ohms) = resistor_ohms(c) else { continue };
+        let Some(ohms) = resistor_ohms(c) else {
+            continue;
+        };
         for op in &c.pins {
             let Some(oid) = op.net else { continue };
             if oid == net_id {
@@ -299,7 +305,10 @@ fn enumerate_detents(board: &ExtractedBoard, net_id: i64) -> Vec<Detent> {
         for pad in &sw.pins {
             let Some(pid) = pad.net else {
                 // a dangling NC pad on the selector is an open detent
-                detents.push(Detent { extra_pd: None, label: format!("{}.{}", sw.reference, pad.number) });
+                detents.push(Detent {
+                    extra_pd: None,
+                    label: format!("{}.{}", sw.reference, pad.number),
+                });
                 continue;
             };
             if pid == net_id {
@@ -307,11 +316,17 @@ fn enumerate_detents(board: &ExtractedBoard, net_id: i64) -> Vec<Detent> {
             }
             let Some(pn) = board.net(pid) else { continue };
             if is_unconnected_net(&pn.name) {
-                detents.push(Detent { extra_pd: None, label: format!("{}.{} (open)", sw.reference, pad.number) });
+                detents.push(Detent {
+                    extra_pd: None,
+                    label: format!("{}.{} (open)", sw.reference, pad.number),
+                });
                 continue;
             }
             if is_ground_name(&pn.name) {
-                detents.push(Detent { extra_pd: Some(0.0), label: format!("{}.{} (GND)", sw.reference, pad.number) });
+                detents.push(Detent {
+                    extra_pd: Some(0.0),
+                    label: format!("{}.{} (GND)", sw.reference, pad.number),
+                });
                 continue;
             }
             // A leg node: look for a single resistor from this node to ground.
@@ -352,7 +367,9 @@ fn is_selector_switch(c: &Component) -> bool {
 /// A single assembled resistor with one pad on `node` and the other on ground.
 fn leg_resistor_to_ground(board: &ExtractedBoard, node: i64) -> Option<(String, f64)> {
     for (c, _p) in board.net_members(node) {
-        let Some(ohms) = resistor_ohms(c) else { continue };
+        let Some(ohms) = resistor_ohms(c) else {
+            continue;
+        };
         for op in &c.pins {
             let Some(oid) = op.net else { continue };
             if oid == node {
@@ -405,7 +422,7 @@ fn check_cypd3177(board: &ExtractedBoard, u: &Component, report: &mut NetLintRep
                 for d in &detents {
                     let eff_pd = match d.extra_pd {
                         Some(extra) => parallel(*rpd, extra), // permanent || switched leg
-                        None => *rpd,                          // open leg: permanent only
+                        None => *rpd,                         // open leg: permanent only
                     };
                     let mv = divider_mv(*rpu, eff_pd);
                     let b = decode_table2(mv);
@@ -538,11 +555,20 @@ mod tests {
         // detent5 open: permanent R12 alone -> 2185 mV
         assert!((divider_mv(rpu, r12) - 2185).abs() <= 2, "open leg");
         // detent4: R12 || 5.1k = 3400 -> 1315 mV
-        assert!((divider_mv(rpu, parallel(r12, 5100.0)) - 1315).abs() <= 2, "5.1k leg");
+        assert!(
+            (divider_mv(rpu, parallel(r12, 5100.0)) - 1315).abs() <= 2,
+            "5.1k leg"
+        );
         // detent3: R12 || 2.4k -> 908 mV
-        assert!((divider_mv(rpu, parallel(r12, 2400.0)) - 908).abs() <= 2, "2.4k leg");
+        assert!(
+            (divider_mv(rpu, parallel(r12, 2400.0)) - 908).abs() <= 2,
+            "2.4k leg"
+        );
         // detent2: R12 || 1k -> 499 mV
-        assert!((divider_mv(rpu, parallel(r12, 1000.0)) - 499).abs() <= 2, "1k leg");
+        assert!(
+            (divider_mv(rpu, parallel(r12, 1000.0)) - 499).abs() <= 2,
+            "1k leg"
+        );
         // detent1: direct GND (0 ohm) -> 0 mV
         assert_eq!(divider_mv(rpu, parallel(r12, 0.0)), 0, "GND-direct leg");
     }
@@ -802,7 +828,12 @@ mod tests {
     (pad 2 smd rect (at 0 1) (net 21 "VBUS_max") (pinfunction "VBUS_MAX"))
   )
 )"#;
-        assert_eq!(decode_findings(text).of_check(LintCheck::DeviceDecode).count(), 0);
+        assert_eq!(
+            decode_findings(text)
+                .of_check(LintCheck::DeviceDecode)
+                .count(),
+            0
+        );
     }
 
     // ── DNP-awareness (the real pd-sink board's actual state) ────────────────

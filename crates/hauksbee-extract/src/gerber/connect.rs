@@ -380,10 +380,12 @@ pub fn reconstruct(
     // Break count ties by lowest net id (Reverse) so the GND label is stable,
     // iterating the HashMap keys left it dependent on iteration order when two
     // pours tied on primitive count.
-    let gnd_net = net_touches_region
-        .keys()
-        .copied()
-        .max_by_key(|&n| (net_prim_count.get(&n).copied().unwrap_or(0), std::cmp::Reverse(n)));
+    let gnd_net = net_touches_region.keys().copied().max_by_key(|&n| {
+        (
+            net_prim_count.get(&n).copied().unwrap_or(0),
+            std::cmp::Reverse(n),
+        )
+    });
 
     // Build the Net table with names.
     let mut nets: Vec<Net> = root_to_net
@@ -824,7 +826,10 @@ mod tests {
         // it must take the largest-dimension path (3.2/2 + 1 = 2.6 mm), not the
         // 2x2-grid path (~7.62 mm).
         let he = footprint_half_extent("Crystal_SMD_3225-2Pin_3.2x2.5mm");
-        assert!(he < 4.0, "decimal crystal body half-extent must be small, got {he}");
+        assert!(
+            he < 4.0,
+            "decimal crystal body half-extent must be small, got {he}"
+        );
     }
 
     #[test]
@@ -862,7 +867,11 @@ mod tests {
         ];
         let (board, stats) = reconstruct("t", vec![layer], vec![], vec![]);
         assert_eq!(stats.n_nets, 2, "two separate pours are two nets");
-        let gnd = board.nets.iter().find(|n| n.name == "GND").expect("a GND net");
+        let gnd = board
+            .nets
+            .iter()
+            .find(|n| n.name == "GND")
+            .expect("a GND net");
         let min_id = board.nets.iter().map(|n| n.id).min().unwrap();
         assert_eq!(
             gnd.id, min_id,

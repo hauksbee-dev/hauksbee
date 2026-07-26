@@ -87,7 +87,8 @@ impl Transient {
         for (id, dev) in circuit.iter() {
             if matches!(dev, Device::Vsource { .. } | Device::Inductor { .. }) {
                 if let Some(bi) = layout.branch(id) {
-                    wf.branch_currents.push((dev.name().to_string(), Vec::new()));
+                    wf.branch_currents
+                        .push((dev.name().to_string(), Vec::new()));
                     branch_outputs.push(bi);
                 }
             }
@@ -300,10 +301,10 @@ impl Transient {
         let mut x_accepted = ws.x.clone();
         let mut steps_taken: u64 = 0;
         let max_steps: u64 = 50_000_000; // safety valve
-        // Spacing of the reactive history's two back samples (x1..x2), i.e.
-        // the previous ACCEPTED step: the LTE divided difference needs it to
-        // tell real curvature from a step-size change on a slope. 0.0 = no
-        // accepted step yet.
+                                         // Spacing of the reactive history's two back samples (x1..x2), i.e.
+                                         // the previous ACCEPTED step: the LTE divided difference needs it to
+                                         // tell real curvature from a step-size change on a slope. 0.0 = no
+                                         // accepted step yet.
         let mut h_prev_accepted: f64 = 0.0;
 
         // Source breakpoints (PWL vertices, PULSE corners): mandatory step
@@ -352,8 +353,7 @@ impl Transient {
         // The step AFTER an event-resolved accept is not extrapolated at all
         // (pred_skip_once): the accepted pair straddles the discontinuity the
         // event loop just resolved, so the linear history is a lie there.
-        let predictor_armed =
-            transient_dyn && matches!(opts.step, StepControl::Adaptive { .. });
+        let predictor_armed = transient_dyn && matches!(opts.step, StepControl::Adaptive { .. });
         const PRED_MAX_SCALE: f64 = 2.0;
         let mut pred_skip_once = false;
         // The accepted point BEFORE the current one: the predictor's second
@@ -504,7 +504,15 @@ impl Transient {
                 for &cmp_smooth in &modes {
                     ws.x.copy_from_slice(&x_accepted);
                     if newton_solve_event(
-                        &mut ws, circuit, opts, t + h, h, coeffs, &state, opts.gmin, cmp_smooth,
+                        &mut ws,
+                        circuit,
+                        opts,
+                        t + h,
+                        h,
+                        coeffs,
+                        &state,
+                        opts.gmin,
+                        cmp_smooth,
                     ) {
                         converged = true;
                         break;
@@ -548,26 +556,34 @@ impl Transient {
             // bare Newton can't solve; the exact dt_min thrash that re-opened the
             // wall. With the event loop owning the discontinuity, accept the step.
             if !used_event {
-            if let Some(frac) = crossing_fraction(circuit, &x_accepted, &ws.x, &ws.layout_nodes()) {
-                // Census: which devices' controls straddled a threshold on this
-                // trial. A second read-only scan, run only when the census is
-                // live, so the default path keeps the single-pass check.
-                if let Some(c) = census.as_mut() {
-                    crossing_census(circuit, &x_accepted, &ws.x, &ws.layout_nodes(), &mut c.crossings);
-                }
-                if matches!(opts.step, StepControl::Adaptive { .. }) && h > dt_min * 4.0 {
-                    // Bisect toward the crossing for a sharper edge.
-                    let refined = (h * frac).clamp(dt_min, h);
-                    if (refined - h).abs() > dt_min {
-                        if let (Some(c), Some(t0)) = (census.as_mut(), t_trial) {
-                            c.event_bisections += 1;
-                            c.ns_bisected += t0.elapsed().as_nanos() as u64;
+                if let Some(frac) =
+                    crossing_fraction(circuit, &x_accepted, &ws.x, &ws.layout_nodes())
+                {
+                    // Census: which devices' controls straddled a threshold on this
+                    // trial. A second read-only scan, run only when the census is
+                    // live, so the default path keeps the single-pass check.
+                    if let Some(c) = census.as_mut() {
+                        crossing_census(
+                            circuit,
+                            &x_accepted,
+                            &ws.x,
+                            &ws.layout_nodes(),
+                            &mut c.crossings,
+                        );
+                    }
+                    if matches!(opts.step, StepControl::Adaptive { .. }) && h > dt_min * 4.0 {
+                        // Bisect toward the crossing for a sharper edge.
+                        let refined = (h * frac).clamp(dt_min, h);
+                        if (refined - h).abs() > dt_min {
+                            if let (Some(c), Some(t0)) = (census.as_mut(), t_trial) {
+                                c.event_bisections += 1;
+                                c.ns_bisected += t0.elapsed().as_nanos() as u64;
+                            }
+                            dt = refined;
+                            continue;
                         }
-                        dt = refined;
-                        continue;
                     }
                 }
-            }
             }
 
             // Also skip LTE rejection for an event-resolved step: the reactive
@@ -736,9 +752,9 @@ fn seed_reactive_state(
             // the operating-point junction voltages, bank A = Q_gs,
             // xb[0] = Q_gd, xb[1] = Q_bd, xb[2] = Q_bs (the `ReactiveState`
             // packing table).
-            Device::Mosfet { d, g, s, b, model, .. }
-                if crate::stamp::mos_has_charge(model, &opts.effects) =>
-            {
+            Device::Mosfet {
+                d, g, s, b, model, ..
+            } if crate::stamp::mos_has_charge(model, &opts.effects) => {
                 let (q_gs, q_gd, q_bd, q_bs) = mos_q(ws, *d, *g, *s, *b, model, opts);
                 state.x1[i] = q_gs;
                 state.x2[i] = q_gs;
@@ -764,8 +780,8 @@ fn seed_reactive_state(
                 ..
             } => {
                 let vref = reference.map(|n| node_v(ws, n)).unwrap_or(0.0);
-                let target = (vref + gain * (node_v(ws, *inp) - node_v(ws, *inn)))
-                    .clamp(*rail_lo, *rail_hi);
+                let target =
+                    (vref + gain * (node_v(ws, *inp) - node_v(ws, *inn))).clamp(*rail_lo, *rail_hi);
                 state.x1[i] = target;
                 state.x2[i] = target;
                 state.dx1[i] = 0.0;
@@ -819,16 +835,8 @@ fn bjt_q(
     model: &hauksbee_ir::BjtModel,
     opts: &SolverOptions,
 ) -> (f64, f64) {
-    let (vbe, vbc) = crate::stamp::bjt_junction_voltages(
-        &ws.layout,
-        &ws.x,
-        id,
-        c,
-        b,
-        e,
-        model,
-        &opts.effects,
-    );
+    let (vbe, vbc) =
+        crate::stamp::bjt_junction_voltages(&ws.layout, &ws.x, id, c, b, e, model, &opts.effects);
     crate::stamp::bjt_charges_at(model, vbe, vbc, opts.model_temp(), opts.effects.temperature)
 }
 
@@ -922,9 +930,9 @@ fn advance_reactive_state(
             // (A = Q_gs, xb[0] = Q_gd, xb[1] = Q_bd, xb[2] = Q_bs); each dx
             // is that junction's dQ/dt, the capacitive current its
             // trapezoidal history needs.
-            Device::Mosfet { d, g, s, b, model, .. }
-                if crate::stamp::mos_has_charge(model, &opts.effects) =>
-            {
+            Device::Mosfet {
+                d, g, s, b, model, ..
+            } if crate::stamp::mos_has_charge(model, &opts.effects) => {
                 let (q_gs, q_gd, q_bd, q_bs) = mos_q(ws, *d, *g, *s, *b, model, opts);
                 let q_old = state.x1[i];
                 let dq = if trapz {
@@ -968,8 +976,8 @@ fn advance_reactive_state(
                 ..
             } => {
                 let vref = reference.map(|n| node_v(ws, n)).unwrap_or(0.0);
-                let target = (vref + gain * (node_v(ws, *inp) - node_v(ws, *inn)))
-                    .clamp(*rail_lo, *rail_hi);
+                let target =
+                    (vref + gain * (node_v(ws, *inp) - node_v(ws, *inn))).clamp(*rail_lo, *rail_hi);
                 if let Some((v_out, _)) =
                     crate::stamp::opamp_transient_output(state.x1[i], target, *pole_hz, *slew, h)
                 {
@@ -1065,16 +1073,21 @@ fn lte_estimate(
             {
                 let (q_be, q_bc) = bjt_q(ws, id, *c, *b, *e, model, opts);
                 worst = worst.max(err_of(q_be, state.x1[i], state.x2[i], opts.chgtol));
-                worst = worst.max(err_of(q_bc, state.xb[0].x1[i], state.xb[0].x2[i], opts.chgtol));
+                worst = worst.max(err_of(
+                    q_bc,
+                    state.xb[0].x1[i],
+                    state.xb[0].x2[i],
+                    opts.chgtol,
+                ));
                 continue;
             }
             // A charge-storing MOSFET participates through all four charges
             // (chgtol floor each), gate charge is what shapes its switching
             // edges, so it must gate the step size exactly as a capacitor
             // would. Charge-free MOSFETs hit the `continue` exactly as before.
-            Device::Mosfet { d, g, s, b, model, .. }
-                if crate::stamp::mos_has_charge(model, &opts.effects) =>
-            {
+            Device::Mosfet {
+                d, g, s, b, model, ..
+            } if crate::stamp::mos_has_charge(model, &opts.effects) => {
                 let (q_gs, q_gd, q_bd, q_bs) = mos_q(ws, *d, *g, *s, *b, model, opts);
                 worst = worst.max(err_of(q_gs, state.x1[i], state.x2[i], opts.chgtol));
                 for (bank, q) in [(0, q_gd), (1, q_bd), (2, q_bs)] {
@@ -1099,7 +1112,6 @@ fn lte_estimate(
     }
     worst
 }
-
 
 // --- source breakpoints ------------------------------------------------------
 
@@ -1340,7 +1352,10 @@ mod breakpoint_cap_tests {
             kind: SourceKind::Pwl(vec![
                 PwlPoint { t: 0.0, v: 0.0 },
                 PwlPoint { t: 0.9, v: 5.0 },
-                PwlPoint { t: 0.9 + 1e-6, v: 0.0 },
+                PwlPoint {
+                    t: 0.9 + 1e-6,
+                    v: 0.0,
+                },
             ]),
         });
         let bps = breakpoint_table(&c, 1.0);
@@ -1384,16 +1399,49 @@ mod branch_output_tests {
             n: NodeId::GROUND,
             kind: SourceKind::Dc(1.0),
         });
-        c.add(Device::Resistor { name: "R1".into(), a: inn, b, ohms: 1000.0, tc1: None });
+        c.add(Device::Resistor {
+            name: "R1".into(),
+            a: inn,
+            b,
+            ohms: 1000.0,
+            tc1: None,
+        });
         // A dependent voltage source (VCVS) that owns a branch, defined BEFORE L1
         // so it interleaves ahead of the inductor's branch unknown.
-        c.add(Device::Vcvs { name: "E1".into(), p: cc, n: NodeId::GROUND, cp: a, cn: NodeId::GROUND, gain: 2.0 });
-        c.add(Device::Resistor { name: "Rc".into(), a: cc, b: NodeId::GROUND, ohms: 1000.0, tc1: None });
-        c.add(Device::Resistor { name: "Ra".into(), a, b: NodeId::GROUND, ohms: 1000.0, tc1: None });
+        c.add(Device::Vcvs {
+            name: "E1".into(),
+            p: cc,
+            n: NodeId::GROUND,
+            cp: a,
+            cn: NodeId::GROUND,
+            gain: 2.0,
+        });
+        c.add(Device::Resistor {
+            name: "Rc".into(),
+            a: cc,
+            b: NodeId::GROUND,
+            ohms: 1000.0,
+            tc1: None,
+        });
+        c.add(Device::Resistor {
+            name: "Ra".into(),
+            a,
+            b: NodeId::GROUND,
+            ohms: 1000.0,
+            tc1: None,
+        });
         // The inductor whose current we check: b -> ground.
-        c.add(Device::Inductor { name: "L1".into(), a: b, b: NodeId::GROUND, henries: 1e-3, ic: None });
+        c.add(Device::Inductor {
+            name: "L1".into(),
+            a: b,
+            b: NodeId::GROUND,
+            henries: 1e-3,
+            ic: None,
+        });
 
-        let wf = Transient::new(SolverOptions::default()).run(&c, 1e-3).unwrap();
+        let wf = Transient::new(SolverOptions::default())
+            .run(&c, 1e-3)
+            .unwrap();
         let (_, l1) = wf
             .branch_currents
             .iter()

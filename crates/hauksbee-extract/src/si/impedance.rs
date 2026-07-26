@@ -430,14 +430,22 @@ fn is_single_ended_50(name: &str) -> bool {
     let is_control = toks.iter().any(|t| {
         matches!(
             *t,
-            "SEL" | "SELECT"
-                | "DET" | "DETECT"
-                | "CTRL" | "CTL" | "CONTROL"
-                | "EN" | "ENABLE"
-                | "SW" | "SWITCH"
+            "SEL"
+                | "SELECT"
+                | "DET"
+                | "DETECT"
+                | "CTRL"
+                | "CTL"
+                | "CONTROL"
+                | "EN"
+                | "ENABLE"
+                | "SW"
+                | "SWITCH"
                 | "GPIO"
-                | "DIV" | "DIVERSITY"
-                | "STAT" | "STATUS"
+                | "DIV"
+                | "DIVERSITY"
+                | "STAT"
+                | "STATUS"
         )
     });
     if is_control {
@@ -864,21 +872,42 @@ mod tests {
         // judged against controlled-impedance limits, a false finding on a
         // wireless board (which declares controlled impedance for its real feed).
         assert!(!is_single_ended_50("ANT_SEL"), "ANT_SEL is a control GPIO");
-        assert!(!is_single_ended_50("ANT_DET"), "ANT_DET is antenna-detect status");
-        assert!(!is_single_ended_50("ANT_CTRL"), "ANT_CTRL is a control line");
+        assert!(
+            !is_single_ended_50("ANT_DET"),
+            "ANT_DET is antenna-detect status"
+        );
+        assert!(
+            !is_single_ended_50("ANT_CTRL"),
+            "ANT_CTRL is a control line"
+        );
         assert!(!is_single_ended_50("ANT_EN"), "ANT_EN is an enable");
         assert!(!is_single_ended_50("RF_SW"), "RF_SW is a switch control");
-        assert!(!is_single_ended_50("ANT_DIV_SEL"), "diversity select is control");
+        assert!(
+            !is_single_ended_50("ANT_DIV_SEL"),
+            "diversity select is control"
+        );
         // The genuine RF feed conventions must still classify.
         assert!(is_single_ended_50("ANT"), "the bare antenna feed is 50 ohm");
         assert!(is_single_ended_50("ANTENNA"), "ANTENNA feed is 50 ohm");
         assert!(is_single_ended_50("RF"), "the RF feed is 50 ohm");
         assert!(is_single_ended_50("RF_IN"), "RF_IN feed is 50 ohm");
-        assert!(is_single_ended_50("ANT1"), "a switched antenna feed ANT1 is 50 ohm");
+        assert!(
+            is_single_ended_50("ANT1"),
+            "a switched antenna feed ANT1 is 50 ohm"
+        );
         // R54: `starts_with("ANT")` swallowed non-RF tokens; only `ANT` + digits
         // (a switched feed) or the bare `ANT`/`ANTENNA` token is an RF feed.
-        assert!(!is_single_ended_50("ANTIALIAS_IN"), "ANTIALIAS is not an antenna");
-        assert!(!is_single_ended_50("ANTI_ALIAS_OUT"), "ANTI is not an antenna");
-        assert!(is_single_ended_50("ANT2"), "a switched antenna feed ANT2 is 50 ohm");
+        assert!(
+            !is_single_ended_50("ANTIALIAS_IN"),
+            "ANTIALIAS is not an antenna"
+        );
+        assert!(
+            !is_single_ended_50("ANTI_ALIAS_OUT"),
+            "ANTI is not an antenna"
+        );
+        assert!(
+            is_single_ended_50("ANT2"),
+            "a switched antenna feed ANT2 is 50 ohm"
+        );
     }
 }

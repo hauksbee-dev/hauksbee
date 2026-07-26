@@ -168,22 +168,19 @@ fn run_worker(
     // Build the engine on the worker thread. A failure here (bad firmware arch,
     // unbindable board) is surfaced as an error update, never a silent hang.
     let board_url = format!("/boards/{board_name}");
-    let mut engine = match HauksbeeEngine::from_board_file(
-        &board_text,
-        firmware.as_deref(),
-        &board_url,
-    ) {
-        Ok(e) => e,
-        Err(e) => {
-            let _ = tx.send(CosimUpdate {
-                done: true,
-                error: Some(format!("co-sim could not start: {e}")),
-                chunk_ms,
-                ..Default::default()
-            });
-            return;
-        }
-    };
+    let mut engine =
+        match HauksbeeEngine::from_board_file(&board_text, firmware.as_deref(), &board_url) {
+            Ok(e) => e,
+            Err(e) => {
+                let _ = tx.send(CosimUpdate {
+                    done: true,
+                    error: Some(format!("co-sim could not start: {e}")),
+                    chunk_ms,
+                    ..Default::default()
+                });
+                return;
+            }
+        };
     // Coarsen the scheduler chunk so QEMU/Renode backends step in viable jumps
     // (the integration tests use 5 ms for exactly this reason; the 100 us
     // default would make the run appear to hang). The same value drives both the
@@ -265,8 +262,19 @@ fn run_worker(
         let net_voltages = frame.net_voltages;
         // If the UI has gone away, stop.
         let update = build_update(
-            t, &start, chunk_ms, &uart, &uart_partial, uart_seen, &tracker, gpio_driven,
-            substitution, analog_valid, failed_chunk_count, heuristic_spi_buses, false,
+            t,
+            &start,
+            chunk_ms,
+            &uart,
+            &uart_partial,
+            uart_seen,
+            &tracker,
+            gpio_driven,
+            substitution,
+            analog_valid,
+            failed_chunk_count,
+            heuristic_spi_buses,
+            false,
             net_voltages.clone(),
         );
         last_voltages = net_voltages;
@@ -293,8 +301,20 @@ fn run_worker(
         .map(|(b, _)| b)
         .collect();
     let _ = tx.send(build_update(
-        t, &start, chunk_ms, &uart, &uart_partial, uart_seen, &tracker, gpio_driven, substitution,
-        analog_valid, failed_chunk_count, heuristic_spi_buses, true, last_voltages,
+        t,
+        &start,
+        chunk_ms,
+        &uart,
+        &uart_partial,
+        uart_seen,
+        &tracker,
+        gpio_driven,
+        substitution,
+        analog_valid,
+        failed_chunk_count,
+        heuristic_spi_buses,
+        true,
+        last_voltages,
     ));
 }
 
@@ -416,13 +436,20 @@ fn is_watch_net(name: &str) -> bool {
     let upper = name.to_ascii_uppercase();
     // Power/ground rails are never "the LED", exclude them explicitly so a
     // matched keyword inside a rail name doesn't pull a static rail in.
-    let bare = upper.trim_start_matches(['/', '+']).trim_start_matches("NET-(");
-    if matches!(bare, "GND" | "VCC" | "VDD" | "VBUS" | "3V3" | "5V" | "+3V3" | "+5V") {
+    let bare = upper
+        .trim_start_matches(['/', '+'])
+        .trim_start_matches("NET-(");
+    if matches!(
+        bare,
+        "GND" | "VCC" | "VDD" | "VBUS" | "3V3" | "5V" | "+3V3" | "+5V"
+    ) {
         return false;
     }
-    if ["LED", "BOOT", "GPIO", "PWM", "MOTOR", "CTRL", "NRST", "RESET", "DSHOT"]
-        .iter()
-        .any(|k| upper.contains(k))
+    if [
+        "LED", "BOOT", "GPIO", "PWM", "MOTOR", "CTRL", "NRST", "RESET", "DSHOT",
+    ]
+    .iter()
+    .any(|k| upper.contains(k))
     {
         return true;
     }
@@ -572,18 +599,45 @@ mod tests {
 
         // A clean run: valid, zero failed chunks.
         let clean = build_update(
-            0.1, &start, 1.0, &uart, "", false, &tracker, false, None, /*analog_valid*/ true,
-            /*failed_chunk_count*/ 0, Vec::new(), false, HashMap::new(),
+            0.1,
+            &start,
+            1.0,
+            &uart,
+            "",
+            false,
+            &tracker,
+            false,
+            None,
+            /*analog_valid*/ true,
+            /*failed_chunk_count*/ 0,
+            Vec::new(),
+            false,
+            HashMap::new(),
         );
         assert!(clean.analog_valid, "clean run stays analog-valid");
         assert_eq!(clean.failed_chunk_count, 0);
 
         // A diverged run: invalid, with the failed-chunk count carried through.
         let bad = build_update(
-            0.1, &start, 1.0, &uart, "", false, &tracker, false, None, /*analog_valid*/ false,
-            /*failed_chunk_count*/ 3, Vec::new(), true, HashMap::new(),
+            0.1,
+            &start,
+            1.0,
+            &uart,
+            "",
+            false,
+            &tracker,
+            false,
+            None,
+            /*analog_valid*/ false,
+            /*failed_chunk_count*/ 3,
+            Vec::new(),
+            true,
+            HashMap::new(),
         );
-        assert!(!bad.analog_valid, "a failed chunk makes the update analog-invalid");
+        assert!(
+            !bad.analog_valid,
+            "a failed chunk makes the update analog-invalid"
+        );
         assert_eq!(
             bad.failed_chunk_count, 3,
             "the failed-chunk count reaches the UI snapshot"

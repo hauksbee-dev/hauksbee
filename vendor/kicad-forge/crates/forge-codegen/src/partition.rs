@@ -60,10 +60,9 @@ impl Default for PartitionConfig {
 /// Default substrings that mark a net as a power/ground rail. Matched
 /// case-insensitively against the full net name.
 const DEFAULT_GLOBAL_SUBSTRINGS: &[&str] = &[
-    "GND", "GROUND", "VCC", "VDD", "VSS", "VBUS", "VIN", "VOUT", "VREF",
-    "+5V", "+3V3", "+3.3V", "+1V8", "+12V", "-12V", "+1V2", "+2V5", "+15V",
-    "-15V", "VEE", "AVDD", "AVSS", "DVDD", "DGND", "AGND", "PGND", "VBAT",
-    "POWER",
+    "GND", "GROUND", "VCC", "VDD", "VSS", "VBUS", "VIN", "VOUT", "VREF", "+5V", "+3V3", "+3.3V",
+    "+1V8", "+12V", "-12V", "+1V2", "+2V5", "+15V", "-15V", "VEE", "AVDD", "AVSS", "DVDD", "DGND",
+    "AGND", "PGND", "VBAT", "POWER",
 ];
 
 /// A connected block of components, identified by their indices into the
@@ -149,11 +148,7 @@ pub fn partition(nl: &Netlist, cfg: &PartitionConfig) -> Partition {
 
 /// Connected components of `comps` under the comp-net graph, treating any net in
 /// `cut` as absent. Returns each component's sorted comp-index list.
-fn connected_components(
-    nl: &Netlist,
-    comps: &[usize],
-    cut: &HashSet<NetId>,
-) -> Vec<Vec<usize>> {
+fn connected_components(nl: &Netlist, comps: &[usize], cut: &HashSet<NetId>) -> Vec<Vec<usize>> {
     // Local dense indexing.
     let local: std::collections::HashMap<usize, usize> =
         comps.iter().enumerate().map(|(i, &c)| (c, i)).collect();
@@ -187,8 +182,7 @@ fn connected_components(
         }
     }
 
-    let mut groups: std::collections::HashMap<usize, Vec<usize>> =
-        std::collections::HashMap::new();
+    let mut groups: std::collections::HashMap<usize, Vec<usize>> = std::collections::HashMap::new();
     for (li, &ci) in comps.iter().enumerate() {
         groups.entry(uf.find(li)).or_default().push(ci);
     }
@@ -227,7 +221,9 @@ fn refine_block(
     out: &mut Vec<Block>,
 ) {
     if comps.len() <= cfg.max_block_size {
-        out.push(Block { comp_indices: comps });
+        out.push(Block {
+            comp_indices: comps,
+        });
         return;
     }
 
@@ -256,7 +252,9 @@ fn refine_block(
         .map(|(&n, pts)| (n, bbox_diag(pts)))
         .collect();
     if net_span.is_empty() {
-        out.push(Block { comp_indices: comps });
+        out.push(Block {
+            comp_indices: comps,
+        });
         return;
     }
 
@@ -274,7 +272,9 @@ fn refine_block(
 
     if cut_nets.is_empty() {
         // No bridging net to cut; emit as-is.
-        out.push(Block { comp_indices: comps });
+        out.push(Block {
+            comp_indices: comps,
+        });
         return;
     }
     net_span.clear();
@@ -287,7 +287,9 @@ fn refine_block(
     let pieces = connected_components(nl, &comps, &cut);
     // No progress: emit as-is to avoid spinning.
     if pieces.len() == 1 && pieces[0].len() == comps.len() {
-        out.push(Block { comp_indices: comps });
+        out.push(Block {
+            comp_indices: comps,
+        });
         return;
     }
 
@@ -298,8 +300,7 @@ fn refine_block(
 
 /// Bounding-box diagonal of a set of points (mm).
 fn bbox_diag(pts: &[(f64, f64)]) -> f64 {
-    let (mut minx, mut miny, mut maxx, mut maxy) =
-        (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    let (mut minx, mut miny, mut maxx, mut maxy) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for &(x, y) in pts {
         minx = minx.min(x);
         miny = miny.min(y);

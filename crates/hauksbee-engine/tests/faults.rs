@@ -561,7 +561,11 @@ fn binder_gathers_per_pin_metas_for_logic_outputs() {
         vec!["U1:qa", "U1:qb"],
         "one per-pin meta per stamped output driver"
     );
-    for m in bound.device_meta.iter().filter(|m| m.reference.starts_with("U1:")) {
+    for m in bound
+        .device_meta
+        .iter()
+        .filter(|m| m.reference.starts_with("U1:"))
+    {
         assert_eq!(m.kind, ComponentKind::ShiftRegister);
         assert_eq!(
             m.ratings.max_pin_current_a,

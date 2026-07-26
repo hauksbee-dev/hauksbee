@@ -22,9 +22,7 @@ use super::cosim::{self, CosimHandle, CosimUpdate};
 use super::render;
 use super::state::{AppState, Net, Pane};
 use crate::binder::bind_board;
-use crate::result::{
-    lint_findings_json, si_findings_json, BindSummary, DrcStructured,
-};
+use crate::result::{lint_findings_json, si_findings_json, BindSummary, DrcStructured};
 
 /// Co-sim target duration (s) when launched from the TUI.
 const COSIM_SECONDS: f64 = 2.0;
@@ -50,14 +48,7 @@ pub fn run(
     let board_name = state.board_name.clone();
 
     let mut term = setup_terminal()?;
-    let res = event_loop(
-        &mut term,
-        state,
-        board_text,
-        board_name,
-        firmware,
-        chunk_ms,
-    );
+    let res = event_loop(&mut term, state, board_text, board_name, firmware, chunk_ms);
     restore_terminal(&mut term)?;
     res
 }
@@ -402,10 +393,22 @@ mod tests {
         let board = ExtractedBoard {
             name: "t".into(),
             nets: vec![
-                ExtractNet { id: 0, name: "".into() },
-                ExtractNet { id: 1, name: "GND".into() },
-                ExtractNet { id: 2, name: "VBUS".into() },
-                ExtractNet { id: 9, name: "unconnected-(U1-NC)".into() },
+                ExtractNet {
+                    id: 0,
+                    name: "".into(),
+                },
+                ExtractNet {
+                    id: 1,
+                    name: "GND".into(),
+                },
+                ExtractNet {
+                    id: 2,
+                    name: "VBUS".into(),
+                },
+                ExtractNet {
+                    id: 9,
+                    name: "unconnected-(U1-NC)".into(),
+                },
             ],
             components: vec![Component {
                 reference: "U1".into(),
@@ -417,11 +420,11 @@ mod tests {
                 properties: vec![],
                 dnp: false,
                 pins: vec![
-                    pin("1", Some(2)),    // VBUS
-                    pin("2", Some(1)),    // GND
-                    pin("3", Some(9)),    // unconnected placeholder -> dropped
-                    pin("4", Some(0)),    // net 0 -> dropped
-                    pin("5", None),       // no net -> dropped
+                    pin("1", Some(2)), // VBUS
+                    pin("2", Some(1)), // GND
+                    pin("3", Some(9)), // unconnected placeholder -> dropped
+                    pin("4", Some(0)), // net 0 -> dropped
+                    pin("5", None),    // no net -> dropped
                 ],
             }],
         };

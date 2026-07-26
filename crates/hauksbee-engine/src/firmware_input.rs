@@ -172,14 +172,22 @@ fn resolve_firmware_bytes_limited(
                 .to_string()
         })?;
         let (artifact, note) = pio_build(&project)?;
-        let bytes = std::fs::read(&artifact)
-            .map_err(|e| format!("could not read the built image '{}': {e}", artifact.display()))?;
+        let bytes = std::fs::read(&artifact).map_err(|e| {
+            format!(
+                "could not read the built image '{}': {e}",
+                artifact.display()
+            )
+        })?;
         let name = artifact
             .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("firmware.elf")
             .to_string();
-        return Ok(ResolvedFirmware { name, bytes, note: Some(note) });
+        return Ok(ResolvedFirmware {
+            name,
+            bytes,
+            note: Some(note),
+        });
     }
 
     Err(format!(
@@ -199,7 +207,10 @@ pub fn resolve_firmware_cli(path: &Path) -> anyhow::Result<Option<ResolvedFirmwa
         if find_platformio_project(path).is_some() {
             let project = find_platformio_project(path).unwrap();
             let (artifact, note) = pio_build(&project).map_err(anyhow::Error::msg)?;
-            return Ok(Some(ResolvedFirmwareFile { path: artifact, note }));
+            return Ok(Some(ResolvedFirmwareFile {
+                path: artifact,
+                note,
+            }));
         }
         if let Some((artifact, env)) = newest_pio_artifact(path) {
             return Ok(Some(ResolvedFirmwareFile {
@@ -240,7 +251,9 @@ pub fn resolve_firmware_cli(path: &Path) -> anyhow::Result<Option<ResolvedFirmwa
         std::fs::write(&out, &resolved.bytes)?;
         return Ok(Some(ResolvedFirmwareFile {
             path: out,
-            note: resolved.note.unwrap_or_else(|| "resolved from the zip".to_string()),
+            note: resolved
+                .note
+                .unwrap_or_else(|| "resolved from the zip".to_string()),
         }));
     }
     Ok(None)
@@ -256,7 +269,9 @@ struct ImageEntry {
 /// any other `.elf` (1) > `.pio/build/**/firmware.hex` (2) > any `.hex` (3).
 /// Ties go to the newest entry timestamp. macOS resource-fork noise
 /// (`__MACOSX/`, dotfiles) is ignored.
-fn best_image_entry<R: Read + std::io::Seek>(archive: &mut zip::ZipArchive<R>) -> Option<ImageEntry> {
+fn best_image_entry<R: Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+) -> Option<ImageEntry> {
     let mut candidates: Vec<(u8, i64, usize, String)> = Vec::new();
     for i in 0..archive.len() {
         let entry = match archive.by_index(i) {
@@ -267,15 +282,25 @@ fn best_image_entry<R: Read + std::io::Seek>(archive: &mut zip::ZipArchive<R>) -
             continue;
         }
         let name = entry.name().to_string();
-        if name.starts_with("__MACOSX/") || name.rsplit('/').next().is_some_and(|f| f.starts_with('.')) {
+        if name.starts_with("__MACOSX/")
+            || name.rsplit('/').next().is_some_and(|f| f.starts_with('.'))
+        {
             continue;
         }
         let lower = name.to_ascii_lowercase();
         let in_pio_build = lower.contains(".pio/build/");
         let rank = if lower.ends_with(".elf") {
-            if in_pio_build { 0 } else { 1 }
+            if in_pio_build {
+                0
+            } else {
+                1
+            }
         } else if lower.ends_with(".hex") {
-            if in_pio_build { 2 } else { 3 }
+            if in_pio_build {
+                2
+            } else {
+                3
+            }
         } else {
             continue;
         };
@@ -296,11 +321,14 @@ fn best_image_entry<R: Read + std::io::Seek>(archive: &mut zip::ZipArchive<R>) -
     }
     let total = candidates.len();
     candidates.sort();
-    candidates.into_iter().next().map(|(_, _, index, entry_name)| ImageEntry {
-        index,
-        entry_name,
-        had_rivals: total > 1,
-    })
+    candidates
+        .into_iter()
+        .next()
+        .map(|(_, _, index, entry_name)| ImageEntry {
+            index,
+            entry_name,
+            had_rivals: total > 1,
+        })
 }
 
 fn archive_has_platformio_ini<R: Read + std::io::Seek>(archive: &mut zip::ZipArchive<R>) -> bool {
@@ -393,7 +421,11 @@ fn find_platformio_project(root: &Path) -> Option<PathBuf> {
         let mut subdirs: Vec<PathBuf> = std::fs::read_dir(dir)
             .ok()?
             .filter_map(|e| e.ok().map(|e| e.path()))
-            .filter(|p| p.is_dir() && p.file_name().is_some_and(|n| n != ".pio" && n != "__MACOSX"))
+            .filter(|p| {
+                p.is_dir()
+                    && p.file_name()
+                        .is_some_and(|n| n != ".pio" && n != "__MACOSX")
+            })
             .collect();
         subdirs.sort();
         subdirs.iter().find_map(|d| walk(d, depth - 1))
@@ -506,8 +538,12 @@ fn pio_build(project: &Path) -> Result<(PathBuf, String), String> {
             Err(e) => return Err(format!("waiting for `{bin} run`: {e}")),
         }
     };
-    let stdout = stdout_thread.and_then(|t| t.join().ok()).unwrap_or_default();
-    let stderr = stderr_thread.and_then(|t| t.join().ok()).unwrap_or_default();
+    let stdout = stdout_thread
+        .and_then(|t| t.join().ok())
+        .unwrap_or_default();
+    let stderr = stderr_thread
+        .and_then(|t| t.join().ok())
+        .unwrap_or_default();
     if !status.success() {
         let mut text = String::from_utf8_lossy(&stdout).into_owned();
         text.push_str(&String::from_utf8_lossy(&stderr));
@@ -617,7 +653,10 @@ mod tests {
         assert_eq!(r.name, "firmware.elf");
         assert_eq!(r.bytes, b"\x7fELF built");
         let note = r.note.expect("archive resolution is reported");
-        assert!(note.contains(".pio/build/uno/firmware.elf"), "note names the entry: {note}");
+        assert!(
+            note.contains(".pio/build/uno/firmware.elf"),
+            "note names the entry: {note}"
+        );
     }
 
     #[test]
@@ -635,14 +674,23 @@ mod tests {
     fn zip_with_nothing_useful_is_a_clear_error() {
         let z = zip_of(&[("README.md", b"# not firmware")]);
         let err = resolve_firmware_bytes("fw.zip", &z).unwrap_err();
-        assert!(err.contains(".elf"), "error names what was looked for: {err}");
-        assert!(err.contains("platformio.ini"), "and the build fallback: {err}");
+        assert!(
+            err.contains(".elf"),
+            "error names what was looked for: {err}"
+        );
+        assert!(
+            err.contains("platformio.ini"),
+            "and the build fallback: {err}"
+        );
     }
 
     #[test]
     fn pio_project_zip_without_pio_installed_says_how_to_get_it() {
         let z = zip_of(&[
-            ("blink/platformio.ini", b"[env:uno]\nplatform = atmelavr\nboard = uno\n"),
+            (
+                "blink/platformio.ini",
+                b"[env:uno]\nplatform = atmelavr\nboard = uno\n",
+            ),
             ("blink/src/main.cpp", b"int main(){}"),
         ]);
         let _env = ENV_LOCK.lock().unwrap();
@@ -650,13 +698,20 @@ mod tests {
         let err = resolve_firmware_bytes("blink.zip", &z).unwrap_err();
         std::env::remove_var("HAUKSBEE_PIO");
         assert!(err.contains("PlatformIO"), "names the missing tool: {err}");
-        assert!(err.contains("firmware.elf"), "offers the manual path: {err}");
+        assert!(
+            err.contains("firmware.elf"),
+            "offers the manual path: {err}"
+        );
     }
 
     #[test]
     fn zip_with_too_many_entries_is_refused() {
         let z = zip_of(&[("a.txt", b"x"), ("b.txt", b"y"), ("c.txt", b"z")]);
-        let limits = ZipLimits { max_entries: 2, max_entry_bytes: 1024, max_total_bytes: 4096 };
+        let limits = ZipLimits {
+            max_entries: 2,
+            max_entry_bytes: 1024,
+            max_total_bytes: 4096,
+        };
         let err = resolve_firmware_bytes_limited("fw.zip", &z, &limits).unwrap_err();
         assert!(err.contains("entries"), "names the quota: {err}");
         assert!(err.contains("zip-bomb"), "says why: {err}");
@@ -666,7 +721,11 @@ mod tests {
     fn oversized_built_image_is_refused() {
         let big = vec![0u8; 1024];
         let z = zip_of(&[("build/app.elf", big.as_slice())]);
-        let limits = ZipLimits { max_entries: 10, max_entry_bytes: 512, max_total_bytes: 1 << 20 };
+        let limits = ZipLimits {
+            max_entries: 10,
+            max_entry_bytes: 512,
+            max_total_bytes: 1 << 20,
+        };
         let err = resolve_firmware_bytes_limited("fw.zip", &z, &limits).unwrap_err();
         assert!(err.contains("per-file limit"), "names the quota: {err}");
     }
@@ -678,7 +737,11 @@ mod tests {
             ("p/platformio.ini", b"[env:uno]\n"),
             ("p/src/big.bin", big.as_slice()),
         ]);
-        let limits = ZipLimits { max_entries: 10, max_entry_bytes: 128, max_total_bytes: 1 << 20 };
+        let limits = ZipLimits {
+            max_entries: 10,
+            max_entry_bytes: 128,
+            max_total_bytes: 1 << 20,
+        };
         let err = resolve_firmware_bytes_limited("p.zip", &z, &limits).unwrap_err();
         assert!(err.contains("per-file limit"), "names the quota: {err}");
     }
@@ -692,7 +755,11 @@ mod tests {
             ("p/src/b.bin", chunk.as_slice()),
             ("p/src/c.bin", chunk.as_slice()),
         ]);
-        let limits = ZipLimits { max_entries: 10, max_entry_bytes: 400, max_total_bytes: 700 };
+        let limits = ZipLimits {
+            max_entries: 10,
+            max_entry_bytes: 400,
+            max_total_bytes: 700,
+        };
         let err = resolve_firmware_bytes_limited("p.zip", &z, &limits).unwrap_err();
         assert!(err.contains("total limit"), "names the quota: {err}");
     }
@@ -741,8 +808,14 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let zip_path = dir.path().join("fw.zip");
         std::fs::write(&zip_path, &z).unwrap();
-        let r = resolve_firmware_cli(&zip_path).unwrap().expect("a zip resolves");
-        assert!(r.path.is_file(), "staged image exists: {}", r.path.display());
+        let r = resolve_firmware_cli(&zip_path)
+            .unwrap()
+            .expect("a zip resolves");
+        assert!(
+            r.path.is_file(),
+            "staged image exists: {}",
+            r.path.display()
+        );
         assert_eq!(std::fs::read(&r.path).unwrap(), b"\x7fELF cli image");
         // The staging dir is deliberately kept; tidy it up in the test.
         if let Some(parent) = r.path.parent() {
@@ -764,8 +837,14 @@ mod tests {
         )
         .unwrap();
         std::fs::write(dir.join("src/main.c"), "int main(void){for(;;){}}\n").unwrap();
-        let r = resolve_firmware_cli(&dir).unwrap().expect("a project dir resolves");
-        assert!(r.path.is_file(), "built artifact exists: {}", r.path.display());
+        let r = resolve_firmware_cli(&dir)
+            .unwrap()
+            .expect("a project dir resolves");
+        assert!(
+            r.path.is_file(),
+            "built artifact exists: {}",
+            r.path.display()
+        );
         assert!(r.note.contains("pio run"), "note says it built: {}", r.note);
         let bytes = std::fs::read(&r.path).unwrap();
         assert!(bytes.starts_with(b"\x7fELF") || r.path.extension().is_some_and(|e| e == "hex"));

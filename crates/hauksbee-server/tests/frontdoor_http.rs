@@ -120,8 +120,9 @@ async fn analyze_without_filename_header_defaults_gracefully() {
 /// Spawn the firmware-aware router with a stub FirmwareAnalyzer that echoes back
 /// what it received (board name, board length, firmware name + length, or "none").
 async fn spawn_fw() -> std::net::SocketAddr {
-    let analyze: frontdoor::FirmwareAnalyzer =
-        Arc::new(|name: &str, contents: &[u8], fw: Option<(&str, &[u8])>| match fw {
+    let analyze: frontdoor::FirmwareAnalyzer = Arc::new(
+        |name: &str, contents: &[u8], fw: Option<(&str, &[u8])>| {
+            match fw {
             Some((fw_name, fw_bytes)) => format!(
                 "{{\"ok\":true,\"file_name\":\"{name}\",\"len\":{},\"fw_name\":\"{fw_name}\",\"fw_len\":{}}}",
                 contents.len(),
@@ -131,7 +132,9 @@ async fn spawn_fw() -> std::net::SocketAddr {
                 "{{\"ok\":true,\"file_name\":\"{name}\",\"len\":{},\"fw\":\"none\"}}",
                 contents.len()
             ),
-        });
+        }
+        },
+    );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     let router = frontdoor::router_with_firmware(analyze);
@@ -173,8 +176,14 @@ async fn firmware_router_still_serves_board_only_analyze() {
         body.len()
     );
     let resp = http(addr, &req, body).await;
-    assert!(resp.contains("200 OK"), "board-only should 200: {resp:.160}");
-    assert!(resp.contains("\"fw\":\"none\""), "board-only path passes no firmware");
+    assert!(
+        resp.contains("200 OK"),
+        "board-only should 200: {resp:.160}"
+    );
+    assert!(
+        resp.contains("\"fw\":\"none\""),
+        "board-only path passes no firmware"
+    );
 }
 
 #[tokio::test]
@@ -199,8 +208,14 @@ async fn analyze_with_firmware_threads_board_and_firmware_bytes() {
     );
     let resp = http(addr, &req, &body).await;
     assert!(resp.contains("200 OK"), "should 200: {resp:.200}");
-    assert!(resp.contains("\"file_name\":\"tiny.kicad_pcb\""), "board name threaded: {resp}");
-    assert!(resp.contains("\"fw_name\":\"drone.elf\""), "fw name threaded: {resp}");
+    assert!(
+        resp.contains("\"file_name\":\"tiny.kicad_pcb\""),
+        "board name threaded: {resp}"
+    );
+    assert!(
+        resp.contains("\"fw_name\":\"drone.elf\""),
+        "fw name threaded: {resp}"
+    );
     // Exact byte count proves the firmware bytes survived intact (no UTF-8 lossy).
     assert!(
         resp.contains(&format!("\"fw_len\":{}", fw.len())),
@@ -282,7 +297,10 @@ async fn malformed_multipart_names_the_real_cause() {
         body.len()
     );
     let resp = http(addr, &req, body).await;
-    assert!(resp.contains("200 OK"), "error is carried in the JSON body: {resp:.200}");
+    assert!(
+        resp.contains("200 OK"),
+        "error is carried in the JSON body: {resp:.200}"
+    );
     assert!(
         resp.contains("\"ok\":false"),
         "a malformed upload must not report ok: {resp}"
@@ -309,7 +327,9 @@ async fn spawn_deps() -> std::net::SocketAddr {
         if id == "ok-dep" {
             Ok(())
         } else {
-            Err(format!("install of '{id}' failed. Last output:\nthe disk is full"))
+            Err(format!(
+                "install of '{id}' failed. Last output:\nthe disk is full"
+            ))
         }
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -332,7 +352,10 @@ async fn deps_status_relays_the_engine_json() {
     .await;
     assert!(resp.contains("200 OK"), "{resp:.200}");
     assert!(resp.contains("application/json"), "{resp:.200}");
-    assert!(resp.contains("\"id\":\"stub\""), "status JSON relayed: {resp}");
+    assert!(
+        resp.contains("\"id\":\"stub\""),
+        "status JSON relayed: {resp}"
+    );
 }
 
 #[tokio::test]
@@ -346,11 +369,23 @@ async fn deps_install_streams_progress_then_done() {
     )
     .await;
     assert!(resp.contains("200 OK"), "{resp:.200}");
-    assert!(resp.contains("text/event-stream"), "SSE content type: {resp:.300}");
-    assert!(resp.contains("data: step one"), "progress line one streamed: {resp}");
-    assert!(resp.contains("data: step two"), "progress line two streamed: {resp}");
+    assert!(
+        resp.contains("text/event-stream"),
+        "SSE content type: {resp:.300}"
+    );
+    assert!(
+        resp.contains("data: step one"),
+        "progress line one streamed: {resp}"
+    );
+    assert!(
+        resp.contains("data: step two"),
+        "progress line two streamed: {resp}"
+    );
     assert!(resp.contains("event: done"), "terminal done event: {resp}");
-    assert!(!resp.contains("event: error"), "no error on success: {resp}");
+    assert!(
+        !resp.contains("event: error"),
+        "no error on success: {resp}"
+    );
 }
 
 #[tokio::test]
@@ -363,7 +398,10 @@ async fn deps_install_failure_carries_the_real_tail() {
         b"",
     )
     .await;
-    assert!(resp.contains("event: error"), "terminal error event: {resp}");
+    assert!(
+        resp.contains("event: error"),
+        "terminal error event: {resp}"
+    );
     // The multi-line error survives SSE framing as consecutive data lines.
     assert!(
         resp.contains("data: the disk is full"),
@@ -384,7 +422,10 @@ async fn deps_install_refuses_cross_site_requests() {
         b"",
     )
     .await;
-    assert!(resp.contains("403"), "cross-site install must 403: {resp:.300}");
+    assert!(
+        resp.contains("403"),
+        "cross-site install must 403: {resp:.300}"
+    );
     assert!(
         !resp.contains("event: done") && !resp.contains("data: step one"),
         "the installer must not have run: {resp}"

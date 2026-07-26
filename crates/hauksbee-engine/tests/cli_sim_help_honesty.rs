@@ -56,7 +56,10 @@ fn sim_help_does_not_claim_working_features_refuse() {
 fn sim_help_states_the_working_capabilities() {
     let help = sim_help();
     // All four analyses named as running.
-    assert!(help.contains("All four analyses run"), "help should say all four analyses run");
+    assert!(
+        help.contains("All four analyses run"),
+        "help should say all four analyses run"
+    );
     // The AC worked example the panel asked for.
     assert!(
         help.contains("--ac --print V(out)"),

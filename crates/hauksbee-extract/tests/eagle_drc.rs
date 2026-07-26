@@ -140,8 +140,16 @@ fn eagle_populate_no_sets_dnp() {
 "#;
     let text = board(packages, elements, signals, default_rules());
     let brd = ExtractedBoard::from_eagle_brd(&text).expect("eagle extraction succeeds");
-    let r1 = brd.components.iter().find(|c| c.reference == "R1").expect("R1");
-    let r2 = brd.components.iter().find(|c| c.reference == "R2").expect("R2");
+    let r1 = brd
+        .components
+        .iter()
+        .find(|c| c.reference == "R1")
+        .expect("R1");
+    let r2 = brd
+        .components
+        .iter()
+        .find(|c| c.reference == "R2")
+        .expect("R2");
     assert!(!r1.dnp, "R1 has no populate attribute -> populated");
     assert!(r2.dnp, "R2 populate=\"no\" -> do-not-populate");
 }
@@ -167,7 +175,11 @@ fn eagle_mirrored_rotated_pad_uses_drc_handedness() {
 "#;
     let text = board(packages, elements, signals, default_rules());
     let brd = ExtractedBoard::from_eagle_brd(&text).expect("eagle extraction succeeds");
-    let u1 = brd.components.iter().find(|c| c.reference == "U1").expect("U1");
+    let u1 = brd
+        .components
+        .iter()
+        .find(|c| c.reference == "U1")
+        .expect("U1");
     let p1 = u1.pins.iter().find(|p| p.number == "1").expect("pad 1");
     let (x, y) = p1.position.expect("pad 1 has a position");
     // flip-X then rotate by -90°: local (2, 0) -> world (0, +2). The old +90°
@@ -198,7 +210,11 @@ fn eagle_spin_mirrored_element_is_recognised_as_mirrored() {
 "#;
     let text = board(packages, elements, signals, default_rules());
     let brd = ExtractedBoard::from_eagle_brd(&text).expect("eagle extraction succeeds");
-    let u1 = brd.components.iter().find(|c| c.reference == "U1").expect("U1");
+    let u1 = brd
+        .components
+        .iter()
+        .find(|c| c.reference == "U1")
+        .expect("U1");
     // Mirrored -> bottom copper, and mirror-then-rotate places pad 1 at (0, 2)
     // just like MR90. Un-mirrored (the bug) would leave it on F.Cu at (0, -2).
     assert_eq!(u1.layer, "B.Cu", "SMR90 is mirrored -> bottom side");
@@ -258,7 +274,11 @@ fn eagle_same_named_packages_in_different_libraries_do_not_merge() {
 </eagle>
 "#;
     let brd = ExtractedBoard::from_eagle_brd(text).expect("eagle extraction succeeds");
-    let c1 = brd.components.iter().find(|c| c.reference == "C1").expect("C1");
+    let c1 = brd
+        .components
+        .iter()
+        .find(|c| c.reference == "C1")
+        .expect("C1");
     let mut nums: Vec<&str> = c1.pins.iter().map(|p| p.number.as_str()).collect();
     nums.sort_unstable();
     assert_eq!(

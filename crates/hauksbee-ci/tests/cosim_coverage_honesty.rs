@@ -33,7 +33,9 @@ use hauksbee_ci::{run, RunConfig};
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 fn repo(rel: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..").join(rel)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(rel)
 }
 
 fn renode_available() -> bool {
@@ -90,7 +92,11 @@ contains = "hello from stm32"
         ),
     );
 
-    let result = run(&RunConfig { spec, ..Default::default() }).expect("ci run");
+    let result = run(&RunConfig {
+        spec,
+        ..Default::default()
+    })
+    .expect("ci run");
     let _ = std::fs::remove_dir_all(&dir);
 
     assert!(
@@ -139,11 +145,11 @@ fn unexercised_bus_sensor_warns_and_fails_its_peripheral_assertion() {
     std::fs::create_dir_all(&dir).expect("mkdir override dir");
     let stock = std::fs::read_to_string(repo("crates/hauksbee-mcu/db/mcu/stm32f103.soc.toml"))
         .expect("read stock descriptor");
-    let no_i2c = stock.replace(
-        "controllers = [\"i2c1\"]",
-        "controllers = []",
+    let no_i2c = stock.replace("controllers = [\"i2c1\"]", "controllers = []");
+    assert_ne!(
+        no_i2c, stock,
+        "the stock descriptor must have had i2c1 to empty"
     );
-    assert_ne!(no_i2c, stock, "the stock descriptor must have had i2c1 to empty");
     std::fs::write(dir.join("stm32f103.soc.toml"), no_i2c).expect("write override");
 
     let spec = write_spec(
@@ -207,7 +213,10 @@ max   = 45.0
     );
 
     std::env::set_var("HAUKSBEE_MCU_DIR", &dir);
-    let result = run(&RunConfig { spec, ..Default::default() });
+    let result = run(&RunConfig {
+        spec,
+        ..Default::default()
+    });
     std::env::remove_var("HAUKSBEE_MCU_DIR");
     let result = result.expect("ci run");
     let _ = std::fs::remove_dir_all(&dir);
@@ -223,7 +232,9 @@ max   = 45.0
     );
     assert!(result.render_human().contains("COVERAGE HOLE"));
     assert!(result.render_junit().contains("COVERAGE HOLE"));
-    assert!(result.render_github_annotations().contains("COSIM COVERAGE HOLE"));
+    assert!(result
+        .render_github_annotations()
+        .contains("COSIM COVERAGE HOLE"));
 
     // The peripheral assertion FAILS loudly instead of green-passing on the
     // sensor's untouched default state.

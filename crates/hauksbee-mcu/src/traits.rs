@@ -233,11 +233,7 @@ pub trait Mcu {
     /// with multiple SPI controllers) override this to route each controller to
     /// its own bridge/callback, so a slave attached to "spi2" only receives
     /// traffic from the spi2 controller, not from spi3.
-    fn on_spi_controller(
-        &mut self,
-        _controller: &str,
-        cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>,
-    ) {
+    fn on_spi_controller(&mut self, _controller: &str, cb: Box<dyn FnMut(SpiEvent) -> u8 + Send>) {
         self.on_spi(cb);
     }
 

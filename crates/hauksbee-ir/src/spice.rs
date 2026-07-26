@@ -317,7 +317,15 @@ fn load_deck(
         stack: top_canon.into_iter().map(|p| (p, None)).collect(),
     };
     let mut phys: Vec<PhysLine> = Vec::new();
-    read_source(text, top_dir, top_name, Rc::from(""), true, &mut ctx, &mut phys)?;
+    read_source(
+        text,
+        top_dir,
+        top_name,
+        Rc::from(""),
+        true,
+        &mut ctx,
+        &mut phys,
+    )?;
     let logical = join_continuations(&phys);
 
     // First pass: collect `.model`/`.subckt`/`.param`/directives, set aside
@@ -375,8 +383,15 @@ fn load_deck(
     for sl in &expanded {
         let before = fixups.len();
         let before_dev = circuit.devices.len();
-        parse_element(sl.lineno, &sl.text, &mut circuit, &col.models, &sl.env, &mut fixups)
-            .map_err(|e| with_provenance(e, &sl.provenance))?;
+        parse_element(
+            sl.lineno,
+            &sl.text,
+            &mut circuit,
+            &col.models,
+            &sl.env,
+            &mut fixups,
+        )
+        .map_err(|e| with_provenance(e, &sl.provenance))?;
         for fx in &mut fixups[before..] {
             fx.provenance = sl.provenance.clone();
         }
@@ -852,11 +867,7 @@ struct ParamCard {
 }
 
 /// Parse a `.param a=1 b={a*2} ...` card, appending each definition.
-fn parse_param_card(
-    line: usize,
-    raw: &str,
-    out: &mut Vec<ParamCard>,
-) -> Result<(), SpiceError> {
+fn parse_param_card(line: usize, raw: &str, out: &mut Vec<ParamCard>) -> Result<(), SpiceError> {
     // Keep `=` so `key=value` pairs (and braced expressions) survive tokenizing.
     let toks = tokenize_kv(raw);
     let mut any = false;
@@ -1297,10 +1308,7 @@ fn parse_subckt_header(line: usize, raw: &str) -> Result<SubcktDef, SpiceError> 
             // lengths match) and the flattened netlist is mis-wired with no
             // diagnostic. Port matching is case-insensitive there, so compare
             // case-insensitively here too.
-            if ports
-                .iter()
-                .any(|p: &String| p.eq_ignore_ascii_case(tok))
-            {
+            if ports.iter().any(|p: &String| p.eq_ignore_ascii_case(tok)) {
                 return Err(SpiceError::Syntax {
                     line,
                     msg: format!(
@@ -1561,7 +1569,12 @@ fn expand_instance(
     let local_cards: Vec<ParamCard> = def
         .body
         .iter()
-        .filter(|pl| pl.text.trim_start().to_ascii_lowercase().starts_with(".param"))
+        .filter(|pl| {
+            pl.text
+                .trim_start()
+                .to_ascii_lowercase()
+                .starts_with(".param")
+        })
         .map(|pl| -> Result<Vec<ParamCard>, SpiceError> {
             let mut tmp = Vec::new();
             parse_param_card(pl.lineno, &pl.text, &mut tmp)?;
@@ -1667,12 +1680,10 @@ fn expand_instance(
             // clean "POLY controlled-source unsupported" refusal into a cryptic
             // "malformed number". Skip node-mapping for these so the verbatim
             // line reaches parse_controlled and is refused by name. (R8 #16)
-            let eg_ctrl_form = matches!(kind, 'E' | 'G')
-                && btoks.len() > 3
-                && {
-                    let t = btoks[3].to_ascii_lowercase();
-                    t.starts_with("poly") || t.starts_with("value") || t.starts_with("table")
-                };
+            let eg_ctrl_form = matches!(kind, 'E' | 'G') && btoks.len() > 3 && {
+                let t = btoks[3].to_ascii_lowercase();
+                t.starts_with("poly") || t.starts_with("value") || t.starts_with("table")
+            };
             if !eg_ctrl_form {
                 for &i in node_indices_for(kind) {
                     if i < btoks.len() {
@@ -1801,7 +1812,12 @@ fn with_provenance(err: SpiceError, prov: &str) -> SpiceError {
             tok,
             text: format!("{text}{prov}"),
         },
-        SpiceError::Unsupported { line, card, text, reason } => SpiceError::Unsupported {
+        SpiceError::Unsupported {
+            line,
+            card,
+            text,
+            reason,
+        } => SpiceError::Unsupported {
             line,
             card,
             text: format!("{text}{prov}"),
@@ -1979,7 +1995,10 @@ fn include_file(
             site,
             raw,
             origin,
-            format!("`.include` takes exactly one file path (got {})", args.len()),
+            format!(
+                "`.include` takes exactly one file path (got {})",
+                args.len()
+            ),
         ));
     }
     let path = resolve_include(&args[0], this_dir, &ctx.top_dir).map_err(|attempts| {
@@ -2005,7 +2024,17 @@ fn include_file(
         )
         .as_str(),
     );
-    splice_file(&path, &args[0], child_origin, None, site, raw, origin, ctx, out)
+    splice_file(
+        &path,
+        &args[0],
+        child_origin,
+        None,
+        site,
+        raw,
+        origin,
+        ctx,
+        out,
+    )
 }
 
 /// Handle a `.lib <file> <section>` call, or refuse the ambiguous one-arg form.
@@ -2046,7 +2075,17 @@ fn lib_call(
                 )
                 .as_str(),
             );
-            splice_file(&path, file, child_origin, Some(section), site, raw, origin, ctx, out)
+            splice_file(
+                &path,
+                file,
+                child_origin,
+                Some(section),
+                site,
+                raw,
+                origin,
+                ctx,
+                out,
+            )
         }
         1 => Err(provenanced_syntax(
             site,
@@ -2117,15 +2156,35 @@ fn splice_file(
             format!("cannot read included file `{}`: {e}", path.display()),
         )
     })?;
-    let child_dir = path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let child_dir = path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .to_path_buf();
     let child_name = path
         .file_name()
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string());
     ctx.stack.push(key);
     let r = match section {
-        Some(sec) => read_section(&text, &child_dir, &child_name, sec, display_arg, child_origin, ctx, out),
-        None => read_source(&text, &child_dir, &child_name, child_origin, false, ctx, out),
+        Some(sec) => read_section(
+            &text,
+            &child_dir,
+            &child_name,
+            sec,
+            display_arg,
+            child_origin,
+            ctx,
+            out,
+        ),
+        None => read_source(
+            &text,
+            &child_dir,
+            &child_name,
+            child_origin,
+            false,
+            ctx,
+            out,
+        ),
     };
     ctx.stack.pop();
     r
@@ -2196,7 +2255,17 @@ fn read_section(
                     )
                     .as_str(),
                 );
-                splice_file(&path, &args[0], child_origin, Some(&args[1]), lineno, raw, &origin, ctx, out)?;
+                splice_file(
+                    &path,
+                    &args[0],
+                    child_origin,
+                    Some(&args[1]),
+                    lineno,
+                    raw,
+                    &origin,
+                    ctx,
+                    out,
+                )?;
                 continue;
             } else if in_section {
                 return Err(provenanced_syntax(
@@ -2217,8 +2286,7 @@ fn read_section(
         }
         if tok.eq_ignore_ascii_case(".include") || tok.eq_ignore_ascii_case(".inc") {
             if in_section {
-                let args =
-                    parse_directive_args(&strip_inline_comment(&trimmed[tok.len()..]));
+                let args = parse_directive_args(&strip_inline_comment(&trimmed[tok.len()..]));
                 include_file(&args, lineno, raw, this_dir, this_name, &origin, ctx, out)?;
             }
             continue;
@@ -2292,12 +2360,12 @@ fn parse_ic_values(
             .get(i + 2)
             .ok_or_else(|| syn(format!("{what}: `V({node})` without a value")))?;
         let value = eval_value(pl.lineno, valtok, &pl.text, env)?;
-        let nid = circuit
-            .find_node(node)
-            .ok_or_else(|| syn(format!(
+        let nid = circuit.find_node(node).ok_or_else(|| {
+            syn(format!(
                 "{what} references unknown node `{node}`{}",
                 did_you_mean(circuit, node)
-            )))?;
+            ))
+        })?;
         out.push((nid, value));
         any = true;
         i += 3;
@@ -3343,10 +3411,7 @@ fn parse_current_controlled(
     // and a blanket token scan would refuse a legitimately named source (a
     // `Vtable`, or literally `Value`). `poly` cannot be a vname (a V-source
     // name starts with `V`), so the check is unambiguous.
-    if toks
-        .get(3)
-        .is_some_and(|t| t.eq_ignore_ascii_case("poly"))
-    {
+    if toks.get(3).is_some_and(|t| t.eq_ignore_ascii_case("poly")) {
         return Err(SpiceError::Syntax {
             line,
             msg: "`POLY` controlled-source form is unsupported (only the linear \
@@ -3529,7 +3594,7 @@ fn parse_behavioral(
     }
     if toks.len() < 5 {
         return Err(syn(
-            "B-source needs n+, n-, and `V={expr}` or `I={expr}`".into(),
+            "B-source needs n+, n-, and `V={expr}` or `I={expr}`".into()
         ));
     }
     let name = toks[0].clone();
@@ -3725,7 +3790,10 @@ fn rewrite_behavioral_expr(
                     return Err(syn(format!("unclosed `{ident}(` in behavioral expression")));
                 }
                 args.push(cur.trim().to_string());
-                if args.iter().any(|a| a.is_empty() || a.chars().any(char::is_whitespace)) {
+                if args
+                    .iter()
+                    .any(|a| a.is_empty() || a.chars().any(char::is_whitespace))
+                {
                     return Err(syn(format!(
                         "malformed `{ident}(...)` argument list in behavioral expression"
                     )));
@@ -3938,7 +4006,10 @@ fn parse_ac(line: usize, raw: &str) -> Result<AcDirective, SpiceError> {
     if points < 1.0 || points.fract() != 0.0 {
         return Err(SpiceError::Syntax {
             line,
-            msg: format!("`.ac` point count must be a positive integer, got `{}`", toks[2]),
+            msg: format!(
+                "`.ac` point count must be a positive integer, got `{}`",
+                toks[2]
+            ),
             text: raw.into(),
         });
     }
@@ -4217,10 +4288,16 @@ mod tests {
         // W is a braced expr referencing a param; L is literal. Pre-fix W was
         // dropped → w_over_l defaulted to 1/2 = 0.5; correct is 4/2 = 2.
         let braced = "m\n.param wv=4\nM1 d g 0 0 MX W={wv} L=2\n.model MX NMOS(KP=1)\n.end\n";
-        assert!((mosfet_wl(braced) - 2.0).abs() < 1e-9, "W={{wv}} must resolve to 4");
+        assert!(
+            (mosfet_wl(braced) - 2.0).abs() < 1e-9,
+            "W={{wv}} must resolve to 4"
+        );
         // Bare param name, same expectation.
         let bare = "m\n.param wv=4\nM1 d g 0 0 MX W=wv L=2\n.model MX NMOS(KP=1)\n.end\n";
-        assert!((mosfet_wl(bare) - 2.0).abs() < 1e-9, "W=wv must resolve to 4");
+        assert!(
+            (mosfet_wl(bare) - 2.0).abs() < 1e-9,
+            "W=wv must resolve to 4"
+        );
 
         // A malformed braced option is refused, not silently dropped.
         let bad = "m\nM1 d g 0 0 MX W={ } L=2\n.model MX NMOS(KP=1)\n.end\n";
@@ -4290,7 +4367,10 @@ mod tests {
         // A local param that does NOT collide with an outer name is fine.
         let ok = "d\n.param vdd=10\n.subckt amp in out\n.param gain={vdd*0.5}\n\
                   R1 in out {gain}\n.ends\nX1 a b amp\n.end\n";
-        assert!(SpiceLoader::load(ok).is_ok(), "a non-shadowing local param must load");
+        assert!(
+            SpiceLoader::load(ok).is_ok(),
+            "a non-shadowing local param must load"
+        );
     }
 
     /// Round-8 #16: the E/G POLY/VALUE/TABLE refusal must survive subckt
@@ -4354,7 +4434,10 @@ mod tests {
         );
         // A subckt with all-distinct ports still loads cleanly.
         let ok = "d\n.subckt divider in mid out\nR1 in mid 1k\nR2 mid out 1k\n.ends\nX1 vin vmid vout divider\n.end\n";
-        assert!(SpiceLoader::load(ok).is_ok(), "distinct ports must still load");
+        assert!(
+            SpiceLoader::load(ok).is_ok(),
+            "distinct ports must still load"
+        );
     }
 
     /// Bug-hunt: a 0-Ω resistor is a SHORT (ngspice convention), but the
@@ -4377,7 +4460,11 @@ mod tests {
                 .unwrap_or_else(|| panic!("{name} present"))
         };
         assert_eq!(ohms_of("R0"), 1e-6, "0 Ω clamps to the 1e-6 short floor");
-        assert_eq!(ohms_of("Rneg"), 1e-6, "negative R clamps to the short floor");
+        assert_eq!(
+            ohms_of("Rneg"),
+            1e-6,
+            "negative R clamps to the short floor"
+        );
         assert_eq!(ohms_of("Rok"), 1e3, "positive R passes through unchanged");
     }
 
@@ -4400,7 +4487,11 @@ mod tests {
         };
         // Direct element value: {6/4} is 1.5 Ω, not integer-truncated 1 Ω.
         let direct = "d\nR1 a 0 {6/4}\n.end\n";
-        assert!((ohms_of(direct, "R1") - 1.5).abs() < 1e-9, "got {}", ohms_of(direct, "R1"));
+        assert!(
+            (ohms_of(direct, "R1") - 1.5).abs() < 1e-9,
+            "got {}",
+            ohms_of(direct, "R1")
+        );
         // Through a .param and an X-scaled override expression: 1.5 * 1000.
         let via_param = "d\n.param h={6/4}\nR1 a 0 {h*1000}\n.end\n";
         assert!(
@@ -4410,7 +4501,11 @@ mod tests {
         );
         // Identifiers carrying digits are not corrupted by the rewrite.
         let idents = "d\n.param r2=3\nR1 a 0 {r2*2}\n.end\n";
-        assert!((ohms_of(idents, "R1") - 6.0).abs() < 1e-9, "got {}", ohms_of(idents, "R1"));
+        assert!(
+            (ohms_of(idents, "R1") - 6.0).abs() < 1e-9,
+            "got {}",
+            ohms_of(idents, "R1")
+        );
     }
 
     /// Dev-plan 04 §3.3: SPICE-convention PMOS threshold (negative VTO for
@@ -4423,12 +4518,20 @@ mod tests {
                    .model MP PMOS(VTO=-1.1 KP=4.5 W=1m L=10u TOX=50n \
                    CGSO=2e-9 CGDO=1e-9 IS=1e-12 CBD=50p CBS=20p PB=0.7 MJ=0.4)\n.end\n";
         let c = SpiceLoader::load(net).unwrap();
-        let m = match c.devices.iter().find(|d| matches!(d, Device::Mosfet { .. })) {
+        let m = match c
+            .devices
+            .iter()
+            .find(|d| matches!(d, Device::Mosfet { .. }))
+        {
             Some(Device::Mosfet { model, .. }) => model,
             _ => unreachable!(),
         };
         assert_eq!(m.polarity, Polarity::P);
-        assert!((m.vto - 1.1).abs() < 1e-12, "PMOS VTO folds positive: {}", m.vto);
+        assert!(
+            (m.vto - 1.1).abs() < 1e-12,
+            "PMOS VTO folds positive: {}",
+            m.vto
+        );
         assert!((m.cgs_ov - 2e-12).abs() < 1e-18, "CGSO·W: {}", m.cgs_ov);
         assert!((m.cgd_ov - 1e-12).abs() < 1e-18, "CGDO·W: {}", m.cgd_ov);
         let c_ox_want = 3.9 * 8.854_214_871e-12 / 50e-9 * 1e-3 * 10e-6;
@@ -4448,7 +4551,11 @@ mod tests {
         // IS; hauksbee deliberately does not, documented on the fields).
         let plain = "m\nM1 d g 0 0 MN\n.model MN NMOS(VTO=2 KP=1e-3)\n.end\n";
         let c2 = SpiceLoader::load(plain).unwrap();
-        let m2 = match c2.devices.iter().find(|d| matches!(d, Device::Mosfet { .. })) {
+        let m2 = match c2
+            .devices
+            .iter()
+            .find(|d| matches!(d, Device::Mosfet { .. }))
+        {
             Some(Device::Mosfet { model, .. }) => model,
             _ => unreachable!(),
         };
@@ -4478,12 +4585,33 @@ mod tests {
             .iter()
             .map(|(id, s)| (c.devices[id.0 as usize].name().to_string(), *s))
             .collect();
-        assert_eq!(stim["V1"], AcStim { mag: 1.0, phase_deg: 0.0 });
-        assert_eq!(stim["V2"], AcStim { mag: 2.0, phase_deg: 30.0 });
-        assert_eq!(stim["V3"], AcStim { mag: 1.0, phase_deg: 0.0 });
+        assert_eq!(
+            stim["V1"],
+            AcStim {
+                mag: 1.0,
+                phase_deg: 0.0
+            }
+        );
+        assert_eq!(
+            stim["V2"],
+            AcStim {
+                mag: 2.0,
+                phase_deg: 30.0
+            }
+        );
+        assert_eq!(
+            stim["V3"],
+            AcStim {
+                mag: 1.0,
+                phase_deg: 0.0
+            }
+        );
         // V3 still carries its SIN transient function (AC was peeled off).
         match &c.devices[2] {
-            Device::Vsource { kind: SourceKind::Sin { freq, .. }, .. } => {
+            Device::Vsource {
+                kind: SourceKind::Sin { freq, .. },
+                ..
+            } => {
                 assert!((freq - 1e3).abs() < 1e-9)
             }
             other => panic!("expected V3 to keep SIN, got {other:?}"),
@@ -4505,9 +4633,15 @@ mod tests {
         }
         // Unknown sweep type and duplicate cards are line-numbered refusals.
         let bad = "ac\nV1 a 0 AC 1\nR1 a 0 1k\n.ac bogus 5 10 1e6\n.end\n";
-        assert!(SpiceLoader::load(bad).unwrap_err().to_string().contains("sweep type"));
+        assert!(SpiceLoader::load(bad)
+            .unwrap_err()
+            .to_string()
+            .contains("sweep type"));
         let dup = "ac\nV1 a 0 AC 1\nR1 a 0 1k\n.ac dec 5 10 1e6\n.ac lin 5 10 1e6\n.end\n";
-        assert!(SpiceLoader::load(dup).unwrap_err().to_string().contains("duplicate `.ac`"));
+        assert!(SpiceLoader::load(dup)
+            .unwrap_err()
+            .to_string()
+            .contains("duplicate `.ac`"));
     }
 
     #[test]
@@ -4575,7 +4709,11 @@ mod tests {
         // current-source value into oblivion.)
         assert_eq!(parse_spice_number("5A"), Some(5.0));
         assert_eq!(parse_spice_number("1.5a"), Some(1.5));
-        assert_eq!(parse_spice_number("100mA"), Some(100e-3), "m=milli, A ignored");
+        assert_eq!(
+            parse_spice_number("100mA"),
+            Some(100e-3),
+            "m=milli, A ignored"
+        );
         // The femto scale still works with a trailing farad unit.
         assert!((parse_spice_number("2fF").unwrap() - 2e-15).abs() < 1e-25);
     }
@@ -4693,7 +4831,10 @@ mod tests {
     fn refuses_dangling_control_name() {
         let net = "dangle\nF1 out 0 Vnope 2\nR1 out 0 1k\n.end\n";
         let err = SpiceLoader::load(net).unwrap_err().to_string();
-        assert!(err.contains("Vnope") && err.contains("does not exist"), "{err}");
+        assert!(
+            err.contains("Vnope") && err.contains("does not exist"),
+            "{err}"
+        );
         assert!(err.contains("line 2"), "error must carry the line: {err}");
     }
 
@@ -4758,7 +4899,9 @@ mod tests {
         let c = SpiceLoader::load(net).unwrap();
         let (l1, l2) = (dev_id(&c, "L1"), dev_id(&c, "L2"));
         match &c.devices[dev_id(&c, "K1").0 as usize] {
-            Device::Coupling { l1: a, l2: b, k, .. } => {
+            Device::Coupling {
+                l1: a, l2: b, k, ..
+            } => {
                 assert_eq!((*a, *b), (l1, l2), "K1 must resolve to L1/L2");
                 assert!((k - 0.99).abs() < 1e-12);
             }
@@ -4795,7 +4938,10 @@ mod tests {
         // Dangling name: the standard resolve error, with the line.
         let net2 = "dangle\nL1 a 0 1m\nK1 L1 Lnope 0.9\n.end\n";
         let err2 = SpiceLoader::load(net2).unwrap_err().to_string();
-        assert!(err2.contains("Lnope") && err2.contains("does not exist"), "{err2}");
+        assert!(
+            err2.contains("Lnope") && err2.contains("does not exist"),
+            "{err2}"
+        );
     }
 
     #[test]
@@ -4805,8 +4951,7 @@ mod tests {
         let err = SpiceLoader::load(net).unwrap_err().to_string();
         assert!(err.contains("itself"), "{err}");
         // Two K cards over the same pair (either order) would silently sum M.
-        let net2 =
-            "dupk\nL1 a 0 1m\nL2 b 0 1m\nK1 L1 L2 0.9\nK2 L2 L1 0.5\n.end\n";
+        let net2 = "dupk\nL1 a 0 1m\nL2 b 0 1m\nK1 L1 L2 0.9\nK2 L2 L1 0.5\n.end\n";
         let err2 = SpiceLoader::load(net2).unwrap_err().to_string();
         assert!(
             err2.contains("duplicate coupling") && err2.contains("line 5"),
@@ -4983,8 +5128,14 @@ mod tests {
     fn param_undefined_name_is_rejected() {
         let net = "p\n.param a={q+1}\nR1 n 0 {a}\n.end\n";
         let err = SpiceLoader::load(net).unwrap_err().to_string();
-        assert!(err.contains("undefined parameter") && err.contains('q'), "{err}");
-        assert!(err.contains("line 2"), "must point at the .param line: {err}");
+        assert!(
+            err.contains("undefined parameter") && err.contains('q'),
+            "{err}"
+        );
+        assert!(
+            err.contains("line 2"),
+            "must point at the .param line: {err}"
+        );
     }
 
     #[test]
@@ -5046,8 +5197,14 @@ mod tests {
                    X2 m 0 SC\n\
                    .end\n";
         let c = SpiceLoader::load(net).unwrap();
-        assert!((resistor_ohms(&c, "X1.R1") - 4e3).abs() < 1e-9, "override->default");
-        assert!((resistor_ohms(&c, "X2.R1") - 2e3).abs() < 1e-9, "pure defaults");
+        assert!(
+            (resistor_ohms(&c, "X1.R1") - 4e3).abs() < 1e-9,
+            "override->default"
+        );
+        assert!(
+            (resistor_ohms(&c, "X2.R1") - 2e3).abs() < 1e-9,
+            "pure defaults"
+        );
     }
 
     #[test]
@@ -5220,7 +5377,10 @@ mod tests {
         // The main deck references a diode model DEFINED in an included file.
         // Inclusion must run before `.model` collection so the diode binds it.
         let d = TmpDir::new("modlib");
-        d.write("models.lib", "* a model library\n.model DFAST D(IS=3e-15 N=1.7)\n");
+        d.write(
+            "models.lib",
+            "* a model library\n.model DFAST D(IS=3e-15 N=1.7)\n",
+        );
         let main = d.write(
             "main.cir",
             "main deck\nD1 a 0 DFAST\nR1 a 0 1k\n.include models.lib\n.end\n",
@@ -5271,14 +5431,20 @@ mod tests {
              .lib fast\n.model MM NMOS(VTO=0.5 KP=5e-3)\n.endl\n\
              .lib slow\n.model MM NMOS(VTO=1.5 KP=1e-3)\n.endl\n",
         );
-        let main = d.write(
-            "main.cir",
-            "m\nM1 d g 0 0 MM\n.lib corner.lib fast\n.end\n",
-        );
+        let main = d.write("main.cir", "m\nM1 d g 0 0 MM\n.lib corner.lib fast\n.end\n");
         let c = SpiceLoader::load_file(&main).unwrap();
-        match c.devices.iter().find(|x| matches!(x, Device::Mosfet { .. })).unwrap() {
+        match c
+            .devices
+            .iter()
+            .find(|x| matches!(x, Device::Mosfet { .. }))
+            .unwrap()
+        {
             Device::Mosfet { model, .. } => {
-                assert!((model.vto - 0.5).abs() < 1e-9, "fast VTO, not slow: {}", model.vto);
+                assert!(
+                    (model.vto - 0.5).abs() < 1e-9,
+                    "fast VTO, not slow: {}",
+                    model.vto
+                );
             }
             _ => unreachable!(),
         }
@@ -5340,7 +5506,10 @@ mod tests {
         let main = d.write("main.cir", "m\nM1 d g 0 0 MM\n.lib corner.lib typ\n.end\n");
         let err = SpiceLoader::load_file(&main).unwrap_err().to_string();
         assert!(err.contains("not found"), "{err}");
-        assert!(err.contains("fast") && err.contains("slow"), "lists sections: {err}");
+        assert!(
+            err.contains("fast") && err.contains("slow"),
+            "lists sections: {err}"
+        );
     }
 
     #[test]
@@ -5350,7 +5519,10 @@ mod tests {
         let main = d.write("main.cir", "m\nM1 d g 0 0 MM\n.lib stuff.lib\n.end\n");
         let err = SpiceLoader::load_file(&main).unwrap_err().to_string();
         assert!(err.contains("ambiguous"), "{err}");
-        assert!(err.contains(".include") && err.contains("<section>"), "guides the user: {err}");
+        assert!(
+            err.contains(".include") && err.contains("<section>"),
+            "guides the user: {err}"
+        );
     }
 
     #[test]
@@ -5370,7 +5542,8 @@ mod tests {
 
     /// Find a node id by name (test helper).
     fn node_of(c: &Circuit, name: &str) -> NodeId {
-        c.find_node(name).unwrap_or_else(|| panic!("no node {name}"))
+        c.find_node(name)
+            .unwrap_or_else(|| panic!("no node {name}"))
     }
 
     #[test]
@@ -5404,7 +5577,10 @@ mod tests {
         let net = "rc\nC1 out 0 1u\nR1 out 0 1k\n.ic V(ott)=5\n.tran 1u 1m uic\n.end\n";
         let err = SpiceLoader::load(net).unwrap_err().to_string();
         assert!(err.contains("unknown node") && err.contains("ott"), "{err}");
-        assert!(err.contains("did you mean") && err.contains("out"), "candidate: {err}");
+        assert!(
+            err.contains("did you mean") && err.contains("out"),
+            "candidate: {err}"
+        );
     }
 
     #[test]
@@ -5422,7 +5598,11 @@ mod tests {
                    .end\n";
         let (c, _d) = SpiceLoader::load_with_directives(net).unwrap();
         let n = node_of(&c, "X1.out");
-        assert_eq!(c.initial_conditions, vec![(n, 2.0)], "flattened-name contract");
+        assert_eq!(
+            c.initial_conditions,
+            vec![(n, 2.0)],
+            "flattened-name contract"
+        );
     }
 
     #[test]
@@ -5538,7 +5718,8 @@ mod tests {
     /// Zero-dependency expressions are legal (a constant / time-only source).
     #[test]
     fn behavioral_constant_and_time_only() {
-        let net = "b\nB1 out 0 V={3.3}\nB2 0 d I={0.001*sin(6.28*time)}\nRL out 0 1k\nRd d 0 1k\n.end\n";
+        let net =
+            "b\nB1 out 0 V={3.3}\nB2 0 d I={0.001*sin(6.28*time)}\nRL out 0 1k\nRd d 0 1k\n.end\n";
         let c = SpiceLoader::load(net).unwrap();
         match &c.devices[dev_id(&c, "B1").0 as usize] {
             Device::Behavioral { deps, expr, .. } => {

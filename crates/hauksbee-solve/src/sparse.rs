@@ -549,11 +549,9 @@ impl Symbolic {
                         continue;
                     }
                     // Markowitz count: (row_cnt-1)*(col_cnt-1).
-                    let mark = (row_cnt[i].saturating_sub(1))
-                        .saturating_mul(col_cnt[c].saturating_sub(1));
-                    if mark < best_mark
-                        || (mark == best_mark && v.abs() > best_mag)
-                    {
+                    let mark =
+                        (row_cnt[i].saturating_sub(1)).saturating_mul(col_cnt[c].saturating_sub(1));
+                    if mark < best_mark || (mark == best_mark && v.abs() > best_mag) {
                         best_mark = mark;
                         best_mag = v.abs();
                         best_r = i;
@@ -1110,7 +1108,11 @@ mod tests {
         f.solve(&mut xf, &mut scratch_f);
 
         // Byte-for-byte identical: refactor (default) == refactor_frozen.
-        assert_eq!(xa.to_bits_vec(), xf.to_bits_vec(), "default refactor diverged from frozen");
+        assert_eq!(
+            xa.to_bits_vec(),
+            xf.to_bits_vec(),
+            "default refactor diverged from frozen"
+        );
     }
 
     trait Bits {
@@ -1132,7 +1134,11 @@ mod tests {
         let mut ent: Vec<(usize, usize, f64)> = Vec::new();
         // a tridiagonal-ish backbone with some long-range coupling
         for i in 0..n {
-            let diag = if i % 4 == 2 { 1e-12 } else { 2.0 + (i as f64) * 0.1 };
+            let diag = if i % 4 == 2 {
+                1e-12
+            } else {
+                2.0 + (i as f64) * 0.1
+            };
             ent.push((i, i, diag));
             if i > 0 {
                 ent.push((i, i - 1, -0.7));

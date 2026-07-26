@@ -299,7 +299,10 @@ fn fixture_no_connect_control_pin_is_tagged_and_suppressed() {
     let floating = r
         .of_check(hauksbee_extract::LintCheck::FloatingControlPin)
         .count();
-    assert_eq!(floating, 0, "explicit no-connect must suppress the floating-control finding");
+    assert_eq!(
+        floating, 0,
+        "explicit no-connect must suppress the floating-control finding"
+    );
 }
 
 #[test]
@@ -540,7 +543,12 @@ fn fixture_multiunit_common_pin_bridges_nets() {
     for c in &b.components {
         for p in &c.pins {
             if let Some(id) = p.net {
-                assert!(ids.contains(&id), "{}.{} on orphan net {id}", c.reference, p.number);
+                assert!(
+                    ids.contains(&id),
+                    "{}.{} on orphan net {id}",
+                    c.reference,
+                    p.number
+                );
             }
         }
     }

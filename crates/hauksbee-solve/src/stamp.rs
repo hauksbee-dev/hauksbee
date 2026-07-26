@@ -223,7 +223,6 @@ fn stamp_current<S: StampSink>(sink: &mut S, layout: &Layout, a: NodeId, b: Node
     }
 }
 
-
 /// Where device stamps write. Two implementations: the real `(matrix, rhs)`
 /// assembly, and the matrix-free residual accumulator (assembly-economy
 /// sub-lever A). Generic and monomorphized, so the default assembly path
@@ -376,9 +375,7 @@ pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix)
                 }
                 // CCVS: -transres*i_ctrl lives in H's OWN branch row.
                 Device::Ccvs { .. } => {
-                    let br = layout
-                        .branch(id)
-                        .expect("ccvs owns a branch unknown");
+                    let br = layout.branch(id).expect("ccvs owns a branch unknown");
                     m.touch(br, cbr);
                 }
                 // Behavioral: an I(...) partial lands in the p/n rows
@@ -468,12 +465,7 @@ fn stamp_into<S: StampSink>(ctx: &StampCtx, sink: &mut S) {
 /// two-tier assembly (`plan.rs`) can re-stamp tier-2 devices through the SAME
 /// interpreted device code with a slot-resolving sink: the physics formulas
 /// exist here once, whichever assembly drives them.
-pub(crate) fn stamp_device<S: StampSink>(
-    ctx: &StampCtx,
-    id: DeviceId,
-    dev: &Device,
-    sink: &mut S,
-) {
+pub(crate) fn stamp_device<S: StampSink>(ctx: &StampCtx, id: DeviceId, dev: &Device, sink: &mut S) {
     match dev {
         Device::Resistor {
             a, b, ohms, tc1, ..
@@ -500,10 +492,25 @@ pub(crate) fn stamp_device<S: StampSink>(
         }
         Device::Diode { a, k, model, .. } => stamp_diode(ctx, id, *a, *k, model, sink),
         Device::Bjt { c, b, e, model, .. } => stamp_bjt(ctx, id, *c, *b, *e, model, sink),
-        Device::Mosfet { d, g: gate, s, b, model, .. } => {
-            stamp_mosfet(ctx, id, *d, *gate, *s, *b, model, sink)
-        }
-        Device::VSwitch { a, b, ctrl_p, ctrl_n, von, voff, ron, roff, .. } => stamp_vswitch(
+        Device::Mosfet {
+            d,
+            g: gate,
+            s,
+            b,
+            model,
+            ..
+        } => stamp_mosfet(ctx, id, *d, *gate, *s, *b, model, sink),
+        Device::VSwitch {
+            a,
+            b,
+            ctrl_p,
+            ctrl_n,
+            von,
+            voff,
+            ron,
+            roff,
+            ..
+        } => stamp_vswitch(
             ctx, id, *a, *b, *ctrl_p, *ctrl_n, *von, *voff, *ron, *roff, sink,
         ),
         Device::OpAmp {
@@ -518,11 +525,26 @@ pub(crate) fn stamp_device<S: StampSink>(
             rail_hi,
             ..
         } => stamp_opamp(
-            ctx, id, *out, *inp, *inn, *reference, *gain, *pole_hz, *slew, *rail_lo, *rail_hi,
-            sink,
+            ctx, id, *out, *inp, *inn, *reference, *gain, *pole_hz, *slew, *rail_lo, *rail_hi, sink,
         ),
-        Device::Comparator { out, inp, inn, out_lo, out_hi, hysteresis, .. } => stamp_comparator(
-            ctx, id, *out, *inp, *inn, *out_lo, *out_hi, *hysteresis, sink,
+        Device::Comparator {
+            out,
+            inp,
+            inn,
+            out_lo,
+            out_hi,
+            hysteresis,
+            ..
+        } => stamp_comparator(
+            ctx,
+            id,
+            *out,
+            *inp,
+            *inn,
+            *out_lo,
+            *out_hi,
+            *hysteresis,
+            sink,
         ),
         Device::Vcvs {
             p, n, cp, cn, gain, ..
@@ -545,7 +567,11 @@ pub(crate) fn stamp_device<S: StampSink>(
             );
         }
         Device::Cccs {
-            p, n, ctrl_src, gain, ..
+            p,
+            n,
+            ctrl_src,
+            gain,
+            ..
         } => {
             // I(p->n) = gain * i_ctrl, where i_ctrl is the LIVE branch-current
             // unknown of the control Vsource (resolved by the loader's name
@@ -565,7 +591,11 @@ pub(crate) fn stamp_device<S: StampSink>(
             }
         }
         Device::Ccvs {
-            p, n, ctrl_src, transres, ..
+            p,
+            n,
+            ctrl_src,
+            transres,
+            ..
         } => stamp_ccvs(ctx, id, *p, *n, *ctrl_src, *transres, sink),
         Device::Behavioral {
             name,
@@ -743,8 +773,7 @@ fn stamp_behavioral<S: StampSink>(
             }
         }
     }
-    let (f0, partials) = match behavioral_eval_partials(expr, deps, &mut vals, ctx.time, ctx.opts)
-    {
+    let (f0, partials) = match behavioral_eval_partials(expr, deps, &mut vals, ctx.time, ctx.opts) {
         Ok(r) => r,
         Err(detail) => {
             note_behavioral_fault(name, detail);
@@ -940,8 +969,7 @@ fn stamp_inductor<S: StampSink>(
         sink.g(br, pbr, -(m * ctx.coeffs.g));
         let veq_m = match ctx.opts.integration {
             Integration::Trapezoidal => {
-                m * ctx.coeffs.g * ctx.state.x1[pid.0 as usize]
-                    + m * ctx.state.dx1[pid.0 as usize]
+                m * ctx.coeffs.g * ctx.state.x1[pid.0 as usize] + m * ctx.state.dx1[pid.0 as usize]
             }
             Integration::Gear2 => {
                 m * (ctx.coeffs.a1 * ctx.state.x1[pid.0 as usize]
@@ -1218,10 +1246,7 @@ pub(crate) const BJT_MJ: f64 = 0.33;
 /// decks whose BJT models predate this physics are bit-identical whatever
 /// the toggle; the same contract [`diode_has_charge`] pins for diodes.
 #[inline]
-pub(crate) fn bjt_has_charge(
-    model: &BjtModel,
-    effects: &crate::options::DeviceEffects,
-) -> bool {
+pub(crate) fn bjt_has_charge(model: &BjtModel, effects: &crate::options::DeviceEffects) -> bool {
     effects.junction_caps
         && (model.cje > 0.0 || model.cjc > 0.0 || model.tf > 0.0 || model.tr > 0.0)
 }
@@ -1353,10 +1378,7 @@ pub(crate) const MOS_CGD_MEYER: f64 = 0.5;
 /// charge, so decks whose MOS models predate this physics are bit-identical
 /// whatever the toggle; the [`diode_has_charge`]/[`bjt_has_charge`] contract.
 #[inline]
-pub(crate) fn mos_has_charge(
-    model: &MosfetModel,
-    effects: &crate::options::DeviceEffects,
-) -> bool {
+pub(crate) fn mos_has_charge(model: &MosfetModel, effects: &crate::options::DeviceEffects) -> bool {
     effects.junction_caps && (model.has_gate_charge() || model.cbd > 0.0 || model.cbs > 0.0)
 }
 
@@ -1426,8 +1448,7 @@ pub(crate) fn mos_channel(
         // phantom subthreshold current across a zero-bias channel).
         let id = beta * (vov_eff * vds - 0.5 * vds * vds) * clm;
         let gm = beta * vds * clm * dvov;
-        let gds =
-            beta * ((vov_eff - vds) * clm + (vov_eff * vds - 0.5 * vds * vds) * lambda);
+        let gds = beta * ((vov_eff - vds) * clm + (vov_eff * vds - 0.5 * vds * vds) * lambda);
         (id, gm.max(gmin), gds.max(gmin))
     } else {
         // Saturation; the subthreshold exponential is this branch's
@@ -1759,8 +1780,18 @@ fn stamp_bjt<S: StampSink>(
     // Iteration-path only; the converged root is unchanged.
     let vcrit_be = vcrit(is, model.nf * vt);
     let vcrit_bc = vcrit(is, model.nr * vt);
-    let vbe = pnjlim(vbe, sign * (vx_prev(bi) - vx_prev(ei)), model.nf * vt, vcrit_be);
-    let vbc = pnjlim(vbc, sign * (vx_prev(bi) - vx_prev(ci)), model.nr * vt, vcrit_bc);
+    let vbe = pnjlim(
+        vbe,
+        sign * (vx_prev(bi) - vx_prev(ei)),
+        model.nf * vt,
+        vcrit_be,
+    );
+    let vbc = pnjlim(
+        vbc,
+        sign * (vx_prev(bi) - vx_prev(ci)),
+        model.nr * vt,
+        vcrit_bc,
+    );
 
     let nvf = model.nf * vt;
     let nvr = model.nr * vt;
@@ -1928,7 +1959,8 @@ fn stamp_bjt<S: StampSink>(
         Integration::BackwardEuler => ctx.coeffs.a1 * x1,
     };
     let geq_be = ctx.coeffs.g * c_be;
-    let ieq_be = (ctx.coeffs.g * q_be - hist(ctx.state.x1[sl], ctx.state.dx1[sl], ctx.state.x2[sl]))
+    let ieq_be = (ctx.coeffs.g * q_be
+        - hist(ctx.state.x1[sl], ctx.state.dx1[sl], ctx.state.x2[sl]))
         - geq_be * vbe;
     add_pair(sink, bi, ei, geq_be);
     inject(sink, bi, -sign * ieq_be);
@@ -1936,7 +1968,11 @@ fn stamp_bjt<S: StampSink>(
 
     let geq_bc = ctx.coeffs.g * c_bc;
     let ieq_bc = (ctx.coeffs.g * q_bc
-        - hist(ctx.state.xb[0].x1[sl], ctx.state.xb[0].dx1[sl], ctx.state.xb[0].x2[sl]))
+        - hist(
+            ctx.state.xb[0].x1[sl],
+            ctx.state.xb[0].dx1[sl],
+            ctx.state.xb[0].x2[sl],
+        ))
         - geq_bc * vbc;
     add_pair(sink, bi, ci, geq_bc);
     inject(sink, bi, -sign * ieq_bc);
@@ -2145,8 +2181,7 @@ fn stamp_mosfet<S: StampSink>(
                 let (q, c) = depletion_charge(cbx, model.pb, model.mj, vj);
                 let bk = &ctx.state.xb[bank];
                 let geq = ctx.coeffs.g * c;
-                let ieq_c =
-                    (ctx.coeffs.g * q - hist(bk.x1[sl], bk.dx1[sl], bk.x2[sl])) - geq * vj;
+                let ieq_c = (ctx.coeffs.g * q - hist(bk.x1[sl], bk.dx1[sl], bk.x2[sl])) - geq * vj;
                 add_pair(sink, bulk_i, term_i, geq);
                 inject(sink, bulk_i, -sign * ieq_c);
                 inject(sink, term_i, sign * ieq_c);
@@ -2292,8 +2327,13 @@ fn stamp_vswitch<S: StampSink>(
     let bbm = ctx.opts.effects.spdt_bbm;
     if bbm {
         if let Some(&sib) = ctx.spdt_sibling.get(&id) {
-            if let Some(Device::VSwitch { ctrl_p: scp, ctrl_n: scn, von: svon, voff: svoff, .. }) =
-                ctx.circuit.devices.get(sib.0 as usize)
+            if let Some(Device::VSwitch {
+                ctrl_p: scp,
+                ctrl_n: scn,
+                von: svon,
+                voff: svoff,
+                ..
+            }) = ctx.circuit.devices.get(sib.0 as usize)
             {
                 let svmid = 0.5 * (svon + svoff);
                 let sspan = (svon - svoff).abs().max(1e-9);
@@ -2531,7 +2571,10 @@ fn stamp_comparator<S: StampSink>(
     // loop re-evaluates and re-solves if any decision flipped.
     if let Some(freeze) = ctx.cmp_freeze {
         let _ = (vp, vn, hyst);
-        let high = freeze.get(&id).copied().unwrap_or(prev_out > 0.5 * (out_lo + out_hi));
+        let high = freeze
+            .get(&id)
+            .copied()
+            .unwrap_or(prev_out > 0.5 * (out_lo + out_hi));
         // PIN the output to its frozen rail with a CONSTANT target (no input
         // dependence). A smooth input-dependent transfer still swings the output
         // whenever the comparator inputs pass near threshold, which makes the
@@ -2656,7 +2699,6 @@ impl StampCtx<'_> {
     }
 }
 
-
 #[cfg(test)]
 mod diode_physics_tests {
     use super::*;
@@ -2688,7 +2730,10 @@ mod diode_physics_tests {
         let (q_lo, c_lo) = eval(knee - eps);
         let (q_hi, c_hi) = eval(knee + eps);
         // Q and C continuous across the knee.
-        assert!((q_hi - q_lo).abs() < 1e-6 * q_lo.abs().max(1e-15), "Q jump at knee");
+        assert!(
+            (q_hi - q_lo).abs() < 1e-6 * q_lo.abs().max(1e-15),
+            "Q jump at knee"
+        );
         assert!((c_hi - c_lo).abs() < 1e-6 * c_lo, "C jump at knee");
         // dC/dv continuous: one-sided slopes agree.
         let d = 1e-6;
@@ -2726,12 +2771,21 @@ mod diode_physics_tests {
     /// exponent clamp far past breakdown.
     #[test]
     fn breakdown_current_is_reverse_continuous_and_bounded() {
-        let m = DiodeModel { bv: 6.2, ..DiodeModel::default() };
+        let m = DiodeModel {
+            bv: 6.2,
+            ..DiodeModel::default()
+        };
         let nvt = m.n * hauksbee_ir::thermal_voltage_c(27.0);
         let (i_at, _) = diode_eval(&m, -6.2, 27.0, false);
-        assert!((i_at + m.is).abs() < 1e-3 * m.is, "not continuous at -bv: {i_at:e}");
+        assert!(
+            (i_at + m.is).abs() < 1e-3 * m.is,
+            "not continuous at -bv: {i_at:e}"
+        );
         let (i_past, g_past) = diode_eval(&m, -6.2 - 5.0 * nvt, 27.0, false);
-        assert!(i_past < 0.0, "breakdown current must be REVERSE, got {i_past:e}");
+        assert!(
+            i_past < 0.0,
+            "breakdown current must be REVERSE, got {i_past:e}"
+        );
         assert!(
             (i_past + m.is * 5.0f64.exp()).abs() < 1e-6 * m.is * 5.0f64.exp(),
             "wrong exponential shape: {i_past:e}"
@@ -2756,7 +2810,12 @@ mod diode_physics_tests {
         let stamp_with = |model: DiodeModel, junction_caps: bool| {
             let mut c = Circuit::new();
             let a = c.node("a");
-            c.add(Device::Diode { name: "D1".into(), a, k: hauksbee_ir::NodeId::GROUND, model });
+            c.add(Device::Diode {
+                name: "D1".into(),
+                a,
+                k: hauksbee_ir::NodeId::GROUND,
+                model,
+            });
             let layout = Layout::new(&c);
             let mut m = SparseMatrix::new(layout.size);
             reserve_pattern(&c, &layout, &mut m);
@@ -2789,13 +2848,21 @@ mod diode_physics_tests {
             let mut rhs = vec![0.0; layout.size];
             let mut mat = m;
             stamp_all(&ctx, &mut mat, &mut rhs);
-            let diag = mat.row(0).iter().find(|(col, _)| *col == 0).map(|&(_, v)| v).unwrap();
+            let diag = mat
+                .row(0)
+                .iter()
+                .find(|(col, _)| *col == 0)
+                .map(|&(_, v)| v)
+                .unwrap();
             (diag, rhs[0])
         };
         // Charge-carrying model: the toggle must CHANGE the stamp.
         let (g_on, r_on) = stamp_with(charge_model(), true);
         let (g_off, r_off) = stamp_with(charge_model(), false);
-        assert!(g_on > g_off, "junction_caps on must add companion conductance");
+        assert!(
+            g_on > g_off,
+            "junction_caps on must add companion conductance"
+        );
         assert!(r_on != r_off, "junction_caps on must add history RHS terms");
         // Charge-free (default) model: bit-identical either way.
         let (g_on0, r_on0) = stamp_with(DiodeModel::default(), true);
@@ -2817,7 +2884,10 @@ mod diode_physics_tests {
             name: "D1".into(),
             a,
             k: hauksbee_ir::NodeId::GROUND,
-            model: DiodeModel { rs: 0.5, ..DiodeModel::default() },
+            model: DiodeModel {
+                rs: 0.5,
+                ..DiodeModel::default()
+            },
         });
         let layout = Layout::new(&c);
         let mut m = SparseMatrix::new(layout.size);
@@ -2825,7 +2895,8 @@ mod diode_physics_tests {
         let x = vec![0.6];
         let state = ReactiveState::new(1);
         let opts = SolverOptions::default();
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::BackwardEuler, 1e-9, 1e-9, true);
+        let coeffs =
+            IntegCoeffs::for_step(crate::options::Integration::BackwardEuler, 1e-9, 1e-9, true);
         let spdt = std::collections::HashMap::new();
         let ctx = StampCtx {
             circuit: &c,
@@ -2891,7 +2962,8 @@ mod bjt_physics_tests {
         let mut state = ReactiveState::new(1);
         state.x1[0] = 1e-12; // nonzero history so RHS terms show too
         state.xb[0].x1[0] = -2e-12;
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-9, 1e-9, false);
+        let coeffs =
+            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-9, 1e-9, false);
         let spdt = std::collections::HashMap::new();
         let ctx = StampCtx {
             circuit: &cir,
@@ -2941,7 +3013,10 @@ mod bjt_physics_tests {
         };
         let (g_on, r_on) = run(charge_model(), true);
         let (g_off, r_off) = run(charge_model(), false);
-        assert!(g_on > g_off, "junction_caps on must add companion conductance");
+        assert!(
+            g_on > g_off,
+            "junction_caps on must add companion conductance"
+        );
         assert!(r_on != r_off, "junction_caps on must add history RHS terms");
         let (g_on0, r_on0) = run(BjtModel::default(), true);
         let (g_off0, r_off0) = run(BjtModel::default(), false);
@@ -2955,7 +3030,12 @@ mod bjt_physics_tests {
     /// allocated) the two stamps are bit-identical.
     #[test]
     fn series_resistance_toggle_changes_bjt_stamp() {
-        let model = BjtModel { rb: 100.0, re: 1.0, rc: 10.0, ..BjtModel::default() };
+        let model = BjtModel {
+            rb: 100.0,
+            re: 1.0,
+            rc: 10.0,
+            ..BjtModel::default()
+        };
         let run = |model: BjtModel, series: bool| {
             let mut opts = SolverOptions::default();
             opts.effects.series_resistance = series;
@@ -2966,15 +3046,30 @@ mod bjt_physics_tests {
         // Three internal unknowns allocated either way (model-keyed).
         assert_eq!(layout_on.n_nodes, 2 + 3);
         let b_row = 0usize;
-        let d_on = m_on.row(b_row).iter().find(|(c, _)| *c == b_row).map(|&(_, v)| v).unwrap();
-        let d_off = m_off.row(b_row).iter().find(|(c, _)| *c == b_row).map(|&(_, v)| v).unwrap();
+        let d_on = m_on
+            .row(b_row)
+            .iter()
+            .find(|(c, _)| *c == b_row)
+            .map(|&(_, v)| v)
+            .unwrap();
+        let d_off = m_off
+            .row(b_row)
+            .iter()
+            .find(|(c, _)| *c == b_row)
+            .map(|&(_, v)| v)
+            .unwrap();
         // Toggle ON: the external base row carries ONLY the 1/rb series
         // conductance (the junction moved inside). Toggle OFF: it carries the
         // junction tangents and no series term.
         assert_eq!(d_on, 1.0 / 100.0);
         assert!(d_off != d_on);
         // Toggle OFF pins each internal unknown with a unit diagonal.
-        let int_diag = m_off.row(2).iter().find(|(c, _)| *c == 2).map(|&(_, v)| v).unwrap();
+        let int_diag = m_off
+            .row(2)
+            .iter()
+            .find(|(c, _)| *c == 2)
+            .map(|&(_, v)| v)
+            .unwrap();
         assert_eq!(int_diag, 1.0);
         // Default model: no internal nodes, bit-identical across the toggle.
         let (l_def_on, m_def_on, r_def_on) = run(BjtModel::default(), true);
@@ -3051,7 +3146,8 @@ mod bjt_physics_tests {
         let state = ReactiveState::new(1);
         let mut opts = SolverOptions::default();
         opts.effects.temperature = false;
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-9, 1e-9, false);
+        let coeffs =
+            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-9, 1e-9, false);
         let spdt = std::collections::HashMap::new();
         let ctx = StampCtx {
             circuit: &cir,
@@ -3087,8 +3183,15 @@ mod bjt_physics_tests {
     fn bjt_var_scales_transport_current() {
         let vt = hauksbee_ir::thermal_voltage_c(27.0);
         let (vb, vc) = (0.65, 3.0);
-        let m_inf = BjtModel { vaf: 100.0, ..BjtModel::default() };
-        let m_fin = BjtModel { vaf: 100.0, var: 15.0, ..BjtModel::default() };
+        let m_inf = BjtModel {
+            vaf: 100.0,
+            ..BjtModel::default()
+        };
+        let m_fin = BjtModel {
+            vaf: 100.0,
+            var: 15.0,
+            ..BjtModel::default()
+        };
         let (fb_inf, fc_inf) = bjt_residual(m_inf, vb, vc, vb);
         let (fb_fin, fc_fin) = bjt_residual(m_fin, vb, vc, vb);
         // Base current has no q1 factor: untouched to the bit.
@@ -3127,7 +3230,10 @@ mod bjt_physics_tests {
     #[test]
     fn bjt_vbc_limiter_uses_reverse_vcrit() {
         let vt = hauksbee_ir::thermal_voltage_c(27.0);
-        let m = BjtModel { nr: 1.5, ..BjtModel::default() };
+        let m = BjtModel {
+            nr: 1.5,
+            ..BjtModel::default()
+        };
         let vcrit_f = vcrit(m.is, m.nf * vt);
         let vcrit_r = vcrit(m.is, m.nr * vt);
         assert!(vcrit_r > vcrit_f, "nr-built vcrit must scale with nr");
@@ -3164,13 +3270,26 @@ mod bjt_physics_tests {
     /// arithmetic bit-for-bit (the §3.1 regression surface must not move).
     #[test]
     fn depletion_helper_is_bit_identical_to_diode_charge() {
-        let m = DiodeModel { cjo: 4e-12, vj: 0.7, m: 0.45, ..DiodeModel::default() };
+        let m = DiodeModel {
+            cjo: 4e-12,
+            vj: 0.7,
+            m: 0.45,
+            ..DiodeModel::default()
+        };
         for &vd in &[-5.0, -1.0, 0.0, 0.2, 0.34, 0.35, 0.4, 0.9] {
             let (q_h, c_h) = depletion_charge(m.cjo, m.vj, m.m, vd);
             let (idc, gd) = diode_eval(&m, vd, 27.0, false);
             let (q_d, c_d) = diode_charge(&m, vd, idc, gd);
-            assert_eq!(q_d.to_bits(), (0.0f64 + q_h).to_bits(), "Q mismatch at {vd}");
-            assert_eq!(c_d.to_bits(), (0.0f64 + c_h).to_bits(), "C mismatch at {vd}");
+            assert_eq!(
+                q_d.to_bits(),
+                (0.0f64 + q_h).to_bits(),
+                "Q mismatch at {vd}"
+            );
+            assert_eq!(
+                c_d.to_bits(),
+                (0.0f64 + c_h).to_bits(),
+                "C mismatch at {vd}"
+            );
         }
     }
 }
@@ -3295,11 +3414,40 @@ mod bench {
             let s = c.node(&format!("s{k}"));
             let o = c.node(&format!("o{k}"));
             let com = c.node(&format!("c{k}"));
-            c.add(Device::Resistor { name: format!("R{k}a"), a: vdd, b: m, ohms: 10e3, tc1: None });
-            c.add(Device::Resistor { name: format!("R{k}b"), a: m, b: NodeId::GROUND, ohms: 47e3, tc1: None });
-            c.add(Device::Capacitor { name: format!("C{k}"), a: m, b: NodeId::GROUND, farads: 1e-9, ic: None });
-            c.add(Device::Diode { name: format!("D{k}"), a: m, k: s, model: Default::default() });
-            c.add(Device::Bjt { name: format!("Q{k}"), c: vdd, b: s, e: NodeId::GROUND, model: Default::default() });
+            c.add(Device::Resistor {
+                name: format!("R{k}a"),
+                a: vdd,
+                b: m,
+                ohms: 10e3,
+                tc1: None,
+            });
+            c.add(Device::Resistor {
+                name: format!("R{k}b"),
+                a: m,
+                b: NodeId::GROUND,
+                ohms: 47e3,
+                tc1: None,
+            });
+            c.add(Device::Capacitor {
+                name: format!("C{k}"),
+                a: m,
+                b: NodeId::GROUND,
+                farads: 1e-9,
+                ic: None,
+            });
+            c.add(Device::Diode {
+                name: format!("D{k}"),
+                a: m,
+                k: s,
+                model: Default::default(),
+            });
+            c.add(Device::Bjt {
+                name: format!("Q{k}"),
+                c: vdd,
+                b: s,
+                e: NodeId::GROUND,
+                model: Default::default(),
+            });
             c.add(Device::Comparator {
                 name: format!("K{k}"),
                 out: o,
@@ -3311,15 +3459,33 @@ mod bench {
             });
             c.add(Device::VSwitch {
                 name: format!("G{k}_s1"),
-                a: com, b: m, ctrl_p: o, ctrl_n: NodeId::GROUND,
-                von: 3.0, voff: 2.0, ron: 10.0, roff: 1e9,
+                a: com,
+                b: m,
+                ctrl_p: o,
+                ctrl_n: NodeId::GROUND,
+                von: 3.0,
+                voff: 2.0,
+                ron: 10.0,
+                roff: 1e9,
             });
             c.add(Device::VSwitch {
                 name: format!("G{k}_s0"),
-                a: com, b: vdd, ctrl_p: o, ctrl_n: NodeId::GROUND,
-                von: 2.0, voff: 3.0, ron: 10.0, roff: 1e9,
+                a: com,
+                b: vdd,
+                ctrl_p: o,
+                ctrl_n: NodeId::GROUND,
+                von: 2.0,
+                voff: 3.0,
+                ron: 10.0,
+                roff: 1e9,
             });
-            c.add(Device::Resistor { name: format!("R{k}c"), a: com, b: NodeId::GROUND, ohms: 100.0, tc1: None });
+            c.add(Device::Resistor {
+                name: format!("R{k}c"),
+                a: com,
+                b: NodeId::GROUND,
+                ohms: 100.0,
+                tc1: None,
+            });
         }
         c
     }
@@ -3344,7 +3510,8 @@ mod bench {
         let x: Vec<f64> = (0..n).map(|i| 0.5 + 0.001 * (i % 7) as f64).collect();
         let state = ReactiveState::new(circuit.devices.len());
         let opts = SolverOptions::default();
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
+        let coeffs =
+            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
         let spdt = std::collections::HashMap::new();
         let ctx = StampCtx {
             circuit: &circuit,
@@ -3370,21 +3537,29 @@ mod bench {
         // Warm both paths.
         for _ in 0..10 {
             m.clear_values();
-            for v in rhs.iter_mut() { *v = 0.0; }
+            for v in rhs.iter_mut() {
+                *v = 0.0;
+            }
             stamp_all(&ctx, &mut m, &mut rhs);
-            for v in f.iter_mut() { *v = 0.0; }
+            for v in f.iter_mut() {
+                *v = 0.0;
+            }
             stamp_residual(&ctx, &mut f);
         }
         let t0 = std::time::Instant::now();
         for _ in 0..REPS {
             m.clear_values();
-            for v in rhs.iter_mut() { *v = 0.0; }
+            for v in rhs.iter_mut() {
+                *v = 0.0;
+            }
             stamp_all(&ctx, &mut m, &mut rhs);
         }
         let full = t0.elapsed().as_secs_f64() / REPS as f64;
         let t1 = std::time::Instant::now();
         for _ in 0..REPS {
-            for v in f.iter_mut() { *v = 0.0; }
+            for v in f.iter_mut() {
+                *v = 0.0;
+            }
             stamp_residual(&ctx, &mut f);
         }
         let resid = t1.elapsed().as_secs_f64() / REPS as f64;
@@ -3418,7 +3593,8 @@ mod bench {
             .collect();
         let state = ReactiveState::new(circuit.devices.len());
         let opts = SolverOptions::default();
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
+        let coeffs =
+            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
         let spdt = std::collections::HashMap::new();
         let ctx = StampCtx {
             circuit: &circuit,
@@ -3479,9 +3655,12 @@ mod behavioral_fd_tests {
         // f(v, i) = 2 v + 100 tanh(5 i) + 0.1 t
         //   df/dv = 2 (exactly, linear)
         //   df/di = 500 sech^2(5 i)
-        let expr = CompiledExpr::compile("2.0*__d0 + 100.0*math::tanh(5.0*__d1) + 0.1*time")
-            .unwrap();
-        let deps = [BDep::Volt(hauksbee_ir::NodeId(1)), BDep::Branch(DeviceId(0))];
+        let expr =
+            CompiledExpr::compile("2.0*__d0 + 100.0*math::tanh(5.0*__d1) + 0.1*time").unwrap();
+        let deps = [
+            BDep::Volt(hauksbee_ir::NodeId(1)),
+            BDep::Branch(DeviceId(0)),
+        ];
         let opts = SolverOptions::default();
         let mut worst_lin = 0.0f64;
         let mut worst_curved = 0.0f64;
@@ -3496,14 +3675,21 @@ mod behavioral_fd_tests {
             let (f0, partials) =
                 behavioral_eval_partials(&expr, &deps, &mut vals, t, &opts).unwrap();
             let f_true = 2.0 * v + 100.0 * (5.0 * i).tanh() + 0.1 * t;
-            assert!((f0 - f_true).abs() < 1e-12 * f_true.abs().max(1.0), "f0 at ({v},{i},{t})");
+            assert!(
+                (f0 - f_true).abs() < 1e-12 * f_true.abs().max(1.0),
+                "f0 at ({v},{i},{t})"
+            );
             // Linear partial: FD is exact to rounding for a linear term...
             // except for the tanh term's contribution? No: partials are per
             // SLOT, slot 0 perturbs v only, and f is linear in v, so the
             // difference quotient is exactly 2 up to cancellation rounding.
             let dv_err = ((partials[0] - 2.0) / 2.0).abs();
             worst_lin = worst_lin.max(dv_err);
-            assert!(dv_err < 1e-9, "df/dv at ({v},{i},{t}): {} (rel {dv_err:e})", partials[0]);
+            assert!(
+                dv_err < 1e-9,
+                "df/dv at ({v},{i},{t}): {} (rel {dv_err:e})",
+                partials[0]
+            );
             // Curved partial: truncation O(delta/2 * f''), delta ~ 1e-3|i|+1e-12.
             let sech2 = 1.0 / (5.0f64 * i).cosh().powi(2);
             let di_true = 500.0 * sech2;
@@ -3566,7 +3752,16 @@ mod gear2_varstep_tests {
     #[test]
     fn uniform_grid_is_bit_identical_to_old_constants() {
         for &dt in &[
-            1e-12, 1e-9, 3.7e-8, 1e-6, 1.0 / 3.0, 0.1, 1.0, 7.3, 1e3, 1e9,
+            1e-12,
+            1e-9,
+            3.7e-8,
+            1e-6,
+            1.0 / 3.0,
+            0.1,
+            1.0,
+            7.3,
+            1e3,
+            1e9,
         ] {
             let c = IntegCoeffs::for_step(Integration::Gear2, dt, dt, false);
             assert_eq!(c.g.to_bits(), (1.5 / dt).to_bits(), "g at dt={dt}");

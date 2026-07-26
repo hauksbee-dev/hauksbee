@@ -144,7 +144,11 @@ fn build_table(out: &SimOutput, plot: RawPlot) -> RawTable {
                 .iter()
                 .map(|r| r.iter().map(|&v| (v, 0.0)).collect())
                 .collect();
-            RawTable { complex: false, vars, values }
+            RawTable {
+                complex: false,
+                vars,
+                values,
+            }
         }
         RawPlot::Transient => {
             // Scale is `time` (from SimOutput::time); columns are the probes.
@@ -164,7 +168,11 @@ fn build_table(out: &SimOutput, plot: RawPlot) -> RawTable {
                     row
                 })
                 .collect();
-            RawTable { complex: false, vars, values }
+            RawTable {
+                complex: false,
+                vars,
+                values,
+            }
         }
         RawPlot::Dc => {
             // run_dc puts the swept-source value in column 0 (named after the
@@ -176,18 +184,17 @@ fn build_table(out: &SimOutput, plot: RawPlot) -> RawTable {
                 _ => ("v-sweep", "voltage"),
             };
             let mut vars = vec![(scale_name.to_string(), scale_type)];
-            vars.extend(
-                out.columns
-                    .iter()
-                    .skip(1)
-                    .map(|c| (c.clone(), var_type(c))),
-            );
+            vars.extend(out.columns.iter().skip(1).map(|c| (c.clone(), var_type(c))));
             let values = out
                 .rows
                 .iter()
                 .map(|r| r.iter().map(|&v| (v, 0.0)).collect())
                 .collect();
-            RawTable { complex: false, vars, values }
+            RawTable {
+                complex: false,
+                vars,
+                values,
+            }
         }
         RawPlot::Ac => {
             // run_ac lays out columns as: frequency, then (mag, phase_deg) pairs
@@ -216,7 +223,11 @@ fn build_table(out: &SimOutput, plot: RawPlot) -> RawTable {
                     row
                 })
                 .collect();
-            RawTable { complex: true, vars, values }
+            RawTable {
+                complex: true,
+                vars,
+                values,
+            }
         }
     }
 }
@@ -302,7 +313,10 @@ mod tests {
         let raw = write_ascii_rawfile(&o, RawPlot::Transient, "rc lowpass step");
         // The Command line carries the `ngspice` token so readers auto-detect
         // the dialect (see RAW_COMMAND), and it is deterministic.
-        assert!(raw.contains("Command: hauksbee sim (ngspice-compatible rawfile)\n"), "{raw}");
+        assert!(
+            raw.contains("Command: hauksbee sim (ngspice-compatible rawfile)\n"),
+            "{raw}"
+        );
         assert!(raw.to_lowercase().contains("ngspice"));
         assert!(raw.contains("Plotname: Transient Analysis\n"), "{raw}");
         assert!(raw.contains("Flags: real\n"));
@@ -359,7 +373,10 @@ mod tests {
         assert!(raw.contains("\t0\tfrequency\tfrequency\n"));
         assert!(raw.contains("\t1\tV(out)\tvoltage\n"));
         // frequency written as re,im with a zero imaginary part.
-        assert!(raw.contains(" 0\t1.000000000000000e+03,0.000000000000000e+00\n"), "{raw}");
+        assert!(
+            raw.contains(" 0\t1.000000000000000e+03,0.000000000000000e+00\n"),
+            "{raw}"
+        );
         // phasor: re ~ 0, im ~ -1. cos(-90 deg) ~ 6.1e-17, sin ~ -1.
         let has_im = raw.contains(",-1.000000000000000e+00\n");
         assert!(has_im, "expected im=-1 phasor line in:\n{raw}");

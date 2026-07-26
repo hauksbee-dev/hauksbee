@@ -87,7 +87,14 @@ const fn accept(
     summary: &'static str,
     deck: &'static str,
 ) -> Claim {
-    Claim { cat, syntax, summary, deck, aux: &[], expect: Expect::Accept }
+    Claim {
+        cat,
+        syntax,
+        summary,
+        deck,
+        aux: &[],
+        expect: Expect::Accept,
+    }
 }
 
 const fn refuse(
@@ -96,7 +103,14 @@ const fn refuse(
     deck: &'static str,
     fragment: &'static str,
 ) -> Claim {
-    Claim { cat: Cat::Element, syntax, summary, deck, aux: &[], expect: Expect::Refuse(fragment) }
+    Claim {
+        cat: Cat::Element,
+        syntax,
+        summary,
+        deck,
+        aux: &[],
+        expect: Expect::Refuse(fragment),
+    }
 }
 
 /// THE accept/refuse list. Left column = what the doc claims; the deck proves it.
@@ -211,11 +225,8 @@ static COUNTER: AtomicUsize = AtomicUsize::new(0);
 /// as a stringly-typed Result for uniform assertion.
 fn load_claim(claim: &Claim) -> Result<(), String> {
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let dir: PathBuf = std::env::temp_dir().join(format!(
-        "hauksbee_compat_{}_{}",
-        std::process::id(),
-        n
-    ));
+    let dir: PathBuf =
+        std::env::temp_dir().join(format!("hauksbee_compat_{}_{}", std::process::id(), n));
     std::fs::create_dir_all(&dir).expect("create temp dir");
     for (name, contents) in aux_for(claim.syntax).iter().chain(claim.aux.iter()) {
         std::fs::write(dir.join(name), contents).expect("write aux file");
@@ -306,7 +317,8 @@ fn supported_region() -> Region {
         s.push('\n');
     }
     Region {
-        begin: "<!-- BEGIN GENERATED: supported (source: crates/hauksbee-ir/tests/compat_drift.rs) -->",
+        begin:
+            "<!-- BEGIN GENERATED: supported (source: crates/hauksbee-ir/tests/compat_drift.rs) -->",
         end: "<!-- END GENERATED: supported -->",
         body: s.trim_end().to_string(),
     }
@@ -316,15 +328,23 @@ fn refused_region() -> Region {
     let all = claims();
     let mut s = String::new();
     s.push_str(&format!("{REGEN_HINT}\n\n"));
-    s.push_str("| Card / form | Why it refuses | Error fragment (substring of the exact message) |\n");
-    s.push_str("|-------------|----------------|--------------------------------------------------|\n");
+    s.push_str(
+        "| Card / form | Why it refuses | Error fragment (substring of the exact message) |\n",
+    );
+    s.push_str(
+        "|-------------|----------------|--------------------------------------------------|\n",
+    );
     for c in &all {
         if let Expect::Refuse(fragment) = c.expect {
-            s.push_str(&format!("| {} | {} | `{}` |\n", c.syntax, c.summary, fragment));
+            s.push_str(&format!(
+                "| {} | {} | `{}` |\n",
+                c.syntax, c.summary, fragment
+            ));
         }
     }
     Region {
-        begin: "<!-- BEGIN GENERATED: refused (source: crates/hauksbee-ir/tests/compat_drift.rs) -->",
+        begin:
+            "<!-- BEGIN GENERATED: refused (source: crates/hauksbee-ir/tests/compat_drift.rs) -->",
         end: "<!-- END GENERATED: refused -->",
         body: s.trim_end().to_string(),
     }

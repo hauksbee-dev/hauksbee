@@ -36,9 +36,9 @@ impl Program {
         let mut next: i64 = 1;
         let mut order: Vec<(i64, String)> = Vec::new();
         let intern = |name: &str,
-                          net_id: &mut HashMap<String, i64>,
-                          next: &mut i64,
-                          order: &mut Vec<(i64, String)>|
+                      net_id: &mut HashMap<String, i64>,
+                      next: &mut i64,
+                      order: &mut Vec<(i64, String)>|
          -> i64 {
             if let Some(&id) = net_id.get(name) {
                 return id;
@@ -111,14 +111,7 @@ fn build_footprint(c: &Comp, net_id: &HashMap<String, i64>) -> FootprintBuilder 
         let net = p.net.as_ref().map(|n| (net_id[n], n.as_str()));
         let layers: Vec<&str> = p.layers.iter().map(|s| s.as_str()).collect();
         fb = fb.add_pad(
-            &p.number,
-            &p.kind,
-            &p.shape,
-            p.at,
-            p.size,
-            p.drill,
-            layers,
-            net,
+            &p.number, &p.kind, &p.shape, p.at, p.size, p.drill, layers, net,
         );
     }
     fb

@@ -195,7 +195,10 @@ fn cosim_failed_chunk_marks_analog_invalid() {
         Some(EXIT_INVALID_FOR_ANALYSIS),
         "the strict path resolves to exit 3 (EXIT_INVALID_FOR_ANALYSIS)"
     );
-    assert_eq!(EXIT_INVALID_FOR_ANALYSIS, 3, "the invalid-for-analysis code is 3");
+    assert_eq!(
+        EXIT_INVALID_FOR_ANALYSIS, 3,
+        "the invalid-for-analysis code is 3"
+    );
 
     // The co-sim JSON reports analog_valid:false with the failed window, and the
     // shape stays backward-compatible (analog_valid is always present).

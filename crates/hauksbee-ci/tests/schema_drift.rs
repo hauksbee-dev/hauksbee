@@ -36,7 +36,10 @@ fn generated_schema() -> String {
     let obj = schema.ensure_object();
     // Root metadata follows the original file's conventions; schemars would
     // otherwise title it "Spec" and describe it with the struct's one-liner.
-    obj.insert("$schema".into(), json!("http://json-schema.org/draft-07/schema#"));
+    obj.insert(
+        "$schema".into(),
+        json!("http://json-schema.org/draft-07/schema#"),
+    );
     obj.insert("$id".into(), json!(SCHEMA_ID));
     obj.insert("title".into(), json!("hauksbee-ci spec"));
     obj.insert(
@@ -81,8 +84,12 @@ fn schema_file_matches_spec_type() {
         eprintln!("regenerated {}", path.display());
         return;
     }
-    let current = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("cannot read {}: {e}\nRegenerate with: {REGEN}", path.display()));
+    let current = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "cannot read {}: {e}\nRegenerate with: {REGEN}",
+            path.display()
+        )
+    });
     assert!(
         current == want,
         "editors/vscode-hauksbee-board/schemas/hauksbee-ci-spec.schema.json is out of \

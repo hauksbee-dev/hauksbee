@@ -53,7 +53,11 @@ pub struct WebHeadsUp {
 
 impl From<&HeadsUp> for WebHeadsUp {
     fn from(h: &HeadsUp) -> Self {
-        WebHeadsUp { what: h.what.clone(), why: h.why.clone(), fix: h.fix.clone() }
+        WebHeadsUp {
+            what: h.what.clone(),
+            why: h.why.clone(),
+            fix: h.fix.clone(),
+        }
     }
 }
 
@@ -355,10 +359,7 @@ pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
 /// co-sim, instead of re-reading the original bytes with a weaker sniffer
 /// (the old path failed co-sim on any `.board` or gerber zip that had just
 /// produced a clean static report).
-fn analyze_normalized(
-    file_name: &str,
-    norm: &crate::board_input::NormalizedBoard,
-) -> WebReport {
+fn analyze_normalized(file_name: &str, norm: &crate::board_input::NormalizedBoard) -> WebReport {
     let is_binary = norm.is_binary();
     let is_gerber = norm.is_gerber();
     let board = &norm.board;
@@ -625,14 +626,26 @@ fn fold_cosim_faults(
     static_serious: usize,
     cosim: &WebCosimSection,
 ) -> Option<(usize, usize, String)> {
-    let serious = cosim.findings.iter().filter(|f| f.level == "serious").count();
-    let warnings = cosim.findings.iter().filter(|f| f.level == "warning").count();
+    let serious = cosim
+        .findings
+        .iter()
+        .filter(|f| f.level == "serious")
+        .count();
+    let warnings = cosim
+        .findings
+        .iter()
+        .filter(|f| f.level == "warning")
+        .count();
     if serious == 0 && warnings == 0 {
         return None;
     }
     let total = static_total + serious + warnings;
     let serious = static_serious + serious;
-    Some((total, serious, overall_headline(total, serious, false, false)))
+    Some((
+        total,
+        serious,
+        overall_headline(total, serious, false, false),
+    ))
 }
 
 /// The headline a statically-clean board (`total == 0`, no serious co-sim faults)
@@ -707,7 +720,11 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
             .collect::<Vec<_>>()
             .join(", ")
     };
-    let chunk_word = if failed_chunks == 1 { "chunk" } else { "chunks" };
+    let chunk_word = if failed_chunks == 1 {
+        "chunk"
+    } else {
+        "chunks"
+    };
     // Note-level, NOT serious: analog non-convergence is a co-sim HONESTY caveat,
     // not a board defect. Like its sibling caveats (substitute core, firmware not
     // exercised, both note-level) it must DEMOTE the headline off "Looks healthy"
@@ -789,7 +806,9 @@ fn run_web_cosim(board: &ExtractedBoard, fw_name: &str, fw_bytes: &[u8]) -> WebC
         .tempfile()
     {
         Ok(t) => t,
-        Err(e) => return cosim_unavailable(format!("Could not stage the firmware for co-sim: {e}.")),
+        Err(e) => {
+            return cosim_unavailable(format!("Could not stage the firmware for co-sim: {e}."))
+        }
     };
     if let Err(e) = tmp.write_all(fw_bytes).and_then(|_| tmp.flush()) {
         return cosim_unavailable(format!("Could not write the firmware for co-sim: {e}."));
@@ -931,8 +950,7 @@ fn run_web_cosim(board: &ExtractedBoard, fw_name: &str, fw_bytes: &[u8]) -> WebC
                       cannot vouch for firmware behaviour (the MCU may have stalled \
                       at boot, run no I/O, or the firmware may not match this board)."
                     .to_string(),
-                fix: "Confirm the firmware matches this MCU and actually drives I/O."
-                    .to_string(),
+                fix: "Confirm the firmware matches this MCU and actually drives I/O.".to_string(),
             },
         );
     }
@@ -1185,7 +1203,10 @@ mod tests {
         let net_volts: HashMap<String, f64> = HashMap::new();
         let top = top_gpio_nets(&stats, &net_volts, 15);
         assert_eq!(top.len(), 15);
-        assert_eq!(top[0].name, "ZZ_CLK", "the top mover must lead, not be dropped");
+        assert_eq!(
+            top[0].name, "ZZ_CLK",
+            "the top mover must lead, not be dropped"
+        );
         // Toggle counts are non-increasing down the ranked list.
         // (ZZ_CLK first, then the 1-toggle nets.)
         assert!(top.iter().all(|n| n.driven), "all 15 kept nets were driven");
@@ -1202,16 +1223,28 @@ mod tests {
         use std::collections::HashMap;
         let mut stats: HashMap<String, NetStat> = HashMap::new();
         // "AAA_TINY" sorts first alphabetically but has the smallest swing.
-        stats.insert("AAA_TINY".to_string(), NetStat::with_toggles_and_range(1, 0.0, 0.1));
+        stats.insert(
+            "AAA_TINY".to_string(),
+            NetStat::with_toggles_and_range(1, 0.0, 0.1),
+        );
         // "ZZ_BIG" sorts last alphabetically but has the largest swing.
-        stats.insert("ZZ_BIG".to_string(), NetStat::with_toggles_and_range(1, 0.0, 5.0));
+        stats.insert(
+            "ZZ_BIG".to_string(),
+            NetStat::with_toggles_and_range(1, 0.0, 5.0),
+        );
         for i in 0..14 {
-            stats.insert(format!("M{i:02}"), NetStat::with_toggles_and_range(1, 0.0, 1.0));
+            stats.insert(
+                format!("M{i:02}"),
+                NetStat::with_toggles_and_range(1, 0.0, 1.0),
+            );
         }
         let net_volts: HashMap<String, f64> = HashMap::new();
         let top = top_gpio_nets(&stats, &net_volts, 15);
         assert_eq!(top.len(), 15);
-        assert_eq!(top[0].name, "ZZ_BIG", "largest voltage swing leads on a toggle tie");
+        assert_eq!(
+            top[0].name, "ZZ_BIG",
+            "largest voltage swing leads on a toggle tie"
+        );
         assert!(
             top.iter().any(|n| n.name == "ZZ_BIG"),
             "the widest-swing net must survive truncation"
@@ -1223,7 +1256,8 @@ mod tests {
     }
 
     const SHORTED: &[u8] = include_bytes!("../../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
-    const BLUEPILL: &[u8] = include_bytes!("../../../testdata/boards/stm32_bluepill_demo.kicad_pcb");
+    const BLUEPILL: &[u8] =
+        include_bytes!("../../../testdata/boards/stm32_bluepill_demo.kicad_pcb");
 
     #[test]
     fn from_plain_carries_heads_up_and_serializes() {
@@ -1239,7 +1273,10 @@ mod tests {
             "match trace width and spacing to the stackup",
         ));
         let sect = WebSection::from_plain("Signal integrity", &p);
-        assert!(sect.findings.is_empty(), "no findings, only a heads-up note");
+        assert!(
+            sect.findings.is_empty(),
+            "no findings, only a heads-up note"
+        );
         assert_eq!(sect.heads_up.len(), 1, "the heads-up note must survive");
         // The three-part gloss survives into the web shape.
         assert!(!sect.heads_up[0].why.is_empty(), "why must survive");
@@ -1263,12 +1300,16 @@ mod tests {
         // And a bind-open board likewise.
         let h2 = overall_headline(0, 0, false, true);
         assert!(
-            !h2.to_lowercase().contains("looks healthy") && h2.to_lowercase().contains("trustworthy"),
+            !h2.to_lowercase().contains("looks healthy")
+                && h2.to_lowercase().contains("trustworthy"),
             "bind-open headline must warn: {h2}"
         );
         // A genuinely clean board still reads healthy.
         let h3 = overall_headline(0, 0, false, false);
-        assert!(h3.to_lowercase().contains("looks healthy"), "clean board: {h3}");
+        assert!(
+            h3.to_lowercase().contains("looks healthy"),
+            "clean board: {h3}"
+        );
     }
 
     #[test]
@@ -1427,9 +1468,16 @@ fn main {
         assert!(r.num_nets >= 2, "both nets survive: {}", r.num_nets);
         // Sniffed by header too: the extension is not load-bearing.
         let r2 = analyze("exported.txt", dsl);
-        assert!(r2.ok, "header sniff works without the extension: {:?}", r2.error);
+        assert!(
+            r2.ok,
+            "header sniff works without the extension: {:?}",
+            r2.error
+        );
         // A broken DSL fails with the compile error, not the format-sniffer one.
-        let r3 = analyze("broken.board", b"# Board-as-Code (hauksbee board DSL v1)\nfn main { comp }");
+        let r3 = analyze(
+            "broken.board",
+            b"# Board-as-Code (hauksbee board DSL v1)\nfn main { comp }",
+        );
         assert!(!r3.ok);
         assert!(
             r3.error.as_deref().unwrap_or("").contains("Board-as-Code"),
@@ -1456,8 +1504,11 @@ fn main {
 }
 "#;
         let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        w.start_file("export/tarski.board", zip::write::SimpleFileOptions::default())
-            .unwrap();
+        w.start_file(
+            "export/tarski.board",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
         w.write_all(dsl).unwrap();
         let bytes = w.finish().unwrap().into_inner();
         let r = analyze("tarski-export.zip", &bytes);
@@ -1465,7 +1516,8 @@ fn main {
         assert_eq!(r.num_components, 1, "R1 survives the zip + compile");
         // A zip with neither gerbers nor a .board says what it looked for.
         let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        w.start_file("README.md", zip::write::SimpleFileOptions::default()).unwrap();
+        w.start_file("README.md", zip::write::SimpleFileOptions::default())
+            .unwrap();
         w.write_all(b"not a board").unwrap();
         let bytes = w.finish().unwrap().into_inner();
         let r2 = analyze("junk.zip", &bytes);
@@ -1520,7 +1572,9 @@ fn main {
             drc.verdict
         );
         assert!(
-            r.notes.iter().any(|n| n.message.contains("reverse-extracted")),
+            r.notes
+                .iter()
+                .any(|n| n.message.contains("reverse-extracted")),
             "coverage note present"
         );
     }
@@ -1562,13 +1616,18 @@ fn main {
 }
 "#;
         let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
-        w.start_file("export/tarski.board", zip::write::SimpleFileOptions::default())
-            .unwrap();
+        w.start_file(
+            "export/tarski.board",
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
         w.write_all(dsl).unwrap();
         let bytes = w.finish().unwrap().into_inner();
         let r = analyze_with_firmware("tarski-export.zip", &bytes, "fw.elf", BOOT_GATE_FW);
         assert!(r.ok, "static analysis succeeds: {:?}", r.error);
-        let cosim = r.cosim.expect("cosim section present once firmware was supplied");
+        let cosim = r
+            .cosim
+            .expect("cosim section present once firmware was supplied");
         assert!(
             !cosim
                 .findings
@@ -1577,7 +1636,10 @@ fn main {
             "the re-read failure mode must be gone: {:?}",
             cosim.findings
         );
-        assert!(!cosim.ran, "the DSL board has no MCU, so the co-sim cannot run");
+        assert!(
+            !cosim.ran,
+            "the DSL board has no MCU, so the co-sim cannot run"
+        );
         assert!(
             cosim
                 .findings
@@ -1618,7 +1680,9 @@ fn main {
         let bytes = w.finish().unwrap().into_inner();
         let r = analyze_with_firmware("cm4_adapter_gerbers.zip", &bytes, "fw.elf", BOOT_GATE_FW);
         assert!(r.ok, "gerber zip static analysis succeeds: {:?}", r.error);
-        let cosim = r.cosim.expect("cosim section present once firmware was supplied");
+        let cosim = r
+            .cosim
+            .expect("cosim section present once firmware was supplied");
         assert!(
             !cosim
                 .findings
@@ -1663,21 +1727,34 @@ fn main {
         // board was corrupted before parse AND never routed to its reader. Raw
         // bytes must now extract and report like any text board.
         let r = analyze("two_resistor.PcbDoc", ALTIUM);
-        assert!(r.ok, "binary board must extract from raw bytes: {:?}", r.error);
+        assert!(
+            r.ok,
+            "binary board must extract from raw bytes: {:?}",
+            r.error
+        );
         assert_eq!(r.num_components, 2, "R1 and R2 survive");
         assert!(r.num_nets > 0, "nets survive: {}", r.num_nets);
         // The guard that proves the bytes path is what makes it work: the SAME
         // board pushed through the lossy round-trip the old path performed is
         // mangled (the OLE2 magic is not valid UTF-8) and fails to read.
         let lossy = String::from_utf8_lossy(ALTIUM).into_owned();
-        assert_ne!(lossy.as_bytes(), ALTIUM, "lossy decode must corrupt the container");
+        assert_ne!(
+            lossy.as_bytes(),
+            ALTIUM,
+            "lossy decode must corrupt the container"
+        );
         let r2 = analyze("two_resistor.PcbDoc", lossy.as_bytes());
-        assert!(!r2.ok, "the lossy view must NOT extract; bytes-first routing is load-bearing");
+        assert!(
+            !r2.ok,
+            "the lossy view must NOT extract; bytes-first routing is load-bearing"
+        );
     }
 
     // Track D: web firmware drop zone.
-    const NO_MCU: &[u8] = include_bytes!("../../hauksbee-ci/examples/boards/power_resistor.kicad_pcb");
-    const BOOT_GATE_FW: &[u8] = include_bytes!("../../../testdata/firmware/boot_gate_a/boot_gate.elf");
+    const NO_MCU: &[u8] =
+        include_bytes!("../../hauksbee-ci/examples/boards/power_resistor.kicad_pcb");
+    const BOOT_GATE_FW: &[u8] =
+        include_bytes!("../../../testdata/firmware/boot_gate_a/boot_gate.elf");
 
     #[test]
     fn board_only_path_leaves_cosim_absent() {
@@ -1686,7 +1763,10 @@ fn main {
         let r = analyze("boot_gate.kicad_pcb", SHORTED);
         assert!(r.cosim.is_none(), "board-only analyze must not set cosim");
         let json = analyze_json("boot_gate.kicad_pcb", SHORTED);
-        assert!(!json.contains("\"cosim\""), "board-only JSON must omit cosim: {json:.200}");
+        assert!(
+            !json.contains("\"cosim\""),
+            "board-only JSON must omit cosim: {json:.200}"
+        );
     }
 
     #[test]
@@ -1698,7 +1778,10 @@ fn main {
         let cosim = r.cosim.expect("cosim present once firmware was supplied");
         assert!(!cosim.ran, "no MCU => co-sim cannot run");
         assert!(
-            cosim.findings.iter().any(|f| f.why.to_lowercase().contains("microcontroller")),
+            cosim
+                .findings
+                .iter()
+                .any(|f| f.why.to_lowercase().contains("microcontroller")),
             "should name the missing MCU as the reason: {:?}",
             cosim.findings
         );
@@ -1720,7 +1803,10 @@ fn main {
         let json = analyze_with_firmware_json("pr.kicad_pcb", NO_MCU, "fw.elf", BOOT_GATE_FW);
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         assert_eq!(v["ok"], true);
-        assert!(v["cosim"].is_object(), "cosim object must be present: {json:.200}");
+        assert!(
+            v["cosim"].is_object(),
+            "cosim object must be present: {json:.200}"
+        );
         assert_eq!(v["cosim"]["ran"], false);
     }
 
@@ -1730,7 +1816,12 @@ fn main {
         // is its matching AVR firmware: the co-sim should actually run. If the
         // build was made without the AVR backend the load fails gracefully, so we
         // accept either a real run OR a friendly ran:false note (never ok:false).
-        let r = analyze_with_firmware("boot_gate.kicad_pcb", SHORTED, "boot_gate.elf", BOOT_GATE_FW);
+        let r = analyze_with_firmware(
+            "boot_gate.kicad_pcb",
+            SHORTED,
+            "boot_gate.elf",
+            BOOT_GATE_FW,
+        );
         assert!(r.ok, "static analysis still succeeds: {:?}", r.error);
         let cosim = r.cosim.expect("cosim present once firmware was supplied");
         if cosim.ran {
@@ -1751,7 +1842,12 @@ fn main {
         // Finding 1 (05 §3b): the web co-sim section must expose analog validity
         // STRUCTURALLY, not only as prose. On a converging board it is true and
         // present; failed_windows is omitted when empty (backward-compatible).
-        let json = analyze_with_firmware_json("boot_gate.kicad_pcb", SHORTED, "boot_gate.elf", BOOT_GATE_FW);
+        let json = analyze_with_firmware_json(
+            "boot_gate.kicad_pcb",
+            SHORTED,
+            "boot_gate.elf",
+            BOOT_GATE_FW,
+        );
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         let cosim = &v["cosim"];
         assert!(cosim.is_object(), "cosim object present: {json:.200}");
@@ -1895,7 +1991,10 @@ fn main {
             "headline matches the CLI 'worth a look' verdict, got: {}",
             folded.2
         );
-        assert!(!folded.2.contains("Looks healthy"), "must not read Looks healthy");
+        assert!(
+            !folded.2.contains("Looks healthy"),
+            "must not read Looks healthy"
+        );
 
         // A destructive SERIOUS fault still escalates serious, not just total.
         let mut killed = clean_ran_section();
@@ -1907,7 +2006,11 @@ fn main {
         });
         let folded = fold_cosim_faults(0, 0, &killed).expect("a serious fault folds in");
         assert_eq!((folded.0, folded.1), (1, 1), "1 issue, 1 serious");
-        assert!(folded.2.contains("1 serious"), "serious headline, got: {}", folded.2);
+        assert!(
+            folded.2.contains("1 serious"),
+            "serious headline, got: {}",
+            folded.2
+        );
 
         // A clean run with only note-level caveats does NOT fold (returns None),
         // notes demote via cosim_caveat_headline, not the fault count.
@@ -1964,7 +2067,10 @@ fn main {
         // web told the user to "fix the serious ones" for a phantom hardware fault.
         let mut diverged = clean_ran_section();
         diverged.analog_valid = false;
-        diverged.failed_windows = vec![WebFailedWindow { start_s: 0.0012, end_s: 0.0034 }];
+        diverged.failed_windows = vec![WebFailedWindow {
+            start_s: 0.0012,
+            end_s: 0.0034,
+        }];
         diverged.findings.insert(
             0,
             analog_invalid_finding(2, &diverged.failed_windows.clone()),
@@ -1995,11 +2101,17 @@ fn main {
             uart_output: String::new(),
             findings: vec![analog_invalid_finding(
                 1,
-                &[WebFailedWindow { start_s: 0.0, end_s: 0.0001 }],
+                &[WebFailedWindow {
+                    start_s: 0.0,
+                    end_s: 0.0001,
+                }],
             )],
             gpio_nets: Vec::new(),
             analog_valid: false,
-            failed_windows: vec![WebFailedWindow { start_s: 0.0, end_s: 0.0001 }],
+            failed_windows: vec![WebFailedWindow {
+                start_s: 0.0,
+                end_s: 0.0001,
+            }],
             spi_framing: Vec::new(),
             boot_gates: Vec::new(),
             firmware_exercised: true,
@@ -2039,12 +2151,21 @@ fn main {
             substituted: false,
         };
         let json = serde_json::to_string(&section).unwrap();
-        assert!(json.contains("\"boot_gates\""), "populated boot_gates serializes: {json}");
-        assert!(json.contains("GATE_CTRL") && json.contains("driven_high"), "panel row present: {json}");
+        assert!(
+            json.contains("\"boot_gates\""),
+            "populated boot_gates serializes: {json}"
+        );
+        assert!(
+            json.contains("GATE_CTRL") && json.contains("driven_high"),
+            "panel row present: {json}"
+        );
         // Empty => omitted (backward-compatible schema).
         section.boot_gates.clear();
         let json2 = serde_json::to_string(&section).unwrap();
-        assert!(!json2.contains("\"boot_gates\""), "empty boot_gates omitted: {json2}");
+        assert!(
+            !json2.contains("\"boot_gates\""),
+            "empty boot_gates omitted: {json2}"
+        );
     }
 
     /// R18 parity: the web firmware co-sim must surface the SAME boot power-up
@@ -2056,8 +2177,12 @@ fn main {
     #[cfg(feature = "avr")]
     #[test]
     fn web_cosim_carries_the_boot_advisory() {
-        let json =
-            analyze_with_firmware_json("boot_gate.kicad_pcb", SHORTED, "boot_gate.elf", BOOT_GATE_FW);
+        let json = analyze_with_firmware_json(
+            "boot_gate.kicad_pcb",
+            SHORTED,
+            "boot_gate.elf",
+            BOOT_GATE_FW,
+        );
         let v: serde_json::Value = serde_json::from_str(&json).unwrap();
         let cosim = &v["cosim"];
         if cosim["ran"] != serde_json::json!(true) {
@@ -2073,9 +2198,10 @@ fn main {
         // The held-high hazard leads the findings as a serious item.
         let findings = cosim["findings"].as_array().expect("findings array");
         assert!(
-            findings
-                .iter()
-                .any(|f| f["what"].as_str().unwrap_or("").contains("energised at power-up")),
+            findings.iter().any(|f| f["what"]
+                .as_str()
+                .unwrap_or("")
+                .contains("energised at power-up")),
             "the held-high control net must surface as a serious finding: {json:.600}"
         );
     }

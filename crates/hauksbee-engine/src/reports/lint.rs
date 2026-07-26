@@ -15,7 +15,12 @@ use super::{lint_fails, OutputMode};
 
 /// Print the full `--lint` bundle in `mode`, surface any pin-role guesses, then
 /// (under `strict`) exit non-zero on a high/medium finding.
-pub fn emit(board: &ExtractedBoard, lib: &ModelLibrary, mode: OutputMode, strict: bool) -> anyhow::Result<()> {
+pub fn emit(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    mode: OutputMode,
+    strict: bool,
+) -> anyhow::Result<()> {
     // device_decode is now inside engine_lint (so --check/--json/TUI/frontdoor
     // get it too); no longer spliced here, which would double-count it.
     let report = crate::checks::engine_lint(board, lib);
@@ -77,7 +82,8 @@ fn render_pin_role_guesses(guesses: &[(String, String)]) -> String {
     // Group by the inferred pattern, keeping first-seen order so the output is
     // deterministic for a given board.
     let mut order: Vec<&str> = Vec::new();
-    let mut counts: std::collections::HashMap<&str, (usize, &str)> = std::collections::HashMap::new();
+    let mut counts: std::collections::HashMap<&str, (usize, &str)> =
+        std::collections::HashMap::new();
     for (r, g) in guesses {
         let entry = counts.entry(g.as_str()).or_insert_with(|| {
             order.push(g.as_str());
@@ -89,10 +95,7 @@ fn render_pin_role_guesses(guesses: &[(String, String)]) -> String {
         let (n, first) = counts[pattern];
         let _ = writeln!(s, "  ? {pattern} (x{n}, e.g. {first})");
     }
-    let _ = writeln!(
-        s,
-        "  the per-part mapping is in --json (bind_role notes)"
-    );
+    let _ = writeln!(s, "  the per-part mapping is in --json (bind_role notes)");
     s
 }
 
@@ -197,12 +200,18 @@ mod tests {
         let v: serde_json::Value =
             serde_json::from_str(&out).expect("lint --json must emit ONE parseable JSON document");
         // The guesses are present, on the structured `notes` channel.
-        let notes = v.get("notes").and_then(|n| n.as_array()).expect("notes array");
+        let notes = v
+            .get("notes")
+            .and_then(|n| n.as_array())
+            .expect("notes array");
         assert_eq!(notes.len(), 2, "both pin-role guesses surfaced as notes");
-        assert!(notes.iter().all(|n| n.get("kind").and_then(|k| k.as_str()) == Some("bind_role")));
         assert!(notes
             .iter()
-            .any(|n| n.get("message").and_then(|m| m.as_str()) == Some("pin-role guess U1.PA0: adc0")));
+            .all(|n| n.get("kind").and_then(|k| k.as_str()) == Some("bind_role")));
+        assert!(notes
+            .iter()
+            .any(|n| n.get("message").and_then(|m| m.as_str())
+                == Some("pin-role guess U1.PA0: adc0")));
         // With no guesses, notes is omitted (skip_serializing_if) and it still parses.
         let clean = lint_json(&bound, &report, &[]);
         let cv: serde_json::Value = serde_json::from_str(&clean).expect("clean lint --json parses");

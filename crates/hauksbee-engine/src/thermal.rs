@@ -263,7 +263,8 @@ mod tests {
         // R12: "R_01005_0402Metric" contains "0402"; the 01005 branch must win
         // (checked first), giving the smallest body the HIGHER theta_JA, never
         // the 0402's 600 (which would under-estimate Tj, the unsafe direction).
-        let theta = theta_ja_from_footprint("Resistor_SMD:R_01005_0402Metric", ComponentKind::Passive);
+        let theta =
+            theta_ja_from_footprint("Resistor_SMD:R_01005_0402Metric", ComponentKind::Passive);
         assert_ne!(theta, 600.0, "must not collide with the 0402 metric twin");
         assert!(theta > 900.0, "01005 sits above 0201's 900, got {theta}");
         // The 0201 whose metric twin is 0603 still resolves to 0201.

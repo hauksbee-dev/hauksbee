@@ -197,10 +197,7 @@ mod tests {
         assert_eq!(assignments[0].consumers.len(), 1);
         // The driver is the group containing exactly the two Thevenin devices.
         let d = assignments[0].driver_group;
-        let dev_count: usize = dag.groups[d]
-            .iter()
-            .map(|&i| g.islands[i].len())
-            .sum();
+        let dev_count: usize = dag.groups[d].iter().map(|&i| g.islands[i].len()).sum();
         assert_eq!(dev_count, 2);
     }
 

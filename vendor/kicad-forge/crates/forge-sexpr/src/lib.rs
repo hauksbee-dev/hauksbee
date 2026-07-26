@@ -66,17 +66,27 @@ pub struct Document {
 impl Token {
     /// New bare atom. The caller must ensure `text` needs no quoting.
     pub fn atom(text: impl Into<Text>) -> Self {
-        Token { leading: Text::empty(), raw: text.into() }
+        Token {
+            leading: Text::empty(),
+            raw: text.into(),
+        }
     }
 
     /// New string token, quoted and escaped per KiCad rules.
     pub fn string(text: &str) -> Self {
-        Token { leading: Text::empty(), raw: Text::from(quote(text)) }
+        Token {
+            leading: Text::empty(),
+            raw: Text::from(quote(text)),
+        }
     }
 
     /// New token holding a value: quoted only if KiCad would require it.
     pub fn value_token(text: &str) -> Self {
-        if needs_quoting(text) { Self::string(text) } else { Self::atom(text) }
+        if needs_quoting(text) {
+            Self::string(text)
+        } else {
+            Self::atom(text)
+        }
     }
 
     pub fn is_string(&self) -> bool {
@@ -112,7 +122,11 @@ impl Token {
 
 impl List {
     pub fn new(children: Vec<Sexpr>) -> Self {
-        List { leading: Text::empty(), children, close_leading: Text::empty() }
+        List {
+            leading: Text::empty(),
+            children,
+            close_leading: Text::empty(),
+        }
     }
 
     /// The list's keyword: its first child, when that child is an atom.
@@ -200,7 +214,8 @@ impl List {
     /// Remove all child lists named `name`; returns how many were removed.
     pub fn remove_all(&mut self, name: &str) -> usize {
         let before = self.children.len();
-        self.children.retain(|c| !matches!(c, Sexpr::List(l) if l.name() == Some(name)));
+        self.children
+            .retain(|c| !matches!(c, Sexpr::List(l) if l.name() == Some(name)));
         before - self.children.len()
     }
 }
@@ -239,7 +254,11 @@ impl Sexpr {
 impl Document {
     /// A hand-built document (no borrowed source; all text is owned).
     pub fn new(nodes: Vec<Sexpr>, trailing: impl Into<Text>) -> Document {
-        Document { nodes, trailing: trailing.into(), src: None }
+        Document {
+            nodes,
+            trailing: trailing.into(),
+            src: None,
+        }
     }
 
     /// The root list (e.g. the `kicad_pcb` node).
@@ -300,7 +319,11 @@ mod tests {
         // "nan"/"inf" parse as valid f64 in std, but a coordinate is never one
         // and NaN would silently defeat downstream geometry checks.
         for token in ["nan", "NaN", "inf", "-inf", "infinity", "Infinity"] {
-            assert_eq!(Token::atom(token).as_f64(), None, "{token} must not parse as a number");
+            assert_eq!(
+                Token::atom(token).as_f64(),
+                None,
+                "{token} must not parse as a number"
+            );
         }
     }
 

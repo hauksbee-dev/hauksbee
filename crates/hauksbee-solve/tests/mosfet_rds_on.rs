@@ -85,8 +85,7 @@ fn drain_voltage(model: MosfetModel, vdd: f64, rl: f64, vg: f64, swap_ds: bool) 
         model,
     });
     let opts = SolverOptions::default();
-    let out = run_op(&c, &opts, &[Probe::NodeVoltage("d".into())])
-        .expect("op converges");
+    let out = run_op(&c, &opts, &[Probe::NodeVoltage("d".into())]).expect("op converges");
     out.column("V(d)").unwrap()[0]
 }
 

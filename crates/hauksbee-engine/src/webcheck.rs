@@ -20,7 +20,13 @@ fn sanitize_name(name: &str, fallback: &str) -> String {
     let base = name.rsplit(['/', '\\']).next().unwrap_or(fallback);
     let clean: String = base
         .chars()
-        .map(|c| if c.is_alphanumeric() || ".-_".contains(c) { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || ".-_".contains(c) {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect();
     if clean.is_empty() || clean.starts_with('.') {
         format!("{fallback}{clean}")
@@ -57,7 +63,14 @@ fn err_json(msg: &str) -> String {
 /// `spec_file`) or overwrite (a vcd_sink's `vcd_path` reaches `File::create`)
 /// paths outside the staging dir, because the CI resolver accepts absolute
 /// paths and `..` traversal.
-const PATH_KEYS: [&str; 6] = ["board", "firmware", "asbuilt", "trace", "spec_file", "vcd_path"];
+const PATH_KEYS: [&str; 6] = [
+    "board",
+    "firmware",
+    "asbuilt",
+    "trace",
+    "spec_file",
+    "vcd_path",
+];
 
 /// The first path-bearing key the fragment tries to set, if any.
 ///
@@ -70,7 +83,11 @@ const PATH_KEYS: [&str; 6] = ["board", "firmware", "asbuilt", "trace", "spec_fil
 /// refuses it before resolving anything.
 fn forbidden_path_key(spec_fragment: &str) -> Option<&'static str> {
     for line in spec_fragment.lines() {
-        let key = line.trim_start().split(['=', ' ', '\t']).next().unwrap_or("");
+        let key = line
+            .trim_start()
+            .split(['=', ' ', '\t'])
+            .next()
+            .unwrap_or("");
         if let Some(hit) = PATH_KEYS.iter().copied().find(|k| *k == key) {
             return Some(hit);
         }
@@ -248,7 +265,11 @@ fn validate_web_limits(spec_fragment: &str) -> Result<(), String> {
     // enumeration, which is 2^n over the toleranced components a rule expands to
     // once the board is bound). We cannot expand patterns without a board here,
     // so we cap the rule count as the cheap, board-free proxy.
-    if let Some(len) = table.get("tolerance").and_then(toml::Value::as_array).map(|a| a.len()) {
+    if let Some(len) = table
+        .get("tolerance")
+        .and_then(toml::Value::as_array)
+        .map(|a| a.len())
+    {
         if len > MAX_WEB_TOLERANCE_RULES {
             return Err(format!(
                 "the spec declares {len} [[tolerance]] rules, over the web check limit of \
@@ -258,7 +279,11 @@ fn validate_web_limits(spec_fragment: &str) -> Result<(), String> {
     }
 
     // [[assert]] count.
-    if let Some(len) = table.get("assert").and_then(toml::Value::as_array).map(|a| a.len()) {
+    if let Some(len) = table
+        .get("assert")
+        .and_then(toml::Value::as_array)
+        .map(|a| a.len())
+    {
         if len > MAX_WEB_ASSERTS {
             return Err(format!(
                 "the spec declares {len} [[assert]] blocks, over the web check limit of \
@@ -417,8 +442,7 @@ mod tests {
         SERIAL.lock().unwrap_or_else(|e| e.into_inner())
     }
 
-    const BOOT_GATE: &str =
-        include_str!("../../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
+    const BOOT_GATE: &str = include_str!("../../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
 
     fn spec_fragment() -> &'static str {
         r#"name = "web check"
@@ -449,11 +473,19 @@ kind = "no_faults"
             return;
         }
         std::env::set_var("HAUKSBEE_CI_BIN", &ci);
-        let json = run_web_check("boot_gate.kicad_pcb", BOOT_GATE.as_bytes(), None, spec_fragment());
+        let json = run_web_check(
+            "boot_gate.kicad_pcb",
+            BOOT_GATE.as_bytes(),
+            None,
+            spec_fragment(),
+        );
         std::env::remove_var("HAUKSBEE_CI_BIN");
         let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
         assert_eq!(v["ok"], true, "run succeeds: {json}");
-        assert_eq!(v["passed"], true, "no_faults holds on the demo board: {json}");
+        assert_eq!(
+            v["passed"], true,
+            "no_faults holds on the demo board: {json}"
+        );
         assert!(v["results"].as_array().is_some_and(|r| !r.is_empty()));
     }
 
@@ -523,21 +555,29 @@ kind = "no_faults"
     #[test]
     fn spec_at_the_caps_is_accepted() {
         let asserts = "[[assert]]\nkind = \"no_faults\"\n".repeat(MAX_WEB_ASSERTS);
-        let tolerances = "[[tolerance]]\nref = \"R*\"\npercent = 10.0\n".repeat(MAX_WEB_TOLERANCE_RULES);
+        let tolerances =
+            "[[tolerance]]\nref = \"R*\"\npercent = 10.0\n".repeat(MAX_WEB_TOLERANCE_RULES);
         let spec = format!(
             "duration_ms = {MAX_WEB_DURATION_MS}\nframe_ms = {MIN_WEB_FRAME_MS}\n\
              [fuzz]\nseeds = {MAX_WEB_FUZZ_SEEDS}\n\
              [ensemble]\nseeds = {MAX_WEB_ENSEMBLE_SEEDS}\n\
              {tolerances}\n{asserts}"
         );
-        assert_eq!(validate_web_limits(&spec), Ok(()), "spec at the caps: {spec}");
+        assert_eq!(
+            validate_web_limits(&spec),
+            Ok(()),
+            "spec at the caps: {spec}"
+        );
     }
 
     /// An integer `duration_ms` at the cap is accepted (the field is f64 in the
     /// spec, but a hand author writes `2000`, not `2000.0`).
     #[test]
     fn integer_duration_at_cap_is_accepted() {
-        assert_eq!(validate_web_limits("duration_ms = 2000\n[[assert]]\nkind = \"no_faults\"\n"), Ok(()));
+        assert_eq!(
+            validate_web_limits("duration_ms = 2000\n[[assert]]\nkind = \"no_faults\"\n"),
+            Ok(())
+        );
     }
 
     #[test]
@@ -559,19 +599,27 @@ kind = "no_faults"
     fn fuzz_seeds_over_cap_is_rejected() {
         let err = validate_web_limits("[fuzz]\nseeds = 64\n[[assert]]\nkind = \"no_faults\"\n")
             .expect_err("64 seeds exceeds the fuzz cap of 8");
-        assert!(err.contains("fuzz") && err.contains("seeds"), "names the field: {err}");
+        assert!(
+            err.contains("fuzz") && err.contains("seeds"),
+            "names the field: {err}"
+        );
     }
 
     #[test]
     fn ensemble_seeds_over_cap_is_rejected() {
-        let err = validate_web_limits("[ensemble]\nseeds = 128\n[[assert]]\nkind = \"no_faults\"\n")
-            .expect_err("128 seeds exceeds the ensemble cap of 16");
-        assert!(err.contains("ensemble") && err.contains("seeds"), "names the field: {err}");
+        let err =
+            validate_web_limits("[ensemble]\nseeds = 128\n[[assert]]\nkind = \"no_faults\"\n")
+                .expect_err("128 seeds exceeds the ensemble cap of 16");
+        assert!(
+            err.contains("ensemble") && err.contains("seeds"),
+            "names the field: {err}"
+        );
     }
 
     #[test]
     fn too_many_tolerance_rules_rejected() {
-        let toosmany = "[[tolerance]]\nref = \"R*\"\npercent = 10.0\n".repeat(MAX_WEB_TOLERANCE_RULES + 1);
+        let toosmany =
+            "[[tolerance]]\nref = \"R*\"\npercent = 10.0\n".repeat(MAX_WEB_TOLERANCE_RULES + 1);
         let err = validate_web_limits(&format!("{toosmany}[[assert]]\nkind = \"no_faults\"\n"))
             .expect_err("over the tolerance-rule cap");
         assert!(err.contains("tolerance"), "names tolerance: {err}");
@@ -599,7 +647,11 @@ kind = "no_faults"
     fn concurrency_budget_is_enforced() {
         let _serial = serial_guard();
         // The counter should be at rest since we hold the serial lock.
-        assert_eq!(ACTIVE_WEB_CHECKS.load(Ordering::Acquire), 0, "counter starts clean");
+        assert_eq!(
+            ACTIVE_WEB_CHECKS.load(Ordering::Acquire),
+            0,
+            "counter starts clean"
+        );
 
         let mut slots: Vec<WebCheckSlot> = Vec::new();
         for i in 0..MAX_CONCURRENT_WEB_CHECKS {
@@ -607,16 +659,29 @@ kind = "no_faults"
         }
         // At the cap: the next acquire must fail, and the counter must not have
         // crept past the ceiling (the failed acquire rolled its increment back).
-        assert!(WebCheckSlot::acquire().is_none(), "acquire past the cap is refused");
-        assert_eq!(ACTIVE_WEB_CHECKS.load(Ordering::Acquire), MAX_CONCURRENT_WEB_CHECKS);
+        assert!(
+            WebCheckSlot::acquire().is_none(),
+            "acquire past the cap is refused"
+        );
+        assert_eq!(
+            ACTIVE_WEB_CHECKS.load(Ordering::Acquire),
+            MAX_CONCURRENT_WEB_CHECKS
+        );
 
         // Freeing one slot lets exactly one more through.
         drop(slots.pop());
         let regained = WebCheckSlot::acquire().expect("a freed slot is reusable");
-        assert!(WebCheckSlot::acquire().is_none(), "still capped after regaining one");
+        assert!(
+            WebCheckSlot::acquire().is_none(),
+            "still capped after regaining one"
+        );
 
         drop(regained);
         drop(slots);
-        assert_eq!(ACTIVE_WEB_CHECKS.load(Ordering::Acquire), 0, "all slots released on drop");
+        assert_eq!(
+            ACTIVE_WEB_CHECKS.load(Ordering::Acquire),
+            0,
+            "all slots released on drop"
+        );
     }
 }

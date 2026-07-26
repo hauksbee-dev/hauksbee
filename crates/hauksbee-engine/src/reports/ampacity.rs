@@ -10,7 +10,10 @@ pub fn emit(text: &str, altium_present: bool) -> anyhow::Result<()> {
         Vec::new()
     } else {
         let doc = forge_sexpr::parse(text)?;
-        let copper = doc.root().map(hauksbee_extract::net_copper_from_root).unwrap_or_default();
+        let copper = doc
+            .root()
+            .map(hauksbee_extract::net_copper_from_root)
+            .unwrap_or_default();
         hauksbee_extract::trace_capacity_report(&copper, &hauksbee_extract::TraceAudit::default())
     };
     print!("{}", hauksbee_extract::render_trace_capacity_report(&rows));

@@ -138,9 +138,7 @@ fn strip_size_code(s: &str) -> Option<&str> {
         if let Some(rest) = s.strip_prefix(code) {
             return match rest.chars().next() {
                 None => Some(rest),
-                Some('_') | Some('-') | Some(' ') | Some('\t') => {
-                    Some(rest[1..].trim_start())
-                }
+                Some('_') | Some('-') | Some(' ') | Some('\t') => Some(rest[1..].trim_start()),
                 _ => None,
             };
         }
@@ -171,7 +169,10 @@ fn normalise_comma_decimal(s: &str) -> String {
             .map(|c| c.is_ascii_digit())
             .unwrap_or(false);
         // Length of the digit run immediately after the comma.
-        let run = after_comma.chars().take_while(|c| c.is_ascii_digit()).count();
+        let run = after_comma
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .count();
         if prev_digit && run >= 1 {
             // A single comma is a thousands separator for a grouped integer: a
             // nonzero integer part with no leading zero and a 3-digit group. The
@@ -198,7 +199,10 @@ fn normalise_comma_decimal(s: &str) -> String {
 fn is_thousands_grouped(s: &str) -> bool {
     for (i, b) in s.bytes().enumerate() {
         if b == b',' {
-            let run = s[i + 1..].chars().take_while(|c| c.is_ascii_digit()).count();
+            let run = s[i + 1..]
+                .chars()
+                .take_while(|c| c.is_ascii_digit())
+                .count();
             if run != 3 {
                 return false;
             }
@@ -594,7 +598,7 @@ mod tests {
         check("1M0G", 1_000_000.0); // 1 MΩ ±2%
         check("100J", 100.0); // 100 Ω ±5%, no multiplier
         check("100RK", 100.0); // 100 Ω ±10%
-        // The tolerance letter followed by a further annotation still parses.
+                               // The tolerance letter followed by a further annotation still parses.
         check("4k7K 1%", 4700.0);
         // Bare 'F' is still the Farad unit, not a tolerance code.
         check("1F", 1.0);
@@ -610,9 +614,9 @@ mod tests {
         check("4F7", 4.7); // 4.7 F
         check("1H5", 1.5); // 1.5 H
         check("2R2", 2.2); // resistor form still works
-        // R36: the H/F decimal-letter IS the unit; it must not be dropped, or
-        // downstream parse_ohms accepts a henry/farad part as a resistance. Only
-        // the ohmic 'R' form is legitimately unitless.
+                           // R36: the H/F decimal-letter IS the unit; it must not be dropped, or
+                           // downstream parse_ohms accepts a henry/farad part as a resistance. Only
+                           // the ohmic 'R' form is legitimately unitless.
         assert_eq!(parse_value("4H7").unwrap().unit.as_deref(), Some("H"));
         assert_eq!(parse_value("4F7").unwrap().unit.as_deref(), Some("F"));
         assert_eq!(parse_value("1H5").unwrap().unit.as_deref(), Some("H"));
@@ -681,9 +685,9 @@ mod tests {
         check("0,1uF", 100e-9); // 1-2 digit group already worked
         check("4,7uF", 4.7e-6);
         check("5,1k", 5100.0); // 5.1 kΩ
-        // Genuine thousands grouping (nonzero integer part) stays 1000x, and a
-        // trailing unit does not demote it to a decimal (R34: the old
-        // "group is the whole string" clause read "4,700uF" as 4.7 µF, 1000x low).
+                               // Genuine thousands grouping (nonzero integer part) stays 1000x, and a
+                               // trailing unit does not demote it to a decimal (R34: the old
+                               // "group is the whole string" clause read "4,700uF" as 4.7 µF, 1000x low).
         check("4,700", 4700.0);
         check("4,700uF", 4.7e-3); // 4700 µF = 4.7 mF, NOT 4.7 µF
         check("2,200uF", 2.2e-3); // 2200 µF = 2.2 mF
@@ -701,7 +705,7 @@ mod tests {
         check("2.2e-9", 2.2e-9);
         check("1e3", 1000.0);
         check("4.7e3F", 4700.0); // exponent then a unit (Farads)
-        // A lone 'e' with no exponent digits is NOT a number.
+                                 // A lone 'e' with no exponent digits is NOT a number.
         assert!(parse_value("4e").is_none());
     }
 
@@ -739,11 +743,14 @@ mod tests {
         check("R1", 0.1);
         check("R047", 0.047);
         check("r47", 0.47); // lowercase marking
-        // The leading-zero and middle-letter equivalents still parse identically.
+                            // The leading-zero and middle-letter equivalents still parse identically.
         check("0R47", 0.47);
         // A bare "R" with no following digit is not a value.
         assert!(parse_value("R").is_none(), "bare R is not a value");
-        assert!(parse_value("R_LABEL").is_none(), "R + non-digit is not a value");
+        assert!(
+            parse_value("R_LABEL").is_none(),
+            "R + non-digit is not a value"
+        );
     }
 
     #[test]
@@ -802,7 +809,9 @@ mod tests {
         // defeated the binder's generic-diode fallback (which keys off
         // parse_value() == None), silently deleting a conducting rectifier /
         // Schottky / zener path. JEDEC 1N/2N part numbers must return None.
-        for pn in ["1N4007", "1N5819", "1N914", "1N4733", "2N3904", "2N7000", "3N201"] {
+        for pn in [
+            "1N4007", "1N5819", "1N914", "1N4733", "2N3904", "2N7000", "3N201",
+        ] {
             assert!(
                 parse_value(pn).is_none(),
                 "JEDEC part number {pn:?} must not parse as a passive value, got {:?}",
@@ -967,7 +976,3 @@ mod tests {
         assert_eq!(parse_value("1F").unwrap().unit.as_deref(), Some("F"));
     }
 }
-
-
-
-

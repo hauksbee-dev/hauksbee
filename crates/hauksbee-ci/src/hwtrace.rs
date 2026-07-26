@@ -133,12 +133,12 @@ pub struct Feature {
 
 /// The feature kinds and their units, for validation and reporting.
 const FEATURE_KINDS: &[(&str, &str)] = &[
-    ("level", "V"),         // time-weighted mean (the settled/average level)
-    ("min", "V"),           // minimum voltage
-    ("max", "V"),           // maximum voltage (peak)
-    ("period", "ms"),       // mean rising-to-rising edge spacing
-    ("duty", "frac"),       // high-time fraction over complete periods
-    ("pulse_width", "ms"),  // mean high-pulse (rising-to-falling) duration
+    ("level", "V"),          // time-weighted mean (the settled/average level)
+    ("min", "V"),            // minimum voltage
+    ("max", "V"),            // maximum voltage (peak)
+    ("period", "ms"),        // mean rising-to-rising edge spacing
+    ("duty", "frac"),        // high-time fraction over complete periods
+    ("pulse_width", "ms"),   // mean high-pulse (rising-to-falling) duration
     ("edge_count", "edges"), // total threshold crossings (both directions)
 ];
 
@@ -267,9 +267,10 @@ pub fn assert_nets(spec: &Spec) -> Result<HashSet<String>, SpecError> {
 
 /// Resolve an hwtrace assertion's `trace` path against the spec's directory.
 pub fn trace_path(spec: &Spec, a: &crate::spec::Assertion) -> Result<PathBuf, SpecError> {
-    let rel = a.trace.as_deref().ok_or_else(|| {
-        SpecError::Invalid("hwtrace assertion needs a `trace` path".to_string())
-    })?;
+    let rel = a
+        .trace
+        .as_deref()
+        .ok_or_else(|| SpecError::Invalid("hwtrace assertion needs a `trace` path".to_string()))?;
     Ok(if Path::new(rel).is_absolute() {
         PathBuf::from(rel)
     } else {
@@ -359,21 +360,19 @@ fn load_vcd(path: &Path, signal: Option<&str>) -> Result<Vec<(f64, f64)>, SpecEr
             break;
         }
     }
-    let ts = timescale_s.ok_or_else(|| {
-        SpecError::Invalid(format!("{ctx}: VCD has no parseable $timescale"))
-    })?;
+    let ts = timescale_s
+        .ok_or_else(|| SpecError::Invalid(format!("{ctx}: VCD has no parseable $timescale")))?;
     let id = match signal {
-        Some(name) => {
-            vars.iter()
-                .find(|(_, n)| n == name)
-                .map(|(i, _)| i.clone())
-                .ok_or_else(|| {
-                    let known: Vec<&String> = vars.iter().map(|(_, n)| n).collect();
-                    SpecError::Invalid(format!(
-                        "{ctx}: VCD has no signal named '{name}' (have: {known:?})"
-                    ))
-                })?
-        }
+        Some(name) => vars
+            .iter()
+            .find(|(_, n)| n == name)
+            .map(|(i, _)| i.clone())
+            .ok_or_else(|| {
+                let known: Vec<&String> = vars.iter().map(|(_, n)| n).collect();
+                SpecError::Invalid(format!(
+                    "{ctx}: VCD has no signal named '{name}' (have: {known:?})"
+                ))
+            })?,
         None => {
             if vars.len() != 1 {
                 let known: Vec<&String> = vars.iter().map(|(_, n)| n).collect();
@@ -692,7 +691,14 @@ mod tests {
 
     /// A clean square wave: `period_s` period, `duty` high fraction, levels
     /// lo/hi, sampled at `dt`, starting low at t=0.
-    fn square(period_s: f64, duty: f64, lo: f64, hi: f64, total_s: f64, dt: f64) -> Vec<(f64, f64)> {
+    fn square(
+        period_s: f64,
+        duty: f64,
+        lo: f64,
+        hi: f64,
+        total_s: f64,
+        dt: f64,
+    ) -> Vec<(f64, f64)> {
         let mut out = Vec::new();
         let mut t = 0.0;
         while t <= total_s {
@@ -724,8 +730,8 @@ mod tests {
                    $var wire 1 ! sig $end\n\
                    $enddefinitions $end\n\
                    #0\n0!\n#10\nµ garbage line\n1!\n";
-        let path = std::env::temp_dir()
-            .join(format!("hauksbee_vcd_multibyte_{}.vcd", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("hauksbee_vcd_multibyte_{}.vcd", std::process::id()));
         std::fs::write(&path, vcd).unwrap();
         let series = load_vcd(&path, None);
         let _ = std::fs::remove_file(&path);
@@ -734,7 +740,11 @@ mod tests {
         assert_eq!(series.len(), 2);
         assert_eq!(series[0].1, 0.0);
         assert_eq!(series[1].1, 1.0);
-        assert!((series[1].0 - 10e-6).abs() < 1e-12, "second edge at 10µs: {}", series[1].0);
+        assert!(
+            (series[1].0 - 10e-6).abs() < 1e-12,
+            "second edge at 10µs: {}",
+            series[1].0
+        );
     }
 
     #[test]
@@ -744,8 +754,10 @@ mod tests {
         // (band = reltol*|cap| becomes inf/NaN). load_csv must fail loud instead.
         let csv = "0.0,1.0\n1e-4,2.0\n2e-4,inf\n3e-4,3.0\n4e-4,4.0\n\
                    5e-4,5.0\n6e-4,6.0\n7e-4,7.0\n8e-4,8.0\n";
-        let path = std::env::temp_dir()
-            .join(format!("hauksbee_hwtrace_nonfinite_{}.csv", std::process::id()));
+        let path = std::env::temp_dir().join(format!(
+            "hauksbee_hwtrace_nonfinite_{}.csv",
+            std::process::id()
+        ));
         std::fs::write(&path, csv).unwrap();
         let r = load_csv(&path);
         let _ = std::fs::remove_file(&path);
@@ -814,7 +826,11 @@ mod tests {
         assert!(!r.pass);
         assert!(r.detail.contains("period"), "{}", r.detail);
         assert!(r.detail.contains("200"), "sim value missing: {}", r.detail);
-        assert!(r.detail.contains("300"), "captured value missing: {}", r.detail);
+        assert!(
+            r.detail.contains("300"),
+            "captured value missing: {}",
+            r.detail
+        );
         assert!(r.detail.contains("EXCEEDS"), "{}", r.detail);
     }
 

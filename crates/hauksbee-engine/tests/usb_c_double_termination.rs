@@ -191,7 +191,10 @@ fn lily58_dual_receptacle_both_halves_terminated() {
          headline: {}",
         report.headline
     );
-    assert!(report.has_discrete_rd, "the GNDA-returned Rd must be credited");
+    assert!(
+        report.has_discrete_rd,
+        "the GNDA-returned Rd must be credited"
+    );
 }
 
 #[test]

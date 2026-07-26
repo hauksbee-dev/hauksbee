@@ -54,7 +54,9 @@ pub fn stamp_bridge(
     // name-pairs still get unique device names in the circuit.
     let (lo, hi) = if a <= b { (a, b) } else { (b, a) };
     let already = circuit.devices.iter().any(|d| match d {
-        Device::Resistor { a: da, b: db, name, .. } if name.starts_with("SHORT_") => {
+        Device::Resistor {
+            a: da, b: db, name, ..
+        } if name.starts_with("SHORT_") => {
             let (dl, dh) = if da <= db { (*da, *db) } else { (*db, *da) };
             dl == lo && dh == hi
         }
@@ -125,7 +127,10 @@ mod tests {
         let n4 = c.node("1_2");
         let s1 = stamp_bridge(&mut c, n1, n2, "GPIO_1", "2");
         let s2 = stamp_bridge(&mut c, n3, n4, "GPIO", "1_2");
-        assert!(s1.is_some() && s2.is_some(), "both distinct shorts must stamp");
+        assert!(
+            s1.is_some() && s2.is_some(),
+            "both distinct shorts must stamp"
+        );
         assert_ne!(s1, s2, "the two bridges must have distinct device names");
         let bridges = c
             .devices

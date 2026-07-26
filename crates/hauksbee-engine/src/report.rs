@@ -139,9 +139,11 @@ impl BindReport {
     /// Every pin-role GUESS warning: `(reference, message)` for each pad whose
     /// role was inferred from a pin-rule rather than an explicit pin-function.
     pub fn guess_warnings(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.rows
-            .iter()
-            .flat_map(|r| r.guesses.iter().map(move |g| (r.reference.as_str(), g.as_str())))
+        self.rows.iter().flat_map(|r| {
+            r.guesses
+                .iter()
+                .map(move |g| (r.reference.as_str(), g.as_str()))
+        })
     }
 
     /// Render a Unicode box-drawing table of every row.
@@ -297,15 +299,33 @@ mod resolved_count_tests {
         // headline "N of M resolved" otherwise overstated coverage and disagreed
         // with the open part listed below it.
         let mut report = BindReport::default();
-        report.push(row("D1", Confidence::Exact, BindOutcome::Analog { device: "diode".into() }));
+        report.push(row(
+            "D1",
+            Confidence::Exact,
+            BindOutcome::Analog {
+                device: "diode".into(),
+            },
+        ));
         report.push(row(
             "D2",
             Confidence::Exact, // model matched...
-            BindOutcome::Unresolved { reason: "left open".into() }, // ...but left open
+            BindOutcome::Unresolved {
+                reason: "left open".into(),
+            }, // ...but left open
         ));
-        report.push(row("H1", Confidence::Unresolved, BindOutcome::Skipped { reason: "hole".into() }));
+        report.push(row(
+            "H1",
+            Confidence::Unresolved,
+            BindOutcome::Skipped {
+                reason: "hole".into(),
+            },
+        ));
 
-        assert_eq!(report.non_ignored_count(), 2, "the skipped mounting hole is ignored");
+        assert_eq!(
+            report.non_ignored_count(),
+            2,
+            "the skipped mounting hole is ignored"
+        );
         assert_eq!(
             report.resolved_count(),
             1,

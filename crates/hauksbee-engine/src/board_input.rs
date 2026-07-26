@@ -200,10 +200,7 @@ pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, B
     // through the untouched text path (parse, DRC, SI) as if a `.kicad_pcb`
     // was uploaded.
     let is_board_code = zip_code.is_some()
-        || Path::new(file_name)
-            .extension()
-            .and_then(|e| e.to_str())
-            == Some("board")
+        || Path::new(file_name).extension().and_then(|e| e.to_str()) == Some("board")
         || crate::commands::common::is_board_code_header(&text);
     let text: String = if is_board_code {
         crate::boardcode::code_to_board_text(&text)
@@ -211,8 +208,8 @@ pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, B
     } else {
         text.into_owned()
     };
-    let board = ExtractedBoard::from_auto(&text)
-        .map_err(|e| BoardInputError::Extract(e.to_string()))?;
+    let board =
+        ExtractedBoard::from_auto(&text).map_err(|e| BoardInputError::Extract(e.to_string()))?;
     Ok(NormalizedBoard {
         board,
         layout_text: Some(text),
@@ -371,8 +368,8 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
         ));
     }
 
-    let board = ExtractedBoard::from_auto(&text)
-        .map_err(|e| BoardInputError::Extract(e.to_string()))?;
+    let board =
+        ExtractedBoard::from_auto(&text).map_err(|e| BoardInputError::Extract(e.to_string()))?;
     Ok(with_name_fallback(
         NormalizedBoard {
             board,
@@ -411,7 +408,9 @@ fn with_name_fallback(mut norm: NormalizedBoard, path: &Path) -> NormalizedBoard
 fn zip_board_code(file_name: &str, contents: &[u8]) -> Result<Option<String>, BoardInputError> {
     use std::io::Read;
     let mut archive = zip::ZipArchive::new(std::io::Cursor::new(contents)).map_err(|e| {
-        BoardInputError::Zip(format!("could not open '{file_name}' as a zip archive: {e}"))
+        BoardInputError::Zip(format!(
+            "could not open '{file_name}' as a zip archive: {e}"
+        ))
     })?;
     let mut code_entries: Vec<usize> = Vec::new();
     for i in 0..archive.len() {
@@ -436,11 +435,15 @@ fn zip_board_code(file_name: &str, contents: &[u8]) -> Result<Option<String>, Bo
         return Ok(None);
     };
     let mut entry = archive.by_index(i).map_err(|e| {
-        BoardInputError::Zip(format!("could not read the .board inside '{file_name}': {e}"))
+        BoardInputError::Zip(format!(
+            "could not read the .board inside '{file_name}': {e}"
+        ))
     })?;
     let mut src = String::new();
     entry.read_to_string(&mut src).map_err(|e| {
-        BoardInputError::Zip(format!("could not read the .board inside '{file_name}': {e}"))
+        BoardInputError::Zip(format!(
+            "could not read the .board inside '{file_name}': {e}"
+        ))
     })?;
     Ok(Some(src))
 }
@@ -522,13 +525,20 @@ fn main {
         let bytes = zip_of(&[("export/tarski.board", DSL)]);
         let norm = from_bytes("tarski-export.zip", &bytes).expect("zipped .board normalizes");
         assert_eq!(norm.kind, InputKind::BoardCode);
-        let text = norm.layout_text.as_deref().expect("compiled layout text present");
+        let text = norm
+            .layout_text
+            .as_deref()
+            .expect("compiled layout text present");
         assert!(
             text.contains("kicad_pcb"),
             "layout_text is the COMPILED KiCad text, not the DSL: {}",
             &text[..text.len().min(120)]
         );
-        assert_eq!(norm.board.components.len(), 1, "R1 survives the zip + compile");
+        assert_eq!(
+            norm.board.components.len(),
+            1,
+            "R1 survives the zip + compile"
+        );
     }
 
     #[test]
@@ -553,7 +563,10 @@ fn main {
         let norm = from_bytes("two_resistor.PcbDoc", ALTIUM).expect("altium normalizes");
         assert_eq!(norm.kind, InputKind::Altium);
         assert!(norm.is_binary());
-        assert!(norm.layout_text.is_none(), "a binary board has no layout text");
+        assert!(
+            norm.layout_text.is_none(),
+            "a binary board has no layout text"
+        );
         // raw must be the EXACT container bytes: altium_drc reads copper from it.
         assert_eq!(norm.raw, ALTIUM, "raw bytes must survive for the DRC twin");
         assert_eq!(norm.board.components.len(), 2, "R1 and R2 survive");
@@ -648,8 +661,14 @@ fn main {
         // The directory form (from_path only).
         let norm = from_path(&dir).expect("gerber directory normalizes");
         assert_eq!(norm.kind, InputKind::Gerber);
-        assert!(norm.layout_text.is_none(), "a gerber archive has no layout text");
-        assert!(norm.raw.is_empty(), "no single file to keep for a directory");
+        assert!(
+            norm.layout_text.is_none(),
+            "a gerber archive has no layout text"
+        );
+        assert!(
+            norm.raw.is_empty(),
+            "no single file to keep for a directory"
+        );
 
         // The zipped form through the bytes path.
         let mut entries: Vec<(String, Vec<u8>)> = Vec::new();

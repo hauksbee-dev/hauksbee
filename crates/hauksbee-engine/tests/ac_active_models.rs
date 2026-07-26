@@ -91,10 +91,7 @@ fn ina186_sc70_binds_as_behavioral_current_sense_amp() {
     assert_eq!(bound.circuit.node_name(out), "ISENSE_OUT");
     assert_eq!(bound.circuit.node_name(inp), "SENSE_P");
     assert_eq!(bound.circuit.node_name(inn), "SENSE_N");
-    assert_eq!(
-        reference.map(|n| bound.circuit.node_name(n)),
-        Some("VREF")
-    );
+    assert_eq!(reference.map(|n| bound.circuit.node_name(n)), Some("VREF"));
     assert_eq!(gain, 25.0);
     assert_eq!(pole_hz, Some(45_000.0));
     assert!(
@@ -102,7 +99,8 @@ fn ina186_sc70_binds_as_behavioral_current_sense_amp() {
             .report
             .rows
             .iter()
-            .any(|row| row.reference == "U1" && row.model_id.as_deref() == Some("ina186_dck_a1_family")),
+            .any(|row| row.reference == "U1"
+                && row.model_id.as_deref() == Some("ina186_dck_a1_family")),
         "bind report should name the INA186 model"
     );
 }

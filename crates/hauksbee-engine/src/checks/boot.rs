@@ -341,12 +341,19 @@ fn transistor_gate_nets(board: &ExtractedBoard) -> Vec<(String, String)> {
         if c.dnp || c.reference.chars().next().map(|ch| ch.to_ascii_uppercase()) != Some('Q') {
             continue;
         }
-        let named = |is: fn(&str) -> bool| c.pins.iter().find(move |p| is(&p.number) || is(&p.function));
+        let named = |is: fn(&str) -> bool| {
+            c.pins
+                .iter()
+                .find(move |p| is(&p.number) || is(&p.function))
+        };
         // 1. An explicit GATE pad, 2. an explicit BASE pad (gate wins over a
         // bulk pad also labelled `B`), 3. else the footprint's control pad.
-        let pin = named(is_gate_pad_name).or_else(|| named(is_base_pad_name)).or_else(|| {
-            switch_control_pad(&c.footprint).and_then(|pad| c.pins.iter().find(|p| p.number == pad))
-        });
+        let pin = named(is_gate_pad_name)
+            .or_else(|| named(is_base_pad_name))
+            .or_else(|| {
+                switch_control_pad(&c.footprint)
+                    .and_then(|pad| c.pins.iter().find(|p| p.number == pad))
+            });
         let Some(net_id) = pin.and_then(|p| p.net) else {
             continue;
         };
@@ -501,8 +508,18 @@ fn boot_gate_states(
 /// the firmware does to it at power-up. The arrows flag the active / undefined
 /// cases for a non-engineer to verify; LOW is reported without a flag.
 pub fn render_boot_gate_panel(rows: &[(String, String, BootGateState)]) -> String {
-    let ref_w = rows.iter().map(|(r, _, _)| r.len()).max().unwrap_or(3).max(2);
-    let net_w = rows.iter().map(|(_, n, _)| n.len()).max().unwrap_or(8).max(8);
+    let ref_w = rows
+        .iter()
+        .map(|(r, _, _)| r.len())
+        .max()
+        .unwrap_or(3)
+        .max(2);
+    let net_w = rows
+        .iter()
+        .map(|(_, n, _)| n.len())
+        .max()
+        .unwrap_or(8)
+        .max(8);
     let mut s = String::from(
         "\nPower-up state of MOSFET / transistor gates: what the firmware does to each\n\
          switch the moment the board powers up. Verify each is the level you intend\n\
@@ -567,17 +584,35 @@ mod tests {
     fn rails_and_grounds_recognised_signals_not() {
         let b = board(
             &[
-                (1, "GND"), (2, "+3V3"), (3, "VCC"), (4, "GNDA"), (5, "5V"),
-                (6, "VMOT"), (7, "VSYS"), (8, "VIN"), (9, "12V"), (10, "1V8"),
-                (11, "SIG"), (12, "DATA0"),
+                (1, "GND"),
+                (2, "+3V3"),
+                (3, "VCC"),
+                (4, "GNDA"),
+                (5, "5V"),
+                (6, "VMOT"),
+                (7, "VSYS"),
+                (8, "VIN"),
+                (9, "12V"),
+                (10, "1V8"),
+                (11, "SIG"),
+                (12, "DATA0"),
             ],
             vec![],
         );
         for id in [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] {
-            assert!(is_power_or_ground_net(&b, id), "net {id} should be rail/ground");
+            assert!(
+                is_power_or_ground_net(&b, id),
+                "net {id} should be rail/ground"
+            );
         }
-        assert!(!is_power_or_ground_net(&b, 11), "SIG must not read as rail/ground");
-        assert!(!is_power_or_ground_net(&b, 12), "DATA0 must not read as rail/ground");
+        assert!(
+            !is_power_or_ground_net(&b, 11),
+            "SIG must not read as rail/ground"
+        );
+        assert!(
+            !is_power_or_ground_net(&b, 12),
+            "DATA0 must not read as rail/ground"
+        );
     }
 
     #[test]
@@ -598,9 +633,15 @@ mod tests {
         // level; an RT thermistor likewise is not a bias resistor. Crediting
         // either would silently suppress a real held-high boot hazard (#8).
         let b = board(&[(1, "GATE"), (2, "GND")], vec![resistor("RV1", 1, 2)]);
-        assert!(net_has_no_bias_resistor(&b, "GATE"), "RV to GND must not count as a bias");
+        assert!(
+            net_has_no_bias_resistor(&b, "GATE"),
+            "RV to GND must not count as a bias"
+        );
         let b = board(&[(1, "GATE"), (2, "GND")], vec![resistor("RT1", 1, 2)]);
-        assert!(net_has_no_bias_resistor(&b, "GATE"), "RT to GND must not count as a bias");
+        assert!(
+            net_has_no_bias_resistor(&b, "GATE"),
+            "RT to GND must not count as a bias"
+        );
         // A plain R with the same wiring IS a bias (the strict predicate keeps it).
         let b = board(&[(1, "GATE"), (2, "GND")], vec![resistor("R1", 1, 2)]);
         assert!(!net_has_no_bias_resistor(&b, "GATE"));
@@ -611,7 +652,10 @@ mod tests {
         let mut r = resistor("R1", 1, 2);
         r.dnp = true;
         let b = board(&[(1, "GATE"), (2, "GND")], vec![r]);
-        assert!(net_has_no_bias_resistor(&b, "GATE"), "a DNP resistor is electrically absent");
+        assert!(
+            net_has_no_bias_resistor(&b, "GATE"),
+            "a DNP resistor is electrically absent"
+        );
     }
 
     #[test]
@@ -658,7 +702,10 @@ mod tests {
         assert!(net_drives_a_switch(&b, "GATE"));
         assert!(net_drives_a_switch(&b, "COIL"));
         assert!(!net_drives_a_switch(&b, "HDR"));
-        assert!(!net_drives_a_switch(&b, "DNPGATE"), "a DNP transistor must not count");
+        assert!(
+            !net_drives_a_switch(&b, "DNPGATE"),
+            "a DNP transistor must not count"
+        );
         assert!(!net_drives_a_switch(&b, "missing"));
     }
 
@@ -666,7 +713,10 @@ mod tests {
     fn switch_control_pad_by_footprint() {
         assert_eq!(switch_control_pad("Package_TO_SOT_SMD:SOT-23"), Some("1"));
         assert_eq!(switch_control_pad("SOT-23-3"), Some("1"));
-        assert_eq!(switch_control_pad("Package_TO_SOT_SMD:TO-252-3_DPAK"), Some("1"));
+        assert_eq!(
+            switch_control_pad("Package_TO_SOT_SMD:TO-252-3_DPAK"),
+            Some("1")
+        );
         // 5/6-pin SOT-23 variants contain "SOT-23" but pad 1 is NOT the
         // control terminal there (#9): they must not match the 3-lead rule.
         assert_eq!(switch_control_pad("Package_TO_SOT_SMD:SOT-23-5"), None);
@@ -693,7 +743,12 @@ mod tests {
         }
     }
 
-    fn transistor(reference: &str, footprint: &str, pads: &[(&str, &str, i64)], dnp: bool) -> Component {
+    fn transistor(
+        reference: &str,
+        footprint: &str,
+        pads: &[(&str, &str, i64)],
+        dnp: bool,
+    ) -> Component {
         Component {
             reference: reference.into(),
             value: String::new(),
@@ -719,13 +774,35 @@ mod tests {
     #[test]
     fn transistor_gate_nets_prefers_named_pad_then_footprint() {
         let b = board(
-            &[(1, "GATE_A"), (2, "DRN"), (3, "SRC"), (4, "GATE_B"), (5, "X"), (6, "BULK")],
+            &[
+                (1, "GATE_A"),
+                (2, "DRN"),
+                (3, "SRC"),
+                (4, "GATE_B"),
+                (5, "X"),
+                (6, "BULK"),
+            ],
             vec![
-                transistor("Q1", "whatever", &[("G", "", 1), ("D", "", 2), ("S", "", 3)], false),
-                transistor("Q2", "SOT-23", &[("1", "", 4), ("2", "", 5), ("3", "", 2)], false),
+                transistor(
+                    "Q1",
+                    "whatever",
+                    &[("G", "", 1), ("D", "", 2), ("S", "", 3)],
+                    false,
+                ),
+                transistor(
+                    "Q2",
+                    "SOT-23",
+                    &[("1", "", 4), ("2", "", 5), ("3", "", 2)],
+                    false,
+                ),
                 transistor("Q3", "SOT-23", &[("1", "", 1)], true),
                 transistor("Q5", "TO-92", &[("1", "", 5)], false),
-                transistor("Q4", "SOT-23", &[("G", "", 1), ("S", "", 3), ("D", "", 2), ("B", "", 6)], false),
+                transistor(
+                    "Q4",
+                    "SOT-23",
+                    &[("G", "", 1), ("S", "", 3), ("D", "", 2), ("B", "", 6)],
+                    false,
+                ),
             ],
         );
         let gates = transistor_gate_nets(&b);
@@ -769,7 +846,10 @@ mod tests {
             vec![resistor("R1", 1, 2), resistor("R2", 2, 3)],
         );
         let bias = gate_bias(&b, "Q1_G").expect("a 2-hop chain to a rail is a bias");
-        assert_eq!(bias.reference, "R1", "the resistor on the gate net is named");
+        assert_eq!(
+            bias.reference, "R1",
+            "the resistor on the gate net is named"
+        );
         assert_eq!(bias.rail, "GND");
         assert_eq!(bias.level, BiasLevel::Low);
     }
@@ -814,10 +894,21 @@ mod tests {
             }
             other => panic!("Q1 should be HeldByBias, got {other:?}"),
         }
-        assert_eq!(q1.2.marker(), "", "a correctly-biased gate carries no warning marker");
-        assert_eq!(q1.2.label(), "not driven by firmware; held low by R1 (100k to GND)");
+        assert_eq!(
+            q1.2.marker(),
+            "",
+            "a correctly-biased gate carries no warning marker"
+        );
+        assert_eq!(
+            q1.2.label(),
+            "not driven by firmware; held low by R1 (100k to GND)"
+        );
         let q2 = adv.gate_states.iter().find(|(r, _, _)| r == "Q2").unwrap();
-        assert_eq!(q2.2, BootGateState::Floating, "a bare gate is still floating");
+        assert_eq!(
+            q2.2,
+            BootGateState::Floating,
+            "a bare gate is still floating"
+        );
         assert!(q2.2.marker().contains("undefined"));
     }
 

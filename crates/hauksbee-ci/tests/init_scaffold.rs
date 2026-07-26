@@ -20,14 +20,16 @@ fn blinky() -> PathBuf {
 /// so it CAN report pin drive direction and boot-coverage scaffolds without the
 /// backend-gap note.
 fn stm32_bluepill() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/boards/stm32_bluepill_demo.kicad_pcb")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/boards/stm32_bluepill_demo.kicad_pcb")
 }
 
 /// An ESP32 devkit board: its MCU binds to the `qemu:esp32` backend, which
 /// observes GPIO through a RAM mailbox carrying LEVELS only; it cannot report
 /// pin drive direction, so boot-coverage keeps the honest backend-gap note.
 fn esp32_devkit() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../testdata/boards/esp32_devkit_demo.kicad_pcb")
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/boards/esp32_devkit_demo.kicad_pcb")
 }
 
 /// Copy `blinky.kicad_pcb` into a fresh per-test temp dir and return the copy's
@@ -59,7 +61,10 @@ fn init_generates_a_spec_the_loader_accepts() {
 
     // It landed beside the board as <stem>.toml.
     assert_eq!(spec_path.file_name().unwrap(), "blinky.toml");
-    assert!(spec_path.exists(), "the spec file should be written to disk");
+    assert!(
+        spec_path.exists(),
+        "the spec file should be written to disk"
+    );
 
     // The generated spec round-trips through the crate's own loader (the point of
     // the feature). Structural validation runs here too, so a bad scaffold fails.
@@ -67,7 +72,11 @@ fn init_generates_a_spec_the_loader_accepts() {
 
     // The scaffold reflects what the board actually is: the detected MCU and the
     // detected +5V supply leg.
-    assert_eq!(spec.mcu.as_deref(), Some("atmega328p"), "detected MCU is filled in");
+    assert_eq!(
+        spec.mcu.as_deref(),
+        Some("atmega328p"),
+        "detected MCU is filled in"
+    );
     assert!(
         spec.supplies.iter().any(|s| s.net == "+5V"),
         "the +5V supply leg the binder detected is scaffolded"
@@ -79,12 +88,19 @@ fn init_generates_a_spec_the_loader_accepts() {
     // (the exact false-red the persona panel hit). The rail voltage asserts also
     // stay commented. So exactly one assertion loads.
     let kinds: Vec<&str> = spec.asserts.iter().map(|a| a.kind.as_str()).collect();
-    assert!(kinds.contains(&"no_faults"), "a no_faults assertion is enabled");
+    assert!(
+        kinds.contains(&"no_faults"),
+        "a no_faults assertion is enabled"
+    );
     assert!(
         !kinds.contains(&"boot-coverage"),
         "boot-coverage is scaffolded commented-out so the starter is GREEN out of the box"
     );
-    assert_eq!(spec.asserts.len(), 1, "only the no_faults assertion is live");
+    assert_eq!(
+        spec.asserts.len(),
+        1,
+        "only the no_faults assertion is live"
+    );
 
     // The rendered text still carries a (commented) boot-coverage block so the
     // user can opt in after wiring firmware.

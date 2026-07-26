@@ -404,8 +404,7 @@ impl PartitionedTransient {
         let mut nonlinear = Vec::new();
 
         let touches_rail = |isl: &crate::partition::Island| -> bool {
-            !rail_nodes.is_empty()
-                && isl.boundary_in.iter().any(|n| rail_nodes.contains(n))
+            !rail_nodes.is_empty() && isl.boundary_in.iter().any(|n| rail_nodes.contains(n))
         };
         for isl in &part.islands {
             // A linear island that loads a torn rail must be solved as a sub-block
@@ -492,7 +491,11 @@ impl PartitionedTransient {
         let coupled = linear
             .iter()
             .flat_map(|li| li.inputs().iter())
-            .chain(nonlinear.iter().flat_map(|nl| nl.boundary.iter().map(|(bn, _)| bn)))
+            .chain(
+                nonlinear
+                    .iter()
+                    .flat_map(|nl| nl.boundary.iter().map(|(bn, _)| bn)),
+            )
             .any(|n| claimed[n.0 as usize]);
 
         let pool = build_pool(opts.parallel, nonlinear.len());
@@ -1123,7 +1126,9 @@ impl RailLoads for PartitionedRailLoads<'_> {
                 .enumerate()
                 .filter(|(_, nl)| nl.touches_rail(rail))
                 .filter_map(|(k, nl)| {
-                    nl.phase_a(vbuf, h, tnext, false, opts).err().map(|e| (k, e))
+                    nl.phase_a(vbuf, h, tnext, false, opts)
+                        .err()
+                        .map(|e| (k, e))
                 })
                 .min_by_key(|(k, _)| *k)
         } else {
@@ -1172,7 +1177,10 @@ impl RailLoads for PartitionedRailLoads<'_> {
 
     fn n_loads(&self, i: usize) -> usize {
         let rail = self.tears[i].rail;
-        self.nonlinear.iter().filter(|nl| nl.touches_rail(rail)).count()
+        self.nonlinear
+            .iter()
+            .filter(|nl| nl.touches_rail(rail))
+            .count()
     }
 }
 
@@ -1278,10 +1286,7 @@ fn verify_single_writer(
             }
         }
     }
-    Ok(owner
-        .iter()
-        .map(|&o| o != FREE && o != OUTER)
-        .collect())
+    Ok(owner.iter().map(|&o| o != FREE && o != OUTER).collect())
 }
 
 /// Which terminal a cut source *fixes* when applied in the ordered sweep.
@@ -1426,7 +1431,11 @@ impl NonlinearIsland {
         // to write and the only honest move is to refuse the build,
         // `try_build*` then falls back to the exact monolithic path.
         for li in 0..isl.devices.len() {
-            for (slot, gctrl) in sub.devices[li].controlling_sources().into_iter().enumerate() {
+            for (slot, gctrl) in sub.devices[li]
+                .controlling_sources()
+                .into_iter()
+                .enumerate()
+            {
                 let Some(local) = isl.devices.iter().position(|&d| d == gctrl) else {
                     return None;
                 };
@@ -1728,9 +1737,9 @@ fn seed_sub_reactive(
             // (A = Q_gs, xb[0] = Q_gd, xb[1] = Q_bd, xb[2] = Q_bs) seeded at
             // the island's DC junction voltages; the monolithic driver's
             // arm, mirrored for the same reason as the diode's and BJT's.
-            Device::Mosfet { d, g, s, b, model, .. }
-                if crate::stamp::mos_has_charge(model, &opts.effects) =>
-            {
+            Device::Mosfet {
+                d, g, s, b, model, ..
+            } if crate::stamp::mos_has_charge(model, &opts.effects) => {
                 let (q_gs, q_gd, q_bd, q_bs) = sub_mos_q(ws, *d, *g, *s, *b, model, opts);
                 state.x1[i] = q_gs;
                 state.x2[i] = q_gs;
@@ -1759,8 +1768,8 @@ fn seed_sub_reactive(
                 ..
             } => {
                 let vref = reference.map(|n| node_v(ws, n)).unwrap_or(0.0);
-                let target = (vref + gain * (node_v(ws, *inp) - node_v(ws, *inn)))
-                    .clamp(*rail_lo, *rail_hi);
+                let target =
+                    (vref + gain * (node_v(ws, *inp) - node_v(ws, *inn))).clamp(*rail_lo, *rail_hi);
                 state.x1[i] = target;
                 state.x2[i] = target;
                 state.dx1[i] = 0.0;
@@ -1790,16 +1799,8 @@ fn sub_bjt_q(
     model: &hauksbee_ir::BjtModel,
     opts: &SolverOptions,
 ) -> (f64, f64) {
-    let (vbe, vbc) = crate::stamp::bjt_junction_voltages(
-        &ws.layout,
-        &ws.x,
-        id,
-        c,
-        b,
-        e,
-        model,
-        &opts.effects,
-    );
+    let (vbe, vbc) =
+        crate::stamp::bjt_junction_voltages(&ws.layout, &ws.x, id, c, b, e, model, &opts.effects);
     crate::stamp::bjt_charges_at(model, vbe, vbc, opts.model_temp(), opts.effects.temperature)
 }
 
@@ -2089,7 +2090,10 @@ mod tests {
         let opts = fixed_opts(1e-6);
         let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, part)
             .expect("the ring partition is well-formed (disjoint owners), so the build succeeds");
-        assert!(engine.coupled, "the ring must register as inter-island coupled");
+        assert!(
+            engine.coupled,
+            "the ring must register as inter-island coupled"
+        );
         let err = engine
             .run_streaming(&c, 10e-6, |_| {})
             .expect_err("an odd-inversion ring can never satisfy the coupling tolerance");
@@ -2229,7 +2233,10 @@ mod tests {
         let opts = fixed_opts(dt);
         let mut engine = PartitionedTransient::try_build_from_partition(&c, &opts, part)
             .expect("well-formed feedforward partition builds");
-        assert!(engine.coupled, "the sense boundary must register as coupling");
+        assert!(
+            engine.coupled,
+            "the sense boundary must register as coupling"
+        );
         let n = engine.global_x_len();
         let mut last = vec![0.0; n];
         engine
@@ -2403,10 +2410,13 @@ mod tests {
             p: vin,
             n: NodeId::GROUND,
             kind: SourceKind::Pwl(vec![
-                hauksbee_ir::PwlPoint { t:0.0, v: 0.0 },
-                hauksbee_ir::PwlPoint { t:t1, v: 0.0 },
-                hauksbee_ir::PwlPoint { t:t1 + riser, v: 1.0 },
-                hauksbee_ir::PwlPoint { t:1.0, v: 1.0 },
+                hauksbee_ir::PwlPoint { t: 0.0, v: 0.0 },
+                hauksbee_ir::PwlPoint { t: t1, v: 0.0 },
+                hauksbee_ir::PwlPoint {
+                    t: t1 + riser,
+                    v: 1.0,
+                },
+                hauksbee_ir::PwlPoint { t: 1.0, v: 1.0 },
             ]),
         });
         // V(s) = V(vin): an ideal repeater. The point of routing vin through
@@ -2583,9 +2593,9 @@ fn advance_sub_reactive(
             }
             // Charge-storing MOSFET: the roll applied to all four banks,
             // mirroring the monolithic driver.
-            Device::Mosfet { d, g, s, b, model, .. }
-                if crate::stamp::mos_has_charge(model, &opts.effects) =>
-            {
+            Device::Mosfet {
+                d, g, s, b, model, ..
+            } if crate::stamp::mos_has_charge(model, &opts.effects) => {
                 let (q_gs, q_gd, q_bd, q_bs) = sub_mos_q(ws, *d, *g, *s, *b, model, opts);
                 let q_old = state.x1[i];
                 let dq = if trapz {
@@ -2628,8 +2638,8 @@ fn advance_sub_reactive(
                 ..
             } => {
                 let vref = reference.map(|n| node_v(ws, n)).unwrap_or(0.0);
-                let target = (vref + gain * (node_v(ws, *inp) - node_v(ws, *inn)))
-                    .clamp(*rail_lo, *rail_hi);
+                let target =
+                    (vref + gain * (node_v(ws, *inp) - node_v(ws, *inn))).clamp(*rail_lo, *rail_hi);
                 if let Some((v_out, _)) =
                     crate::stamp::opamp_transient_output(state.x1[i], target, *pole_hz, *slew, h)
                 {

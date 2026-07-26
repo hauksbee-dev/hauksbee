@@ -31,13 +31,19 @@ fn ipa045n10n3g_resolves_nmos_with_correct_ratings() {
     assert_eq!(m.id, "ipa045n10n3g");
     assert_eq!(m.kind, ComponentKind::Nmos, "IPA045N10N3G must be nmos");
 
-    let vmax = m.ratings.max_voltage_v.expect("IPA045N10N3G: max_voltage_v must be present");
+    let vmax = m
+        .ratings
+        .max_voltage_v
+        .expect("IPA045N10N3G: max_voltage_v must be present");
     assert!(
         (90.0..=110.0).contains(&vmax),
         "IPA045N10N3G: max_voltage_v should be ~100V, got {vmax}"
     );
 
-    let imax = m.ratings.max_current_a.expect("IPA045N10N3G: max_current_a must be present");
+    let imax = m
+        .ratings
+        .max_current_a
+        .expect("IPA045N10N3G: max_current_a must be present");
     assert!(
         imax > 50.0,
         "IPA045N10N3G: max_current_a should be >50A (datasheet 100A), got {imax}"
@@ -56,13 +62,19 @@ fn irf9358_resolves_pmos_with_correct_ratings() {
     assert_eq!(m.id, "irf9358");
     assert_eq!(m.kind, ComponentKind::Pmos, "IRF9358 must be pmos");
 
-    let vmax = m.ratings.max_voltage_v.expect("IRF9358: max_voltage_v must be present");
+    let vmax = m
+        .ratings
+        .max_voltage_v
+        .expect("IRF9358: max_voltage_v must be present");
     assert!(
         (25.0..=35.0).contains(&vmax),
         "IRF9358: max_voltage_v should be ~30V, got {vmax}"
     );
 
-    let imax = m.ratings.max_current_a.expect("IRF9358: max_current_a must be present");
+    let imax = m
+        .ratings
+        .max_current_a
+        .expect("IRF9358: max_current_a must be present");
     assert!(
         (5.0..=15.0).contains(&imax),
         "IRF9358: max_current_a should be ~9.2A, got {imax}"
@@ -81,13 +93,19 @@ fn sir182dp_resolves_nmos_with_correct_ratings() {
     assert_eq!(m.id, "sir182dp");
     assert_eq!(m.kind, ComponentKind::Nmos, "SIR182DP must be nmos");
 
-    let vmax = m.ratings.max_voltage_v.expect("SIR182DP: max_voltage_v must be present");
+    let vmax = m
+        .ratings
+        .max_voltage_v
+        .expect("SIR182DP: max_voltage_v must be present");
     assert!(
         (90.0..=110.0).contains(&vmax),
         "SIR182DP: max_voltage_v should be ~100V, got {vmax}"
     );
 
-    let imax = m.ratings.max_current_a.expect("SIR182DP: max_current_a must be present");
+    let imax = m
+        .ratings
+        .max_current_a
+        .expect("SIR182DP: max_current_a must be present");
     assert!(
         (15.0..=30.0).contains(&imax),
         "SIR182DP: max_current_a should be ~21A, got {imax}"
@@ -106,15 +124,25 @@ fn bq76952_resolves_with_stack_voltage_rating() {
     let r = lib.resolve(&q);
     let m = r.model.expect("bq76952 must resolve");
     assert_eq!(m.id, "bq76952");
-    assert_eq!(m.kind, ComponentKind::Digital, "bq76952 must be digital kind");
+    assert_eq!(
+        m.kind,
+        ComponentKind::Digital,
+        "bq76952 must be digital kind"
+    );
 
-    let vmax = m.ratings.max_voltage_v.expect("bq76952: max_voltage_v must be present");
+    let vmax = m
+        .ratings
+        .max_voltage_v
+        .expect("bq76952: max_voltage_v must be present");
     assert!(
         vmax >= 80.0,
         "bq76952: max_voltage_v should be >=80V (datasheet 85V), got {vmax}"
     );
 
-    let tj = m.ratings.max_junction_temp_c.expect("bq76952: max_junction_temp_c must be present");
+    let tj = m
+        .ratings
+        .max_junction_temp_c
+        .expect("bq76952: max_junction_temp_c must be present");
     assert!(
         tj >= 100.0,
         "bq76952: max_junction_temp_c should be >=100C, got {tj}"
@@ -135,7 +163,10 @@ fn lm5109_resolves_as_digital() {
         assert_eq!(m.id, "lm5109", "{val} must resolve to lm5109");
         assert_eq!(m.kind, ComponentKind::Digital, "{val} must be digital");
 
-        let vmax = m.ratings.max_voltage_v.expect("{val}: max_voltage_v required");
+        let vmax = m
+            .ratings
+            .max_voltage_v
+            .expect("{val}: max_voltage_v required");
         assert!(
             (12.0..=18.0).contains(&vmax),
             "{val}: VDD max_voltage_v should be ~15V, got {vmax}"
@@ -171,7 +202,10 @@ fn ina181_resolves_as_opamp_with_supply_rating() {
         assert_eq!(m.id, "ina181", "{val} must resolve to ina181");
         assert_eq!(m.kind, ComponentKind::Opamp, "{val} must be opamp");
 
-        let vmax = m.ratings.max_voltage_v.expect("{val}: max_voltage_v required");
+        let vmax = m
+            .ratings
+            .max_voltage_v
+            .expect("{val}: max_voltage_v required");
         assert!(
             (24.0..=28.0).contains(&vmax),
             "{val}: max_voltage_v should be ~26V, got {vmax}"
@@ -190,9 +224,16 @@ fn ina2181_resolves_dual_opamp_with_supply_rating() {
         let r = lib.resolve(&q);
         let m = r.model.unwrap_or_else(|| panic!("{val} must resolve"));
         assert_eq!(m.id, "ina2181", "{val} must resolve to ina2181");
-        assert_eq!(m.kind, ComponentKind::Opamp, "{val} must be opamp (dual CSA)");
+        assert_eq!(
+            m.kind,
+            ComponentKind::Opamp,
+            "{val} must be opamp (dual CSA)"
+        );
 
-        let vmax = m.ratings.max_voltage_v.expect("{val}: max_voltage_v required");
+        let vmax = m
+            .ratings
+            .max_voltage_v
+            .expect("{val}: max_voltage_v required");
         assert!(
             (24.0..=28.0).contains(&vmax),
             "{val}: max_voltage_v should be ~26V, got {vmax}"
@@ -213,7 +254,9 @@ fn generic_nmos_fallback_binds_unknown_fet_in_dpak_footprint() {
         ..Default::default()
     };
     let r = lib.resolve(&q);
-    let m = r.model.expect("unknown FET in DPAK footprint should bind to generic fallback");
+    let m = r
+        .model
+        .expect("unknown FET in DPAK footprint should bind to generic fallback");
     assert_eq!(
         m.id, "generic_nmos_power_pkg",
         "unknown N-ch FET in DPAK should bind to generic_nmos_power_pkg, got '{}'",

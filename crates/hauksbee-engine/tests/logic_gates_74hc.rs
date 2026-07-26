@@ -95,10 +95,14 @@ fn hc02_nor_function_table() {
         tick(
             &mut lc,
             &[
-                ("g1a", a), ("g1b", b),
-                ("g2a", b), ("g2b", a),
-                ("g3a", a), ("g3b", a),
-                ("g4a", b), ("g4b", b),
+                ("g1a", a),
+                ("g1b", b),
+                ("g2a", b),
+                ("g2b", a),
+                ("g3a", a),
+                ("g3b", a),
+                ("g4a", b),
+                ("g4b", b),
             ],
         );
         assert_eq!(lc.output_level("g1y"), Some(!(a || b)), "NOR({a},{b})");
@@ -140,9 +144,15 @@ fn hc27_triple_3input_nor_function_table() {
         tick(
             &mut lc,
             &[
-                ("a1", a), ("b1", b), ("c1", c),
-                ("a2", c), ("b2", a), ("c2", b),
-                ("a3", b), ("b3", c), ("c3", a),
+                ("a1", a),
+                ("b1", b),
+                ("c1", c),
+                ("a2", c),
+                ("b2", a),
+                ("c2", b),
+                ("a3", b),
+                ("b3", c),
+                ("c3", a),
             ],
         );
         let want = !(a || b || c);
@@ -160,18 +170,34 @@ fn hc125_tristate_buffer_function_table() {
     tick(
         &mut lc,
         &[
-            ("a1", true), ("oe_n_1", false),
-            ("a2", false), ("oe_n_2", false),
-            ("a3", true), ("oe_n_3", true),
-            ("a4", false), ("oe_n_4", true),
+            ("a1", true),
+            ("oe_n_1", false),
+            ("a2", false),
+            ("oe_n_2", false),
+            ("a3", true),
+            ("oe_n_3", true),
+            ("a4", false),
+            ("oe_n_4", true),
         ],
     );
-    assert_eq!(lc.output_level("y1"), Some(true), "enabled buffer passes HIGH");
+    assert_eq!(
+        lc.output_level("y1"),
+        Some(true),
+        "enabled buffer passes HIGH"
+    );
     assert_eq!(lc.output_enabled("y1"), Some(true));
-    assert_eq!(lc.output_level("y2"), Some(false), "enabled buffer passes LOW");
+    assert_eq!(
+        lc.output_level("y2"),
+        Some(false),
+        "enabled buffer passes LOW"
+    );
     assert_eq!(lc.output_enabled("y2"), Some(true));
     assert_eq!(lc.output_enabled("y3"), Some(false), "OE_n HIGH -> Hi-Z");
-    assert_eq!(lc.output_enabled("y4"), Some(false), "independent per-gate enables");
+    assert_eq!(
+        lc.output_enabled("y4"),
+        Some(false),
+        "independent per-gate enables"
+    );
 }
 
 /// TI SN74HC74 function table, one row at a time:
@@ -186,12 +212,28 @@ fn hc74_dff_function_table() {
     let released = [("pre_n1", true), ("clr_n1", true)];
 
     // Async preset dominates the clock.
-    tick(&mut lc, &[("pre_n1", false), ("clr_n1", true), ("d1", false), ("clk1", true)]);
+    tick(
+        &mut lc,
+        &[
+            ("pre_n1", false),
+            ("clr_n1", true),
+            ("d1", false),
+            ("clk1", true),
+        ],
+    );
     assert_eq!(lc.output_level("q1"), Some(true), "PRE_n low sets Q");
     assert_eq!(lc.output_level("q_n1"), Some(false));
 
     // Async clear.
-    tick(&mut lc, &[("pre_n1", true), ("clr_n1", false), ("d1", true), ("clk1", true)]);
+    tick(
+        &mut lc,
+        &[
+            ("pre_n1", true),
+            ("clr_n1", false),
+            ("d1", true),
+            ("clk1", true),
+        ],
+    );
     assert_eq!(lc.output_level("q1"), Some(false), "CLR_n low clears Q");
     assert_eq!(lc.output_level("q_n1"), Some(true));
 
@@ -208,28 +250,48 @@ fn hc74_dff_function_table() {
 
     // D changes while CLK is high or low: no effect until the next edge.
     step(&mut lc, false, true);
-    assert_eq!(lc.output_level("q1"), Some(true), "D change at CLK high ignored");
+    assert_eq!(
+        lc.output_level("q1"),
+        Some(true),
+        "D change at CLK high ignored"
+    );
     step(&mut lc, false, false);
     assert_eq!(lc.output_level("q1"), Some(true), "CLK falling holds");
 
     // Next rising edge captures D = L.
     step(&mut lc, false, true);
-    assert_eq!(lc.output_level("q1"), Some(false), "CLK rising captures D=L");
+    assert_eq!(
+        lc.output_level("q1"),
+        Some(false),
+        "CLK rising captures D=L"
+    );
     assert_eq!(lc.output_level("q_n1"), Some(true));
 
     // The second flop is independent: clocking FF2 must not disturb FF1.
     tick(
         &mut lc,
         &[
-            ("pre_n1", true), ("clr_n1", true), ("d1", false), ("clk1", false),
-            ("pre_n2", true), ("clr_n2", true), ("d2", true), ("clk2", false),
+            ("pre_n1", true),
+            ("clr_n1", true),
+            ("d1", false),
+            ("clk1", false),
+            ("pre_n2", true),
+            ("clr_n2", true),
+            ("d2", true),
+            ("clk2", false),
         ],
     );
     tick(
         &mut lc,
         &[
-            ("pre_n1", true), ("clr_n1", true), ("d1", false), ("clk1", false),
-            ("pre_n2", true), ("clr_n2", true), ("d2", true), ("clk2", true),
+            ("pre_n1", true),
+            ("clr_n1", true),
+            ("d1", false),
+            ("clk1", false),
+            ("pre_n2", true),
+            ("clr_n2", true),
+            ("d2", true),
+            ("clk2", true),
         ],
     );
     assert_eq!(lc.output_level("q2"), Some(true), "FF2 captured its own D");

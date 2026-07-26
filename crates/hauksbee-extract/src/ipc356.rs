@@ -197,7 +197,10 @@ mod tests {
         let (x, y) = board.components[0].pins[0]
             .position
             .expect("blank-sign coordinate must parse");
-        assert!((x - 48.26).abs() < 1e-3 && (y - 74.803).abs() < 1e-3, "{x},{y}");
+        assert!(
+            (x - 48.26).abs() < 1e-3 && (y - 74.803).abs() < 1e-3,
+            "{x},{y}"
+        );
     }
 
     #[test]

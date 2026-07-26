@@ -131,10 +131,12 @@ mod firmware_guard_tests {
         let msg = err.to_string();
         assert!(msg.contains("no firmware file"), "message: {msg}");
         // The tried path is reported absolutely, not as the bare relative typo.
-        assert!(msg.contains("definitely_missing_firmware.hex"), "message: {msg}");
         assert!(
-            Path::new(msg.rsplit(' ').next().unwrap_or("")).is_absolute()
-                || msg.contains('/'),
+            msg.contains("definitely_missing_firmware.hex"),
+            "message: {msg}"
+        );
+        assert!(
+            Path::new(msg.rsplit(' ').next().unwrap_or("")).is_absolute() || msg.contains('/'),
             "message names an absolute path: {msg}"
         );
     }

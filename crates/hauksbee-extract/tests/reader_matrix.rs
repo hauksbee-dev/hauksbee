@@ -73,7 +73,11 @@ fn detection_matrix_every_fixture() {
     // Fixture roots: testdata boards + netlists + d356, CI example boards,
     // frontend demo boards, and both crates' tests/fixtures dirs.
     let mut files: Vec<PathBuf> = Vec::new();
-    collect(&cd.join("../../testdata/boards"), &["kicad_pcb"], &mut files);
+    collect(
+        &cd.join("../../testdata/boards"),
+        &["kicad_pcb"],
+        &mut files,
+    );
     collect(&cd.join("../../testdata"), &["net", "d356"], &mut files);
     collect(
         &cd.join("../../frontend/public/boards"),
@@ -178,7 +182,10 @@ fn detection_matrix_every_fixture() {
     }
 
     // Print the matrix.
-    eprintln!("\nDetection matrix (readers in order: {}):", names.join(", "));
+    eprintln!(
+        "\nDetection matrix (readers in order: {}):",
+        names.join(", ")
+    );
     eprintln!(
         "{:<58} {:<16} {}",
         "fixture", "expected", "readers-that-claim"
@@ -190,7 +197,10 @@ fn detection_matrix_every_fixture() {
         *per_format.entry(expected.as_str()).or_default() += 1;
     }
     eprintln!("{}", "-".repeat(96));
-    eprintln!("Per-format counts: {per_format:?}  (total {} fixtures)", rows.len());
+    eprintln!(
+        "Per-format counts: {per_format:?}  (total {} fixtures)",
+        rows.len()
+    );
 
     assert!(ok, "detection matrix failed; see stderr above");
 }
@@ -256,7 +266,9 @@ fn third_party_reader_registers_and_wins() {
 
     let mut reg = Registry::builtin();
     reg.register(Box::new(ToyReader));
-    let board = reg.read(b"TOYBOARD v1", None).expect("toy reader claims it");
+    let board = reg
+        .read(b"TOYBOARD v1", None)
+        .expect("toy reader claims it");
     assert_eq!(board.name, "toy");
     // And a builtin format still routes correctly with the fork's reader present.
     assert_eq!(

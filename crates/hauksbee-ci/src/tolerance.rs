@@ -214,7 +214,9 @@ pub fn resolve(spec: &Spec, board: &ExtractedBoard) -> Result<Vec<ResolvedTolera
         last_value.insert(ov.reference.as_str(), ov.value.as_str());
     }
     for ov in &spec.overrides {
-        let Some(percent) = ov.tolerance else { continue };
+        let Some(percent) = ov.tolerance else {
+            continue;
+        };
         let dist = Distribution::parse(ov.distribution.as_deref().unwrap_or("uniform"))?;
         let eff_value = last_value
             .get(ov.reference.as_str())
@@ -254,7 +256,9 @@ pub fn glob_match(pattern: &str, s: &str) -> bool {
         match p.split_first() {
             None => s.is_empty(),
             Some((b'*', rest)) => (0..=s.len()).any(|i| inner(rest, &s[i..])),
-            Some((c, rest)) => s.split_first().is_some_and(|(sc, sr)| sc == c && inner(rest, sr)),
+            Some((c, rest)) => s
+                .split_first()
+                .is_some_and(|(sc, sr)| sc == c && inner(rest, sr)),
         }
     }
     inner(pattern.as_bytes(), s.as_bytes())
@@ -310,7 +314,11 @@ pub fn build_plans(
                         .iter()
                         .enumerate()
                         .map(|(i, t)| {
-                            let corner = if (k >> i) & 1 == 0 { Corner::Min } else { Corner::Max };
+                            let corner = if (k >> i) & 1 == 0 {
+                                Corner::Min
+                            } else {
+                                Corner::Max
+                            };
                             let tol = t.percent / 100.0;
                             let si = match corner {
                                 Corner::Min => t.nominal_si * (1.0 - tol),
@@ -347,14 +355,12 @@ pub fn sample(seed: u32, t: &ResolvedTolerance) -> SampledValue {
             // Truncated gaussian: sigma = tol/3 => unit-sigma normal truncated
             // at |z| <= 3, by rejection (deterministic: the stream is private
             // to this (seed, ref) pair, so extra draws perturb nothing else).
-            Distribution::Gaussian => {
-                loop {
-                    let z = rng.next_gaussian();
-                    if z.abs() <= 3.0 {
-                        break z / 3.0;
-                    }
+            Distribution::Gaussian => loop {
+                let z = rng.next_gaussian();
+                if z.abs() <= 3.0 {
+                    break z / 3.0;
                 }
-            }
+            },
         }
     };
     SampledValue {
@@ -500,9 +506,16 @@ mod tests {
              [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n",
         )
         .unwrap();
-        let board = ExtractedBoard { name: "b".into(), nets: vec![], components: vec![] };
+        let board = ExtractedBoard {
+            name: "b".into(),
+            nets: vec![],
+            components: vec![],
+        };
         let resolved = resolve(&spec, &board).unwrap();
-        let r1 = resolved.iter().find(|r| r.reference == "R1").expect("R1 resolved");
+        let r1 = resolved
+            .iter()
+            .find(|r| r.reference == "R1")
+            .expect("R1 resolved");
         assert!(
             (r1.nominal_si - 12_000.0).abs() < 1.0,
             "must spread around the last override (12k), got {}",
@@ -544,11 +557,17 @@ mod tests {
         let mut spread = 0.0f64;
         for seed in 1..2000 {
             let v = sample(seed, &t).si;
-            assert!(v >= 0.8e-7 - 1e-20 && v <= 1.2e-7 + 1e-20, "seed {seed}: {v}");
+            assert!(
+                v >= 0.8e-7 - 1e-20 && v <= 1.2e-7 + 1e-20,
+                "seed {seed}: {v}"
+            );
             spread = spread.max((v - 1e-7).abs());
         }
         // The distribution actually spreads (not all-nominal).
-        assert!(spread > 0.05e-7, "gaussian never moved: max spread {spread}");
+        assert!(
+            spread > 0.05e-7,
+            "gaussian never moved: max spread {spread}"
+        );
     }
 
     #[test]
@@ -574,7 +593,10 @@ mod tests {
             .collect();
         let err = build_plans(Mode::Corners, 0, &ts).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("monte-carlo"), "refusal points at monte-carlo: {msg}");
+        assert!(
+            msg.contains("monte-carlo"),
+            "refusal points at monte-carlo: {msg}"
+        );
     }
 
     #[test]
@@ -587,8 +609,14 @@ mod tests {
             .collect();
         let err = build_plans(Mode::Corners, 0, &ts).unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("monte-carlo"), "refusal points at monte-carlo: {msg}");
-        assert!(msg.contains("64"), "refusal names the component count: {msg}");
+        assert!(
+            msg.contains("monte-carlo"),
+            "refusal points at monte-carlo: {msg}"
+        );
+        assert!(
+            msg.contains("64"),
+            "refusal names the component count: {msg}"
+        );
     }
 
     #[test]

@@ -300,7 +300,10 @@ mod tests {
         }
         let rec_ok = good.recovery_s(3.0, 3.2);
         // Dip at 2 ms, still below 3.2 at 4 ms, reaches 3.3 at 6 ms => 4 ms recovery.
-        assert!(rec_ok.is_finite() && (rec_ok - 0.004).abs() < 1e-9, "genuine recovery {rec_ok}");
+        assert!(
+            rec_ok.is_finite() && (rec_ok - 0.004).abs() < 1e-9,
+            "genuine recovery {rec_ok}"
+        );
     }
 
     #[test]
@@ -320,7 +323,10 @@ mod tests {
             (rec - 0.006).abs() < 1e-9,
             "recovery is the instant recover_to is reached (6 ms), got {rec}"
         );
-        assert!(rec > 0.005, "a 5 ms recover_within_ms bound must FAIL, not false-pass");
+        assert!(
+            rec > 0.005,
+            "a 5 ms recover_within_ms bound must FAIL, not false-pass"
+        );
     }
 
     #[test]

@@ -609,7 +609,9 @@ pub fn newton_solve(
                 && iters > 1
                 && node_block_converged(&ws.lin_point, &ws.prev_iterate, &ws.layout, opts);
             if dbg_staged {
-                eprintln!("[newton] refactor singular at iter {iters} (already_converged={already})");
+                eprintln!(
+                    "[newton] refactor singular at iter {iters} (already_converged={already})"
+                );
             }
             if census_on {
                 let reason = if already {
@@ -619,7 +621,10 @@ pub fn newton_solve(
                 };
                 crate::census::newton_exit(reason, iters);
             }
-            return NewtonResult { converged: already, iters };
+            return NewtonResult {
+                converged: already,
+                iters,
+            };
         }
         // Residual of the NONLINEAR system at the current linearization point,
         // F(lin_point) = g*lin_point - rhs over the node block. Computed from the
@@ -680,8 +685,7 @@ pub fn newton_solve(
         // branch_reg==0) nothing touches ws.x in between, so this is
         // bit-identical to testing after.
         let undamped_converged = converged(&ws.x, &ws.lin_point, &ws.layout, opts);
-        let undamped_node_converged =
-            node_block_converged(&ws.x, &ws.lin_point, &ws.layout, opts);
+        let undamped_node_converged = node_block_converged(&ws.x, &ws.lin_point, &ws.layout, opts);
         // The TRUE undamped node-block step norm, captured HERE for the same
         // reason as the predicates above: the Armijo line search below rewrites
         // ws.x to lin_point + use_alpha*dx, so a measurement taken after it
@@ -836,7 +840,10 @@ pub fn newton_solve(
             if census_on {
                 crate::census::newton_exit(crate::census::NewtonExit::Full, iters);
             }
-            return NewtonResult { converged: true, iters };
+            return NewtonResult {
+                converged: true,
+                iters,
+            };
         }
         // Staged-DC node-block convergence. The branch regularizer injects
         // O(branch_reg) micro-currents into the Vsource branches that never fully
@@ -850,7 +857,10 @@ pub fn newton_solve(
             if census_on {
                 crate::census::newton_exit(crate::census::NewtonExit::NodeBlock, iters);
             }
-            return NewtonResult { converged: true, iters };
+            return NewtonResult {
+                converged: true,
+                iters,
+            };
         }
         if dbg_newton {
             // Read the pre-damping snapshot: on the staged path ws.x now holds
@@ -884,7 +894,10 @@ pub fn newton_solve(
                     if census_on {
                         crate::census::newton_exit(crate::census::NewtonExit::Stall, iters);
                     }
-                    return NewtonResult { converged: false, iters };
+                    return NewtonResult {
+                        converged: false,
+                        iters,
+                    };
                 }
             }
         }
@@ -1265,7 +1278,10 @@ fn dc_solve(
     let dbg = std::env::var("HAUKSBEE_STAGED_DBG").is_ok();
     let r = solve(ws, opts.gmin, 1.0);
     if dbg {
-        eprintln!("[dc] plain cold: converged={} iters={}", r.converged, r.iters);
+        eprintln!(
+            "[dc] plain cold: converged={} iters={}",
+            r.converged, r.iters
+        );
     }
     if r.converged {
         return Ok(());
@@ -1321,7 +1337,10 @@ fn dc_solve(
         last_iters = r.iters;
         if !r.converged {
             if dbg {
-                eprintln!("[dc] source-step stalled at scale={scale:.3} iters={}", r.iters);
+                eprintln!(
+                    "[dc] source-step stalled at scale={scale:.3} iters={}",
+                    r.iters
+                );
             }
             src_ok = false;
             break;
@@ -1378,7 +1397,12 @@ fn dc_solve(
     }
     ws.symbolic.set_allow_dynamic(dc_dyn);
     if let Some(seed) = solve_relaxed_no_diodes(circuit, opts) {
-        if dbg { eprintln!("[staged] relaxed converged, seeding full (len {})", seed.len()); }
+        if dbg {
+            eprintln!(
+                "[staged] relaxed converged, seeding full (len {})",
+                seed.len()
+            );
+        }
         if seed.len() == ws.x.len() {
             // Warm-start the full nonlinear solve from the relaxed operating
             // point, with two regularizers active:
@@ -1399,7 +1423,12 @@ fn dc_solve(
             ws.staged_branch_reg = STAGED_BRANCH_REG;
             ws.x.copy_from_slice(&seed);
             let r = solve(ws, staged_gmin, 1.0);
-            if dbg { eprintln!("[staged] full from seed @gmin={staged_gmin:e}: converged={} iters={}", r.converged, r.iters); }
+            if dbg {
+                eprintln!(
+                    "[staged] full from seed @gmin={staged_gmin:e}: converged={} iters={}",
+                    r.converged, r.iters
+                );
+            }
             if r.converged {
                 ws.staged_branch_reg = 0.0;
                 ws.symbolic.set_allow_dynamic(false);
@@ -1430,7 +1459,15 @@ fn dc_solve(
             // dynamic-pivot LU (the structural fix) stays on regardless.
             if opts.ladder.has(Strategy::EventFreeze) {
                 crate::diagnostics::note(Strategy::EventFreeze);
-                if let Some(root) = staged_event_solve(ws, circuit, opts, &seed, staged_gmin, STAGED_BRANCH_REG, dbg) {
+                if let Some(root) = staged_event_solve(
+                    ws,
+                    circuit,
+                    opts,
+                    &seed,
+                    staged_gmin,
+                    STAGED_BRANCH_REG,
+                    dbg,
+                ) {
                     ws.x.copy_from_slice(&root);
                     ws.staged_branch_reg = 0.0;
                     ws.cmp_freeze = None;
@@ -1453,8 +1490,12 @@ fn dc_solve(
             // full-circuit DC root (the final step uses the real `is`, so it is
             // exact). This is the principled continuation for a stiff junction
             // network; it reaches the real root, not the relaxed approximation.
-            if let Some(s) = solve_diode_is_homotopy(circuit, opts, &seed, staged_gmin, STAGED_BRANCH_REG) {
-                if dbg { eprintln!("[staged] diode-Is homotopy reached the full root"); }
+            if let Some(s) =
+                solve_diode_is_homotopy(circuit, opts, &seed, staged_gmin, STAGED_BRANCH_REG)
+            {
+                if dbg {
+                    eprintln!("[staged] diode-Is homotopy reached the full root");
+                }
                 ws.x.copy_from_slice(&s);
                 ws.staged_branch_reg = 0.0;
                 ws.symbolic.set_allow_dynamic(false);
@@ -1474,7 +1515,9 @@ fn dc_solve(
                 }
                 gmin *= 0.1;
             }
-            if dbg { eprintln!("[staged] gmin-ramp staged_ok={staged_ok}"); }
+            if dbg {
+                eprintln!("[staged] gmin-ramp staged_ok={staged_ok}");
+            }
             if staged_ok && solve(ws, staged_gmin, 1.0).converged {
                 ws.staged_branch_reg = 0.0;
                 ws.symbolic.set_allow_dynamic(false);
@@ -1492,7 +1535,9 @@ fn dc_solve(
             if opts.ladder.has(Strategy::Ptc) {
                 crate::diagnostics::note(Strategy::Ptc);
                 if let Some(s) = ptc_settle_from_seed(circuit, opts, &seed) {
-                    if dbg { eprintln!("[staged] PTC settled to a full operating point"); }
+                    if dbg {
+                        eprintln!("[staged] PTC settled to a full operating point");
+                    }
                     ws.x.copy_from_slice(&s);
                     ws.symbolic.set_allow_dynamic(false);
                     ws.used_staged_dc = true;
@@ -1509,7 +1554,9 @@ fn dc_solve(
             // otherwise-floating diode-anode nodes through dv/dt (so the per-step
             // matrix is well-conditioned where the static DC was not), and the
             // operating point relaxes to its true steady state over the march.
-            if dbg { eprintln!("[staged] adopting relaxed power-on operating point as seed"); }
+            if dbg {
+                eprintln!("[staged] adopting relaxed power-on operating point as seed");
+            }
             ws.x.copy_from_slice(&seed);
             ws.symbolic.set_allow_dynamic(false);
             ws.used_staged_dc = true;
@@ -1580,7 +1627,13 @@ fn eval_comparator_states(
 ) -> std::collections::HashMap<DeviceId, bool> {
     let mut out = std::collections::HashMap::new();
     for (id, dev) in circuit.iter() {
-        if let Device::Comparator { inp, inn, hysteresis, .. } = dev {
+        if let Device::Comparator {
+            inp,
+            inn,
+            hysteresis,
+            ..
+        } = dev
+        {
             let vp = layout.node(*inp).map(|i| x[i]).unwrap_or(0.0);
             let vn = layout.node(*inn).map(|i| x[i]).unwrap_or(0.0);
             let d = vp - vn;
@@ -1618,7 +1671,9 @@ impl SpdtPairs {
     /// circuits with no complementary-leg SPDTs.
     #[cfg(test)]
     fn empty() -> SpdtPairs {
-        SpdtPairs { sibling: std::collections::HashMap::new() }
+        SpdtPairs {
+            sibling: std::collections::HashMap::new(),
+        }
     }
 
     fn analyze(circuit: &Circuit) -> SpdtPairs {
@@ -1674,7 +1729,14 @@ fn eval_switch_states(
     let mut on: std::collections::HashMap<DeviceId, bool> = std::collections::HashMap::new();
     let mut margin: std::collections::HashMap<DeviceId, f64> = std::collections::HashMap::new();
     for (id, dev) in circuit.iter() {
-        if let Device::VSwitch { ctrl_p, ctrl_n, von, voff, .. } = dev {
+        if let Device::VSwitch {
+            ctrl_p,
+            ctrl_n,
+            von,
+            voff,
+            ..
+        } = dev
+        {
             let vp = layout.node(*ctrl_p).map(|i| x[i]).unwrap_or(0.0);
             let vn = layout.node(*ctrl_n).map(|i| x[i]).unwrap_or(0.0);
             let vctrl = vp - vn;
@@ -1762,11 +1824,24 @@ fn staged_event_solve(
         ws.switch_freeze = Some(sw_states.clone());
         ws.x.copy_from_slice(&x);
         let r = newton_solve(
-            ws, circuit, opts, 0.0, 1.0, coeffs, &empty, true, false, staged_gmin, 1.0,
+            ws,
+            circuit,
+            opts,
+            0.0,
+            1.0,
+            coeffs,
+            &empty,
+            true,
+            false,
+            staged_gmin,
+            1.0,
         );
         if !r.converged {
             if dbg {
-                eprintln!("[staged-event] pass {pass}: inner Newton did NOT converge (iters {})", r.iters);
+                eprintln!(
+                    "[staged-event] pass {pass}: inner Newton did NOT converge (iters {})",
+                    r.iters
+                );
             }
             ws.switch_freeze = None;
             return None;
@@ -1776,8 +1851,14 @@ fn staged_event_solve(
         // (Gauss-Seidel over the discrete comparator + switch states).
         let next_cmp = eval_comparator_states(circuit, &ws.layout, &x, &cmp_states);
         let next_sw = eval_switch_states(circuit, &ws.layout, &x, &sw_states, &spdt);
-        let cmp_flips = next_cmp.iter().filter(|(k, v)| cmp_states.get(k) != Some(*v)).count();
-        let sw_flips = next_sw.iter().filter(|(k, v)| sw_states.get(k) != Some(*v)).count();
+        let cmp_flips = next_cmp
+            .iter()
+            .filter(|(k, v)| cmp_states.get(k) != Some(*v))
+            .count();
+        let sw_flips = next_sw
+            .iter()
+            .filter(|(k, v)| sw_states.get(k) != Some(*v))
+            .count();
         if dbg {
             eprintln!(
                 "[staged-event] pass {pass}: inner converged in {} iters, {cmp_flips} comparator flips, {sw_flips} switch flips",
@@ -1849,7 +1930,9 @@ pub fn newton_solve_event(
     if cmp_states.is_empty() && sw_states.is_empty() {
         // Nothing discrete to freeze: a plain step is already smooth. Caller
         // should not have routed here, but stay correct: one ordinary solve.
-        let r = newton_solve(ws, circuit, opts, time, dt, coeffs, state, false, false, gmin, 1.0);
+        let r = newton_solve(
+            ws, circuit, opts, time, dt, coeffs, state, false, false, gmin, 1.0,
+        );
         return r.converged;
     }
 
@@ -1915,10 +1998,16 @@ pub fn newton_solve_event(
     let inner_gmin = if cmp_smooth { gmin } else { gmin.max(1e-7) };
     let mut x = seed.clone();
     for pass in 0..MAX_EVENT_PASSES {
-        ws.cmp_freeze = if cmp_smooth { None } else { Some(cmp_states.clone()) };
+        ws.cmp_freeze = if cmp_smooth {
+            None
+        } else {
+            Some(cmp_states.clone())
+        };
         ws.switch_freeze = Some(sw_states.clone());
         ws.x.copy_from_slice(&x);
-        let r = newton_solve(ws, circuit, inner, time, dt, coeffs, state, false, false, inner_gmin, 1.0);
+        let r = newton_solve(
+            ws, circuit, inner, time, dt, coeffs, state, false, false, inner_gmin, 1.0,
+        );
         if !r.converged {
             if dbg {
                 eprintln!("[tran-event] t={time:.6e} pass {pass}: inner Newton did NOT converge (iters {})", r.iters);
@@ -1941,7 +2030,10 @@ pub fn newton_solve_event(
         let cmp_flips = if cmp_smooth {
             0
         } else {
-            next_cmp.iter().filter(|(k, v)| cmp_states.get(k) != Some(*v)).count()
+            next_cmp
+                .iter()
+                .filter(|(k, v)| cmp_states.get(k) != Some(*v))
+                .count()
         };
 
         // Switches: bound how many flip this pass. Rank the disagreeing switches
@@ -1952,7 +2044,14 @@ pub fn newton_solve_event(
         // pair is both-on, so flipping a subset never shorts the summing bus.
         let mut disagree: Vec<(DeviceId, bool, f64)> = Vec::new();
         for (id, dev) in circuit.iter() {
-            if let Device::VSwitch { ctrl_p, ctrl_n, von, voff, .. } = dev {
+            if let Device::VSwitch {
+                ctrl_p,
+                ctrl_n,
+                von,
+                voff,
+                ..
+            } = dev
+            {
                 let want = want_sw.get(&id).copied().unwrap_or(false);
                 if sw_states.get(&id).copied() != Some(want) {
                     let vp = ws.layout.node(*ctrl_p).map(|i| x[i]).unwrap_or(0.0);
@@ -2029,7 +2128,8 @@ fn solve_diode_is_homotopy(
     let mut work = circuit.clone();
     let mut ws = Workspace::new(&work);
     ws.set_staged_branch_reg(branch_reg);
-    ws.symbolic.set_allow_dynamic(opts.ladder.has(Strategy::DynamicPivot));
+    ws.symbolic
+        .set_allow_dynamic(opts.ladder.has(Strategy::DynamicPivot));
     let mut x = seed.to_vec();
 
     // Geometric ramp of the Is scale: 1e-4, 1e-3.5, ... up to 1.0.
@@ -2049,7 +2149,19 @@ fn solve_diode_is_homotopy(
         // staged ladder; we are already inside it and supply the warm start).
         let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
         let empty = ReactiveState::new(work.devices.len());
-        let r = newton_solve(&mut ws, &work, opts, 0.0, 1.0, coeffs, &empty, true, false, staged_gmin, 1.0);
+        let r = newton_solve(
+            &mut ws,
+            &work,
+            opts,
+            0.0,
+            1.0,
+            coeffs,
+            &empty,
+            true,
+            false,
+            staged_gmin,
+            1.0,
+        );
         if !r.converged {
             return None;
         }
@@ -2122,11 +2234,7 @@ fn solve_relaxed_no_diodes(circuit: &Circuit, opts: &SolverOptions) -> Option<Ve
 /// Returns the settled unknown vector (truncated to the original layout size, as
 /// the pseudo-caps own no branch unknowns so the node/branch indices are
 /// unchanged), or `None` if even the regularized march fails to settle.
-fn ptc_settle_from_seed(
-    circuit: &Circuit,
-    opts: &SolverOptions,
-    seed: &[f64],
-) -> Option<Vec<f64>> {
+fn ptc_settle_from_seed(circuit: &Circuit, opts: &SolverOptions, seed: &[f64]) -> Option<Vec<f64>> {
     use crate::options::{Integration, Partitioning, StepControl};
     use crate::transient::Transient;
 
@@ -2303,7 +2411,10 @@ mod residual_tests {
         dc_operating_point(&mut ws, &c, &opts).unwrap();
         // At the converged root, every node's KCL closes.
         let r_root = ws.dc_residual_inf_norm(&c, &opts);
-        assert!(r_root < 1e-9, "residual at the root should be ~0, got {r_root:e}");
+        assert!(
+            r_root < 1e-9,
+            "residual at the root should be ~0, got {r_root:e}"
+        );
 
         // Perturb the midpoint by 1 V: KCL now mismatches by ~1 V / 500 ohm = 2 mA
         // (the two 1k resistors in parallel see the extra volt).
@@ -2336,8 +2447,20 @@ mod residual_tests {
             n: NodeId::GROUND,
             kind: SourceKind::Dc(1.0),
         });
-        c.add(Device::Resistor { name: "R1".into(), a: top, b: mid, ohms: 1e3, tc1: None });
-        c.add(Device::Resistor { name: "R2".into(), a: mid, b: NodeId::GROUND, ohms: 1e3, tc1: None });
+        c.add(Device::Resistor {
+            name: "R1".into(),
+            a: top,
+            b: mid,
+            ohms: 1e3,
+            tc1: None,
+        });
+        c.add(Device::Resistor {
+            name: "R2".into(),
+            a: mid,
+            b: NodeId::GROUND,
+            ohms: 1e3,
+            tc1: None,
+        });
         c.add(Device::Capacitor {
             name: "C1".into(),
             a: mid,
@@ -2387,8 +2510,20 @@ mod residual_tests {
             n: NodeId::GROUND,
             kind: SourceKind::Dc(1.0),
         });
-        c.add(Device::Resistor { name: "R1".into(), a: top, b: mid, ohms: 1e3, tc1: None });
-        c.add(Device::Resistor { name: "R2".into(), a: mid, b: NodeId::GROUND, ohms: 1e3, tc1: None });
+        c.add(Device::Resistor {
+            name: "R1".into(),
+            a: top,
+            b: mid,
+            ohms: 1e3,
+            tc1: None,
+        });
+        c.add(Device::Resistor {
+            name: "R2".into(),
+            a: mid,
+            b: NodeId::GROUND,
+            ohms: 1e3,
+            tc1: None,
+        });
         // Cap across the lower leg pinned to ic=0, so the ic solve holds mid at 0 V
         //, far from the true 0.5 V divider bias, giving the caps-open KCL a large
         // imbalance at this iterate.
@@ -2497,7 +2632,10 @@ mod vswitch_jacobian_tests {
 
         // It must be a TRUE root: the KCL residual at the solved point is ~0.
         let r = ws.dc_residual_inf_norm(&c, &opts);
-        assert!(r < 1e-7, "residual at the switch root should be ~0, got {r:e}");
+        assert!(
+            r < 1e-7,
+            "residual at the switch root should be ~0, got {r:e}"
+        );
     }
 
     // A gently-coupled negative-feedback switch (wide tanh transition, moderate
@@ -2557,7 +2695,11 @@ mod vswitch_jacobian_tests {
         let r = newton_solve(
             &mut ws, &c, &opts, 0.0, 1.0, coeffs, &empty, true, false, opts.gmin, 1.0,
         );
-        assert!(r.converged, "switch Newton should converge, iters={}", r.iters);
+        assert!(
+            r.converged,
+            "switch Newton should converge, iters={}",
+            r.iters
+        );
         assert!(
             r.iters <= 8,
             "the control Jacobian should converge the feedback switch quickly, took {} iters",
@@ -2571,13 +2713,18 @@ mod vswitch_jacobian_tests {
             "gentle feedback switch should settle on the transition, got {vout}"
         );
         let res = ws.dc_residual_inf_norm(&c, &opts);
-        assert!(res < 1e-7, "residual at the gentle-switch root should be ~0, got {res:e}");
+        assert!(
+            res < 1e-7,
+            "residual at the gentle-switch root should be ~0, got {res:e}"
+        );
     }
 }
 
 #[cfg(test)]
 mod switch_freeze_tests {
-    use super::{eval_switch_states, solve_relaxed_no_diodes, staged_event_solve, SpdtPairs, Workspace};
+    use super::{
+        eval_switch_states, solve_relaxed_no_diodes, staged_event_solve, SpdtPairs, Workspace,
+    };
     use crate::options::SolverOptions;
     use hauksbee_ir::{Circuit, Device, DiodeModel, NodeId, SourceKind};
     use std::collections::HashMap;
@@ -2614,10 +2761,18 @@ mod switch_freeze_tests {
         let mut prev = HashMap::new();
         prev.insert(id, true);
         let held_on = eval_switch_states(&c, &layout, &x, &prev, &SpdtPairs::empty());
-        assert_eq!(held_on.get(&id), Some(&true), "in-band should hold prior ON");
+        assert_eq!(
+            held_on.get(&id),
+            Some(&true),
+            "in-band should hold prior ON"
+        );
         prev.insert(id, false);
         let held_off = eval_switch_states(&c, &layout, &x, &prev, &SpdtPairs::empty());
-        assert_eq!(held_off.get(&id), Some(&false), "in-band should hold prior OFF");
+        assert_eq!(
+            held_off.get(&id),
+            Some(&false),
+            "in-band should hold prior OFF"
+        );
 
         // Control below voff -> OFF.
         x[ci] = 0.5;
@@ -2648,27 +2803,86 @@ mod switch_freeze_tests {
         let out_on = c.node("OUTON");
         let out_off = c.node("OUTOFF");
         let flt = c.node("FLT");
-        c.add(Device::Vsource { name: "VR".into(), p: rail, n: NodeId::GROUND, kind: SourceKind::Dc(5.0) });
+        c.add(Device::Vsource {
+            name: "VR".into(),
+            p: rail,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(5.0),
+        });
         // Control nodes pulled hard to definite rails (a 595 output, saturated).
-        c.add(Device::Resistor { name: "Ron".into(), a: rail, b: ctrl_on, ohms: 100.0, tc1: None });
-        c.add(Device::Resistor { name: "Roff".into(), a: ctrl_off, b: NodeId::GROUND, ohms: 100.0, tc1: None });
+        c.add(Device::Resistor {
+            name: "Ron".into(),
+            a: rail,
+            b: ctrl_on,
+            ohms: 100.0,
+            tc1: None,
+        });
+        c.add(Device::Resistor {
+            name: "Roff".into(),
+            a: ctrl_off,
+            b: NodeId::GROUND,
+            ohms: 100.0,
+            tc1: None,
+        });
         // Switch driven ON: routes the rail to out_on.
         c.add(Device::VSwitch {
-            name: "Son".into(), a: rail, b: out_on, ctrl_p: ctrl_on, ctrl_n: NodeId::GROUND,
-            von: 2.5, voff: 1.5, ron: 1.0, roff: 1e6,
+            name: "Son".into(),
+            a: rail,
+            b: out_on,
+            ctrl_p: ctrl_on,
+            ctrl_n: NodeId::GROUND,
+            von: 2.5,
+            voff: 1.5,
+            ron: 1.0,
+            roff: 1e6,
         });
-        c.add(Device::Resistor { name: "RLon".into(), a: out_on, b: NodeId::GROUND, ohms: 1.0, tc1: None });
+        c.add(Device::Resistor {
+            name: "RLon".into(),
+            a: out_on,
+            b: NodeId::GROUND,
+            ohms: 1.0,
+            tc1: None,
+        });
         // Switch driven OFF: leaves out_off near ground.
         c.add(Device::VSwitch {
-            name: "Soff".into(), a: rail, b: out_off, ctrl_p: ctrl_off, ctrl_n: NodeId::GROUND,
-            von: 2.5, voff: 1.5, ron: 1.0, roff: 1e6,
+            name: "Soff".into(),
+            a: rail,
+            b: out_off,
+            ctrl_p: ctrl_off,
+            ctrl_n: NodeId::GROUND,
+            von: 2.5,
+            voff: 1.5,
+            ron: 1.0,
+            roff: 1e6,
         });
-        c.add(Device::Resistor { name: "RLoff".into(), a: out_off, b: NodeId::GROUND, ohms: 1e3, tc1: None });
+        c.add(Device::Resistor {
+            name: "RLoff".into(),
+            a: out_off,
+            b: NodeId::GROUND,
+            ohms: 1e3,
+            tc1: None,
+        });
         // Floating reverse-diode cap node, so the relaxed-seed staged machinery is
         // engaged (the diode pathology the staged path exists for).
-        let model = DiodeModel { is: 4.352e-9, n: 1.9, rs: 0.65, ..DiodeModel::default() };
-        c.add(Device::Diode { name: "Dr".into(), a: NodeId::GROUND, k: flt, model });
-        c.add(Device::Capacitor { name: "Cf".into(), a: flt, b: NodeId::GROUND, farads: 5.8e-9, ic: None });
+        let model = DiodeModel {
+            is: 4.352e-9,
+            n: 1.9,
+            rs: 0.65,
+            ..DiodeModel::default()
+        };
+        c.add(Device::Diode {
+            name: "Dr".into(),
+            a: NodeId::GROUND,
+            k: flt,
+            model,
+        });
+        c.add(Device::Capacitor {
+            name: "Cf".into(),
+            a: flt,
+            b: NodeId::GROUND,
+            farads: 5.8e-9,
+            ic: None,
+        });
 
         let opts = SolverOptions::default();
         let mut ws = Workspace::new(&c);
@@ -2682,14 +2896,21 @@ mod switch_freeze_tests {
         let v_off = root[ws.layout.node(out_off).unwrap()];
         // ON switch: 5 V divided 1:1 -> ~2.5 V. OFF switch: leaks 5 V through 1e6
         // to a 1k load -> ~5 mV. The states are saturated and distinct.
-        assert!((2.0..=2.5).contains(&v_on), "ON switch should conduct (~2.5 V), got {v_on}");
+        assert!(
+            (2.0..=2.5).contains(&v_on),
+            "ON switch should conduct (~2.5 V), got {v_on}"
+        );
         assert!(v_off < 0.1, "OFF switch should block (~0 V), got {v_off}");
 
         // The returned vector is a consistent fixed point: re-deriving the switch
         // states from it produces no flip.
-        let states = eval_switch_states(&c, &ws.layout, &root, &HashMap::new(), &SpdtPairs::empty());
+        let states =
+            eval_switch_states(&c, &ws.layout, &root, &HashMap::new(), &SpdtPairs::empty());
         let states2 = eval_switch_states(&c, &ws.layout, &root, &states, &SpdtPairs::empty());
-        assert_eq!(states, states2, "switch states at the root must be self-consistent");
+        assert_eq!(
+            states, states2,
+            "switch states at the root must be self-consistent"
+        );
     }
 }
 
@@ -2710,8 +2931,20 @@ mod staged_stall_norm_tests {
             n: NodeId::GROUND,
             kind: SourceKind::Dc(1.0),
         });
-        c.add(Device::Resistor { name: "R".into(), a, b, ohms: 1e3, tc1: None });
-        c.add(Device::Resistor { name: "Rg".into(), a: b, b: NodeId::GROUND, ohms: 1e3, tc1: None });
+        c.add(Device::Resistor {
+            name: "R".into(),
+            a,
+            b,
+            ohms: 1e3,
+            tc1: None,
+        });
+        c.add(Device::Resistor {
+            name: "Rg".into(),
+            a: b,
+            b: NodeId::GROUND,
+            ohms: 1e3,
+            tc1: None,
+        });
         Workspace::new(&c)
     }
 
@@ -2771,7 +3004,10 @@ mod staged_stall_norm_tests {
             );
             assert_eq!(argmax, 0, "iter {k}: the cycling node attains the max step");
             if k >= 1 {
-                assert_eq!(osc, 1, "iter {k}: the sign-flipping node must be classed oscillating");
+                assert_eq!(
+                    osc, 1,
+                    "iter {k}: the sign-flipping node must be classed oscillating"
+                );
             }
 
             // The damped step left in ws.x shrinks geometrically while the

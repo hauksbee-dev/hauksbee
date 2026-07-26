@@ -132,9 +132,10 @@ fn sensor_spec_inline_parses() {
     use hauksbee_ci::Spec;
     use std::path::Path;
 
-    let spec = Spec::load(Path::new(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/examples/lm75_thermostat.toml"),
-    ))
+    let spec = Spec::load(Path::new(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/examples/lm75_thermostat.toml"
+    )))
     .expect("lm75_thermostat.toml must load and validate");
 
     assert_eq!(spec.sensors.len(), 1, "one [[sensor]] block");

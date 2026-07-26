@@ -51,6 +51,5 @@ pub use feedforward::{FreeTearEdge, StageDag};
 pub use rails::{detect_balance_tears, BalanceTearCandidate, RailPolicy, TearDecision, TearMotive};
 pub use stiff::{detect_stiff_candidates, StiffCandidate, StiffPolicy};
 pub use verify::{
-    Decomposition, Evidence, RefusedAnalysis, TearCertificate, TearKind, TearRecord,
-    ToleranceClaim,
+    Decomposition, Evidence, RefusedAnalysis, TearCertificate, TearKind, TearRecord, ToleranceClaim,
 };

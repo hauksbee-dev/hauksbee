@@ -21,7 +21,11 @@ pub struct ParseError {
 
 impl std::fmt::Display for ParseError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "parse error at line {} (byte {}): {}", self.line, self.offset, self.message)
+        write!(
+            f,
+            "parse error at line {} (byte {}): {}",
+            self.line, self.offset, self.message
+        )
     }
 }
 
@@ -55,14 +59,22 @@ pub fn parse(text: &str) -> Result<Document, ParseError> {
     // escapes this function.
     let owned: &str = &src;
 
-    let mut p = Parser { bytes: owned.as_bytes(), pos: 0, depth: 0 };
+    let mut p = Parser {
+        bytes: owned.as_bytes(),
+        pos: 0,
+        depth: 0,
+    };
     let mut nodes = Vec::new();
     loop {
         let trivia_start = p.pos;
         p.skip_trivia();
         if p.pos >= p.bytes.len() {
             let trailing = span(owned, trivia_start, p.pos);
-            return Ok(Document { nodes, trailing, src: Some(src) });
+            return Ok(Document {
+                nodes,
+                trailing,
+                src: Some(src),
+            });
         }
         let leading = span(owned, trivia_start, p.pos);
         let node = p.node(owned, leading)?;
@@ -107,7 +119,11 @@ impl<'a> Parser<'a> {
     fn error(&self, message: impl Into<String>) -> ParseError {
         let upto = self.pos.min(self.bytes.len());
         let line = 1 + self.bytes[..upto].iter().filter(|&&b| b == b'\n').count();
-        ParseError { offset: self.pos, line, message: message.into() }
+        ParseError {
+            offset: self.pos,
+            line,
+            message: message.into(),
+        }
     }
 
     /// Parse one node. `leading` is the trivia already consumed before it.
@@ -130,7 +146,11 @@ impl<'a> Parser<'a> {
                         let close_leading = span(owned, trivia_start, self.pos);
                         self.pos += 1;
                         self.depth -= 1;
-                        return Ok(Sexpr::List(List { leading, children, close_leading }));
+                        return Ok(Sexpr::List(List {
+                            leading,
+                            children,
+                            close_leading,
+                        }));
                     }
                     let child_leading = span(owned, trivia_start, self.pos);
                     children.push(self.node(owned, child_leading)?);
@@ -179,13 +199,20 @@ mod tests {
         let mut src = String::from("(kicad_pcb ");
         src.push_str(&"(".repeat(50_000));
         let err = parse(&src).expect_err("deep nesting must be a recoverable error");
-        assert!(err.message.contains("too deep"), "unexpected message: {}", err.message);
+        assert!(
+            err.message.contains("too deep"),
+            "unexpected message: {}",
+            err.message
+        );
     }
 
     #[test]
     fn nesting_within_the_limit_still_parses() {
         let src = format!("{}x{}", "(".repeat(100), ")".repeat(100));
-        assert!(parse(&src).is_ok(), "100-deep nesting is well-formed and must parse");
+        assert!(
+            parse(&src).is_ok(),
+            "100-deep nesting is well-formed and must parse"
+        );
     }
 
     #[test]
@@ -194,12 +221,19 @@ mod tests {
         // only the first, silently dropping footprints B and C.
         let src = r#"(kicad_pcb (footprint "A")) (kicad_pcb (footprint "B") (footprint "C"))"#;
         let err = parse(src).expect_err("a second top-level list must be rejected");
-        assert!(err.message.contains("multiple top-level"), "unexpected message: {}", err.message);
+        assert!(
+            err.message.contains("multiple top-level"),
+            "unexpected message: {}",
+            err.message
+        );
     }
 
     #[test]
     fn single_root_list_parses() {
         let src = r#"(kicad_pcb (footprint "A"))"#;
-        assert!(parse(src).is_ok(), "a single root list is the normal, valid case");
+        assert!(
+            parse(src).is_ok(),
+            "a single root list is the normal, valid case"
+        );
     }
 }

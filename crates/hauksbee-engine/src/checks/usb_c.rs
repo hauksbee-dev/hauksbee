@@ -1061,7 +1061,7 @@ pub fn usb_c_report(board: &ExtractedBoard) -> Option<UsbcReport> {
         shared_net: term.shared_net,
         cc1_rd_ohms,
         cc2_rd_ohms,
-        attach: emarked,             // report the stricter, modern-cable case
+        attach: emarked, // report the stricter, modern-cable case
         powers_vbus: emarked.powers(),
         has_discrete_rd,
         level,
@@ -1198,7 +1198,11 @@ impl UsbcReport {
             let _ = writeln!(
                 s,
                 "  {}: CC1 Rd={}, CC2 Rd={}{}",
-                if r.reference.is_empty() { "?" } else { &r.reference },
+                if r.reference.is_empty() {
+                    "?"
+                } else {
+                    &r.reference
+                },
                 fmt_rd(r.cc1.effective_rd_ohms()),
                 fmt_rd(r.cc2.effective_rd_ohms()),
                 if r.has_double_termination() {
@@ -1230,8 +1234,12 @@ impl UsbcReport {
     pub fn render_plain(&self) -> String {
         let verdict = match self.level {
             UsbcLevel::Ok => "USB-C looks healthy: a charger will power this board.",
-            UsbcLevel::Info => "USB-C: nothing wrong found, but one thing is worth knowing (below).",
-            UsbcLevel::Serious => "USB-C PROBLEM: a standards-compliant charger will NOT power this board.",
+            UsbcLevel::Info => {
+                "USB-C: nothing wrong found, but one thing is worth knowing (below)."
+            }
+            UsbcLevel::Serious => {
+                "USB-C PROBLEM: a standards-compliant charger will NOT power this board."
+            }
         };
         let mut s = format!("{verdict}\n\n{}\n\n{}", self.headline, self.detail());
         if self.level == UsbcLevel::Serious {
@@ -1304,7 +1312,10 @@ mod tests {
         };
         let (what, _why, fix) = r.web_gloss().expect("serious verdict has a gloss");
         assert_eq!(what, "RPi-4 shared-CC fault");
-        assert!(fix.contains("5.1 k"), "serious carries the pulldown remedy: {fix}");
+        assert!(
+            fix.contains("5.1 k"),
+            "serious carries the pulldown remedy: {fix}"
+        );
 
         r.level = UsbcLevel::Info;
         r.headline = "No discrete Rd visible".to_string();
@@ -1372,13 +1383,25 @@ mod tests {
         // Real inductor / ferrite refs bridge (DC shorts).
         assert!(is_dc_bridge(&bridge_part("L1", "600R@100MHz", "Device:L")));
         assert!(is_dc_bridge(&bridge_part("L23", "10uH", "Device:L")));
-        assert!(is_dc_bridge(&bridge_part("FB1", "600R@100MHz", "Device:FerriteBead")));
+        assert!(is_dc_bridge(&bridge_part(
+            "FB1",
+            "600R@100MHz",
+            "Device:FerriteBead"
+        )));
         // A ferrite-naming library bridges even with an odd reference.
-        assert!(is_dc_bridge(&bridge_part("Z1", "BLM18", "Device:Ferrite_Bead")));
+        assert!(is_dc_bridge(&bridge_part(
+            "Z1",
+            "BLM18",
+            "Device:Ferrite_Bead"
+        )));
         // LED1 / LDO1 are NOT DC shorts: a bare `L*` prefix match would union
         // their far nets into the CC reachable set.
         assert!(!is_dc_bridge(&bridge_part("LED1", "RED", "Device:LED")));
-        assert!(!is_dc_bridge(&bridge_part("LDO1", "AP2112K", "Regulator_Linear:AP2112K")));
+        assert!(!is_dc_bridge(&bridge_part(
+            "LDO1",
+            "AP2112K",
+            "Regulator_Linear:AP2112K"
+        )));
         // A 0-ohm resistor still bridges; a 5.1k Rd does not.
         assert!(is_dc_bridge(&bridge_part("R5", "0R", "Device:R")));
         assert!(!is_dc_bridge(&bridge_part("R6", "5.1k", "Device:R")));
@@ -1640,8 +1663,15 @@ mod tests {
         // would-be-Ok verdict must escalate to Info (which web_gloss surfaces and
         // which denies "healthy").
         let (lvl, msg) = apply_double_termination(UsbcLevel::Ok, "healthy".into(), true);
-        assert_eq!(lvl, UsbcLevel::Info, "double-terminated Ok must become Info");
-        assert!(msg.contains("double-terminated"), "the headline must name the defect: {msg}");
+        assert_eq!(
+            lvl,
+            UsbcLevel::Info,
+            "double-terminated Ok must become Info"
+        );
+        assert!(
+            msg.contains("double-terminated"),
+            "the headline must name the defect: {msg}"
+        );
         // No double-termination → verdict untouched.
         let (lvl, msg) = apply_double_termination(UsbcLevel::Ok, "healthy".into(), false);
         assert_eq!(lvl, UsbcLevel::Ok);
@@ -1668,9 +1698,18 @@ mod tests {
         let board = ExtractedBoard {
             name: "dt".into(),
             nets: vec![
-                hauksbee_extract::Net { id: 0, name: "GND".into() },
-                hauksbee_extract::Net { id: 1, name: "CC1".into() },
-                hauksbee_extract::Net { id: 2, name: "CC2".into() },
+                hauksbee_extract::Net {
+                    id: 0,
+                    name: "GND".into(),
+                },
+                hauksbee_extract::Net {
+                    id: 1,
+                    name: "CC1".into(),
+                },
+                hauksbee_extract::Net {
+                    id: 2,
+                    name: "CC2".into(),
+                },
             ],
             components: vec![
                 hauksbee_extract::Component {

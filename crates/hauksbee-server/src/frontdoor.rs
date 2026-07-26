@@ -36,7 +36,9 @@ use axum::Router;
 /// standard private-network-access defense for a localhost server.
 ///
 /// Returns `Some(response)` when the request must be refused, `None` to proceed.
-fn reject_cross_site(headers: &HeaderMap) -> Option<(StatusCode, [(header::HeaderName, &'static str); 1], String)> {
+fn reject_cross_site(
+    headers: &HeaderMap,
+) -> Option<(StatusCode, [(header::HeaderName, &'static str); 1], String)> {
     if let Some(site) = headers.get("sec-fetch-site").and_then(|v| v.to_str().ok()) {
         // Browser-origin request: only our own page (same-origin) or a
         // direct address-bar navigation (none) may reach these endpoints.
@@ -66,8 +68,7 @@ pub type Analyzer = Arc<dyn Fn(&str, &[u8]) -> String + Send + Sync>;
 /// binary board or ELF stays intact. Parallel to [`Analyzer`] so the server
 /// crate stays engine-free and the existing `/api/analyze` path + call sites
 /// are untouched.
-pub type FirmwareAnalyzer =
-    Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>) -> String + Send + Sync>;
+pub type FirmwareAnalyzer = Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>) -> String + Send + Sync>;
 
 /// Run the checks a web builder composed: `(board_name, board_bytes,
 /// Option<(firmware_name, firmware_bytes)>, spec_fragment) -> JSON string`.
@@ -85,8 +86,7 @@ pub type DepsStatus = Arc<dyn Fn() -> String + Send + Sync>;
 /// the sink: `(dep_id, line_sink) -> Result<(), error_message>`. The engine's
 /// implementation enforces its own one-at-a-time slot, timeout, and output cap;
 /// on failure the message already carries the child's real output tail.
-pub type DepInstaller =
-    Arc<dyn Fn(&str, &mut dyn FnMut(&str)) -> Result<(), String> + Send + Sync>;
+pub type DepInstaller = Arc<dyn Fn(&str, &mut dyn FnMut(&str)) -> Result<(), String> + Send + Sync>;
 
 /// Largest board upload accepted (256 MiB). Real flagship layouts blow past a
 /// timid cap (the 3,443-component Tarski InputSystem .kicad_pcb is 44 MiB), and
@@ -256,7 +256,10 @@ async fn deps_install_handler(
 /// A JSON body response with the standard content-type header. Every error is
 /// built through `serde_json` so backslashes / control chars in a message can
 /// never produce invalid JSON (B9).
-fn json_body(status: StatusCode, value: serde_json::Value) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
+fn json_body(
+    status: StatusCode,
+    value: serde_json::Value,
+) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
     (
         status,
         [(header::CONTENT_TYPE, "application/json")],
@@ -265,7 +268,10 @@ fn json_body(status: StatusCode, value: serde_json::Value) -> (StatusCode, [(hea
 }
 
 fn json_error(msg: &str) -> (StatusCode, [(header::HeaderName, &'static str); 1], String) {
-    json_body(StatusCode::OK, serde_json::json!({ "ok": false, "error": msg }))
+    json_body(
+        StatusCode::OK,
+        serde_json::json!({ "ok": false, "error": msg }),
+    )
 }
 
 /// The parts every upload endpoint accepts. `board`/`file` name the PCB (a
@@ -439,9 +445,7 @@ async fn analyze_firmware_handler(
     let board_bytes = match parts.board_bytes {
         Some(b) => b,
         None => {
-            return json_error(
-                "no board file in the upload (expected a 'board' or 'file' part)",
-            )
+            return json_error("no board file in the upload (expected a 'board' or 'file' part)")
         }
     };
 

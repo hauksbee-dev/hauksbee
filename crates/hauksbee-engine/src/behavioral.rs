@@ -435,19 +435,22 @@ impl BehavioralDevice {
                 .transitions
                 .iter()
                 .map(|tr| {
-                    let guard = match evalexpr::build_operator_tree::<DefaultNumericTypes>(&tr.guard)
-                    {
-                        Ok(p) => Some(p),
-                        Err(e) => {
-                            eprintln!(
-                                "[behavioural] {reference}: FSM guard '{}' ({} -> {}) \
+                    let guard =
+                        match evalexpr::build_operator_tree::<DefaultNumericTypes>(&tr.guard) {
+                            Ok(p) => Some(p),
+                            Err(e) => {
+                                eprintln!(
+                                    "[behavioural] {reference}: FSM guard '{}' ({} -> {}) \
                                  failed to parse: {e}; transition disabled",
-                                tr.guard, tr.from, tr.to
-                            );
-                            None
-                        }
-                    };
-                    CompiledTransition { tr: tr.clone(), guard }
+                                    tr.guard, tr.from, tr.to
+                                );
+                                None
+                            }
+                        };
+                    CompiledTransition {
+                        tr: tr.clone(),
+                        guard,
+                    }
                 })
                 .collect();
             dev.state_pins = fsm.state_pins.clone();

@@ -80,12 +80,20 @@ pub struct FootprintLib {
 impl FootprintLib {
     /// A resolver that never finds anything (pure minimal emission).
     pub fn disabled() -> FootprintLib {
-        FootprintLib { roots: Vec::new(), nicknames: HashMap::new(), cache: HashMap::new() }
+        FootprintLib {
+            roots: Vec::new(),
+            nicknames: HashMap::new(),
+            cache: HashMap::new(),
+        }
     }
 
     /// Explicit search roots (directories containing `<Lib>.pretty/`).
     pub fn with_roots(roots: Vec<PathBuf>) -> FootprintLib {
-        FootprintLib { roots, nicknames: HashMap::new(), cache: HashMap::new() }
+        FootprintLib {
+            roots,
+            nicknames: HashMap::new(),
+            cache: HashMap::new(),
+        }
     }
 
     /// Environment + system discovery.
@@ -157,7 +165,11 @@ impl FootprintLib {
             }
         }
 
-        FootprintLib { roots, nicknames, cache: HashMap::new() }
+        FootprintLib {
+            roots,
+            nicknames,
+            cache: HashMap::new(),
+        }
     }
 
     /// Resolve a full library id (`"Package_DIP:DIP-28_W7.62mm"`) to the parsed
@@ -184,8 +196,12 @@ impl FootprintLib {
         }
         for dir in candidates {
             let path = dir.join(format!("{name}.kicad_mod"));
-            let Ok(text) = std::fs::read_to_string(&path) else { continue };
-            let Ok(doc) = forge_sexpr::parse(&text) else { continue };
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(doc) = forge_sexpr::parse(&text) else {
+                continue;
+            };
             let Some(root) = doc.root() else { continue };
             // v6+ `.kicad_mod` only; a v5 `(module ...)` uses fp_text fields we
             // would have to rewrite structurally, so it stays on minimal
@@ -202,21 +218,29 @@ impl FootprintLib {
 
 /// `KICAD_FOOTPRINT_DIR`, `KICAD9_FOOTPRINT_DIR`, ... (any version digits).
 fn is_kicad_footprint_dir_var(key: &str) -> bool {
-    let Some(rest) = key.strip_prefix("KICAD") else { return false };
-    let Some(ver) = rest.strip_suffix("_FOOTPRINT_DIR") else { return false };
+    let Some(rest) = key.strip_prefix("KICAD") else {
+        return false;
+    };
+    let Some(ver) = rest.strip_suffix("_FOOTPRINT_DIR") else {
+        return false;
+    };
     ver.is_empty() || ver.chars().all(|c| c.is_ascii_digit())
 }
 
 /// Candidate global fp-lib-table files, newest KiCad version first.
 fn global_fp_lib_tables() -> Vec<PathBuf> {
     let mut out: Vec<(f64, PathBuf)> = Vec::new();
-    let Some(home) = std::env::var_os("HOME") else { return Vec::new() };
+    let Some(home) = std::env::var_os("HOME") else {
+        return Vec::new();
+    };
     let home = PathBuf::from(home);
     for base in [
         home.join("Library/Preferences/kicad"), // macOS
         home.join(".config/kicad"),             // Linux
     ] {
-        let Ok(entries) = std::fs::read_dir(&base) else { continue };
+        let Ok(entries) = std::fs::read_dir(&base) else {
+            continue;
+        };
         for e in entries.flatten() {
             let dir = e.path();
             let table = dir.join("fp-lib-table");
@@ -246,19 +270,27 @@ fn parse_fp_lib_table(
     lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Vec<(String, PathBuf)> {
     let mut out = Vec::new();
-    let Ok(doc) = forge_sexpr::parse(text) else { return out };
+    let Ok(doc) = forge_sexpr::parse(text) else {
+        return out;
+    };
     let Some(root) = doc.root() else { return out };
     if root.name() != Some("fp_lib_table") {
         return out;
     }
     for lib in root.find_all("lib") {
-        let Some(nick) = lib.find_value("name") else { continue };
+        let Some(nick) = lib.find_value("name") else {
+            continue;
+        };
         let ty = lib.find_value("type").unwrap_or_default();
         if !ty.eq_ignore_ascii_case("kicad") {
             continue;
         }
-        let Some(uri) = lib.find_value("uri") else { continue };
-        let Some(path) = substitute_uri(&uri, lookup) else { continue };
+        let Some(uri) = lib.find_value("uri") else {
+            continue;
+        };
+        let Some(path) = substitute_uri(&uri, lookup) else {
+            continue;
+        };
         if path.is_dir() {
             out.push((nick, path));
         }
@@ -326,13 +358,15 @@ pub(crate) fn dress_footprint(
             {
                 continue;
             }
-            let lat = lp.find("at").map(|l| {
-                (l.arg_f64(0).unwrap_or(0.0), l.arg_f64(1).unwrap_or(0.0))
-            });
-            let lsz = lp.find("size").map(|l| {
-                (l.arg_f64(0).unwrap_or(0.0), l.arg_f64(1).unwrap_or(0.0))
-            });
-            let (Some(lat), Some(lsz)) = (lat, lsz) else { continue };
+            let lat = lp
+                .find("at")
+                .map(|l| (l.arg_f64(0).unwrap_or(0.0), l.arg_f64(1).unwrap_or(0.0)));
+            let lsz = lp
+                .find("size")
+                .map(|l| (l.arg_f64(0).unwrap_or(0.0), l.arg_f64(1).unwrap_or(0.0)));
+            let (Some(lat), Some(lsz)) = (lat, lsz) else {
+                continue;
+            };
             if (lat.0 - p.at.0).abs() > PAD_POS_TOL
                 || (lat.1 - p.at.1).abs() > PAD_POS_TOL
                 || (lsz.0 - p.size.0).abs() > PAD_SIZE_TOL
@@ -443,7 +477,9 @@ fn add_rotation_to_at_angle(item: &mut List, rot: f64) {
     if rot == 0.0 {
         return;
     }
-    let Some(at) = item.find_mut("at") else { return };
+    let Some(at) = item.find_mut("at") else {
+        return;
+    };
     // children: ["at", x, y, angle?]
     match at.children.get_mut(3) {
         Some(Sexpr::Token(t)) => {
@@ -463,7 +499,10 @@ fn normalize_angle(a: f64) -> f64 {
 }
 
 fn tok(leading: &str, raw: impl Into<String>) -> Sexpr {
-    Sexpr::Token(Token { leading: leading.into(), raw: raw.into().into() })
+    Sexpr::Token(Token {
+        leading: leading.into(),
+        raw: raw.into().into(),
+    })
 }
 
 #[cfg(test)]
@@ -502,10 +541,19 @@ fn main {{
         let text = prog.build_with_library(&mut lib).emit();
 
         // Full lib id survives, placement is the board's.
-        assert!(text.contains(r#"(footprint "Fixture_Lib:R_TEST""#), "{text}");
-        assert!(text.contains("(at 100 50)"), "board placement present: {text}");
+        assert!(
+            text.contains(r#"(footprint "Fixture_Lib:R_TEST""#),
+            "{text}"
+        );
+        assert!(
+            text.contains("(at 100 50)"),
+            "board placement present: {text}"
+        );
         // Courtyard, silk and fab graphics copied through verbatim.
-        assert!(text.contains(r#"(layer "F.CrtYd")"#), "courtyard copied: {text}");
+        assert!(
+            text.contains(r#"(layer "F.CrtYd")"#),
+            "courtyard copied: {text}"
+        );
         assert!(text.contains(r#"(layer "F.SilkS")"#), "silk copied: {text}");
         assert!(text.contains(r#"(layer "F.Fab")"#), "fab copied: {text}");
         // The 3D model block is verbatim (origin authored against this very
@@ -519,10 +567,19 @@ fn main {{
             text.contains(r#"(property "Reference" "R1""#),
             "refdes value patched: {text}"
         );
-        assert!(text.contains("(at 0 -1.43 0)"), "library refdes position kept: {text}");
+        assert!(
+            text.contains("(at 0 -1.43 0)"),
+            "library refdes position kept: {text}"
+        );
         // Board nets injected into the copied pads; library pad detail kept.
-        assert!(text.contains(r#"(net 1 "A")"#) && text.contains(r#"(net 2 "B")"#), "{text}");
-        assert!(text.contains("(roundrect_rratio 0.25)"), "library pad detail kept: {text}");
+        assert!(
+            text.contains(r#"(net 1 "A")"#) && text.contains(r#"(net 2 "B")"#),
+            "{text}"
+        );
+        assert!(
+            text.contains("(roundrect_rratio 0.25)"),
+            "library pad detail kept: {text}"
+        );
         // Library-file headers must not leak into a board footprint.
         assert!(!text.contains("kicad-footprint-generator"), "{text}");
     }
@@ -536,22 +593,45 @@ fn main {{
         assert!(text.contains("(at 100 50 90)"), "rotated placement: {text}");
         // Pad 1 is authored at angle 90 in the library; 90 + 90 = 180. Pad 2
         // has no authored angle; it gains the footprint's 90. X/Y stay local.
-        assert!(text.contains("(at -0.825 0 180)"), "pad 1 angle summed: {text}");
-        assert!(text.contains("(at 0.825 0 90)"), "pad 2 angle added: {text}");
+        assert!(
+            text.contains("(at -0.825 0 180)"),
+            "pad 1 angle summed: {text}"
+        );
+        assert!(
+            text.contains("(at 0.825 0 90)"),
+            "pad 2 angle added: {text}"
+        );
         // Text angles are absolute in a board file too.
-        assert!(text.contains("(at 0 -1.43 90)"), "refdes angle rotated: {text}");
+        assert!(
+            text.contains("(at 0 -1.43 90)"),
+            "refdes angle rotated: {text}"
+        );
         // Graphics coordinates are footprint-local: untouched.
-        assert!(text.contains("(start -1.48 -0.73)"), "courtyard untouched: {text}");
+        assert!(
+            text.contains("(start -1.48 -0.73)"),
+            "courtyard untouched: {text}"
+        );
     }
 
     #[test]
     fn missing_library_degrades_to_todays_minimal_emission() {
         let prog = matching_program(0.0);
         // Disabled resolver = a machine with no KiCad installed.
-        let minimal = prog.build_with_library(&mut FootprintLib::disabled()).emit();
-        assert!(!minimal.contains("model"), "no invented model block: {minimal}");
-        assert!(!minimal.contains("F.CrtYd"), "no invented graphics: {minimal}");
-        assert!(minimal.contains(r#"(net 1 "A")"#), "connectivity intact: {minimal}");
+        let minimal = prog
+            .build_with_library(&mut FootprintLib::disabled())
+            .emit();
+        assert!(
+            !minimal.contains("model"),
+            "no invented model block: {minimal}"
+        );
+        assert!(
+            !minimal.contains("F.CrtYd"),
+            "no invented graphics: {minimal}"
+        );
+        assert!(
+            minimal.contains(r#"(net 1 "A")"#),
+            "connectivity intact: {minimal}"
+        );
 
         // An unknown lib id with a real resolver takes the same path.
         let mut lib = FootprintLib::with_roots(fixture_roots());
@@ -591,8 +671,14 @@ fn main {
         let prog = Program::parse(code).expect("parses");
         let mut lib = FootprintLib::with_roots(fixture_roots());
         let text = prog.build_with_library(&mut lib).emit();
-        assert!(!text.contains("model"), "edited pads keep minimal emission: {text}");
-        assert!(text.contains("(at -2 0"), "the edited pad geometry wins: {text}");
+        assert!(
+            !text.contains("model"),
+            "edited pads keep minimal emission: {text}"
+        );
+        assert!(
+            text.contains("(at -2 0"),
+            "the edited pad geometry wins: {text}"
+        );
     }
 
     #[test]

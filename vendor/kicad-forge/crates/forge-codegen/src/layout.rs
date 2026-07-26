@@ -74,9 +74,7 @@ impl LayoutConfig {
         LayoutConfig::Full(FullConfig::default())
     }
     pub fn incremental() -> Self {
-        LayoutConfig::Incremental(IncrementalConfig {
-            comp_spacing: 3.0,
-        })
+        LayoutConfig::Incremental(IncrementalConfig { comp_spacing: 3.0 })
     }
 }
 
@@ -244,7 +242,12 @@ fn clamp_to_outline(pos: (f64, f64), node: &Node, outline: &Outline) -> (f64, f6
 }
 
 /// Snap a pinned node onto its edge (fix the edge-normal coordinate).
-fn snap_to_edge(pos: (f64, f64), node: &Node, outline: &Outline, edge: crate::dsl::Edge) -> (f64, f64) {
+fn snap_to_edge(
+    pos: (f64, f64),
+    node: &Node,
+    outline: &Outline,
+    edge: crate::dsl::Edge,
+) -> (f64, f64) {
     use crate::dsl::Edge as E;
     let mx = node.half.0 + node.clear;
     let my = node.half.1 + node.clear;
@@ -263,10 +266,8 @@ fn relayout_full(prog: &mut Program, cfg: &FullConfig) -> LayoutReport {
 
     // Original positions, so the report only flags genuine moves and locked
     // parts can be re-pinned to exactly where they were.
-    let orig_pos: HashMap<String, (f64, f64)> = prog
-        .comps()
-        .map(|c| (c.reference.clone(), c.at))
-        .collect();
+    let orig_pos: HashMap<String, (f64, f64)> =
+        prog.comps().map(|c| (c.reference.clone(), c.at)).collect();
 
     // 1. Group components by the function (block) they belong to. Singletons
     //    share a synthetic "__singletons__" group.
@@ -284,7 +285,8 @@ fn relayout_full(prog: &mut Program, cfg: &FullConfig) -> LayoutReport {
                 });
                 for (slot, comp) in inst.comps.iter().enumerate() {
                     if let Some(c) = comp {
-                        let node = make_node(c, Loc::Slot(si, slot), fn_space, cfg, gi, &pins, &locks);
+                        let node =
+                            make_node(c, Loc::Slot(si, slot), fn_space, cfg, gi, &pins, &locks);
                         groups[gi].1.push(node);
                     }
                 }
@@ -1021,7 +1023,10 @@ fn astar(
     let mut heap: BinaryHeap<std::cmp::Reverse<(i32, i32)>> = BinaryHeap::new();
     let hcost = |x: i32, y: i32| (x - goal.0).abs() + (y - goal.1).abs();
     g[idx(start.0, start.1)] = 0;
-    heap.push(std::cmp::Reverse((hcost(start.0, start.1), idx(start.0, start.1) as i32)));
+    heap.push(std::cmp::Reverse((
+        hcost(start.0, start.1),
+        idx(start.0, start.1) as i32,
+    )));
     while let Some(std::cmp::Reverse((_, ci))) = heap.pop() {
         let cx = ci % w;
         let cy = ci / w;

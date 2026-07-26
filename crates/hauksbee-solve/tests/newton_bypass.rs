@@ -52,7 +52,9 @@ fn waveform_err(a: &Waveforms, b: &Waveforms, opts: &SolverOptions) -> (f64, f64
 }
 
 fn run(c: &Circuit, opts: SolverOptions, tstop: f64) -> Waveforms {
-    Transient::new(opts).run(c, tstop).expect("march must converge")
+    Transient::new(opts)
+        .run(c, tstop)
+        .expect("march must converge")
 }
 
 /// Gate (a), linear rung: the RC ladder. A fully linear board solves in one
@@ -72,7 +74,11 @@ fn rc_ladder_bypass_on_is_bit_identical() {
     assert_eq!(wf_off.time.len(), wf_on.time.len());
     for (ca, cb) in wf_off.node_voltages.iter().zip(&wf_on.node_voltages) {
         for (va, vb) in ca.iter().zip(cb) {
-            assert_eq!(va.to_bits(), vb.to_bits(), "linear board must be bit-identical");
+            assert_eq!(
+                va.to_bits(),
+                vb.to_bits(),
+                "linear board must be bit-identical"
+            );
         }
     }
 }
@@ -182,7 +188,13 @@ fn spiking_board() -> Circuit {
         farads: 1e-9,
         ic: None,
     });
-    c.add(Device::Resistor { name: "RL".into(), a: m, b: NodeId::GROUND, ohms: 1e5, tc1: None });
+    c.add(Device::Resistor {
+        name: "RL".into(),
+        a: m,
+        b: NodeId::GROUND,
+        ohms: 1e5,
+        tc1: None,
+    });
     c.add(Device::Comparator {
         name: "K1".into(),
         out: spk,
@@ -223,7 +235,13 @@ fn spiking_board() -> Circuit {
         ron: 10.0,
         roff: 1e9,
     });
-    c.add(Device::Resistor { name: "RD".into(), a: com, b: NodeId::GROUND, ohms: 50.0, tc1: None });
+    c.add(Device::Resistor {
+        name: "RD".into(),
+        a: com,
+        b: NodeId::GROUND,
+        ohms: 50.0,
+        tc1: None,
+    });
     // A junction on the membrane so the stiff path has a bypassable device
     // in it (the linesearch fixture itself is diode-free; the flagship board
     // is not). Anode at the 1 V rail, cathode at the membrane: reverse-biased
@@ -234,7 +252,11 @@ fn spiking_board() -> Circuit {
         name: "DLOAD".into(),
         a: rail,
         k: m,
-        model: DiodeModel { is: 4.352e-9, n: 1.906, ..DiodeModel::default() },
+        model: DiodeModel {
+            is: 4.352e-9,
+            n: 1.906,
+            ..DiodeModel::default()
+        },
     });
     c
 }
@@ -356,12 +378,22 @@ fn high_z_board(drive_v: f64) -> Circuit {
     });
     // The weak driver: 10 MΩ series (the "driver pass" shape, a fixed source
     // behind series R feeding a kept sense node).
-    c.add(Device::Resistor { name: "RDRV".into(), a: drv, b: a, ohms: 10e6, tc1: None });
+    c.add(Device::Resistor {
+        name: "RDRV".into(),
+        a: drv,
+        b: a,
+        ohms: 10e6,
+        tc1: None,
+    });
     c.add(Device::Diode {
         name: "D1".into(),
         a,
         k: mem,
-        model: DiodeModel { is: 4.352e-9, n: 1.906, ..DiodeModel::default() },
+        model: DiodeModel {
+            is: 4.352e-9,
+            n: 1.906,
+            ..DiodeModel::default()
+        },
     });
     c.add(Device::Capacitor {
         name: "CM".into(),
@@ -371,7 +403,13 @@ fn high_z_board(drive_v: f64) -> Circuit {
         ic: Some(0.0),
     });
     // The high-Z anchor: 1 GΩ to ground. Charging current is nA-scale.
-    c.add(Device::Resistor { name: "RLEAK".into(), a: mem, b: NodeId::GROUND, ohms: 1e9, tc1: None });
+    c.add(Device::Resistor {
+        name: "RLEAK".into(),
+        a: mem,
+        b: NodeId::GROUND,
+        ohms: 1e9,
+        tc1: None,
+    });
     c.add(Device::Vsource {
         name: "VTH".into(),
         p: th,
@@ -408,12 +446,22 @@ fn high_z_board(drive_v: f64) -> Circuit {
             phase: 0.0,
         },
     });
-    c.add(Device::Resistor { name: "RAUX".into(), a: aux, b: auxm, ohms: 1e3, tc1: None });
+    c.add(Device::Resistor {
+        name: "RAUX".into(),
+        a: aux,
+        b: auxm,
+        ohms: 1e3,
+        tc1: None,
+    });
     c.add(Device::Diode {
         name: "DAUX".into(),
         a: auxm,
         k: NodeId::GROUND,
-        model: DiodeModel { is: 4.352e-9, n: 1.906, ..DiodeModel::default() },
+        model: DiodeModel {
+            is: 4.352e-9,
+            n: 1.906,
+            ..DiodeModel::default()
+        },
     });
     c
 }
@@ -448,8 +496,15 @@ fn high_z_sense_net_verdict_unchanged() {
             "high-Z drive={drive}V: fires off={n_off}@{t_off:?} on={n_on}@{t_on:?} \
              mem_final off={mem_off:.6} on={mem_on:.6}"
         );
-        assert_eq!(n_off == 1, should_fire, "reference verdict sanity (drive {drive})");
-        assert_eq!(n_off, n_on, "bypass changed the fire verdict at drive {drive}");
+        assert_eq!(
+            n_off == 1,
+            should_fire,
+            "reference verdict sanity (drive {drive})"
+        );
+        assert_eq!(
+            n_off, n_on,
+            "bypass changed the fire verdict at drive {drive}"
+        );
         if let (Some(a), Some(b)) = (t_off, t_on) {
             assert!(
                 (a - b).abs() <= 2.0 * 10e-6,

@@ -277,7 +277,10 @@ mod tests {
             (pm - 11.67).abs() < 0.1,
             "pm={pm}, expected ~11.67 deg; the first crossing would give ~36 deg"
         );
-        assert!(pm < 20.0, "the optimistic first-crossing margin must not leak through");
+        assert!(
+            pm < 20.0,
+            "the optimistic first-crossing margin must not leak through"
+        );
     }
 
     #[test]
@@ -334,13 +337,19 @@ mod tests {
         assert!((fc - expect_fc).abs() / expect_fc < 1e-9, "fc={fc}");
         let pm = m.phase_margin_deg.unwrap();
         let expect_pm = 180.0 + (-150.0 + (1.0 / 3.0) * -20.0);
-        assert!((pm - expect_pm).abs() < 1e-9, "pm={pm} expected {expect_pm}");
+        assert!(
+            (pm - expect_pm).abs() < 1e-9,
+            "pm={pm} expected {expect_pm}"
+        );
         // Only -180 deg crossing: -170 -> -190 across 1e4..1e5, frac = 0.5.
         let fp = m.phase_crossover_hz.unwrap();
         let expect_fp = 10f64.powf(4.5);
         assert!((fp - expect_fp).abs() / expect_fp < 1e-9, "fp={fp}");
         let gm = m.gain_margin_db.unwrap();
         let expect_gm = -(-10.0 + 0.5 * -15.0); // 17.5 dB
-        assert!((gm - expect_gm).abs() < 1e-9, "gm={gm} expected {expect_gm}");
+        assert!(
+            (gm - expect_gm).abs() < 1e-9,
+            "gm={gm} expected {expect_gm}"
+        );
     }
 }

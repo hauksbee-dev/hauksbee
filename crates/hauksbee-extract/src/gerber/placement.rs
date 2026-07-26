@@ -165,7 +165,9 @@ fn parse_len(s: &str) -> Option<(f64, bool)> {
     // dropping the coordinate and skipping the whole placement row. A unit is
     // trailing letters (and the inch-mark `"`); a real exponent's 'e' is never at
     // the string end, so stripping trailing alphabetics leaves it intact.
-    let numeric = t.trim().trim_end_matches(|c: char| c.is_ascii_alphabetic() || c == '"');
+    let numeric = t
+        .trim()
+        .trim_end_matches(|c: char| c.is_ascii_alphabetic() || c == '"');
     let cleaned: String = numeric
         .chars()
         .filter(|c| {
@@ -237,10 +239,12 @@ pub fn parse_pnp(text: &str) -> Vec<Placement> {
         if reference.is_empty() {
             continue;
         }
-        let Some((x, x_had_unit)) = parse_len(cells.get(xc).map(|s| s.as_str()).unwrap_or("")) else {
+        let Some((x, x_had_unit)) = parse_len(cells.get(xc).map(|s| s.as_str()).unwrap_or(""))
+        else {
             continue;
         };
-        let Some((y, y_had_unit)) = parse_len(cells.get(yc).map(|s| s.as_str()).unwrap_or("")) else {
+        let Some((y, y_had_unit)) = parse_len(cells.get(yc).map(|s| s.as_str()).unwrap_or(""))
+        else {
             continue;
         };
         let x = if x_had_unit { x } else { x * x_scale };
@@ -248,8 +252,8 @@ pub fn parse_pnp(text: &str) -> Vec<Placement> {
         let rotation = get(rot_col).trim().parse().unwrap_or(0.0);
         let side_raw = get(side_col).to_ascii_lowercase();
         let top = !(side_raw.contains("bot") || side_raw.contains("back") || side_raw == "b");
-        let dnp = cell_is_dnp(get(dnp_col))
-            || (fit_col.is_some() && cell_says_not_fitted(get(fit_col)));
+        let dnp =
+            cell_is_dnp(get(dnp_col)) || (fit_col.is_some() && cell_says_not_fitted(get(fit_col)));
         out.push(Placement {
             reference,
             value: get(val_col).to_string(),
@@ -356,10 +360,12 @@ fn expand_ref_range(tok: &str) -> Vec<String> {
     // expand to C01..C10, not C1..C10, or the padded P&P references (C01..C09)
     // never match on lookup and their value/MPN/DNP enrichment is silently lost.
     // A leading zero signals a fixed-width field; without one, format naturally.
-    let width = if lw > 1 && tok[..a].as_bytes()[lp.len()] == b'0' { lw } else { 0 };
-    (ln..=rn)
-        .map(|n| format!("{lp}{n:0>width$}"))
-        .collect()
+    let width = if lw > 1 && tok[..a].as_bytes()[lp.len()] == b'0' {
+        lw
+    } else {
+        0
+    };
+    (ln..=rn).map(|n| format!("{lp}{n:0>width$}")).collect()
 }
 
 /// Parse a BOM CSV into `reference -> BomEntry` enrichment. Handles the common
@@ -411,7 +417,11 @@ pub fn parse_bom(text: &str) -> HashMap<String, BomEntry> {
     for line in lines {
         let cells = split_csv(line);
         let Some(refs) = cells.get(rc) else { continue };
-        let cell = |i: Option<usize>| i.and_then(|i| cells.get(i)).map(|s| s.as_str()).unwrap_or("");
+        let cell = |i: Option<usize>| {
+            i.and_then(|i| cells.get(i))
+                .map(|s| s.as_str())
+                .unwrap_or("")
+        };
         let value = cell(val_col).to_string();
         let mpn = cell(mpn_col).to_string();
         let dnp = cell_is_dnp(cell(dnp_col))
@@ -518,9 +528,15 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
         assert_eq!(b.len(), 10, "C01..C10 is ten parts");
         assert!(b.contains_key("C01"), "padded key C01 must be present");
         assert!(b.contains_key("C09"), "padded key C09 must be present");
-        assert!(!b.contains_key("C1"), "the stripped key C1 must NOT be produced");
+        assert!(
+            !b.contains_key("C1"),
+            "the stripped key C1 must NOT be produced"
+        );
         assert_eq!(b.get("C01").unwrap().value, "100n");
-        assert!(b.get("C05").unwrap().dnp, "the DNP flag reaches every padded member");
+        assert!(
+            b.get("C05").unwrap().dnp,
+            "the DNP flag reaches every padded member"
+        );
         // An unpadded range is unchanged (natural width).
         let b2 = parse_bom("Designator,Value\nR1-R3,10k\n");
         assert!(b2.contains_key("R1") && b2.contains_key("R3"));
@@ -545,8 +561,14 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
         // actual part number. mpn_col must exclude the already-chosen ref column.
         let b = parse_bom("Part,Value\nR1,10k\nC2,100n\n");
         assert_eq!(b.get("R1").unwrap().value, "10k");
-        assert!(b.get("R1").unwrap().mpn.is_empty(), "mpn must be empty, not the refdes 'R1'");
-        assert!(b.get("C2").unwrap().mpn.is_empty(), "mpn must be empty, not the refdes 'C2'");
+        assert!(
+            b.get("R1").unwrap().mpn.is_empty(),
+            "mpn must be empty, not the refdes 'R1'"
+        );
+        assert!(
+            b.get("C2").unwrap().mpn.is_empty(),
+            "mpn must be empty, not the refdes 'C2'"
+        );
         // A real separate MPN column is still read.
         let b2 = parse_bom("Part,Value,MPN\nR1,10k,RC0402\n");
         assert_eq!(b2.get("R1").unwrap().mpn, "RC0402");
@@ -559,7 +581,11 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
         let csv = "Ref,PosX (mil),PosY (mil),Rot\nU1,1000,2000,0\n";
         let p = parse_pnp(csv);
         assert_eq!(p.len(), 1);
-        assert!((p[0].x - 25.4).abs() < 1e-6, "1000 mil = 25.4 mm, got {}", p[0].x);
+        assert!(
+            (p[0].x - 25.4).abs() < 1e-6,
+            "1000 mil = 25.4 mm, got {}",
+            p[0].x
+        );
         assert!((p[0].y - 50.8).abs() < 1e-6);
     }
 
@@ -582,7 +608,11 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
         let csv = "Index,Ref,X (mm),Y (mm)\n1,U1,12.5,7.5\n";
         let p = parse_pnp(csv);
         assert_eq!(p.len(), 1);
-        assert!((p[0].x - 12.5).abs() < 1e-6, "X column chosen, not Index: got {}", p[0].x);
+        assert!(
+            (p[0].x - 12.5).abs() < 1e-6,
+            "X column chosen, not Index: got {}",
+            p[0].x
+        );
         assert!((p[0].y - 7.5).abs() < 1e-6);
     }
 
@@ -615,8 +645,16 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
         let csv = "Ref,PosX (millimeters),PosY (millimeters),Rot\nU1,10.0,20.0,0\n";
         let p = parse_pnp(csv);
         assert_eq!(p.len(), 1);
-        assert!((p[0].x - 10.0).abs() < 1e-6, "x stays 10 mm, got {}", p[0].x);
-        assert!((p[0].y - 20.0).abs() < 1e-6, "y stays 20 mm, got {}", p[0].y);
+        assert!(
+            (p[0].x - 10.0).abs() < 1e-6,
+            "x stays 10 mm, got {}",
+            p[0].x
+        );
+        assert!(
+            (p[0].y - 20.0).abs() < 1e-6,
+            "y stays 20 mm, got {}",
+            p[0].y
+        );
     }
 
     #[test]
@@ -626,20 +664,32 @@ U2     !  2000.00 !  1000.00 !   90 !   ! QFN56 !\n";
         // re-scaled by the header (25.4x / 39x error). They must convert like
         // their abbreviations and report had_unit=true so the header is ignored.
         let (v, had) = parse_len("0.5inch").unwrap();
-        assert!((v - 12.7).abs() < 1e-9 && had, "0.5inch -> 12.7 mm, unit named");
+        assert!(
+            (v - 12.7).abs() < 1e-9 && had,
+            "0.5inch -> 12.7 mm, unit named"
+        );
         let (v, had) = parse_len("10mils").unwrap();
-        assert!((v - 0.254).abs() < 1e-9 && had, "10mils -> 0.254 mm, unit named");
+        assert!(
+            (v - 0.254).abs() < 1e-9 && had,
+            "10mils -> 0.254 mm, unit named"
+        );
         // R33: the plural "inches" spelling ends in 'e'+'s'. The numeric cleaner
         // keeps 'e' (for scientific notation), so "4.25inches" cleaned to "4.25e"
         // and failed to parse, parse_len returned None and the whole placement
         // row was silently dropped. It must convert like "inch".
         let (v, had) = parse_len("4.25inches").unwrap();
-        assert!((v - 107.95).abs() < 1e-9 && had, "4.25inches -> 107.95 mm, unit named");
+        assert!(
+            (v - 107.95).abs() < 1e-9 && had,
+            "4.25inches -> 107.95 mm, unit named"
+        );
         let (v, had) = parse_len("1.5inches").unwrap();
         assert!((v - 38.1).abs() < 1e-9 && had, "1.5inches -> 38.1 mm");
         // A real scientific-notation exponent's 'e' is untouched (not trailing).
         let (v, _) = parse_len("1.5e1").unwrap();
-        assert!((v - 15.0).abs() < 1e-9, "1.5e1 -> 15 (sci-notation survives)");
+        assert!(
+            (v - 15.0).abs() < 1e-9,
+            "1.5e1 -> 15 (sci-notation survives)"
+        );
         // The abbreviations still behave.
         assert_eq!(parse_len("0.5in").unwrap(), (12.7, true));
         assert_eq!(parse_len("10mil").unwrap(), (0.254, true));

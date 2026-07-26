@@ -22,11 +22,7 @@ fn fake_release_archive(dir: &Path, binary: &str, machines: &str) -> std::path::
     let bin_dir = tree.join("qemu/bin");
     std::fs::create_dir_all(&bin_dir).unwrap();
     let bin = bin_dir.join(binary);
-    std::fs::write(
-        &bin,
-        format!("#!/bin/sh\nprintf '%s\\n' \"{machines}\"\n"),
-    )
-    .unwrap();
+    std::fs::write(&bin, format!("#!/bin/sh\nprintf '%s\\n' \"{machines}\"\n")).unwrap();
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
 
     let archive = dir.join("fake-release.tar.gz");

@@ -196,7 +196,9 @@ pub fn run_op(
             Probe::BranchCurrent(d) => {
                 let id = resolve_branch_device(circuit, d)?;
                 let bi = ws.layout.branch(id).ok_or_else(|| {
-                    format!("element `{d}` carries no branch current (only V-sources and inductors do)")
+                    format!(
+                        "element `{d}` carries no branch current (only V-sources and inductors do)"
+                    )
                 })?;
                 ws.x[bi]
             }
@@ -249,7 +251,9 @@ pub fn run_tran(
                 .find(|(name, _)| name.eq_ignore_ascii_case(d))
                 .map(|(_, v)| v.clone())
                 .ok_or_else(|| {
-                    format!("element `{d}` carries no branch current (only V-sources and inductors do)")
+                    format!(
+                        "element `{d}` carries no branch current (only V-sources and inductors do)"
+                    )
                 })?,
         };
         series.push(s);
@@ -406,9 +410,10 @@ pub fn run_ac(
     for p in probes {
         match p {
             Probe::NodeVoltage(a) => targets.push(AcTarget::Node(resolve_node(circuit, a)?)),
-            Probe::NodeDiff(a, b) => {
-                targets.push(AcTarget::Diff(resolve_node(circuit, a)?, resolve_node(circuit, b)?))
-            }
+            Probe::NodeDiff(a, b) => targets.push(AcTarget::Diff(
+                resolve_node(circuit, a)?,
+                resolve_node(circuit, b)?,
+            )),
             Probe::BranchCurrent(_) => unreachable!("refused above"),
         }
         columns.push(p.label());
@@ -461,7 +466,13 @@ mod tests {
                    .dc Vin 0 3 1\n.end\n";
         let (c, d) = SpiceLoader::load_with_directives(net).unwrap();
         let probes = [Probe::NodeVoltage("out".into())];
-        let out = run_dc(&c, &SolverOptions::default(), d.dc.as_ref().unwrap(), &probes).unwrap();
+        let out = run_dc(
+            &c,
+            &SolverOptions::default(),
+            d.dc.as_ref().unwrap(),
+            &probes,
+        )
+        .unwrap();
         assert_eq!(out.columns, vec!["Vin", "V(out)"]);
         assert_eq!(out.rows.len(), 4); // 0,1,2,3
         for (i, row) in out.rows.iter().enumerate() {
@@ -479,7 +490,10 @@ mod tests {
         let vals = dc_sweep_values(0.0, 1.0, 0.1);
         assert_eq!(vals.len(), 11, "must include both endpoints: {vals:?}");
         assert!((vals.first().copied().unwrap()).abs() < 1e-12);
-        assert!((vals.last().copied().unwrap() - 1.0).abs() < 1e-9, "stop endpoint present");
+        assert!(
+            (vals.last().copied().unwrap() - 1.0).abs() < 1e-9,
+            "stop endpoint present"
+        );
         // A non-integer number of steps must NOT gain a spurious extra point:
         // 0..0.95 by 0.1 covers 0.0..0.9 (10 points), not 1.05.
         let vals2 = dc_sweep_values(0.0, 0.95, 0.1);
@@ -492,7 +506,13 @@ mod tests {
                    .dc Vin 0 2 1 Vg 0 1 1\n.end\n";
         let (c, d) = SpiceLoader::load_with_directives(net).unwrap();
         let probes = [Probe::NodeVoltage("in".into())];
-        let out = run_dc(&c, &SolverOptions::default(), d.dc.as_ref().unwrap(), &probes).unwrap();
+        let out = run_dc(
+            &c,
+            &SolverOptions::default(),
+            d.dc.as_ref().unwrap(),
+            &probes,
+        )
+        .unwrap();
         // inner 0,1,2 (3 pts) x outer 0,1 (2 pts) = 6 rows; the inner value is
         // the reported sweep axis and repeats per outer block.
         assert_eq!(out.rows.len(), 6);
@@ -514,8 +534,13 @@ mod tests {
                    .ac dec 5 10 1e6\n.end\n";
         let (c, d) = SpiceLoader::load_with_directives(net).unwrap();
         let probes = [Probe::NodeVoltage("out".into())];
-        let err = run_ac(&c, &SolverOptions::default(), d.ac.as_ref().unwrap(), &probes)
-            .unwrap_err();
+        let err = run_ac(
+            &c,
+            &SolverOptions::default(),
+            d.ac.as_ref().unwrap(),
+            &probes,
+        )
+        .unwrap_err();
         assert!(err.contains("no AC stimulus"), "{err}");
     }
 
@@ -527,23 +552,42 @@ mod tests {
                    .ac lin 2 1000 2000\n.end\n";
         let (c, d) = SpiceLoader::load_with_directives(net).unwrap();
         let probes = [Probe::NodeVoltage("out".into())];
-        let out = run_ac(&c, &SolverOptions::default(), d.ac.as_ref().unwrap(), &probes).unwrap();
+        let out = run_ac(
+            &c,
+            &SolverOptions::default(),
+            d.ac.as_ref().unwrap(),
+            &probes,
+        )
+        .unwrap();
         assert_eq!(out.columns, vec!["frequency", "V(out)", "V(out):phase_deg"]);
         let row = &out.rows[0];
         assert!((row[0] - 1000.0).abs() < 1e-6, "first freq is the corner");
-        assert!((row[1] - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-3, "mag {}", row[1]);
+        assert!(
+            (row[1] - std::f64::consts::FRAC_1_SQRT_2).abs() < 1e-3,
+            "mag {}",
+            row[1]
+        );
         assert!((row[2] + 45.0).abs() < 0.2, "phase {}", row[2]);
     }
 
     #[test]
     fn parse_probe_forms() {
-        assert_eq!(Probe::parse("V(out)").unwrap(), Probe::NodeVoltage("out".into()));
+        assert_eq!(
+            Probe::parse("V(out)").unwrap(),
+            Probe::NodeVoltage("out".into())
+        );
         assert_eq!(
             Probe::parse("v(a,b)").unwrap(),
             Probe::NodeDiff("a".into(), "b".into())
         );
-        assert_eq!(Probe::parse("I(V1)").unwrap(), Probe::BranchCurrent("V1".into()));
-        assert_eq!(Probe::parse("n20").unwrap(), Probe::NodeVoltage("n20".into()));
+        assert_eq!(
+            Probe::parse("I(V1)").unwrap(),
+            Probe::BranchCurrent("V1".into())
+        );
+        assert_eq!(
+            Probe::parse("n20").unwrap(),
+            Probe::NodeVoltage("n20".into())
+        );
         assert!(Probe::parse("V(a").is_err());
         assert!(Probe::parse("X(a)").is_err());
     }

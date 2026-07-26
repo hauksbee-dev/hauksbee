@@ -33,7 +33,10 @@ pub fn emit(
         // KiCad 10 keeps class clearances in the sibling .kicad_pro. Resolve
         // concrete net names here (the CLI has both the board path and the
         // extracted netlist), then hand the DRC a pairwise clearance resolver.
-        ExtractedBoard::drc_with_clearance_rules(text, kicad_pro_clearance_rules(board_path, board))?
+        ExtractedBoard::drc_with_clearance_rules(
+            text,
+            kicad_pro_clearance_rules(board_path, board),
+        )?
     };
     match mode {
         OutputMode::Json => {
@@ -108,7 +111,10 @@ pub(crate) fn find_kicad_cli() -> Option<(String, String)> {
                     // Handles both `<base>/KiCad*.app/...` (entry is the bundle) and
                     // `<base>/KiCad*/KiCad.app/...` (entry is a folder holding it,
                     // the macOS .dmg / cask layout).
-                    for sub in ["Contents/MacOS/kicad-cli", "KiCad.app/Contents/MacOS/kicad-cli"] {
+                    for sub in [
+                        "Contents/MacOS/kicad-cli",
+                        "KiCad.app/Contents/MacOS/kicad-cli",
+                    ] {
                         let cli = e.path().join(sub);
                         if cli.exists() {
                             candidates.push(cli.to_string_lossy().into_owned());
@@ -118,7 +124,11 @@ pub(crate) fn find_kicad_cli() -> Option<(String, String)> {
             }
         }
     }
-    for p in ["/usr/bin/kicad-cli", "/usr/local/bin/kicad-cli", "/opt/homebrew/bin/kicad-cli"] {
+    for p in [
+        "/usr/bin/kicad-cli",
+        "/usr/local/bin/kicad-cli",
+        "/opt/homebrew/bin/kicad-cli",
+    ] {
         if std::path::Path::new(p).exists() {
             candidates.push(p.to_string());
         }
@@ -231,7 +241,9 @@ fn oracle_cross_check(board: &Path, report: &hauksbee_extract::DrcReport) -> Str
     } else if shorts > 0 && confirmed == 0 {
         format!("hauksbee finds {shorts} short(s) the oracle does not; likely false positives, investigate")
     } else if shorts == 0 && confirmed > 0 {
-        format!("oracle finds {confirmed} touching-copper violation(s) hauksbee missed; investigate")
+        format!(
+            "oracle finds {confirmed} touching-copper violation(s) hauksbee missed; investigate"
+        )
     } else if shorts > confirmed * 2 {
         format!("both find touching copper, but hauksbee's {shorts} >> the oracle's {confirmed}: hauksbee likely over-reports; compare by location")
     } else {

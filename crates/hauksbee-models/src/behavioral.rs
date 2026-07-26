@@ -373,7 +373,9 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
         // legal, so only finiteness is checked (the sibling of the pull_ohms gate).
         if let Some(v) = pin.pull_to_volts {
             if !v.is_finite() {
-                errs.push(format!("pin '{role}': pull_to_volts must be finite, got {v}"));
+                errs.push(format!(
+                    "pin '{role}': pull_to_volts must be finite, got {v}"
+                ));
             }
         }
         // The pull/open-drain TARGET voltages are stamped verbatim as DC sources
@@ -495,10 +497,15 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
         // to 0 V; the regulated rail silently reads 0 V for the whole run. A NaN
         // limit silently disables the CC loop. Reject both up front, like
         // vout_setpoint / efficiency above.
-        for (name, lim) in [("iout_limit_a", c.iout_limit_a), ("iin_limit_a", c.iin_limit_a)] {
+        for (name, lim) in [
+            ("iout_limit_a", c.iout_limit_a),
+            ("iin_limit_a", c.iin_limit_a),
+        ] {
             if let Some(v) = lim {
                 if !v.is_finite() || v <= 0.0 {
-                    errs.push(format!("converter: {name} must be a positive finite number, got {v}"));
+                    errs.push(format!(
+                        "converter: {name} must be a positive finite number, got {v}"
+                    ));
                 }
             }
         }
@@ -514,10 +521,7 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
             // sign-typo `rsense_ohms = -0.005` becomes 1e-6 and the input-current
             // limit balloons to ~50 kA; the over-current fold-back can never
             // engage and the converter is silently unprotected. Reject non-positive.
-            for (name, v) in [
-                ("rsense_ohms", sp.rsense_ohms),
-                ("prog_ohms", sp.prog_ohms),
-            ] {
+            for (name, v) in [("rsense_ohms", sp.rsense_ohms), ("prog_ohms", sp.prog_ohms)] {
                 if let Some(v) = v {
                     if !v.is_finite() || v <= 0.0 {
                         errs.push(format!(
@@ -627,7 +631,9 @@ mod tests {
             state_pins: BTreeMap::new(),
         });
         assert!(
-            validate_behavioral(&b).iter().any(|e| e.contains("min_dwell_s")),
+            validate_behavioral(&b)
+                .iter()
+                .any(|e| e.contains("min_dwell_s")),
             "a NaN min_dwell_s must be rejected: {:?}",
             validate_behavioral(&b)
         );
@@ -658,7 +664,9 @@ mod tests {
             },
         );
         assert!(
-            validate_behavioral(&b).iter().any(|e| e.contains("pull_to_volts")),
+            validate_behavioral(&b)
+                .iter()
+                .any(|e| e.contains("pull_to_volts")),
             "a NaN pull_to_volts must be rejected: {:?}",
             validate_behavioral(&b)
         );
@@ -674,7 +682,9 @@ mod tests {
             },
         );
         assert!(
-            validate_behavioral(&b).iter().any(|e| e.contains("od_to_volts")),
+            validate_behavioral(&b)
+                .iter()
+                .any(|e| e.contains("od_to_volts")),
             "an inf od_to_volts must be rejected: {:?}",
             validate_behavioral(&b)
         );
@@ -706,7 +716,11 @@ mod tests {
             let mut pins = BTreeMap::new();
             pins.insert(
                 "out".to_string(),
-                StatePinBehaviour { drive_volts, drive_ohms, ..Default::default() },
+                StatePinBehaviour {
+                    drive_volts,
+                    drive_ohms,
+                    ..Default::default()
+                },
             );
             sp.insert("on".to_string(), pins);
             Behavioral {
@@ -722,14 +736,18 @@ mod tests {
         // Negative source resistance.
         let b = mk(Some(3.3), Some(-50.0));
         assert!(
-            validate_behavioral(&b).iter().any(|e| e.contains("drive_ohms")),
+            validate_behavioral(&b)
+                .iter()
+                .any(|e| e.contains("drive_ohms")),
             "negative drive_ohms must be rejected: {:?}",
             validate_behavioral(&b)
         );
         // NaN drive voltage.
         let b = mk(Some(f64::NAN), Some(50.0));
         assert!(
-            validate_behavioral(&b).iter().any(|e| e.contains("drive_volts")),
+            validate_behavioral(&b)
+                .iter()
+                .any(|e| e.contains("drive_volts")),
             "NaN drive_volts must be rejected: {:?}",
             validate_behavioral(&b)
         );
@@ -819,21 +837,27 @@ v_sense_full = {v_sense_full}
         // Sign-typo v_sense_full.
         let b: Behavioral = toml::from_str(&base(-0.05, 1.19)).expect("parse");
         assert!(
-            validate_behavioral(&b).iter().any(|e| e.contains("v_sense_full")),
+            validate_behavioral(&b)
+                .iter()
+                .any(|e| e.contains("v_sense_full")),
             "negative v_sense_full must be rejected: {:?}",
             validate_behavioral(&b)
         );
         // Zero v_sense_full.
         let b: Behavioral = toml::from_str(&base(0.0, 1.19)).expect("parse");
         assert!(
-            validate_behavioral(&b).iter().any(|e| e.contains("v_sense_full")),
+            validate_behavioral(&b)
+                .iter()
+                .any(|e| e.contains("v_sense_full")),
             "zero v_sense_full must be rejected: {:?}",
             validate_behavioral(&b)
         );
         // Sign-typo vprog_ref.
         let b: Behavioral = toml::from_str(&base(0.05, -1.19)).expect("parse");
         assert!(
-            validate_behavioral(&b).iter().any(|e| e.contains("vprog_ref")),
+            validate_behavioral(&b)
+                .iter()
+                .any(|e| e.contains("vprog_ref")),
             "negative vprog_ref must be rejected: {:?}",
             validate_behavioral(&b)
         );
@@ -873,7 +897,9 @@ v_sense_full = 0.05
         };
         let b: Behavioral = toml::from_str(&spec("inf")).expect("parse");
         assert!(
-            validate_behavioral(&b).iter().any(|e| e.contains("prog_ref_ohms")),
+            validate_behavioral(&b)
+                .iter()
+                .any(|e| e.contains("prog_ref_ohms")),
             "an inf prog_ref_ohms must be rejected: {:?}",
             validate_behavioral(&b)
         );
@@ -913,13 +939,18 @@ v_sense_full = 0.05
         };
         let b: Behavioral = toml::from_str(&spec("rsense_ohms = -0.005")).expect("parse");
         assert!(
-            validate_behavioral(&b).iter().any(|e| e.contains("rsense_ohms")),
+            validate_behavioral(&b)
+                .iter()
+                .any(|e| e.contains("rsense_ohms")),
             "a negative rsense_ohms must be rejected: {:?}",
             validate_behavioral(&b)
         );
-        let b: Behavioral = toml::from_str(&spec("rsense_ohms = 0.005\nprog_ohms = 0.0")).expect("parse");
+        let b: Behavioral =
+            toml::from_str(&spec("rsense_ohms = 0.005\nprog_ohms = 0.0")).expect("parse");
         assert!(
-            validate_behavioral(&b).iter().any(|e| e.contains("prog_ohms")),
+            validate_behavioral(&b)
+                .iter()
+                .any(|e| e.contains("prog_ohms")),
             "a zero prog_ohms must be rejected: {:?}",
             validate_behavioral(&b)
         );
@@ -959,7 +990,9 @@ v_sense_full = 0.05
         )
         .expect("parse");
         assert!(
-            validate_behavioral(&nan_vout).iter().any(|e| e.contains("vout_setpoint")),
+            validate_behavioral(&nan_vout)
+                .iter()
+                .any(|e| e.contains("vout_setpoint")),
             "a NaN vout_setpoint must be rejected: {:?}",
             validate_behavioral(&nan_vout)
         );
@@ -969,17 +1002,19 @@ v_sense_full = 0.05
         )
         .expect("parse");
         assert!(
-            validate_behavioral(&nan_eff).iter().any(|e| e.contains("efficiency")),
+            validate_behavioral(&nan_eff)
+                .iter()
+                .any(|e| e.contains("efficiency")),
             "a NaN efficiency must be rejected: {:?}",
             validate_behavioral(&nan_eff)
         );
 
-        let inf_pull: Behavioral = toml::from_str(
-            "[pins.shphld]\npull_to = \"vsys\"\npull_ohms = inf\n",
-        )
-        .expect("parse");
+        let inf_pull: Behavioral =
+            toml::from_str("[pins.shphld]\npull_to = \"vsys\"\npull_ohms = inf\n").expect("parse");
         assert!(
-            validate_behavioral(&inf_pull).iter().any(|e| e.contains("pull_ohms")),
+            validate_behavioral(&inf_pull)
+                .iter()
+                .any(|e| e.contains("pull_ohms")),
             "an inf pull_ohms must be rejected: {:?}",
             validate_behavioral(&inf_pull)
         );
@@ -996,7 +1031,9 @@ v_sense_full = 0.05
         )
         .expect("parse");
         assert!(
-            validate_behavioral(&neg).iter().any(|e| e.contains("iout_limit_a")),
+            validate_behavioral(&neg)
+                .iter()
+                .any(|e| e.contains("iout_limit_a")),
             "a negative iout_limit_a must be rejected: {:?}",
             validate_behavioral(&neg)
         );
@@ -1005,7 +1042,9 @@ v_sense_full = 0.05
         )
         .expect("parse");
         assert!(
-            validate_behavioral(&nan_iin).iter().any(|e| e.contains("iin_limit_a")),
+            validate_behavioral(&nan_iin)
+                .iter()
+                .any(|e| e.contains("iin_limit_a")),
             "a NaN iin_limit_a must be rejected: {:?}",
             validate_behavioral(&nan_iin)
         );
@@ -1014,7 +1053,11 @@ v_sense_full = 0.05
             "[converter]\ntopology=\"buck\"\nout_pin=\"o\"\nin_pin=\"i\"\nvout_setpoint=5.0\niout_limit_a = 1.0\n",
         )
         .expect("parse");
-        assert!(validate_behavioral(&ok).is_empty(), "a positive limit must pass: {:?}", validate_behavioral(&ok));
+        assert!(
+            validate_behavioral(&ok).is_empty(),
+            "a positive limit must pass: {:?}",
+            validate_behavioral(&ok)
+        );
     }
 
     #[test]

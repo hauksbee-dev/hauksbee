@@ -14,7 +14,7 @@ use ratatui::Frame;
 
 use super::cosim::CosimUpdate;
 use super::state::{
-    downsample, AppState, Level, LeftDetail, Pane, PartStatus, ScopeView, Severity,
+    downsample, AppState, LeftDetail, Level, Pane, PartStatus, ScopeView, Severity,
     TUI_LAUNCH_BANNER,
 };
 
@@ -68,7 +68,9 @@ fn severity_style(sev: Severity) -> Style {
 
 fn focused_border(pane: Pane, focus: Pane) -> Style {
     if pane == focus {
-        Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+        Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::BOLD)
     } else {
         Style::default().fg(Color::DarkGray)
     }
@@ -176,10 +178,7 @@ fn draw_parts(f: &mut Frame, area: Rect, state: &AppState) {
     for (i, n) in state.nets.iter().enumerate() {
         let selected = state.focus == Pane::Parts && state.parts_sel == state.parts.len() + i;
         let v = match n.voltage_v {
-            Some(v) => Span::styled(
-                format!("{v:>7.3} V"),
-                Style::default().fg(Color::LightBlue),
-            ),
+            Some(v) => Span::styled(format!("{v:>7.3} V"), Style::default().fg(Color::LightBlue)),
             None => Span::styled("    -   ", Style::default().fg(Color::DarkGray)),
         };
         // Probed-net indicator: nets on the scope get a "◉" in their series
@@ -199,7 +198,11 @@ fn draw_parts(f: &mut Frame, area: Rect, state: &AppState) {
 
     let block = Block::default()
         .title(pane_title(
-            &format!("Nets & Parts ({} / {} nets)", state.parts.len(), state.nets.len()),
+            &format!(
+                "Nets & Parts ({} / {} nets)",
+                state.parts.len(),
+                state.nets.len()
+            ),
             Pane::Parts,
             state.focus,
         ))
@@ -225,7 +228,11 @@ fn draw_parts(f: &mut Frame, area: Rect, state: &AppState) {
 fn draw_findings(f: &mut Frame, area: Rect, state: &AppState) {
     // Verdict line (rendered inside the bordered area's top).
     let block = Block::default()
-        .title(pane_title("Findings (triaged)", Pane::Findings, state.focus))
+        .title(pane_title(
+            "Findings (triaged)",
+            Pane::Findings,
+            state.focus,
+        ))
         .borders(Borders::ALL)
         .border_style(focused_border(Pane::Findings, state.focus));
     let inner = block.inner(area);
@@ -246,7 +253,13 @@ fn draw_findings(f: &mut Frame, area: Rect, state: &AppState) {
     let mut verdict_lines = vec![Line::from(Span::styled(
         v.headline(),
         Style::default()
-            .fg(if v.serious > 0 { Color::Red } else if v.worth_attention > 0 { Color::Yellow } else { Color::Green })
+            .fg(if v.serious > 0 {
+                Color::Red
+            } else if v.worth_attention > 0 {
+                Color::Yellow
+            } else {
+                Color::Green
+            })
             .add_modifier(Modifier::BOLD),
     ))];
     if let Some(w) = &warning {
@@ -300,9 +313,12 @@ fn draw_findings(f: &mut Frame, area: Rect, state: &AppState) {
     }
 
     let mut ls = ListState::default();
-    ls.select(Some(state.findings_sel.min(state.findings.len().saturating_sub(1))));
-    let list = List::new(items)
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+    ls.select(Some(
+        state
+            .findings_sel
+            .min(state.findings.len().saturating_sub(1)),
+    ));
+    let list = List::new(items).highlight_style(Style::default().add_modifier(Modifier::REVERSED));
     f.render_stateful_widget(list, inner_chunks[1], &mut ls);
 }
 
@@ -322,7 +338,9 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
     if state.no_mcu {
         lines.push(Line::from(Span::styled(
             "No MCU / firmware on this board.",
-            Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
         )));
         lines.push(Line::from(Span::styled(
             "Static analysis only; there is no firmware to co-simulate.",
@@ -342,7 +360,12 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
             // co-simulate, show the idle "press [r]" prompt.
             lines.push(Line::from(vec![
                 Span::styled("idle: press ", Style::default().fg(Color::Gray)),
-                Span::styled("[r]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    "[r]",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
                 Span::styled(" to run co-sim", Style::default().fg(Color::Gray)),
             ]));
             lines.push(Line::from(Span::styled(
@@ -358,7 +381,9 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
             if let Some(sub) = &state.backend_substituted {
                 lines.push(Line::from(Span::styled(
                     format!("chip substitution: {sub}"),
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
                 )));
             }
         }
@@ -425,8 +450,15 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
                             ("-  ", Color::DarkGray)
                         };
                         lines.push(Line::from(vec![
-                            Span::raw(format!("  {:<width$}", truncate(&g.name, name_w), width = name_w)),
-                            Span::styled(format!("{:>6.2} V {glyph} ", g.volts), Style::default().fg(lvl_color)),
+                            Span::raw(format!(
+                                "  {:<width$}",
+                                truncate(&g.name, name_w),
+                                width = name_w
+                            )),
+                            Span::styled(
+                                format!("{:>6.2} V {glyph} ", g.volts),
+                                Style::default().fg(lvl_color),
+                            ),
                             Span::styled(drv.to_string(), Style::default().fg(drv_color)),
                         ]));
                     }
@@ -439,7 +471,9 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
                 if let Some(sub) = &state.backend_substituted {
                     lines.push(Line::from(Span::styled(
                         format!("chip substitution: {sub}"),
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
                     )));
                 }
 
@@ -451,7 +485,11 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
                 // chunk count (0 on a clean run) so a default/idle snapshot never
                 // trips it.
                 if u.failed_chunk_count > 0 {
-                    let chunk_word = if u.failed_chunk_count == 1 { "chunk" } else { "chunks" };
+                    let chunk_word = if u.failed_chunk_count == 1 {
+                        "chunk"
+                    } else {
+                        "chunks"
+                    };
                     lines.push(Line::from(Span::styled(
                         format!(
                             "analog solve FAILED on {} {chunk_word}: net levels above are held-stale, not trustworthy",
@@ -494,7 +532,9 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
                     };
                     lines.push(Line::from(Span::styled(
                         head,
-                        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
                     )));
                     lines.push(Line::from(Span::styled(
                         STALL_HINT_L1,
@@ -592,14 +632,19 @@ fn draw_scope(f: &mut Frame, area: Rect, state: &AppState, cosim_running: bool) 
         ScopeView::NoProbes => Some(vec![
             Line::from(Span::styled(
                 "no nets probed",
-                Style::default().fg(Color::Gray).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Gray)
+                    .add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
                 "press [p] on a net in Nets & Parts",
                 Style::default().fg(Color::Gray),
             )),
             Line::from(Span::styled(
-                format!("(up to {} nets; oldest is dropped)", super::state::SCOPE_MAX_PROBES),
+                format!(
+                    "(up to {} nets; oldest is dropped)",
+                    super::state::SCOPE_MAX_PROBES
+                ),
                 Style::default().fg(Color::DarkGray),
             )),
         ]),
@@ -615,7 +660,10 @@ fn draw_scope(f: &mut Frame, area: Rect, state: &AppState, cosim_running: bool) 
             ))];
             for (i, name) in state.scope.probed().iter().enumerate() {
                 lines.push(Line::from(Span::styled(
-                    format!("◉ {}", truncate(name, inner.width.saturating_sub(2) as usize)),
+                    format!(
+                        "◉ {}",
+                        truncate(name, inner.width.saturating_sub(2) as usize)
+                    ),
                     Style::default().fg(series_color(i)),
                 )));
             }
@@ -717,7 +765,9 @@ fn draw_scope(f: &mut Frame, area: Rect, state: &AppState, cosim_running: bool) 
 }
 
 fn draw_footer(f: &mut Frame, area: Rect, state: &AppState, running: bool) {
-    let block = Block::default().borders(Borders::ALL).border_style(Style::default().fg(Color::DarkGray));
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray));
     let inner = block.inner(area);
     f.render_widget(block, area);
 
@@ -736,7 +786,9 @@ fn draw_footer(f: &mut Frame, area: Rect, state: &AppState, running: bool) {
     let line = Line::from(vec![
         Span::styled(
             format!("{} ", truncate(&state.board_name, 24)),
-            Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(Color::White)
+                .add_modifier(Modifier::BOLD),
         ),
         Span::styled(format!("· {mcu} "), Style::default().fg(Color::Magenta)),
         Span::styled(format!("· {backend} "), Style::default().fg(Color::Cyan)),
@@ -759,7 +811,10 @@ fn draw_detail_overlay(f: &mut Frame, state: &AppState) {
     let area = centered_rect(OVERLAY_PCT_X, OVERLAY_PCT_Y, f.area());
     f.render_widget(Clear, area);
     let block = Block::default()
-        .title(format!(" {} / {}: detail (Enter/Esc to close) ", fdg.check, fdg.kind))
+        .title(format!(
+            " {} / {}: detail (Enter/Esc to close) ",
+            fdg.check, fdg.kind
+        ))
         .borders(Borders::ALL)
         .border_style(severity_style(fdg.severity).add_modifier(Modifier::BOLD));
     let mut lines: Vec<Line> = Vec::new();
@@ -768,7 +823,10 @@ fn draw_detail_overlay(f: &mut Frame, state: &AppState) {
         severity_style(fdg.severity),
     )));
     lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled("What it means:", Style::default().add_modifier(Modifier::BOLD))));
+    lines.push(Line::from(Span::styled(
+        "What it means:",
+        Style::default().add_modifier(Modifier::BOLD),
+    )));
     lines.push(Line::from(fdg.plain.clone()));
     if !fdg.nets.is_empty() {
         lines.push(Line::from(""));
@@ -782,7 +840,10 @@ fn draw_detail_overlay(f: &mut Frame, state: &AppState) {
             "Location: x={:.1} mm, y={:.1} mm{}",
             loc[0],
             loc[1],
-            fdg.layer.as_ref().map(|l| format!("  ({l})")).unwrap_or_default()
+            fdg.layer
+                .as_ref()
+                .map(|l| format!("  ({l})"))
+                .unwrap_or_default()
         )));
     } else if let Some(layer) = &fdg.layer {
         lines.push(Line::from(format!("Layer: {layer}")));
@@ -790,7 +851,12 @@ fn draw_detail_overlay(f: &mut Frame, state: &AppState) {
     if let Some(fix) = &fdg.fix {
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
-            Span::styled("Suggested fix: ", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                "Suggested fix: ",
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
             Span::raw(fix.clone()),
         ]));
     }
@@ -822,13 +888,17 @@ fn draw_left_detail_overlay(f: &mut Frame, state: &AppState) {
             let border = if critical_open {
                 Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
             };
             let mut lines: Vec<Line> = Vec::new();
             lines.push(Line::from(vec![
                 Span::styled(
                     format!("{reference}  "),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(value.clone(), Style::default().fg(Color::Gray)),
             ]));
@@ -879,14 +949,19 @@ fn draw_left_detail_overlay(f: &mut Frame, state: &AppState) {
             let mut lines: Vec<Line> = Vec::new();
             lines.push(Line::from(Span::styled(
                 name.clone(),
-                Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
             )));
             lines.push(Line::from(""));
             match voltage_v {
                 Some(v) => {
                     let level = Level::from_volts(v);
                     lines.push(Line::from(vec![
-                        Span::styled("DC voltage: ", Style::default().add_modifier(Modifier::BOLD)),
+                        Span::styled(
+                            "DC voltage: ",
+                            Style::default().add_modifier(Modifier::BOLD),
+                        ),
                         Span::styled(
                             format!("{v:.3} V  {} {}", level.glyph(), level.word()),
                             Style::default().fg(Color::LightBlue),
@@ -913,7 +988,9 @@ fn draw_left_detail_overlay(f: &mut Frame, state: &AppState) {
             }
             (
                 format!(" net {name}: detail (Enter/Esc to close) "),
-                Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
                 lines,
             )
         }
@@ -1017,7 +1094,9 @@ mod tests {
             value: "STM32".into(),
             model_id: None,
             confidence: Confidence::Exact,
-            outcome: BindOutcome::Mcu { backend: "renode:stm32f103".into() },
+            outcome: BindOutcome::Mcu {
+                backend: "renode:stm32f103".into(),
+            },
             warning: None,
             guesses: Vec::new(),
         });
@@ -1038,8 +1117,14 @@ mod tests {
             &[],
             &[],
             vec![
-                crate::tui::state::Net { name: "/LED".into(), voltage_v: Some(0.0) },
-                crate::tui::state::Net { name: "/PA5".into(), voltage_v: Some(3.3) },
+                crate::tui::state::Net {
+                    name: "/LED".into(),
+                    voltage_v: Some(0.0),
+                },
+                crate::tui::state::Net {
+                    name: "/PA5".into(),
+                    voltage_v: Some(3.3),
+                },
             ],
             HashMap::new(),
             HashMap::new(),
@@ -1071,7 +1156,10 @@ mod tests {
         st.scope.toggle("/PA5");
         for i in 0..200 {
             let mut v = HashMap::new();
-            v.insert("/LED".to_string(), if (i / 20) % 2 == 0 { 0.0 } else { 3.3 });
+            v.insert(
+                "/LED".to_string(),
+                if (i / 20) % 2 == 0 { 0.0 } else { 3.3 },
+            );
             v.insert("/PA5".to_string(), 3.3);
             st.scope.record(i as f64 * 5.0, &v);
         }
@@ -1088,12 +1176,19 @@ mod tests {
         assert!(all.contains("3.30V"), "latest value shown:\n{all}");
         // Braille dots actually drawn (U+2800..U+28FF); the trace itself.
         assert!(
-            all.chars().any(|c| ('\u{2800}'..='\u{28FF}').contains(&c) && c != '\u{2800}'),
+            all.chars()
+                .any(|c| ('\u{2800}'..='\u{28FF}').contains(&c) && c != '\u{2800}'),
             "braille trace glyphs present:\n{all}"
         );
         // The probed nets are marked in the Nets & Parts list too.
-        let list_row = rows.iter().find(|r| r.contains("/LED") && r.contains("◉")).unwrap();
-        assert!(list_row.contains("◉ /LED"), "probe marker in the list: {list_row}");
+        let list_row = rows
+            .iter()
+            .find(|r| r.contains("/LED") && r.contains("◉"))
+            .unwrap();
+        assert!(
+            list_row.contains("◉ /LED"),
+            "probe marker in the list: {list_row}"
+        );
         // The footer advertises the probe key.
         assert!(all.contains("p probe"), "footer lists the p key:\n{all}");
     }
@@ -1110,7 +1205,10 @@ mod tests {
         st.scope.toggle("/PA5");
         for i in 0..200 {
             let mut v = HashMap::new();
-            v.insert("/LED".to_string(), if (i / 20) % 2 == 0 { 0.0 } else { 3.3 });
+            v.insert(
+                "/LED".to_string(),
+                if (i / 20) % 2 == 0 { 0.0 } else { 3.3 },
+            );
             v.insert("/PA5".to_string(), 3.3);
             st.scope.record(i as f64 * 5.0, &v);
         }

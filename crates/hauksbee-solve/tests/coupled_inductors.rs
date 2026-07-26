@@ -123,8 +123,8 @@ fn closed_form_vsec(f: f64, k: f64, l1: f64, l2: f64, rs: f64, rl: f64) -> Compl
     let jw = Complex64::new(0.0, std::f64::consts::TAU * f);
     let denom_s = Complex64::new(1.0, 0.0) + jw * l2 / rl;
     let vs_over_i1 = jw * m / denom_s;
-    let i1 = Complex64::new(1.0, 0.0)
-        / (Complex64::new(rs, 0.0) + jw * l1 - jw * m * vs_over_i1 / rl);
+    let i1 =
+        Complex64::new(1.0, 0.0) / (Complex64::new(rs, 0.0) + jw * l1 - jw * m * vs_over_i1 / rl);
     vs_over_i1 * i1
 }
 
@@ -143,7 +143,10 @@ fn k1_singular_group_solves_to_closed_form() {
         .run(&c, tstop)
         .expect("k=1 transformer must SOLVE: L is stamped, never inverted");
     for row in &wf.node_voltages {
-        assert!(row.iter().all(|x| x.is_finite()), "non-finite sample at k=1");
+        assert!(
+            row.iter().all(|x| x.is_finite()),
+            "non-finite sample at k=1"
+        );
     }
     let amp = last_cycle_amplitude(&c, &wf, "sec", tstop);
     let expect = closed_form_vsec(10e3, 1.0, 1e-3, 4e-3, 50.0, 1e3).norm();
@@ -354,9 +357,7 @@ fn ac_matches_two_winding_closed_form() {
     let mut checked = 0;
     for p in &resp.points {
         let vs = closed_form_vsec(p.freq, k, l1, l2, rs, rl);
-        let got = p
-            .node(&c, "sec")
-            .expect("sec phasor present");
+        let got = p.node(&c, "sec").expect("sec phasor present");
         let err = (got - vs).norm();
         assert!(
             err <= 1e-6 + 1e-9 * vs.norm().max(got.norm()),

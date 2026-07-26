@@ -31,7 +31,10 @@ fn lint(path: &std::path::Path) -> (i32, String) {
 #[test]
 fn lint_names_every_broken_category() {
     let cases: &[(&str, &str)] = &[
-        ("undeclared_pin.toml", "references undeclared name 'phantom_pin'"),
+        (
+            "undeclared_pin.toml",
+            "references undeclared name 'phantom_pin'",
+        ),
         (
             "width_mismatch.toml",
             "bit index 7 is out of range for register 'reg' (4 bits)",
@@ -52,11 +55,17 @@ fn lint_names_every_broken_category() {
             "bad_tristate.toml",
             "enable pin 'oe_missing' is not a declared input",
         ),
-        ("non_converging.toml", "does not converge within 16 fixpoint sweeps"),
+        (
+            "non_converging.toml",
+            "does not converge within 16 fixpoint sweeps",
+        ),
     ];
     for (file, needle) in cases {
         let (code, out) = lint(&fixture(file));
-        assert_eq!(code, 2, "{file}: lint must exit 2 on a finding; output:\n{out}");
+        assert_eq!(
+            code, 2,
+            "{file}: lint must exit 2 on a finding; output:\n{out}"
+        );
         assert!(
             out.contains(needle),
             "{file}: expected the named error {needle:?} in output:\n{out}"
@@ -68,10 +77,12 @@ fn lint_names_every_broken_category() {
 /// binding, so lint-ok == bind-ok).
 #[test]
 fn builtin_digital_db_lints_clean() {
-    let db = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../hauksbee-models/db/digital.toml");
+    let db = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hauksbee-models/db/digital.toml");
     let (code, out) = lint(&db);
-    assert_eq!(code, 0, "builtin digital.toml must lint clean; output:\n{out}");
+    assert_eq!(
+        code, 0,
+        "builtin digital.toml must lint clean; output:\n{out}"
+    );
     for id in ["74hc595", "74hc165", "74hc125", "74hc27", "74hc02"] {
         assert!(
             out.contains(&format!("model '{id}': ok")),

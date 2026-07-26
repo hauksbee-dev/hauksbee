@@ -347,7 +347,13 @@ fn sim_output_to_csv(o: &hauksbee_solve::SimOutput) -> String {
         header.push("time_s".to_string());
     }
     header.extend(o.columns.iter().cloned());
-    s.push_str(&header.iter().map(|h| csv_escape(h)).collect::<Vec<_>>().join(","));
+    s.push_str(
+        &header
+            .iter()
+            .map(|h| csv_escape(h))
+            .collect::<Vec<_>>()
+            .join(","),
+    );
     s.push('\n');
     for (i, row) in o.rows.iter().enumerate() {
         let mut cells = Vec::with_capacity(row.len() + 1);
@@ -434,12 +440,20 @@ mod tests {
             SpiceLoader::load_with_directives("t\nV1 in 0 1\nR1 in 0 1k\n.temp 100\n.op\n.end\n")
                 .unwrap();
         let opts = solver_opts_from_deck(&c, &d);
-        assert!((opts.temperature_c - 100.0).abs() < 1e-9, "got {}", opts.temperature_c);
+        assert!(
+            (opts.temperature_c - 100.0).abs() < 1e-9,
+            "got {}",
+            opts.temperature_c
+        );
 
         // No `.temp` card → the solver default (27 °C) is preserved.
         let (c0, d0) =
             SpiceLoader::load_with_directives("t\nV1 in 0 1\nR1 in 0 1k\n.op\n.end\n").unwrap();
         let opts0 = solver_opts_from_deck(&c0, &d0);
-        assert!((opts0.temperature_c - 27.0).abs() < 1e-9, "got {}", opts0.temperature_c);
+        assert!(
+            (opts0.temperature_c - 27.0).abs() < 1e-9,
+            "got {}",
+            opts0.temperature_c
+        );
     }
 }

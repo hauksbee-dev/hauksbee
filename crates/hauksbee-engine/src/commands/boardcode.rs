@@ -108,7 +108,8 @@ pub fn from_code(code_path: &Path, opts: &FromCodeOpts) -> anyhow::Result<()> {
     // The operator routes it with whatever router on whatever clock, then
     // `hauksbee merge-ses` brings the SES back through the same audit.
     if let Some(dsn_path) = &opts.route_dsn {
-        let dsn_text = forge_codegen::write_dsn(&pcb, prog.outline, &forge_codegen::RouteRules::default());
+        let dsn_text =
+            forge_codegen::write_dsn(&pcb, prog.outline, &forge_codegen::RouteRules::default());
         std::fs::write(dsn_path, &dsn_text)?;
         eprintln!("wrote routing DSN to {}", dsn_path.display());
         eprintln!(

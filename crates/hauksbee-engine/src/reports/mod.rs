@@ -60,7 +60,10 @@ pub fn kicad_pro_clearance_rules(
     board: &ExtractedBoard,
 ) -> Option<hauksbee_extract::ClearanceRules> {
     let text = std::fs::read_to_string(board_path.with_extension("kicad_pro")).ok()?;
-    hauksbee_extract::clearance_rules_from_kicad_pro(&text, board.nets.iter().map(|n| n.name.as_str()))
+    hauksbee_extract::clearance_rules_from_kicad_pro(
+        &text,
+        board.nets.iter().map(|n| n.name.as_str()),
+    )
 }
 
 /// Strict-mode predicate for the connectivity/resource lint: any high/medium

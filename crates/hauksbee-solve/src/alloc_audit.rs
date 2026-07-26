@@ -91,13 +91,13 @@ fn count_allocs<R>(f: impl FnOnce() -> R) -> (u64, R) {
 
 #[cfg(test)]
 mod tests {
+    use super::fixtures;
     use super::*;
     use crate::newton::{dc_operating_point, newton_solve, Workspace};
     use crate::options::{Integration, Partitioning, SolverOptions, StepControl};
     use crate::partitioned::PartitionedTransient;
     use crate::stamp::IntegCoeffs;
     use crate::system::ReactiveState;
-    use super::fixtures;
 
     fn audit_opts() -> SolverOptions {
         // Mirror the rail_tear test's options so the board solves on the same
@@ -126,7 +126,10 @@ mod tests {
             v.push(2);
             v
         });
-        assert!(n >= 1, "counter saw {n} allocations for a Vec growth; must be >= 1");
+        assert!(
+            n >= 1,
+            "counter saw {n} allocations for a Vec growth; must be >= 1"
+        );
         assert_eq!(v, vec![1, 2]);
     }
 
@@ -209,7 +212,9 @@ mod tests {
         let h = 1e-6;
         // Warm: advance one real step (first=true) then relax a couple of times
         // (first=false), so island state and any lazy buffers are established.
-        engine.sweep_for_audit(&circuit, h, h, true).expect("warm sweep");
+        engine
+            .sweep_for_audit(&circuit, h, h, true)
+            .expect("warm sweep");
         for k in 0..3 {
             engine
                 .sweep_for_audit(&circuit, h, (k + 2) as f64 * h, false)

@@ -350,7 +350,11 @@ impl StampPlan {
                     }
                 }
                 Device::Cccs {
-                    p, n, ctrl_src, gain, ..
+                    p,
+                    n,
+                    ctrl_src,
+                    gain,
+                    ..
                 } => {
                     // Fully constant like the VCCS: two (output-row,
                     // control-branch-column) entries fold into the backbone.
@@ -371,7 +375,11 @@ impl StampPlan {
                     }
                 }
                 Device::Ccvs {
-                    p, n, ctrl_src, transres, ..
+                    p,
+                    n,
+                    ctrl_src,
+                    transres,
+                    ..
                 } => {
                     // Branch incidence (a VCVS-shaped constraint) plus the
                     // -transres dependence at the control source's branch
@@ -517,16 +525,9 @@ impl StampPlan {
 /// device-level limiting), and event-frozen solves (`cmp_freeze` /
 /// `switch_freeze`). Those paths are cold (once per run / stiff-board rescue),
 /// so they keep the reference behaviour at zero risk.
-pub fn stamp_all_planned(
-    ctx: &StampCtx,
-    plan: &StampPlan,
-    g: &mut SparseMatrix,
-    rhs: &mut [f64],
-) {
-    let eligible = !ctx.dc
-        && ctx.branch_reg == 0.0
-        && ctx.cmp_freeze.is_none()
-        && ctx.switch_freeze.is_none();
+pub fn stamp_all_planned(ctx: &StampCtx, plan: &StampPlan, g: &mut SparseMatrix, rhs: &mut [f64]) {
+    let eligible =
+        !ctx.dc && ctx.branch_reg == 0.0 && ctx.cmp_freeze.is_none() && ctx.switch_freeze.is_none();
     if !eligible {
         stamp_all(ctx, g, rhs);
         return;
@@ -634,25 +635,92 @@ mod tests {
                 phase: 0.0,
             },
         });
-        c.add(Device::Resistor { name: "R1".into(), a: vin, b: n1, ohms: 1e3, tc1: None });
-        c.add(Device::Resistor { name: "Rt".into(), a: n1, b: n2, ohms: 2e3, tc1: Some(0.001) });
-        c.add(Device::Capacitor { name: "C1".into(), a: n1, b: NodeId::GROUND, farads: 1e-9, ic: None });
-        c.add(Device::Inductor { name: "L1".into(), a: n2, b: n3, henries: 1e-6, ic: None });
-        c.add(Device::Isource { name: "I1".into(), p: n3, n: NodeId::GROUND, kind: SourceKind::Dc(1e-3) });
-        c.add(Device::Diode { name: "D1".into(), a: n1, k: n4, model: Default::default() });
-        c.add(Device::Bjt { name: "Q1".into(), c: vin, b: n4, e: NodeId::GROUND, model: Default::default() });
-        c.add(Device::Mosfet { name: "M1".into(), d: n2, g: n1, s: NodeId::GROUND, b: None, model: Default::default() });
+        c.add(Device::Resistor {
+            name: "R1".into(),
+            a: vin,
+            b: n1,
+            ohms: 1e3,
+            tc1: None,
+        });
+        c.add(Device::Resistor {
+            name: "Rt".into(),
+            a: n1,
+            b: n2,
+            ohms: 2e3,
+            tc1: Some(0.001),
+        });
+        c.add(Device::Capacitor {
+            name: "C1".into(),
+            a: n1,
+            b: NodeId::GROUND,
+            farads: 1e-9,
+            ic: None,
+        });
+        c.add(Device::Inductor {
+            name: "L1".into(),
+            a: n2,
+            b: n3,
+            henries: 1e-6,
+            ic: None,
+        });
+        c.add(Device::Isource {
+            name: "I1".into(),
+            p: n3,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(1e-3),
+        });
+        c.add(Device::Diode {
+            name: "D1".into(),
+            a: n1,
+            k: n4,
+            model: Default::default(),
+        });
+        c.add(Device::Bjt {
+            name: "Q1".into(),
+            c: vin,
+            b: n4,
+            e: NodeId::GROUND,
+            model: Default::default(),
+        });
+        c.add(Device::Mosfet {
+            name: "M1".into(),
+            d: n2,
+            g: n1,
+            s: NodeId::GROUND,
+            b: None,
+            model: Default::default(),
+        });
         c.add(Device::VSwitch {
-            name: "S1".into(), a: n3, b: n5, ctrl_p: n1, ctrl_n: NodeId::GROUND,
-            von: 3.0, voff: 2.0, ron: 10.0, roff: 1e9,
+            name: "S1".into(),
+            a: n3,
+            b: n5,
+            ctrl_p: n1,
+            ctrl_n: NodeId::GROUND,
+            von: 3.0,
+            voff: 2.0,
+            ron: 10.0,
+            roff: 1e9,
         });
         c.add(Device::OpAmp {
-            name: "U1".into(), out: n5, inp: n1, inn: n2, reference: None,
-            gain: 1e5, pole_hz: None, slew: None, rail_lo: 0.0, rail_hi: 5.0,
+            name: "U1".into(),
+            out: n5,
+            inp: n1,
+            inn: n2,
+            reference: None,
+            gain: 1e5,
+            pole_hz: None,
+            slew: None,
+            rail_lo: 0.0,
+            rail_hi: 5.0,
         });
         c.add(Device::Comparator {
-            name: "K1".into(), out: n6, inp: n1, inn: n2,
-            out_lo: 0.0, out_hi: 5.0, hysteresis: 0.05,
+            name: "K1".into(),
+            out: n6,
+            inp: n1,
+            inn: n2,
+            out_lo: 0.0,
+            out_hi: 5.0,
+            hysteresis: 0.05,
         });
 
         let layout = Layout::new(&c);
@@ -663,7 +731,9 @@ mod tests {
         let n = layout.size;
         // Non-trivial iterate with mixed signs/magnitudes, plus non-zero
         // reactive history so the RHS-only tier carries real values.
-        let x: Vec<f64> = (0..n).map(|i| ((i as f64 * 0.7391).sin()) * 3.0 + 0.1).collect();
+        let x: Vec<f64> = (0..n)
+            .map(|i| ((i as f64 * 0.7391).sin()) * 3.0 + 0.1)
+            .collect();
         let mut state = ReactiveState::new(c.devices.len());
         for (i, v) in state.x1.iter_mut().enumerate() {
             *v = 0.3 * (i as f64 + 1.0);
@@ -672,7 +742,8 @@ mod tests {
             *v = -0.1 * (i as f64 + 1.0);
         }
         let opts = SolverOptions::default();
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
+        let coeffs =
+            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
         let spdt = std::collections::HashMap::new();
         let ctx = StampCtx {
             circuit: &c,
@@ -751,24 +822,77 @@ mod tests {
         let mut prev = vin;
         for k in 0..1000 {
             let n = rc.node(&format!("n{k}"));
-            rc.add(Device::Resistor { name: format!("R{k}"), a: prev, b: n, ohms: 1e3, tc1: None });
-            rc.add(Device::Capacitor { name: format!("C{k}"), a: n, b: NodeId::GROUND, farads: 1e-9, ic: None });
+            rc.add(Device::Resistor {
+                name: format!("R{k}"),
+                a: prev,
+                b: n,
+                ohms: 1e3,
+                tc1: None,
+            });
+            rc.add(Device::Capacitor {
+                name: format!("C{k}"),
+                a: n,
+                b: NodeId::GROUND,
+                farads: 1e-9,
+                ic: None,
+            });
             prev = n;
         }
         // Shunt-fed mirror-ish array, 240 blocks: hub rail + BJT pairs + RC.
         let mut ma = Circuit::new();
         let vcc = ma.node("vcc");
         let rail = ma.node("rail");
-        ma.add(Device::Vsource { name: "V".into(), p: vcc, n: NodeId::GROUND, kind: SourceKind::Dc(5.0) });
-        ma.add(Device::Resistor { name: "Rsh".into(), a: vcc, b: rail, ohms: 1e3, tc1: None });
+        ma.add(Device::Vsource {
+            name: "V".into(),
+            p: vcc,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(5.0),
+        });
+        ma.add(Device::Resistor {
+            name: "Rsh".into(),
+            a: vcc,
+            b: rail,
+            ohms: 1e3,
+            tc1: None,
+        });
         for k in 0..240 {
             let b = ma.node(&format!("b{k}"));
             let mem = ma.node(&format!("m{k}"));
-            ma.add(Device::Resistor { name: format!("Rr{k}"), a: rail, b, ohms: 47e3, tc1: None });
-            ma.add(Device::Bjt { name: format!("Q1_{k}"), c: b, b, e: NodeId::GROUND, model: Default::default() });
-            ma.add(Device::Bjt { name: format!("Q2_{k}"), c: mem, b, e: NodeId::GROUND, model: Default::default() });
-            ma.add(Device::Resistor { name: format!("Rm{k}"), a: rail, b: mem, ohms: 100e3, tc1: None });
-            ma.add(Device::Capacitor { name: format!("Cm{k}"), a: mem, b: NodeId::GROUND, farads: 1e-9, ic: None });
+            ma.add(Device::Resistor {
+                name: format!("Rr{k}"),
+                a: rail,
+                b,
+                ohms: 47e3,
+                tc1: None,
+            });
+            ma.add(Device::Bjt {
+                name: format!("Q1_{k}"),
+                c: b,
+                b,
+                e: NodeId::GROUND,
+                model: Default::default(),
+            });
+            ma.add(Device::Bjt {
+                name: format!("Q2_{k}"),
+                c: mem,
+                b,
+                e: NodeId::GROUND,
+                model: Default::default(),
+            });
+            ma.add(Device::Resistor {
+                name: format!("Rm{k}"),
+                a: rail,
+                b: mem,
+                ohms: 100e3,
+                tc1: None,
+            });
+            ma.add(Device::Capacitor {
+                name: format!("Cm{k}"),
+                a: mem,
+                b: NodeId::GROUND,
+                farads: 1e-9,
+                ic: None,
+            });
         }
 
         for (label, c) in [("rc_ladder_1k", &rc), ("mirror_240", &ma)] {
@@ -852,8 +976,19 @@ mod tests {
     fn planned_assembly_falls_back_on_dc_context() {
         let mut c = Circuit::new();
         let a = c.node("a");
-        c.add(Device::Vsource { name: "V".into(), p: a, n: NodeId::GROUND, kind: SourceKind::Dc(1.0) });
-        c.add(Device::Capacitor { name: "C".into(), a, b: NodeId::GROUND, farads: 1e-9, ic: Some(0.5) });
+        c.add(Device::Vsource {
+            name: "V".into(),
+            p: a,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(1.0),
+        });
+        c.add(Device::Capacitor {
+            name: "C".into(),
+            a,
+            b: NodeId::GROUND,
+            farads: 1e-9,
+            ic: Some(0.5),
+        });
         let layout = Layout::new(&c);
         let mut m = SparseMatrix::new(layout.size);
         reserve_pattern(&c, &layout, &mut m);
@@ -862,7 +997,8 @@ mod tests {
         let x = vec![0.0f64; n];
         let state = ReactiveState::new(c.devices.len());
         let opts = SolverOptions::default();
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1.0, 1.0, true);
+        let coeffs =
+            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1.0, 1.0, true);
         let spdt = std::collections::HashMap::new();
         let ctx = StampCtx {
             circuit: &c,
@@ -890,7 +1026,11 @@ mod tests {
         let mut rhs = vec![0.0f64; n];
         stamp_all_planned(&ctx, &plan, &mut m, &mut rhs);
         for i in 0..n {
-            assert_eq!(m.row(i), m_ref.row(i), "dc fallback row {i} not bit-identical");
+            assert_eq!(
+                m.row(i),
+                m_ref.row(i),
+                "dc fallback row {i} not bit-identical"
+            );
             assert_eq!(rhs[i], rhs_ref[i], "dc fallback rhs {i} not bit-identical");
         }
     }

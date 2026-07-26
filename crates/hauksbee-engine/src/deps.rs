@@ -153,8 +153,7 @@ fn probe_esp_qemu() -> DepStatus {
     let cost = match std::env::consts::OS {
         "macos" => "two small downloads, about 8 MB total (checksum-verified)".to_string(),
         "linux" => "two downloads, about 35 MB total (checksum-verified)".to_string(),
-        _ => "not auto-installable on this OS; see github.com/espressif/qemu/releases"
-            .to_string(),
+        _ => "not auto-installable on this OS; see github.com/espressif/qemu/releases".to_string(),
     };
     let manual = "hauksbee install esp-qemu".to_string();
 
@@ -182,11 +181,17 @@ fn probe_esp_qemu() -> DepStatus {
                 let mut parts = Vec::new();
                 match &xtensa {
                     Ok(p) => parts.push(format!("qemu-system-xtensa found at {}", p.display())),
-                    Err(e) => parts.push(format!("qemu-system-xtensa: {}", first_line(&e.to_string()))),
+                    Err(e) => parts.push(format!(
+                        "qemu-system-xtensa: {}",
+                        first_line(&e.to_string())
+                    )),
                 }
                 match &riscv {
                     Ok(p) => parts.push(format!("qemu-system-riscv32 found at {}", p.display())),
-                    Err(e) => parts.push(format!("qemu-system-riscv32: {}", first_line(&e.to_string()))),
+                    Err(e) => parts.push(format!(
+                        "qemu-system-riscv32: {}",
+                        first_line(&e.to_string())
+                    )),
                 }
                 DepStatus {
                     id: "esp-qemu",
@@ -233,7 +238,11 @@ fn find_ngspice() -> Option<PathBuf> {
             return Some(pb);
         }
     }
-    let exe = if cfg!(windows) { "ngspice.exe" } else { "ngspice" };
+    let exe = if cfg!(windows) {
+        "ngspice.exe"
+    } else {
+        "ngspice"
+    };
     if let Ok(path) = std::env::var("PATH") {
         for dir in std::env::split_paths(&path) {
             let cand = dir.join(exe);
@@ -356,8 +365,7 @@ fn probe_kicad_cli() -> DepStatus {
         _ => "download KiCad from kicad.org",
     }
     .to_string();
-    let cost = "part of the full KiCad suite; the KiCad download alone is over 1 GB"
-        .to_string();
+    let cost = "part of the full KiCad suite; the KiCad download alone is over 1 GB".to_string();
     match find_kicad_cli() {
         Some((path, ver)) => DepStatus {
             id: "kicad-cli",
@@ -620,8 +628,14 @@ fn run_streaming(
     let (tx, rx) = std::sync::mpsc::channel::<String>();
     let mut readers = Vec::new();
     for pipe in [
-        child.stdout.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
-        child.stderr.take().map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn std::io::Read + Send>),
     ]
     .into_iter()
     .flatten()
@@ -769,7 +783,10 @@ mod tests {
         let avr = probe_all().into_iter().find(|d| d.id == "avr").unwrap();
         assert!(!avr.installable);
         let err = install_dep("avr", &mut |_| {}).expect_err("avr install must refuse");
-        assert!(err.contains("build time"), "explains the build-time link: {err}");
+        assert!(
+            err.contains("build time"),
+            "explains the build-time link: {err}"
+        );
     }
 
     #[test]
@@ -804,10 +821,17 @@ mod tests {
         let mut cmd = Command::new("sh");
         cmd.args(["-c", "echo starting; echo 'the disk is full' >&2; exit 3"]);
         let mut lines = Vec::new();
-        let err = run_streaming(cmd, &mut |l| lines.push(l.to_string()), Duration::from_secs(30))
-            .expect_err("exit 3 is a failure");
+        let err = run_streaming(
+            cmd,
+            &mut |l| lines.push(l.to_string()),
+            Duration::from_secs(30),
+        )
+        .expect_err("exit 3 is a failure");
         assert!(err.contains("code 3"), "names the exit code: {err}");
-        assert!(err.contains("the disk is full"), "carries the stderr tail: {err}");
+        assert!(
+            err.contains("the disk is full"),
+            "carries the stderr tail: {err}"
+        );
         assert!(
             lines.iter().any(|l| l.contains("starting")),
             "stdout was streamed live: {lines:?}"
@@ -820,11 +844,21 @@ mod tests {
         cmd.args(["-c", "echo begun; sleep 30; echo never"]);
         let mut lines = Vec::new();
         let started = Instant::now();
-        let err = run_streaming(cmd, &mut |l| lines.push(l.to_string()), Duration::from_secs(1))
-            .expect_err("must time out");
-        assert!(started.elapsed() < Duration::from_secs(10), "did not wait for the sleep");
+        let err = run_streaming(
+            cmd,
+            &mut |l| lines.push(l.to_string()),
+            Duration::from_secs(1),
+        )
+        .expect_err("must time out");
+        assert!(
+            started.elapsed() < Duration::from_secs(10),
+            "did not wait for the sleep"
+        );
         assert!(err.contains("was stopped"), "names the timeout: {err}");
-        assert!(!lines.iter().any(|l| l.contains("never")), "child was killed");
+        assert!(
+            !lines.iter().any(|l| l.contains("never")),
+            "child was killed"
+        );
     }
 
     #[test]
@@ -832,10 +866,20 @@ mod tests {
         let mut cmd = Command::new("sh");
         cmd.args(["-c", "echo one; echo two >&2; exit 0"]);
         let mut lines = Vec::new();
-        run_streaming(cmd, &mut |l| lines.push(l.to_string()), Duration::from_secs(30))
-            .expect("exit 0 succeeds");
-        assert!(lines.iter().any(|l| l == "one"), "stdout relayed: {lines:?}");
-        assert!(lines.iter().any(|l| l == "two"), "stderr relayed: {lines:?}");
+        run_streaming(
+            cmd,
+            &mut |l| lines.push(l.to_string()),
+            Duration::from_secs(30),
+        )
+        .expect("exit 0 succeeds");
+        assert!(
+            lines.iter().any(|l| l == "one"),
+            "stdout relayed: {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|l| l == "two"),
+            "stderr relayed: {lines:?}"
+        );
     }
 
     /// The renode installer resolves scripts/install-sims.sh through the env
@@ -849,8 +893,11 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hauksbee-deps-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let script = dir.join("install-sims.sh");
-        std::fs::write(&script, "#!/bin/sh\necho fake renode install ran \"$@\"\nexit 0\n")
-            .unwrap();
+        std::fs::write(
+            &script,
+            "#!/bin/sh\necho fake renode install ran \"$@\"\nexit 0\n",
+        )
+        .unwrap();
         std::env::set_var("HAUKSBEE_INSTALL_SIMS", &script);
         let mut lines = Vec::new();
         let res = install_dep("renode", &mut |l| lines.push(l.to_string()));
@@ -859,7 +906,9 @@ mod tests {
         if std::env::consts::OS == "macos" || std::env::consts::OS == "linux" {
             res.expect("fake installer exits 0");
             assert!(
-                lines.iter().any(|l| l.contains("fake renode install ran --renode-only")),
+                lines
+                    .iter()
+                    .any(|l| l.contains("fake renode install ran --renode-only")),
                 "the script ran with --renode-only: {lines:?}"
             );
         }

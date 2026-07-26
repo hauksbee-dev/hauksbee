@@ -249,5 +249,10 @@ fn bench_dc_mirror(cr: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_rc_ladder, bench_mirror_array, bench_dc_mirror);
+criterion_group!(
+    benches,
+    bench_rc_ladder,
+    bench_mirror_array,
+    bench_dc_mirror
+);
 criterion_main!(benches);

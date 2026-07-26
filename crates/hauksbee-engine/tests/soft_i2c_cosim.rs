@@ -102,10 +102,10 @@ fn firmware_reads_i2c_sensor_over_bitbanged_gpios() {
     assert_eq!(scl, ('D', 2), "pad 4 is PD2");
     assert_eq!(sda, ('D', 3), "pad 5 is PD3");
 
-    let bus = Arc::new(Mutex::new(
-        I2cBus::new("U2").with_slave(Box::new(sensor)),
-    ));
-    sched.attach_soft_i2c(bus, scl, sda).expect("attach soft I2C");
+    let bus = Arc::new(Mutex::new(I2cBus::new("U2").with_slave(Box::new(sensor))));
+    sched
+        .attach_soft_i2c(bus, scl, sda)
+        .expect("attach soft I2C");
 
     // Run the co-sim, accumulating the firmware's UART report.
     let mut out = Vec::new();
@@ -124,10 +124,7 @@ fn firmware_reads_i2c_sensor_over_bitbanged_gpios() {
         .next()
         .unwrap_or_else(|| panic!("firmware produced no UART report; raw = {text:?}"));
 
-    let expected = format!(
-        "AW68T{:02X}{:02X}",
-        expected_temp[0], expected_temp[1]
-    );
+    let expected = format!("AW68T{:02X}{:02X}", expected_temp[0], expected_temp[1]);
     assert_eq!(
         line, expected,
         "soft-I2C readback must ACK and match the model's registers; raw = {text:?}"

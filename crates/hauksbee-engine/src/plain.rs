@@ -77,7 +77,11 @@ impl HeadsUp {
     /// A self-contained note with no separate why/what-to-do (already one
     /// complete sentence).
     pub fn note(what: impl Into<String>) -> Self {
-        HeadsUp { what: what.into(), why: String::new(), fix: String::new() }
+        HeadsUp {
+            what: what.into(),
+            why: String::new(),
+            fix: String::new(),
+        }
     }
 
     /// A fully-glossed three-part note.
@@ -86,7 +90,11 @@ impl HeadsUp {
         why: impl Into<String>,
         fix: impl Into<String>,
     ) -> Self {
-        HeadsUp { what: what.into(), why: why.into(), fix: fix.into() }
+        HeadsUp {
+            what: what.into(),
+            why: why.into(),
+            fix: fix.into(),
+        }
     }
 }
 
@@ -270,7 +278,12 @@ pub fn plain_drc(report: &DrcReport) -> PlainReport {
         } else {
             &f.net_b_name
         };
-        let where_ = format!("near x={:.1} mm, y={:.1} mm on {}", f.x, f.y, friendly_layer(&f.layer));
+        let where_ = format!(
+            "near x={:.1} mm, y={:.1} mm on {}",
+            f.x,
+            f.y,
+            friendly_layer(&f.layer)
+        );
         match f.kind {
             ViolationKind::Short => out.push(
                 PlainLevel::Serious,
@@ -329,11 +342,21 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
 
     // Real shorts first; the things that actually break a board.
     for sh in &st.shorts {
-        let a = if sh.net_a.is_empty() { "an unnamed net" } else { &sh.net_a };
-        let b = if sh.net_b.is_empty() { "an unnamed net" } else { &sh.net_b };
+        let a = if sh.net_a.is_empty() {
+            "an unnamed net"
+        } else {
+            &sh.net_a
+        };
+        let b = if sh.net_b.is_empty() {
+            "an unnamed net"
+        } else {
+            &sh.net_b
+        };
         let where_ = format!(
             "near x={:.1} mm, y={:.1} mm on {}",
-            sh.loc_mm[0], sh.loc_mm[1], friendly_layer(&sh.layer)
+            sh.loc_mm[0],
+            sh.loc_mm[1],
+            friendly_layer(&sh.layer)
         );
         // Read the per-short severity (the single source); a downgraded short is
         // a Note, a real one is Serious.
@@ -354,8 +377,16 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
 
     // Genuinely below-rule clearance groups (gap < rule).
     for g in &st.violations {
-        let a = if g.net_a.is_empty() { "an unnamed net" } else { &g.net_a };
-        let b = if g.net_b.is_empty() { "an unnamed net" } else { &g.net_b };
+        let a = if g.net_a.is_empty() {
+            "an unnamed net"
+        } else {
+            &g.net_a
+        };
+        let b = if g.net_b.is_empty() {
+            "an unnamed net"
+        } else {
+            &g.net_b
+        };
         let places = format!(
             "{} location{}",
             g.count,
@@ -382,8 +413,16 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
 
     // At-the-limit groups (gap == rule, no margin). NOT "below" the rule.
     for g in &st.at_limit {
-        let a = if g.net_a.is_empty() { "an unnamed net" } else { &g.net_a };
-        let b = if g.net_b.is_empty() { "an unnamed net" } else { &g.net_b };
+        let a = if g.net_a.is_empty() {
+            "an unnamed net"
+        } else {
+            &g.net_a
+        };
+        let b = if g.net_b.is_empty() {
+            "an unnamed net"
+        } else {
+            &g.net_b
+        };
         let places = format!(
             "{} location{}",
             g.count,
@@ -603,7 +642,10 @@ fn short_msg(msg: &str) -> String {
     // Cut back to a word boundary so the summary never ends mid-word, then mark
     // the elision with an ellipsis.
     let truncated: String = first.chars().take(160).collect();
-    let cut = truncated.rsplit_once(' ').map(|(h, _)| h).unwrap_or(&truncated);
+    let cut = truncated
+        .rsplit_once(' ')
+        .map(|(h, _)| h)
+        .unwrap_or(&truncated);
     format!("{}…", cut.trim_end())
 }
 
@@ -833,7 +875,11 @@ mod tests {
             f.what
         );
         // The count reflects all three locations.
-        assert!(f.what.contains("3 locations"), "missing grouped count: {}", f.what);
+        assert!(
+            f.what.contains("3 locations"),
+            "missing grouped count: {}",
+            f.what
+        );
         // Genuinely-below findings DO say "below".
         let mut below = at_limit();
         below.gap_mm = 0.10; // below the 0.2 rule
@@ -843,11 +889,13 @@ mod tests {
             primitive_count: 2,
             version_warning: None,
         };
-        let below_plain =
-            plain_drc_structured(&DrcStructured::from_report(&below_report));
+        let below_plain = plain_drc_structured(&DrcStructured::from_report(&below_report));
         assert_eq!(below_plain.findings.len(), 1);
         assert!(
-            below_plain.findings[0].what.to_lowercase().contains("below"),
+            below_plain.findings[0]
+                .what
+                .to_lowercase()
+                .contains("below"),
             "below-rule finding should say 'below': {}",
             below_plain.findings[0].what
         );
@@ -953,7 +1001,10 @@ mod tests {
             rendered.contains("Heads up"),
             "render must include the Heads up section: {rendered}"
         );
-        assert!(rendered.contains("171 ohm"), "the value is shown: {rendered}");
+        assert!(
+            rendered.contains("171 ohm"),
+            "the value is shown: {rendered}"
+        );
     }
 
     #[test]
@@ -970,7 +1021,10 @@ mod tests {
             }],
         };
         let plain = plain_si(&report);
-        assert!(plain.heads_up.is_empty(), "within-tolerance note not promoted");
+        assert!(
+            plain.heads_up.is_empty(),
+            "within-tolerance note not promoted"
+        );
     }
 
     #[test]

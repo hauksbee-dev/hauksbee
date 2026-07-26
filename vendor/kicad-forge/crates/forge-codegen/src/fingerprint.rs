@@ -40,8 +40,8 @@
 
 use crate::netlist::{Comp, Netlist};
 use crate::partition::Block;
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 /// Number of WL refinement rounds. Block diameters are tiny (a handful of
@@ -73,8 +73,7 @@ impl<'a> BlockGraph<'a> {
         let n = comps.len();
 
         // Map global comp index -> local 0..n.
-        let local: HashMap<usize, usize> =
-            comps.iter().enumerate().map(|(i, &c)| (c, i)).collect();
+        let local: HashMap<usize, usize> = comps.iter().enumerate().map(|(i, &c)| (c, i)).collect();
 
         // Collect internal nets local to this block: a net counts if at least
         // two of its pin-touches are within this block. (Single-touch nets are

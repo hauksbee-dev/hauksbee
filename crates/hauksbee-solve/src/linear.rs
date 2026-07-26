@@ -446,7 +446,10 @@ impl LinearIsland {
         // gate (it is TNOM when the effect is off), so the formula below is
         // byte-identical to the reference path in both modes.
         for &id in &island.devices {
-            if let Device::Resistor { a, b, ohms, tc1, .. } = &circuit.devices[id.0 as usize] {
+            if let Device::Resistor {
+                a, b, ohms, tc1, ..
+            } = &circuit.devices[id.0 as usize]
+            {
                 let r = match tc1 {
                     Some(tc) => *ohms * (1.0 + tc * (temp_c - 27.0)),
                     None => *ohms,

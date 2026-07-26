@@ -146,9 +146,7 @@ impl GdbStub {
                 Scan::BadChecksum(consumed) => {
                     naks += 1;
                     if naks > MAX_NAKS {
-                        bail!(
-                            "gdbstub sent {naks} packet(s) with bad checksums; giving up"
-                        );
+                        bail!("gdbstub sent {naks} packet(s) with bad checksums; giving up");
                     }
                     // Request a retransmission and drain the corrupt packet so the
                     // retransmitted copy is scanned fresh rather than re-rejected.
