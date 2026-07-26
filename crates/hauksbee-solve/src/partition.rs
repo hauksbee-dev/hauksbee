@@ -189,9 +189,9 @@ impl Partition {
         // If the source stayed a cut, its branch unknown would live in no
         // island's sub-system (cut sources are global, applied as pinned
         // boundary voltages only) and the F/H stamp would have no column to
-        // write, not even a lagged one. So "union the F/H island with the
-        // control source's island" (04-spice-compat.md §2.2) concretely means
-        // DEMOTING the control source from cut to ordinary island member:
+        // write, not even a lagged one. So the rule "union the F/H island
+        // with the control source's island" concretely means DEMOTING the
+        // control source from cut to ordinary island member:
         //
         //   * it does not pin its nodes (skipped in the propagation below),
         //   * it unions its p/n like any conducting device,
@@ -282,7 +282,7 @@ impl Partition {
         // Gauss-Seidel step lag, exactly the O(dt) coupling error the tear
         // rules forbid. So a dependent source never cuts: it unions its
         // control nodes with its output nodes and the whole coupled region
-        // solves together (04-spice-compat.md §2.1). The decompose layer's
+        // solves together. The decompose layer's
         // sense-edge machinery may later prove specific one-directional tears;
         // this partitioner stays conservative.
         for (id, dev) in circuit.iter() {
@@ -342,8 +342,9 @@ impl Partition {
             // A K-coupling has NO nodes of its own, so `rep` sees nothing,
             // but it must NOT drop from islands: sub-circuit extraction
             // rebuilds each island's own Layout, and a coupling absent from
-            // the device list would silently decouple the windings there (the
-            // silent-drop hazard class of 04-spice-compat.md §1). Its island
+            // the device list would silently decouple the windings there:
+            // the silent-drop hazard, a plausible wrong waveform and no
+            // crash. Its island
             // is its windings' island, ONE island by construction, because
             // the `controlling_sources` union above fused the two windings'
             // free nodes, so borrow the first winding rep. If BOTH windings
@@ -423,7 +424,7 @@ impl Partition {
         // solver owns. A TORN rail changes the story: the "pin" is a balance
         // unknown, and the device's current belongs in the rail's KCL books
         // (a decoupling cap on a balance-torn supply is the canonical case;
-        // dropping it is precisely the strand hazard the old detector refused
+        // dropping it is precisely the strand hazard the detector refuses
         // rails over). Each such device becomes its own island whose every
         // node is a boundary input, so the orchestrator solves it against
         // trial voltages and reads its boundary current like any block's.

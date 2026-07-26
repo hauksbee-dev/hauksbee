@@ -3,8 +3,8 @@
 //! Input: the [`ConductionGraph`](super::conduction::ConductionGraph)'s
 //! islands and sense edges. Output: the *stage DAG*, the partial order that
 //! licenses solving upstream islands first and replaying their boundary
-//! waveforms into downstream islands as sources (the free tear of
-//! `docs/dev-plans/02-tearing-architecture.md` §1).
+//! waveforms into downstream islands as sources: the free tear, the weakest
+//! and most widely applicable of the tear kinds.
 //!
 //! ## The proof obligation
 //!
@@ -12,9 +12,9 @@
 //! no conduction path B→A (impossible by construction, distinct conduction
 //! components share no conduction path at all) and no sense edge B→A (a
 //! comparator in A watching a node in B would make the coupling
-//! bidirectional). This is the Tarski STEP-0 gate as an algorithm
-//! (`docs/learn/tarski-saga.md` §2a fact 3: the exhaustive net sweep that
-//! proved hidden and output comparator families disjoint). Here the sweep is
+//! bidirectional). This is the Tarski STEP-0 gate as an algorithm: the
+//! exhaustive net sweep that proves the hidden and output comparator families
+//! disjoint. Here the sweep is
 //! a strongly-connected-components pass over the island digraph: islands in
 //! the same SCC are genuinely coupled and stay fused into one solve;
 //! condensation edges between distinct components are one-directional *by
@@ -279,9 +279,9 @@ mod tests {
         (inp, out)
     }
 
-    /// Fixture (a) of 02-tearing-architecture.md §3: two RC stages coupled by
-    /// a comparator select. Expect two groups, stage A before stage B, one
-    /// free tear on the sensed node.
+    /// The canonical free-tear fixture: two RC stages coupled by a comparator
+    /// select. Expect two groups, stage A before stage B, one free tear on the
+    /// sensed node.
     #[test]
     fn comparator_coupling_yields_two_stages_and_a_free_tear() {
         let mut c = Circuit::new();

@@ -8,10 +8,9 @@
 //! records, per torn node, which claim is being made and what tolerance it
 //! carries, so that (a) reports and `--json` can show a user why their board
 //! was torn and how much to trust the result, (b) the validation gates can
-//! assert each tear against its own bar instead of a blanket number
-//! (`docs/dev-plans/08-validation-and-test-campaign.md` section 3), and (c)
+//! assert each tear against its own bar instead of a blanket number, and (c)
 //! analyses that a torn model cannot honestly answer are refused instead of
-//! silently answered wrong. The canonical example of (c) is lore #12: a rail
+//! silently answered wrong. The canonical example of (c): a rail
 //! pinned by a stiff or balance tear can no longer sag, so any
 //! supply-integrity question (brownout, inrush, droop) evaluated on the torn
 //! model would report calm where the real board browns out. Refuse, don't
@@ -36,8 +35,8 @@ use super::rails::{detect_balance_tears, BalanceTearCandidate, RailPolicy, TearM
 use super::stiff::{detect_stiff_candidates, StiffCandidate, StiffPolicy};
 
 /// What kind of tear a node carries. The kinds are ordered by the strength of
-/// their exactness claim; see the vocabulary in
-/// `docs/dev-plans/02-tearing-architecture.md` section 1.
+/// their exactness claim: `Balance` is exact by construction, `Stiff` only
+/// within a measured sag, `Free` only to the capture grid it is replayed on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TearKind {
     /// One scalar KCL equation reconciles the rail per step: exact.
@@ -119,7 +118,8 @@ pub struct TearRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RefusedAnalysis {
     /// Brownout / inrush / droop on a rail that a tear has pinned. The tear
-    /// removed exactly the physics the question asks about (lore #12).
+    /// removed exactly the physics the question asks about: a pinned rail
+    /// cannot sag, so it reports calm where the real board browns out.
     SupplyIntegrityOnTornRail,
 }
 
@@ -507,7 +507,8 @@ mod tests {
         assert_eq!(rec.evidence, Evidence::BalanceEquation);
         assert_eq!(rec.tolerance, ToleranceClaim::RoundOff);
         // The refusal is the point: the torn model must not answer brownout
-        // questions about the rail it pinned (lore #12).
+        // questions about the rail it pinned: pinning removed the sag those
+        // questions are about.
         let err = d
             .certificate
             .permits(RefusedAnalysis::SupplyIntegrityOnTornRail)

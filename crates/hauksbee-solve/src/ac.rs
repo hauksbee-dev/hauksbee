@@ -1034,8 +1034,8 @@ fn stamp_mosfet_ac(
         // Bulk depletion capacitances at the OP, at the internal drain/source.
         // The short test compares ELECTRICAL unknowns, not physical terminals,
         // exactly as the transient stamp does: with rd/rs the internal
-        // drain/source is a distinct unknown, so a netlist body tie no longer
-        // shorts the junction away.
+        // drain/source is a distinct unknown, so a netlist body tie does NOT
+        // short the junction away.
         let bi = layout.node(bulk);
         for (term_i, cbx) in [(d_eff, model.cbd), (s_eff, model.cbs)] {
             if term_i == bi || cbx <= 0.0 {
@@ -1235,8 +1235,8 @@ mod frequency_tests {
 
     #[test]
     fn near_degenerate_span_keeps_fstart_not_fstop() {
-        // R13: fstop within ~1e-9 of fstart used to drop fstart and return a
-        // 1-point sweep starting at fstop. fstart must survive.
+        // R13: an fstop within ~1e-9 of fstart must not collapse the sweep
+        // into a 1-point sweep starting at fstop. fstart must survive.
         let s = AcSpec {
             fstart: 1000.0,
             fstop: 1000.0 * (1.0 + 1e-10),

@@ -1,23 +1,22 @@
 //! Stiff-rail detection: where a balance tear fragments a fused core.
 //!
-//! The shape this hunts is the one that defeated the Tarski monolith
-//! (`docs/learn/tarski-saga.md` §1a): a supply rail fed through
-//! one series impedance, loaded by many nonlinear blocks. Every block couples
+//! The shape this hunts is the one that defeats a monolithic solve of the
+//! Tarski board: a supply rail fed through one series impedance, loaded by
+//! many nonlinear blocks. Every block couples
 //! to every other only through the scalar rail voltage, so the system is
 //! bordered-block-diagonal and tears *exactly* into per-block solves plus one
-//! scalar KCL balance at the rail (the balance tear of
-//! `02-tearing-architecture.md` §1; `partition::analyze_with_tears` and its
-//! `rail_tear.rs` round-off gate are the proven solver-side mechanics this
-//! module decides *when* to use).
+//! scalar KCL balance at the rail (the balance tear;
+//! `partition::analyze_with_tears` and its `rail_tear.rs` round-off gate are
+//! the proven solver-side mechanics this module decides *when* to use).
 //!
-//! ## What replaced the magic numbers
+//! ## Why a cost model and not thresholds
 //!
-//! The first implementation gated tearing on two tuned constants (a nonlinear
-//! fanout of 8, a block-size cap of 600, both calibrated on one board). Here
-//! the decision is a first-order cost model instead, and the old block-size
-//! cap falls out of it: if tearing fails to fragment the core (one block
-//! nearly the whole island), the torn cost is the monolithic cost times the
-//! outer-loop count and the model refuses on its own. No threshold needed.
+//! Gating the tear on tuned constants (a nonlinear fanout bar, a block-size
+//! cap) only ever calibrates to the board it was measured on. The decision
+//! here is a first-order cost model, and a block-size cap falls out of it for
+//! free: if tearing fails to fragment the core (one block nearly the whole
+//! island), the torn cost is the monolithic cost times the outer-loop count
+//! and the model refuses on its own. No threshold needed.
 //!
 //! The model is deliberately crude and says so: per-step Newton cost on an
 //! island of `n` devices is estimated as `n^ALPHA` with `ALPHA = 1.4`, the
@@ -36,7 +35,8 @@
 //! [`TearMotive::ConvergenceEscalation`]: structural guards still apply (an
 //! unsound tear stays refused), but the cost gate is bypassed, because a slow
 //! answer beats no answer. This is the "decompose" rung of the robustness
-//! ladder (`02-tearing-architecture.md` §2.2, §2.6).
+//! ladder: the escalation reached when the plain monolithic solve has already
+//! failed.
 //!
 //! ## Stacked feeds (the flagship's actual shape)
 //!
@@ -48,11 +48,11 @@
 //! a fixpoint. Decisions are then JOINT: every surviving candidate is held
 //! as a boundary while each island's fragmentation is computed once, because
 //! that is the system the multi-rail balance executor actually solves.
-//! Within a cascade every accepted rail now tears, parent and child alike:
+//! Within a cascade every accepted rail tears, parent and child alike:
 //! the balance executor carries the inter-rail shunt term. A parent's KCL
 //! subtracts the current leaving through the shunt toward each accepted child,
 //! whose shunt belongs to no block because it sits between two held rails (see
-//! `orchestrate::balance::RailChannel::children`). The parent no longer has to
+//! `orchestrate::balance::RailChannel::children`). The parent does not have to
 //! stay fused to keep its books straight, so it joins the joint cost
 //! evaluation like any other candidate.
 //!
@@ -66,11 +66,11 @@
 //!
 //! Stranding (the bypass-cap hazard: a device whose conduction terminals
 //! all land in {held rails, pinned, ground} losing its current from every
-//! block's books) is no longer a refusal, because it is no longer possible:
-//! the island analysis gives such devices boundary-only islands whose
-//! currents the balance reads like any block's (`partition.rs`). The old
-//! detector's refusal survives only on the legacy `detect_rail_tears` path,
-//! whose executor predates that fix.
+//! block's books) is not a refusal here, because it cannot happen: the island
+//! analysis gives such devices boundary-only islands whose currents the
+//! balance reads like any block's (`partition.rs`). The refusal survives only
+//! on the legacy `detect_rail_tears` path, whose executor does not carry those
+//! boundary-only currents.
 //!
 //! Long-form how-and-why (motivation, theory, rejected alternatives, the
 //! buried bodies): docs/how-and-why/hauksbee-solve/decompose.md
@@ -287,11 +287,11 @@ pub fn detect_balance_tears(
     // one exception and are excluded from that pass because their currents
     // are the analytic balance terms themselves.
 
-    // Cascade parents now join the joint decision like everyone else: the
+    // Cascade parents join the joint decision like everyone else: the
     // balance executor carries the inter-rail shunt term (a parent's KCL
     // subtracts the current leaving toward each accepted child, whose shunt
     // is in no block; see `orchestrate::balance::RailChannel::children`), so a
-    // parent no longer has to stay fused to keep the books straight. Every
+    // parent does not have to stay fused to keep the books straight. Every
     // surviving candidate is held jointly and fragments once.
     let final_kept: Vec<usize> = kept;
 
@@ -586,9 +586,9 @@ mod tests {
         }
     }
 
-    /// The old TEAR_MAX_BLOCK_DEVICES=600 cap, now emergent: an "array" that
-    /// is one giant block plus a couple of trivial ones does not fragment, so
-    /// the cost model refuses without any size threshold.
+    /// A block-size cap is emergent, not configured: an "array" that is one
+    /// giant block plus a couple of trivial ones does not fragment, so the
+    /// cost model refuses without any size threshold.
     #[test]
     fn unfragmented_core_refuses_on_cost() {
         let (mut c, rail) = shunt_array(2);
@@ -622,10 +622,10 @@ mod tests {
         assert!(esc[0].torn(), "{:?}", esc[0].decision);
     }
 
-    /// The bypass-cap shape that used to refuse: with boundary-only islands
-    /// carrying the cap's current into the balance books (`partition.rs`),
-    /// the rail now tears. The numerical proof that this is exact (not just
-    /// permitted) is the staged executor's
+    /// The bypass-cap shape a naive detector refuses: with boundary-only
+    /// islands carrying the cap's current into the balance books
+    /// (`partition.rs`), the rail tears. The numerical proof that this is
+    /// exact, and not merely permitted, is the staged executor's
     /// `bypass_cap_on_torn_rail_matches_monolith` gate.
     #[test]
     fn ground_bypass_cap_no_longer_refuses() {
@@ -651,11 +651,11 @@ mod tests {
     /// The flagship's founding shape (analysis-probe finding 1): a supply
     /// CASCADE, source -> R1 -> MID -> R2 -> INNER, with the big array on
     /// INNER and a couple of loads on MID. Single-hop detection never
-    /// reached INNER; transitive discovery must. Now that the balance executor
-    /// carries the inter-rail shunt term, BOTH rails tear: they share a
-    /// conduction island, so they are decided jointly, and the joint cost on
-    /// this fixture (26 small blocks vs one fused core) clears the outer-loop
-    /// overhead. The parent no longer defers.
+    /// reaches INNER; transitive discovery must. The balance executor carries
+    /// the inter-rail shunt term, so BOTH rails tear: they share a conduction
+    /// island, so they are decided jointly, and the joint cost on this fixture
+    /// (26 small blocks vs one fused core) clears the outer-loop overhead. The
+    /// parent does not defer.
     #[test]
     fn stacked_cascade_reaches_and_tears_the_inner_rail() {
         let mut c = Circuit::new();

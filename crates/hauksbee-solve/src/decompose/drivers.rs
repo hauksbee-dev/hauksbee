@@ -1,11 +1,10 @@
 //! The driver pass: which upstream groups are absorbed instead of torn.
 //!
-//! The bug that forced this pass into existence (`docs/learn/tarski-saga.md`
-//! §1c, STEP 1): the first exact tear correctly excluded switch-control nets
-//! from conduction reachability, and thereby also excluded the little
-//! Thevenin drivers (`Vdrv` behind `Rdrv`) that *held* those nets at their
-//! latched values. The sense nets floated, every magnitude switch sat at its
-//! band centre, and no synapse current reached any membrane: a dead board,
+//! The failure this pass exists to prevent: a tear that correctly excludes
+//! switch-control nets from conduction reachability thereby also excludes the
+//! little Thevenin drivers (`Vdrv` behind `Rdrv`) that *hold* those nets at
+//! their latched values. The sense nets float, every magnitude switch sits at
+//! its band centre, and no synapse current reaches any membrane: a dead board,
 //! from dropping two-device islands.
 //!
 //! ## Why absorption is exact, and when
@@ -391,7 +390,7 @@ mod tests {
 
     /// A SELF-SENSING upstream (a relaxation oscillator resetting itself)
     /// must never be absorbed: its output is not a function of its inputs
-    /// alone, so replicas could diverge (lore #5).
+    /// alone, so replicas could diverge.
     #[test]
     fn self_sensing_driver_is_not_absorbed() {
         let mut c = Circuit::new();
