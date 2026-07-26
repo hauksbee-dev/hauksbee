@@ -347,7 +347,7 @@ impl RobustnessLadder {
 
     /// Is this strategy granted?
     pub fn has(&self, s: Strategy) -> bool {
-        self.steps.contains(&Some(s))
+        self.steps.iter().any(|&x| x == Some(s))
     }
 
     /// Revoke a strategy, preserving the order of the rest. The per-island

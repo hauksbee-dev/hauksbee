@@ -1368,7 +1368,7 @@ mod tests {
             sect.verdict
         );
         // Folded into a sections vec, it raises serious/total and denies "healthy".
-        let sections = [sect];
+        let sections = vec![sect];
         let serious_n: usize = sections
             .iter()
             .map(|s| s.findings.iter().filter(|f| f.level == "serious").count())

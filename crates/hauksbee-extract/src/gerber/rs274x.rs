@@ -727,7 +727,7 @@ impl<'a> Plotter<'a> {
         // which is even, i.e. an outer).
         let group_of: Vec<usize> = (0..n)
             .map(|i| {
-                if encloses[i].len().is_multiple_of(2) {
+                if encloses[i].len() % 2 == 0 {
                     i
                 } else {
                     encloses[i]

@@ -1097,7 +1097,7 @@ fn run_one(
                 if t_ms + 1e-9 >= thr {
                     for (name, &v) in &frame.net_voltages {
                         let key = (name.clone(), thr.to_bits());
-                        let w = windows.entry(key).or_default();
+                        let w = windows.entry(key).or_insert_with(NetWindow::new);
                         w.observe(v);
                         if let Some(&(mn, mx)) = vext.get(name) {
                             // Widen the window with the extremes but keep last_v

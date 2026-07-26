@@ -111,11 +111,11 @@ fn build_pcbdoc(streams: &[(&str, Vec<u8>)]) -> Vec<u8> {
         s.write_all(&[0u8; 24]).unwrap();
     }
     for (section, body) in streams {
-        cf.create_storage(format!("/{section}")).unwrap();
-        let mut data = cf.create_stream(format!("/{section}/Data")).unwrap();
+        cf.create_storage(&format!("/{section}")).unwrap();
+        let mut data = cf.create_stream(&format!("/{section}/Data")).unwrap();
         data.write_all(body).unwrap();
         drop(data);
-        let mut hdr = cf.create_stream(format!("/{section}/Header")).unwrap();
+        let mut hdr = cf.create_stream(&format!("/{section}/Header")).unwrap();
         hdr.write_all(&1u32.to_le_bytes()).unwrap();
     }
     cf.flush().unwrap();
