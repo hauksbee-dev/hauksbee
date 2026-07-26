@@ -3,12 +3,12 @@
 //!
 //! The old scheduler enabled a pin's driver on its first firmware edge (and
 //! from `pins_configured_output`) but never released it, so an open-drain bus
-//! hand-off left the net latched at the last driven voltage forever — the
+//! hand-off left the net latched at the last driven voltage forever; the
 //! exact "latched bus" failure the AVR backend's DDR hook comments say was
 //! fixed on the observation side.
 //!
 //! The probe firmware (testdata/firmware/gpio_release) drives PC2 (Nano A2)
-//! HIGH for ~28 ms, then sets DDRC back to input while leaving PORTC2 = 1 —
+//! HIGH for ~28 ms, then sets DDRC back to input while leaving PORTC2 = 1,
 //! deliberately emitting NO PORT edge, so the release is visible only through
 //! the direction report. With a 10k pull-down on the net, the release must
 //! let the net fall to ~0 V; a latched driver would hold it at 5 V.

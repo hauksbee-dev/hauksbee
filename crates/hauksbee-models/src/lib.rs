@@ -1,4 +1,4 @@
-//! `hauksbee-models` — PCB component model library.
+//! `hauksbee-models`, PCB component model library.
 //!
 //! Given a component identified by lib_id, value, footprint, or part-number,
 //! this crate resolves a simulation model definition. Physics arrives by five
@@ -127,7 +127,7 @@ pub enum SourceLayer {
     Builtin,
     /// An installed model pack (`~/.hauksbee/packs/<name>@<version>/`).
     Pack,
-    /// The legacy standing user model directory (`~/.hauksbee/models`) — where
+    /// The legacy standing user model directory (`~/.hauksbee/models`), where
     /// datasheet extraction writes.
     UserDir,
     /// The user's own config model directory (`~/.config/hauksbee/models`),
@@ -316,9 +316,9 @@ impl ModelLibrary {
     /// in explicit layer order (lowest to highest priority):
     ///   0. the embedded builtin db,
     ///   1. installed packs (`~/.hauksbee/packs`, recorded in `packs.toml`),
-    ///   2. `~/.hauksbee/models`        — where datasheet extraction writes,
-    ///   3. `~/.config/hauksbee/models` — the user's own custom models,
-    ///   4. each `extra_dirs` entry    — e.g. a `--models-dir` flag, highest.
+    ///   2. `~/.hauksbee/models`, where datasheet extraction writes,
+    ///   3. `~/.config/hauksbee/models`; the user's own custom models,
+    ///   4. each `extra_dirs` entry, e.g. a `--models-dir` flag, highest.
     /// A custom behavioural part dropped into one of these loads without
     /// recompiling. Directory and pack load errors are warned to stderr, not
     /// fatal, so a single malformed user file never breaks the whole library.
@@ -361,7 +361,7 @@ impl ModelLibrary {
     /// survive one bad installed pack), but nothing is silent either:
     ///   - a recorded pack whose dir fails validation is skipped with a warning;
     ///   - two packs shipping the same model id is a same-layer conflict,
-    ///     reported naming both packs (the plan forbids resolving it quietly —
+    ///     reported naming both packs (the plan forbids resolving it quietly,
     ///     within a layer only specificity orders entries, so identical ids
     ///     would tie on match rules and win by load order, i.e. by accident).
     pub fn load_packs(&mut self, store: &PackStore) -> Vec<String> {
@@ -444,7 +444,7 @@ impl ModelLibrary {
         let mut errors = Vec::new();
         if !dir.exists() {
             // The auto-discovered `~/.hauksbee` / `~/.config` dirs legitimately
-            // may not exist — skip them silently. But `--models-dir` (and the CI
+            // may not exist, skip them silently. But `--models-dir` (and the CI
             // equivalent) is an EXPLICIT user-typed path: a missing one is a
             // typo that would otherwise load zero models with no signal, so the
             // user's whole custom set silently never applies. Report it.
@@ -504,19 +504,19 @@ impl ModelLibrary {
     /// Resolve a component query to a model entry.
     ///
     /// The winner is the matching entry with the highest
-    /// ([`SourceLayer::priority`], specificity score) pair — the layer is the
+    /// ([`SourceLayer::priority`], specificity score) pair; the layer is the
     /// *first* key of the comparison, so a user-dir entry beats a pack entry
     /// beats a builtin entry no matter how the specificity scores fall.
     /// Within a layer the specificity score orders entries; a score tie is
     /// broken by regex constrainedness ([`CompiledEntry::regex_specificity`]),
     /// so an exact-literal override (`^1N4004$`) beats the family pattern
     /// (`^1N400[1-7]$`) it carves out of. A remaining tie is broken by the
-    /// lexicographically-smallest entry id — never by load order, so
+    /// lexicographically-smallest entry id, never by load order, so
     /// resolution is deterministic regardless of file order. User SPICE cards
     /// are layer 40, the highest, and match by exact card name, so they are
     /// checked before the entry scan.
     pub fn resolve(&self, q: &ComponentQuery) -> Resolution {
-        // Layer 40: SPICE cards — match by card name against value and MPN.
+        // Layer 40: SPICE cards, match by card name against value and MPN.
         if let Some(card) = self.find_spice_match(q) {
             return self.resolution_from_spice(card, q.clone());
         }
@@ -595,7 +595,7 @@ impl ModelLibrary {
             // block (an omitted section, or a typo'd key like `mch_re` that serde
             // silently drops) matches EVERY component at specificity 0. Since the
             // user layer outranks pack/builtin in `resolve`'s sort key, one such
-            // stray entry would silently rebind the whole board to it — a
+            // stray entry would silently rebind the whole board to it, a
             // wholesale-wrong simulation with no diagnostic. The schema documents
             // "at least one rule must be populated"; enforce it here.
             if entry.r#match.is_empty() {
@@ -693,7 +693,7 @@ fn score_to_confidence(score: u32) -> Confidence {
 }
 
 /// Infer a [`ComponentKind`] from a SPICE `.model` type string. Returns `None`
-/// for a type the resolver cannot model — an unknown/unsupported type is NOT
+/// for a type the resolver cannot model, an unknown/unsupported type is NOT
 /// silently downgraded to `Passive` (that produced a wrong `Exact` match that
 /// shadowed the real part). Genuine passive model types (R/C/L) still map to
 /// `Passive`.
@@ -748,7 +748,7 @@ impl std::fmt::Display for ResolutionReport {
                 Some(m) => (m.id.as_str(), res.confidence.to_string()),
                 None    => ("UNRESOLVED", "unresolved".to_string()),
             };
-            // Truncate on CHAR boundaries — a byte slice like `&val_s[..24]`
+            // Truncate on CHAR boundaries, a byte slice like `&val_s[..24]`
             // panics when a multibyte char (e.g. 'µ' in a "µF" value) straddles
             // the cut point.
             let clip = |s: &str, n: usize| -> String { s.chars().take(n).collect() };
@@ -938,7 +938,7 @@ mod tests {
     }
 
     /// U3: an explicit `--models-dir` pointing at a nonexistent path is a
-    /// user typo — it must produce a loud error (so the CLI's eprintln fires),
+    /// user typo; it must produce a loud error (so the CLI's eprintln fires),
     /// not silently load zero models. The auto-discovered user dirs, by
     /// contrast, may legitimately be absent and must stay silent.
     #[test]

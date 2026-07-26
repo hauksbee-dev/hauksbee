@@ -259,7 +259,7 @@ fn via_outside_zone_is_clean() {
 fn unfilled_multilayer_zone_outline_is_kept_on_every_layer() {
     // R11: a zone declared over BOTH copper layers with `(layers "F.Cu" "B.Cu")`
     // and no computed fill. The outline must be kept on each layer for clearance
-    // — the old code read only a single `(layer ...)`, found none, and dropped
+    //; the old code read only a single `(layer ...)`, found none, and dropped
     // the whole zone, so a track crossing the pour boundary on B.Cu went unseen.
     // A track on net A crossing the left outline edge (x=10) on B.Cu now shorts
     // against the GND zone edge.
@@ -423,7 +423,7 @@ fn kicad_pro_rules_apply_assignments_and_wildcard_patterns() {
 fn diff_pair_class_with_inherited_clearance_is_kept() {
     // R14: a diff-pair class that leaves `clearance` at 0 (KiCad's "inherit the
     // board default") must NOT be discarded. The old `clearance_mm > 0` gate
-    // dropped it wholesale — losing the diff_pair_gap AND making its nets fall
+    // dropped it wholesale, losing the diff_pair_gap AND making its nets fall
     // back to the wider default, so the pair at its own gap was falsely flagged.
     let pro = r#"{
       "net_settings": {
@@ -564,7 +564,7 @@ fn mask_only_pad_carries_no_copper() {
 #[test]
 fn pad_without_layers_list_still_gets_all_copper() {
     // No (layers ...) list at all: keep the through-hole-style fallback that
-    // places the pad on every copper layer — here it shorts a B.Cu track.
+    // places the pad on every copper layer, here it shorts a B.Cu track.
     let items = r#"
   (footprint "R" (at 5 0)
     (property "Reference" "R1")

@@ -4,12 +4,12 @@
 //!
 //! Two confidence layers:
 //!
-//! 1. **Extraction + DRC sanity** — every real board extracts a plausible
+//! 1. **Extraction + DRC sanity**, every real board extracts a plausible
 //!    number of nets / components / netted pins, and its geometric DRC reports
 //!    ZERO true shorts (these are shipped or near-shipped designs). Clearance
 //!    violations are expected on dense boards and reported, not asserted away.
 //!
-//! 2. **Cross-validation against KiCad's Altium importer (ground truth)** —
+//! 2. **Cross-validation against KiCad's Altium importer (ground truth)**,
 //!    KiCad 9 converts the same `.PcbDoc` to `.kicad_pcb` (committed under
 //!    `kicad_xval/`). We extract that with hauksbee's KiCad path and compare the
 //!    NET PARTITION over shared (refdes, pad) pins: two pins sharing a net in

@@ -147,7 +147,7 @@ fn eagle_populate_no_sets_dnp() {
 }
 
 /// Round-5: a mirrored, rotated Eagle element (`MR90`) must place its pads with
-/// the corpus-validated drc.rs handedness — flip-X then rotate by `-deg`, not
+/// the corpus-validated drc.rs handedness, flip-X then rotate by `-deg`, not
 /// the old `+deg` form that put pads on the wrong side of the origin whenever
 /// the rotation was not a multiple of 180.
 #[test]
@@ -180,7 +180,7 @@ fn eagle_mirrored_rotated_pad_uses_drc_handedness() {
 
 /// Round-7 #5: the spin-prefixed mirror form `SMR90` must be recognised as
 /// mirrored, exactly like `MR90`. `starts_with('M')` missed it (the string
-/// starts with 'S'); `contains('M')` — matching drc.rs — catches it.
+/// starts with 'S'); `contains('M')`, matching drc.rs, catches it.
 #[test]
 fn eagle_spin_mirrored_element_is_recognised_as_mirrored() {
     let packages = r#"
@@ -211,7 +211,7 @@ fn eagle_spin_mirrored_element_is_recognised_as_mirrored() {
 }
 
 /// Round-7 #1: Eagle namespaces packages per <library>. Two libraries each
-/// defining a package named "COMMON" (with different pads) must NOT merge — an
+/// defining a package named "COMMON" (with different pads) must NOT merge, an
 /// element keyed to one library's package must get only that library's pads,
 /// not the concatenation of both.
 #[test]

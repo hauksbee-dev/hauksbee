@@ -16,7 +16,7 @@ fn emit_node(node: &Sexpr, out: &mut String) {
         Sexpr::Token(t) => {
             // Two adjacent bare atoms would merge into one token; that is the
             // only case that genuinely requires an inserted separator (it can
-            // only arise for freshly built nodes — parsed tokens carry their
+            // only arise for freshly built nodes, parsed tokens carry their
             // original trivia). `)x`, `(x`, and `"a"x` all re-parse correctly.
             if t.leading.is_empty() && atoms_would_merge(out) {
                 out.push(' ');

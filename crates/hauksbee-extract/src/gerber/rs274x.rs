@@ -42,8 +42,8 @@ use super::macros::instantiate_macro;
 const ARC_SEGMENTS: usize = 16;
 
 /// Radius (mm) of the small disc a macro flash falls back to when its aperture
-/// macro cannot be instantiated. A fixed physical size — never scaled by the
-/// document's unit factor — so an inch-unit board gets the same 0.25 mm anchor
+/// macro cannot be instantiated. A fixed physical size, never scaled by the
+/// document's unit factor, so an inch-unit board gets the same 0.25 mm anchor
 /// as a millimetre one rather than a 6.35 mm blob.
 const MACRO_FALLBACK_DISC_MM: f64 = 0.25;
 
@@ -179,8 +179,8 @@ struct Plotter<'a> {
     aperture: Option<i32>,
     interp: InterpolationMode,
     /// Inside a G36 region: the accumulated contours. RS-274X 4.10.4 lets one
-    /// region carry several closed contours (each begun by a D02 move) — an
-    /// outer boundary plus holes cut out of it, or several disjoint islands —
+    /// region carry several closed contours (each begun by a D02 move), an
+    /// outer boundary plus holes cut out of it, or several disjoint islands,
     /// so contours are kept SEPARATE; the last entry is the contour currently
     /// being drawn. Flattening them into one ring bridged the pieces with
     /// phantom edges (false shorts across islands, holes filled back in).
@@ -299,8 +299,8 @@ impl<'a> Plotter<'a> {
         }
     }
 
-    /// Close the open step-and-repeat block (if any) by tiling the base cell —
-    /// the primitives appended since the block opened — across the `repeat_x` ×
+    /// Close the open step-and-repeat block (if any) by tiling the base cell,
+    /// the primitives appended since the block opened, across the `repeat_x` ×
     /// `repeat_y` grid at the I/J step. The base copy at cell (0,0) is already in
     /// `out`; only the other cells are cloned, each translated by its grid
     /// offset. Without this the repeated copies of a panelized/arrayed layer
@@ -359,8 +359,8 @@ impl<'a> Plotter<'a> {
                 if self.region.is_some() {
                     // Region contour: collect the boundary vertices. A segment
                     // drawn under circular interpolation (G02/G03) contributes
-                    // its flattened arc — the same centre/sweep geometry a
-                    // stroked arc sweeps — NOT just its chord: chord-collapsing
+                    // its flattened arc; the same centre/sweep geometry a
+                    // stroked arc sweeps, NOT just its chord: chord-collapsing
                     // turned a round pour drawn as two semicircles into a
                     // zero-area polygon, vanishing its copper entirely.
                     let seg: Vec<(f64, f64)> = match self.interp {
@@ -424,7 +424,7 @@ impl<'a> Plotter<'a> {
             | Some(Aperture::Obround(Rectangular { x, y, .. })) => x.min(*y) * self.to_mm,
             // Unknown aperture (polygon/macro/undefined): a fixed 0.1 mm hairline,
             // enough to connect endpoints. This is a physical millimetre size and
-            // must NOT be scaled by `to_mm` — on an inch-unit file (`%MOIN%`,
+            // must NOT be scaled by `to_mm`, on an inch-unit file (`%MOIN%`,
             // to_mm=25.4) `0.1 * to_mm` = 2.54 mm, a fat stroke that union-merges
             // adjacent copper into a false short (the same unit-scaling hazard the
             // MACRO_FALLBACK_DISC_MM constant is documented to avoid).
@@ -495,7 +495,7 @@ impl<'a> Plotter<'a> {
                             // support): fall back to a small disc so the flash
                             // still anchors a pad rather than vanishing. The
                             // radius is a fixed physical size (mm); `cx`/`cy` are
-                            // already mm, so it must NOT be scaled by `to_mm` —
+                            // already mm, so it must NOT be scaled by `to_mm`,
                             // doing so bloated the anchor to 6.35 mm (0.25 inch)
                             // on an inch-unit file, big enough to merge adjacent
                             // copper into one net.
@@ -568,7 +568,7 @@ impl<'a> Plotter<'a> {
     }
 
     /// The I/J arc offset of a circular D01, scaled to board millimetres
-    /// ((0, 0) when the offset — or either axis — is absent).
+    /// ((0, 0) when the offset, or either axis, is absent).
     fn offset_mm(&self, offset: &Option<CoordinateOffset>) -> (f64, f64) {
         offset
             .as_ref()
@@ -583,7 +583,7 @@ impl<'a> Plotter<'a> {
 
     /// Resolve a circular D01's geometry: centre, radius, start angle and
     /// signed sweep, honouring the quadrant mode. This is the ONE place the
-    /// centre/sweep math lives — the stroked-arc path (`push_arc`) and the
+    /// centre/sweep math lives; the stroked-arc path (`push_arc`) and the
     /// region-contour path both flatten from these numbers, so a pour boundary
     /// arc lands on byte-identical points to the same arc drawn as a track.
     /// `None` when the radius degenerates (centre on the start point): the
@@ -603,7 +603,7 @@ impl<'a> Plotter<'a> {
             // G74: I/J are unsigned magnitudes, so the true centre is one of the
             // four ±I,±J offsets from the start. Per RS-274X §4.5, pick the
             // candidate whose start- and end-radius agree and whose sweep (in
-            // the requested direction) is <= 90 degrees — the single-quadrant
+            // the requested direction) is <= 90 degrees; the single-quadrant
             // guarantee. Fall back to the multi-quadrant formula if none fits.
             self.single_quadrant_center(sx, sy, ex, ey, ox, oy, ccw)
                 .unwrap_or((sx + ox, sy + oy))
@@ -633,7 +633,7 @@ impl<'a> Plotter<'a> {
     /// The flattened arc: `ARC_SEGMENTS` points sampled from just past the
     /// start through the endpoint (the start itself is NOT included, so the
     /// samples chain onto a path that already holds it). A degenerate radius
-    /// yields just the endpoint — the chord.
+    /// yields just the endpoint; the chord.
     #[allow(clippy::too_many_arguments)]
     fn arc_samples(
         &self,
@@ -680,7 +680,7 @@ impl<'a> Plotter<'a> {
         let Some(contours) = self.region.take() else {
             return;
         };
-        // A clear-polarity region is a cut-out, not copper — dropping it
+        // A clear-polarity region is a cut-out, not copper, dropping it
         // matches the draw/flash handling and the module's polarity
         // contract. Materializing it would union nets across a gap.
         if !self.region_dark {
@@ -705,10 +705,10 @@ impl<'a> Plotter<'a> {
         }
         // Several contours in one region (RS-274X 4.10.4): group them into the
         // physically-connected pieces of copper they fill, because the
-        // connectivity tracer unions per PRIMITIVE — two disjoint islands
+        // connectivity tracer unions per PRIMITIVE, two disjoint islands
         // sharing one primitive would falsely short their nets. Nesting depth
         // (how many other contours enclose a contour) classifies each one: an
-        // even-depth contour is an outer boundary — its own piece of copper —
+        // even-depth contour is an outer boundary; its own piece of copper,
         // and an odd-depth contour is a hole cut out of its immediate
         // (depth-1) parent. Legal region contours never cross, so any single
         // vertex is a valid containment witness. An island nested inside a
@@ -725,7 +725,7 @@ impl<'a> Plotter<'a> {
             })
             .collect();
         // Each contour's emit group: an outer owns itself; a hole belongs to
-        // its immediate parent — the DEEPEST contour enclosing it (depth-1,
+        // its immediate parent; the DEEPEST contour enclosing it (depth-1,
         // which is even, i.e. an outer).
         let group_of: Vec<usize> = (0..n)
             .map(|i| {
@@ -903,7 +903,7 @@ M02*
 
     #[test]
     fn clear_polarity_region_is_dropped() {
-        // R6: a region drawn under LPC (clear) is a cut-out, not copper — it
+        // R6: a region drawn under LPC (clear) is a cut-out, not copper; it
         // must not materialize as an additive Region primitive (which would
         // union nets across the gap). A dark region still does.
         let dark = parse_layer(region_layer("dark")).unwrap();
@@ -956,8 +956,8 @@ M02*
     fn region_arc_segment_is_flattened_not_chorded() {
         // A filled circle drawn as a G36 region of two G03 semicircles (centre
         // at the origin, radius 1 mm). The old region branch recorded only each
-        // D01's ENDPOINT — ignoring the circular interpolation mode and the I/J
-        // offset — so the contour collapsed to the degenerate chord polygon
+        // D01's ENDPOINT, ignoring the circular interpolation mode and the I/J
+        // offset, so the contour collapsed to the degenerate chord polygon
         // [(-1,0),(1,0),(-1,0)]: zero area, whole pour vanished from
         // connectivity (false OPEN for anything connecting through it).
         let g = "\
@@ -1006,7 +1006,7 @@ M02*
         // each contour begins with a D02 move): [0,5]x[0,5] and [95,100]x[0,5],
         // 90 mm apart. The old flat contour vector never split on the second
         // D02, dropped that contour's start vertex, and emitted ONE polygon
-        // with a phantom bridge edge — reading two electrically-isolated pads
+        // with a phantom bridge edge, reading two electrically-isolated pads
         // (one per island) onto the same net: a false SHORT.
         let g = "\
 %FSLAX46Y46*%
@@ -1067,7 +1067,7 @@ M02*
         // [8,12]x[8,12] as a second contour. The ring is copper; the hole
         // interior is NOT. The old flat concatenation bridged the two contours
         // and dropped the hole's start vertex, so the two non-coincident bridge
-        // edges enclosed a sliver of RING copper — (0,0)-(12,8)-(8,8) — whose
+        // edges enclosed a sliver of RING copper, (0,0)-(12,8)-(8,8), whose
         // parity read OUTSIDE (false open through the ring).
         let g = "\
 %FSLAX46Y46*%
@@ -1114,7 +1114,7 @@ M02*
 
     #[test]
     fn step_and_repeat_replicates_the_base_cell() {
-        // R14: a %SRX2Y1I10J0*% block flashing one pad must produce TWO pads —
+        // R14: a %SRX2Y1I10J0*% block flashing one pad must produce TWO pads,
         // the base copy at (0,0) and a repeated copy 10 mm along x. The old
         // plotter dropped every StepAndRepeat command, so the repeated copies
         // (all copper/pads but the first) vanished from a panelized layer.
@@ -1149,7 +1149,7 @@ M02*
     fn inch_unit_macro_fallback_disc_is_a_fixed_physical_size() {
         // R14: when an aperture macro can't be instantiated (here a Circle whose
         // diameter references an undefined variable), the flash falls back to a
-        // small anchor disc. Its radius is a fixed 0.25 mm — NOT scaled by the
+        // small anchor disc. Its radius is a fixed 0.25 mm, NOT scaled by the
         // document's unit factor. On an inch board (to_mm = 25.4) the old
         // `0.25 * to_mm` bloated it to 6.35 mm, big enough to merge nets.
         let g = "\
@@ -1177,9 +1177,9 @@ M02*
     #[test]
     fn inch_unit_unknown_aperture_stroke_is_a_fixed_hairline() {
         // R40: the fallback stroke width for a non-circle/rect/obround aperture was
-        // `0.1 * to_mm`. On an inch board (to_mm = 25.4) that is 2.54 mm — a fat
+        // `0.1 * to_mm`. On an inch board (to_mm = 25.4) that is 2.54 mm, a fat
         // capsule (1.27 mm radius) that union-merges adjacent copper into a false
-        // short — not the intended 0.1 mm hairline. The width is a fixed physical
+        // short, not the intended 0.1 mm hairline. The width is a fixed physical
         // mm and must not be unit-scaled (same rule as MACRO_FALLBACK_DISC_MM).
         // A polygon aperture (P) hits the unknown-aperture fallback arm.
         let g = "\
@@ -1211,7 +1211,7 @@ M02*
     fn single_line_aperture_macro_survives_normalization() {
         // A single-line aperture macro packs its primitives with '*'
         // separators. The block splitter must not treat them as independent
-        // extended codes and collapse the macro to an empty def — that shrinks
+        // extended codes and collapse the macro to an empty def, that shrinks
         // the pad to a fallback disc. AMBOX is a 2×2 CenterLine rectangle.
         let g = "\
 %FSLAX46Y46*%

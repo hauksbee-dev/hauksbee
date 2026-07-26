@@ -147,7 +147,7 @@ pub struct Spec {
     /// overlay performs post-bind structural surgery.
     #[serde(default)]
     pub asbuilt: Option<PathBuf>,
-    /// Optional MCU-kind note. Purely informational — nothing reads it: the
+    /// Optional MCU-kind note. Purely informational, nothing reads it: the
     /// binder detects the MCU from the BOARD's part value via the model
     /// library's `[[models]] kind = "mcu"` routing entries (builtin, user
     /// model dirs, or `--models-dir`), and the resulting `backend:part`
@@ -324,7 +324,7 @@ impl AcConfig {
         // them is false, so `fstop <= fstart` and `fstart <= 0` both pass for a
         // non-finite bound. That flows into AcSpec::frequencies() where
         // `(fstop/fstart).log(base)` becomes inf and the step count saturates to
-        // usize::MAX — a `with_capacity` overflow panic (debug) or a bogus
+        // usize::MAX, a `with_capacity` overflow panic (debug) or a bogus
         // inf-Hz sweep (release). Reject non-finite bounds up front, matching the
         // finiteness guards on duration_ms/frame_ms/after_ms/freq_hz.
         if !self.fstart.is_finite() || !self.fstop.is_finite() {
@@ -508,7 +508,7 @@ impl PeripheralSpec {
                 self.id, self.kind
             )));
         }
-        // A vcd_sink logs the signals named in `nets` — and the runtime reads
+        // A vcd_sink logs the signals named in `nets`, and the runtime reads
         // ONLY `p.nets` (never `net`/`ref`/`net_a`). A singular `net = "CLK"` (the
         // natural mistake, since every other control uses `net`) would validate
         // here and then log an EMPTY waveform with no diagnostic. Require `nets`.
@@ -524,7 +524,7 @@ impl PeripheralSpec {
 
 impl SensorAttach {
     /// Structural validation: one of `spec` / `spec_file` must be present.
-    /// Does NOT parse the sensor TOML — that happens in the runner so parse
+    /// Does NOT parse the sensor TOML, that happens in the runner so parse
     /// errors are attributed to the sensor id and include context.
     pub(crate) fn validate(&self) -> Result<(), SpecError> {
         match (&self.spec, &self.spec_file) {
@@ -606,7 +606,7 @@ pub struct ToleranceRule {
     /// Tolerance as a percentage of nominal (10.0 = ±10%).
     pub percent: f64,
     /// `"uniform"` (default) or `"gaussian"` (sigma = percent/3, truncated at
-    /// the bound — the standard EDA 3-sigma convention).
+    /// the bound; the standard EDA 3-sigma convention).
     #[serde(default)]
     pub distribution: Option<String>,
 }
@@ -686,7 +686,7 @@ pub struct Assertion {
     pub min: Option<f64>,
     #[serde(default)]
     pub max: Option<f64>,
-    /// Only sample at/after this time (ms) — lets the rail settle first.
+    /// Only sample at/after this time (ms), lets the rail settle first.
     #[serde(default)]
     pub after_ms: Option<f64>,
 
@@ -843,7 +843,7 @@ impl Spec {
         }
         // TOML accepts `inf`/`nan` floats, so a non-finite time field must be
         // rejected explicitly: `duration_ms = inf` passes `<= 0.0` yet makes the
-        // frame loop `t < total_s` always true — an infinite CI hang — and `nan`
+        // frame loop `t < total_s` always true, an infinite CI hang, and `nan`
         // runs zero frames so every assertion fails "never sampled" (confusing
         // all-RED). Check finiteness before the sign.
         if !self.duration_ms.is_finite() || self.duration_ms <= 0.0 {
@@ -867,7 +867,7 @@ impl Spec {
         // An assertion's `scenario` scope must name a declared [[scenario]] id.
         // Without this, an unknown scope would silently fall back to a window
         // starting at t=0 and the assertion would be measured over the WHOLE
-        // run instead of the scenario window it claims to judge — a check that
+        // run instead of the scenario window it claims to judge, a check that
         // never fails the way the spec author intended. Same fail-loud pattern
         // as the unknown-net / unknown-profile validation.
         for a in &self.asserts {
@@ -901,7 +901,7 @@ impl Spec {
             }
         }
         // A `peripheral` assertion's `id` must name a declared [[peripheral]] or
-        // [[sensor]] — otherwise a typo fails only after a full co-sim runs (or
+        // [[sensor]], otherwise a typo fails only after a full co-sim runs (or
         // silently reads nothing), the same class the scenario-scope check closes.
         for a in &self.asserts {
             if a.kind != "peripheral" {
@@ -1134,7 +1134,7 @@ impl SupplySpec {
         // non-finite volts poisons every node it touches, a `soc` outside 0..1
         // reads a bogus point off the OCV curve, and `cells = 0` silently
         // collapses the pack to 0 V. TOML accepts `nan`/`inf`, so guard the
-        // range here at load — fail-loud — rather than shipping garbage into a
+        // range here at load, fail-loud, rather than shipping garbage into a
         // run. Errors name the field and net so a spec typo is obvious.
         let net = &self.net;
         let finite = |field: &str, v: Option<f64>| -> Result<(), SpecError> {
@@ -1321,7 +1321,7 @@ impl Assertion {
                 // The `bytes` and `field` forms are mutually exclusive:
                 // check_peripheral evaluates `bytes` first and RETURNS, so a
                 // spec that sets both silently drops the field/min/max constraint
-                // (and label() reports only the bytes check) — a false green if
+                // (and label() reports only the bytes check), a false green if
                 // the field bound is violated. Reject it, like toggle's
                 // freq_hz+min_toggles rejection above.
                 if self.bytes.is_some() && self.field.is_some() {
@@ -1358,8 +1358,8 @@ impl Assertion {
                 // The converse: a `recover_to` (recovery intent) is only evaluated
                 // by check_rail_window when `recover_within_ms` is also present
                 // (its match binds all three). Without it the recovery check is a
-                // silent no-op — accepted only because a `min`/`max` also happens
-                // to be set — so the author's recovery constraint never runs. Fail
+                // silent no-op, accepted only because a `min`/`max` also happens
+                // to be set, so the author's recovery constraint never runs. Fail
                 // loud instead of passing a spec whose recovery clause does nothing.
                 if self.recover_to.is_some() && self.recover_within_ms.is_none() {
                     return Err(SpecError::Invalid(
@@ -1371,7 +1371,7 @@ impl Assertion {
                 // reads it inside guards that require `for_max_ms` or
                 // `recover_within_ms` as a partner. A bare `dip_below` alongside a
                 // `min`/`max` (which satisfies has_check) is therefore never
-                // evaluated — the author's dip threshold does nothing. Require it
+                // evaluated; the author's dip threshold does nothing. Require it
                 // to carry a partner that actually consumes it.
                 if self.dip_below.is_some()
                     && self.for_max_ms.is_none()
@@ -1742,7 +1742,7 @@ min = 3.0
     #[test]
     fn toggle_with_both_freq_and_count_is_rejected() {
         // Round-29: check_toggle evaluates min_toggles and ignores freq_hz when
-        // both are set, yet the label reports the ~N Hz frequency form — a spec
+        // both are set, yet the label reports the ~N Hz frequency form, a spec
         // that silently checks a count while claiming a frequency. The two forms
         // are mutually exclusive; validation must reject both-at-once up front.
         let src = r#"
@@ -1838,7 +1838,7 @@ min = 3.0
     #[test]
     fn nan_after_ms_is_rejected_not_panicked() {
         // R33: a NaN `after_ms` made the threshold-bucket sort's `partial_cmp`
-        // return None, so `.unwrap()` PANICKED — a crash instead of the crate's
+        // return None, so `.unwrap()` PANICKED, a crash instead of the crate's
         // fail-loud SpecError. Assertion::validate now rejects a non-finite window.
         let spec = spec_from(
             r#"
@@ -1867,7 +1867,7 @@ after_ms = nan
         // R35: check_rail_window only evaluates a recovery when all three of
         // dip_below/recover_to/recover_within_ms are present. A spec that sets a
         // recovery intent (dip_below + recover_to) but omits recover_within_ms
-        // used to be ACCEPTED whenever a min/max was also present — the recovery
+        // used to be ACCEPTED whenever a min/max was also present; the recovery
         // clause then silently never ran (a false GREEN on the recovery
         // dimension). Validation must now reject the incomplete recovery spec.
         let spec = spec_from(
@@ -1917,7 +1917,7 @@ recover_within_ms = 5.0
         // R36: the dip_below sibling of the R35 recover_to gap. check_rail_window
         // only reads dip_below inside guards that require for_max_ms or
         // recover_within_ms, so a bare dip_below alongside a min/max (which
-        // satisfies has_check) silently does nothing — a rail at 3.1 V passes
+        // satisfies has_check) silently does nothing, a rail at 3.1 V passes
         // GREEN against a dip_below=3.2 the author wrote. Validation must reject
         // the partnerless dip_below.
         let spec = spec_from(
@@ -1963,7 +1963,7 @@ for_max_ms = 2.0
     #[test]
     fn vcd_sink_with_singular_net_is_rejected() {
         // R42: attach_peripherals reads a vcd_sink's logged signals ONLY from
-        // `p.nets`. A singular `net = "CLK"` (the natural mistake — every other
+        // `p.nets`. A singular `net = "CLK"` (the natural mistake, every other
         // control uses `net`) validated clean and then logged an EMPTY waveform
         // with no diagnostic. vcd_sink must require `nets`.
         let assert_block =
@@ -1989,7 +1989,7 @@ for_max_ms = 2.0
     fn peripheral_with_both_bytes_and_field_is_rejected() {
         // R40: check_peripheral evaluates `bytes` first and RETURNS, so a spec
         // that sets both `bytes` and a `field`+min/max silently drops the field
-        // constraint — a false green if the field bound is violated. The dual spec
+        // constraint, a false green if the field bound is violated. The dual spec
         // must be rejected, like toggle's freq_hz+min_toggles.
         let spec = spec_from(
             r#"

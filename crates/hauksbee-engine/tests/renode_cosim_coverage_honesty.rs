@@ -1,7 +1,7 @@
 //! Live-Renode proof for the ADC-coverage honesty surfaces (U3 finding 1).
 //!
 //! The board (`stm32_adc_divider_demo.kicad_pcb`) is the blue pill demo plus a
-//! 10k/10k divider on PA0 — the binder maps LQFP-48 pin 10 (`pa0_adc0`) to
+//! 10k/10k divider on PA0; the binder maps LQFP-48 pin 10 (`pa0_adc0`) to
 //! engine ADC channel 0, so the scheduler pushes the solved TEMP_SENSE voltage
 //! into the core every chunk. The stock Renode 1.16.1 STM32F103 platform
 //! models NO ADC and the shipped descriptor honestly carries no `[[soc.adc]]`
@@ -61,7 +61,7 @@ fn dropped_adc_injection_reaches_cosim_json() {
     )
     .expect("build STM32 engine");
 
-    // Coarse chunks (external emulator); a short run suffices — the very first
+    // Coarse chunks (external emulator); a short run suffices; the very first
     // chunk pushes the ADC injection and the backend records the drop.
     engine.scheduler_mut().chunk_s = 5e-3;
     for _ in 0..20 {

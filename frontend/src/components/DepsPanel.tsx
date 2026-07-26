@@ -156,7 +156,7 @@ export function DepsPanel() {
       <div className="text-[12px] text-center mb-5" style={{ color: 'var(--silk-dim)' }}>
         {missing === 0
           ? 'Everything optional is installed. All co-sim backends and oracles are ready.'
-          : `Core hauksbee works now. ${missing} optional ${missing === 1 ? 'piece' : 'pieces'} would unlock more — install from here or from the terminal.`}
+          : `Core hauksbee works now. ${missing} optional ${missing === 1 ? 'piece' : 'pieces'} would unlock more, install from here or from the terminal.`}
       </div>
 
       <div className="rounded-xl overflow-hidden" style={{ border: '1px solid var(--hairline)' }}>
@@ -273,7 +273,7 @@ export function DepsPanel() {
                 )}
                 {install.phase === 'running' && (
                   <div className="mt-1.5 text-[12px] flex items-center gap-2" role="status" aria-live="polite" style={{ color: 'var(--copper-hi)' }}>
-                    <span className="slot-spin" /> Installing — this can take a few minutes on a slow connection.
+                    <span className="slot-spin" /> Installing; this can take a few minutes on a slow connection.
                   </div>
                 )}
                 {install.phase === 'ended' && (

@@ -25,7 +25,7 @@ and failure parse the same way:
 serious but an analysis that ran could not be judged (AC or thermal reported
 `valid:false`); `"pass"` otherwise. DRC shorts are excluded from `serious_count`
 when the board is newer than the validated copper extraction (a
-`drc.version_warning` is set) — the same carve-out the exit gate makes.
+`drc.version_warning` is set); the same carve-out the exit gate makes.
 
 ## Sections
 
@@ -41,7 +41,7 @@ when the corresponding analysis ran.
 | `ac` | `--ac` | `valid` (+ `reason`), `nets[]` (`{net, points:[[freq,mag_db,phase]]}`), `no_signal_path_nets[]`, `not_found_nets[]`, `coverage` |
 | `thermal` | `--thermal` | `valid` (+ `reason`), `ambient_c`, `devices[]` (`{reference, tj_c, over_limit}`), `coverage` |
 | `boot_gates` | boot-state panel | per-transistor-gate power-up state (informational) |
-| `notes` | always non-empty on real runs | array of `{kind, message}` — bind roles, MCU substitution, coverage caveats; **informational, never gating** |
+| `notes` | always non-empty on real runs | array of `{kind, message}`, bind roles, MCU substitution, coverage caveats; **informational, never gating** |
 | `cosim` | a firmware co-sim ran | `CosimJson` (below) |
 
 ### `Finding` (the uniform finding shape)
@@ -68,12 +68,12 @@ Beyond activity (`total_toggles`, `uart_seen`, `activity_summary[]`) and
 `analog_valid` (+ `failed_windows[]`), the co-sim block surfaces every coverage
 degradation so a run that silently lost fidelity never reads as healthy:
 
-- `substituted` — the firmware ran on a substitute core (also in `notes`).
-- `adc_dropped[]` — ADC channels whose modeled voltage the platform could not
+- `substituted`; the firmware ran on a substitute core (also in `notes`).
+- `adc_dropped[]`, ADC channels whose modeled voltage the platform could not
   inject (the firmware read nothing on that pin).
-- `unexercised_buses[]` — bound I2C/SPI peripherals the platform's controller set
+- `unexercised_buses[]`, bound I2C/SPI peripherals the platform's controller set
   never exercised (a `peripheral` assertion against one fails, not green-passes).
-- `spi_framing[]` — per-bus framing tier; a `"heuristic"` tier means transaction
+- `spi_framing[]`, per-bus framing tier; a `"heuristic"` tier means transaction
   boundaries were guessed at chunk edges.
 
 ## Example

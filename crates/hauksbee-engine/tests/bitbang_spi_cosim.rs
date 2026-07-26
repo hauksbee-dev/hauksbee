@@ -3,17 +3,17 @@
 //!
 //! The firmware (testdata/firmware/bitbang_spi_imu) toggles SCLK/MOSI/CS_n on
 //! PD4..PD6 and samples MISO on PD7 with a plain `PIND` read one instruction
-//! after each rising clock edge — deliberately NOT the ATmega328P's hardware
+//! after each rising clock edge, deliberately NOT the ATmega328P's hardware
 //! SPI pins, so only the engine's [`BitBangSpiResponder`] bridging to the
 //! byte-level [`SpiBus`] slave can answer. The slave is the shipped ICM-42605
 //! declarative spec (docs/hunts/specs/icm42605.toml) loaded into a
-//! [`RegisterMapSensor`] — the existing SPI slave model, no parallel device.
+//! [`RegisterMapSensor`]; the existing SPI slave model, no parallel device.
 //!
 //! The firmware reads WHO_AM_I (0x75 -> 0x42) and a two-byte burst from
 //! GYRO_CONFIG1 (0x4F -> 0x06, auto-incrementing to 0x50 -> 0x06) and reports
 //! "W<who>G<b0><b1>" in hex over UART; the test asserts the exact line. Every
 //! byte of that report crossed the bit-level bridge inside the firmware's own
-//! clock loop — the read-inside-`run_micros` shape the 74HC165 fix pioneered,
+//! clock loop; the read-inside-`run_micros` shape the 74HC165 fix pioneered,
 //! now for any SPI slave.
 
 #![cfg(feature = "avr")]

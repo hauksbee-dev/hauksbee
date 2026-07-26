@@ -372,7 +372,7 @@ fn inactive_voltage_law_releases_the_pin_not_clamps_it() {
     // EN low: the FSM stays in "off", so the `only_in_state = "on"` voltage law
     // is inactive. An inactive voltage law must RELEASE its pin (tri-state the
     // series resistor) so PINN floats up to the 3.3 V pull-up. The pre-fix code
-    // only zeroed the Vsource, leaving the stiff 1 mΩ series resistor connected —
+    // only zeroed the Vsource, leaving the stiff 1 mΩ series resistor connected,
     // a near-short that clamped PINN to ~0 V, fighting the pull-up and looking
     // like the part was actively grounding a pin it should have let float.
     let h = voltage_law_harness(0.0, 1.0);
@@ -403,7 +403,7 @@ fn active_voltage_law_still_drives_the_pin() {
 #[test]
 fn malformed_fsm_guard_disables_transition_without_panicking() {
     // A guard that fails to compile must be caught once at stamp time and simply
-    // never fire — not be silently re-parsed (and re-failing) every chunk, and
+    // never fire, not be silently re-parsed (and re-failing) every chunk, and
     // certainly not panic. The device stays in its initial state.
     let mut c = Circuit::new();
     let en = c.node("EN");
@@ -555,7 +555,7 @@ fn converter_input_limit_settles_and_conserves_energy() {
     // Regression: the input-limit fold used to scale the FRESH setpoint by
     // limit/iin instead of anchoring to the previous command, so a load beyond
     // the input limit bang-banged forever between full setpoint (~14.39 V) and
-    // the throttled point (~12.24 V) — and on the full-setpoint chunks the
+    // the throttled point (~12.24 V), and on the full-setpoint chunks the
     // input Isource still carried the previous under-limit current while the
     // output delivered full power, manufacturing energy. The clamped
     // `converter_iin()` accessor masked all of this from the test above.
@@ -574,7 +574,7 @@ fn converter_input_limit_settles_and_conserves_energy() {
 
         // Per-chunk energy sanity: the output may never deliver more power
         // than the input draws (eff < 1), and the draw must be truly bounded
-        // by the programmed limit — not merely clamped in the accessor.
+        // by the programmed limit, not merely clamped in the accessor.
         let iin = h.dev.converter_iin().unwrap();
         let p_in = h.v("PVIN") * iin;
         let p_out = v_bat * v_bat / 2.0; // R_load = 2 ohms

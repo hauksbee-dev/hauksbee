@@ -65,7 +65,7 @@ into GitHub Actions (`integrations/github-action`) or run it from KiCad
 
 ## Quick start
 
-Rather than hand-write a spec from a blank page, scaffold one from your board —
+Rather than hand-write a spec from a blank page, scaffold one from your board,
 `init` detects the supplies, MCU, and nets and emits a starter spec you edit:
 
 ```bash
@@ -96,9 +96,9 @@ echo $?   # 0
 `hauksbee-ci run` binds the board against the same layered model library as
 `hauksbee run`: the builtin db, then installed packs, then the user model dirs
 (`~/.hauksbee/models`, `~/.config/hauksbee/models`), then `--models-dir DIR`
-(highest priority). A custom `[[models]]` entry — including a
+(highest priority). A custom `[[models]]` entry, including a
 `kind = "mcu"` routing entry that maps a part value to a `renode:<part>` /
-`qemu:<part>` backend and its SoC descriptor — therefore binds in CI exactly
+`qemu:<part>` backend and its SoC descriptor, therefore binds in CI exactly
 as it does interactively:
 
 ```bash
@@ -110,7 +110,7 @@ MCU SoC descriptors themselves resolve from `$HAUKSBEE_MCU_DIR` /
 alike (see `docs/extending/add-an-mcu-variant.md` for the full two-file
 recipe). `hauksbee-ci init`'s scaffold uses the same layered library, so the
 detected MCU matches what a run would bind. Note the spec's top-level `mcu`
-key does NOT select the MCU — it is an informational note; the board's part
+key does NOT select the MCU; it is an informational note; the board's part
 value plus the routing entries decide.
 
 ## Spec format
@@ -126,7 +126,7 @@ name lists its near-matches ("did you mean `ANALOG_VDD`?").
 | `name`          | string   | `"hauksbee-ci"`| Label shown in reports.                                       |
 | `board`         | path     | required      | Board file: `.kicad_sch` (schematic), `.kicad_pcb`, `.net`, Eagle `.brd`, IPC-D-356, Altium `.PcbDoc`, a gerber folder/zip, or Board-as-Code `.board` (bare or zipped; compiled in-process, no routing step needed). The same formats `hauksbee run` accepts. |
 | `firmware`      | path     | none          | Firmware to boot on the detected MCU: a compiled ELF/hex, a PlatformIO project directory, or a zip of either (same three input tiers as `run --firmware`, see [`../cosim/MCU.md`](../cosim/MCU.md)). |
-| `mcu`           | string   | none          | Informational note only — nothing reads it. The MCU comes from the BOARD's part value via `[[models]] kind = "mcu"` routing entries (builtin, user model dirs, `--models-dir`); this field cannot force a backend. |
+| `mcu`           | string   | none          | Informational note only, nothing reads it. The MCU comes from the BOARD's part value via `[[models]] kind = "mcu"` routing entries (builtin, user model dirs, `--models-dir`); this field cannot force a backend. |
 | `duration_ms`   | float    | `100`         | Simulated time to run.                                        |
 | `frame_ms`      | float    | `1`           | Sampling cadence (how often nets are read).                   |
 | `suppress_rail` | [string] | `[]`          | Nets whose auto-rail is removed (fed only through the board). |
@@ -189,7 +189,7 @@ value = "0.05"            # the documented milliohm sense shunt
 
 `[[override]]` swaps a component's *value string* before binding. Some boards
 differ from their design files more radically: traces cut with a knife, pins
-lifted, jumper wires soldered, parts replaced — the physical rework record.
+lifted, jumper wires soldered, parts replaced; the physical rework record.
 That delta lives in a declarative `.asbuilt.toml` overlay (the format is
 documented in `docs/how-and-why/hauksbee-engine/asbuilt.md`), and a spec can
 reference one; it is applied to the bound board before every run, ahead of any
@@ -202,7 +202,7 @@ asbuilt = "tarski.asbuilt.toml"   # relative to the spec file, like `board`
 The overlay is fail-loud: an entry that matches nothing (or a different number
 of devices/terminals than it declares) aborts the run with a line-numbered
 error and a did-you-mean suggestion. The flagship example is the Tarski
-board's validated surgery, `testdata/tarski.asbuilt.toml` — the same file the
+board's validated surgery, `testdata/tarski.asbuilt.toml`; the same file the
 engine CLI takes as `hauksbee run board --asbuilt board.asbuilt.toml`.
 
 ### Initial-state fuzzing: `[fuzz]`
@@ -227,7 +227,7 @@ a run is reproducible.
 A board that only meets its assertions at *nominal* component values is a
 latent defect: real parts are ±1% / ±5% / ±10%, and some fraction of assembled
 units will land outside the window. Declare the tolerances and hauksbee-ci
-replays the whole assertion set across an **ensemble** of sampled builds — on
+replays the whole assertion set across an **ensemble** of sampled builds, on
 every commit.
 
 ```toml
@@ -244,7 +244,7 @@ mode = "monte-carlo"       # "monte-carlo" (default) | "corners"
 Rules apply in order and the **last matching rule wins** per component, so a
 broad `ref = "R*"` can be followed by a tighter `ref = "R7"`. The nominal is
 the component's board value (after any `[[override]]`). An override can also
-declare its own spread — the `value` becomes the nominal:
+declare its own spread; the `value` becomes the nominal:
 
 ```toml
 [[override]]
@@ -254,12 +254,12 @@ tolerance = 1.0            # the repaired shunt is a ±1% part
 ```
 
 Distributions: `"uniform"` samples the full ±tolerance band (assumes nothing
-about vendor binning, stresses the edges hardest — the default); `"gaussian"`
+about vendor binning, stresses the edges hardest; the default); `"gaussian"`
 uses the standard EDA convention, sigma = tolerance/3 truncated at the
 tolerance bound (a part outside its marked tolerance would have been binned
 out at the factory).
 
-**What a green ensemble means — and does not.** Monte-Carlo is *sampled
+**What a green ensemble means, and does not.** Monte-Carlo is *sampled
 coverage*: "passed 24/24 sampled tolerance seeds" is statistical evidence over
 the tolerance space, **never a worst-case proof**, and the report words it
 exactly that way. An assertion passes only if it holds on **every** member.
@@ -267,14 +267,14 @@ exactly that way. An assertion passes only if it holds on **every** member.
 **Corner mode** (`mode = "corners"`) is the deterministic complement: instead
 of random samples it enumerates every all-min/all-max combination of the
 toleranced components (2^n runs). For a response that is *monotonic* in each
-component value — dividers, ladders, most DC bias networks — the true worst
+component value (dividers, ladders, most DC bias networks) the true worst
 case is a corner, so a green corner run bounds it. For non-monotonic responses
 (filters peaking mid-band, matched pairs) the interior can be worse than any
 corner, so the report claims boundedness **only for monotonic responses**.
 Full enumeration is capped at 2^10 = 1024 components' corners; above 10
 toleranced components corner mode refuses and points at Monte-Carlo. Corner
 mode does not compose with `[fuzz]` (the corner index enumerates min/max
-combinations, not fuzz seeds) — Monte-Carlo does.
+combinations, not fuzz seeds), Monte-Carlo does.
 
 **Reproducibility is doctrine.** Every sampled value is a pure function of
 (spec, seed, component reference): seed 0 is always the nominal baseline, the
@@ -289,7 +289,7 @@ the exact sampled values:
       seed 8: VOUT: min=2.695V ... [R1=9.17k, R2=10.7k]; passed 19/24 seeds (failing: 8, 10, 16, 18, 19)
 ```
 
-Re-run that one build in isolation — it reproduces byte-identically:
+Re-run that one build in isolation; it reproduces byte-identically:
 
 ```bash
 hauksbee-ci run ci/divider.toml --seed 8
@@ -411,7 +411,7 @@ recover_within_ms = 20
 ```
 
 **`protection_trip`**: a battery/e-fuse protection cutoff fired (or must NOT
-have fired) within a scenario window — `supply_net`, `expect_trip = true|false`,
+have fired) within a scenario window, `supply_net`, `expect_trip = true|false`,
 optional `scenario`.
 
 **`peripheral`**: a bus-slave / sensor / VCD-sink peripheral's end-of-run state,
@@ -419,7 +419,7 @@ by `id` and `field` (e.g. a `vcd_sink`'s `transitions` count, an EEPROM's last
 address). Pairs with a `[[peripheral]]` block (below).
 
 **`hwtrace`**: compare the simulated waveform against a captured scope trace
-(features like period / rise-time / overshoot within tolerance) — `trace =
+(features like period / rise-time / overshoot within tolerance), `trace =
 "trace.toml"`. See [the hardware-trace docs](../../testdata/hwtraces) for the
 capture format.
 
@@ -448,7 +448,7 @@ exercised by `crates/hauksbee-ci/tests/peripherals.rs` and
 
 For a machine-readable single-board result outside the assertion runner,
 `hauksbee run <board> --json` emits a documented object with a top-level
-`ok`/`verdict`/`serious_count` rollup — see [JSON_OUTPUT.md](../analysis/JSON_OUTPUT.md).
+`ok`/`verdict`/`serious_count` rollup, see [JSON_OUTPUT.md](../analysis/JSON_OUTPUT.md).
 
 ## Worked example: the Tarski power-up brownout
 

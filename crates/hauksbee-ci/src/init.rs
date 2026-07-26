@@ -108,7 +108,7 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     // held-LOW control net from an undriven one, so its boot-coverage diagnosis
     // is trustworthy. The in-process AVR backend always reports it (DDR hooks),
     // and a `renode:` part does once its SoC descriptor maps every GPIO port's
-    // direction register (stm32f103 CRL/CRH, stm32f4 MODER, nrf52840 DIR — see
+    // direction register (stm32f103 CRL/CRH, stm32f4 MODER, nrf52840 DIR, see
     // db/mcu/*.soc.toml). The `qemu:` ESP32 family and unmapped Renode parts
     // cannot; on those a scaffolded boot-coverage assertion can go RED with a
     // misleading diagnosis on a net the firmware actually drives LOW (or via an
@@ -256,7 +256,7 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
 
     // Transient / brownout on-ramp: scaffold a [[profile]] + [[scenario]] +
     // rail_window whenever a supply rail was detected. This is the ONLY place a
-    // user discovers dynamic analysis from `hauksbee run` — there is no `run
+    // user discovers dynamic analysis from `hauksbee run`; there is no `run
     // --transient` flag; brownout/inrush lives here in the spec. Commented so
     // the starter stays GREEN on no_faults alone; the user opts in and tunes the
     // load profile to their board. See docs/checks/TRANSIENTS.md.
@@ -293,7 +293,7 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
         let _ = writeln!(s, "# min = {}                    # the rail must never sag below this (V)", fmt2(vref * 0.9));
     }
 
-    // Firmware-behaviour assertions — the tool's headline pitch ("assert the UART
+    // Firmware-behaviour assertions; the tool's headline pitch ("assert the UART
     // says hello, assert the LED blinks"). Only meaningful once `firmware = ...`
     // above points at a real image, so scaffold them COMMENTED and only when an
     // MCU was detected; uncomment them together with the firmware line.

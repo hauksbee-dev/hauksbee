@@ -9,7 +9,7 @@
 /// real co-sim would accept.
 ///
 /// For each backend this calls the exact resolver the scheduler uses
-/// (`hauksbee_mcu::qemu::find_qemu`, `hauksbee_mcu::renode::find_renode`) — no
+/// (`hauksbee_mcu::qemu::find_qemu`, `hauksbee_mcu::renode::find_renode`), no
 /// re-implemented search logic. `find_qemu` runs the Espressif-fork check
 /// (`is_esp_fork`), so a Homebrew mainline `qemu-system-xtensa` on PATH is
 /// reported `absent` here just as the co-sim rejects it, and a fork under

@@ -1,6 +1,6 @@
 # Oracles: cross-checking hauksbee against ground-truth tools
 
-> For the full capability map of hauksbee — including which layers use oracles, which run firmware, and which are commodity vs. differentiated — see [`docs/about/CAPABILITIES.md`](../about/CAPABILITIES.md).
+> For the full capability map of hauksbee (including which layers use oracles, which run firmware, and which are commodity vs. differentiated) see [`docs/about/CAPABILITIES.md`](../about/CAPABILITIES.md).
 
 hauksbee does its own DRC, analog solve and co-sim from the layout. To keep it
 honest we cross-check its results against independent, authoritative tools we call
@@ -52,9 +52,9 @@ Worked examples (this repo's hunt boards):
 
 | Board | hauksbee | oracle (kicad-cli 10.0.3) | verdict |
 |-------|----------|---------------------------|---------|
-| `bms-prototype` (REG1_3V3↔GND) | 4 shorts | 5 touching-copper | **agree** — real short confirmed |
+| `bms-prototype` (REG1_3V3↔GND) | 4 shorts | 5 touching-copper | **agree**: real short confirmed |
 | `VENDETTAESC` (KiCad 10) | 121 shorts | 12 touching-copper (10 `shorting_items`) | hauksbee over-reports ~109 (the U12 GND-pad antipad artifacts); 10 are real |
-| `FUSB302Breakout` | 0 | 0 | **agree** — clean |
+| `FUSB302Breakout` | 0 | 0 | **agree**: clean |
 
 That ESC line is exactly how the residual false-positive count was adjudicated: the
 oracle confirms ~10-12 genuine touches, so the other ~109 are hauksbee artifacts.
@@ -88,7 +88,7 @@ needed.
 For the solver, the oracle is **ngspice**: hauksbee's transient/AC results are
 cross-checked against ngspice to fractions of a percent, and every speed claim is
 gated behind one of these accuracy checks (see `docs/about/COMPARISON.md`). ngspice is a
-small, BSD-licensed CLI and is invoked the same way — detected, used for
+small, BSD-licensed CLI and is invoked the same way, detected, used for
 validation, not bundled or required at runtime.
 
 ## The MCU simulator backends follow the same pattern

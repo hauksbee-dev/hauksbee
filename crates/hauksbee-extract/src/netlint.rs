@@ -66,8 +66,8 @@ pub enum LintCheck {
     /// empty), so downstream physics cannot know the actual part.
     PlaceholderValue,
     /// A component that looks like an MCU (by part-number family) resolved to no
-    /// device model, so the MCU-model-dependent checks — the boot strap-pin lint
-    /// and the internal resource-conflict check — could not run on it. Without
+    /// device model, so the MCU-model-dependent checks; the boot strap-pin lint
+    /// and the internal resource-conflict check, could not run on it. Without
     /// this note those checks are silently empty, which a bare "Looks healthy"
     /// verdict would misread as "checked and clean". Informational, never a
     /// `--strict` failure: an unmodelled part is a coverage gap, not a defect.
@@ -240,7 +240,7 @@ fn has_signal_role_token(n: &str) -> bool {
 }
 
 /// A rail whose name carries its own numeric magnitude: an optional leading
-/// '+', then digits, 'V', and optional trailing digits — plain "15V"/"24V" or
+/// '+', then digits, 'V', and optional trailing digits, plain "15V"/"24V" or
 /// the KiCad digit-V-digit "5V0"/"3V3" form. Returns `None` for names that
 /// don't start with a digit after the optional '+' (VCC, VDD_IO), leaving them
 /// to the token heuristics. Mirrors the engine binder's `positive_rail_fallback`.
@@ -256,8 +256,8 @@ fn numeric_rail_magnitude(n: &str) -> Option<f64> {
     let after = rest[int_part.len()..].strip_prefix('V')?;
     let frac: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
     // The name must be ENTIRELY consumed by the "<digits>V<digits>" grammar.
-    // Otherwise rail-named SIGNAL nets — "5V_DET", "3V3_EN", "5V_SEL", "12V_PG"
-    // — over-match as real rails ("5V_DET" → 5.0 V), so net_is_raillike wrongly
+    // Otherwise rail-named SIGNAL nets, "5V_DET", "3V3_EN", "5V_SEL", "12V_PG"
+    //, over-match as real rails ("5V_DET" → 5.0 V), so net_is_raillike wrongly
     // reports a monitor/enable net as a supply and suppresses genuine findings
     // (a missing I2C pull-up whose divider taps a "5V_DET" sense net).
     if !after[frac.len()..].is_empty() {
@@ -274,7 +274,7 @@ fn numeric_rail_magnitude(n: &str) -> Option<f64> {
     // rail above 60 V and fell back to the 5 V default, so `rail_voltage("+65V")`
     // returned 5.0 and check_led_current under-counted the drive, suppressing a
     // genuine over-current finding. Real boards run 65 V motor rails, 100 V+ LED
-    // strings, 400 V PFC buses — the magnitude is whatever the token says as long
+    // strings, 400 V PFC buses; the magnitude is whatever the token says as long
     // as it is a positive, finite number. (Mirrors binder.rs::embedded_rail_magnitude,
     // whose identical clamp was removed in the same spirit.)
     (mag > 0.0 && mag.is_finite()).then_some(mag)
@@ -299,7 +299,7 @@ fn connected_pads(c: &Component) -> usize {
 /// The reference designator with a single split-keyboard mirror prefix stripped,
 /// uppercased. Split layouts (Corne / crkbd, Lily58) duplicate the right half
 /// with a lowercase `r` prefix (`rC2`, `rY1`, `rR3`, `rU1`), so the type
-/// classifiers must see `C2`/`Y1`/`R3`/`U1` underneath — otherwise `rC2` reads
+/// classifiers must see `C2`/`Y1`/`R3`/`U1` underneath, otherwise `rC2` reads
 /// as an `R`-prefixed part and a mirrored decoupling cap is both misclassified
 /// and falsely flagged as a designator/footprint mismatch. Only a lowercase `r`
 /// immediately before an uppercase designator letter counts, so a genuine `R5`
@@ -334,7 +334,7 @@ fn is_resistor(c: &Component) -> bool {
 /// A resistor NETWORK / array (RN/RP/RM): several resistor elements in one
 /// package, a standard way to pull up an I2C bus (a 4-element array pulls SDA/SCL
 /// and two more signals). Not a plain two-terminal resistor, so `is_resistor`
-/// excludes it — but it IS a legitimate bus pull-up and an active-device
+/// excludes it, but it IS a legitimate bus pull-up and an active-device
 /// miscount, so the I2C check must recognise it.
 fn is_resistor_array(c: &Component) -> bool {
     let r = ref_designator(&c.reference);
@@ -376,12 +376,12 @@ fn is_led(c: &Component) -> bool {
 /// package name, because boards label headers with non-obvious refs (Adafruit's
 /// Arduino headers are `IOH`/`IOL`/`AD`/`POWER`, Eagle package `1X10`).
 fn is_connector_like(c: &Component) -> bool {
-    // A resistor NETWORK (RN/RP/RM) is a passive part, never a connector — even
+    // A resistor NETWORK (RN/RP/RM) is a passive part, never a connector, even
     // though its footprint name carries a grid dimension ("R_Array_..._4x0603")
     // that `is_pin_array_package` reads as a pin array. Without this a resistor-
     // array I2C pull-up was classified a header (exits_to_connector) and its
     // pull-up credit skipped.
-    // A resistor NETWORK (RN/RP/RM) is a passive part, never a connector — even
+    // A resistor NETWORK (RN/RP/RM) is a passive part, never a connector, even
     // though its footprint name carries a grid dimension ("R_Array_..._4x0603")
     // that `is_pin_array_package` reads as a pin array. Without this a resistor-
     // array I2C pull-up was classified a header (exits_to_connector) and its
@@ -456,7 +456,7 @@ fn is_connector_like(c: &Component) -> bool {
 /// Eagle/KiCad pin-row package names like "1X10", "2X05", "1X10_OVALWAVE".
 ///
 /// A pin grid is INTEGER counts with no unit. A body DIMENSION ("7x7mm",
-/// "3.9x4.9mm") is a package size, not a pin grid — and KiCad appends one to
+/// "3.9x4.9mm") is a package size, not a pin grid, and KiCad appends one to
 /// essentially every SMD IC footprint ("LQFP-48_7x7mm", "QFN-48-1EP_7x7mm"). The
 /// old code accepted any `<digit>X<digit>`, so those ICs read as connector-like
 /// and silently suppressed the floating-control / I2C-pull-up / output-contention
@@ -513,9 +513,9 @@ fn passive_prefix(reference: &str) -> Option<char> {
     match first {
         'R' if !r.starts_with("RV") && !r.starts_with("RT") && !r.starts_with("RN") => Some('R'),
         'C' if !r.starts_with("CN") && !r.starts_with("CON") => Some('C'),
-        // The 'L' arm must exclude the many non-inductor L-prefixed designators —
+        // The 'L' arm must exclude the many non-inductor L-prefixed designators,
         // LED (light-emitting diode), LS (loudspeaker/buzzer), LDR (photoresistor),
-        // LCD (display) — or an LED1/LS1 with a blank value fires a false
+        // LCD (display), or an LED1/LS1 with a blank value fires a false
         // "set the actual L value" placeholder finding and an LDR on a resistor
         // footprint fires a false designator/footprint-family mismatch. Mirrors
         // the guarded R/C arms and the file's own is_led().
@@ -586,7 +586,7 @@ fn parse_capacitance_uf(value: &str) -> Option<f64> {
     // R-style decimal: a digit run AFTER a BARE prefix letter is the fractional
     // part ("4u7" = 4.7 uF, "1n5" = 1.5 nF), mirroring parse_ohms' "4K7" handling.
     // This only applies when the unit is the multiplier letter standing in for the
-    // decimal point — i.e. the 'F' is ABSENT. When the unit already spells out the
+    // decimal point, i.e. the 'F' is ABSENT. When the unit already spells out the
     // Farad ("1uF25V", "10nF50V"), the value is complete and the trailing digits
     // are an attached voltage rating, not a fraction: eating them turned "1uF25V"
     // into 1.25 uF and false-flagged a valid 0201/0402 cap on the package ceiling.
@@ -807,7 +807,7 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
                 continue;
             }
             // An IC / sensor pin on the bus means the bus is used on-board. A
-            // resistor ARRAY is a passive pull-up, not an active device — exclude
+            // resistor ARRAY is a passive pull-up, not an active device, exclude
             // it so it does not inflate `active_devices` and manufacture the
             // two-device "missing pull-up" case.
             let r = c.reference.to_ascii_uppercase();
@@ -996,7 +996,7 @@ fn check_floating_control_pins(board: &ExtractedBoard, report: &mut NetLintRepor
 /// the single canonical parser in `hauksbee-models`.
 ///
 /// Delegated to `value::parse_value` so this copy never drifts from the SI-check
-/// copy or the canonical one again — the three hand-rolled variants had diverged
+/// copy or the canonical one again; the three hand-rolled variants had diverged
 /// on the "/footprint" qualifier, milli-`m` (a 1e9 error), and inline
 /// annotations. Accept only an ohmic magnitude (no unit, or explicit Ω).
 fn parse_ohms(v: &str) -> Option<f64> {
@@ -1082,7 +1082,7 @@ fn resistor_to_rail(
             continue;
         }
         // Skip an R-ref part whose value does not parse (a DNP/NC option
-        // resistor, a bare MPN) and keep scanning — the genuine series resistor
+        // resistor, a bare MPN) and keep scanning; the genuine series resistor
         // to the rail may be a LATER member. Using `?` here abandoned the whole
         // search on the first unparseable co-located resistor, silently voiding
         // the LED-current sanity check (the same abort-via-`?` the sub-ohm "R47"
@@ -1353,7 +1353,7 @@ mod parse_ohms_tests {
     fn leading_r_sub_ohm_notation_parses() {
         // R5 regression: "R47" = 0.47 Ω (the leading-R sub-1-ohm marking). The
         // empty integer part used to fail the parse and, via `?`, abort the
-        // whole rail-resistor search — silently skipping the LED-current check
+        // whole rail-resistor search, silently skipping the LED-current check
         // on a near-dead-short.
         assert_eq!(parse_ohms("R47"), Some(0.47));
         assert_eq!(parse_ohms("r47"), Some(0.47));
@@ -1379,7 +1379,7 @@ mod parse_ohms_tests {
     #[test]
     fn parse_ohms_matches_the_canonical_parser() {
         // R25 (DRIFT-1): the "/footprint" qualifier (Olimex "2.2k/R0603") must
-        // be tolerated — net-lint dropped it and returned None, silently
+        // be tolerated, net-lint dropped it and returned None, silently
         // disabling the LED-current check for that resistor.
         assert_eq!(parse_ohms("2.2k/R0603"), Some(2200.0));
         assert_eq!(parse_ohms("330R/R0603"), Some(330.0));
@@ -1474,7 +1474,7 @@ mod wired_or_tests {
                      "PG_3V3", "ALERT_N", "NMI", "NFLT", "CPU_RDY", "BUSY0"] {
             assert!(is_wired_or_name(name), "{name} is a wired-OR/open-drain line");
         }
-        // NOT recognised — "INT"/"PG" only appear mid-word, so these push-pull
+        // NOT recognised, "INT"/"PG" only appear mid-word, so these push-pull
         // signal nets must stay in the contention check:
         for name in ["SETPOINT_DAC", "PRINT_HEAD", "MIDPOINT", "INTERNAL_CLK",
                      "SPGND_SENSE", "SPRING_A"] {
@@ -1532,7 +1532,7 @@ mod rail_and_cap_tests {
         // R31: numeric_rail_magnitude read only the leading "<digits>V<digits>"
         // and ignored any trailing text, so rail-named SIGNAL nets over-matched
         // as supplies ("5V_DET" -> 5.0 V). net_is_raillike then wrongly treated a
-        // presence/enable/select net as a rail — e.g. suppressing a missing I2C
+        // presence/enable/select net as a rail, e.g. suppressing a missing I2C
         // pull-up whose divider taps a "5V_DET" sense net. A name must be entirely
         // consumed by the numeric-rail grammar to count.
         // These reach the numeric-rail grammar (they start with a digit and are
@@ -1544,7 +1544,7 @@ mod rail_and_cap_tests {
         // R50: the 5V branch had a rail-context guard but the 3V3/1V8 loose
         // `contains` fallbacks did not, so a `3V3_EN` / `1V8_PG` signal net (which
         // fails the numeric-rail full-consumption check and drops to the fallback)
-        // still read as a rail — suppressing a genuine missing-pull-up finding
+        // still read as a rail, suppressing a genuine missing-pull-up finding
         // when a divider tapped it. The signal-role token must disqualify them.
         assert_eq!(rail_voltage("3V3_EN"), None);
         assert_eq!(rail_voltage("1V8_EN"), None);
@@ -1580,7 +1580,7 @@ mod rail_and_cap_tests {
         // 5 V default above it, so rail_voltage("+65V") returned Some(5.0). That
         // under-counted the drive in check_led_current and suppressed a genuine
         // over-current finding on high-voltage LED strings / motor rails. Real
-        // boards run well past 60 V — the magnitude is whatever the token says.
+        // boards run well past 60 V; the magnitude is whatever the token says.
         assert_eq!(rail_voltage("+65V"), Some(65.0));
         assert_eq!(rail_voltage("100V"), Some(100.0));
         assert_eq!(rail_voltage("+400V"), Some(400.0));
@@ -1593,7 +1593,7 @@ mod rail_and_cap_tests {
     fn attached_voltage_rating_is_not_read_as_a_capacitance_fraction() {
         // R34: the R-style-decimal frac loop ran even when the unit already
         // spelled out the Farad ("uF"), so "1uF25V" ate the "25" rating and
-        // became 1.25 uF — false-flagging a valid 0201 (1 uF ceiling) cap on the
+        // became 1.25 uF, false-flagging a valid 0201 (1 uF ceiling) cap on the
         // package-ceiling check. When the 'F' is present the value is complete
         // and trailing digits are a rating, not a fraction.
         assert_eq!(parse_capacitance_uf("1uF25V"), Some(1.0));

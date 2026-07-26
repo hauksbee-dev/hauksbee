@@ -5,13 +5,13 @@
 //! plus a [`ModelLibrary`](hauksbee_models::ModelLibrary) into a *live*
 //! co-simulation that couples three domains:
 //!
-//! 1. **Analog** — the MNA transient solver in `hauksbee-solve`, fed a
+//! 1. **Analog**; the MNA transient solver in `hauksbee-solve`, fed a
 //!    [`Circuit`](hauksbee_ir::Circuit) the [`binder`] builds by resolving
 //!    every component to a model and stamping it as IR devices.
-//! 2. **MCU** — emulated microcontroller cores from `hauksbee-mcu`, coupled at
+//! 2. **MCU**, emulated microcontroller cores from `hauksbee-mcu`, coupled at
 //!    the pin level: GPIO output edges drive analog nets, analog node voltages
 //!    are injected into ADC channels, UART passes through.
-//! 3. **Digital** — behavioral ICs (shift registers, gates) handled by the
+//! 3. **Digital**, behavioral ICs (shift registers, gates) handled by the
 //!    [`digital`] event layer, NOT solved in MNA. Their inputs sample net
 //!    voltages against `vih`/`vil`; their outputs drive nets as Thevenin
 //!    sources stamped into the circuit.

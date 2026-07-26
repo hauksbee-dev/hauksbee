@@ -50,7 +50,7 @@ fn parse_helpers() {
     assert_eq!(super::parse_farads("0.1uF"), Some(0.1e-6));
     assert_eq!(super::parse_farads("TBD"), None);
     // R33: a trailing dielectric / voltage / tolerance token (space- or
-    // letter-separated) is metadata, not a fractional part — the base value must
+    // letter-separated) is metadata, not a fractional part; the base value must
     // still parse, not drop to None (which produced a false "crystal has no load
     // caps" finding on a correctly-capped board). The "4p7" fraction form (digits
     // IMMEDIATELY after the unit) still works. (Approx compare: `a*mult` differs
@@ -75,12 +75,12 @@ fn parse_helpers() {
 
 #[test]
 fn parse_helpers_handle_unicode_and_spice_multipliers() {
-    // R24: both micro glyphs — the micro sign U+00B5 and the Greek small-letter
-    // mu U+03BC — must parse as 1e-6 (libraries write "4.7µF" with either).
+    // R24: both micro glyphs; the micro sign U+00B5 and the Greek small-letter
+    // mu U+03BC, must parse as 1e-6 (libraries write "4.7µF" with either).
     assert_eq!(super::parse_farads("4.7\u{00b5}F"), Some(4.7e-6));
     assert_eq!(super::parse_farads("4.7\u{03bc}F"), Some(4.7e-6));
     assert_eq!(super::parse_farads("0.1\u{03bc}F"), Some(0.1e-6));
-    // Both ohm glyphs — Greek capital omega U+03A9 and the ohm sign U+2126.
+    // Both ohm glyphs, Greek capital omega U+03A9 and the ohm sign U+2126.
     assert_eq!(super::parse_ohms("10\u{03a9}"), Some(10.0));
     assert_eq!(super::parse_ohms("10\u{2126}"), Some(10.0));
     // SPICE-style MEG/GIG multipliers, matched before the single-letter scan.
@@ -92,7 +92,7 @@ fn parse_helpers_handle_unicode_and_spice_multipliers() {
 
 #[test]
 fn parse_ohms_no_longer_drifts_from_the_canonical_parser() {
-    // R25 (DRIFT-2): lowercase 'm' is MILLIohm, not mega — "2m2" is 2.2 mΩ, a
+    // R25 (DRIFT-2): lowercase 'm' is MILLIohm, not mega, "2m2" is 2.2 mΩ, a
     // current-sense shunt marking. The hand-rolled parser uppercased first and
     // read it as 2.2 MΩ (a 1e9 error).
     assert_eq!(super::parse_ohms("2m2"), Some(0.0022));
@@ -103,7 +103,7 @@ fn parse_ohms_no_longer_drifts_from_the_canonical_parser() {
     // R25 (DRIFT-4): an inline tolerance annotation must not reject the value.
     assert_eq!(super::parse_ohms("10k 1%"), Some(10_000.0));
     assert_eq!(super::parse_ohms("4.7k 1%"), Some(4700.0));
-    // Uppercase 'M' is still mega (SPICE convention) — the milli fix must not
+    // Uppercase 'M' is still mega (SPICE convention); the milli fix must not
     // regress this.
     assert_eq!(super::parse_ohms("4M7"), Some(4.7e6));
 }
@@ -495,7 +495,7 @@ fn antenna_keepout_ground_pour_fires_even_when_module_has_a_bonded_gnd_pad() {
     // R39: a real WROOM module bonds many pads to the board GND net. The old code
     // built `own_nets` from ALL of the antenna's pad nets and skipped any intrusion
     // on an own net, so with a GND pad present the board GND landed in own_nets and
-    // a ground pour flooding the keepout was silently skipped — a false all-clear on
+    // a ground pour flooding the keepout was silently skipped, a false all-clear on
     // the exact detuning case. Excluding only the NON-ground own nets, a ground pour
     // must still fire even though the module has a GND pad.
     let text = r#"(kicad_pcb (version 20240101) (net 0 "") (net 1 "GND") (net 2 "ANT")
@@ -520,7 +520,7 @@ fn antenna_keepout_ground_pour_fires_even_when_module_has_a_bonded_gnd_pad() {
 fn antenna_keepout_finding_kinds_are_sorted_deterministically() {
     // R41: the intrusion `kinds` were collected into a HashSet and formatted with
     // {:?}, so a multi-kind intrusion's message order varied run-to-run (a HashSet
-    // Debug order is randomized per process) — non-reproducible SI output. Sorting
+    // Debug order is randomized per process), non-reproducible SI output. Sorting
     // (like the sibling `nets`) makes it byte-stable. A track + via + zone on the
     // same non-ground net inside the keepout must render as ["track", "via", "zone"].
     let text = r#"(kicad_pcb (version 20240101) (net 0 "") (net 1 "GND") (net 2 "ANT") (net 3 "SIG")
@@ -1009,7 +1009,7 @@ fn bus_capacitance_dedups_a_double_listed_pad() {
 
 #[test]
 fn fast_mode_name_is_whole_token_not_substring() {
-    // R48: `contains("FM")`/`contains("FAST")` over-matched — an FPGA Mezzanine
+    // R48: `contains("FM")`/`contains("FAST")` over-matched, an FPGA Mezzanine
     // Connector I2C bus `FMC_SDA` embeds "FM" inside the token "FMC", so a
     // standard-mode bus was judged against the 3.3x-tighter fast-mode limit,
     // firing a false rise-time finding. Only a whole `FM`/`FAST` token selects
@@ -1025,7 +1025,7 @@ fn fast_mode_name_is_whole_token_not_substring() {
 fn si_rail_voltage_rejects_signal_named_rails() {
     // R50: the loose 3V3/1V8 `contains` fallbacks in si.rs rail_voltage (a
     // duplicate of netlint's) had no signal-role guard, so a `3V3_EN` enable net
-    // read as a 3.3V rail — miscounting a resistor tapping it as an I2C pull-up
+    // read as a 3.3V rail, miscounting a resistor tapping it as an I2C pull-up
     // and suppressing a genuine MissingI2cPullup finding.
     assert_eq!(super::rail_voltage("3V3_EN"), None);
     assert_eq!(super::rail_voltage("1V8_PG"), None);
@@ -1041,7 +1041,7 @@ fn si_rail_voltage_resolves_numeric_rails_like_netlint() {
     // R51: si.rs rail_voltage handled bare "3V0" but not "5V0" and lacked
     // netlint's numeric_rail_magnitude, so a pull-up returning to a bare "5V0" /
     // "+12V" / "24V" rail was not seen as rail-like and the I2C rise-time audit
-    // was silently skipped — a --si vs --lint disagreement.
+    // was silently skipped, a --si vs --lint disagreement.
     assert_eq!(super::rail_voltage("5V0"), Some(5.0));
     assert_eq!(super::rail_voltage("+12V"), Some(12.0));
     assert_eq!(super::rail_voltage("24V"), Some(24.0));
@@ -1053,7 +1053,7 @@ fn si_rail_voltage_resolves_numeric_rails_like_netlint() {
 
 #[test]
 fn si_rail_voltage_recognises_the_same_tokens_as_netlint() {
-    // R53: si.rs rail_voltage drifted from netlint's table — VCC5V/VCC5 (5V) and
+    // R53: si.rs rail_voltage drifted from netlint's table, VCC5V/VCC5 (5V) and
     // VPP/VDD_IO (battery/IO rails) were recognised by --lint but not --si, so the
     // same net was a rail for the pull-up-presence check but not the mirroring
     // rise-time audit (a --si vs --lint disagreement).

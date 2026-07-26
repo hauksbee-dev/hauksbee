@@ -292,7 +292,7 @@ impl QemuConfig {
     // Named accessors over the shipped `db/mcu/*.soc.toml` descriptors (embedded
     // via `include_str!`): the mailbox layout, arch, and clocking that used to be
     // hand-written here now live in the TOML. A fresh part is addable purely as
-    // data via [`crate::SocConfig::resolve`]. `.expect` is correct — a shipped
+    // data via [`crate::SocConfig::resolve`]. `.expect` is correct, a shipped
     // descriptor failing to load is a build bug caught by tests/soc_descriptors.rs.
 
     /// Classic ESP32 (Xtensa LX6). See `db/mcu/esp32.soc.toml`.
@@ -320,7 +320,7 @@ impl QemuConfig {
 /// ELF header. So:
 ///   1. If `flash_image` is itself an ELF (rare, but possible), check it.
 ///   2. Otherwise (raw `.bin`), look for the esp-idf-emitted app ELF in the same
-///      directory — the sibling `*.elf` files — and check the arch against those.
+///      directory; the sibling `*.elf` files, and check the arch against those.
 ///      This is the build layout in `testdata/firmware/esp32*/` (e.g. `flash.bin`
 ///      beside `esp32_blinky.elf`), and it is what makes the persona's
 ///      Xtensa-on-RISC-V mistake catchable even though the bin itself is opaque.
@@ -337,7 +337,7 @@ impl QemuConfig {
 ///   - if ANY of them matches `expected`, the image is arch-consistent → `Ok`;
 ///   - only if there are sibling ELFs and NONE matches do we raise the clear
 ///     two-sided mismatch error (the genuine Xtensa-on-RISC-V case the gate was
-///     built for — where the *only* sibling disagrees — is still caught);
+///     built for, where the *only* sibling disagrees, is still caught);
 ///   - no parseable sibling ELF at all → unchecked (`Ok`, never a false error).
 ///
 /// As a tie-break, when nothing matches we report the mismatch against a sibling
@@ -358,7 +358,7 @@ fn validate_flash_image_arch(
         return Ok(());
     }
 
-    // Case 2: raw .bin — probe sibling ELFs in the same directory.
+    // Case 2: raw .bin, probe sibling ELFs in the same directory.
     let Some(dir) = flash_image.parent() else {
         return Ok(());
     };
@@ -450,7 +450,7 @@ const BOOT_WINDOW_CAP_S: f64 = 50e-3;
 
 /// Wall-clock run window for a requested virtual interval of `seconds`.
 ///
-/// The guest's virtual clock runs at roughly wall rate (no icount — it breaks
+/// The guest's virtual clock runs at roughly wall rate (no icount; it breaks
 /// esp32 boot, measured; see the module notes), so the window IS the intended
 /// virtual-time advance. Two regimes:
 ///
@@ -460,7 +460,7 @@ const BOOT_WINDOW_CAP_S: f64 = 50e-3;
 /// - **Booted**: honor the request exactly. The lockstep contract is that
 ///   `run_micros(us)` advances ~`us` so all domains level at each chunk
 ///   boundary; any floor here would run the guest ahead of the analog solve
-///   (pin edges, UART timing, everything time-correlated desyncs — R8 #5).
+///   (pin edges, UART timing, everything time-correlated desyncs, R8 #5).
 ///
 /// Pure function of its inputs so the regression tests can pin the mapping
 /// without a QEMU process.
@@ -501,7 +501,7 @@ pub struct QemuBackend {
     /// time is honored exactly so the guest stays leveled with the analog
     /// solve and the other MCUs (R8 #5). A firmware that never raises MAGIC
     /// (unmodified vendor firmware, not mailbox-aware) keeps the floor
-    /// forever — identical to the pre-fix behaviour, and the only honest
+    /// forever, identical to the pre-fix behaviour, and the only honest
     /// option: without the handshake there is no boot signal to gate on.
     boot_complete: bool,
     /// Virtual time advanced so far, in cycles-equivalent.
@@ -559,7 +559,7 @@ impl QemuBackend {
         // Arch gate (BEFORE spawning QEMU): the persona-esp32-iot hunt loaded an
         // Xtensa image onto a RISC-V ESP32-C3 and got 136 MB of UART garbage with
         // no error. QEMU boots from the merged `.bin`, which is raw and carries no
-        // ISA, so we cannot check the flash image directly — but the esp-idf build
+        // ISA, so we cannot check the flash image directly, but the esp-idf build
         // emits the app ELF (which DOES carry e_machine) right beside it. If the
         // image itself is an ELF, check it; otherwise check a sibling app ELF if
         // one is present. A raw `.bin` with no sibling ELF is left unchecked
@@ -752,7 +752,7 @@ impl QemuBackend {
         // the demo firmware writes MAGIC_VALUE into the mailbox as the first
         // thing app_main does, so its appearance is the earliest reliable
         // "past the ROM + 2nd-stage bootloader" signal the backend can see.
-        // A failed read leaves the flag down (floor stays — the safe side).
+        // A failed read leaves the flag down (floor stays; the safe side).
         if !self.boot_complete {
             if let Ok(magic) = self.read_guest_u32(mailbox::MAGIC) {
                 if magic == mailbox::MAGIC_VALUE {
@@ -826,7 +826,7 @@ impl QemuBackend {
             return Ok(());
         }
         if !self.bus_magic_seen {
-            // A pre-v2 firmware never raises the magic — un-primed RAM reads
+            // A pre-v2 firmware never raises the magic, un-primed RAM reads
             // as an honest 0 through a WORKING channel. A read that FAILS is a
             // control-channel fault and must surface, not masquerade as "magic
             // not raised" (a v2 firmware would spin on RSP_SEQ forever).
@@ -879,7 +879,7 @@ impl QemuBackend {
         let mut active = self.i2c_ring_active.take();
         // Mirrors the Renode bridge's `I2cBridgeState::ensure_mode` exactly:
         // switching TO write stops any open transaction; switching to read on
-        // the SAME address is a repeated START (no Stop — a register-read
+        // the SAME address is a repeated START (no Stop, a register-read
         // slave must not see its transaction boundary mid-read); a read on a
         // DIFFERENT address stops the old transaction first.
         let ensure_mode = |active: &mut Option<(u8, bool)>, cb: &mut I2cCb, a: u8, read: bool| {
@@ -1123,7 +1123,7 @@ impl Mcu for QemuBackend {
                     // Loud-drop discipline: a failed guest write means the
                     // injection never landed. Silently swallowing the Err left
                     // the shadow un-updated AND printed nothing, so the drop was
-                    // invisible — matching set_analog_in's "ADC injection write
+                    // invisible, matching set_analog_in's "ADC injection write
                     // failed" and the no-gdbstub branch above.
                     Err(e) => eprintln!(
                         "qemu: digital-input injection write failed \
@@ -1133,7 +1133,7 @@ impl Mcu for QemuBackend {
                 }
             }
         } else if !self.unbridged_gpio_warned {
-            // The addressed port has no bank in this SoC — the injection cannot
+            // The addressed port has no bank in this SoC; the injection cannot
             // land and the firmware read of this pin will never see the board
             // level. Say so once rather than returning silently (ESP32 GPIO>=32
             // maps to port '1', which the single-bank ESP32 SoC does not expose).
@@ -1152,7 +1152,7 @@ impl Mcu for QemuBackend {
         // so injection rides the RAM mailbox (05 §5.1): the modeled voltage is
         // converted to a 12-bit count and written into the channel's mailbox
         // slot each chunk, with the channel's ADC_MASK bit set. Firmware reads
-        // the count from the slot rather than a real peripheral — a FIRMWARE
+        // the count from the slot rather than a real peripheral, a FIRMWARE
         // CONTRACT, stated as such in [`mailbox`], retired per function the
         // day the fork models the peripheral (05 §5.3).
         if channel >= mailbox::ADC_CHANNELS {
@@ -1246,7 +1246,7 @@ impl Mcu for QemuBackend {
         // participating in the mailbox v2 contract submits transaction-level
         // bursts and each byte is surfaced through this callback (MISO bytes
         // return via the response cell). Gated on BUS_MAGIC; unmodified vendor
-        // firmware driving the real (unmodeled) SPI controller is untouched —
+        // firmware driving the real (unmodeled) SPI controller is untouched,
         // and, honestly, unserved until the fork grows a peripheral hook.
         self.on_spi = Some(cb);
     }
@@ -1402,7 +1402,7 @@ mod tests {
     // ── run_window: the boot-only floor/cap (R8 #5) ──────────────────────────
 
     /// THE BUG (R8 #5): the 8 ms floor was unconditional, so a steady-state
-    /// scheduler chunk of 100 µs advanced the guest ~8 ms — an ~80x
+    /// scheduler chunk of 100 µs advanced the guest ~8 ms, an ~80x
     /// over-advance that desynced the QEMU MCU from the analog solve and the
     /// lockstep peers. Post-boot, the requested interval must be honored
     /// exactly. Before the fix this asserted 8 ms for the 100 µs case.
@@ -1487,7 +1487,7 @@ mod tests {
     }
 
     /// THE BUG: a raw `.bin` (Xtensa flash image) sits in a directory that holds
-    /// TWO sibling ELFs of DIFFERENT arch — the matching Xtensa `esp32_blinky.elf`
+    /// TWO sibling ELFs of DIFFERENT arch; the matching Xtensa `esp32_blinky.elf`
     /// AND the non-matching RISC-V `esp32c3_blinky.elf`. The gate must PASS for an
     /// Xtensa board because a correct-arch sibling exists; it must NOT false-error
     /// just because the RISC-V sibling disagrees.

@@ -117,7 +117,7 @@ pub fn draw(f: &mut Frame, state: &AppState, cosim: Option<&CosimUpdate>, cosim_
 }
 
 /// The dismissible one-line launch banner. Dim, borderless, and truncated to the
-/// terminal width — it points a first-time user at the non-TUI report surfaces
+/// terminal width; it points a first-time user at the non-TUI report surfaces
 /// and disappears on the first keypress.
 fn draw_banner(f: &mut Frame, area: Rect) {
     let line = Line::from(Span::styled(
@@ -316,7 +316,7 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
 
     let mut lines: Vec<Line> = Vec::new();
 
-    // A board with no MCU / no firmware target has no co-sim to run — the pane
+    // A board with no MCU / no firmware target has no co-sim to run; the pane
     // is a static-analysis surface, not a firmware co-sim. Say that plainly in
     // every state instead of the MCU-centric "press [r] to run" framing.
     if state.no_mcu {
@@ -339,7 +339,7 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
     match cosim {
         None => {
             // The no-MCU case returned early above, so here there IS an MCU to
-            // co-simulate — show the idle "press [r]" prompt.
+            // co-simulate, show the idle "press [r]" prompt.
             lines.push(Line::from(vec![
                 Span::styled("idle — press ", Style::default().fg(Color::Gray)),
                 Span::styled("[r]", Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD)),
@@ -409,7 +409,7 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
                     for g in &u.gpio_nets {
                         let level = Level::from_volts(g.volts);
                         // Voltage-threshold label (not a drive direction): HIGH
-                        // near a rail, LOW near 0 V, MID in between — so a 1.48 V
+                        // near a rail, LOW near 0 V, MID in between, so a 1.48 V
                         // node can never read as "low".
                         let glyph = format!("{} {:<4}", level.glyph(), level.word());
                         let lvl_color = match level {
@@ -434,7 +434,7 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
 
                 // ── Chip-substitution honesty ─────────────────────────────────
                 // If the board's MCU was modelled by a less-specific core, the
-                // GPIO/UART results are from a substitute chip — say so in yellow
+                // GPIO/UART results are from a substitute chip, say so in yellow
                 // (parallel to the stall note) so they are never read as exact.
                 if let Some(sub) = &state.backend_substituted {
                     lines.push(Line::from(Span::styled(
@@ -484,7 +484,7 @@ fn draw_cosim(f: &mut Frame, area: Rect, state: &AppState, cosim: Option<&CosimU
                 // anything, say so plainly rather than freezing silently. While
                 // running we wait out a boot window; on completion we show it
                 // unconditionally (a finished run that produced nothing is the
-                // clearest stall of all — keep the pane honest, don't blank it).
+                // clearest stall of all, keep the pane honest, don't blank it).
                 let quiet = !u.gpio_active && !u.gpio_driven && !u.uart_seen;
                 if quiet && (u.done || u.wall_s > STALL_AFTER_WALL_S) {
                     let head = if u.done {
@@ -553,7 +553,7 @@ fn series_color(idx: usize) -> Color {
 }
 
 /// The scope pane: probed nets' recent voltage history as stacked braille
-/// sparklines (one mini-chart per net — at these pane widths separate y-scales
+/// sparklines (one mini-chart per net, at these pane widths separate y-scales
 /// with a per-net label read far better than one shared multi-series chart).
 /// Display-only: the sole interaction is the `p` probe-toggle in the list.
 fn draw_scope(f: &mut Frame, area: Rect, state: &AppState, cosim_running: bool) {
@@ -651,7 +651,7 @@ fn draw_scope(f: &mut Frame, area: Rect, state: &AppState, cosim_running: bool) 
             continue;
         };
 
-        // Header: "◉ NET 1.23V 0.00..3.30" — compact so latest + min..max
+        // Header: "◉ NET 1.23V 0.00..3.30", compact so latest + min..max
         // survive a ~24-column pane; the net name yields first.
         let header = match (series.latest(), series.min_max()) {
             (Some(last), Some((lo, hi))) => {
@@ -800,7 +800,7 @@ fn draw_detail_overlay(f: &mut Frame, state: &AppState) {
     );
 }
 
-/// The part/net detail overlay opened by Enter on the Nets&Parts pane — the
+/// The part/net detail overlay opened by Enter on the Nets&Parts pane; the
 /// counterpart to the findings detail, so Enter is consistent across panes.
 fn draw_left_detail_overlay(f: &mut Frame, state: &AppState) {
     let Some(detail) = state.left_detail_view() else {
@@ -936,7 +936,7 @@ fn spinner(t: f64) -> char {
 
 /// Hard-wrap `s` into chunks of at most `width` characters, pushing each chunk
 /// into `out`. An empty input yields a single empty row (so a blank UART line
-/// still occupies a row). Counts by character, never splitting a codepoint —
+/// still occupies a row). Counts by character, never splitting a codepoint,
 /// which is what keeps multibyte UART bytes from garbling the pane.
 fn wrap_into(s: &str, width: usize, out: &mut Vec<String>) {
     let width = width.max(1);
@@ -1086,7 +1086,7 @@ mod tests {
         assert!(all.contains("◉ /PA5"), "PA5 header:\n{all}");
         assert!(all.contains("0.00..3.30"), "LED min..max window:\n{all}");
         assert!(all.contains("3.30V"), "latest value shown:\n{all}");
-        // Braille dots actually drawn (U+2800..U+28FF) — the trace itself.
+        // Braille dots actually drawn (U+2800..U+28FF); the trace itself.
         assert!(
             all.chars().any(|c| ('\u{2800}'..='\u{28FF}').contains(&c) && c != '\u{2800}'),
             "braille trace glyphs present:\n{all}"
@@ -1098,7 +1098,7 @@ mod tests {
         assert!(all.contains("p probe"), "footer lists the p key:\n{all}");
     }
 
-    /// Not an assertion — a viewer. `cargo test -p hauksbee-engine --lib
+    /// Not an assertion, a viewer. `cargo test -p hauksbee-engine --lib
     /// scope_pane_snapshot -- --ignored --nocapture` prints the rendered frame
     /// so a human can eyeball the scope pane without a PTY.
     #[test]

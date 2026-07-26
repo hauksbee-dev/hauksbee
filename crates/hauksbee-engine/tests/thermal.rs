@@ -301,7 +301,7 @@ fn dual_package(
         // Per-UNIT rating, as the model DB documents for dual pairs
         // (bjt.toml: ratings are "per transistor"). 0.6 W: each 0.5 W unit is
         // individually fine, so Overpower must NOT fire even when the pooled
-        // 1.0 W exceeds it — only Tj pools.
+        // 1.0 W exceeds it, only Tj pools.
         max_power_w: Some(0.6),
         theta_ja_c_per_w: Some(250.0),
         max_junction_temp_c: Some(200.0),
@@ -319,7 +319,7 @@ fn dual_package(
 }
 
 /// Both units dissipating: pooled 1.0 W through the shared 250 C/W package is
-/// Tj = 25 + 250 = 275 C > 200 C — overtemperature MUST fire (each unit alone
+/// Tj = 25 + 250 = 275 C > 200 C, overtemperature MUST fire (each unit alone
 /// reads 150 C, which is how the bug hid). Per-unit Overpower must stay quiet
 /// (0.5 W < 0.6 W per unit), and both unit rows must report the shared Tj.
 #[test]
@@ -372,7 +372,7 @@ fn dual_package_pools_sibling_dissipation_for_tj() {
 }
 
 /// One unit dissipating, its sibling idle: the pool is just that unit's own
-/// 0.5 W, Tj = 150 C < 200 C — no fault. Pooling must not inflate a package
+/// 0.5 W, Tj = 150 C < 200 C, no fault. Pooling must not inflate a package
 /// whose single active unit is within limits (the false-positive side).
 #[test]
 fn dual_package_single_active_unit_does_not_false_fire() {

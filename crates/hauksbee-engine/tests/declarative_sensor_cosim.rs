@@ -2,26 +2,26 @@
 //! interpreter (`RegisterMapSensor`).
 //!
 //! These tests are written against the *design contract* defined in
-//! `docs/hunts/DECLARATIVE_SENSOR_DESIGN.md` — the interpreter does NOT exist
+//! `docs/hunts/DECLARATIVE_SENSOR_DESIGN.md`; the interpreter does NOT exist
 //! yet.  Every test here is intentionally RED: it will compile cleanly and fail
 //! at runtime (with an explicit "unimplemented" panic) until a real
 //! `RegisterMapSensor` is shipped that implements the specified API.
 //!
 //! ## Tests
 //!
-//! 1. **`declarative_lm75_equivalence`** — pure model, no firmware.
+//! 1. **`declarative_lm75_equivalence`**, pure model, no firmware.
 //!    Builds a declarative LM75 spec via TOML and asserts it returns
 //!    byte-identical reads to the hand-coded `Lm75` across several
 //!    temperatures (-10, 0, 25, 30.5, 85 °C).  Pins that the interpreter
 //!    matches the reference encoding.
 //!
-//! 2. **`declarative_spi_who_am_i_and_data`** — pure model, no firmware.
+//! 2. **`declarative_spi_who_am_i_and_data`**, pure model, no firmware.
 //!    Builds a declarative SPI sensor spec with a const WHO_AM_I register and
 //!    one i16 data register driven by an input.  Asserts WHO_AM_I reads 0x42
 //!    and the data register reflects a swept input over the `SpiSlave`
 //!    interface.
 //!
-//! 3. **`declarative_lm75_i2c_thermostat_cosim`** — Renode co-sim gate.
+//! 3. **`declarative_lm75_i2c_thermostat_cosim`**, Renode co-sim gate.
 //!    Attaches the declarative LM75 (NOT the hand-coded `Lm75`) to the I2C bus,
 //!    runs `testdata/firmware/stm32_i2c_thermostat/thermostat.elf` on the STM32
 //!    Renode backend, sweeps `temperature_c` across the 30 °C threshold, and
@@ -49,7 +49,7 @@
 //! stub with the real import and all three tests should go green together.
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Placeholder stub — delete and replace with the real import once the
+// Placeholder stub, delete and replace with the real import once the
 // interpreter lands in hauksbee-engine.
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -189,7 +189,7 @@ fn declarative_lm75_equivalence() {
             .with_slave(Box::new(sensor));
         let sut_bytes = i2c_read_register(&mut sut_bus, 0x48, 0x00, 2);
 
-        // Bytes must be identical — same encoding, same rounding, same byte order.
+        // Bytes must be identical, same encoding, same rounding, same byte order.
         assert_eq!(
             sut_bytes, ref_bytes,
             "at {t} °C: declarative sensor returned {sut_bytes:?}, \
@@ -266,7 +266,7 @@ fn declarative_spi_who_am_i_and_data() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Test 3: Full Renode co-sim gate — declarative LM75 drives the FLAG net
+// Test 3: Full Renode co-sim gate, declarative LM75 drives the FLAG net
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// End-to-end Renode co-simulation: the declarative LM75 (NOT the hand-coded

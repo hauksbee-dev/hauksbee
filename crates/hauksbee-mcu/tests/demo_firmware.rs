@@ -1,6 +1,6 @@
 //! Integration tests against hauksbee's own demo firmware
 //! (testdata/firmware/demo): banner on boot, UART echo/commands, LED blink
-//! on PB5, ADC readback — every co-sim coupling path with firmware we
+//! on PB5, ADC readback, every co-sim coupling path with firmware we
 //! control end to end.
 
 // The whole file drives the in-process simavr core, so it only exists on

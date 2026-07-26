@@ -28,8 +28,8 @@ description = "ACME's sensor line"   # optional
 
 Every field except `description` is required; unknown fields are rejected
 (typos must not vanish silently). Every `models/*.toml` file must pass the
-same validation `hauksbee models lint` applies — including compiling any
-`[models.logic]` block — before anything is installed. Each failure category
+same validation `hauksbee models lint` applies, including compiling any
+`[models.logic]` block, before anything is installed. Each failure category
 is a named error (`hauksbee-models/src/pack.rs`, `PackError`).
 
 ## CLI
@@ -64,4 +64,4 @@ The higher layer wins outright; the specificity score only breaks ties within
 a layer. Two packs shipping the same model id is a same-layer conflict:
 reported loudly at load, naming both packs, never silently resolved.
 `hauksbee models resolve <board>` prints the winning entry, layer, and origin
-per component — the pack author's debugging surface.
+per component; the pack author's debugging surface.

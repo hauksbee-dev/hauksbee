@@ -9,9 +9,9 @@
 //! These helpers build a tiny purpose-made circuit per device kind, solve its
 //! DC operating point with the real hauksbee solver, and assert physical sanity:
 //!
-//!   * diode  — forward voltage at a stated forward current,
-//!   * BJT    — DC current gain (beta = Ic/Ib) at a stated bias,
-//!   * LDO    — output voltage under load, within tolerance, with headroom.
+//!   * diode, forward voltage at a stated forward current,
+//!   * BJT, DC current gain (beta = Ic/Ib) at a stated bias,
+//!   * LDO, output voltage under load, within tolerance, with headroom.
 //!
 //! The same functions back both the offline fixture test (canned codex reply,
 //! always runs) and the `#[ignore]` live test (real codex). When a real
@@ -391,7 +391,7 @@ pub fn assert_ldo_physical(m: &ModelEntry, nominal: f64, tol: f64) {
 
 // ── Offline fixture tests (always run, no codex / network) ──────────────────
 
-/// A canned codex reply for the BC847 — the exact shape real codex returns,
+/// A canned codex reply for the BC847; the exact shape real codex returns,
 /// captured from a live run. This is the CI-safe path: it never shells out.
 const FIXTURE_BC847: &str = r#"
 [[models]]
@@ -490,11 +490,11 @@ fn fixture_ams1117_regulates() {
 /// A deliberately garbage model must be rejected by the physical checks, not
 /// silently bound. This is the "validation rejects nonsense" guarantee: the
 /// model passes the static range checks (bf in 1..2000, is in 1e-20..1e-3) yet
-/// is physically absurd, and physical validation must reject it — whether by
+/// is physically absurd, and physical validation must reject it, whether by
 /// landing beta out of band or by failing to reach a sane operating point.
 #[test]
 fn garbage_bjt_is_rejected() {
-    // Case 1: bf = 5 with a normal is — a "transistor" that barely amplifies.
+    // Case 1: bf = 5 with a normal is, a "transistor" that barely amplifies.
     // It converges fine, but beta lands ~5, far below the BC847 band.
     let weak = first_model(
         r#"
@@ -513,7 +513,7 @@ vaf = 65.0
         "a bf=5 'transistor' slipped through physical validation"
     );
 
-    // Case 2: is = 1e-20 — a junction that never turns on. The operating point
+    // Case 2: is = 1e-20, a junction that never turns on. The operating point
     // cannot be reached, so the solver reports an error (also a rejection).
     let dead = first_model(
         r#"

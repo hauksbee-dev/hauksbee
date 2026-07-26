@@ -1,4 +1,4 @@
-//! `--ampacity`: IPC-2221 capacity-only report. No current is fabricated here —
+//! `--ampacity`: IPC-2221 capacity-only report. No current is fabricated here,
 //! without a per-net current spec this tells the user the bottleneck capacity and
 //! explicitly asks for a current before pass/fail. Text-only (there is no JSON /
 //! plain variant of this report).

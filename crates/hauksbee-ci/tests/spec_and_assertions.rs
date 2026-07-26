@@ -119,7 +119,7 @@ fn typoed_max_current_ref_is_rejected_not_silently_green() {
 
 #[test]
 fn max_current_on_untracked_component_kind_is_rejected_not_green() {
-    // C1 is a real capacitor on the board, so the typo check passes — but peak
+    // C1 is a real capacitor on the board, so the typo check passes, but peak
     // current is only measured for resistors and diodes, so the guard would
     // never be evaluated. That must be a loud rejection, never a green pass.
     let board =
@@ -291,7 +291,7 @@ fn boot_coverage_requires_net_min_and_deadline() {
 // A `scenario = "id"` scope on an assertion must name a declared [[scenario]]
 // id. Before the fix, an unknown scope silently defaulted the window start to
 // t=0, so the rail_window was measured over the WHOLE run instead of the
-// scenario window it claimed to judge — and the "never sampled in scenario
+// scenario window it claimed to judge, and the "never sampled in scenario
 // window" failure could never fire.
 
 #[test]

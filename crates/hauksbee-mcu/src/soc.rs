@@ -1,7 +1,7 @@
 //! Data-driven MCU/SoC descriptors (06-extensibility-sdk §2).
 //!
 //! The per-part `RenodeConfig`/`QemuConfig` constructors used to embed register
-//! offsets, platform paths, and port maps in hand-written Rust — the single
+//! offsets, platform paths, and port maps in hand-written Rust; the single
 //! largest hardcoded surface in the co-sim layer, and the home of the
 //! F103-vs-F4 ODR-offset footgun. This module moves that data into reviewed
 //! TOML: one `db/mcu/<part>.soc.toml` file per part, read through a single
@@ -35,11 +35,11 @@
 //! The plan's illustrative shape omits several fields the *real* constructors
 //! set, all carried by this schema so a descriptor reproduces its constructor
 //! byte-for-byte:
-//!   - `machine`, `mcu_label`, `frequency_hz` — always present on the structs.
-//!   - `extra_setup` / `post_load_setup` — the FE310 bring-up footgun (PRCI
+//!   - `machine`, `mcu_label`, `frequency_hz`, always present on the structs.
+//!   - `extra_setup` / `post_load_setup`; the FE310 bring-up footgun (PRCI
 //!     clock tags + `{cpu} PC vinit`) lives in `post_load_setup`, not code.
-//!   - `[soc.spi].extra_repl` — the STM32F103 SPI1-injection fragment.
-//!   - `[[soc.adc]]` — the AdcChannelMap injection recipes that landed after the
+//!   - `[soc.spi].extra_repl`; the STM32F103 SPI1-injection fragment.
+//!   - `[[soc.adc]]`; the AdcChannelMap injection recipes that landed after the
 //!     plan (05 §5.1). No shipped built-in uses them (the stock Renode platforms
 //!     model no ADC, so the loud-drop path is correct), but the schema carries
 //!     them so a board that knows where its counts land can inject purely as
@@ -47,8 +47,8 @@
 //!
 //! The plan example also wrote `sysbus.gpioPortA` / `platforms/...` (no `@`);
 //! the shipped descriptors instead store the exact backend-facing strings the
-//! constructors used (`gpioPortA`, `@platforms/...`) — the backend prepends
-//! `sysbus.` when polling and Renode resolves the `@`-path — so the equivalence
+//! constructors used (`gpioPortA`, `@platforms/...`); the backend prepends
+//! `sysbus.` when polling and Renode resolves the `@`-path, so the equivalence
 //! proof against the deleted constructors is byte-exact. The plan's *field
 //! names* are honored; the *values* are whatever the backend consumes.
 //!
@@ -56,7 +56,7 @@
 //!
 //! [`SocConfig::resolve`] maps a `backend:part` spec (e.g. `"renode:stm32f103"`)
 //! to a descriptor. The shipped parts are embedded via `include_str!` (the
-//! binary stays self-contained, the file stays the single source of truth — the
+//! binary stays self-contained, the file stays the single source of truth; the
 //! `mcp4728.toml` precedent), and a user override directory is searched first so
 //! a new part is added without recompiling. See [`SocConfig::resolve`].
 //!
@@ -105,7 +105,7 @@ pub enum SocError {
     #[error("unknown QEMU arch {0:?}: expected \"xtensa\" or \"riscv32\"")]
     UnknownArch(String),
 
-    /// A GPIO port/bank declared `width = 0` — it addresses no bits.
+    /// A GPIO port/bank declared `width = 0`; it addresses no bits.
     #[error("port/bank {letter:?} has zero width; a GPIO port must have at least one bit")]
     ZeroWidthPort { letter: char },
 
@@ -115,7 +115,7 @@ pub enum SocError {
     #[error("port/bank {letter:?} width {width} exceeds 32; a GPIO bank maps onto one 32-bit word")]
     PortTooWide { letter: char, width: u8 },
 
-    /// Two GPIO ports/banks claim the same letter — the engine keys on the
+    /// Two GPIO ports/banks claim the same letter; the engine keys on the
     /// letter, so the second would silently shadow the first.
     #[error("duplicate GPIO port/bank letter {0:?}: port letters must be unique")]
     DuplicatePortLetter(char),
@@ -157,7 +157,7 @@ pub enum SocError {
     },
 
     /// An override-dir descriptor file existed for the requested part but
-    /// failed to load — carries the path so the failing FILE is named, and the
+    /// failed to load, carries the path so the failing FILE is named, and the
     /// inner named validation error so the failing FIELD/CHECK is too. This is
     /// deliberately fatal for the resolution (fail loud): an invalid override
     /// is never silently skipped in favour of a lower-priority descriptor.
@@ -247,7 +247,7 @@ mod renode_schema {
         #[serde(default)]
         pub post_load_setup: Vec<String>,
         // `PortMap` (letter/peripheral/odr_offset/width) already derives
-        // Deserialize, so `[[soc.ports]]` maps straight onto it — the existing
+        // Deserialize, so `[[soc.ports]]` maps straight onto it; the existing
         // derive does the mechanical parsing (06 §2: reuse the derives).
         #[serde(default)]
         pub ports: Vec<PortMap>,
@@ -587,7 +587,7 @@ impl SocConfig {
     ///   3. the embedded built-in for the spec.
     ///
     /// A file found by (1) or (2) still declares its own `backend`, and the
-    /// resulting config is dispatched by that declared backend — so the `part`
+    /// resulting config is dispatched by that declared backend, so the `part`
     /// half of the spec is a filename, and the `backend` half is validated
     /// against the descriptor: a `renode:mypart` spec that resolves to a
     /// `backend = "qemu"` file is a [`SocError::BackendMismatch`], never a
@@ -629,7 +629,7 @@ impl SocConfig {
                     // before the full parse: peek_backend is feature-independent,
                     // so a mismatched descriptor reports BackendMismatch even in
                     // a build where the declared backend's feature is disabled
-                    // (from_soc_toml would say BackendDisabled — misleading for
+                    // (from_soc_toml would say BackendDisabled, misleading for
                     // an invalid renode override that typo'd `backend = "qemu"`).
                     return peek_backend(&src)
                         .and_then(|declared| {
@@ -758,7 +758,7 @@ fn env_dir_missing_warning(dir: &std::path::Path) -> Option<String> {
 /// (`<part>.soc.toml`). This catches the mis-named-file trap: the user
 /// installed a descriptor, the resolver never looked at it, and the built-in
 /// silently won. Directories with no descriptors (or that don't exist) stay
-/// silent — nothing there was plausibly meant to override.
+/// silent, nothing there was plausibly meant to override.
 fn builtin_fallback_hints(part: &str, dirs: &[PathBuf]) -> Vec<String> {
     let mut hints = Vec::new();
     for dir in dirs {
@@ -802,7 +802,7 @@ fn not_found_hint(spec: &str, builtins: &[&'static str]) -> String {
 
 /// The built-in spec closest to `spec`, or `None` when nothing is plausibly
 /// close. Comparison is on the `part` half; a same-backend candidate is
-/// preferred. Ranking is longest-common-prefix first, then edit distance —
+/// preferred. Ranking is longest-common-prefix first, then edit distance,
 /// LCP-first is what makes `stm32f407` suggest `stm32f4_discovery` (LCP 7)
 /// over `stm32f103` (LCP 5, despite the smaller edit distance), mirroring how
 /// a human reads part families.
@@ -971,7 +971,7 @@ mod not_found_honesty_tests {
 mod width_validation_tests {
     use super::{validate_ports, SocError};
 
-    /// Round-8 #15: a GPIO bank/port wider than 32 bits is refused at load — the
+    /// Round-8 #15: a GPIO bank/port wider than 32 bits is refused at load; the
     /// engine observes a bank as one u32 word and shifts `1u32 << bit`, so a
     /// width of 33+ would overflow the shift on the first poll.
     #[test]

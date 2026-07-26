@@ -2,17 +2,17 @@
 //! MPU-6050 through the synchronous input responder (05 §1.5).
 //!
 //! The firmware (testdata/firmware/soft_i2c_sensor) toggles SCL/SDA on
-//! PD2/PD3 — deliberately NOT the ATmega328P's hardware TWI pins — with the
+//! PD2/PD3, deliberately NOT the ATmega328P's hardware TWI pins, with the
 //! push-pull master waveform the [`SoftI2cResponder`] documents, sampling
 //! every ACK and read bit with a plain `PIND` read one instruction after the
 //! SCL rising edge. The slave is the shipped declarative MPU-6050 spec
-//! (docs/hunts/specs/mpu6050.toml) on the existing [`I2cBus`] — the same
+//! (docs/hunts/specs/mpu6050.toml) on the existing [`I2cBus`]; the same
 //! model class the hardware-TWI path serves, no parallel device.
 //!
 //! The firmware performs two classic pointered reads with repeated-START
 //! framing (WHO_AM_I 0x75; TEMP_OUT 0x41, two-byte burst with a master ACK
 //! between) and reports "<A|n>W<who>T<hi><lo>" over UART. The test asserts
-//! WHO_AM_I = 0x68, every address byte ACKed, and — transport equality — that
+//! WHO_AM_I = 0x68, every address byte ACKed, and, transport equality, that
 //! the temperature bytes the firmware clocked in over pin edges are exactly
 //! the bytes the sensor model holds for the driven temperature.
 
@@ -87,7 +87,7 @@ fn firmware_reads_i2c_sensor_over_bitbanged_gpios() {
     let bound = bind_board(&board, &lib);
     let mut engine = HauksbeeEngine::from_bound(bound, Some(&fw), "/ci").expect("build engine");
 
-    // The bytes the model holds for TEMP_OUT at the driven temperature — the
+    // The bytes the model holds for TEMP_OUT at the driven temperature; the
     // transport-equality oracle (the spec's raw = temp_c*340 - 12420.2 math
     // has its own unit proofs; this test proves the PIN-EDGE TRANSPORT).
     let mut sensor = RegisterMapSensor::from_toml(MPU6050_SPEC).expect("shipped spec validates");

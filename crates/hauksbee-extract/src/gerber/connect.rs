@@ -300,7 +300,7 @@ pub fn reconstruct(
                         // outline means the pour copper is *on* that primitive.
                         // Large pours use the grid; small ones test directly. A
                         // multi-contour pour (an outer with holes) uses even-odd
-                        // containment — inside the ring is in, inside a hole is
+                        // containment, inside the ring is in, inside a hole is
                         // out; these are rare and small, so they take the exact
                         // test without a grid.
                         let inside = test_pts.iter().any(|&(px, py)| {
@@ -377,7 +377,7 @@ pub fn reconstruct(
     }
 
     // GND heuristic: among region-touching nets, the one with the most copper.
-    // Break count ties by lowest net id (Reverse) so the GND label is stable —
+    // Break count ties by lowest net id (Reverse) so the GND label is stable,
     // iterating the HashMap keys left it dependent on iteration order when two
     // pours tied on primitive count.
     let gnd_net = net_touches_region
@@ -699,7 +699,7 @@ fn grid_hint(p: &str) -> Option<(u32, u32)> {
             // Walk across a decimal point too, so a body dimension like
             // "3.2x2.5mm" captures left="3.2"/right="2.5" (which then fail the
             // u32 parse and drop out) instead of the integer fragments "2"/"2"
-            // that touch the 'x' — those parsed as a bogus 2x2 pin grid and
+            // that touch the 'x', those parsed as a bogus 2x2 pin grid and
             // oversized the crystal pad window. A real pin grid ("2x18") has no
             // '.', so this does not change it.
             let is_grid_char = |c: char| c.is_ascii_digit() || c == '.';
@@ -730,7 +730,7 @@ fn grid_hint(p: &str) -> Option<(u32, u32)> {
 /// Parse `P2.54mm` / `P1.27mm` pitch (mm) from a footprint name.
 fn pitch_hint(p: &str) -> Option<f64> {
     // Match the pitch token `p<number>mm`, i.e. a 'p' IMMEDIATELY followed by a
-    // digit — not merely the first 'p' in the name. `pinheader_2x18_p2.54mm` has
+    // digit, not merely the first 'p' in the name. `pinheader_2x18_p2.54mm` has
     // its first 'p' in "pinheader"; keying on that read no digits and fell back
     // to the 2.54 mm default, so any non-2.54 header (P1.27mm, P5.08mm, ...) was
     // silently mis-pitched. The caller already lowercased `p`.
@@ -808,7 +808,7 @@ mod tests {
     fn grid_hint_rejects_decimal_body_sizes() {
         // R36: the digit walk stopped at the decimal point, so a body dimension
         // like "3.2x2.5mm" captured the integer fragments "2"/"2" that touch the
-        // 'x' and returned a bogus 2x2 pin grid — oversizing the crystal pad
+        // 'x' and returned a bogus 2x2 pin grid, oversizing the crystal pad
         // window ~3x and letting it claim stray orphan flashes. A decimal body
         // size must not read as a grid.
         assert_eq!(grid_hint("crystal_smd_3225-2pin_3.2x2.5mm"), None);
@@ -854,7 +854,7 @@ mod tests {
     fn gnd_label_is_deterministic_on_a_copper_count_tie() {
         // Round-8 #14: two separate region pours with EQUAL primitive counts
         // tie on "most copper". Iterating the HashMap keys made the GND label
-        // land on whichever tied net came first in iteration order — flaky
+        // land on whichever tied net came first in iteration order, flaky
         // across extractions. The tiebreak now always labels the lowest net id.
         let layer = vec![
             cap(0.0, 0.0, 0.0, 0.0, 1.0, PrimKind::Region),

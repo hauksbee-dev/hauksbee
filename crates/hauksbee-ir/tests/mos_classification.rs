@@ -1,6 +1,6 @@
 //! Dev-plan 04 §3.3: the MOSFET's conduction/sense split is MODEL-DEPENDENT.
 //! Gate and bulk are sense terminals for a default (charge-free, body-free)
-//! model — the pre-§3.3 classification, bit-identically — and become
+//! model; the pre-§3.3 classification, bit-identically, and become
 //! conduction terminals exactly when the model carries gate capacitance /
 //! bulk-junction physics, because their KCL rows then receive the companion
 //! and junction currents. The solve-side zero-row cross-check holds the

@@ -1,13 +1,13 @@
 # External simulator backends
 
-> For the full capability map of hauksbee — MCU architecture coverage, which parts are proven, and the scope of the co-sim layer — see [`docs/about/CAPABILITIES.md`](../about/CAPABILITIES.md).
+> For the full capability map of hauksbee (MCU architecture coverage, which parts are proven, and the scope of the co-sim layer) see [`docs/about/CAPABILITIES.md`](../about/CAPABILITIES.md).
 
 hauksbee's MCU co-simulation layer runs firmware against the solved analog
 circuit in lockstep. Three backends cover the full supported architecture range:
 
 | Backend | Chips | Emulator | Install needed? |
 |---------|-------|----------|-----------------|
-| `simavr` | ATmega328P (AVR / Arduino) | libsimavr, linked in-process | **Yes** (source build) — `scripts/install-sims.sh --avr` |
+| `simavr` | ATmega328P (AVR / Arduino) | libsimavr, linked in-process | **Yes** (source build), `scripts/install-sims.sh --avr` |
 | `renode` | STM32 / nRF52840 / SiFive FE310 (RISC-V) / RP2040 | External headless Renode process | **Yes** |
 | `qemu` | ESP32 / ESP32-S3 (Xtensa) / ESP32-C3 (RISC-V) | External Espressif QEMU process | **Yes** |
 
@@ -35,7 +35,7 @@ demand; tests skip cleanly when the binary is absent rather than failing.
 ## Quick install
 
 For the ESP32-family backend, hauksbee can fetch the Espressif QEMU fork
-itself — no shell script needed:
+itself, no shell script needed:
 
 ```
 hauksbee install esp-qemu          # prompts; add --yes for CI
@@ -89,7 +89,7 @@ is missing.
 hauksbee calls `find_renode()` in
 `crates/hauksbee-mcu/src/renode/process.rs`. It checks, in order:
 
-1. `$HAUKSBEE_RENODE` — if set, it must be the full path to the `renode`
+1. `$HAUKSBEE_RENODE`, if set, it must be the full path to the `renode`
    binary. hauksbee uses it directly and fails clearly if the path does not
    exist.
 2. `renode` on `$PATH`.
@@ -108,15 +108,15 @@ hauksbee calls `find_qemu(arch)` in
 `crates/hauksbee-mcu/src/qemu/process.rs`. For each of `qemu-system-xtensa`
 (ESP32 / ESP32-S3) and `qemu-system-riscv32` (ESP32-C3), it checks:
 
-1. `$HAUKSBEE_QEMU_XTENSA` / `$HAUKSBEE_QEMU_RISCV32` — full path to the
+1. `$HAUKSBEE_QEMU_XTENSA` / `$HAUKSBEE_QEMU_RISCV32`, full path to the
    binary; used directly if set.
-2. `$HAUKSBEE_QEMU_DIR/bin/<name>` — points at the `bin/` directory of the
+2. `$HAUKSBEE_QEMU_DIR/bin/<name>`, points at the `bin/` directory of the
    unpacked fork.
-3. `~/.hauksbee-qemu-esp/qemu/bin/<name>` — the conventional manual-unpack
+3. `~/.hauksbee-qemu-esp/qemu/bin/<name>`; the conventional manual-unpack
    location.
-4. `~/.espressif/tools/qemu-*/<ver>/qemu/bin/<name>` — the location used by
+4. `~/.espressif/tools/qemu-*/<ver>/qemu/bin/<name>`; the location used by
    ESP-IDF's `idf_tools.py install qemu-xtensa qemu-riscv32`.
-5. `<name>` on `$PATH` — accepted **only if** it is the Espressif fork. The
+5. `<name>` on `$PATH`, accepted **only if** it is the Espressif fork. The
    check runs `qemu-system-xtensa -machine help` and looks for `esp32` in the
    output. Homebrew's mainline `qemu-system-xtensa` lists only `lx60`/`kc705`/
    `sim` and is rejected. This guard is not optional: mainline QEMU cannot boot

@@ -47,8 +47,8 @@ Same netlists, same tolerances, wall-clock. ngspice 46, Apple Silicon.
 |---|---|---|---|
 | half-wave rectifier, 10ms tran | 2.05 ms | ~23x wall-clock (48.1 ms incl. process start) | <1% rel |
 | synapse array, 90 Tarski-like blocks (partitioned) | 6.2-7.1x vs own monolithic | ~6x | 1.05e-7 vs monolithic |
-| small RC island, exact exponential steps | 100x fewer steps at equal accuracy (~35x wall) | — | 9.6e-10 vs analytic |
-| RC ladder 1000 stages | 13.7k steps/s (Auto keeps monolithic: sparse LU already optimal there) | — | partitioned vs monolithic 3.8e-4 |
+| small RC island, exact exponential steps | 100x fewer steps at equal accuracy (~35x wall) |, | 9.6e-10 vs analytic |
+| RC ladder 1000 stages | 13.7k steps/s (Auto keeps monolithic: sparse LU already optimal there) |, | partitioned vs monolithic 3.8e-4 |
 | KiCad-authored vectors: rectifier / 3x-2N2222 amplifier | runs both via SpiceLoader | same netlists | 2.5e-5 / 0.92% max rel vs ngspice |
 
 The accuracy column entries marked "vs analytic" / "vs monolithic" are checked by
@@ -62,7 +62,7 @@ the string CST); the 44MB Tarski board extracts to a bound circuit in
 under a second.
 
 "Any PCB" evidence (bind_sweep over the corpus): 19/19 boards extract and
-bind with zero failures across KiCad 5-10 and Eagle formats — Jetson AGX
+bind with zero failures across KiCad 5-10 and Eagle formats, Jetson AGX
 Thor baseboard 81.4% of simulatable parts resolved (788 analog devices),
 vme-wren 77.8%, multichannel mixer 80.7%, pic_programmer 92.3%, and both
 ATmega boards find and instantiate their MCU.

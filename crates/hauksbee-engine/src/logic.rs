@@ -7,7 +7,7 @@
 //! part's behaviour arrives as data (a validated
 //! [`hauksbee_models::logic_spec::Logic`] block) and is COMPILED once at bind
 //! time into pin index tables, `u64` register state, and evalexpr operator
-//! trees — then evaluated per tick with no parsing and no per-tick
+//! trees, then evaluated per tick with no parsing and no per-tick
 //! allocation of program structure. Ticks happen on every simulated edge in
 //! the replay paths, so bind-time compilation is a real performance
 //! requirement, not a nicety.
@@ -19,21 +19,21 @@
 //! [`LogicExpr`] AST is lowered into a fully parenthesized evalexpr source
 //! string over sanitized boolean variables (`v_<name>` for pins/outputs,
 //! `b_<reg>_<bit>` for register bits; full parenthesization makes operator
-//! precedence a non-issue) and compiled with `build_operator_tree` — the same
+//! precedence a non-issue) and compiled with `build_operator_tree`; the same
 //! pattern `register_map.rs` uses for sensor value expressions.
 //!
 //! ## Evaluation order and combinational cycles
 //!
 //! Outputs are evaluated in dependency (topological) order. Outputs forming a
-//! strongly connected component — a genuine combinational cycle, e.g. the
-//! cross-coupled NOR SR latch — are resolved by Gauss–Seidel fixpoint
+//! strongly connected component, a genuine combinational cycle, e.g. the
+//! cross-coupled NOR SR latch, are resolved by Gauss–Seidel fixpoint
 //! iteration in `outputs`-declaration order (the spec's declared resolution
 //! order), seeded from the previous stable levels (`init` at power-on).
 //!
 //! The iteration bound is [`COMB_FIXPOINT_BOUND`] sweeps. The bound is not a
-//! correctness knob: at compile time every SCC is checked EXHAUSTIVELY — all
+//! correctness knob: at compile time every SCC is checked EXHAUSTIVELY, all
 //! `2^m` assignments of its external inputs crossed with all `2^k` seed
-//! states of its members — and a spec whose cycle fails to settle within the
+//! states of its members, and a spec whose cycle fails to settle within the
 //! bound for any combination is REFUSED with a named error and a concrete
 //! witness (`y = !y` is the canonical refusal). A cycle too wide to enumerate
 //! (`m + k >` [`CONVERGENCE_ENUM_CAP`]) is likewise refused rather than
@@ -52,7 +52,7 @@
 //! See the `logic_spec` module docs for the full contract. In short: per tick
 //! every register computes its next value from the PRE-tick state with
 //! priority reset > async load > clock edge (matching the 74HC595 SRCLR and
-//! 74HC165 PL datasheet rows), then all registers commit simultaneously —
+//! 74HC165 PL datasheet rows), then all registers commit simultaneously,
 //! tied shift+latch clocks behave like real silicon (store one clock behind
 //! shift).
 //!
@@ -62,8 +62,8 @@
 //! CONTROL pin reads the level that keeps the part operating normally:
 //! resets and loads released, clocks enabled, tri-states driving. (A board
 //! that ties these does so in copper; a spec input left unwired must not
-//! freeze the part.) This matches the old hardcoded parts' behaviour — an
-//! unwired SRCLR_n read released, an unwired OE_n stayed enabled — with one
+//! freeze the part.) This matches the old hardcoded parts' behaviour, an
+//! unwired SRCLR_n read released, an unwired OE_n stayed enabled, with one
 //! documented exception: the old `tick_165` treated an unwired PL_n as LOW
 //! (load permanently transparent), which was a modeling artifact, not
 //! silicon; here an unwired PL_n reads released like every other active-low
@@ -88,7 +88,7 @@ pub const COMB_FIXPOINT_BOUND: usize = 16;
 
 /// Maximum `external inputs + cycle members` the exhaustive convergence check
 /// will enumerate (2^cap evaluations). A cycle wider than this is refused
-/// rather than shipped unverified — refuse-rather-than-fake.
+/// rather than shipped unverified, refuse-rather-than-fake.
 pub const CONVERGENCE_ENUM_CAP: u32 = 12;
 
 /// A named logic-compilation failure (everything `logic_spec` validation
@@ -147,7 +147,7 @@ struct CompReg {
     /// (input pin index, edge), plus the previous clock level for edge detect.
     clock: Option<(usize, Edge)>,
     prev_clock: bool,
-    /// (input pin index, active level, reset value) — first active wins.
+    /// (input pin index, active level, reset value), first active wins.
     resets: Vec<(usize, Level, u64)>,
     op: Option<RegisterOp>,
     data_in: Option<DataSrc>,
@@ -183,7 +183,7 @@ struct CompTristate {
 }
 
 /// One bound, compiled `[models.logic]` part: pin tables, register state,
-/// compiled expressions. Pure logic — it computes LEVELS; the caller owns
+/// compiled expressions. Pure logic; it computes LEVELS; the caller owns
 /// voltage thresholds, net wiring, and drivers.
 #[derive(Debug)]
 pub struct LogicComponent {
@@ -528,7 +528,7 @@ impl LogicComponent {
         for members in scc_steps {
             // External variables: everything the member expressions read that
             // is not itself a member. Enumerating non-member OUTPUTS as free
-            // bits over-approximates reachable states — safe: convergence
+            // bits over-approximates reachable states, safe: convergence
             // for a superset of states implies it for the reachable set.
             let member_set: std::collections::HashSet<usize> = members.iter().copied().collect();
             let mut externals: Vec<String> = Vec::new();
@@ -645,7 +645,7 @@ impl LogicComponent {
         self.output_names.iter().any(|n| n == name)
     }
 
-    /// True when the part has at least one clocked register — the parts whose
+    /// True when the part has at least one clocked register; the parts whose
     /// sub-chunk pulse trains demand edge-granular replay.
     pub fn is_sequential(&self) -> bool {
         self.registers.iter().any(|r| r.clock.is_some())
@@ -745,7 +745,7 @@ impl LogicComponent {
     /// One evaluation step. `sample(name, prev)` returns the decided level of
     /// a WIRED input pin given its previous level (the caller applies its
     /// voltage thresholds + hysteresis), or `None` for an unwired pin (which
-    /// then reads its default — see module docs).
+    /// then reads its default, see module docs).
     pub fn tick(&mut self, sample: &mut dyn FnMut(&str, bool) -> Option<bool>) {
         // 1. Sample every input.
         for i in 0..self.input_names.len() {
@@ -1162,7 +1162,7 @@ outputs = ["y"]
     #[test]
     fn too_wide_cycle_is_refused_not_shipped_unverified() {
         // A 13-output ring: converges trivially, but too wide to verify
-        // exhaustively under the cap — refused with the named error.
+        // exhaustively under the cap, refused with the named error.
         let outputs: Vec<String> = (0..13).map(|i| format!("y{i}")).collect();
         let mut comb = std::collections::BTreeMap::new();
         for i in 0..13usize {

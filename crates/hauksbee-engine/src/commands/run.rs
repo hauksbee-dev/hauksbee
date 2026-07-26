@@ -81,7 +81,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         hauksbee_mcu::validate_firmware_path(cfg.firmware.as_deref().expect("just set"))?;
     }
     // Advisory: if this board sits among sibling .kicad_pcb files (a multi-board
-    // product), say so — a clean verdict on one file is misleading if the user
+    // product), say so, a clean verdict on one file is misleading if the user
     // meant the whole thing. Routed through `Notes` so it stays on stderr and is
     // silenced under --quiet / --json / a piped stdout (it is helpful exactly once
     // for an interactive user, and pure noise in report and pipeline output).
@@ -322,7 +322,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // --thermal: run a short co-sim, then print the steady-state junction
     // temperature per dissipating device and exit. Fix #1: a thermal table that
     // covers ~no dissipating devices because the power ICs are UNRESOLVED is a
-    // meaningless result, not a "runs cool" pass — flag it invalid and exit 3.
+    // meaningless result, not a "runs cool" pass, flag it invalid and exit 3.
     if cfg.thermal {
         return crate::reports::thermal::emit(&mut engine, cfg.ambient, cfg.seconds, cfg.json, cfg.strict_thermal);
     }
@@ -365,15 +365,15 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         // a firmware that drives a control line high and HOLDS it (boot-gate style)
         // has zero net toggles yet clearly ran, so a toggles-only test would cry
         // wolf on it. Determined BEFORE emitting so the refusal reaches every
-        // surface — including --json when no MCU was instantiated (cosim is None).
+        // surface, including --json when no MCU was instantiated (cosim is None).
         let zero_activity =
             total_toggles == 0 && !uart_seen && !engine.scheduler().any_gpio_driven();
 
-        // Boot-safety advisory — derived once (so --json and --plain agree) from
+        // Boot-safety advisory, derived once (so --json and --plain agree) from
         // the library so the TUI and web get the same advisory from the same call.
         // `held_high_control_nets` are the heads-up hazards (a control net driven/
         // pulled HIGH and held from reset that switches a transistor/relay and has
-        // no bias resistor — a MOSFET gate / relay / igniter energised at power-up;
+        // no bias resistor, a MOSFET gate / relay / igniter energised at power-up;
         // the switch requirement is the zero-FP guard). `gate_states` is the
         // informational per-gate panel, populated only when firmware actually ran
         // (with no --firmware or a stalled one, every gate would read "floating").
@@ -582,7 +582,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         } else {
             // Default text headless mode: the co-sim activity table is printed
             // elsewhere, but the boot power-up hazard and the gate panel must
-            // surface here too — otherwise the plainest persona is the ONLY one
+            // surface here too, otherwise the plainest persona is the ONLY one
             // that hides a switched load energised at reset (the --json/--plain/
             // web surfaces all carry it). Advisory-only (no exit-code change);
             // --strict-boot still escalates below.
@@ -649,7 +649,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         // --strict-boot: opt-in escalation of the boot-safety advisory to a
         // failing gate (exit 2). The run was valid and these are real findings
         // about specific nets; default behaviour leaves them advisory-only. Print
-        // the reason to stderr so the failure is never silent — including in the
+        // the reason to stderr so the failure is never silent, including in the
         // default headless mode (neither --json nor --plain), where the advisory
         // text is not otherwise emitted.
         if cfg.strict_boot && has_boot_advisory {
@@ -692,7 +692,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // and hand it to the app via `/api/startup`. Board-only unless firmware was
     // supplied (then include the in-process co-sim, matching the drop path).
     // The analyzers take the board as raw bytes (so binary formats survive). A
-    // binary board (Altium) hands over the file's own bytes — its `text` is
+    // binary board (Altium) hands over the file's own bytes; its `text` is
     // empty; text / Board-as-Code boards hand over the (possibly recompiled)
     // text, which is exactly what the analysis must see for them.
     let report_bytes: &[u8] = if is_altium { &raw } else { text.as_bytes() };
@@ -722,7 +722,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     crate::commands::common::serve(engine, cfg.port, Some((board_url, text)), startup_json)
 }
 
-/// Warn (advisory, stderr) when the board sits among sibling `.kicad_pcb` files —
+/// Warn (advisory, stderr) when the board sits among sibling `.kicad_pcb` files,
 /// a multi-board product (e.g. a main board with a separate ESC/daughter board in
 /// a sibling folder). A clean verdict on ONE file reads as "the product is fine"
 /// when the user may have meant the whole thing. Best-effort; never fails the run.
@@ -738,8 +738,8 @@ fn notes_visible(quiet: bool, json: bool, stdout_is_tty: bool) -> bool {
 
 /// The `--list-nets --json` array, serialized through serde_json rather than
 /// Rust `Debug`. The two agree on the common escapes but diverge on control
-/// characters — Debug emits variable-length brace-hex, whereas JSON mandates a
-/// fixed four-hex-digit escape — so a net name carrying a control char from a
+/// characters, Debug emits variable-length brace-hex, whereas JSON mandates a
+/// fixed four-hex-digit escape, so a net name carrying a control char from a
 /// malformed/adversarial netlist would make the hand-`Debug`-assembled array a
 /// document no JSON parser accepts. This is pure so it is unit-testable.
 fn list_nets_json(nets: &[String]) -> String {
@@ -851,7 +851,7 @@ mod list_nets_json_tests {
     fn control_char_net_names_emit_valid_json() {
         // R51: the array was hand-assembled with `format!("{n:?}")`, so a net name
         // carrying a control char (e.g. U+0007 from a malformed netlist) produced
-        // `\u{7}` — valid Rust Debug but invalid JSON. serde_json must emit a
+        // `\u{7}`, valid Rust Debug but invalid JSON. serde_json must emit a
         // document every JSON parser accepts.
         let nets = vec![
             "GND".to_string(),
@@ -861,7 +861,7 @@ mod list_nets_json_tests {
         ];
         let out = list_nets_json(&nets);
         // The output must round-trip through a strict JSON parser back to the
-        // original names — the base bug's `\u{7}` form fails to parse here.
+        // original names; the base bug's `\u{7}` form fails to parse here.
         let parsed: Vec<String> =
             serde_json::from_str(&out).expect("list-nets --json must be valid JSON");
         assert_eq!(parsed, nets);

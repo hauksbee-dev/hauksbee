@@ -63,7 +63,7 @@ struct Change {
 /// glyphs (we exclude `"` and `$`, which delimit VCD tokens), so nets past the
 /// 92nd MUST roll over to multi-character codes. This is a bijective base-92
 /// numeral over that alphabet: indices 0..92 are one char, 92..(92+92²) are two,
-/// and so on — every index gets a distinct code, none ever collides on `!`.
+/// and so on, every index gets a distinct code, none ever collides on `!`.
 fn vcd_code(index: usize) -> String {
     const EXCLUDED: [char; 2] = ['"', '$'];
     let alphabet: Vec<char> = ('!'..='~').filter(|c| !EXCLUDED.contains(c)).collect();
@@ -126,7 +126,7 @@ impl VcdSink {
     /// Number of recorded transitions (for assertions / tests).
     pub fn transition_count(&self) -> usize {
         // The initial value dump every net emits at t=0 is not a transition,
-        // regardless of its level — exclude it by timestamp only. The old
+        // regardless of its level, exclude it by timestamp only. The old
         // `|| c.level` term wrongly counted the t=0 dump for a net that powers
         // up HIGH, over-counting by one (inconsistent with `transitions_for`,
         // which drops the initial dump via `saturating_sub(1)`).

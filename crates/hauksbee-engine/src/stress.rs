@@ -282,7 +282,7 @@ impl StressMonitor {
     /// consecutive-over-limit counters, the already-raised set (so a fault that
     /// fired last run can fire again), the live stress fractions, and the
     /// destroyed flags. The device metadata (`metas`) and the `destructive` /
-    /// `ambient_c` config are preserved — only the accumulated run state resets.
+    /// `ambient_c` config are preserved, only the accumulated run state resets.
     /// The circuit itself is restored separately by the scheduler (this monitor
     /// does not own it), so clearing `destroyed` here stays consistent with a
     /// pristine circuit only when that restore also happens.
@@ -324,7 +324,7 @@ impl StressMonitor {
         // the dice share ONE package: one mould compound, one leadframe, one
         // junction→ambient path. theta_JA is a property of that shared path,
         // so the temperature-driving power is the SUM of every live sibling's
-        // dissipation — evaluating each unit against only its own power
+        // dissipation, evaluating each unit against only its own power
         // under-reads Tj by exactly the siblings' share (a dual BJT with both
         // halves at 0.23 W in a ~440 C/W SOT-363 really sits near 126 C, not
         // the 76 C a single unit's power suggests) and silently missed real
@@ -335,7 +335,7 @@ impl StressMonitor {
         //
         // Sampling every operating point up front (before pass 2 can mutate
         // the circuit destructively) also means every check this chunk sees
-        // the one solved state — previously a device evaluated after an
+        // the one solved state, previously a device evaluated after an
         // earlier device's same-chunk destruction saw mutated parameters
         // under stale node voltages. The next chunk re-solves either way.
         let ops: Vec<Option<OperatingPoint>> = self
@@ -381,14 +381,14 @@ impl StressMonitor {
             // is a per-UNIT rating in the model DB (bjt.toml's dual-pair
             // entries note "this entry models a single transistor in the
             // pair" and comment the ratings "per transistor"), so Overpower
-            // compares each unit's own dissipation against it — pooling there
+            // compares each unit's own dissipation against it, pooling there
             // would false-trip a package whose halves are individually fine.
             // Tj is the opposite: the heat path is shared, so only the pooled
             // figure is physical.
             //
             // Every unit row reports the shared package Tj (to first order the
             // dice sit at one temperature), because per-unit keys are what the
-            // CI max_temp aggregation and the UI heat-map already consume — a
+            // CI max_temp aggregation and the UI heat-map already consume, a
             // synthetic package-level row would be a key no consumer looks up.
             // Consequently each sibling raises its own Overtemperature fault
             // on the same chunk: both junctions genuinely are over-limit, and
@@ -576,8 +576,8 @@ fn operating_point(
             }
         }
         Some(Device::Capacitor { a, b, .. }) => {
-            // An ideal capacitor's through-current is displacement current —
-            // it needs dv/dt across chunks, not one voltage sample — and it
+            // An ideal capacitor's through-current is displacement current,
+            // it needs dv/dt across chunks, not one voltage sample, and it
             // dissipates no real power. Every capacitor check (over-voltage,
             // reverse bias) is voltage-based, so the zeros disable nothing.
             let v = node_v(*a) - node_v(*b);
@@ -589,7 +589,7 @@ fn operating_point(
         }
         Some(Device::Inductor { a, b, .. }) => {
             // The winding current lives in the inductor's branch unknown
-            // (like a Vsource's), not in a node-voltage difference — without
+            // (like a Vsource's), not in a node-voltage difference, without
             // it the surge-current check could never fire for a coil. Power
             // stays zero: an ideal inductor *stores* v·i rather than
             // dissipating it, and reporting it as heat would false-trip the
@@ -603,7 +603,7 @@ fn operating_point(
         }
         Some(Device::Bjt { c, b, e, model, .. }) => {
             // Gummel-Poon transport at the sampled node voltages, polarity
-            // folded — the same equations the solver stamps, so the monitor
+            // folded; the same equations the solver stamps, so the monitor
             // sees the operating point the solve actually settled at.
             let sign = match model.polarity {
                 hauksbee_ir::Polarity::N => 1.0,
@@ -653,7 +653,7 @@ fn operating_point(
         Some(Device::Mosfet {
             d, g, s, b, model, ..
         }) => {
-            // Shichman-Hodges level-1 channel at the sampled node voltages —
+            // Shichman-Hodges level-1 channel at the sampled node voltages,
             // the same blended-overdrive equations the solver stamps (see
             // `mos_channel` in hauksbee-solve), so the monitor sees the
             // current the simulated channel actually carries. This arm used
@@ -707,7 +707,7 @@ fn operating_point(
             // Channel-length modulation is always applied here (the solver
             // gates it on a sim option the monitor cannot see); lambda is 0
             // for most models, and when it isn't, including it errs toward
-            // the slightly *higher* current — conservative for a limit check.
+            // the slightly *higher* current, conservative for a limit check.
             let clm = 1.0 + model.lambda * vds_f;
             let ids = if vds_f < vov_eff {
                 // Triode.
@@ -728,7 +728,7 @@ fn operating_point(
         }
         Some(Device::Vsource { .. }) => {
             // Supply / regulator output leg: the sourced current is the
-            // branch unknown. Voltage and power stay zero ON PURPOSE — this
+            // branch unknown. Voltage and power stay zero ON PURPOSE; this
             // IR device is the regulator's ideal *output* source only. Its
             // across-voltage is its own setpoint (checking the rail against
             // itself is meaningless), and the real pass-element dissipation
@@ -763,7 +763,7 @@ fn build_checks(meta: &DeviceMeta, op: &OperatingPoint) -> Vec<Check> {
     let mut checks = Vec::new();
     let r = &meta.ratings;
 
-    // Surge current (instantaneous ceiling) — for any device with a surge spec.
+    // Surge current (instantaneous ceiling), for any device with a surge spec.
     if let Some(surge) = r.max_surge_current_a {
         checks.push(Check {
             kind: FaultKind::SurgeCurrent,
@@ -804,7 +804,7 @@ fn build_checks(meta: &DeviceMeta, op: &OperatingPoint) -> Vec<Check> {
                     surge: false,
                 });
             }
-            // Continuous current rating — the natural home for an inductor's
+            // Continuous current rating; the natural home for an inductor's
             // rated / saturation current. Previously unchecked for passives, so a
             // coil's steady-state current limit was silently unenforced (and an
             // inductor's power_w is 0, leaving Overpower/Overtemperature dead too).
@@ -928,15 +928,15 @@ fn diode_current(model: &hauksbee_ir::DiodeModel, vd: f64, temp_c: f64) -> f64 {
     // Temperature-corrected saturation current, matching the solver's
     // `diode_eval` (which uses `is_at(t)` whenever it uses the temp-corrected
     // Vt). Pairing a temp-corrected Vt with the nominal `is` understated the
-    // forward current of a hot junction — the monitor's over-current/over-power
+    // forward current of a hot junction; the monitor's over-current/over-power
     // checks saw a cooler device than the solve actually settled at.
     let i = model.is_at(temp_c) * (exp_arg.exp() - 1.0);
     i.clamp(-1e3, 1e3)
 }
 
 /// Thermal utilisation as a RISE-based fraction: (Tj − ambient)/(Tj_max −
-/// ambient). An idle part reads ~0 — comparable with the power/current/voltage
-/// checks, which are all true 0-at-idle ratios — and a part at its junction
+/// ambient). An idle part reads ~0, comparable with the power/current/voltage
+/// checks, which are all true 0-at-idle ratios, and a part at its junction
 /// limit reads 1.0. The old absolute-Celsius ratio (Tj/Tj_max) floored every
 /// dissipating part at ~ambient/Tj_max (~0.2), giving the exported heat-map a
 /// spurious floor. The trip threshold is unchanged: frac > 1 ⟺ Tj > Tj_max under
@@ -956,7 +956,7 @@ mod monitor_temp_tests {
 
     /// R15: the exported thermal stress fraction is rise-based, so a lightly-
     /// loaded part reads ~0, not the ~0.2 floor the absolute Tj/Tj_max ratio gave
-    /// every dissipating device — while the fault trip (frac > 1) is unchanged.
+    /// every dissipating device, while the fault trip (frac > 1) is unchanged.
     #[test]
     fn thermal_stress_is_rise_based_not_absolute() {
         // Ambient 25 C, Tj_max 125 C.
@@ -1002,7 +1002,7 @@ mod monitor_temp_tests {
     fn passive_inductor_gets_a_continuous_current_check() {
         // R13: a passive with a continuous current rating (an inductor's
         // rated/saturation current) must produce an Overcurrent check. It was
-        // omitted — only surge was ever checked for passives.
+        // omitted, only surge was ever checked for passives.
         let ratings = Ratings { max_current_a: Some(2.0), ..Default::default() };
         let meta = DeviceMeta {
             reference: "L1".into(),
@@ -1125,7 +1125,7 @@ mod monitor_temp_tests {
             (i_hot - expected).abs() <= expected.abs() * 1e-9,
             "diode_current must use is_at(T): got {i_hot:e}, expected {expected:e}"
         );
-        // The old nominal-Is result would be materially smaller — guard the gap.
+        // The old nominal-Is result would be materially smaller, guard the gap.
         let nominal = model.is * ((vd / vt_hot).exp() - 1.0);
         assert!(
             i_hot > nominal * 1.5,

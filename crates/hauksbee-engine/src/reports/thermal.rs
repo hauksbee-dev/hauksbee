@@ -129,7 +129,7 @@ fn thermal_coverage_caveat(coverage: &CheckCoverage) -> String {
     // State the honest facts: how many active power ICs are OPEN (and so dissipate
     // nothing), out of the total on the live circuit. The earlier wording claimed
     // "{total - open} active IC(s) are in the table", but being resolved/non-open
-    // is NOT the same as producing a thermal row — a resolved logic IC that
+    // is NOT the same as producing a thermal row, a resolved logic IC that
     // dissipates ~0 W yields no row yet was counted as "in the table", overstating
     // coverage in a caveat whose whole point is to prevent false comfort.
     format!(
@@ -215,7 +215,7 @@ mod tests {
         // R42: the caveat computed "covered = total - open" and claimed that many
         // active ICs were "in the table". But a resolved active IC that dissipates
         // ~0 W produces no thermal row, so being non-open is NOT being in the
-        // table — the wording overstated coverage in a message whose whole purpose
+        // table; the wording overstated coverage in a message whose whole purpose
         // is to prevent false comfort. total_active=3, open=1, and the rows come
         // only from passives (dissipating_count counts them): the caveat must not
         // claim "2 of 3 active power IC(s) ... are in the table".

@@ -2,7 +2,7 @@
 //! design files and the real, reworked board on the bench.
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/asbuilt.md.
 //!
-//! A `.asbuilt.toml` file describes BOARD state only — solder-blob shorts,
+//! A `.asbuilt.toml` file describes BOARD state only, solder-blob shorts,
 //! fitted component values, cut traces, lifted pins, jumper wires: the rework
 //! a technician performed on copper. It deliberately does NOT describe
 //! harness/scenario state (firmware-programmed registers, injected drives,
@@ -13,28 +13,28 @@
 //!
 //! The vocabulary (each an array-of-tables):
 //!
-//! - `[[replace]]` — a component value swap or retune: `ref` names the device
+//! - `[[replace]]`, a component value swap or retune: `ref` names the device
 //!   (substring match on the bound device name), `set` carries the fitted
 //!   values (`ohms`, `farads`, `von`, `voff`), optional `was` records the
 //!   removed part's value and doubles as a match refinement (±1 % relative),
 //!   so a rework note like "removed the 10 pF, fitted 5.8 nF" is executable.
-//! - `[[cut]]` — severed traces: every device terminal of the named role
+//! - `[[cut]]`, severed traces: every device terminal of the named role
 //!   (`base`/`collector`/`emitter`) on a net matching `net_glob` is moved to
 //!   a fresh floating node (floating beats grounded for cut terminals;
 //!   dev-plan 02 §6). `expect_matches` pins the severed-terminal count.
-//! - `[[lift]]` — one lifted pin: like `cut` but for a single named device.
-//! - `[[jumper]]` — a bodge wire: net `to` is merged onto net `from`.
+//! - `[[lift]]`, one lifted pin: like `cut` but for a single named device.
+//! - `[[jumper]]`, a bodge wire: net `to` is merged onto net `from`.
 //!
 //! Validation is fail-loud in the house style (`hauksbee-ci`'s spec/error
 //! conventions): unknown TOML keys are rejected (`deny_unknown_fields`),
 //! unknown refs/nets name the offending line and suggest near matches, and
 //! every entry must match exactly the number of devices/terminals it declares
-//! (default 1) — a rework that silently applies to nothing or to twice as
+//! (default 1), a rework that silently applies to nothing or to twice as
 //! much hardware as documented is a lie about the physical board.
 //!
 //! Application order is fixed and semantic: `replace` entries in file order,
 //! then `cut`, then `lift`, then `jumper`. All are pure [`BoundBoard`]
-//! mutations — no transient, no DC — preserving the prep-stays-solve-free
+//! mutations, no transient, no DC, preserving the prep-stays-solve-free
 //! invariant `tarski_prep` established.
 
 use std::collections::BTreeMap;
@@ -48,7 +48,7 @@ use hauksbee_ir::{Device, NodeId};
 use crate::binder::BoundBoard;
 
 /// First node id handed to floated (cut/lifted) terminals. Must clear the
-/// binder's node namespace entirely — [`apply`](AsBuiltOverlay::apply) fails
+/// binder's node namespace entirely, [`apply`](AsBuiltOverlay::apply) fails
 /// loudly if any bound node reaches it. The value is the historical base
 /// `tarski_prep::fault1_cut` used, kept so the overlay's result is
 /// byte-identical to the proven imperative surgery.
@@ -623,7 +623,7 @@ impl AsBuiltOverlay {
             }
         }
         // The circuit's device terminals are remapped above, but the binder also
-        // cached raw NodeIds on the event-driven layer — the MCUs' role/ADC/GPIO
+        // cached raw NodeIds on the event-driven layer; the MCUs' role/ADC/GPIO
         // node maps, the supply legs, the DAC output drivers, and any behavioral
         // device's node map. Left unremapped they point at the orphaned `to`
         // node, so ADC injection, GPIO drive, rail stamping, and DAC output all
@@ -804,7 +804,7 @@ mod tests {
     /// Round-8 #6: an as-built `[[jumper]]` merging net `N` (NodeId 2) onto
     /// `BUS` (NodeId 1) must remap not only the circuit devices and net_nodes
     /// but also the cached NodeIds the binder stashed on the event-driven layer
-    /// — the MCU's role/ADC/GPIO node maps and the DAC output drivers. Left
+    ///; the MCU's role/ADC/GPIO node maps and the DAC output drivers. Left
     /// stale they point at the orphaned node.
     #[test]
     fn jumper_remaps_cached_mcu_and_dac_node_ids() {

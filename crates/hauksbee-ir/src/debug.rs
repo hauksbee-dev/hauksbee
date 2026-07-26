@@ -1,7 +1,7 @@
 //! The internal-diagnostics channel.
 //!
 //! Solver/engine internals sometimes want to say something that is true and
-//! useful *to a hauksbee developer* but is noise — or worse, a trust wound — in
+//! useful *to a hauksbee developer* but is noise, or worse, a trust wound, in
 //! a user's CI log: dev-plan references, "not stamped yet" caveats, emulator
 //! stack dumps. The persona-validation panel caught two of these reaching
 //! user-facing CI output (`[effects] ... (dev-plan 04 §3.2)` from the diode
@@ -15,7 +15,7 @@
 //!
 //! Anything a *user* needs to act on (a chip substitution, an unresolved part, a
 //! refuse-rather-than-fake INVALID) is NOT an internal note and must keep going
-//! to its normal stderr path — this channel is only for engine-internal chatter.
+//! to its normal stderr path; this channel is only for engine-internal chatter.
 
 use std::sync::OnceLock;
 

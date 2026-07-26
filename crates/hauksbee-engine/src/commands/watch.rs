@@ -220,7 +220,7 @@ impl WatchSet {
     /// - **BoardCode**: just the `.board` file.
     /// - **Spec**: the spec TOML + the board and firmware it names + any sensor
     ///   `spec_file`s, resolved relative to the spec's directory (a minimal TOML
-    ///   extract of just those path fields — the engine cannot reach hauksbee-ci's
+    ///   extract of just those path fields; the engine cannot reach hauksbee-ci's
     ///   loader without a dependency cycle). A spec that fails to parse degrades
     ///   to watching the spec file alone; the run itself then surfaces the error.
     pub fn derive(target: Target, path: &Path) -> WatchSet {

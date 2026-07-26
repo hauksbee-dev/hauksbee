@@ -25,7 +25,7 @@ fn truncate(s: &str, max: usize) -> String {
 /// requested part / backend / substitution flag.
 /// Whether co-sim ran against a substituted MCU core, as a BOARD-WIDE honesty
 /// flag: true iff ANY MCU's requested part was collapsed onto a less-specific
-/// modelled core. `_first_ref` is ignored on purpose — the `--json` notes loop,
+/// modelled core. `_first_ref` is ignored on purpose; the `--json` notes loop,
 /// the `--plain` heads-up, and the web `WebCosimSection.substituted` all treat
 /// substitution board-wide, so scoping this to the first-bound MCU made the JSON
 /// field contradict its own notes[] (and the web report) whenever a NON-first
@@ -148,7 +148,7 @@ pub fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<Cosi
 /// One canonical warning per HEURISTIC-framed SPI bus (05 §2 / U3 finding 3),
 /// shared by the default-text summary, the `--plain` heads-ups, and the
 /// `--json` coverage notes so every surface names the same failure modes.
-/// Exact/backend-framed buses produce nothing — their boundaries are real.
+/// Exact/backend-framed buses produce nothing, their boundaries are real.
 pub fn heuristic_framing_warnings(
     framing: &[(String, crate::peripherals::SpiFramingMode)],
 ) -> Vec<String> {
@@ -517,8 +517,8 @@ mod tests {
     use super::{cosim_substituted, heuristic_framing_warnings, probe_csv_header};
     use crate::scheduler::McuSubstitution;
 
-    // U3 finding 3: the heuristic framing tier — documented as actively wrong
-    // (merges/truncates transactions) — must produce the canonical warning the
+    // U3 finding 3: the heuristic framing tier, documented as actively wrong
+    // (merges/truncates transactions), must produce the canonical warning the
     // text summary, --plain heads-ups, and --json notes all share; the real
     // tiers (exact/backend) must produce none.
     #[test]
@@ -545,7 +545,7 @@ mod tests {
     fn substituted_is_board_wide_not_scoped_to_the_first_mcu() {
         // R52: the flag was `substitutions().any(|s| s.reference == first_mcu_ref)`,
         // so a board whose FIRST MCU bound exactly but whose SECOND MCU was
-        // substituted reported substituted=false — contradicting the same JSON's
+        // substituted reported substituted=false, contradicting the same JSON's
         // notes[] and the web report, which flag substitution board-wide.
         let sub = |r: &str| McuSubstitution {
             reference: r.to_string(),

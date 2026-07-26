@@ -137,7 +137,7 @@ for_max_ms = 1.0
 /// scoped protection_trip with no matching rail_window always failed with
 /// "nothing to trip" regardless of the real trip. Here the LiPo protection
 /// genuinely trips on the cold-boot inrush, and the ONLY assertion is the scoped
-/// protection_trip — with no rail_window at all — so it must PASS.
+/// protection_trip, with no rail_window at all, so it must PASS.
 #[test]
 fn scoped_protection_trip_passes_without_a_matching_rail_window() {
     let body = format!(

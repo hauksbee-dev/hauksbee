@@ -258,7 +258,7 @@ fn accumulate(
 /// KiCad generations emit on tracks, resolving the latter through the file's own
 /// `(net N "name")` declarations. Without the name fallback a name-only export
 /// yields zero segments, so the IPC-2221 ampacity audit silently reports no
-/// copper — a false all-clear on a safety check.
+/// copper, a false all-clear on a safety check.
 fn net_id_of(list: &List, by_name: &HashMap<String, i64>) -> Option<i64> {
     let net = list.find("net")?;
     if let Some(id) = net.arg_i64(0) {
@@ -507,7 +507,7 @@ mod tests {
     #[test]
     fn name_only_net_reference_still_resolves_copper() {
         // A track that cites its net by NAME rather than numeric id (some KiCad
-        // generations) must still be measured — otherwise the IPC-2221 ampacity
+        // generations) must still be measured, otherwise the IPC-2221 ampacity
         // audit silently sees zero copper on the net, a false all-clear.
         let pcb = r#"(kicad_pcb
           (net 0 "")

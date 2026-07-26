@@ -172,12 +172,12 @@ fn hierarchy_subsheet_components_are_loaded() {
         ),
     );
     // If the sub-sheet were dropped, this errors with "unknown component". If it
-    // is loaded, the ref resolves — and then either the assert is evaluable (a
+    // is loaded, the ref resolves, and then either the assert is evaluable (a
     // 100 A ceiling trivially holds) or, for a socket kind whose current is not
     // tracked, the runner rejects the assert as untrackable ("resistors and
     // diodes"). Both loaded outcomes prove the hierarchy was followed; only
     // "unknown component" means it was not. (This test previously relied on the
-    // untracked-kind case silently passing green — that silent pass was bug #18
+    // untracked-kind case silently passing green, that silent pass was bug #18
     // and is now a loud rejection.)
     match run(&RunConfig { spec, ..Default::default() }) {
         Ok(res) => assert!(

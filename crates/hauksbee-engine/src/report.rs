@@ -1,5 +1,5 @@
 //! The bind report: one row per board component recording what model it resolved
-//! to and what it became in the simulation — an analog or behavioral device, a
+//! to and what it became in the simulation, an analog or behavioral device, a
 //! digital or MCU block, a power rail, a deliberately-skipped part, or an
 //! unresolved open circuit. [`BindOutcome`] is that per-component verdict; the
 //! surrounding report aggregates them for the CLI and the resolve-rate stats.
@@ -92,7 +92,7 @@ impl BindReport {
     ///
     /// Keyed on the bind OUTCOME, not the model-match confidence: a part whose
     /// model matched (confidence Exact/High) but was then left `Unresolved`
-    /// (e.g. an open diode whose pins are not both connected) is NOT resolved —
+    /// (e.g. an open diode whose pins are not both connected) is NOT resolved,
     /// counting it as such overstated device coverage and made the "N of M
     /// resolved" headline disagree with the open parts listed below it.
     pub fn resolved_count(&self) -> usize {
@@ -293,7 +293,7 @@ mod resolved_count_tests {
     #[test]
     fn resolved_count_keys_on_outcome_not_model_confidence() {
         // R24: a part whose model MATCHED (confidence Exact) but was then left
-        // Unresolved (e.g. an open diode) must NOT be counted resolved — the
+        // Unresolved (e.g. an open diode) must NOT be counted resolved; the
         // headline "N of M resolved" otherwise overstated coverage and disagreed
         // with the open part listed below it.
         let mut report = BindReport::default();

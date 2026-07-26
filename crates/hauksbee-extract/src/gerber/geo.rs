@@ -28,8 +28,8 @@ pub enum Shape {
     Polygon { pts: Vec<(f64, f64)>, r: f64 },
     /// One connected piece of pour copper with holes: the first contour is the
     /// outer boundary, the rest are holes cut out of it (RS-274X 4.10.4 lets a
-    /// single G36/G37 region carry several contours). Containment is even-odd —
-    /// a point is copper iff it lies inside an odd number of contours — so the
+    /// single G36/G37 region carry several contours). Containment is even-odd,
+    /// a point is copper iff it lies inside an odd number of contours, so the
     /// ring reads as copper and a hole's interior reads as empty. Disjoint
     /// islands of one region are split into separate shapes upstream (one shape
     /// = one conductor for the union-find), so a `MultiPolygon` is always a
@@ -285,7 +285,7 @@ pub fn shape_gap(a: &Shape, b: &Shape) -> f64 {
         // The multi-contour arms mirror the polygon arms above: the copper edge
         // is the nearest of ALL contour boundaries (a hole's rim is copper edge
         // just like the outer rim), and containment is even-odd (a capsule
-        // endpoint sitting in a hole is NOT contained — the hole is empty).
+        // endpoint sitting in a hole is NOT contained; the hole is empty).
         (Shape::Capsule(c), Shape::MultiPolygon { contours })
         | (Shape::MultiPolygon { contours }, Shape::Capsule(c)) => {
             let best = contours

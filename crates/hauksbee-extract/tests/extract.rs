@@ -106,7 +106,7 @@ fn numeric_net_zero_means_no_net_not_a_shared_node() {
 #[test]
 fn v10_empty_net_name_means_no_net() {
     // KiCad 10 writes `(net "")` on unrouted pads (no top-level net table,
-    // no numeric ids). The empty name is "no net" — it must not be interned,
+    // no numeric ids). The empty name is "no net"; it must not be interned,
     // or every unconnected pad in the file gets fused onto one shared node.
     let pcb = r#"(kicad_pcb (version 20260206)
   (footprint "Resistor_SMD:R_0402_1005Metric" (layer "F.Cu")

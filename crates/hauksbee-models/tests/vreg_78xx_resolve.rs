@@ -1,5 +1,5 @@
 //! Each 78xx voltage code must resolve to its own model with the correct output
-//! voltage — the family must not collapse onto the +5V model (which silently
+//! voltage; the family must not collapse onto the +5V model (which silently
 //! simulated 9V/12V/15V rails as 5V).
 
 use hauksbee_models::{ComponentQuery, ModelLibrary};

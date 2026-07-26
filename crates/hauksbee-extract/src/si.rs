@@ -244,7 +244,7 @@ fn rail_voltage(name: &str) -> Option<f64> {
                 Some(v)
             } else if n.contains("5V") && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS")) {
                 // Loose 5V rail, but only with rail context (+/VCC/VBUS) so a
-                // signal net that merely embeds "5V" is not misread — mirrors
+                // signal net that merely embeds "5V" is not misread, mirrors
                 // netlint's guarded 5V fallback.
                 Some(5.0)
             } else if n.contains("3V3") || n.contains("3.3V") || n.contains("3P3") {
@@ -261,7 +261,7 @@ fn rail_voltage(name: &str) -> Option<f64> {
 }
 
 /// A rail whose name carries its own numeric magnitude: an optional leading '+',
-/// then digits, 'V', and optional trailing digits — plain "12V"/"24V" or the
+/// then digits, 'V', and optional trailing digits, plain "12V"/"24V" or the
 /// KiCad digit-V-digit "5V0" form. The name must be ENTIRELY consumed by the
 /// grammar, so a rail-named signal net ("5V_DET") does NOT match. Mirrors
 /// netlint's `numeric_rail_magnitude`.
@@ -368,7 +368,7 @@ fn is_unconnected_net(name: &str) -> bool {
 /// ohms via the single canonical parser in `hauksbee-models`.
 ///
 /// This used to be a hand-rolled parser that drifted from `value::parse_value`
-/// and from net-lint's copy — reading lowercase-`m` milliohms as MEGohms (a 1e9
+/// and from net-lint's copy, reading lowercase-`m` milliohms as MEGohms (a 1e9
 /// error), rejecting leading-`R` shunt marks ("R47") and inline annotations
 /// ("10k 1%"), and missing unicode/SPICE forms. Delegating kills that whole
 /// drift class: the canonical parser handles µ/Ω/ohm-sign glyphs, MEG/GIG,
@@ -393,7 +393,7 @@ fn parse_farads(v: &str) -> Option<f64> {
         return None;
     }
     // Unit suffix scales the number. Recognise BOTH micro glyphs: the micro sign
-    // (U+00B5, "µ") and the Greek small-letter mu (U+03BC, "μ") — component
+    // (U+00B5, "µ") and the Greek small-letter mu (U+03BC, "μ"), component
     // libraries write "4.7μF" with either, and uppercasing leaves both untouched.
     for (suffix, mult) in [
         ("P", 1e-12),
@@ -408,8 +408,8 @@ fn parse_farads(v: &str) -> Option<f64> {
             let a: f64 = a.trim().parse().ok()?;
             // "4p7" style: the suffix doubles as a decimal point, but ONLY when
             // digits IMMEDIATELY follow it. A space- or letter-separated trailing
-            // token — a dielectric code ("18pF C0G"), a voltage rating
-            // ("18pF 50V"), or a tolerance ("10n 5%") — is metadata, not a
+            // token, a dielectric code ("18pF C0G"), a voltage rating
+            // ("18pF 50V"), or a tolerance ("10n 5%"), is metadata, not a
             // fraction: ignore it and take the base value, matching netlint's
             // parse_capacitance_uf. (Before this, any trailing token poisoned the
             // fractional parse and dropped the whole value to None, producing a
@@ -850,7 +850,7 @@ fn is_connector_like(c: &Component) -> bool {
 /// Find the effective pull-up resistance on an I2C net: every resistor with one
 /// pad on the net and the other on a rail-like node. Multiple pull-ups on one
 /// net sit in PARALLEL, so the effective R is the reciprocal of the summed
-/// conductances (1/(Σ 1/Rᵢ)) — strictly SMALLER than any single resistor, i.e.
+/// conductances (1/(Σ 1/Rᵢ)), strictly SMALLER than any single resistor, i.e.
 /// a faster bus. Returns ohms, or `None` if the net carries no pull-up.
 fn pullup_ohms(board: &ExtractedBoard, net_id: i64) -> Option<f64> {
     let mut conductance = 0.0_f64; // Σ 1/Rᵢ (siemens)
@@ -934,7 +934,7 @@ fn check_i2c_rise_time(board: &ExtractedBoard, report: &mut SiReport) {
         // any leaf that merely embeds the letters (e.g. `FMC_SDA`, the FPGA
         // Mezzanine Connector I2C bus, contains "FM" inside the token "FMC"),
         // misclassifying a standard-mode bus as fast and tightening the limit
-        // 3.3x — a false positive. Mirror i2c_role's tokenise-and-compare.
+        // 3.3x, a false positive. Mirror i2c_role's tokenise-and-compare.
         let fast = is_fast_mode_name(&net.name);
         let limit = if fast { T_R_FAST_NS } else { T_R_STANDARD_NS };
 
@@ -1153,11 +1153,11 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
         let id_to_name: std::collections::HashMap<i64, &str> =
             by_name.iter().map(|(n, &i)| (i, n.as_str())).collect();
 
-        // Nets owned by the antenna part itself are not intrusions — its own RF
+        // Nets owned by the antenna part itself are not intrusions; its own RF
         // FEED net lives at its edge by design. But the antenna's GROUND pads are
         // bonded to the whole board ground net, so excluding every own net would
         // remove the board ground plane from the check and silently miss a ground
-        // pour flooding the keepout — the exact detuning case this check exists to
+        // pour flooding the keepout; the exact detuning case this check exists to
         // catch. So exclude only the antenna's NON-ground own nets; a ground pour
         // under the antenna must still register as an intrusion.
         let own_nets: std::collections::HashSet<i64> = ant
@@ -1277,7 +1277,7 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
             }
             // A pour intrudes the keepout in either of two ways: (a) a fill
             // vertex lands inside the keepout (partial overlap), or (b) the pour
-            // ENGULFS the keepout — a board-wide ground plane covering the whole
+            // ENGULFS the keepout, a board-wide ground plane covering the whole
             // antenna region has ALL its fill vertices outside the small keepout
             // rectangle, so vertex-only sampling missed it and reported a false
             // all-clear. Also test each keepout corner against the fill polygon to
@@ -1307,7 +1307,7 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
                     // A real KiCad pour outline is deeply NON-convex (it weaves
                     // around every via / pad / thermal relief), so the convex
                     // `point_in_poly` winding test returns false for interior
-                    // points the moment two edges disagree — silently missing the
+                    // points the moment two edges disagree, silently missing the
                     // engulf it was written to catch. Use the even-odd ray cast,
                     // which is correct for arbitrary (non-convex) polygons.
                     if hit.is_none() && fill.len() >= 3 {
@@ -1504,7 +1504,7 @@ fn track_width_range(root: &List, net_id: i64) -> Option<(f64, f64)> {
 /// share an identical scope key (the hierarchical sheet path PLUS the leaf stem
 /// with the polarity token removed) and differ only in polarity. This is what
 /// keeps the matcher from pairing two electrically-distinct nets that merely
-/// look USB-ish — in particular the connector-side and MCU-side legs on opposite
+/// look USB-ish, in particular the connector-side and MCU-side legs on opposite
 /// sides of a series device (an ESD array, common-mode choke, or series R), which
 /// KiCad gives different names (different sheet path and/or different stem). See
 /// the regression note in `usb_pair_key` and
@@ -1553,7 +1553,7 @@ fn usb_pairs(board: &ExtractedBoard) -> Vec<(i64, i64, String)> {
 /// The key is `<sheet-path>\u{1}<leaf-stem>`, both uppercased: the hierarchical
 /// path up to and including the final `/` (KiCad's sheet scope) joined to the leaf
 /// name with the recognised polarity token removed. Two nets pair iff their keys
-/// are identical and their polarities are opposite — i.e. they are the `+`/`-`
+/// are identical and their polarities are opposite, i.e. they are the `+`/`-`
 /// legs of the *same* logical signal in the *same* sheet scope.
 ///
 /// Why the scope, not just the stem: across a series device (ESD array,
@@ -1565,7 +1565,7 @@ fn usb_pairs(board: &ExtractedBoard) -> Vec<(i64, i64, String)> {
 /// the matcher never compares geometry across the ESD device. The previous
 /// implementation collapsed every USB-ish net to the constant base `"USB"`, which
 /// paired `/USB_DP` with `/ESP32-C3-02/USB_D-` across the ESD array and reported a
-/// bogus width/spacing/skew mismatch — the false positive this guards against.
+/// bogus width/spacing/skew mismatch; the false positive this guards against.
 fn usb_pair_key(raw_name: &str) -> Option<(String, char)> {
     let trimmed = raw_name.trim();
     // Split the raw name into the sheet path (up to and including the final '/')

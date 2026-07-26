@@ -1,7 +1,7 @@
 # Add an MCU variant: an STM32 sibling via `.soc.toml`, no recompile
 
 **Goal.** Make hauksbee co-simulate firmware for an MCU part it doesn't ship,
-by writing two small TOML files — a SoC descriptor (validated fail-loud,
+by writing two small TOML files, a SoC descriptor (validated fail-loud,
 resolved from a user directory at runtime) and a `[[models]]` routing entry
 that maps your board's part value to it. **No recompile is the whole point.**
 The worked example is an STM32F103 sibling on the Renode backend; the shipped
@@ -15,23 +15,23 @@ names in that platform.
 ## How resolution works
 
 At co-sim time an MCU is named by a `backend:part` spec, e.g.
-`renode:stm32f103` — the backend string the binder attached to your board's
+`renode:stm32f103`; the backend string the binder attached to your board's
 MCU (Step 4 below is where that string comes from). The scheduler's backend
 instantiation hands the spec to `SocConfig::resolve` (in `soc.rs`), which
 searches, highest priority first:
 
-1. `$HAUKSBEE_MCU_DIR/<part>.soc.toml` — explicit override directory,
-2. `~/.config/hauksbee/mcu/<part>.soc.toml` — your standing descriptor dir,
+1. `$HAUKSBEE_MCU_DIR/<part>.soc.toml`, explicit override directory,
+2. `~/.config/hauksbee/mcu/<part>.soc.toml`, your standing descriptor dir,
 3. the embedded built-ins (shipped via `include_str!`, so the binary is
    self-contained while the db file stays the single source of truth).
    `hauksbee models list --builtin` prints them.
 
 Drop `mypart.soc.toml` in (1) or (2) and every co-sim that names
-`renode:mypart` loads it — that's the entire installation procedure. Two
+`renode:mypart` loads it, that's the entire installation procedure. Two
 properties are guaranteed:
 
 - **Override beats builtin.** A `stm32f103.soc.toml` in (1) or (2) wins over
-  the shipped F103 descriptor — same layering doctrine as the model library.
+  the shipped F103 descriptor, same layering doctrine as the model library.
 - **Fail loud, never skip.** If a descriptor file *exists* for the requested
   part, it is parsed and any validation error aborts the run naming the file
   and the failing field. An invalid override is never silently skipped in
@@ -42,13 +42,13 @@ against what the file declares, so a `backend = "qemu"` file resolved under a
 `renode:` spec fails with a named `BackendMismatch`, never a confusing schema
 error.
 
-## Step 1 — copy the nearest shipped descriptor
+## Step 1, copy the nearest shipped descriptor
 
 ```
 cp crates/hauksbee-mcu/db/mcu/stm32f103.soc.toml my_dir/stm32f107.soc.toml
 ```
 
-The shipped F103 file (abridged — read the real one, its comments carry the
+The shipped F103 file (abridged, read the real one, its comments carry the
 reasoning):
 
 ```toml
@@ -77,54 +77,54 @@ controllers = ["spi1"]
 extra_repl = "spi1: SPI.STM32SPI @ sysbus 0x40013000"
 ```
 
-## Step 2 — edit the fields for your part
+## Step 2, edit the fields for your part
 
 Field by field (the schema is `RenodeSoc` in `soc.rs`; QEMU descriptors have
-their own shape — `arch`, `icount_shift`, mailbox-style `banks` — see
+their own shape (`arch`, `icount_shift`, mailbox-style `banks`) see
 `esp32.soc.toml`):
 
-- `platform_repl` — the Renode platform to load. `@platforms/...` paths
+- `platform_repl`; the Renode platform to load. `@platforms/...` paths
   resolve inside the Renode installation; a local `.repl` file path also
   works.
-- `cpu_path` / `uart` — the platform's names for the CPU and console UART
+- `cpu_path` / `uart`; the platform's names for the CPU and console UART
   (`sysbus.`-qualified, exactly as Renode's monitor addresses them).
 - `frequency_hz`, `expected_e_machine` (`EM_ARM`, `EM_RISCV`, `EM_XTENSA`,
-  `EM_AVR` — firmware ELFs are checked against it so an ESP32 binary refuses
+  `EM_AVR`, firmware ELFs are checked against it so an ESP32 binary refuses
   loudly on an ARM part), `mcu_label` (report string).
-- `[[soc.ports]]` — one per GPIO port: `letter`, the platform `peripheral`
-  name (**without** `sysbus.` — the backend prepends it when polling), the
+- `[[soc.ports]]`, one per GPIO port: `letter`, the platform `peripheral`
+  name (**without** `sysbus.`; the backend prepends it when polling), the
   ODR register offset, and the pin width.
-- `[soc.i2c]` / `[soc.spi]` — controller names; `spi.extra_repl` splices a
+- `[soc.i2c]` / `[soc.spi]`, controller names; `spi.extra_repl` splices a
   peripheral definition the stock platform lacks (the F103 file adds SPI1
   this way, with a comment explaining why the IRQ-less single line suffices
   for polling-mode firmware).
-- `extra_setup` / `post_load_setup` — monitor commands run around firmware
+- `extra_setup` / `post_load_setup`, monitor commands run around firmware
   load. The SiFive FE310's PRCI clock-tag bring-up lives in
   `post_load_setup` in `sifive_fe310.soc.toml`; that footgun living in a
   reviewed data file instead of a constructor is this schema's reason to
   exist.
-- `[[soc.adc]]` — ADC channel injection recipes (`channel`,
+- `[[soc.adc]]`, ADC channel injection recipes (`channel`,
   `full_scale_volts`, `max_count`, and exactly one of `monitor_command` or
   `memory_word`).
 
-> **Why this is data at all — the ODR footgun.** The STM32F1 GPIO output-data
+> **Why this is data at all; the ODR footgun.** The STM32F1 GPIO output-data
 > register sits at offset `0x0C`; the F4 family moved it to `0x14`. Read the
-> wrong offset and you observe the wrong register — silently. That exact bug
+> wrong offset and you observe the wrong register, silently. That exact bug
 > class is why the per-part Rust constructors were replaced by reviewed TOML
 > (the F103 file's header comment tells the story; compare
 > `stm32f4_discovery.soc.toml`). When you write your descriptor, the ODR
 > offset is the number to triple-check against the reference manual.
 
-**Trap — values are backend-facing strings, not pretty names.** The plan's
+**Trap, values are backend-facing strings, not pretty names.** The plan's
 original sketch wrote `sysbus.gpioPortA` and `platforms/...`; the shipped
 schema stores exactly what the backend consumes: `gpioPortA` (no `sysbus.`
-prefix — the backend adds it) but `@platforms/...` (with the `@`) and
+prefix; the backend adds it) but `@platforms/...` (with the `@`) and
 `sysbus.usart1` (with the prefix, because the monitor command uses it
 verbatim). Copy a shipped file and preserve each field's existing shape rather
-than normalizing them to look consistent — they are inconsistent because the
+than normalizing them to look consistent; they are inconsistent because the
 backend is.
 
-## Step 3 — install the descriptor
+## Step 3, install the descriptor
 
 ```
 mkdir -p ~/.config/hauksbee/mcu
@@ -136,13 +136,13 @@ happens at load with named errors: unknown backend, empty `platform_repl`,
 duplicate or zero-width port letters, duplicate controllers, unknown
 `expected_e_machine`, ambiguous ADC injection. The schema is
 `deny_unknown_fields`, so a typo'd field name is rejected instead of
-vanishing — if you fatfinger `od_offset`, you find out immediately, with the
+vanishing, if you fatfinger `od_offset`, you find out immediately, with the
 file path and field named in the error.
 
-## Step 4 — route your board's part to the descriptor
+## Step 4, route your board's part to the descriptor
 
 The descriptor answers "what is `renode:stm32f107`?". A second, equally
-necessary file answers "which components ARE a `renode:stm32f107`?" — a
+necessary file answers "which components ARE a `renode:stm32f107`?", a
 `[[models]] kind = "mcu"` routing entry in the model library, matching your
 board's part value and carrying the backend string plus the pin-role map (the
 full recipe with a second RISC-V template is in
@@ -175,20 +175,20 @@ How each entry point picks it up:
   matches `value_re`, the entry's `backend` string reaches the scheduler, and
   the scheduler resolves the descriptor.
 - **`hauksbee-ci run`** uses the same layered library and also takes
-  `--models-dir` — check the routing entry into your hardware repo and pass
+  `--models-dir`, check the routing entry into your hardware repo and pass
   it in CI. The spec file's top-level `mcu` field is an **informational note
   only**; nothing reads it. The MCU comes from the board via the routing
   entry, exactly as in `hauksbee run`.
 - Without a matching entry, known families fall back to a built-in router
-  (e.g. any `STM32F1xx` value binds `renode:stm32f103`) — fine for F103
+  (e.g. any `STM32F1xx` value binds `renode:stm32f103`), fine for F103
   siblings that share its layout, but it will never name YOUR part; a new
   part needs the routing entry.
 
 `hauksbee models resolve <board> [--models-dir DIR]` shows, per component,
-which entry won and from which layer — the debugging surface when the match
+which entry won and from which layer; the debugging surface when the match
 doesn't take.
 
-## Step 5 — the proof
+## Step 5; the proof
 
 Mechanism tests (no emulator needed):
 
@@ -196,16 +196,16 @@ Mechanism tests (no emulator needed):
 cargo test -p hauksbee-mcu --test soc_descriptors
 ```
 
-pins the resolver — `resolve_from_override_dir_adds_a_part_as_data` (a new
+pins the resolver, `resolve_from_override_dir_adds_a_part_as_data` (a new
 part purely as data), `override_dir_is_fail_loud_and_beats_builtin` (an
-invalid override aborts naming the file; a valid one wins over the builtin) —
+invalid override aborts naming the file; a valid one wins over the builtin),
 plus descriptor/constructor equivalence and every named validation error.
 `cargo test -p hauksbee-engine --lib soc_wiring` pins that the scheduler's
 backend instantiation actually consults the override dirs (the product path,
 not just the library function).
 
 The end-to-end proof is a real boot. This transcript is an `stm32f101`
-descriptor (a copy of the F103 file — the F101 shares the F1 GPIO layout)
+descriptor (a copy of the F103 file; the F101 shares the F1 GPIO layout)
 plus the routing entry above adjusted to F101, running the bundled blinky
 firmware on an F101 board (Renode must be installed; `hauksbee doctor` checks
 backend availability):
@@ -240,8 +240,8 @@ A descriptor configures the **backends that already exist** (Renode, QEMU).
 Two things stay Rust, deliberately (`soc.rs` module docs, plan 06 §2):
 
 - **A new emulator backend** is a new implementation of the `Mcu` trait
-  (`crates/hauksbee-mcu/src/traits.rs`) — a lockstep contract, not a config.
-- **simavr parts** — simavr's own part database does the work; there is
+  (`crates/hauksbee-mcu/src/traits.rs`), a lockstep contract, not a config.
+- **simavr parts**: simavr's own part database does the work; there is
   nothing for a descriptor to describe.
 
 If your part needs a peripheral the Renode platform doesn't model (an ADC, a

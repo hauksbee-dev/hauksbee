@@ -4,13 +4,13 @@
 //! 1. Forward cycle drift: `avr_run` steps whole instructions (1-5 cycles),
 //!    so each `run_cycles` chunk stops up to 4 cycles past its endpoint. The
 //!    old loop targeted `start + n` per chunk and DISCARDED that overshoot,
-//!    re-incurring it every chunk — over many chunks the emulated clock ran
+//!    re-incurring it every chunk, over many chunks the emulated clock ran
 //!    unboundedly ahead of simulated time (a 16 MHz core did more than
 //!    16e6·t cycles). The fix anchors the loop to an absolute cumulative
 //!    target, so the total error stays bounded by one instruction.
 //!
 //! 2. Swallowed terminal states: the loop broke on `cpu_Done`/`cpu_Crashed`
-//!    but still returned a clean `Ok`, and `McuState` carried no flag — a
+//!    but still returned a clean `Ok`, and `McuState` carried no flag, a
 //!    crashed MCU was indistinguishable from a healthy chunk. The fix
 //!    surfaces both through `state().crashed` / `state().done`.
 //!
@@ -78,7 +78,7 @@ const RJMP_LOOP: &[u8] = &[0xFF, 0xCF];
 /// `jmp 0x4000` (word address) at address 0: lands the PC at byte address
 /// 0x8000, past the ATmega328P's `flashend` (0x7FFF). simavr's `avr_run_one`
 /// treats a PC beyond flash as a firmware crash (`avr_sadly_crashed` →
-/// `cpu_Crashed`) — the "jumped into the weeds" failure mode.
+/// `cpu_Crashed`); the "jumped into the weeds" failure mode.
 const JMP_INTO_WEEDS: &[u8] = &[
     0x0C, 0x94, 0x00, 0x40, // jmp 0x4000 (words) = byte pc 0x8000
     0xFF, 0xCF, // rjmp .-2 (never reached)
@@ -106,7 +106,7 @@ fn mcu_with(program: &[u8], name: &str, freq: u64) -> AvrMcu {
 /// Many small chunks of a 3-cycle-instruction loop: total elapsed cycles must
 /// track freq·t to within ONE instruction, not accumulate the per-chunk
 /// overshoot. 2000 × 1 µs @ 16 MHz = 32 000 cycles; each 16-cycle chunk ends
-/// on a multiple of 3, so the old `start + n` loop ran 18 cycles per chunk —
+/// on a multiple of 3, so the old `start + n` loop ran 18 cycles per chunk,
 /// 36 000 total, 12.5 % ahead. The absolute target keeps it ≤ 32 000 + 3.
 #[test]
 fn chunked_run_micros_does_not_drift_ahead() {
@@ -179,7 +179,7 @@ fn crashed_core_is_observable_via_state() {
         st.pc
     );
 
-    // A crashed core makes no further progress — and the run loop must not
+    // A crashed core makes no further progress, and the run loop must not
     // spin toward the now-unreachable absolute target.
     let cycles_at_crash = st.cycles;
     mcu.run_millis(5).expect("post-crash run returns promptly");

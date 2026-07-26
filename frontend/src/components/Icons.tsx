@@ -1,4 +1,4 @@
-// Icon set — vetted geometry from Lucide (https://lucide.dev, ISC/MIT), inlined
+// Icon set, vetted geometry from Lucide (https://lucide.dev, ISC/MIT), inlined
 // rather than pulled as a runtime dependency so the bundle stays small and the
 // served UI is self-contained. Every icon is Lucide's 24×24 grid at a 2px
 // stroke, drawn on `currentColor` so each call site controls colour. Pass
@@ -58,14 +58,14 @@ export const CheckIcon = ({ size = 14, ...p }: IconProps) =>
 export const BackIcon = ({ size = 14, ...p }: IconProps) =>
   svg(size, <><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></>, p)
 
-// Lucide `zap` — the fault glyph, filled.
+// Lucide `zap`; the fault glyph, filled.
 export const BoltIcon = ({ size = 14, ...p }: IconProps) =>
   svg(size, <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" fill="currentColor" stroke="none" />, p)
 
-// Lucide `activity` — a waveform, for the scope-attach affordance.
+// Lucide `activity`, a waveform, for the scope-attach affordance.
 export const ProbeIcon = ({ size = 14, ...p }: IconProps) =>
   svg(size, <path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2" />, p)
 
-// Lucide `circuit-board` — the "load a board" slot marker.
+// Lucide `circuit-board`; the "load a board" slot marker.
 export const BoardTargetIcon = ({ size = 20, ...p }: IconProps) =>
   svg(size, <><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M11 9h4a2 2 0 0 0 2-2V3" /><circle cx="9" cy="9" r="2" /><path d="M7 21v-4a2 2 0 0 1 2-2h4" /><circle cx="15" cy="15" r="2" /></>, p)

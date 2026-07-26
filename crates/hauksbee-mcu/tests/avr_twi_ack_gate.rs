@@ -7,7 +7,7 @@
 //! gates the address ACK on the known-address set installed through
 //! [`Mcu::set_i2c_slave_addresses`] (the engine populates it from the attached
 //! bus), NACKs unknown addresses, and never fabricates ACKed read data for
-//! them — mirroring the `SoftI2cResponder`'s honest no-answer.
+//! them, mirroring the `SoftI2cResponder`'s honest no-answer.
 //!
 //! The probe firmware (testdata/firmware/twi_scan) is the classic i2c_scanner:
 //! START + SLA+W for every address in 0x08..=0x77, reporting each address whose
@@ -56,7 +56,7 @@ fn scanner_mcu() -> (AvrMcu, Arc<Mutex<Vec<u8>>>) {
 }
 
 /// With a known-address set installed, the scanner finds EXACTLY the modeled
-/// slaves — every other address is NACKed.
+/// slaves, every other address is NACKed.
 #[test]
 fn twi_scanner_finds_only_modeled_addresses() {
     let (mut mcu, uart) = scanner_mcu();

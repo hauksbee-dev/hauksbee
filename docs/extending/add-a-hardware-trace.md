@@ -3,7 +3,7 @@
 You have a physical board, an oscilloscope (or logic analyzer), and a
 simulation of the same board. This walkthrough turns one capture session into
 a permanent regression gate: a checked-in trace that every future run of the
-simulator is compared against, feature by feature. It requires no Rust — a
+simulator is compared against, feature by feature. It requires no Rust, a
 directory, two TOML files, and the instrument's own export.
 
 This is oracle tier **T6** (the validation plan's
@@ -16,15 +16,15 @@ taking that seriously.
 
 A real capture carries component tolerances (that 100 kΩ is ±5%), probe
 loading, supply drift, and the MCU's RC-oscillator jitter. A *correct*
-simulation will not match it sample-for-sample — and a simulation that did
+simulation will not match it sample-for-sample, and a simulation that did
 would be suspicious, not validated. So the comparison never diffs waveforms
 pointwise. It extracts the quantities an EE actually reads off a scope's
-measure menu — settled level, min/max, period, duty, pulse width, edge
-count — from **both** waveforms, and compares each within the tolerance the
+measure menu, settled level, min/max, period, duty, pulse width, edge
+count, from **both** waveforms, and compares each within the tolerance the
 trace itself declares. The capture is the oracle; the tolerances are its
 error bars, and you state them.
 
-## Step 1 — capture, and write down everything
+## Step 1, capture, and write down everything
 
 Probe the net you care about, trigger, and export what the instrument gives
 you:
@@ -33,19 +33,19 @@ you:
   preamble lines are skipped automatically.
 - **Logic analyzer → VCD.** Standard `$timescale` / `$var` / `#time` VCD.
   A logic analyzer records *bits, not volts*, so only the timing features
-  are allowed on a VCD channel — the loader refuses a `max` on one by name.
+  are allowed on a VCD channel; the loader refuses a `max` on one by name.
 
 While the probe is still on the board, write down: instrument and probe
 (10x? loading matters), supply and its measured voltage, firmware build,
 temperature if unusual. This goes in the trace file next; the capture that
-skips this step is the one nobody can interpret in a year — which is exactly
+skips this step is the one nobody can interpret in a year, which is exactly
 what happened to the Tarski bring-up session (`testdata/hwtraces/README.md`
 records what little survived).
 
-## Step 2 — the trace directory
+## Step 2; the trace directory
 
 Traces live at `testdata/hwtraces/<board>/<scenario>/` (or anywhere in your
-own repo — the CI spec points at the file). Copy the seed as a template:
+own repo; the CI spec points at the file). Copy the seed as a template:
 
 ```
 testdata/hwtraces/avr-blinky/led-blink-scope/
@@ -82,7 +82,7 @@ Optional per-feature fields: `after_ms` (skip the boot transient),
 `threshold` (edge-detection level in volts; default is 50% of each
 waveform's own swing, the scope convention).
 
-## Step 3 — the spec that replays the scenario
+## Step 3; the spec that replays the scenario
 
 The comparison only means something if the sim runs the *same experiment*:
 same board, same firmware, same supply the capture session used. That is a
@@ -106,19 +106,19 @@ trace = "trace.toml"
 
 Because `hwtrace` is an ordinary assertion, everything the CI runner does
 composes with it: tolerance ensembles, fuzz seeds (the features must hold on
-every seed), JUnit output, exit codes — and it runs in a hardware repo's CI
+every seed), JUnit output, exit codes, and it runs in a hardware repo's CI
 like any other gate, not just in this repo's test suite. One `hwtrace`
 assertion expands to one report line per (channel, feature), each showing
 the simulated value, the captured value, the delta, and the band that judged
 them.
 
 Two timing details that bite: set `duration_ms` to the capture's window
-(edge counts over different windows are not comparable — the harness refuses
+(edge counts over different windows are not comparable; the harness refuses
 the comparison rather than scaling it), and set `frame_ms` well below your
 fastest feature (the sim waveform is sampled at the frame cadence; the
 default 1 ms resolves a 200 ms blink fine and a 104 µs UART bit not at all).
 
-## Step 4 — run it
+## Step 4, run it
 
 ```
 hauksbee-ci run testdata/hwtraces/avr-blinky/led-blink-scope/spec.toml
@@ -131,21 +131,21 @@ hauksbee-ci run testdata/hwtraces/avr-blinky/led-blink-scope/spec.toml
         D13 max: sim 4.5947 V vs captured 4.7443 V (Δ -0.1496 V within ±0.3000 V)
 ```
 
-When a feature fails, the line carries both values — which is the point.
+When a feature fails, the line carries both values, which is the point.
 A real disagreement between sim and hardware is a *finding*, not a nuisance:
 document the delta and its suspected cause in the trace's `notes` rather
 than widening the tolerance until it disappears. (The recalled Tarski
-bring-up delta — measured V_out peak 2.1–2.3 V vs the sim's ~1.5 V — is the
+bring-up delta, measured V_out peak 2.1–2.3 V vs the sim's ~1.5 V, is the
 canonical example this tier exists to adjudicate.)
 
 ## The trap: provenance
 
 `provenance` is mandatory and has exactly two values. `"real"` means the
 bytes came off an instrument probing a physical board. `"synthetic"` means
-they were constructed — from datasheet-typical behavior, another simulator,
+they were constructed, from datasheet-typical behavior, another simulator,
 or by hand. A synthetic trace is legitimate scaffolding (the seed traces are
 synthetic, and say so), but it validates the **harness**, not the simulator:
-the report appends `[SYNTHETIC trace — validates the harness, not the
+the report appends `[SYNTHETIC trace, validates the harness, not the
 hardware]` to every one of its lines so a green run can never quietly
 impersonate hardware validation. A trace file without the field does not
 load. If you regenerate a synthetic capture, keep its generator script

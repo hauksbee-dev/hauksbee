@@ -106,7 +106,7 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
       const gridStep = vRange > 4 ? 1 : vRange > 2 ? 0.5 : 0.2
       const gridStart = Math.ceil(vMin / gridStep) * gridStep
 
-      // Grid — phosphor green grid
+      // Grid, phosphor green grid
       ctx.strokeStyle = 'rgba(0,200,80,0.15)'
       ctx.lineWidth = 0.5
       ctx.setLineDash([2, 4])
@@ -117,7 +117,7 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
         ctx.lineTo(PAD_L + plotW, gy)
         ctx.stroke()
 
-        // Voltage label — dim phosphor green
+        // Voltage label, dim phosphor green
         ctx.fillStyle = 'rgba(0,200,80,0.45)'
         ctx.font = '9px JetBrains Mono, monospace'
         ctx.textAlign = 'right'
@@ -131,7 +131,7 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
       ctx.textAlign = 'center'
       ctx.fillText('← 3s window →', PAD_L + plotW / 2, H - 4)
 
-      // Traces — phosphor glow with multi-pass bloom
+      // Traces, phosphor glow with multi-pass bloom
       probes.forEach((net, idx) => {
         const buf = buffers.current.get(net) ?? []
         const color = PROBE_COLORS[idx % PROBE_COLORS.length]
@@ -199,7 +199,7 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
 
   return (
     <div className="flex flex-col gap-2">
-      {/* Oscilloscope canvas — CRT-style container */}
+      {/* Oscilloscope canvas, CRT-style container */}
       <div
         className="relative"
         style={{

@@ -79,7 +79,7 @@ fn join_continuation_lines(text: &str) -> Vec<String> {
                 last.push(' ');
                 last.push_str(line[1..].trim_start());
             } else {
-                // Continuation without a prior line — treat as new
+                // Continuation without a prior line, treat as new
                 result.push(line[1..].trim_start().to_string());
             }
         } else {
@@ -92,8 +92,8 @@ fn join_continuation_lines(text: &str) -> Vec<String> {
 /// Parse a `.model` card.
 ///
 /// Handles two common formats:
-/// - `.MODEL name TYPE (key=val ...)` — space-separated type and params
-/// - `.MODEL name TYPE(key=val ...)`  — type and params fused (no space)
+/// - `.MODEL name TYPE (key=val ...)`, space-separated type and params
+/// - `.MODEL name TYPE(key=val ...)`, type and params fused (no space)
 fn parse_dot_model(line: &str) -> Option<SpiceCard> {
     // Split on whitespace, skip the ".model" keyword
     let tokens: Vec<&str> = line.split_whitespace().collect();
@@ -105,7 +105,7 @@ fn parse_dot_model(line: &str) -> Option<SpiceCard> {
     // The type token may be "NPN", "D", etc., or "NPN(IS=..." with a fused paren.
     let type_raw = tokens[2];
     let (model_type, extra_params) = if let Some(paren_pos) = type_raw.find('(') {
-        // Fused: "D(IS=2.52N ..." — split at the paren
+        // Fused: "D(IS=2.52N ...", split at the paren
         let typ = type_raw[..paren_pos].to_uppercase();
         let rest_of_type = &type_raw[paren_pos..]; // includes the '('
         (typ, Some(rest_of_type))
@@ -136,7 +136,7 @@ fn parse_dot_model(line: &str) -> Option<SpiceCard> {
     })
 }
 
-/// Parse a `.subckt` card (only the declaration line — full body is the raw text).
+/// Parse a `.subckt` card (only the declaration line, full body is the raw text).
 ///
 /// Format: `.SUBCKT <name> <port1> <port2> ...`
 fn parse_dot_subckt(decl_line: &str, all_lines: &[String]) -> Option<SpiceCard> {
@@ -159,7 +159,7 @@ fn parse_dot_subckt(decl_line: &str, all_lines: &[String]) -> Option<SpiceCard> 
     for line in all_lines {
         let lower = line.to_lowercase();
         if lower.starts_with(".subckt") {
-            // The declared name is the SECOND token — match it exactly, not as a
+            // The declared name is the SECOND token, match it exactly, not as a
             // substring of the whole line. A substring match opened the wrong
             // body whenever this name was a substring of another subckt's name
             // (".subckt OP" vs ".subckt OPAMP") or appeared as a port/comment.
@@ -176,7 +176,7 @@ fn parse_dot_subckt(decl_line: &str, all_lines: &[String]) -> Option<SpiceCard> 
         }
     }
 
-    // Count ports for subckt (approximate — the solver may need more detail)
+    // Count ports for subckt (approximate; the solver may need more detail)
     let pin_count = ports.len();
     let _ = pin_count;
 
@@ -216,7 +216,7 @@ fn parse_kv_params(s: &str) -> BTreeMap<String, f64> {
 /// ignore any trailing unit. Matching on `ends_with` was wrong: a trailing unit
 /// letter (`F` for farad) collided with a scale letter (`f` = femto), so `4pF`
 /// took the femto branch, then failed to parse `"4p"` as a mantissa and returned
-/// `None` — silently dropping the value, disagreeing with hauksbee-ir which
+/// `None`, silently dropping the value, disagreeing with hauksbee-ir which
 /// reads it as 4 pF.
 fn parse_spice_number(s: &str) -> Option<f64> {
     let t = s.trim();
@@ -294,7 +294,7 @@ fn scale_suffix(suffix: &str) -> f64 {
         1e-15
     } else {
         // No `a`=atto branch: atto is NOT in the SPICE3/ngspice scale set
-        // (T/G/Meg/K/mil/m/u/n/p/f) and 'a' collides with the ampere unit — a
+        // (T/G/Meg/K/mil/m/u/n/p/f) and 'a' collides with the ampere unit, a
         // current-valued model param "IBV=5A" must read 5 A, not 5e-18. This
         // matches hauksbee-ir::spice::scale_suffix exactly (the authoritative
         // loader this function mirrors). An unrecognised trailing unit with no
@@ -349,7 +349,7 @@ Q2 OUT2 IN2 GND NPN_MODEL
     fn subckt_body_matches_name_exactly_not_as_substring() {
         // R11: two subckts whose names share a prefix ("OP" ⊂ "OPAMP"). The old
         // substring match opened OP's body at the first `.subckt` line
-        // containing "op" — which was OPAMP — so OP captured OPAMP's body.
+        // containing "op", which was OPAMP, so OP captured OPAMP's body.
         let src = "\
 .SUBCKT OPAMP INP INN OUT
 R1 INP OUT 1k

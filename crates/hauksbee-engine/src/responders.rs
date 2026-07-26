@@ -7,7 +7,7 @@
 //! that on push backends: on every GPIO output edge the responder runs
 //! synchronously and its returned input-pin drives are applied before the
 //! firmware's next instruction (`hauksbee-mcu/src/avr.rs`, the per-port IRQ
-//! hook). Poll backends (Renode/QEMU) keep the hook's no-op default — their
+//! hook). Poll backends (Renode/QEMU) keep the hook's no-op default, their
 //! responder tier is deliberately coarse (05 §1.5), and nothing in this module
 //! assumes any particular backend feature.
 //!
@@ -20,13 +20,13 @@
 //! held by the scheduler), the pin key is the dispatch map here.
 //!
 //! Registered protocols:
-//!   * [`Hc165Responder`] — the original consumer: MCU-bit-banged 74HC165
+//!   * [`Hc165Responder`]; the original consumer: MCU-bit-banged 74HC165
 //!     parallel-in/serial-out chains (the B2 readback fix), unchanged in
 //!     behaviour, now arriving through the registry instead of owning the
 //!     hook outright.
-//!   * [`BitBangSpiResponder`] — firmware bit-bangs SCLK/MOSI/CS on GPIOs and
+//!   * [`BitBangSpiResponder`], firmware bit-bangs SCLK/MOSI/CS on GPIOs and
 //!     reads MISO from an existing byte-level [`SpiBus`] slave model.
-//!   * [`SoftI2cResponder`] — firmware bit-bangs SCL/SDA on GPIOs; a small
+//!   * [`SoftI2cResponder`], firmware bit-bangs SCL/SDA on GPIOs; a small
 //!     I2C protocol engine over pin edges routes the transaction to the
 //!     existing [`I2cBus`] slave models.
 
@@ -52,7 +52,7 @@ pub trait InputResponder: Send {
     fn watched_pins(&self) -> Vec<(char, u8)>;
 
     /// Handle one GPIO output edge on a watched pin (`high` is the pin's new
-    /// level). Returns the MCU input pins to drive — applied immediately,
+    /// level). Returns the MCU input pins to drive, applied immediately,
     /// before the firmware's next instruction.
     fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<((char, u8), bool)>;
 }
@@ -61,7 +61,7 @@ pub trait InputResponder: Send {
 /// [`InputResponder`]s, dispatching each output edge only to the responders
 /// keyed on that pin.
 ///
-/// A pin miss is one `HashMap` lookup — the same cheap early-return the
+/// A pin miss is one `HashMap` lookup; the same cheap early-return the
 /// original single-purpose 165 closure had, preserved so a busy non-protocol
 /// pin (a status LED toggling in the firmware's hot loop) costs nothing.
 /// Multiple responders may watch the same pin (e.g. two protocols sharing a
@@ -192,7 +192,7 @@ pub struct BitBangSpiPins {
 /// synchronously, so `digitalRead(MISO)` inside the firmware's own clock loop
 /// sees the slave's bit (05 §1.5).
 ///
-/// ## Supported waveform (stated subset — refused loudly outside it)
+/// ## Supported waveform (stated subset, refused loudly outside it)
 ///
 /// * **All four SPI modes**, taken from the sensor spec's `protocol.spi_mode`
 ///   (0..=3) and threaded here through the bus ([`SpiBus::spi_mode`]). The
@@ -205,25 +205,25 @@ pub struct BitBangSpiPins {
 ///
 /// ## Bridging a bit stream to a byte-level model, honestly
 ///
-/// The slave API is `transfer(mosi) -> miso`, one whole byte per call — but at
+/// The slave API is `transfer(mosi) -> miso`, one whole byte per call, but at
 /// the moment the slave must present MISO bit 7, the master's MOSI byte has
 /// not arrived yet. Physically there is no paradox (a real slave preloads its
 /// shift register; MISO byte N cannot depend on MOSI byte N), so the bridge
 /// asks the slave for that preloaded byte via [`SpiSlave::miso_preview`]
 /// (`SpiBus::miso_preview`), shifts ITS bits out on the falling edges, and at
 /// the byte boundary (8th rising edge, when the MOSI byte is complete) makes
-/// the real `transfer` call — cross-checking that the reply equals what was
+/// the real `transfer` call, cross-checking that the reply equals what was
 /// presented. Two refusal paths, both loud, never silently wrong:
 ///
 /// * preview/transfer mismatch: the model's reply depended on the incoming
-///   byte — the preview contract is broken; error + responder disabled.
+///   byte; the preview contract is broken; error + responder disabled.
 /// * no preview (`None`): the bridge presents LOW bits; if the transfer then
 ///   returns nonzero, the slave meant to say something the firmware did not
-///   see — error + responder disabled. (A slave that genuinely answers 0x00,
+///   see, error + responder disabled. (A slave that genuinely answers 0x00,
 ///   e.g. during a command/write phase, is exact.)
 ///
 /// **SPI mode coverage.** The responder honors the sensor's *declared* mode and
-/// polices the firmware against it — the point is to be right for the declared
+/// polices the firmware against it; the point is to be right for the declared
 /// mode and loud when the firmware clocks a different one, never silently
 /// mistimed. From `mode = (CPOL, CPHA)`:
 ///
@@ -243,7 +243,7 @@ pub struct BitBangSpiPins {
 /// * **MOSI moved during the sample phase.** The master must hold MOSI stable
 ///   across the half-period in which the slave samples (the level the clock
 ///   rests at *after* a sample edge, `CPOL == CPHA`). A MOSI transition there
-///   contradicts the declared mode — the firmware is clocking a different phase —
+///   contradicts the declared mode; the firmware is clocking a different phase,
 ///   so it faults rather than accumulate a mistimed bit. (For mode 0 this is
 ///   exactly the classic "MOSI moved while SCLK high".)
 ///
@@ -358,7 +358,7 @@ impl InputResponder for BitBangSpiResponder {
     fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<((char, u8), bool)> {
         if pin == self.pins.mosi {
             // The master must hold MOSI stable through the slave's sample window
-            // — the half-period at `sample_hold_level` (the clock's resting level
+            //; the half-period at `sample_hold_level` (the clock's resting level
             // after a sample edge). A MOSI transition there is not the declared
             // mode's shift phase: the firmware is clocking a different phase, so
             // we fault rather than accumulate a mistimed bit. (Mode 0: the sample
@@ -410,7 +410,7 @@ impl InputResponder for BitBangSpiResponder {
                     // CPHA=1: bit 7 is driven on the FIRST leading edge, not now.
                     return Vec::new();
                 }
-                // CPHA=0: present bit 7 immediately — the slave drives MISO from
+                // CPHA=0: present bit 7 immediately; the slave drives MISO from
                 // CS assert, before the first clock.
                 return vec![(self.pins.miso, self.miso_bit())];
             }
@@ -537,8 +537,8 @@ enum I2cPhase {
 }
 
 /// Firmware bit-bangs SCL/SDA as plain GPIOs; this responder is a small I2C
-/// protocol engine over the pin edges — START/STOP detection, address
-/// decoding, ACK generation, byte clocking — routing the transaction to the
+/// protocol engine over the pin edges, START/STOP detection, address
+/// decoding, ACK generation, byte clocking, routing the transaction to the
 /// EXISTING [`I2cBus`] slave models and answering SDA synchronously, so the
 /// firmware's `digitalRead(SDA)` inside its own clock loop sees the slave's
 /// bit (05 §1.5).
@@ -553,17 +553,17 @@ enum I2cPhase {
 ///   the subset.
 /// * **7-bit addressing, standard framing.** START/repeated-START/STOP are
 ///   recognized from any state (SDA transition while SCL high), exactly the
-///   asynchronous resync a real slave performs — so a mid-byte START is
+///   asynchronous resync a real slave performs, so a mid-byte START is
 ///   treated as a START, not an error, matching silicon.
 /// * **Push-pull master waveform.** The responder observes the master through
 ///   PORT-register edges. Classic open-drain emulation that toggles ONLY the
 ///   direction register (DDR out+low vs. input-release, PORT held at 0)
-///   produces no PORT edges at all and is therefore INVISIBLE — a documented
+///   produces no PORT edges at all and is therefore INVISIBLE, a documented
 ///   no-answer, not a wrong answer: the firmware sees a dead bus (perpetual
 ///   NACK), and this doc plus the fixture show the supported pattern (drive
 ///   SDA push-pull; switch it to input for the ACK bit and read bytes).
 /// * **An address no attached slave models is NACKed** (SDA left high), with
-///   a once-per-address warning — never a fake ACK.
+///   a once-per-address warning, never a fake ACK.
 ///
 /// SDA is bidirectional: the responder tracks the MASTER's driven level from
 /// the PORT edges, separately from the level IT drives into the MCU's input
@@ -585,7 +585,7 @@ pub struct SoftI2cResponder {
     active: bool,
     /// Every modeled address this transaction has touched since the last
     /// STOP. A repeated START re-addresses without a STOP, so this ADDS; the
-    /// physical STOP then names each member to the bus — not just the
+    /// physical STOP then names each member to the bus, not just the
     /// last-addressed slave, and even when the FINAL leg was a NACKed
     /// unmodeled address (`active` false).
     touched: Vec<u8>,
@@ -657,7 +657,7 @@ impl SoftI2cResponder {
     }
 
     /// A START (or repeated START) was seen: begin address capture. Never
-    /// dispatches a Stop — a repeated START legitimately ends the previous
+    /// dispatches a Stop, a repeated START legitimately ends the previous
     /// transfer without one (the register-read idiom: write pointer, Sr,
     /// read), and the slave models' `on_start` handles the rollover.
     fn on_start(&mut self, out: &mut Vec<((char, u8), bool)>) {
@@ -676,7 +676,7 @@ impl SoftI2cResponder {
     /// chunk-boundary `flush_stops`, same as the hardware-TWI path.
     fn on_stop(&mut self, out: &mut Vec<((char, u8), bool)>) {
         // A physical STOP ends the WHOLE transaction, and a repeated-START
-        // chain may have addressed several slaves — every one gets its Stop
+        // chain may have addressed several slaves, every one gets its Stop
         // (a DAC written in the first leg still commits its output net when
         // a later leg re-addressed some other device), not just `self.addr`.
         for addr in std::mem::take(&mut self.touched) {
@@ -702,7 +702,7 @@ impl SoftI2cResponder {
                 .addresses()
                 .contains(&addr);
             // Dispatch the Start regardless (the bus tracks its own active
-            // address; an unmatched Start clears it) — but only a MODELED
+            // address; an unmatched Start clears it), but only a MODELED
             // address gets the ACK. An unknown address is NACKed honestly,
             // and loudly once, never fake-ACKed.
             self.dispatch(I2cEvent::Start { addr, read });
@@ -1059,7 +1059,7 @@ addr_mask = 0x7f
     }
 
     /// CPHA=1 (mode 1) idles SCLK LOW exactly like mode 0, so the CS-assert
-    /// polarity guard cannot catch it — but a mode-1 master changes MOSI on the
+    /// polarity guard cannot catch it, but a mode-1 master changes MOSI on the
     /// leading edge, i.e. while SCLK is HIGH. The per-edge responder sees that
     /// ordering and must fault rather than silently mistime the byte.
     #[test]
@@ -1133,7 +1133,7 @@ addr_mask = 0x7f
 
     /// A mode-parametric bit-level SPI master: it derives CPOL/CPHA from the
     /// declared mode and drives the responder the way a firmware clocking THAT
-    /// mode would — idle clock at CPOL, MOSI changed on the shift edge, MISO
+    /// mode would, idle clock at CPOL, MOSI changed on the shift edge, MISO
     /// sampled on the sample edge. The generalization of the mode-0-only
     /// [`SpiMaster`] above.
     struct ModeMaster {
@@ -1202,8 +1202,8 @@ addr_mask = 0x7f
         )
     }
 
-    /// PROOF: a full mode-3 (CPOL=1, CPHA=1) read — idle clock HIGH, shift on the
-    /// falling (leading) edge, sample on the rising (trailing) edge — answers
+    /// PROOF: a full mode-3 (CPOL=1, CPHA=1) read, idle clock HIGH, shift on the
+    /// falling (leading) edge, sample on the rising (trailing) edge, answers
     /// WHO_AM_I and the i16 gyro value bit-exactly and never faults. Proves the
     /// declared mode drives the timing end to end.
     #[test]
@@ -1226,7 +1226,7 @@ addr_mask = 0x7f
         assert!(!m.resp.faulted());
     }
 
-    /// PROOF: a mode-1 (CPOL=0, CPHA=1) read succeeds — CPHA=1 is now MODELED
+    /// PROOF: a mode-1 (CPOL=0, CPHA=1) read succeeds, CPHA=1 is now MODELED
     /// (bit 7 driven on the first leading edge, sample on the trailing edge),
     /// not faulted, WHEN the spec declares it. Contrast with
     /// `bitbang_spi_refuses_cpha1_clock_phase`, where a mode-0 spec meets CPHA=1
@@ -1366,9 +1366,9 @@ style = "i2c_pointer"
         )
     }
 
-    /// PROOF: the classic pointered register read — START, addr+W (acked),
+    /// PROOF: the classic pointered register read, START, addr+W (acked),
     /// pointer byte, repeated START, addr+R (acked), data bytes with a master
-    /// ACK between and a NACK to end, STOP — recovered entirely from pin
+    /// ACK between and a NACK to end, STOP, recovered entirely from pin
     /// edges and answered by the byte-level RegisterMapSensor.
     #[test]
     fn soft_i2c_reads_registers_via_repeated_start() {
@@ -1397,8 +1397,8 @@ style = "i2c_pointer"
         assert_eq!(i16::from_be_bytes([hi, lo]), 1234);
     }
 
-    /// An address no attached slave models is NACKed — the honest no-answer,
-    /// never a fake ACK — and a following good transaction still works.
+    /// An address no attached slave models is NACKed; the honest no-answer,
+    /// never a fake ACK, and a following good transaction still works.
     #[test]
     fn soft_i2c_nacks_unknown_address() {
         let (mut m, _bus) = i2c_master(0.0);
@@ -1414,7 +1414,7 @@ style = "i2c_pointer"
     }
 
     /// A DAC-style spec: a fast_write command latches the code and the output
-    /// law drives VOUT — the write-side device whose STOP delivery matters.
+    /// law drives VOUT; the write-side device whose STOP delivery matters.
     const I2C_DAC_SPEC: &str = r#"
 [sensor]
 name = "MINIDAC"
@@ -1448,7 +1448,7 @@ style = "i2c_pointer"
 
     /// PROOF: a physical STOP closes the WHOLE repeated-START chain, not just
     /// the last-addressed leg. Firmware writes the DAC at 0x60 (ACKed, code
-    /// latched), then a repeated START re-addresses 0x50 — unmodeled, NACKed —
+    /// latched), then a repeated START re-addresses 0x50, unmodeled, NACKed,
     /// and only then STOPs. The DAC must still get its transaction end: its
     /// output law lands on the bound net at the chunk-boundary flush. Before
     /// the fix both layers tracked only the most-recent address, so the ACKed
@@ -1480,7 +1480,7 @@ style = "i2c_pointer"
         assert!(m.write_byte(0x60 << 1), "DAC address+W must ACK");
         assert!(m.write_byte(0x08));
         assert!(m.write_byte(0x00));
-        // Leg 2: repeated START to a DIFFERENT, unmodeled address (NACKed) —
+        // Leg 2: repeated START to a DIFFERENT, unmodeled address (NACKed),
         // the last-addressed slot no longer names the DAC.
         m.start();
         assert!(!m.write_byte((0x50 << 1) | 1), "unmodeled address must NACK");

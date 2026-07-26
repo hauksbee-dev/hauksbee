@@ -1,18 +1,18 @@
 # Add an analog part: an LDO / op-amp / discrete, one `[[models]]` entry
 
-**Goal.** Bind a stock analog part the built-in DB doesn't ship — an LDO, op-amp,
-diode, BJT, MOSFET, or comparator — by hand-writing one `[[models]]` TOML entry.
+**Goal.** Bind a stock analog part the built-in DB doesn't ship, an LDO, op-amp,
+diode, BJT, MOSFET, or comparator, by hand-writing one `[[models]]` TOML entry.
 **No recompile, no LLM in the loop, no source knowledge.** Validated fail-loud at
 load, so a typo is caught by `hauksbee models lint` before it ever reaches a run.
 
 When a part on your board is *not* modelled, hauksbee binds it OPEN and says so
-("N% resolved", "simulated as OPEN") — this is how you close that gap.
+("N% resolved", "simulated as OPEN"); this is how you close that gap.
 
 > **Shortcut:** to auto-draft this entry from a PDF datasheet instead of writing
 > it by hand, run the extractor and then lint/correct its output:
 > `cargo run -p hauksbee-models --bin model-extract -- part.pdf`
 > (see [../MODELS.md](../models/MODELS.md#pointing-hauksbee-at-a-datasheet)). The
-> hand-written path below is still worth reading — it is what you edit the draft
+> hand-written path below is still worth reading; it is what you edit the draft
 > into, and what `hauksbee models lint` checks.
 
 ## The shape of a model entry
@@ -23,7 +23,7 @@ kind-specific device parameters, and a `[models.pins]` map from footprint pad
 numbers to device roles. Optionally `[models.ratings]` for the stress/destruction
 monitor.
 
-### Example 1 — an LDO regulator (`kind = "vreg"`)
+### Example 1, an LDO regulator (`kind = "vreg"`)
 
 Save as `my-parts.toml`:
 
@@ -51,7 +51,7 @@ iq_a      = 0.0000016  # quiescent current (A)   [0 .. 1]
 max_current_a = 0.25
 ```
 
-### Example 2 — an op-amp (`kind = "opamp"`)
+### Example 2, an op-amp (`kind = "opamp"`)
 
 ```toml
 [[models]]
@@ -94,15 +94,15 @@ rail_hi = 15.0         # output high rail (V) [-60 .. 60]
 
 ## Pin roles (what to put on the right of `[models.pins]`)
 
-The role strings are consumed verbatim by the binder — use these canonical names
+The role strings are consumed verbatim by the binder, use these canonical names
 (a wrong role binds the pin OPEN):
 
 - **diode:** `anode`, `cathode`
 - **bjt:** `base`, `emitter`, `collector`
 - **mosfet:** `gate`, `source`, `drain`
-- **vreg:** `in`, `out`, `gnd` — `out` is the regulated net the model sources
+- **vreg:** `in`, `out`, `gnd`, `out` is the regulated net the model sources
 - **opamp:** `out`, `in_plus`, `in_minus` (append `_a`/`_b`/`_c`/`_d` per unit on a
-  multi-op-amp package — the binder recognises the letter suffixes only, up to
+  multi-op-amp package; the binder recognises the letter suffixes only, up to
   four channels; a single-channel part uses the bare roles)
 - **comparator:** `out`, `in_plus`, `in_minus`
 - **analog_switch:** `com`, `s0`, `s1`, `ctrl`
@@ -134,7 +134,7 @@ ship it as a [model pack](make-a-model-pack.md).
 
 ## Adding a whole MCU / chip
 
-An MCU is a different animal — its firmware runs on an emulated core, so it needs
+An MCU is a different animal; its firmware runs on an emulated core, so it needs
 a SoC descriptor (register map + backend) in addition to a routing entry. That is
 the [add-an-mcu-variant](add-an-mcu-variant.md) two-file recipe (still no
 recompile). If a board's MCU is co-simulated on a *substitute* core, the co-sim

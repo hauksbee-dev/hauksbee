@@ -110,10 +110,10 @@ pub struct SlotSpec {
 /// A statement in the `main` body.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
-    /// `net <name>` — declare a net. Declaration order fixes the emitted net id
+    /// `net <name>`, declare a net. Declaration order fixes the emitted net id
     /// table; pads referencing an undeclared net auto-declare it.
     Net(String),
-    /// `space fn <block> <dist>` — a clearance distance field applied to every
+    /// `space fn <block> <dist>`, a clearance distance field applied to every
     /// instance of a whole block/function (deliverable 3).
     BlockSpace { block: String, dist: f64 },
     /// `pin <ref> edge <left|right|top|bottom>` - hold a component against a

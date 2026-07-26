@@ -47,7 +47,7 @@ pub enum BOutput {
 /// the `__d{k}` variables in its [`CompiledExpr`] (slot `k` = `deps[k]`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum BDep {
-    /// `V(node)`: reads a node voltage. A NODE reference — it must remap in
+    /// `V(node)`: reads a node voltage. A NODE reference; it must remap in
     /// [`Device::map_nodes`] and it is a SENSE terminal for the tear layers.
     Volt(NodeId),
     /// `I(vname)`: reads the branch current of an independent Vsource,
@@ -90,14 +90,14 @@ pub struct Circuit {
     #[serde(default)]
     pub initial_conditions: Vec<(NodeId, f64)>,
     /// `.nodeset V(node)=val` DC convergence aids: seed values for the DC Newton
-    /// start vector. Unlike `.ic` these are a GUESS, not a constraint — the
+    /// start vector. Unlike `.ic` these are a GUESS, not a constraint; the
     /// solver may converge elsewhere (consumed by `newton::dc_solve`). Empty for
     /// a deck without `.nodeset` cards.
     #[serde(default)]
     pub nodesets: Vec<(NodeId, f64)>,
     /// Small-signal AC stimulus per source, captured from `AC <mag> [phase]`
     /// tokens on source cards (consumed by `hauksbee_solve::AcAnalysis`). Empty
-    /// for a deck whose sources carry no `AC` spec — the honest signal that a
+    /// for a deck whose sources carry no `AC` spec; the honest signal that a
     /// `.ac` analysis would have a zero stimulus and must be refused rather than
     /// faked. The `DeviceId` is the flattened source's id, resolved post-splice.
     #[serde(default)]
@@ -128,8 +128,8 @@ impl Circuit {
     ///
     /// Matching is case-INSENSITIVE, like SPICE net identity and every other
     /// resolution path in this crate (`find_node`, subckt ports, device/model
-    /// lookup). A case-sensitive match here split one net into two — `node("OUT")`
-    /// and `node("Out")` returned different ids — and disagreed with the
+    /// lookup). A case-sensitive match here split one net into two, `node("OUT")`
+    /// and `node("Out")` returned different ids, and disagreed with the
     /// case-insensitive `find_node`, so a `.ic V(out)=…` card seeded only one of
     /// the halves. The first-seen casing is kept for display.
     pub fn node(&mut self, name: &str) -> NodeId {
@@ -159,7 +159,7 @@ impl Circuit {
 
     /// Look up an already-interned node by name (case-insensitive), honoring the
     /// `0`/`gnd` ground aliases. Unlike [`Circuit::node`] this does NOT create a
-    /// new node for an unknown name — it returns `None`, so callers that must
+    /// new node for an unknown name; it returns `None`, so callers that must
     /// reference an EXISTING node (`.ic`/`.nodeset`) can refuse a typo rather
     /// than silently interning a floating node.
     pub fn find_node(&self, name: &str) -> Option<NodeId> {
@@ -289,12 +289,12 @@ pub enum Device {
         roff: f64,
     },
     /// Behavioral op-amp: `out = clamp(reference + gain * (inp - inn), rails)`.
-    /// `pole_hz`, when present, applies a single pole to the gain path — in
+    /// `pole_hz`, when present, applies a single pole to the gain path, in
     /// `.ac` as the complex `gain / (1 + j·w/wp)`, in transient as a
     /// first-order lag of the driven output toward the clipped ideal target
     /// (time constant `1/(2π·pole_hz)`). `slew`, when present, additionally
     /// rate-limits the transient output in V/µs (the datasheet unit); it has
-    /// no small-signal (`.ac`) effect, matching physics — slew is a
+    /// no small-signal (`.ac`) effect, matching physics, slew is a
     /// large-signal limit. `None`/`0`/non-finite in either field degrades to
     /// the ideal instantaneous behavior for that mechanism.
     OpAmp {
@@ -401,16 +401,16 @@ pub enum Device {
     /// `l1`/`l2` are device references like an F/H `ctrl_src`, resolved by the
     /// loader's name pass and retargeted per slot by sub-circuit extraction;
     /// they surface through [`Device::controlling_sources`] because the
-    /// coupled stamp reads BOTH windings' branch-current unknowns — which is
+    /// coupled stamp reads BOTH windings' branch-current unknowns, which is
     /// exactly the fusion/retargeting contract that accessor already carries.
     /// `0 < k <= 1` (validated at load); `k == 1` makes the group inductance
-    /// matrix singular, which is legal on the card — the stamp uses L itself,
+    /// matrix singular, which is legal on the card; the stamp uses L itself,
     /// never its inverse. Multiple K cards may chain 3+ windings; each card
     /// contributes one pairwise M.
     ///
     /// Fidelity (plan §2.3): this is the LOSSLESS LINEAR mutual model, which
     /// matches ngspice's `K` closely (the differential decks pin it).
-    /// Saturating/hysteretic cores are UNSUPPORTED — no core model card
+    /// Saturating/hysteretic cores are UNSUPPORTED, no core model card
     /// parses, so a deck needing one refuses at load rather than running
     /// linear physics under a nonlinear name.
     Coupling {
@@ -590,7 +590,7 @@ impl Device {
                 *cp = f(*cp);
                 *cn = f(*cn);
             }
-            // NOTE: `ctrl_src` is a DeviceId, not a node — node remapping does
+            // NOTE: `ctrl_src` is a DeviceId, not a node, node remapping does
             // not touch it. A pass that extracts devices into a sub-circuit
             // must ALSO call [`Device::retarget_controlling_source`] or the
             // reference silently points at whatever occupies that index in the
@@ -602,7 +602,7 @@ impl Device {
             // The dep list carries the device's V(node) references: remap
             // every one IN PLACE, keeping slot order (the expression's __d{k}
             // variables are positional). BDep::Branch is a DeviceId, untouched
-            // here — extraction passes retarget it via
+            // here, extraction passes retarget it via
             // `retarget_controlling_source_slot`, exactly like F/H.
             Device::Behavioral { p, n, deps, .. } => {
                 *p = f(*p);
@@ -614,7 +614,7 @@ impl Device {
                 }
             }
             // Deliberately empty, NOT an oversight: a coupling carries no
-            // NodeId at all — `l1`/`l2` are DeviceIds, the same reference
+            // NodeId at all, `l1`/`l2` are DeviceIds, the same reference
             // class as an F/H `ctrl_src`, and extraction passes retarget them
             // through `retarget_controlling_source_slot` (slots 0 and 1).
             Device::Coupling { .. } => {}
@@ -623,18 +623,18 @@ impl Device {
 
     /// The devices whose BRANCH CURRENTS this device reads, in slot order
     /// (the F/H control; a B-source's `I(vname)` deps; a K-coupling's two
-    /// windings — the mutual stamp reads BOTH inductors' branch-current
+    /// windings; the mutual stamp reads BOTH inductors' branch-current
     /// unknowns, so the coupling declares them here and inherits the fusion
     /// and retargeting contracts below wholesale). This is a sense
     /// declaration in a vocabulary [`Device::sense_nodes`] cannot express:
     /// the coupling is to another device's branch-current unknown, not to any
-    /// node voltage. Plural since the B-source landed — an expression may
+    /// node voltage. Plural since the B-source landed, an expression may
     /// read several ammeters; F/H return exactly one. Consumers:
     ///
     /// * the partitioner and the conduction graph, which must FUSE this
     ///   device's island with EVERY control source's island (a branch current
     ///   is not replayable across a Gauss-Seidel lag, and unlike a sensed node
-    ///   voltage it cannot even be expressed as a boundary source — so this
+    ///   voltage it cannot even be expressed as a boundary source, so this
     ///   coupling is never a tear candidate);
     /// * sub-circuit extraction, which must keep every control source in the
     ///   same sub-system (the stamp needs its branch column) and retarget each
@@ -643,7 +643,7 @@ impl Device {
     pub fn controlling_sources(&self) -> Vec<DeviceId> {
         // Exhaustive, no `_` arm: a future variant carrying a device reference
         // that fell into a catch-all empty-vec would be invisible to the
-        // partitioner's fusion rule and to sub-circuit retargeting — the same
+        // partitioner's fusion rule and to sub-circuit retargeting; the same
         // silent-drop hazard class as a `_` arm in `map_nodes`.
         match self {
             Device::Cccs { ctrl_src, .. } | Device::Ccvs { ctrl_src, .. } => vec![*ctrl_src],
@@ -658,7 +658,7 @@ impl Device {
             // its history reads from) both windings' branch unknowns, so the
             // partitioner must union the two windings' islands (mutual flux is
             // never a tear candidate) and sub-circuit extraction must carry
-            // both inductors along and retarget these ids — exactly the F/H
+            // both inductors along and retarget these ids, exactly the F/H
             // contracts this accessor already grants.
             Device::Coupling { l1, l2, .. } => vec![*l1, *l2],
             Device::Resistor { .. }
@@ -680,7 +680,7 @@ impl Device {
     /// Rewrite the `slot`-th [`DeviceId`] of [`Device::controlling_sources`]
     /// (its index in that vec), in place. The device-reference analogue of
     /// [`Device::map_nodes`]: any pass that copies devices into a circuit with
-    /// different device indices routes through here, once per slot — and the
+    /// different device indices routes through here, once per slot, and the
     /// loader's resolve-by-name pass patches each deferred `vname` through its
     /// own slot. Panics on a slot the device does not have: a mis-addressed
     /// retarget is the silent-corruption bug class this API exists to prevent,
@@ -757,7 +757,7 @@ impl Device {
             // the bulk row exactly when it carries bulk-junction physics
             // (body-diode DC branch and/or depletion caps). A default model
             // (no cap/body fields) keeps the pre-§3.3 [d, s] classification
-            // bit-identically — gate stays sense, bulk stays unstamped.
+            // bit-identically, gate stays sense, bulk stays unstamped.
             Device::Mosfet { d, g, s, b, model, .. } => {
                 let mut v = vec![*d, *s];
                 if model.has_gate_charge() {
@@ -781,7 +781,7 @@ impl Device {
             // Controlled sources drive current through their output port only:
             // the VCVS branch current enters the p/n KCL rows, the VCCS
             // transconductance current likewise. The control pair appears
-            // exclusively as matrix COLUMNS of other rows — this is the
+            // exclusively as matrix COLUMNS of other rows; this is the
             // canonical sense-vs-conduction split the W1 classifier was built
             // for, and the solve-side cross-check test holds the stamp to it.
             Device::Vcvs { p, n, .. } | Device::Vccs { p, n, .. } => vec![*p, *n],
@@ -790,7 +790,7 @@ impl Device {
             Device::Cccs { p, n, .. } | Device::Ccvs { p, n, .. } => vec![*p, *n],
             // A B-source drives current through its output port only. Every
             // V(node) dep is read-only (Jacobian COLUMNS of the p/n or branch
-            // rows) — the maximal-coupling device is still, per terminal, the
+            // rows); the maximal-coupling device is still, per terminal, the
             // same conduct-vs-sense split as a VCVS.
             Device::Behavioral { p, n, .. } => vec![*p, *n],
             // A coupling has NO terminals: current flows through the WINDINGS,
@@ -857,7 +857,7 @@ impl Device {
             // DELIBERATELY EMPTY, and a vocabulary gap made explicit: what an
             // F/H senses is another device's BRANCH CURRENT, which this
             // node-voltage sense list cannot express. Declaring the control
-            // source's nodes here would be a lie — the stamp never reads their
+            // source's nodes here would be a lie; the stamp never reads their
             // voltages (it reads the control branch-current COLUMN), and the
             // zero-row cross-check would pass vacuously while the tearing
             // passes drew the wrong conclusion (a node-voltage sense is a free
@@ -865,12 +865,12 @@ impl Device {
             // is declared through [`Device::controlling_sources`] instead, and
             // the partitioner/conduction graph consume that directly.
             Device::Cccs { .. } | Device::Ccvs { .. } => Vec::new(),
-            // Every V(node) dep is a declared SENSE edge — the tear layers
+            // Every V(node) dep is a declared SENSE edge; the tear layers
             // must see that this device reads across island boundaries (plan
             // §2.5). Deduped, and EXCLUDING the output terminals: a
             // self-referencing expression (`B1 out 0 I={tanh(V(out))}`, the
             // nonlinear-resistor idiom) senses a node it also conducts into,
-            // and a terminal must be in exactly one of the two sets — the
+            // and a terminal must be in exactly one of the two sets; the
             // conduction claim wins because the p/n rows really do receive
             // current. I(vname) deps are branch-current reads with no node
             // vocabulary, declared via `controlling_sources` like F/H.
@@ -888,7 +888,7 @@ impl Device {
             }
             // No node-voltage reads either: what a coupling "senses" is both
             // windings' BRANCH CURRENTS, which this node vocabulary cannot
-            // express (the F/H precedent, same reasoning verbatim) — declared
+            // express (the F/H precedent, same reasoning verbatim), declared
             // through `controlling_sources`, never as a free-tear candidate.
             Device::Coupling { .. } => Vec::new(),
         }
@@ -1012,7 +1012,7 @@ impl Device {
             // consumer that builds a circuit around an example must ensure
             // device index 0 is an independent Vsource BEFORE adding the
             // example (the conduction cross-check in hauksbee-solve inserts a
-            // 0 V ammeter from n[3] to ground first for exactly this reason —
+            // 0 V ammeter from n[3] to ground first for exactly this reason,
             // n[3]-to-ground so the ammeter's own incidence entries stay off
             // n[2], which the Behavioral example declares as a SENSE node
             // whose row must provably receive nothing). Consumers that only
@@ -1037,7 +1037,7 @@ impl Device {
             // the DeviceId(0) control convention above), a `time` read, and a
             // Voltage output (owns a branch unknown). The canonical expression
             // compiles here so every property-test consumer gets a genuinely
-            // evaluable device; `expect` is safe — the text is a constant.
+            // evaluable device; `expect` is safe; the text is a constant.
             Device::Behavioral {
                 name: "Bex".into(),
                 p: n[0],
@@ -1090,7 +1090,7 @@ impl Device {
     /// time, not on the solution). Diodes, transistors, switches, and the
     /// behavioral blocks are nonlinear and force Newton iteration in any island
     /// that contains them. `Device::Behavioral` is nonlinear BY CONSTRUCTION
-    /// (an arbitrary expression's Jacobian moves with the iterate — even a
+    /// (an arbitrary expression's Jacobian moves with the iterate, even a
     /// linear-looking `{2*V(a)}` ships the finite-difference tangent path), so
     /// it deliberately stays off this whitelist and taints its island.
     pub fn is_linear(&self) -> bool {
@@ -1102,21 +1102,21 @@ impl Device {
                 | Device::Vsource { .. }
                 | Device::Isource { .. }
                 // Controlled sources E/G: the stamp is a CONSTANT gain/gm times
-                // node voltages, so the Jacobian never moves — linear. Linear
+                // node voltages, so the Jacobian never moves, linear. Linear
                 // does NOT mean state-space-reducible: `LinearIsland::compile`
                 // must still explicitly refuse islands containing them (it
                 // models only R/C/L/I) or they would vanish from the A matrix.
                 | Device::Vcvs { .. }
                 | Device::Vccs { .. }
                 // Controlled sources F/H: constant gain/transresistance times
-                // a branch-current UNKNOWN — still constant matrix entries, so
+                // a branch-current UNKNOWN, still constant matrix entries, so
                 // the Jacobian never moves. Same caveat as E/G: linear does
                 // not mean state-space-reducible, and `LinearIsland::compile`
                 // refuses islands containing them.
                 | Device::Cccs { .. }
                 | Device::Ccvs { .. }
                 // Coupled inductors: the mutual inductance M = k*sqrt(L1*L2)
-                // is a CONSTANT — the companion cross terms scale with 1/dt
+                // is a CONSTANT; the companion cross terms scale with 1/dt
                 // like any inductor's, never with the iterate, so coupling
                 // never taints an island nonlinear. Linear does NOT mean
                 // state-space-reducible: `LinearIsland::compile` refuses

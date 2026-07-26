@@ -4,12 +4,12 @@
 //! co-sim (same board + firmware + supply the capture session used) and let
 //! its `hwtrace` assertion compare the simulated waveforms against the
 //! captured trace, feature by feature, within the trace's stated tolerances.
-//! Prints the per-feature table with both values — the same shape as the
+//! Prints the per-feature table with both values; the same shape as the
 //! ngspice corpus harness, with a different oracle.
 //!
 //! Unlike ngspice, the oracle here is a checked-in file, so nothing is
 //! skipped-if-absent: an unreadable trace is a loud failure. What CAN be
-//! absent is *real* hardware data — the seed traces are synthetic (labeled so
+//! absent is *real* hardware data; the seed traces are synthetic (labeled so
 //! in their trace.toml and bannered in every report line) and prove the
 //! pipeline, not the simulator.
 
@@ -89,7 +89,7 @@ fn hwtrace_corpus() {
 /// Gate (b): a deliberate mismatch must FAIL and the failure must name the
 /// feature and both values. We reuse the real seed scenario (board, firmware,
 /// supply) but swap in a capture whose period is 300 ms where the firmware
-/// toggles at 200 ms — the failure the harness exists to catch.
+/// toggles at 200 ms; the failure the harness exists to catch.
 // Replays AVR .hex firmware (the demo/blinky corpus is ATmega-based), so it
 // needs the GPL-gated `avr` feature; the MIT-clean renode/qemu build refuses
 // AVR firmware by design.

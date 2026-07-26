@@ -15,8 +15,8 @@ use hauksbee_models::{ModelLibrary, Pack, PackStore};
 /// engine interpreter applies); anything with `[[models]]` entries lints each
 /// entry's kind-specific params (`hauksbee_models::validate`) and, when a
 /// `[models.logic]` block is present, COMPILES it through the same
-/// `LogicComponent::compile` path binding uses — schema validation, expression
-/// lowering, and the exhaustive comb-cycle convergence check — so "lint said
+/// `LogicComponent::compile` path binding uses, schema validation, expression
+/// lowering, and the exhaustive comb-cycle convergence check, so "lint said
 /// ok" and "the board binds it" can never disagree.
 pub fn lint(file: &Path) -> anyhow::Result<()> {
     let text = std::fs::read_to_string(file)
@@ -110,7 +110,7 @@ fn default_store() -> anyhow::Result<PackStore> {
 ///   - a git URL (`git@…`, `git://…`, `ssh://…`, `…​.git`, or any `https://…`),
 ///     shallow-cloned with the system `git`.
 /// Plain `http://` URLs are refused: no HTTP client ships in hauksbee, and an
-/// unencrypted model source is a bad default anyway — clone or download it
+/// unencrypted model source is a bad default anyway, clone or download it
 /// yourself and pass the path.
 pub fn add(source: &str) -> anyhow::Result<()> {
     let store = default_store()?;
@@ -196,7 +196,7 @@ pub fn remove(name: &str) -> anyhow::Result<()> {
 }
 
 /// `hauksbee models list`: the installed packs, from `packs.toml`. With
-/// `--builtin`, first the embedded MCU SoC descriptors — the `backend:part`
+/// `--builtin`, first the embedded MCU SoC descriptors; the `backend:part`
 /// specs a board's `renode:<part>` / `qemu:<part>` backend string resolves to
 /// when no override-dir descriptor shadows them.
 pub fn list(builtin: bool) -> anyhow::Result<()> {

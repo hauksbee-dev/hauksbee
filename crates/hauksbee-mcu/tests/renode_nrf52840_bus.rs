@@ -4,7 +4,7 @@
 //! bound I2C/SPI sensor was silently never exercised (`install_i2c_bridge`
 //! returns Ok on an empty list; `on_spi` returns silently). The descriptor now
 //! names the controllers the stock Renode 1.16.1 `nrf52840.repl` actually
-//! models — `twi0`/`twi1` (I2C.NRF52840_I2C) and `spi2` (NRF52840_SPI) — and
+//! models, `twi0`/`twi1` (I2C.NRF52840_I2C) and `spi2` (NRF52840_SPI), and
 //! this test proves, against the LIVE Renode install, that:
 //!
 //!   1. the descriptor's controller names exist on the booted platform (a
@@ -13,7 +13,7 @@
 //!      bridge is loaded and attached at a slave address on every configured
 //!      TWI controller, and the SPI bridge attaches on `spi2`. Registration is
 //!      the step Renode validates the container type and name on, so passing
-//!      it is the "this controller can host engine slaves" proof — the same
+//!      it is the "this controller can host engine slaves" proof; the same
 //!      bar the shipped STM32F103 controllers were held to when their bridge
 //!      first landed.
 //!
