@@ -1642,7 +1642,7 @@ fn stamp_diode<S: StampSink>(
     if ctx.opts.effects.series_resistance && model.rs > 0.0 {
         effect_log::log_once(
             &effect_log::DIODE_SERIES_R,
-            "series_resistance: diode RS is not stamped yet (dev-plan 04 §3.2); \
+            "series_resistance: diode RS is not stamped yet; \
              the model field is ignored",
         );
     }

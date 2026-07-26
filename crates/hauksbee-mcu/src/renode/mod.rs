@@ -256,7 +256,7 @@ pub struct RenodeConfig {
     /// model no ADC peripheral at all, and Renode's `Analog.STM32_ADC` speaks
     /// the F0/L0 register layout, registering it at an F1 address would let
     /// firmware "read" a peripheral whose registers are laid out wrong, which
-    /// is fake fidelity ("refuse rather than fake", 00-MASTER-PLAN §5). A
+    /// is fake fidelity, and this tool refuses rather than fakes. A
     /// board/test that knows where its counts must land (a modeled ADC's feed
     /// command, or the RAM result word its firmware reads) supplies the map.
     pub adc_channels: Vec<AdcChannelMap>,

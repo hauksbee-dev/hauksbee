@@ -380,7 +380,7 @@ impl CiResult {
         // A summary line.
         if self.analog_invalid() {
             out.push_str(&format!(
-                "::error title=hauksbee-ci::analog co-sim did not converge - {} assertion(s) INVALID, run is invalid for analysis (05 §3b)\n",
+                "::error title=hauksbee-ci::analog co-sim did not converge - {} assertion(s) INVALID, run is invalid for analysis\n",
                 self.invalid_count()
             ));
         } else if self.passed() {
