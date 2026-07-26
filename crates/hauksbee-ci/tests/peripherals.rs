@@ -14,7 +14,7 @@ fn testdata(rel: &str) -> PathBuf {
 }
 
 fn write_tmp(name: &str, body: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join("hauksbee_ci_periph_tests");
+    let dir = std::env::temp_dir().join(format!("hauksbee_ci_periph_tests_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let p = dir.join(name);
     std::fs::write(&p, body).unwrap();

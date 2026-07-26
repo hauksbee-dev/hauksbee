@@ -18,7 +18,7 @@ use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::{AcAnalysis, AcSpec, LoopStability, SolverOptions, Sweep};
 
 fn write_tmp(name: &str, body: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join("hauksbee_ci_ac_tests");
+    let dir = std::env::temp_dir().join(format!("hauksbee_ci_ac_tests_{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let p = dir.join(name);
     std::fs::write(&p, body).unwrap();
