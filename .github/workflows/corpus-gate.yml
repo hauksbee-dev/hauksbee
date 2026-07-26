@@ -45,13 +45,17 @@ jobs:
         if: steps.corpus-cache.outputs.cache-hit != 'true'
         run: scripts/fetch-corpus.sh
 
-      # One test at a time. The corpus suites drive external emulators (Renode,
-      # QEMU) and share scratch directories, and under parallel load they fail
-      # intermittently and in different places each run. Measured on the
-      # development machine: three parallel runs produced three different
-      # failure sets, while the same suite single-threaded was green apart from
-      # one genuine failure. A gate that is randomly red teaches people to
-      # ignore it, which costs more than the wall-clock this spends.
+      # One test at a time, for the emulators only.
+      #
+      # The scratch-directory races that made this suite fail in a different
+      # place on every run are fixed: every suite now names its temp directory
+      # per process, and three consecutive parallel runs of the full workspace
+      # are green. So this is no longer load-bearing for correctness.
+      #
+      # It stays because the corpus suites also drive Renode and QEMU as child
+      # processes, and several of those running at once contend for real
+      # resources in ways three green runs do not disprove. This job is nightly,
+      # so the wall clock is cheap and a gate nobody trusts is not.
       - name: Run the gate
         env:
           HAUKSBEE_CORPUS_DIR: ${{ github.workspace }}/board-corpus
