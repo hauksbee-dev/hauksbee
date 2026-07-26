@@ -8,7 +8,10 @@
 use hauksbee_models::{ComponentQuery, ModelLibrary, SourceLayer};
 
 fn resolve(lib: &ModelLibrary, val: &str) -> hauksbee_models::Resolution {
-    let q = ComponentQuery { value: Some(val.into()), ..Default::default() };
+    let q = ComponentQuery {
+        value: Some(val.into()),
+        ..Default::default()
+    };
     lib.resolve(&q)
 }
 
@@ -49,7 +52,9 @@ fn ina186_gain_suffix_beats_the_broad_family_entry() {
     // ((?i)^INA186, gain 100) on field specificity; the exact-literal prefix
     // must win the tie on regex constrainedness, not on file position.
     let lib = ModelLibrary::builtin();
-    let m = resolve(&lib, "INA186A1IDCKR").model.expect("INA186A1 resolves");
+    let m = resolve(&lib, "INA186A1IDCKR")
+        .model
+        .expect("INA186A1 resolves");
     assert_eq!(m.id, "ina186_dck_a1");
     assert_eq!(m.params.get_f64("gain"), Some(25.0));
     // The bare value with no gain suffix still binds the broad entry.

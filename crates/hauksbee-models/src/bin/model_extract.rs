@@ -100,7 +100,11 @@ fn is_sensor_kind(kind: &str) -> bool {
 /// hauksbee-models::sensor_spec). The reply is validated by parsing it as a
 /// `SensorSpec` and round-tripping it through TOML.
 fn build_sensor_prompt(part: &str, kind: &str, pdf_text: &str) -> String {
-    let bus = if kind.trim() == "spi_sensor" { "spi" } else { "i2c" };
+    let bus = if kind.trim() == "spi_sensor" {
+        "spi"
+    } else {
+        "i2c"
+    };
     let bus_specifics = if bus == "spi" {
         r#"This is a SPI sensor. Set:
     bus = "spi"
@@ -216,7 +220,11 @@ fn validate_sensor_reply(
         .with_context(|| format!("round-trip re-parse of sensor spec for {part} failed"))?;
 
     // Bus must match the requested kind.
-    let want_bus = if kind.trim() == "spi_sensor" { Bus::Spi } else { Bus::I2c };
+    let want_bus = if kind.trim() == "spi_sensor" {
+        Bus::Spi
+    } else {
+        Bus::I2c
+    };
     if spec.sensor.bus != want_bus {
         bail!(
             "bus mismatch for {part}: requested '{kind}' but the spec declares \
@@ -324,9 +332,7 @@ fn extract_pdf_text(path: &Path) -> Result<String> {
 
     // Fallback: read raw bytes and let the LLM handle it (works with codex)
     // Return a placeholder that tells the prompt to read the PDF directly
-    eprintln!(
-        "[model-extract] pdftotext not found; LLM backend will read the PDF directly"
-    );
+    eprintln!("[model-extract] pdftotext not found; LLM backend will read the PDF directly");
     Ok(format!(
         "<pdf_path>{}</pdf_path>\n\
          [Note: pdftotext not available. The LLM should read the PDF at the path above directly.]",
@@ -524,46 +530,56 @@ number (pin functions table, electrical characteristics, typical application).
 /// stress monitor reads these from `[models.ratings]`.
 fn ratings_hint_for_kind(kind: &str) -> &'static str {
     match kind {
-        "diode" => "\
+        "diode" => {
+            "\
   max_current_a       # IF continuous forward current
   max_surge_current_a # IFSM non-repetitive surge current
-  max_voltage_v       # VRRM repetitive peak reverse voltage",
-        "bjt_npn" | "bjt_pnp" => "\
+  max_voltage_v       # VRRM repetitive peak reverse voltage"
+        }
+        "bjt_npn" | "bjt_pnp" => {
+            "\
   max_current_a       # IC continuous collector current
   max_surge_current_a # ICM peak collector current
   max_power_w         # Ptot total power dissipation
-  max_voltage_v       # VCEO collector-emitter breakdown voltage",
-        "nmos" | "pmos" => "\
+  max_voltage_v       # VCEO collector-emitter breakdown voltage"
+        }
+        "nmos" | "pmos" => {
+            "\
   max_current_a       # ID continuous drain current
   max_power_w         # Ptot total power dissipation
-  max_voltage_v       # VDS drain-source breakdown voltage",
-        "vreg" => "\
+  max_voltage_v       # VDS drain-source breakdown voltage"
+        }
+        "vreg" => {
+            "\
   max_current_a       # IOUT maximum output current
   max_voltage_v       # maximum input voltage (VIN abs max)
-  max_junction_temp_c # TJ maximum junction temperature",
-        _ => "\
+  max_junction_temp_c # TJ maximum junction temperature"
+        }
+        _ => {
+            "\
   max_current_a       # if a continuous current limit is stated
   max_voltage_v       # if a maximum voltage is stated
-  max_power_w         # if a power dissipation limit is stated",
+  max_power_w         # if a power dissipation limit is stated"
+        }
     }
 }
 
 fn required_params_for_kind(kind: &str) -> &'static str {
     match kind {
-        "diode"              => "is, n, rs  (also cjo, vj, m, bv if available)",
+        "diode" => "is, n, rs  (also cjo, vj, m, bv if available)",
         "bjt_npn" | "bjt_pnp" => "is, bf, nf, vaf, br  (also rb, rc, re, cje, cjc, tf)",
-        "nmos" | "pmos"     => "vto, kp  (also lambda, rd, rs, cgd, cgs)",
-        "vreg"               => "vout, dropout_v, iq_a",
-        "opamp"              => "gain, rail_lo, rail_hi",
-        "comparator"         => "out_lo, out_hi, hysteresis, tpd_s",
-        "analog_switch"      => "ron, roff, vth",
+        "nmos" | "pmos" => "vto, kp  (also lambda, rd, rs, cgd, cgs)",
+        "vreg" => "vout, dropout_v, iq_a",
+        "opamp" => "gain, rail_lo, rail_hi",
+        "comparator" => "out_lo, out_hi, hysteresis, tpd_s",
+        "analog_switch" => "ron, roff, vth",
         "digital" | "shift_register" => "voh, vol, vih, vil, tpd_s, supply_pin, gnd_pin",
-        "dac"                => "bits, vref_int, i2c_addr (or spi mode)",
-        "mcu"                => "backend (e.g. simavr:atmega328p)",
-        "charger"            => "vout, dropout_v, iq_a  (the converter behaviour is in [models.behavioral])",
-        "pmic"               => "vout, dropout_v, iq_a  (the pin pulls are in [models.behavioral])",
-        "balancer"           => "(the leak law is in [models.behavioral]; no required numeric params)",
-        _                    => "(see db/README.md for kind-specific requirements)",
+        "dac" => "bits, vref_int, i2c_addr (or spi mode)",
+        "mcu" => "backend (e.g. simavr:atmega328p)",
+        "charger" => "vout, dropout_v, iq_a  (the converter behaviour is in [models.behavioral])",
+        "pmic" => "vout, dropout_v, iq_a  (the pin pulls are in [models.behavioral])",
+        "balancer" => "(the leak law is in [models.behavioral]; no required numeric params)",
+        _ => "(see db/README.md for kind-specific requirements)",
     }
 }
 
@@ -706,7 +722,9 @@ fn run_codex_once(prompt: &str, workdir: &Path) -> Result<String> {
         }
     }
 
-    let output = child.wait_with_output().context("collecting codex output")?;
+    let output = child
+        .wait_with_output()
+        .context("collecting codex output")?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         bail!(
@@ -721,8 +739,8 @@ fn run_codex_once(prompt: &str, workdir: &Path) -> Result<String> {
 /// Call an OpenAI-compatible API endpoint via `curl`.
 fn call_api_backend(prompt: &str, args: &Args) -> Result<String> {
     let api_key = std::env::var("HAUKSBEE_LLM_API_KEY").unwrap();
-    let model = std::env::var("HAUKSBEE_LLM_MODEL")
-        .unwrap_or_else(|_| "gpt-5.3-chat-latest".to_string());
+    let model =
+        std::env::var("HAUKSBEE_LLM_MODEL").unwrap_or_else(|_| "gpt-5.3-chat-latest".to_string());
     let base_url = std::env::var("HAUKSBEE_LLM_BASE_URL")
         .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
@@ -743,18 +761,22 @@ fn call_api_backend(prompt: &str, args: &Args) -> Result<String> {
         let output = Command::new("curl")
             .args([
                 "-s",
-                "-X", "POST",
+                "-X",
+                "POST",
                 &url,
-                "-H", "Content-Type: application/json",
-                "-H", &format!("Authorization: Bearer {}", api_key),
-                "-d", &body_str,
+                "-H",
+                "Content-Type: application/json",
+                "-H",
+                &format!("Authorization: Bearer {}", api_key),
+                "-d",
+                &body_str,
             ])
             .output()
             .context("running curl for API call")?;
 
         let resp_str = String::from_utf8_lossy(&output.stdout);
-        let resp: serde_json::Value = serde_json::from_str(&resp_str)
-            .context("parsing API response as JSON")?;
+        let resp: serde_json::Value =
+            serde_json::from_str(&resp_str).context("parsing API response as JSON")?;
 
         let content = resp["choices"][0]["message"]["content"]
             .as_str()
@@ -766,7 +788,11 @@ fn call_api_backend(prompt: &str, args: &Args) -> Result<String> {
         match parse_and_validate_reply(&raw, &args.part, &args.kind_str) {
             Ok(_) => return Ok(raw),
             Err(e) if attempt < args.retries => {
-                eprintln!("[model-extract] attempt {} failed: {}; retrying...", attempt + 1, e);
+                eprintln!(
+                    "[model-extract] attempt {} failed: {}; retrying...",
+                    attempt + 1,
+                    e
+                );
             }
             Err(e) => return Err(e),
         }
@@ -892,7 +918,13 @@ fn kind_discriminant(kind: hauksbee_models::ComponentKind) -> &'static str {
 
 fn sanitise_filename(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -905,7 +937,6 @@ fn dirs_next() -> PathBuf {
         .map(PathBuf::from)
         .unwrap_or_else(|_| PathBuf::from("/tmp"))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -937,13 +968,25 @@ mod tests {
         // A charger prompt must teach the [models.behavioral.converter] schema
         // and the input-current-limit programming block.
         let charger = build_prompt("LTC4020", "charger", "datasheet");
-        assert!(charger.contains("[models.behavioral.converter]"), "charger prompt missing converter schema");
-        assert!(charger.contains("iin_program"), "charger prompt missing current-limit program");
+        assert!(
+            charger.contains("[models.behavioral.converter]"),
+            "charger prompt missing converter schema"
+        );
+        assert!(
+            charger.contains("iin_program"),
+            "charger prompt missing current-limit program"
+        );
         assert!(charger.contains("CHARGER specifically"));
         // A PMIC prompt must teach the internal-pull pin schema.
         let pmic = build_prompt("nPM1300", "pmic", "datasheet");
-        assert!(pmic.contains("pull_to"), "pmic prompt missing internal-pull schema");
-        assert!(pmic.contains("SHPHLD"), "pmic prompt should mention the ship-hold case");
+        assert!(
+            pmic.contains("pull_to"),
+            "pmic prompt missing internal-pull schema"
+        );
+        assert!(
+            pmic.contains("SHPHLD"),
+            "pmic prompt should mention the ship-hold case"
+        );
         // A balancer prompt must teach the leak-law schema.
         let bal = build_prompt("LTC6803", "balancer", "datasheet");
         assert!(bal.contains("[[models.behavioral.laws]]"));
@@ -1020,7 +1063,10 @@ dropout_v = 1.0
 iq_a = 0.001
 "#;
         let err = parse_and_validate_reply(reply, "X", "charger").unwrap_err();
-        assert!(err.to_string().contains("no [models.behavioral]"), "got: {err}");
+        assert!(
+            err.to_string().contains("no [models.behavioral]"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1173,8 +1219,14 @@ max_current_a = 0.1\n\
         let c = entry.behavioral.converter.expect("converter block");
         assert_eq!(c.in_pin, "pvin");
         assert_eq!(c.out_pin, "bat");
-        assert!(c.iin_program.is_some(), "ILIMIT current-limit program present");
-        println!("live LTC4020 charger: vout={} eff={:?}", c.vout_setpoint, c.efficiency);
+        assert!(
+            c.iin_program.is_some(),
+            "ILIMIT current-limit program present"
+        );
+        println!(
+            "live LTC4020 charger: vout={} eff={:?}",
+            c.vout_setpoint, c.efficiency
+        );
     }
 
     /// Test the validation path with a mocked LLM reply.
@@ -1229,7 +1281,11 @@ vaf = 80.0
         let err = parse_and_validate_reply(bad_reply, "BCM847BS", "bjt_npn");
         assert!(err.is_err(), "bad bf should fail validation");
         let msg = err.unwrap_err().to_string();
-        assert!(msg.contains("bf") || msg.contains("validation"), "error message: {}", msg);
+        assert!(
+            msg.contains("bf") || msg.contains("validation"),
+            "error message: {}",
+            msg
+        );
     }
 
     #[test]

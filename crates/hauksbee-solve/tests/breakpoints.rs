@@ -28,9 +28,15 @@ fn pulse_circuit() -> (Circuit, NodeId) {
         kind: SourceKind::Pwl(vec![
             PwlPoint { t: 0.0, v: 0.0 },
             PwlPoint { t: 400e-6, v: 0.0 },
-            PwlPoint { t: 400.2e-6, v: 5.0 },
+            PwlPoint {
+                t: 400.2e-6,
+                v: 5.0,
+            },
             PwlPoint { t: 402e-6, v: 5.0 },
-            PwlPoint { t: 402.2e-6, v: 0.0 },
+            PwlPoint {
+                t: 402.2e-6,
+                v: 0.0,
+            },
         ]),
     });
     c.add(Device::Resistor {
@@ -153,7 +159,10 @@ fn pulse_source_corners_are_registered() {
             .time
             .iter()
             .any(|&t| (t - corner).abs() <= f64::max(1e-15, corner * 1e-9));
-        assert!(hit, "no accepted step landed on the {corner:.6e} s pulse edge");
+        assert!(
+            hit,
+            "no accepted step landed on the {corner:.6e} s pulse edge"
+        );
     }
 }
 
@@ -219,7 +228,10 @@ fn breakpoint_landing_does_not_collapse_controller_dt() {
         .iter()
         .position(|&t| (t - corner).abs() <= corner * 1e-9)
         .expect("an accepted step must land exactly on the flat PWL vertex");
-    assert!(i >= 2 && i + 1 < wf.time.len(), "corner sample needs neighbours");
+    assert!(
+        i >= 2 && i + 1 < wf.time.len(),
+        "corner sample needs neighbours"
+    );
     let pre_dt = wf.time[i - 1] - wf.time[i - 2]; // controller rhythm before
     let sliver = wf.time[i] - wf.time[i - 1]; // the truncated landing step
     let post_dt = wf.time[i + 1] - wf.time[i]; // first step after the corner

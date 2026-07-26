@@ -227,9 +227,9 @@ impl Partition {
         // islands. We still fuse a device's own internal nodes normally.
         let mut pinned = vec![false; n_nodes + 1];
         pinned[0] = true; // ground is a (trivially pinned) reference
-        // Rail tear nodes are treated as boundary inputs: a device touching the
-        // rail does not fuse with other blocks through it. The rail's voltage is
-        // resolved by the orchestrator's scalar balance, not by an ideal source.
+                          // Rail tear nodes are treated as boundary inputs: a device touching the
+                          // rail does not fuse with other blocks through it. The rail's voltage is
+                          // resolved by the orchestrator's scalar balance, not by an ideal source.
         for n in extra_pinned {
             if !n.is_ground() {
                 pinned[n.0 as usize] = true;
@@ -654,9 +654,10 @@ fn detect_rail_tears(circuit: &Circuit) -> Vec<RailTear> {
             }
             // Does this device have any non-ground node that is NOT the rail and
             // NOT already pinned? If not, it is dropped and its current is lost.
-            let has_free = dev.nodes().iter().any(|n| {
-                !n.is_ground() && n.0 as usize != rail && !pinned[n.0 as usize]
-            });
+            let has_free = dev
+                .nodes()
+                .iter()
+                .any(|n| !n.is_ground() && n.0 as usize != rail && !pinned[n.0 as usize]);
             if !has_free {
                 droppable_load = true;
                 break;

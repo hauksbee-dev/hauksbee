@@ -65,10 +65,7 @@ fn outcome_with(peak_temp_c: HashMap<String, f64>, faults: Vec<RunFault>) -> Run
 }
 
 fn temps(entries: &[(&str, f64)]) -> HashMap<String, f64> {
-    entries
-        .iter()
-        .map(|(k, v)| (k.to_string(), *v))
-        .collect()
+    entries.iter().map(|(k, v)| (k.to_string(), *v)).collect()
 }
 
 const MAX_TEMP_85_SPEC: &str = "board=\"b.kicad_pcb\"\nduration_ms=1\n\

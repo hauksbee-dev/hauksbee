@@ -105,7 +105,8 @@ fn ci_result(results: Vec<hauksbee_ci::assertions::AssertResult>, analog_abort: 
     }
 }
 
-const VOLTAGE_SPEC: &str = "board=\"b.kicad_pcb\"\nduration_ms=1\n[[assert]]\nkind=\"voltage\"\nnet=\"n1\"\nmin=3.0\n";
+const VOLTAGE_SPEC: &str =
+    "board=\"b.kicad_pcb\"\nduration_ms=1\n[[assert]]\nkind=\"voltage\"\nnet=\"n1\"\nmin=3.0\n";
 
 #[test]
 fn assertion_over_failed_window_is_invalid_and_exits_3_without_abort() {
@@ -117,7 +118,11 @@ fn assertion_over_failed_window_is_invalid_and_exits_3_without_abort() {
     let results = evaluate(&spec, &[out]);
     assert_eq!(results.len(), 1);
     let r = &results[0];
-    assert!(r.invalid, "the assertion must be INVALID, not evaluated: {}", r.detail);
+    assert!(
+        r.invalid,
+        "the assertion must be INVALID, not evaluated: {}",
+        r.detail
+    );
     assert!(!r.passed, "an invalid assertion is never counted as passed");
     assert!(
         r.detail.contains("INVALID") && r.detail.to_lowercase().contains("held-stale"),
@@ -133,8 +138,15 @@ fn assertion_over_failed_window_is_invalid_and_exits_3_without_abort() {
         "an INVALID assertion exits 3 even without a consecutive abort"
     );
     // The rendered surfaces name the invalidity distinctly from pass/fail.
-    assert!(result.render_human().contains("[INVALID]"), "{}", result.render_human());
-    assert!(result.render_junit().contains("<error"), "junit uses <error> for invalid");
+    assert!(
+        result.render_human().contains("[INVALID]"),
+        "{}",
+        result.render_human()
+    );
+    assert!(
+        result.render_junit().contains("<error"),
+        "junit uses <error> for invalid"
+    );
     assert!(result.render_github_annotations().contains("INVALID"));
 }
 
@@ -146,7 +158,10 @@ fn assertion_clear_of_failed_window_passes_normally() {
     let out = outcome_with("n1", 5.0, 1.0, false, vec![(0.002, 0.003)], false);
     let results = evaluate(&spec, &[out]);
     let r = &results[0];
-    assert!(!r.invalid, "a non-overlapping failed window does not invalidate");
+    assert!(
+        !r.invalid,
+        "a non-overlapping failed window does not invalidate"
+    );
     assert!(r.passed, "5 V clears the >= 3 V bound: {}", r.detail);
 
     let result = ci_result(results, false);
@@ -166,7 +181,10 @@ fn tripped_abort_forces_exit_3_even_when_assertions_pass() {
     out.uart.insert("U1".to_string(), "hi there".to_string());
     let results = evaluate(&spec, &[out]);
     assert!(results[0].passed, "the UART assertion itself passes");
-    assert!(!results[0].invalid, "a UART assertion is not analog-invalidated");
+    assert!(
+        !results[0].invalid,
+        "a UART assertion is not analog-invalidated"
+    );
 
     let result = ci_result(results, true);
     assert!(result.passed(), "every assertion passed");
@@ -221,6 +239,9 @@ fn abort_with_an_invalid_assertion_does_not_double_count_in_junit() {
 
     let result = ci_result(results, true);
     let xml = result.render_junit();
-    assert!(xml.contains("tests=\"1\""), "no synthetic testcase added: {xml}");
+    assert!(
+        xml.contains("tests=\"1\""),
+        "no synthetic testcase added: {xml}"
+    );
     assert!(xml.contains("errors=\"1\""), "{xml}");
 }

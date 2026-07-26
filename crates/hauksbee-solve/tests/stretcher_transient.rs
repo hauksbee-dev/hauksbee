@@ -154,31 +154,99 @@ fn build_neuron9_spike_path(membrane: Vec<PwlPoint>) -> Circuit {
     });
 
     // Threshold divider + adaptation on -IN.
-    c.add(Device::Resistor { name: "R_top2601".into(), a: vdd, b: thr, ohms: 820e3, tc1: None });
-    c.add(Device::Resistor { name: "R_bottom2601".into(), a: thr, b: NodeId::GROUND, ohms: 150e3, tc1: None });
-    c.add(Device::Capacitor { name: "C_adapt2601".into(), a: thr, b: NodeId::GROUND, farads: 4.7e-9, ic: None });
-    c.add(Device::Resistor { name: "R_inject2601".into(), a: thr, b: adapt2_pad, ohms: 47e3, tc1: None });
+    c.add(Device::Resistor {
+        name: "R_top2601".into(),
+        a: vdd,
+        b: thr,
+        ohms: 820e3,
+        tc1: None,
+    });
+    c.add(Device::Resistor {
+        name: "R_bottom2601".into(),
+        a: thr,
+        b: NodeId::GROUND,
+        ohms: 150e3,
+        tc1: None,
+    });
+    c.add(Device::Capacitor {
+        name: "C_adapt2601".into(),
+        a: thr,
+        b: NodeId::GROUND,
+        farads: 4.7e-9,
+        ic: None,
+    });
+    c.add(Device::Resistor {
+        name: "R_inject2601".into(),
+        a: thr,
+        b: adapt2_pad,
+        ohms: 47e3,
+        tc1: None,
+    });
 
     // LMV7219 comparator (datasheet rails 0.05/4.95 V, 3 mV offset).
     c.add(Device::Comparator {
         name: "NEURON_COMPARATOR2601".into(),
-        out: cmp_out, inp: mem, inn: thr,
-        out_lo: 0.05, out_hi: 4.95, hysteresis: 0.003,
+        out: cmp_out,
+        inp: mem,
+        inn: thr,
+        out_lo: 0.05,
+        out_hi: 4.95,
+        hysteresis: 0.003,
     });
 
     // Charge path OUT -> R_charge -> D_stretch -> V_out.
-    c.add(Device::Resistor { name: "R_charge2601".into(), a: cmp_out, b: d_a, ohms: 1.0e3, tc1: None });
-    c.add(Device::Diode { name: "D_stretch2601".into(), a: d_a, k: vout, model: diode_1n4148() });
+    c.add(Device::Resistor {
+        name: "R_charge2601".into(),
+        a: cmp_out,
+        b: d_a,
+        ohms: 1.0e3,
+        tc1: None,
+    });
+    c.add(Device::Diode {
+        name: "D_stretch2601".into(),
+        a: d_a,
+        k: vout,
+        model: diode_1n4148(),
+    });
 
     // V_out: stretch cap (surgered 5.8nF) + leak, both to GND; plus a hi-Z load
     // for the synapse-mirror analog-switch source pins.
-    c.add(Device::Capacitor { name: "C__stretch2601".into(), a: vout, b: NodeId::GROUND, farads: 5.8e-9, ic: None });
-    c.add(Device::Resistor { name: "R__stretch2601".into(), a: vout, b: NodeId::GROUND, ohms: 150e3, tc1: None });
-    c.add(Device::Resistor { name: "R_mirror_load".into(), a: vout, b: NodeId::GROUND, ohms: 1.0e6, tc1: None });
+    c.add(Device::Capacitor {
+        name: "C__stretch2601".into(),
+        a: vout,
+        b: NodeId::GROUND,
+        farads: 5.8e-9,
+        ic: None,
+    });
+    c.add(Device::Resistor {
+        name: "R__stretch2601".into(),
+        a: vout,
+        b: NodeId::GROUND,
+        ohms: 150e3,
+        tc1: None,
+    });
+    c.add(Device::Resistor {
+        name: "R_mirror_load".into(),
+        a: vout,
+        b: NodeId::GROUND,
+        ohms: 1.0e6,
+        tc1: None,
+    });
 
     // Adaptation feedback V_out -> D_stretch2602 -> C_adapt2602 -> R_inject.
-    c.add(Device::Diode { name: "D_stretch2602".into(), a: vout, k: adapt2, model: diode_1n4148() });
-    c.add(Device::Capacitor { name: "C_adapt2602".into(), a: adapt2, b: adapt2_pad, farads: 150e-12, ic: None });
+    c.add(Device::Diode {
+        name: "D_stretch2602".into(),
+        a: vout,
+        k: adapt2,
+        model: diode_1n4148(),
+    });
+    c.add(Device::Capacitor {
+        name: "C_adapt2602".into(),
+        a: adapt2,
+        b: adapt2_pad,
+        farads: 150e-12,
+        ic: None,
+    });
     c
 }
 
@@ -191,15 +259,25 @@ fn neuron_spike_forms_through_comparator_flip_event() {
         PwlPoint { t: 100e-6, v: 0.30 },
         PwlPoint { t: 300e-6, v: 1.50 },
         PwlPoint { t: 900e-6, v: 1.50 },
-        PwlPoint { t: 1000e-6, v: 0.30 },
-        PwlPoint { t: 2000e-6, v: 0.30 },
+        PwlPoint {
+            t: 1000e-6,
+            v: 0.30,
+        },
+        PwlPoint {
+            t: 2000e-6,
+            v: 0.30,
+        },
     ];
     let circuit = build_neuron9_spike_path(membrane);
 
     let mut opts = SolverOptions::adaptive(1e-7, 1e-4);
     opts.integration = Integration::Gear2;
     opts.partitioning = Partitioning::Off;
-    opts.step = StepControl::Adaptive { dt_initial: 1e-7, dt_min: 1e-12, dt_max: 1e-4 };
+    opts.step = StepControl::Adaptive {
+        dt_initial: 1e-7,
+        dt_min: 1e-12,
+        dt_max: 1e-4,
+    };
 
     let wf = Transient::new(opts)
         .run(&circuit, 2000e-6)
@@ -210,8 +288,16 @@ fn neuron_spike_forms_through_comparator_flip_event() {
 
     // Before the membrane crosses threshold (t < 150 us) V_out is the discharged
     // power-on state.
-    let early = time.iter().zip(vout).find(|(t, _)| **t > 120e-6).map(|(_, v)| *v).unwrap();
-    assert!(early.abs() < 0.05, "V_out should rest near 0 before the flip: {early:.4} V");
+    let early = time
+        .iter()
+        .zip(vout)
+        .find(|(t, _)| **t > 120e-6)
+        .map(|(_, v)| *v)
+        .unwrap();
+    assert!(
+        early.abs() < 0.05,
+        "V_out should rest near 0 before the flip: {early:.4} V"
+    );
 
     // After the comparator fires, a real stretched pulse forms (rails near the
     // comparator high minus a diode drop).
@@ -221,8 +307,19 @@ fn neuron_spike_forms_through_comparator_flip_event() {
     // Once the membrane drops the comparator releases and V_out decays through
     // R__stretch||R_mirror * C__stretch (tau ~ 0.76 ms), i.e. it is FALLING but
     // not yet fully discharged by t = 2 ms.
-    let v_release = time.iter().zip(vout).find(|(t, _)| **t > 1100e-6).map(|(_, v)| *v).unwrap();
+    let v_release = time
+        .iter()
+        .zip(vout)
+        .find(|(t, _)| **t > 1100e-6)
+        .map(|(_, v)| *v)
+        .unwrap();
     let v_final = *vout.last().unwrap();
-    assert!(v_final < v_release, "V_out should be decaying after release: {v_release:.3} -> {v_final:.3}");
-    assert!(v_final > 0.5, "decay too fast vs the R*C stretch time constant: {v_final:.3} V");
+    assert!(
+        v_final < v_release,
+        "V_out should be decaying after release: {v_release:.3} -> {v_final:.3}"
+    );
+    assert!(
+        v_final > 0.5,
+        "decay too fast vs the R*C stretch time constant: {v_final:.3} V"
+    );
 }

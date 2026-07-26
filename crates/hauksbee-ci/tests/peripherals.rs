@@ -119,7 +119,10 @@ max = 25
     );
     let spec_path = write_tmp("vcd_sink.toml", &spec);
 
-    let cfg = RunConfig { spec: spec_path, ..Default::default() };
+    let cfg = RunConfig {
+        spec: spec_path,
+        ..Default::default()
+    };
     let result = run(&cfg).expect("run vcd spec");
     assert!(
         result.passed(),

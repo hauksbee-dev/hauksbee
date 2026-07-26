@@ -113,15 +113,18 @@ impl PinRuleTable {
                 ));
             }
             if rule.roles.is_empty() {
-                return Err(format!("pin_rules: rule '{}' maps no pad to a role", rule.id));
+                return Err(format!(
+                    "pin_rules: rule '{}' maps no pad to a role",
+                    rule.id
+                ));
             }
-            let footprint_re = match &rule.footprint_re {
-                Some(p) => Some(
-                    Regex::new(&format!("(?i){p}"))
-                        .map_err(|e| format!("pin_rules: rule '{}' bad footprint_re: {e}", rule.id))?,
-                ),
-                None => None,
-            };
+            let footprint_re =
+                match &rule.footprint_re {
+                    Some(p) => Some(Regex::new(&format!("(?i){p}")).map_err(|e| {
+                        format!("pin_rules: rule '{}' bad footprint_re: {e}", rule.id)
+                    })?),
+                    None => None,
+                };
             ids.push(rule.id.clone());
             compiled.push(CompiledRule { rule, footprint_re });
         }

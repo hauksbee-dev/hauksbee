@@ -426,13 +426,14 @@ impl<'a> Parser<'a> {
                     if istart == self.pos {
                         return self.err("expected a bit index after '['");
                     }
-                    let idx: u32 = self.src[istart..self.pos]
-                        .parse()
-                        .map_err(|_| LogicExprError {
-                            msg: "bit index does not fit in u32".into(),
-                            at: istart,
-                            src: self.src.to_string(),
-                        })?;
+                    let idx: u32 =
+                        self.src[istart..self.pos]
+                            .parse()
+                            .map_err(|_| LogicExprError {
+                                msg: "bit index does not fit in u32".into(),
+                                at: istart,
+                                src: self.src.to_string(),
+                            })?;
                     if self.bytes.get(self.pos) != Some(&b']') {
                         return self.err("expected ']'");
                     }
@@ -503,7 +504,9 @@ pub enum LogicSpecError {
         bits: u32,
     },
 
-    #[error("{context}: bit index {index} is out of range for register '{register}' ({bits} bits)")]
+    #[error(
+        "{context}: bit index {index} is out of range for register '{register}' ({bits} bits)"
+    )]
     BitIndexOutOfRange {
         context: String,
         register: String,
@@ -1168,7 +1171,14 @@ outputs = ["q", "qb"]
         logic.comb.insert("qa".into(), "store[8]".into());
         let e = logic.validate().unwrap_err();
         assert!(
-            matches!(e, LogicSpecError::BitIndexOutOfRange { index: 8, bits: 8, .. }),
+            matches!(
+                e,
+                LogicSpecError::BitIndexOutOfRange {
+                    index: 8,
+                    bits: 8,
+                    ..
+                }
+            ),
             "got: {e}"
         );
     }
@@ -1176,7 +1186,9 @@ outputs = ["q", "qb"]
     #[test]
     fn rejects_clock_pin_in_comb() {
         let mut logic = parse_logic(HC595);
-        logic.comb.insert("qh_serial".into(), "srclk & shift[7]".into());
+        logic
+            .comb
+            .insert("qh_serial".into(), "srclk & shift[7]".into());
         let e = logic.validate().unwrap_err();
         assert!(
             matches!(e, LogicSpecError::ClockAlsoComb { ref pin, .. } if pin == "srclk"),
@@ -1223,7 +1235,10 @@ outputs = ["q", "qb"]
             },
         );
         let e = logic.validate().unwrap_err();
-        assert!(matches!(e, LogicSpecError::TristateRangeInvalid { .. }), "got: {e}");
+        assert!(
+            matches!(e, LogicSpecError::TristateRangeInvalid { .. }),
+            "got: {e}"
+        );
     }
 
     #[test]
@@ -1254,7 +1269,14 @@ load = { pin = "pl_n", active = "low", data = ["a", "b"] }
 "#;
         let e = parse_logic(toml_src).validate().unwrap_err();
         assert!(
-            matches!(e, LogicSpecError::LoadWidthMismatch { bits: 8, got: 2, .. }),
+            matches!(
+                e,
+                LogicSpecError::LoadWidthMismatch {
+                    bits: 8,
+                    got: 2,
+                    ..
+                }
+            ),
             "got: {e}"
         );
     }
@@ -1272,7 +1294,11 @@ load = { pin = "pl_n", active = "low", data = ["a", "b"] }
         assert!(
             matches!(
                 e,
-                LogicSpecError::DataInWidthMismatch { bits: 4, from_bits: 8, .. }
+                LogicSpecError::DataInWidthMismatch {
+                    bits: 4,
+                    from_bits: 8,
+                    ..
+                }
             ),
             "got: {e}"
         );
@@ -1313,7 +1339,11 @@ data_in = "d"
 "q_n" = "!ff[0]"
 "#;
         let logic = parse_logic(toml_src);
-        assert_eq!(logic.registers[0].resets.len(), 2, "both async controls parsed");
+        assert_eq!(
+            logic.registers[0].resets.len(),
+            2,
+            "both async controls parsed"
+        );
         logic.validate().expect("74HC74 shape validates");
     }
 
@@ -1322,6 +1352,9 @@ data_in = "d"
         let mut logic = parse_logic(HC595);
         logic.inputs.push("store".into());
         let e = logic.validate().unwrap_err();
-        assert!(matches!(e, LogicSpecError::DuplicateName { .. }), "got: {e}");
+        assert!(
+            matches!(e, LogicSpecError::DuplicateName { .. }),
+            "got: {e}"
+        );
     }
 }

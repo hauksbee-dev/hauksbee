@@ -124,7 +124,10 @@ fn module_apin_binds_adc_and_disabled_gpio_driver() {
         .gpio_drivers
         .get(&('C', 0))
         .expect("A0 carries a (disabled) GPIO driver too");
-    assert!(!a0.enabled, "A0 driver stays disabled: the pin is never driven");
+    assert!(
+        !a0.enabled,
+        "A0 driver stays disabled: the pin is never driven"
+    );
 }
 
 /// (b) The gate test (08-validation-and-test-campaign §2). Drive a synthetic

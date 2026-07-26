@@ -48,9 +48,7 @@ mod rebuild;
 mod report;
 pub mod route_freerouting;
 
-pub use cluster::{
-    analyze, Analysis, Anomaly, Cluster, Instance, Placement, TemplateRole,
-};
+pub use cluster::{analyze, Analysis, Anomaly, Cluster, Instance, Placement, TemplateRole};
 pub use fingerprint::{BlockGraph, Fingerprint};
 pub use netlist::{Comp, CompPad, NetId, Netlist};
 pub use partition::{partition, Block, Partition, PartitionConfig};
@@ -82,10 +80,7 @@ pub fn decompile_analysis(pcb: &Pcb) -> (Netlist, Analysis) {
 }
 
 /// Decompilation with an explicit partition configuration.
-pub fn decompile_analysis_with(
-    pcb: &Pcb,
-    cfg: &PartitionConfig,
-) -> (Netlist, Analysis) {
+pub fn decompile_analysis_with(pcb: &Pcb, cfg: &PartitionConfig) -> (Netlist, Analysis) {
     let nl = Netlist::from_pcb(pcb);
     let part = partition(&nl, cfg);
     let analysis = analyze(&nl, &part);

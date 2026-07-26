@@ -133,9 +133,7 @@ impl Analysis {
             .clusters
             .iter()
             .flat_map(|c| &c.instances)
-            .map(|i| {
-                i.comps_by_slot.iter().filter(|c| c.is_some()).count() + i.extra_comps.len()
-            })
+            .map(|i| i.comps_by_slot.iter().filter(|c| c.is_some()).count() + i.extra_comps.len())
             .sum();
         covered as f64 / self.total_comps as f64
     }
@@ -361,11 +359,7 @@ fn align_instance(
 }
 
 /// Majority-vote each template slot's lib_id/value/pad_count across instances.
-fn majority_vote_template(
-    nl: &Netlist,
-    template: &mut [TemplateRole],
-    aligned: &[InstanceAlign],
-) {
+fn majority_vote_template(nl: &Netlist, template: &mut [TemplateRole], aligned: &[InstanceAlign]) {
     for (slot, tr) in template.iter_mut().enumerate() {
         let mut lib_votes: HashMap<&str, usize> = HashMap::new();
         let mut val_votes: HashMap<&str, usize> = HashMap::new();
@@ -405,11 +399,7 @@ fn majority_copy(votes: &HashMap<usize, usize>) -> Option<usize> {
 }
 
 /// Diff an aligned instance against the template, producing anomalies.
-fn diff_instance(
-    nl: &Netlist,
-    a: &InstanceAlign,
-    template: &[TemplateRole],
-) -> Vec<Anomaly> {
+fn diff_instance(nl: &Netlist, a: &InstanceAlign, template: &[TemplateRole]) -> Vec<Anomaly> {
     let mut out = Vec::new();
     for (slot, tr) in template.iter().enumerate() {
         match a.comps_by_slot[slot] {

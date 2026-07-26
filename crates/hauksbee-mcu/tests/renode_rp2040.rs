@@ -169,7 +169,8 @@ fn rp2040_gpio_output_diffing_works() {
     let mut mcu = RenodeBackend::new(config).expect("spawn Renode rp2040");
 
     let elf = write_elf_to_temp();
-    mcu.load_firmware(&elf).expect("load hand-assembled M0 fixture ELF");
+    mcu.load_firmware(&elf)
+        .expect("load hand-assembled M0 fixture ELF");
 
     let levels: Arc<Mutex<HashMap<(char, u8), bool>>> = Arc::new(Mutex::new(HashMap::new()));
     let sink = levels.clone();

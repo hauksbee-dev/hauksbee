@@ -272,9 +272,7 @@ fn healthy_board_no_overtemp() {
 /// `Q1_q1` / `Q1_q2` (0.5 W each when both load resistors are `load_ohms`;
 /// pass a huge second resistance to idle unit 2). Metas mirror a dual BJT:
 /// per-unit `max_power_w`, shared explicit theta_JA and Tj limit.
-fn dual_package(
-    unit2_ohms: f64,
-) -> (Circuit, Vec<DeviceMeta>) {
+fn dual_package(unit2_ohms: f64) -> (Circuit, Vec<DeviceMeta>) {
     let mut circuit = Circuit::new();
     let vp = NodeId(1);
     circuit.add(Device::Vsource {

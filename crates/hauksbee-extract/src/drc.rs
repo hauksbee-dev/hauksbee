@@ -131,7 +131,13 @@ impl ClearanceRules {
             // A class clearance of 0 means "inherit the board default", not a
             // literal zero-clearance rule, resolve it to the default so a
             // diff-pair-only class does not report a 0 mm spacing requirement.
-            .map(|r| if r.clearance_mm > 0.0 { r.clearance_mm } else { self.default_clearance_mm })
+            .map(|r| {
+                if r.clearance_mm > 0.0 {
+                    r.clearance_mm
+                } else {
+                    self.default_clearance_mm
+                }
+            })
             .unwrap_or(self.default_clearance_mm)
     }
 
@@ -231,7 +237,11 @@ pub fn clearance_rules_from_kicad_pro<'a>(
         // default everywhere, a KiCad 10 board keeps its clearances only here.
         // The sibling assignment/pattern loops already skip bad entries; match
         // that.
-        let Some(name) = class.get("name").and_then(|x| x.as_str()).map(str::to_string) else {
+        let Some(name) = class
+            .get("name")
+            .and_then(|x| x.as_str())
+            .map(str::to_string)
+        else {
             continue;
         };
         let clearance = class
@@ -2220,8 +2230,7 @@ pub mod eagle_drc {
                                     out.packages
                                         .entry((cur_library.clone(), pkg.clone()))
                                         .or_default()
-                                        .push(
-                                        PkgItem::Pad {
+                                        .push(PkgItem::Pad {
                                             name: a.get("name").cloned().unwrap_or_default(),
                                             x,
                                             y,
@@ -2232,8 +2241,7 @@ pub mod eagle_drc {
                                                 .cloned()
                                                 .unwrap_or_else(|| "round".to_string()),
                                             rot_deg,
-                                        },
-                                    );
+                                        });
                                 }
                             }
                         }
@@ -2257,8 +2265,7 @@ pub mod eagle_drc {
                                             roundness: num(&a, "roundness").unwrap_or(0.0),
                                             rot_deg,
                                             layer,
-                                        },
-                                    );
+                                        });
                                 }
                             }
                         }
@@ -3548,11 +3555,20 @@ mod version_warning_tests {
     #[test]
     fn drc_report_carries_the_warning_for_kicad10() {
         // A minimal v20260206 board → the report flags the version even with no copper.
-        let r = drc_from_text_with_clearance_rules("(kicad_pcb (version 20260206) (generator x))", None)
-            .expect("parses");
-        assert!(r.version_warning.is_some(), "KiCad 10 board must carry the caveat");
-        let r2 = drc_from_text_with_clearance_rules("(kicad_pcb (version 20221018) (generator x))", None)
-            .expect("parses");
+        let r = drc_from_text_with_clearance_rules(
+            "(kicad_pcb (version 20260206) (generator x))",
+            None,
+        )
+        .expect("parses");
+        assert!(
+            r.version_warning.is_some(),
+            "KiCad 10 board must carry the caveat"
+        );
+        let r2 = drc_from_text_with_clearance_rules(
+            "(kicad_pcb (version 20221018) (generator x))",
+            None,
+        )
+        .expect("parses");
         assert!(r2.version_warning.is_none(), "validated board must not");
     }
 }

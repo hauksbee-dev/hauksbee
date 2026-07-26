@@ -222,15 +222,26 @@ fn rail_voltage(name: &str) -> Option<f64> {
                 matches!(
                     t,
                     "EN" | "ENABLE"
-                        | "PG" | "PGOOD" | "POWERGOOD" | "GOOD"
-                        | "SEL" | "SELECT"
-                        | "DET" | "DETECT"
-                        | "MON" | "MONITOR"
-                        | "STAT" | "STATUS"
-                        | "FLT" | "FAULT"
-                        | "INT" | "IRQ"
-                        | "RST" | "RESET"
-                        | "CTRL" | "CTL"
+                        | "PG"
+                        | "PGOOD"
+                        | "POWERGOOD"
+                        | "GOOD"
+                        | "SEL"
+                        | "SELECT"
+                        | "DET"
+                        | "DETECT"
+                        | "MON"
+                        | "MONITOR"
+                        | "STAT"
+                        | "STATUS"
+                        | "FLT"
+                        | "FAULT"
+                        | "INT"
+                        | "IRQ"
+                        | "RST"
+                        | "RESET"
+                        | "CTRL"
+                        | "CTL"
                 )
             });
             if is_signal {
@@ -242,7 +253,9 @@ fn rail_voltage(name: &str) -> Option<f64> {
                 // bare "5V0" rail is not seen as rail-like and the I2C rise-time
                 // audit is silently skipped (a --si vs --lint disagreement).
                 Some(v)
-            } else if n.contains("5V") && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS")) {
+            } else if n.contains("5V")
+                && (n.starts_with('+') || n.contains("VCC") || n.contains("VBUS"))
+            {
                 // Loose 5V rail, but only with rail context (+/VCC/VBUS) so a
                 // signal net that merely embeds "5V" is not misread, mirrors
                 // netlint's guarded 5V fallback.

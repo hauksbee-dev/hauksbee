@@ -21,7 +21,10 @@ fn seven_eight_xx_family_resolves_to_its_own_voltage() {
         ("7818", "7818", 18.0),
         ("7824", "7824", 24.0),
     ] {
-        let q = ComponentQuery { value: Some(val.into()), ..Default::default() };
+        let q = ComponentQuery {
+            value: Some(val.into()),
+            ..Default::default()
+        };
         let m = lib
             .resolve(&q)
             .model

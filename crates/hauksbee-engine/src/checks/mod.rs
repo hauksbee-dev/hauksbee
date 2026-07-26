@@ -60,9 +60,7 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
     report
         .findings
         .extend(straps::strap_lint(board, lib).findings);
-    report
-        .findings
-        .extend(resources_lint(board, lib).findings);
+    report.findings.extend(resources_lint(board, lib).findings);
     report
         .findings
         .extend(device_decode::device_decode_lint(board, lib).findings);

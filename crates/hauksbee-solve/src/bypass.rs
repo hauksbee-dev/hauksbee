@@ -371,15 +371,37 @@ mod tests {
             n: NodeId::GROUND,
             kind: SourceKind::Dc(3.0),
         });
-        c.add(Device::Resistor { name: "R1".into(), a: vin, b: n1, ohms: 1e3, tc1: None });
-        c.add(Device::Capacitor { name: "C1".into(), a: n1, b: NodeId::GROUND, farads: 1e-9, ic: None });
+        c.add(Device::Resistor {
+            name: "R1".into(),
+            a: vin,
+            b: n1,
+            ohms: 1e3,
+            tc1: None,
+        });
+        c.add(Device::Capacitor {
+            name: "C1".into(),
+            a: n1,
+            b: NodeId::GROUND,
+            farads: 1e-9,
+            ic: None,
+        });
         c.add(Device::Diode {
             name: "D1".into(),
             a: n1,
             k: n2,
-            model: DiodeModel { cjo: 4e-12, tt: 10e-9, ..DiodeModel::default() },
+            model: DiodeModel {
+                cjo: 4e-12,
+                tt: 10e-9,
+                ..DiodeModel::default()
+            },
         });
-        c.add(Device::Resistor { name: "R2".into(), a: n2, b: NodeId::GROUND, ohms: 2e3, tc1: None });
+        c.add(Device::Resistor {
+            name: "R2".into(),
+            a: n2,
+            b: NodeId::GROUND,
+            ohms: 2e3,
+            tc1: None,
+        });
         c.add(Device::Bjt {
             name: "Q1".into(),
             c: vin,
@@ -387,7 +409,13 @@ mod tests {
             e: n3,
             model: BjtModel::default(),
         });
-        c.add(Device::Resistor { name: "RE".into(), a: n3, b: NodeId::GROUND, ohms: 100.0, tc1: None });
+        c.add(Device::Resistor {
+            name: "RE".into(),
+            a: n3,
+            b: NodeId::GROUND,
+            ohms: 100.0,
+            tc1: None,
+        });
         c.add(Device::Mosfet {
             name: "M1".into(),
             d: n1,
@@ -460,13 +488,16 @@ mod tests {
         let mut m = SparseMatrix::new(layout.size);
         reserve_pattern(&c, &layout, &mut m);
         let n = layout.size;
-        let x: Vec<f64> = (0..n).map(|i| ((i as f64) * 0.61).sin() * 2.0 + 0.4).collect();
+        let x: Vec<f64> = (0..n)
+            .map(|i| ((i as f64) * 0.61).sin() * 2.0 + 0.4)
+            .collect();
         let mut state = ReactiveState::new(c.devices.len());
         for (i, v) in state.x1.iter_mut().enumerate() {
             *v = 0.2 * (i as f64 + 1.0);
         }
         let opts = SolverOptions::default();
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
+        let coeffs =
+            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
         let spdt = std::collections::HashMap::new();
         let cx = ctx(&c, &layout, &opts, &x, &x, &state, coeffs, &spdt);
 
@@ -483,9 +514,17 @@ mod tests {
 
         for i in 0..n {
             assert_eq!(m.row(i), m_ref.row(i), "row {i} not bit-identical");
-            assert_eq!(rhs[i].to_bits(), rhs_ref[i].to_bits(), "rhs {i} not bit-identical");
+            assert_eq!(
+                rhs[i].to_bits(),
+                rhs_ref[i].to_bits(),
+                "rhs {i} not bit-identical"
+            );
         }
-        assert_eq!(st.counters(), (3, 0), "diode+bjt+mosfet evaluated, none skipped");
+        assert_eq!(
+            st.counters(),
+            (3, 0),
+            "diode+bjt+mosfet evaluated, none skipped"
+        );
     }
 
     /// With an unmoved iterate on iteration ≥3, the bypassable devices replay
@@ -498,10 +537,13 @@ mod tests {
         let mut m = SparseMatrix::new(layout.size);
         reserve_pattern(&c, &layout, &mut m);
         let n = layout.size;
-        let x: Vec<f64> = (0..n).map(|i| ((i as f64) * 0.37).cos() * 1.5 + 0.2).collect();
+        let x: Vec<f64> = (0..n)
+            .map(|i| ((i as f64) * 0.37).cos() * 1.5 + 0.2)
+            .collect();
         let state = ReactiveState::new(c.devices.len());
         let opts = SolverOptions::default();
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
+        let coeffs =
+            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
         let spdt = std::collections::HashMap::new();
         let cx = ctx(&c, &layout, &opts, &x, &x, &state, coeffs, &spdt);
 
@@ -518,10 +560,18 @@ mod tests {
         stamp_all_bypass(&cx, &mut st, &mut m, &mut rhs3, false);
         for i in 0..n {
             assert_eq!(m.row(i), &ref_rows[i][..], "replayed row {i} differs");
-            assert_eq!(rhs3[i].to_bits(), rhs1[i].to_bits(), "replayed rhs {i} differs");
+            assert_eq!(
+                rhs3[i].to_bits(),
+                rhs1[i].to_bits(),
+                "replayed rhs {i} differs"
+            );
         }
         let (evals, skips) = st.counters();
-        assert_eq!((evals, skips), (3, 3), "second assembly must replay all three");
+        assert_eq!(
+            (evals, skips),
+            (3, 3),
+            "second assembly must replay all three"
+        );
     }
 
     /// A moved terminal re-evaluates exactly the devices that read it; a
@@ -536,7 +586,8 @@ mod tests {
         let mut x: Vec<f64> = (0..n).map(|i| 0.3 + 0.05 * i as f64).collect();
         let state = ReactiveState::new(c.devices.len());
         let opts = SolverOptions::default();
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
+        let coeffs =
+            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
         let spdt = std::collections::HashMap::new();
 
         let mut st = BypassState::build(&c, &layout);
@@ -552,7 +603,9 @@ mod tests {
         let n1 = (0..c.node_count())
             .find(|&i| c.node_name(hauksbee_ir::NodeId(i as u32)) == "n1")
             .expect("n1 exists");
-        let n1_idx = layout.node(hauksbee_ir::NodeId(n1 as u32)).expect("n1 unknown");
+        let n1_idx = layout
+            .node(hauksbee_ir::NodeId(n1 as u32))
+            .expect("n1 unknown");
         x[n1_idx] += 0.5;
         {
             let cx = ctx(&c, &layout, &opts, &x, &x, &state, coeffs, &spdt);
@@ -574,7 +627,11 @@ mod tests {
             stamp_all_bypass(&cx, &mut st, &mut m, &mut rhs, false);
         }
         let (evals2, skips2) = st.counters();
-        assert_eq!(evals2 - evals, 3, "generation bump must re-evaluate all three");
+        assert_eq!(
+            evals2 - evals,
+            3,
+            "generation bump must re-evaluate all three"
+        );
         let _ = skips2;
     }
 
@@ -609,9 +666,26 @@ mod tests {
         // R + junction divider whose cold Newton walks in pnjlim-limited
         // steps (several iterations), and they settle at different rates, so
         // the tail iterations have quiescent devices to skip.
-        c.add(Device::Resistor { name: "R1".into(), a: vin, b: mid, ohms: 1e3, tc1: None });
-        c.add(Device::Diode { name: "D1".into(), a: mid, k: NodeId::GROUND, model: DiodeModel::default() });
-        c.add(Device::Resistor { name: "R2".into(), a: vin, b: out, ohms: 4.7e3, tc1: None });
+        c.add(Device::Resistor {
+            name: "R1".into(),
+            a: vin,
+            b: mid,
+            ohms: 1e3,
+            tc1: None,
+        });
+        c.add(Device::Diode {
+            name: "D1".into(),
+            a: mid,
+            k: NodeId::GROUND,
+            model: DiodeModel::default(),
+        });
+        c.add(Device::Resistor {
+            name: "R2".into(),
+            a: vin,
+            b: out,
+            ohms: 4.7e3,
+            tc1: None,
+        });
         c.add(Device::Bjt {
             name: "Q1".into(),
             c: out,
@@ -620,14 +694,15 @@ mod tests {
             model: BjtModel::default(),
         });
 
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
+        let coeffs =
+            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
         let run = |bypass: crate::options::NewtonBypass| {
             let mut opts = SolverOptions::default();
             opts.newton_bypass = bypass;
             // The flagship substrate bypass targets runs with the Armijo
             // line search armed; exercise the same interplay here.
-            opts.ladder = crate::options::RobustnessLadder::none()
-                .with(crate::options::Strategy::LineSearch);
+            opts.ladder =
+                crate::options::RobustnessLadder::none().with(crate::options::Strategy::LineSearch);
             let mut ws = Workspace::new(&c);
             let state = ReactiveState::new(c.devices.len());
             // DC operating point at the sine's offset (bypass never runs on
@@ -641,7 +716,11 @@ mod tests {
                 &mut ws, &c, &opts, 4.3e-7, 1e-7, coeffs, &state, false, false, opts.gmin, 1.0,
             );
             assert!(r.converged, "solve must converge (iters {})", r.iters);
-            assert!(r.iters > 2, "fixture must need >2 iterations, got {}", r.iters);
+            assert!(
+                r.iters > 2,
+                "fixture must need >2 iterations, got {}",
+                r.iters
+            );
             (ws.x.clone(), ws.bypass_counters(), r.iters)
         };
         let (x_ref, (e0, s0), _) = run(crate::options::NewtonBypass::Off);
@@ -651,7 +730,8 @@ mod tests {
         assert!(skips > 0, "fixture must actually skip some evaluations");
         let opts = SolverOptions::default();
         for i in 0..x_ref.len() {
-            let tol = opts.reltol * x_ref[i].abs().max(x_byp[i].abs()) + opts.vntol.max(opts.abstol);
+            let tol =
+                opts.reltol * x_ref[i].abs().max(x_byp[i].abs()) + opts.vntol.max(opts.abstol);
             assert!(
                 (x_ref[i] - x_byp[i]).abs() <= tol,
                 "unknown {i}: bypass root {} vs reference {} exceeds tolerance",
@@ -672,7 +752,8 @@ mod tests {
         let mut x: Vec<f64> = vec![0.4; n];
         let state = ReactiveState::new(c.devices.len());
         let opts = SolverOptions::default();
-        let coeffs = IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
+        let coeffs =
+            IntegCoeffs::for_step(crate::options::Integration::Trapezoidal, 1e-7, 1e-7, false);
         let spdt = std::collections::HashMap::new();
         let mut st = BypassState::build(&c, &layout);
         st.begin_solve();

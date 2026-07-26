@@ -79,9 +79,8 @@ fn qemu_adc_injection_lands_in_guest_ram() {
     mcu.set_analog_in(3, 3.3);
     mcu.run_micros(5_000).expect("run chunk");
 
-    let expected = ((volts / mailbox::ADC_FULL_SCALE_VOLTS)
-        * f64::from(mailbox::ADC_MAX_COUNT))
-    .round() as u32;
+    let expected = ((volts / mailbox::ADC_FULL_SCALE_VOLTS) * f64::from(mailbox::ADC_MAX_COUNT))
+        .round() as u32;
     let got = mcu
         .debug_read_u32(mailbox::adc_channel_word(0))
         .expect("read ADC slot 0");
@@ -103,9 +102,8 @@ fn qemu_adc_injection_lands_in_guest_ram() {
     let updated = mcu
         .debug_read_u32(mailbox::adc_channel_word(0))
         .expect("re-read ADC slot 0");
-    let expected2 = ((0.4 / mailbox::ADC_FULL_SCALE_VOLTS)
-        * f64::from(mailbox::ADC_MAX_COUNT))
-    .round() as u32;
+    let expected2 =
+        ((0.4 / mailbox::ADC_FULL_SCALE_VOLTS) * f64::from(mailbox::ADC_MAX_COUNT)).round() as u32;
     assert_eq!(updated, expected2, "count must track the injected voltage");
 }
 
@@ -153,7 +151,8 @@ fn qemu_i2c_mailbox_surfaces_byte_events() {
         .expect("payload");
     mcu.debug_write_u32(mailbox::I2C_REQ_OP, mailbox::I2C_OP_WRITE)
         .expect("op");
-    mcu.debug_write_u32(mailbox::I2C_REQ_ADDR, 0x50).expect("addr");
+    mcu.debug_write_u32(mailbox::I2C_REQ_ADDR, 0x50)
+        .expect("addr");
     mcu.debug_write_u32(mailbox::I2C_REQ_LEN, 3).expect("len");
     mcu.debug_write_u32(mailbox::I2C_REQ_SEQ, 1).expect("seq");
     mcu.run_micros(5_000).expect("run chunk");
@@ -209,7 +208,10 @@ fn qemu_i2c_mailbox_surfaces_byte_events() {
     mcu.debug_write_u32(mailbox::I2C_REQ_LEN, 0).expect("len");
     mcu.debug_write_u32(mailbox::I2C_REQ_SEQ, 3).expect("seq");
     mcu.run_micros(5_000).expect("run chunk");
-    assert_eq!(events.lock().unwrap().last().map(String::as_str), Some("stop 0x50"));
+    assert_eq!(
+        events.lock().unwrap().last().map(String::as_str),
+        Some("stop 0x50")
+    );
     assert_eq!(mcu.debug_read_u32(mailbox::I2C_RSP_SEQ).unwrap(), 3);
 }
 
@@ -284,7 +286,8 @@ fn qemu_bus_mailbox_is_inert_without_magic() {
     // A fully-formed request in the cell, but no BUS_MAGIC: must be ignored.
     mcu.debug_write_u32(mailbox::I2C_REQ_OP, mailbox::I2C_OP_WRITE)
         .expect("op");
-    mcu.debug_write_u32(mailbox::I2C_REQ_ADDR, 0x50).expect("addr");
+    mcu.debug_write_u32(mailbox::I2C_REQ_ADDR, 0x50)
+        .expect("addr");
     mcu.debug_write_u32(mailbox::I2C_REQ_LEN, 1).expect("len");
     mcu.debug_write_u32(mailbox::I2C_REQ_SEQ, 1).expect("seq");
     mcu.debug_write_u32(mailbox::SPI_REQ_OP, mailbox::SPI_OP_TRANSFER)

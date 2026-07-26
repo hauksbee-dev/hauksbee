@@ -14,7 +14,11 @@ use std::fmt::Write;
 /// Generate the full decompiled program text.
 pub fn emit_program(nl: &Netlist, analysis: &Analysis) -> String {
     let mut s = String::new();
-    let _ = writeln!(s, "// Auto-decompiled board: {} components.", analysis.total_comps);
+    let _ = writeln!(
+        s,
+        "// Auto-decompiled board: {} components.",
+        analysis.total_comps
+    );
     let _ = writeln!(
         s,
         "// {} repeated block(s), {} singleton(s). Coverage {:.1}%.",
@@ -32,7 +36,10 @@ pub fn emit_program(nl: &Netlist, analysis: &Analysis) -> String {
 
     // main: instance calls + singletons.
     let _ = writeln!(s, "fn main() {{");
-    let _ = writeln!(s, "    let mut b = PcbBuilder::new(20241229).standard_2layer_layers();");
+    let _ = writeln!(
+        s,
+        "    let mut b = PcbBuilder::new(20241229).standard_2layer_layers();"
+    );
     let _ = writeln!(s);
 
     for c in &analysis.clusters {
@@ -74,7 +81,9 @@ fn emit_block_fn(s: &mut String, c: &Cluster) {
         let _ = writeln!(
             s,
             "    // slot {}: {} = {}",
-            tr.slot, tr.lib_id, dq(&tr.value)
+            tr.slot,
+            tr.lib_id,
+            dq(&tr.value)
         );
         let _ = writeln!(
             s,
@@ -100,7 +109,10 @@ fn emit_instance_call(s: &mut String, nl: &Netlist, c: &Cluster, inst: &Instance
         .collect();
 
     let (at, rot) = match inst.placement {
-        Some(p) => (format!("({:.4}, {:.4})", p.dx, p.dy), format!("{:.1}", p.rot)),
+        Some(p) => (
+            format!("({:.4}, {:.4})", p.dx, p.dy),
+            format!("{:.1}", p.rot),
+        ),
         None => ("(0.0, 0.0)".to_string(), "0.0".to_string()),
     };
 

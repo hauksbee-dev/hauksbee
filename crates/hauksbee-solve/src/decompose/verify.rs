@@ -202,11 +202,7 @@ impl TearCertificate {
                 ToleranceClaim::Stiffness { sag_v } => format!("stiffness sag {sag_v:.3e}V"),
                 ToleranceClaim::Unmeasured => "UNMEASURED (assumed feed hold)".to_string(),
             };
-            let _ = writeln!(
-                out,
-                "{kind} tear at {} ({tol})",
-                circuit.node_name(r.node)
-            );
+            let _ = writeln!(out, "{kind} tear at {} ({tol})", circuit.node_name(r.node));
         }
         for (refused, nodes) in &self.refusals {
             let names: Vec<_> = nodes.iter().map(|n| circuit.node_name(*n)).collect();
@@ -261,7 +257,12 @@ pub struct Decomposition {
 impl Decomposition {
     /// Run the four analysis passes and assemble the certificate.
     pub fn analyze(circuit: &Circuit, motive: TearMotive) -> Decomposition {
-        Self::analyze_with(circuit, motive, RailPolicy::default(), DriverPolicy::default())
+        Self::analyze_with(
+            circuit,
+            motive,
+            RailPolicy::default(),
+            DriverPolicy::default(),
+        )
     }
 
     /// [`Decomposition::analyze`] with explicit policies.

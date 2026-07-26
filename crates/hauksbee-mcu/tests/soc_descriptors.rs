@@ -148,7 +148,13 @@ monitor_command = "sysbus.adc FeedMillivolts {millivolts}"
 
 /// Build a minimal-but-valid Renode descriptor, then let the caller corrupt one
 /// field, so each validation test isolates exactly one fault.
-fn renode_descriptor(extra_ports: &str, i2c: &str, spi: &str, e_machine: &str, backend: &str) -> String {
+fn renode_descriptor(
+    extra_ports: &str,
+    i2c: &str,
+    spi: &str,
+    e_machine: &str,
+    backend: &str,
+) -> String {
     format!(
         r#"
 [soc]
@@ -166,13 +172,17 @@ mcu_label = "test"
     )
 }
 
-const ONE_PORT: &str = "[[soc.ports]]\nletter = \"A\"\nperipheral = \"gpioPortA\"\nodr_offset = 0x0C\nwidth = 16";
+const ONE_PORT: &str =
+    "[[soc.ports]]\nletter = \"A\"\nperipheral = \"gpioPortA\"\nodr_offset = 0x0C\nwidth = 16";
 
 #[test]
 fn unknown_backend_is_named() {
     let src = renode_descriptor(ONE_PORT, "", "", "EM_ARM", "banana");
     let err = SocConfig::from_soc_toml(&src).unwrap_err();
-    assert!(matches!(err, SocError::UnknownBackend(ref b) if b == "banana"), "got: {err}");
+    assert!(
+        matches!(err, SocError::UnknownBackend(ref b) if b == "banana"),
+        "got: {err}"
+    );
     assert!(err.to_string().contains("unknown backend"), "msg: {err}");
 }
 
@@ -203,33 +213,58 @@ fn overlapping_port_letters_is_named() {
     let two_same = "[[soc.ports]]\nletter = \"A\"\nperipheral = \"gpioPortA\"\nodr_offset = 0x0C\nwidth = 16\n[[soc.ports]]\nletter = \"A\"\nperipheral = \"gpioPortB\"\nodr_offset = 0x0C\nwidth = 16";
     let src = renode_descriptor(two_same, "", "", "EM_ARM", "renode");
     let err = RenodeConfig::from_soc_toml(&src).unwrap_err();
-    assert!(matches!(err, SocError::DuplicatePortLetter('A')), "got: {err}");
-    assert!(err.to_string().contains("duplicate GPIO port"), "msg: {err}");
+    assert!(
+        matches!(err, SocError::DuplicatePortLetter('A')),
+        "got: {err}"
+    );
+    assert!(
+        err.to_string().contains("duplicate GPIO port"),
+        "msg: {err}"
+    );
 }
 
 #[test]
 fn zero_width_port_is_named() {
-    let zero = "[[soc.ports]]\nletter = \"A\"\nperipheral = \"gpioPortA\"\nodr_offset = 0x0C\nwidth = 0";
+    let zero =
+        "[[soc.ports]]\nletter = \"A\"\nperipheral = \"gpioPortA\"\nodr_offset = 0x0C\nwidth = 0";
     let src = renode_descriptor(zero, "", "", "EM_ARM", "renode");
     let err = RenodeConfig::from_soc_toml(&src).unwrap_err();
-    assert!(matches!(err, SocError::ZeroWidthPort { letter: 'A' }), "got: {err}");
+    assert!(
+        matches!(err, SocError::ZeroWidthPort { letter: 'A' }),
+        "got: {err}"
+    );
     assert!(err.to_string().contains("zero width"), "msg: {err}");
 }
 
 #[test]
 fn duplicate_i2c_controller_is_named() {
-    let src = renode_descriptor(ONE_PORT, "[soc.i2c]\ncontrollers = [\"i2c1\", \"i2c1\"]", "", "EM_ARM", "renode");
+    let src = renode_descriptor(
+        ONE_PORT,
+        "[soc.i2c]\ncontrollers = [\"i2c1\", \"i2c1\"]",
+        "",
+        "EM_ARM",
+        "renode",
+    );
     let err = RenodeConfig::from_soc_toml(&src).unwrap_err();
     assert!(
         matches!(err, SocError::DuplicateController { bus: "i2c", ref name } if name == "i2c1"),
         "got: {err}"
     );
-    assert!(err.to_string().contains("duplicate i2c controller"), "msg: {err}");
+    assert!(
+        err.to_string().contains("duplicate i2c controller"),
+        "msg: {err}"
+    );
 }
 
 #[test]
 fn duplicate_spi_controller_is_named() {
-    let src = renode_descriptor(ONE_PORT, "", "[soc.spi]\ncontrollers = [\"spi2\", \"spi2\"]", "EM_ARM", "renode");
+    let src = renode_descriptor(
+        ONE_PORT,
+        "",
+        "[soc.spi]\ncontrollers = [\"spi2\", \"spi2\"]",
+        "EM_ARM",
+        "renode",
+    );
     let err = RenodeConfig::from_soc_toml(&src).unwrap_err();
     assert!(
         matches!(err, SocError::DuplicateController { bus: "spi", ref name } if name == "spi2"),
@@ -241,7 +276,10 @@ fn duplicate_spi_controller_is_named() {
 fn unknown_e_machine_is_named() {
     let src = renode_descriptor(ONE_PORT, "", "", "EM_SPARC", "renode");
     let err = RenodeConfig::from_soc_toml(&src).unwrap_err();
-    assert!(matches!(err, SocError::UnknownEMachine(ref m) if m == "EM_SPARC"), "got: {err}");
+    assert!(
+        matches!(err, SocError::UnknownEMachine(ref m) if m == "EM_SPARC"),
+        "got: {err}"
+    );
     assert!(err.to_string().contains("unknown e_machine"), "msg: {err}");
 }
 
@@ -254,14 +292,20 @@ fn ambiguous_adc_inject_is_named() {
         renode_descriptor(ONE_PORT, "", "", "EM_ARM", "renode")
     );
     let err = RenodeConfig::from_soc_toml(&src).unwrap_err();
-    assert!(matches!(err, SocError::AdcInjectAmbiguous { channel: 0, set: 2 }), "got: {err}");
+    assert!(
+        matches!(err, SocError::AdcInjectAmbiguous { channel: 0, set: 2 }),
+        "got: {err}"
+    );
     // Neither form set → also refuse.
     let src2 = format!(
         "{}\n[[soc.adc]]\nchannel = 0\nfull_scale_volts = 3.3\nmax_count = 4095",
         renode_descriptor(ONE_PORT, "", "", "EM_ARM", "renode")
     );
     let err2 = RenodeConfig::from_soc_toml(&src2).unwrap_err();
-    assert!(matches!(err2, SocError::AdcInjectAmbiguous { channel: 0, set: 0 }), "got: {err2}");
+    assert!(
+        matches!(err2, SocError::AdcInjectAmbiguous { channel: 0, set: 0 }),
+        "got: {err2}"
+    );
 }
 
 #[test]
@@ -292,15 +336,20 @@ in_reg = 0x5000_0004
 width = 32
 "#;
     let err = QemuConfig::from_soc_toml(src).unwrap_err();
-    assert!(matches!(err, SocError::UnknownArch(ref a) if a == "sparc"), "got: {err}");
+    assert!(
+        matches!(err, SocError::UnknownArch(ref a) if a == "sparc"),
+        "got: {err}"
+    );
 }
 
 /// deny_unknown_fields: a mistyped field is a loud parse error, not a silent
 /// drop (refuse rather than fake).
 #[test]
 fn unknown_field_is_rejected() {
-    let src = renode_descriptor(ONE_PORT, "", "", "EM_ARM", "renode")
-        .replace("mcu_label = \"test\"", "mcu_label = \"test\"\ntypoo_field = 1");
+    let src = renode_descriptor(ONE_PORT, "", "", "EM_ARM", "renode").replace(
+        "mcu_label = \"test\"",
+        "mcu_label = \"test\"\ntypoo_field = 1",
+    );
     let err = RenodeConfig::from_soc_toml(&src).unwrap_err();
     assert!(matches!(err, SocError::Parse(_)), "got: {err}");
 }

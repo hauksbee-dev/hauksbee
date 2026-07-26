@@ -184,7 +184,11 @@ impl Encoding {
     pub fn natural_width(self) -> usize {
         match self {
             Encoding::U8 => 1,
-            Encoding::U16Be | Encoding::U16Le | Encoding::I16Be | Encoding::I16Le | Encoding::Q71Be => 2,
+            Encoding::U16Be
+            | Encoding::U16Le
+            | Encoding::I16Be
+            | Encoding::I16Le
+            | Encoding::Q71Be => 2,
             Encoding::U20BeXlsb => 3,
             Encoding::Raw => 0,
         }
@@ -291,7 +295,11 @@ impl BitFieldSpec {
     pub fn extract(&self, value: u32) -> u32 {
         let [high, low] = self.bits;
         let width = high - low + 1;
-        let mask = if width >= 32 { u32::MAX } else { (1u32 << width) - 1 };
+        let mask = if width >= 32 {
+            u32::MAX
+        } else {
+            (1u32 << width) - 1
+        };
         (value >> low) & mask
     }
 }
@@ -356,7 +364,10 @@ pub struct ChannelSelectSpec {
 }
 
 fn default_channel_select() -> ChannelSelectSpec {
-    ChannelSelectSpec { source: ChannelSource::Auto, bits: None }
+    ChannelSelectSpec {
+        source: ChannelSource::Auto,
+        bits: None,
+    }
 }
 
 /// One command family of a command-framed write protocol (the MCP4728 shape):
@@ -614,7 +625,7 @@ impl SensorSpec {
                 }
                 if s.protocol.style != ProtocolStyle::SpiReg {
                     return Err(err(
-                        "bus = \"spi\" requires protocol.style = \"spi_reg\"".into(),
+                        "bus = \"spi\" requires protocol.style = \"spi_reg\"".into()
                     ));
                 }
                 // addr_mask must not include bit 7 (the R/W bit in the command byte).
@@ -635,12 +646,10 @@ impl SensorSpec {
             && s.write_commands.is_empty()
             && s.read_frame.is_none()
         {
-            return Err(err(
-                "a sensor needs at least one [[sensor.register]], \
+            return Err(err("a sensor needs at least one [[sensor.register]], \
                  [[sensor.write_register]], [[sensor.write_command]], or a \
                  [sensor.read_frame]"
-                    .into(),
-            ));
+                .into()));
         }
 
         self.validate_write_side()?;
@@ -1051,7 +1060,12 @@ fn expr_identifiers(expr: &str) -> Vec<String> {
     fn flush(cur: &mut String, out: &mut Vec<String>) {
         if !cur.is_empty() {
             // Keep tokens that start with a letter or underscore (skip numbers).
-            if cur.chars().next().map(|c| c.is_alphabetic() || c == '_').unwrap_or(false) {
+            if cur
+                .chars()
+                .next()
+                .map(|c| c.is_alphabetic() || c == '_')
+                .unwrap_or(false)
+            {
                 out.push(cur.clone());
             }
             cur.clear();
@@ -1068,7 +1082,12 @@ fn expr_identifiers(expr: &str) -> Vec<String> {
     // evalexpr's built-in function namespaces show up as bare identifiers here;
     // drop a small allowlist so they aren't mistaken for inputs. `if` is the
     // evalexpr builtin `if(condition, then, else)` the write-side laws use.
-    out.retain(|t| !matches!(t.as_str(), "math" | "min" | "max" | "abs" | "round" | "floor" | "ceil" | "if"));
+    out.retain(|t| {
+        !matches!(
+            t.as_str(),
+            "math" | "min" | "max" | "abs" | "round" | "floor" | "ceil" | "if"
+        )
+    });
     out
 }
 
@@ -1290,7 +1309,10 @@ style = "i2c_pointer"
     fn rejects_namespace_collision_between_input_and_store() {
         let bad = WRITE_REG_SPEC.replace("store = \"config\"", "store = \"a0\"");
         let e = SensorSpec::from_toml(&bad).unwrap_err();
-        assert!(e.to_string().contains("duplicate variable name"), "got: {e}");
+        assert!(
+            e.to_string().contains("duplicate variable name"),
+            "got: {e}"
+        );
     }
 
     #[test]
@@ -1300,7 +1322,10 @@ style = "i2c_pointer"
             "encoding = \"q7.1_be\"\nstore = \"config\"",
         );
         let e = SensorSpec::from_toml(&bad).unwrap_err();
-        assert!(e.to_string().contains("no defined write decode"), "got: {e}");
+        assert!(
+            e.to_string().contains("no defined write decode"),
+            "got: {e}"
+        );
     }
 
     #[test]

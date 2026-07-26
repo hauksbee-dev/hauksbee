@@ -93,7 +93,9 @@ fn collect_thermal(engine: &mut HauksbeeEngine, seconds: f64) -> Vec<(String, f6
     while t < seconds {
         let frame = engine.step(frame_dt);
         for (reference, &tj) in &engine.scheduler().temp_states() {
-            let e = peak_temp.entry(reference.clone()).or_insert(f64::NEG_INFINITY);
+            let e = peak_temp
+                .entry(reference.clone())
+                .or_insert(f64::NEG_INFINITY);
             if tj > *e {
                 *e = tj;
             }
@@ -136,7 +138,9 @@ fn thermal_coverage_caveat(coverage: &CheckCoverage) -> String {
         "thermal coverage is PARTIAL: {} of {} active power IC(s) on the live circuit \
          are open/unresolved and dissipate nothing in simulation. The {} dissipating \
          part(s) shown are real, but the result UNDERSTATES the true load.",
-        coverage.open_active_on_live_circuit, coverage.total_active_count, coverage.dissipating_count,
+        coverage.open_active_on_live_circuit,
+        coverage.total_active_count,
+        coverage.dissipating_count,
     )
 }
 
@@ -186,7 +190,12 @@ fn render_thermal_text(rows: &[(String, f64, bool)], ambient_c: f64, validity: &
         } else {
             "ok".to_string()
         };
-        println!("│ {:<18} │ {:>7.1}   │ {:<8} │", truncate(reference, 18), tj, status);
+        println!(
+            "│ {:<18} │ {:>7.1}   │ {:<8} │",
+            truncate(reference, 18),
+            tj,
+            status
+        );
     }
     println!("└────────────────────┴───────────┴──────────┘");
     if n_over > 0 {

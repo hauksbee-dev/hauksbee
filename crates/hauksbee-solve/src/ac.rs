@@ -121,7 +121,11 @@ impl AcSpec {
                 // and the final point is pinned to fstop so a non-integer number
                 // of decades/octaves (e.g. 100 Hz .. 3 kHz) still includes the
                 // endpoint. `base` is 10 for a decade, 2 for an octave.
-                let base = if self.sweep == Sweep::Octave { 2.0 } else { 10.0 };
+                let base = if self.sweep == Sweep::Octave {
+                    2.0
+                } else {
+                    10.0
+                };
                 let intervals = (self.fstop / self.fstart).log(base);
                 let steps = (intervals * self.points as f64).ceil() as usize;
                 let ratio = base.powf(1.0 / self.points as f64);
@@ -275,7 +279,10 @@ impl AcAnalysis {
             let drive = match dev {
                 Device::Vsource { name, .. } | Device::Isource { name, .. } => {
                     if use_explicit {
-                        explicit.get(&id).copied().unwrap_or(Complex64::new(0.0, 0.0))
+                        explicit
+                            .get(&id)
+                            .copied()
+                            .unwrap_or(Complex64::new(0.0, 0.0))
                     } else {
                         source_ac_drive(name, dedicated_ac_source)
                     }
@@ -322,7 +329,10 @@ impl OperatingPoint {
                 node_v[node] = ws.x[idx];
             }
         }
-        OperatingPoint { node_v, x: ws.x.clone() }
+        OperatingPoint {
+            node_v,
+            x: ws.x.clone(),
+        }
     }
 
     #[inline]
@@ -442,9 +452,9 @@ fn stamp_ac(
         Device::Bjt { c, b, e, model, .. } => {
             stamp_bjt_ac(sys, layout, op, id, *c, *b, *e, model, opts, w)
         }
-        Device::Mosfet { d, g, s, b, model, .. } => {
-            stamp_mosfet_ac(sys, layout, op, id, *d, *g, *s, *b, model, opts, w)
-        }
+        Device::Mosfet {
+            d, g, s, b, model, ..
+        } => stamp_mosfet_ac(sys, layout, op, id, *d, *g, *s, *b, model, opts, w),
         Device::OpAmp {
             out,
             inp,
@@ -603,7 +613,11 @@ fn stamp_ac(
         // control branch index resolves through the SAME layout the transient
         // path froze, so the F/H coupling column is identical.
         Device::Cccs {
-            p, n: neg, ctrl_src, gain, ..
+            p,
+            n: neg,
+            ctrl_src,
+            gain,
+            ..
         } => {
             let cbr = layout
                 .branch(*ctrl_src)
@@ -616,7 +630,11 @@ fn stamp_ac(
             }
         }
         Device::Ccvs {
-            p, n: neg, ctrl_src, transres, ..
+            p,
+            n: neg,
+            ctrl_src,
+            transres,
+            ..
         } => {
             // Branch row `v_p - v_n - transres*i_ctrl = 0`, RHS 0 (a dependent
             // source is never an AC drive).
@@ -670,15 +688,14 @@ fn stamp_ac(
                     }
                 }
             }
-            let partials = match crate::stamp::behavioral_eval_partials(
-                expr, deps, &mut vals, 0.0, opts,
-            ) {
-                Ok((_f0, partials)) => partials,
-                Err(detail) => {
-                    crate::stamp::note_behavioral_fault(name, detail);
-                    return;
-                }
-            };
+            let partials =
+                match crate::stamp::behavioral_eval_partials(expr, deps, &mut vals, 0.0, opts) {
+                    Ok((_f0, partials)) => partials,
+                    Err(detail) => {
+                        crate::stamp::note_behavioral_fault(name, detail);
+                        return;
+                    }
+                };
             match output {
                 hauksbee_ir::BOutput::Current => {
                     let (pi, ni) = (n(*p), n(*neg));
@@ -727,9 +744,7 @@ fn stamp_ac(
 /// caller should warn that the sweep has no chosen injection point.
 pub fn has_dedicated_ac_source(circuit: &Circuit) -> bool {
     circuit.iter().any(|(_, dev)| match dev {
-        Device::Vsource { name, .. } | Device::Isource { name, .. } => {
-            is_dedicated_ac_source(name)
-        }
+        Device::Vsource { name, .. } | Device::Isource { name, .. } => is_dedicated_ac_source(name),
         _ => false,
     })
 }
@@ -1199,10 +1214,22 @@ mod frequency_tests {
 
     #[test]
     fn decade_sweep_always_includes_fstart() {
-        let s = AcSpec { fstart: 10.0, fstop: 1e6, points: 5, sweep: Sweep::Decade };
+        let s = AcSpec {
+            fstart: 10.0,
+            fstop: 1e6,
+            points: 5,
+            sweep: Sweep::Decade,
+        };
         let f = s.frequencies();
-        assert!((f[0] - 10.0).abs() < 1e-9, "first point is fstart: {}", f[0]);
-        assert!((f.last().unwrap() - 1e6).abs() < 1.0, "endpoint pinned to fstop");
+        assert!(
+            (f[0] - 10.0).abs() < 1e-9,
+            "first point is fstart: {}",
+            f[0]
+        );
+        assert!(
+            (f.last().unwrap() - 1e6).abs() < 1.0,
+            "endpoint pinned to fstop"
+        );
         assert!(f.windows(2).all(|w| w[1] > w[0]), "monotonic increasing");
     }
 
@@ -1218,6 +1245,10 @@ mod frequency_tests {
         };
         let f = s.frequencies();
         assert!(!f.is_empty(), "must not be empty");
-        assert!((f[0] - 1000.0).abs() < 1e-6, "first point is fstart, not fstop: {}", f[0]);
+        assert!(
+            (f[0] - 1000.0).abs() < 1e-6,
+            "first point is fstart, not fstop: {}",
+            f[0]
+        );
     }
 }

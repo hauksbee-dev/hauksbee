@@ -106,7 +106,11 @@ fn naming_a_link_fits_it_anyway() {
     let d = b
         .apply_dnp_policy(DnpPolicy::FitExceptLinks, &["R7".to_string()], &[])
         .unwrap();
-    let r7 = d.fitted.iter().find(|p| p.reference == "R7").expect("fitted");
+    let r7 = d
+        .fitted
+        .iter()
+        .find(|p| p.reference == "R7")
+        .expect("fitted");
     assert_eq!(r7.reason, DnpReason::NamedFit);
     assert!(d.left_open.is_empty());
 }
@@ -236,5 +240,9 @@ fn the_tarski_nano_is_fitted_by_default() {
     assert_eq!(d.fitted[0].reference, "A101");
 
     let bound = bind_board(&b, &ModelLibrary::builtin());
-    assert_eq!(bound.mcus.len(), 1, "the board has its processor by default");
+    assert_eq!(
+        bound.mcus.len(),
+        1,
+        "the board has its processor by default"
+    );
 }

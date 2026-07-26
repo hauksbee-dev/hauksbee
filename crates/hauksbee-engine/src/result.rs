@@ -201,9 +201,7 @@ impl BindSummary {
     /// so a thermal/AC result over those nets is just as untrustworthy. We walk
     /// `Mcu`/`Resolved`-style rows that carry a `warning` and name an active IC.
     pub fn active_open_on_live_circuit(&self) -> bool {
-        self.resolved_but_open_active
-            .iter()
-            .any(|u| u.active_ic)
+        self.resolved_but_open_active.iter().any(|u| u.active_ic)
     }
 
     /// Whether any active IC that actually sits on the live circuit is
@@ -258,7 +256,11 @@ impl BindSummary {
             );
         }
         if !self.active_path_unresolved.is_empty() {
-            let _ = writeln!(s, "active_path_unresolved ({}):", self.active_path_unresolved.len());
+            let _ = writeln!(
+                s,
+                "active_path_unresolved ({}):",
+                self.active_path_unresolved.len()
+            );
             for u in &self.active_path_unresolved {
                 let _ = writeln!(s, "  {} ({}): {}", u.reference, u.value, u.consequence);
             }
@@ -488,7 +490,12 @@ pub fn coverage_open_active_refs(summary: &BindSummary) -> Vec<String> {
         .active_path_unresolved
         .iter()
         .filter(|u| u.active_ic)
-        .chain(summary.resolved_but_open_active.iter().filter(|u| u.active_ic))
+        .chain(
+            summary
+                .resolved_but_open_active
+                .iter()
+                .filter(|u| u.active_ic),
+        )
         .map(|u| u.reference.clone())
         .collect()
 }
@@ -824,14 +831,11 @@ impl DrcStructured {
                     // mm without misclassifying a genuine sub-micron violation as
                     // "at limit" (a gap 0.5 um short stays "below the rule").
                     let below = f.gap_mm < f.required_clearance_mm - 1e-4;
-                    let key = (
-                        f.net_a_name.clone(),
-                        f.net_b_name.clone(),
-                        f.layer.clone(),
-                    );
-                    let e = groups
-                        .entry(key)
-                        .or_insert((0, 0, f64::INFINITY, f.required_clearance_mm));
+                    let key = (f.net_a_name.clone(), f.net_b_name.clone(), f.layer.clone());
+                    let e =
+                        groups
+                            .entry(key)
+                            .or_insert((0, 0, f64::INFINITY, f.required_clearance_mm));
                     e.0 += 1;
                     if below {
                         e.1 += 1;
@@ -1054,7 +1058,11 @@ pub fn usbc_finding_json(report: &crate::checks::usb_c::UsbcReport) -> Option<Js
         nets: Vec::new(),
         location_mm: None,
         layer: None,
-        refs: report.receptacles.iter().map(|r| r.reference.clone()).collect(),
+        refs: report
+            .receptacles
+            .iter()
+            .map(|r| r.reference.clone())
+            .collect(),
         actionable,
         message: report.headline.clone(),
         plain: report.headline.clone(),
@@ -1110,7 +1118,11 @@ pub fn fault_findings_json(faults: &[crate::stress::FaultEvent]) -> Vec<JsonFind
             actionable: true,
             message: pf.what.clone(),
             plain: pf.what.clone(),
-            fix: if pf.fix.is_empty() { None } else { Some(pf.fix.clone()) },
+            fix: if pf.fix.is_empty() {
+                None
+            } else {
+                Some(pf.fix.clone())
+            },
         })
         .collect()
 }
@@ -1424,7 +1436,10 @@ mod tests {
         let (ok, verdict, serious, _) = clean.verdict();
         assert!(ok && verdict == "pass" && serious == 0);
         let txt = clean.to_json();
-        assert!(txt.contains("\"ok\": true") && txt.contains("\"verdict\": \"pass\""), "{txt}");
+        assert!(
+            txt.contains("\"ok\": true") && txt.contains("\"verdict\": \"pass\""),
+            "{txt}"
+        );
 
         // A serious co-sim fault → fail, counted.
         let mut failed = JsonReport::new("b", bind.clone());
@@ -1443,7 +1458,10 @@ mod tests {
         // An invalid AC sweep with nothing serious → invalid, not pass.
         let mut invalid = JsonReport::new("b", bind);
         invalid.ac = Some(AcJson {
-            validity: Validity { valid: false, reason: Some("no signal path".into()) },
+            validity: Validity {
+                valid: false,
+                reason: Some("no signal path".into()),
+            },
             nets: Vec::new(),
             no_signal_path_nets: Vec::new(),
             not_found_nets: Vec::new(),
@@ -1483,7 +1501,10 @@ mod tests {
             fix: String::new(),
         };
         group.plain = group.label();
-        assert!(!group.plain.is_empty(), "group plain must be the human label");
+        assert!(
+            !group.plain.is_empty(),
+            "group plain must be the human label"
+        );
     }
 
     fn active_ic(reference: &str) -> UnresolvedActive {
@@ -1603,8 +1624,14 @@ mod tests {
         };
         let st = DrcStructured::from_report(&report);
         assert_eq!(st.shorts.len(), 1);
-        assert_eq!(st.shorts[0].severity, "note", "phantom-prone short must not be 'serious'");
-        assert_eq!(st.version_warning.as_deref(), Some("unreliable on this version"));
+        assert_eq!(
+            st.shorts[0].severity, "note",
+            "phantom-prone short must not be 'serious'"
+        );
+        assert_eq!(
+            st.version_warning.as_deref(),
+            Some("unreliable on this version")
+        );
 
         // The same report on a validated version keeps "serious".
         report.version_warning = None;
@@ -1613,7 +1640,7 @@ mod tests {
         assert!(st.version_warning.is_none());
     }
 
-    use crate::report::{BindRow, BindOutcome};
+    use crate::report::{BindOutcome, BindRow};
     use hauksbee_models::Confidence;
 
     fn row(reference: &str, outcome: BindOutcome, warning: Option<&str>) -> BindRow {
@@ -1646,7 +1673,10 @@ mod tests {
         // U9 counts toward critical_total (it's an active IC) but is NOT in the
         // active path, so validity must stay TRUE with an empty table.
         assert!(!summary.active_ics_unresolved());
-        assert!(thermal_validity(0, &summary).valid, "isolated open IC -> still valid");
+        assert!(
+            thermal_validity(0, &summary).valid,
+            "isolated open IC -> still valid"
+        );
     }
 
     #[test]
@@ -1688,8 +1718,14 @@ mod tests {
             Some("U1: all I/O pins open (undriven)"),
         ));
         let summary = BindSummary::from_report(&report);
-        assert!(!summary.active_ics_unresolved(), "resolved MCU is not 'unresolved'");
-        assert!(summary.active_open_on_live_circuit(), "but it IS open on the live circuit");
+        assert!(
+            !summary.active_ics_unresolved(),
+            "resolved MCU is not 'unresolved'"
+        );
+        assert!(
+            summary.active_open_on_live_circuit(),
+            "but it IS open on the live circuit"
+        );
         let cov = thermal_coverage(1, &summary);
         assert!(cov.partial);
         assert!(coverage_open_active_refs(&summary).contains(&"U1".to_string()));
@@ -1741,14 +1777,20 @@ mod tests {
         let summary = BindSummary::from_report(&report);
         // The distinguishing condition: unresolved is FALSE (it bound), but the
         // part is open on the live circuit.
-        assert!(!summary.active_ics_unresolved(), "resolved MCU is not 'unresolved'");
+        assert!(
+            !summary.active_ics_unresolved(),
+            "resolved MCU is not 'unresolved'"
+        );
         assert!(summary.active_open_on_live_circuit());
         let v = thermal_validity(0, &summary);
         assert!(
             !v.valid,
             "an empty table hiding a resolved-but-open power IC must be invalid, not 'runs cool'"
         );
-        assert!(v.reason.unwrap().contains("U1"), "the reason must name the open IC");
+        assert!(
+            v.reason.unwrap().contains("U1"),
+            "the reason must name the open IC"
+        );
     }
 
     #[test]
@@ -1786,7 +1828,9 @@ mod tests {
         let st = DrcStructured::from_report(&report);
         assert_eq!(st.at_limit.len(), 1, "at-limit group separated");
         assert_eq!(st.at_limit[0].count, 3);
-        assert!(st.at_limit[0].label().contains("exactly at minimum clearance (no margin)"));
+        assert!(st.at_limit[0]
+            .label()
+            .contains("exactly at minimum clearance (no margin)"));
         assert!(!st.at_limit[0].label().contains("below the"));
         assert_eq!(st.violations.len(), 1, "below-rule group separated");
         assert!(st.violations[0].label().contains("below the"));
@@ -1860,7 +1904,9 @@ mod tests {
                 kind,
                 message: "x".to_string(),
             };
-            assert!(serde_json::to_string(&note).unwrap().contains("\"message\""));
+            assert!(serde_json::to_string(&note)
+                .unwrap()
+                .contains("\"message\""));
         }
     }
 }

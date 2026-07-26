@@ -733,7 +733,15 @@ impl NetlistBuilder {
                         NameScope::Global => AnchorKind::Global,
                         NameScope::Local => AnchorKind::Local,
                     };
-                    self.push_anchor(sheet, NamedAnchor { name, scope, kind, node });
+                    self.push_anchor(
+                        sheet,
+                        NamedAnchor {
+                            name,
+                            scope,
+                            kind,
+                            node,
+                        },
+                    );
                 }
             }
         }
@@ -1777,7 +1785,11 @@ mod tests {
         let c = comp("U1", vec![first, pin("7", 5)]);
         let (out, bridged) = merge_units(vec![c]);
         let u1 = out.iter().find(|c| c.reference == "U1").expect("U1 kept");
-        assert_eq!(u1.pins.len(), 1, "equal non-empty pad numbers still collapse");
+        assert_eq!(
+            u1.pins.len(),
+            1,
+            "equal non-empty pad numbers still collapse"
+        );
         assert_eq!(u1.pins[0].net, Some(5), "the connected occurrence wins");
         assert!(bridged.is_empty());
     }
@@ -1938,8 +1950,11 @@ mod tests {
         // (OOM). Past MAX_BUS_WIDTH the label is treated as a non-bus.
         assert_eq!(expand_bus("A[0..100000000]"), None);
         assert_eq!(expand_bus("A[0..4096]"), None); // width 4096 == cap: rejected
-        // A sane bus just under the cap still expands.
-        assert_eq!(expand_bus("A[0..2]"), Some(vec!["A0".into(), "A1".into(), "A2".into()]));
+                                                    // A sane bus just under the cap still expands.
+        assert_eq!(
+            expand_bus("A[0..2]"),
+            Some(vec!["A0".into(), "A1".into(), "A2".into()])
+        );
     }
 
     #[test]

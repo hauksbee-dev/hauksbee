@@ -619,7 +619,10 @@ impl SoftI2cResponder {
     }
 
     fn dispatch(&mut self, ev: I2cEvent) -> Option<u8> {
-        self.bus.lock().unwrap_or_else(|e| e.into_inner()).dispatch(ev)
+        self.bus
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .dispatch(ev)
     }
 
     /// Put a slave-driven level on the wire (records it for re-assertion).
@@ -782,7 +785,11 @@ impl InputResponder for SoftI2cResponder {
 
         if rising {
             match self.phase {
-                I2cPhase::MasterBits { is_addr, nbits, acc } => {
+                I2cPhase::MasterBits {
+                    is_addr,
+                    nbits,
+                    acc,
+                } => {
                     let acc = (acc << 1) | u8::from(self.sda);
                     if nbits + 1 == 8 {
                         self.on_master_byte(is_addr, acc);
@@ -1067,7 +1074,10 @@ addr_mask = 0x7f
         let (mut m, _bus) = spi_master();
         m.edge(PINS.cs_n, true); // idle
         m.select(); // CS low, SCLK low: passes the polarity guard
-        assert!(!m.resp.faulted(), "mode 1 idles SCLK low; not caught at CS assert");
+        assert!(
+            !m.resp.faulted(),
+            "mode 1 idles SCLK low; not caught at CS assert"
+        );
 
         // Mode-1 shift phase: raise SCLK (leading edge), THEN drive the bit.
         m.edge(PINS.sclk, true);
@@ -1353,17 +1363,9 @@ style = "i2c_pointer"
     fn i2c_master(val: f64) -> (I2cMaster, Arc<Mutex<I2cBus>>) {
         let mut sensor = RegisterMapSensor::from_toml(I2C_SPEC).unwrap();
         sensor.set_input("val", val);
-        let bus = Arc::new(Mutex::new(
-            I2cBus::new("U3").with_slave(Box::new(sensor)),
-        ));
+        let bus = Arc::new(Mutex::new(I2cBus::new("U3").with_slave(Box::new(sensor))));
         let resp = SoftI2cResponder::new(bus.clone(), SCL, SDA);
-        (
-            I2cMaster {
-                resp,
-                sda_in: true,
-            },
-            bus,
-        )
+        (I2cMaster { resp, sda_in: true }, bus)
     }
 
     /// PROOF: the classic pointered register read, START, addr+W (acked),
@@ -1483,16 +1485,27 @@ style = "i2c_pointer"
         // Leg 2: repeated START to a DIFFERENT, unmodeled address (NACKed),
         // the last-addressed slot no longer names the DAC.
         m.start();
-        assert!(!m.write_byte((0x50 << 1) | 1), "unmodeled address must NACK");
+        assert!(
+            !m.write_byte((0x50 << 1) | 1),
+            "unmodeled address must NACK"
+        );
         m.stop();
 
         let src_volts = |c: &Circuit| match c.devices[vsource.0 as usize] {
-            Device::Vsource { kind: SourceKind::Dc(v), .. } => v,
+            Device::Vsource {
+                kind: SourceKind::Dc(v),
+                ..
+            } => v,
             _ => panic!("driver vsource"),
         };
         assert_eq!(src_volts(&circuit), 0.0, "not driven before flush");
         let volts = vec![0.0; 4];
-        let mut ctx = TickCtx { circuit: &mut circuit, node_volts: &volts, t: 0.0, dt: 1e-3 };
+        let mut ctx = TickCtx {
+            circuit: &mut circuit,
+            node_volts: &volts,
+            t: 0.0,
+            dt: 1e-3,
+        };
         bus.lock().unwrap().flush_stops(&mut ctx);
         assert!(
             (src_volts(&circuit) - 2.048).abs() < 1e-9,

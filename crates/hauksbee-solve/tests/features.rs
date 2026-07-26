@@ -423,9 +423,7 @@ fn mos_body_diode_is_structural_and_model_gated() {
     // threshold), real physics ngspice reproduces, but not the body-diode
     // observable this test isolates.
     let net = |model: &str| {
-        format!(
-            "m\nVNEG neg 0 DC -1.5\nRD neg d 1k\nM1 d 0 0 0 MB\n{model}\n.op\n.end\n"
-        )
+        format!("m\nVNEG neg 0 DC -1.5\nRD neg d 1k\nM1 d 0 0 0 MB\n{model}\n.op\n.end\n")
     };
     let with_diode = net(".model MB NMOS(VTO=2 KP=1e-2 IS=1e-12)");
     let plain = net(".model MB NMOS(VTO=2 KP=1e-2)");

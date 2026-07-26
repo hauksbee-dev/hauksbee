@@ -169,7 +169,9 @@ fn stock_footprints_pass_kicad_library_parity_drc_when_dressed() {
     let dir = std::env::temp_dir().join(format!("hauksbee_drc_parity_{}", std::process::id()));
     std::fs::create_dir_all(&dir).expect("mkdir");
 
-    let minimal = prog.build_with_library(&mut FootprintLib::disabled()).emit();
+    let minimal = prog
+        .build_with_library(&mut FootprintLib::disabled())
+        .emit();
     let dressed = prog.build_with_library(&mut lib).emit();
 
     let before = drc_mismatch_count(&cli, &minimal, &dir, "minimal");

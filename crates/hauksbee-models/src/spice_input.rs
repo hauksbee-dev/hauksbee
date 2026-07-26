@@ -391,7 +391,7 @@ R2 A B 2k
             ("1MegOhm", 1e6),
             ("4.7kOhm", 4.7e3),
             ("15mV", 15e-3),
-            ("4F", 4e-15),   // bare femto, no unit, unchanged from before
+            ("4F", 4e-15), // bare femto, no unit, unchanged from before
             ("2.52N", 2.52e-9),
             ("80", 80.0),
             ("1e-14", 1e-14),
@@ -413,7 +413,10 @@ R2 A B 2k
         }
         // And end-to-end through a model card: CJO=4P survives.
         let card = &parse_spice_text(SAMPLE_MODEL).unwrap()[0];
-        let cjo = *card.params.get("CJO").expect("CJO must be parsed, not dropped");
+        let cjo = *card
+            .params
+            .get("CJO")
+            .expect("CJO must be parsed, not dropped");
         assert!((cjo - 4e-12).abs() < 1e-18, "CJO={cjo}");
     }
 }

@@ -171,7 +171,8 @@ mod tests {
     #[test]
     fn env_override_takes_precedence_when_dir_exists() {
         let _guard = ENV_LOCK.lock().unwrap();
-        let root = std::env::temp_dir().join(format!("hauksbee-webdist-env-{}", std::process::id()));
+        let root =
+            std::env::temp_dir().join(format!("hauksbee-webdist-env-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
         std::fs::create_dir_all(&root).unwrap();
 

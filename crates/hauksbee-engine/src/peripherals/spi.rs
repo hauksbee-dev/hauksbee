@@ -608,7 +608,11 @@ mod tests {
         // One-quarter scale: 1024 * 0.25 = 256 exactly (1023*0.25 = 255.75 → 256
         // by rounding, so pick a fraction where the two formulas diverge).
         // 1/1024 of Vref should read code 1 (LSB = Vref/1024).
-        assert_eq!(read(5.0 / 1024.0), 1, "one LSB (Vref/1024) must read code 1");
+        assert_eq!(
+            read(5.0 / 1024.0),
+            1,
+            "one LSB (Vref/1024) must read code 1"
+        );
         // Full scale saturates at 1023, never overflowing the 10-bit field.
         assert_eq!(read(5.0), 1023, "Vin==Vref must saturate at 1023");
         // Mid-scale is exact.

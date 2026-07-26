@@ -292,8 +292,8 @@ pub fn shape_gap(a: &Shape, b: &Shape) -> f64 {
                 .iter()
                 .map(|pts| seg_contour_dist((c.ax, c.ay), (c.bx, c.by), pts))
                 .fold(f64::INFINITY, f64::min);
-            let contained = point_in_contours(c.ax, c.ay, contours)
-                || point_in_contours(c.bx, c.by, contours);
+            let contained =
+                point_in_contours(c.ax, c.ay, contours) || point_in_contours(c.bx, c.by, contours);
             if contained {
                 -c.r.max(0.0) - 1e-6
             } else {

@@ -185,7 +185,8 @@ fn renode_adc_injection_reaches_firmware() {
     let mut mcu = RenodeBackend::new(config).expect("spawn Renode STM32F103");
 
     let elf = write_elf_to_temp();
-    mcu.load_firmware(&elf).expect("load hand-assembled fixture ELF");
+    mcu.load_firmware(&elf)
+        .expect("load hand-assembled fixture ELF");
 
     // Accumulate firmware-driven pin levels from the standard ODR-poll edges.
     let levels: Arc<Mutex<HashMap<(char, u8), bool>>> = Arc::new(Mutex::new(HashMap::new()));

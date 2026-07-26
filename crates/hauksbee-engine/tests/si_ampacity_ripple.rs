@@ -16,9 +16,8 @@ use hauksbee_models::ModelLibrary;
 
 /// Build a board + its raw text from inline kicad_pcb body.
 fn board_and_text(body: &str) -> (ExtractedBoard, String) {
-    let text = format!(
-        "(kicad_pcb (version 20240101) (generator pcbnew)\n  (net 0 \"\")\n{body}\n)"
-    );
+    let text =
+        format!("(kicad_pcb (version 20240101) (generator pcbnew)\n  (net 0 \"\")\n{body}\n)");
     let board = ExtractedBoard::from_kicad_pcb(&text).expect("kicad_pcb parses");
     (board, text)
 }
@@ -65,10 +64,19 @@ fn si_surfaces_ampacity_on_undersized_routed_rail() {
     );
     let report = run_si(&board, &text);
     let amp = findings_of(&report, SiCheck::TraceAmpacity);
-    assert_eq!(amp.len(), 1, "the undersized +3V3 rail must fire one ampacity finding: {:?}", report.findings);
+    assert_eq!(
+        amp.len(),
+        1,
+        "the undersized +3V3 rail must fire one ampacity finding: {:?}",
+        report.findings
+    );
     let f = &amp[0];
     assert!(f.nets.contains(&"+3V3".to_string()), "fires on +3V3");
-    assert!(f.message.contains("AMS1117") || f.message.contains("1.00 A"), "cites the regulator current: {}", f.message);
+    assert!(
+        f.message.contains("AMS1117") || f.message.contains("1.00 A"),
+        "cites the regulator current: {}",
+        f.message
+    );
 }
 
 /// R15: the SI chokepoint `engine_si` must carry the engine-layer ampacity +
@@ -134,7 +142,11 @@ fn si_is_silent_on_poured_rail_with_thin_stub() {
     );
     let report = run_si(&board, &text);
     let amp = findings_of(&report, SiCheck::TraceAmpacity);
-    assert!(amp.is_empty(), "a poured rail must never fire: {:?}", report.findings);
+    assert!(
+        amp.is_empty(),
+        "a poured rail must never fire: {:?}",
+        report.findings
+    );
 }
 
 /// A board with no part carrying a DB current rating: no current is attributed,
@@ -254,13 +266,20 @@ fn si_ripple_attributes_and_compares_without_false_firing() {
     // A 120 uF input cap defaults to 1.0 A ripple rating, so 0.5 A is UNDER:
     // the check correctly produces an info note, not a finding (no false fire).
     let fires = findings_of(&report, SiCheck::InputCapRipple);
-    assert!(fires.is_empty(), "0.5 A ripple under the 1.0 A default must not fire: {:?}", report.findings);
+    assert!(
+        fires.is_empty(),
+        "0.5 A ripple under the 1.0 A default must not fire: {:?}",
+        report.findings
+    );
     // But the topology + computation must be on the record as an info note.
     let info = report
         .findings
         .iter()
         .any(|f| f.check == SiCheck::InputCapRipple && f.severity == SiSeverity::Info);
-    assert!(info, "an input-cap ripple info note must be recorded for the resolved buck");
+    assert!(
+        info,
+        "an input-cap ripple info note must be recorded for the resolved buck"
+    );
 }
 
 // ===========================================================================
@@ -273,7 +292,10 @@ fn famous_root() -> Option<PathBuf> {
         return Some(p);
     }
     if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-        panic!("HAUKSBEE_REQUIRE_CORPUS set but board-corpus/famous is missing: {}", p.display());
+        panic!(
+            "HAUKSBEE_REQUIRE_CORPUS set but board-corpus/famous is missing: {}",
+            p.display()
+        );
     }
     eprintln!("board-corpus/famous absent; skipping ampacity/ripple corpus sweep");
     None
@@ -288,8 +310,12 @@ fn famous_corpus_has_no_ampacity_or_ripple_findings() {
     let lib = ModelLibrary::builtin();
     let mut boards_checked = 0usize;
     for entry in walk_kicad_pcbs(&root) {
-        let Ok(text) = std::fs::read_to_string(&entry) else { continue };
-        let Ok(board) = ExtractedBoard::from_kicad_pcb(&text) else { continue };
+        let Ok(text) = std::fs::read_to_string(&entry) else {
+            continue;
+        };
+        let Ok(board) = ExtractedBoard::from_kicad_pcb(&text) else {
+            continue;
+        };
         boards_checked += 1;
         let mut report = SiReport::default();
         ampacity::append_ampacity(&board, &lib, Some(&text), &mut report);
@@ -313,7 +339,10 @@ fn famous_corpus_has_no_ampacity_or_ripple_findings() {
         );
     }
     if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-        assert!(boards_checked > 0, "corpus required but no boards were checked");
+        assert!(
+            boards_checked > 0,
+            "corpus required but no boards were checked"
+        );
     }
 }
 
@@ -323,7 +352,9 @@ fn walk_kicad_pcbs(root: &PathBuf) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![root.clone()];
     while let Some(dir) = stack.pop() {
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
         for e in rd.flatten() {
             let p = e.path();
             if p.is_dir() {

@@ -41,11 +41,9 @@ pub mod register_map;
 pub mod sink;
 pub mod spi;
 
-pub use controls::{
-    Encoder, Potentiometer, Pushbutton, Stimulus, ToggleSwitch,
-};
-pub use load::DynamicLoad;
+pub use controls::{Encoder, Potentiometer, Pushbutton, Stimulus, ToggleSwitch};
 pub use i2c::{Bme280, Eeprom24c, I2cBus, I2cSlave};
+pub use load::DynamicLoad;
 pub use register_map::RegisterMapSensor;
 pub use sink::VcdSink;
 pub use spi::{Mcp3008, Spi25Eeprom, SpiBus, SpiFramingMode, SpiSlave};
@@ -146,14 +144,19 @@ impl PeripheralSet {
     /// Add timeline events, keeping the list time-sorted.
     pub fn add_events(&mut self, mut events: Vec<TimelineEvent>) {
         self.timeline.append(&mut events);
-        self.timeline
-            .sort_by(|a, b| a.t_s.partial_cmp(&b.t_s).unwrap_or(std::cmp::Ordering::Equal));
+        self.timeline.sort_by(|a, b| {
+            a.t_s
+                .partial_cmp(&b.t_s)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         self.next_event = 0;
     }
 
     /// Fire any timeline events whose time has been reached by `t`.
     pub fn fire_due_events(&mut self, t: f64) {
-        while self.next_event < self.timeline.len() && self.timeline[self.next_event].t_s <= t + 1e-12 {
+        while self.next_event < self.timeline.len()
+            && self.timeline[self.next_event].t_s <= t + 1e-12
+        {
             let ev = self.timeline[self.next_event].clone();
             for p in &mut self.peripherals {
                 if p.id() == ev.target {

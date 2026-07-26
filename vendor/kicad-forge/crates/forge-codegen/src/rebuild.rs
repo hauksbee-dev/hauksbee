@@ -8,7 +8,7 @@
 //! result's extraction is compared against the original up to net renaming.
 
 use crate::cluster::Analysis;
-use crate::netlist::{Netlist, NetId};
+use crate::netlist::{NetId, Netlist};
 use forge_model::{FootprintBuilder, Pcb, PcbBuilder};
 use std::collections::{BTreeMap, HashMap};
 
@@ -236,10 +236,7 @@ pub fn compare(original: &BoardSemantics, rebuilt: &BoardSemantics) -> Result<()
             match rebuilt.footprints.get(k) {
                 None => return Err(format!("footprint {k} missing in rebuild")),
                 Some(rv) if rv != v => {
-                    return Err(format!(
-                        "footprint {k} differs: {:?} vs {:?}",
-                        v, rv
-                    ))
+                    return Err(format!("footprint {k} differs: {:?} vs {:?}", v, rv))
                 }
                 _ => {}
             }

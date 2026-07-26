@@ -1006,8 +1006,8 @@ fn parts_from_report(report: &BindReport, summary: &BindSummary) -> Vec<Part> {
                 _ if r.confidence == Confidence::Exact => PartStatus::Bound,
                 _ => PartStatus::Family,
             };
-            let active_ic = matches!(r.outcome, BindOutcome::Mcu { .. })
-                || is_active_ic_ref(&r.reference);
+            let active_ic =
+                matches!(r.outcome, BindOutcome::Mcu { .. }) || is_active_ic_ref(&r.reference);
             Part {
                 reference: r.reference.clone(),
                 value: r.value.clone(),
@@ -1049,7 +1049,12 @@ mod tests {
     use crate::report::{BindOutcome, BindReport, BindRow};
     use hauksbee_models::Confidence;
 
-    fn row(reference: &str, outcome: BindOutcome, conf: Confidence, warning: Option<&str>) -> BindRow {
+    fn row(
+        reference: &str,
+        outcome: BindOutcome,
+        conf: Confidence,
+        warning: Option<&str>,
+    ) -> BindRow {
         BindRow {
             reference: reference.to_string(),
             value: String::new(),
@@ -1151,14 +1156,23 @@ mod tests {
         let mut report = BindReport::default();
         report.push(row(
             "U2",
-            BindOutcome::Mcu { backend: "renode:stm32f103".into() },
+            BindOutcome::Mcu {
+                backend: "renode:stm32f103".into(),
+            },
             Confidence::Exact,
             None,
         ));
-        report.push(row("R1", BindOutcome::Analog { device: "R".into() }, Confidence::Exact, None));
+        report.push(row(
+            "R1",
+            BindOutcome::Analog { device: "R".into() },
+            Confidence::Exact,
+            None,
+        ));
         report.push(row(
             "U7",
-            BindOutcome::Unresolved { reason: "no model".into() },
+            BindOutcome::Unresolved {
+                reason: "no model".into(),
+            },
             Confidence::Unresolved,
             Some("on connected net(s)"),
         ));
@@ -1166,8 +1180,14 @@ mod tests {
         let si = vec![jf("info", "si", true, "USB pair ~171 ohm from target")];
         let lint = vec![jf("serious", "lint", true, "floating EN")];
         let nets = vec![
-            Net { name: "/3V3".into(), voltage_v: Some(3.3) },
-            Net { name: "/USB_D+".into(), voltage_v: None },
+            Net {
+                name: "/3V3".into(),
+                voltage_v: Some(3.3),
+            },
+            Net {
+                name: "/USB_D+".into(),
+                voltage_v: None,
+            },
         ];
         // U7 connects /3V3 and /USB_D+; U2 connects /3V3.
         let mut part_nets: HashMap<String, Vec<String>> = HashMap::new();
@@ -1288,7 +1308,11 @@ mod tests {
         assert_eq!(sc.probed(), &["/A", "/B", "/C", "/D"]);
         assert!(sc.toggle("/E"), "/E is now probed");
         assert_eq!(sc.probed().len(), SCOPE_MAX_PROBES);
-        assert_eq!(sc.probed(), &["/B", "/C", "/D", "/E"], "oldest (/A) evicted");
+        assert_eq!(
+            sc.probed(),
+            &["/B", "/C", "/D", "/E"],
+            "oldest (/A) evicted"
+        );
         assert!(!sc.is_probed("/A"));
         // Toggling a probed net off removes it (and frees a slot).
         assert!(!sc.toggle("/C"), "/C toggled off");
@@ -1328,7 +1352,10 @@ mod tests {
         assert_eq!(led.len(), 2);
         assert_eq!(led.latest(), Some(0.0));
         assert_eq!(led.min_max(), Some((0.0, 3.3)));
-        assert!(sc.series("/GND").is_none(), "unprobed nets are never buffered");
+        assert!(
+            sc.series("/GND").is_none(),
+            "unprobed nets are never buffered"
+        );
         // clear_samples keeps the probe but drops the history.
         sc.clear_samples();
         assert!(sc.is_probed("/LED"));
@@ -1345,8 +1372,14 @@ mod tests {
         let ramp: Vec<f64> = (0..100).map(|i| i as f64).collect();
         let ds = downsample(&ramp, 10);
         assert_eq!(ds.len(), 10);
-        assert!(ds.windows(2).all(|w| w[0] < w[1]), "shape preserved (monotonic)");
-        assert!(ds[0] < 10.0 && *ds.last().unwrap() > 89.0, "spans the range");
+        assert!(
+            ds.windows(2).all(|w| w[0] < w[1]),
+            "shape preserved (monotonic)"
+        );
+        assert!(
+            ds[0] < 10.0 && *ds.last().unwrap() > 89.0,
+            "spans the range"
+        );
     }
 
     #[test]
@@ -1358,7 +1391,11 @@ mod tests {
         // Parts focus, cursor on a PART row (first row is the active IC U7): no-op.
         st.focus = Pane::Parts;
         st.parts_sel = 0;
-        assert_eq!(st.toggle_probe_selected(), None, "a part row is not probeable");
+        assert_eq!(
+            st.toggle_probe_selected(),
+            None,
+            "a part row is not probeable"
+        );
         // Move onto the first net row and probe it.
         st.parts_sel = st.parts.len();
         let net = st.toggle_probe_selected().expect("net row is probeable");
@@ -1373,11 +1410,23 @@ mod tests {
     fn scope_view_transitions_across_placeholder_states() {
         // No-MCU board → NoMcu, regardless of probes.
         let mut report = BindReport::default();
-        report.push(row("R1", BindOutcome::Analog { device: "R".into() }, Confidence::Exact, None));
+        report.push(row(
+            "R1",
+            BindOutcome::Analog { device: "R".into() },
+            Confidence::Exact,
+            None,
+        ));
         let summary = BindSummary::from_report(&report);
         let no_mcu = AppState::new(
-            "Analog".into(), &report, &summary, &empty_drc(), &[], &[], vec![],
-            HashMap::new(), HashMap::new(),
+            "Analog".into(),
+            &report,
+            &summary,
+            &empty_drc(),
+            &[],
+            &[],
+            vec![],
+            HashMap::new(),
+            HashMap::new(),
         );
         assert_eq!(no_mcu.scope_view(), ScopeView::NoMcu);
 
@@ -1386,7 +1435,11 @@ mod tests {
         assert!(!st.no_mcu);
         assert_eq!(st.scope_view(), ScopeView::NoProbes);
         st.scope.toggle("/3V3");
-        assert_eq!(st.scope_view(), ScopeView::NoData, "probed but no samples yet");
+        assert_eq!(
+            st.scope_view(),
+            ScopeView::NoData,
+            "probed but no samples yet"
+        );
         let mut v = HashMap::new();
         v.insert("/3V3".to_string(), 3.3);
         st.scope.record(0.0, &v);
@@ -1417,7 +1470,12 @@ mod tests {
         assert!(st.left_detail_open, "Enter on Parts opens the part detail");
         let detail = st.left_detail_view().expect("a detail for the selection");
         match detail {
-            LeftDetail::Part { reference, critical_open, nets, .. } => {
+            LeftDetail::Part {
+                reference,
+                critical_open,
+                nets,
+                ..
+            } => {
                 assert_eq!(reference, "U7");
                 assert!(critical_open, "U7 is an unresolved active IC");
                 assert_eq!(nets, vec!["/3V3".to_string(), "/USB_D+".to_string()]);
@@ -1440,7 +1498,11 @@ mod tests {
         st.activate();
         assert!(st.left_detail_open);
         match st.left_detail_view().unwrap() {
-            LeftDetail::Net { name, voltage_v, parts } => {
+            LeftDetail::Net {
+                name,
+                voltage_v,
+                parts,
+            } => {
                 assert_eq!(name, "/3V3");
                 assert_eq!(voltage_v, Some(3.3));
                 assert_eq!(parts, vec!["U2".to_string(), "U7".to_string()]);
@@ -1505,7 +1567,9 @@ mod tests {
         let mut report = BindReport::default();
         report.push(row(
             "U1",
-            BindOutcome::Mcu { backend: "renode:stm32f103".into() },
+            BindOutcome::Mcu {
+                backend: "renode:stm32f103".into(),
+            },
             Confidence::Exact,
             None,
         ));
@@ -1530,7 +1594,12 @@ mod tests {
     #[test]
     fn no_mcu_board_sets_the_no_mcu_flag() {
         let mut report = BindReport::default();
-        report.push(row("R1", BindOutcome::Analog { device: "R".into() }, Confidence::Exact, None));
+        report.push(row(
+            "R1",
+            BindOutcome::Analog { device: "R".into() },
+            Confidence::Exact,
+            None,
+        ));
         let summary = BindSummary::from_report(&report);
         let st = AppState::new(
             "Analog".into(),

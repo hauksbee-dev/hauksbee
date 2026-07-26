@@ -27,8 +27,7 @@
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_solve::{
     DcInit, DeviceEffects, EventRetryTuning, RobustnessLadder, SolverOptions, StepControl,
-    Strategy, Transient,
-    Waveforms,
+    Strategy, Transient, Waveforms,
 };
 
 /// Integrate-and-fire relaxation oscillator with a binder-style SPDT pair.

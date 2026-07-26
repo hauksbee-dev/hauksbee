@@ -6,8 +6,8 @@
 use std::path::Path;
 
 use crate::result::{
-    ac_is_all_sentinel, no_signal_path_reason, AcJson, AcNetJson, BindSummary, CheckCoverage,
-    coverage_open_active_refs, JsonReport, Validity, EXIT_INVALID_FOR_ANALYSIS,
+    ac_is_all_sentinel, coverage_open_active_refs, no_signal_path_reason, AcJson, AcNetJson,
+    BindSummary, CheckCoverage, JsonReport, Validity, EXIT_INVALID_FOR_ANALYSIS,
 };
 
 pub fn emit(
@@ -110,8 +110,7 @@ pub fn emit(
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
     }
 
-    let all_sentinel =
-        !nonempty.is_empty() && nonempty.iter().all(|(_, b)| ac_is_all_sentinel(b));
+    let all_sentinel = !nonempty.is_empty() && nonempty.iter().all(|(_, b)| ac_is_all_sentinel(b));
 
     if all_sentinel {
         // Name a representative net for the reason (the first reported one).
@@ -386,14 +385,20 @@ mod ac_csv_tests {
         // data, contradicting the JSON/text "never present the floor as data"
         // contract. The floor-only net must be omitted and reported.
         let live: Vec<(f64, f64, f64)> = vec![(1.0, -3.0, -45.0), (10.0, -20.0, -90.0)];
-        let dead: Vec<(f64, f64, f64)> =
-            vec![(1.0, AC_FLOOR_DB, 0.0), (10.0, AC_FLOOR_DB, 0.0)];
+        let dead: Vec<(f64, f64, f64)> = vec![(1.0, AC_FLOOR_DB, 0.0), (10.0, AC_FLOOR_DB, 0.0)];
         let per_net = vec![("OUT".to_string(), live), ("DEAD".to_string(), dead)];
 
         let (csv, no_path) = ac_csv_body(&per_net);
 
-        assert_eq!(no_path, vec!["DEAD".to_string()], "the dead net must be reported as omitted");
-        assert!(csv.contains("OUT,1,-3,-45"), "the live net's real rows must be present: {csv}");
+        assert_eq!(
+            no_path,
+            vec!["DEAD".to_string()],
+            "the dead net must be reported as omitted"
+        );
+        assert!(
+            csv.contains("OUT,1,-3,-45"),
+            "the live net's real rows must be present: {csv}"
+        );
         assert!(
             !csv.contains("DEAD"),
             "the no-signal-path net must not appear in the CSV at all: {csv}"

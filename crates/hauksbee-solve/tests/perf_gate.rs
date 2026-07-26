@@ -316,7 +316,11 @@ fn perf_gate() {
     }
 
     let tol = base.tolerance_frac;
-    eprintln!("=== perf gate: class '{}' (arch {arch}), ±{:.0}% ===", base.class, tol * 100.0);
+    eprintln!(
+        "=== perf gate: class '{}' (arch {arch}), ±{:.0}% ===",
+        base.class,
+        tol * 100.0
+    );
 
     let mut violations: Vec<String> = Vec::new();
     for board in boards() {
@@ -402,10 +406,19 @@ fn perf_capture_baseline() {
     eprintln!("=== perf baseline capture: class '{class}', arch '{arch}', reps {REPS} ===\n");
 
     let mut lines = Vec::new();
-    lines.push("# Perf baseline, HONEST-UPDATE RULE (08-validation-and-test-campaign.md §4):".to_string());
-    lines.push("# change this file only in its OWN commit whose message explains the delta".to_string());
-    lines.push("# (a flame-graph diff or a written reason). Never fold a baseline move into an".to_string());
-    lines.push("# unrelated change; never loosen the gate silently to make a regression pass.".to_string());
+    lines.push(
+        "# Perf baseline, HONEST-UPDATE RULE (08-validation-and-test-campaign.md §4):".to_string(),
+    );
+    lines.push(
+        "# change this file only in its OWN commit whose message explains the delta".to_string(),
+    );
+    lines.push(
+        "# (a flame-graph diff or a written reason). Never fold a baseline move into an"
+            .to_string(),
+    );
+    lines.push(
+        "# unrelated change; never loosen the gate silently to make a regression pass.".to_string(),
+    );
     lines.push(format!("class = \"{class}\""));
     lines.push(format!("arch = \"{arch}\""));
     lines.push("tolerance_frac = 0.15".to_string());
@@ -425,7 +438,11 @@ fn perf_capture_baseline() {
             human_ms(med_ms / 1e3),
             spread * 100.0,
             max,
-            if noisy { "  <- high spread: verify the quiet number is reproducible across two captures before gating" } else { "" }
+            if noisy {
+                "  <- high spread: verify the quiet number is reproducible across two captures before gating"
+            } else {
+                ""
+            }
         );
         lines.push(format!("[boards.{}]", board.id));
         lines.push(format!("quiet_ms = {q_ms:.4}"));

@@ -55,15 +55,15 @@ use once_cell::sync::Lazy;
 use regex::Error as RegexError;
 use thiserror::Error;
 
+pub use logic_spec::{Logic, LogicExpr, LogicSpecError, ValidatedLogic};
 pub use matcher::ComponentQuery;
 pub use pack::{Pack, PackError, PackManifest, PackRecord, PackStore, Provenance};
 pub use pin_rules::{InferredRole, PinRule, PinRuleTable};
 pub use profile::{LoadProfile, Segment};
-pub use schema::{
-    ComponentKind, ModelEntry, Params, StrapInternalPull, StrapLevel, StrapPin,
+pub use schema::{ComponentKind, ModelEntry, Params, StrapInternalPull, StrapLevel, StrapPin};
+pub use sensor_spec::{
+    Bus, Encoding, ProtocolStyle, RegisterSpec, Sensor, SensorSpec, SensorSpecError,
 };
-pub use logic_spec::{Logic, LogicExpr, LogicSpecError, ValidatedLogic};
-pub use sensor_spec::{Bus, Encoding, ProtocolStyle, RegisterSpec, Sensor, SensorSpec, SensorSpecError};
 pub use spice_input::SpiceCard;
 
 /// Built-in pin-role inference rules, embedded at compile time.
@@ -73,18 +73,21 @@ static BUILTIN_PIN_RULES_TOML: &str = include_str!("../db/pin_rules.toml");
 
 /// All built-in TOML database files embedded at compile time.
 static BUILTIN_TOML_FILES: &[(&str, &str)] = &[
-    ("passives",          include_str!("../db/passives.toml")),
-    ("diodes",            include_str!("../db/diodes.toml")),
-    ("bjt",               include_str!("../db/bjt.toml")),
-    ("mosfet",            include_str!("../db/mosfet.toml")),
-    ("opamp_comparator",  include_str!("../db/opamp_comparator.toml")),
-    ("analog_switch",     include_str!("../db/analog_switch.toml")),
-    ("digital",           include_str!("../db/digital.toml")),
-    ("dac_adc",           include_str!("../db/dac_adc.toml")),
-    ("vreg",              include_str!("../db/vreg.toml")),
-    ("power_ics",         include_str!("../db/power_ics.toml")),
-    ("mcu",               include_str!("../db/mcu.toml")),
-    ("ignore",            include_str!("../db/ignore.toml")),
+    ("passives", include_str!("../db/passives.toml")),
+    ("diodes", include_str!("../db/diodes.toml")),
+    ("bjt", include_str!("../db/bjt.toml")),
+    ("mosfet", include_str!("../db/mosfet.toml")),
+    (
+        "opamp_comparator",
+        include_str!("../db/opamp_comparator.toml"),
+    ),
+    ("analog_switch", include_str!("../db/analog_switch.toml")),
+    ("digital", include_str!("../db/digital.toml")),
+    ("dac_adc", include_str!("../db/dac_adc.toml")),
+    ("vreg", include_str!("../db/vreg.toml")),
+    ("power_ics", include_str!("../db/power_ics.toml")),
+    ("mcu", include_str!("../db/mcu.toml")),
+    ("ignore", include_str!("../db/ignore.toml")),
 ];
 
 // ── Error type ────────────────────────────────────────────────────────────────
@@ -92,7 +95,11 @@ static BUILTIN_TOML_FILES: &[(&str, &str)] = &[
 #[derive(Debug, Error)]
 pub enum ModelError {
     #[error("TOML parse error in '{source}': {error}")]
-    TomlParse { source: String, #[source] error: toml::de::Error },
+    TomlParse {
+        source: String,
+        #[source]
+        error: toml::de::Error,
+    },
 
     #[error("invalid regex in entry '{id}': {error}")]
     InvalidRegex { id: String, error: RegexError },
@@ -192,9 +199,9 @@ pub enum Confidence {
 impl std::fmt::Display for Confidence {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Confidence::Exact      => write!(f, "exact"),
-            Confidence::Family     => write!(f, "family"),
-            Confidence::Guessed    => write!(f, "guessed"),
+            Confidence::Exact => write!(f, "exact"),
+            Confidence::Family => write!(f, "family"),
+            Confidence::Guessed => write!(f, "guessed"),
             Confidence::Unresolved => write!(f, "unresolved"),
         }
     }
@@ -371,8 +378,7 @@ impl ModelLibrary {
             Err(e) => return vec![format!("cannot read pack record: {e}")],
         };
         // model id -> pack dir_name that first shipped it, for conflict reports.
-        let mut seen: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
+        let mut seen: std::collections::HashMap<String, String> = std::collections::HashMap::new();
         for record in &records {
             let dir = store.pack_dir(record);
             let pack = match pack::Pack::load(&dir) {
@@ -449,7 +455,9 @@ impl ModelLibrary {
             // typo that would otherwise load zero models with no signal, so the
             // user's whole custom set silently never applies. Report it.
             if layer == SourceLayer::ModelsDirFlag {
-                errors.push(ModelError::MissingDir { dir: dir.display().to_string() });
+                errors.push(ModelError::MissingDir {
+                    dir: dir.display().to_string(),
+                });
             }
             return errors;
         }
@@ -469,13 +477,20 @@ impl ModelLibrary {
                     continue;
                 }
             };
-            let name = path.file_stem().and_then(|s| s.to_str()).unwrap_or("?").to_string();
+            let name = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("?")
+                .to_string();
             // A `pin_rules.toml` (or any file carrying a `[[pin_rules]]` array)
             // is loaded into the pin-role inference table, prepended so user
             // rules override the built-ins. Everything else is model entries.
             if name == "pin_rules" || src.contains("[[pin_rules]]") {
                 if let Err(e) = self.pin_rules.load_toml_str(&src, true) {
-                    errors.push(ModelError::PinRules { file: name, message: e });
+                    errors.push(ModelError::PinRules {
+                        file: name,
+                        message: e,
+                    });
                 }
                 continue;
             }
@@ -699,13 +714,13 @@ fn score_to_confidence(score: u32) -> Confidence {
 /// `Passive`.
 fn spice_kind_from_model_type(t: Option<&str>) -> Option<ComponentKind> {
     match t.unwrap_or("").to_uppercase().as_str() {
-        "D"                       => Some(ComponentKind::Diode),
-        "NPN"                     => Some(ComponentKind::BjtNpn),
-        "PNP"                     => Some(ComponentKind::BjtPnp),
-        "NMOS" | "NMOSFET"        => Some(ComponentKind::Nmos),
-        "PMOS" | "PMOSFET"        => Some(ComponentKind::Pmos),
+        "D" => Some(ComponentKind::Diode),
+        "NPN" => Some(ComponentKind::BjtNpn),
+        "PNP" => Some(ComponentKind::BjtPnp),
+        "NMOS" | "NMOSFET" => Some(ComponentKind::Nmos),
+        "PMOS" | "PMOSFET" => Some(ComponentKind::Pmos),
         "R" | "RES" | "C" | "CAP" | "L" | "IND" => Some(ComponentKind::Passive),
-        _                         => None, // unknown/unsupported: don't guess Passive
+        _ => None, // unknown/unsupported: don't guess Passive
     }
 }
 
@@ -719,34 +734,72 @@ pub struct ResolutionReport {
 impl ResolutionReport {
     /// Count resolutions by confidence level.
     pub fn counts(&self) -> (usize, usize, usize, usize) {
-        let exact    = self.resolutions.iter().filter(|r| r.confidence == Confidence::Exact).count();
-        let family   = self.resolutions.iter().filter(|r| r.confidence == Confidence::Family).count();
-        let guessed  = self.resolutions.iter().filter(|r| r.confidence == Confidence::Guessed).count();
-        let unresolved = self.resolutions.iter().filter(|r| r.confidence == Confidence::Unresolved).count();
+        let exact = self
+            .resolutions
+            .iter()
+            .filter(|r| r.confidence == Confidence::Exact)
+            .count();
+        let family = self
+            .resolutions
+            .iter()
+            .filter(|r| r.confidence == Confidence::Family)
+            .count();
+        let guessed = self
+            .resolutions
+            .iter()
+            .filter(|r| r.confidence == Confidence::Guessed)
+            .count();
+        let unresolved = self
+            .resolutions
+            .iter()
+            .filter(|r| r.confidence == Confidence::Unresolved)
+            .count();
         (exact, family, guessed, unresolved)
     }
 
     /// All unresolved queries.
     pub fn unresolved(&self) -> Vec<&Resolution> {
-        self.resolutions.iter().filter(|r| r.confidence == Confidence::Unresolved).collect()
+        self.resolutions
+            .iter()
+            .filter(|r| r.confidence == Confidence::Unresolved)
+            .collect()
     }
 }
 
 impl std::fmt::Display for ResolutionReport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let (exact, family, guessed, unresolved) = self.counts();
-        writeln!(f, "┌──────────────────────────────────────────────────────────────┐")?;
-        writeln!(f, "│ Resolution report: {} components", self.resolutions.len())?;
-        writeln!(f, "│  exact={exact}  family={family}  guessed={guessed}  unresolved={unresolved}")?;
-        writeln!(f, "├──────────┬──────────────────────────┬────────────┬────────────┤")?;
-        writeln!(f, "│ Ref      │ Value                    │ Model ID   │ Confidence │")?;
-        writeln!(f, "├──────────┼──────────────────────────┼────────────┼────────────┤")?;
+        writeln!(
+            f,
+            "┌──────────────────────────────────────────────────────────────┐"
+        )?;
+        writeln!(
+            f,
+            "│ Resolution report: {} components",
+            self.resolutions.len()
+        )?;
+        writeln!(
+            f,
+            "│  exact={exact}  family={family}  guessed={guessed}  unresolved={unresolved}"
+        )?;
+        writeln!(
+            f,
+            "├──────────┬──────────────────────────┬────────────┬────────────┤"
+        )?;
+        writeln!(
+            f,
+            "│ Ref      │ Value                    │ Model ID   │ Confidence │"
+        )?;
+        writeln!(
+            f,
+            "├──────────┼──────────────────────────┼────────────┼────────────┤"
+        )?;
         for res in &self.resolutions {
             let ref_s = res.query.reference.as_deref().unwrap_or("?");
             let val_s = res.query.value.as_deref().unwrap_or("");
             let (model_id, conf) = match &res.model {
                 Some(m) => (m.id.as_str(), res.confidence.to_string()),
-                None    => ("UNRESOLVED", "unresolved".to_string()),
+                None => ("UNRESOLVED", "unresolved".to_string()),
             };
             // Truncate on CHAR boundaries, a byte slice like `&val_s[..24]`
             // panics when a multibyte char (e.g. 'µ' in a "µF" value) straddles
@@ -761,7 +814,10 @@ impl std::fmt::Display for ResolutionReport {
                 clip(&conf, 10),
             )?;
         }
-        writeln!(f, "└──────────┴──────────────────────────┴────────────┴────────────┘")?;
+        writeln!(
+            f,
+            "└──────────┴──────────────────────────┴────────────┴────────────┘"
+        )?;
         Ok(())
     }
 }
@@ -811,7 +867,8 @@ mod tests {
             lib_id = "Device:R"
         "#;
         assert!(
-            lib.load_toml_str(ok, "real.toml", SourceLayer::UserDir).is_ok(),
+            lib.load_toml_str(ok, "real.toml", SourceLayer::UserDir)
+                .is_ok(),
             "an entry with a populated match rule must load"
         );
     }
@@ -824,28 +881,31 @@ mod tests {
     fn resolution_report_display_survives_multibyte_value() {
         // 23 ASCII + 'µ' (2 bytes) puts a char boundary across byte index 24.
         let value = format!("{}{}", "a".repeat(23), "µF");
-        let q = ComponentQuery { value: Some(value), ..Default::default() };
+        let q = ComponentQuery {
+            value: Some(value),
+            ..Default::default()
+        };
         let report = ResolutionReport {
             resolutions: vec![Resolution::unresolved(q)],
         };
         let rendered = report.to_string();
-        assert!(rendered.contains("Resolution report"), "report renders: {rendered}");
+        assert!(
+            rendered.contains("Resolution report"),
+            "report renders: {rendered}"
+        );
     }
 
     #[test]
     fn resolve_resistor() {
         let l = lib();
-        let q = ComponentQuery::new(
-            Some("Device:R".to_string()),
-            Some("10k".to_string()),
-            None,
-        );
+        let q = ComponentQuery::new(Some("Device:R".to_string()), Some("10k".to_string()), None);
         let res = l.resolve(&q);
         // Exact lib_id match with no value_re in the rule resolves at Family
         // confidence (the entry covers the whole Device:R class, not a specific part).
         assert!(
             res.confidence <= Confidence::Family,
-            "expected Family or better, got {:?}", res.confidence
+            "expected Family or better, got {:?}",
+            res.confidence
         );
         assert_eq!(res.model.unwrap().kind, ComponentKind::Passive);
     }
@@ -865,7 +925,10 @@ mod tests {
     #[test]
     fn resolve_1n4148() {
         let l = lib();
-        let q = ComponentQuery { value: Some("1N4148".to_string()), ..Default::default() };
+        let q = ComponentQuery {
+            value: Some("1N4148".to_string()),
+            ..Default::default()
+        };
         let res = l.resolve(&q);
         assert!(res.model.is_some());
         assert_eq!(res.model.unwrap().kind, ComponentKind::Diode);
@@ -874,7 +937,10 @@ mod tests {
     #[test]
     fn resolve_74hc595() {
         let l = lib();
-        let q = ComponentQuery { value: Some("74HC595".to_string()), ..Default::default() };
+        let q = ComponentQuery {
+            value: Some("74HC595".to_string()),
+            ..Default::default()
+        };
         let res = l.resolve(&q);
         assert!(res.model.is_some());
         assert_eq!(res.model.unwrap().kind, ComponentKind::ShiftRegister);
@@ -917,7 +983,10 @@ mod tests {
             model_type: Some("NPN".to_string()),
         };
         l.add_spice_card(card);
-        let q = ComponentQuery { value: Some("BC847".to_string()), ..Default::default() };
+        let q = ComponentQuery {
+            value: Some("BC847".to_string()),
+            ..Default::default()
+        };
         let res = l.resolve(&q);
         assert_eq!(res.source.as_deref(), Some("spice"));
     }
@@ -947,7 +1016,9 @@ mod tests {
         let missing = Path::new("/nonexistent/hauksbee/models/typo");
         let flag_errs = l.load_dir_layer(missing, SourceLayer::ModelsDirFlag);
         assert!(
-            flag_errs.iter().any(|e| matches!(e, ModelError::MissingDir { .. })),
+            flag_errs
+                .iter()
+                .any(|e| matches!(e, ModelError::MissingDir { .. })),
             "an explicit --models-dir typo must report MissingDir, got: {flag_errs:?}"
         );
         for auto in [SourceLayer::UserDir, SourceLayer::UserConfigDir] {
@@ -968,14 +1039,26 @@ mod tests {
             name: "MYOPAMP".to_string(),
             kind: spice_input::SpiceCardKind::Subckt,
             raw: ".SUBCKT MYOPAMP INP INN VCC VEE OUT".to_string(),
-            ports: vec!["INP".into(), "INN".into(), "VCC".into(), "VEE".into(), "OUT".into()],
+            ports: vec![
+                "INP".into(),
+                "INN".into(),
+                "VCC".into(),
+                "VEE".into(),
+                "OUT".into(),
+            ],
             params: Default::default(),
             model_type: None,
         };
         let mut l = lib();
         l.add_spice_card(subckt);
-        let res = l.resolve(&ComponentQuery { value: Some("MYOPAMP".to_string()), ..Default::default() });
-        assert!(res.model.is_none(), "a subckt must not resolve to a Passive model");
+        let res = l.resolve(&ComponentQuery {
+            value: Some("MYOPAMP".to_string()),
+            ..Default::default()
+        });
+        assert!(
+            res.model.is_none(),
+            "a subckt must not resolve to a Passive model"
+        );
         assert_eq!(res.confidence, Confidence::Unresolved);
 
         let vdmos = SpiceCard {
@@ -988,8 +1071,14 @@ mod tests {
         };
         let mut l2 = lib();
         l2.add_spice_card(vdmos);
-        let res2 = l2.resolve(&ComponentQuery { value: Some("M1".to_string()), ..Default::default() });
-        assert!(res2.model.is_none(), "an unknown .model type must not resolve to Passive");
+        let res2 = l2.resolve(&ComponentQuery {
+            value: Some("M1".to_string()),
+            ..Default::default()
+        });
+        assert!(
+            res2.model.is_none(),
+            "an unknown .model type must not resolve to Passive"
+        );
 
         // A genuine passive .model R still resolves.
         let rmod = SpiceCard {
@@ -1002,17 +1091,38 @@ mod tests {
         };
         let mut l3 = lib();
         l3.add_spice_card(rmod);
-        let res3 = l3.resolve(&ComponentQuery { value: Some("RMOD".to_string()), ..Default::default() });
-        assert!(res3.model.is_some(), "a .model R is a genuine passive and must resolve");
+        let res3 = l3.resolve(&ComponentQuery {
+            value: Some("RMOD".to_string()),
+            ..Default::default()
+        });
+        assert!(
+            res3.model.is_some(),
+            "a .model R is a genuine passive and must resolve"
+        );
     }
 
     #[test]
     fn report_display() {
         let l = lib();
         let queries = vec![
-            ComponentQuery { reference: Some("R1".to_string()), value: Some("10k".to_string()), footprint: Some("Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal".to_string()), ..Default::default() },
-            ComponentQuery { reference: Some("D1".to_string()), value: Some("1N4148".to_string()), ..Default::default() },
-            ComponentQuery { reference: Some("U99".to_string()), value: Some("UNKNOWN".to_string()), ..Default::default() },
+            ComponentQuery {
+                reference: Some("R1".to_string()),
+                value: Some("10k".to_string()),
+                footprint: Some(
+                    "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal".to_string(),
+                ),
+                ..Default::default()
+            },
+            ComponentQuery {
+                reference: Some("D1".to_string()),
+                value: Some("1N4148".to_string()),
+                ..Default::default()
+            },
+            ComponentQuery {
+                reference: Some("U99".to_string()),
+                value: Some("UNKNOWN".to_string()),
+                ..Default::default()
+            },
         ];
         let report = l.report(&queries);
         let s = report.to_string();
@@ -1027,21 +1137,49 @@ mod tests {
         let l = lib();
         // Components extracted from the pic_programmer.kicad_pcb
         let bom: &[(&str, &str, &str)] = &[
-            ("C1",   "100µF",    "Capacitor_THT:CP_Axial_L18.0mm_D6.5mm_P25.00mm_Horizontal"),
-            ("C2",   "220uF",    "Capacitor_THT:CP_Axial_L18.0mm_D6.5mm_P25.00mm_Horizontal"),
-            ("R1",   "10K",      "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal"),
-            ("R10",  "5,1K",     "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal"),
-            ("D2",   "BAT43",    "Diode_THT:D_DO-35_SOD27_P7.62mm_Horizontal"),
-            ("D1",   "1N4004",   "Diode_THT:D_DO-35_SOD27_P12.70mm_Horizontal"),
-            ("D8",   "RED-LED",  "LED_THT:LED_D5.0mm"),
-            ("D9",   "GREEN-LED","LED_THT:LED_D5.0mm"),
-            ("Q1",   "BC237",    "footprints:TO-92"),
-            ("Q3",   "BC307",    "footprints:TO-92"),
-            ("L1",   "22uH",     "Inductor_THT:L_Radial_D7.8mm_P5.00mm_Fastron_07HCP"),
-            ("U3",   "7805",     "Package_TO_SOT_THT:TO-220-3_Horizontal_TabDown"),
-            ("P101", "CONN_1",   "MountingHole:MountingHole_4.3mm_M4"),
-            ("C5",   "10nF",     "Capacitor_THT:C_Disc_D5.1mm_W3.2mm_P5.00mm"),
-            ("U2",   "74HC125",  "Package_DIP:DIP-14_W7.62mm_LongPads"),
+            (
+                "C1",
+                "100µF",
+                "Capacitor_THT:CP_Axial_L18.0mm_D6.5mm_P25.00mm_Horizontal",
+            ),
+            (
+                "C2",
+                "220uF",
+                "Capacitor_THT:CP_Axial_L18.0mm_D6.5mm_P25.00mm_Horizontal",
+            ),
+            (
+                "R1",
+                "10K",
+                "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal",
+            ),
+            (
+                "R10",
+                "5,1K",
+                "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal",
+            ),
+            ("D2", "BAT43", "Diode_THT:D_DO-35_SOD27_P7.62mm_Horizontal"),
+            (
+                "D1",
+                "1N4004",
+                "Diode_THT:D_DO-35_SOD27_P12.70mm_Horizontal",
+            ),
+            ("D8", "RED-LED", "LED_THT:LED_D5.0mm"),
+            ("D9", "GREEN-LED", "LED_THT:LED_D5.0mm"),
+            ("Q1", "BC237", "footprints:TO-92"),
+            ("Q3", "BC307", "footprints:TO-92"),
+            (
+                "L1",
+                "22uH",
+                "Inductor_THT:L_Radial_D7.8mm_P5.00mm_Fastron_07HCP",
+            ),
+            (
+                "U3",
+                "7805",
+                "Package_TO_SOT_THT:TO-220-3_Horizontal_TabDown",
+            ),
+            ("P101", "CONN_1", "MountingHole:MountingHole_4.3mm_M4"),
+            ("C5", "10nF", "Capacitor_THT:C_Disc_D5.1mm_W3.2mm_P5.00mm"),
+            ("U2", "74HC125", "Package_DIP:DIP-14_W7.62mm_LongPads"),
         ];
 
         let queries: Vec<ComponentQuery> = bom
@@ -1065,14 +1203,17 @@ mod tests {
         );
 
         // The components that should definitely resolve
-        let must_resolve = ["C1", "C2", "R1", "D2", "D1", "D8", "D9", "Q1", "L1", "U3", "P101", "C5", "U2"];
+        let must_resolve = [
+            "C1", "C2", "R1", "D2", "D1", "D8", "D9", "Q1", "L1", "U3", "P101", "C5", "U2",
+        ];
         for res in &report.resolutions {
             let r = res.query.reference.as_deref().unwrap_or("");
             if must_resolve.contains(&r) {
                 assert!(
                     res.model.is_some(),
                     "component {} (value={:?}) should have resolved but didn't",
-                    r, res.query.value
+                    r,
+                    res.query.value
                 );
             }
         }
@@ -1081,14 +1222,15 @@ mod tests {
         let unresolved_list = report.unresolved();
         let unresolved_refs: Vec<_> = unresolved_list
             .iter()
-            .filter(|r| {
-                must_resolve.contains(&r.query.reference.as_deref().unwrap_or(""))
-            })
+            .filter(|r| must_resolve.contains(&r.query.reference.as_deref().unwrap_or("")))
             .collect();
         assert!(
             unresolved_refs.is_empty(),
             "expected no unresolved in must_resolve set, got: {:?}",
-            unresolved_refs.iter().map(|r| r.query.reference.as_deref()).collect::<Vec<_>>()
+            unresolved_refs
+                .iter()
+                .map(|r| r.query.reference.as_deref())
+                .collect::<Vec<_>>()
         );
     }
 }

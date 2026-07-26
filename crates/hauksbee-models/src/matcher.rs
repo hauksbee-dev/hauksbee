@@ -401,7 +401,7 @@ impl MatchRules {
 
 #[cfg(test)]
 mod tests {
-    use super::{pattern_constrainedness, ComponentQuery, CompiledEntry};
+    use super::{pattern_constrainedness, CompiledEntry, ComponentQuery};
     use crate::schema::{ComponentKind, MatchRules, ModelEntry};
 
     #[test]
@@ -430,7 +430,10 @@ mod tests {
             footprint: Some("Package_TO_SOT_SMD:SOT-23".to_string()),
             ..Default::default()
         };
-        assert!(compiled.matches(&q), "footprint regex must match case-insensitively");
+        assert!(
+            compiled.matches(&q),
+            "footprint regex must match case-insensitively"
+        );
     }
 
     #[test]
@@ -457,8 +460,14 @@ mod tests {
 
     #[test]
     fn inline_flags_and_groups_score_nothing() {
-        assert_eq!(pattern_constrainedness("(?i)AB"), pattern_constrainedness("AB"));
-        assert_eq!(pattern_constrainedness("(AB)"), pattern_constrainedness("AB"));
+        assert_eq!(
+            pattern_constrainedness("(?i)AB"),
+            pattern_constrainedness("AB")
+        );
+        assert_eq!(
+            pattern_constrainedness("(AB)"),
+            pattern_constrainedness("AB")
+        );
     }
 
     #[test]
@@ -470,8 +479,7 @@ mod tests {
         // and won the same-layer regex tie-break, silently binding the generic
         // params. The exact literal must now win deterministically.
         assert!(
-            pattern_constrainedness("^1N4148$")
-                > pattern_constrainedness("^1N4148[A-Z0-9-]*$"),
+            pattern_constrainedness("^1N4148$") > pattern_constrainedness("^1N4148[A-Z0-9-]*$"),
             "the exact override must out-score the optional-tail family"
         );
         // An optional region is strictly looser than the same required region.
@@ -506,12 +514,14 @@ mod tests {
         );
         // The gross inflation is gone: the family no longer exceeds the exact.
         assert!(
-            pattern_constrainedness("^(BC846|BC847|BC848)$")
-                < pattern_constrainedness("^BC847$"),
+            pattern_constrainedness("^(BC846|BC847|BC848)$") < pattern_constrainedness("^BC847$"),
             "a grouped family must not out-score the exact arm it carves out of"
         );
         // A single-branch group is NOT an alternation and is not docked.
-        assert_eq!(pattern_constrainedness("(AB)"), pattern_constrainedness("AB"));
+        assert_eq!(
+            pattern_constrainedness("(AB)"),
+            pattern_constrainedness("AB")
+        );
         // A top-level alternation is still scored as its loosest arm (no group).
         assert_eq!(
             pattern_constrainedness("^AB$|^ABCD$"),
@@ -526,8 +536,7 @@ mod tests {
         // docked only 1, so `^1N4148(W)?$` (15) out-scored the exact `^1N4148$` (14)
         // override it carves out of; the inversion regex_specificity prevents.
         assert!(
-            pattern_constrainedness("^1N4148$")
-                > pattern_constrainedness("^1N4148(W)?$"),
+            pattern_constrainedness("^1N4148$") > pattern_constrainedness("^1N4148(W)?$"),
             "the exact override must out-score the optional-group family"
         );
         // A REQUIRED group still counts (no quantifier): `(W)` == the bare literal.
@@ -536,8 +545,6 @@ mod tests {
             pattern_constrainedness("^1N4148(W)$")
         );
         // An optional grouped ALTERNATION is also fully retracted by the `?`.
-        assert!(
-            pattern_constrainedness("^ABC$") > pattern_constrainedness("^ABC(D|E)?$")
-        );
+        assert!(pattern_constrainedness("^ABC$") > pattern_constrainedness("^ABC(D|E)?$"));
     }
 }

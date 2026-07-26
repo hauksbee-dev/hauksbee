@@ -222,7 +222,11 @@ fn unified_router(
 ) -> Router {
     let mut router = Router::new();
     if let Some(shared) = shared {
-        router = router.merge(Router::new().route("/ws", get(ws_handler)).with_state(shared));
+        router = router.merge(
+            Router::new()
+                .route("/ws", get(ws_handler))
+                .with_state(shared),
+        );
     }
     if let Some(analyze) = analyze {
         router = router.merge(frontdoor::api_routes(analyze));
@@ -244,12 +248,7 @@ fn unified_router(
         "/api/startup",
         get(move || {
             let body = startup_json.clone();
-            async move {
-                (
-                    [(header::CONTENT_TYPE, "application/json")],
-                    body,
-                )
-            }
+            async move { ([(header::CONTENT_TYPE, "application/json")], body) }
         }),
     );
     if let Some((url_path, contents)) = board_file {
@@ -336,7 +335,15 @@ pub async fn serve_frontdoor_on(
     deps: Option<(DepsStatus, DepInstaller)>,
     startup_json: String,
 ) -> anyhow::Result<()> {
-    let router = unified_router(None, static_dir, None, Some(analyze), check, deps, startup_json);
+    let router = unified_router(
+        None,
+        static_dir,
+        None,
+        Some(analyze),
+        check,
+        deps,
+        startup_json,
+    );
     axum::serve(listener, router).await?;
     Ok(())
 }

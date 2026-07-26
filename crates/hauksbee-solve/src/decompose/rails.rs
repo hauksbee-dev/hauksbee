@@ -429,8 +429,10 @@ pub(crate) fn fragment_blocks(
         }
     }
 
-    let mut block_devices: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
-    let mut device_block: std::collections::HashMap<DeviceId, usize> = std::collections::HashMap::new();
+    let mut block_devices: std::collections::HashMap<usize, usize> =
+        std::collections::HashMap::new();
+    let mut device_block: std::collections::HashMap<DeviceId, usize> =
+        std::collections::HashMap::new();
     let mut node_block: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
     for &id in &graph.islands[island] {
         let dev = &circuit.devices[id.0 as usize];
@@ -606,10 +608,7 @@ mod tests {
         assert_eq!(tears.len(), 1);
         assert_eq!(tears[0].rail, rail);
         assert!(
-            matches!(
-                tears[0].decision,
-                TearDecision::RefusedUnprofitable { .. }
-            ),
+            matches!(tears[0].decision, TearDecision::RefusedUnprofitable { .. }),
             "one fused block cannot win the outer loop: {:?}",
             tears[0].decision
         );
@@ -849,10 +848,17 @@ mod tests {
         let g = ConductionGraph::analyze(&c);
         // Even under escalation (structural guards never relax), two feeds
         // must refuse.
-        let tears =
-            detect_balance_tears(&c, &g, TearMotive::ConvergenceEscalation, &RailPolicy::default());
+        let tears = detect_balance_tears(
+            &c,
+            &g,
+            TearMotive::ConvergenceEscalation,
+            &RailPolicy::default(),
+        );
         let cand = tears.iter().find(|t| t.rail == rail).expect("candidate");
-        assert_eq!(cand.decision, TearDecision::RefusedAmbiguousFeed { feeds: 2 });
+        assert_eq!(
+            cand.decision,
+            TearDecision::RefusedAmbiguousFeed { feeds: 2 }
+        );
         assert!(!cand.torn());
     }
 }

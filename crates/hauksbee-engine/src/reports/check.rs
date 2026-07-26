@@ -31,7 +31,10 @@ pub fn emit(
     let drc = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
-        ExtractedBoard::drc_with_clearance_rules(text, kicad_pro_clearance_rules(board_path, board))?
+        ExtractedBoard::drc_with_clearance_rules(
+            text,
+            kicad_pro_clearance_rules(board_path, board),
+        )?
     };
     let drc_structured = DrcStructured::from_report(&drc);
     let lint = crate::checks::engine_lint(board, lib);
@@ -127,7 +130,10 @@ pub fn emit_combined_json(
     let drc = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
-        ExtractedBoard::drc_with_clearance_rules(text, kicad_pro_clearance_rules(board_path, board))?
+        ExtractedBoard::drc_with_clearance_rules(
+            text,
+            kicad_pro_clearance_rules(board_path, board),
+        )?
     };
     jr.drc = Some(DrcStructured::from_report(&drc));
     let lint = crate::checks::engine_lint(board, lib);

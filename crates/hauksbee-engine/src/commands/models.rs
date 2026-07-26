@@ -142,7 +142,12 @@ pub fn add(source: &str) -> anyhow::Result<()> {
             let tmp = tempfile::tempdir()?;
             run_tool(
                 "tar",
-                &["-xf", path.to_str().unwrap(), "-C", tmp.path().to_str().unwrap()],
+                &[
+                    "-xf",
+                    path.to_str().unwrap(),
+                    "-C",
+                    tmp.path().to_str().unwrap(),
+                ],
                 "unpacking the pack tarball",
             )?;
             let dir = find_pack_root(tmp.path())?;
@@ -340,10 +345,7 @@ pub fn resolve_report(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoa
 
 /// The `models resolve --json` object: the same rows as the text table, plus a
 /// resolved/unresolved rollup so a consumer needs no counting pass.
-pub fn resolve_report_json(
-    lib: &ModelLibrary,
-    board: &hauksbee_extract::ExtractedBoard,
-) -> String {
+pub fn resolve_report_json(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoard) -> String {
     let rows = resolve_rows(lib, board);
     let unresolved = rows.iter().filter(|r| !r.resolved).count();
     serde_json::json!({
@@ -380,7 +382,10 @@ fn find_pack_root(dir: &Path) -> anyhow::Result<PathBuf> {
         .collect();
     match candidates.as_slice() {
         [one] => Ok(one.clone()),
-        [] => anyhow::bail!("no pack.toml found in '{}' (or one level below)", dir.display()),
+        [] => anyhow::bail!(
+            "no pack.toml found in '{}' (or one level below)",
+            dir.display()
+        ),
         many => anyhow::bail!(
             "'{}' contains {} directories with a pack.toml; pass the pack directory itself",
             dir.display(),

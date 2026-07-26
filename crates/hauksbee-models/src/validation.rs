@@ -183,9 +183,7 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             if !v.is_finite() || v <= 0.0 {
                 errors.push(ValidationError {
                     id: entry.id.clone(),
-                    message: format!(
-                        "rating '{name}' = {v} must be a positive finite number"
-                    ),
+                    message: format!("rating '{name}' = {v} must be a positive finite number"),
                 });
             }
         }
@@ -318,7 +316,10 @@ mod tests {
         // (typically a typo) used to pass lint clean, then bind the part OPEN at
         // run time with a misleading "not connected" message. It must fail lint.
         let mut d = make_diode(1e-14, 1.5, 1.0);
-        d.pins = BTreeMap::from([("1".into(), "anmode".into()), ("2".into(), "cathode".into())]);
+        d.pins = BTreeMap::from([
+            ("1".into(), "anmode".into()),
+            ("2".into(), "cathode".into()),
+        ]);
         let errs = validate(&d).unwrap_err();
         assert!(
             errs.iter().any(|e| e.message.contains("anode")),
@@ -332,7 +333,11 @@ mod tests {
             ("2".into(), "k".into()),
             ("3".into(), "case".into()), // an extra thermal/NC pad is fine
         ]);
-        assert!(validate(&ok).is_ok(), "aliases + an extra pin must pass: {:?}", validate(&ok));
+        assert!(
+            validate(&ok).is_ok(),
+            "aliases + an extra pin must pass: {:?}",
+            validate(&ok)
+        );
 
         // An empty pins map (the footprint/pin-rules inference path) is left alone.
         let inferred = make_diode(1e-14, 1.5, 1.0);
@@ -351,7 +356,11 @@ mod tests {
             ("2".into(), "in_minus_a".into()),
             ("3".into(), "in_plus_a".into()),
         ]);
-        assert!(validate(&op).is_ok(), "suffixed opamp channel must pass: {:?}", validate(&op));
+        assert!(
+            validate(&op).is_ok(),
+            "suffixed opamp channel must pass: {:?}",
+            validate(&op)
+        );
     }
 
     #[test]
@@ -362,14 +371,20 @@ mod tests {
         let mut entry = make_diode(1e-14, 1.5, 1.0);
         entry.ratings.max_current_a = Some(f64::NAN);
         assert!(
-            validate(&entry).unwrap_err().iter().any(|e| e.message.contains("max_current_a")),
+            validate(&entry)
+                .unwrap_err()
+                .iter()
+                .any(|e| e.message.contains("max_current_a")),
             "a NaN max_current_a must be rejected"
         );
 
         let mut entry = make_diode(1e-14, 1.5, 1.0);
         entry.ratings.max_voltage_v = Some(-75.0);
         assert!(
-            validate(&entry).unwrap_err().iter().any(|e| e.message.contains("max_voltage_v")),
+            validate(&entry)
+                .unwrap_err()
+                .iter()
+                .any(|e| e.message.contains("max_voltage_v")),
             "a negative max_voltage_v must be rejected"
         );
 
@@ -389,14 +404,20 @@ mod tests {
         let mut entry = make_diode(1e-14, 1.5, 1.0);
         entry.ratings.theta_ja_c_per_w = Some(-50.0);
         assert!(
-            validate(&entry).unwrap_err().iter().any(|e| e.message.contains("theta_ja_c_per_w")),
+            validate(&entry)
+                .unwrap_err()
+                .iter()
+                .any(|e| e.message.contains("theta_ja_c_per_w")),
             "a negative theta_ja must be rejected"
         );
 
         let mut entry = make_diode(1e-14, 1.5, 1.0);
         entry.ratings.theta_jc_c_per_w = Some(f64::NAN);
         assert!(
-            validate(&entry).unwrap_err().iter().any(|e| e.message.contains("theta_jc_c_per_w")),
+            validate(&entry)
+                .unwrap_err()
+                .iter()
+                .any(|e| e.message.contains("theta_jc_c_per_w")),
             "a NaN theta_jc must be rejected"
         );
 
@@ -482,7 +503,8 @@ mod tests {
         };
         let errs = validate(&entry).unwrap_err();
         assert!(
-            errs.iter().any(|e| e.message.contains("rail_lo") && e.message.contains("less than")),
+            errs.iter()
+                .any(|e| e.message.contains("rail_lo") && e.message.contains("less than")),
             "swapped opamp rails must be rejected: {errs:?}"
         );
 
@@ -551,7 +573,10 @@ mod tests {
             logic: Default::default(),
         };
         assert!(
-            validate(&entry).unwrap_err().iter().any(|e| e.message.contains("kp")),
+            validate(&entry)
+                .unwrap_err()
+                .iter()
+                .any(|e| e.message.contains("kp")),
             "kp=5000 is still out of range"
         );
     }
@@ -606,7 +631,8 @@ mod tests {
         };
         let errs = validate(&entry).unwrap_err();
         assert!(
-            errs.iter().any(|e| e.message.contains("ron") && e.message.contains("less than")),
+            errs.iter()
+                .any(|e| e.message.contains("ron") && e.message.contains("less than")),
             "a switch with ron >= roff must be rejected: {errs:?}"
         );
 
@@ -626,7 +652,10 @@ mod tests {
             behavioral: Default::default(),
             logic: Default::default(),
         };
-        assert!(validate(&good).is_ok(), "a well-ordered analog switch must pass");
+        assert!(
+            validate(&good).is_ok(),
+            "a well-ordered analog switch must pass"
+        );
     }
 
     #[test]
@@ -650,7 +679,8 @@ mod tests {
         };
         let errs = validate(&entry).unwrap_err();
         assert!(
-            errs.iter().any(|e| e.message.contains("out_lo") && e.message.contains("less than")),
+            errs.iter()
+                .any(|e| e.message.contains("out_lo") && e.message.contains("less than")),
             "swapped comparator outputs must be rejected: {errs:?}"
         );
     }

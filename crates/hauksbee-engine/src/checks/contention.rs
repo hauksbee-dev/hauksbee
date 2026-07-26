@@ -202,11 +202,7 @@ fn tristateable_outputs(model: &ModelEntry) -> HashSet<String> {
 /// whole of the check's classification lives here; `contention_lint` only
 /// decides which nets in the result are worth a finding.
 pub fn scan(board: &ExtractedBoard, lib: &ModelLibrary) -> Scan {
-    let net_name: HashMap<i64, &str> = board
-        .nets
-        .iter()
-        .map(|n| (n.id, n.name.as_str()))
-        .collect();
+    let net_name: HashMap<i64, &str> = board.nets.iter().map(|n| (n.id, n.name.as_str())).collect();
 
     let mut parts = Vec::new();
     let mut by_net: BTreeMap<i64, Vec<Driver>> = BTreeMap::new();
@@ -234,7 +230,10 @@ pub fn scan(board: &ExtractedBoard, lib: &ModelLibrary) -> Scan {
             value: comp.value.clone(),
             model_id: model.id.clone(),
             output_roles: all_roles.len(),
-            tristateable_roles: all_roles.iter().filter(|r| tri.contains(r.as_str())).count(),
+            tristateable_roles: all_roles
+                .iter()
+                .filter(|r| tri.contains(r.as_str()))
+                .count(),
             pads_absent: 0,
             pads_unrouted: 0,
             pads_on_excluded_nets: 0,
@@ -278,11 +277,7 @@ pub fn scan(board: &ExtractedBoard, lib: &ModelLibrary) -> Scan {
 pub fn contention_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
 
-    let net_name: HashMap<i64, &str> = board
-        .nets
-        .iter()
-        .map(|n| (n.id, n.name.as_str()))
-        .collect();
+    let net_name: HashMap<i64, &str> = board.nets.iter().map(|n| (n.id, n.name.as_str())).collect();
 
     for (id, drivers) in scan(board, lib).by_net {
         let refs: BTreeSet<&str> = drivers.iter().map(|d| d.reference.as_str()).collect();
@@ -378,7 +373,12 @@ mod tests {
             ],
         );
         let r = run(&b);
-        assert_eq!(r.findings.len(), 1, "one contention finding: {:?}", r.findings);
+        assert_eq!(
+            r.findings.len(),
+            1,
+            "one contention finding: {:?}",
+            r.findings
+        );
         let f = &r.findings[0];
         assert_eq!(f.check, LintCheck::OutputContention);
         assert_eq!(f.severity, Severity::High);
@@ -500,7 +500,11 @@ mod tests {
         let b = board(
             &[(1, "A"), (2, "B"), (3, "PAR")],
             // 74HC08 y1 (pad 3) and y2 (pad 6) paralleled onto one net.
-            vec![comp("U1", "74HC08", &[("1", 1), ("2", 2), ("3", 3), ("6", 3)])],
+            vec![comp(
+                "U1",
+                "74HC08",
+                &[("1", 1), ("2", 2), ("3", 3), ("6", 3)],
+            )],
         );
         assert!(run(&b).findings.is_empty(), "{:?}", run(&b).findings);
     }

@@ -145,16 +145,39 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // report, so a person (or an AI) gets everything in a single command instead
     // of running one flag at a time. Honours --plain / --json / --strict.
     if cfg.check {
-        return crate::reports::check::emit(&cfg.board, &board, &text, &raw, is_altium, &lib, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain), cfg.strict);
+        return crate::reports::check::emit(
+            &cfg.board,
+            &board,
+            &text,
+            &raw,
+            is_altium,
+            &lib,
+            crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
+            cfg.strict,
+        );
     }
 
     if cfg.report {
-        return crate::reports::bind::emit(&board, &lib, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain));
+        return crate::reports::bind::emit(
+            &board,
+            &lib,
+            crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
+        );
     }
 
     // --drc: run geometric short / clearance detection, print, exit.
     if cfg.drc {
-        return crate::reports::drc::emit(&cfg.board, &board, &text, &raw, is_altium, &lib, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain), cfg.oracle, cfg.strict);
+        return crate::reports::drc::emit(
+            &cfg.board,
+            &board,
+            &text,
+            &raw,
+            is_altium,
+            &lib,
+            crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
+            cfg.oracle,
+            cfg.strict,
+        );
     }
 
     // --ampacity: IPC-2221 capacity-only report. No current is fabricated here:
@@ -168,26 +191,47 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // (which needs the model db's per-part strap tables), and the MCU internal
     // resource-conflict check (a lint-class structural check too), print, exit.
     if cfg.lint {
-        return crate::reports::lint::emit(&board, &lib, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain), cfg.strict);
+        return crate::reports::lint::emit(
+            &board,
+            &lib,
+            crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
+            cfg.strict,
+        );
     }
 
     // --resources: run only the MCU internal resource-conflict check, print, exit.
     if cfg.resources {
-        return crate::reports::lint::emit_resources(&board, &lib, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain), cfg.strict);
+        return crate::reports::lint::emit_resources(
+            &board,
+            &lib,
+            crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
+            cfg.strict,
+        );
     }
 
     // --usb-c: run the USB-C CC attach classifier (the RPi 4 re-derivation) and
     // print the compliance report. The capability existed but was unreachable from
     // any user-facing surface; this is its CLI front door.
     if cfg.usb_c {
-        return crate::reports::usb_c::emit(&board, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain), cfg.strict);
+        return crate::reports::usb_c::emit(
+            &board,
+            crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
+            cfg.strict,
+        );
     }
 
     // --si: run the signal-integrity / physics static checks, print, exit. The
     // geometry-bearing checks (antenna keepout, USB length skew) need the raw
     // KiCad layout text, so it is passed through.
     if cfg.si {
-        return crate::reports::si::emit(&board, &text, is_altium, &lib, crate::reports::OutputMode::from_flags(cfg.json, cfg.plain), cfg.strict);
+        return crate::reports::si::emit(
+            &board,
+            &text,
+            is_altium,
+            &lib,
+            crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
+            cfg.strict,
+        );
     }
 
     // --ac: small-signal AC sweep on the bound circuit, print Bode + (optional)
@@ -214,13 +258,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // combined branch or those JSON paths become unreachable dead code.
     if cfg.json && !cfg.thermal && !cfg.headless {
         return crate::reports::check::emit_combined_json(
-            &cfg.board,
-            &board,
-            &text,
-            &raw,
-            is_altium,
-            &lib,
-            cfg.strict,
+            &cfg.board, &board, &text, &raw, is_altium, &lib, cfg.strict,
         );
     }
 
@@ -238,8 +276,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // Altium boards reach here with an empty `text` (binary parsed from bytes);
     // the TUI's text-based build path can't analyse those, so they keep the
     // websocket flow.
-    let launch_tui =
-        !cfg.serve && !cfg.headless && !is_altium && (cfg.tui || stdout_is_tty);
+    let launch_tui = !cfg.serve && !cfg.headless && !is_altium && (cfg.tui || stdout_is_tty);
     if launch_tui {
         return crate::tui::run(
             &cfg.board,
@@ -285,10 +322,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         if bound.mcus.is_empty() {
             eprintln!(
                 "error: {}",
-                crate::binder::no_processor_message(
-                    &bound.dnp_mcus,
-                    crate::binder::FitRemedy::Cli
-                )
+                crate::binder::no_processor_message(&bound.dnp_mcus, crate::binder::FitRemedy::Cli)
             );
             std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
         }
@@ -324,14 +358,24 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // covers ~no dissipating devices because the power ICs are UNRESOLVED is a
     // meaningless result, not a "runs cool" pass, flag it invalid and exit 3.
     if cfg.thermal {
-        return crate::reports::thermal::emit(&mut engine, cfg.ambient, cfg.seconds, cfg.json, cfg.strict_thermal);
+        return crate::reports::thermal::emit(
+            &mut engine,
+            cfg.ambient,
+            cfg.seconds,
+            cfg.json,
+            cfg.strict_thermal,
+        );
     }
 
     if cfg.headless {
         // --probe preconditions, checked before the run so a typo fails fast with
         // the same near-match style the rest of the net-facing CLI uses.
         let probes = crate::reports::cosim::dedup_probes(&cfg.probe);
-        crate::reports::cosim::validate_probes(&probes, cfg.probe_csv.as_deref(), &probe_known_nets)?;
+        crate::reports::cosim::validate_probes(
+            &probes,
+            cfg.probe_csv.as_deref(),
+            &probe_known_nets,
+        )?;
 
         let board_name = engine.report().board_name.clone();
         let summary = BindSummary::from_report(engine.report());
@@ -524,10 +568,14 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             // / heuristic-framing warnings the JSON notes carry, as plain
             // heads-ups so the verdict reads "no failures, but N worth a look".
             for d in engine.scheduler().adc_dropped() {
-                report.heads_up.push(crate::plain::HeadsUp::note(d.message()));
+                report
+                    .heads_up
+                    .push(crate::plain::HeadsUp::note(d.message()));
             }
             for b in engine.scheduler().unexercised_buses() {
-                report.heads_up.push(crate::plain::HeadsUp::note(b.message()));
+                report
+                    .heads_up
+                    .push(crate::plain::HeadsUp::note(b.message()));
             }
             for w in crate::reports::cosim::heuristic_framing_warnings(
                 &engine.scheduler().spi_framing_modes(),
@@ -537,10 +585,14 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             // Sub-chunk pulse and driver-contention findings, same wording as
             // the JSON notes and the default text summary.
             for p in engine.scheduler().short_pulses() {
-                report.heads_up.push(crate::plain::HeadsUp::note(p.message()));
+                report
+                    .heads_up
+                    .push(crate::plain::HeadsUp::note(p.message()));
             }
             for c in engine.scheduler().driver_contentions() {
-                report.heads_up.push(crate::plain::HeadsUp::note(c.message()));
+                report
+                    .heads_up
+                    .push(crate::plain::HeadsUp::note(c.message()));
             }
             // Boot-safety heads-up: control nets the firmware switches ON and
             // holds from power-up, with no resistor setting a safe default. The
@@ -841,7 +893,6 @@ fn warn_sibling_boards(board: &std::path::Path, notes: Notes) {
     }
     eprintln!("  If they are part of the same product, check each one separately.");
 }
-
 
 #[cfg(test)]
 mod list_nets_json_tests {

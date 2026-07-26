@@ -109,9 +109,8 @@ unsafe fn drive_ioport_input(
     }
     // avr_ioport_external_t is a bitfield struct over one unsigned long:
     // name:7 | mask:8 | value:8, LSB-first on every LP64 target we build for.
-    let mut ext: u64 = ((pin.port as u8 as u64) & 0x7f)
-        | ((*mask as u64) << 7)
-        | ((*value as u64) << 15);
+    let mut ext: u64 =
+        ((pin.port as u8 as u64) & 0x7f) | ((*mask as u64) << 7) | ((*value as u64) << 15);
     unsafe {
         ffi::avr_ioctl(
             avr,
@@ -287,7 +286,10 @@ macro_rules! make_port_hook {
                             continue;
                         }
                         let high = (new_val >> bit) & 1 != 0;
-                        let pin = PinId { port: $port_char, bit };
+                        let pin = PinId {
+                            port: $port_char,
+                            bit,
+                        };
                         if let Some(cb) = &mut s.callbacks.on_pin_change {
                             cb(pin, high, cycle);
                         }
@@ -301,12 +303,7 @@ macro_rules! make_port_hook {
                         if let Some(resp) = &mut st.callbacks.input_responder {
                             for (in_pin, in_high) in resp(pin, high) {
                                 unsafe {
-                                    drive_ioport_input(
-                                        avr,
-                                        &mut st.ext_drive,
-                                        in_pin,
-                                        in_high,
-                                    );
+                                    drive_ioport_input(avr, &mut st.ext_drive, in_pin, in_high);
                                 }
                             }
                         }

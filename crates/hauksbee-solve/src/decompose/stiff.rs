@@ -246,8 +246,7 @@ pub fn detect_stiff_candidates(
                     let better = match &best {
                         None => true,
                         Some((bn, bs, _)) => {
-                            speedup > *bs + 1e-12
-                                || ((speedup - *bs).abs() <= 1e-12 && p < *bn)
+                            speedup > *bs + 1e-12 || ((speedup - *bs).abs() <= 1e-12 && p < *bn)
                         }
                     };
                     if better {
@@ -260,7 +259,9 @@ pub fn detect_stiff_candidates(
                 }
             }
 
-            let Some((node, speedup, frag_win)) = best else { break };
+            let Some((node, speedup, frag_win)) = best else {
+                break;
+            };
             chosen.push(node);
 
             // The candidate's own sizes are the WHOLE island's fragmentation
@@ -392,7 +393,11 @@ mod tests {
             "vout must fragment into 2+ blocks: {:?}",
             t.block_sizes
         );
-        assert!(t.est_speedup > 1.0, "must be a modeled win: {}", t.est_speedup);
+        assert!(
+            t.est_speedup > 1.0,
+            "must be a modeled win: {}",
+            t.est_speedup
+        );
     }
 
     /// The same board, but with the floor above the block size: the fused
@@ -403,13 +408,8 @@ mod tests {
         let (c, _vout) = fused_pair();
         let g = ConductionGraph::analyze(&c);
         // Default floor is 64; the fused island is ~21 devices.
-        let cands = detect_stiff_candidates(
-            &c,
-            &g,
-            &[],
-            &RailPolicy::default(),
-            &StiffPolicy::default(),
-        );
+        let cands =
+            detect_stiff_candidates(&c, &g, &[], &RailPolicy::default(), &StiffPolicy::default());
         assert!(
             cands.is_empty(),
             "a sub-floor block cannot repay a boundary: {cands:?}"
@@ -514,7 +514,11 @@ mod tests {
             max_probes_per_block: 16,
         };
         let cands = detect_stiff_candidates(&c, &g, &[], &RailPolicy::default(), &policy);
-        assert_eq!(cands.len(), 2, "both cut nodes must be nominated: {cands:?}");
+        assert_eq!(
+            cands.len(),
+            2,
+            "both cut nodes must be nominated: {cands:?}"
+        );
         assert!(
             cands.iter().any(|k| k.node == x),
             "x must be nominated: {cands:?}"

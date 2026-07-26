@@ -97,7 +97,10 @@ fn follower_driven_past_rail_converges_to_rail() {
     let v = dc_out(&follower(6.0, gain, 0.0, 5.0));
     // The 1 ohm output stage into the 1 M load drops the rail by 5e-6 V, so
     // allow that divider on top of the rail value.
-    assert!((v - 5.0).abs() < 1e-4, "follower past rail: got {v}, want 5");
+    assert!(
+        (v - 5.0).abs() < 1e-4,
+        "follower past rail: got {v}, want 5"
+    );
 }
 
 /// Same past-the-low-rail case, mirrored.
@@ -158,7 +161,9 @@ fn follower_tracks_square_wave_transient() {
         step: StepControl::Fixed { dt: 1e-5 },
         ..SolverOptions::default()
     };
-    let wf = Transient::new(opts).run(&c, 8e-3).expect("transient converges");
+    let wf = Transient::new(opts)
+        .run(&c, 8e-3)
+        .expect("transient converges");
     let vout = wf.node(&c, "out").unwrap();
     let want_hi = linear_op(5.0, gain);
     // Mid-high-phase and mid-low-phase samples must both track.

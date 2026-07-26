@@ -15,11 +15,7 @@ pub struct Schematic {
 impl Schematic {
     pub fn parse(text: &str) -> Result<Schematic, Error> {
         let doc = parse(text)?;
-        let root_name = doc
-            .root()
-            .and_then(|l| l.name())
-            .unwrap_or("")
-            .to_string();
+        let root_name = doc.root().and_then(|l| l.name()).unwrap_or("").to_string();
         if root_name != "kicad_sch" {
             return Err(Error::NotSchematic(root_name));
         }

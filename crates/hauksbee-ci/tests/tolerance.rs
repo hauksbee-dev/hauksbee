@@ -141,10 +141,19 @@ fn corners_land_on_the_analytic_envelope() {
     let vs: Vec<f64> = outcomes.iter().map(vout).collect();
     let lo = vs.iter().cloned().fold(f64::INFINITY, f64::min);
     let hi = vs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-    assert!((lo - V_MIN).abs() < 1e-6, "min corner {lo} != analytic {V_MIN}");
-    assert!((hi - V_MAX).abs() < 1e-6, "max corner {hi} != analytic {V_MAX}");
+    assert!(
+        (lo - V_MIN).abs() < 1e-6,
+        "min corner {lo} != analytic {V_MIN}"
+    );
+    assert!(
+        (hi - V_MAX).abs() < 1e-6,
+        "max corner {hi} != analytic {V_MAX}"
+    );
     for v in &vs {
-        assert!((V_MIN - 1e-6..=V_MAX + 1e-6).contains(v), "corner VOUT {v} off envelope");
+        assert!(
+            (V_MIN - 1e-6..=V_MAX + 1e-6).contains(v),
+            "corner VOUT {v} off envelope"
+        );
     }
 }
 
@@ -200,8 +209,16 @@ fn failing_seed_reruns_in_isolation_with_identical_values() {
     let r = &result.results[0];
     assert_eq!(r.failing_seed, Some(failing.seed));
     assert!(r.seeds_total == 24 && !r.failing_seeds.is_empty());
-    assert!(r.detail.contains("R1=") && r.detail.contains("R2="), "detail names values: {}", r.detail);
-    assert!(r.detail.contains("/24 seeds"), "detail carries the pass-rate: {}", r.detail);
+    assert!(
+        r.detail.contains("R1=") && r.detail.contains("R2="),
+        "detail names values: {}",
+        r.detail
+    );
+    assert!(
+        r.detail.contains("/24 seeds"),
+        "detail carries the pass-rate: {}",
+        r.detail
+    );
     let human = result.render_human();
     assert!(
         human.contains("statistical coverage, not worst-case proof"),
@@ -239,8 +256,11 @@ fn ensemble_is_deterministic_across_runs() {
 fn tolerances_do_not_perturb_the_fuzz_stream() {
     let fuzz_block = "\n[[net_drive]]\nnet = \"SPARE\"\nvolts = 0.0\n\n\
                       [fuzz]\nseeds = 6\nnets = [\"SPARE\"]\nlevels = [0.0, 5.0]\n";
-    let plain = Spec::load(&write_spec("fuzz_plain", &format!("{SPEC_COMMON}{fuzz_block}")))
-        .expect("plain spec loads");
+    let plain = Spec::load(&write_spec(
+        "fuzz_plain",
+        &format!("{SPEC_COMMON}{fuzz_block}"),
+    ))
+    .expect("plain spec loads");
     let with_tol = Spec::load(&write_spec(
         "fuzz_with_tol",
         &format!(
@@ -281,7 +301,10 @@ fn spec_validation_rejects_bad_ensembles() {
          [[tolerance]]\nref = \"R1\"\npercent = 5.0\n\n[ensemble]\nmode = \"corners\"\n"
     );
     let err = Spec::load(&write_spec("bad_corners_fuzz", &corners_fuzz)).unwrap_err();
-    assert!(err.to_string().contains("does not compose with [fuzz]"), "{err}");
+    assert!(
+        err.to_string().contains("does not compose with [fuzz]"),
+        "{err}"
+    );
 
     let empty_ensemble = format!("{SPEC_COMMON}\n[ensemble]\nseeds = 8\n");
     let err = Spec::load(&write_spec("bad_empty_ensemble", &empty_ensemble)).unwrap_err();

@@ -42,7 +42,9 @@ pub fn emit(board: &ExtractedBoard, lib: &ModelLibrary, mode: OutputMode) -> any
                          --models-dir to cover them."
                     );
                 } else if m > 0 {
-                    println!("Bottom line: all {m} critical parts modelled; the board binds cleanly.");
+                    println!(
+                        "Bottom line: all {m} critical parts modelled; the board binds cleanly."
+                    );
                 } else {
                     println!("Bottom line: no active ICs to model; this is a passive board.");
                 }

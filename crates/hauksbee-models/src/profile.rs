@@ -150,14 +150,7 @@ impl LoadProfile {
                 // ~1.2 A at every period edge, corrupting the exact rail-dip /
                 // protection-trip analysis the profile exists to drive.
                 let from = if local0 < period { prev_level } else { idle };
-                return ramp_hold(
-                    from,
-                    seg.level_a,
-                    idle,
-                    seg.rise_s,
-                    seg.duration_s,
-                    phase,
-                );
+                return ramp_hold(from, seg.level_a, idle, seg.rise_s, seg.duration_s, phase);
             }
 
             // Non-periodic segment. Its active span is rise + duration.
@@ -308,7 +301,10 @@ mod tests {
             edge2 < 0.1,
             "period-2 edge must sit near idle (0.04 A), not re-spike to 1.2 A: {edge2}"
         );
-        assert!((edge2 - 0.040).abs() < 1e-6, "period-2 edge is the 40 mA idle: {edge2}");
+        assert!(
+            (edge2 - 0.040).abs() < 1e-6,
+            "period-2 edge is the 40 mA idle: {edge2}"
+        );
         assert!(
             (ramp2 - 0.080).abs() < 1e-6,
             "period-2 ramp rises idle->level (0.04 -> 0.24): {ramp2}"
@@ -316,7 +312,10 @@ mod tests {
         // The burst itself is unchanged, and every period repeats identically.
         let hold2 = p.current_at(0.114, 0); // period 2 hold
         let hold3 = p.current_at(0.214, 0); // period 3 hold
-        assert!((hold2 - 0.240).abs() < 1e-9 && (hold3 - 0.240).abs() < 1e-9, "burst hold is 240 mA");
+        assert!(
+            (hold2 - 0.240).abs() < 1e-9 && (hold3 - 0.240).abs() < 1e-9,
+            "burst hold is 240 mA"
+        );
         assert!(
             (p.current_at(0.1092, 0) - p.current_at(0.2092, 0)).abs() < 1e-9,
             "period 2 and 3 ramps are identical"

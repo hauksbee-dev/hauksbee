@@ -199,7 +199,10 @@ fn done_core_is_observable_via_state() {
 
     mcu.run_millis(1).expect("run to completion");
     let st = mcu.state();
-    assert!(st.done, "sleep-with-interrupts-off must surface as done=true");
+    assert!(
+        st.done,
+        "sleep-with-interrupts-off must surface as done=true"
+    );
     assert!(!st.crashed, "a clean exit is not a crash");
 }
 

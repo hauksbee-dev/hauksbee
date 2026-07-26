@@ -397,7 +397,12 @@ struct RunArgs {
     thermal: bool,
 
     /// Ambient temperature (C) for the --thermal estimate. Default 25 C.
-    #[arg(long, default_value_t = 25.0, value_name = "C", help_heading = "Advanced / analyses")]
+    #[arg(
+        long,
+        default_value_t = 25.0,
+        value_name = "C",
+        help_heading = "Advanced / analyses"
+    )]
     ambient: f64,
 
     /// Translate the report into plain language for a non-engineer: a one-line
@@ -472,7 +477,12 @@ struct RunArgs {
     tui: bool,
 
     /// Port for the live frontend websocket server (`--serve`).
-    #[arg(long, default_value_t = 3001, value_name = "PORT", help_heading = "Advanced / analyses")]
+    #[arg(
+        long,
+        default_value_t = 3001,
+        value_name = "PORT",
+        help_heading = "Advanced / analyses"
+    )]
     port: u16,
 
     /// Extra model directory (highest priority), layered over the built-in DB.
@@ -485,11 +495,19 @@ struct RunArgs {
     /// a unit AC source on every independent source in the circuit.
     ///
     /// Example: hauksbee run board.kicad_pcb --ac 10:1e6:20 --ac-node OUT
-    #[arg(long, value_name = "FSTART:FSTOP:POINTS", help_heading = "Advanced / analyses")]
+    #[arg(
+        long,
+        value_name = "FSTART:FSTOP:POINTS",
+        help_heading = "Advanced / analyses"
+    )]
     ac: Option<String>,
 
     /// Output net(s) to report for `--ac` (repeatable). Defaults to every net.
-    #[arg(long = "ac-node", value_name = "NET", help_heading = "Advanced / analyses")]
+    #[arg(
+        long = "ac-node",
+        value_name = "NET",
+        help_heading = "Advanced / analyses"
+    )]
     ac_node: Vec<String>,
 
     /// Write the full AC sweep (all reported nets) to this CSV file.
@@ -499,14 +517,23 @@ struct RunArgs {
     /// Measure loop stability at this break/output net: report gain crossover
     /// and phase margin. Use with `--ac`. The net is the far side of a loop
     /// broken by an injection `Vsource` (see docs/analysis/AC_ANALYSIS.md).
-    #[arg(long = "ac-loop", value_name = "NET", help_heading = "Advanced / analyses")]
+    #[arg(
+        long = "ac-loop",
+        value_name = "NET",
+        help_heading = "Advanced / analyses"
+    )]
     ac_loop: Option<String>,
 
     /// Record these nets' node voltages each chunk of a `--headless` run and write
     /// them to `--probe-csv`, so waveforms are scriptable with no UI. Comma-
     /// separated and/or repeatable: `--probe +5V,GATE --probe D13`. An unknown net
     /// is a loud error (with near-matches) before the run starts.
-    #[arg(long, value_name = "NET[,NET...]", value_delimiter = ',', help_heading = "Advanced / analyses")]
+    #[arg(
+        long,
+        value_name = "NET[,NET...]",
+        value_delimiter = ',',
+        help_heading = "Advanced / analyses"
+    )]
     probe: Vec<String>,
 
     /// CSV path for `--probe`: header is `time_s` then one column per probed net,
@@ -525,12 +552,22 @@ struct RunArgs {
     /// Simulate these Do-Not-Populate parts as fitted, whatever the DNP policy
     /// says. Comma-separated and/or repeatable: `--fit A101,R7`. An unknown
     /// reference is a loud error.
-    #[arg(long, value_name = "REF[,REF...]", value_delimiter = ',', help_heading = "Do-not-populate")]
+    #[arg(
+        long,
+        value_name = "REF[,REF...]",
+        value_delimiter = ',',
+        help_heading = "Do-not-populate"
+    )]
     fit: Vec<String>,
 
     /// Leave these Do-Not-Populate parts open, whatever the DNP policy says.
     /// The inverse of `--fit`, for a footprint you know will stay empty.
-    #[arg(long, value_name = "REF[,REF...]", value_delimiter = ',', help_heading = "Do-not-populate")]
+    #[arg(
+        long,
+        value_name = "REF[,REF...]",
+        value_delimiter = ',',
+        help_heading = "Do-not-populate"
+    )]
     no_fit: Vec<String>,
 
     /// Leave every DNP part out of the simulation, matching what a fab house
@@ -732,7 +769,12 @@ struct CheckCodeArgs {
 
     /// Ambient temperature (C) for the steady-state junction-temperature
     /// estimate (Tj = Tambient + P * theta_JA). Default 25 C.
-    #[arg(long, default_value_t = 25.0, value_name = "C", help_heading = "Advanced / analyses")]
+    #[arg(
+        long,
+        default_value_t = 25.0,
+        value_name = "C",
+        help_heading = "Advanced / analyses"
+    )]
     ambient: f64,
 
     /// Emit the check as one JSON object ({"ok","board","components","nets",
@@ -796,9 +838,7 @@ fn main() -> anyhow::Result<()> {
             args.json,
         ),
         Command::Serve(args) => hauksbee_engine::commands::serve::run(args.port),
-        Command::Doctor(args) => {
-            hauksbee_engine::commands::doctor::run(args.backends, args.json)
-        }
+        Command::Doctor(args) => hauksbee_engine::commands::doctor::run(args.backends, args.json),
         Command::Sim(args) => hauksbee_engine::commands::sim::run(
             &args.file,
             args.out.as_deref(),
@@ -839,7 +879,6 @@ fn main() -> anyhow::Result<()> {
     }
     result
 }
-
 
 /// Deconstruct the parsed `RunArgs` (clap) into the library's plain [`RunConfig`],
 /// so the run orchestrator lives in `hauksbee_engine::commands::run` while
