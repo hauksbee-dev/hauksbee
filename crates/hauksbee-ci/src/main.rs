@@ -87,8 +87,8 @@ struct RunArgs {
     seed: Option<u32>,
 
     /// Extra model directory, layered above the builtin db, installed packs,
-    /// and the user model dirs (`~/.hauksbee/models`, `~/.config/hauksbee/models`)
-    ///; the same layer order as `hauksbee run --models-dir`. Lets a spec's
+    /// and the user model dirs (`~/.hauksbee/models`, `~/.config/hauksbee/models`);
+    /// the same layer order as `hauksbee run --models-dir`. Lets a spec's
     /// board bind custom parts checked into the hardware repo, including
     /// `[[models]] kind = "mcu"` routing entries for user SoC descriptors.
     #[arg(long, value_name = "DIR")]
