@@ -106,8 +106,8 @@
 //!
 //! `.ic` semantics: with `uic` on the `.tran` card the named node voltages seed
 //! the power-on start directly (the solver's `FromZero` path, extended to read
-//! these values). WITHOUT `uic`, SPICE pins the named nodes DURING the DC solve
-//!, machinery the solver does not have (only device-level capacitor `ic=`
+//! these values). WITHOUT `uic`, SPICE pins the named nodes DURING the DC solve,
+//! machinery the solver does not have (only device-level capacitor `ic=`
 //! pinning exists), so the loader REFUSES `.ic` without `uic` loudly rather
 //! than silently downgrading it to a start-vector seed. `.nodeset` is a
 //! convergence GUESS only: it influences which root Newton finds but is never
@@ -376,9 +376,10 @@ fn load_deck(
     // are annotated with where the body came from and where it was instantiated.
     let mut fixups: Vec<NameFixup> = Vec::new();
     // Case-insensitive refdes index over the FLATTENED device table: a duplicate
-    // element name (e.g. two top-level `R1`) used to be silently accepted,
-    // stamping both in parallel on a wrong netlist. Distinct subckt instances
-    // (X1.R1 vs X2.R1) carry qualified names and do not collide. (R7 #11)
+    // element name (e.g. two top-level `R1`) is refused rather than silently
+    // accepted, which would stamp both in parallel on a wrong netlist. Distinct
+    // subckt instances (X1.R1 vs X2.R1) carry qualified names and do not
+    // collide. (R7 #11)
     let mut seen_refdes: HashMap<String, usize> = HashMap::new();
     for sl in &expanded {
         let before = fixups.len();
@@ -2683,8 +2684,8 @@ fn parse_model_card(line: usize, raw: &str) -> Result<ModelCard, SpiceError> {
     }
     // LEVEL refusal (dev-plan 04 §3.3/§4.3): the stamp implements exactly
     // level 1 (Shichman-Hodges + switch-relevant gate charge / body diode).
-    // A card asking for LEVEL=2/3/… used to be SILENTLY stamped as level 1,
-    // the misparse sin §4.3 names. Refuse it at load, with the line.
+    // A card asking for LEVEL=2/3/… is refused at load, with the line, rather
+    // than SILENTLY stamped as level 1, the misparse sin §4.3 names.
     if kind == "mos" {
         if let Some(lv) = params.get("level").copied() {
             if lv != 1.0 {
@@ -2898,8 +2899,8 @@ fn parse_source(
     let n = circuit.node(&toks[2]);
     let name = toks[0].clone();
     // Peel off the `AC <mag> [phase]` small-signal stimulus before parsing the
-    // time-domain function: previously the AC keyword was silently dropped, so a
-    // `.ac` analysis had no honest drive.
+    // time-domain function. Dropping the AC keyword silently would leave a `.ac`
+    // analysis with no honest drive.
     let (ac, kind_toks) = extract_ac_spec(&toks[3..], env);
     let kind = parse_source_kind(line, raw, &kind_toks, env)?;
 
@@ -4237,13 +4238,13 @@ mod tests {
         assert!(SpiceLoader::load(ok).is_ok(), "LEVEL=1 must stay accepted");
     }
 
-    /// Round-6 #5: a `.model` parameter whose value LOOKS numeric, a stray
-    /// sign, a bare `.`, or an unresolved `{expr}`, but does not parse used to
-    /// be SILENTLY dropped, so the stamp filled a default and the device
-    /// behaved nothing like the card said. The loader now refuses it, with the
-    /// card's line. Model cards don't get `{expr}` evaluation, so an unresolved
-    /// brace expression is exactly such a malformed number. Genuine string
-    /// metadata (mfg=, type=) still passes through untouched.
+    /// Round-6 #5: a `.model` parameter whose value LOOKS numeric, a stray sign,
+    /// a bare `.`, or an unresolved `{expr}`, but does not parse, is refused
+    /// with the card's line. Dropping it SILENTLY would let the stamp fill a
+    /// default, and the device would behave nothing like the card said. Model
+    /// cards don't get `{expr}` evaluation, so an unresolved brace expression is
+    /// exactly such a malformed number. Genuine string metadata (mfg=, type=)
+    /// still passes through untouched.
     #[test]
     fn unparseable_numeric_model_param_is_refused_not_dropped() {
         // `VTO={VT0}`, an unresolved brace expression, not metadata. It looks
@@ -4270,9 +4271,9 @@ mod tests {
 
     /// Round-7 #2: trailing element options (MOSFET W=/L=, R tc1=, C/L ic=) must
     /// evaluate braced `{expr}` and bare `.param` names, exactly like the main
-    /// device value; they used to be scanned with a number-only parser that
-    /// silently dropped anything non-numeric, so the device fell back to a
-    /// default. A numeric-looking-but-unevaluable option is now refused.
+    /// device value. A number-only scan silently drops anything non-numeric and
+    /// the device falls back to a default, so a numeric-looking-but-unevaluable
+    /// option is refused instead.
     #[test]
     fn trailing_options_resolve_params_and_exprs() {
         let mosfet_wl = |deck: &str| -> f64 {

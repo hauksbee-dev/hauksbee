@@ -4,9 +4,10 @@
 //! A non-CLI, non-engineer user runs `hauksbee serve`, opens the printed URL,
 //! drops a board file onto the React drop zone, and gets back the plain-language
 //! verdict, the full report, and a 2D map of where the parts sit, all rendered
-//! by the React app (W6 §1). There is no server-rendered HTML page anymore: the
-//! one web experience is the React app in `frontend/dist`, and this module is the
-//! JSON API it fetches (`/api/analyze`, `/api/analyze-with-firmware`).
+//! by the React app. There is one web experience: a single server path serving
+//! the React bundle in `frontend/dist`, with no server-rendered HTML
+//! alternative. This module is the JSON API that bundle fetches
+//! (`/api/analyze`, `/api/analyze-with-firmware`).
 //!
 //! This module is the thin HTTP layer only. The actual analysis is injected as a
 //! callback (`Analyzer` / `FirmwareAnalyzer`) so the server crate stays free of
@@ -122,7 +123,7 @@ struct FirmwareState {
 /// Both endpoints share the one [`FirmwareAnalyzer`]; the board-only path simply
 /// passes `None` for the firmware. Returns a `Router<()>` so it merges cleanly
 /// into the unified server router alongside the WebSocket sim and the static
-/// React bundle (W6 §1: one server path).
+/// React bundle, keeping the whole web experience on one server path.
 pub fn api_routes(analyze: FirmwareAnalyzer) -> Router {
     let state = Arc::new(FirmwareState { analyze });
     Router::new()
@@ -292,10 +293,10 @@ struct UploadedParts {
 /// Drain a multipart body into [`UploadedParts`], or return the user-facing
 /// reason it could not be read.
 ///
-/// One parser for every upload endpoint: the handlers previously carried a copy
-/// each, and they had already drifted, with one building its error JSON by hand
-/// so a message containing a backslash or a control character could emit
-/// invalid JSON. Distinguishing `Ok(None)` (the clean end of the stream) from
+/// One parser for every upload endpoint. A copy per handler drifts, and a
+/// drifted copy that builds its error JSON by hand emits invalid JSON the
+/// moment a message carries a backslash or a control character.
+/// Distinguishing `Ok(None)` (the clean end of the stream) from
 /// `Err` (a truncated or malformed body) also matters: collapsing them reports a
 /// corrupt upload as "no board file in the upload", which sends the user
 /// looking in the wrong place.
@@ -386,8 +387,8 @@ async fn analyze_handler(
 
     // Board files may be text (KiCad/Eagle/IPC), a zip (gerbers) or a binary
     // container (Altium .PcbDoc). The analyzer's extractor sniffs the format
-    // from the RAW bytes; decoding here (the old lossy-UTF8 view) corrupted the
-    // binary formats before they were ever parsed.
+    // from the RAW bytes; decoding here to a lossy-UTF8 string would corrupt the
+    // binary formats before they are ever parsed.
     let json = (state.analyze)(&file_name, &body);
 
     (

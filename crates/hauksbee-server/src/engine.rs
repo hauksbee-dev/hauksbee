@@ -38,7 +38,7 @@ pub struct McuDemoEngine {
     name: String,
     board_url: String,
     /// Kept so `reset()` can reboot from a fresh firmware load, not just zero the
-    /// clock (the MCU core, UART buffer and LED state used to leak across reset).
+    /// clock, which would leak the MCU core, UART buffer and LED state across it.
     firmware_path: std::path::PathBuf,
     sim_time: f64,
     controls: SolverControls,
