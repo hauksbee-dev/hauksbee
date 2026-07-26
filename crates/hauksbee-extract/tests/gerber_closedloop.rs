@@ -119,11 +119,22 @@ fn export_fab(cli: &Path, pcb: &Path, tag: &str) -> Option<PathBuf> {
     Some(dir)
 }
 
-/// 0.1 mm cell key. Native KiCad pcb has Y pointing down; gerber/P&P have Y up,
-/// so the caller negates native Y before keying.
+/// 0.1 mm bucket key. Native KiCad pcb has Y pointing down; gerber/P&P have Y
+/// up, so the caller negates native Y before keying.
+///
+/// This is a spatial bucket, NOT a tolerance. Rounding alone would make two
+/// pads 0.001 mm apart fail to match whenever they straddle a cell boundary,
+/// so lookups scan the 3x3 neighbourhood and accept the nearest hit within
+/// `PAD_MATCH_TOL_MM`.
 fn pad_key(x: f64, y: f64) -> (i64, i64) {
     ((x * 10.0).round() as i64, (y * 10.0).round() as i64)
 }
+
+/// How far apart the same pad may land in the two extractions and still be
+/// recognised as the same pad. Well under any real pad pitch, so it cannot
+/// fuse neighbouring pads; it exists to absorb rounding in the gerber and P&P
+/// coordinate formats.
+const PAD_MATCH_TOL_MM: f64 = 0.05;
 
 struct Agreement {
     native_components: usize,
@@ -137,33 +148,62 @@ struct Agreement {
 }
 
 fn agreement(native: &ExtractedBoard, recon: &ExtractedBoard) -> Agreement {
+    // Only pads carrying a net can be matched, so only those count in the
+    // denominator. Including net-less pads would report a miss rate for pads
+    // this comparison never tries to place.
     let mut native_pad_net: HashMap<(i64, i64), i64> = HashMap::new();
+    let mut native_xy: Vec<(f64, f64, (i64, i64))> = Vec::new();
     let mut native_pads = 0;
     for c in &native.components {
         for p in &c.pins {
-            if let Some((x, y)) = p.position {
+            if let (Some((x, y)), Some(net)) = (p.position, p.net) {
                 native_pads += 1;
-                if let Some(net) = p.net {
-                    native_pad_net.insert(pad_key(x, -y), net);
-                }
+                let k = pad_key(x, -y);
+                native_pad_net.insert(k, net);
+                native_xy.push((x, -y, k));
             }
         }
     }
+    // Bucketed by cell so a lookup scans a 3x3 neighbourhood rather than the
+    // whole board.
     let mut recon_pad_net: HashMap<(i64, i64), i64> = HashMap::new();
+    let mut recon_cells: HashMap<(i64, i64), Vec<(f64, f64)>> = HashMap::new();
     for c in &recon.components {
         for p in &c.pins {
-            if let Some((x, y)) = p.position {
-                if let Some(net) = p.net {
-                    recon_pad_net.insert(pad_key(x, y), net);
-                }
+            if let (Some((x, y)), Some(net)) = (p.position, p.net) {
+                let k = pad_key(x, y);
+                recon_pad_net.insert(k, net);
+                recon_cells.entry(k).or_default().push((x, y));
             }
         }
     }
-    let shared: Vec<(i64, i64)> = native_pad_net
-        .keys()
-        .filter(|k| recon_pad_net.contains_key(*k))
-        .copied()
-        .collect();
+    // A native pad is located when some reconstructed pad sits within tolerance
+    // of it. Scanning the 3x3 cell neighbourhood is what makes the tolerance
+    // real: an exact-key test would drop every pair that happens to straddle a
+    // cell boundary, however close together they actually are.
+    let mut shared: Vec<(i64, i64)> = Vec::new();
+    for &(nx, ny, nk) in &native_xy {
+        let mut best: Option<((i64, i64), f64)> = None;
+        for dx in -1..=1 {
+            for dy in -1..=1 {
+                let cell = (nk.0 + dx, nk.1 + dy);
+                for &(rx, ry) in recon_cells.get(&cell).into_iter().flatten() {
+                    let d = ((rx - nx).powi(2) + (ry - ny).powi(2)).sqrt();
+                    if d <= PAD_MATCH_TOL_MM && best.as_ref().is_none_or(|&(_, bd)| d < bd) {
+                        best = Some((pad_key(rx, ry), d));
+                    }
+                }
+            }
+        }
+        if let Some((rk, _)) = best {
+            // Keyed by the RECON cell, so the pair-agreement pass below can look
+            // both nets up by the same key.
+            native_pad_net.insert(rk, native_pad_net[&nk]);
+            shared.push(rk);
+        }
+    }
+    shared.sort_unstable();
+    shared.dedup();
     let mut pad_pairs = 0;
     let mut pad_pairs_agree = 0;
     for i in 0..shared.len() {
@@ -298,25 +338,22 @@ fn corpus_sweep_partition_floor() {
             "famous/crkbd/pcbs/corne-cherry.kicad_pcb",
             "corne",
             99.0,
-            0.45,
+            // Measured 74.4% (482/648) with kicad-cli 9.0.3.
+            0.70,
         ),
         (
             "famous/lily58/Pro_V2/Pro_V2.kicad_pcb",
             "lily58prov2",
             98.5,
-            0.50,
+            // Measured 81.0% (687/848) with kicad-cli 9.0.3.
+            0.78,
         ),
         (
             "famous/mnt_reform/reform2-motherboard30-pcb/reform2-motherboard30.kicad_pcb",
             "reform_mobo",
             99.0,
-            // Re-measured against kicad-cli 9.0.3 at 75.3% (1713 of 2276 pads).
-            // The tightest floor in this table, so it is the first to move when
-            // the exporter changes, and the reverse-extraction code was
-            // untouched when it did. The gap between this and the 99.7%
-            // net-partition agreement is the open question: connectivity is
-            // recovered correctly, individual pads are not all matched.
-            0.74,
+            // Measured 81.7% (1785/2184) with kicad-cli 9.0.3.
+            0.78,
         ),
     ];
     // Half of this loop is kicad-cli's output, so a floor breach has to say
