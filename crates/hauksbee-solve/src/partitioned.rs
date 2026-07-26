@@ -1837,146 +1837,6 @@ fn sub_mos_q(
 #[allow(dead_code)]
 mod test_fixtures;
 
-fn advance_sub_reactive(
-    state: &mut ReactiveState,
-    sub: &Circuit,
-    ws: &Workspace,
-    h: f64,
-    opts: &SolverOptions,
-    first: bool,
-) {
-    let trapz = opts.integration == Integration::Trapezoidal && !first;
-    for (id, dev) in sub.iter() {
-        let i = id.0 as usize;
-        match dev {
-            Device::Capacitor { a, b, .. } => {
-                let v_new = node_v(ws, *a) - node_v(ws, *b);
-                let v_old = state.x1[i];
-                let dv = if trapz {
-                    2.0 * (v_new - v_old) / h - state.dx1[i]
-                } else {
-                    (v_new - v_old) / h
-                };
-                state.x2[i] = v_old;
-                state.x1[i] = v_new;
-                state.dx1[i] = dv;
-            }
-            Device::Inductor { .. } => {
-                let i_new = ws.layout.branch(id).map(|br| ws.x[br]).unwrap_or(0.0);
-                let i_old = state.x1[i];
-                let di = if trapz {
-                    2.0 * (i_new - i_old) / h - state.dx1[i]
-                } else {
-                    (i_new - i_old) / h
-                };
-                state.x2[i] = i_old;
-                state.x1[i] = i_new;
-                state.dx1[i] = di;
-            }
-            // Charge-storing diode: the capacitor roll, in CHARGE (dx1 is
-            // dQ/dt, the capacitive branch current the trapezoidal history
-            // term needs next step).
-            Device::Diode { a, k, model, .. }
-                if crate::stamp::diode_has_charge(model, &opts.effects) =>
-            {
-                let q_new = sub_diode_q(model, node_v(ws, *a) - node_v(ws, *k), opts);
-                let q_old = state.x1[i];
-                let dq = if trapz {
-                    2.0 * (q_new - q_old) / h - state.dx1[i]
-                } else {
-                    (q_new - q_old) / h
-                };
-                state.x2[i] = q_old;
-                state.x1[i] = q_new;
-                state.dx1[i] = dq;
-            }
-            // Charge-storing BJT: the diode's roll applied to both charge
-            // banks (A = Q_be, B = Q_bc), mirroring the monolithic driver.
-            Device::Bjt { c, b, e, model, .. }
-                if crate::stamp::bjt_has_charge(model, &opts.effects) =>
-            {
-                let (q_be, q_bc) = sub_bjt_q(ws, id, *c, *b, *e, model, opts);
-                let q_old = state.x1[i];
-                let dq = if trapz {
-                    2.0 * (q_be - q_old) / h - state.dx1[i]
-                } else {
-                    (q_be - q_old) / h
-                };
-                state.x2[i] = q_old;
-                state.x1[i] = q_be;
-                state.dx1[i] = dq;
-                let qb_old = state.xb[0].x1[i];
-                let dqb = if trapz {
-                    2.0 * (q_bc - qb_old) / h - state.xb[0].dx1[i]
-                } else {
-                    (q_bc - qb_old) / h
-                };
-                state.xb[0].x2[i] = qb_old;
-                state.xb[0].x1[i] = q_bc;
-                state.xb[0].dx1[i] = dqb;
-            }
-            // Charge-storing MOSFET: the roll applied to all four banks,
-            // mirroring the monolithic driver.
-            Device::Mosfet {
-                d, g, s, b, model, ..
-            } if crate::stamp::mos_has_charge(model, &opts.effects) => {
-                let (q_gs, q_gd, q_bd, q_bs) = sub_mos_q(ws, *d, *g, *s, *b, model, opts);
-                let q_old = state.x1[i];
-                let dq = if trapz {
-                    2.0 * (q_gs - q_old) / h - state.dx1[i]
-                } else {
-                    (q_gs - q_old) / h
-                };
-                state.x2[i] = q_old;
-                state.x1[i] = q_gs;
-                state.dx1[i] = dq;
-                for (bank, q_new) in [(0, q_gd), (1, q_bd), (2, q_bs)] {
-                    let q_old = state.xb[bank].x1[i];
-                    let dq = if trapz {
-                        2.0 * (q_new - q_old) / h - state.xb[bank].dx1[i]
-                    } else {
-                        (q_new - q_old) / h
-                    };
-                    state.xb[bank].x2[i] = q_old;
-                    state.xb[bank].x1[i] = q_new;
-                    state.xb[bank].dx1[i] = dq;
-                }
-            }
-            // Op-amp with output dynamics: roll the internal drive EMF forward
-            // from the frozen previous EMF and the accepted input voltages, the
-            // monolithic advance arm (transient.rs) mirrored here. Without it a
-            // torn-island op-amp's EMF slot never advanced, so `stamp_opamp`
-            // re-derived the output from a stale (never-updated) v_prev every
-            // step and the bandwidth/slew-limited output never integrated
-            // toward its target. Ideal op-amps return None and leave the slot
-            // untouched.
-            Device::OpAmp {
-                inp,
-                inn,
-                reference,
-                gain,
-                pole_hz,
-                slew,
-                rail_lo,
-                rail_hi,
-                ..
-            } => {
-                let vref = reference.map(|n| node_v(ws, n)).unwrap_or(0.0);
-                let target =
-                    (vref + gain * (node_v(ws, *inp) - node_v(ws, *inn))).clamp(*rail_lo, *rail_hi);
-                if let Some((v_out, _)) =
-                    crate::stamp::opamp_transient_output(state.x1[i], target, *pole_hz, *slew, h)
-                {
-                    state.x2[i] = state.x1[i];
-                    state.x1[i] = v_out;
-                    state.dx1[i] = 0.0;
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::test_fixtures as fixtures;
@@ -2650,5 +2510,145 @@ mod tests {
              {worst:.3e} V vs the analytic waveform (at t={t_worst:.3e} s; the \
              stale-input defect loses the riser step's charge, ~1e-2 V)"
         );
+    }
+}
+
+fn advance_sub_reactive(
+    state: &mut ReactiveState,
+    sub: &Circuit,
+    ws: &Workspace,
+    h: f64,
+    opts: &SolverOptions,
+    first: bool,
+) {
+    let trapz = opts.integration == Integration::Trapezoidal && !first;
+    for (id, dev) in sub.iter() {
+        let i = id.0 as usize;
+        match dev {
+            Device::Capacitor { a, b, .. } => {
+                let v_new = node_v(ws, *a) - node_v(ws, *b);
+                let v_old = state.x1[i];
+                let dv = if trapz {
+                    2.0 * (v_new - v_old) / h - state.dx1[i]
+                } else {
+                    (v_new - v_old) / h
+                };
+                state.x2[i] = v_old;
+                state.x1[i] = v_new;
+                state.dx1[i] = dv;
+            }
+            Device::Inductor { .. } => {
+                let i_new = ws.layout.branch(id).map(|br| ws.x[br]).unwrap_or(0.0);
+                let i_old = state.x1[i];
+                let di = if trapz {
+                    2.0 * (i_new - i_old) / h - state.dx1[i]
+                } else {
+                    (i_new - i_old) / h
+                };
+                state.x2[i] = i_old;
+                state.x1[i] = i_new;
+                state.dx1[i] = di;
+            }
+            // Charge-storing diode: the capacitor roll, in CHARGE (dx1 is
+            // dQ/dt, the capacitive branch current the trapezoidal history
+            // term needs next step).
+            Device::Diode { a, k, model, .. }
+                if crate::stamp::diode_has_charge(model, &opts.effects) =>
+            {
+                let q_new = sub_diode_q(model, node_v(ws, *a) - node_v(ws, *k), opts);
+                let q_old = state.x1[i];
+                let dq = if trapz {
+                    2.0 * (q_new - q_old) / h - state.dx1[i]
+                } else {
+                    (q_new - q_old) / h
+                };
+                state.x2[i] = q_old;
+                state.x1[i] = q_new;
+                state.dx1[i] = dq;
+            }
+            // Charge-storing BJT: the diode's roll applied to both charge
+            // banks (A = Q_be, B = Q_bc), mirroring the monolithic driver.
+            Device::Bjt { c, b, e, model, .. }
+                if crate::stamp::bjt_has_charge(model, &opts.effects) =>
+            {
+                let (q_be, q_bc) = sub_bjt_q(ws, id, *c, *b, *e, model, opts);
+                let q_old = state.x1[i];
+                let dq = if trapz {
+                    2.0 * (q_be - q_old) / h - state.dx1[i]
+                } else {
+                    (q_be - q_old) / h
+                };
+                state.x2[i] = q_old;
+                state.x1[i] = q_be;
+                state.dx1[i] = dq;
+                let qb_old = state.xb[0].x1[i];
+                let dqb = if trapz {
+                    2.0 * (q_bc - qb_old) / h - state.xb[0].dx1[i]
+                } else {
+                    (q_bc - qb_old) / h
+                };
+                state.xb[0].x2[i] = qb_old;
+                state.xb[0].x1[i] = q_bc;
+                state.xb[0].dx1[i] = dqb;
+            }
+            // Charge-storing MOSFET: the roll applied to all four banks,
+            // mirroring the monolithic driver.
+            Device::Mosfet {
+                d, g, s, b, model, ..
+            } if crate::stamp::mos_has_charge(model, &opts.effects) => {
+                let (q_gs, q_gd, q_bd, q_bs) = sub_mos_q(ws, *d, *g, *s, *b, model, opts);
+                let q_old = state.x1[i];
+                let dq = if trapz {
+                    2.0 * (q_gs - q_old) / h - state.dx1[i]
+                } else {
+                    (q_gs - q_old) / h
+                };
+                state.x2[i] = q_old;
+                state.x1[i] = q_gs;
+                state.dx1[i] = dq;
+                for (bank, q_new) in [(0, q_gd), (1, q_bd), (2, q_bs)] {
+                    let q_old = state.xb[bank].x1[i];
+                    let dq = if trapz {
+                        2.0 * (q_new - q_old) / h - state.xb[bank].dx1[i]
+                    } else {
+                        (q_new - q_old) / h
+                    };
+                    state.xb[bank].x2[i] = q_old;
+                    state.xb[bank].x1[i] = q_new;
+                    state.xb[bank].dx1[i] = dq;
+                }
+            }
+            // Op-amp with output dynamics: roll the internal drive EMF forward
+            // from the frozen previous EMF and the accepted input voltages, the
+            // monolithic advance arm (transient.rs) mirrored here. Without it a
+            // torn-island op-amp's EMF slot never advanced, so `stamp_opamp`
+            // re-derived the output from a stale (never-updated) v_prev every
+            // step and the bandwidth/slew-limited output never integrated
+            // toward its target. Ideal op-amps return None and leave the slot
+            // untouched.
+            Device::OpAmp {
+                inp,
+                inn,
+                reference,
+                gain,
+                pole_hz,
+                slew,
+                rail_lo,
+                rail_hi,
+                ..
+            } => {
+                let vref = reference.map(|n| node_v(ws, n)).unwrap_or(0.0);
+                let target =
+                    (vref + gain * (node_v(ws, *inp) - node_v(ws, *inn))).clamp(*rail_lo, *rail_hi);
+                if let Some((v_out, _)) =
+                    crate::stamp::opamp_transient_output(state.x1[i], target, *pole_hz, *slew, h)
+                {
+                    state.x2[i] = state.x1[i];
+                    state.x1[i] = v_out;
+                    state.dx1[i] = 0.0;
+                }
+            }
+            _ => {}
+        }
     }
 }

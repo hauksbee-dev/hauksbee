@@ -281,7 +281,7 @@ fn declarative_spi_who_am_i_and_data() {
 ///
 /// The firmware polls the LM75 at 0x48 and drives a GPIO HIGH when temperature
 /// >= 30 °C, LOW otherwise.  We sweep `temperature_c` across the threshold and
-/// > assert the FLAG net follows.
+/// assert the FLAG net follows.
 ///
 /// Guarded by `#[cfg(feature = "renode")]`.  Skips gracefully when Renode is
 /// not installed or the STM32 I2C thermostat ELF is not built.

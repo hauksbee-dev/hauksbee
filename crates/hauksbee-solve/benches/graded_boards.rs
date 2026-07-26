@@ -98,7 +98,7 @@ fn assert_rc_sane(c: &Circuit, wf: &Waveforms) {
         "rc near end out of sane window: {near}"
     );
     assert!(
-        far.is_finite() && (-1e-6..=1.0 + 1e-6).contains(&far),
+        far.is_finite() && far >= -1e-6 && far <= 1.0 + 1e-6,
         "rc far end out of sane window: {far}"
     );
 }
@@ -161,7 +161,7 @@ fn assert_mirror_sane(c: &Circuit, wf: &Waveforms) {
         "rail out of sane sag window: {rail}"
     );
     assert!(
-        mem0.is_finite() && (-1e-2..=5.0).contains(&mem0),
+        mem0.is_finite() && mem0 >= -1e-2 && mem0 <= 5.0,
         "membrane out of sane window: {mem0}"
     );
 }

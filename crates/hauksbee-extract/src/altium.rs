@@ -740,7 +740,7 @@ mod tests {
         }
         // sub-record 5 (geometry): declared length then the supplied bytes.
         b.extend_from_slice(&geom_len.to_le_bytes());
-        b.extend(std::iter::repeat_n(0u8, geom_have));
+        b.extend(std::iter::repeat(0u8).take(geom_have));
         b
     }
 

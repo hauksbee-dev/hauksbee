@@ -201,7 +201,8 @@ fn ambient_pushes_part_over_its_limit() {
 #[test]
 fn healthy_board_no_overtemp() {
     // 330 Ohm series, ~10 mA, sub-50 mW dissipation: nowhere near hot.
-    let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+    let text = format!(
+        r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
   (net 0 "")
   (net 1 "GND")
   (net 2 "+5V")
@@ -221,7 +222,8 @@ fn healthy_board_no_overtemp() {
     (pad K smd rect (at 2 0) (net 1 "GND"))
   )
 )
-"#.to_string();
+"#
+    );
     let mut engine =
         HauksbeeEngine::from_board_file(&text, None, "/boards/thermal.kicad_pcb").expect("engine");
     let mut controls = SolverControls::default();

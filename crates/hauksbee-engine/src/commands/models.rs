@@ -330,8 +330,8 @@ pub fn resolve_report(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoa
     );
     let _ = writeln!(
         out,
-        "{:<10} {:<24} {:<28} {:<16} Origin",
-        "Ref", "Value", "Model", "Layer"
+        "{:<10} {:<24} {:<28} {:<16} {}",
+        "Ref", "Value", "Model", "Layer", "Origin"
     );
     for row in resolve_rows(lib, board) {
         let _ = writeln!(

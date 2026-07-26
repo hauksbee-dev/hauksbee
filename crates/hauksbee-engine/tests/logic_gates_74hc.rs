@@ -238,7 +238,7 @@ fn hc74_dff_function_table() {
     assert_eq!(lc.output_level("q_n1"), Some(true));
 
     // Clocked capture of D = H (release controls, clock low, then rising edge).
-    let step = |lc: &mut LogicComponent, d: bool, clk: bool| {
+    let mut step = |lc: &mut LogicComponent, d: bool, clk: bool| {
         let mut v: Vec<(&str, bool)> = released.to_vec();
         v.push(("d1", d));
         v.push(("clk1", clk));

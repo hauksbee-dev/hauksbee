@@ -469,7 +469,7 @@ fn partitioned_nonlinear_island_advances_internal_time_varying_source() {
     };
     let opts_auto = SolverOptions {
         partitioning: Partitioning::Auto,
-        ..opts_off
+        ..opts_off.clone()
     };
     let tstop = 1e-3; // two full SIN periods at 2 kHz
     let c = build();

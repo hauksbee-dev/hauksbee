@@ -1076,26 +1076,6 @@ fn wrap_words(s: &str, width: usize) -> Vec<String> {
     lines
 }
 
-/// A centered rect `pct_x` % wide and `pct_y` % tall, for the overlay.
-fn centered_rect(pct_x: u16, pct_y: u16, r: Rect) -> Rect {
-    let vert = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - pct_y) / 2),
-            Constraint::Percentage(pct_y),
-            Constraint::Percentage((100 - pct_y) / 2),
-        ])
-        .split(r);
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - pct_x) / 2),
-            Constraint::Percentage(pct_x),
-            Constraint::Percentage((100 - pct_x) / 2),
-        ])
-        .split(vert[1])[1]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1259,4 +1239,24 @@ mod tests {
         assert!(all.contains("no live signals"), "{all}");
         assert!(all.contains("firmware/co-sim"), "{all}");
     }
+}
+
+/// A centered rect `pct_x` % wide and `pct_y` % tall, for the overlay.
+fn centered_rect(pct_x: u16, pct_y: u16, r: Rect) -> Rect {
+    let vert = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - pct_y) / 2),
+            Constraint::Percentage(pct_y),
+            Constraint::Percentage((100 - pct_y) / 2),
+        ])
+        .split(r);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - pct_x) / 2),
+            Constraint::Percentage(pct_x),
+            Constraint::Percentage((100 - pct_x) / 2),
+        ])
+        .split(vert[1])[1]
 }

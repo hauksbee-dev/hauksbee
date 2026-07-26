@@ -558,7 +558,7 @@ mod tests {
         for seed in 1..2000 {
             let v = sample(seed, &t).si;
             assert!(
-                (0.8e-7 - 1e-20..=1.2e-7 + 1e-20).contains(&v),
+                v >= 0.8e-7 - 1e-20 && v <= 1.2e-7 + 1e-20,
                 "seed {seed}: {v}"
             );
             spread = spread.max((v - 1e-7).abs());
