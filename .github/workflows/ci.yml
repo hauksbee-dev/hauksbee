@@ -63,6 +63,17 @@ jobs:
       - name: cargo test --workspace
         run: cargo test --workspace
 
+  diagrams:
+    name: diagram geometry lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # draw.io renders overlapping boxes, spilling labels, and dangling edges
+      # without complaint, and the export is what readers see. The linter
+      # checks the .drawio sources geometrically so those defects fail here
+      # instead of shipping into the docs.
+      - run: python3 scripts/lint-diagrams.py
+
   gpl-free-check:
     name: cargo check (GPL-free renode+qemu shape)
     runs-on: ubuntu-latest
