@@ -24,9 +24,9 @@
         </mxCell>
         <mxCell id="a1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;" edge="1" parent="1" source="chg" target="run"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="a2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;" edge="1" parent="1" source="run" target="ass"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="a3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;" edge="1" parent="1" source="ass" target="exit"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="a4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;" edge="1" parent="1" source="ass" target="junit"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="a5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;" edge="1" parent="1" source="ass" target="gh"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;exitX=1;exitY=0.2;entryX=0;entryY=0.5;" edge="1" parent="1" source="ass" target="exit"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="ass" target="junit"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="a5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;exitX=1;exitY=0.8;entryX=0;entryY=0.5;" edge="1" parent="1" source="ass" target="gh"><mxGeometry relative="1" as="geometry"/></mxCell>
       </root>
     </mxGraphModel>
   </diagram>
