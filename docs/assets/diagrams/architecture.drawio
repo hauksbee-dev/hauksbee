@@ -17,7 +17,7 @@
           <mxGeometry x="60" y="180" width="200" height="46" as="geometry"/>
         </mxCell>
         <mxCell id="solve" value="Partitioned hybrid solver&#10;linear: matrix exponential (exact at any step)&#10;nonlinear: MNA + Newton&#10;digital: event driven" style="rounded=1;arcSize=8;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="40" y="290" width="300" height="92" as="geometry"/>
+          <mxGeometry x="40" y="290" width="330" height="92" as="geometry"/>
         </mxCell>
         <mxCell id="mcu" value="MCU backends&#10;AVR (in-process simavr)&#10;STM32 / nRF52 / RISC-V (Renode)&#10;ESP32 family (Espressif QEMU)" style="rounded=1;arcSize=8;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
           <mxGeometry x="420" y="290" width="300" height="92" as="geometry"/>
@@ -26,7 +26,7 @@
           <mxGeometry x="40" y="450" width="300" height="60" as="geometry"/>
         </mxCell>
         <mxCell id="web" value="Web front door and live viewer&#10;drop a board, read a report, build checks&#10;2D/3D render, probes, scope" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#22c55e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="420" y="450" width="300" height="60" as="geometry"/>
+          <mxGeometry x="420" y="450" width="300" height="72" as="geometry"/>
         </mxCell>
         <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;fontColor=#94a3b8;" edge="1" parent="1" source="in" target="ex"><mxGeometry relative="1" as="geometry"/></mxCell>
         <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#64748b;dashed=1;" edge="1" parent="1" source="bind" target="ex"><mxGeometry relative="1" as="geometry"/></mxCell>
