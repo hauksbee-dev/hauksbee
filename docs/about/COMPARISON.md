@@ -1,8 +1,5 @@
 # Hauksbee vs the field
 
-> Status: structure + qualitative findings final; quantitative cells marked
-> TBD are filled by the benchmark campaign in `testdata/` and `tests/`.
-
 ## The claim
 
 No tool, open or commercial (verified June 2026), does what hauksbee does:
@@ -36,36 +33,40 @@ load-bearing:
   start-up. Treat them as "what we measured on Apple Silicon against ngspice 46",
   not as a contract.
 - The **accuracy** figures (the `accuracy` column) are the asserted ones. The
-  always-on suite (`tests/analytic.rs`, and `tests/ngspice.rs` when an ngspice
-  binary is present) gates every run on hard error bounds: rectifier <1% rel, CE
-  amplifier <2% rel, RC ladder <1% rel, diode DC point <0.1%, BJT mirror ratio
-  within 3%. Those are the numbers we stand behind.
+  always-on suite (`tests/analytic.rs`, plus `tests/ngspice.rs` and
+  `tests/kicad_vectors.rs` when an ngspice binary is present) gates every run on
+  hard error bounds: half-wave rectifier deck <2% rel, CE amplifier deck <0.2%
+  rel, RC ladder deck <1% rel, diode DC point <0.1%, BJT mirror ratio within 3%,
+  and the KiCad-authored vectors at <1% (rectifier) and <2% (3x-2N2222
+  amplifier). Those are the numbers we stand behind.
 
 Same netlists, same tolerances, wall-clock. ngspice 46, Apple Silicon.
 
 | circuit | hauksbee | vs ngspice (observed) | accuracy (asserted) |
 |---|---|---|---|
-| half-wave rectifier, 10ms tran | 2.05 ms | ~23x wall-clock (48.1 ms incl. process start) | <1% rel |
-| synapse array, 90 Tarski-like blocks (partitioned) | 6.2-7.1x vs own monolithic | ~6x | 1.05e-7 vs monolithic |
-| small RC island, exact exponential steps | 100x fewer steps at equal accuracy (~35x wall) |, | 9.6e-10 vs analytic |
-| RC ladder 1000 stages | 13.7k steps/s (Auto keeps monolithic: sparse LU already optimal there) |, | partitioned vs monolithic 3.8e-4 |
+| half-wave rectifier, 5ms tran | 2.05 ms | ~23x wall-clock (48.1 ms incl. process start) | <2% rel |
+| synapse array, 90 blocks (partitioned) | 6.2-7.1x vs own monolithic | ~6x | 1.05e-7 vs monolithic |
+| small RC island, exact exponential steps | 100x fewer steps at equal accuracy (~35x wall) | n/a (measured against its own monolithic reference) | 9.6e-10 vs analytic |
+| RC ladder 1000 stages | 13.7k steps/s (Auto keeps monolithic: sparse LU already optimal there) | n/a (partitioned vs monolithic comparison) | <1e-6 vs monolithic |
 | KiCad-authored vectors: rectifier / 3x-2N2222 amplifier | runs both via SpiceLoader | same netlists | 2.5e-5 / 0.92% max rel vs ngspice |
 
-The accuracy column entries marked "vs analytic" / "vs monolithic" are checked by
-the partitioned-vs-monolithic and analytic asserts in the always-on suite; the
-"vs ngspice" accuracy entries are asserted only when an ngspice binary is present
-(the relevant tests early-return and skip otherwise, they do not fail).
+The accuracy column entries marked "vs analytic" / "vs monolithic" are asserted
+inside the same benches in `perf.rs` (each bench passes only if the partitioned
+result agrees with its monolithic or analytic reference); the "vs ngspice"
+accuracy entries are asserted by the always-on cross-check tests only when an
+ngspice binary is present (the relevant tests early-return and skip otherwise,
+they do not fail).
 
 File-layer performance (forge-sexpr span CST): the 85MB Jetson AGX Thor
-baseboard parses in ~230ms, emits byte-exact in ~114ms (2.1x end-to-end vs
-the string CST); the 44MB Tarski board extracts to a bound circuit in
-under a second.
+baseboard parses in ~230ms, emits byte-exact in ~114ms; a 44MB production
+board extracts to a bound circuit in under a second.
 
 "Any PCB" evidence (bind_sweep over the corpus): 19/19 boards extract and
 bind with zero failures across KiCad 5-10 and Eagle formats, Jetson AGX
-Thor baseboard 81.4% of simulatable parts resolved (788 analog devices),
-vme-wren 77.8%, multichannel mixer 80.7%, pic_programmer 92.3%, and both
-ATmega boards find and instantiate their MCU.
+Thor baseboard 81.4% of simulatable parts resolved, pic_programmer 92.3%;
+the stormduino Uno clone goes further: its ATmega328P is found,
+instantiated, and boots demo firmware through the solved circuit
+(`docs/record/TEST_CAMPAIGN.md`).
 
 Honest engineering note: the matrix-exponential fast path wins where circuits
 fragment into many small islands (exactly the PCB regime: per-component RC
@@ -81,29 +82,23 @@ speed observations above were taken on runs that also passed those accuracy
 bounds, so they are honest measurements rather than corner-cutting, but the
 asserted guarantee is accuracy, not a speed ratio.
 
-## vs the bespoke Tarski-Emulator
-
-The predecessor hand-modeled one board. Hauksbee must match its usefulness
-without the hand-modeling:
-
-| | Tarski-Emulator | Hauksbee |
-|---|---|---|
-| board support | 1 (hardcoded behavioral net) | any KiCad/Eagle/D356 |
-| extraction | hand-written simplifier | automatic binder + model db |
-| device physics | closed-form behavioral | SPICE-class, temperature, tolerances |
-| MCU | simavr ATmega328P | same bridge, generalized API |
-| hardware bug discovery | models the intended circuit (cannot see wiring defects) | independently derived the inhibitory miswire: 689mA through a 100mA junction when INH_Q4 enables (docs/record/BUG_HUNT.md Finding 15) |
-
 ## Unique capabilities
 
+- Faults come from the copper, not the intent: hauksbee simulates the circuit
+  the layout actually implements, so a wiring defect that a behavioural model
+  of the intended design cannot represent shows up as electrical stress in
+  simulation. One production miswire was derived independently from the
+  netlist this way; the board is private, so the reproducing tests are
+  catalogued in `docs/about/PRIVATE_SUITE.md` rather than shipped.
 - Datasheet → model extraction (codex-backed) when a part has no model.
 - Board-to-code decompilation (kicad-forge): repeated blocks become
   functions; layout anomalies become diffs. Found 19 block clusters covering
-  99.8% of the Tarski board's 3,443 components in 0.09s.
+  99.8% of a 3,443-component production board.
 - Solver debugging dials: every physical effect is a toggle; granularity is
   continuous; partitioning can be forced off for ground truth.
 - Strict lossless parsing that caught real corruption in KiCad's own demo
-  corpus (royalblue54L_feather, missing paren ×349).
+  corpus (royalblue54L_feather, 349 unbalanced teardrop blocks), asserted as
+  a must-fail.
 - Gerber + pick-and-place reverse extraction (`docs/ingest/GERBER.md`): ingests boards
   that ship only manufacturing files (uConsole, Inkplate 6), reconstructing nets
   and copper from fab data. No other tool in this table ingests a PCB at all,
@@ -120,6 +115,8 @@ without the hand-modeling:
   extracted from the real layout.
 - Known-fault validation (`docs/record/KNOWN_FAULTS_VALIDATION.md`): eight in-scope
   faults documented in real boards' revision history, six caught statically, one
-  executed via firmware co-sim, each catch two-sided (flags the faulty revision,
-  clean on the fix). No other tool here ships a calibration of this kind; it is
+  executed via firmware co-sim, one honest static miss. Every catch is proven
+  two-sided (it also stays silent on a clean counterpart: the fixed revision
+  where the netlist reflects the fix, a constructed clean twin where it does
+  not). No other tool here ships a calibration of this kind; it is
   what lets the clean famous-board sweep be read as honesty rather than blindness.
