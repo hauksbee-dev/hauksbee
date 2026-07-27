@@ -12,7 +12,7 @@ categories.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-hauksbee-ir = { path = "../hauksbee-ir" }
+hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 num-complex = { workspace = true }
