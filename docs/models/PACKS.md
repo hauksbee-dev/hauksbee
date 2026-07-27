@@ -1,7 +1,7 @@
 # Model packs
 
-A pack is a versioned, shareable bundle of model data (06-extensibility-sdk
-§3). Distribution is deliberately plain: a git repo or a tarball. No signing,
+A pack is a versioned, shareable bundle of model data.
+Distribution is deliberately plain: a git repo or a tarball. No signing,
 no registry.
 
 ## Layout

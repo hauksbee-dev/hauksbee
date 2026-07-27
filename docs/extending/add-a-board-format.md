@@ -9,8 +9,8 @@ pattern is `crates/hauksbee-extract/tests/reader_matrix.rs`.
 
 **Honesty up front: this is a fork-with-one-registration-line story, not a
 plugin ABI.** A dynamic `.so` plugin interface is deliberately out of scope,
-Rust's unstable ABI makes one a maintenance sink (`reader.rs` module docs,
-plan 06 §4). You fork, add a file, add one registration line, and carry a
+Rust's unstable ABI makes one a maintenance sink (`reader.rs` module
+docs). You fork, add a file, add one registration line, and carry a
 small diff.
 
 ## How the registry works

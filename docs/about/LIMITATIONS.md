@@ -7,16 +7,16 @@ for "fixed" is the project's: every change covered by a test, no false positive
 introduced into any lint/check, and any flipped result two-sided with file-level
 evidence.
 
-The governing rule throughout is the Tarski meta-lesson: a surprising pass or
-fail is presumed a defect in *our* tool until chased to ground truth. Two of the
-fixes below began as recorded "honest limitations" and turned out, once chased,
-to be hauksbee defects.
+The governing rule throughout: a surprising pass or fail is presumed a defect
+in *our* tool until chased to ground truth. Two of the fixes below began as
+recorded "honest limitations" and turned out, once chased, to be hauksbee
+defects.
 
 ## Fixed
 
 ### 1. USB-C CC audit under-read on dual-receptacle boards
 
-- **Was** (docs/record/FAMOUS_SWEEP.md, round 3): "the USB-C CC audit under-reads the
+- **Was**: "the USB-C CC audit under-reads the
   device-side Rd on a board with two USB-C receptacles (Lily58's two halves);
   the board is clean ... the audit just does not credit them."
 - **Chased to ground truth.** Two compounding causes, both hauksbee defects:
@@ -82,8 +82,7 @@ to be hauksbee defects.
   voltage to ~0. In firmware co-sim that reads as **every** MCU-driven net
   "never driven / Hi-Z", a silent, board-wide false negative on essentially any
   crystal-clocked MCU board.
-- **Chased to ground** on `explosion33/RocketryIgniter` (see
-  [`hunts/HUNT_2026-06-30.md`](../hunts/HUNT_2026-06-30.md)): a strong-output test
+- **Chased to ground** on `explosion33/RocketryIgniter`: a strong-output test
   firmware on the same pin also read 0 V (ruling out the firmware), and a board
   with the crystals stripped drove the pin to 5 V (isolating the cause).
 - **Fix** (`39128bb`): detect crystals/resonators **before** the passive
@@ -114,8 +113,8 @@ those boards' layouts; only their legacy schematics are out of scope.
 
 ### Renode ADC injection / I2C-SPI slave interception; QEMU ESP32 ADC and GPIO mailbox
 
-- **Renode ADC (`set_analog_in`)** now injects for real (05-cosim-fidelity
-  §5.1, validated against a live Renode 1.16.1): counts are delivered per chunk
+- **Renode ADC (`set_analog_in`)** injects for real (validated against a live
+  Renode 1.16.1): counts are delivered per chunk
   over the Monitor channel through a per-platform `AdcChannelMap` recipe (a
   modeled ADC's feed command, or a `WriteDoubleWord` into the result word the
   firmware reads). What remains deferred is a *default* map for the stock
@@ -127,12 +126,12 @@ those boards' layouts; only their legacy schematics are out of scope.
   (see `docs/cosim/MCU.md`).
 - **QEMU ESP32 SAR ADC** is not modelled by the Espressif QEMU fork (a
   silicon-model gap), so `set_analog_in` writes the count into a RAM-mailbox
-  slot instead (05 §5.1), a firmware contract like the GPIO mailbox below:
+  slot instead, a firmware contract like the GPIO mailbox below:
   only mailbox-aware firmware reads it. The same applies to the I2C/SPI byte
-  callbacks (05 §5.2): request/response mailbox cells gated on `BUS_MAGIC`,
+  callbacks: request/response mailbox cells gated on `BUS_MAGIC`,
   serviced once per chunk, surfacing through the standard `on_i2c`/`on_spi`
   trait callbacks. Unmodified vendor firmware's real-controller bus traffic
-  stays host-invisible until the fork grows a peripheral hook (05 §5.3).
+  stays host-invisible until the fork grows a peripheral hook.
 - **QEMU ESP32 GPIO** is observed through a firmware RAM mailbox because the fork's
   `esp32.gpio` model has no `GPIO_OUT_REG` read-back. **Empirically confirmed on
   the latest build** (QEMU 9.2.2 `esp_develop`, 2026-06-30): a host read of
@@ -143,13 +142,11 @@ those boards' layouts; only their legacy schematics are out of scope.
   plugins are disabled in the prebuilt (`-plugin help` → not enabled), and there
   is no QEMU source tree on disk, so the only real fix is a ~15-line device-model
   patch to the fork's `hw/gpio/esp32_gpio.c` (store + return `GPIO_OUT`/`ENABLE`,
-  handling the W1TS/W1TC aliases) plus a rebuild, fully specified, with the
-  exact registers and the matching backend change, in
-  [`hunts/esp32-qemu-i2c-status.md`](../hunts/esp32-qemu-i2c-status.md). Shipping the
+  handling the W1TS/W1TC aliases) plus a rebuild; the exact registers and the
+  matching backend change are specified. Shipping the
   register-read backend path *without* a patched QEMU to validate it against
-  would violate the no-unvalidatable-fixes rule, so it stays deferred, now with
-  an exact, actionable spec rather than an open question. (The orthogonal
-  discovery-path bug the spike surfaced is fixed: the loader now probes the
+  would violate the no-unvalidatable-fixes rule, so it stays deferred.
+  (The loader probes the
   current `~/.hauksbee-qemu-esp` first, with the legacy `~/.galvani-qemu-esp`
   kept as a fallback so existing installs keep resolving.)
 
@@ -190,16 +187,11 @@ These are genuine open limitations the code carries today. Each is the
 responsibility of the doc that owns the surface, and is listed here only so this
 triage page is a complete index of what is *not* yet closed.
 
-**Reconciled 2026-07-08 (trunk `7c3b8c8`):** two entries in this list had been
-closed by the W4 co-sim-fidelity tests without this index being updated. They
-are moved to the closed block below, each verified by re-running its closing
-test against the current trunk. The still-open entries follow.
-
 Closed since recorded (verified by re-run, 2026-07-08):
 
 - **MCP4728 not emulated as an I2C slave** (`LOAD_DAC` NAKs), **CLOSED**. The
-  MCP4728 IS an I2C slave now: a spec-driven `RegisterMapSensor`
-  (`docs/hunts/specs/mcp4728.toml`), three instances auto-attached at
+  MCP4728 IS an I2C slave: a spec-driven `RegisterMapSensor`
+  (`testdata/sensor-specs/mcp4728.toml`), three instances auto-attached at
   0x60/0x61/0x62 with VOUT PinDrivers into the analog solve. Covered by
   `crates/hauksbee-engine/tests/mcp4728_cosim.rs`
   (`programmed_dac_drives_vout_net_in_solve`: the firmware's exact Fast-Write
@@ -208,9 +200,8 @@ Closed since recorded (verified by re-run, 2026-07-08):
   `tarski_firmware_cosim.rs::host_programs_dacs_over_serial` (LOAD_DAC ACKs,
   all 12 codes latch). The QEMU-ESP32 I2C-interception limitation recorded in
   the original wording is a separate, still-open item (see the deferred
-  section above); the Tarski DACs sit on the AVR/simavr path, which
-  intercepts I2C fully. Dated closure notes in
-  `docs/record/TARSKI_RESULTS.md` §5.3 and `docs/record/TEST_CAMPAIGN.md`.
+  section above); these DACs sit on the AVR/simavr path, which
+  intercepts I2C fully.
 - **Bit-banged SPI at sub-chunk timing collapses in full co-sim**: **CLOSED**.
   The scheduler resolves ordered pin edges within a chunk; firmware-driven
   bit-banged buses work end-to-end. Covered by
@@ -219,22 +210,19 @@ Closed since recorded (verified by re-run, 2026-07-08):
   clock a register-exact WHO_AM_I + burst read, twice, proving CS re-framing),
   `soft_i2c_cosim.rs` (`firmware_reads_i2c_sensor_over_bitbanged_gpios`), and
   `cosim_spi_cs_frames_transactions.rs` (chunk-boundary framing). The 595
-  chain no longer needs the PATH B side-step:
+  chain needs no side-step:
   `tarski_firmware_cosim.rs::host_loads_synapse_weights_over_serial` and
   `host_reads_known_output_word_over_serial` run the firmware's own bit-bang
-  loops against the bound chain. Dated closure notes in
-  `docs/record/TARSKI_RESULTS.md` §5.1 and `docs/record/TEST_CAMPAIGN.md`.
+  loops against the bound chain.
 
 Still open (re-checked 2026-07-08):
 
 - **nRF5340 has no co-sim backend**: the Renode 1.16.1 portable build ships no
   nRF5340 platform, so the ZSWatch-class DISPLAY-EN fault stays a static miss.
   Re-checked against `docs/cosim/MCU.md` (nRF5340 section) 2026-07-08: still true.
-  See `docs/record/KNOWN_FAULTS_VALIDATION.md`.
 - **PCB-only extraction has no pinfunctions**: multi-unit packages fall back to
   db pin maps when only a layout (no schematic netlist) is available; schematic
-  netlists are authoritative when present. See `docs/record/TEST_CAMPAIGN.md` and
-  `docs/record/FAMOUS_SWEEP.md`.
+  netlists are authoritative when present.
 - **Device-decode is per-part and grows one part at a time**: the configurable-
   controller decode check (config-pin divider vs the part's datasheet band table)
   has no generic engine; each supported part is a hand-written decoder. Seeded

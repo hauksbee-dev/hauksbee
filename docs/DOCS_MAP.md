@@ -1,10 +1,9 @@
 # Docs map
 
-`docs/` serves two audiences: a new adopter following the user path, and the
-project record (evidence trail, war stories, internal plans). The entry point is
-[`START_HERE.md`](START_HERE.md); this file is the full classification. There is
-no generated index (no mdbook `SUMMARY.md`, no `mkdocs.yml`); the repo-root
-`README.md` leads with START_HERE.
+The entry point is [`START_HERE.md`](START_HERE.md); this file maps every doc
+to the question it answers. There is no generated index (no mdbook
+`SUMMARY.md`, no `mkdocs.yml`); the repo-root `README.md` leads with
+START_HERE.
 
 The user docs are grouped by the question the reader is asking. Only the entry
 points live at the `docs/` root: START_HERE, this map, and
@@ -70,27 +69,17 @@ firmware + spec, and the one local command that runs them).
 | File | Covers |
 |---|---|
 | [`about/ARCHITECTURE.md`](about/ARCHITECTURE.md) | End-to-end pipeline and design overview |
-| [`about/CAPABILITIES.md`](about/CAPABILITIES.md) | Authoritative scope: every layer, MCU coverage, misconceptions |
+| [`about/CAPABILITIES.md`](about/CAPABILITIES.md) | Authoritative scope: every layer, full MCU coverage |
 | [`about/COMPARISON.md`](about/COMPARISON.md) | Feature matrix and positioning vs the field |
 | [`about/LIMITATIONS.md`](about/LIMITATIONS.md) | Honest limitations, triage and closure |
 | [`about/release-and-licensing.md`](about/release-and-licensing.md) | Release process and the GPL boundary |
 
-## Scoped directories (unchanged)
+## Scoped directories
 
-| Path | Role | Class |
-|---|---|---|
-| [`extending/`](extending/) | Contributor walkthroughs: add a part, sensor, logic IC, MCU variant, board format, model pack | USER |
-| [`learn/`](learn/) | First-principles course (netlist → MNA → Newton → co-sim → checks) | USER |
-| [`teach/`](teach/) | Teaching material derived from the course + the doc-coverage inventory | USER |
-| [`how-and-why/`](how-and-why/) | Code companion explanations, per crate | USER |
-| [`spice-compat/`](spice-compat/) | SPICE compatibility statement + ngspice cross-check results | USER |
-| [`record/`](record/) | The project's evidence trail: campaigns, calibration, benchmarks | RECORD |
-| [`hunts/`](hunts/) | Bug-hunt working directory: per-board narratives, briefs, results | RECORD |
-| [`dev-plans/`](dev-plans/) | Design plans 00-09, perf notes, `research/` | RECORD |
-| [`assets/`](assets/) | Images embedded by docs | n/a |
+| Path | Covers |
+|---|---|
+| [`extending/`](extending/) | Contributor walkthroughs: add a part, sensor, logic IC, MCU variant, board format, model pack |
+| [`spice-compat/`](spice-compat/) | SPICE compatibility statement + ngspice cross-check results |
+| [`assets/`](assets/) | Images embedded by docs |
 
-## Counts
-
-- USER PATH: 26 docs in 7 themed groups, plus the scoped USER directories.
-- PROJECT RECORD: `record/`, `hunts/`, `dev-plans/`.
-- Root: `START_HERE.md`, `PROJECT_LAYOUT.md`, and this map only.
+Root: `START_HERE.md`, `PROJECT_LAYOUT.md`, and this map.

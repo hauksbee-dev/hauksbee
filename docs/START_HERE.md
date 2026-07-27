@@ -46,8 +46,8 @@ are optional and come later.
    co-simulation.
 
 From there, the rest of `docs/` covers each capability in depth: the authoritative
-scope document ([`CAPABILITIES.md`](about/CAPABILITIES.md), every layer plus the common
-misconceptions), analysis ([`AC_ANALYSIS.md`](analysis/AC_ANALYSIS.md),
+scope document ([`CAPABILITIES.md`](about/CAPABILITIES.md), every layer and the full
+MCU coverage matrix), analysis ([`AC_ANALYSIS.md`](analysis/AC_ANALYSIS.md),
 [`THERMAL.md`](checks/THERMAL.md), [`TRANSIENTS.md`](checks/TRANSIENTS.md)), checks
 ([`SHORTS.md`](checks/SHORTS.md), [`SI_CHECKS.md`](checks/SI_CHECKS.md),
 [`RESOURCE_CONFLICTS.md`](checks/RESOURCE_CONFLICTS.md),
@@ -75,11 +75,5 @@ The full menu is [`extending/README.md`](extending/README.md).
 
 ## Going deeper
 
-- [`docs/how-and-why/`](how-and-why/): the code companion explanations, how each
-  crate works and why it is built that way.
-- [`docs/dev-plans/`](dev-plans/): the design plans and research behind the tool's
-  direction (design history).
-- [`docs/record/`](record/): the project's evidence trail. The bug-hunt campaigns,
-  known-fault calibration, flagship benchmark, and how the tool was proven honest.
-- [`docs/hunts/`](hunts/): the bug-hunt working directory, per-board narratives.
-- [`docs/DOCS_MAP.md`](DOCS_MAP.md): the full classification of every doc.
+[`docs/DOCS_MAP.md`](DOCS_MAP.md) maps every doc in the tree to the question it
+answers.

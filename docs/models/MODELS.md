@@ -284,8 +284,7 @@ the actual board:
   so a law dividing by it contributes ~0.
 
 This is what lets one model produce different behaviour on two board revisions
-with no model edit; the basis of the two-sided fault validations in
-`docs/record/KNOWN_FAULTS_VALIDATION.md`.
+with no model edit; the basis of the project's two-sided fault validations.
 
 ## Adding a custom part without recompiling
 

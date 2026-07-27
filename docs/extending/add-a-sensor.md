@@ -5,7 +5,7 @@
 (`RegisterMapSensor` in `crates/hauksbee-engine/src/peripherals/register_map.rs`)
 realizes as a bus slave. No Rust. The worked example is the Bosch BME280
 (humidity/pressure/temperature); the shipped spec this walkthrough retraces is
-`docs/hunts/specs/bme280.toml`.
+`testdata/sensor-specs/bme280.toml`.
 
 **What you need:** the part's datasheet (register map + electrical worked
 example), and `hauksbee models lint`.
@@ -53,7 +53,7 @@ understanding because you will hit it on other parts:
 > `adc_hum`, the natural register-map quantities, and the raw→physical
 > compensation is applied by the *consumer* (the firmware in a real co-sim,
 > the fixture test otherwise). The full rationale is the header comment of
-> `docs/hunts/specs/bme280.toml`.
+> `testdata/sensor-specs/bme280.toml`.
 
 ```toml
 [[sensor.input]]
@@ -148,12 +148,12 @@ style = "i2c_pointer"
 (For the SPI variant of the same part: `bus = "spi"`, drop `i2c_address`, use
 `style = "spi_reg"` with `rw_read_is_high`/`addr_mask`, and keep the **raw
 datasheet register addresses**; the interpreter masks the R/W bit off both
-sides. See `docs/hunts/specs/bmp280.toml` for a full worked SPI spec.)
+sides. See `testdata/sensor-specs/icm42605.toml` for a full worked SPI spec.)
 
 ## Step 5, lint it
 
 ```
-cargo run -p hauksbee-engine --bin hauksbee -- models lint docs/hunts/specs/bme280.toml
+cargo run -p hauksbee-engine --bin hauksbee -- models lint testdata/sensor-specs/bme280.toml
 ```
 
 Green looks like:
@@ -235,7 +235,7 @@ side of the same schema: `[[sensor.write_register]]` (pointer-framed, with
 declared bit fields), `[[sensor.write_command]]` (command-framed, the MCP4728
 shape), `[[sensor.state]]` + `[[sensor.output]]` (per-channel state driving an
 analog net through a voltage law). The shipped `ads1115.toml`, `ina219.toml`,
-and `mcp4728.toml` specs in `docs/hunts/specs/` are the worked examples, and
+and `mcp4728.toml` specs in `testdata/sensor-specs/` are the worked examples, and
 the write side is currently modeled for I2C only, an SPI spec with write
 blocks is *rejected* by validation rather than silently mis-parsed (a stated
 limitation, not a capability).

@@ -138,7 +138,7 @@ is deliberate and, where it affects a waveform, is quantified in [`results.md`](
     small-signal match.
   - **Datasheet `Rds(on)` is honored: supply it as `RD`/`RS`.** A power FET's on-state
     resistance lives mostly in the drain/source ohmic resistance, not the channel. `RD` and
-    `RS` (SPICE ohmic drain/source resistance) are now read from both a `.model` card and the
+    `RS` (SPICE ohmic drain/source resistance) are read from both a `.model` card and the
     part database (which splits each part's datasheet `Rds(on)` into `rd + rs`), and stamped
     as series resistors with the transistor intrinsic moved onto internal drain/source nodes,
     exactly the way ngspice level 1 wires them. On-state `Rds(on)` is therefore `rd + rs +
@@ -162,8 +162,8 @@ is deliberate and, where it affects a waveform, is quantified in [`results.md`](
   undefined is refused (`references undefined .model`), and one whose `.model` is not a
   diode (e.g. an `NPN`) is refused (`not a diode model`) rather than silently inheriting
   foreign parameters. The model token is required (there is no bare `Dxxx a k` default-
-  diode form), so a typo'd model name is caught, not silently defaulted. (This closes the
-  loader inconsistency where the diode used to default while `Q`/`M` erred; see §3.)
+  diode form), so a typo'd model name is caught, not silently defaulted, and all
+  three device classes (`D`/`Q`/`M`) refuse identically; see §3.
 - **Behavioral `B` sources use a fixed expression subset.** `V={expr}`/`I={expr}` over
   `v(node)`, `v(a,b)`, `i(vsource)`, `time`, and `.param` values, with the function set
   `ln log10 log2 exp pow sqrt cbrt abs sin cos tan asin acos atan atan2 sinh cosh tanh
@@ -215,10 +215,10 @@ asserted by the drift test.
 | `.dc` on a non-source | `.dc` can only sweep an independent V or I source. | `can only sweep an independent V or I source` |
 | degenerate VCVS | A VCVS shorting its own output port (or unity self-sense) is singular and refuses by name. | `shorts its own output port` |
 | undefined subckt | An `X` call to a subcircuit that was never defined refuses with the name. | `undefined subckt` |
-| missing BJT/MOS `.model` | A `Q`/`M` referencing an undefined model is refused (a diode now refuses the same way; see below). | `references undefined .model` |
+| missing BJT/MOS `.model` | A `Q`/`M` referencing an undefined model is refused (a diode refuses the same way; see below). | `references undefined .model` |
 | unknown `.ac` sweep type | `.ac` accepts only `dec`, `oct`, or `lin`. | `unknown `.ac` sweep type` |
 | `.param` dependency cycle | Parameters that reference each other circularly are refused. | `dependency cycle` |
-| `D` undefined `.model` | A diode naming a model that does not exist is refused (no longer silently defaulted). | `references undefined .model` |
+| `D` undefined `.model` | A diode naming a model that does not exist is refused, not silently defaulted. | `references undefined .model` |
 | `D` non-diode `.model` | A diode naming a `.model` that is not a diode (e.g. an NPN) is refused rather than inheriting foreign params. | `not a diode model` |
 | `.tf` | Small-signal transfer-function analysis is not implemented; refused rather than silently ignored. | `unsupported directive `.tf`` |
 | `.noise` | Noise analysis is not implemented; refused rather than silently ignored. | `unsupported directive `.noise`` |
@@ -270,10 +270,10 @@ Things a user migrating a deck must know, beyond the per-card caveats above:
   directives accepted-and-ignored are the ones whose omission cannot change a computed
   value: `.end` (deck terminator), `.op` (the default DC operating point), `.title` (deck
   name), and `.width` / `.save` (output formatting/selection; hauksbee retains every
-  node). This closes the last "no silent no-op" gap the statement previously tracked.
+  node).
 
 ---
 
-*This statement is the honesty gate for dev-plan `04-spice-compat.md` §7. The subset it
+*The subset this statement
 documents is exactly the subset `crates/hauksbee-ir/tests/compat_drift.rs` enforces; the
 fidelity numbers live in [`results.md`](results.md).*
