@@ -105,6 +105,7 @@ The installer and `scripts/bundle.sh` agree on this exact shape (do not drift):
 | tarball          | `<base>.tar.gz`                                    |
 | checksum         | `<base>.tar.gz.sha256` (relative basename, `shasum -a 256` format) |
 | tarball layout   | `<base>/bin/hauksbee` and `<base>/bin/hauksbee-ci` (mode 0755) |
+| macOS app        | `<base>-app.zip` + `<base>-app.zip.sha256` (darwin suffixes only; contains `Hauksbee.app`, built by `app/macos/build-app.sh`; unsigned, see `app/macos/SIGNING.md`) |
 
 `get-hauksbee.sh` was extended in this change to accept all four suffixes; it
 previously rejected `linux-aarch64` and `darwin-x86_64` because the old matrix
@@ -120,21 +121,30 @@ runner actually executed.
 
 ## 5. Windows, evaluated, NOT promised
 
-Windows is plausible but unexercised, so it is not a shipping target and the
-installer refuses to pretend otherwise. What is actually known:
+Windows is close but unproven on real hardware, so it is not a shipping target
+and the installer refuses to pretend otherwise. Measured baseline (2026-07-27,
+cross-compiled `x86_64-pc-windows-gnu` from macOS, exercised under Wine):
 
-- **simavr (avr backend)**: builds on Windows in principle (MSYS2/MinGW), and the
-  FFI in `hauksbee-mcu` is not inherently POSIX-only, but it is untested here and
-  would need a Windows simavr build recipe + bindgen/libclang on Windows. Moot
-  for release binaries anyway, since the shipping shape is avr-free.
-- **Renode**: ships Windows builds, so the renode backend is plausible; the
-  discovery paths in `install-sims.sh` and `scripts/doctor.sh` are POSIX-shaped
-  and would need Windows equivalents.
-- **QEMU (Espressif fork)**: Windows binaries exist; same discovery-path caveat.
-- **Installer**: `get-hauksbee.sh` is bash; Windows would need a PowerShell
+- **The GPL-free shape cross-compiles clean**: all 229 crates, zero errors,
+  zero warnings, zero native C dependencies. Under Wine the binary runs real
+  analysis (bind report, DRC), board-as-code round-trips including a transient
+  solve, `doctor`, and `serve` answering HTTP with the real UI. The remaining
+  code gaps found were two `cfg(windows)` branches (browser open in serve,
+  process-tree kill in the dependency installer), both since added.
+- **Target choice**: `windows-gnu` is the proven cross-check target from
+  mac/Linux CI; the real port should ship `windows-msvc` (same pure-Rust
+  graph, no mingw runtime DLLs, the native toolchain on `windows-latest`).
+  Note the pinned toolchain: `rustup target add` must be applied to the
+  toolchain from `rust-toolchain.toml`, not whichever is globally active.
+- **simavr (avr backend)**: out of the GPL-free shape; a Windows avr build
+  would need an MSYS2 simavr recipe + bindgen. Moot for release binaries.
+- **Renode / QEMU (Espressif fork)**: both ship Windows builds; the discovery
+  paths in `install-sims.sh` and `scripts/doctor.sh` are POSIX-shaped and need
+  Windows equivalents, and co-sim end-to-end is unexercised on Windows.
+- **Installer**: `get-hauksbee.sh` is bash; Windows needs a PowerShell
   installer and `.zip` assets (no `tar.gz`/`shasum` assumptions).
-- **Toolchain**: MSVC vs GNU target, path handling, and CRLF concerns are all
-  unexercised.
+- **Wine is not Windows**: console/TTY behaviour, real filesystem semantics,
+  Defender, and the test suite under a native runner remain unproven.
 
 Windows stays off the promised-targets list until the port below exists and a
 Windows runner keeps it green; a target nobody tests is a target that silently
@@ -148,11 +158,13 @@ mechanical, and an agent can drive most of it. If you have Windows and an agent
 (Claude Code, Codex, or similar), this prompt is a working starting point:
 
 > Port hauksbee (github.com/ETM-Code/hauksbee) to Windows. Clone it, install a
-> stable MSVC Rust toolchain, and get `cargo build --workspace
-> --no-default-features --features renode,qemu` compiling; fix path handling,
-> process spawning, and anything POSIX-shaped you hit, keeping changes
-> `cfg`-gated or platform-neutral rather than forking behaviour. Then make
-> `cargo test --workspace --no-default-features --features renode,qemu` green.
+> stable MSVC Rust toolchain (add the target to the toolchain rust-toolchain.toml
+> pins), and confirm `cargo build --workspace --no-default-features --features
+> renode,qemu` compiles; the cross-compile baseline in section 5 says it should,
+> cleanly. The real work starts at making `cargo test --workspace
+> --no-default-features --features renode,qemu` green on a native runner,
+> keeping any platform change `cfg`-gated or platform-neutral rather than
+> forking behaviour.
 > Install Renode from its Windows portable zip and the Espressif QEMU Windows
 > binaries, teach the discovery logic (`crates/hauksbee-mcu`, `scripts/doctor.sh`
 > equivalents) where to find them, and prove firmware co-simulation end to end:

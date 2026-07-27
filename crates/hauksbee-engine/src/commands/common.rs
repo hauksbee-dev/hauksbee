@@ -167,11 +167,18 @@ pub fn dist_stale_message(dist_dir: &Path, source_paths: &[PathBuf]) -> Option<S
         }
     }
     let (path, _) = newest?;
+    // The path mixes a compile-time CARGO_MANIFEST_DIR prefix with runtime
+    // separators, which prints as 'a/b\c' on Windows. One separator style,
+    // and the repo-relative tail is the readable part anyway.
+    let shown = path.display().to_string().replace('\\', "/");
+    let shown = shown
+        .rsplit_once("/frontend/")
+        .map(|(_, tail)| format!("frontend/{tail}"))
+        .unwrap_or(shown);
     Some(format!(
         "  warning: the web app bundle looks STALE: frontend/dist was built before\n  \
-         '{}' changed. You may be served old, already-fixed behaviour. Rebuild with:\n\n      \
-         cd frontend && bun install && bun run build\n",
-        path.display()
+         '{shown}' changed. You may be served old, already-fixed behaviour. Rebuild with:\n\n      \
+         cd frontend && bun install && bun run build\n"
     ))
 }
 
