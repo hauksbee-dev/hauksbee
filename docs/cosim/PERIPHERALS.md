@@ -96,26 +96,24 @@ slave per bus). Two concrete devices:
 - **MCP3008 ADC** (`Mcp3008`); 8-channel 10-bit ADC; per-channel input voltage
   is settable and converted to counts on the standard 3-byte transfer.
 
-### The AVR master-read fix (was the MCP4728 gap)
+### Master reads on the AVR TWI hook
 
-The AVR TWI hook previously ACK'd writes but **never injected a reply byte on a
-master read**: slaves were effectively write-only, which is why the MCP4728
-I2C slave was a known gap and why no sensor read worked. This is fixed: the TWI
-hook now handles `TWI_COND_READ` by asking the slave for its byte and raising
-the TWI input IRQ with `READ | ACK` carrying the data. `I2cEvent` gained a
+Slaves are readable as well as writable: the TWI
+hook handles `TWI_COND_READ` by asking the slave for its byte and raising
+the TWI input IRQ with `READ | ACK` carrying the data, and `I2cEvent` has a
 `Read { addr }` variant for this path. The integration proof reads an LM75 and
 decodes real temperature bytes end to end.
 
 ### Declarative register-map devices (and the write side)
 
 Hand-coding each bus device in Rust does not scale, so a device can instead be
-a **TOML spec** (`docs/hunts/specs/*.toml`, schema in
+a **TOML spec** (`testdata/sensor-specs/*.toml`, schema in
 `hauksbee-models/src/sensor_spec.rs`) that the generic `RegisterMapSensor`
 interpreter realizes as a live `I2cSlave`/`SpiSlave`. The read side maps
 physical inputs through `evalexpr` value expressions into datasheet register
 packings (BME280, MPU6050, LM75 are byte-identical to hand-coded models).
 
-Since 05 §3.2 the spec also describes the **write side**: what firmware
+The spec also describes the **write side**: what firmware
 writes do:
 
 - **Pointer-framed write registers** decode into stored variables that read
@@ -125,10 +123,10 @@ writes do:
   fixture-anchored to datasheet worked-example numbers.
 - **Command-framed writes** (the MCP4728 shape: mask-matched command byte,
   fixed-size data groups, per-channel state) update state whose **output
-  voltage laws drive analog nets**. The MCP4728 is pure data now
-  (`docs/hunts/specs/mcp4728.toml`); the scheduler binds the binder-stamped
+  voltage laws drive analog nets**. The MCP4728 is pure data
+  (`testdata/sensor-specs/mcp4728.toml`); the scheduler binds the binder-stamped
   VOUT `PinDriver`s to the spec's outputs, and the slave drives them itself in
-  the ctx-bearing `on_stop` (05 §3.1), delivered once per chunk, after the
+  the ctx-bearing `on_stop`, delivered once per chunk, after the
   MCU ran and before the analog solve, because the byte events arrive inside
   the MCU callback where no circuit context exists (and the solve could not
   see a mid-chunk voltage anyway).

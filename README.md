@@ -6,7 +6,7 @@ Software runs its tests on every commit. Hardware never got that loop: you chang
 
 No other tool does this from the layout. Schematic simulators never see the board, MCU simulators use breadboards, and Proteus VSM co-simulates only from its own schematic. Hauksbee starts from the copper. See [`docs/about/COMPARISON.md`](docs/about/COMPARISON.md) for the full matrix.
 
-**New here? Start with [`docs/START_HERE.md`](docs/START_HERE.md):** the user path, install, and your next four reads. The authoritative scope document is [`docs/about/CAPABILITIES.md`](docs/about/CAPABILITIES.md): what every layer does, which MCU architectures the firmware co-sim covers (AVR via libsimavr; STM32/nRF52/RISC-V via Renode; ESP32 family via Espressif QEMU), and a common-misconceptions section. The project's evidence trail (bug-hunt campaigns, known-fault calibration, benchmarks) lives in [`docs/record/`](docs/record/).
+**New here? Start with [`docs/START_HERE.md`](docs/START_HERE.md):** the user path, install, and your next four reads. The authoritative scope document is [`docs/about/CAPABILITIES.md`](docs/about/CAPABILITIES.md): what every layer does, which checks are commodity versus differentiated, and which MCU architectures the firmware co-sim covers (AVR via libsimavr; STM32/nRF52/RISC-V via Renode; ESP32 family via Espressif QEMU).
 
 [**Watch the showcase**](frontend/capture/out/hauksbee_showcase.mp4) (a dozen boards running headless, ~2.5 min).
 

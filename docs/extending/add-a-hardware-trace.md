@@ -6,8 +6,7 @@ a permanent regression gate: a checked-in trace that every future run of the
 simulator is compared against, feature by feature. It requires no Rust, a
 directory, two TOML files, and the instrument's own export.
 
-This is oracle tier **T6** (the validation plan's
-`docs/dev-plans/08-validation-and-test-campaign.md` §T6): the one tier whose
+This is oracle tier **T6**: the one tier whose
 oracle is reality itself, and therefore the one tier where the sim and the
 oracle can *honestly disagree*. Everything about the format follows from
 taking that seriously.

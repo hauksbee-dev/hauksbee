@@ -60,22 +60,22 @@ A `--no-default-features --features renode,qemu` build is GPL-free: both the
 Renode and QEMU backends talk to their emulator over TCP and spawn it as a child
 process, so they link no GPL code.
 
-### Parts are data, not code (`db/mcu/*.soc.toml`, 06 §2)
+### Parts are data, not code (`db/mcu/*.soc.toml`)
 
-A *part* (an STM32F103, an ESP32-C3) is no longer a hand-written Rust
-constructor. Each is a reviewed descriptor file under
+A *part* (an STM32F103, an ESP32-C3) is a reviewed descriptor file, not a
+hand-written Rust constructor. Each lives under
 `crates/hauksbee-mcu/db/mcu/<part>.soc.toml`, loaded through one validated path
 (`RenodeConfig::from_soc_toml` / `QemuConfig::from_soc_toml`) with fail-loud,
 named errors; the same discipline as `sensor_spec.rs`. The descriptor carries
-everything the constructor used to embed: the platform `.repl` path, the CPU
+everything a backend needs to drive the part: the platform `.repl` path, the CPU
 path, the per-port register offsets (the F1-vs-F4 ODR footgun lives here as
 `odr_offset` data, not scattered logic), the UART/I2C/SPI controller names, the
 expected ISA (`expected_e_machine = "EM_ARM"`), and the awkward per-part fixups
 (`post_load_setup` for the FE310 PRCI/`vinit` bring-up, `[soc.spi].extra_repl`
 for the F103 SPI1 fragment, `[[soc.adc]]` injection recipes). The shipped
 descriptors are embedded via `include_str!` (the binary stays self-contained,
-the file stays the single source of truth; the `mcp4728.toml` precedent), and
-`RenodeConfig::stm32f103()` and friends are now thin accessors that load their
+the file stays the single source of truth), and
+`RenodeConfig::stm32f103()` and friends are thin accessors that load their
 descriptor. Validation refuses rather than fakes: unknown/mismatched backend,
 empty `platform_repl`, zero-width or overlapping ports, duplicate controllers,
 unknown `expected_e_machine`, ambiguous ADC inject, and (via
@@ -90,7 +90,7 @@ pattern below). The scheduler's backend instantiation resolves every
 override directories are the product path, not just a library function: an
 override directory wins over a built-in of the same name, and an *invalid*
 override for a part in use aborts the run naming the file and field, never a
-silent fallback to the built-in. That is the 06 §6.4 acceptance bar, a new
+silent fallback to the built-in. That is the acceptance bar: a new
 Renode MCU added without touching hauksbee's source. The equivalence and
 validation tests live in `crates/hauksbee-mcu/tests/soc_descriptors.rs`, the
 product-path wiring test in `hauksbee-engine`'s `soc_wiring_tests`;
@@ -128,11 +128,11 @@ floating input. A backend reports it observable
 authoritative; on a Renode part it flips true exactly when every polled port's
 SoC descriptor carries a verified `dir = { offset, encoding }` map, and the
 ODR poll then also masks out pins not configured as outputs (an input pin's
-ODR bit is not a drive). Unmapped platforms keep the old conservative
+ODR bit is not a drive). Unmapped platforms keep the conservative
 behavior: every ODR change reports, direction stays unobservable, and
 boot-coverage diagnoses hedge instead of asserting Hi-Z.
 
-The tiers (05-cosim-fidelity §5.1/§5.2): `simavr` runs in-process over FFI with
+The tiers: `simavr` runs in-process over FFI with
 cycle-accurate TWI/SPI/ADC IRQ callbacks, so interception is exact. Renode is
 driven over the Monitor TCP channel: I2C/SPI slaves are real Renode peripherals
 (generated C# bridges that call back into the engine), and ADC counts are
@@ -152,13 +152,13 @@ surfaced through the same `on_i2c`/`on_spi` callbacks as the other backends.
 That is a **firmware contract, not general firmware support**: unmodified
 vendor firmware sees none of it (the cells are gated on a `BUS_MAGIC` word),
 and each mailbox function is retired the day the fork grows the corresponding
-peripheral hook (05 §5.3).
+peripheral hook.
 
 ### ADC / bus coverage by platform (and how a hole is surfaced)
 
 An external co-sim can degrade silently: the platform has no ADC injection
 path, or no bus controller for a bound sensor, GPIO/UART still work, and the
-report reads healthy. Since the U3 honesty round that is impossible to miss,
+report reads healthy. hauksbee makes that impossible to miss:
 every hole below is surfaced on **all** report surfaces: `hauksbee run`
 default text, `--plain` heads-ups, `--json` (`CosimJson.adc_dropped` /
 `CosimJson.unexercised_buses` plus `notes[]` coverage entries), and every
@@ -330,7 +330,7 @@ control and the peripheral models, so the firmware runs unmodified.
 A row is **Proven** only if it was actually run end-to-end on this branch (a real
 emulator booting real firmware against the solved circuit, with the output
 recorded). Anything not run for real is labelled honestly. Every row's config is
-a `db/mcu/<part>.soc.toml` descriptor (06 §2), named by the `backend:part` in the
+a `db/mcu/<part>.soc.toml` descriptor, named by the `backend:part` in the
 first column; the built-in constructors load these files.
 
 | Architecture | Backend | Emulator / platform | Proof run on this branch |
@@ -360,7 +360,7 @@ portable build and was not run).
 ### RP2040 / Raspberry Pi Pico, honestly
 
 `db/mcu/rp2040.soc.toml` (loaded by `RenodeConfig::rp2040()`) ships as a
-data-driven descriptor (05-cosim-fidelity §5.4/§5.5, 06 §2), and it is unit-tested
+data-driven descriptor, and it is unit-tested
 (`rp2040_config_shape`, the serde round-trip, and the descriptor equivalence
 suite). What is **proven** is the config shape and the datasheet-grounded register
 offsets; what is **not** proven
@@ -418,9 +418,10 @@ are proven through QEMU above.
   you are on a build with `39128bb`+ and check `--report` for any passive with an
   absurd capacitance. See [`LIMITATIONS.md`](../about/LIMITATIONS.md) Fixed #4.
 - **ESP32 GPIO needs the firmware mailbox** (stock third-party firmware is
-  GPIO-invisible). The exact, empirically-validated reason and the QEMU-fork
-  patch that would remove the requirement are in
-  [`hunts/esp32-qemu-i2c-status.md`](../hunts/esp32-qemu-i2c-status.md).
+  GPIO-invisible). The reason is empirically validated (the fork's GPIO model
+  exposes no output read-back), and the QEMU-fork patch that would remove the
+  requirement is specified; see
+  [`LIMITATIONS.md`](../about/LIMITATIONS.md) (deferred section).
 
 ## What `--firmware` accepts (and the web drop zone too)
 
@@ -631,8 +632,8 @@ proving the backend is ISA-agnostic.
   STM32F103/F4/nRF52/FE310 platform descriptions model no ADC at all, so
   `set_analog_in` delivers counts only where a `RenodeConfig::adc_channels`
   recipe says how (a Monitor feed command for a modeled ADC, or a
-  `WriteDoubleWord` into the result word the firmware reads, 05-cosim-fidelity
-  §5.1). An unmapped channel's drop is recorded and surfaced on EVERY report
+  `WriteDoubleWord` into the result word the firmware
+  reads). An unmapped channel's drop is recorded and surfaced on EVERY report
   surface (run text, `--plain`, `--json` `CosimJson.adc_dropped` + notes, and
   the hauksbee-ci human/JUnit/GitHub reports), naming the channel, MCU, and
   net, never a stderr-only whisper. The STM32 demo couples through the
@@ -665,20 +666,20 @@ proving the backend is ISA-agnostic.
   backend keeps the same icount-free mechanism for uniformity.
 
 - **ESP32 ADC (SAR) is not modelled** by the QEMU fork, so `set_analog_in`
-  writes the modeled 12-bit count into a fixed RAM-mailbox slot instead
-  (05-cosim-fidelity §5.1): firmware reads the count from the slot where it
+  writes the modeled 12-bit count into a fixed RAM-mailbox slot
+  instead: firmware reads the count from the slot where it
   would read the SAR result register, with a validity mask distinguishing
   "never injected" from an honest zero. Like the GPIO words, this is a
   firmware contract. The demo couples through the GPIO/LED path.
 
-- **I2C/SPI byte interception rides the same mailbox** (05 §5.2): the fork
+- **I2C/SPI byte interception rides the same mailbox**: the fork
   exposes no host hook for the I2C RX FIFO or GPSPI transfers, so a
   participating firmware submits transaction-level requests through mailbox
   cells (gated on a `BUS_MAGIC` word; sequence handshake; one transaction per
   bus per chunk) and the backend surfaces each byte through the standard
   `on_i2c`/`on_spi` callbacks, writing replies back into guest RAM. Unmodified
   vendor firmware is untouched, and its real-controller bus traffic remains
-  host-invisible until the fork grows a peripheral hook (05 §5.3). Temperature
+  host-invisible until the fork grows a peripheral hook. Temperature
   sensors additionally reach unmodified firmware through the machine's own
   emulated tmp105 via `set_i2c_device_temperature`.
 

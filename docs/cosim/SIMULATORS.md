@@ -12,7 +12,7 @@ circuit in lockstep. Three backends cover the full supported architecture range:
 | `qemu` | ESP32 / ESP32-S3 (Xtensa) / ESP32-C3 (RISC-V) | External Espressif QEMU process | **Yes** |
 
 AVR links libsimavr from the system (GPL-3.0, deliberately not vendored in this
-MIT repo): install it with `scripts/install-sims.sh --avr`, or build without AVR
+Apache-2.0 repo): install it with `scripts/install-sims.sh --avr`, or build without AVR
 via `cargo build -p hauksbee-engine --no-default-features --features renode,qemu`.
 This document covers installing Renode and the Espressif QEMU fork for the other
 two. See [`docs/cosim/MCU.md`](MCU.md) for the full co-simulation
@@ -241,7 +241,9 @@ Same as x86_64 above, but use the `linux-arm64-portable-dotnet.tar.gz` asset.
 Download `renode-<ver>.windows-portable-dotnet.zip`, extract it, and either add
 the `renode.exe` to `PATH` or set `HAUKSBEE_RENODE` to its full path. The
 installer script does not cover Windows (it is bash); this step must be done
-manually.
+manually. Windows as a whole is untested territory: if you want to change that,
+`docs/about/release-and-licensing.md` section 5 has a ready-made prompt for
+pointing a coding agent at the port, and an invitation to PR the result.
 
 ---
 

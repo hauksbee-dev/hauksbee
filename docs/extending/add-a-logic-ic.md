@@ -206,9 +206,9 @@ function-table test the way the shipped parts are pinned does.
 
 Not everything digital is a boolean-comb data entry, on purpose:
 
-- **Muxes, the 74HC138 decoder, the 74HC245 transceiver** are deferred, their
-  select/direction semantics are not boolean combinational logic (a design
-  decision recorded in `docs/dev-plans/06-extensibility-sdk.md` §8.2).
+- **Muxes, the 74HC138 decoder, the 74HC245 transceiver** are deferred, a
+  deliberate design decision: their select/direction semantics are not boolean
+  combinational logic.
 - **MCU-facing chain controllers** (`Hc595Chain`/`Hc165Chain`) and the
   binder's 74HC02 cross-couple fusion stay Rust, documented in
   `crates/hauksbee-engine/src/digital.rs`, net-level feedback cannot settle
