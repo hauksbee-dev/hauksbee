@@ -343,7 +343,7 @@
           "default": null
         },
         "id": {
-          "description": "peripheral: the `id` of the [[peripheral]] / [[sensor]] to read.",
+          "description": "peripheral: the `id` of the `[[peripheral]]` / `[[sensor]]` to read.",
           "type": [
             "string",
             "null"
