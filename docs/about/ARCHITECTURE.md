@@ -17,34 +17,7 @@ without giving up the speed that made it many times faster than ngspice.
 
 ## Pipeline
 
-```
-.kicad_pcb ──forge-sexpr/model──▶ typed board
-.kicad_sch ──forge-sexpr────────▶ derived netlist   (see docs/ingest/SCHEMATICS.md)
-.brd / .d356 ───────────────────▶ typed board
-gerber + drill + P&P ───────────▶ reconstructed board (see docs/ingest/GERBER.md)
-        │
-        ▼
-hauksbee-extract: pads ⇒ nets ⇒ connectivity graph ⇒ component instances
-        │                                   ▲
-        ▼                                   │ model binding
-hauksbee-models: lib_id/value/part-number ⇒ device model
-   (built-in defaults │ user SPICE │ datasheet extraction via codex)
-        │
-        ▼
-hauksbee-ir: Circuit IR; devices, nodes, parameters, parasitics (optional)
-        │
-        ▼
-hauksbee-solve: partitioned hybrid solver           hauksbee-mcu: MCU backends
-   linear subcircuits → state-space exp.    ◀───▶    AVR/STM32/ESP32/nRF/RISC-V
-   nonlinear islands  → MNA + Newton                 pin/ADC/UART/I2C hooks
-   digital            → event queue                  lockstep co-sim (docs/cosim/MCU.md)
-        │
-        ▼
-hauksbee-server: websocket protocol (frames, probes, controls)
-        │                         └─ front door: drop a board, get a report
-        ▼                            (`hauksbee serve`, browser, no CLI)
-frontend: board-accurate 2D/3D render, live signal flow, probes, controls
-```
+![The pipeline from board and schematic files through extraction, model binding and the circuit IR, into a hybrid solver running in lockstep with an emulated MCU, and out to the server and frontend](../assets/diagrams/pipeline-stack.svg)
 
 ## Solver philosophy (why we beat ngspice)
 

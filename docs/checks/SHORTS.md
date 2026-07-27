@@ -9,18 +9,7 @@ the board actually does with the short present (`hauksbee-engine`).
 
 ## Pipeline
 
-```
-.kicad_pcb ──drc::run_drc──▶ DrcReport (shorts + clearance violations)
-                                   │
-                                   ▼
-              Scheduler::apply_drc_shorts / short_nets
-                                   │  bridge shorted nets with a few-mΩ resistor
-                                   ▼
-              transient solve ──▶ StressMonitor ──▶ FaultEvent{kind:"short", ...}
-                                   │
-                                   ▼
-                         frontend fault channel (no UI change)
-```
+![How a copper short travels through Hauksbee: DRC on the .kicad_pcb produces a DrcReport of shorts and clearance violations, the scheduler bridges the shorted nets with a few-milliohm resistor, and the transient solve and stress monitor raise a short fault event on the frontend fault channel](../assets/diagrams/short-detection.svg)
 
 ## Detection (`hauksbee-extract/src/drc.rs`)
 
