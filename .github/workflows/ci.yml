@@ -1,4 +1,4 @@
-# PR/push CI for hauksbee: format, lints, tests, and the MIT-clean build shape.
+# PR/push CI for hauksbee: format, lints, tests, and the GPL-free build shape.
 #
 # The board-corpus gate runs nightly instead (corpus-gate.yml): it fetches a
 # hundred-odd boards from their upstream projects, which is too slow to put in
@@ -64,7 +64,7 @@ jobs:
         run: cargo test --workspace
 
   gpl-free-check:
-    name: cargo check (MIT-clean renode+qemu shape)
+    name: cargo check (GPL-free renode+qemu shape)
     runs-on: ubuntu-latest
     env:
       # GPL-freeness guard: a clean shape ignores these; a leaky shape panics.
@@ -77,7 +77,7 @@ jobs:
       # pointed at a nonexistent path: if the renode+qemu shape is truly
       # avr-free, hauksbee-mcu/build.rs early-returns and ignores it. If `avr`
       # leaks back into the graph, build.rs panics and this job fails, telling
-      # us the "MIT-clean" release would in fact be GPL-encumbered.
+      # us the "GPL-free" release would in fact be GPL-encumbered.
       #
       # A red here means a feature-graph regression re-enabled avr. Fix the
       # graph, never weaken this check.

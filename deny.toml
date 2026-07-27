@@ -2,10 +2,11 @@
 #
 #   cargo install cargo-deny && cargo deny check
 #
-# Licences matter more than usual here. hauksbee is MIT, but the `avr` feature
-# links the GPL libsimavr, so the default build shape is GPL-encumbered while
-# `--no-default-features --features renode,qemu` is not. CI already asserts that
-# shape stays genuinely avr-free; this checks the dependency tree that feeds it.
+# Licences matter more than usual here. hauksbee is Apache-2.0, but the `avr`
+# feature links the GPL libsimavr, so the default build shape is GPL-encumbered
+# while `--no-default-features --features renode,qemu` is not. CI already
+# asserts that shape stays genuinely avr-free; this checks the dependency tree
+# that feeds it.
 
 [advisories]
 yanked = "deny"

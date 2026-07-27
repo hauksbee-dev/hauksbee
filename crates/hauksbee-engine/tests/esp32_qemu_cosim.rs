@@ -301,7 +301,7 @@ fn esp32c3_full_cosim_through_solved_circuit() {
 // Regression for the ESP32-S3 co-sim gap: the builtin `esp32s3` model entry
 // carried no `backend` param, so a Watchy-v3-class board silently inherited
 // the binder's AVR default (`simavr:atmega328p`), wrong ISA, and the
-// GPL-gated `avr` feature the MIT-clean build excludes. These tests pin the
+// GPL-gated `avr` feature the GPL-free build excludes. These tests pin the
 // whole chain: bind → `qemu:esp32s3` → SocConfig::resolve (esp32s3.soc.toml)
 // → QemuBackend spawning the Espressif fork's *esp32s3* machine.
 //

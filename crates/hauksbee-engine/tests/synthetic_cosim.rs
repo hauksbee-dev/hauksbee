@@ -58,7 +58,7 @@ fn synthetic_board_binds() {
 }
 
 // Boots the AVR demo firmware on the synthetic Nano board, so it needs the
-// GPL-gated `avr` feature (the MIT-clean renode/qemu build refuses AVR
+// GPL-gated `avr` feature (the GPL-free renode/qemu build refuses AVR
 // firmware by design). `synthetic_board_binds` above stays feature-free.
 #[cfg(feature = "avr")]
 #[test]

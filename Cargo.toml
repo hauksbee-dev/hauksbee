@@ -20,7 +20,7 @@ exclude = ["vendor/kicad-forge"]
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "Apache-2.0"
 # Every crate inherits these, so the shared metadata is stated once and cannot
 # drift between the eight published crates. `description` is deliberately NOT
 # here: each crate describes what it actually does.
@@ -123,12 +123,12 @@ ratatui = "0.29"
 crossterm = "0.28"
 
 # Tuned for a small shipped binary (the release tarball is what users download).
-# Fat LTO + a single codegen unit + strip takes the two MIT-clean binaries from
-# ~19 MB combined down to ~14.8 MB (measured ~-23%), with no runtime cost — we
+# Fat LTO + a single codegen unit + strip takes the two GPL-free binaries from
+# ~19 MB combined down to ~14.8 MB (measured ~-23%), with no runtime cost; we
 # keep opt-level 3 because the hot numeric solve path is the product's speed
 # story. `strip` keeps the tarball small even if a build bypasses bundle.sh;
 # panic location info survives (we do not strip panic messages). `opt-level="s"`
-# shrinks a further ~17% but can slow the solver a few percent — adopt it only
+# shrinks a further ~17% but can slow the solver a few percent, so adopt it only
 # after a release-build timing check on a real spec confirms the hot path holds.
 [profile.release]
 opt-level = 3

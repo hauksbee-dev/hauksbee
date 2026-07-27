@@ -1,0 +1,13 @@
+Hauksbee
+Copyright 2026 Eoghan Collins
+
+Hardware CI: circuit extraction from real board files, device-model binding,
+static checks, and firmware co-simulation on emulated MCUs.
+https://hauksbee.dev
+
+This product includes software developed by Eoghan Collins.
+
+Redistributions of this software, with or without modification, must retain
+this NOTICE file per section 4(d) of the Apache License 2.0. If you build
+something on hauksbee, a visible credit ("powered by hauksbee") is appreciated
+but the licence only requires what section 4 requires.

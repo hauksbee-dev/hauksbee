@@ -78,7 +78,7 @@ fn which_avr_gcc() -> bool {
 /// Variant A drives the gate promptly: the boot-coverage assertion PASSES, and
 /// so does the no_faults assertion (boot window clean).
 // Runs AVR .hex firmware on the ATmega boot_gate board, so it needs the
-// GPL-gated `avr` feature (the MIT-clean renode/qemu build refuses AVR
+// GPL-gated `avr` feature (the GPL-free renode/qemu build refuses AVR
 // firmware by design). The Watchy QEMU rows below cover the external-backend
 // half of the mechanism.
 #[cfg(feature = "avr")]
@@ -113,7 +113,7 @@ fn gate_driven_promptly_passes() {
 /// the control net that was left Hi-Z. This is the discriminating half - the
 /// check has teeth only because this case goes RED.
 // Runs AVR .hex firmware on the ATmega boot_gate board, so it needs the
-// GPL-gated `avr` feature (the MIT-clean renode/qemu build refuses AVR
+// GPL-gated `avr` feature (the GPL-free renode/qemu build refuses AVR
 // firmware by design). The Watchy QEMU rows below cover the external-backend
 // half of the mechanism.
 #[cfg(feature = "avr")]
