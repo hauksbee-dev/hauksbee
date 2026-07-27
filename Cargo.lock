@@ -725,14 +725,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d9c4f5dac5e15c24eb999c26181a6ca40b39fe946cbe4c263c7209467bc83af2"
 
 [[package]]
-name = "forge-codegen"
-version = "0.1.0"
-dependencies = [
- "forge-model",
- "forge-sexpr",
-]
-
-[[package]]
 name = "forge-model"
 version = "0.1.0"
 dependencies = [
@@ -939,10 +931,10 @@ dependencies = [
  "clap",
  "crossterm",
  "evalexpr",
- "forge-codegen",
  "forge-model",
  "forge-sexpr",
  "hauksbee-extract",
+ "hauksbee-forge-codegen",
  "hauksbee-ir",
  "hauksbee-mcu",
  "hauksbee-models",
@@ -979,6 +971,14 @@ dependencies = [
  "thiserror 2.0.18",
  "toml",
  "zip",
+]
+
+[[package]]
+name = "hauksbee-forge-codegen"
+version = "0.1.0"
+dependencies = [
+ "forge-model",
+ "forge-sexpr",
 ]
 
 [[package]]

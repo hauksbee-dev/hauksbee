@@ -102,7 +102,10 @@ write_literal = "allow"
 # forge-codegen = { path = "../kicad-forge/crates/forge-codegen" }
 forge-sexpr = { path = "vendor/kicad-forge/crates/forge-sexpr" }
 forge-model = { path = "vendor/kicad-forge/crates/forge-model" }
-forge-codegen = { path = "vendor/kicad-forge/crates/forge-codegen" }
+# The dependency key stays forge-codegen so `use forge_codegen::` keeps
+# working everywhere; the package itself is hauksbee-forge-codegen because
+# crates.io already has an unrelated forge-codegen.
+forge-codegen = { path = "vendor/kicad-forge/crates/forge-codegen", package = "hauksbee-forge-codegen" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 anyhow = "1"
