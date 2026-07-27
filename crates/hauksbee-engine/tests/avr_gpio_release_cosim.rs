@@ -14,7 +14,7 @@
 //! let the net fall to ~0 V; a latched driver would hold it at 5 V.
 
 // The board binds `simavr:atmega328p`, whose in-process core needs the
-// GPL-gated `avr` feature (excluded from the MIT-clean renode/qemu build).
+// GPL-gated `avr` feature (excluded from the GPL-free renode/qemu build).
 #![cfg(feature = "avr")]
 
 use hauksbee_engine::binder::bind_board;

@@ -50,7 +50,7 @@ fn main() {
              hauksbee-mcu: the `avr` co-sim feature needs a system libsimavr, but \
              couldn't find {missing}.\n\
              \n\
-             simavr is GPL-3.0 and this repo is MIT, so simavr is NOT vendored here; \
+             simavr is GPL-3.0 and this repo is Apache-2.0, so simavr is NOT vendored here; \
              it is linked from your system by deliberate choice. To build the AVR \
              backend, pick one:\n\
              \n\

@@ -155,7 +155,7 @@ fn recognized_family_without_platform_and_non_mcu_parts_stay_unresolved() {
 // v3's MCU), so the family-router fallback never runs for it. The bind must
 // still land on the QEMU Xtensa backend; the old silent
 // `.unwrap_or("simavr:atmega328p")` default sent an ESP32-S3 into the AVR
-// path (wrong ISA, and the GPL-gated `avr` feature the MIT-clean build
+// path (wrong ISA, and the GPL-gated `avr` feature the GPL-free build
 // excludes).
 #[test]
 fn esp32s3_db_model_binds_qemu_backend_not_avr() {

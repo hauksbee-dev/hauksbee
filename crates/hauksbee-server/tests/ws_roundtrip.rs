@@ -3,7 +3,7 @@
 //! frames + serial interaction.
 //!
 //! Whole file is gated on `avr`: the demo engine IS the simavr backend, so in
-//! the MIT-clean shape (`--no-default-features --features renode,qemu`) there
+//! the GPL-free shape (`--no-default-features --features renode,qemu`) there
 //! is nothing to test here and the file compiles to nothing.
 #![cfg(feature = "avr")]
 

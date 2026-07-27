@@ -20,8 +20,9 @@ Espressif) are detected at runtime, not required to build. `hauksbee doctor`
 reports which ones this machine has, and the web UI offers one-click installs
 for the missing ones. See `docs/cosim/SIMULATORS.md`.
 
-**Licensing note:** the `avr` feature links the GPL `libsimavr`, so the default
-build shape is GPL-encumbered. The MIT-clean shape is
+**Licensing note:** hauksbee is Apache-2.0, and the `NOTICE` file must ride
+along with any redistribution. The `avr` feature links the GPL `libsimavr`, so
+the default build shape is GPL-encumbered. The GPL-free shape is
 `--no-default-features --features renode,qemu`, and CI asserts that it stays
 genuinely avr-free rather than merely compiling. See
 `docs/about/release-and-licensing.md` before touching the feature graph.

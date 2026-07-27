@@ -30,7 +30,7 @@ pub trait Engine: Send + 'static {
 ///
 /// Feature-gated on `avr`: this is the only place the server crate touches the
 /// simavr-backed [`hauksbee_mcu::AvrMcu`]. Keeping it behind the gate is what
-/// lets the MIT-clean release shape (`--no-default-features --features
+/// lets the GPL-free release shape (`--no-default-features --features
 /// renode,qemu`) build the server crate without linking GPL-3.0 libsimavr.
 #[cfg(feature = "avr")]
 pub struct McuDemoEngine {

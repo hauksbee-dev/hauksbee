@@ -224,7 +224,7 @@ fn github_annotations_emit_error_on_failure() {
 }
 
 // Boots the AVR demo .hex on the blinky ATmega board, so it needs the
-// GPL-gated `avr` feature (the MIT-clean renode/qemu build refuses AVR
+// GPL-gated `avr` feature (the GPL-free renode/qemu build refuses AVR
 // firmware by design).
 #[cfg(feature = "avr")]
 #[test]

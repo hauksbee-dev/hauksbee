@@ -22,7 +22,7 @@ Vendoring captures the exact sources, builds offline, and is deterministic.
 - Repository: https://github.com/ETM-Code/kicad-forge.git
 - Commit: `d3f1a18293387e721dddaa2f93af8c34d0eb3691`
   (branch `feat/decompile-board-example`)
-- License: MIT (per the upstream workspace `[workspace.package] license = "MIT"`)
+- License: Apache-2.0 (relicensed with this workspace; the upstream sibling repo is the same author)
 
 ## What was and was not copied
 

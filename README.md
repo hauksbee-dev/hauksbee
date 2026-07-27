@@ -165,8 +165,8 @@ documented at the top of [`crates/hauksbee-ci/src/spec.rs`](crates/hauksbee-ci/s
 
 AVR (ATmega328P) co-simulation links libsimavr directly into the engine, so
 there is no separate simulator process to launch. simavr is GPL-3.0 and this
-MIT repo does not vendor it, so a source build links it from the system, one
-command installs it:
+Apache-2.0 repo does not vendor it, so a source build links it from the
+system, one command installs it:
 
 ```bash
 scripts/install-sims.sh --avr    # build + install libsimavr (AVR co-sim)
@@ -264,6 +264,10 @@ Hauksbee stands on a lot of open-source work. The substantial ones:
 
 **Rust ecosystem**: [num-complex](https://crates.io/crates/num-complex) (complex MNA for the AC solver), [cfb](https://crates.io/crates/cfb) (OLE2 parsing for Altium files), [evalexpr](https://crates.io/crates/evalexpr) (behavioural device-model expressions), [clap](https://crates.io/crates/clap) (CLI), [axum](https://crates.io/crates/axum) + [tower-http](https://crates.io/crates/tower-http) + [tokio](https://crates.io/crates/tokio) (the web front door), [serde](https://crates.io/crates/serde) (serialisation), [bindgen](https://crates.io/crates/bindgen) (the simavr FFI bindings), and the wider Rust crate ecosystem.
 
+## Contributing
+
+[`CONTRIBUTING.md`](CONTRIBUTING.md) covers getting a build, running the tests (including reproducing the board corpus the zero-false-positive gate is measured against), and what a change has to clear before it lands. Security reports go through [`SECURITY.md`](SECURITY.md), conduct is covered by [`CODE_OF_CONDUCT.md`](CODE_OF_CONDUCT.md), and notable changes land in [`CHANGELOG.md`](CHANGELOG.md).
+
 ## License
 
-Hauksbee's own source is **MIT** (see [`LICENSE`](LICENSE)). One caveat, stated plainly: the optional `avr` backend links **libsimavr, which is GPL-3.0**, so a binary built with the default features (which include `avr`) is a combined work covered by GPL-3.0. Build with `--no-default-features --features renode,qemu` for a GPL-free binary, Renode and the Espressif QEMU fork run as separate processes reached over TCP, so they impose no link-time licence obligation.
+Hauksbee's own source is **Apache-2.0** (see [`LICENSE`](LICENSE)). Redistributions must retain the [`NOTICE`](NOTICE) file, which is how attribution travels with the code. One caveat, stated plainly: the optional `avr` backend links **libsimavr, which is GPL-3.0**, so a binary built with the default features (which include `avr`) is a combined work covered by GPL-3.0. Build with `--no-default-features --features renode,qemu` for a GPL-free binary, Renode and the Espressif QEMU fork run as separate processes reached over TCP, so they impose no link-time licence obligation.

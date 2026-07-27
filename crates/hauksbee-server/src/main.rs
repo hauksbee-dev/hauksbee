@@ -6,7 +6,7 @@
 //! libsimavr.
 
 // The demo binary is AVR-only: it exists to run the synthetic McuDemoEngine
-// (a simavr-backed atmega328p). Without the `avr` feature (the MIT-clean
+// (a simavr-backed atmega328p). Without the `avr` feature (the GPL-free
 // release shape) there is nothing for it to demo, so it compiles to a stub
 // that says so instead of dragging GPL libsimavr into a "GPL-free" build.
 #[cfg(not(feature = "avr"))]

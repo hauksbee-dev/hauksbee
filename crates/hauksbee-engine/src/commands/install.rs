@@ -2,7 +2,7 @@
 //! QEMU fork (qemu-system-xtensa + qemu-system-riscv32) into
 //! `~/.hauksbee-qemu-esp/`, the first location the engine's own discovery
 //! checks. Fetch, never bundle: the fork is GPL-2.0 and stays out of this
-//! MIT-licensed tree; the installer downloads from
+//! Apache-2.0-licensed tree; the installer downloads from
 //! `github.com/espressif/qemu` releases, verifies the sha256 against the
 //! release's checksum manifest, and accepts each binary only after the same
 //! `is_esp_fork` machine-list check a co-sim applies.
