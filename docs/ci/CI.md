@@ -190,8 +190,7 @@ value = "0.05"            # the documented milliohm sense shunt
 `[[override]]` swaps a component's *value string* before binding. Some boards
 differ from their design files more radically: traces cut with a knife, pins
 lifted, jumper wires soldered, parts replaced; the physical rework record.
-That delta lives in a declarative `.asbuilt.toml` overlay (the format is
-documented in `docs/how-and-why/hauksbee-engine/asbuilt.md`), and a spec can
+That delta lives in a declarative `.asbuilt.toml` overlay, and a spec can
 reference one; it is applied to the bound board before every run, ahead of any
 harness attachment:
 
@@ -550,8 +549,8 @@ driven only by an MCU GPIO that goes high-impedance at reset. Its power-up
 default is therefore undefined. Whether that is a *bug* depends on the intended
 default state of the controlled load, which the netlist does not encode: a
 display that must be on by default and a haptic motor that must be off by default
-have byte-identical netlist topology. `docs/record/KNOWN_FAULTS_VALIDATION.md` records
-two real such faults (Watchy e-paper RES#, ZSWatch DISPLAY-EN) as honest misses
+have byte-identical netlist topology. Two real such faults (Watchy e-paper
+RES#, ZSWatch DISPLAY-EN) are recorded as honest misses of the static checks
 for exactly this reason - a static check firing there would be a confident false
 positive on a shipped board, on the very same topology that is correct elsewhere.
 
@@ -590,18 +589,17 @@ assertion, two firmwares, opposite verdicts. Pinned as an integration test,
 ### Backend reach (stated honestly)
 
 This proof uses the **AVR (simavr)** backend, one of hauksbee's **three** co-sim
-backends; the mechanism is backend-agnostic and now runs on all three. Besides
+backends; the mechanism is backend-agnostic and runs on all three. Besides
 AVR, the **Renode** backend co-sims STM32, **nRF52**, and SiFive RISC-V, and the
 **QEMU** backend co-sims ESP32 / ESP32-S3 / ESP32-C3 (see `docs/cosim/MCU.md` for the
 full matrix). nRF52 is turnkey today: `hauksbee run` boots the bundled
 `testdata/firmware/renode_demos/nrf52840-zephyr_shell.board` +
 `nrf52840-zephyr_shell.elf` pair to the Zephyr `uart:~$` prompt through Renode.
 
-So the corpus boards' MCUs are no longer blocked on a *missing* backend: ZSWatch
+Both faulted boards named above are covered by a backend: ZSWatch
 is nRF52 (Renode) and Watchy is ESP32 (QEMU), and both architectures co-sim.
 What each still needs to run *this* boot-coverage check is its own firmware
-image built for the target; `docs/record/KNOWN_FAULTS_VALIDATION.md` tracks those
-rows with that note.
+image built for the target.
 
 Honest per-backend caveat for boot-coverage: GPIO-drive detection reads the
 port's output register once per co-sim chunk. On AVR (cycle-accurate simavr) and

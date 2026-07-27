@@ -28,7 +28,7 @@ Today exactly **one** part is seeded: the Cypress / Infineon **CYPD3177**
 
 ## Zero-false-positive discipline (binding)
 
-In line with the project rule (`docs/record/KNOWN_FAULTS_VALIDATION.md`), the check fires
+In line with the project's zero-false-positive rule, the check fires
 ONLY when:
 
 1. the part is **positively identified** (its value / MPN string contains the
@@ -94,17 +94,17 @@ detent: the part requests VBUS_MAX, not the (higher) labelled voltage.
   cannot say "the detent labelled 15 V decodes to 12 V" from the netlist alone.
   It states which bands the selector can reach and which it cannot; a reviewer
   reads off that "20 V" is unreachable. The exact "detent N labelled X decodes Y"
-  mismatch is proven in the unit tests against the hunt's hand-derived numbers.
+  mismatch is proven in the unit tests against hand-derived numbers.
 - A selector wired through a part that does not bind as a multi-pad switch on the
   config net is not enumerated. The static (permanent) divider is still decoded
   and the Note-1 check still runs.
 
-## The hunt this reproduces, and an important correction
+## The board this was calibrated on
 
-The seed comes from `docs/hunts/pd-sink-trigger.md` CANDIDATE 4: the
-INGBZGMBH PD-Sink-Trigger-Board's rotary VBUS selector.
+The seed case is the INGBZGMBH PD-Sink-Trigger-Board's rotary VBUS selector
+(a CYPD3177 with a per-detent switched divider).
 
-The hunt's decode arithmetic is reproduced exactly by the unit tests
+The decode arithmetic is locked down by the unit tests
 (`hunt_detent_voltages_decode`, `divider_voltage_matches_hand_math`,
 `table2_band_edges_decode`): with a **permanent 10 k pull-down (R12) populated**,
 detent 4 ("15 V") decodes to the 12 V band and detent 5 ("20 V") decodes to the
@@ -112,11 +112,10 @@ detent 4 ("15 V") decodes to the 12 V band and detent 5 ("20 V") decodes to the
 synthetic-board tests confirm the check fires (Medium unreachable-top-band + High
 Note-1) on exactly that topology.
 
-**However, running the as-built board surfaces a correction to the hunt.** In
+On the board **as actually assembled**, though, that topology never exists. In
 both `USB-C_PD_Trigger.kicad_pcb` and `.kicad_sch`, **R12 (the permanent VBUS_MAX
 pull-down) and R9 (the VBUS_MIN pull-up) are marked Do-Not-Populate**
-(`(attr smd exclude_from_bom dnp)` / `(dnp yes)`). The hunt doc assumed R12 is
-"always present"; the design files say it is not assembled.
+(`(attr smd exclude_from_bom dnp)` / `(dnp yes)`).
 
 With DNP honored:
 
@@ -128,12 +127,10 @@ With DNP honored:
 
 So the device-decode check correctly produces **no finding** on the real board:
 the permanent pull-down it would need to compute the faulty static VBUS_MAX
-divider is unpopulated. Firing here would be a false positive. This is the
-zero-false-positive discipline doing its job, and it is also a genuine result:
-the hunt's "confirmed defect" was derived from treating two DNP parts as
-populated. The check's decode math (the part that *is* portable and provable) is
-locked down by the unit tests; the check's silence on the real board is the
-honest, correct call given the assembled BOM.
+divider is unpopulated. Firing here would be a false positive; the check's
+silence on the real board is the zero-false-positive discipline doing its job.
+The decode math (the part that *is* portable and provable) is
+locked down by the unit tests.
 
 ## Tests
 

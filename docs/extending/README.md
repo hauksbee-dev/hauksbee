@@ -21,8 +21,7 @@ they assume **no knowledge of hauksbee's source**.
 
 ## The extension hierarchy
 
-The rows above are ordered from cheapest to most invasive
-(`docs/dev-plans/06-extensibility-sdk.md` §0):
+The rows above are ordered from cheapest to most invasive:
 
 1. **Data.** Model TOML, sensor specs, logic specs, SoC descriptors. No
    recompile; validated fail-loud at load.
@@ -60,6 +59,3 @@ validation rule, that rule exists because its absence once corrupted a result.
 - [docs/models/PACKS.md](../models/PACKS.md); the pack format reference.
 - [docs/cosim/PERIPHERALS.md](../cosim/PERIPHERALS.md); the peripheral layer sensors plug into.
 - [docs/cosim/MCU.md](../cosim/MCU.md); the co-sim backends SoC descriptors configure.
-- `docs/dev-plans/06-extensibility-sdk.md`; the design plan behind all of this.
-- `docs/dev-plans/04-spice-compat.md` §1; the six-touchpoint hazard table for
-  device physics.

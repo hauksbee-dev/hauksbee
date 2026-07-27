@@ -204,7 +204,7 @@ schematic is out of scope. Adding the legacy parser is future work.
 
 ## Known limitations
 
-- **Bus aliases referenced as `{ALIAS}` are now expanded.** A `(bus_alias …)`
+- **Bus aliases referenced as `{ALIAS}` are expanded.** A `(bus_alias …)`
   definition is recorded per sheet and substituted for its member list when a
   group bus references it (`MEM{ADDR}`). Covered end-to-end by the
   `bus_alias_top` / `bus_alias_child` fixture pair (a `MEM{ADDR}` reference

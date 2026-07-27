@@ -209,8 +209,8 @@ are in the [board-as-code README](../../examples/board-as-code/README.md).
 † These two specs run against boards in the developer board-corpus (the
 historical-revision Watchy v1.5 and KiCad's `pic_programmer` demo), which is not
 redistributed in this repo, and the Watchy one also needs the Espressif QEMU
-ESP32 backend. They document the [known-fault validation
-campaign](../record/KNOWN_FAULTS_VALIDATION.md); their integration tests skip
+ESP32 backend. They come from the known-fault validation campaign the checks
+were calibrated on; their integration tests skip
 cleanly when the corpus or backend is absent. To run a real board here with no
 extra setup, use `hauksbee run boards/watchy.kicad_pcb --report` above.
 

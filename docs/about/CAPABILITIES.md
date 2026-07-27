@@ -1,10 +1,9 @@
 # Hauksbee capabilities and scope
 
-> Read this first if you are integrating, evaluating, or building automation
-> around hauksbee. The two most common mistakes, treating it as "just a DRC
-> wrapper" and assuming firmware co-simulation is ATmega-only, are addressed
-> explicitly in the [Common misconceptions](#common-misconceptions) section at
-> the end.
+> The authoritative scope document. Read this first if you are integrating,
+> evaluating, or building automation around hauksbee: every layer, what is
+> commodity versus differentiated, and exactly which MCUs the firmware co-sim
+> covers.
 
 ---
 
@@ -125,6 +124,11 @@ through the analog circuit solver in lockstep. Every static check becomes a
 dynamic check: rails are measured under actual firmware-driven load; GPIO
 transitions fire in the correct order; boot timing is observed in simulated time.
 
+Coverage in one sentence: **co-sim covers AVR (via libsimavr, in-process),
+STM32 / nRF52 / RISC-V (via Renode), and the full ESP32 family (via Espressif
+QEMU), all behind one `Mcu` trait**; the per-chip proven status is in the
+backend tables below.
+
 The entry point is `hauksbee run <board> --firmware <img> --headless [--seconds N]`.
 
 ### Boot-safety advisory (`--headless --plain` / `--json`)
@@ -183,8 +187,7 @@ mislabelled. In `--json` the same rows appear under `boot_gates`.
 For a deadline-gated, *named* pass/fail check on a specific net, use the
 `boot-coverage` assertion in `hauksbee-ci` (`boot_gate_pass.toml` /
 `boot_gate_fail.toml`). The held-high warning is exactly how the
-`explosion33/RocketryIgniter` power-up ignition fault surfaces from one command
-(see [`hunts/HUNT_2026-06-30.md`](../hunts/HUNT_2026-06-30.md)).
+`explosion33/RocketryIgniter` power-up ignition fault surfaces from one command.
 
 ### The `Mcu` trait and three backends
 
@@ -194,11 +197,16 @@ scheduler couples to any of them without change. The trait lives in
 `crates/hauksbee-mcu/src/traits.rs`; the backends in
 `crates/hauksbee-mcu/src/`.
 
+STM32, nRF52840, ESP32, and ESP32-C3 are all proven end-to-end on this branch
+by named integration tests: `crates/hauksbee-engine/tests/stm32_renode_cosim.rs`,
+`esp32_qemu_cosim.rs`, and `renode_riscv_arm_cosim.rs`. The external simulators
+install via `scripts/install-sims.sh` and are found automatically at runtime.
+
 #### AVR, `AvrMcu` (libsimavr, linked in-process)
 
 Backed by libsimavr, linked directly into the engine; the AVR co-sim runs
 in-process, with no separate simulator to launch. simavr is GPL-3.0 and this
-MIT repo deliberately does **not** vendor it, so a source build links it from
+Apache-2.0 repo deliberately does **not** vendor it, so a source build links it from
 the system. Get there one of three ways:
 
 - install it with one command, `scripts/install-sims.sh --avr` (builds and
@@ -266,7 +274,7 @@ command or result-word write). **No shipped Renode platform carries a map**:
 the stock STM32F103/F4/nRF52840 Renode 1.16.1 platform descriptions model no
 ADC peripheral at all (verified live), and shipping a wrong-layout model or an
 invented RAM word would be fake fidelity. An unmapped channel's injections are
-therefore DROPPED, and, since the U3 honesty round, that drop is surfaced on
+therefore DROPPED, and that drop is surfaced on
 **every** report surface (`hauksbee run` text, `--plain`, `--json`
 `CosimJson.adc_dropped` + coverage notes, and all hauksbee-ci report formats),
 naming the channel, MCU, and net. A board that knows its counts' landing spot
@@ -454,54 +462,6 @@ Three commands form the edit–simulate loop:
 `.brd` (Eagle), `.PcbDoc` (Altium, see [`docs/ingest/ALTIUM.md`](../ingest/ALTIUM.md)),
 `.d356` (IPC-D-356 netlist), or a directory of gerbers
 (reverse-extracted from copper geometry alone, see [`docs/ingest/GERBER.md`](../ingest/GERBER.md)).
-
----
-
-## Common misconceptions
-
-### "Firmware co-simulation only works on ATmega / Arduino boards"
-
-**Wrong.**
-
-The AVR backend (ATmega328P, ATmega2560, and anything else simavr knows) links
-libsimavr in-process, installed with `scripts/install-sims.sh --avr`, or
-skipped entirely (see the AVR section above). But hauksbee's co-sim layer has three
-backends behind one uniform `Mcu` trait, and the other two cover a wide range
-of modern architectures:
-
-- **STM32F103 (Cortex-M3), STM32F407 (Cortex-M4)**: via Renode
-- **nRF52840 (Cortex-M4, Bluetooth)**: via Renode
-- **SiFive FE310 / HiFive1 (RISC-V RV32)**: via Renode
-- **ESP32 (Xtensa LX6), ESP32-S3 (Xtensa LX7)**: via Espressif QEMU
-- **ESP32-C3 (RISC-V RV32IMC)**: via Espressif QEMU
-
-STM32, nRF52840, ESP32, and ESP32-C3 are all proven end-to-end on this branch
-(see `crates/hauksbee-engine/tests/stm32_renode_cosim.rs`,
-`esp32_qemu_cosim.rs`, `renode_riscv_arm_cosim.rs`). The external simulators
-install via `scripts/install-sims.sh` and are found automatically at runtime.
-
-The correct description: **hauksbee's firmware co-sim covers AVR (via
-libsimavr), STM32/nRF52/RISC-V (via Renode), and the full ESP32 family (via
-Espressif QEMU).**
-
-### "hauksbee is just a DRC wrapper"
-
-**Wrong.**
-
-DRC (copper shorts and clearance) is one report flag (`--drc`), it is
-commodity, KiCad's built-in DRC finds the same class of fault, and it is
-explicitly labelled as such in the scope table above.
-
-hauksbee's differentiator is the firmware co-simulation and behavioral
-assertion pipeline. It boots real firmware on an emulated MCU, drives the MCU's
-GPIO and peripheral outputs through an analog circuit solver in lockstep, and
-lets you assert, in a file that lives next to your hardware repo, that the
-firmware makes the hardware behave correctly. A DRC run never touches firmware.
-A `hauksbee-ci` run boots the firmware, measures rails, checks UART output,
-watches GPIO blink rates, and gates CI on the result.
-
-No other PCB-CI tool starts from the copper layout and runs firmware against the
-simulated board. That is the scope of this tool.
 
 ---
 

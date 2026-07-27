@@ -237,7 +237,7 @@ passes with `hauksbee-ci run spec.toml --models-dir ./models` (plus
 ## The honest boundary
 
 A descriptor configures the **backends that already exist** (Renode, QEMU).
-Two things stay Rust, deliberately (`soc.rs` module docs, plan 06 §2):
+Two things stay Rust, deliberately (`soc.rs` module docs):
 
 - **A new emulator backend** is a new implementation of the `Mcu` trait
   (`crates/hauksbee-mcu/src/traits.rs`), a lockstep contract, not a config.

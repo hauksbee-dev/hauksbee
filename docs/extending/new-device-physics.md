@@ -13,8 +13,7 @@ as commits `82a818f` (IR + loader + terminal classification) and `ff00d94`
 (stamps through every integration site). Read those two commits alongside
 this doc; they are the checklist executed once, with design notes.
 
-**Prerequisite reading:** `docs/dev-plans/04-spice-compat.md` §1, the hazard
-table this checklist descends from. The one-sentence summary: several
+**The hazard this checklist guards against**, in one sentence: several
 consumers of the `Device` enum are silently wrong, not loudly broken, when
 a new variant slips past them, and the worst failure is a plausible wrong
 waveform.
@@ -107,7 +106,7 @@ canonical case the classifier was built for: output `p/n` conduct, control
 
 This is not paperwork, a *sense* terminal is what makes a free tear exact
 (cutting the wire and replaying its voltage changes nothing, because no
-current ever crossed it; `docs/dev-plans/02-tearing-architecture.md` §1). A
+current ever crossed it). A
 terminal declared sense whose stamp actually leaks current would break torn
 solves silently. So the claim is enforced mechanically:
 
@@ -143,12 +142,12 @@ incidence plus the `(branch, cp)`/`(branch, cn)` control columns.
 
 If your device is `is_linear() == true`, an island containing it still reaches
 the state-space reducer under `Partitioning::Auto`, and the reducer models
-only R/C/L/I. Its device walk used to end in `_ => {}`, which for a VCVS
-would have compiled the island *with the controlled source silently missing
-from the A matrix*: no crash, no error, a plausible wrong waveform. This is
-the failure plan 04 §1 rates the worst of the six.
+only R/C/L/I. Its device walk is an **exhaustive match**, deliberately: a
+catch-all `_ => {}` arm would compile an island *with a controlled source
+silently missing from the A matrix*: no crash, no error, a plausible wrong
+waveform, the worst failure of the six hazard classes.
 
-The walk is now an exhaustive match. Your options, in order of preference:
+The exhaustive match forces you to choose. Your options, in order of preference:
 
 1. **Model the device in the state-space assembly** (only if you also build
    the exactness gate proving fast-path == monolithic for it), or
@@ -238,7 +237,5 @@ Three layers, all of which must be green:
 
 ---
 
-Background: `docs/dev-plans/04-spice-compat.md` (the whole plan, §1
-especially), `docs/dev-plans/02-tearing-architecture.md` for why
-conduction/sense exists. For extensions that *don't* need core physics, start
+For extensions that *don't* need core physics, start
 at [README.md](README.md), most parts are data, not devices.
