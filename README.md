@@ -8,8 +8,6 @@ No other tool does this from the layout. Schematic simulators never see the boar
 
 **New here? Start with [`docs/START_HERE.md`](docs/START_HERE.md):** the user path, install, and your next four reads. The authoritative scope document is [`docs/about/CAPABILITIES.md`](docs/about/CAPABILITIES.md): what every layer does, which checks are commodity versus differentiated, and which MCU architectures the firmware co-sim covers (AVR via libsimavr; STM32/nRF52/RISC-V via Renode; ESP32 family via Espressif QEMU).
 
-[**Watch the showcase**](frontend/capture/out/hauksbee_showcase.mp4) (a dozen boards running headless, ~2.5 min).
-
 ![A board, live in 2D with net activity](frontend/screenshots/beauty/2d-live.png)
 
 ---
