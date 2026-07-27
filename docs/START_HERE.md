@@ -10,8 +10,26 @@ fortnight at the bench fails a test instead.
 
 ## Install and first run
 
-One command builds and installs both binaries; then point it at the bundled
-blinky board.
+**On a Mac, no terminal needed:** download `Hauksbee.app` (the
+`hauksbee-<version>-darwin-<arch>-app.zip` asset) from the
+[releases page](https://github.com/ETM-Code/hauksbee/releases), unzip,
+double-click. Your browser opens on the drop-zone; drop a board and read the
+report. The app is unsigned today, so the first launch is right-click > Open
+past the Gatekeeper warning (details and the notarisation plan:
+[`app/macos/SIGNING.md`](../app/macos/SIGNING.md)). The app is macOS-only for
+now; Windows is tracked separately in
+[`release-and-licensing.md`](about/release-and-licensing.md), and Linux users
+take the installer line below. Release assets exist once there is a published
+public release; during private beta, build from source.
+
+**From a terminal**, either the one-line installer:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ETM-Code/hauksbee/main/scripts/get-hauksbee.sh | bash
+```
+
+or one command that builds and installs both binaries from a checkout; then
+point it at the bundled blinky board.
 
 ```bash
 scripts/install.sh                                      # build hauksbee + hauksbee-ci onto PATH

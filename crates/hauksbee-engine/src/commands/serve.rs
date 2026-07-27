@@ -5,8 +5,41 @@
 //! drop-zone: drop a board (and optionally firmware) to get the plain-language
 //! report from the analysis API, then press "run it" to bring a board to life.
 
-/// `hauksbee serve [--port N]`: the local web front door (drop-a-board report).
-pub fn run(port: u16) -> anyhow::Result<()> {
+/// Open the system browser at `url`, detached, best-effort.
+///
+/// Used for `--open` and for the no-TTY launch path (double-click / launchd /
+/// Finder), where nobody can read a printed URL. Failure is silent by design: a
+/// headless box has no browser, and the server must keep serving regardless.
+fn open_browser(url: &str) {
+    use std::process::{Command, Stdio};
+    #[cfg(target_os = "macos")]
+    let mut cmd = Command::new("open");
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let mut cmd = Command::new("xdg-open");
+    // `start` is a cmd.exe builtin, not an executable; the empty string is
+    // start's window-title slot, which would otherwise swallow the URL.
+    #[cfg(windows)]
+    let mut cmd = {
+        let mut c = Command::new("cmd");
+        c.args(["/C", "start", ""]);
+        c
+    };
+    #[cfg(not(any(unix, windows)))]
+    return;
+    #[cfg(any(unix, windows))]
+    {
+        let _ = cmd
+            .arg(url)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+    }
+}
+
+/// `hauksbee serve [--port N] [--open]`: the local web front door
+/// (drop-a-board report).
+pub fn run(port: u16, open: bool) -> anyhow::Result<()> {
     use std::sync::Arc;
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async move {
@@ -43,6 +76,23 @@ pub fn run(port: u16) -> anyhow::Result<()> {
         // the bind falls back to another port; printing `addr` before binding
         // advertised a URL the server was not actually listening on.
         let (listener, bound) = hauksbee_server::bind_frontdoor(&addr).await?;
+
+        // Browser auto-open. Two triggers: the explicit --open flag, and a
+        // non-TTY stdout, which means we were launched by something that is not
+        // a terminal (double-click, launchd, Finder, the .app launcher). In
+        // that situation nobody can read the printed URL, so opening the
+        // browser IS the user interface. Only when the UI exists, though:
+        // opening a browser onto the "build the frontend first" API-only
+        // fallback would be worse than nothing. The listener is already bound
+        // at this point (fallback port included), so the URL is live.
+        {
+            use std::io::IsTerminal;
+            let launched_headless = !std::io::stdout().is_terminal();
+            if (open || launched_headless) && dir.is_some() {
+                open_browser(&format!("http://{bound}"));
+            }
+        }
+
         if let Some(static_dir) = dir.as_ref() {
             // dist/ is gitignored: a `git pull` updates frontend/src but not the
             // built bundle, so warn when what we serve predates the sources.
