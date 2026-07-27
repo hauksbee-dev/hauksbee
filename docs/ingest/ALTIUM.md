@@ -50,23 +50,7 @@ Two record encodings live inside the `Data` streams:
 
 ## What is read
 
-```
-.PcbDoc (OLE2/CFB)
-   │  cfb crate
-   ├── Nets6/Data        ──▶ net names (index = primitive net field)
-   ├── Components6/Data   ──▶ refdes (SOURCEDESIGNATOR), footprint (PATTERN),
-   │                          library, placement (X/Y/ROTATION/LAYER), channel
-   ├── Pads6/Data         ──▶ pad designator, layer, net, owning component,
-   │                          position, size, shape  ──▶ pins + copper
-   ├── Tracks6/Data       ──▶ copper segments (layer, net, endpoints, width)
-   ├── Arcs6/Data         ──▶ copper arcs (centre, radius, angles, width)
-   ├── Vias6/Data         ──▶ through-hole vias (net, position, diameter)
-   ├── Texts6/Data        ──▶ component value/comment (best-effort)
-   └── Polygons6/Data     ──▶ copper-pour outlines (layer, net, vertices)
-          │ connectivity                       │ geometry
-          ▼                                    ▼
-   ExtractedBoard (nets, components, pads)   altium_drc → DrcReport
-```
+![Which streams inside a .PcbDoc file are read, and how they split into board connectivity and DRC geometry](../assets/diagrams/altium-streams.svg)
 
 The connectivity extractor (`crates/hauksbee-extract/src/altium.rs`) builds the
 nets, components, and netted pads. The DRC geometry extractor (the `altium_drc`

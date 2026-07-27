@@ -123,9 +123,7 @@ Rather than widen the shared `Device::Capacitor` IR, an ESR/ESL capacitor is
 stamped as a **series R-L-C network** between the two original pads, with one or
 two internal nodes (`crates/hauksbee-engine/src/decoupling.rs`):
 
-```
-pad_a ──[ R_esr ]── n1 ──[ L_esl ]── n2 ──[ C ]── pad_b
-```
+![A real capacitor stamped as a series network between its two pads: pad_a through R_esr to internal node n1, through L_esl to internal node n2, then through C to pad_b](../assets/diagrams/capacitor-model.svg)
 
 This is purely additive: the solver already handles R, L and C, and it works
 identically in both solver paths (the RLC island is linear). When ESR and ESL
