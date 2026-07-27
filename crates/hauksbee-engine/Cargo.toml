@@ -15,7 +15,7 @@ description = "Integration heart: binds an extracted board to models and co-simu
 # Propagate the MCU backend choices. All on by default so the engine runs AVR,
 # Renode (STM32 / nRF52 / RISC-V), and Espressif-QEMU (ESP32 family) firmware
 # out of the box. A `--no-default-features --features renode,qemu` build is
-# GPL-free (no libsimavr link) — this only holds because every hauksbee-* path
+# GPL-free (no libsimavr link); this only holds because every hauksbee-* path
 # dependency here sets `default-features = false` and each feature forwards
 # explicitly (cargo cannot un-default a dependency from the command line).
 # See docs/about/release-and-licensing.md.
@@ -62,7 +62,7 @@ rust-embed = { version = "8", optional = true }
 toml = "0.8"
 # Watch mode (`hauksbee watch`): cross-platform filesystem notifications. Default
 # features only (macOS FSEvents; inotify/ReadDirectoryChanges are always compiled
-# on Linux/Windows) — the recommended-watcher + watch-a-dir-and-filter pattern
+# on Linux/Windows); the recommended-watcher + watch-a-dir-and-filter pattern
 # needs nothing more.
 notify = "8"
 # Interactive TUI: the default human-facing surface when `hauksbee run <board>`
