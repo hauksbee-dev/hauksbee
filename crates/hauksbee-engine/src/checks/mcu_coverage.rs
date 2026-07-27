@@ -145,7 +145,7 @@ pub(crate) fn is_probable_mcu(comp: &Component) -> bool {
 ///
 /// Two predicates, both required:
 ///
-/// 1. The part is a strap-bearing MCU ([`is_strap_bearing_family`]): STM32 + its
+/// 1. The part is a strap-bearing MCU (`is_strap_bearing_family`): STM32 + its
 ///    BOOT0 clones, or the ESP32 family. These are the only families with a
 ///    reset-sampled boot strap, so they are the only ones for which "no strap
 ///    table" is a real gap. AVR (fuses), PIC, MSP430, SAMD, nRF, etc. are not

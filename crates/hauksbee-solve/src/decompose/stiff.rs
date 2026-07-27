@@ -22,7 +22,7 @@
 //! more pieces the cost model says are worth solving apart. Search is confined
 //! to blocks big enough to repay a capture/replay boundary, the top
 //! conduction-fanout nodes of each are probed, and the reuse is deliberate:
-//! [`super::rails::fragment_blocks`] already fragments an island under an
+//! `super::rails::fragment_blocks` already fragments an island under an
 //! arbitrary held set, so this is a new caller, not a new engine. No magic
 //! fanout constant survives; the probe budget is bounded by policy and the
 //! candidates are ranked by the same joint cost model the balance tears use.

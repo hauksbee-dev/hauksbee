@@ -745,7 +745,7 @@ impl AvrMcu {
 
     /// Register GPIO port hooks for the listed ports.
     ///
-    /// Automatically called when [`on_pin_change`] is first set, but you can
+    /// Automatically called when [`Mcu::on_pin_change`] is first set, but you can
     /// call this manually to pre-register ports before setting the callback.
     pub fn register_port_hooks(&mut self, ports: &[char]) {
         for &port in ports {
@@ -785,7 +785,7 @@ impl AvrMcu {
 
     /// Register the TWI (I2C) hook.
     ///
-    /// Called automatically when [`on_i2c`] is first set.
+    /// Called automatically when [`Mcu::on_i2c`] is first set.
     pub fn register_twi_hook(&mut self) {
         unsafe {
             let twi_out = ffi::avr_io_getirq(self.avr, TWI_GETIRQ, TWI_IRQ_OUTPUT);
@@ -797,7 +797,7 @@ impl AvrMcu {
 
     /// Register the SPI hook.
     ///
-    /// Called automatically when [`on_spi`] is first set.
+    /// Called automatically when [`Mcu::on_spi`] is first set.
     pub fn register_spi_hook(&mut self) {
         unsafe {
             let spi_out = ffi::avr_io_getirq(self.avr, SPI_GETIRQ, SPI_IRQ_OUTPUT);

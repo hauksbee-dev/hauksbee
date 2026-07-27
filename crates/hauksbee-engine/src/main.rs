@@ -880,7 +880,8 @@ fn main() -> anyhow::Result<()> {
     result
 }
 
-/// Deconstruct the parsed `RunArgs` (clap) into the library's plain [`RunConfig`],
+/// Deconstruct the parsed `RunArgs` (clap) into the library's plain
+/// [`hauksbee_engine::commands::run::RunConfig`],
 /// so the run orchestrator lives in `hauksbee_engine::commands::run` while
 /// argument parsing stays here.
 fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {

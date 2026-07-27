@@ -9,7 +9,7 @@
 //! row-per-timepoint [`SimOutput`] that a CSV writer or a comparison harness
 //! can consume without re-deriving how to read node voltages and branch
 //! currents out of the two very different result shapes (an `x` vector for
-//! `.op`, a [`Waveforms`] for `.tran`).
+//! `.op`, a [`crate::Waveforms`] for `.tran`).
 //!
 //! Everything here is a wrapper over code that already exists. It adds no
 //! physics; it only routes.

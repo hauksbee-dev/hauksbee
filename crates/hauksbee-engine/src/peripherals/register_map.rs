@@ -16,8 +16,8 @@
 //! one calls the other.
 //!
 //! It attaches through the existing bus peripherals unchanged: build an
-//! [`I2cBus`] with the sensor as a slave (`add_slave` / `with_slave`), or a
-//! [`SpiBus`] (`SpiBus::new`). The `on_i2c` / `on_spi` Renode/simavr bridge is
+//! [`super::i2c::I2cBus`] with the sensor as a slave (`add_slave` /
+//! `with_slave`), or a [`super::spi::SpiBus`] (`SpiBus::new`). The `on_i2c` / `on_spi` Renode/simavr bridge is
 //! untouched; this is just another slave.
 //!
 //! ## Write side (05 §3.2)
@@ -359,7 +359,8 @@ impl RegisterMapSensor {
     /// # Panics
     ///
     /// This constructor is public but does NOT re-validate the spec. If two
-    /// registers collide to the same key under [`Sensor::register_key`] (e.g. an
+    /// registers collide to the same key under
+    /// [`hauksbee_models::Sensor::register_key`] (e.g. an
     /// SPI spec declaring both `0x50` and `0xD0`, which both mask to `0x50`), one
     /// would silently overwrite the other in the register map. Rather than
     /// produce a sensor that quietly drops a register, this panics with a message
@@ -777,7 +778,7 @@ impl RegisterMapSensor {
     /// visible rather than silently returning another register's data.
     ///
     /// `addr` is the RAW, externally-supplied address: it is normalized via
-    /// [`Self::normalize_addr`] before lookup so callers may pass the raw
+    /// `normalize_addr` before lookup so callers may pass the raw
     /// datasheet register address (e.g. 0xD0) for an SPI sensor and still hit the
     /// post-mask key (0x50) the register is stored under.
     /// Public so tests can compare against a hand-coded model directly.

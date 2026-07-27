@@ -311,7 +311,8 @@ pub fn plain_drc(report: &DrcReport) -> PlainReport {
     out
 }
 
-/// Translate the *grouped* DRC ([`DrcStructured`]) for the plain / web surfaces.
+/// Translate the *grouped* DRC ([`crate::result::DrcStructured`]) for the plain /
+/// web surfaces.
 ///
 /// This is the single source of truth shared with the default text and `--json`
 /// paths: duplicates are collapsed by (net pair + layer), and, crucially, a

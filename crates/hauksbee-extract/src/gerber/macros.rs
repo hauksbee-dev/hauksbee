@@ -21,7 +21,7 @@ use gerber_types::{ApertureMacro, MacroBoolean, MacroContent, MacroDecimal, Macr
 
 /// Evaluate a macro into the convex-hull polygon of its solid area, centred at
 /// the flash point `(cx, cy)` and scaled by `s` (inch->mm or 1.0). `args` are
-/// the flash's positional parameters (`$1` = args[0], ...).
+/// the flash's positional parameters (`$1` = `args[0]`, ...).
 pub fn instantiate_macro(
     m: &ApertureMacro,
     args: &[MacroDecimal],

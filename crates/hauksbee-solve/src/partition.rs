@@ -123,7 +123,7 @@ pub struct Partition {
     /// Total non-ground node count (for sizing global exchange buffers).
     pub n_nodes: usize,
     /// Detected shunt-fed rail tears. When non-empty, the orchestrator must
-    /// solve each tear's scalar rail balance (see [`RailTear`]); the islands are
+    /// solve each tear's scalar rail balance (see `RailTear`); the islands are
     /// already split as if the rail were a boundary input.
     pub tears: Vec<RailTear>,
 }
@@ -135,7 +135,7 @@ impl Partition {
     }
 
     /// Analyze a circuit into islands, additionally detecting and cutting
-    /// shunt-fed supply-rail tear nodes (see [`RailTear`]). This is what unlocks
+    /// shunt-fed supply-rail tear nodes (see `RailTear`). This is what unlocks
     /// the Tarski synapse array: every current mirror shares one `ANALOG_VDD`
     /// rail fed through a 1 kΩ sense shunt, which otherwise fuses the whole
     /// array into one giant nonlinear island.
@@ -150,7 +150,7 @@ impl Partition {
 
     /// Analyze with tears chosen by an EXTERNAL decision layer (the decompose
     /// analysis's cost model and structural guards), instead of by this
-    /// module's [`detect_rail_tears`] scan. The island-splitting mechanics are
+    /// module's `detect_rail_tears` scan. The island-splitting mechanics are
     /// identical; only the decider changes. This is the seam that lets the
     /// certificate-carrying decomposition drive the proven executor without
     /// this module's legacy magic-constant detection having a vote.

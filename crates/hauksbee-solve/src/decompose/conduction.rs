@@ -16,8 +16,9 @@
 //! them and hide the tear; reachability computed over conduction terminals
 //! only is what lets a 6,400-device board fall apart into per-block solves.
 //!
-//! The classification itself lives on the IR ([`Device::conduction_nodes`] /
-//! [`Device::sense_nodes`]) next to each variant. It is a claim about the
+//! The classification itself lives on the IR
+//! ([`hauksbee_ir::Device::conduction_nodes`] /
+//! [`hauksbee_ir::Device::sense_nodes`]) next to each variant. It is a claim about the
 //! stamp as implemented, and claims drift, so this module carries the
 //! cross-check test that stamps every example device at multiple operating
 //! points and fails if a declared sense node's row ever receives a matrix

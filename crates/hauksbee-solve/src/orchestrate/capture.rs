@@ -923,7 +923,7 @@ pub fn execute_stiff_group_held_capped(
 /// signals fragment finely can still leave a large nonlinear island for the
 /// balance engine (the flagship's 5808-device mega group does, even with every
 /// signal pinned: a 4000-device block survives and its per-island Newton cannot
-/// march). When [`balance_group_fragments`] reports this (a [`ComposedPolicy`]
+/// march). When `balance_group_fragments` reports this (a [`ComposedPolicy`]
 /// cap), the rails are treated as the STIFF supplies they are (fed through mΩ
 /// legs) and HELD at a fixed estimate (the whole-group DC value when one
 /// exists, else the feed voltage) instead of balanced on the whole group; only

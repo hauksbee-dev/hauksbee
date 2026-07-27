@@ -72,9 +72,9 @@
 //!
 //! # File inclusion (dev-plan 04 §4.1, `.include` / `.lib`)
 //!
-//! `.include <file>` splices another file's text in place; `.lib <file>
-//! <section>` splices only the named `.lib <section> ... .endl` block from a
-//! library file. Inclusion happens FIRST, at the physical-line level, before
+//! `.include <file>` splices another file's text in place;
+//! `.lib <file> <section>` splices only the named `.lib <section> ... .endl`
+//! block from a library file. Inclusion happens FIRST, at the physical-line level, before
 //! any other pass, so included `.model`/`.subckt`/`.param` cards and elements
 //! participate in every later pass exactly as if they had been typed inline.
 //!
