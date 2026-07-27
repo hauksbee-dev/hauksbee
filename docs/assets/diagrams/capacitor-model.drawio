@@ -1,0 +1,43 @@
+<mxfile host="hauksbee">
+  <diagram name="capacitor-model" id="cap">
+    <mxGraphModel dx="900" dy="600" grid="0" page="0" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+        <mxCell id="pada" value="pad_a" style="rounded=1;arcSize=8;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="20" y="40" width="90" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="resr" value="R_esr" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="150" y="40" width="90" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="n1txt" value="n1" style="text;html=1;fontSize=10;fontColor=#94a3b8;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="270" y="14" width="40" height="28" as="geometry"/>
+        </mxCell>
+        <mxCell id="n1dot" style="ellipse;fillColor=#94a3b8;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry x="283" y="55" width="14" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="lesl" value="L_esl" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="340" y="40" width="90" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="n2txt" value="n2" style="text;html=1;fontSize=10;fontColor=#94a3b8;align=center;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="460" y="14" width="40" height="28" as="geometry"/>
+        </mxCell>
+        <mxCell id="n2dot" style="ellipse;fillColor=#94a3b8;strokeColor=#94a3b8;" vertex="1" parent="1">
+          <mxGeometry x="473" y="55" width="14" height="14" as="geometry"/>
+        </mxCell>
+        <mxCell id="cap" value="C" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="530" y="40" width="90" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="padb" value="pad_b" style="rounded=1;arcSize=8;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="670" y="40" width="90" height="44" as="geometry"/>
+        </mxCell>
+        <mxCell id="w1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;endArrow=none;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="pada" target="resr"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="w2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;endArrow=none;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="resr" target="n1dot"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="w3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;endArrow=none;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="n1dot" target="lesl"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="w4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;endArrow=none;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="lesl" target="n2dot"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="w5" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;endArrow=none;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="n2dot" target="cap"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="w6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;endArrow=none;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="cap" target="padb"><mxGeometry relative="1" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

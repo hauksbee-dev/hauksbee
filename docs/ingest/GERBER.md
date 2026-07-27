@@ -16,27 +16,7 @@ board.
 
 ## How it works
 
-```
-job dir ──classify──▶ copper layers, drill, pick-and-place, (BOM)
-   │                        │
-   │                   parse each
-   │        ┌───────────────┼────────────────┬─────────────┐
-   ▼        ▼               ▼                ▼             ▼
- mapping  RS-274X        Excellon /        P&P CSV /      BOM CSV
- file     copper →       gerber drill →    Allegro loc →  (enrich)
- (opt)    primitives     plated holes      placements
-                    │          │               │
-                    ▼          ▼               ▼
-           ┌──────────────────────────────────────────┐
-           │  connect: R-tree union-find connectivity  │
-           │   • copper that touches = one conductor   │
-           │   • plated holes stitch layers (vias/PTH) │
-           │   • pour membership = containment         │
-           │   • components claim nearby flashes       │
-           └──────────────────────────────────────────┘
-                              ▼
-                        ExtractedBoard
-```
+![How a gerber job directory is classified (with an optional mapping file overriding the guess), parsed file by file, and stitched back into a connected board by geometric union-find, with the BOM enriching the result](../assets/diagrams/gerber-reconstruction.svg)
 
 1. **Classify** every file (recursing sub-dirs) by name into copper / drill /
    outline / ignore. A `layer_map.txt` or `*.map` file overrides the guess.

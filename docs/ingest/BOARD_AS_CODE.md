@@ -14,14 +14,7 @@ layer: it carries full pad-level connectivity and round-trips.
 
 ## The loop
 
-```text
-.kicad_pcb ──to-code──▶ board.board  (editable text)
-                              │  edit: value, wiring, add/remove parts, layout hints
-                              ▼
-                        from-code ──▶ .kicad_pcb'   (recompiled, connectivity-equal)
-                              │
-                          check-code ──▶ extract ▸ bind ▸ co-sim ▸ stress monitor ▸ report
-```
+![The Board-as-Code loop: a .kicad_pcb decompiles to editable board.board text, edits to values, wiring, parts and layout hints recompile through from-code into a connectivity-equal board, and check-code runs the same code through extract, bind, co-simulation, the stress monitor and a report](../assets/diagrams/board-as-code-roundtrip.svg)
 
 Three CLI verbs, alongside the existing `hauksbee run`:
 
