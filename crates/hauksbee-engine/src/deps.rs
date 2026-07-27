@@ -712,13 +712,21 @@ fn tail_text(tail: &VecDeque<String>) -> String {
     }
 }
 
-/// Kill the child's whole process group (unix), falling back to the direct
-/// child. `kill -- -<pid>` addresses the group created by `process_group(0)`.
+/// Kill the child's whole process tree, falling back to the direct child.
+/// On unix `kill -- -<pid>` addresses the group created by `process_group(0)`;
+/// on Windows `taskkill /T` walks the tree, since a timed-out installer's
+/// grandchildren would otherwise outlive it.
 fn kill_process_group(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
         let _ = Command::new("kill")
             .args(["-9", "--", &format!("-{}", child.id())])
+            .output();
+    }
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/T", "/F", "/PID", &child.id().to_string()])
             .output();
     }
     let _ = child.kill();
