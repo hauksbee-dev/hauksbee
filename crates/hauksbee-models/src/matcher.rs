@@ -1,8 +1,8 @@
 //! Match-rule evaluation engine.
 //!
 //! A compiled [`CompiledEntry`] pre-compiles all regex patterns from a
-//! [`ModelEntry`] so matching is fast at runtime. The [`score`] function
-//! assigns a specificity score so more-specific rules win over catch-alls.
+//! [`ModelEntry`] so matching is fast at runtime.
+//! [`CompiledEntry::specificity_score`] assigns a specificity score so more-specific rules win over catch-alls.
 //! The specificity score orders entries only *within* a resolution layer;
 //! the layer itself wins first (see `crate::SourceLayer`).
 //!
@@ -351,7 +351,7 @@ fn normalise_value_str(s: &str) -> String {
 
 // ── ComponentQuery ────────────────────────────────────────────────────────────
 
-/// All available metadata for a component, used as input to [`ModelLibrary::resolve`].
+/// All available metadata for a component, used as input to [`crate::ModelLibrary::resolve`].
 ///
 /// All fields are optional; the library matches against whatever is present.
 #[derive(Debug, Clone, Default)]

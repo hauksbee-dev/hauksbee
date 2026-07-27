@@ -30,7 +30,7 @@ pub struct AppliedShort {
     pub net_a: String,
     pub net_b: String,
     /// The bridge resistor's device name in the circuit
-    /// ("SHORT_<a>_<b>_n<lo>_n<hi>", the node ids disambiguating name collisions).
+    /// (`SHORT_<a>_<b>_n<lo>_n<hi>`, the node ids disambiguating name collisions).
     pub device_name: String,
 }
 

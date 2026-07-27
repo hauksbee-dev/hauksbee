@@ -14,7 +14,7 @@
 //! JSON renderers all read from, so they can never disagree (the same discipline
 //! as [`crate::plain`], extended with machine-readable validity + honest bind
 //! roles). It does **not** re-run or weaken any check: it consumes the existing
-//! [`BindReport`](crate::report::BindReport), [`DrcReport`](hauksbee_extract::DrcReport),
+//! [`BindReport`], [`DrcReport`],
 //! AC bode points, and thermal peaks, and adds the honesty annotations
 //! (`valid`/`reason`, `critical_parts_bound`, grouped DRC) on top.
 //!
@@ -196,7 +196,7 @@ impl BindSummary {
     /// Whether any active IC on the live circuit is RESOLVED but had an open
     /// pin warning raised against it (e.g. an MCU bound as `BindOutcome::Mcu`
     /// whose every I/O pin was `open_warning`'d, or a resolved analog part with
-    /// a dangling pin). These escape [`active_ics_unresolved`] because their
+    /// a dangling pin). These escape [`Self::active_path_unresolved`] because their
     /// outcome is not `Unresolved`, yet the part still does not drive its nets,
     /// so a thermal/AC result over those nets is just as untrustworthy. We walk
     /// `Mcu`/`Resolved`-style rows that carry a `warning` and name an active IC.

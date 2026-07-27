@@ -46,7 +46,7 @@ pub enum Chemistry {
 
 impl Chemistry {
     /// Open-circuit terminal voltage of a *single cell* at the given
-    /// state-of-charge (SoC ∈ [0,1]). Piecewise-linear interpolation over
+    /// state-of-charge (SoC in `[0, 1]`). Piecewise-linear interpolation over
     /// `(soc, volts)` knots taken from published discharge curves.
     ///
     /// Sources (typical room-temperature, low-rate discharge):

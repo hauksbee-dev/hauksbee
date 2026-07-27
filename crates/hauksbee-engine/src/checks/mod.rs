@@ -2,7 +2,7 @@
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/checks.md.
 //!
 //! Each check is self-contained: it takes an
-//! [`ExtractedBoard`](hauksbee_extract::ExtractedBoard) (and, where it needs
+//! [`ExtractedBoard`] (and, where it needs
 //! physics, builds and solves its own [`Circuit`](hauksbee_ir::Circuit)), and
 //! returns a verdict plus the numbers behind it. They are kept separate from
 //! the bind-time [`stress`](crate::stress) monitor: stress watches a running

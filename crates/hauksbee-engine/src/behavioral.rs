@@ -1,7 +1,7 @@
 //! Behavioural-device runtime.
 //!
 //! This is the engine-side realisation of the declarative
-//! [`Behavioral`](hauksbee_models::behavioral::Behavioral) layer. A behavioural
+//! [`Behavioral`] layer. A behavioural
 //! device participates in the solve loop exactly the way the configurable power
 //! supplies do (`power_supply.rs`): it stamps controllable Thevenin legs and
 //! sense resistors into the [`Circuit`] once, and the scheduler calls

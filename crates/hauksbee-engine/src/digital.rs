@@ -801,7 +801,7 @@ impl Hc595Chain {
 
     /// Replay an ordered log of GPIO transitions, clocking the chain at edge
     /// granularity. On each SRCLK rising edge the whole chain shifts up one bit
-    /// carrying serial across chips (qh_serial[k] -> ser[k+1]); on each RCLK
+    /// carrying serial across chips (`qh_serial[k]` -> `ser[k+1]`); on each RCLK
     /// rising edge every chip latches; while SRCLR_n is low the shift registers
     /// hold cleared. Levels persist across calls.
     pub fn replay(&mut self, edges: &[(char, u8, bool)]) {

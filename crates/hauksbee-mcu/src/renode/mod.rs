@@ -2,7 +2,7 @@
 //!
 //! [`RenodeBackend`] drives an external, headless Renode process over its
 //! Monitor TCP protocol and a UART socket terminal, exposing the same generic
-//! [`Mcu`](crate::traits::Mcu) trait the simavr [`AvrMcu`](crate::avr::AvrMcu)
+//! [`Mcu`] trait the simavr [`AvrMcu`](crate::avr::AvrMcu)
 //! backend implements. The engine's lockstep contract is unchanged: it calls
 //! `run_micros`, exchanges GPIO/ADC/UART state, and the backend translates that
 //! into Monitor commands.

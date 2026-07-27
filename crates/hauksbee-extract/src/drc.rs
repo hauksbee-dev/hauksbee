@@ -1947,7 +1947,7 @@ pub fn altium_drc_from_bytes(bytes: &[u8]) -> Result<DrcReport, crate::ExtractEr
 
 /// Eagle `.brd` geometry extraction. The connectivity extractor in `eagle.rs`
 /// reads pad nets; this reads *copper geometry per net* (wires, vias, pads,
-/// smds, polygons, rectangles, circles) and feeds it to [`sweep_buckets`], the
+/// smds, polygons, rectangles, circles) and feeds it to `sweep_buckets`, the
 /// exact same short / clearance engine the KiCad path uses. The geometry is kept
 /// in Eagle's native frame (millimetres, y-up); the DRC is self-consistent so
 /// the y orientation never matters, only relative positions do.
@@ -2972,7 +2972,7 @@ pub mod eagle_drc {
 /// Altium `.PcbDoc` copper-geometry extraction for the DRC. The connectivity
 /// extractor in `altium.rs` reads pad nets; this reads *copper geometry per net*
 /// (tracks, arcs, vias, pads, polygon outlines) straight from the binary record
-/// streams and feeds it to [`sweep_buckets`], the exact same short / clearance
+/// streams and feeds it to `sweep_buckets`, the exact same short / clearance
 /// engine the KiCad and Eagle paths use.
 ///
 /// Geometry is kept in Altium's native frame (millimetres, y-up); the DRC is

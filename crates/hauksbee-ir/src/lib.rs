@@ -354,7 +354,7 @@ pub enum Device {
     /// wire). The first device variant that references ANOTHER DEVICE by id:
     /// the loader resolves the card's `vname` in a deferred second pass, and
     /// every pass that clones devices into a sub-circuit must retarget
-    /// `ctrl_src` through [`Device::retarget_controlling_source`] or the id
+    /// `ctrl_src` through [`Device::retarget_controlling_source_slot`] or the id
     /// goes stale. No branch unknown of its own; two matrix entries in the
     /// control source's branch COLUMN.
     Cccs {

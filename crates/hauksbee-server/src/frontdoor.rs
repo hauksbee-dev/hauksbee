@@ -165,7 +165,7 @@ struct DepsState {
 /// discovery) and `POST /api/deps/install/{id}` (run an install, streaming its
 /// progress as Server-Sent Events). Merged into the unified router next to the
 /// analysis routes. The install route executes an installer, so it carries the
-/// same [`reject_cross_site`] guard as every other mutating endpoint: a hostile
+/// same `reject_cross_site` guard as every other mutating endpoint: a hostile
 /// page in another tab must not be able to trigger a download.
 pub fn deps_routes(status: DepsStatus, install: DepInstaller) -> Router {
     let state = Arc::new(DepsState { status, install });

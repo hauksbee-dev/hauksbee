@@ -37,7 +37,7 @@
 //! its own blocks, so `(n_loads - 1) * gmin` is the same surplus it always
 //! was. The inter-rail current itself (which MID's block sum misses because
 //! `R2` is in no block) is carried separately as the analytic child-draw term
-//! in [`balance_one`]; see [`RailChannel::children`].
+//! in `balance_one`; see [`RailChannel::children`].
 //!
 //! ## Scope and honesty
 //!
@@ -93,7 +93,7 @@ pub struct RailChannel {
     /// `R2` as its analytic feed term `(v_MID - v_INNER)/R2`. MID would then
     /// MISS that same current as a draw leaving it toward INNER, and its KCL
     /// would be short by exactly that term. Listing INNER as a child of MID
-    /// restores it (see [`balance_one`]). Empty for a rail that feeds no other
+    /// restores it (see `balance_one`). Empty for a rail that feeds no other
     /// torn rail, which is every non-cascade rail; the residual is then
     /// bit-identical to the pre-cascade single-rail form.
     pub children: Vec<(usize, f64)>,

@@ -147,7 +147,7 @@ pub trait Mcu {
     ///
     /// The callback receives the pin, the new logic level, and the MCU cycle
     /// counter at the instant of the edge. It is called synchronously from
-    /// within [`run_cycles`] / [`run_micros`] on the same thread.
+    /// within [`Mcu::run_cycles`] / [`Mcu::run_micros`] on the same thread.
     ///
     /// The cycle stamp is what lets the co-sim replay a sub-µs `shiftOut` SCLK
     /// burst in the exact order (and multiplicity) the firmware produced it,
@@ -230,7 +230,7 @@ pub trait Mcu {
 
     /// Install a handler for SPI bus events on a named controller.
     ///
-    /// The default implementation forwards to [`on_spi`], which is correct for
+    /// The default implementation forwards to [`Mcu::on_spi`], which is correct for
     /// single-controller backends (AVR, QEMU). Multi-controller backends (Renode
     /// with multiple SPI controllers) override this to route each controller to
     /// its own bridge/callback, so a slave attached to "spi2" only receives

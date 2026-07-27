@@ -5,7 +5,8 @@
 //! ## How it plugs into the co-sim
 //!
 //! The MCU backend surfaces each byte the firmware clocks out as a
-//! [`SpiEvent`] (MOSI byte) through `Mcu::on_spi`, and the handler returns the
+//! [`hauksbee_mcu::SpiEvent`] (MOSI byte) through `Mcu::on_spi`, and the handler
+//! returns the
 //! MISO byte the slave drives back on the same transfer. An [`SpiBus`] owns one
 //! slave (chip-select is not surfaced by the simavr SPI IRQ, so a single
 //! active slave per bus is the supported topology) and threads the byte stream
@@ -35,7 +36,7 @@ pub trait SpiSlave: Send {
 
     /// Chip-select ASSERTED (active-low falling edge): begin a fresh transaction
     /// by resetting the command state machine to its start-of-transaction state
-    /// (05 §2.1). The default reuses [`deselect`], which for the built-in slaves
+    /// (05 §2.1). The default reuses [`Self::deselect`], which for the built-in slaves
     /// resets the sequence/command counter to idle without disturbing latched
     /// permission bits (the 25xx `deselect` only clears the write-enable latch
     /// when it lands mid-WRITE, and a select edge never does, because the previous

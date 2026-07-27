@@ -43,7 +43,8 @@
 //!     plan (05 §5.1). No shipped built-in uses them (the stock Renode platforms
 //!     model no ADC, so the loud-drop path is correct), but the schema carries
 //!     them so a board that knows where its counts land can inject purely as
-//!     data. See [`AdcChannelSpec`].
+//!     data. Each entry names the channel, its full-scale volts and max
+//!     count, and exactly one of `monitor_command` or `memory_word`.
 //!
 //! The plan example also wrote `sysbus.gpioPortA` / `platforms/...` (no `@`);
 //! the shipped descriptors instead store the exact backend-facing strings the
