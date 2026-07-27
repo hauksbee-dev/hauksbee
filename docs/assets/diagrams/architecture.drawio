@@ -4,37 +4,39 @@
       <root>
         <mxCell id="0"/>
         <mxCell id="1" parent="0"/>
-        <mxCell id="in" value="Design files&#10;.kicad_pcb  .kicad_sch  .brd&#10;.PcbDoc  .d356  gerber  .board" style="rounded=1;arcSize=8;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;align=center;verticalAlign=middle;" vertex="1" parent="1">
-          <mxGeometry x="40" y="40" width="240" height="70" as="geometry"/>
+        <mxCell id="in" value="Design files&#10;.kicad_pcb  .kicad_sch  .brd  .PcbDoc  .d356  gerber  .board" style="rounded=1;arcSize=8;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="30" width="460" height="58" as="geometry"/>
         </mxCell>
-        <mxCell id="ex" value="Extract&#10;pads to nets to connectivity&#10;to components" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="360" y="40" width="220" height="70" as="geometry"/>
+        <mxCell id="extract" value="Extract&#10;pads to nets to connectivity to components" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="140" width="460" height="58" as="geometry"/>
         </mxCell>
-        <mxCell id="bind" value="Model binding&#10;built-in db  |  user SPICE&#10;|  datasheet extraction" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#64748b;fontColor=#cbd5e1;fontSize=11;dashed=1;" vertex="1" parent="1">
-          <mxGeometry x="360" y="160" width="220" height="66" as="geometry"/>
+        <mxCell id="models" value="Model binding&#10;built-in db | user SPICE | datasheet extraction" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="250" width="460" height="58" as="geometry"/>
         </mxCell>
-        <mxCell id="ir" value="Circuit IR" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="60" y="180" width="200" height="46" as="geometry"/>
+        <mxCell id="ir" value="Circuit IR&#10;devices, nodes, parameters, parasitics" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#3b82f6;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="360" width="460" height="58" as="geometry"/>
         </mxCell>
         <mxCell id="solve" value="Partitioned hybrid solver&#10;linear: matrix exponential (exact at any step)&#10;nonlinear: MNA + Newton&#10;digital: event driven" style="rounded=1;arcSize=8;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="40" y="290" width="330" height="92" as="geometry"/>
+          <mxGeometry x="40" y="470" width="460" height="92" as="geometry"/>
         </mxCell>
         <mxCell id="mcu" value="MCU backends&#10;AVR (in-process simavr)&#10;STM32 / nRF52 / RISC-V (Renode)&#10;ESP32 family (Espressif QEMU)" style="rounded=1;arcSize=8;fillColor=#0f1729;strokeColor=#e08a4e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="420" y="290" width="300" height="92" as="geometry"/>
+          <mxGeometry x="620" y="470" width="380" height="92" as="geometry"/>
         </mxCell>
-        <mxCell id="out" value="Reports and checks&#10;DRC  lint  SI  thermal  AC  co-sim" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#22c55e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="40" y="450" width="300" height="60" as="geometry"/>
+        <mxCell id="reports" value="Reports and checks&#10;DRC  lint  SI  thermal  AC  co-sim assertions" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#22c55e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="640" width="460" height="58" as="geometry"/>
         </mxCell>
         <mxCell id="web" value="Web front door and live viewer&#10;drop a board, read a report, build checks&#10;2D/3D render, probes, scope" style="rounded=1;arcSize=8;fillColor=#111c33;strokeColor=#22c55e;fontColor=#e2e8f0;fontSize=12;" vertex="1" parent="1">
-          <mxGeometry x="420" y="450" width="300" height="72" as="geometry"/>
+          <mxGeometry x="620" y="640" width="380" height="72" as="geometry"/>
         </mxCell>
-        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;fontColor=#94a3b8;" edge="1" parent="1" source="in" target="ex"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#64748b;dashed=1;" edge="1" parent="1" source="bind" target="ex"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;" edge="1" parent="1" source="ex" target="ir"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;" edge="1" parent="1" source="ir" target="solve"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e5" value="lockstep" style="edgeStyle=orthogonalEdgeStyle;rounded=1;startArrow=classic;startFill=1;strokeColor=#e08a4e;fontColor=#94a3b8;fontSize=10;labelBackgroundColor=none;" edge="1" parent="1" source="solve" target="mcu"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;" edge="1" parent="1" source="solve" target="out"><mxGeometry relative="1" as="geometry"/></mxCell>
-        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;" edge="1" parent="1" source="mcu" target="web"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="in" target="extract"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="extract" target="models"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="models" target="ir"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#3b82f6;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="ir" target="solve"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e5" value="lockstep" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#e08a4e;startArrow=classic;startFill=1;exitX=1;exitY=0.5;entryX=0;entryY=0.5;fontColor=#94a3b8;fontSize=10;labelBackgroundColor=#0b1020;" edge="1" parent="1" source="solve" target="mcu">
+          <mxGeometry relative="1" as="geometry"><mxPoint x="0" y="-16" as="offset"/></mxGeometry>
+        </mxCell>
+        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="solve" target="reports"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;rounded=1;strokeColor=#22c55e;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="mcu" target="web"><mxGeometry relative="1" as="geometry"/></mxCell>
       </root>
     </mxGraphModel>
   </diagram>
