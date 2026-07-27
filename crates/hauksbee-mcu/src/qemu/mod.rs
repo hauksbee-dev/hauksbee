@@ -2,7 +2,7 @@
 //!
 //! [`QemuBackend`] drives a headless Espressif QEMU process (the fork with full
 //! ESP32 SoC peripheral models) over two TCP control channels plus a UART
-//! socket, exposing the same generic [`Mcu`](crate::traits::Mcu) trait the
+//! socket, exposing the same generic [`Mcu`] trait the
 //! simavr and Renode backends implement. The engine's lockstep contract is
 //! unchanged: it calls `run_micros`, exchanges GPIO/UART state, and this backend
 //! translates that into QEMU control operations.

@@ -74,6 +74,20 @@ jobs:
       # instead of shipping into the docs.
       - run: python3 scripts/lint-diagrams.py
 
+  docs:
+    name: cargo doc (rendered module docs stay valid)
+    runs-on: ubuntu-latest
+    env:
+      RUSTDOCFLAGS: -D warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      # The //! module headers are rustdoc input, rendered by `cargo doc` and
+      # published on docs.rs if the crates ever ship there. Broken intra-doc
+      # links and malformed markdown rot silently unless something builds the
+      # docs, so this builds them.
+      - run: cargo doc --workspace --no-deps
+
   gpl-free-check:
     name: cargo check (GPL-free renode+qemu shape)
     runs-on: ubuntu-latest

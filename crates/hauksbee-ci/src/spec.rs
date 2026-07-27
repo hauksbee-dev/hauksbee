@@ -784,7 +784,7 @@ pub struct Assertion {
     #[serde(default)]
     pub celsius: Option<f64>,
 
-    /// peripheral: the `id` of the [[peripheral]] / [[sensor]] to read.
+    /// peripheral: the `id` of the `[[peripheral]]` / `[[sensor]]` to read.
     #[serde(default)]
     pub id: Option<String>,
     /// EEPROM byte sequence (hex string, e.g. "48 69" or "4869") that must

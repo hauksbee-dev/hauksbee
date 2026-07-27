@@ -9,7 +9,8 @@
 //!    land in a shared queue via `on_pin_change`; UART output bytes are
 //!    captured; the latest ADC voltages (from the *previous* chunk's solve) are
 //!    injected continuously before the run.
-//! 2. **Drivers**: apply captured GPIO edges to their Thevenin [`PinDriver`]s,
+//! 2. **Drivers**: apply captured GPIO edges to their Thevenin
+//!    [`crate::drivers::PinDriver`]s,
 //!    so the analog circuit sees the new pin states this chunk.
 //! 3. **Analog**: solve a transient over the chunk and read the final node
 //!    voltages for every net.
@@ -1200,7 +1201,7 @@ impl Scheduler {
     /// The bus is also added to `spi_buses` so the chunk-boundary deselect
     /// loop (which is controller-agnostic) can reach it.
     ///
-    /// `cs_pin` behaves exactly as in [`attach_spi_bus`]: `Some` frames from the
+    /// `cs_pin` behaves exactly as in [`Self::attach_spi_bus`]: `Some` frames from the
     /// real CS edge, `None` falls back to the chunk-boundary heuristic.
     pub fn attach_spi_bus_on(
         &mut self,
@@ -1444,8 +1445,8 @@ impl Scheduler {
     /// Look up the SPI bus attached to a specific named controller.
     ///
     /// Returns `None` if no bus was attached to that controller via
-    /// [`attach_spi_bus_on`]. Buses attached via the controller-agnostic
-    /// [`attach_spi_bus`] are not findable by name (they carry no controller
+    /// [`Self::attach_spi_bus_on`]. Buses attached via the controller-agnostic
+    /// [`Self::attach_spi_bus`] are not findable by name (they carry no controller
     /// key in the map).
     pub fn spi_bus_for_controller(&self, controller: &str) -> Option<&Arc<Mutex<SpiBus>>> {
         self.spi_controller_map.get(controller)

@@ -131,7 +131,7 @@ pub enum DcInit {
     /// sample is emitted as zeros, and the march proceeds from rest with the
     /// existing backward-Euler first step.
     ///
-    /// Pair it with [`crate::SourceKind::Ramped`] sources so the board sees a
+    /// Pair it with [`hauksbee_ir::SourceKind::Ramped`] sources so the board sees a
     /// physical power-ramp: sources rise from zero and the state integrates up,
     /// and there is no DC solve to fail. This is the honest way to carry a
     /// circuit (or sub-circuit) whose DC operating point is unreachable: a

@@ -1,6 +1,6 @@
 //! Feedforward discovery: which sense couplings are provably one-directional.
 //!
-//! Input: the [`ConductionGraph`](super::conduction::ConductionGraph)'s
+//! Input: the [`ConductionGraph`]'s
 //! islands and sense edges. Output: the *stage DAG*, the partial order that
 //! licenses solving upstream islands first and replaying their boundary
 //! waveforms into downstream islands as sources: the free tear, the weakest

@@ -1,7 +1,8 @@
 //! Hauksbee transient circuit solver.
 //!
 //! A dense/small-sparse modified-nodal-analysis engine with real device
-//! physics. The pipeline: build a [`Workspace`] from a [`Circuit`] (which
+//! physics. The pipeline: build a [`Workspace`] from a [`hauksbee_ir::Circuit`]
+//! (which
 //! analyzes the fixed sparsity once), find the DC operating point with Newton
 //! plus homotopy fallbacks, then time-march with companion models and adaptive
 //! step control. Every physical effect is a toggle in [`SolverOptions`].

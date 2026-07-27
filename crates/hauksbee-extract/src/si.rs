@@ -4,16 +4,16 @@
 //! geometry, netlists, part values) plus a small table of datasheet constants.
 //! Each corresponds to a bug class that really ships:
 //!
-//! 1. [`check_crystal_load_cap`] - crystal CL spec vs the board's two load caps
+//! 1. `check_crystal_load_cap` - crystal CL spec vs the board's two load caps
 //!    and stray capacitance (`CL = C1*C2/(C1+C2) + Cstray`). Wrong caps pull the
 //!    oscillator off-frequency or stop it starting.
-//! 2. [`check_i2c_rise_time`] - pull-up resistance vs computed bus capacitance vs
+//! 2. `check_i2c_rise_time` - pull-up resistance vs computed bus capacitance vs
 //!    the I2C spec rise-time limit (`t_r ~ 0.8473*R*C`). Upgrades the existing
 //!    "is a pull-up present" lint to "is the pull-up *sufficient*".
-//! 3. [`check_antenna_keepout`] - copper / ground poured inside a chip-antenna or
+//! 3. `check_antenna_keepout` - copper / ground poured inside a chip-antenna or
 //!    integrated-module-antenna keepout region (per the antenna/module
 //!    datasheet). The Watchy / Inkplate-6 bad-WiFi class.
-//! 4. [`check_usb_diff_pair`] - intra-pair routed-length skew on a USB D+/D- pair
+//! 4. `check_usb_diff_pair` - intra-pair routed-length skew on a USB D+/D- pair
 //!    vs the full-speed / high-speed limit, plus width/gap consistency.
 //!
 //! ## Discipline (read before trusting any fire)

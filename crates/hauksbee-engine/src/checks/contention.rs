@@ -28,7 +28,7 @@
 //!
 //! ## What counts as a push-pull output
 //!
-//! [`output_roles`](crate::digital::output_roles) is the binder's own answer, so
+//! [`output_roles`] is the binder's own answer, so
 //! this check and the binder cannot disagree: a model with a `[models.logic]`
 //! block declares `outputs` explicitly; a model without one falls back to the
 //! `y*` role convention the synthesized passthrough mirrors onto. The check maps

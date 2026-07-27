@@ -70,9 +70,11 @@ manifest. Nothing in the public test suite depends on them.
 cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
 
-CI runs the same three. Beyond that:
+CI runs the same four. The module headers are rendered documentation, so
+`cargo doc --open` is how you read them the way a reader will. Beyond that:
 
 **A check that fires must be right.** The corpus gate exists because a hardware
 tool that cries wolf gets switched off, and a switched-off tool catches nothing.

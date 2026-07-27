@@ -84,7 +84,7 @@ pub trait I2cSlave: Send {
 }
 
 /// The I2C bus peripheral: a router over attached slaves. Register its
-/// [`I2cBus::handler`] as the MCU's `on_i2c` callback.
+/// [`I2cBus::dispatch`] as the MCU's `on_i2c` callback.
 pub struct I2cBus {
     id: String,
     /// Address of the slave currently addressed (set on START), if any matched.

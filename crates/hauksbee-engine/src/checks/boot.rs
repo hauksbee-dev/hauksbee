@@ -95,7 +95,7 @@ pub fn analyze(
 /// default level, so it does NOT count as a bias and the net is still flagged.
 /// An unknown/unresolvable net name returns false (assume biased; stay silent).
 ///
-/// "Resistor" is the strict shared predicate ([`super::straps::is_assembled_resistor`]):
+/// "Resistor" is the strict shared predicate (`super::straps::is_assembled_resistor`):
 /// plain R refs only. An RV varistor / RT thermistor / RN network is `R…`-prefixed
 /// but sets no DC level (a varistor is high-impedance below its clamp), so crediting
 /// one as a bias would silently suppress a real boot hazard.
@@ -136,7 +136,7 @@ pub fn net_has_no_bias_resistor(board: &ExtractedBoard, net_name: &str) -> bool 
 /// so it can never suppress a genuinely floating gate.
 ///
 /// "Resistor" is the same strict predicate the hazard filter uses
-/// ([`super::straps::is_assembled_resistor`]), plain assembled R refs only, so a
+/// (`super::straps::is_assembled_resistor`), plain assembled R refs only, so a
 /// varistor / thermistor / DNP part is never miscredited as a bias.
 pub fn gate_bias(board: &ExtractedBoard, net_name: &str) -> Option<GateBias> {
     let net = board.nets.iter().find(|n| n.name == net_name)?;
