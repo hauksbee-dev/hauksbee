@@ -7,7 +7,7 @@
 //! instead, so a CI run cannot go green by skipping everything.
 
 // The whole file drives the in-process simavr core, so it only exists on
-// builds with the GPL-gated `avr` feature (the MIT-clean renode/qemu build
+// builds with the GPL-gated `avr` feature (the GPL-free renode/qemu build
 // excludes it).
 #![cfg(feature = "avr")]
 

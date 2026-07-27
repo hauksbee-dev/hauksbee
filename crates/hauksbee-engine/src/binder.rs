@@ -1062,7 +1062,7 @@ fn route_mcu_family(comp: &Component) -> Option<McuFamilyRoute> {
 /// none, the family router decides from the part's identity strings, a DB
 /// entry that exists for strap-lint data (esp32s3, esp32s2) must not silently
 /// inherit the AVR default: that sent an ESP32-S3 into simavr (wrong ISA, and
-/// the GPL-gated `avr` feature the MIT-clean build excludes) instead of
+/// the GPL-gated `avr` feature the GPL-free build excludes) instead of
 /// `qemu:esp32s3`. A recognized family with no co-sim platform gets an
 /// explicit `none:<family>` token the scheduler refuses loudly at
 /// instantiation. Only a part NO family route recognizes keeps the historical

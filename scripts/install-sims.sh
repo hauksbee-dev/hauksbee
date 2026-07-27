@@ -2,7 +2,7 @@
 # install-sims.sh - install or verify the external MCU simulator backends.
 #
 # hauksbee's AVR co-sim links libsimavr from the system. simavr is GPL-3.0 and
-# this repo is MIT, so simavr is NOT vendored — it is linked from the system by
+# this repo is Apache-2.0, so simavr is NOT vendored — it is linked from the system by
 # deliberate choice; `--avr` below builds and installs it for you. The Renode
 # and Espressif QEMU backends require externally installed binaries. This script
 # installs any of them into the exact locations hauksbee auto-discovers,
@@ -616,7 +616,7 @@ install_qemu() {
 
 # ── install AVR / simavr ──────────────────────────────────────────────────────
 #
-# simavr is GPL-3.0 and deliberately not vendored (this repo is MIT); we build
+# simavr is GPL-3.0 and deliberately not vendored (this repo is Apache-2.0); we build
 # and install it from a pinned upstream tag into the prefix build.rs links
 # against. This is the same recipe used to produce the working install on the
 # reference machine.

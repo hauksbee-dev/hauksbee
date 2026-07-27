@@ -6,7 +6,7 @@
 //! location [`find_qemu`](super::find_qemu) checks, then accepts each binary
 //! only after it passes the same `is_esp_fork` machine-list check discovery
 //! uses. Fetch, never bundle: the fork is GPL-2.0 and deliberately not
-//! vendored into this MIT-licensed tree (the same posture as libsimavr and
+//! vendored into this Apache-2.0-licensed tree (the same posture as libsimavr and
 //! Renode; see scripts/install-sims.sh, whose asset-resolution rules this
 //! module mirrors).
 //!

@@ -4235,7 +4235,7 @@ mod tests {
 
     // The Nano board binds `simavr:atmega328p`, whose in-process core is
     // always instantiated (even with no firmware), so this test needs the
-    // GPL-gated `avr` feature and cannot run on the MIT-clean renode/qemu
+    // GPL-gated `avr` feature and cannot run on the GPL-free renode/qemu
     // build.
     #[cfg(feature = "avr")]
     #[test]
@@ -4347,7 +4347,7 @@ mod tests {
     ///
     /// `rc_scheduler` binds an `simavr:atmega328p` Nano, whose in-process
     /// core is always instantiated, so this test needs the GPL-gated `avr`
-    /// feature and cannot run on the MIT-clean renode/qemu build.
+    /// feature and cannot run on the GPL-free renode/qemu build.
     #[cfg(feature = "avr")]
     #[test]
     fn pwl_drive_integrates_a_pulse_train_the_dc_path_collapses() {
@@ -4490,7 +4490,7 @@ mod tests {
     // ── Plain digital-input sync (BUG #17) ──────────────────────────────────
 
     /// A trait-level mock core recording every `set_digital_in` call, so the
-    /// run_chunk digital-input sync is provable on the MIT-clean build (no
+    /// run_chunk digital-input sync is provable on the GPL-free build (no
     /// emulator backend needed; the sync is engine logic, not backend logic).
     struct RecordingCore {
         digital_ins: Arc<Mutex<Vec<((char, u8), bool)>>>,

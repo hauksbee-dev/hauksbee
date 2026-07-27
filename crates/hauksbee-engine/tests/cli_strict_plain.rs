@@ -540,7 +540,7 @@ fn strict_gate_ignores_shorts_on_unvalidated_kicad10_but_not_validated() {
 /// `boot_control_net` note, advisory-only by default (exit 0), and escalated to
 /// exit 2 under `--strict-boot`. Uses committed fixtures.
 // Boots AVR .hex firmware on an ATmega board through the compiled binary,
-// so it needs the GPL-gated `avr` feature (the MIT-clean renode/qemu build
+// so it needs the GPL-gated `avr` feature (the GPL-free renode/qemu build
 // refuses AVR firmware by design).
 #[cfg(feature = "avr")]
 #[test]
@@ -632,7 +632,7 @@ fn default_text_headless_surfaces_the_boot_hazard() {
 /// A clean board whose firmware only toggles a signal (no switch-driving net
 /// held high) raises NO boot advisory and is not gated by --strict-boot.
 // Boots AVR .hex firmware on an ATmega board through the compiled binary,
-// so it needs the GPL-gated `avr` feature (the MIT-clean renode/qemu build
+// so it needs the GPL-gated `avr` feature (the GPL-free renode/qemu build
 // refuses AVR firmware by design).
 #[cfg(feature = "avr")]
 #[test]
@@ -671,7 +671,7 @@ fn clean_firmware_raises_no_boot_advisory() {
 /// --plain panel and in --json `boot_gates`; variant B (gate never driven)
 /// reports it as floating. Reporting, not gating, exit stays 0 either way.
 // Boots AVR .hex firmware on an ATmega board through the compiled binary,
-// so it needs the GPL-gated `avr` feature (the MIT-clean renode/qemu build
+// so it needs the GPL-gated `avr` feature (the GPL-free renode/qemu build
 // refuses AVR firmware by design).
 #[cfg(feature = "avr")]
 #[test]
@@ -749,7 +749,7 @@ fn boot_state_panel_reports_gate_drive_state() {
 /// report "driven HIGH", earlier the panel reused the safety-filtered held-high
 /// set (which drops biased nets), inverting the label to LOW on ordinary boards.
 // Boots AVR .hex firmware on an ATmega board through the compiled binary,
-// so it needs the GPL-gated `avr` feature (the MIT-clean renode/qemu build
+// so it needs the GPL-gated `avr` feature (the GPL-free renode/qemu build
 // refuses AVR firmware by design).
 #[cfg(feature = "avr")]
 #[test]

@@ -47,7 +47,7 @@ fn corpus_specs() -> Vec<PathBuf> {
 }
 
 // Replays AVR .hex firmware (the demo/blinky corpus is ATmega-based), so it
-// needs the GPL-gated `avr` feature; the MIT-clean renode/qemu build refuses
+// needs the GPL-gated `avr` feature; the GPL-free renode/qemu build refuses
 // AVR firmware by design.
 #[cfg(feature = "avr")]
 #[test]
@@ -94,7 +94,7 @@ fn hwtrace_corpus() {
 /// supply) but swap in a capture whose period is 300 ms where the firmware
 /// toggles at 200 ms; the failure the harness exists to catch.
 // Replays AVR .hex firmware (the demo/blinky corpus is ATmega-based), so it
-// needs the GPL-gated `avr` feature; the MIT-clean renode/qemu build refuses
+// needs the GPL-gated `avr` feature; the GPL-free renode/qemu build refuses
 // AVR firmware by design.
 #[cfg(feature = "avr")]
 #[test]

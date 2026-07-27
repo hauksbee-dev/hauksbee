@@ -10,13 +10,13 @@
 # ============================================================================
 # LICENSING DECISION — READ THIS (W6 §6). Product- and user-facing.
 # ============================================================================
-# hauksbee is MIT. Its optional `avr` co-sim backend STATICALLY LINKS libsimavr,
+# hauksbee is Apache-2.0. Its optional `avr` co-sim backend STATICALLY LINKS libsimavr,
 # which is GPL-3.0. Statically linking GPL code makes the resulting BINARY a GPL
 # derivative work — distributing it puts the whole download under GPL-3.0, even
-# though the source stays MIT. That is a real, irreversible licensing
+# though the source stays Apache-2.0. That is a real, irreversible licensing
 # consequence for anyone who `curl | bash`-installs a release.
 #
-# Decision: release binaries ship in the **MIT-clean shape** — the renode+qemu
+# Decision: release binaries ship in the **GPL-free shape** — the renode+qemu
 # backends only, no avr / no libsimavr:
 #
 #     cargo build --release --no-default-features --features renode,qemu
@@ -29,7 +29,7 @@
 # without an explicit, documented decision to ship GPL binaries.
 #
 # ---------------------------------------------------------------------------
-# GPL guard (regression check, expected GREEN): the MIT-clean shape is
+# GPL guard (regression check, expected GREEN): the GPL-free shape is
 # genuinely avr-free. hauksbee-server's AvrMcu usage is gated on its `avr`
 # feature, and every hauksbee-* path dependency in the workspace sets
 # `default-features = false` with explicit per-feature forwarding (cargo cannot
@@ -49,7 +49,7 @@
 # QEMU userland emulation — every artifact is produced on its own architecture.
 #
 # Dependency note: the forge-* crates are vendored into this repo
-# (vendor/kicad-forge; see vendor/kicad-forge/VENDORED.md), and the MIT-clean
+# (vendor/kicad-forge; see vendor/kicad-forge/VENDORED.md), and the GPL-free
 # shape links NO system libraries (no simavr, no libclang/bindgen — those are
 # only reached by the avr path), so the build is self-contained with just Rust.
 
@@ -115,7 +115,7 @@ jobs:
           restore-keys: |
             release-${{ matrix.label }}-
 
-      # NOTE: the MIT-clean shape deliberately installs NO system build deps.
+      # NOTE: the GPL-free shape deliberately installs NO system build deps.
       # It needs neither libsimavr (avr backend) nor libclang/bindgen. If you
       # switch to the GPL full-featured variant (option A) you must restore the
       # simavr + clang install steps — see the commented block at the bottom.
@@ -138,14 +138,14 @@ jobs:
           fi
           echo "version=${raw#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build MIT-clean bundle (renode+qemu; refuses to link GPL simavr)
+      - name: Build GPL-free bundle (renode+qemu; refuses to link GPL simavr)
         shell: bash
         env:
           # The GPL guard (see header). If `avr` is genuinely excluded,
           # hauksbee-mcu/build.rs early-returns and ignores these paths. If it
           # leaks in, build.rs panics HERE, before any GPL code is linked —
           # so we can never accidentally build, let alone ship, a GPL binary
-          # while calling it MIT-clean.
+          # while calling it GPL-free.
           SIMAVR_INCLUDE_DIR: /nonexistent/simavr-must-not-be-linked
           SIMAVR_LIB_DIR: /nonexistent/simavr-must-not-be-linked
         run: |
@@ -157,7 +157,7 @@ jobs:
                --target "${{ matrix.label }}" \
                --out dist; then
             echo "::error title=GPL guard tripped::The renode+qemu build pulled in the avr backend (libsimavr, GPL-3.0)."
-            echo "Refusing to build a GPL-encumbered binary and label it MIT-clean." >&2
+            echo "Refusing to build a GPL-encumbered binary and label it GPL-free." >&2
             echo "A feature-graph regression re-enabled avr; see docs/about/release-and-licensing.md §2." >&2
             exit 1
           fi
@@ -217,14 +217,14 @@ jobs:
 # =============================================================================
 # The variant below builds with DEFAULT features (avr + renode + qemu), which
 # statically links GPL-3.0 libsimavr. The resulting binaries — and therefore the
-# published release download — are GPL-3.0 licensed, not MIT. Shipping this is a
+# published release download — are GPL-3.0 licensed, not Apache-2.0. Shipping this is a
 # deliberate product/licensing decision that must be made and documented by a
 # human; it is intentionally left commented out.
 #
-# To use it: replace the matrix "Build MIT-clean bundle" step with per-OS build
+# To use it: replace the matrix "Build GPL-free bundle" step with per-OS build
 # steps that (1) install simavr + clang and (2) call bundle.sh WITHOUT the
 # --no-default-features/--features flags. Reference steps (previously the
-# shipping path before the MIT-clean decision):
+# shipping path before the GPL-free decision):
 #
 #   - name: Install Linux build dependencies
 #     if: runner.os == 'Linux'
