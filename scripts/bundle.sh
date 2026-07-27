@@ -30,7 +30,7 @@
 #
 # Feature note: with NO feature flags, cargo builds the default feature set
 # (avr + renode + qemu). The `avr` backend statically links libsimavr, which is
-# GPL-3.0 — so a default bundle is GPL-encumbered. Pass
+# GPL-3.0, so a default bundle is GPL-encumbered. Pass
 # `--no-default-features --features renode,qemu` for the GPL-free shape (no
 # libsimavr link; verified avr-free). See the release.yml header and
 # docs/about/release-and-licensing.md for the licensing decision and the GPL guard.

@@ -689,9 +689,19 @@ struct MergeSesArgs {
 
 #[derive(Parser)]
 struct ServeArgs {
-    /// Port for the local web front door.
+    /// Port for the local web front door. If busy, the next free port is
+    /// bound instead and the printed URL reflects the real one.
     #[arg(long, default_value_t = 3001, value_name = "PORT")]
     port: u16,
+
+    /// Open the system browser at the served URL once the listener is up.
+    ///
+    /// Also happens automatically (without this flag) when stdout is not a
+    /// terminal, i.e. when serve was launched by a double-click / Finder /
+    /// launchd and nobody can read the printed URL. Opening is best-effort:
+    /// on a headless machine with no browser it silently does nothing.
+    #[arg(long)]
+    open: bool,
 }
 
 #[derive(Parser)]
@@ -837,7 +847,7 @@ fn main() -> anyhow::Result<()> {
             args.ambient,
             args.json,
         ),
-        Command::Serve(args) => hauksbee_engine::commands::serve::run(args.port),
+        Command::Serve(args) => hauksbee_engine::commands::serve::run(args.port, args.open),
         Command::Doctor(args) => hauksbee_engine::commands::doctor::run(args.backends, args.json),
         Command::Sim(args) => hauksbee_engine::commands::sim::run(
             &args.file,

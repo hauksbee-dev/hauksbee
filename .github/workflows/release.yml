@@ -162,12 +162,30 @@ jobs:
             exit 1
           fi
 
+      # The double-clickable macOS front door. Reuses the binaries bundle.sh
+      # just built (--no-build), wraps them in Hauksbee.app with the compiled
+      # Swift launcher, and zips it as `hauksbee-<version>-<label>-app.zip`
+      # per the section-3 naming contract in docs/about/release-and-licensing.md.
+      # The app is unsigned (see app/macos/SIGNING.md); the README states the
+      # Gatekeeper caveat where the download is offered.
+      - name: Build Hauksbee.app (macOS only)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          chmod +x hauksbee/app/macos/build-app.sh
+          cd hauksbee
+          app/macos/build-app.sh --no-build \
+            --version "${{ steps.ver.outputs.version }}" \
+            --target "${{ matrix.label }}" \
+            --out dist
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: hauksbee-${{ matrix.label }}
           path: |
             hauksbee/dist/*.tar.gz
+            hauksbee/dist/*.zip
             hauksbee/dist/*.sha256
           if-no-files-found: error
 
@@ -188,7 +206,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          find artifacts -type f \( -name '*.tar.gz' -o -name '*.sha256' \) -exec cp {} dist/ \;
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.zip' -o -name '*.sha256' \) -exec cp {} dist/ \;
           ls -la dist
 
       - name: Verify every manifest before publishing
@@ -208,6 +226,7 @@ jobs:
         with:
           files: |
             dist/*.tar.gz
+            dist/*.zip
             dist/*.sha256
           generate_release_notes: true
           fail_on_unmatched_files: true

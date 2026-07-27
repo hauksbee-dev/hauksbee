@@ -40,6 +40,16 @@ Point it at any PCB design and it will:
 
 ## Quickstart
 
+**Download the app (macOS): double-click, drop a board.** Grab `Hauksbee.app` (the `hauksbee-<version>-darwin-<arch>-app.zip` asset) from the [releases page](https://github.com/ETM-Code/hauksbee/releases), unzip, double-click. It opens your browser on the drop-zone; drop a board file and read the report. No terminal at any point. Caveat, stated plainly: the app is currently **unsigned**, so the first launch needs right-click > Open past the Gatekeeper "unidentified developer" warning ([`app/macos/SIGNING.md`](app/macos/SIGNING.md) has the details and the notarisation plan). The app is macOS-only today; Windows is tracked separately in [`docs/about/release-and-licensing.md`](docs/about/release-and-licensing.md), and Linux users take the installer line below. Like every release asset, it exists once there is a published public release; during private beta, build from source.
+
+**One-line installer (terminal, macOS/Linux):**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ETM-Code/hauksbee/main/scripts/get-hauksbee.sh | bash
+```
+
+This fetches the latest release for your OS/arch, verifies the sha256 checksum, and installs `hauksbee` + `hauksbee-ci` to `~/.local/bin`. If that directory is not on your `PATH`, the installer prints the exact line to add. macOS users: if Gatekeeper blocks the binary on first run, remove the quarantine flag with `xattr -d com.apple.quarantine ~/.local/bin/hauksbee ~/.local/bin/hauksbee-ci`. `scripts/test-install-mock.sh` exercises the whole download/verify/install flow against a local mock so the installer is proven before any release goes out.
+
 **Build from source:**
 
 ```bash
@@ -80,15 +90,7 @@ Reports exit 0 by default even when they find something; `--strict` (alias `--fa
 
 **Native for agents, not just humans.** Every surface is machine-readable by design: `hauksbee run --json` and `hauksbee-ci run --json` emit one structured verdict object, exit codes distinguish green / failed / bad-input / not-trustworthy (an aborted analog solve exits 3 rather than pretending), honesty qualifiers (substitute MCU cores, coverage holes) are data fields rather than prose, and the whole analyze/check flow is reachable over localhost HTTP. An AI agent can scaffold a spec with `hauksbee-ci init`, iterate it to green, and wire the result into CI without ever opening the browser. [`agents/AGENTS.md`](agents/AGENTS.md) is the agent-facing contract. Runnable specs, board-as-code examples and captured sessions are in [`docs/ci/EXAMPLES.md`](docs/ci/EXAMPLES.md); the test campaign is in [`docs/record/TEST_CAMPAIGN.md`](docs/record/TEST_CAMPAIGN.md).
 
-**Prebuilt binary (once a public release exists):**
-
-> The prebuilt install needs a published, publicly-downloadable GitHub release. While hauksbee is in private beta there is none yet, so build from source (above) for now.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ETM-Code/hauksbee/main/scripts/get-hauksbee.sh | bash
-```
-
-This fetches the latest release for your OS/arch, verifies the sha256 checksum, and installs `hauksbee` + `hauksbee-ci` to `~/.local/bin`. If that directory is not on your `PATH`, the installer prints the exact line to add. macOS users: if Gatekeeper blocks the binary on first run, remove the quarantine flag with `xattr -d com.apple.quarantine ~/.local/bin/hauksbee ~/.local/bin/hauksbee-ci`. `scripts/test-install-mock.sh` exercises the whole download/verify/install flow against a local mock so the installer is proven before any release goes out.
+> The app download and the one-line installer both need a published, publicly-downloadable GitHub release. While hauksbee is in private beta there is none yet, so build from source (above) for now.
 
 ---
 
