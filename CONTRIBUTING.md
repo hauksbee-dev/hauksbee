@@ -113,6 +113,14 @@ The short version:
 | `hauksbee-ci` | Declarative TOML specs and assertions for pipelines |
 | `hauksbee-server` | The web front door |
 
+## The CLA
+
+First-time contributors sign a contributor licence agreement (`CLA.md`) by
+replying to a bot comment on their first pull request; it takes one sentence
+and one click. Short version: you keep your copyright, the project gets a
+licence broad enough to keep its options open, and the reasoning is stated
+plainly in the document rather than buried in legalese.
+
 ## Reporting bugs
 
 A board file that reproduces the problem is worth more than any description. If
