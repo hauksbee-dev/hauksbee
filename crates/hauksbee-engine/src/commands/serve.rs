@@ -114,7 +114,14 @@ pub fn run(port: u16, open: bool) -> anyhow::Result<()> {
         // tells it this server can launch a live sim for an uploaded board
         // (`/api/live/launch`), so the report offers the launch button instead
         // of the CLI-hint fallback.
-        let startup_json = "{\"preloaded\":false,\"live\":true}".to_string();
+        let startup_json = serde_json::json!({
+            "preloaded": false,
+            "live": true,
+            // Engine version, for the Environment page's "what am I running"
+            // card.
+            "version": env!("CARGO_PKG_VERSION"),
+        })
+        .to_string();
         hauksbee_server::serve_frontdoor_on(
             listener,
             dir.as_deref(),

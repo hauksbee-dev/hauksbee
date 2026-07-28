@@ -44,7 +44,7 @@ export function FaultPanel({ faults, onClear, onFaultComponentSelect, selectedFa
     <>
       {faults.length === 0 ? (
         <div className="px-3 py-2.5 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
-          No faults detected
+          No faults detected in what is monitored
         </div>
       ) : (
         <div>
@@ -119,6 +119,19 @@ export function FaultPanel({ faults, onClear, onFaultComponentSelect, selectedFa
           </div>
         </div>
       )}
+
+      {/* Monitoring-scope honesty: an empty list is only as reassuring as
+          what the monitor actually watches, so the scope is stated
+          persistently rather than implied. */}
+      <div
+        className="px-3 pb-2.5 pt-1 text-[10px] leading-relaxed"
+        style={{ color: 'var(--silk-faint)', borderTop: '1px solid var(--rule)' }}
+      >
+        Watching datasheet limits on parts the model library rates: current
+        (continuous and surge), voltage, power, reverse bias, junction
+        temperature, per-pin drive current, and MCU/logic supply overvoltage.
+        Parts with no known ratings are not checked.
+      </div>
 
       {/* Toast notifications */}
       <div className="fixed bottom-8 right-4 flex flex-col gap-2 z-50 pointer-events-none">

@@ -222,6 +222,31 @@ pub fn strip_unit_suffix(name: &str) -> &str {
         .unwrap_or(name)
 }
 
+/// A supply-rail absolute-maximum watch for a part that is not an analog
+/// device in the solver (an MCU / logic IC): the part's supply NET is checked
+/// against the model's `max_voltage_v` each chunk. These parts deliberately get
+/// no whole-device [`DeviceMeta`] (their per-pin currents are covered by the
+/// pin-driver metas), which used to mean a rail driven far past the chip's
+/// absolute-maximum Vcc raised nothing at all, an honesty gap: the model DB
+/// carries the rating (e.g. ATmega328P `max_voltage_v = 6.0`), so we check it.
+#[derive(Debug, Clone)]
+pub struct SupplyWatch {
+    /// Component reference designator the fault names (e.g. "U1").
+    pub reference: String,
+    /// The supply-net node to sample (the part's VCC/VDD net).
+    pub node: NodeId,
+    /// Absolute-maximum supply voltage (V) from the model's ratings.
+    pub max_v: f64,
+}
+
+/// Sustain/raised state for one [`SupplyWatch`] (same filter as continuous
+/// device ratings: a solver transient must not cook a chip).
+#[derive(Debug, Clone, Default)]
+struct WatchTrack {
+    over_chunks: u32,
+    raised: bool,
+}
+
 /// Per-device running state for the sustain filter.
 #[derive(Debug, Clone, Default)]
 struct DeviceTrack {
@@ -241,6 +266,10 @@ struct DeviceTrack {
 pub struct StressMonitor {
     metas: Vec<DeviceMeta>,
     tracks: Vec<DeviceTrack>,
+    /// Supply-rail absolute-maximum watches for MCU/logic packages (no analog
+    /// device to meter; the rating is checked against the rail node directly).
+    supply_watches: Vec<SupplyWatch>,
+    watch_tracks: Vec<WatchTrack>,
     /// Destructive mode: mutate the circuit on fault.
     pub destructive: bool,
     /// Ambient temperature (C) the steady-state junction estimate sits on top
@@ -266,6 +295,8 @@ impl StressMonitor {
         StressMonitor {
             metas,
             tracks: vec![DeviceTrack::default(); n],
+            supply_watches: Vec::new(),
+            watch_tracks: Vec::new(),
             destructive: false,
             ambient_c: crate::thermal::DEFAULT_AMBIENT_C,
             stress_by_ref: HashMap::new(),
@@ -276,6 +307,13 @@ impl StressMonitor {
     /// Number of monitored devices.
     pub fn device_count(&self) -> usize {
         self.metas.len()
+    }
+
+    /// Install the supply-rail watches (built at bind time from the MCU
+    /// bindings' VCC nets + model ratings). Replaces any existing set.
+    pub fn set_supply_watches(&mut self, watches: Vec<SupplyWatch>) {
+        self.watch_tracks = vec![WatchTrack::default(); watches.len()];
+        self.supply_watches = watches;
     }
 
     /// Clear all per-run tracking so a replay starts from a clean slate: the
@@ -289,6 +327,9 @@ impl StressMonitor {
     pub fn reset_tracks(&mut self) {
         for track in &mut self.tracks {
             *track = DeviceTrack::default();
+        }
+        for track in &mut self.watch_tracks {
+            *track = WatchTrack::default();
         }
         self.stress_by_ref.clear();
         self.temp_by_ref.clear();
@@ -490,6 +531,44 @@ impl StressMonitor {
             self.tracks[i].stress = worst_stress.min(1.0);
             self.stress_by_ref
                 .insert(meta.reference.clone(), worst_stress.min(1.0));
+        }
+
+        // ── Pass 3: supply-rail absolute-maximum watches (MCU/logic Vcc) ─────
+        // These parts have no analog device to meter; the honest check is the
+        // rail node's voltage against the model's absolute-maximum supply
+        // rating. Same sustain filter as any continuous rating.
+        for i in 0..self.supply_watches.len() {
+            let w = self.supply_watches[i].clone();
+            let v = node_v(w.node);
+            let frac = if w.max_v > 0.0 {
+                (v / w.max_v).max(0.0)
+            } else {
+                0.0
+            };
+            // The package's stress heat-map entry: keep the worst of the pin
+            // metas' fraction (keyed "<ref>:<pin>") and this rail fraction
+            // (keyed on the bare ref, which the UI heat-map reads).
+            let entry = self.stress_by_ref.entry(w.reference.clone()).or_insert(0.0);
+            *entry = entry.max(frac.min(1.0));
+            let track = &mut self.watch_tracks[i];
+            if frac > 1.0 {
+                track.over_chunks += 1;
+            } else {
+                track.over_chunks = 0;
+            }
+            if track.over_chunks >= SUSTAIN_CHUNKS && !track.raised {
+                track.raised = true;
+                faults.push(FaultEvent {
+                    component: w.reference,
+                    kind: FaultKind::Overvoltage,
+                    value: v,
+                    limit: w.max_v,
+                    t,
+                    // Chip-cooking is not modeled destructively; the fault
+                    // reports, the circuit is left intact.
+                    destroyed: false,
+                });
+            }
         }
         faults
     }
@@ -1106,6 +1185,58 @@ mod monitor_temp_tests {
             1,
             "after reset the fault re-raises on replay"
         );
+    }
+
+    #[test]
+    fn supply_watch_raises_overvoltage_past_the_mcu_abs_max() {
+        // An MCU has no whole-device meta (per-pin currents only), so its
+        // abs-max supply rating is enforced through a SupplyWatch on the Vcc
+        // NODE: a rail driven to 100 V on a 6 V-max part must raise a
+        // sustained overvoltage fault naming the part, and a nominal rail
+        // must raise nothing.
+        let mut c = Circuit::new();
+        let vcc = c.node("+5V");
+        let mut mon = StressMonitor::new(Vec::new());
+        mon.set_supply_watches(vec![SupplyWatch {
+            reference: "U1".into(),
+            node: vcc,
+            max_v: 6.0,
+        }]);
+        let no_branch = |_: DeviceId| None;
+
+        // Nominal 5 V: no fault, modest stress fraction.
+        let node_v5 = |n: NodeId| if n == vcc { 5.0 } else { 0.0 };
+        for k in 0..(SUSTAIN_CHUNKS + 2) {
+            let faults = mon.evaluate(&mut c, &node_v5, &no_branch, k as f64 * 1e-3);
+            assert!(faults.is_empty(), "5 V on a 6 V-max part is not a fault");
+        }
+        let frac = mon.stress_by_ref().get("U1").copied().unwrap_or(0.0);
+        assert!(
+            (frac - 5.0 / 6.0).abs() < 1e-9,
+            "stress fraction 5/6: {frac}"
+        );
+
+        // 100 V: sustained overvoltage, raised exactly once, naming the part.
+        let node_v100 = |n: NodeId| if n == vcc { 100.0 } else { 0.0 };
+        let mut raised = Vec::new();
+        for k in 0..(SUSTAIN_CHUNKS + 2) {
+            raised.extend(mon.evaluate(&mut c, &node_v100, &no_branch, k as f64 * 1e-3));
+        }
+        assert_eq!(raised.len(), 1, "raised once, not per chunk");
+        assert_eq!(raised[0].component, "U1");
+        assert_eq!(raised[0].kind, FaultKind::Overvoltage);
+        assert_eq!(raised[0].limit, 6.0);
+        assert_eq!(raised[0].value, 100.0);
+
+        // reset_tracks clears the latch: a replay re-raises.
+        mon.reset_tracks();
+        let mut re_raised = 0;
+        for k in 0..(SUSTAIN_CHUNKS + 2) {
+            re_raised += mon
+                .evaluate(&mut c, &node_v100, &no_branch, k as f64 * 1e-3)
+                .len();
+        }
+        assert_eq!(re_raised, 1, "watch re-raises after reset_tracks");
     }
 
     #[test]

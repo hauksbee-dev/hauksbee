@@ -411,7 +411,6 @@ export function renderStaticBoard(
   // a readable name on, and fades in as it grows: zoomed out the board is
   // clean copper (no 3,443-label smear), zoomed in every part is named. The
   // screen-size rule is self-limiting, so no explicit density cap is needed.
-  const LABEL_MIN_PX = 26
   if (opts?.showLabels === false) return
   ctx.save()
   ctx.textAlign = 'center'
@@ -451,9 +450,16 @@ export function renderStaticBoard(
 // Renders per-frame data on the overlay canvas above the (blitted) static
 // board: voltage tints, highlights, faults, particles, probe tooltip.
 
+/** Minimum ON-SCREEN footprint extent (px) before its reference label is
+ *  drawn. Exported so the viewer's label hit-test gates on the exact same
+ *  rule the renderer draws with. */
+export const LABEL_MIN_PX = 26
+
 export interface OverlayData {
   /** Pulsing glow on these nets */
   highlightNets: Set<string>
+  /** A "show on board" marker (board mm): pulsing ring + optional label. */
+  marker?: { x: number; y: number; label?: string } | null
   /** Dim the non-highlighted board when a highlight is active */
   dimOthers?: boolean
   /** Signal flow particles: netName → list of positions (t∈[0,1]) along each segment */
@@ -773,5 +779,55 @@ export function renderDynamicOverlay(
     ctx.arc(sx, sy, 4, 0, Math.PI * 2)
     ctx.fillStyle = '#60a5fa'
     ctx.fill()
+  }
+
+  // ── "Show on board" marker: pulsing ring + crosshair at a finding's spot ──
+  if (overlay.marker) {
+    const { x, y, label } = overlay.marker
+    const [sx, sy] = ws(cam, x, y)
+    const t = overlay.animTime ?? 0
+    const pulse = 0.5 + 0.5 * Math.sin(t * 4)
+    const ringR = 14 + pulse * 6
+
+    ctx.save()
+    ctx.strokeStyle = '#f87171'
+    ctx.lineWidth = 2
+    ctx.shadowColor = '#ef4444'
+    ctx.shadowBlur = 10
+    ctx.globalAlpha = 0.9 - pulse * 0.4
+    ctx.beginPath()
+    ctx.arc(sx, sy, ringR, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.globalAlpha = 1
+    ctx.shadowBlur = 0
+
+    // Crosshair
+    ctx.beginPath()
+    ctx.moveTo(sx - 8, sy)
+    ctx.lineTo(sx + 8, sy)
+    ctx.moveTo(sx, sy - 8)
+    ctx.lineTo(sx, sy + 8)
+    ctx.lineWidth = 1.5
+    ctx.stroke()
+
+    if (label) {
+      const fontSize = 11
+      ctx.font = `bold ${fontSize}px 'JetBrains Mono', monospace`
+      // Clamp the label to a readable width; the finding card has the rest.
+      const shown = label.length > 60 ? `${label.slice(0, 57)}...` : label
+      const w = ctx.measureText(shown).width + 14
+      const bx = Math.min(Math.max(6, sx - w / 2), ctx.canvas.width - w - 6)
+      const by = sy + ringR + 8
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.92)'
+      ctx.strokeStyle = '#ef4444'
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      ctx.roundRect(bx, by, w, fontSize + 12, 5)
+      ctx.fill()
+      ctx.stroke()
+      ctx.fillStyle = '#fca5a5'
+      ctx.fillText(shown, bx + 7, by + fontSize + 4)
+    }
+    ctx.restore()
   }
 }

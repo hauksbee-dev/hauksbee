@@ -55,6 +55,11 @@ pub struct PlainFinding {
     pub why: String,
     /// "Suggested fix"; the concrete thing to change.
     pub fix: String,
+    /// Board location (mm, layout coordinate space) when the finding points at
+    /// a physical spot (a DRC short, the tightest clearance gap). Lets the web
+    /// report pan its board map to the finding instead of making the user
+    /// parse "near x=12.3 mm" prose. None for findings with no single spot.
+    pub loc_mm: Option<[f64; 2]>,
 }
 
 /// An actionable "heads up" note: worth knowing, not a failure. Carries the same
@@ -129,6 +134,26 @@ impl PlainReport {
             what,
             why,
             fix,
+            loc_mm: None,
+        });
+    }
+
+    /// [`Self::push`] with a board location, for findings that point at one
+    /// physical spot the UI can pan to.
+    fn push_at(
+        &mut self,
+        level: PlainLevel,
+        what: String,
+        why: String,
+        fix: String,
+        loc_mm: [f64; 2],
+    ) {
+        self.findings.push(PlainFinding {
+            level,
+            what,
+            why,
+            fix,
+            loc_mm: Some(loc_mm),
         });
     }
 
@@ -366,13 +391,14 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
         } else {
             PlainLevel::Note
         };
-        out.push(
+        out.push_at(
             level,
             format!("Two separate connections, \"{a}\" and \"{b}\", are touching, {where_}."),
             format!(
                 "These are meant to be electrically separate. Where they touch they become one connection (a short), so \"{a}\" and \"{b}\" will be forced to the same voltage. That usually means the board does the wrong thing, and if one is a power rail it can pull large current and overheat."
             ),
             "Pull the two pieces of copper apart so there is a clear gap between them, or remove the bit of copper that bridges them. If they really are supposed to connect, give them the same net name.".to_string(),
+            sh.loc_mm,
         );
     }
 
@@ -404,11 +430,12 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
                 friendly_layer(&g.layer), g.below_count, g.rule_mm, g.min_gap_mm,
             )
         };
-        out.push(
+        out.push_at(
             PlainLevel::Warning,
             what,
             "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.".to_string(),
             "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.".to_string(),
+            g.min_gap_loc_mm,
         );
     }
 
@@ -429,7 +456,7 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
             g.count,
             if g.count == 1 { "" } else { "s" }
         );
-        out.push(
+        out.push_at(
             PlainLevel::Warning,
             format!(
                 "\"{a}\" and \"{b}\" sit at minimum clearance (no margin) at {places} on {} ({:.3} mm, exactly your {:.3} mm rule).",
@@ -437,6 +464,7 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
             ),
             "These meet your clearance rule exactly, with nothing to spare. They are not below the rule, so this is not a violation, but there is no margin left, so any small manufacturing variation eats into a gap that is already at its allowed minimum.".to_string(),
             "If you want some safety margin, open these gaps up a little beyond the rule. If the rule already reflects your process limits, this is acceptable as-is; just be aware there is no slack.".to_string(),
+            g.min_gap_loc_mm,
         );
     }
 

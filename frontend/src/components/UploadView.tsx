@@ -35,13 +35,44 @@ function activateOnEnterSpace(inputId: string) {
   }
 }
 
-export function UploadView({ session }: { session: BoardSession }) {
+export function UploadView({ session, onOpenLive }: {
+  session: BoardSession
+  /** Open the live session already running server-side (mounts the sim). */
+  onOpenLive?: () => void
+}) {
   const { busy, uploadError, firmwareFile, handleBoard, handleFirmware, runSample } = session
   const [dragOver, setDragOver] = useState(false)
 
   return (
     <div className="landing h-full overflow-y-auto view-enter">
       <div className="max-w-xl mx-auto px-6 pb-24" style={{ paddingTop: 'clamp(2rem, 7vh, 4.5rem)' }}>
+        {/* A live session survives a page reload server-side. Landing on a
+            bare drop zone while the server still runs a board reads as data
+            loss; acknowledge the session and offer to open it. */}
+        {!busy && session.serverLive?.active && session.serverLive.boardName && onOpenLive && (
+          <div
+            data-testid="landing-live-notice"
+            className="mb-6 rounded-lg px-4 py-3 text-[13px] flex flex-wrap items-center gap-x-3 gap-y-2"
+            style={{ background: 'var(--surface)', border: '1px solid var(--copper-deep)', color: 'var(--silk)' }}
+          >
+            <span>
+              A live session for{' '}
+              <b style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>
+                {session.serverLive.boardName}
+              </b>{' '}
+              is still running on this server.
+            </span>
+            <button
+              type="button"
+              data-testid="landing-open-live"
+              onClick={onOpenLive}
+              className="hb-btn hb-press px-3 text-[12px]"
+              style={{ height: 28 }}
+            >
+              Open the live sim
+            </button>
+          </div>
+        )}
         {/* Hero, a calm, centered thesis */}
         {!busy && (
           <div className="text-center">

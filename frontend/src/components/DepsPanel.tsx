@@ -74,19 +74,36 @@ function CopyCmd({ text }: { text: string }) {
   )
 }
 
-export function DepsPanel() {
-  const [deps, setDeps] = useState<DepInfo[] | null>(null)
+type DepsFetch =
+  | { phase: 'loading' }
+  | { phase: 'ready'; deps: DepInfo[] }
+  | { phase: 'unavailable'; reason: string }
+
+export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) {
+  const [fetchState, setFetchState] = useState<DepsFetch>({ phase: 'loading' })
   const [install, setInstall] = useState<InstallState>({ phase: 'idle' })
   const logRef = useRef<HTMLPreElement>(null)
 
   const fetchDeps = useCallback(async () => {
     try {
       const res = await fetch('/api/deps')
-      if (!res.ok) return
+      if (!res.ok) {
+        setFetchState({
+          phase: 'unavailable',
+          reason: `the server answered ${res.status} ${res.statusText} for /api/deps`,
+        })
+        return
+      }
       const json = (await res.json()) as { deps?: DepInfo[] }
-      if (Array.isArray(json.deps)) setDeps(json.deps)
-    } catch {
-      // An older server without /api/deps: the panel simply does not render.
+      if (Array.isArray(json.deps)) setFetchState({ phase: 'ready', deps: json.deps })
+      else setFetchState({ phase: 'unavailable', reason: 'the server returned an unexpected shape for /api/deps' })
+    } catch (e) {
+      // An older server / a serve mode without the dependency endpoints: say
+      // so honestly instead of rendering a blank page.
+      setFetchState({
+        phase: 'unavailable',
+        reason: `the /api/deps request failed (${e instanceof Error ? e.message : String(e)})`,
+      })
     }
   }, [])
 
@@ -138,21 +155,81 @@ export function DepsPanel() {
     }
   }, [fetchDeps])
 
-  if (!deps) return null
-
+  const deps = fetchState.phase === 'ready' ? fetchState.deps : []
   const missing = deps.filter(d => !d.present).length
   const busyId = install.phase === 'running' ? install.id : null
   const activeLog = install.phase === 'running' || install.phase === 'ended' ? install.log : []
   const activeId = install.phase === 'idle' ? null : install.id
 
   return (
-    <div className="mt-14" data-testid="deps-panel">
+    <div className="mt-10" data-testid="deps-panel">
+      {/* What am I running: version + serving origin. Honest basics that make
+          "is this the build I think it is" answerable from the browser. */}
+      <div
+        className="rounded-xl px-4 py-3 mb-8 text-[12px] flex flex-wrap gap-x-6 gap-y-1"
+        style={{ border: '1px solid var(--hairline)', background: 'var(--surface)', color: 'var(--silk-dim)' }}
+        data-testid="env-about"
+      >
+        <span>
+          engine:{' '}
+          <span style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)' }}>
+            {engineVersion ? `hauksbee v${engineVersion}` : 'version not reported by this server'}
+          </span>
+        </span>
+        <span>
+          serving:{' '}
+          <span style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)' }}>
+            {window.location.origin}
+          </span>
+        </span>
+      </div>
+
       <div
         className="text-[11px] font-semibold tracking-[0.2em] uppercase text-center mb-2"
         style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}
       >
         Simulators on this machine
       </div>
+
+      {fetchState.phase === 'loading' && (
+        <div
+          className="text-[13px] text-center mt-6 flex items-center justify-center gap-2"
+          role="status"
+          aria-live="polite"
+          style={{ color: 'var(--silk-dim)' }}
+        >
+          <span className="slot-spin" /> Probing the co-sim backends and oracles on this machine ...
+        </div>
+      )}
+
+      {fetchState.phase === 'unavailable' && (
+        <div
+          data-testid="deps-unavailable"
+          className="rounded-xl px-4 py-3.5 mt-4 text-[13px]"
+          style={{ border: '1px solid var(--warn-border)', background: 'var(--warn-bg)', color: 'var(--silk)' }}
+        >
+          <span className="text-[10px] font-bold tracking-widest uppercase block mb-1" style={{ color: 'var(--warn-strong)' }}>
+            Dependency status unavailable
+          </span>
+          This server does not expose the dependency endpoints: {fetchState.reason}. Backend
+          availability and one-click installs need a full <code className="hb-inline">hauksbee serve</code>{' '}
+          (or <code className="hb-inline">hauksbee run --serve</code>) session. From a terminal,{' '}
+          <code className="hb-inline">hauksbee doctor --backends</code> shows backend availability.
+          <div className="mt-2">
+            <button
+              type="button"
+              onClick={() => { setFetchState({ phase: 'loading' }); void fetchDeps() }}
+              className="hb-btn hb-press px-3 text-[12px]"
+              style={{ height: 28 }}
+            >
+              Retry
+            </button>
+          </div>
+        </div>
+      )}
+
+      {fetchState.phase === 'ready' && (
+        <>
       <div className="text-[12px] text-center mb-5" style={{ color: 'var(--silk-dim)' }}>
         {missing === 0
           ? 'Everything optional is installed. All co-sim backends and oracles are ready.'
@@ -295,6 +372,8 @@ export function DepsPanel() {
           </div>
         ))}
       </div>
+        </>
+      )}
     </div>
   )
 }

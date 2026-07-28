@@ -210,6 +210,61 @@ function tomlToBuilder(raw: string): { name: string; duration: string; supplies:
   }
 }
 
+/** The left column while raw-edit mode owns the spec: a live, read-only
+ *  summary of what the raw TOML currently says (name, run length, supplies,
+ *  the checks grouped by family), so the column is not a blank void. Falls
+ *  back to a best-effort description when the spec uses vocabulary the
+ *  builder cannot parse. */
+function RawModeSummary({ rawText }: { rawText: string }) {
+  const parsed = useMemo(() => tomlToBuilder(rawText), [rawText])
+  return (
+    <div className="hb-card px-4 py-4 text-[13px] leading-relaxed" style={{ color: 'var(--silk-dim)' }} data-testid="raw-summary">
+      <div className="text-[11px] font-bold tracking-widest uppercase mb-2" style={{ color: 'var(--silk-faint)' }}>
+        What the raw spec says
+      </div>
+      {parsed ? (
+        <>
+          <div>
+            <b style={{ color: 'var(--silk)', fontWeight: 600 }}>{parsed.name}</b>
+            {' '}· run length {parsed.duration} ms
+          </div>
+          {parsed.supplies.length > 0 && (
+            <div className="mt-2">
+              <span style={{ color: 'var(--silk)' }}>Power supplies:</span>{' '}
+              {parsed.supplies.map(s => `${s.net} at ${s.volts} V`).join(', ')}
+            </div>
+          )}
+          <ul className="mt-2 pl-4" style={{ listStyleType: 'disc' }}>
+            {parsed.checks.map((c, i) => {
+              const meta = CHECK_KINDS.find(k => k.kind === c.kind)
+              const subject = c.net ? ` on ${c.net}` : c.ref ? ` for ${c.ref}` : ''
+              return (
+                <li key={i} className="my-0.5">
+                  {meta?.label ?? c.kind}{subject}
+                  <code className="text-[10px] ml-1.5" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
+                    {c.kind}
+                  </code>
+                </li>
+              )
+            })}
+            {parsed.checks.length === 0 && <li>no assertions yet</li>}
+          </ul>
+        </>
+      ) : (
+        <div>
+          The spec uses vocabulary beyond the visual builder (tolerances, scenarios,
+          overrides, sensors ...), so it cannot be summarized here.
+        </div>
+      )}
+      <div className="mt-3 text-[12px]" style={{ color: 'var(--silk-faint)' }}>
+        The raw TOML on the right is the source of truth now. The visual builder comes
+        back when the spec fits its vocabulary (the “back to the builder” switch on the
+        pane).
+      </div>
+    </div>
+  )
+}
+
 function Field({ label, value, onChange, width = 90, placeholder }: {
   label: string
   value: string
@@ -559,14 +614,7 @@ jobs:
             )}
 
             {rawMode ? (
-              <div
-                className="hb-card px-4 py-4 text-[13px] leading-relaxed"
-                style={{ color: 'var(--silk-dim)' }}
-              >
-                The raw TOML on the right is the source of truth now. The visual builder
-                comes back when the spec fits its vocabulary (the “back to the builder”
-                switch on the pane).
-              </div>
+              <RawModeSummary rawText={rawText} />
             ) : (
               <>
                 {/* Spec identity */}
@@ -715,6 +763,23 @@ jobs:
                               </>
                             )}
                           </div>
+                          {/* The run's measured value, on the row it judged:
+                              a bare PASS chip hid the number the run actually
+                              produced (it lived only in a hover tooltip). */}
+                          {rowResult && rowResult.detail && (
+                            <div
+                              data-testid="row-result-detail"
+                              className="mt-1.5 text-[11px] tnum"
+                              style={{
+                                color: 'var(--silk-faint)',
+                                fontFamily: 'var(--font-mono)',
+                                opacity: stale ? 0.55 : 1,
+                              }}
+                            >
+                              {rowResult.detail}
+                              {stale ? ' (from the last run; the spec has changed since)' : ''}
+                            </div>
+                          )}
                         </div>
                       )
                     })}
@@ -902,7 +967,10 @@ jobs:
                   <div className="text-[12px] mb-1.5" style={{ color: 'var(--silk-dim)' }}>
                     2. <code className="hb-inline">.github/workflows/hauksbee-ci.yml</code>:
                   </div>
-                  <pre className="hb-code p-3 overflow-x-auto text-[11px] leading-relaxed">
+                  {/* pre-wrap: the long `paths:` lines soft-wrap at spaces
+                      instead of clipping at the card's right edge (the copied
+                      text keeps its real newlines either way). */}
+                  <pre className="hb-code p-3 overflow-x-auto whitespace-pre-wrap text-[11px] leading-relaxed">
                     {workflowYml}
                   </pre>
                   <button type="button" className="hb-btn hb-press mt-2 px-3 py-1.5 text-[12px]"

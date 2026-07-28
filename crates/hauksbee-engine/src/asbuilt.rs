@@ -860,6 +860,7 @@ mod tests {
             adc_nets,
             adc_pin: HashMap::new(),
             module: false,
+            max_supply_v: None,
         };
         let dac = DacBinding {
             reference: "U9".to_string(),

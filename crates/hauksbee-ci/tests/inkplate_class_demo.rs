@@ -212,12 +212,17 @@ board = "{board}"
 duration_ms = 60
 frame_ms = 0.2
 
-# Stiff USB 5V/3A feeding the 3V3 rail directly (USB-supplemented operation:
-# the LDO is fed from USB, not the small cell). No protection to trip.
+# USB-supplemented operation: the LDO is fed from stiff USB power instead of
+# the small cell, so its 3.3 V OUTPUT is stiff. Modelled as a stiff bench
+# supply at the rail's own 3.3 V: the fixture has no VBUS net (the LDO is
+# abstracted away), and stamping the USB 5 V directly onto the 3V3 net put
+# 5 V on the ESP32's VDD, which the stress monitor now correctly flags as an
+# overvoltage (abs-max 3.6 V). No protection to trip.
 [[supply]]
 net = "+3.3V"
-kind = "usb"
-usb = "5v3a"
+kind = "bench"
+volts = 3.3
+current_limit_a = 3.0
 
 [decoupling]
 parasitics = true

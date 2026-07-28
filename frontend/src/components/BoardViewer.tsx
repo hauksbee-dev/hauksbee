@@ -3,7 +3,7 @@ import { parseKicadPcb, buildNetIndex } from '../lib/kicad-parser'
 import type { ParsedBoard } from '../lib/kicad-parser'
 import { makeCamera, fitScaleFor, zoomCamera, wheelZoomFactor, panCamera, screenToWorld, MIN_SCALE, MAX_SCALE } from '../lib/camera'
 import type { Camera } from '../lib/camera'
-import { renderStaticBoard, renderDynamicOverlay } from '../lib/board-renderer'
+import { renderStaticBoard, renderDynamicOverlay, LABEL_MIN_PX } from '../lib/board-renderer'
 import type { OverlayData, RenderOptions } from '../lib/board-renderer'
 import { getLayerStyle } from '../lib/layer-colors'
 import type { SimFrame, BoardInfoMsg } from '../types/protocol'
@@ -43,6 +43,10 @@ interface BoardViewerProps {
   /** Net names for the layers panel's highlight picker. When absent, the
    *  picker uses the nets parsed from the board file itself. */
   netOptions?: string[]
+  /** Pan/zoom to a board location (mm) and drop a labeled marker there (the
+   *  report's "show on board" affordance). A new `seq` re-triggers the move
+   *  even for the same coordinates. */
+  focusPoint?: { x: number; y: number; label?: string; seq: number } | null
 }
 
 const PARTICLE_COUNT = 4
@@ -167,7 +171,7 @@ function LayerRow({ label, swatch, on, onToggle }: {
 
 export function BoardViewer({
   boardFile, frame, boardInfo, selectedNet, onFootprintClick, onNetClick,
-  onEmptyBoard, faultedRefs, netOptions,
+  onEmptyBoard, faultedRefs, netOptions, focusPoint,
 }: BoardViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
@@ -207,6 +211,12 @@ export function BoardViewer({
   // "100%" at fit rather than an arbitrary internal scale.
   const fitScaleRef = useRef(1)
 
+  // Whether the USER moved the camera this session (wheel, drag, pinch).
+  // Auto-refit (on becoming visible again, on 3D-to-2D return, on resize) is
+  // only allowed while this is false: a camera the user set is theirs, but a
+  // camera nobody touched must never present a stale zoom pinned top-left.
+  const userMovedCamera = useRef(false)
+
   // Static board cache: the full board drawn at a fixed camera, blitted with a
   // cheap transform every animation frame. Re-rendered when the camera settles
   // (or immediately when the render is cheap or the blit would degrade too far).
@@ -237,6 +247,12 @@ export function BoardViewer({
 
   const netIndex = useMemo(() => board ? buildNetIndex(board) : null, [board])
   const boardLayers = useMemo(() => board ? layersPresent(board) : [], [board])
+  // Real (named) nets only: the KiCad net table's synthetic id-0 "" bucket is
+  // not a net, and counting it disagreed with the report's own net count.
+  const namedNetCount = useMemo(
+    () => board ? [...board.nets.values()].filter(Boolean).length : 0,
+    [board],
+  )
 
   // Build net voltages map (throttled by frame reference -- only recompute when frame changes)
   const netVoltagesMap = useMemo(() => {
@@ -265,6 +281,9 @@ export function BoardViewer({
       .then(text => {
         if (cancelled) return
         const parsed = parseKicadPcb(text)
+        // Test hook, sibling of __hbCam below: lets browser-driven checks
+        // compute exact label/pad geometry without React devtools.
+        ;(window as unknown as { __hbBoard?: ParsedBoard }).__hbBoard = parsed
         setBoard(parsed)
         setLoading(false)
         if (
@@ -299,6 +318,13 @@ export function BoardViewer({
 
   useEffect(() => { fitToView() }, [fitToView])
 
+  // Returning from 3D to 2D: the 2D camera is whatever it was when the user
+  // left, which after a mount-while-hidden or a long 3D session reads as a
+  // stale zoom pinned in a corner. Refit unless the user set the camera.
+  useEffect(() => {
+    if (viewMode === '2d' && !userMovedCamera.current) fitToView()
+  }, [viewMode, fitToView])
+
   // ── Canvas resize observer ──
   useEffect(() => {
     const container = containerRef.current
@@ -313,14 +339,22 @@ export function BoardViewer({
       overlay.width = width
       overlay.height = height
       staticCache.current.cam = null
+      // Hidden (display:none) views resize to 0x0; there is nothing to fit
+      // until the view is shown again, at which point this observer re-fires
+      // with the real size and the refit below runs.
+      if (width < 2 || height < 2) return
       if (board) {
         const b = board.bounds
         const c = camRef.current
         const fit = fitScaleFor(b.width, b.height, width, height)
         fitScaleRef.current = fit
+        // A camera the user never touched always refits (a mount-while-hidden
+        // camera was fitted for a default 800x600 guess and shows the board
+        // pinned top-left otherwise). A user-set camera refits only when it
+        // was already near fit, so an intentional zoom survives a resize.
         const refitThreshold = 0.15
         const relativeDiff = Math.abs(c.scale - fit) / fit
-        if (relativeDiff < refitThreshold) {
+        if (!userMovedCamera.current || relativeDiff < refitThreshold) {
           setCamera(makeCamera(b.width, b.height, b.cx, b.cy, width, height))
           zoomTarget.current = null
         }
@@ -374,6 +408,17 @@ export function BoardViewer({
     return best
   }, [board])
 
+  // One FootprintInfo shape for every selection path (body/pad hit, label
+  // hit), so they cannot drift apart.
+  const describeFootprint = useCallback((fp: ParsedBoard['footprints'][number]): FootprintInfo => {
+    // Distinct pad nets in pad order, for the selection card's net list.
+    const nets: string[] = []
+    for (const pad of fp.pads) {
+      if (pad.netName && !nets.includes(pad.netName)) nets.push(pad.netName)
+    }
+    return { ref: fp.ref, value: fp.value, lib_id: fp.lib_id, x: fp.at.x, y: fp.at.y, padNets: nets }
+  }, [])
+
   // ── Find footprint at board coordinate ──
   const findFootprintAt = useCallback((bx: number, by: number): FootprintInfo | null => {
     if (!board) return null
@@ -381,32 +426,61 @@ export function BoardViewer({
     let bestDist = Infinity
     const threshold = 5 / camRef.current.scale
 
-    const describe = (fp: (typeof board.footprints)[number]): FootprintInfo => {
-      // Distinct pad nets in pad order, for the selection card's net list.
-      const nets: string[] = []
-      for (const pad of fp.pads) {
-        if (pad.netName && !nets.includes(pad.netName)) nets.push(pad.netName)
-      }
-      return { ref: fp.ref, value: fp.value, lib_id: fp.lib_id, x: fp.at.x, y: fp.at.y, padNets: nets }
-    }
-
     for (const fp of board.footprints) {
       const d = Math.sqrt((bx - fp.at.x) ** 2 + (by - fp.at.y) ** 2)
       if (d < threshold && d < bestDist) {
         bestDist = d
-        best = describe(fp)
+        best = describeFootprint(fp)
       }
       for (const pad of fp.pads) {
         const pd = Math.sqrt((bx - pad.at.x) ** 2 + (by - pad.at.y) ** 2)
         const padR = Math.max(pad.size.w, pad.size.h) / 2 + 0.5
         if (pd < padR && pd < bestDist) {
           bestDist = pd
-          best = describe(fp)
+          best = describeFootprint(fp)
         }
       }
     }
     return best
-  }, [board])
+  }, [board, describeFootprint])
+
+  // ── Find the footprint whose reference LABEL is under screen coords ──
+  // The label is part of the part's visual identity, so clicking it selects
+  // the part exactly like clicking its body/pads. Mirrors the renderer's
+  // label placement rule (pad-bbox top center, size-gated) so the hit area is
+  // where the text actually is.
+  const findLabelAt = useCallback((sx: number, sy: number): FootprintInfo | null => {
+    if (!board || !showLabels) return null
+    const cam = camRef.current
+    for (const fp of board.footprints) {
+      if (fp.pads.length === 0) continue
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+      for (const pad of fp.pads) {
+        minX = Math.min(minX, pad.at.x - pad.size.w / 2)
+        maxX = Math.max(maxX, pad.at.x + pad.size.w / 2)
+        minY = Math.min(minY, pad.at.y - pad.size.h / 2)
+        maxY = Math.max(maxY, pad.at.y + pad.size.h / 2)
+      }
+      const extentPx = Math.max(maxX - minX, maxY - minY) * cam.scale
+      if (extentPx < LABEL_MIN_PX) continue
+      const sx1 = minX * cam.scale + cam.panX
+      const sx2 = maxX * cam.scale + cam.panX
+      const sy1 = minY * cam.scale + cam.panY
+      const sy2 = maxY * cam.scale + cam.panY
+      const cx = (sx1 + sx2) / 2
+      const topY = Math.min(sy1, sy2)
+      const fontPx = Math.min(13, Math.max(9, extentPx * 0.18))
+      // Monospace glyphs are ~0.6em wide; a small floor keeps 1-char refs
+      // clickable.
+      const w = Math.max(18, fp.ref.length * fontPx * 0.62)
+      const yBottom = topY - 3
+      const yTop = yBottom - fontPx - 2
+      if (sx >= cx - w / 2 && sx <= cx + w / 2 && sy >= yTop && sy <= yBottom) {
+        return describeFootprint(fp)
+      }
+    }
+    return null
+  }, [board, describeFootprint, showLabels])
 
   // ── Animation loop (2D only) ──
   // Per-frame data reaches the loop through refs, NOT effect deps: putting
@@ -426,6 +500,30 @@ export function BoardViewer({
   renderOptsRef.current = renderOpts
   const showActivityRef = useRef(showActivity)
   showActivityRef.current = showActivity
+  const markerRef = useRef<{ x: number; y: number; label?: string } | null>(null)
+
+  // "Show on board": jump the camera to the finding's spot at a readable
+  // close-up and keep a pulsing marker there. Counts as a user move (the
+  // focused framing must not be clobbered by an auto-refit).
+  useEffect(() => {
+    if (!focusPoint || !board || !canvasRef.current) {
+      markerRef.current = focusPoint ?? null
+      return
+    }
+    markerRef.current = { x: focusPoint.x, y: focusPoint.y, label: focusPoint.label }
+    const canvas = canvasRef.current
+    const { width: cw, height: ch } = canvas.getBoundingClientRect()
+    if (cw < 2 || ch < 2) return
+    const scale = Math.min(MAX_SCALE, Math.max(fitScaleRef.current * 5, camRef.current.scale))
+    userMovedCamera.current = true
+    zoomTarget.current = null
+    setCamera({
+      scale,
+      panX: cw / 2 - focusPoint.x * scale,
+      panY: ch / 2 - focusPoint.y * scale,
+    })
+    // Re-trigger on seq even for identical coordinates.
+  }, [focusPoint, focusPoint?.seq, board, setCamera])
 
   useEffect(() => {
     if (!board || viewMode === '3d') return
@@ -581,6 +679,7 @@ export function BoardViewer({
         animTime: animTimeRef.current,
         showActivity: showActivityRef.current,
         renderOpts: renderOptsRef.current,
+        marker: markerRef.current,
       }
 
       ensureStatic(canvas, now)
@@ -611,6 +710,7 @@ export function BoardViewer({
       const target = Math.max(MIN_SCALE, Math.min(MAX_SCALE, base * factor))
       zoomTarget.current = { scale: target, sx, sy }
       camMovedAt.current = performance.now()
+      userMovedCamera.current = true
     }
     canvas.addEventListener('wheel', onWheel, { passive: false })
     return () => canvas.removeEventListener('wheel', onWheel)
@@ -637,7 +737,10 @@ export function BoardViewer({
     if (dragging.current) {
       const dx = e.clientX - lastMouse.current.x
       const dy = e.clientY - lastMouse.current.y
-      if (Math.abs(dx) + Math.abs(dy) > 2) movedSinceDown.current = true
+      if (Math.abs(dx) + Math.abs(dy) > 2) {
+        movedSinceDown.current = true
+        userMovedCamera.current = true
+      }
       lastMouse.current = { x: e.clientX, y: e.clientY }
       setCamera(panCamera(camRef.current, dx, dy))
     } else {
@@ -673,8 +776,16 @@ export function BoardViewer({
       onFootprintClick({ ...fp, padNet: findNearestNet(x, y, 8) })
       return
     }
+    // The reference LABEL is part of the part's visual identity: clicking it
+    // selects the part like clicking its body/pads (label test in SCREEN
+    // space; the label's size is screen-fixed, not board-fixed).
+    const labelFp = findLabelAt(sx, sy)
+    if (labelFp && onFootprintClick) {
+      onFootprintClick({ ...labelFp, padNet: findNearestNet(labelFp.x, labelFp.y, 12) })
+      return
+    }
     if (onNetClick) onNetClick(findNearestNet(x, y, 8))
-  }, [findFootprintAt, onFootprintClick, onNetClick, findNearestNet])
+  }, [findFootprintAt, findLabelAt, onFootprintClick, onNetClick, findNearestNet])
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     if (e.button === 0) {
@@ -716,6 +827,7 @@ export function BoardViewer({
     if (e.touches.length === 1 && dragging.current) {
       const dx = e.touches[0].clientX - lastMouse.current.x
       const dy = e.touches[0].clientY - lastMouse.current.y
+      if (Math.abs(dx) + Math.abs(dy) > 2) userMovedCamera.current = true
       lastMouse.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }
       setCamera(panCamera(camRef.current, dx, dy))
     } else if (e.touches.length === 2) {
@@ -725,6 +837,7 @@ export function BoardViewer({
       // True pinch semantics: the zoom factor IS the ratio of finger spreads,
       // so the board tracks the fingers exactly (no tuning constant involved).
       if (lastTouchDist.current > 0) {
+        userMovedCamera.current = true
         const factor = dist / lastTouchDist.current
         const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2
         const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2
@@ -885,7 +998,12 @@ export function BoardViewer({
             >
               <button
                 type="button"
-                onClick={fitToView}
+                onClick={() => {
+                  // An explicit Fit is a return to the automatic framing, so
+                  // auto-refit may take over again from here.
+                  userMovedCamera.current = false
+                  fitToView()
+                }}
                 title="Fit the board to the view"
                 aria-label="Fit the board to the view"
                 className="hb-press"
@@ -1008,10 +1126,15 @@ export function BoardViewer({
         <div className="absolute bottom-2 right-2 text-[10px] px-2 py-1 rounded tnum"
           style={{ background: 'rgba(15,23,42,0.8)', color: '#64748b', pointerEvents: 'none', fontFamily: 'var(--font-mono)' }}>
           {board.footprints.length} fp · {board.segments.length} segs
-          {/* Show live net count from simulation frame (consistent with status bar) when available */}
+          {/* Net count: NAMED nets only. The KiCad net table always carries a
+              synthetic id-0 "no net" bucket; counting it here made this chip
+              disagree with the report banner (which counts real nets) by
+              exactly one on every board. When a live frame is present the
+              solver's solved-net count is a different (also true) number, so
+              it is labelled distinctly rather than shown as a bare conflict. */}
           {frame && Object.keys(frame.net_voltages).length > 0
-            ? ` · ${Object.keys(frame.net_voltages).length} nets`
-            : board.nets.size > 0 ? ` · ${board.nets.size} nets` : null}
+            ? ` · ${Object.keys(frame.net_voltages).length} nets solved`
+            : namedNetCount > 0 ? ` · ${namedNetCount} nets` : null}
         </div>
       )}
     </div>

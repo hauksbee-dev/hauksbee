@@ -137,20 +137,40 @@ function McuChips({ mcus, frame, uartActive }: {
   )
 }
 
+/** What the sim view reports up to the shell: run state, fault count, and,
+ *  crucially, the SESSION's identity (the board /ws says it is streaming), so
+ *  the shell's header and chips bind to the session rather than to the
+ *  locally analyzed board. */
+export interface SimShellStatus {
+  running: boolean
+  faults: number
+  /** Board name from the session's BoardInfo frame; null while disconnected. */
+  sessionBoard: string | null
+  connected: boolean
+}
+
 // The live-sim view: transport row, the board as the hero surface, and the
 // right rail reorganised into cards (MCU, inputs, power, scope, nets, faults,
 // serial, solver). Mounting it opens the sim WebSocket (via useSimulation),
 // so the shell only mounts it once a live board is actually being served, and
 // keeps it mounted (hidden) so the session's fault log and scope survive
 // navigation.
-export default function SimView({ onQueueCheck, onStatus }: {
+export default function SimView({ onQueueCheck, onStatus, expectedBoard, sessionMatchesCurrent, onRelaunch }: {
   /** Queue a check into the checks builder from a click on the live board.
    *  Absent on the standalone demo server. */
   onQueueCheck?: (check: { kind: string; net?: string; ref?: string }) => void
-  /** Report running state + fault count up to the shell's status chips. */
-  onStatus?: (s: { running: boolean; faults: number }) => void
+  /** Report running state + fault count + session identity up to the shell. */
+  onStatus?: (s: SimShellStatus) => void
+  /** The board currently analyzed in this tab (for the wrong-board banner). */
+  expectedBoard?: string | null
+  /** True when THIS page launched (or preloaded) the session for the current
+   *  board; false means the session on /ws is foreign (another board, a stale
+   *  tab, a pre-reload launch) and the view must say so. */
+  sessionMatchesCurrent?: boolean
+  /** Replace the running session with the analyzed board (label says so). */
+  onRelaunch?: () => void
 } = {}) {
-  const { connected, boardInfo, frame, status, send } = useSimulation()
+  const { connected, boardInfo, frame, status, send, replay } = useSimulation()
 
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
   const [selectedFp, setSelectedFp] = useState<FootprintInfo | null>(null)
@@ -228,6 +248,29 @@ export default function SimView({ onQueueCheck, onStatus }: {
     setSelectedFaultRef(null)
   }, [])
 
+  // A session REPLACEMENT reconnects the socket: boardInfo drops to null, then
+  // the new session's BoardInfo arrives. The old session's fault log, frame
+  // history, selection and probes are that session's story, not this one's;
+  // carrying them over made a replaced sim show the previous board's faults.
+  const hadInfo = useRef(false)
+  const infoWasNull = useRef(true)
+  useEffect(() => {
+    if (boardInfo) {
+      if (infoWasNull.current && hadInfo.current) {
+        setFaultLog([])
+        setSelectedFaultRef(null)
+        setSelectedNet(null)
+        setSelectedFp(null)
+        setProbes([])
+        frameHistory.current = []
+      }
+      hadInfo.current = true
+      infoWasNull.current = false
+    } else {
+      infoWasNull.current = true
+    }
+  }, [boardInfo])
+
   // Reset also starts the fault story over: a log of faults from the previous
   // run reads as live faults on the fresh one.
   const sendWrapped = useCallback((msg: ClientMessage) => {
@@ -249,16 +292,18 @@ export default function SimView({ onQueueCheck, onStatus }: {
   const running = status?.running ?? false
 
   // Report status up to the shell (chips + nav badges); only on change.
-  const lastReported = useRef<{ running: boolean; faults: number } | null>(null)
+  const sessionBoard = boardInfo?.name ?? null
+  const lastReported = useRef<SimShellStatus | null>(null)
   useEffect(() => {
     if (!onStatus) return
-    const cur = { running, faults: faultCount }
+    const cur: SimShellStatus = { running, faults: faultCount, sessionBoard, connected }
     const prev = lastReported.current
-    if (!prev || prev.running !== cur.running || prev.faults !== cur.faults) {
+    if (!prev || prev.running !== cur.running || prev.faults !== cur.faults
+      || prev.sessionBoard !== cur.sessionBoard || prev.connected !== cur.connected) {
       lastReported.current = cur
       onStatus(cur)
     }
-  }, [running, faultCount, onStatus])
+  }, [running, faultCount, sessionBoard, connected, onStatus])
 
   // Keyboard shortcuts. While an input has focus they are suppressed (typing
   // must win); inputFocused drives the hint bar affordance below.
@@ -332,9 +377,51 @@ export default function SimView({ onQueueCheck, onStatus }: {
         connected={connected}
         boardInfo={boardInfo}
         status={status}
-        realtimeFactor={frame?.realtime_factor ?? null}
+        // In a replay the capture-time throughput would read as the playback
+        // rate; the speed control already owns that number.
+        realtimeFactor={replay ? null : frame?.realtime_factor ?? null}
         send={sendWrapped}
+        replay={replay}
       />
+
+      {/* Session-identity banner: this view is bound to what /ws streams. When
+          that session was not launched by this page for the analyzed board (a
+          different board, a stale tab, a launch from before a reload), say so
+          explicitly and offer the relaunch, instead of letting the canvas
+          silently show one board under a header that claims another. */}
+      {sessionMatchesCurrent === false && sessionBoard && (
+        <div
+          data-testid="sim-foreign-session"
+          className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 text-[12px] shrink-0"
+          style={{ background: 'var(--warn-bg)', borderBottom: '1px solid var(--warn-border)', color: 'var(--silk)' }}
+        >
+          <span>
+            This live session is running{' '}
+            <b style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{sessionBoard}</b>
+            {expectedBoard && expectedBoard !== sessionBoard ? (
+              <>
+                , not the board you analyzed (
+                <b style={{ fontFamily: 'var(--font-mono)', fontWeight: 600 }}>{expectedBoard}</b>).
+              </>
+            ) : expectedBoard ? (
+              <>, launched before this page load; it may not match the file you just analyzed.</>
+            ) : (
+              <>, launched before this page load.</>
+            )}
+          </span>
+          {onRelaunch && expectedBoard && (
+            <button
+              type="button"
+              data-testid="sim-relaunch-current"
+              onClick={onRelaunch}
+              className="hb-btn hb-press px-2.5 text-[11px]"
+              style={{ height: 26 }}
+            >
+              Relaunch with {expectedBoard}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Main content area */}
       <div className="flex flex-1 overflow-hidden">
@@ -433,14 +520,30 @@ export default function SimView({ onQueueCheck, onStatus }: {
               </RailCard>
             )}
 
-            <RailCard id="inputs" title="Inputs" icon={<SlidersIcon size={13} />} cardState={cardState} onToggle={toggleCard}>
-              <InputSourcesPanel boardInfo={boardInfo} frame={frame} send={send} />
-            </RailCard>
-
-            {hasSupplies && (
-              <RailCard id="power" title="Power rails" icon={<PowerIcon size={13} />} cardState={cardState} onToggle={toggleCard}>
-                <PowerPanel boardInfo={boardInfo} frame={frame} send={send} />
+            {/* Input-shaped panels only against a live engine: in a replay
+                the knobs would silently do nothing, so instead of disabled
+                controls the rail says plainly what a recording is. */}
+            {replay ? (
+              <RailCard id="recorded" title="Recorded run" icon={<PowerIcon size={13} />} cardState={cardState} onToggle={toggleCard}>
+                <div className="px-3 py-2.5 text-[11px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
+                  Inputs, power rails and solver options were set when this
+                  session was captured from the real engine; a recording
+                  cannot take new ones. Install hauksbee to turn the knobs on
+                  your own boards.
+                </div>
               </RailCard>
+            ) : (
+              <>
+                <RailCard id="inputs" title="Inputs" icon={<SlidersIcon size={13} />} cardState={cardState} onToggle={toggleCard}>
+                  <InputSourcesPanel boardInfo={boardInfo} frame={frame} send={send} />
+                </RailCard>
+
+                {hasSupplies && (
+                  <RailCard id="power" title="Power rails" icon={<PowerIcon size={13} />} cardState={cardState} onToggle={toggleCard}>
+                    <PowerPanel boardInfo={boardInfo} frame={frame} send={send} />
+                  </RailCard>
+                )}
+              </>
             )}
 
             <RailCard id="scope" title="Scope" icon={<ProbeIcon size={13} />} cardState={cardState} onToggle={toggleCard}>
@@ -469,13 +572,15 @@ export default function SimView({ onQueueCheck, onStatus }: {
 
             <RailCard id="serial" title="Serial console" icon={<TerminalIcon size={13} />} cardState={cardState} onToggle={toggleCard}>
               <div style={{ height: 300 }}>
-                <SerialConsole mcus={mcus} frames={frameHistory.current} send={send} />
+                <SerialConsole mcus={mcus} frames={frameHistory.current} send={send} readOnly={!!replay} />
               </div>
             </RailCard>
 
-            <RailCard id="solver" title="Solver" icon={<SlidersIcon size={13} />} defaultOpen={false} cardState={cardState} onToggle={toggleCard}>
-              <SolverControlsPanel controls={status?.options ?? null} send={send} />
-            </RailCard>
+            {!replay && (
+              <RailCard id="solver" title="Solver" icon={<SlidersIcon size={13} />} defaultOpen={false} cardState={cardState} onToggle={toggleCard}>
+                <SolverControlsPanel controls={status?.options ?? null} send={send} />
+              </RailCard>
+            )}
           </div>
         )}
       </div>
@@ -515,10 +620,16 @@ export default function SimView({ onQueueCheck, onStatus }: {
 
         {frame && (
           <>
-            <span style={{ color: 'var(--hairline)' }}>|</span>
-            <span>
-              rt: <span style={{ color: 'var(--silk-dim)' }}>{frame.realtime_factor.toFixed(2)}x</span>
-            </span>
+            {/* Capture-time throughput would masquerade as playback rate in a
+                replay; the transport's speed control owns that number there. */}
+            {!replay && (
+              <>
+                <span style={{ color: 'var(--hairline)' }}>|</span>
+                <span>
+                  rt: <span style={{ color: 'var(--silk-dim)' }}>{frame.realtime_factor.toFixed(2)}x</span>
+                </span>
+              </>
+            )}
             <span style={{ color: 'var(--hairline)' }}>|</span>
             <span>
               nets: <span style={{ color: 'var(--silk-dim)' }}>{Object.keys(frame.net_voltages).length}</span>

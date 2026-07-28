@@ -7,6 +7,7 @@ import { ChecksView, checksStorageKey } from './components/ChecksView'
 import type { ChecksSummary } from './components/ChecksView'
 import { DepsPanel } from './components/DepsPanel'
 import SimView from './SimView'
+import type { SimShellStatus } from './SimView'
 import { useTheme } from './hooks/useTheme'
 import { useBoardSession } from './hooks/useBoardSession'
 import { PlayIcon } from './components/Icons'
@@ -28,7 +29,13 @@ import type { QueuedCheck, Startup, WebReport } from './types/report'
 
 type Boot =
   | { kind: 'loading' }
-  | { kind: 'ready'; report: WebReport | null; boardName: string | null; canLaunchLive: boolean }
+  | {
+      kind: 'ready'
+      report: WebReport | null
+      boardName: string | null
+      canLaunchLive: boolean
+      engineVersion: string | null
+    }
 
 export default function App() {
   const [boot, setBoot] = useState<Boot>({ kind: 'loading' })
@@ -47,15 +54,24 @@ export default function App() {
             report: startup.report,
             boardName: startup.board_name,
             canLaunchLive: startup.live === true,
+            engineVersion: startup.version ?? null,
           })
         } else {
-          setBoot({ kind: 'ready', report: null, boardName: null, canLaunchLive: startup.live === true })
+          setBoot({
+            kind: 'ready',
+            report: null,
+            boardName: null,
+            canLaunchLive: startup.live === true,
+            engineVersion: startup.version ?? null,
+          })
         }
       } catch {
         // No startup endpoint (a stale/odd deployment). Degrade to the
         // drop-a-board Board view, never the live-sim view, which would sit
         // "offline" with no way to load a board.
-        if (alive) setBoot({ kind: 'ready', report: null, boardName: null, canLaunchLive: false })
+        if (alive) {
+          setBoot({ kind: 'ready', report: null, boardName: null, canLaunchLive: false, engineVersion: null })
+        }
       }
     })()
     return () => { alive = false }
@@ -77,6 +93,7 @@ export default function App() {
       preloadedReport={boot.report}
       preloadedBoardName={boot.boardName}
       canLaunchLive={boot.canLaunchLive}
+      engineVersion={boot.engineVersion}
     />
   )
 }
@@ -88,10 +105,11 @@ const VIEW_TITLES: Record<AppView, string> = {
   env: 'Environment',
 }
 
-function Shell({ preloadedReport, preloadedBoardName, canLaunchLive }: {
+function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersion }: {
   preloadedReport: WebReport | null
   preloadedBoardName: string | null
   canLaunchLive: boolean
+  engineVersion: string | null
 }) {
   const { theme, toggleTheme } = useTheme()
   const session = useBoardSession({
@@ -107,7 +125,12 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive }: {
   const [simMounted, setSimMounted] = useState(false)
   // Environment mounts on first visit (its /api/deps fetch is on mount).
   const [envVisited, setEnvVisited] = useState(false)
-  const [simStatus, setSimStatus] = useState<{ running: boolean; faults: number }>({ running: false, faults: 0 })
+  // `sessionBoard` is the board the /ws session says IT is running (from its
+  // BoardInfo frame): the sim surface's identity is bound to this, never to
+  // the locally analyzed board.
+  const [simStatus, setSimStatus] = useState<SimShellStatus>({
+    running: false, faults: 0, sessionBoard: null, connected: false,
+  })
   const [checksSummary, setChecksSummary] = useState<ChecksSummary | null>(null)
 
   // Checks queued from a board surface (net/component clicks on the report
@@ -133,18 +156,47 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive }: {
     })
   }, [session])
 
-  const simEnabled = simMounted || (reportOk && session.liveMode !== 'none')
+  // Attach to the session ALREADY running server-side (a stale tab, a reload,
+  // a session for another board) without launching anything: the sim view
+  // binds its identity to what /ws streams and says which board that is.
+  const openLiveSession = useCallback(() => {
+    session.refreshLiveStatus()
+    setSimMounted(true)
+    setView('sim')
+  }, [session])
+
+  // Relaunch the session with the CURRENT board, replacing whatever runs now.
+  // Used where the affordance's label already names the replacement.
+  const relaunchWithCurrent = useCallback(() => {
+    session.forceLaunch(() => {
+      setSimMounted(true)
+      setView('sim')
+    })
+  }, [session])
+
+  const serverLiveActive = session.serverLive?.active === true
+  const simEnabled = simMounted || (reportOk && session.liveMode !== 'none') || serverLiveActive
 
   const navigate = useCallback((v: AppView) => {
     if (v === 'env') setEnvVisited(true)
     if (v === 'sim' && !simMounted) {
-      // No session yet: the nav entry launches one, exactly like the primary
-      // action, so "Live Sim" never opens an offline shell.
-      driveLive()
+      if (reportOk && session.liveMode !== 'none') {
+        // The nav entry launches (or asks to replace), exactly like the
+        // primary action, so "Live Sim" never opens an offline shell.
+        driveLive()
+        return
+      }
+      if (serverLiveActive) {
+        // No launchable board here, but the server IS running a session:
+        // open it (the sim view names which board it belongs to) instead of
+        // being a dead click.
+        openLiveSession()
+        return
+      }
       return
     }
     setView(v)
-  }, [driveLive, simMounted])
+  }, [driveLive, openLiveSession, reportOk, serverLiveActive, session.liveMode, simMounted])
 
   const analyzeAnother = useCallback(() => {
     session.resetFlow()
@@ -210,7 +262,17 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive }: {
     else if (invalid > 0) chips.push(chip(`checks ${invalid} invalid`, 'warn', () => setView('checks'), 'chip-checks'))
     else chips.push(chip(`checks ${passed} passed`, 'ok', () => setView('checks'), 'chip-checks'))
   }
-  if (simMounted) {
+  // The live session's identity, as the session itself reports it (BoardInfo
+  // over /ws when the sim view is connected, /api/live/status otherwise).
+  // Empty-string guard: an unnamed engine identity must fall through to the
+  // launch file name from /api/live/status, never read as "a" session name.
+  const sessionBoard = (simStatus.sessionBoard?.trim() || null)
+    ?? (session.serverLive?.boardName?.trim() || null)
+  // "Matches" means THIS page launched (or preloaded) the session for the
+  // board currently analyzed; a same-named session from a previous page-load
+  // is deliberately foreign (its content may differ).
+  const sessionMatchesCurrent = session.liveMode === 'connected'
+  if (simMounted && sessionMatchesCurrent) {
     if (simStatus.faults > 0) {
       chips.push(chip(`${simStatus.faults} fault${simStatus.faults === 1 ? '' : 's'}`, 'err', () => setView('sim'), 'chip-faults'))
     }
@@ -221,7 +283,17 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive }: {
       'chip-sim',
       simStatus.running,
     ))
-  } else if (reportOk && session.liveMode === 'connected') {
+  } else if ((simMounted || serverLiveActive) && sessionBoard) {
+    // A session is live for some OTHER board (or a pre-reload launch of this
+    // one): never show "sim running" as if it were this board's. The chip
+    // names the session's board and opens it.
+    chips.push(chip(
+      `another session is live: ${sessionBoard}`,
+      'warn',
+      simMounted ? () => setView('sim') : openLiveSession,
+      'chip-sim',
+    ))
+  } else if (reportOk && sessionMatchesCurrent) {
     chips.push(chip('live session ready', 'ok', driveLive, 'chip-sim'))
   }
 
@@ -254,12 +326,15 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive }: {
             <h1 className="text-[15px] font-semibold truncate" style={{ margin: 0, color: 'var(--silk)' }}>
               {VIEW_TITLES[view]}
             </h1>
-            {session.boardLabel && (
+            {/* On the sim view the header names the SESSION's board (what /ws
+                actually streams), never the locally analyzed one: the two can
+                differ, and the canvas/nets/footer follow the session. */}
+            {(view === 'sim' ? (sessionBoard ?? session.boardLabel) : session.boardLabel) && (
               <span
                 className="text-[12px] truncate"
                 style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}
               >
-                {session.boardLabel}
+                {view === 'sim' ? (sessionBoard ?? session.boardLabel) : session.boardLabel}
               </span>
             )}
           </div>
@@ -298,6 +373,64 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive }: {
           )}
         </header>
 
+        {/* Replace-the-running-session confirmation, in-app (a native
+            window.confirm is auto-dismissed by automation and unstylable).
+            Covers ALL foreign-session cases: another board, a stale tab, a
+            launch from before a reload. */}
+        {session.launch.phase === 'confirm' && (
+          <div
+            data-testid="live-replace-confirm"
+            className="mx-5 mt-3 rounded-lg px-4 py-3 text-[13px]"
+            style={{ background: 'var(--warn-bg)', border: '1px solid var(--warn-border)', color: 'var(--silk)' }}
+          >
+            <span className="text-[10px] font-bold tracking-widest uppercase block mb-1" style={{ color: 'var(--warn-strong)' }}>
+              A live session is already running
+            </span>
+            The server is running a live session for{' '}
+            <span style={{ fontFamily: 'var(--font-mono)' }}>{session.launch.activeBoard}</span>
+            {session.launch.activeBoard === session.launch.targetBoard
+              ? ' (launched before this page, so it may not match what you just analyzed)'
+              : ''}
+            . One session runs at a time.
+            <div className="mt-2.5 flex flex-wrap gap-2">
+              <button
+                type="button"
+                data-testid="confirm-replace-live"
+                onClick={() => {
+                  session.confirmReplace()
+                  setSimMounted(true)
+                  setView('sim')
+                }}
+                className="hb-btn-primary hb-press px-3 text-[12px]"
+                style={{ height: 30 }}
+              >
+                Replace it with {session.launch.targetBoard}
+              </button>
+              <button
+                type="button"
+                data-testid="open-running-live"
+                onClick={() => {
+                  session.cancelLaunch()
+                  openLiveSession()
+                }}
+                className="hb-btn hb-press px-3 text-[12px]"
+                style={{ height: 30 }}
+              >
+                Open the running session
+              </button>
+              <button
+                type="button"
+                data-testid="cancel-replace-live"
+                onClick={session.cancelLaunch}
+                className="hb-btn hb-press px-3 text-[12px]"
+                style={{ height: 30 }}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Launch failures surface here, verbatim, wherever you are. */}
         {session.launch.phase === 'error' && session.launch.error && (
           <div
@@ -323,7 +456,7 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive }: {
                 simMounted={simMounted}
               />
             ) : (
-              <UploadView session={session} />
+              <UploadView session={session} onOpenLive={openLiveSession} />
             )}
           </div>
 
@@ -351,6 +484,9 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive }: {
               <SimView
                 onQueueCheck={queueCheck}
                 onStatus={setSimStatus}
+                expectedBoard={session.boardLabel}
+                sessionMatchesCurrent={sessionMatchesCurrent}
+                onRelaunch={reportOk && session.liveMode !== 'none' ? relaunchWithCurrent : undefined}
               />
             </div>
           )}
@@ -361,7 +497,7 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive }: {
               style={{ display: view === 'env' ? 'block' : 'none', height: '100%' }}
             >
               <div className="max-w-3xl mx-auto px-6 pb-16 view-enter">
-                <DepsPanel />
+                <DepsPanel engineVersion={engineVersion} />
               </div>
             </div>
           )}
