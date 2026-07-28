@@ -1021,8 +1021,16 @@ jobs:
               {result && (
                 <div className="mt-3" data-testid="check-results" aria-live="polite">
                   {result.ok === false ? (
+                    // The server's vocabulary errors list the accepted values
+                    // as one unbroken pipe-separated run ("voltage|uart|..."),
+                    // which has no space to break at: without `anywhere` it
+                    // ran straight off the card's right edge. `anywhere` (not
+                    // `break-word`) is what lets a single long token wrap.
                     <div className="rounded-lg px-3 py-2.5 text-[13px]"
-                      style={{ background: 'var(--err-bg)', border: '1px solid var(--err-border)', color: 'var(--err-strong)' }}>
+                      style={{
+                        background: 'var(--err-bg)', border: '1px solid var(--err-border)',
+                        color: 'var(--err-strong)', overflowWrap: 'anywhere',
+                      }}>
                       {result.error}
                     </div>
                   ) : (

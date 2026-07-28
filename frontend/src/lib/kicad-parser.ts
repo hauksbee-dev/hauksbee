@@ -592,6 +592,62 @@ function computeBounds(board: ParsedBoard): BoardBounds {
   return { minX, maxX, minY, maxY, width, height, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 }
 }
 
+// ────────────────────── Footprint hit boxes ───────────────────────────
+
+/** One footprint's drawn extent in board mm. */
+export interface FootprintBox {
+  fp: Footprint
+  x1: number
+  y1: number
+  x2: number
+  y2: number
+  area: number
+}
+
+/** Each footprint's drawn extent: the union of its pads and its body outline
+ *  (silkscreen / fab lines, rects, circles). This is the shape a reader sees
+ *  as "the part", so it is the shape a click on the part should hit; pad-only
+ *  hit-testing left the plastic between an IC's pads, and the silkscreen box
+ *  around a two-pad passive, selecting nothing.
+ *
+ *  Returned smallest-area-first so [`pickFootprintBox`] resolves a small part
+ *  sitting inside a big connector's outline to the small part. */
+export function footprintHitBoxes(board: ParsedBoard): FootprintBox[] {
+  const boxes: FootprintBox[] = []
+  for (const fp of board.footprints) {
+    let x1 = Infinity, y1 = Infinity, x2 = -Infinity, y2 = -Infinity
+    const add = (x: number, y: number) => {
+      if (x < x1) x1 = x
+      if (x > x2) x2 = x
+      if (y < y1) y1 = y
+      if (y > y2) y2 = y
+    }
+    for (const pad of fp.pads) {
+      add(pad.at.x - pad.size.w / 2, pad.at.y - pad.size.h / 2)
+      add(pad.at.x + pad.size.w / 2, pad.at.y + pad.size.h / 2)
+    }
+    for (const l of fp.fp_lines) { add(l.start.x, l.start.y); add(l.end.x, l.end.y) }
+    for (const r of fp.fp_rects) { add(r.start.x, r.start.y); add(r.end.x, r.end.y) }
+    for (const c of fp.fp_circles) {
+      const rad = Math.hypot(c.end.x - c.center.x, c.end.y - c.center.y)
+      add(c.center.x - rad, c.center.y - rad)
+      add(c.center.x + rad, c.center.y + rad)
+    }
+    if (!Number.isFinite(x1)) continue
+    boxes.push({ fp, x1, y1, x2, y2, area: (x2 - x1) * (y2 - y1) })
+  }
+  boxes.sort((a, b) => a.area - b.area)
+  return boxes
+}
+
+/** The smallest footprint whose extent contains this board point, or null. */
+export function pickFootprintBox(boxes: FootprintBox[], bx: number, by: number): Footprint | null {
+  for (const b of boxes) {
+    if (bx >= b.x1 && bx <= b.x2 && by >= b.y1 && by <= b.y2) return b.fp
+  }
+  return null
+}
+
 // ────────────────────── Net geometry index ────────────────────────────
 
 /** Build a map from netName → all geometric segments/arcs/pads for overlays. */

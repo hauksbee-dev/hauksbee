@@ -247,6 +247,9 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
                 frame={null}
                 selectedNet={selectedNet}
                 netOptions={r.nets}
+                // The map sits inside a scrolling report, so it must not eat
+                // the page wheel; it zooms once clicked, or with ctrl/cmd held.
+                wheelMode="capture-on-focus"
                 focusPoint={focusPoint}
                 onViewModeChange={setViewerMode}
                 onNetClick={setSelectedNet}
@@ -273,7 +276,7 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
             <div className="mt-1.5 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
               {viewerMode === '3d'
                 ? 'Drag to orbit · scroll to zoom · shift-drag to pan · switch to 2D to select traces and parts'
-                : 'Scroll to zoom · drag to pan · hover a trace to see its net · click a trace or a part to start a check on it'}
+                : 'Click the map (or hold ctrl) to zoom · drag to pan · hover a trace to see its net · click a trace or a part to start a check on it'}
             </div>
           </section>
         ) : r.components?.length > 0 ? (
