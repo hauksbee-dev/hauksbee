@@ -55,6 +55,37 @@ export function toWireSupply(cfg: SupplyConfig): PowerSupplyWire {
   }
 }
 
+/** A single li-ion cell's open-circuit voltage at full charge, mirroring the
+ *  engine's chemistry curve (power_supply.rs, Chemistry::LiIon at SoC 1.0).
+ *  Kept beside `toWireSupply`, which is what pins the battery to one li-ion
+ *  cell in the first place. */
+export const LI_ION_FULL_V = 4.2
+
+/** USB VBUS, whichever current spec `usbSpecFor` picks. */
+export const USB_VBUS_V = 5
+
+/** The voltage this supply type will ACTUALLY apply, and, when the type sets
+ *  its own voltage, the reason it ignores the box.
+ *
+ *  `toWireSupply` drops `volts` for USB and Battery (a USB spec is 5 V by
+ *  definition; a battery sits at its chemistry's cell voltage), so typing 12
+ *  into the voltage box used to leave the box reading 12 while the rail ran at
+ *  5.000 V with nothing said. The panel asks here instead of assuming the box
+ *  is the setpoint. */
+export function appliedVolts(cfg: SupplyConfig): { volts: number; fixedBy?: string } {
+  switch (cfg.type) {
+    case 'USB':
+      return { volts: USB_VBUS_V, fixedBy: 'USB VBUS is a fixed 5 V' }
+    case 'Battery':
+      return {
+        volts: LI_ION_FULL_V,
+        fixedBy: 'set by the cell: one li-ion cell, 4.2 V full, falling as it discharges',
+      }
+    default:
+      return { volts: cfg.volts }
+  }
+}
+
 /** Supply net names from BoardInfo.power_supplies, a net→config MAP on the
  *  wire, not an array. Iterating it with `for..of` was a TypeError that took
  *  the whole app down on any board with configurable supplies. */

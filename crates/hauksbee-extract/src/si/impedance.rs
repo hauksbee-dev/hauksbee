@@ -317,6 +317,18 @@ impl ImpedanceClass {
             ImpedanceClass::SingleEnded50 => "50 ohm single-ended",
         }
     }
+
+    /// The label WITHOUT its impedance, for use next to a printed target value.
+    /// [`Self::label`] carries the number, so pairing it with the target read
+    /// back as "[target 90 ohm USB 90 ohm differential]"; this says the kind
+    /// once and lets the caller print the number once.
+    pub fn kind_label(self) -> &'static str {
+        match self {
+            ImpedanceClass::UsbDiff => "USB differential",
+            ImpedanceClass::EthernetDiff => "Ethernet differential",
+            ImpedanceClass::SingleEnded50 => "single-ended",
+        }
+    }
 }
 
 /// All controlled-impedance differential pairs on the board with their class:
@@ -650,10 +662,10 @@ fn judge(
             check: SiCheck::ControlledImpedance,
             severity: SiSeverity::Info,
             message: format!(
-                "{} [target {:.0} ohm {}]: estimate {:+.0}% from target - info only ({})",
+                "{} [target {:.0} ohm, {}]: estimate {:+.0}% from target - info only ({})",
                 detail,
                 target,
-                class.label(),
+                class.kind_label(),
                 dev * 100.0,
                 why
             ),
@@ -668,10 +680,10 @@ fn judge(
             check: SiCheck::ControlledImpedance,
             severity: SiSeverity::Info,
             message: format!(
-                "{} vs target {:.0} ohm {} ({:+.1}%, within +-{:.0}%) - ok [{}]",
+                "{} vs target {:.0} ohm, {} ({:+.1}%, within +-{:.0}%) - ok [{}]",
                 detail,
                 target,
-                class.label(),
+                class.kind_label(),
                 dev * 100.0,
                 Z_TOLERANCE * 100.0,
                 stackup.describe()
@@ -691,10 +703,10 @@ fn judge(
             check: SiCheck::ControlledImpedance,
             severity: sev,
             message: format!(
-                "{} vs target {:.0} ohm {}: {:+.1}% deviation exceeds +-{:.0}% tolerance [{}]",
+                "{} vs target {:.0} ohm, {}: {:+.1}% deviation exceeds +-{:.0}% tolerance [{}]",
                 detail,
                 target,
-                class.label(),
+                class.kind_label(),
                 dev * 100.0,
                 Z_TOLERANCE * 100.0,
                 stackup.describe()

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
-import { parseKicadPcb, buildNetIndex } from '../lib/kicad-parser'
+import { parseKicadPcb, buildNetIndex, footprintHitBoxes, pickFootprintBox } from '../lib/kicad-parser'
 import type { ParsedBoard } from '../lib/kicad-parser'
 import { makeCamera, fitScaleFor, zoomCamera, wheelZoomFactor, panCamera, screenToWorld, MIN_SCALE, MAX_SCALE } from '../lib/camera'
 import type { Camera } from '../lib/camera'
@@ -51,6 +51,16 @@ interface BoardViewerProps {
    *  can adapt its own chrome (e.g. the caption under the canvas swaps to
    *  orbit instructions in 3D). */
   onViewModeChange?: (mode: '2d' | '3d') => void
+  /** How the wheel behaves over the 2D canvas.
+   *
+   *  `'always'` (default) suits a full-height surface that owns the viewport:
+   *  the wheel is the zoom, there is nothing behind it to scroll.
+   *
+   *  `'capture-on-focus'` suits a map embedded in a scrolling document (the
+   *  report): a plain wheel scrolls the PAGE, and the canvas only takes the
+   *  wheel once the reader has clicked it, or while ctrl/cmd is held. Skimming
+   *  past the map used to zoom the board down to 1% and leave a blank panel. */
+  wheelMode?: 'always' | 'capture-on-focus'
 }
 
 const PARTICLE_COUNT = 4
@@ -176,6 +186,7 @@ function LayerRow({ label, swatch, on, onToggle }: {
 export function BoardViewer({
   boardFile, frame, boardInfo, selectedNet, onFootprintClick, onNetClick,
   onEmptyBoard, faultedRefs, netOptions, focusPoint, onViewModeChange,
+  wheelMode = 'always',
 }: BoardViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
@@ -187,6 +198,11 @@ export function BoardViewer({
   const [error, setError] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d')
   const [layersOpen, setLayersOpen] = useState(false)
+  // `capture-on-focus` only: has the reader claimed the map by clicking it?
+  // Until then the wheel belongs to the page. Cleared by a click anywhere else,
+  // so the map gives the page back the moment attention moves on.
+  const [zoomFocused, setZoomFocused] = useState(false)
+  const [hovering, setHovering] = useState(false)
 
   // Tell the embedding view which mode the segmented control is in (effect,
   // not inline in the click handlers, so the initial mode is reported too).
@@ -429,7 +445,14 @@ export function BoardViewer({
     return { ref: fp.ref, value: fp.value, lib_id: fp.lib_id, x: fp.at.x, y: fp.at.y, padNets: nets }
   }, [])
 
+  // Computed once per board: a 3,000-part flagship must not rebuild the part
+  // extents on every click.
+  const footprintBoxes = useMemo(() => (board ? footprintHitBoxes(board) : []), [board])
+
   // ── Find footprint at board coordinate ──
+  // Pads and the part origin first (the precise targets), then the part BODY:
+  // clicking the plastic between an IC's pads, or the silkscreen box around a
+  // two-pad passive, is a click on that part and used to select nothing.
   const findFootprintAt = useCallback((bx: number, by: number): FootprintInfo | null => {
     if (!board) return null
     let best: FootprintInfo | null = null
@@ -451,8 +474,11 @@ export function BoardViewer({
         }
       }
     }
-    return best
-  }, [board, describeFootprint])
+    if (best) return best
+
+    const body = pickFootprintBox(footprintBoxes, bx, by)
+    return body ? describeFootprint(body) : null
+  }, [board, footprintBoxes, describeFootprint])
 
   // ── Find the footprint whose reference LABEL is under screen coords ──
   // The label is part of the part's visual identity, so clicking it selects
@@ -711,6 +737,13 @@ export function BoardViewer({
     const canvas = canvasRef.current
     if (!canvas || viewMode === '3d') return
     const onWheel = (e: WheelEvent) => {
+      // Embedded in a scrolling document, the map only takes the wheel with
+      // intent: ctrl/cmd held (the universal "zoom this, not the page"), or
+      // after the reader clicked it. Otherwise let the event through so the
+      // page scrolls past, instead of silently zooming the board to nothing.
+      // A trackpad pinch also arrives as ctrlKey+wheel, which is exactly the
+      // gesture that should zoom here.
+      if (wheelMode === 'capture-on-focus' && !zoomFocused && !e.ctrlKey && !e.metaKey) return
       e.preventDefault()
       const rect = canvas.getBoundingClientRect()
       const sx = e.clientX - rect.left
@@ -724,7 +757,19 @@ export function BoardViewer({
     }
     canvas.addEventListener('wheel', onWheel, { passive: false })
     return () => canvas.removeEventListener('wheel', onWheel)
-  }, [viewMode])
+  }, [viewMode, wheelMode, zoomFocused])
+
+  // Give the wheel back to the page as soon as the reader clicks away. Capture
+  // phase, so it fires even when the click lands on something that stops
+  // propagation.
+  useEffect(() => {
+    if (wheelMode !== 'capture-on-focus' || !zoomFocused) return
+    const onDocDown = (e: PointerEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) setZoomFocused(false)
+    }
+    document.addEventListener('pointerdown', onDocDown, true)
+    return () => document.removeEventListener('pointerdown', onDocDown, true)
+  }, [wheelMode, zoomFocused])
 
   // A "click" is a press that never travelled: dragging.current is armed on
   // EVERY mousedown (it also drives pan), so it cannot distinguish click from
@@ -733,6 +778,8 @@ export function BoardViewer({
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button === 0) {
+      // Touching the map is what claims the wheel from the page.
+      setZoomFocused(true)
       dragging.current = true
       movedSinceDown.current = false
       lastMouse.current = { x: e.clientX, y: e.clientY }
@@ -902,6 +949,8 @@ export function BoardViewer({
     <div
       ref={containerRef}
       className="relative w-full h-full overflow-hidden"
+      onMouseEnter={() => setHovering(true)}
+      onMouseLeave={() => setHovering(false)}
       style={{ background: 'var(--instrument)', cursor: viewMode === '2d' ? (dragging.current ? 'grabbing' : 'crosshair') : 'default' }}
     >
       {/* 2D canvas layer */}
@@ -924,6 +973,25 @@ export function BoardViewer({
         className="absolute inset-0 pointer-events-none"
         style={{ display: viewMode === '2d' ? 'block' : 'none' }}
       />
+
+      {/* The wheel currently belongs to the page: say so, and say how to take
+          it, rather than letting the reader discover it by scrolling and
+          watching the board vanish. */}
+      {viewMode === '2d' && wheelMode === 'capture-on-focus' && hovering && !zoomFocused && (
+        <div
+          data-testid="zoom-hint"
+          className="absolute bottom-3 left-1/2 z-20 px-2.5 py-1 rounded-md text-[11px] pointer-events-none"
+          style={{
+            transform: 'translateX(-50%)',
+            background: 'color-mix(in srgb, var(--surface) 88%, transparent)',
+            border: '1px solid var(--hairline)',
+            backdropFilter: 'blur(6px)',
+            color: 'var(--silk-dim)',
+          }}
+        >
+          Click to enable zoom · or hold ctrl and scroll
+        </div>
+      )}
 
       {/* Visually-hidden guidance for keyboard / screen-reader users: the canvas
           has no keyboard net-selection path, so point them to the net pickers in

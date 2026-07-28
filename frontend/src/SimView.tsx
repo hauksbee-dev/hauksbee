@@ -315,14 +315,32 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
     send(msg)
   }, [send])
 
-  // Faulted refs (for 2D/3D highlights), from the accumulated log so the
-  // highlight persists as long as the fault is listed.
-  const faultedRefs = useMemo(() => {
-    if (faultLog.length === 0) return undefined
-    return new Set(faultLog.map(f => f.component))
-  }, [faultLog])
+  // Which logged parts are STILL over a limit right now. The stress monitor
+  // latches (a fault fires once and does not re-fire), so the log alone cannot
+  // tell "happening now" from "happened at t=0.4s". The live signal is the
+  // per-component stress fraction already on every frame. The engine saturates
+  // it at 1.0 (stress.rs `worst_stress.min(1.0)`), so 1.0 means "at or past its
+  // rating right now" and anything below means the condition has cleared. A
+  // part the frame does not report on is left as it was rather than declared
+  // recovered, and a destroyed part never recovers.
+  const activeFaultRefs = useMemo(() => {
+    const states = frame?.component_states
+    const active = new Set<string>()
+    for (const f of faultLog) {
+      const stress = states?.[f.component]?.stress
+      if (f.destroyed || stress === undefined || stress >= 1) active.add(f.component)
+    }
+    return active
+  }, [faultLog, frame])
 
-  const faultCount = faultedRefs?.size ?? 0
+  // Faulted refs drive the 2D/3D part glow, and the glow means "over its rating
+  // NOW". A part that recovered keeps its row in the log but stops glowing.
+  const faultedRefs = useMemo(
+    () => (activeFaultRefs.size === 0 ? undefined : activeFaultRefs),
+    [activeFaultRefs],
+  )
+
+  const faultCount = new Set(faultLog.map(f => f.component)).size
   const running = status?.running ?? false
 
   // Report status up to the shell (chips + nav badges); only on change.
@@ -642,6 +660,7 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
             <RailCard id="faults" title="Faults" icon={<BoltIcon size={13} />} badge={faultBadge} cardState={cardState} onToggle={toggleCard}>
               <FaultPanel
                 faults={faultLog}
+                activeRefs={activeFaultRefs}
                 onClear={clearFaults}
                 onFaultComponentSelect={setSelectedFaultRef}
                 selectedFaultRef={selectedFaultRef}
