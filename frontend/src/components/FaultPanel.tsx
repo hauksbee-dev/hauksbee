@@ -1,11 +1,12 @@
 /**
  * FaultPanel.tsx
  *
- * Displays the session's accumulated fault log with red accent styling. The
- * server drains each fault into exactly one SimFrame, so the OWNER of this
- * panel (SimView) accumulates them; a fault stays listed from the moment it
- * was seen, with its sim timestamp, until the user clears the log.
- * Shows a quiet empty state if no faults have been seen.
+ * The session's accumulated fault log for the sim rail's "Faults" card (the
+ * card header owns the title and count badge). The server drains each fault
+ * into exactly one SimFrame, so the OWNER of this panel (SimView) accumulates
+ * them; a fault stays listed from the moment it was seen, with its sim
+ * timestamp, until the user clears the log. First occurrences also raise a
+ * toast so a fault at play speed is never a single-frame blink.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -41,130 +42,103 @@ export function FaultPanel({ faults, onClear, onFaultComponentSelect, selectedFa
 
   return (
     <>
-      {/* Fault list panel */}
-      <div
-        className="flex flex-col gap-1"
-        style={{
-          background: faults.length > 0 ? 'rgba(30,0,0,0.95)' : '#0f172a',
-          border: faults.length > 0 ? '1px solid #7f1d1d' : '1px solid #1e293b',
-          borderRadius: 8,
-          overflow: 'hidden',
-          boxShadow: faults.length > 0 ? '0 0 16px rgba(248,71,71,0.15), inset 0 0 20px rgba(127,29,29,0.08)' : 'none',
-          transition: 'all 0.3s ease',
-        }}
-      >
-        <div className="px-3 pt-2.5 pb-1 flex items-center gap-2">
-          <span
-            className="text-[10px] font-bold tracking-wider"
-            style={{ color: faults.length > 0 ? '#f87171' : '#64748b' }}
-          >
-            FAULTS
-          </span>
-          {faults.length > 0 && (
-            <span
-              className="text-[9px] font-bold px-1.5 py-0.5 rounded-full animate-pulse"
-              style={{
-                background: '#7f1d1d',
-                color: '#fca5a5',
-                boxShadow: '0 0 6px rgba(248,113,113,0.6)',
-              }}
-            >
-              {faults.length}
-            </span>
-          )}
-          {selectedFaultRef && (
-            <button
-              onClick={() => onFaultComponentSelect?.(null)}
-              className="ml-auto text-[10px] hover:opacity-70"
-              style={{ color: '#475569' }}
-            >
-              deselect
-            </button>
-          )}
-          {faults.length > 0 && onClear && (
-            <button
-              onClick={() => { seenRefs.current.clear(); onClear() }}
-              className={selectedFaultRef ? 'text-[10px] hover:opacity-70' : 'ml-auto text-[10px] hover:opacity-70'}
-              style={{ color: '#475569' }}
-              title="Clear the fault log"
-            >
-              clear log
-            </button>
-          )}
+      {faults.length === 0 ? (
+        <div className="px-3 py-2.5 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+          No faults detected
         </div>
-
-        {faults.length === 0 ? (
-          <div className="px-3 pb-2.5 text-[10px]" style={{ color: '#334155' }}>
-            No faults detected
+      ) : (
+        <div>
+          <div className="px-3 pt-2 flex items-center justify-end gap-3">
+            {selectedFaultRef && (
+              <button
+                onClick={() => onFaultComponentSelect?.(null)}
+                className="hb-press text-[10px] cursor-pointer"
+                style={{ color: 'var(--silk-faint)', background: 'none', border: 'none' }}
+              >
+                deselect
+              </button>
+            )}
+            {onClear && (
+              <button
+                onClick={() => { seenRefs.current.clear(); onClear() }}
+                className="hb-press text-[10px] cursor-pointer"
+                style={{ color: 'var(--silk-faint)', background: 'none', border: 'none' }}
+                title="Clear the fault log"
+              >
+                clear log
+              </button>
+            )}
           </div>
-        ) : (
-          <div className="overflow-y-auto" style={{ maxHeight: 200 }}>
+          <div className="overflow-y-auto py-1.5 px-1.5 flex flex-col gap-1" style={{ maxHeight: 220 }}>
             {faults.map(f => {
               const isSelected = f.component === selectedFaultRef
               return (
                 <div
                   key={`${f.component}-${f.kind}`}
                   onClick={() => onFaultComponentSelect?.(isSelected ? null : f.component)}
-                  className="flex flex-col gap-0.5 px-3 py-2 cursor-pointer hover:opacity-90"
+                  className="flex flex-col gap-0.5 px-2.5 py-2 cursor-pointer rounded-md"
                   style={{
-                    background: isSelected ? '#4a0a0a' : 'rgba(127,29,29,0.2)',
-                    borderLeft: isSelected ? '3px solid #f87171' : '3px solid #dc2626',
-                    marginBottom: 1,
-                    boxShadow: isSelected ? 'inset 0 0 12px rgba(248,71,71,0.1)' : 'none',
+                    background: 'var(--err-bg)',
+                    border: '1px solid var(--err-border)',
+                    borderLeft: isSelected ? '3px solid var(--err)' : '3px solid var(--err-border)',
                   }}
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5">
-                      <span style={{ color: '#f87171', display: 'inline-flex' }}><BoltIcon size={11} /></span>
+                      <span style={{ color: 'var(--err)', display: 'inline-flex' }}><BoltIcon size={11} /></span>
                       <span
-                        className="text-[10px] font-mono font-bold"
-                        style={{ color: '#fca5a5', fontFamily: "'JetBrains Mono', monospace" }}
+                        className="text-[11px] font-bold"
+                        style={{ color: 'var(--err-strong)', fontFamily: 'var(--font-mono)' }}
                       >
                         {f.component}
                       </span>
+                      {f.destroyed && (
+                        <span className="text-[9px] font-bold uppercase" style={{ color: 'var(--err)' }}>
+                          destroyed
+                        </span>
+                      )}
                     </div>
                     <span
                       className="text-[9px] px-1.5 py-0.5 rounded font-bold"
                       style={{
-                        background: '#991b1b',
-                        color: '#fca5a5',
-                        border: '1px solid #dc2626',
+                        background: 'transparent',
+                        color: 'var(--err)',
+                        border: '1px solid var(--err-border)',
                       }}
                     >
                       {f.kind}
                     </span>
                   </div>
-                  <div className="text-[9px] mt-0.5" style={{ color: '#94a3b8' }}>
-                    <span style={{ color: '#f87171' }}>{f.value.toFixed(3)}</span>
-                    <span style={{ color: '#64748b' }}> / lim: {f.limit.toFixed(3)} @ {f.t.toFixed(4)}s</span>
+                  <div className="text-[10px] mt-0.5 tnum" style={{ color: 'var(--silk-dim)' }}>
+                    <span style={{ color: 'var(--err)' }}>{f.value.toFixed(3)}</span>
+                    <span style={{ color: 'var(--silk-faint)' }}> / lim: {f.limit.toFixed(3)} @ {f.t.toFixed(4)}s</span>
                   </div>
                 </div>
               )
             })}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {/* Toast notifications */}
       <div className="fixed bottom-8 right-4 flex flex-col gap-2 z-50 pointer-events-none">
         {toasts.map(t => (
           <div
             key={t.id}
-            className="px-3 py-2 rounded-lg text-[11px] font-mono fault-toast"
+            className="px-3 py-2 rounded-lg text-[11px] fault-toast"
             style={{
-              background: 'rgba(127,29,29,0.95)',
-              color: '#fca5a5',
-              border: '1px solid #f87171',
-              boxShadow: '0 0 18px rgba(248,113,113,0.5), 0 4px 20px rgba(0,0,0,0.5)',
-              fontFamily: "'JetBrains Mono', monospace",
-              backdropFilter: 'blur(8px)',
+              background: 'var(--surface)',
+              color: 'var(--err-strong)',
+              border: '1px solid var(--err-border)',
+              boxShadow: 'var(--shadow-pop)',
+              fontFamily: 'var(--font-mono)',
               display: 'flex',
               alignItems: 'center',
               gap: 8,
             }}
           >
-            <span style={{ color: '#f87171', display: 'inline-flex' }}><BoltIcon size={14} /></span>
-            <span>FAULT: <strong style={{ color: '#fca5a5' }}>{t.ref}</strong>, {t.kind}</span>
+            <span style={{ color: 'var(--err)', display: 'inline-flex' }}><BoltIcon size={14} /></span>
+            <span>FAULT: <strong>{t.ref}</strong>, {t.kind}</span>
           </div>
         ))}
       </div>

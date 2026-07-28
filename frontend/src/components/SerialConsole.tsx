@@ -1,6 +1,10 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import type { SimFrame, ClientMessage } from '../types/protocol'
 
+// The serial console card: one terminal per MCU (tabs when several), a dark
+// instrument scrollback in both themes, and a send line wired to the MCU's
+// UART.
+
 interface SerialEntry {
   kind: 'rx' | 'tx' | 'info'
   text: string
@@ -88,50 +92,50 @@ function McuTerminal({ mcu, frames, send }: { mcu: [string, string]; frames: Sim
       {/* Header */}
       <div
         className="flex items-center justify-between px-3 py-1.5 shrink-0"
-        style={{ borderBottom: '1px solid #1e293b' }}
+        style={{ borderBottom: '1px solid var(--rule)' }}
       >
         <div className="flex items-center gap-2">
-          <div className="w-2 h-2 rounded-full" style={{ background: '#22c55e', boxShadow: '0 0 4px #22c55e80' }} />
-          <span className="text-[11px] font-mono font-bold" style={{ color: '#94a3b8', fontFamily: "'JetBrains Mono', monospace" }}>
+          <div className="w-2 h-2 rounded-full" style={{ background: 'var(--ok)' }} />
+          <span className="text-[11px] font-bold" style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)' }}>
             {mcuRef}
           </span>
-          <span className="text-[9px]" style={{ color: '#334155' }}>{mcuName}</span>
+          <span className="text-[9px]" style={{ color: 'var(--silk-faint)' }}>{mcuName}</span>
         </div>
         <button
           onClick={clear}
-          className="text-[9px] hover:opacity-70"
-          style={{ color: '#334155' }}
+          className="hb-press text-[9px] cursor-pointer"
+          style={{ color: 'var(--silk-faint)', background: 'none', border: 'none' }}
         >
           clear
         </button>
       </div>
 
-      {/* Scrollback */}
+      {/* Scrollback: an instrument surface, dark in both themes. */}
       <div
         ref={scrollRef}
         onScroll={handleScroll}
-        className="flex-1 overflow-y-auto p-2 font-mono text-[11px] leading-relaxed"
+        className="flex-1 overflow-y-auto p-2 text-[11px] leading-relaxed"
         style={{
-          background: '#010b1a',
-          fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace",
+          background: 'var(--instrument)',
+          fontFamily: 'var(--font-mono)',
         }}
       >
         {log.length === 0 && (
-          <div style={{ color: '#1e293b' }}>-- no output --</div>
+          <div style={{ color: '#31435c' }}>-- no output --</div>
         )}
         {log.map((entry, i) => (
           <div key={i} className="flex gap-2 mb-0.5">
-            <span style={{ color: '#1e3a5f', flexShrink: 0 }}>{entry.ts}</span>
+            <span className="tnum" style={{ color: '#31435c', flexShrink: 0 }}>{entry.ts}</span>
             <span
               style={{
                 color: entry.kind === 'rx' ? '#4ade80'
-                  : entry.kind === 'tx' ? '#64748b'
-                  : '#475569',
+                  : entry.kind === 'tx' ? '#8ba0bb'
+                  : '#5b6c84',
                 whiteSpace: 'pre-wrap',
                 wordBreak: 'break-all',
               }}
             >
-              {entry.kind === 'tx' && <span style={{ color: '#334155' }}>{'> '}</span>}
+              {entry.kind === 'tx' && <span style={{ color: '#44546e' }}>{'> '}</span>}
               {entry.text}
             </span>
           </div>
@@ -142,25 +146,22 @@ function McuTerminal({ mcu, frames, send }: { mcu: [string, string]; frames: Sim
       <form
         onSubmit={handleSubmit}
         className="flex items-center gap-0 shrink-0"
-        style={{ borderTop: '1px solid #1e293b' }}
+        style={{ borderTop: '1px solid var(--rule)' }}
       >
-        <span className="px-2 text-[11px] font-mono" style={{ color: '#334155' }}>›</span>
+        <span className="px-2 text-[11px]" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>›</span>
         <input
           value={input}
           onChange={e => setInput(e.target.value)}
           placeholder="type here, Enter to send..."
-          className="flex-1 bg-transparent text-[11px] font-mono py-1.5 pr-2 outline-none placeholder:opacity-30"
-          style={{
-            color: '#94a3b8',
-            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-          }}
+          className="flex-1 bg-transparent text-[11px] py-1.5 pr-2 outline-none placeholder:opacity-40"
+          style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)', border: 'none' }}
           spellCheck={false}
           autoComplete="off"
         />
         <button
           type="submit"
-          className="px-2 py-1.5 text-[10px] mr-1 rounded transition-opacity hover:opacity-80"
-          style={{ color: '#3b82f6', background: 'transparent' }}
+          className="hb-press px-2.5 py-1 text-[11px] mr-1.5 rounded-md cursor-pointer font-semibold"
+          style={{ color: 'var(--copper-hi)', background: 'var(--copper-tint)', border: '1px solid var(--copper-deep)' }}
         >
           send
         </button>
@@ -174,7 +175,7 @@ export function SerialConsole({ mcus, frames, send }: SerialConsoleProps) {
 
   if (mcus.length === 0) {
     return (
-      <div className="flex items-center justify-center h-24 text-[11px]" style={{ color: '#334155' }}>
+      <div className="flex items-center justify-center h-24 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
         No MCUs in board info
       </div>
     )
@@ -184,17 +185,18 @@ export function SerialConsole({ mcus, frames, send }: SerialConsoleProps) {
     <div className="flex flex-col h-full">
       {/* MCU tab switcher (if multiple) */}
       {mcus.length > 1 && (
-        <div className="flex shrink-0" style={{ borderBottom: '1px solid #1e293b' }}>
+        <div className="flex shrink-0" style={{ borderBottom: '1px solid var(--rule)' }}>
           {mcus.map(([ref], i) => (
             <button
               key={ref}
               onClick={() => setActiveMcu(i)}
-              className="px-3 py-1.5 text-[10px] font-mono transition-colors"
+              className="hb-press px-3 py-1.5 text-[10px] cursor-pointer"
               style={{
-                color: activeMcu === i ? '#94a3b8' : '#334155',
-                borderBottom: activeMcu === i ? '2px solid #3b82f6' : '2px solid transparent',
+                color: activeMcu === i ? 'var(--copper-hi)' : 'var(--silk-faint)',
+                borderBottom: activeMcu === i ? '2px solid var(--copper)' : '2px solid transparent',
                 background: 'transparent',
-                fontFamily: "'JetBrains Mono', monospace",
+                border: 'none',
+                fontFamily: 'var(--font-mono)',
               }}
             >
               {ref}

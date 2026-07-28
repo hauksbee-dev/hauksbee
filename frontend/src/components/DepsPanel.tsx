@@ -63,9 +63,9 @@ function CopyCmd({ text }: { text: string }) {
       onClick={copy}
       className="ml-2 rounded px-1.5 py-0.5 text-[10px] font-semibold cursor-pointer transition-all hover:opacity-80"
       style={{
-        background: copied ? 'rgba(87,224,160,0.14)' : 'rgba(224,138,78,0.12)',
-        border: `1px solid ${copied ? '#2f7d5b' : 'var(--copper-deep)'}`,
-        color: copied ? 'var(--live)' : 'var(--copper-hi)',
+        background: copied ? 'var(--ok-bg)' : 'rgba(224,138,78,0.12)',
+        border: `1px solid ${copied ? 'var(--ok-border)' : 'var(--copper-deep)'}`,
+        color: copied ? 'var(--ok)' : 'var(--copper-hi)',
         whiteSpace: 'nowrap',
       }}
     >
@@ -180,7 +180,7 @@ export function DepsPanel() {
                   height: 8,
                   borderRadius: 4,
                   flexShrink: 0,
-                  background: d.present ? 'var(--live)' : '#ef4444',
+                  background: d.present ? 'var(--ok)' : 'var(--err)',
                   boxShadow: d.present ? '0 0 8px rgba(87,224,160,0.5)' : '0 0 8px rgba(239,68,68,0.4)',
                   display: 'inline-block',
                 }}
@@ -190,7 +190,7 @@ export function DepsPanel() {
                   {d.name}
                   <span
                     className="ml-2 text-[10px] font-bold tracking-widest uppercase"
-                    style={{ color: d.present ? 'var(--live)' : '#fca5a5' }}
+                    style={{ color: d.present ? 'var(--ok)' : 'var(--err-strong)' }}
                   >
                     {d.present ? 'installed' : 'missing'}
                   </span>
@@ -222,7 +222,7 @@ export function DepsPanel() {
                     <span className="mr-1">Terminal:</span>
                     <code
                       className="px-1.5 py-0.5 rounded"
-                      style={{ background: 'var(--void-2, #0a0f1e)', color: 'var(--silk-dim)', border: '1px solid var(--hairline)' }}
+                      style={{ background: 'var(--code-bg)', color: 'var(--silk-dim)', border: '1px solid var(--hairline)' }}
                     >
                       {d.manual}
                     </code>
@@ -262,7 +262,7 @@ export function DepsPanel() {
                     className="rounded-lg px-3 py-2 text-[11px] overflow-x-auto overflow-y-auto whitespace-pre-wrap"
                     style={{
                       maxHeight: 180,
-                      background: '#050d1a',
+                      background: 'var(--instrument)',
                       border: '1px solid var(--hairline)',
                       color: 'var(--silk-dim)',
                       fontFamily: 'var(--font-mono)',
@@ -282,8 +282,8 @@ export function DepsPanel() {
                     aria-live="polite"
                     className="mt-1.5 rounded-lg px-3 py-2 text-[12px] whitespace-pre-wrap"
                     style={install.ok
-                      ? { background: 'rgba(87,224,160,0.08)', border: '1px solid #2f7d5b', color: 'var(--live)' }
-                      : { background: 'rgba(239,68,68,0.08)', border: '1px solid #7f1d1d', color: '#fca5a5' }}
+                      ? { background: 'var(--ok-bg)', border: '1px solid var(--ok-border)', color: 'var(--ok)' }
+                      : { background: 'var(--err-bg)', border: '1px solid var(--err-border)', color: 'var(--err-strong)' }}
                   >
                     {install.ok
                       ? 'Installed and verified. The status above is refreshed from a real re-probe.'

@@ -88,10 +88,10 @@ export function FirmwareJack({ firmware, placement, onFile, locked = false }: Fi
       style={locked ? { opacity: 0.5 } : undefined}
       data-active={firmware ? 'true' : 'false'}
     >
-      <span style={{ color: firmware ? 'var(--live)' : 'var(--silk-faint)', display: 'inline-flex', flexShrink: 0 }}>
+      <span style={{ color: firmware ? 'var(--ok)' : 'var(--silk-faint)', display: 'inline-flex', flexShrink: 0 }}>
         {firmware ? <CheckIcon size={15} /> : <PlusIcon size={15} />}
       </span>
-      <span style={{ color: firmware ? 'var(--live)' : 'var(--silk-dim)' }}>
+      <span style={{ color: firmware ? 'var(--ok)' : 'var(--silk-dim)' }}>
         {firmware
           ? <StagedCopy name={firmware.name} placement={placement} />
           : <EmptyCopy placement={placement} />}
