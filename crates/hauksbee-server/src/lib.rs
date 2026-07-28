@@ -28,6 +28,12 @@ struct Shared {
     tx: broadcast::Sender<String>,
     cmd: mpsc::Sender<ClientMessage>,
     board_info_json: Mutex<String>,
+    /// Flipped to true when this session is replaced. Every per-socket task
+    /// watches it and closes its socket: the broadcast channel alone cannot
+    /// signal this (the socket task itself keeps `Shared`, and with it a live
+    /// sender, alive), and a socket left open kept painting the DEAD session's
+    /// last frames as if they were current.
+    replaced: tokio::sync::watch::Sender<bool>,
 }
 
 /// One running live-sim session: the sim loop's shared state, the loop task
@@ -76,14 +82,32 @@ impl LiveHub {
     ) -> bool {
         let (tx, _) = broadcast::channel::<String>(256);
         let (cmd_tx, cmd_rx) = mpsc::channel::<ClientMessage>(64);
-        let board_info = serde_json::to_string(&ServerMessage::BoardInfo(engine.board_info()))
-            .expect("board info serializes");
+        // The session's identity on the wire. Many boards carry no board name
+        // in their layout file, so the engine's BoardInfo.name comes back
+        // empty; the frontend binds the sim surface's identity to this name
+        // (the wrong-board banner, the "another session is live" chip), and an
+        // empty identity reads as no identity at all. Fall back to the launch
+        // file name, which is always known.
+        let wire_name = {
+            let engine_name = engine.board_info().name;
+            if engine_name.trim().is_empty() {
+                board_name.clone()
+            } else {
+                engine_name
+            }
+        };
+        let board_info = serde_json::to_string(&ServerMessage::BoardInfo(named_board_info(
+            &*engine, &wire_name,
+        )))
+        .expect("board info serializes");
+        let (replaced_tx, _) = tokio::sync::watch::channel(false);
         let shared = Arc::new(Shared {
             tx: tx.clone(),
             cmd: cmd_tx,
             board_info_json: Mutex::new(board_info),
+            replaced: replaced_tx,
         });
-        let task = tokio::spawn(sim_loop(engine, tx, cmd_rx, shared.clone()));
+        let task = tokio::spawn(sim_loop(engine, wire_name, tx, cmd_rx, shared.clone()));
         let old = self
             .session
             .lock()
@@ -108,6 +132,9 @@ impl LiveHub {
                     .shared
                     .tx
                     .send(serde_json::to_string(&bye).expect("error serializes"));
+                // Close every socket still attached to the old session: the
+                // frontends reconnect and land on the NEW session's stream.
+                let _ = old.shared.replaced.send(true);
                 old.task.abort();
                 true
             }
@@ -152,8 +179,18 @@ pub struct Server {
 impl Server {
     /// Spawn the simulation loop around `engine` and return the server.
     pub fn new(engine: Box<dyn Engine>) -> Server {
+        Server::new_named(engine, None)
+    }
+
+    /// [`Server::new`] with an explicit session name for `/api/live/status`
+    /// and the frontend's session-identity surfaces. Callers that know the
+    /// board's FILE name should pass it: many layout files carry no board
+    /// name, so the engine-derived fallback is often empty.
+    pub fn new_named(engine: Box<dyn Engine>, name: Option<String>) -> Server {
         let hub = LiveHub::new();
-        let name = engine.board_info().name.clone();
+        let name = name
+            .filter(|n| !n.trim().is_empty())
+            .unwrap_or_else(|| engine.board_info().name.clone());
         hub.launch(engine, name, None, None);
         Server { hub }
     }
@@ -572,8 +609,21 @@ async fn handle_socket(mut socket: WebSocket, shared: Arc<Shared>) {
         return;
     }
     let mut rx = shared.tx.subscribe();
+    let mut replaced_rx = shared.replaced.subscribe();
+    // A socket attached to an already-replaced session closes immediately.
+    if *replaced_rx.borrow() {
+        return;
+    }
     loop {
         tokio::select! {
+            // The session was replaced: close this socket so the client's
+            // reconnect loop attaches to the NEW session instead of painting
+            // the dead one's last frames forever.
+            changed = replaced_rx.changed() => {
+                if changed.is_err() || *replaced_rx.borrow() {
+                    return;
+                }
+            }
             broadcasted = rx.recv() => {
                 match broadcasted {
                     Ok(json) => {
@@ -607,8 +657,19 @@ async fn handle_socket(mut socket: WebSocket, shared: Arc<Shared>) {
     }
 }
 
+/// The engine's BoardInfo with the session's wire name applied (see the
+/// fallback rationale in [`LiveHub::launch`]).
+fn named_board_info(engine: &dyn Engine, wire_name: &str) -> protocol::BoardInfo {
+    let mut info = engine.board_info();
+    if info.name.trim().is_empty() {
+        info.name = wire_name.to_string();
+    }
+    info
+}
+
 async fn sim_loop(
     mut engine: Box<dyn Engine>,
+    wire_name: String,
     tx: broadcast::Sender<String>,
     mut cmd_rx: mpsc::Receiver<ClientMessage>,
     shared: Arc<Shared>,
@@ -686,7 +747,7 @@ async fn sim_loop(
                     }
                 }
                 let info = serde_json::to_string(
-                    &ServerMessage::BoardInfo(engine.board_info()),
+                    &ServerMessage::BoardInfo(named_board_info(&*engine, &wire_name)),
                 ).unwrap();
                 *shared.board_info_json.lock().await = info;
                 broadcast_msg(&ServerMessage::Status(Status {

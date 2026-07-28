@@ -717,6 +717,9 @@ pub struct DrcGroup {
     pub at_limit: bool,
     /// The tightest gap in the group (mm).
     pub min_gap_mm: f64,
+    /// Board location (mm) of the tightest gap, so a UI can pan to the worst
+    /// spot of the group.
+    pub min_gap_loc_mm: [f64; 2],
     /// The clearance rule for this pair (mm).
     pub rule_mm: f64,
     /// Human one-line description (`self.label()`), serialized so `--json`
@@ -795,9 +798,12 @@ impl DrcStructured {
         // from below-rule. A KiCad clearance finding has positive gap; "at limit"
         // means gap is within a hair of the rule.
         use std::collections::BTreeMap;
-        // key -> (count, below_count, min_gap, rule)
-        let mut groups: BTreeMap<(String, String, String), (usize, usize, f64, f64)> =
-            BTreeMap::new();
+        // key -> (count, below_count, min_gap, rule, min_gap_loc)
+        #[allow(clippy::type_complexity)]
+        let mut groups: BTreeMap<
+            (String, String, String),
+            (usize, usize, f64, f64, [f64; 2]),
+        > = BTreeMap::new();
 
         // On an unvalidated board format (KiCad 10+) the shorts may be phantom, so
         // they carry "note" severity, not "serious", every structured consumer
@@ -833,15 +839,23 @@ impl DrcStructured {
                     // "at limit" (a gap 0.5 um short stays "below the rule").
                     let below = f.gap_mm < f.required_clearance_mm - 1e-4;
                     let key = (f.net_a_name.clone(), f.net_b_name.clone(), f.layer.clone());
-                    let e =
-                        groups
-                            .entry(key)
-                            .or_insert((0, 0, f64::INFINITY, f.required_clearance_mm));
+                    let e = groups.entry(key).or_insert((
+                        0,
+                        0,
+                        f64::INFINITY,
+                        f.required_clearance_mm,
+                        [f.x, f.y],
+                    ));
                     e.0 += 1;
                     if below {
                         e.1 += 1;
                     }
-                    e.2 = e.2.min(f.gap_mm);
+                    // Track the tightest gap AND where it is, so the group can
+                    // point a UI at its worst spot.
+                    if f.gap_mm < e.2 {
+                        e.2 = f.gap_mm;
+                        e.4 = [f.x, f.y];
+                    }
                     e.3 = f.required_clearance_mm;
                 }
             }
@@ -849,7 +863,7 @@ impl DrcStructured {
 
         let mut violations = Vec::new();
         let mut at_limit = Vec::new();
-        for ((net_a, net_b, layer), (count, below_count, min_gap, rule)) in groups {
+        for ((net_a, net_b, layer), (count, below_count, min_gap, rule, min_gap_loc)) in groups {
             let any_below = below_count > 0;
             let mut group = DrcGroup {
                 net_a,
@@ -859,6 +873,7 @@ impl DrcStructured {
                 below_count,
                 at_limit: !any_below,
                 min_gap_mm: if min_gap.is_finite() { min_gap } else { rule },
+                min_gap_loc_mm: min_gap_loc,
                 rule_mm: rule,
                 plain: String::new(),
                 fix: String::new(),
@@ -1497,6 +1512,7 @@ mod tests {
             below_count: 3,
             at_limit: false,
             min_gap_mm: 0.1,
+            min_gap_loc_mm: [0.0, 0.0],
             rule_mm: 0.2,
             plain: String::new(),
             fix: String::new(),

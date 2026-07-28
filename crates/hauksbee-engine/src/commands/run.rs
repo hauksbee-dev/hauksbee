@@ -777,6 +777,8 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         // This server can also launch a live session for a NEWLY uploaded
         // board (replacing the preloaded one), same as `hauksbee serve`.
         "live": true,
+        // Engine version, for the Environment page's "what am I running" card.
+        "version": env!("CARGO_PKG_VERSION"),
     })
     .to_string();
 

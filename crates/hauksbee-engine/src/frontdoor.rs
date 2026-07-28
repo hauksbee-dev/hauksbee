@@ -35,6 +35,14 @@ pub struct WebFinding {
     pub what: String,
     pub why: String,
     pub fix: String,
+    /// Board location (mm, layout space; same space as [`WebComponent`]
+    /// positions) when the finding points at one physical spot. The browser
+    /// renders a "show on board" affordance that pans the map there. Omitted
+    /// from the JSON when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub x: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub y: Option<f64>,
 }
 
 /// A heads-up note in the shape the browser renders. Carries the same
@@ -73,6 +81,8 @@ impl From<&PlainFinding> for WebFinding {
             what: f.what.clone(),
             why: f.why.clone(),
             fix: f.fix.clone(),
+            x: f.loc_mm.map(|l| l[0]),
+            y: f.loc_mm.map(|l| l[1]),
         }
     }
 }
@@ -355,7 +365,7 @@ fn unreadable(file_name: &str, error: String) -> WebReport {
 /// board file is.
 pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
     match crate::board_input::from_bytes(file_name, contents) {
-        Ok(norm) => analyze_normalized(file_name, &norm),
+        Ok(norm) => analyze_normalized(file_name, &norm).0,
         Err(e) => unreadable(file_name, e.web_message()),
     }
 }
@@ -366,7 +376,14 @@ pub fn analyze(file_name: &str, contents: &[u8]) -> WebReport {
 /// co-sim, instead of re-reading the original bytes with a weaker sniffer
 /// (re-reading fails co-sim on any `.board` or gerber zip that has just
 /// produced a clean static report).
-fn analyze_normalized(file_name: &str, norm: &crate::board_input::NormalizedBoard) -> WebReport {
+///
+/// Also returns the DRC report it computed, so the firmware path can bridge
+/// the REAL copper shorts into the co-sim circuit instead of simulating a
+/// board the DRC section (on the same page) says is shorted.
+fn analyze_normalized(
+    file_name: &str,
+    norm: &crate::board_input::NormalizedBoard,
+) -> (WebReport, hauksbee_extract::DrcReport) {
     let is_binary = norm.is_binary();
     let is_gerber = norm.is_gerber();
     let board = &norm.board;
@@ -511,7 +528,7 @@ fn analyze_normalized(file_name: &str, norm: &crate::board_input::NormalizedBoar
     supplies.sort_by(|a, b| a.net.cmp(&b.net));
     supplies.dedup_by(|a, b| a.net == b.net);
 
-    WebReport {
+    let report = WebReport {
         ok: true,
         error: None,
         board_name: board.name.clone(),
@@ -533,7 +550,8 @@ fn analyze_normalized(file_name: &str, norm: &crate::board_input::NormalizedBoar
             .collect(),
         supplies,
         cosim: None,
-    }
+    };
+    (report, drc)
 }
 
 /// Run the full static analysis, then (when the board has a bound MCU on an
@@ -567,7 +585,7 @@ pub fn analyze_with_firmware(
         // No board to co-sim against; return the normalization error as-is.
         Err(e) => return unreadable(file_name, e.web_message()),
     };
-    let mut report = analyze_normalized(file_name, &norm);
+    let (mut report, drc) = analyze_normalized(file_name, &norm);
 
     // The firmware part may be a zip (a built tree, or a whole PlatformIO
     // project) rather than a bare image, resolve it first. A resolution
@@ -580,7 +598,7 @@ pub fn analyze_with_firmware(
             return report;
         }
     };
-    let mut cosim = run_web_cosim(&norm.board, &resolved.name, &resolved.bytes);
+    let mut cosim = run_web_cosim(&norm.board, &resolved.name, &resolved.bytes, &drc);
     if let Some(note) = &resolved.note {
         // Say which image actually ran when it came out of an archive/build,
         // so a wrong-env surprise is diagnosable from the report itself.
@@ -592,6 +610,8 @@ pub fn analyze_with_firmware(
                 why: note.clone(),
                 fix: "Upload the exact .elf/.hex directly if this is not the image you meant."
                     .to_string(),
+                x: None,
+                y: None,
             },
         );
     }
@@ -700,6 +720,8 @@ fn cosim_unavailable(reason: impl Into<String>) -> WebCosimSection {
             what: "Co-sim not available for this board.".to_string(),
             why: reason.into(),
             fix: "Drop a board with a supported in-process MCU and a matching firmware build to run the firmware co-sim.".to_string(),
+            x: None,
+            y: None,
         }],
         gpio_nets: Vec::new(),
         // A co-sim that never ran cannot have failed an analog chunk: report the
@@ -760,6 +782,8 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
               nonlinear stage) usually causes it; simplify the offending section or \
               relax the operating point, then re-run."
             .to_string(),
+        x: None,
+        y: None,
     }
 }
 
@@ -770,7 +794,12 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
 /// Takes the ALREADY-extracted board from the caller's normalization pass
 /// (never re-reads the upload): every format the static analysis accepts,
 /// `.board` exports and gerber zips included, reaches co-sim identically.
-fn run_web_cosim(board: &ExtractedBoard, fw_name: &str, fw_bytes: &[u8]) -> WebCosimSection {
+fn run_web_cosim(
+    board: &ExtractedBoard,
+    fw_name: &str,
+    fw_bytes: &[u8],
+    drc: &hauksbee_extract::DrcReport,
+) -> WebCosimSection {
     use crate::plain::plain_faults;
     use crate::stress::{FaultEvent, FaultKind};
     use hauksbee_server::engine::Engine;
@@ -841,6 +870,21 @@ fn run_web_cosim(board: &ExtractedBoard, fw_name: &str, fw_bytes: &[u8]) -> WebC
         }
     };
 
+    // Bridge the DRC's REAL copper shorts into the circuit before stepping.
+    // The static report on the same page names these shorts; a co-sim that
+    // quietly simulated the un-shorted board would then show healthy rails
+    // right under a "GND and +5V are touching" finding, a silent
+    // contradiction. Applying the bridge makes the rails below reflect the
+    // board as it would actually be built. Skipped on an unvalidated format
+    // (KiCad 10+ `version_warning`): those shorts may be phantom, and bridging
+    // a phantom short would corrupt an otherwise-honest co-sim (CI gates skip
+    // them for the same reason).
+    let shorts_applied = if drc.version_warning.is_none() {
+        engine.apply_drc_shorts(drc)
+    } else {
+        0
+    };
+
     // Short fixed window mirroring run_headless: 1 kHz frame cadence for ~0.2s.
     let seconds = 0.2;
     let frame_dt = 1.0 / 1000.0;
@@ -900,6 +944,35 @@ fn run_web_cosim(board: &ExtractedBoard, fw_name: &str, fw_bytes: &[u8]) -> WebC
     // A pin driven high and HELD shows zero net toggles yet clearly ran, so the
     // refusal must also consult whether the firmware drove any GPIO at all.
     let any_gpio_driven = sched.any_gpio_driven();
+    // Say plainly that the shorted copper was simulated as shorted, so the
+    // rails/GPIO table below cannot be read as "the shorted board is fine".
+    if shorts_applied > 0 {
+        let short_word = if shorts_applied == 1 {
+            "short"
+        } else {
+            "shorts"
+        };
+        findings.insert(
+            0,
+            WebFinding {
+                level: "note".to_string(),
+                what: format!(
+                    "This co-sim ran WITH the board's {shorts_applied} copper {short_word} \
+                     bridged into the circuit."
+                ),
+                why: "The DRC section above found copper from separate nets touching. The \
+                      co-sim applies those bridges before simulating, so the rail and GPIO \
+                      voltages below reflect the board as it would actually be built, not \
+                      an idealised un-shorted version of it."
+                    .to_string(),
+                fix: "Fix the copper short(s) named in the DRC section, then re-analyze to \
+                      see the healthy-board behaviour."
+                    .to_string(),
+                x: None,
+                y: None,
+            },
+        );
+    }
     // Chip-substitution: the firmware was emulated on a less-specific core.
     for sub in sched.substitutions() {
         findings.insert(
@@ -911,6 +984,8 @@ fn run_web_cosim(board: &ExtractedBoard, fw_name: &str, fw_bytes: &[u8]) -> WebC
                 fix: "Peripherals/clock/flash may differ on the real part; treat \
                       the co-sim as approximate for this MCU."
                     .to_string(),
+                x: None,
+                y: None,
             },
         );
     }
@@ -928,6 +1003,8 @@ fn run_web_cosim(board: &ExtractedBoard, fw_name: &str, fw_bytes: &[u8]) -> WebC
                       firmware's pin-direction writes; two push-pull drivers must never \
                       share a net without a series element."
                     .to_string(),
+                x: None,
+                y: None,
             },
         );
     }
@@ -948,6 +1025,8 @@ fn run_web_cosim(board: &ExtractedBoard, fw_name: &str, fw_bytes: &[u8]) -> WebC
                 fix: "Rerun from the command line with --chunk-us at or below half the \
                       pulse width, or widen the pulse in firmware."
                     .to_string(),
+                x: None,
+                y: None,
             },
         );
     }
@@ -963,6 +1042,8 @@ fn run_web_cosim(board: &ExtractedBoard, fw_name: &str, fw_bytes: &[u8]) -> WebC
                       at boot, run no I/O, or the firmware may not match this board)."
                     .to_string(),
                 fix: "Confirm the firmware matches this MCU and actually drives I/O.".to_string(),
+                x: None,
+                y: None,
             },
         );
     }
@@ -1035,6 +1116,8 @@ fn run_web_cosim(board: &ExtractedBoard, fw_name: &str, fw_bytes: &[u8]) -> WebC
                 fix: "Confirm the polarity is intended, or add a pull resistor that holds the \
                       gate at its safe (OFF) level until the firmware drives it."
                     .to_string(),
+                x: None,
+                y: None,
             },
         );
     }
@@ -1104,6 +1187,8 @@ fn usbc_web_section(usbc: &crate::checks::usb_c::UsbcReport) -> Option<WebSectio
             what,
             why,
             fix,
+            x: None,
+            y: None,
         });
     } else {
         section.verdict =
@@ -1600,6 +1685,8 @@ fn main {
         // captured from the pre-normalizer analyze() on boot_gate.kicad_pcb;
         // byte-for-byte equality proves the plain .kicad_pcb web report did not
         // change shape, counts, wording, or ordering under the refactor.
+        // (Regenerated once when findings gained their optional x/y board
+        // location: the two DRC shorts now carry x=112.0, y=100.0.)
         let golden = include_str!("../../../testdata/golden/boot_gate_web_report.json");
         let json = analyze_json("boot_gate.kicad_pcb", SHORTED);
         assert_eq!(
@@ -1997,6 +2084,8 @@ fn main {
             what: "R1 carries ~200 mA past its 100 mA continuous rating.".to_string(),
             why: "sustained over-current cooks the part over time".to_string(),
             fix: "raise the resistor's power/current rating or reduce the load".to_string(),
+            x: None,
+            y: None,
         });
         // Statically clean board (total 0, serious 0) + one warning fault.
         let folded = fold_cosim_faults(0, 0, &warned).expect("a warning fault folds in");
@@ -2018,6 +2107,8 @@ fn main {
             what: "Q1 destroyed by over-current.".to_string(),
             why: "the MOSFET exceeded its absolute-max drain current".to_string(),
             fix: "add gate/current limiting".to_string(),
+            x: None,
+            y: None,
         });
         let folded = fold_cosim_faults(0, 0, &killed).expect("a serious fault folds in");
         assert_eq!((folded.0, folded.1), (1, 1), "1 issue, 1 serious");
@@ -2052,6 +2143,8 @@ fn main {
                 what: "Control net 'GATE_CTRL' may be energised at power-up".to_string(),
                 why: "driven HIGH and held from power-up with no safe-default resistor".to_string(),
                 fix: "confirm the polarity or add a pull to the safe level".to_string(),
+                x: None,
+                y: None,
             },
         );
 

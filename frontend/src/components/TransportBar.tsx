@@ -1,11 +1,13 @@
 import { useState, useCallback } from 'react'
 import type { BoardInfoMsg, StatusMsg, ClientMessage } from '../types/protocol'
+import type { ReplayTransport } from '../hooks/useSimulation'
 import { PlayIcon, PauseIcon, StepIcon, ResetIcon } from './Icons'
 
 // The live sim's transport row: play/pause, step, restart, speed, elapsed sim
 // time and the realtime factor, with the connection state at the far end. The
 // shell's sidebar owns navigation and the wordmark, so this row is purely the
-// instrument's controls.
+// instrument's controls. With a replay source the row gains what only a
+// finite recording can offer: a scrub slider over the whole timeline.
 
 interface TransportBarProps {
   connected: boolean
@@ -13,9 +15,12 @@ interface TransportBarProps {
   status: StatusMsg | null
   realtimeFactor: number | null
   send: (msg: ClientMessage) => void
+  /** Present when the source is a recorded replay: enables the scrubber and
+   *  relabels the connection dot (a loaded file is not a live link). */
+  replay?: ReplayTransport
 }
 
-export function TransportBar({ connected, boardInfo, status, realtimeFactor, send }: TransportBarProps) {
+export function TransportBar({ connected, boardInfo, status, realtimeFactor, send, replay }: TransportBarProps) {
   const [speedInput, setSpeedInput] = useState(1.0)
 
   const running = status?.running ?? false
@@ -103,6 +108,33 @@ export function TransportBar({ connected, boardInfo, status, realtimeFactor, sen
 
       <div className="w-px h-5 shrink-0" style={{ background: 'var(--hairline)' }} />
 
+      {/* Scrub, replay only: live sim time cannot be dragged backwards. */}
+      {replay && replay.duration > 0 && (
+        <>
+          <div className="flex items-center gap-2 flex-1 min-w-0" style={{ maxWidth: 320 }}>
+            <input
+              type="range"
+              min={0}
+              max={replay.duration}
+              step={replay.duration / 500}
+              value={replay.position}
+              onChange={e => replay.seek(parseFloat(e.target.value))}
+              aria-label="Scrub the recording"
+              data-testid="replay-scrub"
+              className="w-full h-1 rounded cursor-pointer"
+              style={{ accentColor: 'var(--copper)' }}
+            />
+            <span
+              className="text-[10px] tnum shrink-0"
+              style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}
+            >
+              / {replay.duration.toFixed(1)}s
+            </span>
+          </div>
+          <div className="w-px h-5 shrink-0" style={{ background: 'var(--hairline)' }} />
+        </>
+      )}
+
       {/* Speed */}
       <div className="flex items-center gap-2">
         <span className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--silk-faint)' }}>speed</span>
@@ -155,7 +187,7 @@ export function TransportBar({ connected, boardInfo, status, realtimeFactor, sen
           }}
         />
         <span style={{ color: connected ? 'var(--ok)' : 'var(--err)' }}>
-          {connected ? 'connected' : 'offline'}
+          {connected ? (replay ? 'replay' : 'connected') : 'offline'}
         </span>
       </div>
     </div>

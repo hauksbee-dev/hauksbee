@@ -15,6 +15,9 @@ interface SerialConsoleProps {
   mcus: [string, string][]
   frames: SimFrame[]
   send: (msg: ClientMessage) => void
+  /** Replay sources cannot take UART input; show why instead of a dead
+   *  send line. Scrollback (the recorded output) is unaffected. */
+  readOnly?: boolean
 }
 
 function fmtTs(d: Date) {
@@ -56,7 +59,7 @@ function useSerialLog(mcu: string, frames: SimFrame[]) {
   return { log, addTx, clear }
 }
 
-function McuTerminal({ mcu, frames, send }: { mcu: [string, string]; frames: SimFrame[]; send: (msg: ClientMessage) => void }) {
+function McuTerminal({ mcu, frames, send, readOnly }: { mcu: [string, string]; frames: SimFrame[]; send: (msg: ClientMessage) => void; readOnly?: boolean }) {
   const [mcuRef, mcuName] = mcu
   const { log, addTx, clear } = useSerialLog(mcuRef, frames)
   const [input, setInput] = useState('')
@@ -142,7 +145,16 @@ function McuTerminal({ mcu, frames, send }: { mcu: [string, string]; frames: Sim
         ))}
       </div>
 
-      {/* Input */}
+      {/* Input; a recording's UART is one-way, so replay swaps the send
+          line for the reason. */}
+      {readOnly ? (
+        <div
+          className="px-2 py-1.5 text-[10px] shrink-0"
+          style={{ borderTop: '1px solid var(--rule)', color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}
+        >
+          recorded output; sending needs a live engine
+        </div>
+      ) : (
       <form
         onSubmit={handleSubmit}
         className="flex items-center gap-0 shrink-0"
@@ -166,11 +178,12 @@ function McuTerminal({ mcu, frames, send }: { mcu: [string, string]; frames: Sim
           send
         </button>
       </form>
+      )}
     </div>
   )
 }
 
-export function SerialConsole({ mcus, frames, send }: SerialConsoleProps) {
+export function SerialConsole({ mcus, frames, send, readOnly }: SerialConsoleProps) {
   const [activeMcu, setActiveMcu] = useState(0)
 
   if (mcus.length === 0) {
@@ -211,6 +224,7 @@ export function SerialConsole({ mcus, frames, send }: SerialConsoleProps) {
           mcu={mcus[activeMcu] ?? mcus[0]}
           frames={frames}
           send={send}
+          readOnly={readOnly}
         />
       </div>
     </div>
