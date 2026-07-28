@@ -246,22 +246,6 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
     )
   }
 
-  const chips: React.ReactNode[] = []
-  if (reportOk && report) {
-    if (report.serious > 0) {
-      chips.push(chip(`${report.serious} serious`, 'err', () => setView('board'), 'chip-findings'))
-    } else if (report.total > 0) {
-      chips.push(chip(`${report.total} findings`, 'warn', () => setView('board'), 'chip-findings'))
-    } else {
-      chips.push(chip('analysis clean', 'ok', () => setView('board'), 'chip-findings'))
-    }
-  }
-  if (checksSummary) {
-    const { passed, failed, invalid } = checksSummary
-    if (failed > 0) chips.push(chip(`checks ${failed} failed`, 'err', () => setView('checks'), 'chip-checks'))
-    else if (invalid > 0) chips.push(chip(`checks ${invalid} invalid`, 'warn', () => setView('checks'), 'chip-checks'))
-    else chips.push(chip(`checks ${passed} passed`, 'ok', () => setView('checks'), 'chip-checks'))
-  }
   // The live session's identity, as the session itself reports it (BoardInfo
   // over /ws when the sim view is connected, /api/live/status otherwise).
   // Empty-string guard: an unnamed engine identity must fall through to the
@@ -272,29 +256,70 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
   // board currently analyzed; a same-named session from a previous page-load
   // is deliberately foreign (its content may differ).
   const sessionMatchesCurrent = session.liveMode === 'connected'
-  if (simMounted && sessionMatchesCurrent) {
-    if (simStatus.faults > 0) {
-      chips.push(chip(`${simStatus.faults} fault${simStatus.faults === 1 ? '' : 's'}`, 'err', () => setView('sim'), 'chip-faults'))
+  // Fault chips count faulted PARTS (the card in the sim rail counts its own
+  // fault conditions and labels itself); every surface must say what it counts.
+  const faultChipLabel = `${simStatus.faults} part${simStatus.faults === 1 ? '' : 's'} faulted`
+
+  const chips: React.ReactNode[] = []
+  if (view === 'sim') {
+    // On the Live Sim view the header describes THE SESSION's board only: the
+    // analyzed board's findings/checks chips belong to the Board/Checks
+    // surfaces, and "another session is live: X" while viewing exactly that
+    // session mislabeled the very surface the user was on.
+    if (sessionMatchesCurrent) {
+      if (simStatus.faults > 0) {
+        chips.push(chip(faultChipLabel, 'err', () => setView('sim'), 'chip-faults'))
+      }
+      chips.push(chip(
+        simStatus.running ? 'sim running' : 'sim paused',
+        simStatus.running ? 'ok' : 'quiet',
+        undefined,
+        'chip-sim',
+        simStatus.running,
+      ))
+    } else if (sessionBoard) {
+      chips.push(chip(`live: ${sessionBoard}`, 'quiet', undefined, 'chip-sim', simStatus.running))
     }
-    chips.push(chip(
-      simStatus.running ? 'sim running' : 'sim paused',
-      simStatus.running ? 'ok' : 'quiet',
-      () => setView('sim'),
-      'chip-sim',
-      simStatus.running,
-    ))
-  } else if ((simMounted || serverLiveActive) && sessionBoard) {
-    // A session is live for some OTHER board (or a pre-reload launch of this
-    // one): never show "sim running" as if it were this board's. The chip
-    // names the session's board and opens it.
-    chips.push(chip(
-      `another session is live: ${sessionBoard}`,
-      'warn',
-      simMounted ? () => setView('sim') : openLiveSession,
-      'chip-sim',
-    ))
-  } else if (reportOk && sessionMatchesCurrent) {
-    chips.push(chip('live session ready', 'ok', driveLive, 'chip-sim'))
+  } else {
+    if (reportOk && report) {
+      if (report.serious > 0) {
+        chips.push(chip(`${report.serious} serious`, 'err', () => setView('board'), 'chip-findings'))
+      } else if (report.total > 0) {
+        chips.push(chip(`${report.total} findings`, 'warn', () => setView('board'), 'chip-findings'))
+      } else {
+        chips.push(chip('analysis clean', 'ok', () => setView('board'), 'chip-findings'))
+      }
+    }
+    if (checksSummary) {
+      const { passed, failed, invalid } = checksSummary
+      if (failed > 0) chips.push(chip(`checks ${failed} failed`, 'err', () => setView('checks'), 'chip-checks'))
+      else if (invalid > 0) chips.push(chip(`checks ${invalid} invalid`, 'warn', () => setView('checks'), 'chip-checks'))
+      else chips.push(chip(`checks ${passed} passed`, 'ok', () => setView('checks'), 'chip-checks'))
+    }
+    if (simMounted && sessionMatchesCurrent) {
+      if (simStatus.faults > 0) {
+        chips.push(chip(faultChipLabel, 'err', () => setView('sim'), 'chip-faults'))
+      }
+      chips.push(chip(
+        simStatus.running ? 'sim running' : 'sim paused',
+        simStatus.running ? 'ok' : 'quiet',
+        () => setView('sim'),
+        'chip-sim',
+        simStatus.running,
+      ))
+    } else if ((simMounted || serverLiveActive) && sessionBoard) {
+      // A session is live for some OTHER board (or a pre-reload launch of
+      // this one): never show "sim running" as if it were this board's. The
+      // chip names the session's board and opens it.
+      chips.push(chip(
+        `another session is live: ${sessionBoard}`,
+        'warn',
+        simMounted ? () => setView('sim') : openLiveSession,
+        'chip-sim',
+      ))
+    } else if (reportOk && sessionMatchesCurrent) {
+      chips.push(chip('live session ready', 'ok', driveLive, 'chip-sim'))
+    }
   }
 
   return (

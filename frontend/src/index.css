@@ -353,12 +353,12 @@ code.hb-inline {
 @keyframes slotspin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .slot-spin { animation: none; } }
 
-/* Toasts */
-@keyframes slideInRight {
-  from { transform: translateX(24px); opacity: 0; }
+/* Toasts (bottom-left over the canvas, so they enter from the left) */
+@keyframes slideInLeft {
+  from { transform: translateX(-24px); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
 }
-.fault-toast { animation: slideInRight 0.25s cubic-bezier(0.2, 0, 0, 1); }
+.fault-toast { animation: slideInLeft 0.25s cubic-bezier(0.2, 0, 0, 1); }
 
 /* Status chip pulse for running states */
 @keyframes runpulse {

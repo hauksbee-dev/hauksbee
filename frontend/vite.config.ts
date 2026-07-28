@@ -4,6 +4,12 @@ import tailwindcss from '@tailwindcss/vite'
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // Build-time constant, not an import.meta.env lookup: only a literal is
+  // constant-folded, which is what removes the demo shell from the live
+  // bundle and the upload/live machinery from the demo bundle.
+  define: {
+    __DEMO__: JSON.stringify(process.env.VITE_DEMO === '1'),
+  },
   server: {
     proxy: {
       '/ws': {

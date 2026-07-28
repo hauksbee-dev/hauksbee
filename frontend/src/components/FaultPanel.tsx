@@ -14,8 +14,10 @@ import { BoltIcon } from './Icons'
 import type { SimFault } from '../types/protocol'
 
 interface FaultPanelProps {
-  /** Accumulated fault log (SimView owns the accumulation) */
-  faults: SimFault[]
+  /** Accumulated fault log (SimView owns the accumulation). `restored`
+   *  entries were replayed from the server backlog on a rejoin: history, not
+   *  news, so they list without toasting. */
+  faults: (SimFault & { restored?: boolean })[]
   /** Clears the accumulated log */
   onClear?: () => void
   /** Callback to highlight a faulted component in 2D/3D */
@@ -28,17 +30,22 @@ export function FaultPanel({ faults, onClear, onFaultComponentSelect, selectedFa
   const [toasts, setToasts] = useState<{ ref: string; kind: string; id: number }[]>([])
   const toastId = useRef(0)
 
-  // Toast on first occurrence
+  // Toast on first occurrence (never for backlog-restored history)
   useEffect(() => {
     for (const f of faults) {
       if (!seenRefs.current.has(f.component)) {
         seenRefs.current.add(f.component)
+        if (f.restored) continue
         const id = ++toastId.current
         setToasts(prev => [...prev, { ref: f.component, kind: f.kind, id }])
         setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000)
       }
     }
   }, [faults])
+
+  // What the list counts, said out loud: conditions vs parts differ whenever
+  // one part trips several limits, and the shell chips count parts.
+  const partCount = new Set(faults.map(f => f.component)).size
 
   return (
     <>
@@ -48,7 +55,11 @@ export function FaultPanel({ faults, onClear, onFaultComponentSelect, selectedFa
         </div>
       ) : (
         <div>
-          <div className="px-3 pt-2 flex items-center justify-end gap-3">
+          <div className="px-3 pt-2 flex items-center justify-between gap-3">
+            <span className="text-[10px] tnum" data-testid="fault-count-label" style={{ color: 'var(--silk-faint)' }}>
+              {faults.length} condition{faults.length === 1 ? '' : 's'} on {partCount} part{partCount === 1 ? '' : 's'}
+            </span>
+            <div className="flex items-center gap-3">
             {selectedFaultRef && (
               <button
                 onClick={() => onFaultComponentSelect?.(null)}
@@ -68,6 +79,7 @@ export function FaultPanel({ faults, onClear, onFaultComponentSelect, selectedFa
                 clear log
               </button>
             )}
+            </div>
           </div>
           <div className="overflow-y-auto py-1.5 px-1.5 flex flex-col gap-1" style={{ maxHeight: 220 }}>
             {faults.map(f => {
@@ -133,8 +145,14 @@ export function FaultPanel({ faults, onClear, onFaultComponentSelect, selectedFa
         Parts with no known ratings are not checked.
       </div>
 
-      {/* Toast notifications */}
-      <div className="fixed bottom-8 right-4 flex flex-col gap-2 z-50 pointer-events-none">
+      {/* Toast notifications. Bottom-LEFT over the board canvas (clear of the
+          sidebar and the shortcut hint), never bottom-right: there they
+          stacked directly over the FAULTS rail, covering the very rows they
+          announce. */}
+      <div
+        className="fixed flex flex-col gap-2 z-50 pointer-events-none"
+        style={{ left: 224, bottom: 64 }}
+      >
         {toasts.map(t => (
           <div
             key={t.id}
