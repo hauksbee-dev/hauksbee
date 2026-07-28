@@ -1,42 +1,66 @@
 # Release automation & binary licensing
 
 Companion note to `.github/workflows/release.yml`. Covers the licensing
-decision for prebuilt binaries, a known blocker that prevents that decision
-from being realised today, the naming contract with the installer, the
+decision for prebuilt binaries, the feature-graph guard that keeps the
+permissive build honest, the naming contract with the installer, the
 aarch64-linux build mechanism, and the Windows status.
 
-## 1. The licensing decision (GPL-free binaries)
+## 1. The licensing decision: ship both shapes, label both
 
 hauksbee's source is Apache-2.0, and the `NOTICE` file rides with every
 redistribution; that is the attribution mechanism. Its optional `avr` co-sim
 backend **statically links libsimavr, which is GPL-3.0**. Statically linking
-GPL code makes the *binary* a GPL derivative work: distributing it puts the
-whole download under GPL-3.0, even though the source stays Apache-2.0. For a
-`curl | bash` installer this is a real, irreversible consequence for the person
-installing.
+GPL code makes the *binary* a combined work: distributing it puts that download
+under GPL-3.0, even though the source stays Apache-2.0.
 
-**Decision: release binaries ship in the GPL-free shape**: renode + qemu
-backends only, no avr, no libsimavr:
+**Decision: every release publishes both shapes, each labelled for what it is.**
 
-```
-cargo build --release --no-default-features --features renode,qemu
-```
+| Download | Build | Binary licence | Who it is for |
+| --- | --- | --- | --- |
+| `hauksbee-<ver>-<suffix>.tar.gz` | default features (`avr` + `renode` + `qemu`), links libsimavr | **GPL-3.0** | Everyone installing the tool to use it. What `get-hauksbee.sh` fetches by default, what the README points at, and what `Hauksbee.app` contains |
+| `hauksbee-<ver>-<suffix>-permissive.tar.gz` | `--no-default-features --features renode,qemu` | **Apache-2.0** | Redistributors, embedders, OEMs, anyone putting hauksbee inside something they ship. `get-hauksbee.sh --permissive` |
 
-- AVR co-sim stays available to anyone who **builds from source** and runs
-  `scripts/install-sims.sh --avr`, GPL simavr is then built on *their* machine
-  (their combination, their choice), never something the project distributes.
-- The full GPL-encumbered shape (option A) is preserved as a **commented-out
-  variant** at the bottom of `release.yml`. It is not the shipping default and
-  must not be enabled without an explicit, documented decision to ship GPL
-  binaries.
-- This position is consistent with what the code already states:
-  `scripts/install-sims.sh` and `crates/hauksbee-mcu/build.rs` both document that
-  simavr is GPL-3.0 and deliberately *not* vendored, and `hauksbee-engine`'s
-  Cargo manifest comment already calls `--no-default-features --features
-  renode,qemu` "the GPL-free build". The release workflow makes that stance the
-  shipping default rather than an aspiration.
+### Why the GPL shape is the default
+
+The earlier position here was that the GPL-free shape was the only thing
+shipped. That optimised for the wrong person.
+
+- **The default download should serve the biggest funnel.** AVR / ATmega is the
+  Arduino path: the largest, loudest, most bloggable slice of the audience. A
+  one-line `curl | bash` install whose binary cannot simulate an ATmega328P is
+  an install that fails the most common first thing anyone tries.
+- **GPL-3.0 constrains distribution, not use.** For the person who downloads a
+  tool and runs it on their board, commercial work included, a GPL binary
+  carries no obligation whatsoever. The obligation lands only on someone who
+  redistributes or embeds it.
+- **The people that obligation actually lands on are a small, identifiable
+  set**, and they are a licensing conversation rather than a `curl | bash`. They
+  get a first-class artefact built for them, on every release, from the same
+  commit: the `-permissive` tarball.
+- **Nothing is implied.** Each tarball carries a `LICENSE-BINARY.txt` written by
+  `scripts/bundle.sh` naming its licence in the first line, plus the
+  corresponding-source pointers GPL-3.0 section 6 requires (this repo at the
+  exact build commit, simavr at its pinned tag, the two scripts that reproduce
+  the build, and a copy of the GPL-3.0 text). The installer prints the licence
+  of what it just installed. The README states the two-download story where the
+  download is offered.
+
+Building from source is unchanged and needs no decision from anyone: a plain
+`cargo build` still gives the default (AVR-capable) shape, and
+`scripts/install-sims.sh --avr` still builds simavr on the user's own machine,
+which is their combination rather than something this project distributed.
+
+Both shapes are built on every matrix leg of `release.yml`, and the release
+fails if either is not what its label claims. A silently-AVR-less "default"
+download fails the build exactly as hard as a GPL leak into the permissive one,
+because both are the download lying about itself. Two independent checks, for
+the reason given in section 2.1.
 
 ## 2. The avr feature leak (found, fixed) and the standing GPL guard
+
+This section is about the **permissive** shape only. The default shape is
+supposed to link libsimavr; the guard below exists so that the permissive shape
+cannot, by accident, do the same thing and still be labelled Apache-2.0.
 
 When release automation first landed, the shape `--no-default-features
 --features renode,qemu` **still activated `avr` and still linked libsimavr**.
@@ -76,22 +100,68 @@ co-sim feature needs a system libsimavr"*), and `nm` found 14 simavr C symbols +
 `avr`, so a plain `cargo build --workspace`, the Docker images, and the demo
 server keep AVR co-sim exactly as before. Verified after the fix:
 
-- `nm` on the GPL-free release binaries: **0 simavr symbols, 0 AvrMcu symbols**
-  in both `hauksbee` and `hauksbee-ci` (renode/qemu backends present).
-- The GPL-free shape builds with simavr discovery pointed at a nonexistent
+- The permissive release binaries report `avr  disabled  compiled out` from
+  `hauksbee doctor`, with the renode and qemu backends present. (The original
+  `nm`-based measurement of this is no longer reproducible; see 2.1 for why,
+  and for what replaced it.)
+- The permissive shape builds with simavr discovery pointed at a nonexistent
   path (the guard below); it never even looks for libsimavr.
-- Default-features release binaries still link simavr (AVR available as before),
+- Default-shape release binaries still link simavr (AVR available as before),
   and the full default test suites stay green.
 
 ### The standing GPL guard (expected green)
 
-Both `release.yml` and `ci.yml` point `SIMAVR_INCLUDE_DIR`/`SIMAVR_LIB_DIR` at a
-nonexistent path. A genuinely avr-free build never reads them; any future
-feature-graph regression that drags `avr` back in panics in `build.rs` **before
-any GPL code is linked**, turning the release/CI red. A red guard means "fix the
-feature graph", never "weaken the guard". With the graph clean, releases flow
-with **zero** system dependencies (no simavr, no libclang/bindgen, those are
-only reached by the avr path).
+`ci.yml`, and the **permissive build step only** in `release.yml`, point
+`SIMAVR_INCLUDE_DIR`/`SIMAVR_LIB_DIR` at a nonexistent path. A genuinely
+avr-free build never reads them; any future feature-graph regression that drags
+`avr` back in panics in `build.rs` **before any GPL code is linked**, turning
+the release/CI red. A red guard means "fix the feature graph", never "weaken
+the guard".
+
+The guard's job is unchanged by the two-shape decision; only its scope is now
+explicit. The default build step in `release.yml` deliberately does *not* set
+those variables: it points them at the real prefix that
+`scripts/install-sims.sh --avr` installed into, because that build is meant to
+link simavr. The permissive shape still needs **zero** system dependencies (no
+simavr, no libclang/bindgen, those are only reached by the avr path); the
+default shape needs libsimavr, libelf, zlib and libclang, which the release
+workflow installs per runner OS before building it.
+
+Two build steps, two shapes, one commit.
+
+### 2.1 Why the shape check is behavioural, not a symbol scan
+
+The obvious check is `nm | grep simavr`. It does not work here, and it fails in
+the direction that matters: silently passing.
+
+The workspace sets `strip = true` in `[profile.release]`, so rustc strips at
+link time. Run `nm` on a release binary of *either* shape and you get zero
+simavr and zero `AvrMcu` symbols. Measured on darwin-arm64, on freshly linked
+binaries, before `bundle.sh`'s own `strip` step ever runs. A symbol-table check
+would therefore report "clean" for a GPL-linked binary, which is worse than no
+check at all. (The 14-plus-42 symbol counts recorded above date from before the
+release profile stripped, and cannot be reproduced on a current release build.)
+
+So the check asks the binary what it can do. `hauksbee doctor` reports the
+co-sim backends the build can actually reach, and its `avr` line is decided at
+compile time:
+
+| Shape | `hauksbee doctor` avr line |
+| --- | --- |
+| default | `avr` `builtin` `simavr linked into this binary` |
+| permissive | `avr` `disabled` `compiled out; rebuild with the default features + libsimavr` |
+
+`scripts/bundle.sh` runs that check on every build and **refuses to package**
+a bundle whose answer does not match its `--shape`, in either direction. It
+lives in `bundle.sh` rather than only in the workflow so a local build gets the
+same guarantee as a release build, and so no tarball can exist without having
+passed.
+
+`release.yml` then re-runs the same check independently on the extracted
+tarball contents (what is actually about to be uploaded, not what happened to be
+in `target/release`), greps each `LICENSE-BINARY.txt` for its licence string so
+the two labels cannot be swapped, and checks that `LICENSE`, `NOTICE` and, for
+the default shape, `LICENSE-GPL-3.0.txt` are present and non-empty.
 
 ## 3. Naming contract with `scripts/get-hauksbee.sh`
 
@@ -101,15 +171,35 @@ The installer and `scripts/bundle.sh` agree on this exact shape (do not drift):
 | ---------------- | ------------------------------------------------- |
 | version          | tag with leading `v` stripped (e.g. `0.1.0`)      |
 | target suffix    | `linux-x86_64`, `linux-aarch64`, `darwin-arm64`, `darwin-x86_64` |
-| asset base name  | `hauksbee-<version>-<suffix>`                      |
+| asset base name (default shape) | `hauksbee-<version>-<suffix>`               |
+| asset base name (permissive shape) | `hauksbee-<version>-<suffix>-permissive` |
 | tarball          | `<base>.tar.gz`                                    |
 | checksum         | `<base>.tar.gz.sha256` (relative basename, `shasum -a 256` format) |
 | tarball layout   | `<base>/bin/hauksbee` and `<base>/bin/hauksbee-ci` (mode 0755) |
-| macOS app        | `<base>-app.zip` + `<base>-app.zip.sha256` (darwin suffixes only; contains `Hauksbee.app`, built by `app/macos/build-app.sh`; unsigned, see `app/macos/SIGNING.md`) |
+| licence file     | `<base>/LICENSE-BINARY.txt`, plus `<base>/LICENSE` and `<base>/NOTICE`; the default shape also carries `<base>/LICENSE-GPL-3.0.txt` |
+| macOS app        | `<base>-app.zip` + `<base>-app.zip.sha256` (darwin suffixes only, default shape only; contains `Hauksbee.app`, built by `app/macos/build-app.sh`; unsigned, see `app/macos/SIGNING.md`) |
 
-`get-hauksbee.sh` was extended in this change to accept all four suffixes; it
-previously rejected `linux-aarch64` and `darwin-x86_64` because the old matrix
-built only two targets.
+The `-permissive` suffix is part of the base name, so it appears in the tarball
+name, the checksum name **and** the directory inside the tarball. Both
+`scripts/bundle.sh --shape permissive` and `get-hauksbee.sh --permissive`
+derive it the same way; do not let them drift.
+
+`LICENSE-BINARY.txt` is the per-download licence statement, generated by
+`bundle.sh` from the shape being built. Its first line names the licence
+(`UNDER GPL-3.0` or `UNDER APACHE-2.0`), and the release workflow greps for
+exactly those strings before publishing, so a shape whose label was swapped
+never reaches a release page.
+
+`get-hauksbee.sh` accepts all four suffixes; it previously rejected
+`linux-aarch64` and `darwin-x86_64` because the old matrix built only two
+targets. It installs the default shape unless given `--permissive`, and prints
+the licence of what it installed as the last line of its summary.
+
+The full asset list for a release of version `V`, 20 files:
+
+- 4 targets x `hauksbee-V-<suffix>.tar.gz` + `.sha256`
+- 4 targets x `hauksbee-V-<suffix>-permissive.tar.gz` + `.sha256`
+- 2 darwin targets x `hauksbee-V-<suffix>-app.zip` + `.sha256`
 
 ## 4. aarch64-linux mechanism
 
@@ -125,7 +215,7 @@ Windows is close but unproven on real hardware, so it is not a shipping target
 and the installer refuses to pretend otherwise. Measured baseline (2026-07-27,
 cross-compiled `x86_64-pc-windows-gnu` from macOS, exercised under Wine):
 
-- **The GPL-free shape cross-compiles clean**: all 229 crates, zero errors,
+- **The permissive shape cross-compiles clean**: all 229 crates, zero errors,
   zero warnings, zero native C dependencies. Under Wine the binary runs real
   analysis (bind report, DRC), board-as-code round-trips including a transient
   solve, `doctor`, and `serve` answering HTTP with the real UI. The remaining
@@ -136,8 +226,10 @@ cross-compiled `x86_64-pc-windows-gnu` from macOS, exercised under Wine):
   graph, no mingw runtime DLLs, the native toolchain on `windows-latest`).
   Note the pinned toolchain: `rustup target add` must be applied to the
   toolchain from `rust-toolchain.toml`, not whichever is globally active.
-- **simavr (avr backend)**: out of the GPL-free shape; a Windows avr build
-  would need an MSYS2 simavr recipe + bindgen. Moot for release binaries.
+- **simavr (avr backend)**: a Windows avr build would need an MSYS2 simavr
+  recipe plus bindgen, which nobody has written. A first Windows release would
+  therefore ship the permissive shape only, and would have to say so; the
+  default (AVR-bearing) shape is a later step, not part of the port.
 - **Renode / QEMU (Espressif fork)**: both ship Windows builds; the discovery
   paths in `install-sims.sh` and `scripts/doctor.sh` are POSIX-shaped and need
   Windows equivalents, and co-sim end-to-end is unexercised on Windows.
@@ -186,7 +278,7 @@ so please upstream it. One PR is fine. It should contain:
 2. `scripts/get-hauksbee.ps1`, following the section 3 naming contract with a
    `windows-x86_64` suffix and `.zip` + `.sha256` assets.
 3. A CI matrix entry (`windows-latest`) running fmt, clippy, and the test suite
-   in the GPL-free shape, green.
+   in the permissive shape, green.
 4. The divergence log, as the PR description: what was POSIX-shaped, what you
    changed, what you gated and why. Evidence beats assertion; paste the co-sim
    output and a screenshot of the web front door.
