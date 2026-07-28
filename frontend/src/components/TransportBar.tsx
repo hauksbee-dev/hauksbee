@@ -2,21 +2,24 @@ import { useState, useCallback } from 'react'
 import type { BoardInfoMsg, StatusMsg, ClientMessage } from '../types/protocol'
 import { PlayIcon, PauseIcon, StepIcon, ResetIcon } from './Icons'
 
+// The live sim's transport row: play/pause, step, restart, speed, elapsed sim
+// time and the realtime factor, with the connection state at the far end. The
+// shell's sidebar owns navigation and the wordmark, so this row is purely the
+// instrument's controls.
+
 interface TransportBarProps {
   connected: boolean
   boardInfo: BoardInfoMsg | null
   status: StatusMsg | null
+  realtimeFactor: number | null
   send: (msg: ClientMessage) => void
-  /** Leave the sim view back to the report page; the session keeps running. */
-  onExit?: () => void
 }
 
-export function TransportBar({ connected, boardInfo, status, send, onExit }: TransportBarProps) {
+export function TransportBar({ connected, boardInfo, status, realtimeFactor, send }: TransportBarProps) {
   const [speedInput, setSpeedInput] = useState(1.0)
 
   const running = status?.running ?? false
   const simTime = status?.sim_time ?? 0
-  const boardName = boardInfo?.name ?? '--'
 
   const handlePlayPause = useCallback(() => {
     send({ type: running ? 'Pause' : 'Play' })
@@ -42,111 +45,67 @@ export function TransportBar({ connected, boardInfo, status, send, onExit }: Tra
     return `${t.toFixed(3)} s`
   }
 
+  const quietBtn: React.CSSProperties = {
+    background: 'var(--surface-2)',
+    border: '1px solid var(--hairline)',
+    color: 'var(--silk-dim)',
+    cursor: 'pointer',
+  }
+
   return (
     <div
-      className="flex items-center gap-3 px-4 py-0 shrink-0 select-none"
+      className="flex items-center gap-3 px-4 shrink-0 select-none"
       style={{
-        background: '#0a0f1e',
-        borderBottom: '1px solid #1e293b',
-        height: 44,
+        background: 'var(--surface)',
+        borderBottom: '1px solid var(--hairline)',
+        height: 46,
       }}
     >
-      {/* Back to the report page; the sim keeps running server-side. */}
-      {onExit && (
-        <button
-          data-testid="sim-back"
-          onClick={onExit}
-          title="Back to the report (the sim keeps running)"
-          className="px-2 py-1 rounded text-[11px] font-bold tracking-wider cursor-pointer transition-all hover:opacity-80"
-          style={{
-            background: '#0d1526',
-            border: '1px solid #1e293b',
-            color: '#64748b',
-            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-          }}
-        >
-          ‹ REPORT
-        </button>
-      )}
-
-      {/* Logo, copper wordmark with glow (the one bold accent) */}
-      <div
-        className="font-bold tracking-widest select-none"
-        style={{
-          fontSize: 13,
-          color: '#e08a4e',
-          letterSpacing: '0.25em',
-          fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
-          textShadow: '0 0 8px rgba(224,138,78,0.7), 0 0 20px rgba(224,138,78,0.3)',
-        }}
-      >
-        HAUKSBEE
-      </div>
-
-      <div className="w-px h-5 shrink-0" style={{ background: '#1e293b' }} />
-
-      {/* Board name */}
-      <span
-        className="text-xs"
-        style={{ color: '#64748b', fontFamily: "'JetBrains Mono', monospace" }}
-      >
-        {boardName}
-      </span>
-
-      <div className="w-px h-5 shrink-0" style={{ background: '#1e293b' }} />
-
       {/* Transport controls */}
       <div className="flex items-center gap-1.5">
-        {/* Play/Pause */}
         <button
           onClick={handlePlayPause}
           title={running ? 'Pause (Space)' : 'Play (Space)'}
-          className="flex items-center justify-center w-8 h-7 rounded text-xs font-bold transition-all"
+          aria-label={running ? 'Pause' : 'Play'}
+          className="hb-press flex items-center justify-center rounded-lg"
           style={{
+            width: 34, height: 30, cursor: 'pointer',
             // running → live green; ready-to-play → copper (the action accent)
-            background: running ? 'rgba(87,224,160,0.15)' : 'rgba(224,138,78,0.15)',
-            border: running ? '1px solid rgba(87,224,160,0.35)' : '1px solid rgba(224,138,78,0.35)',
-            color: running ? '#57e0a0' : '#ffb072',
-            boxShadow: running ? '0 0 8px rgba(87,224,160,0.18)' : '0 0 8px rgba(224,138,78,0.18)',
+            background: running ? 'var(--ok-bg)' : 'var(--copper-tint-strong)',
+            border: running ? '1px solid var(--ok-border)' : '1px solid var(--copper-deep)',
+            color: running ? 'var(--ok)' : 'var(--copper-hi)',
           }}
         >
-          {running ? <PauseIcon size={13} /> : <PlayIcon size={13} />}
+          {/* Play triangle sits optically left of center; nudge it right. */}
+          {running ? <PauseIcon size={13} /> : <PlayIcon size={13} style={{ marginLeft: 1 }} />}
         </button>
 
-        {/* Step */}
         <button
           onClick={handleStep}
-          title="Step 1ms (N)"
-          className="flex items-center justify-center w-8 h-7 rounded text-xs font-bold transition-all hover:opacity-80"
-          style={{
-            background: 'rgba(148,163,184,0.08)',
-            border: '1px solid #1e293b',
-            color: '#64748b',
-          }}
+          title="Step 1 ms (N)"
+          aria-label="Step one millisecond"
+          className="hb-press flex items-center justify-center rounded-lg"
+          style={{ ...quietBtn, width: 34, height: 30 }}
         >
           <StepIcon size={13} />
         </button>
 
-        {/* Reset */}
         <button
           onClick={handleReset}
-          title="Reset"
-          className="flex items-center justify-center w-8 h-7 rounded text-xs font-bold transition-all hover:opacity-80"
-          style={{
-            background: 'rgba(148,163,184,0.08)',
-            border: '1px solid #1e293b',
-            color: '#64748b',
-          }}
+          title="Restart the simulation"
+          aria-label="Restart the simulation"
+          className="hb-press flex items-center justify-center rounded-lg"
+          style={{ ...quietBtn, width: 34, height: 30 }}
         >
           <ResetIcon size={13} />
         </button>
       </div>
 
-      <div className="w-px h-5 shrink-0" style={{ background: '#1e293b' }} />
+      <div className="w-px h-5 shrink-0" style={{ background: 'var(--hairline)' }} />
 
       {/* Speed */}
       <div className="flex items-center gap-2">
-        <span className="text-[9px] uppercase tracking-wider" style={{ color: '#334155' }}>spd</span>
+        <span className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--silk-faint)' }}>speed</span>
         <input
           type="range"
           min={0.1}
@@ -154,41 +113,49 @@ export function TransportBar({ connected, boardInfo, status, send, onExit }: Tra
           step={0.1}
           value={speedInput}
           onChange={handleSpeedChange}
-          className="w-16 h-1 rounded appearance-none cursor-pointer"
-          style={{ accentColor: '#e08a4e' }}
+          aria-label="Simulation speed factor"
+          className="w-20 h-1 rounded cursor-pointer"
+          style={{ accentColor: 'var(--copper)' }}
         />
         <span
-          className="text-[11px] font-mono w-8 text-right"
-          style={{ color: '#64748b', fontFamily: "'JetBrains Mono', monospace" }}
+          className="text-[11px] w-9 text-right tnum"
+          style={{ color: 'var(--silk-dim)', fontFamily: 'var(--font-mono)' }}
         >
           {speedInput.toFixed(1)}x
         </span>
       </div>
 
-      <div className="w-px h-5 shrink-0" style={{ background: '#1e293b' }} />
+      <div className="w-px h-5 shrink-0" style={{ background: 'var(--hairline)' }} />
 
-      {/* Sim time, primary readout: larger + brighter */}
-      <div className="flex items-center gap-1.5" style={{ fontFamily: "'JetBrains Mono', monospace" }}>
-        <span className="text-[9px] uppercase tracking-wider" style={{ color: '#334155' }}>t</span>
-        <span className="text-[13px] font-semibold" style={{ color: '#cbd5e1' }}>{formatTime(simTime)}</span>
+      {/* Elapsed sim time, primary readout */}
+      <div className="flex items-baseline gap-1.5" style={{ fontFamily: 'var(--font-mono)' }}>
+        <span className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--silk-faint)' }}>t</span>
+        <span className="text-[13px] font-semibold tnum" style={{ color: 'var(--silk)' }}>{formatTime(simTime)}</span>
+        {realtimeFactor !== null && (
+          <span className="text-[11px] tnum" style={{ color: 'var(--silk-faint)' }}>
+            · {realtimeFactor.toFixed(2)}x realtime
+          </span>
+        )}
       </div>
 
       <div className="flex-1" />
 
-      {/* Connection status */}
-      <div className="flex items-center gap-2 text-[10px]">
+      {/* Board identity + connection */}
+      {boardInfo && (
+        <span className="text-[11px] truncate" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
+          {boardInfo.name}
+        </span>
+      )}
+      <div className="flex items-center gap-1.5 text-[11px]">
         <div
-          className="w-2 h-2 rounded-full shrink-0"
+          className={connected ? 'run-dot' : undefined}
           style={{
-            background: connected ? '#22c55e' : '#ef4444',
-            boxShadow: connected ? '0 0 6px #22c55e80' : 'none',
+            width: 8, height: 8, borderRadius: 4,
+            background: connected ? 'var(--ok)' : 'var(--err)',
           }}
         />
-        <span style={{ color: connected ? '#86efac' : '#fca5a5' }}>
+        <span style={{ color: connected ? 'var(--ok)' : 'var(--err)' }}>
           {connected ? 'connected' : 'offline'}
-        </span>
-        <span style={{ color: '#334155' }}>
-          · :{window.location.port || (window.location.protocol === 'https:' ? '443' : '80')}
         </span>
       </div>
     </div>
