@@ -61,6 +61,12 @@ pub struct RateMeter {
     costs: VecDeque<StepCost>,
 }
 
+impl Default for RateMeter {
+    fn default() -> Self {
+        RateMeter::new()
+    }
+}
+
 impl RateMeter {
     pub fn new() -> RateMeter {
         RateMeter {
@@ -199,7 +205,10 @@ mod tests {
         let mut meter = RateMeter::new();
         drive(&mut meter, 40, 0.1, 0.01, 10.0);
         let achieved = meter.achieved().expect("measured");
-        assert!(achieved < 0.15, "achieved {achieved} must be well under 1.0");
+        assert!(
+            achieved < 0.15,
+            "achieved {achieved} must be well under 1.0"
+        );
         assert!(achieved > 0.05, "achieved {achieved} should be ~0.1");
     }
 

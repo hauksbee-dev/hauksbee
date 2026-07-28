@@ -5663,6 +5663,79 @@ mod tests {
         );
     }
 
+    /// The live-scope honesty flag: on a direction-blind core, a net whose
+    /// MCU pin driver never reported a level must be listed as unobserved
+    /// (its shown voltage is the passive network's static level, not a
+    /// measured drive); the flag clears the moment the driver is enabled,
+    /// and a direction-reporting core never populates it (there, an undriven
+    /// pin's level IS a real measurement).
+    #[test]
+    fn unobserved_drive_nets_flags_only_direction_blind_undriven_pins() {
+        let board = hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let bound = crate::binder::bind_board(&board, &lib);
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let node = *sched.net_nodes.get("BTN_HI").expect("net exists");
+        let make_binding = |sched: &mut Scheduler, observable: bool| {
+            let mut drv =
+                crate::drivers::PinDriver::stamp(&mut sched.circuit, node, "BTN_HI", "t", 50.0);
+            // Mirror bind_mcu: every driver starts tri-stated until the
+            // firmware's first observed drive enables it.
+            drv.set_enabled(&mut sched.circuit, false);
+            let mut gpio_drivers = HashMap::new();
+            gpio_drivers.insert(('0', 1u8), drv);
+            McuBinding {
+                reference: if observable { "U1" } else { "U2" }.into(),
+                backend: "test".into(),
+                requested_part: String::new(),
+                pad_roles: HashMap::new(),
+                role_nets: HashMap::new(),
+                gpio_drivers,
+                adc_nets: HashMap::new(),
+                adc_pin: HashMap::new(),
+                module: false,
+                max_supply_v: None,
+            }
+        };
+
+        // Direction-reporting core: nothing is unobserved, tri-stated or not.
+        let binding = make_binding(&mut sched, true);
+        sched.mcus.push(core_with_hooks(
+            Box::new(DirCore { observable: true }),
+            binding,
+        ));
+        sched.responder_registries.push(None);
+        assert!(
+            sched.unobserved_drive_nets().is_empty(),
+            "a direction-observable backend's undriven pin is a real measurement"
+        );
+
+        // Direction-blind core with a never-driven pin: its net is disclosed.
+        let binding = make_binding(&mut sched, false);
+        sched.mcus.push(core_with_hooks(
+            Box::new(DirCore { observable: false }),
+            binding,
+        ));
+        sched.responder_registries.push(None);
+        assert_eq!(
+            sched.unobserved_drive_nets(),
+            vec!["BTN_HI".to_string()],
+            "a direction-blind, never-driven pin's net must be disclosed"
+        );
+
+        // The moment ANY driver on the net is enabled (an observed drive),
+        // the reading is a driven measurement and the flag clears.
+        {
+            let m = sched.mcus.last_mut().expect("mcu");
+            let drv = m.binding.gpio_drivers.get_mut(&('0', 1u8)).expect("driver");
+            drv.enabled = true;
+        }
+        assert!(
+            sched.unobserved_drive_nets().is_empty(),
+            "an enabled driver makes the net a driven measurement"
+        );
+    }
+
     /// Regression for SCHED-1: `run_micros` takes integer microseconds, so a
     /// chunk whose duration is a fractional number of microseconds must carry
     /// the truncated remainder into the next chunk, otherwise the firmware

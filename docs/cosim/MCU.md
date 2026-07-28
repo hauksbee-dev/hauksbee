@@ -130,7 +130,11 @@ SoC descriptor carries a verified `dir = { offset, encoding }` map, and the
 ODR poll then also masks out pins not configured as outputs (an input pin's
 ODR bit is not a drive). Unmapped platforms keep the conservative
 behavior: every ODR change reports, direction stays unobservable, and
-boot-coverage diagnoses hedge instead of asserting Hi-Z.
+boot-coverage diagnoses hedge instead of asserting Hi-Z. Direction-blind
+backends also feed the live sim's per-net honesty flag
+(`SimFrame.unobserved_drive_nets`, see the QEMU limitations below): nets whose
+MCU pin has never reported a level are disclosed to the UI as "static level,
+drive not observable" instead of being presented as measurements.
 
 The tiers: `simavr` runs in-process over FFI with
 cycle-accurate TWI/SPI/ADC IRQ callbacks, so interception is exact. Renode is
@@ -683,10 +687,27 @@ proving the backend is ISA-agnostic.
   sensors additionally reach unmodified firmware through the machine's own
   emulated tmp105 via `set_i2c_device_temperature`.
 
-- **Control round-trip cost.** Each chunk is a QMP cont/stop pair plus a mailbox
-  read; the wall window per chunk floors at 8 ms so boot clears in a reasonable
-  number of chunks. Coarse co-sim chunks (a few ms) keep the round-trip count
-  modest, as with Renode.
+- **Mailbox bank coverage bounds which GPIOs are observable at all.** The
+  mailbox carries one output-mirror word per declared bank; the shipped
+  `esp32s3` SoC descriptor declares bank `'0'` only, so GPIO32..48 (bank
+  `'1'`: the Watchy v3's display RES/DC/CS on GPIO33/34/35 and its SCK/MOSI
+  on GPIO47/48) are **not co-simulated at all**, firmware drives and reads of
+  them are invisible, and the backend prints a warning naming the missing
+  banks at attach time. Extending the descriptor's bank list (plus the
+  firmware's mirror) is the fix; until then those pins are permanently
+  unobserved.
+
+- **The live sim discloses unobservable pins instead of presenting static
+  levels as measurements.** On a backend that cannot report drive direction
+  (this QEMU mailbox: levels only, and no GPSPI/I2C-controller hook, see
+  above), a pin whose driver has never reported a level might be genuinely
+  undriven or driven invisibly; either way the solved net voltage is just the
+  passive network's idle level (a pull-up reads 3.3 V, a floating trace reads
+  0 V). Every such net is listed per frame in the wire protocol's
+  `SimFrame.unobserved_drive_nets` so the UI can label the reading "static
+  level; MCU drive not observable on this backend" rather than "measured".
+  Direction-observable backends (simavr, dir-mapped Renode platforms) never
+  populate it: there, an undriven pin's level IS a real measurement.
 
 - **Unmodelled ESP32 peripherals.** The fork models GPIO matrix, UART, SPI-flash,
   and timers, but WiFi/BT radio, RMT, I2S, the LEDC/MCPWM generators, and the
