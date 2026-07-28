@@ -13,11 +13,30 @@ import { useEffect, useRef, useState } from 'react'
 import { BoltIcon } from './Icons'
 import type { SimFault } from '../types/protocol'
 
+/** The unit each fault kind's value and limit are measured in. Without it the
+ *  short line read "0.005 / lim: 0.005", two bare numbers whose meaning the
+ *  reader had to guess from the kind chip. */
+const FAULT_UNIT: Record<string, string> = {
+  overcurrent: 'A',
+  surge_current: 'A',
+  pin_overcurrent: 'A',
+  short: 'A',
+  overvoltage: 'V',
+  reverse_bias: 'V',
+  overpower: 'W',
+  overtemperature: '°C',
+}
+
 interface FaultPanelProps {
   /** Accumulated fault log (SimView owns the accumulation). `restored`
    *  entries were replayed from the server backlog on a rejoin: history, not
    *  news, so they list without toasting. */
   faults: (SimFault & { restored?: boolean })[]
+  /** Components whose condition is STILL over the limit in the current frame.
+   *  The log latches by design; this is what separates "happening now" from
+   *  "happened, and is being kept on the record". A ref absent here is shown
+   *  held. */
+  activeRefs?: Set<string>
   /** Clears the accumulated log */
   onClear?: () => void
   /** Callback to highlight a faulted component in 2D/3D */
@@ -25,7 +44,7 @@ interface FaultPanelProps {
   selectedFaultRef?: string | null
 }
 
-export function FaultPanel({ faults, onClear, onFaultComponentSelect, selectedFaultRef }: FaultPanelProps) {
+export function FaultPanel({ faults, activeRefs, onClear, onFaultComponentSelect, selectedFaultRef }: FaultPanelProps) {
   const seenRefs = useRef(new Set<string>())
   const [toasts, setToasts] = useState<{ ref: string; kind: string; id: number }[]>([])
   const toastId = useRef(0)
@@ -58,6 +77,7 @@ export function FaultPanel({ faults, onClear, onFaultComponentSelect, selectedFa
           <div className="px-3 pt-2 flex items-center justify-between gap-3">
             <span className="text-[10px] tnum" data-testid="fault-count-label" style={{ color: 'var(--silk-faint)' }}>
               {faults.length} condition{faults.length === 1 ? '' : 's'} on {partCount} part{partCount === 1 ? '' : 's'}
+              {' · log holds past faults until cleared'}
             </span>
             <div className="flex items-center gap-3">
             {selectedFaultRef && (
@@ -84,23 +104,31 @@ export function FaultPanel({ faults, onClear, onFaultComponentSelect, selectedFa
           <div className="overflow-y-auto py-1.5 px-1.5 flex flex-col gap-1" style={{ maxHeight: 220 }}>
             {faults.map(f => {
               const isSelected = f.component === selectedFaultRef
+              // A destroyed part never recovers; anything else is "held" once
+              // its condition has cleared, and the row says so instead of
+              // reading like a live alarm forever.
+              const active = !activeRefs || f.destroyed || activeRefs.has(f.component)
+              const unit = FAULT_UNIT[f.kind] ?? ''
               return (
                 <div
                   key={`${f.component}-${f.kind}`}
+                  data-testid={active ? 'fault-row-active' : 'fault-row-held'}
                   onClick={() => onFaultComponentSelect?.(isSelected ? null : f.component)}
                   className="flex flex-col gap-0.5 px-2.5 py-2 cursor-pointer rounded-md"
                   style={{
-                    background: 'var(--err-bg)',
-                    border: '1px solid var(--err-border)',
-                    borderLeft: isSelected ? '3px solid var(--err)' : '3px solid var(--err-border)',
+                    background: active ? 'var(--err-bg)' : 'var(--surface-2)',
+                    border: `1px solid ${active ? 'var(--err-border)' : 'var(--hairline)'}`,
+                    borderLeft: `3px solid ${isSelected ? 'var(--err)' : active ? 'var(--err-border)' : 'var(--hairline)'}`,
                   }}
                 >
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-1.5">
-                      <span style={{ color: 'var(--err)', display: 'inline-flex' }}><BoltIcon size={11} /></span>
+                      <span style={{ color: active ? 'var(--err)' : 'var(--silk-faint)', display: 'inline-flex' }}>
+                        <BoltIcon size={11} />
+                      </span>
                       <span
                         className="text-[11px] font-bold"
-                        style={{ color: 'var(--err-strong)', fontFamily: 'var(--font-mono)' }}
+                        style={{ color: active ? 'var(--err-strong)' : 'var(--silk-dim)', fontFamily: 'var(--font-mono)' }}
                       >
                         {f.component}
                       </span>
@@ -109,21 +137,34 @@ export function FaultPanel({ faults, onClear, onFaultComponentSelect, selectedFa
                           destroyed
                         </span>
                       )}
+                      {!active && (
+                        <span
+                          className="text-[9px] font-bold uppercase"
+                          title="This condition has cleared. The entry stays until you clear the log."
+                          style={{ color: 'var(--silk-faint)' }}
+                        >
+                          held
+                        </span>
+                      )}
                     </div>
                     <span
                       className="text-[9px] px-1.5 py-0.5 rounded font-bold"
                       style={{
                         background: 'transparent',
-                        color: 'var(--err)',
-                        border: '1px solid var(--err-border)',
+                        color: active ? 'var(--err)' : 'var(--silk-faint)',
+                        border: `1px solid ${active ? 'var(--err-border)' : 'var(--hairline)'}`,
                       }}
                     >
                       {f.kind}
                     </span>
                   </div>
                   <div className="text-[10px] mt-0.5 tnum" style={{ color: 'var(--silk-dim)' }}>
-                    <span style={{ color: 'var(--err)' }}>{f.value.toFixed(3)}</span>
-                    <span style={{ color: 'var(--silk-faint)' }}> / lim: {f.limit.toFixed(3)} @ {f.t.toFixed(4)}s</span>
+                    <span style={{ color: active ? 'var(--err)' : 'var(--silk-dim)' }}>
+                      {f.value.toFixed(3)}{unit && ` ${unit}`}
+                    </span>
+                    <span style={{ color: 'var(--silk-faint)' }}>
+                      {' / lim '}{f.limit.toFixed(3)}{unit && ` ${unit}`} @ {f.t.toFixed(4)}s
+                    </span>
                   </div>
                 </div>
               )

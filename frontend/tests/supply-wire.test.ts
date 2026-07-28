@@ -6,7 +6,7 @@
 // Run with: bun test  (from frontend/)
 
 import { test, expect } from 'bun:test'
-import { toWireSupply, supplyNetNames, usbSpecFor } from '../src/lib/supply-wire'
+import { toWireSupply, supplyNetNames, usbSpecFor, appliedVolts } from '../src/lib/supply-wire'
 import type { SupplyConfig } from '../src/lib/supply-wire'
 
 const base: Omit<SupplyConfig, 'type'> = {
@@ -64,4 +64,22 @@ test('battery converts Ah to mAh and fills the wire-required fields', () => {
     soc: 1.0,
     r_internal_ohms: 0.1,
   })
+})
+
+test('appliedVolts reports what the rail will really run at, per supply type', () => {
+  // Ideal/bench/wall pass the box through; USB and battery set their own
+  // voltage, and `toWireSupply` drops `volts` for them entirely. The panel
+  // showed 12 while the rail ran at 5.000 V with nothing said.
+  expect(appliedVolts({ ...base, type: 'Ideal', volts: 12 })).toEqual({ volts: 12 })
+  expect(appliedVolts({ ...base, type: 'Bench', volts: 12 })).toEqual({ volts: 12 })
+  expect(appliedVolts({ ...base, type: 'Wall', volts: 12 })).toEqual({ volts: 12 })
+
+  const usb = appliedVolts({ ...base, type: 'USB', volts: 12 })
+  expect(usb.volts).toBe(5)
+  expect(usb.fixedBy).toBeTruthy()
+
+  // Matches the engine's li-ion curve at full charge (power_supply.rs).
+  const batt = appliedVolts({ ...base, type: 'Battery', volts: 12 })
+  expect(batt.volts).toBe(4.2)
+  expect(batt.fixedBy).toBeTruthy()
 })

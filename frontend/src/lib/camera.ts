@@ -70,7 +70,12 @@ export function zoomCamera(cam: Camera, factor: number, focusSX: number, focusSY
 export function wheelZoomFactor(e: { deltaY: number; deltaMode: number; ctrlKey: boolean }): number {
   // Normalise to pixels: 0=pixel, 1=line (~16 px), 2=page (~160 px)
   const px = e.deltaY * (e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 160 : 1)
-  const sensitivity = e.ctrlKey ? 0.012 : 0.0022
+  // A pinch is ctrlKey + a stream of small pixel deltas. A MOUSE wheel held
+  // with ctrl (the report map's zoom gesture) sets the same flag but arrives
+  // in ~120 px notches, where the pinch sensitivity made every notch a 4x
+  // jump; that gets the ordinary wheel response.
+  const pinch = e.ctrlKey && e.deltaMode === 0 && Math.abs(px) < 40
+  const sensitivity = pinch ? 0.012 : 0.0022
   return Math.exp(-px * sensitivity)
 }
 

@@ -119,6 +119,21 @@ pub struct PlainReport {
     pub heads_up: Vec<HeadsUp>,
 }
 
+/// De-escape KiCad's label escapes so a plain sentence names the net the way
+/// the schematic does. KiCad writes a literal `/` inside a label as `{slash}`
+/// (`/` is its sheet-path separator), and that token travels all the way
+/// through extraction into the finding text: the reader saw
+/// `Net-(U4-LNA_IN{slash}RF)` where the schematic says `Net-(U4-LNA_IN/RF)`.
+/// The escaped form stays the identity used for matching; only what a person
+/// reads is unescaped, and only here, at the last step before rendering.
+fn readable(s: String) -> String {
+    if s.contains("{slash}") {
+        s.replace("{slash}", "/")
+    } else {
+        s
+    }
+}
+
 impl PlainReport {
     fn new(subject: &str) -> Self {
         PlainReport {
@@ -131,10 +146,20 @@ impl PlainReport {
     fn push(&mut self, level: PlainLevel, what: String, why: String, fix: String) {
         self.findings.push(PlainFinding {
             level,
-            what,
+            what: readable(what),
             why,
             fix,
             loc_mm: None,
+        });
+    }
+
+    /// [`Self::push`] for a heads-up note, so notes get the same name
+    /// de-escaping every other plain sentence gets.
+    fn push_note(&mut self, note: HeadsUp) {
+        self.heads_up.push(HeadsUp {
+            what: readable(note.what),
+            why: note.why,
+            fix: note.fix,
         });
     }
 
@@ -150,7 +175,7 @@ impl PlainReport {
     ) {
         self.findings.push(PlainFinding {
             level,
-            what,
+            what: readable(what),
             why,
             fix,
             loc_mm: Some(loc_mm),
@@ -354,7 +379,7 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
     // severity (set once in DrcStructured::from_report). Surface the caveat as a
     // never-dropped heads-up so the verdict is "worth a look", not "N serious".
     if let Some(w) = &st.version_warning {
-        out.heads_up.push(HeadsUp::glossed(
+        out.push_note(HeadsUp::glossed(
             format!("The copper-short results below may be unreliable on this file: {w}"),
             "This board was saved by a newer KiCad than hauksbee's copper reader was \
              validated against, so its zone/fill format can be misread: a filled ground \
@@ -599,7 +624,7 @@ pub fn plain_si(report: &SiReport) -> PlainReport {
     // as opposed to a within-tolerance "ok" or a "no judgement" observation.
     for f in info_only(report) {
         if let Some(note) = actionable_info_note(f) {
-            out.heads_up.push(note);
+            out.push_note(note);
         }
     }
     out
@@ -648,15 +673,15 @@ fn actionable_info_note(f: &SiFinding) -> Option<HeadsUp> {
         .strip_prefix(&format!("{affected}:"))
         .unwrap_or(core)
         .trim();
-    // "pair" only when it IS one: the single-ended estimates name one net.
-    let subject = if f.refs.len() >= 2 || f.nets.len() >= 2 {
-        "A high-speed trace pair"
-    } else {
-        "A high-speed trace"
-    };
+    // "pair" only when it IS one: the single-ended estimates name one net, and
+    // they are a different animal (a 50 ohm RF / antenna feed, not a USB or
+    // Ethernet link), so they get their own why and what-to-do below. Reusing
+    // the differential-pair advisory told the reader of a one-net RF trace to
+    // check whether "this pair" is a USB/Ethernet/HDMI link.
+    let is_pair = f.refs.len() >= 2 || f.nets.len() >= 2;
     Some(match f.check {
-        SiCheck::ControlledImpedance => HeadsUp::glossed(
-            format!("{subject} ({affected}) is off its impedance target ({core})."),
+        SiCheck::ControlledImpedance if is_pair => HeadsUp::glossed(
+            format!("A high-speed trace pair ({affected}) is off its impedance target ({core})."),
             "Fast links like USB (90 ohm differential) or Ethernet need their traces to \
              present a specific impedance so the signal does not reflect off the wire and \
              smear. This is a computed estimate, flagged only because the board did not \
@@ -668,6 +693,18 @@ fn actionable_info_note(f: &SiFinding) -> Option<HeadsUp> {
              stackup so the estimate lands near the target (the formulas are in \
              docs/checks/SI_CHECKS.md), or ask your fab to build a controlled-impedance stackup \
              to spec.",
+        ),
+        SiCheck::ControlledImpedance => HeadsUp::glossed(
+            format!("A single-ended trace ({affected}) is off its impedance target ({core})."),
+            "A 50 ohm single-ended line is the convention for an RF or antenna feed: the \
+             trace has to present that impedance end to end or part of the signal reflects \
+             back instead of reaching the antenna, costing range and sensitivity. This is a \
+             computed estimate, flagged only because the board did not formally declare a \
+             controlled-impedance stackup.",
+            "If this is not a controlled-impedance RF path, this estimate is informational. \
+             If it is: widen or narrow the trace for your actual layer stackup so the \
+             estimate lands near 50 ohm (the formulas are in docs/checks/SI_CHECKS.md), or \
+             ask your fab to build a controlled-impedance stackup to spec.",
         ),
         _ => HeadsUp::note(format!("{core} ({affected}).")),
     })
