@@ -774,6 +774,9 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         "preloaded": true,
         "board_name": file_name,
         "report": report_val,
+        // This server can also launch a live session for a NEWLY uploaded
+        // board (replacing the preloaded one), same as `hauksbee serve`.
+        "live": true,
     })
     .to_string();
 

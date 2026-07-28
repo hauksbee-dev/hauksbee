@@ -14,6 +14,9 @@ interface FirmwareJackProps {
   placement: FirmwareJackPlacement
   /** Called with a file dropped onto the jack. */
   onFile: (f: File) => void
+  /** True while an upload is being analyzed: the jack refuses drops and
+   *  clicks (one upload at a time) and dims to say so. */
+  locked?: boolean
 }
 
 const TEST_IDS: Record<FirmwareJackPlacement, string> = {
@@ -60,25 +63,29 @@ function EmptyCopy({ placement }: { placement: FirmwareJackPlacement }) {
   )
 }
 
-export function FirmwareJack({ firmware, placement, onFile }: FirmwareJackProps) {
+export function FirmwareJack({ firmware, placement, onFile, locked = false }: FirmwareJackProps) {
   return (
     <label
       data-testid={TEST_IDS[placement]}
       htmlFor="firmware-file"
       role="button"
-      tabIndex={0}
+      tabIndex={locked ? -1 : 0}
       aria-label={LABELS[placement]}
-      onKeyDown={activateFirmwareInput}
+      aria-disabled={locked}
+      onKeyDown={locked ? undefined : activateFirmwareInput}
+      onClick={e => { if (locked) e.preventDefault() }}
       onDragEnter={e => e.preventDefault()}
       onDragOver={e => e.preventDefault()}
       onDrop={e => {
         e.preventDefault()
+        if (locked) return
         const f = e.dataTransfer.files[0]
         if (f) onFile(f)
       }}
-      className={`fw-row flex items-center gap-2.5 px-4 py-3 cursor-pointer text-[13px] ${
-        placement === 'intake' ? 'mt-3' : 'flex-1'
-      }`}
+      className={`fw-row flex items-center gap-2.5 px-4 py-3 text-[13px] ${
+        locked ? 'cursor-default' : 'cursor-pointer'
+      } ${placement === 'intake' ? 'mt-3' : 'flex-1'}`}
+      style={locked ? { opacity: 0.5 } : undefined}
       data-active={firmware ? 'true' : 'false'}
     >
       <span style={{ color: firmware ? 'var(--live)' : 'var(--silk-faint)', display: 'inline-flex', flexShrink: 0 }}>

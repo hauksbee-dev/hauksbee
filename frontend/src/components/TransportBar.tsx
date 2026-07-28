@@ -7,9 +7,11 @@ interface TransportBarProps {
   boardInfo: BoardInfoMsg | null
   status: StatusMsg | null
   send: (msg: ClientMessage) => void
+  /** Leave the sim view back to the report page; the session keeps running. */
+  onExit?: () => void
 }
 
-export function TransportBar({ connected, boardInfo, status, send }: TransportBarProps) {
+export function TransportBar({ connected, boardInfo, status, send, onExit }: TransportBarProps) {
   const [speedInput, setSpeedInput] = useState(1.0)
 
   const running = status?.running ?? false
@@ -49,6 +51,24 @@ export function TransportBar({ connected, boardInfo, status, send }: TransportBa
         height: 44,
       }}
     >
+      {/* Back to the report page; the sim keeps running server-side. */}
+      {onExit && (
+        <button
+          data-testid="sim-back"
+          onClick={onExit}
+          title="Back to the report (the sim keeps running)"
+          className="px-2 py-1 rounded text-[11px] font-bold tracking-wider cursor-pointer transition-all hover:opacity-80"
+          style={{
+            background: '#0d1526',
+            border: '1px solid #1e293b',
+            color: '#64748b',
+            fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+          }}
+        >
+          ‹ REPORT
+        </button>
+      )}
+
       {/* Logo, copper wordmark with glow (the one bold accent) */}
       <div
         className="font-bold tracking-widest select-none"

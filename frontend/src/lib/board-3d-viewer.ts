@@ -34,6 +34,154 @@ import type { ParsedBoard } from './kicad-parser'
 // KiCad PCB standard 1.6 mm → top surface in Three.js
 const PCB_TOP_Y = 0.0016
 
+// ── Outline helpers for the generated-from-layout model ─────────────────────
+// Shape space is (x_mm * 0.001, -y_mm * 0.001); the extrusion transform in
+// buildFromParsedBoard turns that into the GLB world convention.
+
+const MM_SHAPE = 0.001
+
+/** Sample a KiCad three-point arc (start, mid-on-arc, end) into a polyline. */
+function sampleArcPoints(
+  p1: { x: number; y: number },
+  p2: { x: number; y: number },
+  p3: { x: number; y: number },
+  n = 12,
+): { x: number; y: number }[] {
+  const D = 2 * (p1.x * (p2.y - p3.y) + p2.x * (p3.y - p1.y) + p3.x * (p1.y - p2.y))
+  if (Math.abs(D) < 1e-10) return [p1, p3]
+  const s1 = p1.x * p1.x + p1.y * p1.y
+  const s2 = p2.x * p2.x + p2.y * p2.y
+  const s3 = p3.x * p3.x + p3.y * p3.y
+  const ux = (s1 * (p2.y - p3.y) + s2 * (p3.y - p1.y) + s3 * (p1.y - p2.y)) / D
+  const uy = (s1 * (p3.x - p2.x) + s2 * (p1.x - p3.x) + s3 * (p2.x - p1.x)) / D
+  const r = Math.hypot(p1.x - ux, p1.y - uy)
+  const a1 = Math.atan2(p1.y - uy, p1.x - ux)
+  const am = Math.atan2(p2.y - uy, p2.x - ux)
+  const a3 = Math.atan2(p3.y - uy, p3.x - ux)
+  // Choose the sweep direction that passes through the mid point.
+  const norm = (a: number) => ((a % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
+  const ccwSweep = norm(a3 - a1)
+  const midOnCcw = norm(am - a1) <= ccwSweep
+  const sweep = midOnCcw ? ccwSweep : ccwSweep - 2 * Math.PI
+  const pts: { x: number; y: number }[] = []
+  for (let i = 0; i <= n; i++) {
+    const a = a1 + (sweep * i) / n
+    pts.push({ x: ux + r * Math.cos(a), y: uy + r * Math.sin(a) })
+  }
+  return pts
+}
+
+/**
+ * Chain the Edge.Cuts primitives into a closed outline polygon, or null when
+ * they do not close (gapped exports, netlist-only boards). Lines, rects and
+ * sampled arcs are treated as segment chains; a lone Edge.Cuts circle is a
+ * round board. When several loops close (a board with cutouts), the one with
+ * the largest bounding box is the outer edge; cutouts are skipped, a solid
+ * substrate is honest enough for a preview render.
+ */
+function edgeCutsShape(board: ParsedBoard): THREE.Shape | null {
+  type Pt = { x: number; y: number }
+  const chains: Pt[][] = []
+  for (const l of board.gr_lines) {
+    if (l.layer === 'Edge.Cuts') chains.push([l.start, l.end])
+  }
+  for (const a of board.gr_arcs) {
+    if (a.layer === 'Edge.Cuts') chains.push(sampleArcPoints(a.start, a.mid, a.end))
+  }
+  for (const r of board.gr_rects) {
+    if (r.layer !== 'Edge.Cuts') continue
+    chains.push([
+      { x: r.start.x, y: r.start.y },
+      { x: r.end.x, y: r.start.y },
+      { x: r.end.x, y: r.end.y },
+      { x: r.start.x, y: r.end.y },
+      { x: r.start.x, y: r.start.y },
+    ])
+  }
+  // A circular board outline: one gr_circle on Edge.Cuts.
+  if (chains.length === 0) {
+    const circle = board.gr_circles.find(c => c.layer === 'Edge.Cuts')
+    if (circle) {
+      const r = Math.hypot(circle.end.x - circle.center.x, circle.end.y - circle.center.y)
+      if (r > 0.1) {
+        const shape = new THREE.Shape()
+        shape.absarc(circle.center.x * MM_SHAPE, -circle.center.y * MM_SHAPE, r * MM_SHAPE, 0, Math.PI * 2, false)
+        return shape
+      }
+    }
+    return null
+  }
+
+  // Greedy endpoint chaining with a small tolerance (real exports carry
+  // sub-0.1 mm gaps between outline segments).
+  const TOL = 0.12
+  const near = (a: Pt, b: Pt) => Math.hypot(a.x - b.x, a.y - b.y) <= TOL
+  const loops: Pt[][] = []
+  const used = new Array(chains.length).fill(false)
+  for (let s = 0; s < chains.length; s++) {
+    if (used[s]) continue
+    used[s] = true
+    const loop = [...chains[s]]
+    let extended = true
+    while (extended) {
+      extended = false
+      const tail = loop[loop.length - 1]
+      for (let j = 0; j < chains.length; j++) {
+        if (used[j]) continue
+        const c = chains[j]
+        if (near(tail, c[0])) {
+          loop.push(...c.slice(1))
+        } else if (near(tail, c[c.length - 1])) {
+          loop.push(...c.slice(0, -1).reverse())
+        } else {
+          continue
+        }
+        used[j] = true
+        extended = true
+        break
+      }
+    }
+    if (loop.length >= 4 && near(loop[0], loop[loop.length - 1])) loops.push(loop)
+  }
+  if (loops.length === 0) return null
+  let outer = loops[0]
+  let outerArea = 0
+  for (const loop of loops) {
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+    for (const p of loop) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x)
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y)
+    }
+    const area = (maxX - minX) * (maxY - minY)
+    if (area > outerArea) { outerArea = area; outer = loop }
+  }
+  const shape = new THREE.Shape()
+  shape.moveTo(outer[0].x * MM_SHAPE, -outer[0].y * MM_SHAPE)
+  for (let i = 1; i < outer.length; i++) {
+    shape.lineTo(outer[i].x * MM_SHAPE, -outer[i].y * MM_SHAPE)
+  }
+  shape.closePath()
+  return shape
+}
+
+/** Bounds-rectangle substrate for boards whose outline never chains closed. */
+function boundsShape(board: ParsedBoard): THREE.Shape {
+  const b = board.bounds
+  const pad = 1 // mm of margin so edge pads do not overhang the slab
+  const shape = new THREE.Shape()
+  const x0 = (b.minX - pad) * MM_SHAPE
+  const x1 = (b.maxX + pad) * MM_SHAPE
+  // Shape-space y is negated board y, so the rectangle flips.
+  const y0 = -(b.maxY + pad) * MM_SHAPE
+  const y1 = -(b.minY - pad) * MM_SHAPE
+  shape.moveTo(x0, y0)
+  shape.lineTo(x1, y0)
+  shape.lineTo(x1, y1)
+  shape.lineTo(x0, y1)
+  shape.closePath()
+  return shape
+}
+
 export interface Highlight3D {
   reference: string
   color: number  // hex color e.g. 0x22d3ee
@@ -177,13 +325,13 @@ export class Board3DViewer {
     this.startLoop()
   }
 
-  /** Load a GLB file. Returns a promise resolving when loaded. */
-  async loadGLB(url: string): Promise<void> {
-    const loader = new GLTFLoader()
-    const gltf = await loader.loadAsync(url)
-    const model = gltf.scene
-
-    // Center camera on loaded model
+  /**
+   * Frame `model` like a product photo: point the orbit controls at its
+   * centre, solve the camera distance for a ~72% viewport fill, and scale the
+   * key light's shadow camera to the board. Shared by the GLB path and the
+   * generated-from-layout path so both open on the same composition.
+   */
+  private frameModel(model: THREE.Object3D) {
     const box = new THREE.Box3().setFromObject(model)
     const center = new THREE.Vector3()
     box.getCenter(center)
@@ -278,6 +426,15 @@ export class Board3DViewer {
       keyLightObj.shadow.camera.updateProjectionMatrix()
       this.scene.add(keyLightObj.target)
     }
+  }
+
+  /** Load a GLB file. Returns a promise resolving when loaded. */
+  async loadGLB(url: string): Promise<void> {
+    const loader = new GLTFLoader()
+    const gltf = await loader.loadAsync(url)
+    const model = gltf.scene
+
+    this.frameModel(model)
 
     // Enable shadows on all meshes; apply material upgrades
     // Pass 1: measure mesh areas to identify largest-area meshes (candidate substrate)
@@ -396,6 +553,161 @@ export class Board3DViewer {
 
     model.name = '__board_model__'
     this.scene.add(model)
+  }
+
+  /**
+   * Build the 3D model from the parsed layout itself, for boards with no
+   * pre-exported GLB (any user upload, the 3,443-part flagship): an extruded
+   * substrate from the Edge.Cuts outline (bounds rectangle when the outline
+   * does not chain closed), plus INSTANCED pads, vias and component bodies,
+   * one draw call per family, so part count barely moves the frame cost.
+   *
+   * Coordinates follow the GLB convention documented at the top of this file:
+   * KiCad (x_mm, y_mm) -> Three (x*0.001, up, -y*0.001), board top at
+   * PCB_TOP_Y.
+   */
+  buildFromParsedBoard(board: ParsedBoard) {
+    const MM = 0.001
+    const T = PCB_TOP_Y // 1.6 mm board occupies y in [0, T]
+    const PAD_T = 0.0001 // visual copper thickness
+
+    const group = new THREE.Group()
+
+    // ── Substrate ──
+    const shape = edgeCutsShape(board) ?? boundsShape(board)
+    const substrateGeo = new THREE.ExtrudeGeometry(shape, { depth: T, bevelEnabled: false })
+    // Shape space is (x*MM, -y*MM) with extrusion along +Z; rotateX(90°) maps
+    // (x, y, z) -> (x, -z, y): shape-y becomes world-z (the -y*MM flip built
+    // into the shape gives the right handedness) and the extrusion becomes
+    // world -Y, lifted back up so the top face sits at PCB_TOP_Y.
+    substrateGeo.rotateX(Math.PI / 2)
+    substrateGeo.translate(0, T, 0)
+    const substrateMat = new THREE.MeshPhysicalMaterial({
+      color: 0x0d5c2e,
+      roughness: 0.35,
+      clearcoat: 0.6,
+      clearcoatRoughness: 0.25,
+      envMapIntensity: 1.2,
+    })
+    const substrate = new THREE.Mesh(substrateGeo, substrateMat)
+    substrate.castShadow = true
+    substrate.receiveShadow = true
+    group.add(substrate)
+
+    const dummy = new THREE.Object3D()
+
+    // ── Pads (one instanced box per pad) ──
+    const padCount = board.footprints.reduce((n, fp) => n + fp.pads.length, 0)
+    if (padCount > 0) {
+      const padMat = new THREE.MeshStandardMaterial({
+        color: 0xd7a05a,
+        metalness: 0.85,
+        roughness: 0.35,
+        envMapIntensity: 1.4,
+      })
+      const pads = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), padMat, padCount)
+      let i = 0
+      for (const fp of board.footprints) {
+        const bottom = fp.layer.startsWith('B')
+        for (const pad of fp.pads) {
+          dummy.position.set(
+            pad.at.x * MM,
+            bottom ? -PAD_T / 2 : T + PAD_T / 2,
+            -pad.at.y * MM,
+          )
+          dummy.rotation.set(0, (pad.angle * Math.PI) / 180, 0)
+          dummy.scale.set(
+            Math.max(pad.size.w * MM, 1e-5),
+            PAD_T,
+            Math.max(pad.size.h * MM, 1e-5),
+          )
+          dummy.updateMatrix()
+          pads.setMatrixAt(i++, dummy.matrix)
+        }
+      }
+      pads.castShadow = true
+      pads.receiveShadow = true
+      group.add(pads)
+    }
+
+    // ── Vias (instanced cylinders through the board) ──
+    if (board.vias.length > 0) {
+      const viaMat = new THREE.MeshStandardMaterial({
+        color: 0xb8935a,
+        metalness: 0.8,
+        roughness: 0.45,
+      })
+      const vias = new THREE.InstancedMesh(
+        new THREE.CylinderGeometry(0.5, 0.5, 1, 10),
+        viaMat,
+        board.vias.length,
+      )
+      let i = 0
+      for (const v of board.vias) {
+        dummy.position.set(v.at.x * MM, T / 2, -v.at.y * MM)
+        dummy.rotation.set(0, 0, 0)
+        const d = Math.max(v.size * MM, 1e-5)
+        dummy.scale.set(d, T * 1.06, d)
+        dummy.updateMatrix()
+        vias.setMatrixAt(i++, dummy.matrix)
+      }
+      vias.receiveShadow = true
+      group.add(vias)
+    }
+
+    // ── Component bodies (instanced boxes sized from each part's pad extent) ──
+    const bodies: { cx: number; cy: number; w: number; h: number; tall: number; bottom: boolean }[] = []
+    for (const fp of board.footprints) {
+      if (fp.pads.length === 0) continue
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+      for (const pad of fp.pads) {
+        minX = Math.min(minX, pad.at.x - pad.size.w / 2)
+        maxX = Math.max(maxX, pad.at.x + pad.size.w / 2)
+        minY = Math.min(minY, pad.at.y - pad.size.h / 2)
+        maxY = Math.max(maxY, pad.at.y + pad.size.h / 2)
+      }
+      // The body sits between the pads: slightly inset from the pad bbox,
+      // never below a visible minimum. Height grows gently with footprint
+      // size (a 0402 stays low, a big module reads as a module).
+      const w = Math.max((maxX - minX) * 0.72, 0.3)
+      const h = Math.max((maxY - minY) * 0.72, 0.3)
+      const extent = Math.max(maxX - minX, maxY - minY)
+      const tall = Math.min(3.2, Math.max(0.45, extent * 0.16))
+      bodies.push({
+        cx: (minX + maxX) / 2,
+        cy: (minY + maxY) / 2,
+        w, h, tall,
+        bottom: fp.layer.startsWith('B'),
+      })
+    }
+    if (bodies.length > 0) {
+      const bodyMat = new THREE.MeshStandardMaterial({
+        color: 0x23262e,
+        roughness: 0.55,
+        metalness: 0.1,
+        envMapIntensity: 1.0,
+      })
+      const bodyMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1, 1, 1), bodyMat, bodies.length)
+      let i = 0
+      for (const b of bodies) {
+        const y = b.bottom ? -(b.tall * MM) / 2 - PAD_T : T + (b.tall * MM) / 2 + PAD_T
+        dummy.position.set(b.cx * MM, y, -b.cy * MM)
+        dummy.rotation.set(0, 0, 0)
+        dummy.scale.set(b.w * MM, b.tall * MM, b.h * MM)
+        dummy.updateMatrix()
+        bodyMesh.setMatrixAt(i++, dummy.matrix)
+      }
+      bodyMesh.castShadow = true
+      bodyMesh.receiveShadow = true
+      group.add(bodyMesh)
+    }
+
+    this.frameModel(group)
+
+    const existing = this.scene.getObjectByName('__board_model__')
+    if (existing) this.scene.remove(existing)
+    group.name = '__board_model__'
+    this.scene.add(group)
   }
 
   /**

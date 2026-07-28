@@ -61,13 +61,50 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
   )
 }
 
-export function ReportView({ report: r, boardLabel, canRunLive, onRunIt, boardUrl, onNetClick, onEmptyBoard }: {
+/** A component picked on the board map (the viewer's footprint hit-test). */
+export interface SelectedComponent {
+  ref: string
+  value: string
+  lib_id: string
+  /** Net of the clicked pad, when one was in reach (the only copper an
+   *  unrouted board has), so net checks stay reachable from a part click. */
+  padNet?: string | null
+}
+
+/** The live-sim affordance the report offers for its board.
+ *  - 'connected': the session on /ws IS this board; the button expands into it.
+ *  - 'launch': the server can boot a session for this upload on demand.
+ *  - 'none': no live capability registered; fall back to the CLI hint. */
+export interface LiveAffordance {
+  mode: 'connected' | 'launch' | 'none'
+  phase: 'idle' | 'launching' | 'error'
+  error: string | null
+  /** Firmware is staged and will ride along into the live session. */
+  hasFirmware: boolean
+  onGo: () => void
+}
+
+export function ReportView({
+  report: r,
+  boardLabel,
+  live,
+  boardUrl,
+  selectedNet,
+  selectedComponent,
+  onNetClick,
+  onComponentClick,
+  onQueueCheck,
+  onEmptyBoard,
+}: {
   report: WebReport
   boardLabel: string | null
-  canRunLive: boolean
-  onRunIt: () => void
+  live: LiveAffordance
   boardUrl: string | null
+  selectedNet: string | null
+  selectedComponent: SelectedComponent | null
   onNetClick: (net: string | null) => void
+  onComponentClick: (c: SelectedComponent | null) => void
+  onQueueCheck: (check: { kind: string; net?: string; ref?: string }) => void
   onEmptyBoard: () => void
 }) {
   if (!r.ok) {
@@ -103,21 +140,53 @@ export function ReportView({ report: r, boardLabel, canRunLive, onRunIt, boardUr
         </div>
       </div>
 
-      {/* Run it: expand the report into the live sim (run --serve only). */}
-      {canRunLive ? (
-        <button
-          data-testid="run-it"
-          onClick={onRunIt}
-          className="mt-3 w-full rounded-lg px-4 py-3 text-sm font-bold tracking-wide cursor-pointer transition-all hover:opacity-90 flex items-center justify-center gap-2"
-          style={{
-            background: 'rgba(224,138,78,0.12)',
-            border: '1px solid var(--copper-deep)',
-            color: 'var(--copper-hi)',
-            boxShadow: '0 0 14px rgba(224,138,78,0.18)',
-          }}
-        >
-          <PlayIcon size={13} /> Drive it live; the board, a scope, and firmware in real time
-        </button>
+      {/* Live: expand into (or launch) the live sim for THIS board. Only a
+          deployment with no live capability keeps the CLI-hint fallback. */}
+      {live.mode !== 'none' ? (
+        <>
+          <button
+            data-testid="run-it"
+            onClick={live.onGo}
+            disabled={live.phase === 'launching'}
+            className="mt-3 w-full rounded-lg px-4 py-3 text-sm font-bold tracking-wide cursor-pointer transition-all hover:opacity-90 flex items-center justify-center gap-2"
+            style={{
+              background: 'rgba(224,138,78,0.12)',
+              border: '1px solid var(--copper-deep)',
+              color: 'var(--copper-hi)',
+              boxShadow: '0 0 14px rgba(224,138,78,0.18)',
+              opacity: live.phase === 'launching' ? 0.75 : 1,
+            }}
+          >
+            {live.phase === 'launching' ? (
+              <>
+                <span className="slot-spin" /> Launching the live sim for this board ...
+              </>
+            ) : live.mode === 'connected' ? (
+              <>
+                <PlayIcon size={13} /> Drive it live; the board, a scope, and firmware in real time
+              </>
+            ) : (
+              <>
+                <PlayIcon size={13} />
+                {live.hasFirmware
+                  ? 'Drive it live; boot this board with its firmware in real time'
+                  : 'Drive it live; the board, a scope, and real net voltages'}
+              </>
+            )}
+          </button>
+          {live.phase === 'error' && live.error && (
+            <div
+              data-testid="live-launch-error"
+              className="mt-2 rounded-lg px-4 py-3 text-sm"
+              style={{ border: '1px solid #7f1d1d', background: '#160b0b', color: '#fca5a5' }}
+            >
+              <span className="text-[10px] font-bold tracking-widest uppercase block mb-1" style={{ color: '#f87171' }}>
+                Live launch failed
+              </span>
+              {live.error}
+            </div>
+          )}
+        </>
       ) : (
         <div
           data-testid="run-it-hint"
@@ -166,7 +235,7 @@ export function ReportView({ report: r, boardLabel, canRunLive, onRunIt, boardUr
       {r.sections.map((s, i) => <SectionBlock key={i} section={s} />)}
 
       {/* Firmware co-sim */}
-      {r.cosim && <CosimBlock cosim={r.cosim} />}
+      {r.cosim && <CosimBlock cosim={r.cosim} liveAvailable={live.mode !== 'none'} />}
 
       {/* Board map: the real renderer (pads, outline, pan/zoom) whenever the
           uploaded file is KiCad layout text; the dot map only as the fallback
@@ -183,13 +252,22 @@ export function ReportView({ report: r, boardLabel, canRunLive, onRunIt, boardUr
             <BoardViewer
               boardFile={boardUrl}
               frame={null}
+              selectedNet={selectedNet}
               onNetClick={onNetClick}
+              onFootprintClick={fp =>
+                onComponentClick({ ref: fp.ref, value: fp.value, lib_id: fp.lib_id, padNet: fp.padNet })}
               onEmptyBoard={onEmptyBoard}
             />
           </div>
+          <SelectionBar
+            report={r}
+            selectedNet={selectedNet}
+            selectedComponent={selectedComponent}
+            onQueueCheck={onQueueCheck}
+          />
           <div className="mt-1.5 text-[11px]" style={{ color: '#475569' }}>
-            Scroll to zoom · drag to pan · hover a trace to see its net · click a trace to
-            start a check on it
+            Scroll to zoom · drag to pan · hover a trace to see its net · click a trace or a
+            part to start a check on it
           </div>
         </section>
       ) : r.components?.length > 0 ? (
@@ -199,6 +277,105 @@ export function ReportView({ report: r, boardLabel, canRunLive, onRunIt, boardUr
           </h2>
           <BoardMap components={r.components} />
         </section>
+      ) : null}
+    </div>
+  )
+}
+
+/** One-click assertion offer: queues a prefilled check into the builder and
+ *  brings the builder into view so the result of the click is never silent. */
+function AssertButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        onClick()
+        document.querySelector('[data-testid="checks-panel"]')?.scrollIntoView({
+          behavior: 'smooth',
+          block: 'start',
+        })
+      }}
+      className="px-3 py-1.5 rounded-lg text-[12px] cursor-pointer"
+      style={{ background: 'rgba(224,138,78,0.12)', border: '1px solid #7c4a1e', color: '#ffb072' }}
+    >
+      + {label}
+    </button>
+  )
+}
+
+/** What was clicked on the board map, with its assertion offers. A net offers
+ *  the net-shaped checks (voltage window, blink, boot coverage); a component
+ *  shows its bound model and offers the ref-shaped ones (current, temperature).
+ *  Every offer lands in the checks builder as a normal prefilled row, so the
+ *  generated spec TOML is exactly what a hand-built check produces. */
+function SelectionBar({ report, selectedNet, selectedComponent, onQueueCheck }: {
+  report: WebReport
+  selectedNet: string | null
+  selectedComponent: SelectedComponent | null
+  onQueueCheck: (check: { kind: string; net?: string; ref?: string }) => void
+}) {
+  if (!selectedNet && !selectedComponent) return null
+  return (
+    <div
+      data-testid="selection-bar"
+      className="mt-2 rounded-lg px-4 py-3"
+      style={{ border: '1px solid var(--rule, #1e293b)', borderLeft: '4px solid var(--copper, #e08a4e)', background: '#0a0f1e' }}
+    >
+      {selectedNet ? (
+        <>
+          <div className="text-[13px] mb-2" style={{ color: '#cbd5e1' }}>
+            Net <code style={{ color: '#ffb072', background: '#0f172a', padding: '1px 6px', borderRadius: 4 }}>{selectedNet}</code>
+            <span className="ml-2" style={{ color: '#64748b' }}>add a check on it:</span>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <AssertButton
+              label="must sit at a voltage"
+              onClick={() => onQueueCheck({ kind: 'voltage', net: selectedNet })}
+            />
+            <AssertButton
+              label="must blink"
+              onClick={() => onQueueCheck({ kind: 'toggle', net: selectedNet })}
+            />
+            <AssertButton
+              label="firmware must drive it by a deadline"
+              onClick={() => onQueueCheck({ kind: 'boot-coverage', net: selectedNet })}
+            />
+          </div>
+        </>
+      ) : selectedComponent ? (
+        <>
+          <div className="text-[13px] mb-1" style={{ color: '#cbd5e1' }}>
+            <span className="font-bold" style={{ color: '#e2e8f0' }}>{selectedComponent.ref}</span>
+            {selectedComponent.value && <span className="ml-2" style={{ color: '#94a3b8' }}>{selectedComponent.value}</span>}
+          </div>
+          <div className="text-[12px] mb-2" data-testid="selection-model" style={{ color: '#64748b' }}>
+            {(() => {
+              const kind = report.component_kinds?.[selectedComponent.ref]
+              return kind
+                ? <>bound model: <code style={{ color: '#94a3b8' }}>{kind}</code></>
+                : <>no bound model (this part is open on the live circuit)</>
+            })()}
+            {selectedComponent.lib_id && (
+              <span className="ml-2" style={{ color: '#334155', wordBreak: 'break-all' }}>{selectedComponent.lib_id}</span>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <AssertButton
+              label="must stay under a current"
+              onClick={() => onQueueCheck({ kind: 'max_current', ref: selectedComponent.ref })}
+            />
+            <AssertButton
+              label="must stay cool"
+              onClick={() => onQueueCheck({ kind: 'max_temp', ref: selectedComponent.ref })}
+            />
+            {selectedComponent.padNet && (
+              <AssertButton
+                label={`net ${selectedComponent.padNet} must sit at a voltage`}
+                onClick={() => onQueueCheck({ kind: 'voltage', net: selectedComponent.padNet! })}
+              />
+            )}
+          </div>
+        </>
       ) : null}
     </div>
   )
@@ -332,7 +509,7 @@ function FindingCard({ finding: f }: { finding: WebFinding }) {
   )
 }
 
-function CosimBlock({ cosim: c }: { cosim: WebCosimSection }) {
+function CosimBlock({ cosim: c, liveAvailable }: { cosim: WebCosimSection; liveAvailable: boolean }) {
   return (
     <section className="mt-7" data-testid="cosim-section">
       <h2 className="text-[11px] font-bold tracking-widest uppercase mb-1" style={{ color: '#64748b' }}>
@@ -404,6 +581,20 @@ function CosimBlock({ cosim: c }: { cosim: WebCosimSection }) {
               </tbody>
             </table>
           )}
+          {/* The story continues past the summary: what to do with a finished
+              co-sim, so landing firmware is a beginning, not a dead end. */}
+          <div
+            data-testid="cosim-next"
+            className="mt-3 rounded-lg px-4 py-2.5 text-[13px]"
+            style={{ border: '1px solid var(--rule, #1e293b)', borderLeft: '4px solid var(--copper, #e08a4e)', background: '#0a0f1e', color: '#94a3b8' }}
+          >
+            <b style={{ color: 'var(--copper-hi, #ffb072)', fontWeight: 600 }}>Where to go from here:</b>{' '}
+            {liveAvailable
+              ? 'press "Drive it live" above to boot this firmware interactively (scope, serial console, sliders), or '
+              : ''}
+            turn what you just saw into repeatable checks below; a UART print, a blink, a rail
+            that must hold. The same spec then runs in CI on every push.
+          </div>
         </>
       ) : (
         (c.findings && c.findings.length > 0 ? c.findings : [{

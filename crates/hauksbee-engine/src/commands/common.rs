@@ -52,6 +52,76 @@ pub fn deps_hooks() -> (
     (status, install)
 }
 
+/// The web live-launch callback: turn an uploaded board (and optional
+/// firmware) into a running [`HauksbeeEngine`] the server hub can install
+/// behind `/ws`. Shared by `hauksbee serve` and `run --serve` so an uploaded
+/// board can go live from either front door.
+///
+/// Refusals mirror the CLI: firmware on a board that bound zero processors is
+/// unanswerable (the CLI exits 3 with `no_processor_message`), so the same
+/// message comes back as the launch error instead of a silent board-only
+/// downgrade. Engine-build failures (unloadable firmware, missing emulator)
+/// surface verbatim too; the frontend keeps the report up and shows them.
+pub fn live_launcher() -> hauksbee_server::frontdoor::LiveLauncher {
+    use hauksbee_server::frontdoor::LiveLaunch;
+    use std::io::Write as _;
+    use std::sync::Arc;
+    Arc::new(
+        |name: &str, contents: &[u8], fw: Option<(&str, &[u8])>| -> Result<LiveLaunch, String> {
+            let norm =
+                crate::board_input::from_bytes(name, contents).map_err(|e| e.web_message())?;
+            let mut board = norm.board;
+            // Same DNP default as bare `hauksbee run` (no --fit/--no-fit here).
+            board
+                .apply_dnp_policy(Default::default(), &[], &[])
+                .map_err(|e| e.to_string())?;
+            let lib = hauksbee_models::ModelLibrary::builtin_with_user_dirs(&[]);
+            let bound = crate::binder::bind_board(&board, &lib);
+
+            // Stage the firmware (resolving a zip/project upload to its image
+            // first). The temp file must outlive this call: the emulated MCU
+            // reloads from the path on reset, so it rides along as the
+            // session's keepalive.
+            let mut keepalive: Option<Box<dyn std::any::Any + Send>> = None;
+            let mut fw_path: Option<std::path::PathBuf> = None;
+            if let Some((fw_name, fw_bytes)) = fw {
+                if bound.mcus.is_empty() {
+                    return Err(crate::binder::no_processor_message(
+                        &bound.dnp_mcus,
+                        crate::binder::FitRemedy::Cli,
+                    ));
+                }
+                let resolved = crate::firmware_input::resolve_firmware_bytes(fw_name, fw_bytes)?;
+                let suffix = if resolved.name.to_ascii_lowercase().ends_with(".hex") {
+                    ".hex"
+                } else {
+                    ".elf"
+                };
+                let mut tmp = tempfile::Builder::new()
+                    .prefix("hauksbee-live-fw-")
+                    .suffix(suffix)
+                    .tempfile()
+                    .map_err(|e| format!("could not stage the firmware: {e}"))?;
+                tmp.write_all(&resolved.bytes)
+                    .and_then(|_| tmp.flush())
+                    .map_err(|e| format!("could not write the firmware: {e}"))?;
+                fw_path = Some(tmp.path().to_path_buf());
+                keepalive = Some(Box::new(tmp));
+            }
+
+            let board_url = format!("/boards/{name}");
+            let engine = HauksbeeEngine::from_bound(bound, fw_path.as_deref(), &board_url)
+                .map_err(|e| e.to_string())?;
+            Ok(LiveLaunch {
+                engine: Box::new(engine),
+                board_name: name.to_string(),
+                board_file: norm.layout_text.map(|t| (name.to_string(), t)),
+                keepalive,
+            })
+        },
+    )
+}
+
 pub fn serve(
     engine: HauksbeeEngine,
     port: u16,
@@ -119,6 +189,7 @@ pub fn serve(
                 analyze,
                 Some(check),
                 Some(deps_hooks()),
+                Some(live_launcher()),
                 startup_json,
             )
             .await

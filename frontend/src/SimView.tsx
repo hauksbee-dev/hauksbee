@@ -18,6 +18,60 @@ interface FootprintInfo {
   lib_id: string
   x: number
   y: number
+  /** Net of the clicked pad, when one was in reach. */
+  padNet?: string | null
+}
+
+// A clicked trace's net, with one-click assertion offers that land in the
+// report page's checks builder as ordinary prefilled rows.
+function NetAssertChip({ net, liveVolts, onQueueCheck, onClose }: {
+  net: string
+  liveVolts: number | undefined
+  onQueueCheck: (check: { kind: string; net?: string; ref?: string }) => void
+  onClose: () => void
+}) {
+  const [queued, setQueued] = useState<string | null>(null)
+  const offer = (kind: string, label: string) => (
+    <button
+      type="button"
+      data-testid={`sim-assert-${kind}`}
+      onClick={() => {
+        onQueueCheck({ kind, net })
+        setQueued(kind)
+        setTimeout(() => setQueued(null), 1800)
+      }}
+      className="px-2.5 py-1.5 rounded text-[11px] text-left cursor-pointer"
+      style={{ background: 'rgba(224,138,78,0.12)', border: '1px solid #7c4a1e', color: '#ffb072' }}
+    >
+      {queued === kind ? 'Added to the checks builder ✓' : `+ ${label}`}
+    </button>
+  )
+  return (
+    <div
+      data-testid="sim-net-chip"
+      className="flex flex-col gap-1.5 p-3 rounded-lg"
+      style={{ background: '#0f172a', border: '1px solid #1e293b', minWidth: 220, maxWidth: 300 }}
+    >
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] font-bold tracking-wider" style={{ color: '#64748b' }}>NET</span>
+        <button onClick={onClose} className="text-[10px] hover:opacity-70" style={{ color: '#475569' }}>×</button>
+      </div>
+      <div className="flex items-baseline gap-2">
+        <span className="text-sm font-bold" style={{ color: '#e2e8f0', fontFamily: "'JetBrains Mono', monospace" }}>{net}</span>
+        {liveVolts !== undefined && (
+          <span className="text-[11px]" style={{ color: '#60a5fa', fontFamily: "'JetBrains Mono', monospace" }}>
+            {liveVolts.toFixed(3)} V
+          </span>
+        )}
+      </div>
+      {offer('voltage', 'must sit at a voltage')}
+      {offer('toggle', 'must blink')}
+      {offer('boot-coverage', 'firmware must drive it')}
+      <div className="text-[9px]" style={{ color: '#475569' }}>
+        lands in the checks builder on the report page
+      </div>
+    </div>
+  )
 }
 
 type SidebarTab = 'nets' | 'serial' | 'controls' | 'inputs' | 'probes' | 'faults' | 'power'
@@ -33,10 +87,16 @@ const TAB_LABELS: { id: SidebarTab; label: string }[] = [
 ]
 
 // The live-sim view (scope, board viewers, transport). This is the whole app
-// pre-W6 §1; it is now what the landing report expands into on "run it".
-// Mounting it opens the sim WebSocket (via useSimulation), so the landing only
-// mounts it once a live board is actually being served.
-export default function SimView() {
+// pre-W6 §1; it is now what the landing report expands into on "drive it
+// live". Mounting it opens the sim WebSocket (via useSimulation), so the
+// landing only mounts it once a live board is actually being served.
+export default function SimView({ onExit, onQueueCheck }: {
+  /** Back to the report page (the session keeps running server-side). */
+  onExit?: () => void
+  /** Queue a check into the report page's checks builder from a click on the
+   *  live board (net or component). Absent on the standalone demo server. */
+  onQueueCheck?: (check: { kind: string; net?: string; ref?: string }) => void
+} = {}) {
   const { connected, boardInfo, frame, status, send } = useSimulation()
 
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
@@ -165,6 +225,7 @@ export default function SimView() {
         boardInfo={boardInfo}
         status={status}
         send={sendWrapped}
+        onExit={onExit}
       />
 
       {/* Main content area */}
@@ -177,13 +238,40 @@ export default function SimView() {
             boardInfo={boardInfo}
             selectedNet={selectedNet}
             onFootprintClick={handleFootprintClick}
+            onNetClick={net => {
+              setSelectedNet(net)
+              // A trace click replaces a part selection (and vice versa in
+              // handleFootprintClick): one floating panel at a time.
+              if (net) setSelectedFp(null)
+            }}
             faultedRefs={faultedRefs}
           />
 
-          {/* Floating footprint panel */}
+          {/* Floating footprint panel: the part's identity, its BOUND model
+              (what the engine actually simulates), and component-shaped
+              assertion offers that land in the report's checks builder. */}
           {selectedFp && (
             <div className="absolute top-3 left-3 z-10">
-              <FootprintPanel info={selectedFp} onClose={() => setSelectedFp(null)} />
+              <FootprintPanel
+                info={selectedFp}
+                onClose={() => setSelectedFp(null)}
+                boundKind={boardInfo?.component_kinds?.[selectedFp.ref] ?? null}
+                onAssert={onQueueCheck}
+              />
+            </div>
+          )}
+
+          {/* Floating net chip: a clicked trace's net with its assertion
+              offers, mirrored from the report map so both live surfaces speak
+              the same "click copper, get a check" language. */}
+          {selectedNet && !selectedFp && onQueueCheck && (
+            <div className="absolute top-3 left-3 z-10">
+              <NetAssertChip
+                net={selectedNet}
+                liveVolts={frame?.net_voltages[selectedNet]}
+                onQueueCheck={onQueueCheck}
+                onClose={() => setSelectedNet(null)}
+              />
             </div>
           )}
 
