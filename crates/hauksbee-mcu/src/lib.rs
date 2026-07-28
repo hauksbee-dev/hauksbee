@@ -53,6 +53,7 @@ pub mod ffi {
 
 #[cfg(feature = "avr")]
 pub mod avr;
+pub mod children;
 pub mod elf;
 pub mod traits;
 

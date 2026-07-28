@@ -7,6 +7,10 @@
 use std::io::{BufRead, Write};
 
 fn main() {
+    // An MCP host that kills this server mid-tool-call must not orphan any
+    // co-sim emulator the tool spawned: reap every live Renode/QEMU child on
+    // SIGTERM/SIGINT. See hauksbee_mcu::children.
+    hauksbee_mcu::children::install_signal_reaper();
     let stdin = std::io::stdin();
     let stdout = std::io::stdout();
     let mut server = hauksbee_mcp::protocol::Server::new();

@@ -30,12 +30,14 @@ mod monitor;
 mod process;
 mod uart;
 
-pub use process::{find_renode, is_available};
+// RenodeProcess is exported (not just used internally) for the child-reaping
+// integration tests and any host that needs the raw spawned-emulator handle
+// rather than the backend.
+pub use process::{find_renode, is_available, RenodeProcess};
 
 use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
 use anyhow::{bail, Context, Result};
 use monitor::Monitor;
-use process::RenodeProcess;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};

@@ -75,22 +75,33 @@ pub fn tool_name(arch: QemuArch) -> &'static str {
 
 /// The `<os>-<arch>` suffix Espressif uses in its release asset names, for
 /// this host. The four supported unix targets mirror
-/// `scripts/install-sims.sh`; Windows publishes a `x86_64-w64-mingw32` asset
-/// but its `.exe` layout does not match our unix discovery paths, so it is
-/// refused with manual guidance rather than half-installed.
+/// `scripts/install-sims.sh`. Windows publishes a `x86_64-w64-mingw32` asset
+/// and discovery (`qemu::process`) does resolve a manually unpacked `.exe`
+/// tree, but this installer shells `curl` and `tar`, which a stock Windows
+/// box may not have in compatible form and which no native Windows runner has
+/// exercised; auto-install is therefore refused there with manual guidance
+/// rather than half-installed.
 pub fn host_asset_triple() -> Result<&'static str> {
     match (std::env::consts::OS, std::env::consts::ARCH) {
         ("macos", "aarch64") => Ok("aarch64-apple-darwin"),
         ("macos", "x86_64") => Ok("x86_64-apple-darwin"),
         ("linux", "x86_64") => Ok("x86_64-linux-gnu"),
         ("linux", "aarch64") => Ok("aarch64-linux-gnu"),
-        (os, arch) => bail!(
-            "no Espressif QEMU prebuilt is auto-installable for {os}/{arch}. \
-             Download the right asset from \
-             https://github.com/{ESP_QEMU_REPO}/releases yourself and unpack \
-             it so ~/.hauksbee-qemu-esp/qemu/bin/qemu-system-xtensa exists \
-             (docs/cosim/SIMULATORS.md)."
-        ),
+        (os, arch) => {
+            // Name the path in the host's own convention: telling a Windows
+            // user to create `~/...` sends them somewhere that does not exist.
+            let unpack_hint = if cfg!(windows) {
+                "%USERPROFILE%\\.hauksbee-qemu-esp\\qemu\\bin\\qemu-system-xtensa.exe"
+            } else {
+                "~/.hauksbee-qemu-esp/qemu/bin/qemu-system-xtensa"
+            };
+            bail!(
+                "no Espressif QEMU prebuilt is auto-installable for {os}/{arch}. \
+                 Download the right asset from \
+                 https://github.com/{ESP_QEMU_REPO}/releases yourself and unpack \
+                 it so {unpack_hint} exists (docs/cosim/SIMULATORS.md)."
+            )
+        }
     }
 }
 
