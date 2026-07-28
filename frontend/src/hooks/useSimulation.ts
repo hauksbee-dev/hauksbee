@@ -1,5 +1,6 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useContext } from 'react'
 import type { ServerMessage, SimFrame, BoardInfoMsg, StatusMsg, ProbeDataMsg, ClientMessage } from '../types/protocol'
+import { SimSourceContext } from '../demo/simSource'
 
 // Connect to the same origin that served the page, so the viewer works on any
 // `hauksbee run --port <PORT>` (and over https). In `vite dev` the dev server
@@ -16,9 +17,32 @@ export interface SimulationState {
   status: StatusMsg | null
   probeData: ProbeDataMsg[]
   send: (msg: ClientMessage) => void
+  /** Present only when the source is a recorded-session replay (the demo):
+   *  the replay's own transport, for the scrub UI and read-only affordances. */
+  replay?: ReplayTransport
 }
 
+/** What a replay source exposes beyond the live wire: a finite timeline. */
+export interface ReplayTransport {
+  /** Recording length on the sim-time axis, seconds. */
+  duration: number
+  /** Current playhead position, seconds. */
+  position: number
+  /** Jump the playhead (state is rebuilt from the recording up to `t`). */
+  seek: (t: number) => void
+}
+
+/** The SimSource seam: live WebSocket by default; the demo build provides a
+ *  replay hook via SimSourceContext. The resolved hook's identity is constant
+ *  per mount (see simSource.ts), so the hook call order is stable. */
 export function useSimulation(): SimulationState {
+  const override = useContext(SimSourceContext)
+  const impl = override ?? useLiveSimulation
+  return impl()
+}
+
+/** Today's path, unchanged: the live session on /ws. */
+export function useLiveSimulation(): SimulationState {
   const [connected, setConnected] = useState(false)
   const [boardInfo, setBoardInfo] = useState<BoardInfoMsg | null>(null)
   const [frame, setFrame] = useState<SimFrame | null>(null)

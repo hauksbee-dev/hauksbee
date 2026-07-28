@@ -52,9 +52,12 @@ export function Board3DViewer({ glbUrl, board, frame, boardInfo, faults }: Board
 
     import('../lib/board-3d-viewer').then(async ({ Board3DViewer: Viewer3D }) => {
       if (!alive) return
-      const viewer = new Viewer3D(canvas)
-      viewerRef.current = viewer
       try {
+        // Inside the try: the constructor itself throws where WebGL is
+        // unavailable, and that failure must land in the SAME error state
+        // (not an unhandled rejection over a spinner that never resolves).
+        const viewer = new Viewer3D(canvas)
+        viewerRef.current = viewer
         if (glbUrl) {
           await viewer.loadGLB(glbUrl)
         } else if (board) {
@@ -66,10 +69,18 @@ export function Board3DViewer({ glbUrl, board, frame, boardInfo, faults }: Board
         }
         if (alive) setLoading(false)
       } catch (e) {
-        if (alive) setError(e instanceof Error ? e.message : String(e))
+        if (alive) {
+          setError(e instanceof Error ? e.message : String(e))
+          // The error state replaces the loading state; leaving the spinner
+          // up painted "Loading..." under the error forever.
+          setLoading(false)
+        }
       }
     }).catch(e => {
-      if (alive) setError(e instanceof Error ? e.message : String(e))
+      if (alive) {
+        setError(e instanceof Error ? e.message : String(e))
+        setLoading(false)
+      }
     })
 
     return () => {
@@ -131,7 +142,7 @@ export function Board3DViewer({ glbUrl, board, frame, boardInfo, faults }: Board
         style={{ display: 'block', zIndex: 1 }}
       />
 
-      {loading && (
+      {loading && !error && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           <div className="flex flex-col items-center gap-3">
             <div
@@ -147,9 +158,12 @@ export function Board3DViewer({ glbUrl, board, frame, boardInfo, faults }: Board
         <div className="absolute inset-0 flex items-center justify-center">
           <div
             className="px-4 py-3 rounded-lg text-sm"
-            style={{ background: '#1e293b', color: '#f87171', border: '1px solid #991b1b' }}
+            style={{ background: '#1e293b', color: '#f87171', border: '1px solid #991b1b', maxWidth: '80%' }}
           >
-            3D model error: {error}
+            <div>3D view unavailable: {error}</div>
+            <div className="mt-1 text-xs" style={{ color: '#94a3b8' }}>
+              The 2D view still works; switch back with the 2D button above.
+            </div>
           </div>
         </div>
       )}

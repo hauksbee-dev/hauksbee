@@ -1,5 +1,5 @@
-import { useCallback, useRef, useState } from 'react'
-import type { LiveLaunchResponse, WebReport } from '../types/report'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { LiveLaunchResponse, LiveStatus, WebReport } from '../types/report'
 import type { SelectedComponent } from '../components/SelectionCard'
 
 // The board session: one uploaded (or preloaded) board, its report, its staged
@@ -18,7 +18,19 @@ export interface SampleSpec {
 export type LaunchState =
   | { phase: 'idle' }
   | { phase: 'launching' }
+  /** A live session for a DIFFERENT (or foreign: stale tab, pre-reload) board
+   *  is running server-side; the UI asks in-app before replacing it. A native
+   *  window.confirm here was a dead click under any driver that auto-dismisses
+   *  dialogs, and unstylable besides. */
+  | { phase: 'confirm'; activeBoard: string; targetBoard: string }
   | { phase: 'error'; error: string }
+
+/** The server's one global live session, as last observed. `null` until the
+ *  first status fetch resolves (or when the endpoint is unavailable). */
+export interface ServerLive {
+  active: boolean
+  boardName: string | null
+}
 
 export type LiveMode = 'connected' | 'launch' | 'none'
 
@@ -38,6 +50,19 @@ export interface BoardSession {
   analyzedAt: number | null
   launch: LaunchState
   liveMode: LiveMode
+  /** The server's one global live session (board name + active), kept fresh
+   *  on load / focus / a slow poll, so every live affordance binds to what
+   *  the server actually runs, never to a stale client-side guess. */
+  serverLive: ServerLive | null
+  /** Re-fetch `/api/live/status` now (e.g. after opening the sim view). */
+  refreshLiveStatus: () => void
+  /** Resolve a pending 'confirm' launch: replace the running session. */
+  confirmReplace: () => void
+  /** Resolve a pending 'confirm' launch: keep the running session. */
+  cancelLaunch: () => void
+  /** Launch the current board, REPLACING any running session without asking
+   *  (the user already said so, e.g. "relaunch with this board"). */
+  forceLaunch: (onReady: () => void) => void
   selectedNet: string | null
   selectedComponent: SelectedComponent | null
   setSelectedNet: (net: string | null) => void
@@ -73,12 +98,44 @@ export function useBoardSession(opts: {
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
   const [selectedComponent, setSelectedComponentRaw] = useState<SelectedComponent | null>(null)
 
-  // The board whose live session is currently on /ws (launched from here or
-  // preloaded by `run --serve`).
+  // The board whose live session is currently on /ws AND was launched by THIS
+  // page-load (or preloaded by `run --serve`). Only this counts as "connected":
+  // a session left by a previous page-load or another tab is a foreign session
+  // even when the file name happens to match (the content may differ).
   const [liveBoard, setLiveBoard] = useState<string | null>(
     sessionPreloaded ? preloadedBoardName : null,
   )
   const [launch, setLaunch] = useState<LaunchState>({ phase: 'idle' })
+
+  // The server's one global live session, observed from /api/live/status.
+  // Fetched on load, on window focus, and on a slow poll while visible, so
+  // the header chips and the nav item stay honest about what /ws is serving.
+  const [serverLive, setServerLive] = useState<ServerLive | null>(null)
+  const refreshLiveStatus = useCallback(() => {
+    void (async () => {
+      try {
+        const res = await fetch('/api/live/status')
+        if (!res.ok) throw new Error(String(res.status))
+        const st = await res.json() as LiveStatus
+        setServerLive({ active: st.active === true, boardName: st.board_name ?? null })
+      } catch {
+        // No status endpoint (older server): leave unknown rather than lying.
+        setServerLive(null)
+      }
+    })()
+  }, [])
+  useEffect(() => {
+    refreshLiveStatus()
+    const onFocus = () => refreshLiveStatus()
+    window.addEventListener('focus', onFocus)
+    const t = setInterval(() => {
+      if (!document.hidden) refreshLiveStatus()
+    }, 15000)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      clearInterval(t)
+    }
+  }, [refreshLiveStatus])
 
   // One floating selection at a time: a net click clears the part selection
   // and vice versa.
@@ -259,33 +316,9 @@ export function useBoardSession(opts: {
     }
   }, [analyze, beginRun, busy])
 
-  // Launch (or reconnect to) the live sim for the current report's board.
-  // Server-side session, one at a time: launching over a running session for
-  // a DIFFERENT board asks first, then replaces it. Every path resolves the
-  // phase; never a spinner forever.
-  const launchLive = useCallback(async (onReady: () => void) => {
-    const board = lastBoardFile.current
-    // Preloaded (`run --serve`) report with no re-upload: the session is
-    // already running; just expand into it. Same when this exact upload was
-    // already launched.
-    if (!board) {
-      if (sessionPreloaded) onReady()
-      return
-    }
-    if (liveBoard === board.name) {
-      onReady()
-      return
-    }
-    try {
-      const st = await fetch('/api/live/status').then(r => r.json()) as { active?: boolean; board_name?: string }
-      if (st.active && !window.confirm(
-        `A live session for "${st.board_name}" is running. Replace it with "${board.name}"?`,
-      )) {
-        return
-      }
-    } catch {
-      // Status unavailable: proceed; the launch itself is authoritative.
-    }
+  // The actual POST to /api/live/launch (no questions asked). Every path
+  // resolves the phase; never a spinner forever.
+  const performLaunch = useCallback(async (board: File, onReady: () => void) => {
     setLaunch({ phase: 'launching' })
     try {
       const fd = new FormData()
@@ -301,12 +334,82 @@ export function useBoardSession(opts: {
       }
       if (!parsed.ok) throw new Error(parsed.error || 'the live launch failed')
       setLiveBoard(parsed.board_name ?? board.name)
+      setServerLive({ active: true, boardName: parsed.board_name ?? board.name })
       setLaunch({ phase: 'idle' })
       onReady()
     } catch (e) {
       setLaunch({ phase: 'error', error: e instanceof Error ? e.message : String(e) })
     }
-  }, [firmwareFile, liveBoard, sessionPreloaded])
+  }, [firmwareFile])
+
+  // A launch waiting on the in-app replace confirmation.
+  const pendingReady = useRef<(() => void) | null>(null)
+
+  // Launch (or reconnect to) the live sim for the current report's board.
+  // Server-side session, one at a time. Launching over a session THIS page
+  // did not start for this board (another board, a stale tab, a pre-reload
+  // launch) surfaces an in-app confirm instead of silently doing nothing:
+  // window.confirm was auto-dismissed by automation drivers, which made the
+  // whole live surface a dead click on the second board.
+  const launchLive = useCallback(async (onReady: () => void) => {
+    const board = lastBoardFile.current
+    // Preloaded (`run --serve`) report with no re-upload: the session is
+    // already running; just expand into it. Same when this exact upload was
+    // already launched.
+    if (!board) {
+      if (sessionPreloaded) onReady()
+      return
+    }
+    if (liveBoard === board.name) {
+      onReady()
+      return
+    }
+    try {
+      const st = await fetch('/api/live/status').then(r => r.json()) as LiveStatus
+      if (st.active) {
+        setServerLive({ active: true, boardName: st.board_name ?? null })
+        pendingReady.current = onReady
+        setLaunch({
+          phase: 'confirm',
+          activeBoard: st.board_name ?? 'another board',
+          targetBoard: board.name,
+        })
+        return
+      }
+      setServerLive({ active: false, boardName: null })
+    } catch {
+      // Status unavailable: proceed; the launch itself is authoritative.
+    }
+    await performLaunch(board, onReady)
+  }, [liveBoard, performLaunch, sessionPreloaded])
+
+  const confirmReplace = useCallback(() => {
+    const board = lastBoardFile.current
+    const onReady = pendingReady.current
+    pendingReady.current = null
+    if (!board) {
+      setLaunch({ phase: 'idle' })
+      return
+    }
+    void performLaunch(board, onReady ?? (() => {}))
+  }, [performLaunch])
+
+  const cancelLaunch = useCallback(() => {
+    pendingReady.current = null
+    setLaunch({ phase: 'idle' })
+  }, [])
+
+  // Replace the running session with the current board WITHOUT asking again:
+  // used by affordances whose label already states the replacement ("Relaunch
+  // with this board" on the sim's wrong-board banner).
+  const forceLaunch = useCallback((onReady: () => void) => {
+    const board = lastBoardFile.current
+    if (!board) {
+      if (sessionPreloaded) onReady()
+      return
+    }
+    void performLaunch(board, onReady)
+  }, [performLaunch, sessionPreloaded])
 
   // What the live affordance is for THIS board:
   //  - 'connected': the session on /ws is this board; the action reconnects.
@@ -338,6 +441,11 @@ export function useBoardSession(opts: {
     analyzedAt,
     launch,
     liveMode,
+    serverLive,
+    refreshLiveStatus,
+    confirmReplace,
+    cancelLaunch,
+    forceLaunch,
     selectedNet,
     selectedComponent,
     setSelectedNet: selectNet,

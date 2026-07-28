@@ -668,6 +668,31 @@ impl Scheduler {
             ..
         } = bound;
 
+        // Supply-rail absolute-maximum watches, built BEFORE the bindings are
+        // consumed into live cores. An MCU/logic package has no whole-device
+        // stress meta (its per-pin currents are covered by pin-driver metas),
+        // so without these a rail driven far past the chip's abs-max Vcc
+        // raised no fault at all while the model DB carried the rating. One
+        // watch per distinct supply node per part; direct-supply roles only
+        // (vin feeds a module's onboard regulator, its ceiling is different).
+        let mut supply_watches = Vec::new();
+        for binding in &mcus {
+            if let Some(max_v) = binding.max_supply_v {
+                let mut seen_nodes = std::collections::HashSet::new();
+                for (role, &node) in &binding.role_nets {
+                    let direct_supply =
+                        matches!(role.as_str(), "vcc" | "avcc" | "vdd" | "vdda" | "5v");
+                    if direct_supply && !node.is_ground() && seen_nodes.insert(node) {
+                        supply_watches.push(crate::stress::SupplyWatch {
+                            reference: binding.reference.clone(),
+                            node,
+                            max_v,
+                        });
+                    }
+                }
+            }
+        }
+
         let mut live = Vec::new();
         let mut substitutions = Vec::new();
         for binding in mcus {
@@ -731,7 +756,11 @@ impl Scheduler {
             layout,
             supplies,
             behavioral,
-            stress: StressMonitor::new(device_meta),
+            stress: {
+                let mut stress = StressMonitor::new(device_meta);
+                stress.set_supply_watches(supply_watches);
+                stress
+            },
             faults_pending: Vec::new(),
             chunk_s: DEFAULT_CHUNK_S,
             opts,
@@ -4018,6 +4047,7 @@ mod tests {
             adc_nets,
             adc_pin,
             module: true,
+            max_supply_v: None,
         };
         // ch0's own driver is DISABLED: not promoted, even though a neighbour on
         // the same net IS enabled (a net-keyed check would wrongly say promoted).
@@ -4623,6 +4653,7 @@ mod tests {
             adc_nets: HashMap::new(),
             adc_pin: HashMap::new(),
             module: false,
+            max_supply_v: None,
         };
         let digital_ins = Arc::new(Mutex::new(Vec::new()));
         let core = RecordingCore {
@@ -4720,6 +4751,7 @@ mod tests {
                 adc_nets: HashMap::new(),
                 adc_pin: HashMap::new(),
                 module: false,
+                max_supply_v: None,
             };
             let core = RecordingCore {
                 digital_ins: Arc::new(Mutex::new(Vec::new())),
@@ -4797,6 +4829,7 @@ mod tests {
                 adc_nets: HashMap::new(),
                 adc_pin: HashMap::new(),
                 module: false,
+                max_supply_v: None,
             };
             let core = RecordingCore {
                 digital_ins: Arc::new(Mutex::new(Vec::new())),
@@ -4916,6 +4949,7 @@ mod tests {
             adc_nets: HashMap::new(),
             adc_pin: HashMap::new(),
             module: false,
+            max_supply_v: None,
         };
         let core = CapturingCore::default();
         let handles = CapturingCore {
@@ -4981,6 +5015,7 @@ mod tests {
             adc_nets: HashMap::new(),
             adc_pin: HashMap::new(),
             module: false,
+            max_supply_v: None,
         };
         sched
             .mcus
@@ -5077,6 +5112,7 @@ mod tests {
             adc_nets,
             adc_pin: HashMap::new(),
             module: false,
+            max_supply_v: None,
         };
         sched
             .mcus
@@ -5205,6 +5241,7 @@ mod tests {
             adc_nets: HashMap::new(),
             adc_pin: HashMap::new(),
             module: false,
+            max_supply_v: None,
         };
         sched
             .mcus
@@ -5492,6 +5529,7 @@ mod tests {
             adc_nets: HashMap::new(),
             adc_pin: HashMap::new(),
             module: false,
+            max_supply_v: None,
         };
         sched.mcus.push(core_with_hooks(Box::new(core), binding));
         sched.responder_registries.push(None);
@@ -5561,6 +5599,7 @@ mod tests {
             adc_nets: HashMap::new(),
             adc_pin: HashMap::new(),
             module: false,
+            max_supply_v: None,
         };
 
         assert!(
@@ -5935,6 +5974,7 @@ mod pulse_and_contention_tests {
             adc_nets: HashMap::new(),
             adc_pin: HashMap::new(),
             module: false,
+            max_supply_v: None,
         };
         sched
             .mcus
@@ -6111,6 +6151,7 @@ mod pulse_and_contention_tests {
             adc_nets: HashMap::new(),
             adc_pin: HashMap::new(),
             module: false,
+            max_supply_v: None,
         };
         sched
             .mcus

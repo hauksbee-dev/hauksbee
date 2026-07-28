@@ -149,7 +149,8 @@ export function Sidebar({
             {report.board_name || boardLabel || report.file_name}
           </div>
           <div className="text-[11px] mt-0.5 tnum" style={{ color: 'var(--silk-faint)' }}>
-            {report.num_components} parts · {report.num_nets} nets
+            {report.num_components} {report.num_components === 1 ? 'part' : 'parts'} ·{' '}
+            {report.num_nets} {report.num_nets === 1 ? 'net' : 'nets'}
           </div>
           {analyzedAt && (
             <div className="text-[10px] mt-0.5" style={{ color: 'var(--silk-faint)' }}>

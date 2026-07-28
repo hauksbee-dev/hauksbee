@@ -9,6 +9,11 @@ export interface WebFinding {
   what: string
   why: string
   fix: string
+  /** Board location (mm, layout space, same space as WebComponent x/y) when
+   *  the finding points at one physical spot (a DRC short, the tightest
+   *  clearance gap). Drives the "show on board" affordance. */
+  x?: number
+  y?: number
 }
 
 /** An actionable heads-up note, glossed with the same what/why/what-to-do shape
@@ -110,8 +115,16 @@ export interface WebSupply {
  *  (`POST /api/live/launch`); absent on older/non-live deployments, where the
  *  report falls back to the CLI hint. */
 export type Startup =
-  | { preloaded: false; live?: boolean }
-  | { preloaded: true; board_name: string; report: WebReport | null; live?: boolean }
+  | { preloaded: false; live?: boolean; version?: string }
+  | { preloaded: true; board_name: string; report: WebReport | null; live?: boolean; version?: string }
+
+/** What `GET /api/live/status` returns: whether (and for which board) a live
+ *  session is running server-side. The server holds ONE session globally, so
+ *  this is the truth the client binds its live affordances to. */
+export interface LiveStatus {
+  active: boolean
+  board_name?: string
+}
 
 /** What `POST /api/live/launch` returns. */
 export interface LiveLaunchResponse {

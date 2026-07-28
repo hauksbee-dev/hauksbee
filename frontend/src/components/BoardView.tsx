@@ -86,10 +86,45 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
           >
             {r.error || 'Could not read the file.'}
           </div>
+          {/* The dead end must not be dead: offer the retry inline instead of
+              sending the user hunting for the header button. */}
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <label
+              htmlFor="board-file"
+              data-testid="try-another-file"
+              role="button"
+              tabIndex={0}
+              onKeyDown={e => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault()
+                  document.getElementById('board-file')?.click()
+                }
+              }}
+              className="hb-btn-primary hb-press inline-flex items-center px-3.5 text-[13px] cursor-pointer"
+              style={{ height: 32 }}
+            >
+              Try another file
+            </label>
+            <span className="text-[12px]" style={{ color: 'var(--silk-dim)' }}>
+              accepted: KiCad, Eagle, Altium, IPC-D-356, gerber zip, .board
+            </span>
+          </div>
         </div>
       </div>
     )
   }
+
+  // "Show on board": pan/zoom the map to a finding's board location and drop
+  // a labeled marker there. Only wired when the real renderer is drawing
+  // (the dot map has no camera to move).
+  const [focusPoint, setFocusPoint] = useState<{ x: number; y: number; label: string; seq: number } | null>(null)
+  const focusSeq = useRef(0)
+  const mapRef = useRef<HTMLDivElement>(null)
+  const locate = useCallback((x: number, y: number, label: string) => {
+    focusSeq.current += 1
+    setFocusPoint({ x, y, label, seq: focusSeq.current })
+    mapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [])
 
   const bindOpen = !!(r.bind?.active_path_unresolved?.length)
   const hasHeadsUp = (r.sections || []).some(s => s.heads_up?.length)
@@ -134,7 +169,9 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
         >
           {r.headline}
           <div className="text-xs mt-1.5 tnum" style={{ color: 'var(--silk-dim)' }}>
-            {(r.board_name || r.file_name)} · {r.num_components} parts · {r.num_nets} nets
+            {(r.board_name || r.file_name)} · {r.num_components}{' '}
+            {r.num_components === 1 ? 'part' : 'parts'} · {r.num_nets}{' '}
+            {r.num_nets === 1 ? 'net' : 'nets'}
           </div>
         </div>
 
@@ -190,6 +227,7 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
         {boardUrl ? (
           <section className="mt-6">
             <div
+              ref={mapRef}
               className="rounded-xl overflow-hidden"
               style={{
                 height: 'clamp(420px, 52vh, 620px)',
@@ -203,6 +241,7 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
                 frame={null}
                 selectedNet={selectedNet}
                 netOptions={r.nets}
+                focusPoint={focusPoint}
                 onNetClick={setSelectedNet}
                 onFootprintClick={fp => setSelectedComponent({
                   ref: fp.ref, value: fp.value, lib_id: fp.lib_id,
@@ -239,7 +278,9 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
         ) : null}
 
         {/* Check sections */}
-        {r.sections.map((s, i) => <SectionBlock key={i} section={s} />)}
+        {r.sections.map((s, i) => (
+          <SectionBlock key={i} section={s} onLocate={boardUrl ? locate : undefined} />
+        ))}
 
         {/* Firmware co-sim */}
         {r.cosim && (
@@ -264,13 +305,17 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
 }
 
 /** A run of findings that share level + why + fix (same-shaped): the DRC
- *  clearance case where 128 warnings differ only in which net-pair/location. */
+ *  clearance case where 128 warnings differ only in which net-pair/location.
+ *  Each item keeps its own `what` AND its own board location (if any). */
 interface FindingGroup {
   level: string
   why: string
   fix: string
-  whats: string[]
+  items: { what: string; x?: number; y?: number }[]
 }
+
+/** Pan-the-map callback for findings that carry board coordinates. */
+type LocateFn = (x: number, y: number, label: string) => void
 
 /** Collapse same-shaped findings so the shared explanation is shown ONCE.
  *  Order-independent: any findings with identical level/why/fix merge, no
@@ -279,14 +324,15 @@ interface FindingGroup {
 function groupFindings(findings: WebFinding[]): FindingGroup[] {
   const groups: FindingGroup[] = []
   for (const f of findings) {
+    const item = { what: f.what, x: f.x, y: f.y }
     const g = groups.find(x => x.level === f.level && x.why === f.why && x.fix === f.fix)
-    if (g) g.whats.push(f.what)
-    else groups.push({ level: f.level, why: f.why, fix: f.fix, whats: [f.what] })
+    if (g) g.items.push(item)
+    else groups.push({ level: f.level, why: f.why, fix: f.fix, items: [item] })
   }
   return groups
 }
 
-function SectionBlock({ section: s }: { section: WebSection }) {
+function SectionBlock({ section: s, onLocate }: { section: WebSection; onLocate?: LocateFn }) {
   const groups = groupFindings(s.findings)
   return (
     <section className="mt-7">
@@ -295,9 +341,15 @@ function SectionBlock({ section: s }: { section: WebSection }) {
       </h2>
       <div className="text-sm mb-2" style={{ color: 'var(--silk-dim)' }}>{s.verdict}</div>
       {groups.map((g, i) =>
-        g.whats.length === 1
-          ? <FindingCard key={i} finding={{ level: g.level, what: g.whats[0], why: g.why, fix: g.fix }} />
-          : <GroupedFindingCard key={i} group={g} />
+        g.items.length === 1
+          ? (
+            <FindingCard
+              key={i}
+              finding={{ level: g.level, what: g.items[0].what, why: g.why, fix: g.fix, x: g.items[0].x, y: g.items[0].y }}
+              onLocate={onLocate}
+            />
+          )
+          : <GroupedFindingCard key={i} group={g} onLocate={onLocate} />
       )}
       {(s.heads_up || []).map((h, i) => <HeadsUpCard key={i} note={h} />)}
     </section>
@@ -331,10 +383,10 @@ function HeadsUpCard({ note: h }: { note: WebHeadsUp }) {
 // A collapsed group of same-shaped findings: the shared level + explanation are
 // shown once, and the individual items live inside an expandable list so a long
 // run (e.g. 128 clearance warnings) never walls the page, yet hides nothing.
-function GroupedFindingCard({ group: g }: { group: FindingGroup }) {
+function GroupedFindingCard({ group: g, onLocate }: { group: FindingGroup; onLocate?: LocateFn }) {
   const accent = LEVEL_ACCENT[g.level] ?? 'var(--note-accent)'
   const tagColor = LEVEL_TEXT[g.level] ?? 'var(--note)'
-  const n = g.whats.length
+  const n = g.items.length
   return (
     <div
       data-testid="grouped-finding"
@@ -352,7 +404,22 @@ function GroupedFindingCard({ group: g }: { group: FindingGroup }) {
           Show all {n}
         </summary>
         <ul className="mt-1.5 pl-4 text-sm" style={{ color: 'var(--silk)', listStyleType: 'disc' }}>
-          {g.whats.map((w, i) => <li key={i} className="my-0.5">{w}</li>)}
+          {g.items.map((it, i) => (
+            <li key={i} className="my-0.5">
+              {it.what}
+              {onLocate && it.x !== undefined && it.y !== undefined && (
+                <button
+                  type="button"
+                  data-testid="finding-locate"
+                  onClick={() => onLocate(it.x!, it.y!, it.what)}
+                  className="hb-press ml-2 cursor-pointer text-[11px]"
+                  style={{ background: 'none', border: 'none', padding: 0, color: 'var(--copper-hi)', textDecoration: 'underline', textDecorationColor: 'var(--copper-deep)' }}
+                >
+                  show on board
+                </button>
+              )}
+            </li>
+          ))}
         </ul>
       </details>
       {g.why && (
@@ -369,17 +436,35 @@ function GroupedFindingCard({ group: g }: { group: FindingGroup }) {
   )
 }
 
-function FindingCard({ finding: f }: { finding: WebFinding }) {
+function FindingCard({ finding: f, onLocate }: { finding: WebFinding; onLocate?: LocateFn }) {
   const accent = LEVEL_ACCENT[f.level] ?? 'var(--note-accent)'
   const tagColor = LEVEL_TEXT[f.level] ?? 'var(--note)'
+  const locatable = onLocate !== undefined && f.x !== undefined && f.y !== undefined
+  const locate = locatable ? () => onLocate!(f.x!, f.y!, f.what) : undefined
   return (
     <div
+      data-testid="finding-card"
+      onClick={locate}
       className="rounded-lg px-4 py-3 mb-2"
-      style={{ border: '1px solid var(--hairline)', borderLeft: `4px solid ${accent}`, background: 'var(--surface)' }}
+      style={{
+        border: '1px solid var(--hairline)', borderLeft: `4px solid ${accent}`,
+        background: 'var(--surface)', cursor: locatable ? 'pointer' : undefined,
+      }}
     >
       <span className="text-[10px] font-bold tracking-widest uppercase" style={{ color: tagColor }}>
         {f.level}
       </span>
+      {locatable && (
+        <button
+          type="button"
+          data-testid="finding-locate"
+          onClick={e => { e.stopPropagation(); locate!() }}
+          className="hb-press ml-2 cursor-pointer text-[11px]"
+          style={{ background: 'none', border: 'none', padding: 0, color: 'var(--copper-hi)', textDecoration: 'underline', textDecorationColor: 'var(--copper-deep)' }}
+        >
+          show on board
+        </button>
+      )}
       <div className="font-semibold text-sm mt-1 mb-1.5">{f.what}</div>
       <div className="text-sm my-0.5">
         <b style={{ color: 'var(--silk-dim)', fontWeight: 600 }}>Why it matters:</b> {f.why}

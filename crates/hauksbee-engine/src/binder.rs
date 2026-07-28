@@ -64,6 +64,12 @@ pub struct McuBinding {
     pub adc_pin: HashMap<u8, (char, u8)>,
     /// Whether this is a module wrapper (Arduino_Nano) using header pad names.
     pub module: bool,
+    /// Absolute-maximum supply voltage (V) from the model's ratings
+    /// (`max_voltage_v`), when the model carries one. The scheduler turns this
+    /// plus the vcc/vdd `role_nets` entries into supply-rail stress watches, so
+    /// a rail driven past the chip's abs-max Vcc raises an overvoltage fault
+    /// instead of nothing.
+    pub max_supply_v: Option<f64>,
 }
 
 /// One MCP4728 quad DAC discovered on the board. Carries the assigned 7-bit
@@ -3062,6 +3068,7 @@ fn bind_mcu(
         adc_nets,
         adc_pin,
         module,
+        max_supply_v: model.ratings.max_voltage_v,
     });
     log_mcu_auto_decision(comp, model, derived_when_empty.as_ref())
 }

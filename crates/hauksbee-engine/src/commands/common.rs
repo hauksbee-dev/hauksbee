@@ -131,7 +131,15 @@ pub fn serve(
     use std::sync::Arc;
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async move {
-        let server = Server::new(Box::new(engine));
+        // Name the preloaded session by its board FILE name (the board_file
+        // route is "/boards/<file>"): layout files often carry no board name,
+        // and an unnamed session breaks the web app's session-identity
+        // surfaces (`/api/live/status`, the wrong-board banner).
+        let session_name = board_file
+            .as_ref()
+            .and_then(|(url, _)| url.rsplit('/').next())
+            .map(|s| s.to_string());
+        let server = Server::new_named(Box::new(engine), session_name);
         // Resolve the web app via the ladder (HAUKSBEE_WEB_DIST override ->
         // checkout dist -> embedded copy), so an installed release binary shows
         // the live viewer too, not just a source checkout.
