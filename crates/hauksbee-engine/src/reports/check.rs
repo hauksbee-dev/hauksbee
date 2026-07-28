@@ -105,7 +105,9 @@ pub fn emit(
     // Unvalidated board format (KiCad 10+) → its shorts may be phantom; do not
     // fail the gate on them (the caveat is still printed above).
     let drc_gates = drc.version_warning.is_none() && drc.short_count() > 0;
-    if strict && (drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious) {
+    let would_gate = drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious;
+    super::note_ungated_findings(strict, would_gate);
+    if strict && would_gate {
         std::process::exit(2);
     }
     Ok(())
@@ -156,7 +158,9 @@ pub fn emit_combined_json(
     // text path does (it silently exited 0 before). Mirror emit()'s gate.
     let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
     let drc_gates = drc.version_warning.is_none() && drc.short_count() > 0;
-    if strict && (drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious) {
+    let would_gate = drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious;
+    super::note_ungated_findings(strict, would_gate);
+    if strict && would_gate {
         std::process::exit(2);
     }
     Ok(())

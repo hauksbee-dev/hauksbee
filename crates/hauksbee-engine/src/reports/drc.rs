@@ -69,7 +69,9 @@ pub fn emit(
     // Strict: any true short fails the gate (clearance-only does not). An
     // unvalidated board format (KiCad 10+) yields possibly-phantom shorts, so it
     // does not gate (the printed caveat tells the user to cross-check).
-    if strict && report.version_warning.is_none() && report.short_count() > 0 {
+    let would_gate = report.version_warning.is_none() && report.short_count() > 0;
+    super::note_ungated_findings(strict, would_gate);
+    if strict && would_gate {
         std::process::exit(2);
     }
     Ok(())

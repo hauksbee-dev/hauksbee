@@ -729,6 +729,38 @@ only handles the spec path and the binary does the rest.
 - **Any CI**: call `hauksbee-ci run spec.toml --junit results.xml` and consume
   the exit code and the JUnit file.
 
+## Exit codes (the pipeline contract)
+
+Two commands gate, with two deliberately different contracts:
+
+`hauksbee-ci run <spec.toml>` is the gate for specs (assertions):
+
+| exit | meaning |
+|---|---|
+| 0 | every assertion held (GREEN) |
+| 1 | at least one assertion failed (RED) |
+| 2 | spec / board error (desynced spec, missing board, bad TOML) |
+| 3 | invalid for analysis: the analog solve aborted, so the result is not trustworthy and the run refuses to pretend |
+
+`hauksbee run <board>` static reports (`--lint`, `--drc`, `--si`, `--usb-c`,
+`--check`, bare `--json`) are **report commands: they exit 0 even when they
+print a serious finding**, unless you pass `--strict` (alias
+`--fail-on-findings`). Gating a pipeline on `hauksbee run` without `--strict`
+gates on nothing; when a gate-grade finding is printed without `--strict`, the
+CLI says so on stderr.
+
+| exit | meaning |
+|---|---|
+| 0 | clean, or a report-only run without `--strict` |
+| 2 | gate-grade findings, under `--strict` (or `--strict-boot` for the boot-safety advisory; co-sim stress faults also gate under `--strict`) |
+| 3 | invalid for analysis (aborted analog solve, zero-activity co-sim under `--strict`, thermal table with no usable coverage) |
+
+What `--strict` gates on, per report: `--drc` true copper shorts (clearance
+notes never gate); `--lint` high/medium findings; `--si` any real finding;
+`--usb-c` a serious CC verdict; `--check` / bare `--json` the union of these.
+On a board format newer than the validated range (KiCad 10+), possibly-phantom
+shorts do not gate; the printed caveat says to cross-check.
+
 ## Limitations
 
 - The MCU co-sim runs on three backends, each co-simming its own cores (no

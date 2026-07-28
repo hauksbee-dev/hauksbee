@@ -26,10 +26,15 @@
 
 ## Layer 1: Static analysis (`hauksbee run <board>`)
 
-All flags below print a report and exit 0. Add `--strict` to fail on real
-defects (exits 2), or `--plain` (`--explain`) to rewrite findings as
-plain-language what / why / what-to-do. They compose: `--drc --plain --strict`
-gives a human-readable DRC gate.
+All flags below print a report and exit 0, even on a serious finding; that is
+the report contract, and the CLI prints a stderr note whenever a gate-grade
+finding goes ungated. Add `--strict` to fail on real defects (exits 2), or
+`--plain` (`--explain`) to rewrite findings as plain-language what / why /
+what-to-do. They compose: `--drc --plain --strict` gives a human-readable DRC
+gate. Exit 3 means invalid-for-analysis (the run refuses to vouch for its own
+result, e.g. an aborted analog solve). The full exit-code contract, including
+`hauksbee-ci run` (0 green / 1 red / 2 spec error / 3 invalid), is in
+[docs/ci/CI.md](../ci/CI.md#exit-codes-the-pipeline-contract).
 
 ### `--report`
 
