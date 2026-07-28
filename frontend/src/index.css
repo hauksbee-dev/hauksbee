@@ -3,53 +3,118 @@
    models hang the oxide scanner) and other non-source trees. */
 @source not "../public";
 
-:root {
-  --bg-primary: #020617;
-  --bg-secondary: #0a0f1e;
-  --bg-panel: #0f172a;
-  --border: #1e293b;
-  --border-dim: #0f172a;
-  --text-primary: #e2e8f0;
-  --text-secondary: #94a3b8;
-  --text-dim: #475569;
-  --accent-blue: #3b82f6;
-  --accent-green: #22c55e;
-  --accent-red: #ef4444;
-  --accent-yellow: #eab308;
-  --copper-front: #c84040;
-  --copper-back: #4080c8;
-  --pad-gold: #c8a040;
-  --edge-yellow: #e8c040;
+/* ────────────────────────────────────────────────────────────────────────────
+   Theme tokens. Dark navy + copper is the identity and the default; light is
+   a real maintained theme, not an inversion filter. Every surface, text and
+   status colour in the app goes through these variables so both themes stay
+   coherent everywhere. Instrument surfaces (the board render, the scope, the
+   serial scrollback) intentionally stay dark in BOTH themes: they are screens
+   inside the tool, and the copper/phosphor palettes are tuned for dark.
+   ──────────────────────────────────────────────────────────────────────────── */
 
-  /* Brand signature: copper is what hauksbee reads off the board, so it is the
-     one bold accent. `live` green is functional (a running/pass state) only. */
-  --void: #060a10;
-  --void-2: #0a1019;
-  --void-3: #0e1622;
-  --copper: #e08a4e;
-  --copper-hi: #ffb072;
-  --copper-deep: #a65f34;
-  --live: #57e0a0;
+:root {
+  color-scheme: dark;
+
+  /* Chrome */
+  --canvas: #0a0c10;          /* app background            */
+  --surface: #14171d;         /* cards, panels             */
+  --surface-2: #191d24;       /* raised card tops, inputs  */
+  --surface-3: #10131a;       /* inset wells               */
+  --hairline: #232936;        /* card borders              */
+  --rule: #1b2735;            /* inner dividers            */
+
+  /* Text */
   --silk: #eef2f6;
   --silk-dim: #93a1b3;
   --silk-faint: #5f6c7d;
-  --rule: #1b2735;
 
-  /* Landing surfaces: a calm near-black canvas with one elevated card, so the
-     upload action is the single focal point (the SaaS "one clear thing to do").
-     Clean system sans for prose; mono only for the wordmark, format chips and
-     CLI — that pairing is what reads as a tool, not a terminal toy. */
-  --canvas: #0a0c10;
-  --surface: #14171d;
-  --surface-2: #191d24;
-  --hairline: #232936;
+  /* Brand: copper is the one bold accent (what hauksbee reads off a board).
+     Live green is functional only (running / pass states). */
+  --copper: #e08a4e;
+  --copper-hi: #ffb072;
+  --copper-deep: #a65f34;
+  --copper-tint: rgba(224, 138, 78, 0.10);
+  --copper-tint-strong: rgba(224, 138, 78, 0.16);
+  --copper-glow: rgba(224, 138, 78, 0.28);
+  --on-copper: #2a1c0f;       /* text on a copper-filled button */
+
+  /* Status */
+  --ok: #57e0a0;
+  --ok-bg: rgba(87, 224, 160, 0.08);
+  --ok-border: #2f7d5b;
+  --err: #f87171;
+  --err-strong: #fca5a5;
+  --err-bg: rgba(239, 68, 68, 0.08);
+  --err-border: #7f1d1d;
+  --warn: #fbbf24;
+  --warn-strong: #fde047;
+  --warn-bg: rgba(202, 138, 4, 0.08);
+  --warn-border: #713f12;
+  --note: #94a3b8;
+  --note-accent: #475569;
+
+  /* Instrument surfaces: dark in both themes (screens inside the tool). */
+  --instrument: #050d1a;
+  --instrument-edge: #1b2735;
+
+  --input-bg: #0f131a;
+  --code-bg: #0d1118;
+
+  --shadow-card: 0 1px 0 rgba(255, 255, 255, 0.03) inset, 0 12px 32px -18px rgba(0, 0, 0, 0.65);
+  --shadow-pop: 0 1px 0 rgba(255, 255, 255, 0.04) inset, 0 18px 44px -16px rgba(0, 0, 0, 0.75);
+  --focus-ring: 0 0 0 2px var(--canvas), 0 0 0 4px var(--copper-deep);
+  --image-outline: rgba(255, 255, 255, 0.1);
+
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Inter, Roboto, system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', 'SF Mono', ui-monospace, 'Fira Code', monospace;
 }
 
-* {
-  box-sizing: border-box;
+:root[data-theme='light'] {
+  color-scheme: light;
+
+  --canvas: #f3f1ec;
+  --surface: #ffffff;
+  --surface-2: #faf8f4;
+  --surface-3: #efece6;
+  --hairline: #e0dbd2;
+  --rule: #e7e2d9;
+
+  --silk: #1c2431;
+  --silk-dim: #57626f;
+  --silk-faint: #8a93a0;
+
+  --copper: #b35f24;
+  --copper-hi: #9a4e1a;
+  --copper-deep: #c8834e;
+  --copper-tint: rgba(179, 95, 36, 0.08);
+  --copper-tint-strong: rgba(179, 95, 36, 0.14);
+  --copper-glow: rgba(179, 95, 36, 0.22);
+  --on-copper: #fff7ef;
+
+  --ok: #0e8a5f;
+  --ok-bg: rgba(14, 138, 95, 0.08);
+  --ok-border: #9ed3bc;
+  --err: #b3352c;
+  --err-strong: #9c2921;
+  --err-bg: rgba(179, 53, 44, 0.07);
+  --err-border: #e2b7b3;
+  --warn: #96690e;
+  --warn-strong: #7c560a;
+  --warn-bg: rgba(150, 105, 14, 0.08);
+  --warn-border: #e0cba0;
+  --note: #57626f;
+  --note-accent: #9aa4b1;
+
+  --input-bg: #ffffff;
+  --code-bg: #f6f4ef;
+
+  --shadow-card: 0 1px 2px rgba(28, 36, 49, 0.05), 0 10px 28px -18px rgba(28, 36, 49, 0.22);
+  --shadow-pop: 0 2px 4px rgba(28, 36, 49, 0.06), 0 18px 44px -16px rgba(28, 36, 49, 0.28);
+  --focus-ring: 0 0 0 2px var(--canvas), 0 0 0 4px var(--copper);
+  --image-outline: rgba(0, 0, 0, 0.1);
 }
+
+* { box-sizing: border-box; }
 
 html, body, #root {
   margin: 0;
@@ -57,77 +122,222 @@ html, body, #root {
   width: 100%;
   height: 100%;
   overflow: hidden;
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  font-family: var(--font-mono);
+  background: var(--canvas);
+  color: var(--silk);
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-::-webkit-scrollbar { width: 5px; height: 5px; }
-::-webkit-scrollbar-track { background: var(--bg-secondary); }
-::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #334155; }
+h1, h2, h3 { text-wrap: balance; }
+p { text-wrap: pretty; }
+
+/* Dynamic readouts must not shimmy as digits change. */
+.tnum { font-variant-numeric: tabular-nums; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--hairline); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: var(--silk-faint); }
 
 select option {
-  background: #1e293b;
-  color: #cbd5e1;
+  background: var(--surface-2);
+  color: var(--silk);
 }
 
-/* Tab hover glow */
-.sidebar-tab-btn:hover {
-  color: #64748b !important;
-  background: rgba(224,138,78,0.05) !important;
+/* Focus is always visible, never a default blue outline. */
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+  border-radius: 6px;
 }
 
-/* Running pulse animation */
-@keyframes runpulse {
-  0%, 100% { opacity: 1; box-shadow: 0 0 4px #22c55e80; }
-  50% { opacity: 0.7; box-shadow: 0 0 8px #22c55ecc; }
+/* ── Interactive primitives ─────────────────────────────────────────────── */
+
+/* Every button-ish element: interruptible transitions on exactly the
+   properties that change, plus tactile press. */
+.hb-press {
+  transition-property: transform, background-color, border-color, color, box-shadow, opacity;
+  transition-duration: 0.15s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+.hb-press:active:not(:disabled) { transform: scale(0.96); }
+.hb-press:disabled { cursor: not-allowed; }
+
+/* Quiet secondary button */
+.hb-btn {
+  border: 1px solid var(--hairline);
+  background: var(--surface-2);
+  color: var(--silk-dim);
+  border-radius: 8px;
+  cursor: pointer;
+  font-family: var(--font-sans);
+}
+.hb-btn:hover:not(:disabled) { border-color: var(--silk-faint); color: var(--silk); }
+
+/* Copper primary button */
+.hb-btn-primary {
+  border: none;
+  background: linear-gradient(180deg, var(--copper-hi), var(--copper));
+  color: var(--on-copper);
+  border-radius: 8px;
+  cursor: pointer;
+  font-weight: 600;
+  box-shadow: 0 6px 18px -6px var(--copper-glow);
+}
+:root[data-theme='light'] .hb-btn-primary {
+  background: linear-gradient(180deg, var(--copper), #9a4e1a);
+}
+.hb-btn-primary:hover:not(:disabled) { filter: brightness(1.06); }
+.hb-btn-primary:disabled { opacity: 0.5; }
+
+/* Copper-tinted offer chip (the click-to-assert language) */
+.hb-chip {
+  background: var(--copper-tint);
+  border: 1px solid var(--copper-deep);
+  color: var(--copper-hi);
+  border-radius: 8px;
+  cursor: pointer;
+}
+.hb-chip:hover:not(:disabled) { background: var(--copper-tint-strong); }
+
+/* Card */
+.hb-card {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  box-shadow: var(--shadow-card);
 }
 
-/* ── Landing upload card ──────────────────────────────────────────────────────
-   The single focal point: one elevated, softly-shadowed card that holds the
-   drop area + primary action (CloudConvert's calm central card, dark-themed).
-   Copper ignites on hover and drag-over; no crop-marks, no busy chrome. */
+/* Inputs */
+.hb-input {
+  background: var(--input-bg);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  color: var(--silk);
+  padding: 4px 8px;
+  font-size: 13px;
+  transition-property: border-color, box-shadow;
+  transition-duration: 0.15s;
+}
+.hb-input:hover { border-color: var(--silk-faint); }
+.hb-input:focus { outline: none; border-color: var(--copper-deep); box-shadow: 0 0 0 3px var(--copper-tint); }
+.hb-input::placeholder { color: var(--silk-faint); opacity: 0.8; }
+
+/* Code / pre wells */
+.hb-code {
+  background: var(--code-bg);
+  border: 1px solid var(--hairline);
+  color: var(--silk-dim);
+  font-family: var(--font-mono);
+  border-radius: 8px;
+}
+
+code.hb-inline {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  color: var(--copper-hi);
+  background: var(--copper-tint);
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  padding: 1px 6px;
+}
+
+/* ── Sidebar nav ────────────────────────────────────────────────────────── */
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 40px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 9px;
+  background: transparent;
+  color: var(--silk-dim);
+  font-size: 13px;
+  font-family: var(--font-sans);
+  cursor: pointer;
+  text-align: left;
+  transition-property: background-color, color, transform;
+  transition-duration: 0.15s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
+}
+.nav-item:hover:not(:disabled) { background: var(--copper-tint); color: var(--silk); }
+.nav-item:active:not(:disabled) { transform: scale(0.98); }
+.nav-item[data-active='true'] {
+  background: var(--copper-tint-strong);
+  color: var(--copper-hi);
+  font-weight: 600;
+}
+.nav-item:disabled { opacity: 0.38; cursor: default; }
+
+/* Narrow windows: the rail collapses to icons so the work surface keeps its
+   width. Everything stays reachable; labels return on hover via title text. */
+@media (max-width: 1180px) {
+  .sidebar { width: 60px !important; }
+  .sidebar .sidebar-label { display: none; }
+  .sidebar .nav-item { justify-content: center; padding: 0; }
+}
+
+/* ── View transitions ───────────────────────────────────────────────────── */
+
+/* One soft rise when a view becomes active. Data surfaces inside (canvas,
+   scope) do not animate; this is on the container only. */
+@keyframes viewIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.view-enter { animation: viewIn 0.22s cubic-bezier(0.2, 0, 0, 1); }
+
+@keyframes cardIn {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+.card-stagger > * { animation: cardIn 0.24s cubic-bezier(0.2, 0, 0, 1) backwards; }
+.card-stagger > *:nth-child(1) { animation-delay: 0.02s; }
+.card-stagger > *:nth-child(2) { animation-delay: 0.07s; }
+.card-stagger > *:nth-child(3) { animation-delay: 0.12s; }
+.card-stagger > *:nth-child(4) { animation-delay: 0.17s; }
+.card-stagger > *:nth-child(5) { animation-delay: 0.22s; }
+.card-stagger > *:nth-child(n+6) { animation-delay: 0.26s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .view-enter, .card-stagger > * { animation: none; }
+  .hb-press:active:not(:disabled) { transform: none; }
+}
+
+/* ── Landing upload card ────────────────────────────────────────────────── */
+
 .drop-card {
   border-radius: 16px;
   background: linear-gradient(180deg, var(--surface-2), var(--surface));
   border: 1px solid var(--hairline);
-  box-shadow: 0 1px 0 rgba(255,255,255,0.03) inset, 0 24px 60px -24px rgba(0,0,0,0.7);
-  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+  box-shadow: var(--shadow-card);
+  transition-property: border-color, box-shadow, transform;
+  transition-duration: 0.18s;
+  transition-timing-function: cubic-bezier(0.2, 0, 0, 1);
 }
-.drop-card:hover {
-  border-color: var(--copper-deep);
-}
+.drop-card:hover { border-color: var(--copper-deep); }
 .drop-card[data-active='true'] {
   border-color: var(--copper);
-  box-shadow: 0 0 0 1px rgba(224,138,78,0.5), 0 0 48px -6px rgba(224,138,78,0.28),
-              0 24px 60px -24px rgba(0,0,0,0.7);
+  transform: scale(1.01);
+  box-shadow: 0 0 0 1px var(--copper-glow), 0 0 48px -6px var(--copper-glow), var(--shadow-pop);
 }
 
 /* The firmware jack: a quiet secondary row; its active state reads "live". */
 .fw-row {
   border-radius: 10px;
   border: 1px solid var(--hairline);
-  background: var(--void);
-  transition: border-color 0.18s ease, background 0.18s ease;
+  background: var(--surface);
+  transition-property: border-color, background-color;
+  transition-duration: 0.18s;
 }
 .fw-row:hover { border-color: var(--silk-faint); }
 .fw-row[data-active='true'] {
-  border-color: var(--live);
-  background: rgba(87,224,160,0.05);
-}
-
-/* Format chips (mono file extensions) and inline CLI code on the Landing. */
-.landing code {
-  font-family: var(--font-mono);
-  font-size: 0.86em;
-  color: var(--copper-hi);
-  background: rgba(224,138,78,0.08);
-  border: 1px solid var(--hairline);
-  border-radius: 5px;
-  padding: 1px 6px;
+  border-color: var(--ok-border);
+  background: var(--ok-bg);
 }
 
 /* Copper busy spinner (an arc that sweeps, like a probe settling). */
@@ -143,12 +353,17 @@ select option {
 @keyframes slotspin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .slot-spin { animation: none; } }
 
-/* Fault toast slide-in */
+/* Toasts */
 @keyframes slideInRight {
-  from { transform: translateX(100%); opacity: 0; }
+  from { transform: translateX(24px); opacity: 0; }
   to { transform: translateX(0); opacity: 1; }
 }
+.fault-toast { animation: slideInRight 0.25s cubic-bezier(0.2, 0, 0, 1); }
 
-.fault-toast {
-  animation: slideInRight 0.3s ease-out;
+/* Status chip pulse for running states */
+@keyframes runpulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
+.run-dot { animation: runpulse 1.4s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .run-dot { animation: none; } }

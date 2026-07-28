@@ -1,6 +1,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import type { SolverControls, ClientMessage } from '../types/protocol'
 
+// Solver controls for the sim rail's "Solver" card: ambient temperature,
+// model fidelity toggles, integration method, timestep and granularity.
+
 const DEFAULT_CONTROLS: SolverControls = {
   temperature_c: 27,
   parasitics: false,
@@ -25,24 +28,29 @@ function Toggle({ label, value, onChange, description }: {
   return (
     <div className="flex items-center justify-between py-1">
       <div>
-        <div className="text-[11px]" style={{ color: '#94a3b8' }}>{label}</div>
-        {description && <div className="text-[9px]" style={{ color: '#334155' }}>{description}</div>}
+        <div className="text-[11px]" style={{ color: 'var(--silk)' }}>{label}</div>
+        {description && <div className="text-[9px]" style={{ color: 'var(--silk-faint)' }}>{description}</div>}
       </div>
       <button
         onClick={() => onChange(!value)}
-        className="relative w-9 h-5 rounded-full transition-all"
+        role="switch"
+        aria-checked={value}
+        aria-label={label}
+        className="hb-press relative rounded-full cursor-pointer"
         style={{
-          background: value ? 'rgba(59,130,246,0.3)' : '#1e293b',
-          border: value ? '1px solid rgba(59,130,246,0.5)' : '1px solid #334155',
-          boxShadow: value ? '0 0 8px rgba(59,130,246,0.25)' : 'none',
+          width: 36, height: 20,
+          background: value ? 'var(--copper-tint-strong)' : 'var(--surface-3)',
+          border: value ? '1px solid var(--copper-deep)' : '1px solid var(--hairline)',
+          transition: 'background-color 0.15s, border-color 0.15s',
         }}
       >
         <div
-          className="absolute top-0.5 w-4 h-4 rounded-full transition-all"
+          className="absolute rounded-full"
           style={{
-            background: value ? '#3b82f6' : '#475569',
-            left: value ? 'calc(100% - 18px)' : '2px',
-            boxShadow: value ? '0 0 6px rgba(59,130,246,0.6)' : 'none',
+            top: 2, width: 14, height: 14,
+            background: value ? 'var(--copper)' : 'var(--silk-faint)',
+            left: value ? 'calc(100% - 17px)' : 2,
+            transition: 'left 0.15s cubic-bezier(0.2,0,0,1), background-color 0.15s',
           }}
         />
       </button>
@@ -67,16 +75,14 @@ export function SolverControlsPanel({ controls, send }: SolverControlsPanelProps
   }, [send])
 
   return (
-    <div className="flex flex-col gap-1 px-3 py-2">
-      <div className="text-[10px] font-bold tracking-wider mb-1" style={{ color: '#475569' }}>SOLVER CONTROLS</div>
-
+    <div className="flex flex-col gap-1 px-3 py-2.5">
       {/* Temperature */}
       <div className="py-1">
         <div className="flex items-center justify-between mb-1">
-          <span className="text-[11px]" style={{ color: '#94a3b8' }}>Temperature</span>
+          <span className="text-[11px]" style={{ color: 'var(--silk)' }}>Temperature</span>
           <span
-            className="text-[11px] font-mono"
-            style={{ color: '#60a5fa', fontFamily: "'JetBrains Mono', monospace" }}
+            className="text-[11px] tnum"
+            style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}
           >
             {local.temperature_c.toFixed(0)}°C
           </span>
@@ -88,15 +94,16 @@ export function SolverControlsPanel({ controls, send }: SolverControlsPanelProps
           step={1}
           value={local.temperature_c}
           onChange={e => update({ temperature_c: parseFloat(e.target.value) })}
+          aria-label="Ambient temperature in Celsius"
           className="w-full h-1 rounded cursor-pointer"
-          style={{ accentColor: '#3b82f6' }}
+          style={{ accentColor: 'var(--copper)' }}
         />
-        <div className="flex justify-between text-[9px] mt-0.5" style={{ color: '#334155' }}>
+        <div className="flex justify-between text-[9px] mt-0.5" style={{ color: 'var(--silk-faint)' }}>
           <span>-40°C</span><span>125°C</span>
         </div>
       </div>
 
-      <div className="w-full h-px my-1" style={{ background: '#1e293b' }} />
+      <div className="w-full h-px my-1" style={{ background: 'var(--rule)' }} />
 
       {/* Toggles */}
       <Toggle
@@ -118,22 +125,22 @@ export function SolverControlsPanel({ controls, send }: SolverControlsPanelProps
         onChange={v => update({ tolerances: v })}
       />
 
-      <div className="w-full h-px my-1" style={{ background: '#1e293b' }} />
+      <div className="w-full h-px my-1" style={{ background: 'var(--rule)' }} />
 
       {/* Integration method */}
       <div className="py-1">
-        <div className="text-[11px] mb-1" style={{ color: '#94a3b8' }}>Integration</div>
+        <div className="text-[11px] mb-1" style={{ color: 'var(--silk)' }}>Integration</div>
         <div className="flex gap-1">
           {(['trap', 'gear2'] as const).map(m => (
             <button
               key={m}
               onClick={() => update({ integration: m })}
-              className="flex-1 py-1 rounded text-[10px] font-mono transition-all"
+              className="hb-press flex-1 py-1 rounded-md text-[10px] cursor-pointer"
               style={{
-                background: local.integration === m ? 'rgba(59,130,246,0.2)' : '#0f172a',
-                border: local.integration === m ? '1px solid rgba(59,130,246,0.4)' : '1px solid #1e293b',
-                color: local.integration === m ? '#60a5fa' : '#475569',
-                fontFamily: "'JetBrains Mono', monospace",
+                background: local.integration === m ? 'var(--copper-tint-strong)' : 'var(--surface-2)',
+                border: local.integration === m ? '1px solid var(--copper-deep)' : '1px solid var(--hairline)',
+                color: local.integration === m ? 'var(--copper-hi)' : 'var(--silk-faint)',
+                fontFamily: 'var(--font-mono)',
               }}
             >
               {m}
@@ -145,8 +152,8 @@ export function SolverControlsPanel({ controls, send }: SolverControlsPanelProps
       {/* Fixed dt */}
       <div className="py-1">
         <div className="flex items-center justify-between mb-1">
-          <span className="text-[11px]" style={{ color: '#94a3b8' }}>Fixed dt</span>
-          <span className="text-[10px]" style={{ color: '#475569' }}>0 = adaptive</span>
+          <span className="text-[11px]" style={{ color: 'var(--silk)' }}>Fixed dt</span>
+          <span className="text-[10px]" style={{ color: 'var(--silk-faint)' }}>0 = adaptive</span>
         </div>
         <input
           type="number"
@@ -155,23 +162,19 @@ export function SolverControlsPanel({ controls, send }: SolverControlsPanelProps
           step={0.0001}
           value={local.fixed_dt}
           onChange={e => update({ fixed_dt: parseFloat(e.target.value) || 0 })}
-          className="w-full px-2 py-1 rounded text-[11px] font-mono outline-none"
-          style={{
-            background: '#0f172a',
-            border: '1px solid #1e293b',
-            color: '#94a3b8',
-            fontFamily: "'JetBrains Mono', monospace",
-          }}
+          aria-label="Fixed timestep in seconds, zero for adaptive"
+          className="hb-input tnum w-full text-[11px]"
+          style={{ fontFamily: 'var(--font-mono)' }}
         />
       </div>
 
       {/* Granularity */}
       <div className="py-1">
         <div className="flex items-center justify-between mb-1">
-          <span className="text-[11px]" style={{ color: '#94a3b8' }}>Granularity</span>
+          <span className="text-[11px]" style={{ color: 'var(--silk)' }}>Granularity</span>
           <span
-            className="text-[11px] font-mono"
-            style={{ color: '#60a5fa', fontFamily: "'JetBrains Mono', monospace" }}
+            className="text-[11px] tnum"
+            style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}
           >
             {local.granularity.toFixed(2)}
           </span>
@@ -183,10 +186,11 @@ export function SolverControlsPanel({ controls, send }: SolverControlsPanelProps
           step={0.01}
           value={local.granularity}
           onChange={e => update({ granularity: parseFloat(e.target.value) })}
+          aria-label="Solver granularity"
           className="w-full h-1 rounded cursor-pointer"
-          style={{ accentColor: '#3b82f6' }}
+          style={{ accentColor: 'var(--copper)' }}
         />
-        <div className="flex justify-between text-[9px] mt-0.5" style={{ color: '#334155' }}>
+        <div className="flex justify-between text-[9px] mt-0.5" style={{ color: 'var(--silk-faint)' }}>
           <span>fast</span><span>accurate</span>
         </div>
       </div>

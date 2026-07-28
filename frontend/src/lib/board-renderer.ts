@@ -198,6 +198,22 @@ function drawPad(ctx: CanvasRenderingContext2D, cam: Camera, pad: Pad, color: st
 
 // ────────────────────── Static pass ──────────────────────────────────
 
+/** View options the Layers panel controls. Everything defaults to the layer
+ *  palette's own visibility, so callers without a panel change nothing. */
+export interface RenderOptions {
+  /** Per-layer visibility override; unlisted layers use the palette default. */
+  layerVisible?: (layer: string) => boolean
+  /** Pads (and their drills). Default true. */
+  showPads?: boolean
+  /** Reference labels. Default true. */
+  showLabels?: boolean
+}
+
+function layerOn(layer: string, opts?: RenderOptions): boolean {
+  const base = getLayerStyle(layer).visible
+  return opts?.layerVisible ? opts.layerVisible(layer) : base
+}
+
 /**
  * Draw everything that depends only on the camera: board graphics, copper in
  * its base layer colours, pads, vias, and reference labels. No per-frame
@@ -208,6 +224,7 @@ export function renderStaticBoard(
   ctx: CanvasRenderingContext2D,
   board: ParsedBoard,
   cam: Camera,
+  opts?: RenderOptions,
 ) {
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
 
@@ -231,7 +248,7 @@ export function renderStaticBoard(
   // ── Board graphics, grouped by layer ──
   for (const layer of LAYER_ORDER) {
     const style = getLayerStyle(layer)
-    if (!style.visible) continue
+    if (!layerOn(layer, opts)) continue
 
     const isCopper = isCopperLayer(layer)
     const color = style.color
@@ -380,10 +397,12 @@ export function renderStaticBoard(
   }
 
   // ── Pads ──
-  const padGlow = glowOk ? PAD_GLOW : undefined
-  for (const fp of board.footprints) {
-    for (const pad of fp.pads) {
-      drawPad(ctx, cam, pad, PAD_COLOR, padGlow)
+  if (opts?.showPads !== false) {
+    const padGlow = glowOk ? PAD_GLOW : undefined
+    for (const fp of board.footprints) {
+      for (const pad of fp.pads) {
+        drawPad(ctx, cam, pad, PAD_COLOR, padGlow)
+      }
     }
   }
 
@@ -393,6 +412,7 @@ export function renderStaticBoard(
   // clean copper (no 3,443-label smear), zoomed in every part is named. The
   // screen-size rule is self-limiting, so no explicit density cap is needed.
   const LABEL_MIN_PX = 26
+  if (opts?.showLabels === false) return
   ctx.save()
   ctx.textAlign = 'center'
   ctx.textBaseline = 'bottom'
@@ -450,6 +470,12 @@ export interface OverlayData {
   faultedRefs?: Set<string>
   /** Animation time in seconds (for pulsing effects) */
   animTime?: number
+  /** The activity overlay (voltage tints, flow particles, component glows).
+   *  Default on; the Layers panel can switch it off to read bare copper. */
+  showActivity?: boolean
+  /** Layer/pad visibility, shared with the static pass so the overlay never
+   *  paints activity on copper the user hid. */
+  renderOpts?: RenderOptions
 }
 
 function heatColor(t: number): string {
@@ -514,7 +540,8 @@ export function renderDynamicOverlay(
 ) {
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
 
-  const { highlightNets, dimOthers, netVoltages, faultedRefs, animTime = 0 } = overlay
+  const { highlightNets, dimOthers, netVoltages, faultedRefs, animTime = 0, renderOpts } = overlay
+  const activityOn = overlay.showActivity !== false
   const hasHighlight = highlightNets.size > 0
   // Glow is affordable here when the ACTIVE set is small; count as we draw.
   const glowOk = board.segments.length + board.arcs.length <= GLOW_PRIMITIVE_LIMIT
@@ -532,11 +559,11 @@ export function renderDynamicOverlay(
   }
 
   // ── Voltage-tinted copper over the static base ──
-  if (netVoltages && netVoltages.size > 0 && !hasHighlight) {
+  if (activityOn && netVoltages && netVoltages.size > 0 && !hasHighlight) {
     for (const layer of LAYER_ORDER) {
       if (!isCopperLayer(layer)) continue
       const style = getLayerStyle(layer)
-      if (!style.visible) continue
+      if (!layerOn(layer, renderOpts)) continue
       for (const s of board.segments) {
         if (s.layer !== layer || !s.netName) continue
         const v = netVoltages.get(s.netName)
@@ -623,7 +650,7 @@ export function renderDynamicOverlay(
   }
 
   // ── Component state glows ──
-  if (overlay.componentStates && overlay.componentKinds) {
+  if (activityOn && overlay.componentStates && overlay.componentKinds) {
     // The gradient fills are pretty but not free; a 3,000-component board with
     // every part dissipating would otherwise pay thousands of radial gradients
     // per frame. Cull offscreen parts and cap the total.
@@ -691,7 +718,7 @@ export function renderDynamicOverlay(
 
   // ── Signal flow particles ──
   ctx.shadowBlur = 0
-  for (const [netName, positions] of overlay.particles) {
+  for (const [netName, positions] of activityOn ? overlay.particles : new Map<string, number[]>()) {
     for (const s of board.segments) {
       if (s.netName !== netName) continue
       for (const t of positions) {

@@ -1,6 +1,11 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { BoardInfoMsg, SimFrame, ClientMessage } from '../types/protocol'
-import { CloseIcon, PlusIcon } from './Icons'
+import { CloseIcon, PlusIcon, EyeIcon, EyeOffIcon } from './Icons'
+
+// The scope card: a phosphor-style rolling trace per probed net, with a
+// per-trace visibility toggle (the probe keeps buffering while hidden, so
+// showing it again has history) and the net picker to attach more probes.
+// The scope face is an instrument surface: dark in both themes.
 
 const PROBE_COLORS = ['#3b82f6', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#ec4899']
 const WINDOW_SECS = 3.0
@@ -24,6 +29,11 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const buffers = useRef<Map<string, Sample[]>>(new Map())
   const rafRef = useRef<number>(0)
+  // Hidden traces: still probed and buffered, just not drawn.
+  const [hidden, setHidden] = useState<Set<string>>(new Set())
+  const hiddenRef = useRef(hidden)
+  hiddenRef.current = hidden
+  const [filter, setFilter] = useState('')
 
   const nets = boardInfo?.nets ?? []
 
@@ -65,11 +75,19 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
         ctx.fillRect(0, sy, W, 1)
       }
 
+      const visible = probes.filter(p => !hiddenRef.current.has(p))
       if (probes.length === 0) {
         ctx.fillStyle = 'rgba(0,200,80,0.25)'
         ctx.font = '11px monospace'
         ctx.textAlign = 'center'
-        ctx.fillText('Select nets below to probe', W / 2, H / 2)
+        ctx.fillText('Attach a probe from the net list below', W / 2, H / 2)
+        return
+      }
+      if (visible.length === 0) {
+        ctx.fillStyle = 'rgba(0,200,80,0.25)'
+        ctx.font = '11px monospace'
+        ctx.textAlign = 'center'
+        ctx.fillText('All traces hidden', W / 2, H / 2)
         return
       }
 
@@ -80,24 +98,25 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
       const plotW = W - PAD_L - PAD_R
       const plotH = H - PAD_T - PAD_B
 
-      // Determine time range
+      // Determine time range (visible traces only)
       let tMax = 0
-      for (const buf of buffers.current.values()) {
-        if (buf.length > 0) tMax = Math.max(tMax, buf[buf.length - 1].t)
+      for (const net of visible) {
+        const buf = buffers.current.get(net)
+        if (buf && buf.length > 0) tMax = Math.max(tMax, buf[buf.length - 1].t)
       }
       const tMin = tMax - WINDOW_SECS
 
       // Determine voltage range (autoscale with nice grid)
       let vMin = 0, vMax = 5
-      for (const buf of buffers.current.values()) {
-        for (const s of buf) {
+      for (const net of visible) {
+        for (const s of buffers.current.get(net) ?? []) {
           if (s.t >= tMin) {
             vMin = Math.min(vMin, s.v)
             vMax = Math.max(vMax, s.v)
           }
         }
       }
-      // Add 10% padding
+      // Add padding
       const vRange = vMax - vMin || 1
       vMin -= vRange * 0.05
       vMax += vRange * 0.05
@@ -133,6 +152,7 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
 
       // Traces, phosphor glow with multi-pass bloom
       probes.forEach((net, idx) => {
+        if (hiddenRef.current.has(net)) return
         const buf = buffers.current.get(net) ?? []
         const color = PROBE_COLORS[idx % PROBE_COLORS.length]
 
@@ -197,9 +217,23 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
     return () => cancelAnimationFrame(rafRef.current)
   }, [probes])
 
+  const toggleHidden = (net: string) => {
+    setHidden(prev => {
+      const next = new Set(prev)
+      if (next.has(net)) next.delete(net)
+      else next.add(net)
+      return next
+    })
+  }
+
+  const unprobed = nets.filter(n => !probes.includes(n))
+  const filtered = filter
+    ? unprobed.filter(n => n.toLowerCase().includes(filter.toLowerCase()))
+    : unprobed
+
   return (
-    <div className="flex flex-col gap-2">
-      {/* Oscilloscope canvas, CRT-style container */}
+    <div className="flex flex-col gap-2 px-2.5 py-2.5">
+      {/* Oscilloscope face, an instrument surface (dark in both themes) */}
       <div
         className="relative"
         style={{
@@ -212,53 +246,105 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
       >
         <canvas
           ref={canvasRef}
-          width={260}
+          width={272}
           height={160}
           style={{ display: 'block', width: '100%', height: 160 }}
         />
       </div>
 
-      {/* Net picker */}
-      <div>
-        <div className="text-[10px] font-bold tracking-wider mb-1.5 px-1" style={{ color: '#475569' }}>NETS</div>
-        <div className="flex flex-col gap-0.5 max-h-48 overflow-y-auto">
-          {nets.map((net) => {
-            const active = probes.includes(net)
-            const color = active ? PROBE_COLORS[probes.indexOf(net) % PROBE_COLORS.length] : undefined
+      {/* Attached traces: colour, visibility eye, detach */}
+      {probes.length > 0 && (
+        <div className="flex flex-col gap-0.5">
+          {probes.map((net, idx) => {
+            const color = PROBE_COLORS[idx % PROBE_COLORS.length]
+            const isHidden = hidden.has(net)
+            const live = frame?.net_voltages[net]
             return (
-              <button
+              <div
                 key={net}
-                onClick={() => active ? onRemoveProbe(net) : onAddProbe(net)}
-                className="flex items-center gap-2 px-2 py-1 rounded text-left transition-all hover:opacity-80"
-                style={{
-                  background: active ? 'rgba(59,130,246,0.08)' : 'transparent',
-                  border: active ? `1px solid ${color}30` : '1px solid transparent',
-                }}
+                className="flex items-center gap-2 px-2 py-1 rounded-md"
+                style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)', opacity: isHidden ? 0.6 : 1 }}
               >
                 <div
                   className="w-2 h-2 rounded-full shrink-0"
-                  style={{
-                    background: active ? color : '#1e293b',
-                    boxShadow: active ? `0 0 4px ${color}80` : 'none',
-                  }}
+                  style={{ background: color, boxShadow: isHidden ? 'none' : `0 0 4px ${color}80` }}
                 />
                 <span
-                  className="text-[11px] font-mono flex-1"
-                  style={{
-                    color: active ? '#e2e8f0' : '#64748b',
-                    fontFamily: "'JetBrains Mono', monospace",
-                  }}
+                  className="text-[11px] flex-1 truncate"
+                  style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)' }}
                 >
                   {net}
                 </span>
-                <span style={{ color: active ? color : '#334155', display: 'inline-flex' }}>
-                  {active ? <CloseIcon size={10} /> : <PlusIcon size={10} />}
-                </span>
-              </button>
+                {live !== undefined && !isHidden && (
+                  <span className="text-[10px] tnum shrink-0" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
+                    {live.toFixed(3)}V
+                  </span>
+                )}
+                <button
+                  type="button"
+                  onClick={() => toggleHidden(net)}
+                  className="hb-press cursor-pointer"
+                  aria-label={isHidden ? `Show the ${net} trace` : `Hide the ${net} trace`}
+                  title={isHidden ? 'Show this trace' : 'Hide this trace (keeps recording)'}
+                  style={{ background: 'none', border: 'none', color: isHidden ? 'var(--silk-faint)' : 'var(--silk-dim)', display: 'inline-flex', padding: 4 }}
+                >
+                  {isHidden ? <EyeOffIcon size={12} /> : <EyeIcon size={12} />}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onRemoveProbe(net)}
+                  className="hb-press cursor-pointer"
+                  aria-label={`Detach the probe from ${net}`}
+                  title="Detach this probe"
+                  style={{ background: 'none', border: 'none', color: 'var(--silk-faint)', display: 'inline-flex', padding: 4 }}
+                >
+                  <CloseIcon size={11} />
+                </button>
+              </div>
             )
           })}
+        </div>
+      )}
+
+      {/* Net picker */}
+      <div>
+        <div className="text-[10px] font-bold tracking-wider mb-1.5" style={{ color: 'var(--silk-faint)' }}>
+          ATTACH A PROBE
+        </div>
+        {nets.length > 8 && (
+          <input
+            className="hb-input w-full mb-1.5"
+            placeholder="filter nets"
+            value={filter}
+            onChange={e => setFilter(e.target.value)}
+          />
+        )}
+        <div className="flex flex-col gap-0.5 max-h-40 overflow-y-auto">
+          {filtered.map(net => (
+            <button
+              key={net}
+              onClick={() => onAddProbe(net)}
+              className="hb-press flex items-center gap-2 px-2 py-1 rounded-md text-left cursor-pointer"
+              style={{ background: 'transparent', border: '1px solid transparent' }}
+              onMouseEnter={e => { (e.currentTarget as HTMLElement).style.background = 'var(--copper-tint)' }}
+              onMouseLeave={e => { (e.currentTarget as HTMLElement).style.background = 'transparent' }}
+            >
+              <span
+                className="text-[11px] flex-1 truncate"
+                style={{ color: 'var(--silk-dim)', fontFamily: 'var(--font-mono)' }}
+              >
+                {net}
+              </span>
+              <span style={{ color: 'var(--silk-faint)', display: 'inline-flex' }}>
+                <PlusIcon size={10} />
+              </span>
+            </button>
+          ))}
           {nets.length === 0 && (
-            <div className="text-[11px] px-2 py-1" style={{ color: '#334155' }}>No nets loaded</div>
+            <div className="text-[11px] px-2 py-1" style={{ color: 'var(--silk-faint)' }}>No nets loaded</div>
+          )}
+          {nets.length > 0 && filtered.length === 0 && (
+            <div className="text-[11px] px-2 py-1" style={{ color: 'var(--silk-faint)' }}>No nets match</div>
           )}
         </div>
       </div>
