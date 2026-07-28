@@ -14,6 +14,10 @@ interface FootprintInfo {
   lib_id: string
   x: number
   y: number
+  /** Net of the pad nearest the click, when one was in reach. On an unrouted
+   *  board pads are the ONLY copper, so a part click must still surface its
+   *  net or net checks become unreachable from the map. */
+  padNet?: string | null
 }
 
 interface BoardViewerProps {
@@ -197,7 +201,7 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
   // so the readout tracks exactly what is under the cursor; a CLICK passes a
   // coarser radius (clicking is a blunter gesture, and on an unrouted board
   // the only copper is pads).
-  const findNearestNet = useCallback((bx: number, by: number, reachPx = 3): string | null => {
+  const findNearestNet = useCallback((bx: number, by: number, reachPx = 3, includePads = true): string | null => {
     if (!board) return null
     let best: string | null = null
     let bestDist = Infinity
@@ -219,14 +223,16 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
       }
     }
 
-    for (const fp of board.footprints) {
-      for (const pad of fp.pads) {
-        if (!pad.netName) continue
-        const d = Math.sqrt((bx - pad.at.x) ** 2 + (by - pad.at.y) ** 2)
-        const padR = Math.max(pad.size.w, pad.size.h) / 2
-        if (d < padR + threshold && d < bestDist) {
-          bestDist = d
-          best = pad.netName
+    if (includePads) {
+      for (const fp of board.footprints) {
+        for (const pad of fp.pads) {
+          if (!pad.netName) continue
+          const d = Math.sqrt((bx - pad.at.x) ** 2 + (by - pad.at.y) ** 2)
+          const padR = Math.max(pad.size.w, pad.size.h) / 2
+          if (d < padR + threshold && d < bestDist) {
+            bestDist = d
+            best = pad.netName
+          }
         }
       }
     }
@@ -480,13 +486,28 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
   // and nearest net under canvas-relative screen coords (sx, sy) and fires the
   // consumer callbacks. Used by BOTH the mouse-up click and the touch tap so the
   // two selection paths cannot drift apart.
+  //
+  // Layered, exclusive resolution (firing footprint AND net together made
+  // every part click collapse into a net selection, so the "click a part, see
+  // its bound model" flow was unreachable):
+  //   1. a routed TRACE within tight reach wins: the click was on bare copper;
+  //   2. otherwise a footprint hit wins, carrying the nearest pad's net along
+  //      (on an unrouted board pads are the only copper, so the part click
+  //      must still surface its net);
+  //   3. otherwise the nearest pad net within coarse reach (clicking is a
+  //      blunt gesture), or null to clear the selection.
   const selectAt = useCallback((sx: number, sy: number) => {
     const { x, y } = screenToWorld(camRef.current, sx, sy)
+    const traceNet = findNearestNet(x, y, 5, false)
+    if (traceNet) {
+      if (onNetClick) onNetClick(traceNet)
+      return
+    }
     const fp = findFootprintAt(x, y)
-    if (fp && onFootprintClick) onFootprintClick(fp)
-    // Bare-copper click: the nearest trace/pad's net (for "set a check on
-    // this net" flows). Fired alongside the footprint hit so a consumer
-    // can use either.
+    if (fp && onFootprintClick) {
+      onFootprintClick({ ...fp, padNet: findNearestNet(x, y, 8) })
+      return
+    }
     if (onNetClick) onNetClick(findNearestNet(x, y, 8))
   }, [findFootprintAt, onFootprintClick, onNetClick, findNearestNet])
 
@@ -602,10 +623,13 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
         panel below this viewer.
       </p>
 
-      {/* 3D view -- only mounted when 3D tab is active */}
+      {/* 3D view -- only mounted when 3D tab is active. Boards without a
+          pre-exported GLB get a model GENERATED from the parsed layout
+          (extruded substrate, instanced pads/vias/bodies), so 3D works for
+          any board that renders in 2D, the 3,443-part flagship included. */}
       {viewMode === '3d' && (
         <div className="absolute inset-0">
-          {glbUrl ? (
+          {(glbUrl || board) ? (
             <Board3DViewer
               glbUrl={glbUrl}
               board={board}
@@ -643,17 +667,17 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
           2D
         </button>
         <button
-          disabled={!glbUrl}
+          disabled={!glbUrl && !board}
           onClick={() => {
-            if (!glbUrl) return
+            if (!glbUrl && !board) return
             setViewMode('3d')
           }}
-          title={!glbUrl ? 'No 3D model available for this board' : undefined}
+          title={!glbUrl && !board ? 'The board has not loaded yet' : undefined}
           className="px-3 py-1 text-[10px] font-bold tracking-wider transition-all"
           style={{
             background: viewMode === '3d' ? 'rgba(224,138,78,0.14)' : '#0a0f1e',
-            color: viewMode === '3d' ? '#ffb072' : glbUrl ? '#334155' : '#1e293b',
-            cursor: glbUrl ? 'pointer' : 'not-allowed',
+            color: viewMode === '3d' ? '#ffb072' : (glbUrl || board) ? '#334155' : '#1e293b',
+            cursor: (glbUrl || board) ? 'pointer' : 'not-allowed',
           }}
         >
           3D

@@ -9,13 +9,13 @@ pub mod frontdoor;
 pub mod protocol;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::State;
-use axum::http::header;
+use axum::extract::{Path as UrlPath, State};
+use axum::http::{header, StatusCode};
 use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use engine::Engine;
-use frontdoor::{CheckRunner, DepInstaller, DepsStatus, FirmwareAnalyzer};
+use frontdoor::{CheckRunner, DepInstaller, DepsStatus, FirmwareAnalyzer, LiveLauncher};
 use protocol::{ClientMessage, ServerMessage, Status};
 use std::path::Path;
 use std::sync::Arc;
@@ -30,13 +30,50 @@ struct Shared {
     board_info_json: Mutex<String>,
 }
 
-pub struct Server {
+/// One running live-sim session: the sim loop's shared state, the loop task
+/// itself (so a replacement can stop it), and the session's identity for the
+/// status endpoint and the board-file route.
+struct LiveSession {
     shared: Arc<Shared>,
+    task: tokio::task::JoinHandle<()>,
+    board_name: String,
+    /// (file name, KiCad layout text) served at `/boards/<file name>` so the
+    /// frontend's geometry viewer can render the launched board. None for
+    /// formats with no client-drawable text (Altium, gerber zips).
+    board_file: Option<(String, String)>,
+    /// Anything the session must keep alive for its whole run, e.g. the staged
+    /// firmware temp file the emulated MCU reloads from on reset. Dropped when
+    /// the session is replaced.
+    _keepalive: Option<Box<dyn std::any::Any + Send>>,
 }
 
-impl Server {
-    /// Spawn the simulation loop around `engine` and return the server.
-    pub fn new(engine: Box<dyn Engine>) -> Server {
+/// The one live-sim slot behind `/ws`. `hauksbee serve` starts it empty (the
+/// drop zone launches a session on demand via `/api/live/launch`);
+/// `run --serve` preloads it with the CLI board. A second launch replaces the
+/// current session: the old sim task is aborted after its subscribers get a
+/// final "session replaced" error frame.
+pub struct LiveHub {
+    session: std::sync::Mutex<Option<LiveSession>>,
+}
+
+impl LiveHub {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Arc<LiveHub> {
+        Arc::new(LiveHub {
+            session: std::sync::Mutex::new(None),
+        })
+    }
+
+    /// Install a new live session, replacing any current one. Must be called
+    /// from within a tokio runtime (the sim loop is spawned here). Returns
+    /// true when an existing session was replaced.
+    pub fn launch(
+        &self,
+        engine: Box<dyn Engine>,
+        board_name: String,
+        board_file: Option<(String, String)>,
+        keepalive: Option<Box<dyn std::any::Any + Send>>,
+    ) -> bool {
         let (tx, _) = broadcast::channel::<String>(256);
         let (cmd_tx, cmd_rx) = mpsc::channel::<ClientMessage>(64);
         let board_info = serde_json::to_string(&ServerMessage::BoardInfo(engine.board_info()))
@@ -46,8 +83,84 @@ impl Server {
             cmd: cmd_tx,
             board_info_json: Mutex::new(board_info),
         });
-        tokio::spawn(sim_loop(engine, tx, cmd_rx, shared.clone()));
-        Server { shared }
+        let task = tokio::spawn(sim_loop(engine, tx, cmd_rx, shared.clone()));
+        let old = self
+            .session
+            .lock()
+            .expect("live hub lock")
+            .replace(LiveSession {
+                shared,
+                task,
+                board_name,
+                board_file,
+                _keepalive: keepalive,
+            });
+        match old {
+            Some(old) => {
+                // Tell any client still on the old socket why its stream ends,
+                // then stop the old loop for real: an aborted task drops its
+                // engine (and any external emulator it holds) instead of
+                // stepping a board nobody can see anymore.
+                let bye = ServerMessage::Error {
+                    message: "live session replaced: a new board was launched".to_string(),
+                };
+                let _ = old
+                    .shared
+                    .tx
+                    .send(serde_json::to_string(&bye).expect("error serializes"));
+                old.task.abort();
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn shared(&self) -> Option<Arc<Shared>> {
+        self.session
+            .lock()
+            .expect("live hub lock")
+            .as_ref()
+            .map(|s| s.shared.clone())
+    }
+
+    /// Name of the currently live board, if a session is running.
+    pub fn active_board(&self) -> Option<String> {
+        self.session
+            .lock()
+            .expect("live hub lock")
+            .as_ref()
+            .map(|s| s.board_name.clone())
+    }
+
+    /// The launched board's own layout text, when the current session serves
+    /// `name`. Backs the dynamic `/boards/{name}` route.
+    fn board_file(&self, name: &str) -> Option<String> {
+        self.session
+            .lock()
+            .expect("live hub lock")
+            .as_ref()
+            .and_then(|s| s.board_file.as_ref())
+            .filter(|(n, _)| n == name)
+            .map(|(_, contents)| contents.clone())
+    }
+}
+
+pub struct Server {
+    hub: Arc<LiveHub>,
+}
+
+impl Server {
+    /// Spawn the simulation loop around `engine` and return the server.
+    pub fn new(engine: Box<dyn Engine>) -> Server {
+        let hub = LiveHub::new();
+        let name = engine.board_info().name.clone();
+        hub.launch(engine, name, None, None);
+        Server { hub }
+    }
+
+    /// The live-session hub this server preloaded, for wiring the launch API.
+    pub fn hub(&self) -> Arc<LiveHub> {
+        self.hub.clone()
     }
 
     pub fn router(&self, static_dir: Option<&std::path::Path>) -> Router {
@@ -66,7 +179,7 @@ impl Server {
     ) -> Router {
         let mut router = Router::new()
             .route("/ws", get(ws_handler))
-            .with_state(self.shared.clone());
+            .with_state(self.hub.clone());
         if let Some((url_path, contents)) = board_file {
             router = router.route(
                 &url_path,
@@ -157,21 +270,24 @@ impl Server {
         analyze: FirmwareAnalyzer,
         check: Option<CheckRunner>,
         deps: Option<(DepsStatus, DepInstaller)>,
+        launch: Option<LiveLauncher>,
         startup_json: String,
     ) -> Router {
         unified_router(
-            Some(self.shared.clone()),
+            Some(self.hub.clone()),
             static_dir,
             board_file,
             Some(analyze),
             check,
             deps,
+            launch,
             startup_json,
         )
     }
 
     /// Serve the unified app router (WebSocket sim included). Used by
     /// `hauksbee run --serve`, where a board is preloaded.
+    #[allow(clippy::too_many_arguments)]
     pub async fn serve_app(
         &self,
         addr: &str,
@@ -180,10 +296,19 @@ impl Server {
         analyze: FirmwareAnalyzer,
         check: Option<CheckRunner>,
         deps: Option<(DepsStatus, DepInstaller)>,
+        launch: Option<LiveLauncher>,
         startup_json: String,
     ) -> anyhow::Result<()> {
         let listener = bind_with_fallback(addr).await?;
-        let router = self.app_router(static_dir, board_file, analyze, check, deps, startup_json);
+        let router = self.app_router(
+            static_dir,
+            board_file,
+            analyze,
+            check,
+            deps,
+            launch,
+            startup_json,
+        );
         axum::serve(listener, router).await?;
         Ok(())
     }
@@ -192,6 +317,7 @@ impl Server {
     /// [`bind_frontdoor`], so the caller can print the *actually bound* URL
     /// before the server takes over the thread (the requested port may have
     /// been busy and replaced by a fallback).
+    #[allow(clippy::too_many_arguments)]
     pub async fn serve_app_on(
         &self,
         listener: tokio::net::TcpListener,
@@ -200,34 +326,55 @@ impl Server {
         analyze: FirmwareAnalyzer,
         check: Option<CheckRunner>,
         deps: Option<(DepsStatus, DepInstaller)>,
+        launch: Option<LiveLauncher>,
         startup_json: String,
     ) -> anyhow::Result<()> {
-        let router = self.app_router(static_dir, board_file, analyze, check, deps, startup_json);
+        let router = self.app_router(
+            static_dir,
+            board_file,
+            analyze,
+            check,
+            deps,
+            launch,
+            startup_json,
+        );
         axum::serve(listener, router).await?;
         Ok(())
     }
 }
 
-/// Assemble the unified router from its optional parts. `shared` is present only
-/// when a live engine is available (`run --serve`); `serve` (drop-zone-only, no
-/// preloaded board) passes `None` and simply gets no `/ws` route; the React
-/// landing never opens the socket until the user presses "run it".
+/// Assemble the unified router from its optional parts. `hub` is the live-sim
+/// slot behind `/ws`: preloaded for `run --serve`, empty for `serve` until the
+/// user launches an uploaded board. `launch` mounts the `/api/live/*` routes
+/// that fill (or replace) the hub's session server-side; a deployment without
+/// the callback keeps the CLI-hint fallback in the frontend.
+#[allow(clippy::too_many_arguments)]
 fn unified_router(
-    shared: Option<Arc<Shared>>,
+    hub: Option<Arc<LiveHub>>,
     static_dir: Option<&Path>,
     board_file: Option<(String, String)>,
     analyze: Option<FirmwareAnalyzer>,
     check: Option<CheckRunner>,
     deps: Option<(DepsStatus, DepInstaller)>,
+    launch: Option<LiveLauncher>,
     startup_json: String,
 ) -> Router {
     let mut router = Router::new();
-    if let Some(shared) = shared {
+    if let Some(hub) = &hub {
         router = router.merge(
             Router::new()
                 .route("/ws", get(ws_handler))
-                .with_state(shared),
+                // The launched board's own file, so the geometry viewer can
+                // fetch what was just uploaded (the static dist/ only carries
+                // demo boards). A `run --serve` preloaded board's static route
+                // (exact path, below) takes priority over this parameterised
+                // one, keeping its historical behaviour byte-identical.
+                .route("/boards/{name}", get(live_board_handler))
+                .with_state(hub.clone()),
         );
+    }
+    if let (Some(hub), Some(launch)) = (&hub, launch) {
+        router = router.merge(frontdoor::live_routes(hub.clone(), launch));
     }
     if let Some(analyze) = analyze {
         router = router.merge(frontdoor::api_routes(analyze));
@@ -309,7 +456,16 @@ pub async fn serve_frontdoor(
     startup_json: String,
 ) -> anyhow::Result<()> {
     let (listener, _bound) = bind_frontdoor(addr).await?;
-    serve_frontdoor_on(listener, static_dir, analyze, check, deps, startup_json).await
+    serve_frontdoor_on(
+        listener,
+        static_dir,
+        analyze,
+        check,
+        deps,
+        None,
+        startup_json,
+    )
+    .await
 }
 
 /// Bind the front-door address (applying the busy-port fallback) and return the
@@ -334,15 +490,20 @@ pub async fn serve_frontdoor_on(
     analyze: FirmwareAnalyzer,
     check: Option<CheckRunner>,
     deps: Option<(DepsStatus, DepInstaller)>,
+    launch: Option<LiveLauncher>,
     startup_json: String,
 ) -> anyhow::Result<()> {
+    // The hub starts empty: `/ws` answers 409 until a board is launched. It is
+    // mounted even without a launcher so the route surface stays stable.
+    let hub = LiveHub::new();
     let router = unified_router(
-        None,
+        Some(hub),
         static_dir,
         None,
         Some(analyze),
         check,
         deps,
+        launch,
         startup_json,
     );
     axum::serve(listener, router).await?;
@@ -377,8 +538,32 @@ async fn bind_with_fallback(addr: &str) -> anyhow::Result<tokio::net::TcpListene
     }
 }
 
-async fn ws_handler(ws: WebSocketUpgrade, State(shared): State<Arc<Shared>>) -> impl IntoResponse {
+async fn ws_handler(ws: WebSocketUpgrade, State(hub): State<Arc<LiveHub>>) -> impl IntoResponse {
+    // No session yet (a `serve` front door before any live launch): refuse the
+    // upgrade with a clear status instead of accepting a socket that would
+    // never speak. The frontend only opens `/ws` after a successful launch, so
+    // hitting this means a stale tab or a race; its reconnect loop recovers.
+    let Some(shared) = hub.shared() else {
+        return (StatusCode::CONFLICT, "no live sim session is running").into_response();
+    };
     ws.on_upgrade(move |socket| handle_socket(socket, shared))
+        .into_response()
+}
+
+/// GET `/boards/{name}`: the CURRENT live session's own board file, for the
+/// geometry viewer. 404 for anything but the launched board's exact name.
+async fn live_board_handler(
+    State(hub): State<Arc<LiveHub>>,
+    UrlPath(name): UrlPath<String>,
+) -> axum::response::Response {
+    match hub.board_file(&name) {
+        Some(contents) => (
+            [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+            contents,
+        )
+            .into_response(),
+        None => (StatusCode::NOT_FOUND, "no such live board").into_response(),
+    }
 }
 
 async fn handle_socket(mut socket: WebSocket, shared: Arc<Shared>) {

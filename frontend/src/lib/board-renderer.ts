@@ -521,10 +521,13 @@ export function renderDynamicOverlay(
 
   // ── Dim veil when a net is highlighted ──
   // The static pass cannot dim per-primitive (it is cached), so a translucent
-  // veil over the whole blit approximates the old alpha=0.15 on everything
-  // else, and the highlighted copper is drawn bright on top.
+  // veil over the whole blit stands in for dimming everything else, and the
+  // highlighted copper is drawn bright on top. The alpha is deliberately
+  // moderate: at 0.72 the rest of the board effectively vanished and all
+  // orientation context was lost; the highlight only needs contrast, not a
+  // blackout.
   if (hasHighlight && dimOthers) {
-    ctx.fillStyle = 'rgba(2,6,23,0.72)'
+    ctx.fillStyle = 'rgba(2,6,23,0.45)'
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
   }
 

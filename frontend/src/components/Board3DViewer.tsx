@@ -13,7 +13,9 @@ import type { ParsedBoard } from '../lib/kicad-parser'
 import type { SimFrame, BoardInfoMsg } from '../types/protocol'
 
 interface Board3DViewerProps {
-  glbUrl: string
+  /** Pre-exported GLB, when one exists for this board. Null falls back to a
+   *  model generated from the parsed layout (substrate + pads + bodies). */
+  glbUrl: string | null
   board: ParsedBoard | null
   frame: SimFrame | null
   boardInfo?: BoardInfoMsg | null
@@ -53,7 +55,15 @@ export function Board3DViewer({ glbUrl, board, frame, boardInfo, faults }: Board
       const viewer = new Viewer3D(canvas)
       viewerRef.current = viewer
       try {
-        await viewer.loadGLB(glbUrl)
+        if (glbUrl) {
+          await viewer.loadGLB(glbUrl)
+        } else if (board) {
+          // No exported GLB: build the model from the parsed layout itself,
+          // so 3D is available for ANY board the 2D view can draw.
+          viewer.buildFromParsedBoard(board)
+        } else {
+          throw new Error('the board has not loaded yet')
+        }
         if (alive) setLoading(false)
       } catch (e) {
         if (alive) setError(e instanceof Error ? e.message : String(e))
@@ -67,7 +77,9 @@ export function Board3DViewer({ glbUrl, board, frame, boardInfo, faults }: Board
       viewerRef.current?.dispose()
       viewerRef.current = null
     }
-  }, [glbUrl])
+    // `board` is loaded once per file and stays referentially stable, so this
+    // effect re-runs only when the source (GLB vs parsed board) changes.
+  }, [glbUrl, board])
 
   // Resize observer
   useEffect(() => {

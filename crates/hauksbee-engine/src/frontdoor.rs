@@ -291,6 +291,12 @@ pub struct WebReport {
     /// Empty (and omitted) on an error report; additive for compatibility.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nets: Vec<String>,
+    /// reference -> resolved model kind ("mcu", "bjt_npn", ...), from the same
+    /// bind the summary uses: what a component click on the board map reports
+    /// as the part's bound model. A BTreeMap so the JSON is deterministic
+    /// (the golden-parity test compares bytes). Additive; omitted when empty.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub component_kinds: std::collections::BTreeMap<String, String>,
     /// Binder-detected power supplies (rail net → nominal volts): the checks
     /// builder prefills `[[supply]]` rows from these; the same data
     /// `hauksbee-ci init` scaffolds from.
@@ -329,6 +335,7 @@ fn unreadable(file_name: &str, error: String) -> WebReport {
         bind: None,
         notes: Vec::new(),
         nets: Vec::new(),
+        component_kinds: std::collections::BTreeMap::new(),
         supplies: Vec::new(),
         cosim: None,
     }
@@ -519,6 +526,11 @@ fn analyze_normalized(file_name: &str, norm: &crate::board_input::NormalizedBoar
         bind: Some(bind_web),
         notes,
         nets,
+        component_kinds: bound
+            .component_kinds
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect(),
         supplies,
         cosim: None,
     }
