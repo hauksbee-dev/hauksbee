@@ -46,15 +46,16 @@ hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }
 hauksbee-solve = { version = "0.1.0", path = "../hauksbee-solve" }
 hauksbee-engine = { version = "0.1.0", path = "../hauksbee-engine", default-features = false }
 hauksbee-server = { version = "0.1.0", path = "../hauksbee-server", default-features = false }
+# Direct dep (was dev-only) for two uses: main() installs the emulator child
+# signal reaper (hauksbee_mcu::children), and the boot-coverage tests reuse
+# the backend's real Espressif-QEMU / Renode discovery (is_available) so heavy
+# co-sim cases skip cleanly when the emulator is absent. default-features =
+# false and no `avr` here on purpose: this line must never drag GPL simavr
+# into the permissive shape (see docs/about/release-and-licensing.md).
+hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features = false, features = ["qemu", "renode"] }
 
 [dev-dependencies]
 hauksbee-testkit = { path = "../hauksbee-testkit" }
-# Boot-coverage tests reuse the backend's real Espressif-QEMU discovery
-# (is_available, which runs -machine help to confirm the esp32 fork) so the
-# heavy ESP32 co-sim cases skip cleanly on a stock-qemu host instead of failing.
-# The sensor-attach tests also check Renode availability so they skip cleanly
-# when Renode is not installed.
-hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features = false, features = ["qemu", "renode"] }
 # The firmware-input parity test zips a committed .hex to prove a spec's
 # `firmware = "fw.zip"` resolves exactly like `run --firmware` does.
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }

@@ -796,6 +796,11 @@ struct CheckCodeArgs {
 }
 
 fn main() -> anyhow::Result<()> {
+    // Before anything can spawn a co-sim emulator: make sure a SIGTERM/SIGINT
+    // to this process (e.g. killing a long-lived `hauksbee serve`) reaps every
+    // live Renode/QEMU child instead of orphaning it. See
+    // hauksbee_mcu::children for the leak this closes.
+    hauksbee_mcu::children::install_signal_reaper();
     let cli = Cli::parse();
     // Fix #3 (LOW): under `--json`, an AI/CI consumer expects parseable output on
     // EVERY path, including a hard error. Emit `{"ok": false, "error": "..."}`
