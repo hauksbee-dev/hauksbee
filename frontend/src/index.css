@@ -243,6 +243,32 @@ code.hb-inline {
   padding: 1px 6px;
 }
 
+/* ── Checks builder: box discipline ─────────────────────────────────────── */
+
+/* One border per section card, none inside it. The rows that make up a section
+   are separated by a hairline rule rather than each being its own box, and the
+   inputs sit flush in the row until you reach for them. The focus ring, and the
+   red highlight on an input a validation message names, are untouched: both are
+   set inline on the element and outrank these rules. */
+
+.checks-flush .check-row {
+  border-top: 1px solid var(--rule);
+}
+
+.checks-flush .hb-input {
+  background: transparent;
+  border-color: transparent;
+  transition-property: border-color, background-color, box-shadow;
+}
+.checks-flush .hb-input:hover {
+  background: var(--input-bg);
+  border-color: var(--hairline);
+}
+.checks-flush .hb-input:focus {
+  background: var(--input-bg);
+  border-color: var(--copper-deep);
+}
+
 /* ── Sidebar nav ────────────────────────────────────────────────────────── */
 
 .nav-item {
@@ -324,6 +350,19 @@ code.hb-inline {
   border-color: var(--copper);
   transform: scale(1.01);
   box-shadow: 0 0 0 1px var(--copper-glow), 0 0 48px -6px var(--copper-glow), var(--shadow-pop);
+}
+
+/* The sample boards: three equal cells on one row, stacking to a single column
+   when the card is too narrow to hold them. A wrapping flex row produced a
+   two-then-one rag, which read as an accident rather than a choice. */
+.sample-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+.sample-row > * { text-align: center; }
+@media (max-width: 860px) {
+  .sample-row { grid-template-columns: minmax(0, 1fr); }
 }
 
 /* The firmware jack: a quiet secondary row; its active state reads "live". */

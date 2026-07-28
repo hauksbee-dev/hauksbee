@@ -99,7 +99,7 @@ pub fn build_state(
     // the binder used, so the detail can never disagree with the analysis.
     let (part_nets, net_parts) = connectivity(&board);
 
-    Ok(AppState::new(
+    let mut state = AppState::new(
         bound.name.clone(),
         &bound.report,
         &summary,
@@ -109,7 +109,17 @@ pub fn build_state(
         nets,
         part_nets,
         net_parts,
-    ))
+    );
+    // A board with no title block has no name of its own; fall back to the file
+    // it came from so the identity header always names something.
+    if state.board_label.trim().is_empty() {
+        state.board_label = board_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("board")
+            .to_string();
+    }
+    Ok(state)
 }
 
 /// Build ref↔net adjacency from the extracted board: for each component, the

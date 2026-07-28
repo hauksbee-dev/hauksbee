@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react'
 import { CloseIcon } from './Icons'
+import { displayNet } from '../lib/net-name'
 
 // The unified selection card: what a click on the board surface reports, in
 // the same card language on the report map and the live sim. A net shows its
@@ -82,52 +83,67 @@ export function SelectionCard({
           { kind: 'max_current', label: 'must stay under a current', ref: component.ref },
           { kind: 'max_temp', label: 'must stay cool', ref: component.ref },
           ...(component.padNet
-            ? [{ kind: 'voltage', label: `net ${component.padNet} must sit at a voltage`, net: component.padNet }]
+            ? [{ kind: 'voltage', label: `net ${displayNet(component.padNet)} must sit at a voltage`, net: component.padNet }]
             : []),
         ]
       : []
 
   return (
+    // maxHeight 100% + an internal scroll: the card is anchored inside a strip
+    // that starts BELOW the viewer toolbar (see BoardView / SimView), so it can
+    // never grow up under the 2D/3D and Fit controls and hide its own title.
+    // A part with fifty nets scrolls; the identity row and the close button
+    // stay pinned to the top of the card, always reachable.
     <div
       data-testid="selection-card"
-      className="hb-card flex flex-col gap-2 p-3"
-      style={{ minWidth: 230, maxWidth: 320, boxShadow: 'var(--shadow-pop)' }}
+      className="hb-card flex flex-col"
+      style={{ minWidth: 230, maxWidth: 320, maxHeight: '100%', boxShadow: 'var(--shadow-pop)' }}
     >
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] font-bold tracking-[0.14em]" style={{ color: 'var(--silk-faint)' }}>
-          {net ? 'NET' : 'COMPONENT'}
-        </span>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close selection"
-          className="hb-press cursor-pointer"
-          style={{
-            color: 'var(--silk-faint)', display: 'inline-flex', background: 'none',
-            border: 'none', padding: 6, margin: -6,
-          }}
-        >
-          <CloseIcon size={13} />
-        </button>
-      </div>
-
-      {net ? (
-        <div className="flex items-baseline gap-2">
-          <span className="text-[14px] font-bold" style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)' }}>
-            {net}
+      <div className="shrink-0 flex flex-col gap-2 px-3 pt-3 pb-2">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] font-bold tracking-[0.14em]" style={{ color: 'var(--silk-faint)' }}>
+            {net ? 'NET' : 'COMPONENT'}
           </span>
-          {liveVolts !== undefined && (
-            <span className="text-[12px] tnum" style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}>
-              {liveVolts.toFixed(3)} V
-            </span>
-          )}
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close selection"
+            className="hb-press cursor-pointer"
+            style={{
+              color: 'var(--silk-faint)', display: 'inline-flex', background: 'none',
+              border: 'none', padding: 6, margin: -6,
+            }}
+          >
+            <CloseIcon size={13} />
+          </button>
         </div>
-      ) : component ? (
-        <>
+
+        {net ? (
+          <div className="flex items-baseline gap-2">
+            <span className="text-[14px] font-bold" style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>
+              {displayNet(net)}
+            </span>
+            {liveVolts !== undefined && (
+              <span className="text-[12px] tnum shrink-0" style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}>
+                {liveVolts.toFixed(3)} V
+              </span>
+            )}
+          </div>
+        ) : component ? (
           <div className="flex items-baseline gap-2">
             <span className="text-[17px] font-bold" style={{ color: 'var(--silk)' }}>{component.ref}</span>
             {component.value && <span className="text-[13px]" style={{ color: 'var(--silk-dim)' }}>{component.value}</span>}
           </div>
+        ) : null}
+      </div>
+
+      <div
+        data-testid="selection-card-body"
+        className="flex flex-col gap-2 overflow-y-auto px-3 pb-3"
+        style={{ minHeight: 0 }}
+      >
+      {component ? (
+        <>
           <div className="text-[11px]" data-testid="selection-model" style={{ color: 'var(--silk-dim)' }}>
             {boundKind
               ? <>bound model: <span style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}>{boundKind}</span></>
@@ -139,9 +155,11 @@ export function SelectionCard({
             </div>
           )}
           {component.padNets && component.padNets.length > 0 && (
+            // Every net, not the first eight: the card scrolls, so "+44 more"
+            // with no way to reach them was a dead end.
             <div className="text-[11px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
-              on nets:{' '}
-              {component.padNets.slice(0, 8).map((n, i) => (
+              on {component.padNets.length} {component.padNets.length === 1 ? 'net' : 'nets'}:{' '}
+              {component.padNets.map((n, i) => (
                 <span key={n}>
                   {i > 0 && ', '}
                   {onPickNet ? (
@@ -153,16 +171,16 @@ export function SelectionCard({
                         background: 'none', border: 'none', padding: 0,
                         color: 'var(--silk-dim)', fontFamily: 'var(--font-mono)', fontSize: 11,
                         textDecoration: 'underline', textDecorationColor: 'var(--rule)',
+                        textAlign: 'left', wordBreak: 'break-all',
                       }}
                     >
-                      {n}
+                      {displayNet(n)}
                     </button>
                   ) : (
-                    <span style={{ fontFamily: 'var(--font-mono)' }}>{n}</span>
+                    <span style={{ fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>{displayNet(n)}</span>
                   )}
                 </span>
               ))}
-              {component.padNets.length > 8 && ` +${component.padNets.length - 8} more`}
             </div>
           )}
         </>
@@ -176,6 +194,7 @@ export function SelectionCard({
           </div>
         </div>
       )}
+      </div>
     </div>
   )
 }

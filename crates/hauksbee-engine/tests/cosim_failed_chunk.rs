@@ -77,6 +77,10 @@ fn cosim_json_from(sched: &Scheduler) -> CosimJson {
         backend: "test".to_string(),
         requested_part: String::new(),
         substituted: false,
+        // Unmeasured in this mirror: the wall accounting lives with the CLI's
+        // stepping loop, and 0 is the documented "no claim" value.
+        wall_s: 0.0,
+        realtime_factor: 0.0,
         total_toggles: 0,
         uart_seen: false,
         activity_summary: Vec::new(),

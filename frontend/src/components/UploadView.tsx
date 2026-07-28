@@ -76,9 +76,18 @@ export function UploadView({ session, onOpenLive }: {
         {/* Hero, a calm, centered thesis */}
         {!busy && (
           <div className="text-center">
+            {/* The hero speaks in the wordmark's type, not the system default:
+                the mark in the rail and the thesis under it are one voice. */}
             <h1
               className="font-semibold"
-              style={{ color: 'var(--silk)', fontSize: 'clamp(1.7rem, 4vw, 2.3rem)', lineHeight: 1.1, letterSpacing: '-0.02em', margin: 0 }}
+              style={{
+                color: 'var(--silk)',
+                fontFamily: 'var(--font-mono)',
+                fontSize: 'clamp(1.55rem, 3.6vw, 2.1rem)',
+                lineHeight: 1.15,
+                letterSpacing: '-0.035em',
+                margin: 0,
+              }}
             >
               Point it at a real board.
             </h1>
@@ -201,16 +210,18 @@ export function UploadView({ session, onOpenLive }: {
               <div className="text-[11px] uppercase" style={{ color: 'var(--silk-faint)', letterSpacing: '0.08em' }}>
                 No board handy? Try a sample
               </div>
-              <div className="mt-3 flex flex-wrap justify-center gap-2">
+              {/* One deliberate row of three, or a clean stack when the column
+                  is too narrow for it. Never a two-then-one rag. */}
+              <div className="sample-row mt-3">
                 {SAMPLES.map(s => (
                   <button
                     key={s.label}
                     type="button"
                     onClick={() => runSample(s)}
-                    className="hb-btn hb-press px-3.5 py-2 text-[13px]"
+                    className="hb-btn hb-press px-3.5 py-2.5 text-[13px]"
                   >
-                    <span className="font-semibold" style={{ color: 'var(--silk)' }}>{s.label}</span>
-                    <span className="ml-1.5">{s.desc}</span>
+                    <span className="block font-semibold" style={{ color: 'var(--silk)' }}>{s.label}</span>
+                    <span className="block text-[12px] mt-0.5">{s.desc}</span>
                   </button>
                 ))}
               </div>

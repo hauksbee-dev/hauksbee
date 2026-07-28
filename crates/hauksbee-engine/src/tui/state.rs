@@ -490,6 +490,11 @@ impl Verdict {
 #[derive(Debug, Clone)]
 pub struct AppState {
     pub board_name: String,
+    /// What the identity bar calls this board. Normally `board_name`, but a
+    /// board file with no title block leaves that empty, and a header whose
+    /// first job is to say WHICH board must never start with a separator.
+    /// Set by [`super::app::build_state`] from the file name in that case.
+    pub board_label: String,
     pub mcu: Option<String>,
     pub backend: Option<String>,
     pub critical_parts_bound: String,
@@ -700,6 +705,7 @@ impl AppState {
         let no_mcu = mcu.is_none();
 
         AppState {
+            board_label: board_name.clone(),
             board_name,
             mcu,
             backend,

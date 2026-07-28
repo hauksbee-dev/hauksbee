@@ -393,7 +393,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         let board_name = engine.report().board_name.clone();
         let summary = BindSummary::from_report(engine.report());
         let mut uart_seen = false;
-        let faults = crate::reports::cosim::run_headless(
+        let headless = crate::reports::cosim::run_headless(
             &mut engine,
             cfg.seconds,
             &mut uart_seen,
@@ -403,11 +403,20 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             cfg.probe_csv.as_deref(),
             cfg.chunk_us,
         )?;
+        let achieved_factor = headless.realtime_factor();
+        let wall_s = headless.wall_s;
+        let faults = headless.faults;
 
         // Co-sim honesty summary (Track B): total net toggles, UART activity, and
         // any chip substitution detected at build time. Built from the SAME run
-        // stats the text table reads, so every surface agrees.
-        let cosim = crate::reports::cosim::build_cosim_json(&engine, uart_seen);
+        // stats the text table reads, so every surface agrees. The achieved
+        // rate is stamped from the run's own wall-clock measurement so the
+        // machine surface carries the delivered factor, not an assumed one.
+        let cosim = crate::reports::cosim::build_cosim_json(&engine, uart_seen).map(|mut c| {
+            c.wall_s = wall_s;
+            c.realtime_factor = achieved_factor;
+            c
+        });
         let total_toggles = cosim.as_ref().map(|c| c.total_toggles).unwrap_or(0);
         // Analog-fidelity honesty (05 §3b): once any chunk's analog solve failed,
         // the run held stale voltages and cannot vouch for analog-derived findings
