@@ -8,13 +8,25 @@
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/ETM-Code/hauksbee/main/scripts/get-hauksbee.sh | bash
+#   With flags through the pipe:
+#     curl -fsSL .../get-hauksbee.sh | bash -s -- --permissive
 #   Or run locally:
-#     bash scripts/get-hauksbee.sh [--version v0.1.0] [--prefix ~/.local]
+#     bash scripts/get-hauksbee.sh [--version v0.1.0] [--prefix ~/.local] [--permissive]
 #
 # Options:
 #   --version TAG   Install a specific release tag (default: latest).
 #   --prefix DIR    Install binaries to DIR/bin (default: ~/.local).
+#   --permissive    Install the GPL-free build instead of the default one.
 #   --help          Show this help.
+#
+# Which build you get:
+#   Default: the full build, AVR / ATmega co-simulation included. It statically
+#   links libsimavr, so THE BINARY is GPL-3.0 (hauksbee's source stays
+#   Apache-2.0). GPL-3.0 constrains redistributing the binary, not running it.
+#   --permissive: the same tool without the avr backend, so no GPL code is
+#   linked and the binary is Apache-2.0. Take it if you redistribute or embed
+#   hauksbee. It cannot do AVR co-sim; Renode and Espressif QEMU still work.
+#   Either way, LICENSE-BINARY.txt inside the tarball spells out the terms.
 #
 # Environment:
 #   GITHUB_TOKEN    Optional. Set to avoid GitHub API rate limits (60 req/hr
@@ -31,6 +43,9 @@ RELEASES_BASE="${HAUKSBEE_RELEASES_BASE:-https://github.com/${REPO}/releases/dow
 
 VERSION=""
 PREFIX="${HOME}/.local"
+# Shape: "" = the default download (avr included, GPL-3.0 binary),
+# "-permissive" = the GPL-free download (no avr, Apache-2.0 binary).
+SHAPE_SUFFIX=""
 
 # ---------------------------------------------------------------------------
 # Argument parsing
@@ -51,6 +66,10 @@ while [ $# -gt 0 ]; do
       ;;
     --prefix=*)
       PREFIX="${1#*=}"
+      shift
+      ;;
+    --permissive)
+      SHAPE_SUFFIX="-permissive"
       shift
       ;;
     -h|--help)
@@ -144,7 +163,7 @@ echo "Installing hauksbee ${VERSION} (${VERSION_BARE})"
 # ---------------------------------------------------------------------------
 # Construct asset URLs
 # ---------------------------------------------------------------------------
-ASSET_NAME="hauksbee-${VERSION_BARE}-${ASSET_SUFFIX}"
+ASSET_NAME="hauksbee-${VERSION_BARE}-${ASSET_SUFFIX}${SHAPE_SUFFIX}"
 TARBALL_NAME="${ASSET_NAME}.tar.gz"
 CHECKSUM_NAME="${TARBALL_NAME}.sha256"
 TARBALL_URL="${RELEASES_BASE}/${VERSION}/${TARBALL_NAME}"
@@ -181,7 +200,7 @@ echo "Verifying checksum..."
   else
     # Refuse to install an unverified download. macOS 10.13+ ships shasum and
     # every supported Linux has sha256sum (coreutils), so this is effectively
-    # unreachable in normal use — but a missing tool must abort, not silently
+    # unreachable in normal use, but a missing tool must abort, not silently
     # install a possibly-tampered binary.
     echo "ERROR: neither shasum nor sha256sum found; cannot verify the download." >&2
     echo "Install coreutils (Linux) or use macOS 10.13+; then re-run. Aborting." >&2
@@ -249,5 +268,12 @@ if [ "${OS}" = "Darwin" ]; then
   echo "    xattr -d com.apple.quarantine \"${INSTALL_DIR}/hauksbee\" \"${INSTALL_DIR}/hauksbee-ci\""
 fi
 
+if [ -n "${SHAPE_SUFFIX}" ]; then
+  LICENCE_LINE="Apache-2.0 binary (permissive build: no avr backend, no libsimavr, no GPL code)."
+else
+  LICENCE_LINE="GPL-3.0 binary (includes the avr backend, which links GPL-3.0 libsimavr); hauksbee's source is Apache-2.0."
+fi
+
 echo ""
 echo "hauksbee ${VERSION} installed. Run: hauksbee --help"
+echo "Licence: ${LICENCE_LINE}"
