@@ -533,10 +533,20 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "Some chips read certain pins at the instant they reset to decide how to boot (which mode, where to load code from). If that pin is at the wrong level (or wobbling, e.g. a clock signal sits on it), the chip can boot into the wrong mode or fail to start.".to_string(),
                 format!("Hold \"{net}\" firmly at the level the datasheet wants during reset, usually with a pull-up or pull-down resistor, and keep fast/active signals off that pin until after boot."),
             ),
-            LintCheck::McuResourceConflict => (
+            // The header must match what the finding actually claims. High is a
+            // genuine two-function contention; the low-severity form is a single
+            // function occupying a pin-locked group (no contention, the board can
+            // work as designed), and calling that "two functions ... at once"
+            // was the SparkFun severity/wording overclaim.
+            LintCheck::McuResourceConflict if f.severity == Severity::High => (
                 format!("Two different functions need the same internal block of the microcontroller at once ({parts}). {}", f.message),
                 "A microcontroller has a fixed number of internal blocks (timers/PWM channels, communication units, pin groups). Two board features have been wired to pins that share one block, so the chip physically cannot run both at the same time: one feature will not work.".to_string(),
                 "Move one of the functions to a different pin that maps to a free internal block, or give up one of the two features. The chip's datasheet pin-mux table shows which pins share which block.".to_string(),
+            ),
+            LintCheck::McuResourceConflict => (
+                format!("A pin-locked peripheral group of the microcontroller is committed to a single function ({parts}). {}", f.message),
+                "Some MCU peripherals only work on fixed pins. Wiring those pins to a different function is a legitimate design choice, but it permanently gives up the pin-locked peripheral for them; the netlist alone cannot tell whether that trade was intended.".to_string(),
+                "If this arrangement is deliberate (the firmware drives the device another way), nothing needs to change. If the pin-locked peripheral was intended, move the device to that peripheral's full fixed pin set per the datasheet pin-mux table.".to_string(),
             ),
             LintCheck::DesignatorFootprintMismatch => (
                 f.message.clone(),

@@ -87,6 +87,10 @@ pub fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<Cosi
         backend,
         requested_part,
         substituted,
+        // Wall-clock accounting lives with the loop that ran (run_headless);
+        // the CLI stamps it after this build. 0 = unmeasured, never a claim.
+        wall_s: 0.0,
+        realtime_factor: 0.0,
         total_toggles,
         uart_seen,
         activity_summary,
@@ -277,6 +281,30 @@ fn probe_csv_header(probes: &[String]) -> String {
     csv
 }
 
+/// What a finished headless co-sim run delivered: its faults plus the honest
+/// wall-clock accounting (`hauksbee run` must report the rate it ACHIEVED,
+/// never a rate it did not).
+pub struct HeadlessRun {
+    pub faults: Vec<crate::FaultEvent>,
+    /// Wall-clock seconds the co-sim loop consumed.
+    pub wall_s: f64,
+    /// Sim seconds actually simulated. Falls short of the requested window
+    /// when a `--strict` analog abort ended the run early.
+    pub sim_s: f64,
+}
+
+impl HeadlessRun {
+    /// Achieved realtime factor: sim seconds per wall second. 0 when the run
+    /// was too short to measure.
+    pub fn realtime_factor(&self) -> f64 {
+        if self.wall_s > 0.0 {
+            self.sim_s / self.wall_s
+        } else {
+            0.0
+        }
+    }
+}
+
 pub fn run_headless(
     engine: &mut HauksbeeEngine,
     seconds: f64,
@@ -286,7 +314,7 @@ pub fn run_headless(
     probes: &[String],
     probe_csv: Option<&Path>,
     chunk_us: Option<f64>,
-) -> anyhow::Result<Vec<crate::FaultEvent>> {
+) -> anyhow::Result<HeadlessRun> {
     use crate::{FaultEvent, FaultKind};
     use hauksbee_server::engine::Engine;
     // External emulator backends (Renode/QEMU) advance over a socket: a fine 1 ms
@@ -327,6 +355,10 @@ pub fn run_headless(
         frame_dt = frame_dt.max(chunk_s);
         eprintln!("co-sim: solver chunk set to {us} us (--chunk-us)");
     }
+    // Wall-clock accounting for the achieved-rate line: measured around the
+    // stepping loop only, so probe-CSV writing and the summary print do not
+    // dilute the number.
+    let run_started = std::time::Instant::now();
     let mut t = 0.0;
     let mut next_progress = seconds / 5.0; // ~5 progress lines over the run
     let mut last_uart: Vec<u8> = Vec::new();
@@ -377,15 +409,26 @@ pub fn run_headless(
         t += frame_dt;
     }
 
+    let wall_s = run_started.elapsed().as_secs_f64();
+
     *uart_seen = !last_uart.is_empty();
     // The activity table + UART dump are human-facing. Under `--json` (quiet) the
     // SAME data is emitted structurally via CosimJson.activity_summary, so printing
     // it here would corrupt stdout for a machine consumer. Suppress when quiet.
     if !quiet {
         let sched = engine.scheduler();
+        // The achieved rate, stated from measurement: sim seconds delivered
+        // per wall second. Never print a rate this run did not achieve.
+        let factor = if wall_s > 0.0 {
+            sched.sim_time / wall_s
+        } else {
+            0.0
+        };
         println!(
-            "\nsimulated {:.3}s over {} nets",
+            "\nsimulated {:.3}s in {:.2}s wall ({:.3}x realtime) over {} nets",
             sched.sim_time,
+            wall_s,
+            factor,
             sched.stats.len()
         );
         // Sort nets by activity (toggle count then range).
@@ -521,7 +564,11 @@ pub fn run_headless(
         }
     }
 
-    Ok(faults)
+    Ok(HeadlessRun {
+        faults,
+        wall_s,
+        sim_s: engine.scheduler().sim_time,
+    })
 }
 
 #[cfg(test)]

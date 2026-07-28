@@ -1049,6 +1049,41 @@ impl Scheduler {
         &self.unexercised_buses
     }
 
+    /// Nets wired to an MCU pin whose drive this backend has NOT observed,
+    /// on backends that cannot report drive direction. The honesty layer for
+    /// the live-sim scope: on such a backend (the ESP32 QEMU RAM mailbox
+    /// carries output LEVELS only, and the fork models no GPSPI/I2C
+    /// controller, so hardware-peripheral traffic on a pin is invisible), a
+    /// pin whose Thevenin driver is still tri-stated might be genuinely
+    /// undriven OR driven in ways the backend cannot see; either way, the
+    /// solved voltage on its net is the passive network's static level, not a
+    /// measurement of MCU activity, and the UI must not present it as one.
+    /// Direction-observable backends (simavr DDR hooks, dir-mapped Renode
+    /// ports) are excluded: there a tri-stated driver IS the measured truth.
+    /// A net some other, observed MCU driver is actively pushing on is also
+    /// excluded: its reading is a real driven measurement. Recomputed per
+    /// frame: the flag clears the moment the pin first reports a level.
+    pub fn unobserved_drive_nets(&self) -> Vec<String> {
+        let driven: std::collections::HashSet<u32> = self
+            .mcus
+            .iter()
+            .flat_map(|m| m.binding.gpio_drivers.values())
+            .filter(|d| d.enabled)
+            .map(|d| d.net.0)
+            .collect();
+        let mut out: Vec<String> = self
+            .mcus
+            .iter()
+            .filter(|m| !m.core.drive_direction_observable())
+            .flat_map(|m| m.binding.gpio_drivers.values())
+            .filter(|d| !d.enabled && !driven.contains(&d.net.0))
+            .map(|d| self.circuit.node_name(d.net).to_string())
+            .collect();
+        out.sort();
+        out.dedup();
+        out
+    }
+
     /// ADC channels whose injections the MCU backends DROPPED (no injection
     /// map), resolved to their board nets and nearby parts (U3 finding 1).
     /// Populated by the run itself (a drop is recorded when the scheduler's

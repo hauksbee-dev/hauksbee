@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WebSection, WebFinding, WebHeadsUp, WebComponent, WebCosimSection } from '../types/report'
 import type { BoardSession } from '../hooks/useBoardSession'
-import { CheckIcon } from './Icons'
-import { BoardViewer } from './BoardViewer'
+import { CheckIcon, WarningIcon } from './Icons'
+import { BoardViewer, TOOLBAR_CLEARANCE } from './BoardViewer'
 import { SelectionCard } from './SelectionCard'
 import { FirmwareJack } from './FirmwareJack'
+import { displayNet } from '../lib/net-name'
 
 // The Board view with a report in hand: the viewer as the hero surface (with
 // its toolbar and layers panel), the plain-language verdict, and the findings.
@@ -121,6 +122,9 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
   // Which mode the viewer's 2D/3D control is in, so the caption under the
   // canvas describes the interactions that actually exist in that mode.
   const [viewerMode, setViewerMode] = useState<'2d' | '3d'>('2d')
+  // Expand-to-viewport for the map. Per-view and deliberately not persisted:
+  // it is a "let me look at this properly" gesture, not a setting.
+  const [mapFullscreen, setMapFullscreen] = useState(false)
   const focusSeq = useRef(0)
   const mapRef = useRef<HTMLDivElement>(null)
   const locate = useCallback((x: number, y: number, label: string) => {
@@ -196,26 +200,30 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
           </div>
         )}
 
-        {/* Bind-honesty banner */}
+        {/* Bind-honesty line. The verdict above is the page's one accent
+            surface; this keeps its amber and its place above the fold, but as a
+            single row under the verdict rather than a second shouting box. */}
         {bindOpen && (
           <div
-            className="mt-3 rounded-lg px-4 py-3"
-            style={{ border: '1px solid var(--warn-border)', background: 'var(--warn-bg)' }}
+            className="mt-2 flex items-start gap-2 px-1 text-sm"
+            style={{ color: 'var(--warn-strong)' }}
           >
-            <span className="text-[10px] font-bold tracking-widest uppercase" style={{ color: 'var(--warn-strong)' }}>
-              Active parts unresolved
+            <span className="shrink-0" style={{ display: 'inline-flex', marginTop: 3 }}>
+              <WarningIcon size={14} />
             </span>
-            <div className="text-sm mt-1" style={{ color: 'var(--silk)' }}>
-              {r.bind!.active_path_unresolved!.join(', ')} could not be bound or are left open on the
-              live circuit. Analog / AC / thermal results on their nets are not trustworthy.
-            </div>
+            <span style={{ color: 'var(--silk-dim)' }}>
+              <span style={{ color: 'var(--warn-strong)' }}>
+                {r.bind!.active_path_unresolved!.join(', ')}
+              </span>{' '}
+              could not be bound or are left open on the live circuit. Analog / AC / thermal
+              results on their nets are not trustworthy.
+            </span>
           </div>
         )}
 
         {/* Top-level honesty notes. The bind-role note restates exactly what
-            the yellow ACTIVE PARTS UNRESOLVED banner above already says (the
-            JSON carries both for CLI parity), so render it once, keeping the
-            stronger banner. */}
+            the amber unresolved-parts line above already says (the JSON carries
+            both for CLI parity), so render it once, keeping the stronger one. */}
         {(r.notes || []).filter(n => !(bindOpen && n.kind === 'bind_role')).map((n, i) => (
           <div
             key={i}
@@ -234,13 +242,18 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
           <section className="mt-6">
             <div
               ref={mapRef}
-              className="rounded-xl overflow-hidden"
-              style={{
-                height: 'clamp(420px, 52vh, 620px)',
-                position: 'relative',
-                border: '1px solid var(--hairline)',
-                boxShadow: 'var(--shadow-card)',
-              }}
+              className={mapFullscreen ? 'overflow-hidden' : 'rounded-xl overflow-hidden'}
+              style={mapFullscreen
+                ? {
+                    position: 'fixed', inset: 0, zIndex: 60,
+                    background: 'var(--instrument)',
+                  }
+                : {
+                    height: 'clamp(420px, 52vh, 620px)',
+                    position: 'relative',
+                    border: '1px solid var(--hairline)',
+                    boxShadow: 'var(--shadow-card)',
+                  }}
             >
               <BoardViewer
                 boardFile={boardUrl}
@@ -252,6 +265,8 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
                 wheelMode="capture-on-focus"
                 focusPoint={focusPoint}
                 onViewModeChange={setViewerMode}
+                fullscreen={mapFullscreen}
+                onToggleFullscreen={() => setMapFullscreen(v => !v)}
                 onNetClick={setSelectedNet}
                 onFootprintClick={fp => setSelectedComponent({
                   ref: fp.ref, value: fp.value, lib_id: fp.lib_id,
@@ -261,7 +276,15 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
               />
               {/* Floating selection card, same language as the live sim. */}
               {(selectedNet || selectedComponent) && (
-                <div className="absolute bottom-3 left-3 z-10">
+                // A strip that starts below the viewer toolbar and ends at the
+                // bottom of the map. The card sits at its foot and grows up
+                // into it, so a part with many nets scrolls inside the card
+                // instead of sliding under the 2D/3D and Fit controls.
+                <div
+                  className="absolute left-3 z-10 flex items-end pointer-events-none"
+                  style={{ top: TOOLBAR_CLEARANCE, bottom: 12 }}
+                >
+                  <div className="pointer-events-auto" style={{ maxHeight: '100%', display: 'flex' }}>
                   <SelectionCard
                     net={selectedNet}
                     component={selectedComponent}
@@ -270,6 +293,7 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
                     onClose={() => { setSelectedNet(null); setSelectedComponent(null) }}
                     onPickNet={setSelectedNet}
                   />
+                  </div>
                 </div>
               )}
             </div>
@@ -549,7 +573,7 @@ function CosimBlock({ cosim: c, liveAvailable, onDriveLive, simMounted }: {
               <tbody>
                 {c.gpio_nets.map((g, i) => (
                   <tr key={i}>
-                    <td className="px-2 py-1" style={{ borderBottom: '1px solid var(--rule)' }}>{g.name}</td>
+                    <td className="px-2 py-1" style={{ borderBottom: '1px solid var(--rule)' }}>{displayNet(g.name)}</td>
                     <td className="px-2 py-1 tnum" style={{ borderBottom: '1px solid var(--rule)', fontFamily: 'var(--font-mono)' }}>
                       {(g.volts || 0).toFixed(3)}
                     </td>

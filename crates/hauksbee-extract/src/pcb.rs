@@ -62,6 +62,14 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
     let mut components = Vec::new();
     // KiCad 5 wrote `(module ...)`, 6+ writes `(footprint ...)`.
     for fp in root.find_all("footprint").chain(root.find_all("module")) {
+        // A footprint with no pads at all is board artwork, not a component:
+        // silkscreen logos, drawn graphics, mechanical outlines. Treating them
+        // as parts let an Olimex "Logo-..." silkscreen bind as an inductor (the
+        // L prefix) and raise placeholder-value warnings on decoration, and it
+        // padded bind-rate denominators with things no model could ever bind.
+        if fp.find_all("pad").next().is_none() {
+            continue;
+        }
         components.push(extract_footprint(fp, &mut table));
     }
 
