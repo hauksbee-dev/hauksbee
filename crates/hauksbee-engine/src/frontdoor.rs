@@ -134,13 +134,25 @@ impl BindSummaryWeb {
     /// and the union of open active ICs (unresolved + resolved-but-open), refs
     /// only, in report order.
     pub fn from_summary(s: &BindSummary) -> Self {
-        let active_path_unresolved = s
+        let mut active_path_unresolved: Vec<String> = s
             .active_path_unresolved
             .iter()
             .filter(|u| u.active_ic)
             .chain(s.resolved_but_open_active.iter().filter(|u| u.active_ic))
             .map(|u| u.reference.clone())
             .collect();
+        // Sorted, not report order: every surface that prints this list (the
+        // web banner, the bind-role note) must agree on one order, and "U3,
+        // U6, U2, U5, U1" reads as noise next to "U1, U2, U3, U5, U6".
+        // Reference-natural order (prefix, then numeric index) so U10 does not
+        // sort before U2.
+        let ref_key = |r: &String| -> (String, u64) {
+            let split = r.find(|c: char| c.is_ascii_digit()).unwrap_or(r.len());
+            let (prefix, digits) = r.split_at(split);
+            (prefix.to_string(), digits.parse().unwrap_or(0))
+        };
+        active_path_unresolved.sort_by_key(ref_key);
+        active_path_unresolved.dedup();
         BindSummaryWeb {
             critical_parts_bound: s.critical_parts_bound.clone(),
             active_path_unresolved,

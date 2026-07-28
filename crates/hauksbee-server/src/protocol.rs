@@ -25,6 +25,24 @@ pub enum ServerMessage {
     Error {
         message: String,
     },
+    /// Sent once right after `BoardInfo` on every subscribe: the session's
+    /// server-held history (accumulated faults, the active probe set), so a
+    /// client that reloads mid-session rejoins with the story intact instead
+    /// of a blank log over a sim that kept running. Additive; older clients
+    /// ignore it.
+    Backlog(SessionBacklog),
+}
+
+/// The server-held per-session history replayed to every new subscriber.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SessionBacklog {
+    /// Every distinct (component, kind) fault the session has raised, first
+    /// occurrence each, in the order they fired. Cleared on `Reset`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub faults: Vec<FaultInfo>,
+    /// Nets with an active probe (`AddProbe` without a matching `RemoveProbe`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub probes: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +69,28 @@ pub struct BoardInfo {
     /// ("VCD","vcd_sink"). Additive; older clients ignore it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub peripherals: Vec<PeripheralInfo>,
+    /// Copper-short honesty for the live sim: whether the DRC's detected
+    /// shorts were bridged into this engine before it started streaming.
+    /// Absent when the board has no detected shorts. The UI must disclose
+    /// this the same way the report's co-sim block does, or the live rails
+    /// read as an idealised un-shorted board. Additive; older clients ignore
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shorts: Option<ShortsDisclosure>,
+}
+
+/// Live-sim disclosure of what happened to the DRC's detected copper shorts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ShortsDisclosure {
+    /// Copper shorts the geometric DRC detected on this board.
+    pub detected: usize,
+    /// How many of them were bridged into the live circuit before streaming.
+    pub bridged: usize,
+    /// Why nothing was bridged despite `detected > 0` (e.g. an unvalidated
+    /// layout version makes the shorts potentially phantom). None when the
+    /// shorts were applied.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unapplied_reason: Option<String>,
 }
 
 /// One attached peripheral, for the UI's control panel.

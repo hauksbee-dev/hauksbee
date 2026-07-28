@@ -44,6 +44,7 @@ fn board_info_power_supplies_is_a_map_of_tagged_configs() {
         mcus: vec![],
         power_supplies: Default::default(),
         peripherals: vec![],
+        shorts: None,
     };
     info.power_supplies
         .insert("5V".into(), PowerSupplyConfig::Ideal { volts: 5.0 });

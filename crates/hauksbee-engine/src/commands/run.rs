@@ -352,6 +352,18 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             report.short_count(),
             report.clearance_violations().count(),
         );
+        // A served live sim must also DISCLOSE the outcome on the wire
+        // BoardInfo, matching the report co-sim's "ran WITH the shorts
+        // bridged" note.
+        if cfg.serve && report.short_count() > 0 {
+            engine.set_shorts_disclosure(hauksbee_server::protocol::ShortsDisclosure {
+                detected: report.short_count(),
+                bridged: applied,
+                unapplied_reason: (applied == 0).then(|| {
+                    "the shorted nets could not be bridged into the live circuit".to_string()
+                }),
+            });
+        }
     }
 
     // --thermal: run a short co-sim, then print the steady-state junction
@@ -731,6 +743,26 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             "  For a report add a flag: --check (all static checks) · --plain (prose) · --json (machine); or --serve for the browser UI."
         );
         return Ok(());
+    }
+
+    // The preloaded live session must run the board AS BUILT: run the same
+    // geometric DRC the report page shows and bridge its validated shorts into
+    // the live engine (KiCad-10 `version_warning` shorts refused, reason
+    // disclosed), exactly like the web co-sim. Without this the live sim
+    // silently streamed idealised rails right under a report whose co-sim
+    // block ran WITH the shorts bridged and said so. Skipped when
+    // `--apply-shorts` already bridged and disclosed them above.
+    if !cfg.apply_shorts {
+        let drc_report = if is_altium {
+            ExtractedBoard::altium_drc(&raw).unwrap_or_default()
+        } else {
+            ExtractedBoard::drc_with_clearance_rules(
+                &text,
+                crate::reports::kicad_pro_clearance_rules(&cfg.board, &board),
+            )
+            .unwrap_or_default()
+        };
+        engine.apply_and_disclose_drc_shorts(&drc_report);
     }
 
     // Serve the loaded board's own file at the URL the frontend fetches it from
