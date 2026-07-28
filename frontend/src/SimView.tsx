@@ -175,6 +175,9 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
   const [selectedFp, setSelectedFp] = useState<FootprintInfo | null>(null)
   const [railOpen, setRailOpen] = useState(true)
+  // 2D/3D mode of the viewer's segmented control, so the hint chip describes
+  // the interactions that actually exist in that mode.
+  const [viewerMode, setViewerMode] = useState<'2d' | '3d'>('2d')
   const [probes, setProbes] = useState<string[]>([])
   const [selectedFaultRef, setSelectedFaultRef] = useState<string | null>(null)
   const frameHistory = useRef<SimFrame[]>([])
@@ -522,6 +525,7 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
               if (net) setSelectedFp(null)
             }}
             faultedRefs={faultedRefs}
+            onViewModeChange={setViewerMode}
           />
           )}
 
@@ -554,7 +558,9 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
           >
             {inputFocused
               ? 'shortcuts paused, click away from the input to use Space / N'
-              : 'Space=play/pause · N=step · scroll=zoom · drag=pan · hover=probe'}
+              : viewerMode === '3d'
+                ? 'Space=play/pause · N=step · drag=orbit · scroll=zoom · shift+drag=pan'
+                : 'Space=play/pause · N=step · scroll=zoom · drag=pan · hover=probe'}
           </div>
         </div>
 

@@ -70,6 +70,22 @@ pub fn live_launcher() -> hauksbee_server::frontdoor::LiveLauncher {
         |name: &str, contents: &[u8], fw: Option<(&str, &[u8])>| -> Result<LiveLaunch, String> {
             let norm =
                 crate::board_input::from_bytes(name, contents).map_err(|e| e.web_message())?;
+            // Geometric DRC on the same input the web co-sim runs it on (the
+            // bytes twin for a binary board, the layout text otherwise; a
+            // gerber archive has neither). Computed BEFORE `norm.board` is
+            // moved out, and applied to the live engine below: without this
+            // the live sim silently simulated the un-shorted board while the
+            // report's co-sim block (for the same board) ran with the shorts
+            // bridged and said so.
+            use hauksbee_extract::ExtractedBoard;
+            let drc = if norm.is_binary() {
+                ExtractedBoard::altium_drc(&norm.raw).unwrap_or_default()
+            } else if norm.is_gerber() {
+                Default::default()
+            } else {
+                ExtractedBoard::drc(norm.layout_text.as_deref().unwrap_or_default())
+                    .unwrap_or_default()
+            };
             let mut board = norm.board;
             // Same DNP default as bare `hauksbee run` (no --fit/--no-fit here).
             board
@@ -110,8 +126,12 @@ pub fn live_launcher() -> hauksbee_server::frontdoor::LiveLauncher {
             }
 
             let board_url = format!("/boards/{name}");
-            let engine = HauksbeeEngine::from_bound(bound, fw_path.as_deref(), &board_url)
+            let mut engine = HauksbeeEngine::from_bound(bound, fw_path.as_deref(), &board_url)
                 .map_err(|e| e.to_string())?;
+            // Same bridge-or-refuse policy as the web co-sim (validated shorts
+            // bridged, KiCad-10 `version_warning` shorts left alone), recorded
+            // on the engine so the sim view can disclose it.
+            engine.apply_and_disclose_drc_shorts(&drc);
             Ok(LiveLaunch {
                 engine: Box::new(engine),
                 board_name: name.to_string(),

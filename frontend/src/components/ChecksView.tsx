@@ -265,25 +265,89 @@ function RawModeSummary({ rawText }: { rawText: string }) {
   )
 }
 
-function Field({ label, value, onChange, width = 90, placeholder }: {
+function Field({ label, value, onChange, width = 90, placeholder, invalid }: {
   label: string
   value: string
   onChange: (v: string) => void
   width?: number
   placeholder?: string
+  /** Highlight as the offending input of a validation message. */
+  invalid?: boolean
 }) {
   return (
-    <label className="inline-flex items-center gap-1.5 text-[12px]" style={{ color: 'var(--silk-faint)' }}>
+    <label className="inline-flex items-center gap-1.5 text-[12px]" style={{ color: invalid ? 'var(--err)' : 'var(--silk-faint)' }}>
       {label}
       <input
         className="hb-input tnum"
-        style={{ width }}
+        aria-invalid={invalid || undefined}
+        style={{ width, ...(invalid ? { borderColor: 'var(--err)', background: 'var(--err-bg)' } : {}) }}
         value={value}
         placeholder={placeholder}
         onChange={e => onChange(e.target.value)}
       />
     </label>
   )
+}
+
+/** One builder-row validation problem: which UI field, said in the UI's own
+ *  words (never TOML key names; the raw pane owns that vocabulary). */
+interface RowIssue {
+  /** CheckRow field whose input gets the highlight. */
+  field: keyof CheckRow
+  message: string
+}
+
+/** Builder-mode preflight, mirroring hauksbee-ci's per-assertion requirements
+ *  but speaking in the builder's field labels. Only fields actually missing
+ *  are named, so "ref present, amps empty" says just "max A is empty". */
+function rowIssues(c: CheckRow): RowIssue[] {
+  const blank = (v: string) => v.trim() === ''
+  const issues: RowIssue[] = []
+  const needNet = () => { if (blank(c.net)) issues.push({ field: 'net', message: 'net is empty' }) }
+  switch (c.kind) {
+    case 'voltage':
+      needNet()
+      if (blank(c.min) && blank(c.max)) {
+        issues.push({ field: 'min', message: 'needs a min V and/or a max V' })
+      }
+      break
+    case 'uart':
+      if (blank(c.contains)) issues.push({ field: 'contains', message: '"must print" is empty' })
+      break
+    case 'toggle':
+      needNet()
+      if (blank(c.freq_hz) && blank(c.min_toggles)) {
+        issues.push({ field: 'freq_hz', message: 'needs a freq Hz or a min toggles' })
+      }
+      break
+    case 'boot-coverage':
+      needNet()
+      if (blank(c.min)) issues.push({ field: 'min', message: 'reach V is empty' })
+      if (blank(c.deadline_ms)) issues.push({ field: 'deadline_ms', message: 'within ms is empty' })
+      break
+    case 'max_current':
+      if (blank(c.ref)) issues.push({ field: 'ref', message: 'part (ref) is empty' })
+      if (blank(c.amps)) issues.push({ field: 'amps', message: 'max A is empty' })
+      break
+    case 'max_temp':
+      // max °C may stay blank (falls back to the part's own rating).
+      if (blank(c.ref)) issues.push({ field: 'ref', message: 'part (ref) is empty' })
+      break
+    case 'rail_window':
+      needNet()
+      if (blank(c.dip_below)) {
+        issues.push({ field: 'dip_below', message: 'dip below V is empty' })
+      } else if (blank(c.for_max_ms) && blank(c.recover_within_ms)) {
+        issues.push({ field: 'for_max_ms', message: 'needs a for max ms or a recovery window (within ms)' })
+      }
+      if (!blank(c.recover_within_ms) && blank(c.recover_to)) {
+        issues.push({ field: 'recover_to', message: 'recover to V is empty (needed with within ms)' })
+      }
+      break
+    default:
+      break
+  }
+  return issues
 }
 
 /** Inline PASS / FAIL / INVALID chip riding on a check row after a run. */
@@ -457,12 +521,36 @@ export function ChecksView({
     onPendingConsumed(upTo)
   }, [pendingChecks, rawMode, onPendingConsumed])
 
+  // Builder-mode preflight results: row id -> its missing-field issues.
+  // Set when a run is attempted with holes; a row's entry clears the moment
+  // that row is edited so the highlight never nags about fixed input.
+  const [validation, setValidation] = useState<Map<number, RowIssue[]>>(new Map())
+
   const update = (id: number, patch: Partial<CheckRow>) => {
     setChecks(cs => cs.map(c => (c.id === id ? { ...c, ...patch } : c)))
+    setValidation(prev => {
+      if (!prev.has(id)) return prev
+      const next = new Map(prev)
+      next.delete(id)
+      return next
+    })
   }
 
   const runChecks = useCallback(async () => {
     if (!boardFile) return
+    // Preflight the builder rows in the builder's own vocabulary before
+    // anything is POSTed: the server's TOML-keyed errors ("needs `ref` and
+    // `amps`") belong to raw mode, and they also over-named fields that were
+    // actually present.
+    if (!rawMode) {
+      const problems = new Map<number, RowIssue[]>()
+      for (const c of checks) {
+        const issues = rowIssues(c)
+        if (issues.length > 0) problems.set(c.id, issues)
+      }
+      setValidation(problems)
+      if (problems.size > 0) return
+    }
     setRunning(true)
     const tomlAtRun = effectiveToml
     try {
@@ -488,7 +576,7 @@ export function ChecksView({
     } finally {
       setRunning(false)
     }
-  }, [boardFile, firmwareFile, effectiveToml])
+  }, [boardFile, firmwareFile, effectiveToml, rawMode, checks])
 
   const specStem = (report.file_name || 'board').replace(/\.[^.]+$/, '')
   const specForDownload = () => {
@@ -696,6 +784,10 @@ jobs:
                     {rows.map(c => {
                       const meta = CHECK_KINDS.find(k => k.kind === c.kind)
                       const rowResult = resultForRow(c.id)
+                      const issues = validation.get(c.id) ?? []
+                      // Combined either/or requirements highlight every input
+                      // that could satisfy them (min OR max, freq OR toggles).
+                      const bad = (field: keyof CheckRow) => issues.some(i => i.field === field)
                       return (
                         <div
                           key={c.id}
@@ -713,42 +805,44 @@ jobs:
                           </div>
                           <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2">
                             {NET_KINDS.includes(c.kind) && (
-                              <label className="inline-flex items-center gap-1.5 text-[12px]" style={{ color: 'var(--silk-faint)' }}>
+                              <label className="inline-flex items-center gap-1.5 text-[12px]" style={{ color: bad('net') ? 'var(--err)' : 'var(--silk-faint)' }}>
                                 net
-                                <input className="hb-input" style={{ width: 170 }} list="net-options" value={c.net}
+                                <input className="hb-input" aria-invalid={bad('net') || undefined}
+                                  style={{ width: 170, ...(bad('net') ? { borderColor: 'var(--err)', background: 'var(--err-bg)' } : {}) }}
+                                  list="net-options" value={c.net}
                                   onChange={e => update(c.id, { net: e.target.value })} />
                               </label>
                             )}
                             {REF_KINDS.includes(c.kind) && (
-                              <Field label="part (ref)" value={c.ref} width={90} placeholder="U1"
+                              <Field label="part (ref)" value={c.ref} width={90} placeholder="U1" invalid={bad('ref')}
                                 onChange={v => update(c.id, { ref: v })} />
                             )}
                             {c.kind === 'voltage' && (
                               <>
-                                <Field label="min V" value={c.min} width={64} onChange={v => update(c.id, { min: v })} />
-                                <Field label="max V" value={c.max} width={64} onChange={v => update(c.id, { max: v })} />
+                                <Field label="min V" value={c.min} width={64} invalid={bad('min')} onChange={v => update(c.id, { min: v })} />
+                                <Field label="max V" value={c.max} width={64} invalid={bad('min')} onChange={v => update(c.id, { max: v })} />
                                 <Field label="after ms" value={c.after_ms} width={64} onChange={v => update(c.id, { after_ms: v })} />
                               </>
                             )}
                             {c.kind === 'uart' && (
-                              <Field label="must print" value={c.contains} width={220} placeholder="hello"
+                              <Field label="must print" value={c.contains} width={220} placeholder="hello" invalid={bad('contains')}
                                 onChange={v => update(c.id, { contains: v })} />
                             )}
                             {c.kind === 'toggle' && (
                               <>
-                                <Field label="freq Hz" value={c.freq_hz} width={64} onChange={v => update(c.id, { freq_hz: v })} />
+                                <Field label="freq Hz" value={c.freq_hz} width={64} invalid={bad('freq_hz')} onChange={v => update(c.id, { freq_hz: v })} />
                                 <Field label="±tol" value={c.tolerance} width={56} onChange={v => update(c.id, { tolerance: v })} />
-                                <Field label="or min toggles" value={c.min_toggles} width={64} onChange={v => update(c.id, { min_toggles: v })} />
+                                <Field label="or min toggles" value={c.min_toggles} width={64} invalid={bad('freq_hz')} onChange={v => update(c.id, { min_toggles: v })} />
                               </>
                             )}
                             {c.kind === 'boot-coverage' && (
                               <>
-                                <Field label="reach V" value={c.min} width={64} onChange={v => update(c.id, { min: v })} />
-                                <Field label="within ms" value={c.deadline_ms} width={64} onChange={v => update(c.id, { deadline_ms: v })} />
+                                <Field label="reach V" value={c.min} width={64} invalid={bad('min')} onChange={v => update(c.id, { min: v })} />
+                                <Field label="within ms" value={c.deadline_ms} width={64} invalid={bad('deadline_ms')} onChange={v => update(c.id, { deadline_ms: v })} />
                               </>
                             )}
                             {c.kind === 'max_current' && (
-                              <Field label="max A" value={c.amps} width={64} onChange={v => update(c.id, { amps: v })} />
+                              <Field label="max A" value={c.amps} width={64} invalid={bad('amps')} onChange={v => update(c.id, { amps: v })} />
                             )}
                             {c.kind === 'max_temp' && (
                               <Field label="max °C (blank = part rating)" value={c.celsius} width={70}
@@ -756,13 +850,20 @@ jobs:
                             )}
                             {c.kind === 'rail_window' && (
                               <>
-                                <Field label="dip below V" value={c.dip_below} width={64} onChange={v => update(c.id, { dip_below: v })} />
-                                <Field label="for max ms" value={c.for_max_ms} width={64} onChange={v => update(c.id, { for_max_ms: v })} />
-                                <Field label="recover to V" value={c.recover_to} width={64} onChange={v => update(c.id, { recover_to: v })} />
-                                <Field label="within ms" value={c.recover_within_ms} width={64} onChange={v => update(c.id, { recover_within_ms: v })} />
+                                <Field label="dip below V" value={c.dip_below} width={64} invalid={bad('dip_below')} onChange={v => update(c.id, { dip_below: v })} />
+                                <Field label="for max ms" value={c.for_max_ms} width={64} invalid={bad('for_max_ms')} onChange={v => update(c.id, { for_max_ms: v })} />
+                                <Field label="recover to V" value={c.recover_to} width={64} invalid={bad('recover_to')} onChange={v => update(c.id, { recover_to: v })} />
+                                <Field label="within ms" value={c.recover_within_ms} width={64} invalid={bad('for_max_ms')} onChange={v => update(c.id, { recover_within_ms: v })} />
                               </>
                             )}
                           </div>
+                          {/* The missing-values verdict, on the row it judges,
+                              in the builder's own field names. */}
+                          {issues.length > 0 && (
+                            <div data-testid="row-validation" className="mt-1.5 text-[11px]" style={{ color: 'var(--err)' }}>
+                              Not run: {issues.map(i => i.message).join(' · ')}
+                            </div>
+                          )}
                           {/* The run's measured value, on the row it judged:
                               a bare PASS chip hid the number the run actually
                               produced (it lived only in a hover tooltip). */}
@@ -903,6 +1004,16 @@ jobs:
               {!boardFile && (
                 <div className="mt-1.5 text-[12px]" style={{ color: 'var(--silk-faint)' }}>
                   (running from here needs the board uploaded in this session)
+                </div>
+              )}
+              {!rawMode && validation.size > 0 && (
+                <div
+                  data-testid="builder-validation"
+                  className="mt-3 rounded-lg px-3 py-2.5 text-[13px]"
+                  style={{ background: 'var(--err-bg)', border: '1px solid var(--err-border)', color: 'var(--err-strong)' }}
+                >
+                  Nothing was run: {validation.size === 1 ? 'a check is' : `${validation.size} checks are`} missing
+                  values. The highlighted fields above say which.
                 </div>
               )}
 

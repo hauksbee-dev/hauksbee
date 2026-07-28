@@ -16,7 +16,7 @@ use axum::routing::get;
 use axum::Router;
 use engine::Engine;
 use frontdoor::{CheckRunner, DepInstaller, DepsStatus, FirmwareAnalyzer, LiveLauncher};
-use protocol::{ClientMessage, ServerMessage, Status};
+use protocol::{ClientMessage, ServerMessage, SessionBacklog, SimFrame, Status};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc, Mutex};
@@ -34,6 +34,35 @@ struct Shared {
     /// sender, alive), and a socket left open kept painting the DEAD session's
     /// last frames as if they were current.
     replaced: tokio::sync::watch::Sender<bool>,
+    /// Server-held session history (accumulated faults, active probes),
+    /// replayed to every new subscriber so a mid-session reload rejoins with
+    /// the fault log intact. The broadcast channel alone cannot provide this:
+    /// a fault is drained into exactly one frame, so a client that was not
+    /// connected at that moment would never see it again. std Mutex on
+    /// purpose: every critical section is a short in-memory mutation.
+    backlog: std::sync::Mutex<SessionBacklog>,
+}
+
+impl Shared {
+    /// Fold a frame's freshly-raised faults into the session history: first
+    /// occurrence per (component, kind) keeps its timestamp, matching how the
+    /// frontend's fault log accumulates, so a rejoin restores the same list a
+    /// never-disconnected client would show.
+    fn record_faults(&self, frame: &SimFrame) {
+        if frame.faults.is_empty() {
+            return;
+        }
+        let mut backlog = self.backlog.lock().expect("backlog lock");
+        for f in &frame.faults {
+            if !backlog
+                .faults
+                .iter()
+                .any(|e| e.component == f.component && e.kind == f.kind)
+            {
+                backlog.faults.push(f.clone());
+            }
+        }
+    }
 }
 
 /// One running live-sim session: the sim loop's shared state, the loop task
@@ -106,6 +135,7 @@ impl LiveHub {
             cmd: cmd_tx,
             board_info_json: Mutex::new(board_info),
             replaced: replaced_tx,
+            backlog: std::sync::Mutex::new(SessionBacklog::default()),
         });
         let task = tokio::spawn(sim_loop(engine, wire_name, tx, cmd_rx, shared.clone()));
         let old = self
@@ -608,6 +638,20 @@ async fn handle_socket(mut socket: WebSocket, shared: Arc<Shared>) {
     if socket.send(Message::Text(info.into())).await.is_err() {
         return;
     }
+    // Replay the session's server-held history right after the identity frame:
+    // faults are drained into exactly one broadcast frame each, so without
+    // this a client that reloads mid-session would show an empty fault log
+    // over a sim that kept running (and faulting) the whole time.
+    let backlog = shared.backlog.lock().expect("backlog lock").clone();
+    let backlog_json =
+        serde_json::to_string(&ServerMessage::Backlog(backlog)).expect("backlog serializes");
+    if socket
+        .send(Message::Text(backlog_json.into()))
+        .await
+        .is_err()
+    {
+        return;
+    }
     let mut rx = shared.tx.subscribe();
     let mut replaced_rx = shared.replaced.subscribe();
     // A socket attached to an already-replaced session closes immediately.
@@ -695,6 +739,10 @@ async fn sim_loop(
                 if running {
                     let frame = engine.step(frame_dt * speed);
                     sim_time = frame.t;
+                    // Record BEFORE broadcasting (and regardless of receiver
+                    // count): a fault raised while nobody is connected must
+                    // still be in the backlog a later subscriber replays.
+                    shared.record_faults(&frame);
                     broadcast_msg(&ServerMessage::SimFrame(frame));
                     broadcast_msg(&ServerMessage::Status(Status {
                         running, sim_time, options: engine.controls(),
@@ -715,12 +763,17 @@ async fn sim_loop(
                         let step_dt = if dt > 0.0 { dt.min(1.0) } else { frame_dt };
                         let frame = engine.step(step_dt);
                         sim_time = frame.t;
+                        shared.record_faults(&frame);
                         broadcast_msg(&ServerMessage::SimFrame(frame));
                     }
                     ClientMessage::Reset => {
                         engine.reset();
                         running = false;
                         sim_time = 0.0;
+                        // A reset starts the fault story over server-side too,
+                        // or the next subscriber would replay pre-reset faults
+                        // as if they belonged to the fresh run.
+                        shared.backlog.lock().expect("backlog lock").faults.clear();
                     }
                     ClientMessage::SetSpeed { factor } => {
                         speed = factor.clamp(0.001, 1000.0);
@@ -740,9 +793,25 @@ async fn sim_loop(
                     ClientMessage::SetPeripheral { id, value } => {
                         engine.set_peripheral(&id, value);
                     }
-                    ClientMessage::LoadBoard { .. }
-                    | ClientMessage::AddProbe { .. }
-                    | ClientMessage::RemoveProbe { .. } => {
+                    // Probe DATA is client-derived from the frame stream, but
+                    // the active probe SET is session state: holding it here
+                    // lets a rejoining client restore its probes from the
+                    // backlog instead of losing them on reload.
+                    ClientMessage::AddProbe { net } => {
+                        let mut backlog = shared.backlog.lock().expect("backlog lock");
+                        if !backlog.probes.contains(&net) {
+                            backlog.probes.push(net);
+                        }
+                    }
+                    ClientMessage::RemoveProbe { net } => {
+                        shared
+                            .backlog
+                            .lock()
+                            .expect("backlog lock")
+                            .probes
+                            .retain(|p| p != &net);
+                    }
+                    ClientMessage::LoadBoard { .. } => {
                         // Wired up with the full engine integration.
                     }
                 }

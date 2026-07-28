@@ -109,6 +109,7 @@ impl Engine for McuDemoEngine {
             mcus: vec![("U1".into(), "simavr:atmega328p".into())],
             power_supplies: Default::default(),
             peripherals: Default::default(),
+            shorts: None,
         }
     }
 

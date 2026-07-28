@@ -272,7 +272,7 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
             </div>
             <div className="mt-1.5 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
               {viewerMode === '3d'
-                ? 'Drag to orbit · scroll to zoom · right-drag (or two-finger drag) to pan · switch to 2D to select traces and parts'
+                ? 'Drag to orbit · scroll to zoom · shift-drag to pan · switch to 2D to select traces and parts'
                 : 'Scroll to zoom · drag to pan · hover a trace to see its net · click a trace or a part to start a check on it'}
             </div>
           </section>
