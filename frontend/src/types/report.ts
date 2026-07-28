@@ -91,6 +91,9 @@ export interface WebReport {
   notes?: JsonNote[]
   /** Every net name, sorted; the checks builder's pickers. */
   nets?: string[]
+  /** reference -> bound model kind ("mcu", "bjt_npn", ...); what a component
+   *  click on the board map reports as the part's bound model. */
+  component_kinds?: Record<string, string>
   /** Binder-detected supplies (rail net → nominal volts) for the checks
    *  builder's prefill. */
   supplies?: WebSupply[]
@@ -102,7 +105,29 @@ export interface WebSupply {
   volts: number
 }
 
-/** What `/api/startup` returns: how the server was launched. */
+/** What `/api/startup` returns: how the server was launched. `live` is true
+ *  when the server can launch a live sim for an uploaded board
+ *  (`POST /api/live/launch`); absent on older/non-live deployments, where the
+ *  report falls back to the CLI hint. */
 export type Startup =
-  | { preloaded: false }
-  | { preloaded: true; board_name: string; report: WebReport | null }
+  | { preloaded: false; live?: boolean }
+  | { preloaded: true; board_name: string; report: WebReport | null; live?: boolean }
+
+/** What `POST /api/live/launch` returns. */
+export interface LiveLaunchResponse {
+  ok: boolean
+  error?: string
+  board_name?: string
+  /** True when an existing live session was replaced by this launch. */
+  replaced?: boolean
+}
+
+/** One check queued from a board surface (a net or component click on the
+ *  report map or the live sim) for the checks builder to append verbatim.
+ *  `seq` orders and de-duplicates consumption across remounts. */
+export interface QueuedCheck {
+  seq: number
+  kind: string
+  net?: string
+  ref?: string
+}

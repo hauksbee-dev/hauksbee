@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { parse as parseToml } from 'smol-toml'
-import type { WebReport } from '../types/report'
+import type { QueuedCheck, WebReport } from '../types/report'
+import type { SelectedComponent } from './ReportView'
 
 // The web checks builder: compose the body of a hauksbee-ci spec with plain
 // language, run it through the REAL hauksbee-ci binary (`POST /api/check`
@@ -245,12 +246,28 @@ export function checksStorageKey(report: WebReport): string {
   return `hauksbee.checks.${report.file_name}:${report.num_components}:${report.num_nets}`
 }
 
-export function ChecksPanel({ report, boardFile, firmwareFile, selectedNet }: {
+export function ChecksPanel({
+  report,
+  boardFile,
+  firmwareFile,
+  selectedNet,
+  selectedComponent,
+  pendingChecks,
+  onPendingConsumed,
+}: {
   report: WebReport
   boardFile: File | null
   firmwareFile: File | null
   /** Net last clicked on the board render, offered as a one-click check. */
   selectedNet: string | null
+  /** Component last clicked on the board render, offered as ref checks. */
+  selectedComponent: SelectedComponent | null
+  /** Checks queued from a board surface (report map or live sim), appended
+   *  here as ordinary prefilled rows so the spec TOML is exactly what a
+   *  hand-built check produces. */
+  pendingChecks: QueuedCheck[]
+  /** Every pending check up to (and including) seq has been applied. */
+  onPendingConsumed: (upToSeq: number) => void
 }) {
   const storageKey = checksStorageKey(report)
   // ── Restore a saved session for this board (auto-load). Because the panel
@@ -300,10 +317,41 @@ export function ChecksPanel({ report, boardFile, firmwareFile, selectedNet }: {
     } catch { /* storage full/blocked: the session still works */ }
   }, [storageKey, specName, duration, supplies, checks, rawMode, rawText])
 
-  const addCheck = (kind: string, net = '') => {
-    setChecks(cs => [...cs, emptyCheck(nextId.current++, kind, net)])
+  const addCheck = (kind: string, net = '', ref = '') => {
+    setChecks(cs => {
+      const row = emptyCheck(nextId.current++, kind, net)
+      row.ref = ref
+      return [...cs, row]
+    })
     setAddOpen(false)
   }
+
+  // Consume checks queued from a board surface (a net/component click on the
+  // report map or in the live sim). Builder mode appends them as ordinary
+  // rows; raw mode appends the equivalent [[assert]] text so nothing queued
+  // is ever silently dropped.
+  useEffect(() => {
+    if (pendingChecks.length === 0) return
+    const upTo = pendingChecks[pendingChecks.length - 1].seq
+    if (rawMode) {
+      setRawText(prev => prev + pendingChecks.map(c => {
+        let s = `\n[[assert]]\nkind = ${tomlString(c.kind)}\n`
+        if (c.net) s += `net = ${tomlString(c.net)}\n`
+        if (c.ref) s += `ref = ${tomlString(c.ref)}\n`
+        return s
+      }).join(''))
+    } else {
+      setChecks(cs => [
+        ...cs,
+        ...pendingChecks.map(c => {
+          const row = emptyCheck(nextId.current++, c.kind, c.net ?? '')
+          if (c.ref) row.ref = c.ref
+          return row
+        }),
+      ])
+    }
+    onPendingConsumed(upTo)
+  }, [pendingChecks, rawMode, onPendingConsumed])
 
   const update = (id: number, patch: Partial<CheckRow>) => {
     setChecks(cs => cs.map(c => (c.id === id ? { ...c, ...patch } : c)))
@@ -402,6 +450,28 @@ jobs:
           >
             + Check a voltage on “{selectedNet}” (clicked on the map)
           </button>
+        )}
+        {selectedComponent && !rawMode && (
+          <div className="mb-3 flex flex-wrap gap-2">
+            <button
+              type="button"
+              data-testid="quick-add-ref-current"
+              onClick={() => addCheck('max_current', '', selectedComponent.ref)}
+              className="px-3 py-1.5 rounded-lg text-[12px] cursor-pointer"
+              style={{ background: 'rgba(224,138,78,0.12)', border: '1px solid #7c4a1e', color: '#ffb072' }}
+            >
+              + “{selectedComponent.ref}” must stay under a current (clicked on the map)
+            </button>
+            <button
+              type="button"
+              data-testid="quick-add-ref-temp"
+              onClick={() => addCheck('max_temp', '', selectedComponent.ref)}
+              className="px-3 py-1.5 rounded-lg text-[12px] cursor-pointer"
+              style={{ background: 'rgba(224,138,78,0.12)', border: '1px solid #7c4a1e', color: '#ffb072' }}
+            >
+              + “{selectedComponent.ref}” must stay cool
+            </button>
+          </div>
         )}
 
         {!rawMode && (

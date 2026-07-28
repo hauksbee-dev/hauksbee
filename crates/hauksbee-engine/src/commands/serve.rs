@@ -110,9 +110,20 @@ pub fn run(port: u16, open: bool) -> anyhow::Result<()> {
             println!("  http://{bound}/api/analyze meanwhile. Ctrl-C to stop.\n");
         }
 
-        // No board preloaded: the app lands on the drop zone.
-        let startup_json = "{\"preloaded\":false}".to_string();
-        hauksbee_server::serve_frontdoor_on(listener, dir.as_deref(), analyze, Some(check), Some(deps), startup_json)
-            .await
+        // No board preloaded: the app lands on the drop zone. `live: true`
+        // tells it this server can launch a live sim for an uploaded board
+        // (`/api/live/launch`), so the report offers the launch button instead
+        // of the CLI-hint fallback.
+        let startup_json = "{\"preloaded\":false,\"live\":true}".to_string();
+        hauksbee_server::serve_frontdoor_on(
+            listener,
+            dir.as_deref(),
+            analyze,
+            Some(check),
+            Some(deps),
+            Some(crate::commands::common::live_launcher()),
+            startup_json,
+        )
+        .await
     })
 }

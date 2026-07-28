@@ -78,6 +78,29 @@ pub type FirmwareAnalyzer = Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>) -> St
 pub type CheckRunner =
     Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>, &str) -> String + Send + Sync>;
 
+/// Everything a successful live-launch callback hands back: the engine to run,
+/// plus the session metadata the hub serves (identity for `/api/live/status`,
+/// the board's own layout text for the geometry viewer, and any staged temp
+/// file the session must keep alive).
+pub struct LiveLaunch {
+    pub engine: Box<dyn crate::engine::Engine>,
+    pub board_name: String,
+    /// (file name, KiCad layout text) for `/boards/<file name>`; None when the
+    /// format has no client-drawable text (Altium, gerber zip).
+    pub board_file: Option<(String, String)>,
+    /// Kept alive for the session's lifetime (e.g. the staged firmware file).
+    pub keepalive: Option<Box<dyn std::any::Any + Send>>,
+}
+
+/// Build a live engine for an uploaded board: `(board_name, board_bytes,
+/// Option<(firmware_name, firmware_bytes)>) -> LiveLaunch or a user-facing
+/// refusal`. The error string is shown verbatim in the UI, so the engine's
+/// implementation surfaces the SAME refusals the CLI gives (e.g. firmware on a
+/// board that bound no processor). Boxed like the analyzers so the server
+/// crate stays engine-free.
+pub type LiveLauncher =
+    Arc<dyn Fn(&str, &[u8], Option<(&str, &[u8])>) -> Result<LiveLaunch, String> + Send + Sync>;
+
 /// Report the optional-dependency status: `() -> JSON string` (the engine's
 /// `deps::deps_json`, which runs the engine's OWN discovery). Boxed like the
 /// analyzers so the server crate stays engine-free.
@@ -154,6 +177,82 @@ pub fn check_route(check: CheckRunner) -> Router {
         .route("/api/check", post(check_handler))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
         .with_state(state)
+}
+
+struct LiveState {
+    hub: Arc<crate::LiveHub>,
+    launch: LiveLauncher,
+}
+
+/// The live-launch API: `POST /api/live/launch` (multipart `board` + optional
+/// `firmware`, same parts as `/api/analyze-with-firmware`) boots a live sim
+/// session for the upload and swaps it into the hub behind `/ws`;
+/// `GET /api/live/status` reports whether (and which) a session is running so
+/// the UI can confirm before replacing it. The launch runs an uploaded board
+/// (and firmware) through the engine, so it carries the same
+/// `reject_cross_site` guard as the other mutating endpoints.
+pub fn live_routes(hub: Arc<crate::LiveHub>, launch: LiveLauncher) -> Router {
+    let state = Arc::new(LiveState { hub, launch });
+    Router::new()
+        .route("/api/live/launch", post(live_launch_handler))
+        .route("/api/live/status", get(live_status_handler))
+        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .with_state(state)
+}
+
+async fn live_status_handler(State(state): State<Arc<LiveState>>) -> impl IntoResponse {
+    let body = match state.hub.active_board() {
+        Some(name) => serde_json::json!({ "active": true, "board_name": name }),
+        None => serde_json::json!({ "active": false }),
+    };
+    json_body(StatusCode::OK, body)
+}
+
+/// POST `/api/live/launch`: build the engine for the uploaded board (blocking
+/// pool; extract + bind + firmware load are CPU work) and install it as THE
+/// live session. `{ok:true, board_name, replaced}` on success; a refusal (no
+/// processor for the firmware, unloadable firmware, unreadable board) comes
+/// back as `{ok:false, error}` with the engine's own message, so the report
+/// stays up and the UI shows the reason instead of a dead spinner.
+async fn live_launch_handler(
+    State(state): State<Arc<LiveState>>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> impl IntoResponse {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp;
+    }
+    let parts = match parse_upload(&mut multipart).await {
+        Ok(p) => p,
+        Err(msg) => return json_error(&msg),
+    };
+    let Some(board_bytes) = parts.board_bytes else {
+        return json_error("no board file in the upload (expected a 'board' or 'file' part)");
+    };
+    let (board_name, fw_name, fw_bytes) = (parts.board_name, parts.fw_name, parts.fw_bytes);
+    let launch = state.launch.clone();
+    let built = tokio::task::spawn_blocking(move || match &fw_bytes {
+        Some(bytes) => (launch)(&board_name, &board_bytes, Some((&fw_name, bytes))),
+        None => (launch)(&board_name, &board_bytes, None),
+    })
+    .await;
+    match built {
+        Ok(Ok(live)) => {
+            let board_name = live.board_name.clone();
+            let replaced = state.hub.launch(
+                live.engine,
+                live.board_name,
+                live.board_file,
+                live.keepalive,
+            );
+            json_body(
+                StatusCode::OK,
+                serde_json::json!({ "ok": true, "board_name": board_name, "replaced": replaced }),
+            )
+        }
+        Ok(Err(msg)) => json_error(&msg),
+        Err(_) => json_error("the live launch task panicked; see the server log"),
+    }
 }
 
 struct DepsState {
