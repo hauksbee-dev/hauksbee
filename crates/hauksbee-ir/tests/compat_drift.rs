@@ -184,12 +184,12 @@ fn claims() -> Vec<Claim> {
         refuse("`.dc` on a non-source", "`.dc` can only sweep an independent V or I source.", "t\nV1 a 0 1\nR1 a 0 1k\n.dc R1 0 1 0.1\n.end\n", "can only sweep an independent V or I source"),
         refuse("degenerate VCVS", "A VCVS shorting its own output port (or unity self-sense) is singular and refuses by name.", "t\nE1 out out in 0 2\nV1 in 0 1\n.end\n", "shorts its own output port"),
         refuse("undefined subckt", "An `X` call to a subcircuit that was never defined refuses with the name.", "t\nX1 a b MISSING\nV1 a 0 1\n.end\n", "undefined subckt"),
-        refuse("missing BJT/MOS `.model`", "A `Q`/`M` referencing an undefined model is refused (a diode now refuses the same way; see below).", "t\nQ1 c b e NOPE\nV1 c 0 5\n.end\n", "references undefined .model"),
+        refuse("missing BJT/MOS `.model`", "A `Q`/`M` referencing an undefined model is refused (a diode refuses the same way; see below).", "t\nQ1 c b e NOPE\nV1 c 0 5\n.end\n", "references undefined .model"),
         refuse("unknown `.ac` sweep type", "`.ac` accepts only `dec`, `oct`, or `lin`.", "t\nV1 a 0 AC 1\nR1 a 0 1k\n.ac log 10 1 100k\n.end\n", "unknown `.ac` sweep type"),
         refuse("`.param` dependency cycle", "Parameters that reference each other circularly are refused.", "t\n.param a={b}\n.param b={a}\nR1 a 0 {a}\nV1 a 0 1\n.end\n", "dependency cycle"),
         // Diode model resolution now matches Q/M: a named model that is missing
         // or is not a diode refuses instead of silently defaulting.
-        refuse("`D` undefined `.model`", "A diode naming a model that does not exist is refused (no longer silently defaulted).", "t\nV1 a 0 1\nD1 a 0 NOPE\n.end\n", "references undefined .model"),
+        refuse("`D` undefined `.model`", "A diode naming a model that does not exist is refused, not silently defaulted.", "t\nV1 a 0 1\nD1 a 0 NOPE\n.end\n", "references undefined .model"),
         refuse("`D` non-diode `.model`", "A diode naming a `.model` that is not a diode (e.g. an NPN) is refused rather than inheriting foreign params.", "t\nV1 c 0 5\nD1 c 0 QM\n.model QM NPN(BF=100)\n.end\n", "not a diode model"),
         // Unsupported analysis directives now refuse loudly, each with its own
         // reason, rather than being silently ignored.
