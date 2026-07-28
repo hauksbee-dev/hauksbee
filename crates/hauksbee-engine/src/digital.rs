@@ -362,9 +362,7 @@ fn synth_passthrough_spec(roles: &HashMap<String, NodeId>) -> Option<Logic> {
         inputs,
         outputs,
         comb,
-        registers: Vec::new(),
-        tristate: Default::default(),
-        init: Default::default(),
+        ..Default::default()
     })
 }
 

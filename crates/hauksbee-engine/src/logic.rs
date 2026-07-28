@@ -1306,9 +1306,7 @@ outputs = ["y"]
             inputs: vec![],
             outputs,
             comb,
-            registers: vec![],
-            tristate: Default::default(),
-            init: Default::default(),
+            ..Default::default()
         };
         let e = LogicComponent::compile("ring", &logic).unwrap_err();
         assert!(
