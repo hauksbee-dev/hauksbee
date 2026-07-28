@@ -628,18 +628,35 @@ fn actionable_info_note(f: &SiFinding) -> Option<HeadsUp> {
     if !off_target {
         return None;
     }
-    let parts = join_refs(&f.refs);
-    let affected = if parts == "the part" {
-        String::from("the trace pair noted above")
+    // Name the actual copper: the impedance info notes carry their NETS (refs
+    // are empty), and the old refs-only fallback printed "the trace pair noted
+    // above", a pointer at nothing, on every one of them.
+    let affected = if !f.refs.is_empty() {
+        join_refs(&f.refs)
+    } else if !f.nets.is_empty() {
+        f.nets.join(" / ")
     } else {
-        parts
+        String::from("the flagged trace")
+    };
+    // The measured substance, kept WHOLE: everything up to the "- info only
+    // (...)" caveat, which the gloss below restates in plain words. Running
+    // this through `short_msg`'s 160-char cut lost the target/deviation clause
+    // mid-parenthesis. The message leads with the net names; the sentence
+    // already names them via `affected`, so drop that duplicate prefix.
+    let core = m.split(" - info only").next().unwrap_or(m).trim();
+    let core = core
+        .strip_prefix(&format!("{affected}:"))
+        .unwrap_or(core)
+        .trim();
+    // "pair" only when it IS one: the single-ended estimates name one net.
+    let subject = if f.refs.len() >= 2 || f.nets.len() >= 2 {
+        "A high-speed trace pair"
+    } else {
+        "A high-speed trace"
     };
     Some(match f.check {
         SiCheck::ControlledImpedance => HeadsUp::glossed(
-            format!(
-                "A high-speed trace pair ({affected}) is off its impedance target ({}).",
-                short_msg(m)
-            ),
+            format!("{subject} ({affected}) is off its impedance target ({core})."),
             "Fast links like USB (90 ohm differential) or Ethernet need their traces to \
              present a specific impedance so the signal does not reflect off the wire and \
              smear. This is a computed estimate, flagged only because the board did not \
@@ -652,7 +669,7 @@ fn actionable_info_note(f: &SiFinding) -> Option<HeadsUp> {
              docs/checks/SI_CHECKS.md), or ask your fab to build a controlled-impedance stackup \
              to spec.",
         ),
-        _ => HeadsUp::note(format!("{} ({affected}).", short_msg(m))),
+        _ => HeadsUp::note(format!("{core} ({affected}).")),
     })
 }
 

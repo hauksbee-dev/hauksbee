@@ -18,8 +18,8 @@ use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 use hauksbee_server::engine::Engine;
 use hauksbee_server::protocol::{
-    BoardInfo, ChemistryConfig, FaultInfo, PeripheralInfo, PowerSupplyConfig, SimFrame,
-    SolverControls, SupplyState, UsbSpecConfig,
+    BoardInfo, ChemistryConfig, FaultInfo, PeripheralInfo, PowerSupplyConfig, ShortsDisclosure,
+    SimFrame, SolverControls, SupplyState, UsbSpecConfig,
 };
 use hauksbee_solve::{Integration, SolverOptions, StepControl};
 
@@ -38,6 +38,11 @@ pub struct HauksbeeEngine {
     mcu_backends: Vec<(String, String)>,
     controls: SolverControls,
     report_store: BindReport,
+    /// What happened to the DRC's detected copper shorts on THIS engine, for
+    /// the wire `BoardInfo` so the live-sim UI can disclose it (the report's
+    /// co-sim block already does; the live surface must match). None when no
+    /// shorts were detected (or the launch path ran no DRC).
+    shorts: Option<ShortsDisclosure>,
 }
 
 impl HauksbeeEngine {
@@ -68,6 +73,7 @@ impl HauksbeeEngine {
             mcu_backends,
             controls,
             report_store,
+            shorts: None,
         })
     }
 
@@ -143,6 +149,43 @@ impl HauksbeeEngine {
         self.sched.apply_drc_shorts(report)
     }
 
+    /// Record an already-computed shorts outcome for the wire `BoardInfo`
+    /// (used when the caller bridged the shorts itself, e.g. `--apply-shorts`,
+    /// and only the disclosure is left to do).
+    pub fn set_shorts_disclosure(&mut self, disclosure: ShortsDisclosure) {
+        self.shorts = Some(disclosure);
+    }
+
+    /// Run the geometric DRC verdict this engine was launched with through the
+    /// same bridge-or-refuse policy the web co-sim uses, and RECORD the outcome
+    /// for the wire `BoardInfo`: validated shorts are bridged into the circuit
+    /// (so the live rails reflect the board as built); an unvalidated layout
+    /// version (`version_warning`) leaves them un-bridged, with the reason
+    /// disclosed instead of silently simulating the idealised board.
+    pub fn apply_and_disclose_drc_shorts(&mut self, report: &hauksbee_extract::DrcReport) {
+        let detected = report.short_count();
+        if detected == 0 {
+            self.shorts = None;
+            return;
+        }
+        let bridged = if report.version_warning.is_none() {
+            self.apply_drc_shorts(report)
+        } else {
+            0
+        };
+        self.shorts = Some(ShortsDisclosure {
+            detected,
+            bridged,
+            unapplied_reason: if bridged == 0 {
+                Some(report.version_warning.clone().unwrap_or_else(|| {
+                    "the shorted nets could not be bridged into the live circuit".to_string()
+                }))
+            } else {
+                None
+            },
+        });
+    }
+
     /// Convenience: extract + bind + build, then run geometric DRC on the same
     /// board text and apply every detected short before simulating. This is the
     /// "detect shorts from geometry, then simulate what the board does with them
@@ -181,6 +224,7 @@ impl Engine for HauksbeeEngine {
                 .into_iter()
                 .map(|(id, kind)| PeripheralInfo { id, kind })
                 .collect(),
+            shorts: self.shorts.clone(),
         }
     }
 
