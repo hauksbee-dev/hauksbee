@@ -47,9 +47,17 @@ PREFIX="${PREFIX_ARG:-$(hauksbee_default_prefix)}"
 BINDIR="$PREFIX/bin"
 SRC="$(hauksbee_target_bin)"
 
-have "$CARGO" || die "cargo not found. Install Rust from https://rustup.rs, then re-run."
+# Release-bundle layout: the extracted tarball carries prebuilt binaries in
+# bin/ and no target/ at all (README-BUNDLE.txt points users at
+# `scripts/install.sh --no-build --symlink`). Fall back to that layout when
+# target/release has no binaries, so the documented command works with no
+# Rust toolchain present. A checkout with built binaries is untouched.
+if [ ! -x "$SRC/hauksbee" ] && [ -x "$HAUKSBEE_ROOT/bin/hauksbee" ]; then
+  SRC="$HAUKSBEE_ROOT/bin"
+fi
 
 if [ "$DO_BUILD" -eq 1 ]; then
+  have "$CARGO" || die "cargo not found. Install Rust from https://rustup.rs, then re-run (or pass --no-build to install prebuilt binaries)."
   # Build the web front door bundle first. `hauksbee serve` serves
   # frontend/dist/, which is gitignored (a build artifact), so a fresh `git
   # pull` + install would otherwise keep serving a stale bundle — the classic
@@ -103,5 +111,11 @@ ok "Everything is current: web UI (frontend/dist) + hauksbee + hauksbee-ci."
 info "  Re-run this script any time (e.g. after 'git pull') to rebuild them all."
 printf '\n'
 log "Done. Verify with:"
-info "  hauksbee run $HAUKSBEE_ROOT/crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report"
-info "  hauksbee-ci run $HAUKSBEE_ROOT/crates/hauksbee-ci/examples/blinky.toml"
+# The example paths differ per layout: a checkout keeps them under crates/,
+# a release bundle ships them under examples/ci-specs.
+if [ -f "$HAUKSBEE_ROOT/crates/hauksbee-ci/examples/boards/blinky.kicad_pcb" ]; then
+  info "  hauksbee run $HAUKSBEE_ROOT/crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report"
+  info "  hauksbee-ci run $HAUKSBEE_ROOT/crates/hauksbee-ci/examples/blinky.toml"
+else
+  info "  hauksbee run $HAUKSBEE_ROOT/examples/ci-specs/boards/blinky.kicad_pcb --report"
+fi
