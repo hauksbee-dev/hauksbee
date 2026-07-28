@@ -6,9 +6,19 @@ interface NetPanelProps {
   onSelectNet: (net: string | null) => void
 }
 
+// Rows rendered at once. A 3,000-net board rebuilt thousands of DOM rows on
+// every sim frame; the list is sorted by |V| so the cap keeps the rows that
+// carry information and drops the tail of dead nets.
+const MAX_ROWS = 150
+
 export function NetPanel({ frame, selectedNet, onSelectNet }: NetPanelProps) {
   const voltages = frame?.net_voltages ?? {}
-  const entries = Object.entries(voltages).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+  const allEntries = Object.entries(voltages).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+  const entries = allEntries.slice(0, MAX_ROWS)
+  // Never hide the selected net behind the cap
+  if (selectedNet && voltages[selectedNet] !== undefined && !entries.some(([n]) => n === selectedNet)) {
+    entries.push([selectedNet, voltages[selectedNet]])
+  }
 
   return (
     <div
@@ -94,6 +104,11 @@ export function NetPanel({ frame, selectedNet, onSelectNet }: NetPanelProps) {
               </div>
             )
           })}
+          {allEntries.length > entries.length && (
+            <div className="px-3 py-1.5 text-[9px]" style={{ color: '#334155' }}>
+              showing top {entries.length} of {allEntries.length} nets by |V|
+            </div>
+          )}
         </div>
       )}
     </div>
