@@ -30,6 +30,11 @@ testdata/firmware/*/build_c3/
 tarski-works/**/*.log
 tarski-works/oracle_slice_*/
 
+# Launch-video intermediates: raw playwright webms, and the remotion media
+# dir (copies of video/renders, staged by video/remotion/sync-media.sh).
+frontend/capture/out/launch/
+video/remotion/public/media/
+
 # macOS noise
 .DS_Store
 codex-webreview.log
