@@ -1,0 +1,35 @@
+// The hauksbee.dev demo: Workers static assets (the VITE_DEMO build plus the
+// recorded sessions) fronted by the waitlist Worker in worker/index.js.
+//
+// NOT deployed from a dev checkout. Deployment is the `demo` phase of
+// scripts/make-public.sh (launch day), which runs `wrangler deploy` here.
+// Before the FIRST deploy, once:
+//   1. demo/build.sh                          (produces demo/dist)
+//   2. wrangler kv namespace create WAITLIST  (then paste the id below)
+// The custom domain binds on deploy: hauksbee.dev must already be a zone on
+// the account; wrangler creates the DNS record and certificate itself.
+//
+// Local verification: demo/build.sh && wrangler dev --port 3600
+// (local KV simulation; the placeholder id below is never contacted).
+{
+  "name": "hauksbee-demo",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-07-01",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    // One page; deep links and hard reloads must land on it, not a 404.
+    "not_found_handling": "single-page-application"
+  },
+  "kv_namespaces": [
+    {
+      "binding": "WAITLIST",
+      // Placeholder: create the real namespace at first deploy (see header).
+      "id": "REPLACE_AT_DEPLOY_wrangler_kv_namespace_create_WAITLIST"
+    }
+  ],
+  "routes": [
+    { "pattern": "hauksbee.dev", "custom_domain": true }
+  ],
+  "observability": { "enabled": true }
+}

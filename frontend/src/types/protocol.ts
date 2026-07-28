@@ -71,6 +71,20 @@ export interface BoardInfoMsg {
   peripherals?: PeripheralInfo[]
   /** Future: URL to the pre-exported GLB for 3D view. Optional chaining required. */
   glb_url?: string
+  /** Copper-short honesty: what happened to the DRC's detected shorts on the
+   *  live engine. Absent when no shorts were detected. */
+  shorts?: ShortsDisclosure
+}
+
+/** Live-sim disclosure of what happened to the DRC's detected copper shorts. */
+export interface ShortsDisclosure {
+  /** Copper shorts the geometric DRC detected on this board. */
+  detected: number
+  /** How many were bridged into the live circuit before streaming. */
+  bridged: number
+  /** Why nothing was bridged despite detected > 0 (e.g. unvalidated layout
+   *  version); absent when the shorts were applied. */
+  unapplied_reason?: string
 }
 
 export interface SimFault {
@@ -133,7 +147,18 @@ export interface ErrorMsg {
   message: string
 }
 
-export type ServerMessage = BoardInfoMsg | SimFrame | StatusMsg | ProbeDataMsg | ErrorMsg
+/** Server-held session history replayed right after BoardInfo on subscribe:
+ *  the accumulated fault log and the active probe set, so a mid-session
+ *  reload rejoins with the story intact. */
+export interface BacklogMsg {
+  type: 'Backlog'
+  /** First occurrence per (component, kind), in firing order; omitted when empty. */
+  faults?: SimFault[]
+  /** Nets with an active probe; omitted when empty. */
+  probes?: string[]
+}
+
+export type ServerMessage = BoardInfoMsg | SimFrame | StatusMsg | ProbeDataMsg | ErrorMsg | BacklogMsg
 
 // ============================================================
 // Client → Server

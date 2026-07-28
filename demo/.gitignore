@@ -1,0 +1,5 @@
+# Build artifacts: dist/ is produced by build.sh, .wrangler/ is wrangler dev
+# state. The recorded sessions and the S3 firmware are NOT ignored: they are
+# the demo's content, versioned so a deploy is reproducible byte for byte.
+dist/
+.wrangler/

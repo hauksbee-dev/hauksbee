@@ -1,0 +1,111 @@
+{
+  "generated_at": "2026-07-28T12:12:10.881Z",
+  "engine_commit": "41170e5ad7e6afd45a39a900440d5f1ebcf845a8",
+  "engine_version": "hauksbee 0.1.0 (git 41170e5ad7e6)",
+  "sessions": [
+    {
+      "id": "button_pullup-nominal",
+      "board": "button_pullup",
+      "scenario": "nominal",
+      "title": "Button + pull-up, nominal",
+      "description": "A tiny clean board: a button, a pull-up, a rail. Five seconds of nominal operation.",
+      "board_name": "button_pullup",
+      "firmware": null,
+      "mcus": [],
+      "engine_commit": "41170e5ad7e6afd45a39a900440d5f1ebcf845a8",
+      "engine_version": "hauksbee 0.1.0 (git 41170e5ad7e6)",
+      "captured_at": "2026-07-28T11:39:34.477Z",
+      "duration_s": 5,
+      "frames": 150,
+      "bytes": 86533,
+      "thinned_keep_every": 1,
+      "session": "sessions/button_pullup/nominal.jsonl",
+      "report": "sessions/button_pullup/report-nominal.json",
+      "board_file": "sessions/button_pullup/button_pullup.kicad_pcb",
+      "actions": []
+    },
+    {
+      "id": "boot_gate-nominal",
+      "board": "boot_gate",
+      "scenario": "nominal",
+      "title": "Boot gate + firmware, nominal boot",
+      "description": "The boot-gate board co-simulated with its real firmware: the MCU boots and drives the MOSFET gate. Five seconds, nominal.",
+      "board_name": "boot_gate",
+      "firmware": "testdata/firmware/boot_gate_a/boot_gate.hex",
+      "mcus": [
+        [
+          "U1",
+          "simavr:atmega328p"
+        ]
+      ],
+      "engine_commit": "41170e5ad7e6afd45a39a900440d5f1ebcf845a8",
+      "engine_version": "hauksbee 0.1.0 (git 41170e5ad7e6)",
+      "captured_at": "2026-07-28T11:39:40.504Z",
+      "duration_s": 5,
+      "frames": 151,
+      "bytes": 112912,
+      "thinned_keep_every": 1,
+      "session": "sessions/boot_gate/nominal.jsonl",
+      "report": "sessions/boot_gate/report-nominal.json",
+      "board_file": "sessions/boot_gate/boot_gate.kicad_pcb",
+      "actions": []
+    },
+    {
+      "id": "boot_gate-overvolt",
+      "board": "boot_gate",
+      "scenario": "overvolt",
+      "title": "Boot gate + firmware, overvolted rail",
+      "description": "Same board and firmware, but two seconds in the +5V supply is turned up to 18 V. The load resistor exceeds its power rating and the stress monitor raises the fault.",
+      "board_name": "boot_gate",
+      "firmware": "testdata/firmware/boot_gate_a/boot_gate.hex",
+      "mcus": [
+        [
+          "U1",
+          "simavr:atmega328p"
+        ]
+      ],
+      "engine_commit": "41170e5ad7e6afd45a39a900440d5f1ebcf845a8",
+      "engine_version": "hauksbee 0.1.0 (git 41170e5ad7e6)",
+      "captured_at": "2026-07-28T11:39:46.506Z",
+      "duration_s": 5,
+      "frames": 150,
+      "bytes": 110059,
+      "thinned_keep_every": 1,
+      "session": "sessions/boot_gate/overvolt.jsonl",
+      "report": "sessions/boot_gate/report-overvolt.json",
+      "board_file": "sessions/boot_gate/boot_gate.kicad_pcb",
+      "actions": [
+        {
+          "at_sim": 2,
+          "label": "+5V supply raised to 18 V"
+        }
+      ]
+    },
+    {
+      "id": "watchy-display_init",
+      "board": "watchy",
+      "scenario": "display_init",
+      "title": "Watchy v1.5, display-init co-sim",
+      "description": "A real product board: the Watchy watch running its display-init firmware on the Espressif QEMU co-sim, bringing the e-paper reset line high at boot. Eight seconds.",
+      "board_name": "watchy",
+      "firmware": "demo/firmware/watchy_display_init_s3/flash.bin",
+      "mcus": [
+        [
+          "U4",
+          "qemu:esp32s3"
+        ]
+      ],
+      "engine_commit": "41170e5ad7e6afd45a39a900440d5f1ebcf845a8",
+      "engine_version": "hauksbee 0.1.0 (git 41170e5ad7e6)",
+      "captured_at": "2026-07-28T12:12:10.578Z",
+      "duration_s": 8,
+      "frames": 240,
+      "bytes": 1058811,
+      "thinned_keep_every": 1,
+      "session": "sessions/watchy/display_init.jsonl",
+      "report": "sessions/watchy/report-display_init.json",
+      "board_file": "sessions/watchy/watchy.kicad_pcb",
+      "actions": []
+    }
+  ]
+}

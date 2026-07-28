@@ -430,7 +430,13 @@ export function useBoardSession(opts: {
     uploadError,
     firmwareFile,
     boardFile,
-    boardLabel: boardFile?.name ?? preloadedBoardName,
+    // A failed analysis must not crown its (possibly garbage) filename as the
+    // header's board title: the title names a board this app can speak about,
+    // and a rejected upload is not one. While the upload is still analyzing
+    // the name may show (the busy line names it anyway).
+    boardLabel: (report && !report.ok) || (uploadError && !report)
+      ? null
+      : boardFile?.name ?? preloadedBoardName,
     boardUrl: boardUrl ?? (
       // Preloaded (`run --serve`) boards are served at /boards/<name> for the
       // live viewer; reuse that for the report map too.

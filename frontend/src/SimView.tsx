@@ -170,7 +170,7 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
   /** Replace the running session with the analyzed board (label says so). */
   onRelaunch?: () => void
 } = {}) {
-  const { connected, boardInfo, frame, status, send, replay } = useSimulation()
+  const { connected, boardInfo, frame, status, send, replay, backlog } = useSimulation()
 
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
   const [selectedFp, setSelectedFp] = useState<FootprintInfo | null>(null)
@@ -225,8 +225,10 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
   // so at play speed a fault is visible for a single frame; anything that reads
   // the current frame alone misses it. Accumulate every fault the session has
   // seen (first occurrence per component+kind keeps its timestamp) until the
-  // user clears the log or resets the sim.
-  const [faultLog, setFaultLog] = useState<SimFault[]>([])
+  // user clears the log or resets the sim. `restored` marks entries replayed
+  // from the server's backlog on a rejoin: they are history, not news, so
+  // they must not re-toast.
+  const [faultLog, setFaultLog] = useState<(SimFault & { restored?: boolean })[]>([])
   useEffect(() => {
     const faults = frame?.faults
     if (!faults || faults.length === 0) return
@@ -270,6 +272,35 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
       infoWasNull.current = true
     }
   }, [boardInfo])
+
+  // Rejoin restore: the server replays its session history (fault backlog +
+  // active probe set) right after BoardInfo on every subscribe, so a
+  // mid-session reload shows everything that already fired instead of a clean
+  // log over a sim that kept running. Declared AFTER the session-replacement
+  // reset above so a replaced session's backlog seeds the already-cleared log.
+  useEffect(() => {
+    if (!backlog) return
+    const heldFaults = backlog.faults ?? []
+    if (heldFaults.length > 0) {
+      setFaultLog(prev => {
+        const merged = [...prev]
+        for (const f of heldFaults) {
+          if (!merged.some(e => e.component === f.component && e.kind === f.kind)) {
+            merged.push({ ...f, restored: true })
+          }
+        }
+        return merged.length === prev.length ? prev : merged
+      })
+    }
+    const heldProbes = backlog.probes ?? []
+    if (heldProbes.length > 0) {
+      setProbes(prev => {
+        const merged = [...prev]
+        for (const p of heldProbes) if (!merged.includes(p)) merged.push(p)
+        return merged.length === prev.length ? prev : merged
+      })
+    }
+  }, [backlog])
 
   // Reset also starts the fault story over: a log of faults from the previous
   // run reads as live faults on the fresh one.
@@ -361,14 +392,23 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
   const mcus = boardInfo?.mcus ?? []
   const hasSupplies = !!boardInfo?.power_supplies && Object.keys(boardInfo.power_supplies).length > 0
 
-  const faultBadge = faultCount > 0 ? (
+  // The FAULTS card badge counts what the card lists: fault CONDITIONS
+  // (component + kind entries). The header chips / status bar / nav badge
+  // count faulted PARTS, and say so; the two numbers legitimately differ
+  // (one part can trip several limits).
+  const faultBadge = faultLog.length > 0 ? (
     <span
       className="text-[10px] font-bold px-1.5 rounded-full tnum"
+      title={`${faultLog.length} fault condition${faultLog.length === 1 ? '' : 's'} logged`}
       style={{ background: 'var(--err-bg)', border: '1px solid var(--err-border)', color: 'var(--err)', minWidth: 17, textAlign: 'center' }}
     >
-      {faultCount}
+      {faultLog.length}
     </span>
   ) : undefined
+
+  // Copper-short honesty for the live surface, mirroring the report co-sim's
+  // "ran WITH the shorts bridged" note (or the version-warning refusal).
+  const shorts = boardInfo?.shorts ?? null
 
   return (
     <div className="flex flex-col h-full overflow-hidden" style={{ background: 'var(--canvas)' }}>
@@ -419,6 +459,38 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
             >
               Relaunch with {expectedBoard}
             </button>
+          )}
+        </div>
+      )}
+
+      {/* Copper-short disclosure: this session's engine either bridged the
+          DRC's detected shorts (so the rails reflect the board as built,
+          matching the report's co-sim block) or refused to (unvalidated
+          layout version), and either way the surface must say so instead of
+          letting idealised or sagged rails pass without explanation. */}
+      {shorts && (
+        <div
+          data-testid="sim-shorts-note"
+          className="px-4 py-2 text-[12px] shrink-0"
+          style={{
+            background: 'var(--surface)',
+            borderBottom: '1px solid var(--hairline)',
+            borderLeft: '4px solid var(--copper)',
+            color: 'var(--silk)',
+          }}
+        >
+          {shorts.bridged > 0 ? (
+            <>
+              {shorts.bridged} copper short{shorts.bridged === 1 ? '' : 's'} bridged into the live
+              circuit; voltages reflect the board as built, not an idealised un-shorted version
+              (the report's co-sim ran with the same bridge).
+            </>
+          ) : (
+            <>
+              {shorts.detected} copper short{shorts.detected === 1 ? '' : 's'} detected but NOT
+              bridged ({shorts.unapplied_reason ?? 'could not be applied'}); the live voltages
+              show the un-shorted board.
+            </>
           )}
         </div>
       )}
@@ -650,7 +722,7 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
           <>
             <span style={{ color: 'var(--hairline)' }}>|</span>
             <span style={{ color: 'var(--err)' }}>
-              FAULTS: {faultCount}
+              FAULTS: {faultCount} part{faultCount === 1 ? '' : 's'}
             </span>
           </>
         )}

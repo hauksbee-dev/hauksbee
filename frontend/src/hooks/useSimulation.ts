@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useContext } from 'react'
-import type { ServerMessage, SimFrame, BoardInfoMsg, StatusMsg, ProbeDataMsg, ClientMessage } from '../types/protocol'
+import type { ServerMessage, SimFrame, BoardInfoMsg, StatusMsg, ProbeDataMsg, BacklogMsg, ClientMessage } from '../types/protocol'
 import { SimSourceContext } from '../demo/simSource'
 
 // Connect to the same origin that served the page, so the viewer works on any
@@ -16,6 +16,10 @@ export interface SimulationState {
   frame: SimFrame | null
   status: StatusMsg | null
   probeData: ProbeDataMsg[]
+  /** The session's server-held history (fault log, probe set), replayed once
+   *  per (re)connect so a reload rejoins with everything that already fired.
+   *  A fresh object per connect; absent on sources without one (the demo). */
+  backlog?: BacklogMsg | null
   send: (msg: ClientMessage) => void
   /** Present only when the source is a recorded-session replay (the demo):
    *  the replay's own transport, for the scrub UI and read-only affordances. */
@@ -48,6 +52,7 @@ export function useLiveSimulation(): SimulationState {
   const [frame, setFrame] = useState<SimFrame | null>(null)
   const [status, setStatus] = useState<StatusMsg | null>(null)
   const [probeData, setProbeData] = useState<ProbeDataMsg[]>([])
+  const [backlog, setBacklog] = useState<BacklogMsg | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
 
   // Coalesce high-rate messages to one React commit per animation frame. At
@@ -97,6 +102,9 @@ export function useLiveSimulation(): SimulationState {
         catch { return }
         switch (msg.type) {
           case 'BoardInfo': setBoardInfo(msg); break
+          // Always a fresh object (even when empty) so the consumer's
+          // seed-from-backlog effect re-fires per (re)connect.
+          case 'Backlog': setBacklog({ ...msg }); break
           case 'SimFrame': pendingFrame.current = msg; scheduleFlush(); break
           case 'Status': pendingStatus.current = msg; scheduleFlush(); break
           case 'ProbeData':
@@ -138,5 +146,5 @@ export function useLiveSimulation(): SimulationState {
     }
   }, [])
 
-  return { connected, boardInfo, frame, status, probeData, send }
+  return { connected, boardInfo, frame, status, probeData, backlog, send }
 }
