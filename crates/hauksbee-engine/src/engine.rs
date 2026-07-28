@@ -229,7 +229,13 @@ impl Engine for HauksbeeEngine {
     }
 
     fn step(&mut self, dt: f64) -> SimFrame {
+        // Measure the step's real cost so the frame reports the DELIVERED
+        // sim-per-wall ratio. The server's sim loop overwrites this with a
+        // rolling-window measurement for the stream; the per-step value keeps
+        // headless and embedded callers honest with zero extra plumbing.
+        let step_started = std::time::Instant::now();
         let result = self.sched.step(dt);
+        let step_wall = step_started.elapsed().as_secs_f64();
         let mut component_states = self.sched.mcu_states();
         component_states.extend(self.sched.digital_states());
         component_states.extend(self.sched.peripheral_states());
@@ -271,7 +277,14 @@ impl Engine for HauksbeeEngine {
             .collect();
         SimFrame {
             t: result.sim_time,
-            realtime_factor: 1.0,
+            realtime_factor: if step_wall > 0.0 { dt / step_wall } else { 0.0 },
+            requested_factor: 0.0,
+            rate_limited: false,
+            // Scope honesty: nets whose MCU drive this backend cannot observe
+            // (levels-only backends, tri-stated driver) are flagged so the UI
+            // can say "static level, not a measured drive" instead of
+            // presenting the passive network's idle voltage as a measurement.
+            unobserved_drive_nets: self.sched.unobserved_drive_nets(),
             net_voltages: self.sched.net_voltages(),
             component_states,
             uart: result.uart,

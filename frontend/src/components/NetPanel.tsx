@@ -1,4 +1,5 @@
 import type { SimFrame } from '../types/protocol'
+import { displayNet } from '../lib/net-name'
 
 // Live net-voltage list for the sim rail's "Net voltages" card. The card
 // header is owned by the rail; this renders only the rows.
@@ -69,7 +70,7 @@ export function NetPanel({ frame, selectedNet, onSelectNet }: NetPanelProps) {
                     color: isSelected ? 'var(--copper-hi)' : 'var(--silk-dim)',
                     fontFamily: 'var(--font-mono)',
                   }}>
-                    {name}
+                    {displayNet(name)}
                   </span>
                   <span className="text-[10px] ml-2 shrink-0 tnum" style={{
                     color: isSelected ? 'var(--copper)' : barColor,

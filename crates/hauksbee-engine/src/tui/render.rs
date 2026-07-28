@@ -66,6 +66,16 @@ fn severity_style(sev: Severity) -> Style {
     }
 }
 
+/// The selected row's highlight: one solid background band. `Modifier::REVERSED`
+/// inverts each span against its OWN colour, so a multi-coloured row (or a
+/// wrapped finding) breaks into per-word inverse fragments and the blank tail of
+/// the row flashes white. A plain background patches only `bg`, leaving every
+/// span's foreground intact, so the selection reads as one continuous block
+/// across the full pane width on every wrapped line.
+fn selection_style() -> Style {
+    Style::default().bg(Color::Indexed(24))
+}
+
 fn focused_border(pane: Pane, focus: Pane) -> Style {
     if pane == focus {
         Style::default()
@@ -84,31 +94,70 @@ pub fn draw(f: &mut Frame, state: &AppState, cosim: Option<&CosimUpdate>, cosim_
     let root = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
+            Constraint::Length(1),
             Constraint::Length(banner_rows),
             Constraint::Min(3),
             Constraint::Length(3),
         ])
         .split(f.area());
 
+    draw_identity_bar(f, root[0], state);
     if banner_rows > 0 {
-        draw_banner(f, root[0]);
+        draw_banner(f, root[1]);
     }
 
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage(24),
-            Constraint::Percentage(32),
-            Constraint::Percentage(22),
-            Constraint::Percentage(22),
-        ])
-        .split(root[1]);
+    let body = root[2];
+    if state.no_mcu {
+        // Nothing to co-simulate and nothing to trace, so the two live-signal
+        // panes stop paying for a full box: each becomes a one-line stub and the
+        // height goes to the panes that actually carry this board's content.
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Min(3),
+                Constraint::Length(1),
+                Constraint::Length(1),
+            ])
+            .split(body);
+        let panes = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+            .split(rows[0]);
+        draw_parts(f, panes[0], state);
+        draw_findings(f, panes[1], state);
+        draw_pane_stub(
+            f,
+            rows[1],
+            "co-sim",
+            "no MCU on this board",
+            Pane::Cosim,
+            state.focus,
+        );
+        draw_pane_stub(
+            f,
+            rows[2],
+            "scope",
+            "no live signals without an MCU",
+            Pane::Scope,
+            state.focus,
+        );
+    } else {
+        let panes = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints([
+                Constraint::Percentage(24),
+                Constraint::Percentage(32),
+                Constraint::Percentage(22),
+                Constraint::Percentage(22),
+            ])
+            .split(body);
 
-    draw_parts(f, panes[0], state);
-    draw_findings(f, panes[1], state);
-    draw_cosim(f, panes[2], state, cosim);
-    draw_scope(f, panes[3], state, cosim_running);
-    draw_footer(f, root[2], state, cosim_running);
+        draw_parts(f, panes[0], state);
+        draw_findings(f, panes[1], state);
+        draw_cosim(f, panes[2], state, cosim);
+        draw_scope(f, panes[3], state, cosim_running);
+    }
+    draw_footer(f, root[3], state, cosim_running);
 
     if state.detail_open {
         draw_detail_overlay(f, state);
@@ -116,6 +165,85 @@ pub fn draw(f: &mut Frame, state: &AppState, cosim: Option<&CosimUpdate>, cosim_
     if state.left_detail_open {
         draw_left_detail_overlay(f, state);
     }
+}
+
+/// The persistent identity bar: which board this is, what it is bound to, and
+/// how much it found. It never scrolls away and never dismisses, so the answer to
+/// "what am I looking at" is always on screen rather than only in the bottom bar
+/// (k9s keeps context at the top for the same reason).
+fn draw_identity_bar(f: &mut Frame, area: Rect, state: &AppState) {
+    let mut spans = vec![Span::styled(
+        truncate(&state.board_label, 32),
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD),
+    )];
+    match (state.mcu.as_deref(), state.backend.as_deref()) {
+        (Some(mcu), Some(backend)) => {
+            spans.push(Span::styled(
+                format!(" · {mcu}"),
+                Style::default().fg(Color::Magenta),
+            ));
+            spans.push(Span::styled(
+                format!(" · {backend}"),
+                Style::default().fg(Color::Cyan),
+            ));
+        }
+        (Some(mcu), None) => spans.push(Span::styled(
+            format!(" · {mcu}"),
+            Style::default().fg(Color::Magenta),
+        )),
+        _ => spans.push(Span::styled(" · no MCU", Style::default().fg(Color::Gray))),
+    }
+
+    let v = &state.verdict;
+    spans.push(Span::styled(
+        format!(" · {} worth attention", v.worth_attention),
+        if v.worth_attention > 0 {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::Green)
+        },
+    ));
+    spans.push(Span::styled(
+        format!(" · {} notes", v.grouped_notes),
+        Style::default().fg(Color::Gray),
+    ));
+    spans.push(Span::styled(
+        format!(" · {} serious", v.serious),
+        if v.serious > 0 {
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Gray)
+        },
+    ));
+
+    f.render_widget(
+        Paragraph::new(Line::from(spans)).style(Style::default().bg(Color::Indexed(236))),
+        area,
+    );
+}
+
+/// A collapsed pane: one dim line where a full bordered box would otherwise sit
+/// empty. Still focusable, so Tab order and the key hints are unchanged; it just
+/// costs one row instead of a quarter of the screen.
+fn draw_pane_stub(f: &mut Frame, area: Rect, label: &str, text: &str, pane: Pane, focus: Pane) {
+    let focused = pane == focus;
+    let line = Line::from(vec![
+        Span::raw(if focused { "▶ " } else { "  " }),
+        Span::styled(
+            format!("{label}: "),
+            if focused {
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Gray)
+            },
+        ),
+        Span::styled(text.to_string(), Style::default().fg(Color::DarkGray)),
+    ]);
+    f.render_widget(Paragraph::new(line), area);
 }
 
 /// The dismissible one-line launch banner. Dim, borderless, and truncated to the
@@ -198,11 +326,7 @@ fn draw_parts(f: &mut Frame, area: Rect, state: &AppState) {
 
     let block = Block::default()
         .title(pane_title(
-            &format!(
-                "Nets & Parts ({} / {} nets)",
-                state.parts.len(),
-                state.nets.len()
-            ),
+            &format!("{} parts · {} nets", state.parts.len(), state.nets.len()),
             Pane::Parts,
             state.focus,
         ))
@@ -221,7 +345,7 @@ fn draw_parts(f: &mut Frame, area: Rect, state: &AppState) {
 
     let list = List::new(items)
         .block(block)
-        .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+        .highlight_style(selection_style());
     f.render_stateful_widget(list, area, &mut ls);
 }
 
@@ -318,7 +442,7 @@ fn draw_findings(f: &mut Frame, area: Rect, state: &AppState) {
             .findings_sel
             .min(state.findings.len().saturating_sub(1)),
     ));
-    let list = List::new(items).highlight_style(Style::default().add_modifier(Modifier::REVERSED));
+    let list = List::new(items).highlight_style(selection_style());
     f.render_stateful_widget(list, inner_chunks[1], &mut ls);
 }
 
@@ -1231,13 +1355,106 @@ mod tests {
         let all = render_rows(&st, 120, 30).join("\n");
         assert!(all.contains("no live signals"), "{all}");
         assert!(all.contains("[r]"), "{all}");
+    }
 
-        // A no-MCU board: the static-only placeholder, not an empty box. The
-        // narrow pane word-wraps the sentence, so assert on wrap-safe fragments.
+    #[test]
+    fn no_mcu_board_collapses_the_live_panes_to_stubs() {
+        let mut st = scope_sample_state();
+        st.dismiss_banner();
         st.no_mcu = true;
+        let rows = render_rows(&st, 120, 30);
+        let all = rows.join("\n");
+
+        // Both live panes are one line each, saying why, not empty boxes.
+        assert!(all.contains("co-sim: no MCU on this board"), "{all}");
+        assert!(
+            all.contains("scope: no live signals without an MCU"),
+            "{all}"
+        );
+        // Their boxes are gone: no bordered Co-sim / Scope pane titles remain.
+        assert!(!all.contains("Co-sim "), "co-sim box collapsed:\n{all}");
+        assert!(!all.contains("Scope "), "scope box collapsed:\n{all}");
+
+        // The reclaimed width goes to the two panes that carry content: the
+        // findings pane now runs to within a couple of columns of the edge.
+        let findings_row = rows
+            .iter()
+            .find(|r| r.contains("Findings (triaged)"))
+            .expect("findings pane present");
+        assert!(
+            findings_row.trim_end().len() >= 116,
+            "findings pane spans the reclaimed width: {findings_row}"
+        );
+    }
+
+    #[test]
+    fn identity_bar_is_always_on_screen() {
+        let mut st = scope_sample_state();
+        st.dismiss_banner();
+        // Board, bound MCU + backend, and the finding counts, on row 0.
+        let rows = render_rows(&st, 120, 30);
+        assert!(rows[0].contains("ScopeDemo"), "{}", rows[0]);
+        assert!(rows[0].contains("STM32"), "{}", rows[0]);
+        assert!(rows[0].contains("renode:stm32f103"), "{}", rows[0]);
+        assert!(rows[0].contains("worth attention"), "{}", rows[0]);
+        assert!(rows[0].contains("serious"), "{}", rows[0]);
+    }
+
+    #[test]
+    fn parts_pane_title_reads_as_two_counts() {
+        let mut st = scope_sample_state();
+        st.dismiss_banner();
         let all = render_rows(&st, 120, 30).join("\n");
-        assert!(all.contains("no live signals"), "{all}");
-        assert!(all.contains("firmware/co-sim"), "{all}");
+        assert!(all.contains("1 parts · 2 nets"), "{all}");
+    }
+
+    #[test]
+    fn selected_finding_highlight_is_one_continuous_block() {
+        let mut st = scope_sample_state();
+        st.dismiss_banner();
+        st.findings.push(crate::tui::state::Finding {
+            severity: Severity::Medium,
+            check: "si".into(),
+            kind: "impedance".into(),
+            headline: "a deliberately long headline that has to wrap across more \
+                       than one row inside the findings pane so the selection \
+                       band can be checked on every wrapped line"
+                .into(),
+            plain: String::new(),
+            nets: Vec::new(),
+            refs: Vec::new(),
+            location_mm: None,
+            layer: None,
+            fix: None,
+            actionable: true,
+        });
+        st.verdict = crate::tui::state::Verdict::from_findings(&st.findings);
+        st.focus = Pane::Findings;
+        st.findings_sel = 0;
+
+        let mut term = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        term.draw(|f| draw(f, &st, None, false)).unwrap();
+        let buf = term.backend().buffer().clone();
+
+        // Find the rows carrying the selection background, then assert the band
+        // is unbroken from the first to the last column of the pane on each of
+        // them (a REVERSED highlight leaves per-word gaps and colour fragments).
+        let band = selection_style().bg.unwrap();
+        let rows: Vec<u16> = (0..buf.area.height)
+            .filter(|y| (0..buf.area.width).any(|x| buf[(x, *y)].bg == band))
+            .collect();
+        assert!(rows.len() >= 2, "the selected finding wrapped: {rows:?}");
+        for y in rows {
+            let xs: Vec<u16> = (0..buf.area.width)
+                .filter(|x| buf[(*x, y)].bg == band)
+                .collect();
+            let (first, last) = (xs[0], *xs.last().unwrap());
+            assert_eq!(
+                xs.len() as u16,
+                last - first + 1,
+                "row {y} has gaps in the selection band"
+            );
+        }
     }
 }
 

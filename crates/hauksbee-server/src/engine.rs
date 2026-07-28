@@ -115,14 +115,23 @@ impl Engine for McuDemoEngine {
 
     fn step(&mut self, dt: f64) -> SimFrame {
         let micros = (dt * 1e6) as u64;
+        // Measure what this step actually cost so the reported factor is the
+        // delivered sim-per-wall ratio, never an asserted 1.0. The sim loop
+        // overwrites it with a rolling-window measurement for the stream;
+        // this per-step value keeps direct embedders honest too.
+        let step_started = std::time::Instant::now();
         self.mcu.set_analog_in(0, self.adc_volts);
         let _ = self.mcu.run_micros(micros);
+        let step_wall = step_started.elapsed().as_secs_f64();
         self.sim_time += dt;
         let led = *self.led_state.lock().unwrap();
         let uart: Vec<u8> = std::mem::take(&mut *self.uart_rx.lock().unwrap());
         SimFrame {
             t: self.sim_time,
-            realtime_factor: 1.0,
+            realtime_factor: if step_wall > 0.0 { dt / step_wall } else { 0.0 },
+            requested_factor: 0.0,
+            rate_limited: false,
+            unobserved_drive_nets: Vec::new(),
             net_voltages: [
                 ("D13_LED".to_string(), if led { 5.0 } else { 0.0 }),
                 ("A0".to_string(), self.adc_volts),

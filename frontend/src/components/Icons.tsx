@@ -114,6 +114,15 @@ export const ChevronRightIcon = ({ size = 14, ...p }: IconProps) =>
   svg(size, <path d="m9 18 6-6-6-6" />, p)
 
 // Lucide `cpu`; MCU stat chips.
+export const ExpandIcon = ({ size = 14, ...p }: IconProps) =>
+  svg(size, <><path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M21 8V5a2 2 0 0 0-2-2h-3" /><path d="M3 16v3a2 2 0 0 0 2 2h3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" /></>, p)
+
+export const CollapseIcon = ({ size = 14, ...p }: IconProps) =>
+  svg(size, <><path d="M8 3v3a2 2 0 0 1-2 2H3" /><path d="M21 8h-3a2 2 0 0 1-2-2V3" /><path d="M3 16h3a2 2 0 0 1 2 2v3" /><path d="M16 21v-3a2 2 0 0 1 2-2h3" /></>, p)
+
+export const WarningIcon = ({ size = 14, ...p }: IconProps) =>
+  svg(size, <><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" /><path d="M12 9v4" /><path d="M12 17h.01" /></>, p)
+
 export const CpuIcon = ({ size = 14, ...p }: IconProps) =>
   svg(size, <><rect width="16" height="16" x="4" y="4" rx="2" /><rect width="6" height="6" x="9" y="9" /><path d="M15 2v2" /><path d="M15 20v2" /><path d="M2 15h2" /><path d="M2 9h2" /><path d="M20 15h2" /><path d="M20 9h2" /><path d="M9 2v2" /><path d="M9 20v2" /></>, p)
 

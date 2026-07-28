@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useSimulation } from './hooks/useSimulation'
-import { BoardViewer } from './components/BoardViewer'
+import { BoardViewer, TOOLBAR_CLEARANCE } from './components/BoardViewer'
 import { TransportBar } from './components/TransportBar'
 import { SelectionCard } from './components/SelectionCard'
 import { NetPanel } from './components/NetPanel'
@@ -55,7 +55,10 @@ function RailCard({ id, title, icon, badge, defaultOpen = true, children, cardSt
       // shrink-0: the rail is a flex column; without it the cards compress to
       // share the viewport height and every card body gets clipped.
       className="hb-card overflow-hidden shrink-0"
-      style={{ borderRadius: 10 }}
+      // scrollSnapAlign start, against the rail's scroll-padding: the rail
+      // settles with this card's header as the first thing on screen, never
+      // part-way down its body and never with the card above it clipped.
+      style={{ borderRadius: 10, scrollSnapAlign: 'start' }}
       data-testid={`rail-${id}`}
     >
       <button
@@ -175,6 +178,8 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
   const [selectedFp, setSelectedFp] = useState<FootprintInfo | null>(null)
   const [railOpen, setRailOpen] = useState(true)
+  // Expand-to-viewport for the live board. Per-view, not persisted.
+  const [boardFullscreen, setBoardFullscreen] = useState(false)
   // 2D/3D mode of the viewer's segmented control, so the hint chip describes
   // the interactions that actually exist in that mode.
   const [viewerMode, setViewerMode] = useState<'2d' | '3d'>('2d')
@@ -519,7 +524,12 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
       {/* Main content area */}
       <div className="flex flex-1 overflow-hidden">
         {/* Board canvas (dominant center) */}
-        <div className="flex-1 relative min-w-0 overflow-hidden">
+        <div
+          className="flex-1 relative min-w-0 overflow-hidden"
+          style={boardFullscreen
+            ? { position: 'fixed', inset: 0, zIndex: 60, background: 'var(--instrument)' }
+            : undefined}
+        >
           {boardUrl === null ? (
             <div
               className="absolute inset-0 flex items-center justify-center"
@@ -544,12 +554,18 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
             }}
             faultedRefs={faultedRefs}
             onViewModeChange={setViewerMode}
+            fullscreen={boardFullscreen}
+            onToggleFullscreen={() => setBoardFullscreen(v => !v)}
           />
           )}
 
           {/* Floating selection card: same language as the report map. */}
           {(selectedFp || selectedNet) && (
-            <div className="absolute bottom-9 left-3 z-10">
+            <div
+              className="absolute left-3 z-10 flex items-end pointer-events-none"
+              style={{ top: TOOLBAR_CLEARANCE, bottom: 36 }}
+            >
+              <div className="pointer-events-auto" style={{ maxHeight: '100%', display: 'flex' }}>
               <SelectionCard
                 net={selectedFp ? null : selectedNet}
                 liveVolts={selectedNet && !selectedFp ? frame?.net_voltages[selectedNet] : undefined}
@@ -559,6 +575,7 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
                 onClose={() => { setSelectedFp(null); setSelectedNet(null) }}
                 onPickNet={net => { setSelectedFp(null); setSelectedNet(net) }}
               />
+              </div>
             </div>
           )}
 
@@ -608,6 +625,11 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
               width: 316,
               borderLeft: '1px solid var(--hairline)',
               background: 'var(--canvas)',
+              // Snap the scroll to card starts, and hold the rail's own padding
+              // clear of the top edge, so a card never comes to rest clipped
+              // mid-input: the first thing at the top is always a card header.
+              scrollSnapType: 'y proximity',
+              scrollPaddingTop: 10,
             }}
           >
             {mcus.length > 0 && (

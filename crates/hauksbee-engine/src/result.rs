@@ -551,6 +551,15 @@ pub struct CosimJson {
     pub requested_part: String,
     /// True when the requested part != the modelled core.
     pub substituted: bool,
+    /// Wall-clock seconds the headless co-sim loop consumed. 0 when the
+    /// producing path did not measure (older producers; the web mirror).
+    #[serde(default)]
+    pub wall_s: f64,
+    /// ACHIEVED realtime factor: sim seconds delivered per wall second,
+    /// measured, never the requested window over an assumed wall. 0 when
+    /// unmeasured.
+    #[serde(default)]
+    pub realtime_factor: f64,
     /// Total net toggles seen during the run. `0` => stalled/quiet.
     pub total_toggles: u64,
     pub uart_seen: bool,
@@ -1102,7 +1111,7 @@ pub fn lint_findings_json(report: &NetLintReport) -> Vec<JsonFinding> {
             actionable: true,
             message: f.message.clone(),
             plain: f.message.clone(),
-            fix: lint_fix_hint(f.check).map(str::to_string),
+            fix: lint_fix_hint(f.check, f.severity).map(str::to_string),
         })
         .collect()
 }
@@ -1357,8 +1366,17 @@ pub fn si_fix_hint(check: SiCheck) -> Option<&'static str> {
 }
 
 /// A concise suggested fix for a lint finding kind, for the machine-readable
-/// `fix` field. `None` when no template applies.
-pub fn lint_fix_hint(check: LintCheck) -> Option<&'static str> {
+/// `fix` field. `None` when no template applies. Severity disambiguates the
+/// resource-conflict check, whose low-severity form (a single function
+/// committed to a pin-locked group) has a different honest remedy than the
+/// serious two-function contention.
+pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static str> {
+    if check == LintCheck::McuResourceConflict && severity != Severity::High {
+        return Some(
+            "If deliberate (firmware drives the device another way), nothing needs to change; \
+             if the pin-locked peripheral was intended, move the device to its full fixed pin set.",
+        );
+    }
     Some(match check {
         LintCheck::MissingI2cPullup => {
             "Add a 2.2k-10k pull-up from the I2C line to its power rail (one per SDA and SCL)."

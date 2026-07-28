@@ -1302,14 +1302,30 @@ fn collect_pad(
     };
     let pad_origin = to_world(0.0, 0.0);
 
+    // A through-hole pad can carry `(drill ... (offset x y))`: the pad's `(at)`
+    // is the HOLE position and the copper shape is displaced by the offset,
+    // rotated with the pad. Castellated / edge-solder module footprints (e.g.
+    // the OpenMower xESC2-mini) use this to hang half the copper past the hole;
+    // ignoring it draws the copper up to half a pad away from where KiCad
+    // filled the surrounding zone, which manufactured 114 phantom clearance
+    // warnings on a board KiCad's own DRC scores clean.
+    let (offx, offy) = pad
+        .find("drill")
+        .and_then(|d| d.find("offset"))
+        .and_then(|o| Some((o.arg_f64(0)?, o.arg_f64(1)?)))
+        .unwrap_or((0.0, 0.0));
+
     // Rotate a pad-local outline offset into the world frame. KiCad writes the
     // pad's `(at x y rot)` rotation as the pad outline's *absolute* board-frame
     // orientation (the footprint rotation is already folded into it), so the
     // outline is rotated by `prot` alone (NOT composed with the footprint
     // rotation again, which the position transform already applied). The y-down
-    // form matches `to_world`: (lx cos + ly sin, -lx sin + ly cos).
+    // form matches `to_world`: (lx cos + ly sin, -lx sin + ly cos). The drill
+    // offset is added in the pad-local frame so it rotates with the outline.
     let (psin, pcos) = prot.to_radians().sin_cos();
     let outline_to_world = |lx: f64, ly: f64| -> (f64, f64) {
+        let lx = lx + offx;
+        let ly = ly + offy;
         let wx = lx * pcos + ly * psin;
         let wy = -lx * psin + ly * pcos;
         (pad_origin.0 + wx, pad_origin.1 + wy)
@@ -1333,11 +1349,13 @@ fn collect_pad(
     let shape = match shape_tok.as_str() {
         "circle" => {
             let r = sx.max(sy) / 2.0;
+            // Through outline_to_world so a drill offset displaces the disc too.
+            let c = outline_to_world(0.0, 0.0);
             Shape::Capsule(Capsule {
-                ax: pad_origin.0,
-                ay: pad_origin.1,
-                bx: pad_origin.0,
-                by: pad_origin.1,
+                ax: c.0,
+                ay: c.1,
+                bx: c.0,
+                by: c.1,
                 r,
             })
         }

@@ -7,6 +7,7 @@
 pub mod engine;
 pub mod frontdoor;
 pub mod protocol;
+pub mod rate;
 
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{Path as UrlPath, State};
@@ -701,6 +702,158 @@ async fn handle_socket(mut socket: WebSocket, shared: Arc<Shared>) {
     }
 }
 
+#[cfg(test)]
+mod rate_honesty_tests {
+    //! The sim loop's rate accounting, tested against an artificially slow
+    //! engine: the streamed `realtime_factor` must report what the loop
+    //! DELIVERED, not the requested multiplier, and must track a known step
+    //! cost within tolerance.
+
+    use super::*;
+    use crate::protocol::{BoardInfo, SimFrame, SolverControls};
+
+    /// An engine whose step burns `cost` wall seconds per sim second, so the
+    /// sustainable rate is exactly 1/cost and the loop's honesty is checkable
+    /// against a known ceiling.
+    struct SlowEngine {
+        sim_time: f64,
+        cost: f64,
+        controls: SolverControls,
+    }
+
+    impl Engine for SlowEngine {
+        fn board_info(&self) -> BoardInfo {
+            BoardInfo {
+                name: "slow".into(),
+                board_url: String::new(),
+                num_components: 0,
+                num_nets: 0,
+                nets: Vec::new(),
+                component_kinds: Default::default(),
+                mcus: Vec::new(),
+                power_supplies: Default::default(),
+                peripherals: Default::default(),
+                shorts: None,
+            }
+        }
+        fn step(&mut self, dt: f64) -> SimFrame {
+            std::thread::sleep(std::time::Duration::from_secs_f64(dt * self.cost));
+            self.sim_time += dt;
+            SimFrame {
+                t: self.sim_time,
+                ..Default::default()
+            }
+        }
+        fn reset(&mut self) {
+            self.sim_time = 0.0;
+        }
+        fn set_controls(&mut self, controls: SolverControls) {
+            self.controls = controls;
+        }
+        fn controls(&self) -> SolverControls {
+            self.controls.clone()
+        }
+        fn serial(&mut self, _mcu: &str, _data: &[u8]) {}
+        fn set_input(&mut self, _source: &str, _value: f64) {}
+    }
+
+    /// Run a sim loop over `engine` for `secs` of wall time at requested
+    /// speed 1.0 and return the last streamed frame.
+    async fn last_frame_after(engine: SlowEngine, secs: f64) -> SimFrame {
+        let (tx, mut rx) = broadcast::channel::<String>(1024);
+        let (cmd_tx, cmd_rx) = mpsc::channel::<ClientMessage>(8);
+        let shared = Arc::new(Shared {
+            tx: tx.clone(),
+            cmd: cmd_tx.clone(),
+            board_info_json: Mutex::new(String::new()),
+            replaced: tokio::sync::watch::channel(false).0,
+            backlog: std::sync::Mutex::new(SessionBacklog::default()),
+        });
+        let task = tokio::spawn(sim_loop(
+            Box::new(engine),
+            "slow".into(),
+            tx,
+            cmd_rx,
+            shared,
+        ));
+        cmd_tx.send(ClientMessage::Play).await.unwrap();
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs_f64(secs);
+        let mut last: Option<SimFrame> = None;
+        while tokio::time::Instant::now() < deadline {
+            let timeout = tokio::time::sleep_until(deadline);
+            tokio::select! {
+                _ = timeout => break,
+                msg = rx.recv() => {
+                    match msg {
+                        Ok(json) => {
+                            if let Ok(ServerMessage::SimFrame(f)) =
+                                serde_json::from_str::<ServerMessage>(&json)
+                            {
+                                last = Some(f);
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                        Err(broadcast::error::RecvError::Closed) => break,
+                    }
+                }
+            }
+        }
+        task.abort();
+        last.expect("the loop streamed at least one frame")
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn slow_engine_reports_achieved_below_requested() {
+        // Cost 5 wall s per sim s: sustainable 0.2x. A 1.0x request must come
+        // back with achieved well under 1.0 and the honest cap flagged.
+        let frame = last_frame_after(
+            SlowEngine {
+                sim_time: 0.0,
+                cost: 5.0,
+                controls: SolverControls::default(),
+            },
+            2.0,
+        )
+        .await;
+        assert_eq!(frame.requested_factor, 1.0);
+        assert!(frame.rate_limited, "the 1.0x request exceeds the ceiling");
+        assert!(
+            frame.realtime_factor < 0.5,
+            "achieved {} must not approach the requested 1.0",
+            frame.realtime_factor
+        );
+        // Tracks the known ceiling (0.2x, paced to 0.18x) within a loose CI
+        // tolerance: scheduler jitter and sleep overshoot only push it DOWN.
+        assert!(
+            (0.03..=0.30).contains(&frame.realtime_factor),
+            "achieved {} should track the ~0.2x ceiling",
+            frame.realtime_factor
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn fast_engine_is_not_capped_and_reports_near_requested() {
+        // Near-zero cost: the loop holds the requested 1.0x, and the reported
+        // achieved rate must sit near it (generous lower bound for CI noise).
+        let frame = last_frame_after(
+            SlowEngine {
+                sim_time: 0.0,
+                cost: 0.01,
+                controls: SolverControls::default(),
+            },
+            1.5,
+        )
+        .await;
+        assert_eq!(frame.requested_factor, 1.0);
+        assert!(!frame.rate_limited);
+        assert!(
+            (0.5..=1.1).contains(&frame.realtime_factor),
+            "achieved {} should be near the requested 1.0",
+            frame.realtime_factor
+        );
+    }
+}
+
 /// The engine's BoardInfo with the session's wire name applied (see the
 /// fallback rationale in [`LiveHub::launch`]).
 fn named_board_info(engine: &dyn Engine, wire_name: &str) -> protocol::BoardInfo {
@@ -726,6 +879,12 @@ async fn sim_loop(
     let frame_dt = 1.0 / FRAME_RATE_HZ;
     let mut ticker = tokio::time::interval(std::time::Duration::from_secs_f64(frame_dt));
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Honest rate accounting: what the loop DELIVERS (rolling window) and the
+    // sustainable ceiling it paces to, kept strictly apart from `speed` (what
+    // the user ASKED for). Cleared on pause/reset so idle wall time never
+    // counts against the achieved rate. The wall axis is this loop's start.
+    let mut meter = crate::rate::RateMeter::new();
+    let loop_started = std::time::Instant::now();
 
     let broadcast_msg = |msg: &ServerMessage| {
         if tx.receiver_count() > 0 {
@@ -737,7 +896,30 @@ async fn sim_loop(
         tokio::select! {
             _ = ticker.tick() => {
                 if running {
-                    let frame = engine.step(frame_dt * speed);
+                    // Pace at the measured sustainable ceiling when the
+                    // requested factor exceeds it: one honest small step per
+                    // tick keeps frames flowing and commands responsive, where
+                    // an oversized step would block this loop for its full
+                    // solve time and still not deliver the requested rate.
+                    let (paced, rate_limited) = meter.paced_factor(speed);
+                    let step_dt = frame_dt * paced;
+                    let step_started = std::time::Instant::now();
+                    let mut frame = engine.step(step_dt);
+                    meter.record(
+                        loop_started.elapsed().as_secs_f64(),
+                        frame.t,
+                        step_started.elapsed().as_secs_f64(),
+                        step_dt,
+                    );
+                    // The wire carries BOTH numbers: the measured achieved
+                    // rate (clamped to the paced factor: tick pacing bounds
+                    // delivery, and the clamp also covers the first fraction
+                    // of a second before the window can measure) and the
+                    // user's requested factor, so no UI has to conflate them.
+                    frame.realtime_factor =
+                        meter.achieved().unwrap_or(f64::INFINITY).min(paced);
+                    frame.requested_factor = speed;
+                    frame.rate_limited = rate_limited;
                     sim_time = frame.t;
                     // Record BEFORE broadcasting (and regardless of receiver
                     // count): a fault raised while nobody is connected must
@@ -745,15 +927,26 @@ async fn sim_loop(
                     shared.record_faults(&frame);
                     broadcast_msg(&ServerMessage::SimFrame(frame));
                     broadcast_msg(&ServerMessage::Status(Status {
-                        running, sim_time, options: engine.controls(),
+                        running, sim_time, requested_factor: speed,
+                        options: engine.controls(),
                     }));
                 }
             }
             cmd = cmd_rx.recv() => {
                 let Some(cmd) = cmd else { return };
                 match cmd {
-                    ClientMessage::Play => running = true,
-                    ClientMessage::Pause => running = false,
+                    // Play and Pause both restart the rate window: wall time
+                    // spent paused must never count against the achieved rate,
+                    // and stale pre-pause samples must not shape the first
+                    // post-resume ceiling.
+                    ClientMessage::Play => {
+                        running = true;
+                        meter.clear();
+                    }
+                    ClientMessage::Pause => {
+                        running = false;
+                        meter.clear();
+                    }
                     ClientMessage::Step { dt } => {
                         // Clamp the client-supplied step like SetSpeed clamps
                         // factor: an unbounded dt (e.g. `1e9`) is ~1e13 chunks
@@ -761,7 +954,19 @@ async fn sim_loop(
                         // wedging every client until restart. A manual step is
                         // milliseconds; 1 s is already a generous ceiling.
                         let step_dt = if dt > 0.0 { dt.min(1.0) } else { frame_dt };
-                        let frame = engine.step(step_dt);
+                        let step_started = std::time::Instant::now();
+                        let mut frame = engine.step(step_dt);
+                        // A manual step has no continuous rate to report; the
+                        // honest per-step number is what THIS step delivered
+                        // (sim seconds per wall second of the solve). It does
+                        // not feed the pacing meter: the sim is paused.
+                        let step_wall = step_started.elapsed().as_secs_f64();
+                        frame.realtime_factor = if step_wall > 0.0 {
+                            step_dt / step_wall
+                        } else {
+                            0.0
+                        };
+                        frame.requested_factor = speed;
                         sim_time = frame.t;
                         shared.record_faults(&frame);
                         broadcast_msg(&ServerMessage::SimFrame(frame));
@@ -770,6 +975,7 @@ async fn sim_loop(
                         engine.reset();
                         running = false;
                         sim_time = 0.0;
+                        meter.clear();
                         // A reset starts the fault story over server-side too,
                         // or the next subscriber would replay pre-reset faults
                         // as if they belonged to the fresh run.
@@ -822,6 +1028,7 @@ async fn sim_loop(
                 broadcast_msg(&ServerMessage::Status(Status {
                     running,
                     sim_time,
+                    requested_factor: speed,
                     options: engine.controls(),
                 }));
             }

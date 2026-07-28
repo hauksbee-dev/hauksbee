@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { BoardInfoMsg, SimFrame, ClientMessage } from '../types/protocol'
 import { CloseIcon, PlusIcon, EyeIcon, EyeOffIcon } from './Icons'
+import { displayNet } from '../lib/net-name'
 
 // The scope card: a phosphor-style rolling trace per probed net, with a
 // per-trace visibility toggle (the probe keeps buffering while hidden, so
@@ -208,7 +209,7 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
         ctx.textAlign = 'left'
         ctx.shadowColor = color
         ctx.shadowBlur = 4
-        ctx.fillText(net, PAD_L + plotW + 4, Math.max(PAD_T + 10, Math.min(H - PAD_B - 2, labelY + 3)))
+        ctx.fillText(displayNet(net), PAD_L + plotW + 4, Math.max(PAD_T + 10, Math.min(H - PAD_B - 2, labelY + 3)))
         ctx.shadowBlur = 0
       })
     }
@@ -273,7 +274,7 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
                   className="text-[11px] flex-1 truncate"
                   style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)' }}
                 >
-                  {net}
+                  {displayNet(net)}
                 </span>
                 {live !== undefined && !isHidden && (
                   <span className="text-[10px] tnum shrink-0" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
@@ -333,7 +334,7 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
                 className="text-[11px] flex-1 truncate"
                 style={{ color: 'var(--silk-dim)', fontFamily: 'var(--font-mono)' }}
               >
-                {net}
+                {displayNet(net)}
               </span>
               <span style={{ color: 'var(--silk-faint)', display: 'inline-flex' }}>
                 <PlusIcon size={10} />

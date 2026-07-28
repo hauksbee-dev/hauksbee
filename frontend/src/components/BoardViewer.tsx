@@ -8,7 +8,8 @@ import type { OverlayData, RenderOptions } from '../lib/board-renderer'
 import { getLayerStyle } from '../lib/layer-colors'
 import type { SimFrame, BoardInfoMsg } from '../types/protocol'
 import { Board3DViewer } from './Board3DViewer'
-import { FitIcon, LayersIcon } from './Icons'
+import { FitIcon, LayersIcon, ExpandIcon, CollapseIcon } from './Icons'
+import { displayNet } from '../lib/net-name'
 
 interface FootprintInfo {
   ref: string
@@ -23,6 +24,12 @@ interface FootprintInfo {
   /** All distinct nets on the part's pads, for the selection card. */
   padNets?: string[]
 }
+
+/** Pixels from the top of the viewer to clear the floating toolbar. The toolbar
+ *  sits at top-3 (12px) and its controls are 28px tall inside a 1px border;
+ *  anything anchored below this cannot collide with it. Exported so the views
+ *  that float a selection card over the viewer stay in step with the toolbar. */
+export const TOOLBAR_CLEARANCE = 52
 
 interface BoardViewerProps {
   boardFile: string
@@ -47,6 +54,12 @@ interface BoardViewerProps {
    *  report's "show on board" affordance). A new `seq` re-triggers the move
    *  even for the same coordinates. */
   focusPoint?: { x: number; y: number; label?: string; seq: number } | null
+  /** Expanded-to-viewport state, owned by the embedding view (it also holds
+   *  the floating selection card, so the two must expand together). When a
+   *  toggle is supplied the toolbar grows a fullscreen control and Escape
+   *  collapses; without one the control is absent. */
+  fullscreen?: boolean
+  onToggleFullscreen?: () => void
   /** Fires when the 2D/3D segmented control switches, so the embedding view
    *  can adapt its own chrome (e.g. the caption under the canvas swaps to
    *  orbit instructions in 3D). */
@@ -186,6 +199,7 @@ function LayerRow({ label, swatch, on, onToggle }: {
 export function BoardViewer({
   boardFile, frame, boardInfo, selectedNet, onFootprintClick, onNetClick,
   onEmptyBoard, faultedRefs, netOptions, focusPoint, onViewModeChange,
+  fullscreen = false, onToggleFullscreen,
   wheelMode = 'always',
 }: BoardViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -698,7 +712,7 @@ export function BoardViewer({
         ? {
             x: probePos.current.boardX,
             y: probePos.current.boardY,
-            label: probeNet,
+            label: displayNet(probeNet),
             value: `${(frame.net_voltages[probeNet]!).toFixed(3)} V`,
           }
         : undefined
@@ -930,6 +944,17 @@ export function BoardViewer({
     return [...board.nets.values()].filter(Boolean).sort()
   }, [netOptions, boardInfo, board])
 
+  // Escape leaves the expanded view, the way every other fullscreen surface
+  // behaves. Only bound while expanded, so it never eats an Escape elsewhere.
+  useEffect(() => {
+    if (!fullscreen || !onToggleFullscreen) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); onToggleFullscreen() }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [fullscreen, onToggleFullscreen])
+
   const toolbarBtn = (active: boolean): React.CSSProperties => ({
     background: active ? 'var(--copper-tint-strong)' : 'transparent',
     color: active ? 'var(--copper-hi)' : 'var(--silk-faint)',
@@ -1102,6 +1127,29 @@ export function BoardViewer({
                 100%
               </span>
             </div>
+          )}
+
+          {onToggleFullscreen && (
+            <button
+              type="button"
+              data-testid="viewer-fullscreen"
+              onClick={onToggleFullscreen}
+              aria-pressed={fullscreen}
+              title={fullscreen ? 'Collapse the board view (Esc)' : 'Expand the board view'}
+              aria-label={fullscreen ? 'Collapse the board view' : 'Expand the board view'}
+              className="hb-press rounded-lg"
+              style={{
+                ...toolbarBtn(fullscreen),
+                border: '1px solid var(--hairline)',
+                background: fullscreen
+                  ? 'var(--copper-tint-strong)'
+                  : 'color-mix(in srgb, var(--surface) 88%, transparent)',
+                backdropFilter: 'blur(6px)',
+                boxShadow: 'var(--shadow-card)',
+              }}
+            >
+              {fullscreen ? <CollapseIcon size={13} /> : <ExpandIcon size={13} />}
+            </button>
           )}
         </div>
 

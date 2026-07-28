@@ -17,10 +17,14 @@
 //!    and audio cannot have independent PWM, and in fact both want the *same*
 //!    channel.
 //!
-//! 2. **SparkFun SAMD51 Thing Plus** (sparkfun/Arduino_Boards issue #82): the
-//!    on-board AT25SF041 SPI flash is wired to PA08..PA11, which are the SAM D5x
-//!    **QSPI DATA0..3** pins. Used as a SERCOM SPI device they commit the QSPI
-//!    pin group to non-QSPI use, and the flash ends up inaccessible.
+//! 2. **SparkFun SAMD51 Thing Plus**: the on-board AT25SF041 SPI flash is wired
+//!    to PA08..PA11, which are the SAM D5x **QSPI DATA0..3** pins, with SCK/CS
+//!    off the QSPI-locked PB10/PB11. The QSPI peripheral can therefore never
+//!    drive it; only SERCOM SPI can. Vendor firmware (CircuitPython's board
+//!    config) declares plain SPI flash on exactly these pins, so the board works
+//!    as designed - which is why single-function group occupation is reported as
+//!    a low-severity fact, not a conflict. A genuine conflict (two different
+//!    functions on one group) stays serious.
 //!
 //! The MCU resource map lives in `db/mcu_resources.toml` (hand-authored from the
 //! reference manuals, cited there). The function each used pin is demanded for
@@ -785,9 +789,6 @@ fn report_qspi_group_conflicts(
             .push(d);
     }
     for (group, ds) in by_group {
-        // Any non-QSPI function on a QSPI-group pad is a conflict. (The board
-        // would only place a QSPI-function device here if it intended QSPI; a
-        // flash on a SERCOM/SPI net on these pads is the documented fault.)
         // Require at least two pads of the group committed, so a single stray
         // pad use does not fire - the flash claims four (DATA0..3).
         let pads: std::collections::BTreeSet<&str> = ds.iter().map(|d| d.pad.as_str()).collect();
@@ -804,13 +805,40 @@ fn report_qspi_group_conflicts(
             })
             .collect::<Vec<_>>()
             .join("; ");
+        // Two DIFFERENT functions on one group is a hard conflict: no pin-mux
+        // assignment can serve both, so one feature cannot work. That stays
+        // serious. ONE self-consistent function occupying the group (the
+        // SparkFun Thing Plus SAMD51: a flash wired as plain SERCOM SPI across
+        // the QSPI data pads) is NOT a runtime conflict - nothing contends, the
+        // board works as shipped, and vendor firmware often drives exactly this
+        // arrangement deliberately. The netlist cannot tell deliberate plain-SPI
+        // from a botched QSPI intent, so that case is reported as a low-severity
+        // note that says only what the copper proves: the QSPI peripheral can
+        // never drive these pads. Reporting it as serious on a famous working
+        // board was a wolf-cry by the project's own calibration bar.
+        let funcs: std::collections::BTreeSet<&str> =
+            ds.iter().map(|d| d.function.as_str()).collect();
+        let (severity, message) = if funcs.len() >= 2 {
+            (
+                Severity::High,
+                format!(
+                    "{} ({}): two different functions occupy {} pads of the fixed QSPI pin group '{group}' (SAM D5x QSPI is pin-locked to PA08..PA11/PB10/PB11, not PORT-routable) [SAM D5x/E5x Data Sheet, Table 6-1 function H, section 36]: {chain}",
+                    mcu.reference, mcu.value, pads.len()
+                ),
+            )
+        } else {
+            (
+                Severity::Low,
+                format!(
+                    "{} ({}): the fixed QSPI pin group '{group}' is committed to one non-QSPI function across {} pads (SAM D5x QSPI is pin-locked to PA08..PA11/PB10/PB11, not PORT-routable) [SAM D5x/E5x Data Sheet, Table 6-1 function H, section 36]: {chain}. Nothing contends at runtime: firmware that drives this device as plain SERCOM SPI works, and boards shipping this wiring deliberately exist (the SparkFun Thing Plus SAMD51's vendor firmware declares plain SPI flash on exactly these pads). What the netlist does prove is that the QSPI peripheral can never drive these pads, so quad-rate access to this device is off the table; the netlist cannot tell deliberate plain-SPI from an unintended loss of QSPI.",
+                    mcu.reference, mcu.value, pads.len()
+                ),
+            )
+        };
         report.findings.push(LintFinding {
             check: LintCheck::McuResourceConflict,
-            severity: Severity::High,
-            message: format!(
-                "{} ({}): a non-QSPI function occupies {} pads of the fixed QSPI pin group '{group}' (SAM D5x QSPI is pin-locked to PA08..PA11/PB10/PB11, not PORT-routable) [SAM D5x/E5x Data Sheet, Table 6-1 function H, section 36]: {chain}",
-                mcu.reference, mcu.value, pads.len()
-            ),
+            severity,
+            message,
             refs: vec![mcu.reference.clone()],
             nets: ds.iter().map(|d| d.net.clone()).collect(),
         });
@@ -1056,22 +1084,38 @@ mod tests {
     }
 
     #[test]
-    fn synthetic_samd51_sercom_spi_flash_on_qspi_pads_fires() {
-        let m = msgs(&samd51_flash_net([
+    fn synthetic_samd51_sercom_spi_flash_on_qspi_pads_is_low_severity_fact() {
+        // One self-consistent function (a flash as plain SERCOM SPI) occupying
+        // the QSPI data group is a true, useful fact ("QSPI can never drive
+        // this") but NOT a runtime conflict: boards ship this wiring on purpose
+        // (SparkFun Thing Plus SAMD51, vendor-firmware confirmed). It must
+        // surface as Low, never High - High here was the campaign's confirmed
+        // severity overclaim.
+        let board = ExtractedBoard::from_kicad_netlist(&samd51_flash_net([
             "FLASH_MOSI",
             "FLASH_SCK",
             "FLASH_CS",
             "FLASH_MISO",
-        ]));
+        ]))
+        .expect("synthetic netlist parses");
+        let findings = board.resource_conflicts().findings;
         assert_eq!(
-            m.len(),
+            findings.len(),
             1,
-            "the SERCOM-SPI-on-QSPI bug must fire, got {m:#?}"
+            "the single-function QSPI-group note must fire once, got {findings:#?}"
+        );
+        assert_eq!(
+            findings[0].severity,
+            Severity::Low,
+            "single-function group occupation must not be serious: {}",
+            findings[0].message
         );
         assert!(
-            m[0].contains("qspi_data") && m[0].contains("SPI flash"),
+            findings[0].message.contains("qspi_data")
+                && findings[0].message.contains("SPI flash")
+                && findings[0].message.contains("can never drive"),
             "{}",
-            m[0]
+            findings[0].message
         );
     }
 

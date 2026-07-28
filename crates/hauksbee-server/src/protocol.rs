@@ -106,8 +106,32 @@ pub struct PeripheralInfo {
 pub struct SimFrame {
     /// Simulation time in seconds.
     pub t: f64,
-    /// Wall-clock speedup factor actually achieved.
+    /// Wall-clock speedup factor actually ACHIEVED: sim seconds advanced per
+    /// wall second, measured over a rolling window where the sim loop steps.
+    /// Never the requested multiplier; a sim that cannot keep up reports the
+    /// smaller number it really delivered.
     pub realtime_factor: f64,
+    /// The speed multiplier the user REQUESTED (`SetSpeed`). Distinct from
+    /// `realtime_factor` on purpose: the UI must be able to show "requested
+    /// 1.00x, achieving 0.31x" instead of conflating the two. Additive; older
+    /// clients ignore it.
+    #[serde(default)]
+    pub requested_factor: f64,
+    /// True while the sim loop is pacing BELOW the requested factor because
+    /// the measured sustainable rate is lower (the honest cap): the requested
+    /// rate is not achievable on this board/backend right now. Additive.
+    #[serde(default)]
+    pub rate_limited: bool,
+    /// Nets connected to an MCU pin whose drive this backend has NOT observed:
+    /// the pin's driver is still tri-stated and the backend cannot report drive
+    /// direction (e.g. the ESP32 QEMU mailbox carries levels only, and models
+    /// no GPSPI/I2C controller), so the shown voltage is the passive network's
+    /// static level, not a measurement of MCU activity. Empty on backends with
+    /// authoritative direction reporting (simavr, dir-mapped Renode), where an
+    /// undriven pin's level IS a real measurement. Additive; older clients
+    /// ignore it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unobserved_drive_nets: Vec<String>,
     pub net_voltages: HashMap<String, f64>,
     /// reference -> small state map ("dissipation_mw", "conducting", ...).
     pub component_states: HashMap<String, HashMap<String, f64>>,
@@ -209,6 +233,11 @@ pub enum ChemistryConfig {
 pub struct Status {
     pub running: bool,
     pub sim_time: f64,
+    /// The session's current requested speed multiplier, so a client that
+    /// (re)connects mid-session learns the real setting instead of assuming
+    /// its local default. Additive; older clients ignore it.
+    #[serde(default)]
+    pub requested_factor: f64,
     pub options: SolverControls,
 }
 
