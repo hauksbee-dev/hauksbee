@@ -16,6 +16,21 @@ import type {
   ParsedBoard, Pad, Point, Segment,
 } from './kicad-parser'
 import { getLayerStyle, isCopperLayer, PAD_COLOR, PAD_GLOW, VIA_COLOR, VIA_DRILL_COLOR } from './layer-colors'
+import { footprintHitBoxes } from './kicad-parser'
+import type { FootprintBox } from './kicad-parser'
+
+// The fault overlay paints each faulted part's drawn extent, which is the same
+// geometry the click hit-test uses. Cached per board because the overlay pass
+// runs every animation frame and the boxes never change for a given board.
+const faultBoxCache = new WeakMap<object, Map<string, FootprintBox>>()
+function faultBoxesFor(board: ParsedBoard): Map<string, FootprintBox> {
+  let byRef = faultBoxCache.get(board)
+  if (!byRef) {
+    byRef = new Map(footprintHitBoxes(board).map((b) => [b.fp.ref, b]))
+    faultBoxCache.set(board, byRef)
+  }
+  return byRef
+}
 
 // ────────────────────── Layer ordering ───────────────────────────────
 
@@ -624,34 +639,37 @@ export function renderDynamicOverlay(
     }
   }
 
-  // ── Faulted footprints: pulsing red pads + ring overlays ──
+  // ── Faulted footprints: the part itself turns red ──
+  // A floating ring made the reader hunt for what it circled; painting the
+  // part's own extent (body plus pads) is the message with no indirection.
+  // The pulse rides alpha only, so the shape stays stable while it breathes.
   if (faultedRefs && faultedRefs.size > 0) {
     const faultPulse = 0.35 + 0.65 * Math.abs(Math.sin(animTime * Math.PI * 4))
+    const boxes = faultBoxesFor(board)
     for (const fp of board.footprints) {
       if (!faultedRefs.has(fp.ref)) continue
-      const padColor = `rgba(248,${Math.round(50 + faultPulse * 50)},50,1)`
-      for (const pad of fp.pads) {
-        drawPad(ctx, cam, pad, padColor, '#ff2222')
+      const box = boxes.get(fp.ref)
+      if (box) {
+        const [x1, y1] = ws(cam, box.x1, box.y1)
+        const [x2, y2] = ws(cam, box.x2, box.y2)
+        const pad = 3
+        const bx = Math.min(x1, x2) - pad
+        const by = Math.min(y1, y2) - pad
+        const bw = Math.abs(x2 - x1) + pad * 2
+        const bh = Math.abs(y2 - y1) + pad * 2
+        ctx.fillStyle = `rgba(248,60,50,${0.18 + faultPulse * 0.2})`
+        ctx.fillRect(bx, by, bw, bh)
+        ctx.strokeStyle = `rgba(248,71,71,${0.55 + faultPulse * 0.45})`
+        ctx.lineWidth = 1.5
+        ctx.shadowColor = '#ff2222'
+        ctx.shadowBlur = 10 * faultPulse
+        ctx.strokeRect(bx, by, bw, bh)
+        ctx.shadowBlur = 0
       }
-      const [fpX, fpY] = ws(cam, fp.at.x, fp.at.y)
-      const ringR = Math.max(8, 6 * cam.scale)
-      // Double ring: outer softer, inner crisp
-      ctx.beginPath()
-      ctx.arc(fpX, fpY, ringR * (1.4 + faultPulse * 0.5), 0, Math.PI * 2)
-      ctx.strokeStyle = `rgba(248,71,71,${0.15 + faultPulse * 0.25})`
-      ctx.lineWidth = 3
-      ctx.shadowColor = '#ff2222'
-      ctx.shadowBlur = 14 * faultPulse
-      ctx.stroke()
-
-      ctx.beginPath()
-      ctx.arc(fpX, fpY, ringR * (1 + faultPulse * 0.2), 0, Math.PI * 2)
-      ctx.strokeStyle = `rgba(248,71,71,${0.5 + faultPulse * 0.5})`
-      ctx.lineWidth = 1.5
-      ctx.shadowColor = '#ff3333'
-      ctx.shadowBlur = 8 * faultPulse
-      ctx.stroke()
-      ctx.shadowBlur = 0
+      const padColor = `rgba(248,${Math.round(50 + faultPulse * 50)},50,1)`
+      for (const p of fp.pads) {
+        drawPad(ctx, cam, p, padColor, '#ff2222')
+      }
     }
   }
 

@@ -40,7 +40,7 @@ Point it at any PCB design and it will:
 
 ## Quickstart
 
-**Download the app (macOS): double-click, drop a board.** Grab `Hauksbee.app` (the `hauksbee-<version>-darwin-<arch>-app.zip` asset) from the [releases page](https://github.com/ETM-Code/hauksbee/releases), unzip, double-click. It opens your browser on the drop-zone; drop a board file and read the report. No terminal at any point. Caveat, stated plainly: the app is currently **unsigned**, so the first launch needs right-click > Open past the Gatekeeper "unidentified developer" warning ([`app/macos/SIGNING.md`](app/macos/SIGNING.md) has the details and the notarisation plan). The app is macOS-only today; Windows is tracked separately in [`docs/about/release-and-licensing.md`](docs/about/release-and-licensing.md), and Linux users take the installer line below. Like every release asset, it exists once there is a published public release; during private beta, build from source.
+**Download the app (macOS): double-click, drop a board.** Grab `Hauksbee.app` (the `hauksbee-<version>-darwin-<arch>-app.zip` asset) from the [releases page](https://github.com/ETM-Code/hauksbee/releases), unzip, double-click. It opens your browser on the drop-zone; drop a board file and read the report. No terminal at any point. The app is signed and notarised, so it opens without Gatekeeper warnings. macOS-only today; Windows is tracked in [`docs/about/release-and-licensing.md`](docs/about/release-and-licensing.md), and Linux users take the installer line below. Like every release asset, it exists once there is a published public release; during private beta, build from source.
 
 **One-line installer (terminal, macOS/Linux):**
 
