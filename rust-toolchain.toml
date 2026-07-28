@@ -5,6 +5,11 @@
 # Bumping: raise this, run the full suite plus the corpus gate, and raise
 # `rust-version` in Cargo.toml only when the code actually needs the newer
 # language or library feature.
+#
+# `rust-analyzer` is listed so editors use the analyzer matching this pinned
+# toolchain. Without it, VS Code's bundled analyzer runs against a pin it may
+# be newer than and prompts every contributor to change the pin, which is
+# exactly the wrong direction: the editor should follow the project.
 [toolchain]
 channel = "1.92.0"
-components = ["rustfmt", "clippy"]
+components = ["rustfmt", "clippy", "rust-analyzer"]
