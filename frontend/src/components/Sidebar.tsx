@@ -122,10 +122,13 @@ export function Sidebar({
             )}
             {item.badge !== undefined && (
               <span
-                className="sidebar-label text-[10px] font-bold px-1.5 rounded-full tnum"
+                className="sidebar-label text-[10px] font-bold px-1.5 rounded-full tnum whitespace-nowrap"
+                title={`${item.badge} part${item.badge === 1 ? '' : 's'} faulted`}
                 style={{ background: 'var(--err-bg)', border: '1px solid var(--err-border)', color: 'var(--err)', minWidth: 17, textAlign: 'center' }}
               >
-                {item.badge}
+                {/* Says what it counts: faulted PARTS (the faults card counts
+                    its own conditions separately). */}
+                {item.badge} {item.badge === 1 ? 'part' : 'parts'}
               </span>
             )}
           </button>

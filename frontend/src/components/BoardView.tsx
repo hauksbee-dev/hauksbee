@@ -118,6 +118,9 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
   // a labeled marker there. Only wired when the real renderer is drawing
   // (the dot map has no camera to move).
   const [focusPoint, setFocusPoint] = useState<{ x: number; y: number; label: string; seq: number } | null>(null)
+  // Which mode the viewer's 2D/3D control is in, so the caption under the
+  // canvas describes the interactions that actually exist in that mode.
+  const [viewerMode, setViewerMode] = useState<'2d' | '3d'>('2d')
   const focusSeq = useRef(0)
   const mapRef = useRef<HTMLDivElement>(null)
   const locate = useCallback((x: number, y: number, label: string) => {
@@ -209,8 +212,11 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
           </div>
         )}
 
-        {/* Top-level honesty notes */}
-        {(r.notes || []).map((n, i) => (
+        {/* Top-level honesty notes. The bind-role note restates exactly what
+            the yellow ACTIVE PARTS UNRESOLVED banner above already says (the
+            JSON carries both for CLI parity), so render it once, keeping the
+            stronger banner. */}
+        {(r.notes || []).filter(n => !(bindOpen && n.kind === 'bind_role')).map((n, i) => (
           <div
             key={i}
             className="mt-3 rounded-lg px-4 py-2.5"
@@ -242,6 +248,7 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
                 selectedNet={selectedNet}
                 netOptions={r.nets}
                 focusPoint={focusPoint}
+                onViewModeChange={setViewerMode}
                 onNetClick={setSelectedNet}
                 onFootprintClick={fp => setSelectedComponent({
                   ref: fp.ref, value: fp.value, lib_id: fp.lib_id,
@@ -264,8 +271,9 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
               )}
             </div>
             <div className="mt-1.5 text-[11px]" style={{ color: 'var(--silk-faint)' }}>
-              Scroll to zoom · drag to pan · hover a trace to see its net · click a trace or a
-              part to start a check on it
+              {viewerMode === '3d'
+                ? 'Drag to orbit · scroll to zoom · right-drag (or two-finger drag) to pan · switch to 2D to select traces and parts'
+                : 'Scroll to zoom · drag to pan · hover a trace to see its net · click a trace or a part to start a check on it'}
             </div>
           </section>
         ) : r.components?.length > 0 ? (

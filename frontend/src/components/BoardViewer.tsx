@@ -47,6 +47,10 @@ interface BoardViewerProps {
    *  report's "show on board" affordance). A new `seq` re-triggers the move
    *  even for the same coordinates. */
   focusPoint?: { x: number; y: number; label?: string; seq: number } | null
+  /** Fires when the 2D/3D segmented control switches, so the embedding view
+   *  can adapt its own chrome (e.g. the caption under the canvas swaps to
+   *  orbit instructions in 3D). */
+  onViewModeChange?: (mode: '2d' | '3d') => void
 }
 
 const PARTICLE_COUNT = 4
@@ -171,7 +175,7 @@ function LayerRow({ label, swatch, on, onToggle }: {
 
 export function BoardViewer({
   boardFile, frame, boardInfo, selectedNet, onFootprintClick, onNetClick,
-  onEmptyBoard, faultedRefs, netOptions, focusPoint,
+  onEmptyBoard, faultedRefs, netOptions, focusPoint, onViewModeChange,
 }: BoardViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
@@ -183,6 +187,12 @@ export function BoardViewer({
   const [error, setError] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d')
   const [layersOpen, setLayersOpen] = useState(false)
+
+  // Tell the embedding view which mode the segmented control is in (effect,
+  // not inline in the click handlers, so the initial mode is reported too).
+  useEffect(() => {
+    onViewModeChange?.(viewMode)
+  }, [viewMode, onViewModeChange])
 
   // Layers panel state: per-layer overrides plus the pads/labels/activity
   // switches. Hidden layers also stop rendering activity on their copper.
