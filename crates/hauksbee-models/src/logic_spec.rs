@@ -40,6 +40,15 @@
 //! "qa..qh" = { enable = "oe_n", active = "low" }
 //! ```
 //!
+//! Parallel-bus memories (28C EEPROMs, 62256 SRAMs, 27C ROMs) declare their
+//! data array with `[[models.logic.memory]]` (see [`MemorySpec`]): an
+//! addressable `words` x `bits` store, address pins LSB first, data read onto
+//! tri-stated outputs, and an optional write strobe that samples the (same,
+//! bidirectional) bus pins. The construct is feature-gated: it validates only
+//! under [`Logic::validate_with_features`] with [`Logic::FEATURE_MEMORY`], so
+//! an engine without a memory evaluator refuses the spec loudly instead of
+//! binding a part whose bus it will never drive.
+//!
 //! ## Expressions
 //!
 //! Combinational expressions are boolean expressions over pin, output, and
@@ -208,6 +217,61 @@ pub struct TristateSpec {
     pub active: Level,
 }
 
+/// One addressable memory array (`[[models.logic.memory]]`): the data store
+/// of a parallel-bus memory part (a 28C-series EEPROM, a 62256-class SRAM, a
+/// 27C-series ROM), which is categorically wider than the 64-bit
+/// `[[models.logic.register]]` ceiling. The array is declared, not enumerated:
+/// `words` x `bits` cells, addressed by the `address` pins (LSB first), read
+/// onto the `data_out` output pins, and (when `write` is present) committed
+/// from the `data_in` pins on the write strobe's qualifying edge.
+///
+/// The data bus of a real memory is bidirectional. That is expressed by
+/// declaring the bus pins as OUTPUTS (tri-stated via `[models.logic.tristate]`
+/// on the read-enable condition) and naming those same pins in `data_in`: the
+/// engine samples the pin's net level on the write edge, when the part itself
+/// is not driving the bus. `data_in` is the one place a spec may reference an
+/// output pin as a sampled value.
+///
+/// Evaluating a memory requires engine support that plain registers/comb do
+/// not (backing storage, write-edge capture off the bus, and edge-exact
+/// replay of µs-wide strobes). A spec using `[[models.logic.memory]]` only
+/// validates when the caller passes [`Logic::FEATURE_MEMORY`] to
+/// [`Logic::validate_with_features`]; the plain [`Logic::validate`] rejects it
+/// loudly instead of letting an engine without memory support bind the part
+/// and silently never drive its bus.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemorySpec {
+    /// Array name; shares the one namespace with inputs, outputs, registers.
+    pub name: String,
+    /// Word count (32768 for a 28C256). `address` must carry exactly
+    /// ceil(log2(words)) pins.
+    pub words: u64,
+    /// Bits per word (8 for a byte-wide EEPROM), 1..=64.
+    pub bits: u32,
+    /// Address pins, LSB first (`address[0]` = A0). Declared inputs.
+    pub address: Vec<String>,
+    /// Write strobe: the edge that commits `data_in` at the sampled address
+    /// (the 28C256 latches address on WE falling, data on WE rising; the
+    /// commit is modelled at the declared edge). Absent for a ROM.
+    #[serde(default)]
+    pub write: Option<ClockSpec>,
+    /// Level gates that must ALL be active for a write edge to commit (CE
+    /// low, for a chip-enable-qualified write). Declared inputs.
+    #[serde(default)]
+    pub write_gates: Vec<EnableSpec>,
+    /// Data pins sampled on the write edge, LSB first, one per bit. May name
+    /// output pins (the bidirectional bus case above). Required with `write`,
+    /// forbidden without it.
+    #[serde(default)]
+    pub data_in: Vec<String>,
+    /// Output pins driven with the addressed word, LSB first, one per bit.
+    /// Each must be a declared output and must not also be comb-assigned.
+    pub data_out: Vec<String>,
+    /// Initial value of every word (the erased state; 0xFF for an EEPROM).
+    #[serde(default)]
+    pub init: u64,
+}
+
 /// The `[models.logic]` block.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Logic {
@@ -232,6 +296,11 @@ pub struct Logic {
     /// classic SR metastability). Non-cycle outputs need no init.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub init: BTreeMap<String, u8>,
+    /// Addressable memory arrays (`[[models.logic.memory]]`); see
+    /// [`MemorySpec`]. Feature-gated: only validates under
+    /// [`Logic::validate_with_features`] with [`Logic::FEATURE_MEMORY`].
+    #[serde(default, rename = "memory", skip_serializing_if = "Vec::is_empty")]
+    pub memories: Vec<MemorySpec>,
 }
 
 impl Logic {
@@ -243,6 +312,7 @@ impl Logic {
             && self.registers.is_empty()
             && self.tristate.is_empty()
             && self.init.is_empty()
+            && self.memories.is_empty()
     }
 }
 
@@ -645,6 +715,66 @@ pub enum LogicSpecError {
         output: String,
         source: LogicExprError,
     },
+
+    #[error(
+        "memory '{name}': this engine does not evaluate [[models.logic.memory]] arrays \
+         (validate_with_features was not passed \"memory\"); the part must be left unmodeled \
+         loudly, not bound with a bus that never drives"
+    )]
+    MemoryNotSupported { name: String },
+
+    #[error("memory '{name}' declares {bits} bits per word; the valid range is 1..=64")]
+    MemoryWidthInvalid { name: String, bits: u32 },
+
+    #[error("memory '{name}' declares {words} word(s); an addressable array needs at least 2")]
+    MemoryWordsInvalid { name: String, words: u64 },
+
+    #[error(
+        "memory '{name}' declares {words} x {bits} bits, over the 128 Mbit cap; widen the \
+         bound deliberately rather than allocating it by accident"
+    )]
+    MemoryTooLarge {
+        name: String,
+        words: u64,
+        bits: u32,
+    },
+
+    #[error(
+        "memory '{name}': {words} words need exactly {expected} address pin(s) \
+         (ceil(log2(words)), LSB first), got {got}"
+    )]
+    MemoryAddressWidthMismatch {
+        name: String,
+        words: u64,
+        expected: usize,
+        got: usize,
+    },
+
+    #[error("memory '{name}': {field} lists {got} pin(s) but words are {bits} bits (one pin per bit)")]
+    MemoryDataWidthMismatch {
+        name: String,
+        field: &'static str,
+        bits: u32,
+        got: usize,
+    },
+
+    #[error("memory '{name}' lists data_in pins but declares no write strobe (a ROM takes no data)")]
+    MemoryDataInWithoutWrite { name: String },
+
+    #[error("memory '{name}': data_out pin '{pin}' is not a declared output")]
+    MemoryDataOutNotOutput { name: String, pin: String },
+
+    #[error("output '{output}' is driven by more than one memory's data_out")]
+    MemoryOutputConflict { output: String },
+
+    #[error("output '{name}' is assigned both by comb and by a memory's data_out")]
+    MemoryOutputAlsoComb { name: String },
+
+    #[error(
+        "{context} references memory '{name}'; a memory array has no scalar value (its word \
+         appears on the data_out pins)"
+    )]
+    MemoryInComb { context: String, name: String },
 }
 
 /// The validated, parsed form: every comb expression as an AST, in `outputs`
@@ -659,24 +789,49 @@ pub struct ValidatedLogic {
     pub warnings: Vec<String>,
     /// Outputs participating in at least one combinational cycle.
     pub cyclic_outputs: HashSet<String>,
+    /// The validated memory arrays, in declaration order. Non-empty only when
+    /// validation was run with [`Logic::FEATURE_MEMORY`]; the engine's memory
+    /// evaluator consumes these.
+    pub memories: Vec<MemorySpec>,
 }
 
 impl Logic {
-    /// Structural validation. Returns the parsed comb expressions (so the
-    /// engine compiles the same ASTs the validator checked) plus cycle
-    /// warnings. Every failure is a named [`LogicSpecError`].
+    /// The feature string an engine passes to [`Logic::validate_with_features`]
+    /// to declare it evaluates `[[models.logic.memory]]` arrays.
+    pub const FEATURE_MEMORY: &'static str = "memory";
+
+    /// Structural validation with no optional engine features declared.
+    /// Returns the parsed comb expressions (so the engine compiles the same
+    /// ASTs the validator checked) plus cycle warnings. Every failure is a
+    /// named [`LogicSpecError`]. A spec using feature-gated constructs
+    /// (memory arrays) FAILS here; an engine that implements them calls
+    /// [`Logic::validate_with_features`] instead.
     pub fn validate(&self) -> Result<ValidatedLogic, LogicSpecError> {
+        self.validate_with_features(&[])
+    }
+
+    /// Structural validation, with `features` naming the optional spec
+    /// constructs the calling engine actually evaluates (see
+    /// [`Logic::FEATURE_MEMORY`]). A spec using a construct outside
+    /// `features` is rejected loudly, never silently half-run: an engine
+    /// without memory support must not bind a memory part whose bus it will
+    /// never drive.
+    pub fn validate_with_features(
+        &self,
+        features: &[&str],
+    ) -> Result<ValidatedLogic, LogicSpecError> {
         if self.outputs.is_empty() {
             return Err(LogicSpecError::NoOutputs);
         }
 
-        // One namespace: inputs, outputs, registers.
+        // One namespace: inputs, outputs, registers, memories.
         let declared: Vec<(&str, &'static str)> = self
             .inputs
             .iter()
             .map(|n| (n.as_str(), "input"))
             .chain(self.outputs.iter().map(|n| (n.as_str(), "output")))
             .chain(self.registers.iter().map(|r| (r.name.as_str(), "register")))
+            .chain(self.memories.iter().map(|m| (m.name.as_str(), "memory")))
             .collect();
         let mut seen: HashMap<&str, &'static str> = HashMap::new();
         for (name, kind) in &declared {
@@ -843,16 +998,122 @@ impl Logic {
             }
         }
 
+        // ── Memory arrays ──
+        // Structural checks first, so a spec author gets the real defect even
+        // on an engine that will then refuse the feature.
+        let mut memory_outputs: HashSet<&str> = HashSet::new();
+        for m in &self.memories {
+            let ctx = |what: &str| format!("memory '{}' {what}", m.name);
+            if m.bits == 0 || m.bits > 64 {
+                return Err(LogicSpecError::MemoryWidthInvalid {
+                    name: m.name.clone(),
+                    bits: m.bits,
+                });
+            }
+            if m.words < 2 {
+                return Err(LogicSpecError::MemoryWordsInvalid {
+                    name: m.name.clone(),
+                    words: m.words,
+                });
+            }
+            // Total size cap: 128 Mbit covers every 27C/28C/62xx/39SF-class
+            // part by a wide margin while refusing an absurd allocation.
+            const MAX_TOTAL_BITS: u128 = 128 * 1024 * 1024;
+            if (m.words as u128) * (m.bits as u128) > MAX_TOTAL_BITS {
+                return Err(LogicSpecError::MemoryTooLarge {
+                    name: m.name.clone(),
+                    words: m.words,
+                    bits: m.bits,
+                });
+            }
+            let expected_addr = (64 - (m.words - 1).leading_zeros()) as usize;
+            if m.address.len() != expected_addr {
+                return Err(LogicSpecError::MemoryAddressWidthMismatch {
+                    name: m.name.clone(),
+                    words: m.words,
+                    expected: expected_addr,
+                    got: m.address.len(),
+                });
+            }
+            for pin in &m.address {
+                need_input(ctx("address"), pin)?;
+            }
+            if let Some(w) = &m.write {
+                need_input(ctx("write strobe"), &w.pin)?;
+                if m.data_in.len() != m.bits as usize {
+                    return Err(LogicSpecError::MemoryDataWidthMismatch {
+                        name: m.name.clone(),
+                        field: "data_in",
+                        bits: m.bits,
+                        got: m.data_in.len(),
+                    });
+                }
+                // A bidirectional bus: data_in may sample an OUTPUT pin (the
+                // part tri-states while the bus master drives the write data).
+                for pin in &m.data_in {
+                    if !inputs.contains(pin.as_str()) && !outputs.contains(pin.as_str()) {
+                        return Err(LogicSpecError::UndeclaredName {
+                            context: ctx("data_in"),
+                            name: pin.clone(),
+                        });
+                    }
+                }
+            } else if !m.data_in.is_empty() {
+                return Err(LogicSpecError::MemoryDataInWithoutWrite {
+                    name: m.name.clone(),
+                });
+            }
+            for g in &m.write_gates {
+                need_input(ctx("write gate"), &g.pin)?;
+            }
+            if m.data_out.len() != m.bits as usize {
+                return Err(LogicSpecError::MemoryDataWidthMismatch {
+                    name: m.name.clone(),
+                    field: "data_out",
+                    bits: m.bits,
+                    got: m.data_out.len(),
+                });
+            }
+            for pin in &m.data_out {
+                if !outputs.contains(pin.as_str()) {
+                    return Err(LogicSpecError::MemoryDataOutNotOutput {
+                        name: m.name.clone(),
+                        pin: pin.clone(),
+                    });
+                }
+                if !memory_outputs.insert(pin.as_str()) {
+                    return Err(LogicSpecError::MemoryOutputConflict {
+                        output: pin.clone(),
+                    });
+                }
+            }
+            let mask = if m.bits == 64 {
+                u64::MAX
+            } else {
+                (1u64 << m.bits) - 1
+            };
+            if m.init & !mask != 0 {
+                return Err(LogicSpecError::InitValueTooWide {
+                    register: m.name.clone(),
+                    value: m.init,
+                    bits: m.bits,
+                });
+            }
+        }
+
         // ── Comb ──
         // Every comb target must be a declared output; every output must be
-        // assigned. Parse each expression and check its references.
+        // assigned exactly once, by comb or by a memory's data_out.
         for name in self.comb.keys() {
             if !outputs.contains(name.as_str()) {
                 return Err(LogicSpecError::CombTargetNotOutput { name: name.clone() });
             }
+            if memory_outputs.contains(name.as_str()) {
+                return Err(LogicSpecError::MemoryOutputAlsoComb { name: name.clone() });
+            }
         }
         for name in &self.outputs {
-            if !self.comb.contains_key(name) {
+            if !self.comb.contains_key(name) && !memory_outputs.contains(name.as_str()) {
                 return Err(LogicSpecError::UnassignedOutput { name: name.clone() });
             }
         }
@@ -863,10 +1124,15 @@ impl Logic {
             .filter_map(|r| r.clock.as_ref().map(|c| (c.pin.as_str(), r.name.as_str())))
             .collect();
 
+        let memory_names: HashSet<&str> = self.memories.iter().map(|m| m.name.as_str()).collect();
+
         // Parse in outputs-declaration order; the evaluation order contract.
+        // Memory-driven outputs have no comb expression to parse.
         let mut comb: Vec<(String, LogicExpr)> = Vec::with_capacity(self.outputs.len());
         for out in &self.outputs {
-            let src = &self.comb[out];
+            let Some(src) = self.comb.get(out) else {
+                continue;
+            };
             let expr = parse_logic_expr(src).map_err(|source| LogicSpecError::ExprParse {
                 output: out.clone(),
                 source,
@@ -881,6 +1147,12 @@ impl Logic {
                         context: context.clone(),
                         register: n.to_string(),
                         bits,
+                    });
+                }
+                if memory_names.contains(n) {
+                    return Err(LogicSpecError::MemoryInComb {
+                        context: context.clone(),
+                        name: n.to_string(),
                     });
                 }
                 if !inputs.contains(n) && !outputs.contains(n) {
@@ -944,6 +1216,17 @@ impl Logic {
             }
         }
 
+        // ── Feature gate (last: real structural defects surface first) ──
+        // An engine that has not declared memory support must refuse the spec
+        // rather than bind a part whose bus it will never drive.
+        if let Some(m) = self.memories.first() {
+            if !features.contains(&Self::FEATURE_MEMORY) {
+                return Err(LogicSpecError::MemoryNotSupported {
+                    name: m.name.clone(),
+                });
+            }
+        }
+
         // ── Cycle detection (warning, not an error: cross-coupled latches are
         //    the point). The engine verifies convergence at bind time. ──
         let (warnings, cyclic_outputs) = self.comb_cycles(&comb);
@@ -952,6 +1235,7 @@ impl Logic {
             comb,
             warnings,
             cyclic_outputs,
+            memories: self.memories.clone(),
         })
     }
 
@@ -1356,5 +1640,164 @@ data_in = "d"
             matches!(e, LogicSpecError::DuplicateName { .. }),
             "got: {e}"
         );
+    }
+
+    /// A 28C256-shaped parallel EEPROM: 32K x 8, bidirectional bus expressed
+    /// as tri-stated outputs sampled by data_in, CE-gated WE-rising write.
+    const EEPROM_28C256: &str = r#"
+inputs  = ["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9",
+           "a10", "a11", "a12", "a13", "a14", "ce_n", "oe_n", "we_n"]
+outputs = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+
+[[memory]]
+name = "cell"
+words = 32768
+bits = 8
+init = 0xFF
+address  = ["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9",
+            "a10", "a11", "a12", "a13", "a14"]
+write = { pin = "we_n", edge = "rising" }
+write_gates = [{ pin = "ce_n", active = "low" }]
+data_in  = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+
+[tristate]
+"io0..io7" = { enable = "oe_n", active = "low" }
+"#;
+
+    #[test]
+    fn memory_spec_validates_only_under_the_memory_feature() {
+        let logic = parse_logic(EEPROM_28C256);
+        // Plain validate (an engine that never declared memory support) must
+        // refuse loudly, never bind a part whose bus it will not drive.
+        let e = logic.validate().unwrap_err();
+        assert!(
+            matches!(e, LogicSpecError::MemoryNotSupported { ref name } if name == "cell"),
+            "got: {e}"
+        );
+        // A memory-capable engine passes the feature and gets the arrays.
+        let v = logic
+            .validate_with_features(&[Logic::FEATURE_MEMORY])
+            .expect("28C256 shape validates under the memory feature");
+        assert_eq!(v.memories.len(), 1);
+        assert_eq!(v.memories[0].words, 32768);
+        assert_eq!(v.memories[0].data_out.len(), 8);
+        // The bus outputs are memory-driven, so no comb ASTs exist for them.
+        assert!(v.comb.is_empty());
+    }
+
+    #[test]
+    fn memory_structural_defects_beat_the_feature_gate() {
+        // A wrong address width errors as itself even WITHOUT the feature, so
+        // spec authors debug the real defect, not the gate.
+        let mut logic = parse_logic(EEPROM_28C256);
+        logic.memories[0].address.pop();
+        let e = logic.validate().unwrap_err();
+        assert!(
+            matches!(
+                e,
+                LogicSpecError::MemoryAddressWidthMismatch {
+                    expected: 15,
+                    got: 14,
+                    ..
+                }
+            ),
+            "got: {e}"
+        );
+    }
+
+    #[test]
+    fn memory_data_widths_must_match_word_bits() {
+        let mut logic = parse_logic(EEPROM_28C256);
+        logic.memories[0].data_out.pop();
+        let e = logic
+            .validate_with_features(&[Logic::FEATURE_MEMORY])
+            .unwrap_err();
+        assert!(
+            matches!(
+                e,
+                LogicSpecError::MemoryDataWidthMismatch {
+                    field: "data_out",
+                    bits: 8,
+                    got: 7,
+                    ..
+                }
+            ),
+            "got: {e}"
+        );
+    }
+
+    #[test]
+    fn rom_shape_forbids_data_in_without_write() {
+        let mut logic = parse_logic(EEPROM_28C256);
+        logic.memories[0].write = None;
+        let e = logic
+            .validate_with_features(&[Logic::FEATURE_MEMORY])
+            .unwrap_err();
+        assert!(
+            matches!(e, LogicSpecError::MemoryDataInWithoutWrite { .. }),
+            "got: {e}"
+        );
+        // Dropping data_in too makes it a legal ROM.
+        let mut rom = parse_logic(EEPROM_28C256);
+        rom.memories[0].write = None;
+        rom.memories[0].data_in.clear();
+        rom.validate_with_features(&[Logic::FEATURE_MEMORY])
+            .expect("27C-style ROM shape validates");
+    }
+
+    #[test]
+    fn memory_output_cannot_also_be_comb_assigned() {
+        let mut logic = parse_logic(EEPROM_28C256);
+        logic.comb.insert("io0".into(), "a0".into());
+        let e = logic
+            .validate_with_features(&[Logic::FEATURE_MEMORY])
+            .unwrap_err();
+        assert!(
+            matches!(e, LogicSpecError::MemoryOutputAlsoComb { ref name } if name == "io0"),
+            "got: {e}"
+        );
+    }
+
+    #[test]
+    fn memory_shares_the_one_namespace() {
+        let mut logic = parse_logic(EEPROM_28C256);
+        logic.memories[0].name = "io0".into();
+        let e = logic
+            .validate_with_features(&[Logic::FEATURE_MEMORY])
+            .unwrap_err();
+        assert!(
+            matches!(e, LogicSpecError::DuplicateName { .. }),
+            "got: {e}"
+        );
+    }
+
+    #[test]
+    fn memory_size_cap_refuses_absurd_allocations() {
+        let mut logic = parse_logic(EEPROM_28C256);
+        logic.memories[0].words = 1 << 40;
+        logic.memories[0].address = (0..40).map(|i| format!("a{i}")).collect();
+        logic.inputs = (0..40)
+            .map(|i| format!("a{i}"))
+            .chain(["ce_n".into(), "oe_n".into(), "we_n".into()])
+            .collect();
+        let e = logic
+            .validate_with_features(&[Logic::FEATURE_MEMORY])
+            .unwrap_err();
+        assert!(
+            matches!(e, LogicSpecError::MemoryTooLarge { .. }),
+            "got: {e}"
+        );
+    }
+
+    #[test]
+    fn memory_ignores_do_not_regress_existing_specs() {
+        // The HC595 spec has no memory: it must validate identically with and
+        // without the feature declared.
+        let logic = parse_logic(HC595);
+        logic.validate().expect("plain validate unaffected");
+        logic
+            .validate_with_features(&[Logic::FEATURE_MEMORY])
+            .expect("feature declaration is not a requirement");
     }
 }
