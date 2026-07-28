@@ -1,10 +1,19 @@
-// Board renderer: draws a ParsedBoard onto an HTML canvas.
+// Board renderer: draws a ParsedBoard onto HTML canvases.
 // All draw calls go through the Camera transform.
+//
+// Rendering is split into two passes so a large board stays interactive:
+//   renderStaticBoard: everything that only depends on the camera (copper,
+//     graphics, pads, vias, labels). Drawn into an offscreen canvas that the
+//     viewer blits every animation frame and re-renders only when the camera
+//     settles (see BoardViewer's static cache).
+//   renderDynamicOverlay: everything that changes per frame (voltage tints,
+//     net highlights, fault pulses, particles, probe tooltip, component
+//     glows). Small working sets, so it can run at full frame rate.
 
 import type { Camera } from './camera'
 import { worldToScreen } from './camera'
 import type {
-  ParsedBoard, Pad, Point,
+  ParsedBoard, Pad, Point, Segment,
 } from './kicad-parser'
 import { getLayerStyle, isCopperLayer, PAD_COLOR, PAD_GLOW, VIA_COLOR, VIA_DRILL_COLOR } from './layer-colors'
 
@@ -18,6 +27,23 @@ const LAYER_ORDER = [
   'Edge.Cuts',
   'Dwgs.User', 'User.Drawings',
 ]
+
+// Above this many drawable primitives, canvas shadowBlur (the "glow") is
+// disabled: each blurred stroke costs an offscreen composite, and on a
+// 3,000-component board that alone pushes a full render into hundreds of ms.
+const GLOW_PRIMITIVE_LIMIT = 1500
+
+/** Total drawable primitives, used to decide whether glow effects are payable. */
+export function countPrimitives(board: ParsedBoard): number {
+  let n = board.segments.length + board.arcs.length + board.vias.length +
+    board.gr_lines.length + board.gr_arcs.length + board.gr_circles.length +
+    board.gr_rects.length + board.gr_polys.length
+  for (const fp of board.footprints) {
+    n += fp.pads.length + fp.fp_lines.length + fp.fp_arcs.length +
+      fp.fp_circles.length + fp.fp_rects.length
+  }
+  return n
+}
 
 // ────────────────────── Canvas helpers ───────────────────────────────
 
@@ -41,6 +67,16 @@ function setStroke(ctx: CanvasRenderingContext2D, color: string, glowColor: stri
   } else {
     ctx.shadowBlur = 0
   }
+}
+
+/** True when the screen-space segment cannot touch the canvas (with margin). */
+function segOffscreen(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number, y2: number): boolean {
+  const m = 20
+  const w = ctx.canvas.width, h = ctx.canvas.height
+  return (
+    (x1 < -m && x2 < -m) || (x1 > w + m && x2 > w + m) ||
+    (y1 < -m && y2 < -m) || (y1 > h + m && y2 > h + m)
+  )
 }
 
 // ────────────────────── Three-point arc ──────────────────────────────
@@ -96,18 +132,23 @@ function drawArc(ctx: CanvasRenderingContext2D, cam: Camera, start: Point, mid: 
 
 // ────────────────────── Pad drawing ──────────────────────────────────
 
-function drawPad(ctx: CanvasRenderingContext2D, cam: Camera, pad: Pad, color: string, glowColor: string, alpha = 1) {
+function drawPad(ctx: CanvasRenderingContext2D, cam: Camera, pad: Pad, color: string, glowColor: string | undefined, alpha = 1) {
   const [sx, sy] = ws(cam, pad.at.x, pad.at.y)
   const w = pad.size.w * cam.scale
   const h = pad.size.h * cam.scale
   const minDim = Math.min(w, h)
   if (minDim < 0.5) return
+  // Cull: cheap screen-space reject before any canvas state changes
+  const reach = Math.max(w, h)
+  if (sx + reach < 0 || sx - reach > ctx.canvas.width || sy + reach < 0 || sy - reach > ctx.canvas.height) return
 
   ctx.save()
   ctx.globalAlpha = alpha
   ctx.fillStyle = color
-  ctx.shadowColor = glowColor
-  ctx.shadowBlur = Math.min(w * 0.6, 8)
+  if (glowColor) {
+    ctx.shadowColor = glowColor
+    ctx.shadowBlur = Math.min(w * 0.6, 8)
+  }
   ctx.translate(sx, sy)
   ctx.rotate((pad.angle * Math.PI) / 180)
 
@@ -155,58 +196,18 @@ function drawPad(ctx: CanvasRenderingContext2D, cam: Camera, pad: Pad, color: st
   ctx.restore()
 }
 
-// ────────────────────── Main render function ─────────────────────────
-
-export interface RenderOptions {
-  highlightNets?: Set<string>
-  dimOthers?: boolean
-  /** net name → voltage, used to tint copper traces */
-  netVoltages?: Map<string, number>
-  /** References of faulted components for pulsing red highlight */
-  faultedRefs?: Set<string>
-  /** Animation time in seconds (for pulsing effects) */
-  animTime?: number
-}
+// ────────────────────── Static pass ──────────────────────────────────
 
 /**
- * Compute a tinted copper colour from a net voltage.
- * 0 V     = base layer colour (pass-through)
- * +5 V    = warm bright (#ffb347 blended with base)
- * negative= cool blue (#60a0ff blended with base)
- * Smooth lerp; only applied to nets present in netVoltages.
+ * Draw everything that depends only on the camera: board graphics, copper in
+ * its base layer colours, pads, vias, and reference labels. No per-frame
+ * state (voltages, highlights, faults) touches this pass, so the result can
+ * be cached and blitted.
  */
-function voltageTintColor(baseColor: string, voltage: number, maxV = 5): string {
-  const t = Math.max(-1, Math.min(1, voltage / maxV))  // -1..1
-
-  // Parse base color (assumes #rrggbb format)
-  const br = parseInt(baseColor.slice(1, 3), 16)
-  const bg = parseInt(baseColor.slice(3, 5), 16)
-  const bb = parseInt(baseColor.slice(5, 7), 16)
-
-  let tr: number, tg: number, tb: number, strength: number
-  if (t > 0) {
-    // Warm: brighter amber-orange for high voltage (3.3V / 5V rails)
-    tr = 0xff; tg = 0xc0; tb = 0x40
-    strength = t * 0.72
-  } else if (t < 0) {
-    // Cool blue: negative voltage
-    tr = 0x60; tg = 0xa0; tb = 0xff
-    strength = (-t) * 0.72
-  } else {
-    return baseColor
-  }
-
-  const r = Math.round(br + (tr - br) * strength)
-  const g = Math.round(bg + (tg - bg) * strength)
-  const b = Math.round(bb + (tb - bb) * strength)
-  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
-}
-
-export function renderBoard(
+export function renderStaticBoard(
   ctx: CanvasRenderingContext2D,
   board: ParsedBoard,
   cam: Camera,
-  opts: RenderOptions = {},
 ) {
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
 
@@ -225,34 +226,25 @@ export function renderBoard(
     ctx.fillRect(0, 0, W, H)
   }
 
-  const { highlightNets, dimOthers, netVoltages, faultedRefs, animTime = 0 } = opts
-  const hasHighlight = highlightNets && highlightNets.size > 0
-  const hasVoltages = netVoltages && netVoltages.size > 0
-
-  // Pulsing factor for fault highlight (0..1, 2Hz for urgency)
-  const faultPulse = faultedRefs && faultedRefs.size > 0
-    ? 0.35 + 0.65 * Math.abs(Math.sin(animTime * Math.PI * 4))
-    : 0
+  const glowOk = countPrimitives(board) <= GLOW_PRIMITIVE_LIMIT
 
   // ── Board graphics, grouped by layer ──
-  const layersToRender = [...LAYER_ORDER]
-
-  for (const layer of layersToRender) {
+  for (const layer of LAYER_ORDER) {
     const style = getLayerStyle(layer)
     if (!style.visible) continue
 
     const isCopper = isCopperLayer(layer)
     const color = style.color
-    const glow = style.glow
+    const glow = glowOk ? style.glow : undefined
 
     // gr_lines on this layer
     for (const l of board.gr_lines) {
       if (l.layer !== layer) continue
-      const lw = lineWidth(cam, l.width)
-      ctx.beginPath()
-      setStroke(ctx, color, glow, lw)
       const [x1, y1] = ws(cam, l.start.x, l.start.y)
       const [x2, y2] = ws(cam, l.end.x, l.end.y)
+      if (segOffscreen(ctx, x1, y1, x2, y2)) continue
+      ctx.beginPath()
+      setStroke(ctx, color, glow, lineWidth(cam, l.width))
       ctx.moveTo(x1, y1)
       ctx.lineTo(x2, y2)
       ctx.stroke()
@@ -311,11 +303,11 @@ export function renderBoard(
     for (const fp of board.footprints) {
       for (const l of fp.fp_lines) {
         if (l.layer !== layer) continue
-        const lw = lineWidth(cam, l.width)
-        ctx.beginPath()
-        setStroke(ctx, color, glow, lw)
         const [x1, y1] = ws(cam, l.start.x, l.start.y)
         const [x2, y2] = ws(cam, l.end.x, l.end.y)
+        if (segOffscreen(ctx, x1, y1, x2, y2)) continue
+        ctx.beginPath()
+        setStroke(ctx, color, glow, lineWidth(cam, l.width))
         ctx.moveTo(x1, y1)
         ctx.lineTo(x2, y2)
         ctx.stroke()
@@ -347,58 +339,24 @@ export function renderBoard(
       }
     }
 
-    // Tracks / segments on this copper layer
+    // Tracks / segments on this copper layer, base colour. Live voltage tints
+    // are painted over these by the dynamic pass.
     if (isCopper) {
       for (const s of board.segments) {
         if (s.layer !== layer) continue
-        const isHighlighted = hasHighlight && s.netName != null && highlightNets!.has(s.netName)
-        const alpha = hasHighlight && dimOthers && !isHighlighted ? 0.15 : 1
-        if (alpha < 1) ctx.globalAlpha = alpha
-
-        let trackColor = color
-        let trackGlow = glow
-        if (isHighlighted) {
-          trackColor = '#ffffff'
-          trackGlow = '#80c0ff'
-        } else if (hasVoltages && s.netName && netVoltages!.has(s.netName)) {
-          const v = netVoltages!.get(s.netName)!
-          trackColor = voltageTintColor(color, v)
-          // Bloom-like glow on active traces, stronger to visually pulse
-          if (Math.abs(v) > 0.05) {
-            trackGlow = v > 0 ? '#ffb347cc' : '#60a0ffcc'
-          }
-        }
-
-        const lw = lineWidth(cam, s.width)
-        ctx.beginPath()
-        setStroke(ctx, trackColor, trackGlow, lw)
         const [x1, y1] = ws(cam, s.start.x, s.start.y)
         const [x2, y2] = ws(cam, s.end.x, s.end.y)
+        if (segOffscreen(ctx, x1, y1, x2, y2)) continue
+        ctx.beginPath()
+        setStroke(ctx, color, glow, lineWidth(cam, s.width))
         ctx.moveTo(x1, y1)
         ctx.lineTo(x2, y2)
         ctx.stroke()
-        ctx.globalAlpha = 1
       }
 
       for (const a of board.arcs) {
         if (a.layer !== layer) continue
-        const isHighlighted = hasHighlight && a.netName != null && highlightNets!.has(a.netName)
-        const alpha = hasHighlight && dimOthers && !isHighlighted ? 0.15 : 1
-        if (alpha < 1) ctx.globalAlpha = alpha
-
-        let trackColor = color
-        let trackGlow = glow
-        if (isHighlighted) {
-          trackColor = '#ffffff'
-          trackGlow = '#80c0ff'
-        } else if (hasVoltages && a.netName && netVoltages!.has(a.netName)) {
-          const v = netVoltages!.get(a.netName)!
-          trackColor = voltageTintColor(color, v)
-          if (Math.abs(v) > 0.05) trackGlow = v > 0 ? '#ffb347cc' : '#60a0ffcc'
-        }
-
-        drawArc(ctx, cam, a.start, a.mid, a.end, trackColor, trackGlow, a.width)
-        ctx.globalAlpha = 1
+        drawArc(ctx, cam, a.start, a.mid, a.end, color, glow, a.width)
       }
     }
   }
@@ -406,42 +364,26 @@ export function renderBoard(
   // ── Vias ──
   ctx.shadowBlur = 0
   for (const v of board.vias) {
-    const isHighlighted = hasHighlight && v.netName != null && highlightNets!.has(v.netName)
-    const alpha = hasHighlight && dimOthers && !isHighlighted ? 0.2 : 1
     const [sx, sy] = ws(cam, v.at.x, v.at.y)
     const r = (v.size / 2) * cam.scale
-    const dr = (v.drill / 2) * cam.scale
     if (r < 0.5) continue
-    ctx.globalAlpha = alpha
+    if (sx + r < 0 || sx - r > ctx.canvas.width || sy + r < 0 || sy - r > ctx.canvas.height) continue
+    const dr = (v.drill / 2) * cam.scale
     ctx.beginPath()
-    ctx.fillStyle = isHighlighted ? '#ffffffcc' : VIA_COLOR
-    if (isHighlighted) { ctx.shadowColor = '#80c0ff'; ctx.shadowBlur = 6 }
+    ctx.fillStyle = VIA_COLOR
     ctx.arc(sx, sy, r, 0, Math.PI * 2)
     ctx.fill()
-    ctx.shadowBlur = 0
     ctx.beginPath()
     ctx.fillStyle = VIA_DRILL_COLOR
     ctx.arc(sx, sy, Math.max(dr, 0.5), 0, Math.PI * 2)
     ctx.fill()
-    ctx.globalAlpha = 1
   }
 
   // ── Pads ──
+  const padGlow = glowOk ? PAD_GLOW : undefined
   for (const fp of board.footprints) {
-    const isFaulted = faultedRefs?.has(fp.ref) ?? false
     for (const pad of fp.pads) {
-      const isHighlighted = hasHighlight && pad.netName != null && highlightNets!.has(pad.netName)
-      const alpha = hasHighlight && dimOthers && !isHighlighted && !isFaulted ? 0.15 : 1
-      let padColor = PAD_COLOR
-      let padGlow = PAD_GLOW
-      if (isFaulted) {
-        padColor = `rgba(248,${Math.round(50 + faultPulse * 50)},50,1)`
-        padGlow = '#ff2222'
-      } else if (isHighlighted) {
-        padColor = '#ffdd44'
-        padGlow = '#ffe080'
-      }
-      drawPad(ctx, cam, pad, padColor, padGlow, alpha)
+      drawPad(ctx, cam, pad, PAD_COLOR, padGlow)
     }
   }
 
@@ -483,11 +425,178 @@ export function renderBoard(
   }
   ctx.globalAlpha = 1
   ctx.restore()
+}
 
-  // ── Faulted footprint ring overlays ──
+// ────────────────────── Dynamic pass ─────────────────────────────────
+// Renders per-frame data on the overlay canvas above the (blitted) static
+// board: voltage tints, highlights, faults, particles, probe tooltip.
+
+export interface OverlayData {
+  /** Pulsing glow on these nets */
+  highlightNets: Set<string>
+  /** Dim the non-highlighted board when a highlight is active */
+  dimOthers?: boolean
+  /** Signal flow particles: netName → list of positions (t∈[0,1]) along each segment */
+  particles: Map<string, number[]>
+  /** Probe tooltip */
+  probe?: { x: number; y: number; label: string; value: string }
+  /** Active net voltages for colour tinting */
+  netVoltages?: Map<string, number>
+  /** Component state glows: ref -> state map */
+  componentStates?: Record<string, Record<string, number>>
+  /** Component kinds: ref -> kind string */
+  componentKinds?: Record<string, string>
+  /** References of faulted components for pulsing red highlight */
+  faultedRefs?: Set<string>
+  /** Animation time in seconds (for pulsing effects) */
+  animTime?: number
+}
+
+function heatColor(t: number): string {
+  // t: 0=blue, 0.5=yellow, 1=red
+  const r = Math.round(Math.min(255, t * 2 * 255))
+  const g = Math.round(Math.min(255, (1 - Math.abs(t - 0.5) * 2) * 200))
+  const b = Math.round(Math.max(0, (1 - t * 2) * 255))
+  return `rgb(${r},${g},${b})`
+}
+
+/**
+ * Compute a tinted copper colour from a net voltage.
+ * 0 V     = base layer colour (pass-through)
+ * +5 V    = warm bright (#ffb347 blended with base)
+ * negative= cool blue (#60a0ff blended with base)
+ * Smooth lerp; only applied to nets present in netVoltages.
+ */
+function voltageTintColor(baseColor: string, voltage: number, maxV = 5): string {
+  const t = Math.max(-1, Math.min(1, voltage / maxV))  // -1..1
+
+  // Parse base color (assumes #rrggbb format)
+  const br = parseInt(baseColor.slice(1, 3), 16)
+  const bg = parseInt(baseColor.slice(3, 5), 16)
+  const bb = parseInt(baseColor.slice(5, 7), 16)
+
+  let tr: number, tg: number, tb: number, strength: number
+  if (t > 0) {
+    // Warm: brighter amber-orange for high voltage (3.3V / 5V rails)
+    tr = 0xff; tg = 0xc0; tb = 0x40
+    strength = t * 0.72
+  } else if (t < 0) {
+    // Cool blue: negative voltage
+    tr = 0x60; tg = 0xa0; tb = 0xff
+    strength = (-t) * 0.72
+  } else {
+    return baseColor
+  }
+
+  const r = Math.round(br + (tr - br) * strength)
+  const g = Math.round(bg + (tg - bg) * strength)
+  const b = Math.round(bb + (tb - bb) * strength)
+  return `#${r.toString(16).padStart(2, '0')}${g.toString(16).padStart(2, '0')}${b.toString(16).padStart(2, '0')}`
+}
+
+/** Stroke one copper track (segment) with optional glow. */
+function strokeSeg(ctx: CanvasRenderingContext2D, cam: Camera, s: Segment, color: string, glow: string | undefined) {
+  const [x1, y1] = ws(cam, s.start.x, s.start.y)
+  const [x2, y2] = ws(cam, s.end.x, s.end.y)
+  if (segOffscreen(ctx, x1, y1, x2, y2)) return
+  ctx.beginPath()
+  setStroke(ctx, color, glow, lineWidth(cam, s.width))
+  ctx.moveTo(x1, y1)
+  ctx.lineTo(x2, y2)
+  ctx.stroke()
+}
+
+export function renderDynamicOverlay(
+  ctx: CanvasRenderingContext2D,
+  board: ParsedBoard,
+  cam: Camera,
+  overlay: OverlayData,
+) {
+  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+
+  const { highlightNets, dimOthers, netVoltages, faultedRefs, animTime = 0 } = overlay
+  const hasHighlight = highlightNets.size > 0
+  // Glow is affordable here when the ACTIVE set is small; count as we draw.
+  const glowOk = board.segments.length + board.arcs.length <= GLOW_PRIMITIVE_LIMIT
+
+  // ── Dim veil when a net is highlighted ──
+  // The static pass cannot dim per-primitive (it is cached), so a translucent
+  // veil over the whole blit approximates the old alpha=0.15 on everything
+  // else, and the highlighted copper is drawn bright on top.
+  if (hasHighlight && dimOthers) {
+    ctx.fillStyle = 'rgba(2,6,23,0.72)'
+    ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+  }
+
+  // ── Voltage-tinted copper over the static base ──
+  if (netVoltages && netVoltages.size > 0 && !hasHighlight) {
+    for (const layer of LAYER_ORDER) {
+      if (!isCopperLayer(layer)) continue
+      const style = getLayerStyle(layer)
+      if (!style.visible) continue
+      for (const s of board.segments) {
+        if (s.layer !== layer || !s.netName) continue
+        const v = netVoltages.get(s.netName)
+        if (v === undefined || Math.abs(v) < 0.05) continue
+        const glow = glowOk ? (v > 0 ? '#ffb347cc' : '#60a0ffcc') : undefined
+        strokeSeg(ctx, cam, s, voltageTintColor(style.color, v), glow)
+      }
+      for (const a of board.arcs) {
+        if (a.layer !== layer || !a.netName) continue
+        const v = netVoltages.get(a.netName)
+        if (v === undefined || Math.abs(v) < 0.05) continue
+        const glow = glowOk ? (v > 0 ? '#ffb347cc' : '#60a0ffcc') : undefined
+        drawArc(ctx, cam, a.start, a.mid, a.end, voltageTintColor(style.color, v), glow, a.width)
+      }
+    }
+    ctx.shadowBlur = 0
+  }
+
+  // ── Highlighted nets: copper, arcs, vias, pads drawn bright ──
+  if (hasHighlight) {
+    for (const s of board.segments) {
+      if (!s.netName || !highlightNets.has(s.netName)) continue
+      strokeSeg(ctx, cam, s, '#ffffff', '#80c0ff')
+    }
+    for (const a of board.arcs) {
+      if (!a.netName || !highlightNets.has(a.netName)) continue
+      drawArc(ctx, cam, a.start, a.mid, a.end, '#ffffff', '#80c0ff', a.width)
+    }
+    ctx.shadowBlur = 0
+    for (const v of board.vias) {
+      if (!v.netName || !highlightNets.has(v.netName)) continue
+      const [sx, sy] = ws(cam, v.at.x, v.at.y)
+      const r = (v.size / 2) * cam.scale
+      if (r < 0.5) continue
+      ctx.beginPath()
+      ctx.fillStyle = '#ffffffcc'
+      ctx.shadowColor = '#80c0ff'
+      ctx.shadowBlur = 6
+      ctx.arc(sx, sy, r, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.shadowBlur = 0
+      ctx.beginPath()
+      ctx.fillStyle = VIA_DRILL_COLOR
+      ctx.arc(sx, sy, Math.max((v.drill / 2) * cam.scale, 0.5), 0, Math.PI * 2)
+      ctx.fill()
+    }
+    for (const fp of board.footprints) {
+      for (const pad of fp.pads) {
+        if (!pad.netName || !highlightNets.has(pad.netName)) continue
+        drawPad(ctx, cam, pad, '#ffdd44', '#ffe080')
+      }
+    }
+  }
+
+  // ── Faulted footprints: pulsing red pads + ring overlays ──
   if (faultedRefs && faultedRefs.size > 0) {
+    const faultPulse = 0.35 + 0.65 * Math.abs(Math.sin(animTime * Math.PI * 4))
     for (const fp of board.footprints) {
       if (!faultedRefs.has(fp.ref)) continue
+      const padColor = `rgba(248,${Math.round(50 + faultPulse * 50)},50,1)`
+      for (const pad of fp.pads) {
+        drawPad(ctx, cam, pad, padColor, '#ff2222')
+      }
       const [fpX, fpY] = ws(cam, fp.at.x, fp.at.y)
       const ringR = Math.max(8, 6 * cam.scale)
       // Double ring: outer softer, inner crisp
@@ -509,51 +618,23 @@ export function renderBoard(
       ctx.shadowBlur = 0
     }
   }
-}
-
-// ────────────────────── Overlay renderer ─────────────────────────────
-// Renders dynamic data on a second (overlay) canvas on top of the board canvas.
-
-export interface OverlayData {
-  /** Pulsing glow on these nets */
-  highlightNets: Set<string>
-  /** Signal flow particles: netName → list of positions (t∈[0,1]) along each segment */
-  particles: Map<string, number[]>
-  /** Probe tooltip */
-  probe?: { x: number; y: number; label: string; value: string }
-  /** Active net voltages for colour tinting */
-  netVoltages?: Map<string, number>
-  /** Component state glows: ref -> state map */
-  componentStates?: Record<string, Record<string, number>>
-  /** Component kinds: ref -> kind string */
-  componentKinds?: Record<string, string>
-}
-
-function heatColor(t: number): string {
-  // t: 0=blue, 0.5=yellow, 1=red
-  const r = Math.round(Math.min(255, t * 2 * 255))
-  const g = Math.round(Math.min(255, (1 - Math.abs(t - 0.5) * 2) * 200))
-  const b = Math.round(Math.max(0, (1 - t * 2) * 255))
-  return `rgb(${r},${g},${b})`
-}
-
-export function renderOverlay(
-  ctx: CanvasRenderingContext2D,
-  board: ParsedBoard,
-  cam: Camera,
-  overlay: OverlayData,
-) {
-  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
 
   // ── Component state glows ──
   if (overlay.componentStates && overlay.componentKinds) {
+    // The gradient fills are pretty but not free; a 3,000-component board with
+    // every part dissipating would otherwise pay thousands of radial gradients
+    // per frame. Cull offscreen parts and cap the total.
+    let drawn = 0
+    const GLOW_CAP = 400
     for (const fp of board.footprints) {
+      if (drawn >= GLOW_CAP) break
       const states = overlay.componentStates[fp.ref]
       const kind = overlay.componentKinds[fp.ref]
       if (!states && !kind) continue
 
       const [fpX, fpY] = ws(cam, fp.at.x, fp.at.y)
       const radius = Math.max(20, 12 * cam.scale)
+      if (fpX + radius < 0 || fpX - radius > ctx.canvas.width || fpY + radius < 0 || fpY - radius > ctx.canvas.height) continue
 
       const running = states?.['running'] ?? 0
       const dissipation = states?.['dissipation_mw'] ?? 0
@@ -568,6 +649,7 @@ export function renderOverlay(
         ctx.beginPath()
         ctx.arc(fpX, fpY, radius, 0, Math.PI * 2)
         ctx.fill()
+        drawn++
       } else if (dissipation > 0) {
         // Heat color glow for dissipation
         const t = Math.min(1, dissipation / 500)
@@ -579,16 +661,18 @@ export function renderOverlay(
         ctx.beginPath()
         ctx.arc(fpX, fpY, radius, 0, Math.PI * 2)
         ctx.fill()
+        drawn++
       }
     }
   }
 
-  // ── Net highlight glow pulses (driven from outside with animation) ──
+  // ── Net highlight glow pulses ──
   for (const netName of overlay.highlightNets) {
     for (const s of board.segments) {
       if (s.netName !== netName) continue
       const [x1, y1] = ws(cam, s.start.x, s.start.y)
       const [x2, y2] = ws(cam, s.end.x, s.end.y)
+      if (segOffscreen(ctx, x1, y1, x2, y2)) continue
       ctx.beginPath()
       ctx.strokeStyle = 'rgba(100,200,255,0.35)'
       ctx.lineWidth = Math.max(2, s.width * cam.scale * 3)

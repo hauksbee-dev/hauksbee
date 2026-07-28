@@ -1,29 +1,28 @@
 /**
  * FaultPanel.tsx
  *
- * Displays SimFrame.faults (optional future protocol field) with red accent styling.
- * Uses optional chaining throughout so it's a no-op when the field is absent.
- * Shows a quiet empty state if no faults are present.
+ * Displays the session's accumulated fault log with red accent styling. The
+ * server drains each fault into exactly one SimFrame, so the OWNER of this
+ * panel (SimView) accumulates them; a fault stays listed from the moment it
+ * was seen, with its sim timestamp, until the user clears the log.
+ * Shows a quiet empty state if no faults have been seen.
  */
 
 import { useEffect, useRef, useState } from 'react'
 import { BoltIcon } from './Icons'
-import type { SimFrame, SimFault } from '../types/protocol'
+import type { SimFault } from '../types/protocol'
 
 interface FaultPanelProps {
-  frame: SimFrame | null
+  /** Accumulated fault log (SimView owns the accumulation) */
+  faults: SimFault[]
+  /** Clears the accumulated log */
+  onClear?: () => void
   /** Callback to highlight a faulted component in 2D/3D */
   onFaultComponentSelect?: (ref: string | null) => void
   selectedFaultRef?: string | null
 }
 
-function useFaults(frame: SimFrame | null): SimFault[] {
-  // faults is omitted from the frame when empty
-  return frame?.faults ?? []
-}
-
-export function FaultPanel({ frame, onFaultComponentSelect, selectedFaultRef }: FaultPanelProps) {
-  const faults = useFaults(frame)
+export function FaultPanel({ faults, onClear, onFaultComponentSelect, selectedFaultRef }: FaultPanelProps) {
   const seenRefs = useRef(new Set<string>())
   const [toasts, setToasts] = useState<{ ref: string; kind: string; id: number }[]>([])
   const toastId = useRef(0)
@@ -79,7 +78,17 @@ export function FaultPanel({ frame, onFaultComponentSelect, selectedFaultRef }: 
               className="ml-auto text-[10px] hover:opacity-70"
               style={{ color: '#475569' }}
             >
-              clear
+              deselect
+            </button>
+          )}
+          {faults.length > 0 && onClear && (
+            <button
+              onClick={() => { seenRefs.current.clear(); onClear() }}
+              className={selectedFaultRef ? 'text-[10px] hover:opacity-70' : 'ml-auto text-[10px] hover:opacity-70'}
+              style={{ color: '#475569' }}
+              title="Clear the fault log"
+            >
+              clear log
             </button>
           )}
         </div>

@@ -96,6 +96,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // none; those checks get the bytes twin or an honest "not checked").
     let norm = crate::board_input::from_path(&cfg.board)?;
     let is_altium = norm.is_binary();
+    let is_board_code = norm.kind == crate::board_input::InputKind::BoardCode;
     let raw = norm.raw;
     let text = norm.layout_text.unwrap_or_default();
     let mut board = norm.board;
@@ -743,11 +744,16 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // it into the live sim already running on `/ws`. Compute the report once here
     // and hand it to the app via `/api/startup`. Board-only unless firmware was
     // supplied (then include the in-process co-sim, matching the drop path).
-    // The analyzers take the board as raw bytes (so binary formats survive). A
-    // binary board (Altium) hands over the file's own bytes; its `text` is
-    // empty; text / Board-as-Code boards hand over the (possibly recompiled)
-    // text, which is exactly what the analysis must see for them.
-    let report_bytes: &[u8] = if is_altium { &raw } else { text.as_bytes() };
+    // The analyzers take the board as raw bytes (so binary formats survive)
+    // and normalize by file name, exactly like the drop path. Binary (Altium)
+    // and Board-as-Code inputs hand over the file's own bytes: a `.board`
+    // name with the recompiled KiCad text would be re-"compiled" as DSL and
+    // fail. Plain text boards hand over the layout text.
+    let report_bytes: &[u8] = if is_altium || is_board_code {
+        &raw
+    } else {
+        text.as_bytes()
+    };
     let report_json = match &cfg.firmware {
         Some(fw) => {
             let fw_name = crate::commands::common::file_name(fw);
