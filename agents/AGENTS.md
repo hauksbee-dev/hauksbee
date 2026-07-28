@@ -82,6 +82,87 @@ binaries emit `::error` annotations.
   contract in `docs/spice-compat/compatibility.md`. Refusals are loud and
   line-numbered; never retry a refused card, change the deck.
 
+## The MCP server
+
+`hauksbee-mcp` is a stdio MCP server (JSON-RPC 2.0, newline-delimited,
+protocol revision 2025-06-18; 2025-03-26 and 2024-11-05 are accepted).
+Launch it as a subprocess and speak MCP over its stdin/stdout:
+
+```json
+{ "command": "hauksbee-mcp" }
+```
+
+It declares only the `tools` capability. Five tools:
+
+| tool | arguments | returns |
+|---|---|---|
+| `analyze_board` | `board_path`, `firmware_path?` | the front-door report JSON (headline, `serious`/`total`, per-section findings, `bind` coverage, `nets`, `supplies`, `notes`, and `cosim` when firmware ran) |
+| `run_checks` | `board_path`, `spec_toml`, `firmware_path?` | the `hauksbee-ci --json` verdict: `{passed, assertions_passed, run_valid, exit_code, analog_abort, seeds, coverage, substitutions, coverage_warnings, results[]}` |
+| `list_capabilities` | none | the scope table as data: report kinds, assertion kinds, board/firmware formats, and MCU backend availability probed on this machine with the engine's own discovery (doctor-style `builtin/ok/absent/disabled`) |
+| `board_to_code` | `board_path` | `{board, code}`: the editable Board-as-Code text form (text formats only) |
+| `run_script` | `source` | `{result, logs}`: code mode, below |
+
+`spec_toml` is the spec body WITHOUT `board`/`firmware` keys; the server
+injects them from the path arguments. Every result arrives both as a
+`content` text block and as `structuredContent` (the same object).
+
+### The refusal shape
+
+The exit-3 doctrine, as data. When a run cannot be vouched for (firmware on
+a board with no runnable MCU, an aborted analog solve, an assertion window
+over a failed span), the tool result is:
+
+```json
+{ "status": "invalid_for_analysis", "reason": "...", "report": { ... } }
+```
+
+(`run_checks` attaches the per-assertion data under `"result"` instead of
+`"report"`.) It is a successful tool call (`isError: false`): a refusal is an
+answer, not a malfunction. Never read it as pass or fail, never average it
+away, never retry expecting a different outcome. Genuine input errors
+(missing file, bad TOML) come back with `isError: true` and an `error`
+message instead. Coverage holes on answerable runs stay data fields
+(`substitutions`, `coverage_warnings`, `cosim.adc_dropped`, ...), same as
+the CLI JSON.
+
+### Code mode (`run_script`)
+
+Instead of many tool round-trips, submit one JavaScript program that runs
+server-side in an embedded QuickJS sandbox and returns a composed result.
+The sandbox's only capability is the global `hauksbee` object:
+
+- `hauksbee.analyzeBoard(path, firmwarePath?)`
+- `hauksbee.runChecks(path, specToml, firmwarePath?)`
+- `hauksbee.listCapabilities()`
+- `hauksbee.boardToCode(path)`
+
+Each returns the same object the corresponding tool returns. `console.log`
+is captured into `logs`. No filesystem, network, timers, or imports exist.
+The script runs as a function body: `return` its (JSON-serializable) result.
+Refusals are THROWN as the structured refusal object (`e.status ===
+"invalid_for_analysis"`), so a script cannot mistake one for data; catch it
+to branch on it. Tool input errors throw `{error}`. Scripts are killed
+after 120 seconds.
+
+### Worked example
+
+Request:
+
+```json
+{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{
+  "name":"run_script",
+  "arguments":{"source":"const r = hauksbee.analyzeBoard('boards/button_pullup.kicad_pcb');\nconsole.log('findings:', r.total);\nlet checks = null;\nif (r.serious === 0) {\n  checks = hauksbee.runChecks('boards/button_pullup.kicad_pcb',\n    'duration_ms = 10\\n[[assert]]\\nkind = \"no_faults\"\\n');\n}\nreturn {board: r.file_name, serious: r.serious, checksPassed: checks && checks.passed};"}}}
+```
+
+Response:
+
+```json
+{"jsonrpc":"2.0","id":7,"result":{
+  "content":[{"type":"text","text":"{\"result\":{\"board\":\"button_pullup.kicad_pcb\",\"serious\":0,\"checksPassed\":true},\"logs\":[\"findings: 0\"]}"}],
+  "structuredContent":{"result":{"board":"button_pullup.kicad_pcb","serious":0,"checksPassed":true},"logs":["findings: 0"]},
+  "isError":false}}
+```
+
 ## Ground rules for agents
 
 - Reports exit 0 by default even with findings; gate on `--strict` or a spec.

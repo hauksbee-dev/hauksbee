@@ -1,0 +1,56 @@
+[package]
+name = "hauksbee-mcp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+description = "MCP server for hauksbee: the verifier for AI-designed hardware, exposed as structured tools over stdio"
+
+[features]
+# Mirror the engine's MCU backend features so `cargo build -p hauksbee-mcp
+# --no-default-features --features renode,qemu` (the GPL-free release shape;
+# see docs/about/release-and-licensing.md) resolves against THIS package. All
+# on by default, matching the engine. `avr` pulls in GPL-3.0 libsimavr. Every
+# hauksbee-* path dependency sets `default-features = false` and each feature
+# forwards explicitly, because cargo cannot un-default a dependency from the
+# command line. hauksbee-mcu is forwarded too (not only transitively via the
+# engine) because list_capabilities compiles against its resolvers under the
+# same cfg gates the doctor subcommand uses.
+default = ["avr", "renode", "qemu"]
+avr = ["hauksbee-engine/avr", "hauksbee-ci/avr", "hauksbee-mcu/avr"]
+renode = ["hauksbee-engine/renode", "hauksbee-ci/renode", "hauksbee-mcu/renode"]
+qemu = ["hauksbee-engine/qemu", "hauksbee-ci/qemu", "hauksbee-mcu/qemu"]
+
+[[bin]]
+name = "hauksbee-mcp"
+path = "src/main.rs"
+
+[lib]
+name = "hauksbee_mcp"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tempfile = { workspace = true }
+# Spec injection for run_checks: the caller's spec TOML is parsed (to reject a
+# conflicting `board`/`firmware` key with a clear message) and the staged
+# absolute paths are serialized as real TOML strings, never string-formatted,
+# so a path with a quote or backslash cannot corrupt the spec.
+toml = "0.8"
+# The run_script sandbox: an embedded QuickJS (bundled C, MIT licensed, no
+# system dependency). Chosen over a hand-rolled interpreter or a JS engine
+# service: the whole point is one self-contained binary an agent can launch.
+rquickjs = { version = "0.9", features = ["bindgen"] }
+hauksbee-engine = { version = "0.1.0", path = "../hauksbee-engine", default-features = false }
+hauksbee-ci = { version = "0.1.0", path = "../hauksbee-ci", default-features = false }
+hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features = false }
+
+[lints]
+workspace = true
