@@ -85,3 +85,22 @@ To make the warning disappear entirely the release pipeline needs:
 
 Until those pieces exist, the README and the download page state the caveat
 plainly rather than pretending the app is blessed.
+
+## Verified 2026-07-28
+
+The full chain works on this machine: build-app.sh signs inside-out
+(Resources/bin binaries first, then the launcher, then the bundle), and
+notarisation returns Accepted with the ticket stapled; `spctl` reports
+"accepted, source=Notarized Developer ID". Team 9D7HJAGQ8L, keychain profile
+`notary`.
+
+One trap for external signing wrappers: tools that walk only Contents/MacOS
+miss the CLI binaries under Contents/Resources/bin, and Apple rejects the
+submission with "binary is not signed" for each. Sign those two explicitly
+first (hardened runtime + timestamp) or drive signing through build-app.sh,
+which already orders this correctly.
+
+CI cannot sign yet: the release workflow would need the Developer ID
+certificate and notary key as repository secrets. Until that is set up, the
+launch-day app asset is built and notarised locally and uploaded to the
+release by hand or via make-public.sh.
