@@ -8,50 +8,70 @@
 # prefer these assets and fall back to building from source.
 #
 # ============================================================================
-# LICENSING DECISION — READ THIS (W6 §6). Product- and user-facing.
+# LICENSING DECISION, READ THIS. Product- and user-facing.
 # ============================================================================
-# hauksbee is Apache-2.0. Its optional `avr` co-sim backend STATICALLY LINKS libsimavr,
-# which is GPL-3.0. Statically linking GPL code makes the resulting BINARY a GPL
-# derivative work — distributing it puts the whole download under GPL-3.0, even
-# though the source stays Apache-2.0. That is a real, irreversible licensing
-# consequence for anyone who `curl | bash`-installs a release.
+# hauksbee is Apache-2.0. Its optional `avr` co-sim backend STATICALLY LINKS
+# libsimavr, which is GPL-3.0. Statically linking GPL code makes the resulting
+# BINARY a combined work under GPL-3.0, even though the source stays
+# Apache-2.0.
 #
-# Decision: release binaries ship in the **GPL-free shape** — the renode+qemu
-# backends only, no avr / no libsimavr:
+# Decision: every release ships BOTH shapes, each labelled honestly.
 #
-#     cargo build --release --no-default-features --features renode,qemu
+#   hauksbee-<ver>-<label>.tar.gz             DEFAULT DOWNLOAD
+#     Default features: avr + renode + qemu. Genuinely links libsimavr, so the
+#     binary is GPL-3.0. This is what the installer and the docs point at,
+#     because AVR / ATmega is the largest slice of the audience and the
+#     download they need has to exist. GPL-3.0 constrains redistribution, not
+#     use, so for the person running the tool this costs nothing.
 #
-# AVR co-sim remains available to users who build from source and run
-# `scripts/install-sims.sh --avr` (which builds GPL simavr on THEIR machine —
-# their choice, their combined work, not something we distribute). The full
-# GPL-encumbered shape (option A) is left below as a clearly-marked,
-# commented-out variant; it is NOT the shipping default. Do not un-comment it
-# without an explicit, documented decision to ship GPL binaries.
+#   hauksbee-<ver>-<label>-permissive.tar.gz  GPL-FREE DOWNLOAD
+#     --no-default-features --features renode,qemu. No avr, no libsimavr, no
+#     GPL code. This is the one for redistributors, embedders and OEMs, who
+#     are the people the GPL actually constrains.
+#
+# Each tarball carries a LICENSE-BINARY.txt written by scripts/bundle.sh
+# stating which of the two it is, with the corresponding-source pointers
+# GPL-3.0 section 6 requires. Neither download can be mistaken for the other.
 #
 # ---------------------------------------------------------------------------
-# GPL guard (regression check, expected GREEN): the GPL-free shape is
-# genuinely avr-free. hauksbee-server's AvrMcu usage is gated on its `avr`
+# The GPL guard (permissive shape only, expected GREEN). The permissive shape
+# is genuinely avr-free: hauksbee-server's AvrMcu usage is gated on its `avr`
 # feature, and every hauksbee-* path dependency in the workspace sets
 # `default-features = false` with explicit per-feature forwarding (cargo cannot
 # un-default a dependency from the command line, so one missing declaration
-# silently re-links GPL simavr). Verified by nm: ZERO simavr / AvrMcu symbols
-# in both release binaries. To keep it that way, the build step points simavr
-# discovery at a nonexistent path: a clean shape never reads it, and any future
+# silently re-links GPL simavr). The permissive build step therefore points
+# simavr discovery at a NONEXISTENT path: a clean shape never reads it, and any
 # regression that drags `avr` back into the graph panics in
-# hauksbee-mcu/build.rs BEFORE any GPL code is linked. A red release on a tag
-# means such a regression landed — fix the feature graph, never weaken the
-# guard. Details: docs/about/release-and-licensing.md.
+# hauksbee-mcu/build.rs BEFORE any GPL code is linked. Those env vars apply to
+# the permissive steps ONLY; the default build must find a real libsimavr and
+# link it.
+#
+# Both claims are proved rather than asserted, twice:
+#   1. scripts/bundle.sh refuses to package a shape that is not what it says.
+#      It asks the binary it just built, via `hauksbee doctor`: the avr line
+#      must read `builtin` for the default shape and `disabled` for the
+#      permissive one. (Note for anyone reaching for `nm` here: the workspace
+#      sets `strip = true` in [profile.release], so rustc strips at link time
+#      and a release binary of EITHER shape shows zero simavr symbols. Measured.
+#      A symbol-table check would pass vacuously, which is worse than none.)
+#   2. The "Verify the two shapes" step below re-runs that check independently
+#      on the extracted tarball contents, and greps each LICENSE-BINARY.txt for
+#      its licence string so the two labels cannot be swapped.
+# A red release means fix the feature graph or the simavr install, never weaken
+# the check. Details: docs/about/release-and-licensing.md.
 # ============================================================================
 #
 # aarch64-linux mechanism: we build NATIVELY on GitHub's `ubuntu-24.04-arm`
 # runner (and Intel macOS on `macos-13`), matching the honest, tested,
 # no-cross-compilation philosophy this workflow has always had. No `cross`, no
-# QEMU userland emulation — every artifact is produced on its own architecture.
+# QEMU userland emulation. Every artifact is produced on its own architecture.
 #
 # Dependency note: the forge-* crates are vendored into this repo
-# (vendor/kicad-forge; see vendor/kicad-forge/VENDORED.md), and the GPL-free
-# shape links NO system libraries (no simavr, no libclang/bindgen — those are
-# only reached by the avr path), so the build is self-contained with just Rust.
+# (vendor/kicad-forge; see vendor/kicad-forge/VENDORED.md). The permissive
+# shape links NO system libraries at all. The default shape needs libsimavr
+# (built by scripts/install-sims.sh --avr into a writable prefix, no sudo),
+# plus libelf, zlib and libclang for the bindgen step; the "Install AVR build
+# dependencies" step below provides them per runner OS.
 
 name: release
 
@@ -115,10 +135,37 @@ jobs:
           restore-keys: |
             release-${{ matrix.label }}-
 
-      # NOTE: the GPL-free shape deliberately installs NO system build deps.
-      # It needs neither libsimavr (avr backend) nor libclang/bindgen. If you
-      # switch to the GPL full-featured variant (option A) you must restore the
-      # simavr + clang install steps — see the commented block at the bottom.
+      # ── system deps for the DEFAULT shape only ─────────────────────────────
+      # The permissive shape needs nothing beyond Rust. The default shape links
+      # libsimavr and runs bindgen over its headers, which needs libelf, zlib,
+      # a C toolchain and libclang. The permissive build later in this job is
+      # unaffected by anything installed here: it never looks for simavr.
+      - name: Install AVR build dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential git pkg-config libelf-dev zlib1g-dev clang libclang-dev
+
+      - name: Install AVR build dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          # install-sims.sh --avr brews libelf itself; pkg-config is what
+          # hauksbee-mcu/build.rs probes with, and zlib.pc ships in the SDK.
+          brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
+
+      # Build libsimavr into a WRITABLE prefix under $HOME (no sudo, identical
+      # on every runner) and hand the build its exact location through
+      # SIMAVR_INCLUDE_DIR / SIMAVR_LIB_DIR, which hauksbee-mcu/build.rs reads.
+      # This is the same script users run: scripts/install-sims.sh --avr.
+      - name: Build and install libsimavr (GPL-3.0, for the default shape)
+        shell: bash
+        run: |
+          chmod +x hauksbee/scripts/*.sh
+          cd hauksbee
+          scripts/install-sims.sh --avr --prefix "$HOME/.hauksbee-simavr"
+          test -f "$HOME/.hauksbee-simavr/include/simavr/sim_avr.h"
+          test -f "$HOME/.hauksbee-simavr/lib/libsimavr.a"
 
       - name: Resolve version
         id: ver
@@ -138,36 +185,32 @@ jobs:
           fi
           echo "version=${raw#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Build GPL-free bundle (renode+qemu; refuses to link GPL simavr)
+      # ── shape 1 of 2: the DEFAULT download (avr included, GPL-3.0 binary) ──
+      # No GPL guard env here, deliberately: this build is SUPPOSED to link
+      # libsimavr, and the nm step below fails the release if it did not.
+      # Built first so target/release holds the default binaries when
+      # build-app.sh (--no-build) picks them up for Hauksbee.app.
+      - name: Build default bundle (avr+renode+qemu; GPL-3.0 binary)
         shell: bash
-        env:
-          # The GPL guard (see header). If `avr` is genuinely excluded,
-          # hauksbee-mcu/build.rs early-returns and ignores these paths. If it
-          # leaks in, build.rs panics HERE, before any GPL code is linked —
-          # so we can never accidentally build, let alone ship, a GPL binary
-          # while calling it GPL-free.
-          SIMAVR_INCLUDE_DIR: /nonexistent/simavr-must-not-be-linked
-          SIMAVR_LIB_DIR: /nonexistent/simavr-must-not-be-linked
         run: |
-          chmod +x hauksbee/scripts/*.sh
+          # Point build.rs at the prefix the install step used. Set here rather
+          # than in an `env:` block, which cannot expand $HOME.
+          export SIMAVR_INCLUDE_DIR="$HOME/.hauksbee-simavr/include"
+          export SIMAVR_LIB_DIR="$HOME/.hauksbee-simavr/lib"
           cd hauksbee
-          if ! scripts/bundle.sh \
-               --no-default-features --features renode,qemu \
-               --version "${{ steps.ver.outputs.version }}" \
-               --target "${{ matrix.label }}" \
-               --out dist; then
-            echo "::error title=GPL guard tripped::The renode+qemu build pulled in the avr backend (libsimavr, GPL-3.0)."
-            echo "Refusing to build a GPL-encumbered binary and label it GPL-free." >&2
-            echo "A feature-graph regression re-enabled avr; see docs/about/release-and-licensing.md §2." >&2
-            exit 1
-          fi
+          scripts/bundle.sh --shape default \
+            --version "${{ steps.ver.outputs.version }}" \
+            --target "${{ matrix.label }}" \
+            --out dist
 
-      # The double-clickable macOS front door. Reuses the binaries bundle.sh
-      # just built (--no-build), wraps them in Hauksbee.app with the compiled
-      # Swift launcher, and zips it as `hauksbee-<version>-<label>-app.zip`
-      # per the section-3 naming contract in docs/about/release-and-licensing.md.
-      # The app is unsigned (see app/macos/SIGNING.md); the README states the
-      # Gatekeeper caveat where the download is offered.
+      # The double-clickable macOS front door. Reuses the DEFAULT-shape binaries
+      # bundle.sh just built (--no-build), wraps them in Hauksbee.app with the
+      # compiled Swift launcher, and zips it as
+      # `hauksbee-<version>-<label>-app.zip` per the section-3 naming contract in
+      # docs/about/release-and-licensing.md. The app therefore carries the same
+      # GPL-3.0 binary as the default tarball, and can do AVR co-sim. The app is
+      # unsigned (see app/macos/SIGNING.md); the README states the Gatekeeper
+      # caveat where the download is offered.
       - name: Build Hauksbee.app (macOS only)
         if: runner.os == 'macOS'
         shell: bash
@@ -178,6 +221,93 @@ jobs:
             --version "${{ steps.ver.outputs.version }}" \
             --target "${{ matrix.label }}" \
             --out dist
+
+      # ── shape 2 of 2: the PERMISSIVE download (no avr, no GPL) ─────────────
+      # Runs after the app step, because it overwrites target/release with
+      # avr-free binaries.
+      - name: Build permissive bundle (renode+qemu; refuses to link GPL simavr)
+        shell: bash
+        env:
+          # The GPL guard (see header), permissive shape ONLY. If `avr` is
+          # genuinely excluded, hauksbee-mcu/build.rs early-returns and ignores
+          # these paths. If it leaks in, build.rs panics HERE, before any GPL
+          # code is linked, so we can never build a GPL-encumbered binary and
+          # then label it permissive.
+          SIMAVR_INCLUDE_DIR: /nonexistent/simavr-must-not-be-linked
+          SIMAVR_LIB_DIR: /nonexistent/simavr-must-not-be-linked
+        run: |
+          cd hauksbee
+          if ! scripts/bundle.sh --shape permissive \
+               --version "${{ steps.ver.outputs.version }}" \
+               --target "${{ matrix.label }}" \
+               --out dist; then
+            echo "::error title=GPL guard tripped::The renode+qemu build pulled in the avr backend (libsimavr, GPL-3.0)."
+            echo "Refusing to build a GPL-encumbered binary and label it permissive." >&2
+            echo "A feature-graph regression re-enabled avr; see docs/about/release-and-licensing.md section 2." >&2
+            exit 1
+          fi
+
+      # ── prove both labels, do not assert them ──────────────────────────────
+      # scripts/bundle.sh already refused to package either shape unless it
+      # matched its label, so both directions are enforced before a tarball
+      # exists. This step is the independent second opinion, run on what is
+      # actually about to be uploaded rather than on what was in target/release.
+      #
+      # It asks the binaries themselves, not their symbol tables: release
+      # binaries are stripped at link time (`strip = true` in
+      # [profile.release]), so `nm` finds zero simavr symbols in BOTH shapes and
+      # would pass vacuously. `hauksbee doctor` reports which backends the build
+      # can actually reach:
+      #   default    avr <TAB> builtin  <TAB> simavr linked into this binary
+      #   permissive avr <TAB> disabled <TAB> compiled out; ...
+      # That line is compiled-in behaviour, not a claim in a text file, and it
+      # cannot say "builtin" unless libsimavr really was linked.
+      - name: Verify the two shapes (behaviour + labels)
+        shell: bash
+        run: |
+          set -uo pipefail
+          cd hauksbee/dist
+          V="${{ steps.ver.outputs.version }}"
+          L="${{ matrix.label }}"
+          work="$(mktemp -d)"
+          tar -xzf "hauksbee-$V-$L.tar.gz"            -C "$work"
+          tar -xzf "hauksbee-$V-$L-permissive.tar.gz" -C "$work"
+          def="$work/hauksbee-$V-$L"
+          perm="$work/hauksbee-$V-$L-permissive"
+
+          fail=0
+
+          # `doctor` exits non-zero when an EXTERNAL backend (renode, qemu) is
+          # missing, which it is on a bare runner. We only care about the avr
+          # line, so capture the output and ignore the status.
+          def_doctor="$("$def/bin/hauksbee" doctor 2>&1 || true)"
+          perm_doctor="$("$perm/bin/hauksbee" doctor 2>&1 || true)"
+          printf '%s\n' "--- default doctor ---"    "$def_doctor"
+          printf '%s\n' "--- permissive doctor ---" "$perm_doctor"
+
+          if ! printf '%s' "$def_doctor" | grep -qE '^avr[[:space:]]+builtin'; then
+            echo "::error title=Default shape is not what it claims::the default binary does not report avr as builtin; libsimavr did not link, so the GPL-3.0/AVR-included label is wrong."
+            fail=1
+          fi
+          if ! printf '%s' "$perm_doctor" | grep -qE '^avr[[:space:]]+disabled'; then
+            echo "::error title=GPL leak::the permissive binary does not report avr as compiled out; it may be linking GPL libsimavr under an Apache-2.0 label."
+            fail=1
+          fi
+
+          # The written labels must be present and must not have been swapped.
+          grep -q 'UNDER GPL-3.0'    "$def/LICENSE-BINARY.txt" \
+            || { echo "::error::default tarball LICENSE-BINARY.txt does not state GPL-3.0"; fail=1; }
+          grep -q 'UNDER APACHE-2.0' "$perm/LICENSE-BINARY.txt" \
+            || { echo "::error::permissive tarball LICENSE-BINARY.txt does not state Apache-2.0"; fail=1; }
+          # GPL-3.0 section 4 wants the licence text travelling with the binary.
+          test -s "$def/LICENSE-GPL-3.0.txt" \
+            || { echo "::error::default tarball is missing LICENSE-GPL-3.0.txt"; fail=1; }
+          for d in "$def" "$perm"; do
+            test -s "$d/LICENSE" && test -s "$d/NOTICE" \
+              || { echo "::error::$d is missing LICENSE or NOTICE"; fail=1; }
+          done
+
+          exit "$fail"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -232,49 +362,14 @@ jobs:
           fail_on_unmatched_files: true
 
 # =============================================================================
-# OPTION A (NOT SHIPPED): full-featured, GPL-encumbered binaries.
-# =============================================================================
-# The variant below builds with DEFAULT features (avr + renode + qemu), which
-# statically links GPL-3.0 libsimavr. The resulting binaries — and therefore the
-# published release download — are GPL-3.0 licensed, not Apache-2.0. Shipping this is a
-# deliberate product/licensing decision that must be made and documented by a
-# human; it is intentionally left commented out.
+# Asset list a release produces (per matrix leg, four legs):
+#   hauksbee-<ver>-<label>.tar.gz              + .sha256   default, GPL-3.0
+#   hauksbee-<ver>-<label>-permissive.tar.gz   + .sha256   permissive, Apache-2.0
+#   hauksbee-<ver>-<label>-app.zip             + .sha256   macOS legs only,
+#                                                          wraps the default shape
 #
-# To use it: replace the matrix "Build GPL-free bundle" step with per-OS build
-# steps that (1) install simavr + clang and (2) call bundle.sh WITHOUT the
-# --no-default-features/--features flags. Reference steps (previously the
-# shipping path before the GPL-free decision):
-#
-#   - name: Install Linux build dependencies
-#     if: runner.os == 'Linux'
-#     run: |
-#       sudo apt-get update
-#       sudo apt-get install -y --no-install-recommends \
-#         build-essential git libelf-dev zlib1g-dev clang libclang-dev pkg-config
-#   - name: Build simavr from source (Linux)
-#     if: runner.os == 'Linux'
-#     run: |
-#       git clone --depth 1 --branch v1.8 https://github.com/buserror/simavr.git /tmp/simavr-src
-#       make -C /tmp/simavr-src CC=gcc RELEASE=1 build-simavr
-#       sudo make -C /tmp/simavr-src CC=gcc RELEASE=1 DESTDIR=/usr/local PREFIX=/usr/local install-simavr
-#       sudo ldconfig
-#   - name: Install macOS build dependencies
-#     if: runner.os == 'macOS'
-#     run: brew install simavr llvm
-#   - name: Build FULL (GPL) bundle
-#     if: runner.os == 'Linux'
-#     env:
-#       LIBRARY_PATH: /usr/local/lib
-#       PKG_CONFIG_PATH: /usr/local/lib/pkgconfig
-#       BINDGEN_EXTRA_CLANG_ARGS: "-I/usr/local/include -I/usr/local/include/simavr"
-#     run: |
-#       cd hauksbee
-#       scripts/bundle.sh --version "$V" --target "$LABEL" --out dist   # default features
-#   - name: Build FULL (GPL) bundle (macOS)
-#     if: runner.os == 'macOS'
-#     env:
-#       LIBCLANG_PATH: "/opt/homebrew/opt/llvm/lib"   # /usr/local/opt/llvm on macos-13
-#     run: |
-#       cd hauksbee
-#       scripts/bundle.sh --version "$V" --target "$LABEL" --out dist
+# The historical "OPTION A, not shipped" block that used to live here described
+# the GPL shape as a hypothetical to be enabled by hand. It is now the default
+# download, built by the steps above, so the block was removed rather than left
+# to contradict them.
 # =============================================================================
