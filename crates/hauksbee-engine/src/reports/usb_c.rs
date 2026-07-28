@@ -28,6 +28,7 @@ pub fn emit(board: &ExtractedBoard, mode: OutputMode, strict: bool) -> anyhow::R
                 OutputMode::Plain => print!("{}", report.render_plain()),
                 OutputMode::Text => print!("{}", report.render()),
             }
+            super::note_ungated_findings(strict, report.is_serious());
             if strict && report.is_serious() {
                 std::process::exit(2);
             }

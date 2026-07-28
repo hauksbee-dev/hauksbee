@@ -82,3 +82,19 @@ pub fn lint_fails(report: &hauksbee_extract::NetLintReport) -> bool {
 pub fn si_fails(report: &hauksbee_extract::SiReport) -> bool {
     report.finding_count() > 0
 }
+
+/// Discoverability for the exit-code contract: a report command without
+/// `--strict` exits 0 even when it just printed a gate-grade finding, and the
+/// proof campaign showed people read that 0 as a clean bill in CI. When the
+/// findings WOULD have gated, say so once on stderr (stdout stays a clean
+/// report / a single JSON document). Every strict-gated report calls this at
+/// its gate site so the hint and the gate can never disagree.
+pub fn note_ungated_findings(strict: bool, would_gate: bool) {
+    if !strict && would_gate {
+        eprintln!(
+            "note: gate-grade finding(s) above, but this is a report command so the exit code is 0. \
+             Add --strict to exit 2 on them (exit contract: 0 = clean or report-only, 2 = findings \
+             under --strict, 3 = invalid for analysis), or gate CI with hauksbee-ci."
+        );
+    }
+}

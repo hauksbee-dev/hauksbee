@@ -48,6 +48,7 @@ pub fn emit(
             }
         }
     }
+    super::note_ungated_findings(strict, si_fails(&report));
     if strict && si_fails(&report) {
         std::process::exit(2);
     }
