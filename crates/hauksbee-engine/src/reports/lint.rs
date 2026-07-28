@@ -52,6 +52,7 @@ pub fn emit(
             }
         }
     }
+    super::note_ungated_findings(strict, lint_fails(&report));
     if strict && lint_fails(&report) {
         std::process::exit(2);
     }
@@ -150,6 +151,7 @@ pub fn emit_resources(
             }
         }
     }
+    super::note_ungated_findings(strict, lint_fails(&report));
     if strict && lint_fails(&report) {
         std::process::exit(2);
     }
