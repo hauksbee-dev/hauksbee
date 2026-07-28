@@ -238,10 +238,16 @@ Same as x86_64 above, but use the `linux-arm64-portable-dotnet.tar.gz` asset.
 
 **Windows**
 
-Download `renode-<ver>.windows-portable-dotnet.zip`, extract it, and either add
-the `renode.exe` to `PATH` or set `HAUKSBEE_RENODE` to its full path. The
-installer script does not cover Windows (it is bash); this step must be done
-manually. Windows as a whole is untested territory: if you want to change that,
+Download `renode-<ver>.windows-portable-dotnet.zip` and extract it into
+`%USERPROFILE%\renode-portable` (so `Renode.exe` sits directly inside), or use
+the `.msi` installer. Discovery checks, in order: `HAUKSBEE_RENODE`,
+`Renode.exe`/`renode.exe` on `PATH`, the `%USERPROFILE%\renode-portable` zip
+layout (`Renode.exe` at the top or under `bin\`), then the installer trees
+under `%ProgramFiles%\Renode` and `%LOCALAPPDATA%\Programs\Renode`. These
+lookups are unit-tested on every OS and the portable-zip layout was verified
+resolving under Wine, but no firmware co-sim has run against a real Renode on
+native Windows yet. The installer script does not cover Windows (it is bash);
+the unpack is manual. If you want to close the native-Windows gap,
 `docs/about/release-and-licensing.md` section 5 has a ready-made prompt for
 pointing a coding agent at the port, and an invitation to PR the result.
 
@@ -274,6 +280,7 @@ automatically (slot 4).
    | macOS x86_64 | `x86_64-apple-darwin.tar.bz2` |
    | Linux x86_64 | `x86_64-linux-gnu.tar.bz2` |
    | Linux arm64 | `aarch64-linux-gnu.tar.bz2` |
+   | Windows x86_64 | `x86_64-w64-mingw32.tar.xz` |
 
 3. Extract each into `~/.espressif/tools/<tool-name>/<ver>/qemu/`. The tarball
    has a top-level `qemu/` directory; extract one level up and strip it:
@@ -303,3 +310,14 @@ automatically (slot 4).
    ~/.espressif/tools/qemu-xtensa/<ver>/qemu/bin/qemu-system-xtensa \
      -machine help | grep esp32
    ```
+
+**Windows**: the same two layouts work with backslashes and `.exe`: unpack
+into `%USERPROFILE%\.hauksbee-qemu-esp\qemu\bin\` (so
+`qemu-system-xtensa.exe` and `qemu-system-riscv32.exe` sit there), or use the
+idf-tools tree under `%USERPROFILE%\.espressif\tools\`, `C:\Espressif\tools\`
+(the ESP-IDF Windows installer default), or wherever `IDF_TOOLS_PATH` points.
+`hauksbee install esp-qemu` refuses on Windows (it shells `curl`/`tar` and has
+never run on a native box), so the unpack is manual. These discovery paths are
+unit-tested on every OS and exercised under Wine; an actual ESP32 co-sim on
+native Windows is still unproven, see
+`docs/about/release-and-licensing.md` section 5.

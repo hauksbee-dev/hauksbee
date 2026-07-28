@@ -90,12 +90,14 @@ mod process;
 mod qmp;
 mod uart;
 
-pub use process::{find_qemu, is_available, QemuArch};
+// QemuProcess is exported (not just used internally) for the child-reaping
+// integration tests and any host that needs the raw spawned-emulator handle
+// rather than the backend.
+pub use process::{find_qemu, is_available, QemuArch, QemuProcess};
 
 use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
 use anyhow::{bail, ensure, Context, Result};
 use gdb::GdbStub;
-use process::QemuProcess;
 use qmp::Qmp;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;

@@ -12,8 +12,12 @@
 //!   2. a generic `HAUKSBEE_QEMU_DIR` pointing at the fork's `bin/`,
 //!   3. the conventional unpacked location `~/.hauksbee-qemu-esp/qemu/bin/`
 //!      (or the legacy `~/.galvani-qemu-esp/qemu/bin/`),
-//!   4. the esp-idf tools install (`~/.espressif/tools/qemu-*/.../bin/`),
+//!   4. the esp-idf tools install: `$IDF_TOOLS_PATH/tools/qemu-*/.../bin/`
+//!      when set, else `~/.espressif/tools/qemu-*/.../bin/` (the idf_tools.py
+//!      default on every OS), plus `C:\Espressif\tools\...` on Windows (the
+//!      ESP-IDF Windows installer's default root),
 //!   5. the binary on `PATH`.
+//! On Windows the binary file names carry `.exe`.
 //!
 //! IMPORTANT: this must resolve the *Espressif* fork, not Homebrew's mainline
 //! `qemu-system-xtensa` (which has only `lx60`/`kc705`/`sim` machines and cannot
@@ -53,6 +57,16 @@ impl QemuArch {
             QemuArch::Riscv32 => "HAUKSBEE_QEMU_RISCV32",
         }
     }
+
+    /// The binary file name on this platform: the Espressif Windows builds
+    /// ship `qemu-system-*.exe`, everywhere else the bare name.
+    fn file_name(self) -> String {
+        if cfg!(windows) {
+            format!("{}.exe", self.binary_name())
+        } else {
+            self.binary_name().to_string()
+        }
+    }
 }
 
 /// Locate an Espressif QEMU binary for `arch`, or describe how to install it.
@@ -71,40 +85,24 @@ pub fn find_qemu(arch: QemuArch) -> Result<PathBuf> {
     }
 
     let name = arch.binary_name();
+    let file = arch.file_name();
     let mut candidates: Vec<PathBuf> = Vec::new();
 
     // 2. Generic dir override pointing at the fork's bin/.
     if let Some(dir) = std::env::var_os("HAUKSBEE_QEMU_DIR") {
-        candidates.push(PathBuf::from(dir).join(name));
+        candidates.push(PathBuf::from(dir).join(&file));
     }
 
-    if let Some(home) = std::env::var_os("HOME") {
-        let home = PathBuf::from(&home);
+    if let Some(home) = home_dir() {
         // 3. Conventional unpacked location (what the docs tell you to use).
         //    `.hauksbee-qemu-esp` is the current name; `.galvani-qemu-esp` is
         //    kept as a fallback for installs predating the galvani->hauksbee
         //    rename, so an existing unpacked fork keeps resolving.
-        candidates.push(home.join(".hauksbee-qemu-esp/qemu/bin").join(name));
-        candidates.push(home.join(".galvani-qemu-esp/qemu/bin").join(name));
-        // 4. esp-idf idf_tools install. The directory carries a version, so
-        //    glob the qemu-* tool dirs.
-        if let Ok(entries) = std::fs::read_dir(home.join(".espressif/tools")) {
-            for e in entries.flatten() {
-                let p = e.path();
-                if p.file_name()
-                    .and_then(|n| n.to_str())
-                    .map(|n| n.starts_with("qemu-"))
-                    .unwrap_or(false)
-                {
-                    // .../qemu-xtensa/<ver>/qemu/bin/<name>
-                    if let Ok(vers) = std::fs::read_dir(&p) {
-                        for v in vers.flatten() {
-                            candidates.push(v.path().join("qemu/bin").join(name));
-                        }
-                    }
-                }
-            }
-        }
+        candidates.extend(home_candidates(&home, &file));
+    }
+    // 4. esp-idf idf_tools installs, whichever roots this environment has.
+    for root in idf_tools_roots() {
+        candidates.extend(idf_tools_candidates(&root, &file));
     }
 
     for c in &candidates {
@@ -128,6 +126,68 @@ pub fn find_qemu(arch: QemuArch) -> Result<PathBuf> {
          mainline qemu-system-xtensa has no esp32 machine and will not work.",
         arch.env_override()
     )
+}
+
+/// The conventional unpacked locations for the fork under one home directory.
+/// Takes the file name as a parameter (not `cfg!`-derived inside) so the unit
+/// tests can exercise the Windows `.exe` shape on any OS.
+fn home_candidates(home: &std::path::Path, file: &str) -> Vec<PathBuf> {
+    vec![
+        home.join(".hauksbee-qemu-esp/qemu/bin").join(file),
+        home.join(".galvani-qemu-esp/qemu/bin").join(file),
+    ]
+}
+
+/// The idf-tools roots this environment could have, in priority order:
+/// `$IDF_TOOLS_PATH` (the esp-idf override, honoured on every OS), the
+/// per-user default `~/.espressif`, and on Windows the ESP-IDF Windows
+/// installer's default root `C:\Espressif`.
+fn idf_tools_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    if let Some(p) = std::env::var_os("IDF_TOOLS_PATH") {
+        roots.push(PathBuf::from(p));
+    }
+    if let Some(home) = home_dir() {
+        roots.push(home.join(".espressif"));
+    }
+    #[cfg(windows)]
+    roots.push(PathBuf::from("C:\\Espressif"));
+    roots
+}
+
+/// Candidate binaries named `file` under one idf-tools root:
+/// `<root>/tools/qemu-*/<ver>/qemu/bin/<file>`. The tool directory carries a
+/// version, so the `qemu-*` dirs are globbed. Platform-neutral so the unit
+/// tests can build this tree (Windows file names included) in a temp dir.
+fn idf_tools_candidates(root: &std::path::Path, file: &str) -> Vec<PathBuf> {
+    let mut out = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(root.join("tools")) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.starts_with("qemu-"))
+                .unwrap_or(false)
+            {
+                // .../qemu-xtensa/<ver>/qemu/bin/<file>
+                if let Ok(vers) = std::fs::read_dir(&p) {
+                    for v in vers.flatten() {
+                        out.push(v.path().join("qemu/bin").join(file));
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The user's home directory: `$HOME` first (Unix, and a deliberate override
+/// wins on every OS), then `%USERPROFILE%` (the Windows convention, where HOME
+/// is normally unset).
+fn home_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(PathBuf::from)
 }
 
 /// True if a usable Espressif QEMU for `arch` can be located. Used to skip
@@ -214,10 +274,21 @@ impl QemuProcess {
         cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            // Own process group: teardown kills the whole tree (QEMU plus
+            // anything it forks) with one group kill, and the signal reaper
+            // (crate::children) can do the same when the parent itself is
+            // terminated. Without this, killing a serving hauksbee orphaned
+            // its emulators; see children.rs.
+            cmd.process_group(0);
+        }
 
         let child = cmd
             .spawn()
             .with_context(|| format!("spawning Espressif QEMU from {}", bin.display()))?;
+        crate::children::register(child.id());
 
         Ok(QemuProcess { child, qmp_port })
     }
@@ -232,23 +303,114 @@ impl QemuProcess {
     pub fn has_exited(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(Some(_)))
     }
+
+    /// The spawned QEMU's OS process id (diagnostics and the reaping tests).
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
 }
 
 impl Drop for QemuProcess {
     fn drop(&mut self) {
+        // Tree-kill first (the group on unix, taskkill /T on Windows), then
+        // the direct kill/wait to reap the child handle. Also drops the
+        // signal-reaper registration.
+        crate::children::unregister(self.child.id());
+        crate::children::kill_tree(self.child.id());
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
 }
 
-/// Minimal `which`: search `PATH` for an executable named `name`.
+/// Minimal `which`: search `PATH` for an executable named `name`. On Windows
+/// executables carry an extension, so `<name>.exe` is tried first there (what
+/// the Espressif builds ship); the bare name stays as a fallback for
+/// MSYS2-style shims.
 fn which(name: &str) -> Result<PathBuf> {
     let path = std::env::var_os("PATH").context("PATH not set")?;
     for dir in std::env::split_paths(&path) {
+        if cfg!(windows) {
+            let exe = dir.join(format!("{name}.exe"));
+            if exe.is_file() {
+                return Ok(exe);
+            }
+        }
         let candidate = dir.join(name);
         if candidate.is_file() {
             return Ok(candidate);
         }
     }
     bail!("{name} not found on PATH")
+}
+
+#[cfg(test)]
+mod discovery_tests {
+    use super::*;
+
+    /// Create an empty file, parents included.
+    fn touch(path: &std::path::Path) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, b"").unwrap();
+    }
+
+    /// The conventional home layouts produce the exact candidate paths, for
+    /// both the Unix and the Windows (`.exe`) file names, on any OS.
+    #[test]
+    fn home_layouts_cover_current_legacy_and_windows_names() {
+        let home = tempfile::tempdir().unwrap();
+        for file in ["qemu-system-xtensa", "qemu-system-xtensa.exe"] {
+            let cands = home_candidates(home.path(), file);
+            assert_eq!(
+                cands,
+                vec![
+                    home.path().join(".hauksbee-qemu-esp/qemu/bin").join(file),
+                    home.path().join(".galvani-qemu-esp/qemu/bin").join(file),
+                ],
+                "current location first, legacy rename fallback second"
+            );
+        }
+    }
+
+    /// An idf-tools tree (`<root>/tools/qemu-*/<ver>/qemu/bin/<file>`) is
+    /// globbed correctly: both arch tool dirs, any version, non-qemu tool dirs
+    /// ignored. This is the layout idf_tools.py produces on every OS,
+    /// including `%USERPROFILE%\.espressif` and `C:\Espressif` on Windows.
+    #[test]
+    fn idf_tools_tree_is_globbed() {
+        let root = tempfile::tempdir().unwrap();
+        let xtensa = root
+            .path()
+            .join("tools/qemu-xtensa/esp_develop_9.2.2/qemu/bin/qemu-system-xtensa.exe");
+        let riscv = root
+            .path()
+            .join("tools/qemu-riscv32/esp_develop_9.2.2/qemu/bin/qemu-system-riscv32.exe");
+        touch(&xtensa);
+        touch(&riscv);
+        // A non-qemu tool must not contribute candidates.
+        touch(
+            &root
+                .path()
+                .join("tools/xtensa-esp-elf/13.2.0/bin/xtensa-esp32-elf-gcc"),
+        );
+
+        let cands = idf_tools_candidates(root.path(), "qemu-system-xtensa.exe");
+        assert_eq!(cands.len(), 2, "one per qemu-* tool dir: {cands:?}");
+        assert!(cands.contains(&xtensa), "{cands:?}");
+        assert!(
+            cands
+                .iter()
+                .all(|c| !c.to_string_lossy().contains("xtensa-esp-elf")),
+            "non-qemu tools ignored: {cands:?}"
+        );
+
+        let cands = idf_tools_candidates(root.path(), "qemu-system-riscv32.exe");
+        assert!(cands.contains(&riscv), "{cands:?}");
+    }
+
+    /// A root with no tools/ directory yields no candidates (and no error).
+    #[test]
+    fn missing_idf_root_is_empty() {
+        let root = tempfile::tempdir().unwrap();
+        assert!(idf_tools_candidates(root.path(), "qemu-system-xtensa").is_empty());
+    }
 }

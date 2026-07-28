@@ -103,6 +103,9 @@ struct InitArgs {
 }
 
 fn main() -> ExitCode {
+    // A killed CI run must not orphan its co-sim emulators: reap every live
+    // Renode/QEMU child on SIGTERM/SIGINT. See hauksbee_mcu::children.
+    hauksbee_mcu::children::install_signal_reaper();
     let cli = Cli::parse();
     let args = match cli.command {
         Command::Run(args) => args,
