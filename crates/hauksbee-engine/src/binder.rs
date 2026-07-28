@@ -975,10 +975,16 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
     };
     if let Some((kind, pinmap)) = kind_pins {
         let direct = parse_value(&comp.value).is_some();
+        // Token split includes parentheses: Olimex writes resistor-array values
+        // both as "RMAT (4x0603) 100R/5%" and, on rev D, spaceless as
+        // "RMAT(4x0603)100K/5%". Without ')' in the split set the spaceless
+        // form yields no parsable token and a real 100k array was left OPEN
+        // (the rev-D bind-rate drop the proof hunt flagged). "4x0603" does not
+        // parse as a magnitude, so the package token cannot win by mistake.
         let structured = !direct
             && comp
                 .value
-                .split(['_', ' '])
+                .split(['_', ' ', '(', ')'])
                 .filter(|t| !t.is_empty())
                 .any(|t| parse_value(t).is_some());
         if direct || structured {
@@ -986,7 +992,7 @@ fn fallback_entry(comp: &Component) -> Option<ModelEntry> {
                 None
             } else {
                 comp.value
-                    .split(['_', ' '])
+                    .split(['_', ' ', '(', ')'])
                     .find(|t| parse_value(t).is_some())
                     .map(str::to_string)
             };
@@ -2980,10 +2986,29 @@ fn bind_mcu(
     } else {
         None
     };
-    let effective_pins = derived_when_empty
-        .as_ref()
-        .map(|d| &d.roles)
-        .unwrap_or(&model.pins);
+    // Merge the two role sources PER PAD instead of treating a non-empty model
+    // map as exhaustive. A DB pin map is curated for one package's numbering
+    // (often a module, e.g. the ESP32-S3 entry's WROOM-1 strap pads); applied
+    // to a different footprint it covers a handful of pads and the old
+    // model-only rule then discarded every OTHER pad's own pinfunction. On the
+    // Watchy v3's bare QFN-56 that left ALL display pins (RES/DC/CS, SCK/MOSI,
+    // SDA/SCL, all named "GPIOnn/..." right in the board file) with no GPIO
+    // driver at all, so firmware could never drive them and the live sim
+    // presented their static levels as measurements. Model roles still win on
+    // pads they name (they carry curated semantic suffixes like "pc6_reset"
+    // that the plain pinfunction derivation would weaken); the derivation only
+    // fills pads the model map does not cover.
+    let effective_pins: std::collections::BTreeMap<String, String> = {
+        let mut merged = derived_when_empty
+            .as_ref()
+            .map(|d| d.roles.clone())
+            .unwrap_or_else(|| derive_mcu_pin_roles(comp).roles);
+        for (pad, role) in &model.pins {
+            merged.insert(pad.clone(), role.clone());
+        }
+        merged
+    };
+    let effective_pins = &effective_pins;
 
     let mut pad_roles = HashMap::new();
     let mut role_nets = HashMap::new();
