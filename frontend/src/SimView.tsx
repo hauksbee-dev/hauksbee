@@ -10,7 +10,7 @@ import { InputSourcesPanel } from './components/InputSourcesPanel'
 import { ProbeScopePanel } from './components/ProbeScopePanel'
 import { FaultPanel } from './components/FaultPanel'
 import { PowerPanel } from './components/PowerPanel'
-import type { ClientMessage, SimFrame } from './types/protocol'
+import type { ClientMessage, SimFrame, SimFault } from './types/protocol'
 
 interface FootprintInfo {
   ref: string
@@ -54,21 +54,69 @@ export default function SimView() {
     }
   }, [frame])
 
-  // Compute faulted refs set (for 2D/3D highlights)
-  const faultedRefs = useMemo(() => {
-    const faults = (frame as { faults?: { component: string }[] } | null)?.faults
-    if (!faults || faults.length === 0) return undefined
-    return new Set(faults.map(f => f.component))
+  // Persistent fault log. The server drains each fault into exactly ONE frame,
+  // so at play speed a fault is visible for a single frame; anything that reads
+  // the current frame alone misses it. Accumulate every fault the session has
+  // seen (first occurrence per component+kind keeps its timestamp) until the
+  // user clears the log or resets the sim.
+  const [faultLog, setFaultLog] = useState<SimFault[]>([])
+  useEffect(() => {
+    const faults = frame?.faults
+    if (!faults || faults.length === 0) return
+    setFaultLog(prev => {
+      let next: SimFault[] | null = null
+      for (const f of faults) {
+        if (!prev.some(e => e.component === f.component && e.kind === f.kind) &&
+            !(next?.some(e => e.component === f.component && e.kind === f.kind))) {
+          next = next ?? [...prev]
+          next.push(f)
+        }
+      }
+      return next ?? prev
+    })
   }, [frame])
 
-  // Jump to faults tab on first fault (optional convenience)
-  useEffect(() => {
-    if (faultedRefs && faultedRefs.size > 0 && sidebarTab !== 'faults') {
-      // Don't auto-switch, but badge the tab (handled via faultedRefs count)
-    }
-  }, [faultedRefs, sidebarTab])
+  const clearFaults = useCallback(() => {
+    setFaultLog([])
+    setSelectedFaultRef(null)
+  }, [])
 
-  // Keyboard shortcuts
+  // Reset also starts the fault story over: a log of faults from the previous
+  // run reads as live faults on the fresh one.
+  const sendWrapped = useCallback((msg: ClientMessage) => {
+    if (msg.type === 'Reset') {
+      setFaultLog([])
+      setSelectedFaultRef(null)
+    }
+    send(msg)
+  }, [send])
+
+  // Faulted refs (for 2D/3D highlights), from the accumulated log so the
+  // highlight persists as long as the fault is listed.
+  const faultedRefs = useMemo(() => {
+    if (faultLog.length === 0) return undefined
+    return new Set(faultLog.map(f => f.component))
+  }, [faultLog])
+
+  // Keyboard shortcuts. While a sidebar input has focus they are suppressed
+  // (typing must win); inputFocused drives the hint bar affordance below.
+  const [inputFocused, setInputFocused] = useState(false)
+  useEffect(() => {
+    const isFormField = (t: EventTarget | null) =>
+      t instanceof HTMLInputElement || t instanceof HTMLTextAreaElement
+    const onFocusIn = (e: FocusEvent) => { if (isFormField(e.target)) setInputFocused(true) }
+    const onFocusOut = () => {
+      // The next focused element is not known until after the event settles.
+      requestAnimationFrame(() => setInputFocused(isFormField(document.activeElement)))
+    }
+    window.addEventListener('focusin', onFocusIn)
+    window.addEventListener('focusout', onFocusOut)
+    return () => {
+      window.removeEventListener('focusin', onFocusIn)
+      window.removeEventListener('focusout', onFocusOut)
+    }
+  }, [])
+
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
@@ -116,7 +164,7 @@ export default function SimView() {
         connected={connected}
         boardInfo={boardInfo}
         status={status}
-        send={send}
+        send={sendWrapped}
       />
 
       {/* Main content area */}
@@ -139,12 +187,21 @@ export default function SimView() {
             </div>
           )}
 
-          {/* Board overlay hints */}
+          {/* Board overlay hints. While a sidebar input has focus the keyboard
+              shortcuts are suppressed, so the hint dims and says why. */}
           <div
             className="absolute bottom-2 left-2 text-[9px] px-2 py-1 rounded pointer-events-none"
-            style={{ background: 'rgba(10,15,30,0.8)', color: '#334155', border: '1px solid #1e293b' }}
+            style={{
+              background: 'rgba(10,15,30,0.8)',
+              color: inputFocused ? '#1e293b' : '#334155',
+              border: '1px solid #1e293b',
+              opacity: inputFocused ? 0.65 : 1,
+              transition: 'opacity 0.2s ease, color 0.2s ease',
+            }}
           >
-            Space=play/pause · N=step · scroll=zoom · drag=pan · hover=probe
+            {inputFocused
+              ? 'shortcuts paused, click away from the input to use Space / N'
+              : 'Space=play/pause · N=step · scroll=zoom · drag=pan · hover=probe'}
           </div>
         </div>
 
@@ -232,7 +289,7 @@ export default function SimView() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-[10px]" style={{ color: '#475569' }}>rt</span>
-                  <span className="text-[10px] font-mono" style={{ color: '#94a3b8' }}>{frame ? `${frame.realtime_factor.toFixed(2)}×` : ', '}</span>
+                  <span className="text-[10px] font-mono" style={{ color: '#94a3b8' }}>{frame ? `${frame.realtime_factor.toFixed(2)}x` : '-'}</span>
                 </div>
                 {boardInfo && (
                   <>
@@ -301,7 +358,8 @@ export default function SimView() {
               {sidebarTab === 'faults' && (
                 <div className="p-2">
                   <FaultPanel
-                    frame={frame}
+                    faults={faultLog}
+                    onClear={clearFaults}
                     onFaultComponentSelect={setSelectedFaultRef}
                     selectedFaultRef={selectedFaultRef}
                   />

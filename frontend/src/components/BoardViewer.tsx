@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { parseKicadPcb, buildNetIndex } from '../lib/kicad-parser'
 import type { ParsedBoard } from '../lib/kicad-parser'
-import { makeCamera, zoomCamera, panCamera, screenToWorld } from '../lib/camera'
+import { makeCamera, fitScaleFor, zoomCamera, wheelZoomFactor, panCamera, screenToWorld, MIN_SCALE, MAX_SCALE } from '../lib/camera'
 import type { Camera } from '../lib/camera'
-import { renderBoard, renderOverlay } from '../lib/board-renderer'
+import { renderStaticBoard, renderDynamicOverlay } from '../lib/board-renderer'
 import type { OverlayData } from '../lib/board-renderer'
 import type { SimFrame, BoardInfoMsg } from '../types/protocol'
 import { Board3DViewer } from './Board3DViewer'
@@ -63,8 +63,32 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
   const [board, setBoard] = useState<ParsedBoard | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [cam, setCam] = useState<Camera>({ panX: 0, panY: 0, scale: 1 })
   const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d')
+
+  // The camera lives in a ref, not React state: pan and zoom mutate it up to
+  // 60 times a second and nothing in the DOM depends on it; the animation
+  // loop reads it directly. Re-rendering React per camera tick was pure waste.
+  const camRef = useRef<Camera>({ panX: 0, panY: 0, scale: 1 })
+  // When the camera last moved (wheel/drag/pinch), for static-cache policy.
+  const camMovedAt = useRef(0)
+  const setCamera = useCallback((next: Camera) => {
+    camRef.current = next
+    camMovedAt.current = performance.now()
+  }, [])
+
+  // Static board cache: the full board drawn at a fixed camera, blitted with a
+  // cheap transform every animation frame. Re-rendered when the camera settles
+  // (or immediately when the render is cheap or the blit would degrade too far).
+  const staticCache = useRef<{
+    canvas: HTMLCanvasElement | null
+    cam: Camera | null
+    renderMs: number
+  }>({ canvas: null, cam: null, renderMs: 0 })
+
+  // Smooth zoom: wheel ticks set a target scale and the animation loop glides
+  // the camera toward it (anchored at the cursor), so discrete wheel notches
+  // do not step visibly.
+  const zoomTarget = useRef<{ scale: number; sx: number; sy: number } | null>(null)
 
   // Interaction state
   const dragging = useRef(false)
@@ -74,7 +98,6 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
   const hoveredNet = useRef<string | null>(null)
   const probePos = useRef<{ boardX: number; boardY: number } | null>(null)
   const animTimeRef = useRef(0)
-  const lastTickTime = useRef(performance.now())
 
   const netIndex = useMemo(() => board ? buildNetIndex(board) : null, [board])
 
@@ -134,8 +157,10 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
     if (!board || !canvasRef.current) return
     const { width: cw, height: ch } = canvasRef.current.getBoundingClientRect()
     const b = board.bounds
-    setCam(makeCamera(b.width, b.height, b.cx, b.cy, cw || 800, ch || 600))
-  }, [board])
+    setCamera(makeCamera(b.width, b.height, b.cx, b.cy, cw || 800, ch || 600))
+    zoomTarget.current = null
+    staticCache.current.cam = null
+  }, [board, setCamera])
 
   // ── Canvas resize observer ──
   useEffect(() => {
@@ -150,22 +175,22 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
       canvas.height = height
       overlay.width = width
       overlay.height = height
+      staticCache.current.cam = null
       if (board) {
         const b = board.bounds
-        setCam(c => {
-          const fitScale = Math.min((width * 0.9) / b.width, (height * 0.9) / b.height)
-          const refitThreshold = 0.15
-          const relativeDiff = Math.abs(c.scale - fitScale) / fitScale
-          if (relativeDiff < refitThreshold) {
-            return makeCamera(b.width, b.height, b.cx, b.cy, width, height)
-          }
-          return c
-        })
+        const c = camRef.current
+        const fit = fitScaleFor(b.width, b.height, width, height)
+        const refitThreshold = 0.15
+        const relativeDiff = Math.abs(c.scale - fit) / fit
+        if (relativeDiff < refitThreshold) {
+          setCamera(makeCamera(b.width, b.height, b.cx, b.cy, width, height))
+          zoomTarget.current = null
+        }
       }
     })
     ro.observe(container)
     return () => ro.disconnect()
-  }, [board])
+  }, [board, setCamera])
 
   // ── Find nearest net to a board coordinate ──
   // `reachPx` is the screen-pixel pick radius: hover keeps the tight default
@@ -176,7 +201,7 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
     if (!board) return null
     let best: string | null = null
     let bestDist = Infinity
-    const threshold = reachPx / cam.scale
+    const threshold = reachPx / camRef.current.scale
 
     for (const s of board.segments) {
       if (!s.netName) continue
@@ -207,14 +232,14 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
     }
 
     return best
-  }, [board, cam.scale])
+  }, [board])
 
   // ── Find footprint at board coordinate ──
   const findFootprintAt = useCallback((bx: number, by: number): FootprintInfo | null => {
     if (!board) return null
     let best: FootprintInfo | null = null
     let bestDist = Infinity
-    const threshold = 5 / cam.scale
+    const threshold = 5 / camRef.current.scale
 
     for (const fp of board.footprints) {
       const d = Math.sqrt((bx - fp.at.x) ** 2 + (by - fp.at.y) ** 2)
@@ -232,34 +257,108 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
       }
     }
     return best
-  }, [board, cam.scale])
+  }, [board])
 
   // ── Animation loop (2D only) ──
-  const camRef = useRef(cam)
-  camRef.current = cam
+  // Per-frame data reaches the loop through refs, NOT effect deps: putting
+  // `frame` in the deps tore down and restarted the rAF loop 30 times a
+  // second on a live sim.
   const netVoltagesRef = useRef(netVoltagesMap)
   netVoltagesRef.current = netVoltagesMap
   const faultedRefsRef = useRef(faultedRefs)
   faultedRefsRef.current = faultedRefs
+  const frameRef = useRef(frame)
+  frameRef.current = frame
+  const boardInfoRef = useRef(boardInfo)
+  boardInfoRef.current = boardInfo
+  const selectedNetRef = useRef(selectedNet)
+  selectedNetRef.current = selectedNet
 
   useEffect(() => {
     if (!board || viewMode === '3d') return
 
     let lastT = performance.now()
 
+    // Draw the cached static board onto the main canvas, transformed from the
+    // camera it was rendered at to the current camera. Between static
+    // re-renders (pan in flight, zoom gliding) this is one drawImage.
+    function blitStatic(ctx: CanvasRenderingContext2D, cam: Camera) {
+      const st = staticCache.current
+      if (!st.canvas || !st.cam) return
+      ctx.fillStyle = '#020617'
+      ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+      const k = cam.scale / st.cam.scale
+      ctx.setTransform(k, 0, 0, k, cam.panX - k * st.cam.panX, cam.panY - k * st.cam.panY)
+      ctx.drawImage(st.canvas, 0, 0)
+      ctx.setTransform(1, 0, 0, 1, 0, 0)
+    }
+
+    function ensureStatic(canvas: HTMLCanvasElement, now: number) {
+      if (!board) return
+      const st = staticCache.current
+      const cam = camRef.current
+      const same = st.cam && st.canvas &&
+        st.cam.panX === cam.panX && st.cam.panY === cam.panY && st.cam.scale === cam.scale &&
+        st.canvas.width === canvas.width && st.canvas.height === canvas.height
+      if (same) return
+
+      // Decide whether to pay for a fresh static render this frame:
+      //  - nothing cached yet: always
+      //  - the last render was cheap: every frame (small boards stay crisp)
+      //  - the blit has degraded past 2x in either direction: now
+      //  - the camera has been still for 120 ms: now (gesture settled)
+      const ratio = st.cam ? cam.scale / st.cam.scale : 1
+      const cheap = st.renderMs < 25
+      const degraded = ratio > 2.0 || ratio < 0.5
+      const settled = now - camMovedAt.current > 120
+      if (st.canvas && st.cam && !cheap && !degraded && !settled) return
+
+      let off = st.canvas
+      if (!off || off.width !== canvas.width || off.height !== canvas.height) {
+        off = document.createElement('canvas')
+        off.width = canvas.width
+        off.height = canvas.height
+      }
+      const offCtx = off.getContext('2d')!
+      const t0 = performance.now()
+      renderStaticBoard(offCtx, board, cam)
+      st.renderMs = performance.now() - t0
+      st.canvas = off
+      st.cam = { ...cam }
+    }
+
     function tick(now: number) {
       const dt = (now - lastT) / 1000
       lastT = now
       animTimeRef.current += dt
-      lastTickTime.current = now
 
       const canvas = canvasRef.current
       const overlay = overlayRef.current
-      if (!canvas || !overlay) { animFrame.current = requestAnimationFrame(tick); return }
+      if (!canvas || !overlay || !board) { animFrame.current = requestAnimationFrame(tick); return }
 
       const ctx = canvas.getContext('2d')!
       const octx = overlay.getContext('2d')!
+
+      // Glide toward the wheel zoom target (anchored at the cursor).
+      const zt = zoomTarget.current
+      if (zt) {
+        const cur = camRef.current
+        const logRatio = Math.log(zt.scale / cur.scale)
+        if (Math.abs(logRatio) < 0.005) {
+          setCamera(zoomCamera(cur, zt.scale / cur.scale, zt.sx, zt.sy))
+          zoomTarget.current = null
+        } else {
+          const step = Math.exp(logRatio * Math.min(1, dt * 16))
+          setCamera(zoomCamera(cur, step, zt.sx, zt.sy))
+        }
+      }
+
       const currentCam = camRef.current
+      // Test hook: lets browser-driven checks read the live camera (and lets a
+      // human debug zoom maths from the console) without React devtools.
+      ;(window as unknown as { __hbCam?: Camera }).__hbCam = currentCam
+      const frame = frameRef.current
+      const selectedNet = selectedNetRef.current
 
       const hlNets = new Set<string>()
       if (selectedNet) hlNets.add(selectedNet)
@@ -302,37 +401,48 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
 
       const overlayData: OverlayData = {
         highlightNets: hlNets,
+        dimOthers: hlNets.size > 0,
         particles,
         probe: probeData,
-        componentStates: frame?.component_states,
-        componentKinds: boardInfo?.component_kinds,
-      }
-
-      if (!board) { animFrame.current = requestAnimationFrame(tick); return }
-      renderBoard(ctx, board, currentCam, {
-        highlightNets: hlNets,
-        dimOthers: hlNets.size > 0,
         netVoltages: netVoltagesRef.current,
+        componentStates: frame?.component_states,
+        componentKinds: boardInfoRef.current?.component_kinds,
         faultedRefs: faultedRefsRef.current,
         animTime: animTimeRef.current,
-      })
-      renderOverlay(octx, board, currentCam, overlayData)
+      }
+
+      ensureStatic(canvas, now)
+      blitStatic(ctx, currentCam)
+      renderDynamicOverlay(octx, board, currentCam, overlayData)
 
       animFrame.current = requestAnimationFrame(tick)
     }
 
     animFrame.current = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(animFrame.current)
-  }, [board, selectedNet, netIndex, frame, boardInfo, viewMode])
+  }, [board, netIndex, viewMode, setCamera])
 
-  // ── Mouse / wheel handlers ──
-  const handleWheel = useCallback((e: React.WheelEvent) => {
-    e.preventDefault()
-    const rect = canvasRef.current!.getBoundingClientRect()
-    const sx = e.clientX - rect.left
-    const sy = e.clientY - rect.top
-    setCam(c => zoomCamera(c, -e.deltaY, sx, sy))
-  }, [])
+  // ── Wheel zoom ──
+  // Attached natively (non-passive): React registers wheel listeners as
+  // passive at the root, so preventDefault in an onWheel prop cannot stop the
+  // browser's own pinch-zoom of the page.
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || viewMode === '3d') return
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const rect = canvas.getBoundingClientRect()
+      const sx = e.clientX - rect.left
+      const sy = e.clientY - rect.top
+      const factor = wheelZoomFactor(e)
+      const base = zoomTarget.current?.scale ?? camRef.current.scale
+      const target = Math.max(MIN_SCALE, Math.min(MAX_SCALE, base * factor))
+      zoomTarget.current = { scale: target, sx, sy }
+      camMovedAt.current = performance.now()
+    }
+    canvas.addEventListener('wheel', onWheel, { passive: false })
+    return () => canvas.removeEventListener('wheel', onWheel)
+  }, [viewMode])
 
   // A "click" is a press that never travelled: dragging.current is armed on
   // EVERY mousedown (it also drives pan), so it cannot distinguish click from
@@ -358,13 +468,13 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
       const dy = e.clientY - lastMouse.current.y
       if (Math.abs(dx) + Math.abs(dy) > 2) movedSinceDown.current = true
       lastMouse.current = { x: e.clientX, y: e.clientY }
-      setCam(c => panCamera(c, dx, dy))
+      setCamera(panCamera(camRef.current, dx, dy))
     } else {
       const { x, y } = screenToWorld(camRef.current, sx, sy)
       probePos.current = { boardX: x, boardY: y }
       hoveredNet.current = findNearestNet(x, y)
     }
-  }, [findNearestNet])
+  }, [findNearestNet, setCamera])
 
   // Shared hit-test for a tap/click that did not travel: resolves the footprint
   // and nearest net under canvas-relative screen coords (sx, sy) and fires the
@@ -421,19 +531,23 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
       const dx = e.touches[0].clientX - lastMouse.current.x
       const dy = e.touches[0].clientY - lastMouse.current.y
       lastMouse.current = { x: e.touches[0].clientX, y: e.touches[0].clientY }
-      setCam(c => panCamera(c, dx, dy))
+      setCamera(panCamera(camRef.current, dx, dy))
     } else if (e.touches.length === 2) {
       const dx = e.touches[0].clientX - e.touches[1].clientX
       const dy = e.touches[0].clientY - e.touches[1].clientY
       const dist = Math.sqrt(dx * dx + dy * dy)
-      const delta = dist - lastTouchDist.current
+      // True pinch semantics: the zoom factor IS the ratio of finger spreads,
+      // so the board tracks the fingers exactly (no tuning constant involved).
+      if (lastTouchDist.current > 0) {
+        const factor = dist / lastTouchDist.current
+        const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2
+        const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2
+        const rect = canvasRef.current!.getBoundingClientRect()
+        setCamera(zoomCamera(camRef.current, factor, cx - rect.left, cy - rect.top))
+      }
       lastTouchDist.current = dist
-      const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2
-      const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2
-      const rect = canvasRef.current!.getBoundingClientRect()
-      setCam(c => zoomCamera(c, delta, cx - rect.left, cy - rect.top))
     }
-  }, [])
+  }, [setCamera])
 
   const handleTouchEnd = useCallback((e: React.TouchEvent) => {
     dragging.current = false
@@ -465,7 +579,6 @@ export function BoardViewer({ boardFile, frame, boardInfo, selectedNet, onFootpr
         aria-label="Board map: scroll to zoom, drag to pan, click a trace to select its net. Keyboard users can pick a net in the checks panel below."
         className="absolute inset-0"
         style={{ display: viewMode === '2d' ? 'block' : 'none' }}
-        onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}

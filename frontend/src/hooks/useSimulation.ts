@@ -26,6 +26,23 @@ export function useSimulation(): SimulationState {
   const [probeData, setProbeData] = useState<ProbeDataMsg[]>([])
   const wsRef = useRef<WebSocket | null>(null)
 
+  // Coalesce high-rate messages to one React commit per animation frame. At
+  // play speed the server emits SimFrame + Status 30x/s; pushing each into
+  // state re-rendered the whole app twice per server tick, and when the tab
+  // fell behind the queue only grew. Latest-wins per rAF is the honest rate.
+  const pendingFrame = useRef<SimFrame | null>(null)
+  const pendingStatus = useRef<StatusMsg | null>(null)
+  const flushScheduled = useRef(false)
+  const scheduleFlush = useCallback(() => {
+    if (flushScheduled.current) return
+    flushScheduled.current = true
+    requestAnimationFrame(() => {
+      flushScheduled.current = false
+      if (pendingFrame.current) { setFrame(pendingFrame.current); pendingFrame.current = null }
+      if (pendingStatus.current) { setStatus(pendingStatus.current); pendingStatus.current = null }
+    })
+  }, [])
+
   const send = useCallback((msg: ClientMessage) => {
     const ws = wsRef.current
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -56,8 +73,8 @@ export function useSimulation(): SimulationState {
         catch { return }
         switch (msg.type) {
           case 'BoardInfo': setBoardInfo(msg); break
-          case 'SimFrame': setFrame(msg); break
-          case 'Status': setStatus(msg); break
+          case 'SimFrame': pendingFrame.current = msg; scheduleFlush(); break
+          case 'Status': pendingStatus.current = msg; scheduleFlush(); break
           case 'ProbeData':
             setProbeData(prev => {
               const filtered = prev.filter(p => p.net !== msg.net)
@@ -72,6 +89,10 @@ export function useSimulation(): SimulationState {
 
       ws.onclose = () => {
         if (!alive) return
+        // Drop anything queued for the rAF flush so a pending frame cannot
+        // resurrect state after the disconnect clears it.
+        pendingFrame.current = null
+        pendingStatus.current = null
         setConnected(false)
         setBoardInfo(null)
         setFrame(null)
