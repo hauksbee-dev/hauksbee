@@ -4,9 +4,10 @@
 etc.) writes one JSON object to stdout, designed to be parsed by a CI step or an
 agent. This documents every field so a consumer does not have to read the source.
 
-Stability: fields are **additive**. New fields may appear; existing fields keep
-their meaning. Empty/absent sections are omitted (`skip_serializing_if`), so
-always treat a missing section as "that analysis did not run", not "it failed".
+Stability: fields are **additive**. New fields may appear. Existing fields
+keep their meaning. Empty/absent sections are omitted
+(`skip_serializing_if`), so always treat a missing section as "that analysis
+did not run", not "it failed".
 
 ## Top-level verdict
 
@@ -21,11 +22,12 @@ and failure parse the same way:
 | `serious_count` | int | number of serious findings (DRC shorts + co-sim stress faults + serious lint/SI) |
 | `actionable_count` | int | findings a user can act on (serious + warnings + clearance groups) |
 
-`verdict` is `"fail"` when `serious_count > 0`; `"invalid"` when nothing is
-serious but an analysis that ran could not be judged (AC or thermal reported
-`valid:false`); `"pass"` otherwise. DRC shorts are excluded from `serious_count`
-when the board is newer than the validated copper extraction (a
-`drc.version_warning` is set); the same carve-out the exit gate makes.
+`verdict` is `"fail"` when `serious_count > 0`. It is `"invalid"` when
+nothing is serious but an analysis that ran could not be judged (AC or
+thermal reported `valid:false`). Otherwise it is `"pass"`. DRC shorts are
+excluded from `serious_count` when the board is newer than the validated
+copper extraction (a `drc.version_warning` is set). This is the same
+carve-out the exit gate makes.
 
 ## Sections
 
@@ -68,12 +70,12 @@ Beyond activity (`total_toggles`, `uart_seen`, `activity_summary[]`) and
 `analog_valid` (+ `failed_windows[]`), the co-sim block surfaces every coverage
 degradation so a run that silently lost fidelity never reads as healthy:
 
-- `substituted`; the firmware ran on a substitute core (also in `notes`).
-- `adc_dropped[]`, ADC channels whose modeled voltage the platform could not
+- `substituted`: the firmware ran on a substitute core (also in `notes`).
+- `adc_dropped[]`, ADC channels whose modelled voltage the platform could not
   inject (the firmware read nothing on that pin).
 - `unexercised_buses[]`, bound I2C/SPI peripherals the platform's controller set
   never exercised (a `peripheral` assertion against one fails, not green-passes).
-- `spi_framing[]`, per-bus framing tier; a `"heuristic"` tier means transaction
+- `spi_framing[]`, per-bus framing tier: a `"heuristic"` tier means transaction
   boundaries were guessed at chunk edges.
 
 ## Example

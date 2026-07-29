@@ -1,10 +1,11 @@
 # Extending hauksbee
 
-Worked walkthroughs, one per extension type. Each starts from a real datasheet
-or file format, walks the actual steps against the current code, and ends with
-the test that proves the extension works. They assume you can read TOML and run
-`cargo`, and, for everything except [new device physics](new-device-physics.md),
-they assume **no knowledge of hauksbee's source**.
+This page lists one walkthrough per extension type. Each walkthrough starts
+from a real datasheet or file format, follows the actual steps against the
+current code, and ends with the test that proves the extension works. Each
+walkthrough assumes you can read TOML and run `cargo`. Except for
+[new device physics](new-device-physics.md), each walkthrough assumes
+**no knowledge of the hauksbee source code**.
 
 ## I want to add a ___
 
@@ -21,41 +22,47 @@ they assume **no knowledge of hauksbee's source**.
 
 ## The extension hierarchy
 
-The rows above are ordered from cheapest to most invasive:
+The rows above go from cheapest to most invasive:
 
-1. **Data.** Model TOML, sensor specs, logic specs, SoC descriptors. No
-   recompile; validated fail-loud at load.
-2. **Packs.** Versioned bundles of (1) you can share and pin
+1. **Data.** Model TOML, sensor specs, logic specs, and SoC descriptors. No
+   recompile is needed. The loader validates each file at load time and
+   fails loud on error.
+2. **Packs.** Versioned bundles of the data layer above. Share and pin a pack
    ([docs/models/PACKS.md](../models/PACKS.md)).
-3. **Plugins-by-trait.** Board readers (and I2C/SPI peripherals) implement a
-   small stable trait in a fork. One registration line, no core edits.
-4. **Core.** New `Device` variants and stamps. Rust, deliberately, and guarded
-   by an enforced checklist so a missed integration site cannot ship.
+3. **Plugins-by-trait.** Board readers, and I2C/SPI peripherals, implement a
+   small, stable trait in a fork. This needs one registration line and no
+   core edits.
+4. **Core.** New `Device` variants and stamps, written in Rust by design. An
+   enforced checklist guards this layer, so a missed integration site cannot
+   ship.
 
-A design rule shared by every layer: **bad data fails loud.** Every validator
-in these walkthroughs produces a named error for each failure category, never a
-generic parse error and never a silent fallback. When a walkthrough shows you a
-validation rule, that rule exists because its absence once corrupted a result.
+One design rule applies to every layer: bad data fails loud. Every validator
+in these walkthroughs produces a named error for each failure category. It
+never produces a generic parse error, and it never falls back silently. When
+a walkthrough shows a validation rule, that rule exists because a past run
+without it corrupted a result.
 
 ## Shared tooling
 
-- `hauksbee models lint <file>`, validates a `[[models]]` db file (including
-  any `[models.logic]` block, compiled through the same path board binding
-  uses) or a `[sensor]` spec. From a checkout:
+- `hauksbee models lint <file>` validates a `[[models]]` database file,
+  including any `[models.logic]` block compiled through the same path board
+  binding uses, or a `[sensor]` spec. From a checkout, run:
   `cargo run -p hauksbee-engine --bin hauksbee -- models lint <file>`.
-- `hauksbee models resolve <board>`, per component, which model entry won and
-  from which priority layer. The debugging surface for model and pack authors.
-- `hauksbee models add | list | remove`, pack management
+- `hauksbee models resolve <board>` shows, for each component, which model
+  entry won and from which priority layer. Model and pack authors use this
+  to debug.
+- `hauksbee models add | list | remove` manages packs
   ([make-a-model-pack.md](make-a-model-pack.md)).
-- `model-extract`, auto-draft a model TOML from a PDF datasheet via an LLM, as a
-  starting point you then lint and correct. It is a separate binary (not a
-  `hauksbee` subcommand) and is not installed on PATH; run it from a checkout:
+- `model-extract` drafts a model TOML from a PDF datasheet with an LLM. Use
+  this draft as a starting point, then lint and correct it. This is a
+  separate binary, not a `hauksbee` subcommand, and it is not installed on
+  PATH. Run it from a checkout:
   `cargo run -p hauksbee-models --bin model-extract -- <datasheet.pdf>`. See
   [../MODELS.md](../models/MODELS.md#pointing-hauksbee-at-a-datasheet) for the workflow.
 
 ## Deeper references
 
-- [docs/models/MODELS.md](../models/MODELS.md); the model database and matching.
-- [docs/models/PACKS.md](../models/PACKS.md); the pack format reference.
-- [docs/cosim/PERIPHERALS.md](../cosim/PERIPHERALS.md); the peripheral layer sensors plug into.
-- [docs/cosim/MCU.md](../cosim/MCU.md); the co-sim backends SoC descriptors configure.
+- [docs/models/MODELS.md](../models/MODELS.md): the model database and matching.
+- [docs/models/PACKS.md](../models/PACKS.md): the pack format reference.
+- [docs/cosim/PERIPHERALS.md](../cosim/PERIPHERALS.md): the peripheral layer sensors plug into.
+- [docs/cosim/MCU.md](../cosim/MCU.md): the co-sim backends SoC descriptors configure.

@@ -1,10 +1,10 @@
 # Make a model pack: from a directory to `models add`
 
-**Goal.** Bundle model data, `[[models]]` entries, including sensor and logic
-specs, into a versioned pack you can share as a git repo or tarball, install
-with `hauksbee models add`, and debug with `hauksbee models resolve`. The
-format reference is [docs/models/PACKS.md](../models/PACKS.md); this is the narrative
-version: build one from scratch and run the whole lifecycle. The
+**Goal.** Bundle model data (`[[models]]` entries, including sensor and logic
+specs) into a versioned pack. Share it as a git repo or tarball, install it
+with `hauksbee models add`, and debug it with `hauksbee models resolve`. The
+format reference is [docs/models/PACKS.md](../models/PACKS.md). This is the
+narrative version: build one from scratch and run the whole lifecycle. The
 implementation is `crates/hauksbee-models/src/pack.rs` (format + store) and
 `crates/hauksbee-engine/src/commands/models.rs` (CLI).
 
@@ -12,7 +12,7 @@ implementation is `crates/hauksbee-models/src/pack.rs` (format + store) and
 [add-a-logic-ic.md](add-a-logic-ic.md) or [add-a-sensor.md](add-a-sensor.md))
 and the `hauksbee` binary.
 
-## Step 1; the directory
+## Step 1, the directory
 
 ```
 acme-logic/
@@ -22,7 +22,7 @@ acme-logic/
   firmware/          # optional fixtures for the pack's own tests
 ```
 
-## Step 2; the manifest
+## Step 2, the manifest
 
 ```toml
 [pack]
@@ -34,21 +34,21 @@ provenance = "hand-written"      # hand-written | datasheet-extracted | vendor
 description = "ACME's 74HC coverage"   # the only optional field
 ```
 
-Every other field is required, and **unknown fields are rejected**: a typo'd
-`licence =` fails with a named error instead of vanishing.
+Every other field is required, and **hauksbee rejects unknown fields**: a
+typo'd `licence =` fails with a named error instead of vanishing.
 
-> **Why `provenance` is mandatory.** A pack's numbers were either typed by a
-> human from a datasheet, extracted by an LLM, or shipped by the vendor,
-> and a reviewer of `models list` output deserves to see which at a glance,
-> because the three fail differently. It is declared, not inferred, and it is
-> carried into the install record. (Also deliberate: **no signing, no
-> registry.** Distribution is a git URL or a tarball you already trust the
-> provenance of; a registry would add an authority without adding a
+> **Why `provenance` is mandatory.** A human typed a pack's numbers from a
+> datasheet, an LLM extracted them, or the vendor shipped them, and a
+> reviewer of `models list` output deserves to see which at a glance, because
+> the three fail differently. You declare it, hauksbee does not infer it, and
+> it carries into the install record. (Also deliberate: **no signing, no
+> registry.** Distribution is a git URL or a tarball whose provenance you
+> already trust. A registry would add an authority without adding a
 > verification.)
 
-## Step 3; the model files
+## Step 3, the model files
 
-`models/parts.toml` is an ordinary db file; the same format as the builtin
+`models/parts.toml` is an ordinary db file, in the same format as the builtin
 `crates/hauksbee-models/db/*.toml`:
 
 ```toml
@@ -91,15 +91,16 @@ removed pack 'acme-logic@1.0.0'
 
 `add` also accepts a `.tar.gz`/`.tgz`/`.tar` archive (unpacked with the system
 `tar`) or a git URL (`git@…`, `ssh://…`, `…​.git`, any `https://…`,
-shallow-cloned with the system `git`). Plain `http://` is refused: no HTTP
-client ships in hauksbee, and an unencrypted model source is a bad default.
+shallow-cloned with the system `git`). hauksbee refuses plain `http://`: no
+HTTP client ships in hauksbee, and an unencrypted model source is a bad
+default.
 
 **Validation happens before anything is copied.** `Pack::load` checks the
 manifest field by field (each failure a named `PackError`), requires at least
 one `models/*.toml`, and runs every entry through the same validation
 `models lint` applies, including *compiling* every `[models.logic]` block
-through the engine's bind path, so a pack that installs is a pack that
-loads. If any file fails, nothing lands.
+through the engine's bind path. A pack that installs is a pack that loads.
+If any file fails, nothing lands.
 
 ## Step 5, where your pack sits: the priority layers
 
@@ -114,20 +115,21 @@ Every model source has an explicit layer (`SourceLayer` in
 | `--models-dir` flag | 30 |
 | user SPICE cards | 40 |
 
-The higher layer wins outright; the specificity score only breaks ties
+The higher layer wins outright. The specificity score only breaks ties
 *within* a layer. So your pack overrides any builtin it names, and a user
 who disagrees with your pack overrides it from their model dir without
 touching your files.
 
 **Trap, same-layer conflicts.** Two installed packs shipping the same model
-id cannot be ordered by priority (same layer) and would otherwise win by load
-order, by accident. The library reports the conflict loudly at load, naming
-both packs, and never resolves it silently. If you see that warning, one of
-the two packs has to go (or rename its entry): that is the design, not a bug.
+id cannot be ordered by priority (same layer), and would otherwise win by
+load order, by accident. The library reports the conflict loudly at load,
+naming both packs, and never resolves it silently. If you see that warning,
+one of the two packs has to go, or rename its entry: that is the design, not
+a bug.
 
-## Step 6; the debugging surface
+## Step 6, the debugging surface
 
-When a board doesn't bind what you expected:
+When a board does not bind what you expected:
 
 ```
 $ hauksbee models resolve my_board.kicad_pcb
@@ -137,10 +139,10 @@ U3         ACME7400                 acme-7400                    pack           
 R1         10k                      resistor                     builtin          passives.toml
 ```
 
-Per component: which entry won, from which layer, from which file. This is
-the first command to run when a pack "doesn't work", nine times out of ten
-the entry lost a specificity tie inside its layer or the `match.value_re`
-doesn't hit the board's Value field.
+This shows, per component, which entry won, from which layer, from which
+file. Run this command first when a pack "does not work". Nine times out of
+ten the entry lost a specificity tie inside its layer, or the
+`match.value_re` does not hit the board's Value field.
 
 ## The test that proves it
 
@@ -156,8 +158,8 @@ the CLI-level resolve report in
 cargo test -p hauksbee-models --test pack_format --test pack_store --test pack_layering
 ```
 
-Green is one `test result: ok` block per test file (14 + 2 + 6 tests at the
-time of writing):
+A green run prints one `test result: ok` block per test file (14 + 2 + 6
+tests at the time of writing):
 
 ```
 test result: ok. 14 passed; 0 failed; ...   (pack_format)
@@ -166,8 +168,8 @@ test result: ok. 6 passed; 0 failed; ...    (pack_layering)
 ```
 
 And for *your* pack, the proof is the live transcript in step 4 plus a
-`models resolve` against a board that names your parts, showing them winning
-at the `pack` layer.
+`models resolve` against a board that names your parts, showing them win at
+the `pack` layer.
 
 ---
 

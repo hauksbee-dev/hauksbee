@@ -2,12 +2,12 @@
 
 A PCB is a program that draws itself. Hauksbee makes that program *executable*
 and *editable*: you can decompile a real `.kicad_pcb` into readable code, edit
-the code (change a part value, fix a wiring swap, add a component), recompile it
-back into a coherent board, and run the edit straight through simulation to see
-whether your fix actually worked.
+the code (change a part value, fix a wiring swap, add a component), recompile
+it back into a coherent board, and run the edit straight through simulation to
+see whether your fix actually worked.
 
-This closes a loop that did not exist before. `kicad-forge` already decompiled a
-board into a readable, repeat-detected program, but that text dropped net
+This closes a loop that did not exist before. `kicad-forge` already decompiled
+a board into a readable, repeat-detected program, but that text dropped net
 assignments and was never re-executable; the rebuild step read an in-memory
 analysis struct, not source. The Board-as-Code DSL is the missing executable
 layer: it carries full pad-level connectivity and round-trips.
@@ -27,8 +27,8 @@ Three CLI verbs, alongside the existing `hauksbee run`:
 ## The DSL
 
 A line-oriented, AI- and human-editable format. Repeated hardware blocks the
-decompiler found (a synapse instanced 90 times, a neuron a dozen) become
-`fn` blocks; `main` declares the nets and instantiates the blocks, with every
+decompiler found (a synapse instanced 90 times, a neuron a dozen) become `fn`
+blocks. `main` declares the nets and instantiates the blocks, with every
 component carrying its concrete pads and per-pad net assignments:
 
 ```text
@@ -52,37 +52,40 @@ fn main {
 }
 ```
 
-The bar for the recompile is **connectivity equivalence**, not byte-exactness:
-`board -> code -> board` preserves the component set and every net's wiring (up
-to net renaming). On a clean round-trip it also preserves placement. This is
-verified on stormduino, pic_programmer, microwave and the full 3443-component
-Tarski InputSystem board (`forge-codegen` test `dsl_roundtrip`).
+The bar for the recompile is **connectivity equivalence**, not
+byte-exactness: `board -> code -> board` preserves the component set and
+every net's wiring (up to net renaming). On a clean round-trip it also
+preserves placement. This is verified on stormduino, pic_programmer,
+microwave and the full 3443-component Tarski InputSystem board
+(`forge-codegen` test `dsl_roundtrip`).
 
 ## Authoring a board from scratch
 
 You do not have to start from a decompiled board. The DSL is small enough to
 hand-write. [`examples/board-as-code/starter.board`](../../examples/board-as-code/starter.board)
 is a complete, hand-authored three-part board, a 2-pin header driving an LED
-through a series resistor, written from nothing and richly commented. Build one
-up the same way:
+through a series resistor, written from nothing and richly commented. Build
+one up the same way:
 
-1. **Header + `fn main`.** Every file starts with `board version <N>` (N is any
-   integer tag) and one `fn main { ... }` block that holds the whole board.
+1. **Header + `fn main`.** Every file starts with `board version <N>` (N is
+   any integer tag) and one `fn main { ... }` block that holds the whole
+   board.
 2. **Declare the nets.** List every net with `net "<name>"` before you wire a
-   pad to it, wiring a pad to an undeclared net is a load error, so the net
-   list is also your connectivity contract.
-3. **Add components.** Each `comp` has a reference, a footprint `lib "<lib_id>"`,
-   a `val`, a `layer`, and an `at X Y rot` placement, then a `{ ... }` body of
-   pads. A footprint `lib_id` is a KiCad `Library:Footprint` name (e.g.
-   `Resistor_SMD:R_0805_2012Metric`); the same strings KiCad's footprint chooser
-   shows; the recompiler passes them straight to the `.kicad_pcb`.
+   pad to it. Wiring a pad to an undeclared net is a load error, so the net
+   list also acts as your connectivity contract.
+3. **Add components.** Each `comp` has a reference, a footprint
+   `lib "<lib_id>"`, a `val`, a `layer`, and an `at X Y rot` placement, then
+   a `{ ... }` body of pads. A footprint `lib_id` is a KiCad `Library:Footprint`
+   name (e.g. `Resistor_SMD:R_0805_2012Metric`), the same strings KiCad's
+   footprint chooser shows. The recompiler passes them straight to the
+   `.kicad_pcb`.
 4. **Wire the pads.** Each `pad` carries its number, kind, shape, position
-   (relative to the comp origin), size, copper `layers`, and the `net "<name>"`
-   it connects to (or `nonet` for an unconnected pad). A `thru_hole` /
-   `np_thru_hole` pad also needs a `drill <D>`.
+   (relative to the comp origin), size, copper `layers`, and the
+   `net "<name>"` it connects to (or `nonet` for an unconnected pad). A
+   `thru_hole` / `np_thru_hole` pad also needs a `drill <D>`.
 5. **Check it.** `hauksbee check-code starter.board` recompiles, binds, and
-   simulates it; the fastest way to see "100% resolved" and a clean report (or
-   find out which pad you mis-wired).
+   simulates it, the fastest way to see "100% resolved" and a clean report
+   (or find out which pad you mis-wired).
 
 ```bash
 hauksbee check-code examples/board-as-code/starter.board --seconds 0.01
@@ -109,12 +112,12 @@ One statement per line, inside `fn main` (or an `fn <block>` you instantiate).
 
 Closed token sets:
 
-- **pad `kind`:** `smd`, `thru_hole`, `np_thru_hole`, `connect` (a `thru_hole` /
-  `np_thru_hole` pad needs a `drill`).
+- **pad `kind`:** `smd`, `thru_hole`, `np_thru_hole`, `connect` (a
+  `thru_hole` / `np_thru_hole` pad needs a `drill`).
 - **pad `shape`:** `rect`, `roundrect`, `circle`, `oval`, `trapezoid` (the
-  KiCad pad shapes; omitted defaults to `rect`).
-- **`layers`:** KiCad layer names in `[ ]`, e.g. `[F.Cu F.Paste F.Mask]` for a
-  top SMD pad, `[F.Cu B.Cu]` for a through-hole pad.
+  KiCad pad shapes; an omitted shape defaults to `rect`).
+- **`layers`:** KiCad layer names in `[ ]`, e.g. `[F.Cu F.Paste F.Mask]` for
+  a top SMD pad, `[F.Cu B.Cu]` for a through-hole pad.
 
 ## Worked example: decompile and recompile
 
@@ -147,9 +150,10 @@ Board-as-Code check: stormduino
 ## Worked example: a fix, expressed as a code edit
 
 The headline case is the Tarski inhibitory-synapse miswire. The inhibitory
-cells cross the dual-NPN's base and collector connections: pin 5 (B2) is wired
-to the weight-switch common instead of pin 3 (C2). Enabling the weight then
-slams the base toward the rail through the switch's 6 ohm on-resistance.
+cells cross the dual-NPN's base and collector connections: pin 5 (B2) is
+wired to the weight-switch common instead of pin 3 (C2). Enabling the weight
+then slams the base toward the rail through the switch's 6 ohm
+on-resistance.
 
 Expressed as a Board-as-Code edit, the repair is swapping the net names on
 IC3906's pad 5 and pad 3:
@@ -165,7 +169,8 @@ ic.pads[c2].net = tmp;
 let repaired = prog.emit();
 ```
 
-Recompiling and re-simulating both versions shows the edit changed the physics:
+Recompiling and re-simulating both versions shows the edit changed the
+physics:
 
 | version | base/sink current | stress faults |
 |---|---|---|
@@ -179,30 +184,32 @@ consequence of the one-line wiring edit.
 ## Logical re-layout
 
 `from-code --relayout` recompiles the code to a board arranged by function:
-components are grouped by the cluster/function they belong to, the groups tile
-the board outline so each function occupies its own region, then a
+components group by the cluster/function they belong to, the groups tile the
+board outline so each function occupies its own region, then a
 force-directed relaxation pulls net-connected parts together while a hard
-de-overlap pass guarantees no two courtyards (plus their clearances) intersect.
-Global power/ground rails are excluded from the attraction so they do not
-collapse the whole board into one blob.
+de-overlap pass guarantees no two courtyards (plus their clearances)
+intersect. The relaxation excludes global power/ground rails from the
+attraction, so they do not collapse the whole board into one blob.
 
-The placer respects four real constraints, so the output is something a human
-would accept rather than a scramble:
+The placer respects four real constraints, so the output is something a
+human would accept rather than a scramble:
 
-* **Board outline.** The outline is read from the source board's `Edge.Cuts`
-  geometry on decompile (and re-emitted as `Edge.Cuts` lines on recompile), or
-  set in the DSL with `board size W H` / `board outline X0 Y0 X1 Y1`. Every
-  component, courtyard included, is kept inside it; nothing is placed off-board.
+* **Board outline.** The outline is read from the source board's
+  `Edge.Cuts` geometry on decompile (and re-emitted as `Edge.Cuts` lines on
+  recompile), or set in the DSL with `board size W H` /
+  `board outline X0 Y0 X1 Y1`. Every component, courtyard included, stays
+  inside it; nothing is placed off-board.
 * **Courtyards, not points.** Overlap is computed from each footprint's
-  rotation-aware pad bounding box, so large parts (a DIP, a connector) genuinely
-  reserve their area instead of being treated as a point.
+  rotation-aware pad bounding box, so large parts (a DIP, a connector)
+  genuinely reserve their area instead of being treated as a point.
 * **Hard clearances.** `space` / `space fn` are enforced as minimum clear
-  distances by the de-overlap pass, not soft hints: a test point with `space 3`
-  actually gets 3 mm of clear room around it.
-* **User position constraints.** `pin <ref> edge <left|right|top|bottom>` holds
-  a component against a board edge (the edge-normal coordinate is fixed, the
-  along-edge coordinate relaxes), and `lock <ref>` freezes a component at its
-  exact coordinates and makes it a fixed keep-out for everything else.
+  distances by the de-overlap pass, not soft hints: a test point with
+  `space 3` actually gets 3 mm of clear room around it.
+* **User position constraints.** `pin <ref> edge <left|right|top|bottom>`
+  holds a component against a board edge (the edge-normal coordinate is
+  fixed, the along-edge coordinate relaxes), and `lock <ref>` freezes a
+  component at its exact coordinates and makes it a fixed keep-out for
+  everything else.
 
 ### Constraints in the DSL
 
@@ -244,12 +251,13 @@ Full re-layout of stormduino, exported with `kicad-cli pcb export svg`
 |---|---|
 | ![before](../assets/storm_before.png) | ![after](../assets/storm_after.png) |
 
-Left is the original placement; right is the function-grouped re-layout, with
-every part inside the board outline, courtyards non-overlapping, and clearances
-respected. Connectivity is identical (the recompiled board passes the same
-connectivity check); only the placement changed.
+Left is the original placement; right is the function-grouped re-layout,
+with every part inside the board outline, courtyards non-overlapping, and
+clearances respected. Connectivity stays identical (the recompiled board
+passes the same connectivity check); only the placement changed.
 
-Regenerate both, the routed board, and the incremental diff with one command:
+Regenerate both, the routed board, and the incremental diff with one
+command:
 
 ```bash
 hauksbee/scripts/board_as_code_assets.sh
@@ -257,11 +265,11 @@ hauksbee/scripts/board_as_code_assets.sh
 
 ## Incremental recompile (the preferred default)
 
-Full re-layout throws away the existing placement. Incremental recompile keeps
-it: the *original* board is the base, components whose identity and placement are
-unchanged keep their exact coordinates, and only new, moved or value-changed
-parts are re-placed, into free space near their net neighbours, without
-disturbing the settled board.
+Full re-layout throws away the existing placement. Incremental recompile
+keeps it: the *original* board is the base, components whose identity and
+placement stay unchanged keep their exact coordinates, and only new, moved
+or value-changed parts get re-placed, into free space near their net
+neighbours, without disturbing the settled board.
 
 ```bash
 $BIN from-code storm.board --incremental --out storm_patched.kicad_pcb
@@ -269,36 +277,38 @@ $BIN from-code storm.board --incremental --out storm_patched.kicad_pcb
 ```
 
 This is the right default for a fix workflow: you edited one resistor or one
-wire, so only that part should move. It is exercised by `forge-codegen` test
-`incremental_keeps_unchanged`, which moves a single component and asserts
-exactly that one component is re-placed while every other keeps its coordinates
-and the connectivity is preserved.
+wire, so only that part should move. The `forge-codegen` test
+`incremental_keeps_unchanged` exercises this: it moves a single component
+and asserts exactly that one component gets re-placed, while every other
+part keeps its coordinates and the connectivity stays preserved.
 
-(The `4 moved` on the unedited stormduino above is an honest artifact of that
-board carrying duplicate reference designators: the base index is keyed by
-reference, so the colliding duplicates read as changed. Boards with unique
-references report `0 moved` on an unedited round-trip.)
+(The `4 moved` on the unedited stormduino above is an honest artifact of
+that board carrying duplicate reference designators: the base index is
+keyed by reference, so the colliding duplicates read as changed. Boards
+with unique references report `0 moved` on an unedited round-trip.)
 
 ### Before / after / diff
 
-The visualisation below uses `pic_programmer` (which has unique references for a
-clean diff): the original board, the board after one textual edit (move a single
-resistor) recompiled incrementally, and a diff that highlights the moved part in
-orange (with a dashed ghost at its old position and an arrow to the new one),
-new parts in green, and the 62 untouched parts in grey.
+The visualisation below uses `pic_programmer` (which has unique references
+for a clean diff): the original board, the board after one textual edit
+(move a single resistor) recompiled incrementally, and a diff that
+highlights the moved part in orange (with a dashed ghost at its old
+position and an arrow to the new one), new parts in green, and the 62
+untouched parts in grey.
 
 ![incremental recompile before/after/diff](../assets/incremental_recompile.png)
 
-The middle and diff panels are identical to the original except for that one
-part: incremental recompile keeps every untouched component exactly where it
-was. Regenerate with `hauksbee/scripts/board_as_code_assets.sh` (renderer:
-`scripts/make_incremental_viz.py`).
+The middle and diff panels are identical to the original except for that
+one part: incremental recompile keeps every untouched component exactly
+where it was. Regenerate with `hauksbee/scripts/board_as_code_assets.sh`
+(renderer: `scripts/make_incremental_viz.py`).
 
 ## Routing
 
-Routing is a hard, well-solved problem, so the production path hands the placed
-board to **freerouting** (the standard open-source autorouter, Java) over the
-Specctra DSN/SES interchange format rather than growing a bespoke router.
+Routing is a hard, well-solved problem, so the production path hands the
+placed board to **freerouting** (the standard open-source autorouter, Java)
+over the Specctra DSN/SES interchange format rather than growing a bespoke
+router.
 
 ```bash
 # route with freerouting (the default when it is installed)
@@ -308,16 +318,17 @@ $BIN from-code storm.board --relayout --route --out storm_routed.kicad_pcb
 
 The hand-off, in `forge-codegen`'s `route_freerouting` module:
 
-1. **DSN export** (`write_dsn`): serialise the placed board to Specctra DSN, the
-   board boundary (from `Edge.Cuts`), one image per footprint, a padstack per
-   distinct pad/via geometry, the net list, and a default width/clearance rule.
-2. **Invoke freerouting headless** (`run_freerouting`): spawn `java -jar
-   freerouting -de board.dsn -do board.ses -mp <passes>` as a child process,
-   poll it, and **kill it if it exceeds a wall-clock budget** (autorouting a
-   large board can otherwise run for minutes).
-3. **SES import** (`parse_ses` + `merge_ses_into_pcb`): read the routed wires and
-   vias back and write them onto the board as copper segments and vias on the
-   correct nets.
+1. **DSN export** (`write_dsn`): serialise the placed board to Specctra DSN,
+   the board boundary (from `Edge.Cuts`), one image per footprint, a
+   padstack per distinct pad/via geometry, the net list, and a default
+   width/clearance rule.
+2. **Invoke freerouting headless** (`run_freerouting`): spawn
+   `java -jar freerouting -de board.dsn -do board.ses -mp <passes>` as a
+   child process, poll it, and **kill it if it exceeds a wall-clock
+   budget** (autorouting a large board can otherwise run for minutes).
+3. **SES import** (`parse_ses` + `merge_ses_into_pcb`): read the routed
+   wires and vias back and write them onto the board as copper segments and
+   vias on the correct nets.
 
 ![routed stormduino (freerouting)](../assets/storm_routed.png)
 
@@ -325,27 +336,30 @@ The hand-off, in `forge-codegen`'s `route_freerouting` module:
 
 Download a release jar from
 [github.com/freerouting/freerouting](https://github.com/freerouting/freerouting/releases)
-and either point `FREEROUTING_JAR` at it or drop it in a `tools/` directory up
-the tree (the engine auto-discovers it). A JRE (`java`) must be on `PATH`.
+and either point `FREEROUTING_JAR` at it or drop it in a `tools/` directory
+up the tree (the engine auto-discovers it). A JRE (`java`) must be on
+`PATH`.
 
 **Use the 1.9.0 jar** (`freerouting-1.9.0.jar`). Its headless batch mode
-reliably writes the SES and exits even on a partially-routed board. The 2.x line
-(tested with 2.2.4) parses and routes correctly but **stalls without writing the
-SES unless the board is 100% routed**, which is unworkable for a batch handoff;
-the engine prefers a 1.x jar when both are present and passes `-da` only to 2.x.
-(The DSN/SES writer was validated against both; the 10x output-resolution quirk
-of 1.9.0's SES is handled by detecting the coordinate scale empirically.)
+reliably writes the SES and exits even on a partially-routed board. The 2.x
+line (tested with 2.2.4) parses and routes correctly but **stalls without
+writing the SES unless the board is 100% routed**, which is unworkable for
+a batch handoff. The engine prefers a 1.x jar when both are present and
+passes `-da` only to 2.x. (The DSN/SES writer was validated against both;
+the 10x output-resolution quirk of 1.9.0's SES is handled by detecting the
+coordinate scale empirically.)
 
 ### Grid A* fallback
 
-When freerouting (or a JRE) is absent, `--route` transparently falls back to the
-in-tree grid A* router (`route_grid`); `--route-grid` forces it. It connects each
-net's pads with Manhattan paths on a single layer, treats component bodies as
-keep-outs, and **reports any net it cannot complete rather than silently dropping
-it**. Its honest limitations: one layer, no vias, no rip-up-and-retry, and it
-bails on boards whose bounding grid would exceed a few million cells. It is
-enough to prove a placement is routable in the small and to visualise tracks; it
-is not a production autorouter. Use freerouting for real boards.
+When freerouting (or a JRE) is absent, `--route` transparently falls back to
+the in-tree grid A* router (`route_grid`); `--route-grid` forces it. It
+connects each net's pads with Manhattan paths on a single layer, treats
+component bodies as keep-outs, and **reports any net it cannot complete
+rather than silently dropping it**. Its honest limitations: one layer, no
+vias, no rip-up-and-retry, and it bails on boards whose bounding grid would
+exceed a few million cells. It is enough to prove a placement is routable in
+the small and to visualise tracks; it is not a production autorouter. Use
+freerouting for real boards.
 
 ## Where the code lives
 

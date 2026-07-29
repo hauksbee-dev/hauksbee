@@ -1,6 +1,6 @@
 # AC / small-signal analysis
 
-Hauksbee can run a standard SPICE `.AC` small-signal analysis: linearise the
+Hauksbee can run a standard SPICE `.AC` small-signal analysis: linearize the
 circuit about its DC operating point, then solve the complex MNA system across a
 frequency sweep and report magnitude (dB) and phase at any node. On top of that
 it computes loop-stability metrics (Bode data, gain crossover, phase margin) so
@@ -21,7 +21,7 @@ complex modified-nodal-analysis system
 and solves for the complex node-voltage phasors `x`. `G` is the real
 conductance/transconductance backbone, `jwC` the reactive part, and `b` the AC
 stimulus. The system is built from each device's **small-signal stamp**,
-linearised at the DC operating point:
+linearized at the DC operating point:
 
 | Device | Small-signal stamp |
 |---|---|
@@ -37,7 +37,7 @@ linearised at the DC operating point:
 | V-switch | quiescent conductance at the OP control voltage |
 | Comparator | digital output: no small-signal path |
 
-### What is linearised
+### What is linearized
 
 The active-device conductances and transconductances are exactly the Newton
 tangents the transient solver already computes (`dI/dV`, `dI/dV_control`),
@@ -47,17 +47,18 @@ frozen at the converged DC operating point. AC reuses:
 - the same `dc_operating_point` solve (real Newton with gmin / source-stepping
   homotopy),
 
-and extends only the linear-algebra step to complex. The DC OP is computed once
-per sweep; only the per-frequency complex assemble-and-solve repeats.
+and extends only the linear-algebra step to complex. The DC OP is computed
+once per sweep. Only the per-frequency complex assemble-and-solve repeats.
 
 ### Complex solver
 
 The complex system is solved with a dense LU with partial pivoting over
-`num_complex::Complex64` (`ComplexSystem` in `hauksbee-solve`). Partial pivoting
-is mandatory because MNA voltage-source / inductor rows have a structurally zero
-diagonal. This is the same algorithm LAPACK's `zgesv` uses; for Hauksbee's board
-sizes (tens to low hundreds of unknowns, one solve per frequency) dense `O(n^3)`
-is fast and easy to trust. The real sparse Gilbert-Peierls LU is left untouched.
+`num_complex::Complex64` (`ComplexSystem` in `hauksbee-solve`). Partial
+pivoting is mandatory because MNA voltage-source / inductor rows have a
+structurally zero diagonal. This is the same algorithm LAPACK's `zgesv` uses.
+For Hauksbee's board sizes (tens to low hundreds of unknowns, one solve per
+frequency), dense `O(n^3)` is fast and easy to trust. The real sparse
+Gilbert-Peierls LU is left untouched.
 
 ## Loop stability and loop injection
 
@@ -79,7 +80,7 @@ injected there. Hauksbee follows the standard SPICE single-injection practice:
    The minus sign is the summing-junction convention (the returned signal is
    subtracted at the error node), so a stable single-pole loop reads ~+90 deg
    phase margin rather than appearing inverted. `LoopStability::from_response`
-   applies this; magnitude is unchanged, only phase carries the 180 deg.
+   applies this. Magnitude is unchanged, only phase carries the 180 deg.
 
 From the resulting Bode data it computes:
 
@@ -101,7 +102,7 @@ hauksbee run <board> --ac <fstart>:<fstop>:<points>[:lin] \
 
 - `--ac 10:1e6:20` sweeps 10 Hz to 1 MHz at 20 points per decade (append `:lin`
   for linear spacing with `points` total points).
-- `--ac-node OUT` reports the Bode table for net `OUT` (repeatable; defaults to
+- `--ac-node OUT` reports the Bode table for net `OUT` (repeatable, defaults to
   every non-ground net).
 - `--ac-csv sweep.csv` writes `net,freq_hz,mag_db,phase_deg` rows.
 - `--ac-loop FB` additionally reports gain crossover, phase margin, phase
@@ -116,7 +117,7 @@ hauksbee run regulator.kicad_pcb --ac 10:1e6:50 --ac-node VOUT --ac-loop FB
 ## CI
 
 A spec adds an `[ac]` sweep block and `phase_margin` / `ac_gain` assertions. The
-AC analysis is seed-independent (it linearises about the DC operating point), so
+AC analysis is seed-independent (it linearizes about the DC operating point), so
 it is computed once on the biased circuit (overrides, supplies, and net drives
 applied so the bias matches the run) and shared across fuzz seeds.
 
@@ -163,12 +164,12 @@ The solver is validated against closed-form responses to tight tolerances
 | Series LC notch | deep notch `|V| -> 0` at `f0` | `< 1e-6` | pass |
 | Op-amp single-pole loop | `f_c ~ A0*fp` (10 MHz), phase margin `~90 deg` | 10% on `f_c`, `80..100 deg` | pass |
 
-The op-amp loop uses a single dominant pole (`A0 = 1e5`, `fp = 100 Hz`); a
+The op-amp loop uses a single dominant pole (`A0 = 1e5`, `fp = 100 Hz`). A
 single pole gives ~90 deg phase margin, the textbook unconditionally-stable
 case. The CI surface is exercised end-to-end on the same representative
 compensated-feedback loop in `crates/hauksbee-ci/tests/ac_stability.rs`: a
-`phase_margin >= 45` assertion passes, and `phase_margin >= 120` (impossible for
-a single pole) fails with the measured margin reported.
+`phase_margin >= 45` assertion passes, and `phase_margin >= 120` (impossible
+for a single pole) fails with the measured margin reported.
 
 ### Demonstration on real corpus hardware
 
@@ -184,21 +185,21 @@ reports a flat `0 dB` response on the unit-driven `+5V` rail and the resistive
 board exposes a compensated regulator feedback loop that binds to a *continuous*
 small-signal model (corpus regulators bind as behavioral blocks), so the
 loop-stability / phase-margin demonstration is on the **representative**
-single-pole op-amp loop described above, explicitly labelled as representative.
+single-pole op-amp loop described above, explicitly labeled as representative.
 
 ## Honest limitations
 
-- **Averaged, not switching-level.** AC linearises about one DC operating point,
+- **Averaged, not switching-level.** AC linearizes about one DC operating point,
   so it sees the averaged small-signal behaviour. It does not capture
-  cycle-by-cycle switching dynamics of an SMPS; for a switching converter, run
+  cycle-by-cycle switching dynamics of an SMPS. For a switching converter, run
   AC on the averaged model, not the switching-level netlist.
 - **Small-signal only.** It says nothing about large-signal stability,
   slew-limited recovery, or start-up behaviour. Use the transient solver for
   those.
 - **Behavioral blocks.** The behavioral op-amp uses a single-gain tangent (no
-  internal poles unless they are in the surrounding RC network); comparators and
-  digital outputs have no small-signal path and contribute only their quiescent
-  conductance. Switches sit frozen at their OP conductance.
+  internal poles unless they are in the surrounding RC network). Comparators
+  and digital outputs have no small-signal path and contribute only their
+  quiescent conductance. Switches sit frozen at their OP conductance.
 - **Operating-point dependence.** The accuracy of the active-device tangents is
   only as good as the DC operating point. A circuit whose DC solve does not
   converge has no AC analysis.

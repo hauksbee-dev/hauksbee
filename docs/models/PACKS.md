@@ -1,8 +1,7 @@
 # Model packs
 
-A pack is a versioned, shareable bundle of model data.
-Distribution is deliberately plain: a git repo or a tarball. No signing,
-no registry.
+A pack is a versioned, shareable bundle of model data. Distribution stays
+deliberately plain: a git repo or a tarball. No signing, no registry.
 
 ## Layout
 
@@ -11,7 +10,7 @@ my-pack/
   pack.toml          # manifest (required)
   models/            # one or more [[models]] db TOML files (required, >= 1)
     parts.toml
-  firmware/          # optional fixtures for the pack's own tests
+  firmware/           # optional fixtures for the pack's own tests
 ```
 
 ## pack.toml
@@ -26,11 +25,11 @@ provenance = "hand-written"      # hand-written | datasheet-extracted | vendor
 description = "ACME's sensor line"   # optional
 ```
 
-Every field except `description` is required; unknown fields are rejected
-(typos must not vanish silently). Every `models/*.toml` file must pass the
-same validation `hauksbee models lint` applies, including compiling any
-`[models.logic]` block, before anything is installed. Each failure category
-is a named error (`hauksbee-models/src/pack.rs`, `PackError`).
+Every field except `description` is required. Unknown fields are rejected, so
+a typo does not vanish silently. Every `models/*.toml` file must pass the same
+validation `hauksbee models lint` applies, including compiling any
+`[models.logic]` block, before hauksbee installs anything. Each failure
+category is a named error (`hauksbee-models/src/pack.rs`, `PackError`).
 
 ## CLI
 
@@ -43,7 +42,7 @@ hauksbee models resolve <board>  # per component: which entry won, which layer
 
 `add` accepts a pack directory, a local `.tar.gz`/`.tgz`/`.tar` archive
 (unpacked with the system `tar`), or a git URL (shallow-cloned with the system
-`git`). Plain `http://` URLs are refused. Installs land in
+`git`). It refuses plain `http://` URLs. Installs land in
 `~/.hauksbee/packs/<name>@<version>/` and are recorded in
 `~/.hauksbee/packs.toml` (the lockfile-ish record, sibling of the packs dir).
 
@@ -60,8 +59,8 @@ Every model source has an explicit layer (`SourceLayer` in
 | `--models-dir`   | 30       |
 | user SPICE cards | 40       |
 
-The higher layer wins outright; the specificity score only breaks ties within
+The higher layer wins outright. The specificity score only breaks ties within
 a layer. Two packs shipping the same model id is a same-layer conflict:
-reported loudly at load, naming both packs, never silently resolved.
-`hauksbee models resolve <board>` prints the winning entry, layer, and origin
-per component; the pack author's debugging surface.
+hauksbee reports it loudly at load time, naming both packs, and never
+resolves it silently. `hauksbee models resolve <board>` prints the winning
+entry, layer, and origin per component, the pack author's debugging surface.

@@ -1,25 +1,28 @@
 # Device models: built-in, SPICE, and datasheet extraction
 
-Every component the binder meets needs a simulation model. Physics arrives by
-**four** authoring routes, but they collapse into **three** resolution tiers:
-the codex-extracted models and the hand-written behavioural models are both just
-TOML entries that land in the same user-TOML tier, so the resolver does not treat
-them as separate sources.
+Every component the binder meets needs a simulation model. Physics arrives
+by **four** authoring routes, but they collapse into **three** resolution
+tiers: the codex-extracted models and the hand-written behavioural models
+are both just TOML entries that land in the same user-TOML tier, so the
+resolver does not treat them as separate sources.
 
 The four authoring routes:
 
-- **Built-in DB** (`crates/hauksbee-models/db/*.toml`): the curated library that
-  ships with hauksbee. Covers the common families (BC847, 1N4148, 7805, 74HC595,
-  ATmega328P, ...) plus passives resolved straight from the `Value` field.
-- **Datasheet (codex) extraction** (`model-extract` binary): when a part is not
-  in the DB, point hauksbee at the part's PDF datasheet and an LLM backend (codex
-  by default) extracts a model entry in the same TOML schema. The result is
-  dropped into `~/.hauksbee/models/` and loaded as a user-dir entry.
-- **Hand-written behavioural** TOML: a `[models.behavioral]` entry you author by
-  hand for a power IC (see "Behavioural device models" below). Loaded from the
-  same user model directories as the extracted models.
-- **User SPICE**: a `.model` / `.subckt` card you supply always wins, so you can
-  override anything with a vendor-provided SPICE deck.
+- **Built-in DB** (`crates/hauksbee-models/db/*.toml`): the curated library
+  that ships with hauksbee. It covers the common families (BC847, 1N4148,
+  7805, 74HC595, ATmega328P, and so on) plus passives resolved straight from
+  the `Value` field.
+- **Datasheet (codex) extraction** (`model-extract` binary): when a part is
+  not in the DB, point hauksbee at the part's PDF datasheet and an LLM
+  backend (codex by default) extracts a model entry in the same TOML
+  schema. The result lands in `~/.hauksbee/models/` and loads as a
+  user-dir entry.
+- **Hand-written behavioural** TOML: a `[models.behavioral]` entry you
+  author by hand for a power IC (see "Behavioural device models" below).
+  hauksbee loads it from the same user model directories as the extracted
+  models.
+- **User SPICE**: a `.model` / `.subckt` card you supply always wins, so you
+  can override anything with a vendor-provided SPICE deck.
 
 The three resolution tiers, layered by priority (later wins):
 
@@ -29,10 +32,10 @@ builtin TOML DB   <   user TOML (extracted + hand-written)   <   user SPICE
 ```
 
 The resolution order itself lives in `ModelLibrary::resolve`
-(`crates/hauksbee-models/src/lib.rs`), which returns a `source` of exactly one of
-`"spice"`, `"user"`, or `"builtin"`: SPICE cards first, then user TOML entries
-(where both extracted *and* hand-written behavioural models land), then the
-built-in DB.
+(`crates/hauksbee-models/src/lib.rs`), which returns a `source` of exactly
+one of `"spice"`, `"user"`, or `"builtin"`: SPICE cards first, then user
+TOML entries (where both extracted *and* hand-written behavioural models
+land), then the built-in DB.
 
 ## Pointing hauksbee at a datasheet
 
@@ -48,75 +51,79 @@ cargo build -p hauksbee-models --bin model-extract
     --out-dir ~/.hauksbee/models       # default if omitted
 ```
 
-`--kind` is one of: `passive | diode | bjt_npn | bjt_pnp | nmos | pmos | vreg |
-opamp | comparator | analog_switch | digital | dac | adc | shift_register | mcu
-| connector | ignore`.
+`--kind` is one of: `passive | diode | bjt_npn | bjt_pnp | nmos | pmos |
+vreg | opamp | comparator | analog_switch | digital | dac | adc |
+shift_register | mcu | connector | ignore`.
 
-The tool writes `<part>.toml` to the output directory. Any TOML in
-`~/.hauksbee/models/` is loaded as a user-dir entry the next time the library is
-built, so an extracted part is immediately resolvable by value/MPN.
+The tool writes `<part>.toml` to the output directory. The library loads any
+TOML in `~/.hauksbee/models/` as a user-dir entry the next time it builds,
+so an extracted part becomes immediately resolvable by value/MPN.
 
 ## What gets extracted
 
 The extractor pulls two things from the datasheet:
 
-1. **SPICE-level parameters** for the device kind (`is`, `bf`, `nf`, `vaf` for a
-   BJT; `is`, `n`, `rs` for a diode; `vout`, `dropout_v`, `iq_a` for an LDO; and
-   so on). Where a value is not stated verbatim, the model derives it from a
-   stated operating point (e.g. `is` from VBE at a known IC) and says so in a
-   comment, or falls back to a family-typical value tagged `# estimated`.
-2. **Absolute-maximum ratings** into `[models.ratings]`, `max_current_a`,
+1. **SPICE-level parameters** for the device kind (`is`, `bf`, `nf`, `vaf`
+   for a BJT; `is`, `n`, `rs` for a diode; `vout`, `dropout_v`, `iq_a` for
+   an LDO; and so on). Where a value is not stated verbatim, the model
+   derives it from a stated operating point (e.g. `is` from VBE at a known
+   IC) and says so in a comment, or falls back to a family-typical value
+   tagged `# estimated`.
+2. **Absolute-maximum ratings** into `[models.ratings]`: `max_current_a`,
    `max_surge_current_a`, `max_power_w`, `max_voltage_v`,
    `max_junction_temp_c`. These feed the **stress monitor**
-   (`crates/hauksbee-engine/src/stress.rs`): the live operating point is checked
-   against them and faults are raised when a part is driven past its limits. An
-   omitted field means "no limit known".
+   (`crates/hauksbee-engine/src/stress.rs`): it checks the live operating
+   point against them and raises faults when a part runs past its limits.
+   An omitted field means "no limit known".
 
-Every numeric line carries a comment citing where in the datasheet it came from,
-so an extracted model is auditable.
+Every numeric line carries a comment citing where in the datasheet it came
+from, so an extracted model stays auditable.
 
 ## The pipeline, end to end
 
 `crates/hauksbee-models/src/bin/model_extract.rs`:
 
-1. **PDF → text** via `pdftotext` (if present). When it is absent the backend is
-   told to read the PDF directly from its working directory.
-2. **Prompt** built per kind, listing the required params, the ratings to pull,
-   and the physical bounds each value must respect.
+1. **PDF to text** through `pdftotext` (if present). When it is absent, the
+   backend is told to read the PDF directly from its working directory.
+2. **Prompt** built per kind, listing the required params, the ratings to
+   pull, and the physical bounds each value must respect.
 3. **Backend call**:
    - **codex** (default): `codex exec --sandbox workspace-write
-     --skip-git-repo-check --cd <pdf_dir>`. stdin is closed so codex does not
-     block; the final agent message (clean TOML) comes back on stdout while
-     session logging goes to stderr. A hard timeout (10 min) kills a stuck run.
+     --skip-git-repo-check --cd <pdf_dir>`. stdin is closed so codex does
+     not block; the final agent message (clean TOML) comes back on stdout
+     while session logging goes to stderr. A hard timeout (10 min) kills a
+     stuck run.
    - **API** (optional): set `HAUKSBEE_LLM_API_KEY` (+ `HAUKSBEE_LLM_MODEL`,
-     `HAUKSBEE_LLM_BASE_URL`) to use an OpenAI-compatible chat endpoint instead.
-4. **Parse + validate**: the reply is parsed as TOML, the device kind is checked
-   against the requested kind, and every param is range-checked
-   (`crates/hauksbee-models/src/validation.rs`). A failure feeds the error back
-   to the backend for one retry.
+     `HAUKSBEE_LLM_BASE_URL`) to use an OpenAI-compatible chat endpoint
+     instead.
+4. **Parse and validate**: the tool parses the reply as TOML, checks the
+   device kind against the requested kind, and range-checks every param
+   (`crates/hauksbee-models/src/validation.rs`). A failure feeds the error
+   back to the backend for one retry.
 5. **Write** `<part>.toml`.
 
 ### Failure modes
 
 The extractor fails loudly and usefully:
 
-- **No backend**: clear error listing codex / `HAUKSBEE_LLM_API_KEY` / the
-  offline mock as options.
+- **No backend**: a clear error listing codex / `HAUKSBEE_LLM_API_KEY` /
+  the offline mock as options.
 - **codex timeout**: killed after 10 minutes with a message to tighten the
   prompt or use the API backend.
-- **Empty / prose reply**: rejected with "empty reply" or "no [[models]] table"
-  rather than a confusing TOML parse error.
+- **Empty / prose reply**: rejected with "empty reply" or "no [[models]]
+  table" rather than a confusing TOML parse error.
 - **Wrong kind**: a diode card returned for a `bjt_npn` request is rejected
   ("kind mismatch") so the binder never stamps the wrong device.
-- **Out-of-range params**: rejected by the static range check before writing.
+- **Out-of-range params**: rejected by the static range check before
+  writing.
 
 ## Physical validation
 
 Parsing and range checks are necessary but not sufficient: a model can be
 syntactically fine and still physically wrong (an `is` off by orders of
-magnitude, an LDO that does not regulate). So extracted models are validated by
-**simulation** against the datasheet's spec'd operating point, in
-`crates/hauksbee-engine/tests/datasheet_validation.rs`:
+magnitude, an LDO that does not regulate). So extracted models are
+validated by **simulation** against the datasheet's spec'd operating point,
+in `crates/hauksbee-engine/tests/datasheet_validation.rs`:
 
 | kind  | check                                                                 |
 |-------|-----------------------------------------------------------------------|
@@ -124,11 +131,12 @@ magnitude, an LDO that does not regulate). So extracted models are validated by
 | BJT   | DC current gain beta = Ic/Ib **and** Vbe at the bias (BC847: hFE in 110..450, Vbe ~0.66 V at 2 mA) |
 | LDO   | output voltage under a real load, within tolerance (AMS1117-3.3: 3.30 V) |
 
-The same suite has a garbage-rejection test proving a physically absurd model
-(a "transistor" with beta 5, or a junction that never turns on) is rejected by
-simulation rather than silently bound.
+The same suite has a garbage-rejection test proving simulation rejects a
+physically absurd model (a "transistor" with beta 5, or a junction that
+never turns on) rather than silently binding it.
 
-Measured results from real codex extractions of the three reference datasheets:
+Measured results from real codex extractions of the three reference
+datasheets:
 
 | Part         | Simulated                     | Datasheet truth                  |
 |--------------|-------------------------------|----------------------------------|
@@ -140,8 +148,8 @@ Measured results from real codex extractions of the three reference datasheets:
 
 ### Generic power-FET fallbacks (catch-all by footprint)
 
-Two generic placeholder entries in `db/mosfet.toml` bind any unmodeled power FET
-in a recognised power-FET package (DPAK, D2PAK, TO-252, TO-263, TO-220,
+Two generic placeholder entries in `db/mosfet.toml` bind any unmodeled power
+FET in a recognised power-FET package (DPAK, D2PAK, TO-252, TO-263, TO-220,
 PowerPAK SO-8, PQFN, TDSON, LFPAK, DFN-8) to conservative default ratings:
 
 | Entry ID                  | Kind | Rds(on) model | Max voltage | Max current | Notes |
@@ -149,11 +157,12 @@ PowerPAK SO-8, PQFN, TDSON, LFPAK, DFN-8) to conservative default ratings:
 | `generic_nmos_power_pkg`  | nmos | 20 mOhm (rd+rs) | 30 V (conservative) | 20 A | PLACEHOLDER |
 | `generic_pmos_power_pkg`  | pmos | 20 mOhm (rd+rs) | 30 V (conservative) | 20 A | PLACEHOLDER |
 
-These are **not datasheet-sourced**; they are labeled as placeholders. Their purpose
-is to make dissipation and Tj computation possible for unmodeled power FETs rather
-than leaving the thermal monitor blind. A specific part entry (any entry with a
-`value_re` or `mpn_re`) always outscores these catch-alls due to the specificity
-scoring in `matcher.rs` (footprint-only score = 5; value_re adds 30).
+These are **not datasheet-sourced**; hauksbee labels them as placeholders.
+Their purpose is to make dissipation and Tj computation possible for
+unmodeled power FETs, rather than leaving the thermal monitor blind. A
+specific part entry (any entry with a `value_re` or `mpn_re`) always
+outscores these catch-alls, because of the specificity scoring in
+`matcher.rs` (footprint-only score = 5; value_re adds 30).
 
 ### Specific power-FET entries (datasheet-sourced)
 
@@ -163,9 +172,9 @@ scoring in `matcher.rs` (footprint-only score = 5; value_re adds 30).
 | IRF9358      | pmos | -30     | -9.2/ch | 16.3 mOhm @ -10V | SO-8 DUAL | Infineon Rev 2.1 |
 | SIR182DP     | nmos | 100     | 21     | 17 mOhm @ 10V | PowerPAK SO-8 | Vishay Doc 66664 Rev E 2022-07-13 |
 
-IRF9358 is a dual P-channel device; the entry models single-channel electrical
-behaviour. The DUAL nature and full pin map for both channels is documented in the
-TOML comment.
+IRF9358 is a dual P-channel device; the entry models single-channel
+electrical behaviour. The TOML comment documents the DUAL nature and the
+full pin map for both channels.
 
 ### AFE, gate drivers, and current-sense amplifiers
 
@@ -179,46 +188,49 @@ TOML comment.
 | INA186       | opamp   | VS 26 V abs max     | TI SBOS791A Rev A 2020. Bidirectional current-sense. |
 | INA2181      | opamp   | VS 26 V abs max     | TI SBOS831A Rev A 2021. DUAL (two INA181 channels in MSOP-10). |
 
-The bq76952, LM5107, and LM5109 entries are explicitly minimal-resolve: they give
-the part an id, kind, and ratings so it stops binding open, but internal logic is
-not modeled. This is documented honestly in the TOML comments and in the
-description field. A full behavioral model would require a `[models.behavioral]`
-block (see the LTC4020 entry in `db/power_ics.toml` for the pattern).
+The bq76952, LM5107, and LM5109 entries are explicitly minimal-resolve: they
+give the part an id, kind, and ratings so it stops binding open, but
+hauksbee does not model its internal logic. This is documented honestly in
+the TOML comments and in the description field. A full behavioral model
+would need a `[models.behavioral]` block (see the LTC4020 entry in
+`db/power_ics.toml` for the pattern).
 
 ## Tests
 
 - **Offline (always run in CI)**:
   - `hauksbee-models` `offline_pipeline_with_mock_reply` drives the whole
-    extractor with a canned reply via `HAUKSBEE_EXTRACT_MOCK_REPLY=<file>`, no
-    codex, no network.
+    extractor with a canned reply through `HAUKSBEE_EXTRACT_MOCK_REPLY=<file>`,
+    no codex, no network.
   - `hauksbee-engine` `fixture_*` physical-validation tests simulate canned
     models and assert the datasheet numbers.
-  - `hauksbee-models` `tests/power_fet_afe_resolve.rs` (10 tests): resolves each
-    new specific part (IPA045N10N3G, IRF9358, SIR182DP, bq76952, LM5107, LM5109,
-    INA181, INA2181) by value and asserts kind + sane ratings; also asserts that
-    the generic power-FET fallback binds an unknown FET-in-DPAK by footprint, and
-    that a specific value entry beats the catch-all when both match.
-- **Live (manual)**: `hauksbee-models` `extract_bc847_live` is `#[ignore]`d and
-  runs real codex against `testdata/datasheets/BC847.pdf`. See
+  - `hauksbee-models` `tests/power_fet_afe_resolve.rs` (10 tests): resolves
+    each new specific part (IPA045N10N3G, IRF9358, SIR182DP, bq76952,
+    LM5107, LM5109, INA181, INA2181) by value and asserts kind + sane
+    ratings; it also asserts that the generic power-FET fallback binds an
+    unknown FET-in-DPAK by footprint, and that a specific value entry beats
+    the catch-all when both match.
+- **Live (manual)**: `hauksbee-models` `extract_bc847_live` is `#[ignore]`d
+  and runs real codex against `testdata/datasheets/BC847.pdf`. See
   `crates/hauksbee-models/README_DATASHEET.md`.
 
 # Behavioural device models (power ICs)
 
-The SPICE-level kinds (R/C/L, diode, BJT, MOSFET, switches, simple regulators)
-cannot capture the *internal logic* of power ICs: a charger's input-current
-limit servo, a PMIC's ship-mode pull to a rail, a balancer's bleed FETs, a
-sequencer's state machine. For those, a model entry carries a declarative
-`[models.behavioral]` block, parsed by `crates/hauksbee-models/src/behavioral.rs`
-and realised at run time by `crates/hauksbee-engine/src/behavioral.rs`.
+The SPICE-level kinds (R/C/L, diode, BJT, MOSFET, switches, simple
+regulators) cannot capture the *internal logic* of power ICs: a charger's
+input-current limit servo, a PMIC's ship-mode pull to a rail, a balancer's
+bleed FETs, a sequencer's state machine. For those, a model entry carries a
+declarative `[models.behavioral]` block, parsed by
+`crates/hauksbee-models/src/behavioral.rs` and realised at run time by
+`crates/hauksbee-engine/src/behavioral.rs`.
 
 A behavioural device participates in the solve loop exactly the way the
-configurable power supplies do: it stamps controllable Thevenin legs and sense
-resistors into the circuit once, and the scheduler calls its `update` between
-solver chunks to recompute each leg from the previous chunk's solved node
-voltages (iterate-to-consistency per chunk). It never adds device kinds to the
-inner Newton loop, every behaviour is expressed with the existing
-`Vsource` / `Isource` / `Resistor` primitives, so the partitioned solver is
-untouched.
+configurable power supplies do: it stamps controllable Thevenin legs and
+sense resistors into the circuit once, and the scheduler calls its `update`
+between solver chunks to recompute each leg from the previous chunk's solved
+node voltages (iterate-to-consistency per chunk). It never adds device kinds
+to the inner Newton loop. Every behaviour is expressed with the existing
+`Vsource` / `Isource` / `Resistor` primitives, so the partitioned solver
+stays untouched.
 
 ## The four declarative facts
 
@@ -226,71 +238,77 @@ A `[models.behavioral]` block is a bag of optional facts:
 
 1. **Pins with semantics**: `[models.behavioral.pins.<role>]`:
    - `pull_to = "<rail role>"` + `pull_ohms = <ohms>`: an internal pull to
-     another named pin's rail (the nPM1300 SHPHLD pull to VSYS). The runtime
-     stamps a resistor from the pin to the rail node.
-   - `open_drain = true` + `od_ohms = <ohms>`: an open-drain output the FSM can
-     assert (a charger STAT pin).
-   - `enable_threshold_v` / `enable_active_high`: an enable input read against a
-     threshold.
+     another named pin's rail (the nPM1300 SHPHLD pull to VSYS). The
+     runtime stamps a resistor from the pin to the rail node.
+   - `open_drain = true` + `od_ohms = <ohms>`: an open-drain output the FSM
+     can assert (a charger STAT pin).
+   - `enable_threshold_v` / `enable_active_high`: an enable input read
+     against a threshold.
 
 2. **Finite state machine**: `[models.behavioral.fsm]`:
    - `states = [...]`, optional `initial`.
-   - `[[models.behavioral.fsm.transitions]]` with `from`, `to`, an `evalexpr`
-     `guard` over `v_<pin>` / `t` / `t_in_state` / params, and optional
-     `min_dwell_s`.
-   - `[models.behavioral.fsm.state_pins.<state>.<pin>]` overrides: drive a pin
-     (`drive_volts`), assert its open drain (`od_assert`), or tri-state it
-     (`hi_z`) while that state is active.
+   - `[[models.behavioral.fsm.transitions]]` with `from`, `to`, an
+     `evalexpr` `guard` over `v_<pin>` / `t` / `t_in_state` / params, and
+     optional `min_dwell_s`.
+   - `[models.behavioral.fsm.state_pins.<state>.<pin>]` overrides: drive a
+     pin (`drive_volts`), assert its open drain (`od_assert`), or tri-state
+     it (`hi_z`) while that state is active.
 
 3. **Averaged converter**: `[models.behavioral.converter]`:
    - `topology` (`buck`/`boost`/`buck_boost`), `out_pin`, `in_pin`,
      `vout_setpoint`, `efficiency`, optional `iout_limit_a`.
-   - `[models.behavioral.converter.iin_program]`: a programmable input-current
-     limit set by a sense resistor and a programming resistor, both read off the
-     board by reference designator (`rsense_ref`, `prog_ref`). The limit is
-     `v_sense / rsense`, where `v_sense` scales linearly with the programming
-     resistor up to `v_sense_full`. The runtime regulates the output, folds it
-     back under the output limit, and throttles so the reflected input draw never
+   - `[models.behavioral.converter.iin_program]`: a programmable
+     input-current limit set by a sense resistor and a programming
+     resistor, both read off the board by reference designator
+     (`rsense_ref`, `prog_ref`). The limit is `v_sense / rsense`, where
+     `v_sense` scales linearly with the programming resistor up to
+     `v_sense_full`. The runtime regulates the output, folds it back under
+     the output limit, and throttles so the reflected input draw never
      exceeds the input limit.
 
 4. **Expression laws**: `[[models.behavioral.laws]]`:
-   - A `current` (from pin `a` to `b`) or `voltage` (forced on pin `a` behind
-     `r_ohms`) whose value is an `evalexpr` `expr` over `v_<pin>`, `t`, the param
-     keys, and `state_<name>` booleans. Optional `only_in_state`.
+   - A `current` (from pin `a` to `b`) or `voltage` (forced on pin `a`
+     behind `r_ohms`) whose value is an `evalexpr` `expr` over `v_<pin>`,
+     `t`, the param keys, and `state_<name>` booleans. Optional
+     `only_in_state`.
 
 ### Why `evalexpr` (and not `rhai`)
 
-The laws and FSM guards are pure arithmetic / boolean expressions over a bound
-context (pin voltages, the active state, params). `evalexpr` is a small,
-dependency-light evaluator that does exactly that and **nothing else**: no
-functions, loops, closures, filesystem, or network. `rhai` is a full embedded
-scripting language, more power than these declarative laws need and a much
-larger surface to sandbox. We pin `evalexpr` with `default-features = false`
-(dropping its optional rand/regex/serde), compile each expression once at stamp
-time, and evaluate it against a fresh per-chunk context, so a law is sandboxed
-arithmetic with no side effects.
+The laws and FSM guards are pure arithmetic / boolean expressions over a
+bound context (pin voltages, the active state, params). `evalexpr` is a
+small, dependency-light evaluator that does exactly that and **nothing
+else**: no functions, loops, closures, filesystem, or network. `rhai` is a
+full embedded scripting language, more power than these declarative laws
+need and a much larger surface to sandbox. We pin `evalexpr` with
+`default-features = false` (dropping its optional rand/regex/serde),
+compile each expression once at stamp time, and evaluate it against a fresh
+per-chunk context, so a law stays sandboxed arithmetic with no side
+effects.
 
 ## Board-programmable resistors
 
-A power IC's behaviour is often set by an external resistor (the LTC4020 ILIMIT
-pin, the LTC6803 cell-tie network). The binder reads those resistor *values* off
-the actual board:
+A power IC's behaviour is often set by an external resistor (the LTC4020
+ILIMIT pin, the LTC6803 cell-tie network). The binder reads those resistor
+*values* off the actual board:
 
-- A converter's `iin_program` names `rsense_ref` / `prog_ref` (e.g. `"R49"`,
-  `"R8"`); the binder substitutes the on-board value.
-- Any param `<name>_from_ref = "Rxx"` is rewritten to `<name> = ohms(Rxx)`. If
-  the resistor is *absent* (the revision replaced it, e.g. the LTC6803 tie R52
-  replaced by a blocking diode), the binder substitutes a large open resistance,
-  so a law dividing by it contributes ~0.
+- A converter's `iin_program` names `rsense_ref` / `prog_ref` (e.g.
+  `"R49"`, `"R8"`); the binder substitutes the on-board value.
+- Any param `<name>_from_ref = "Rxx"` is rewritten to
+  `<name> = ohms(Rxx)`. If the resistor is *absent* (the revision replaced
+  it, e.g. the LTC6803 tie R52 replaced by a blocking diode), the binder
+  substitutes a large open resistance, so a law dividing by it contributes
+  ~0.
 
-This is what lets one model produce different behaviour on two board revisions
-with no model edit; the basis of the project's two-sided fault validations.
+This is what lets one model produce different behaviour on two board
+revisions with no model edit, the basis of the project's two-sided fault
+validations.
 
 ## Adding a custom part without recompiling
 
 Models layer `builtin < user TOML < user SPICE` (later wins), and both
-datasheet-extracted and hand-written behavioural models share the user-TOML tier.
-A custom behavioural part is just a TOML file dropped into a user directory:
+datasheet-extracted and hand-written behavioural models share the user-TOML
+tier. A custom behavioural part is just a TOML file dropped into a user
+directory:
 
 - `~/.hauksbee/models/`, where datasheet extraction writes.
 - `~/.config/hauksbee/models/`, your own custom models.
@@ -299,8 +317,8 @@ A custom behavioural part is just a TOML file dropped into a user directory:
 ### Worked example: a "crazy" custom charger
 
 Suppose you have a part `ACME-BUCK-9000`, a buck charger whose input-current
-limit is programmed by a resistor `R42` against a 0.005 ohm shunt `R43`, with a
-STAT open-drain pin that pulls low while charging. Drop this into
+limit is programmed by a resistor `R42` against a 0.005 ohm shunt `R43`,
+with a STAT open-drain pin that pulls low while charging. Drop this into
 `~/.config/hauksbee/models/acme.toml`:
 
 ```toml
@@ -359,17 +377,18 @@ Then:
 hauksbee run my_board.kicad_pcb --models-dir ~/.config/hauksbee/models
 ```
 
-The part binds with no recompile: the converter regulates `bat` to 8.4 V with an
-input-current limit read from `R42`/`R43`, and the STAT pin pulls low once the
-FSM enters `charging`.
+The part binds with no recompile: the converter regulates `bat` to 8.4 V
+with an input-current limit read from `R42`/`R43`, and the STAT pin pulls
+low once the FSM enters `charging`.
 
 ## The escape hatch: a custom Rust behaviour
 
-Some parts have behaviour no finite declarative schema captures, a closed-loop
-controller with internal state, a sequencer with data-dependent timing, a part
-whose output depends on an I2C register the firmware wrote. For those, implement
-the `CustomBehavior` trait (`crates/hauksbee-engine/src/behavioral.rs`) in Rust
-and register it before binding:
+Some parts have behaviour no finite declarative schema captures: a
+closed-loop controller with internal state, a sequencer with data-dependent
+timing, a part whose output depends on an I2C register the firmware wrote.
+For those, implement the `CustomBehavior` trait
+(`crates/hauksbee-engine/src/behavioral.rs`) in Rust and register it before
+binding:
 
 ```rust
 use hauksbee_engine::{CustomBehavior, CustomRegistry, bind_board_with};
@@ -409,32 +428,34 @@ reg.register("ACME-CTRL-X", || Box::new(MyController { isrc: None, integ: 0.0 })
 let bound = bind_board_with(&board, &ModelLibrary::builtin(), &reg);
 ```
 
-The factory is matched against the component's resolved model id, value, or MPN.
-On a hit the binder builds the custom device instead of the declarative one; the
-scheduler then drives it each chunk exactly like a declarative behavioural
-device. You only ever mutate source values between chunks; the same
-convergence-per-chunk pattern the supplies and declarative devices use, so the
-inner Newton loop is untouched.
+The factory matches against the component's resolved model id, value, or
+MPN. On a hit the binder builds the custom device instead of the
+declarative one, and the scheduler then drives it each chunk exactly like a
+declarative behavioural device. You only ever mutate source values between
+chunks, the same convergence-per-chunk pattern the supplies and declarative
+devices use, so the inner Newton loop stays untouched.
 
 ## Extracting a behavioural model from a datasheet
 
-`model-extract` accepts the behavioural families `charger`, `pmic`, `balancer`
-as `--kind`. Each emits the base kind in the TOML (`vreg` / `digital`) plus a
-`[models.behavioral]` block, and the prompt is engineered per family (a charger
-is asked for its converter and the ILIMIT/RSENSE programming; a PMIC for its
-internal pin pulls; a balancer for its leak law):
+`model-extract` accepts the behavioural families `charger`, `pmic`,
+`balancer` as `--kind`. Each emits the base kind in the TOML (`vreg` /
+`digital`) plus a `[models.behavioral]` block, and the prompt is engineered
+per family (a charger is asked for its converter and the ILIMIT/RSENSE
+programming; a PMIC for its internal pin pulls; a balancer for its leak
+law):
 
 ```bash
 model-extract --pdf testdata/datasheets/LTC4020.pdf --part LTC4020 --kind charger
 ```
 
-A live codex run against the LTC4020 datasheet produced a model that agreed with
-the hand-written one on the load-bearing structure, base kind `vreg`, the exact
-pin map, `topology = "buck_boost"`, `out_pin`/`in_pin`, `vout_setpoint = 28.8`
-(8S LiFePO4), `efficiency = 0.92`, and a populated `iin_program` block, and
-honestly left the ILIMIT transfer-function constants at zero because the
-datasheet excerpt did not state the programming equation (those were calibrated
-in the hand model from the documented 60 W/88 W revision evidence, which the
-datasheet alone does not contain). The captured output is regression-locked
-offline in `crates/hauksbee-models/tests/codex_behavioral_fixture.rs`; the live
-run is the `#[ignore]`d `extract_ltc4020_charger_live`.
+A live codex run against the LTC4020 datasheet produced a model that agreed
+with the hand-written one on the load-bearing structure, base kind `vreg`,
+the exact pin map, `topology = "buck_boost"`, `out_pin`/`in_pin`,
+`vout_setpoint = 28.8` (8S LiFePO4), `efficiency = 0.92`, and a populated
+`iin_program` block, and honestly left the ILIMIT transfer-function
+constants at zero because the datasheet excerpt did not state the
+programming equation (the hand model calibrated those from the documented
+60 W/88 W revision evidence, which the datasheet alone does not contain).
+The captured output is regression-locked offline in
+`crates/hauksbee-models/tests/codex_behavioral_fixture.rs`; the live run is
+the `#[ignore]`d `extract_ltc4020_charger_live`.

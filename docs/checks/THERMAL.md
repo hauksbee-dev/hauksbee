@@ -76,9 +76,9 @@ already encodes (a 0402 at 1/16 W reaching its rated rise is the same physics):
 | 2010      | 120            |
 | 2512      | 80             |
 
-`theta_jc_c_per_w` (junction-to-case) can also be carried in the model DB. It is
-informational today; the free-air estimate uses `theta_JA`. A heatsinked path
-(`theta_JC + theta_CS + theta_SA`) is a future extension.
+`theta_jc_c_per_w` (junction-to-case) can also be carried in the model DB. It
+is informational today. The free-air estimate uses `theta_JA`. A heatsinked
+path (`theta_JC + theta_CS + theta_SA`) is a future extension.
 
 ### Maximum junction temperature
 
@@ -110,13 +110,13 @@ reference board).
 
 What it deliberately does **not** capture:
 
-- **Neighbour coupling / heat spreading.** A hot regulator next to a small-signal
-  transistor will, in reality, raise that transistor's case temperature. This
-  model does not propagate one part's heat into another's ambient. Doing that
-  properly is a board thermal field problem (a thermal FEM/CFD over the copper,
-  the dielectric, the air), and faking a coupling coefficient from placement
-  distance would invent numbers with no datasheet behind them. We do not fake a
-  field solve.
+- **Neighbor coupling / heat spreading.** A hot regulator next to a
+  small-signal transistor will, in reality, raise that transistor's case
+  temperature. This model does not propagate one part's heat into another's
+  ambient. Doing that properly is a board thermal field problem (a thermal
+  FEM/CFD over the copper, the dielectric, the air), and faking a coupling
+  coefficient from placement distance would invent numbers with no datasheet
+  behind them. The model does not fake a field solve.
 - **Copper-pour / layer-count effects.** The `theta_JA` defaults assume a typical
   board. A massive ground pour under a DPAK, or a 4-layer stackup, lowers the
   real theta_JA below these still-air figures (the estimate is then
@@ -128,8 +128,8 @@ What it deliberately does **not** capture:
   exactly why the over-temperature check is treated as a **sustained** rating
   (it must persist across several solver chunks before it trips), the same way
   the continuous over-current check is. A device that dissipates only in short
-  bursts will read its steady-state-at-peak temperature, which over-estimates;
-  that is the safe direction.
+  bursts will read its steady-state-at-peak temperature, which over-estimates.
+  That is the safe direction.
 
 If you need true board spreading or transient junction response, that is a
 thermal FEM/CFD coupled to the electrical solve, and it is out of scope for this
@@ -141,8 +141,8 @@ estimator by design.
   co-sim and prints a per-device junction-temperature table, marking any part
   over its limit. Informational (exits 0).
 - **`hauksbee check-code <code> [--ambient C]`**: the over-temperature fault
-  shows up in the fault report alongside the others; a destroyed part fails the
-  check.
+  shows up in the fault report alongside the others. A destroyed part fails
+  the check.
 - **`hauksbee-ci`**: the `max_temp` assertion (per-device or explicit ceiling)
   and the top-level `ambient_c` key. The `no_faults` assertion also catches
   over-temperature. See [CI.md](../ci/CI.md).

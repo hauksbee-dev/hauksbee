@@ -1,8 +1,8 @@
 # Contributing to hauksbee
 
 Thanks for looking. This document covers getting a build, running the tests
-(including the parts that need boards we cannot ship), and what a change is
-expected to clear before it lands.
+(including the parts that need boards we cannot ship), and what a change must
+clear before it lands.
 
 ## Getting a build
 
@@ -12,20 +12,20 @@ cd hauksbee
 cargo build --workspace
 ```
 
-The toolchain is pinned in `rust-toolchain.toml`, so rustup will fetch the right
-version automatically. No system dependencies are needed for the default build.
+`rust-toolchain.toml` pins the toolchain version, so rustup fetches the right
+one automatically. The default build needs no system dependencies.
 
-Optional co-simulation backends (simavr for AVR, Renode for ARM, QEMU for
-Espressif) are detected at runtime, not required to build. `hauksbee doctor`
-reports which ones this machine has, and the web UI offers one-click installs
-for the missing ones. See `docs/cosim/SIMULATORS.md`.
+hauksbee detects optional co-simulation backends (simavr for AVR, Renode for
+ARM, QEMU for Espressif) at runtime. The build does not need them. `hauksbee
+doctor` reports which ones this machine has, and the web UI offers one-click
+installs for the missing ones. See `docs/cosim/SIMULATORS.md`.
 
 **Licensing note:** hauksbee is Apache-2.0, and the `NOTICE` file must ride
 along with any redistribution. The `avr` feature links the GPL `libsimavr`, so
 the default build shape is GPL-encumbered. The GPL-free shape is
-`--no-default-features --features renode,qemu`, and CI asserts that it stays
-genuinely avr-free rather than merely compiling. See
-`docs/about/release-and-licensing.md` before touching the feature graph.
+`--no-default-features --features renode,qemu`. CI checks that this shape
+stays genuinely avr-free rather than merely compiling. Read
+`docs/about/release-and-licensing.md` before you touch the feature graph.
 
 ## Running the tests
 
@@ -39,8 +39,8 @@ Some tests need real boards. See below.
 ### The board corpus
 
 hauksbee's central claim is that its checks produce zero false positives across
-a large corpus of real hardware. That corpus is mostly public open hardware, and
-you can reproduce it:
+a large corpus of real hardware. That corpus is mostly public open hardware.
+You can reproduce it:
 
 ```bash
 scripts/fetch-corpus.sh                   # fetches into ./board-corpus
@@ -48,21 +48,21 @@ export HAUKSBEE_CORPUS_DIR=$PWD/board-corpus
 cargo test --workspace --features avr
 ```
 
-Each board is fetched from its upstream project at a pinned commit and verified
-against a checksum, so the corpus you get is the corpus the gate was measured
-against. The boards are **not** vendored into this repository: they carry
-CC BY-SA, GPL-3.0, and CERN-OHL licences, and fetching means you obtain each one
-from its author under that author's terms rather than through us.
+The fetch script pulls each board from its upstream project at a pinned commit
+and checks it against a checksum, so the corpus you get is the corpus the gate
+was measured against. This repository does **not** vendor the boards. They
+carry CC BY-SA, GPL-3.0, and CERN-OHL licences, and fetching means you get
+each one from its author under that author's terms rather than through us.
 
 Without the corpus, corpus-dependent tests report as ignored, never as passed.
-If you want a missing corpus to be a hard failure instead (recommended in CI):
+To make a missing corpus a hard failure instead (recommended in CI):
 
 ```bash
 HAUKSBEE_REQUIRE_CORPUS=1 cargo test --workspace --features avr
 ```
 
-A handful of boards cannot be redistributed at all and are absent from the
-manifest. Nothing in the public test suite depends on them.
+A handful of boards carry no redistribution rights at all, so they are absent
+from the manifest. Nothing in the public test suite depends on them.
 
 ## What a change has to clear
 
@@ -73,18 +73,19 @@ cargo test --workspace
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 ```
 
-CI runs the same four. The module headers are rendered documentation, so
-`cargo doc --open` is how you read them the way a reader will. Beyond that:
+CI runs the same four checks. `cargo doc` renders the module headers as
+documentation, so `cargo doc --open` is how you read them the way a reader
+will. Beyond that:
 
 **A check that fires must be right.** The corpus gate exists because a hardware
 tool that cries wolf gets switched off, and a switched-off tool catches nothing.
 If you add or widen a check, run it across the corpus and show it stays quiet on
-boards that are fine. A new check that lights up on healthy boards will not land
-however elegant it is, and "it found a real issue on one board" does not excuse
-noise on twenty others.
+boards that are fine. A new check that lights up on healthy boards will not
+land, however well-built it is. "It found a real issue on one board" does not
+excuse noise on twenty others.
 
 **Never report a result you cannot stand behind.** The codebase separates "this
-failed" from "this could not be answered": a run that cannot produce a
+failed" from "this could not be answered". A run that cannot produce a
 meaningful answer exits 3 rather than 0, and a report that would be misleading
 says so instead of rendering. If your change can produce a number that might be
 wrong, make it say so.
@@ -94,8 +95,8 @@ missing, and so reports success having checked nothing, is worse than no test.
 Use `#[ignore]` with a reason if something is genuinely optional.
 
 **Comments explain why.** The what is in the code. Existing comments record the
-reasoning and the failure that motivated a piece of design; match that. House
-style has no em dashes.
+reasoning and the failure that motivated a piece of design. Match that style.
+House rule: no em dashes.
 
 ## Where things live
 
@@ -109,25 +110,25 @@ The short version:
 | `hauksbee-ir` | Circuit representation and the SPICE front-end |
 | `hauksbee-solve` | Sparse MNA solver: DC, transient, AC |
 | `hauksbee-mcu` | Emulator backends for firmware co-simulation |
-| `hauksbee-engine` | Binds it together; the checks, the reports, the CLI |
+| `hauksbee-engine` | Binds it together: the checks, the reports, the CLI |
 | `hauksbee-ci` | Declarative TOML specs and assertions for pipelines |
 | `hauksbee-server` | The web front door |
 
 ## The CLA
 
 First-time contributors sign a contributor licence agreement (`CLA.md`) by
-replying to a bot comment on their first pull request; it takes one sentence
+replying to a bot comment on their first pull request. It takes one sentence
 and one click. Short version: you keep your copyright, the project gets a
-licence broad enough to keep its options open, and the reasoning is stated
-plainly in the document rather than buried in legalese.
+licence broad enough to keep its options open, and the document states the
+reasoning plainly rather than burying it in legalese.
 
 ## Reporting bugs
 
 A board file that reproduces the problem is worth more than any description. If
-you cannot share the board, a minimal reconstruction is the next best thing, and
+you cannot share the board, a minimal reconstruction is the next best thing.
 `hauksbee to-code <board>` produces an editable text form that is often small
 enough to paste.
 
-For security issues, see `SECURITY.md`; please do not open a public issue.
+For security issues, see `SECURITY.md`. Do not open a public issue.
 
-Participation is covered by `CODE_OF_CONDUCT.md`.
+`CODE_OF_CONDUCT.md` covers participation.

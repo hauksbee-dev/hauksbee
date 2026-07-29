@@ -1,9 +1,9 @@
 # Project layout: how to set up a board so hauksbee can run it
 
-You do **not** need a CI pipeline to use hauksbee. The core workflow is one local
-command pointed at a few files that live in your hardware repo. GitHub Actions, a
-KiCad plugin, and a pre-commit hook are optional wrappers around that same
-command, start local, add them later if you want.
+You do **not** need a CI pipeline to use hauksbee. The core workflow is one
+local command pointed at a few files that live in your hardware repo.
+GitHub Actions, a KiCad plugin, and a pre-commit hook are optional wrappers
+around that same command. Start local, and add them later if you want.
 
 ## The minimum you need
 
@@ -21,8 +21,8 @@ To boot-and-check a board, hauksbee needs, at most, three things:
 
 ## A recommended directory layout
 
-Keep the spec checked in next to the board, so a hardware change and the test
-that guards it move together:
+Keep the spec checked in next to the board. This way, a hardware change and
+the test that guards it move together:
 
 ```
 my-board/
@@ -37,8 +37,8 @@ my-board/
 └── README.md
 ```
 
-Nothing here is mandatory, hauksbee takes explicit paths, so you can arrange
-files however you like. This layout is just the one the examples assume.
+Nothing here is mandatory. Hauksbee takes explicit paths, so you can arrange
+files however you like. This layout is only the one the examples assume.
 
 ## The spec file
 
@@ -81,11 +81,11 @@ hauksbee-ci run ci/power-up.toml
 echo $?          # 0 = green, 1 = red
 ```
 
-That is the whole loop. It extracts the circuit from the board file, binds every
-component to a device model, attaches the supplies, boots the firmware on the
-emulated MCU (if given), runs the simulation, and evaluates the assertions,
-exiting non-zero if any fail, and writing a JUnit XML report and inline
-annotations any CI system can ingest.
+That is the whole loop. Hauksbee extracts the circuit from the board file,
+binds every component to a device model, attaches the supplies, and boots
+the firmware on the emulated MCU, if given. It then runs the simulation and
+evaluates the assertions. It exits non-zero if any assertion fails, and it
+writes a JUnit XML report and inline annotations any CI system can ingest.
 
 For a quick look without a spec, point `hauksbee` straight at the board:
 
@@ -103,5 +103,5 @@ unchanged:
 - **KiCad plugin**: run it from the PCB editor: [`../integrations/kicad-plugin/`](../integrations/kicad-plugin/).
 - **pre-commit hook**: gate commits locally: [`../integrations/pre-commit/`](../integrations/pre-commit/).
 
-Each of these just invokes `hauksbee-ci run <spec>`; the same command you
+Each of these just invokes `hauksbee-ci run <spec>`, the same command you
 already run by hand.

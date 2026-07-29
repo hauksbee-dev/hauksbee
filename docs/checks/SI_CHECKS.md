@@ -4,10 +4,10 @@ Seven pure-arithmetic, physics-grounded static checks over the data hauksbee
 already extracts (copper geometry, netlists, part values, board stackup) plus a
 small table of cited datasheet constants. Each targets a bug class that really
 ships. Checks 1 to 5 live in `crates/hauksbee-extract/src/si.rs` (+ the
-`si/impedance.rs` submodule for check 5); checks 6 (trace ampacity) and 7
+`si/impedance.rs` submodule for check 5). Checks 6 (trace ampacity) and 7
 (input-cap ripple) live in `hauksbee-engine` `checks::ampacity` / `checks::ripple`
 because their current attribution needs the bound DB models, and are merged into
-the same `--si` report (the way `--lint` merges the strap lint). All run as
+the same `--si` report, the way `--lint` merges the strap lint. All run as
 `hauksbee run <board> --si`, and follow the same calibration discipline as the
 rest of the tool:
 
@@ -24,7 +24,7 @@ The checks were swept across the full corpus (KiCad `.kicad_pcb` + Eagle `.brd`,
 Pico-PC, Watchy + history, ZSWatch mainboard + DevKit, LumenPnP, Corne, Lily58,
 RP2040-minimal). **Result: zero findings on every known-good board.** Four tool
 defects were found and fixed by chasing each surprise to the file (the Tarski
-meta-lesson); they are recorded below.
+meta-lesson). They are recorded below.
 
 Severity ladder: `high` (functional failure), `medium` (margin / robustness),
 `low` (cosmetic), `info` (a computed value, not a finding).
@@ -35,17 +35,17 @@ Severity ladder: `high` (functional failure), `medium` (margin / robustness),
 
 ### Model
 
-A parallel-resonant crystal is specified for a load capacitance `CL`; the board
-must present that `CL` across the crystal terminals for it to run on frequency.
-The two external load caps `C1`, `C2` (one per terminal to ground) and the
-parasitic stray `Cstray` combine as
+A parallel-resonant crystal is specified for a load capacitance `CL`. The
+board must present that `CL` across the crystal terminals for it to run on
+frequency. The two external load caps `C1`, `C2` (one per terminal to ground)
+and the parasitic stray `Cstray` combine as
 
 ```
 CL_board = (C1 * C2) / (C1 + C2) + Cstray
 ```
 
-The two caps are in series across the crystal (both return to ground); the stray
-adds in parallel. `Cstray` folds the short PCB-trace parasitics and the MCU/IC
+The two caps are in series across the crystal (both return to ground). The
+stray adds in parallel. `Cstray` folds the short PCB-trace parasitics and the MCU/IC
 pin capacitance.
 
 ### Constants, thresholds and error band
@@ -55,11 +55,11 @@ pin capacitance.
 - `CL_TOLERANCE = 8.0 pF` - a finding requires the board CL to deviate from the
   crystal spec by more than 8 pF. This is set wide *on purpose*: a typical MHz
   crystal trims +-20..30 ppm, ~4-6 pF of CL slack near 18 pF, and the stray model
-  carries +-3 pF; summing these, only past 8 pF can the deviation be real rather
+  carries +-3 pF. Summing these, only past 8 pF can the deviation be real rather
   than model noise. So the model uncertainty can never produce the finding on its
   own.
 - Severity: `high` when `CL_board < 0.5 * spec` or `> 1.6 * spec` (the oscillator
-  may not start or is grossly off); `medium` otherwise.
+  may not start or is grossly off). `medium` otherwise.
 
 ### The honest reach
 
@@ -78,13 +78,13 @@ CL is unknown -> info, not a guess.
 
 When CL is unknown, the check emits an `info` note with the computed `CL_board`
 and no judgement. When *both* load caps are absent on a discrete crystal it fires
-`medium` (a real omission); a single missing cap is `info` (often the
-series-resistor topology we could not trace).
+`medium` (a real omission). A single missing cap is `info` (often the
+series-resistor topology that could not be traced).
 
 Parts that integrate their own load caps are recognised and never flagged for
 "missing caps":
 
-- **Ceramic resonators** (Murata CSTxE / CERALOCK, ZTT; or a `RESONATOR`
+- **Ceramic resonators** (Murata CSTxE / CERALOCK, ZTT, or a `RESONATOR`
   footprint): the 3-terminal centre pin is the integrated cap node.
 - **RTCs with integrated oscillator caps**: PCF8523, PCF8563, PCF85063, RV-8263,
   RV-3028, DS3231.
@@ -134,14 +134,14 @@ Too-weak a pull (R too high) or too much bus capacitance blows it.
 
 Bus capacitance is `Cbus = devices * 10 pF + trace_length * 1.0 pF/mm`:
 
-- 10 pF per I2C device pin (a common datasheet figure; refinable per part).
-- 1.0 pF/mm of routed trace (a conservative microstrip-over-plane figure; the
-  geometry refinement is a documented future improvement - the device-count term
-  is the floor used today).
+- 10 pF per I2C device pin (a common datasheet figure, refinable per part).
+- 1.0 pF/mm of routed trace (a conservative microstrip-over-plane figure. The
+  geometry refinement is a documented future improvement, the device-count
+  term is the floor used today).
 
 This **upgrades** the existing netlint `missing_i2c_pullup` check from
-"is a pull-up present" to "is the pull-up *sufficient*". No-pull-up is netlint's
-job; this check only audits a bus that already has a pull.
+"is a pull-up present" to "is the pull-up *sufficient*". No-pull-up is
+netlint's job. This check only audits a bus that already has a pull.
 
 ### Threshold and mode inference
 
@@ -159,13 +159,13 @@ otherwise. This is exactly what keeps it silent on the proven-good corpus buses.
 | ZSWatch Extension bus | 1.8 kohm | 8 | ~80 pF | ~122 ns | ok |
 
 The ZSWatch 8-device Extension bus is the corpus's closest-to-the-limit I2C bus
-and still sits ~8x under standard mode; the designers chose 1.8 kohm precisely
+and still sits ~8x under standard mode. The designers chose 1.8 kohm precisely
 because of the device count. It is the discriminating no-fire (a regression that
 mis-scaled the RC or counted the connector as a device would push it over and the
 corpus test would go red).
 
 Hand-checked physics: `0.8473 * 4700 * 100 pF = 398 ns` (the classic 4.7k/100pF
-~ 400 ns); `0.8473 * 10000 * 250 pF = 2118 ns` (blows standard mode).
+~ 400 ns). `0.8473 * 10000 * 250 pF = 2118 ns` (blows standard mode).
 
 ---
 
@@ -175,8 +175,8 @@ Hand-checked physics: `0.8473 * 4700 * 100 pF = 398 ns` (the classic 4.7k/100pF
 
 A PCB-trace antenna (chip antenna, or the integrated antenna of an
 ESP32-WROOM / nRF module) needs a copper-free, ground-free region around and
-beyond it; ground plane or routed copper inside the keepout detunes the antenna
-and absorbs radiated power. The symptom is poor range / sensitivity (the Watchy /
+beyond it. Ground plane or routed copper inside the keepout detunes the
+antenna and absorbs radiated power. The symptom is poor range / sensitivity (the Watchy /
 Inkplate-6 bad-WiFi class).
 
 The check locates antenna-bearing parts in a cited keepout table, projects the
@@ -222,8 +222,8 @@ board with a ground pour in the keepout), and is silent on the corpus.
 
 ### Model
 
-A USB D+/D- pair must be length-matched so the two edges arrive together;
-intra-pair skew converts differential into common-mode and erodes the eye. The
+A USB D+/D- pair must be length-matched so the two edges arrive together.
+Intra-pair skew converts differential into common-mode and erodes the eye. The
 check finds D+/D- pairs by net name (`D+/D-`, `DP/DM`, `USB_DP/USB_DM`, `UD+/UD-`,
 etc.), sums each leg's routed discrete-trace length per layer (segment + arc
 chord), and compares.
@@ -235,7 +235,7 @@ skew = | length(D+) - length(D-) |
 ### Thresholds
 
 - **Full-speed** (12 Mbps): very tolerant. The 8.33 ns bit time swamps any sane
-  board mismatch; we use a lenient 15 mm budget.
+  board mismatch, so the check uses a lenient 15 mm budget.
 - **High-speed** (480 Mbps): tight, commonly <= 1.25 mm.
 
 Since FS vs HS is not always inferable from the netlist, the **default is the
@@ -249,7 +249,7 @@ fire.
 
 ### The honest reach
 
-Routed discrete-trace length only; vias add a small out-of-plane length
+Routed discrete-trace length only. Vias add a small out-of-plane length
 approximated as zero, and arcs use the straight chord (under-estimates by a few
 percent, well inside the skew tolerance). No poured-net length.
 
@@ -300,7 +300,7 @@ not a field solve.**
   ```
 
   `S` = edge-to-edge trace spacing (measured from the routed geometry: the median
-  centreline gap between a D+ segment and a D- segment, minus the two
+  centerline gap between a D+ segment and a D- segment, minus the two
   half-widths). `Z0` is the single-ended microstrip impedance of one leg.
 
 #### Validation (formula vs reference calculator)
@@ -313,9 +313,10 @@ not a field solve.**
 | stripline | W 0.15, H 0.5, T 0.035, Er 4.3 | **52.5 Ω** | 52.5 Ω (hand) | <0.1% |
 | 90-ohm USB diff | W 0.3, S 0.2, H 0.2, T 0.035, Er 4.3 | **87.4 Ω** | 87.4 Ω (hand, NatSemi form) | exact |
 
-(The prompt's "~0.3 mm on 0.2 mm FR4 Er 4.3 is roughly 50 ohm" lands at 53.5 Ω on
-the IPC-2141 empirical form, the same number every published calculator returns;
-the USB geometry W 0.3 / S 0.2 / H 0.2 gives 87.4 Ω, inside 90 Ω ±15%.)
+(The prompt's "~0.3 mm on 0.2 mm FR4 Er 4.3 is roughly 50 ohm" lands at 53.5 Ω
+on the IPC-2141 empirical form, the same number every published calculator
+returns. The USB geometry W 0.3 / S 0.2 / H 0.2 gives 87.4 Ω, inside 90 Ω
+±15%.)
 
 ### Stackup: what the board provides vs what is assumed
 
@@ -324,7 +325,7 @@ a `type` (`copper` / `core` / `prepreg` / mask / silk), `thickness`, and for
 dielectrics `material` + `epsilon_r` + `loss_tangent`. The check reads the F.Cu
 copper thickness `T`, the **first dielectric under F.Cu** as the microstrip
 reference height `H`, and its `epsilon_r` as `Er`. (17 of the famous-corpus
-`.kicad_pcb` files carry a full stackup; all are FR4, F.Cu 0.035 mm, Er 4.5, with
+`.kicad_pcb` files carry a full stackup. All are FR4, F.Cu 0.035 mm, Er 4.5, with
 `H` from 0.196 mm on the 4-layer watch boards up to 1.51 mm on the 2-layer
 keyboards.)
 
@@ -346,11 +347,11 @@ nets are outer-layer microstrip. (Documented reach, not a guess.)
 | Ethernet / MDI pair | name convention `TRD`/`TRX`/`MDI`/`MX0..3`/`ETH` + `_P`/`_N`/`±` | 100 Ω differential | ±15% |
 | 50 Ω single-ended | RF-feed names only (`RF`, `RF_IN/OUT`, `ANT*`) | 50 Ω | ±15% |
 
-±15% is the looser of the two common fab tolerances (±10% / ±15%); the looser
+±15% is the looser of the two common fab tolerances (±10% / ±15%). The looser
 band keeps the model's own few-percent error from ever producing the finding on
 its own. A deviation past ±30% is `high` (the link will reflect / fail), 15-30%
 is `medium`. Intra-pair skew and width necking are surfaced by check 4
-(`usb_diff_pair`); this check adds the impedance.
+(`usb_diff_pair`). This check adds the impedance.
 
 The single-ended set is deliberately narrow (RF feedlines only): an ordinary GPIO
 or a bare `CLK` is **not** assumed to be a 50 Ω controlled line, so it is never
@@ -358,7 +359,7 @@ judged.
 
 ### The two honesty gates (why it is silent on the whole corpus)
 
-A deviation becomes a **finding** only when BOTH hold; anything short is an
+A deviation becomes a **finding** only when BOTH hold. Anything short is an
 `info` note carrying the computed impedance and the deviation:
 
 1. **A real file stackup** (not the default assumption).
@@ -397,15 +398,16 @@ class this fires on.
 
 ### What this is NOT
 
-- **Not a field solver.** Quasi-static closed-form only; no 2D/3D EM solve.
+- **Not a field solver.** Quasi-static closed-form only, no 2D/3D EM solve.
 - **No co-planar-ground / ground-flanked term**, no via-stub or reference-plane-
-  transition modelling - the single biggest source of the over-estimate above.
+  transition modelling. This is the single biggest source of the over-estimate
+  above.
 - **No crosstalk, no reflection / TDR, no insertion-loss / dielectric-loss sim**
   (the `loss_tangent` in the stackup is read but not yet used).
 - **No FS-vs-HS inference**: it cannot tell whether a USB pair actually needs to
   be 90 Ω, which is exactly why the `dielectric_constraints` intent gate exists.
-- Spacing is the median routed segment gap, not the designer's intended gap;
-  arcs and poured copper are not used for the spacing measure.
+- Spacing is the median routed segment gap, not the designer's intended gap.
+  Arcs and poured copper are not used for the spacing measure.
 
 ---
 
@@ -417,7 +419,7 @@ IPC-2221 external-layer ampacity, `I = k * dT^0.44 * A^0.725` (k = 0.048 outer,
 0.024 inner), applied to the **narrowest routed segment** on a net (the series
 bottleneck). The physics, the Poured-net exemption, and the never-invent-a-
 current rule all live in `hauksbee-extract`'s `trace_current` module and are
-unit-tested there; what `--si` adds is the *attribution* layer
+unit-tested there. What `--si` adds is the *attribution* layer
 (`hauksbee-engine` `checks::ampacity`) that decides which net carries how much
 current, from the bound DB models, so the check runs automatically instead of
 by hand.
@@ -428,7 +430,7 @@ A current is only attributed to a net from an explicit, citeable source, and the
 finding carries that citation:
 
 1. a DB-modelled converter's output-current limit (`iout_limit_a`) on its
-   output net;
+   output net, or
 2. a **regulator** or **connector** continuous-current rating (`max_current_a`)
    on its non-ground power nets.
 
@@ -444,7 +446,7 @@ skips it.
   never flagged: its real cross-section is the plane, not the discrete pad-entry
   stubs, and measuring the stub would be a guaranteed false positive (the
   mppt/pd-sink VBUS/VDC pours, and the LumenPnP motor supply, are exactly this).
-- **Routed traces only.** Only discrete `(segment)`/`(arc)` widths are read;
+- **Routed traces only.** Only discrete `(segment)`/`(arc)` widths are read,
   width, not length (length is voltage drop, a separate concern).
 - It fires on a genuinely under-width *routed* trace carrying a cited current,
   and is silent everywhere it cannot see the real conductor or no current is
@@ -454,8 +456,8 @@ skips it.
 
 - Integration: `--si` surfaces an ampacity finding on a synthetic board with an
   AMS1117 (rated 1.0 A) whose `+3V3` output is a single 0.15 mm trace
-  (~0.46 A); silent on the same board when the rail is poured, and when no
-  rated part attributes a current
+  (~0.46 A). It stays silent on the same board when the rail is poured, and
+  when no rated part attributes a current
   (`crates/hauksbee-engine/tests/si_ampacity_ripple.rs`).
 - Zero-FP corpus sweep across the famous boards (gated by
   `HAUKSBEE_REQUIRE_CORPUS=1`) raises no ampacity findings. That sweep caught,
@@ -502,7 +504,7 @@ attributable `I_out` are all known**. When the topology resolves but the rating
 or `I_out` is unknown it emits an info note (the negative is on the record) and
 does not fire. It never invents a current or a rating. `I_out` is attributed
 from the same citeable sources as the ampacity check (a converter limit, or a
-regulator/connector rating on the output rail); a FET rating and the generic
+regulator/connector rating on the output rail). A FET rating and the generic
 fallback are excluded.
 
 ### Calibration evidence (the hunt's mppt-1210-hus C1)
@@ -514,9 +516,9 @@ fallback are excluded.
   SOLAR+, switch node SW_NODE, inductor L1, input bulk cap C1 1200uF) and
   honestly reports that `I_out` is not attributable from a single part rating
   (the 10 A charge current is a system spec, not a datasheet pin rating), so it
-  emits an info note rather than a fabricated finding. The over-ripple physics is
-  the unit test's job; the board path proves the topology recovery and the honest
-  abstention.
+  emits an info note rather than a fabricated finding. The over-ripple physics
+  is the unit test's job. The board path proves the topology recovery and the
+  honest abstention.
 - Corpus sweep raises no ripple findings on the known-good famous boards.
 
 ---

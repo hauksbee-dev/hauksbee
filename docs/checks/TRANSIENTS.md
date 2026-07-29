@@ -104,17 +104,17 @@ its value each chunk from `profile.current_at(t)`. This rides the existing
 `decoupling_sag.rs::profile_isource_agrees_in_both_solver_paths` drives the same
 PWL-current-step decoupling network through `Partitioning::Off` and
 `Partitioning::Auto` and asserts the rails agree to better than 0.1% and both
-match the closed form to <1%. So a profile-driven load is carried identically by
-either path; no extra machinery was needed.
+match the closed form to <1%. So a profile-driven load is carried identically
+by either path. No extra machinery was needed.
 
 ---
 
 ## 2. Capacitor ESR/ESL
 
-An ideal capacitor is a perfect short to dI/dt; a real one is not. Its **ESR**
+An ideal capacitor is a perfect short to dI/dt. A real one is not. Its **ESR**
 sets the floor on how far a rail sags during a fast load step (the step current
 flows through ESR as an instantaneous IR drop), and its **ESL** sets how fast
-the cap can respond at all. Modelling decoupling as ideal makes every rail look
+the cap can respond at all. Modeling decoupling as ideal makes every rail look
 better than it is.
 
 ### How it is stamped
@@ -127,7 +127,7 @@ two internal nodes (`crates/hauksbee-engine/src/decoupling.rs`):
 
 This is purely additive: the solver already handles R, L and C, and it works
 identically in both solver paths (the RLC island is linear). When ESR and ESL
-are both zero the network collapses to the ideal capacitor (zero legs are
+are both zero, the network collapses to the ideal capacitor (zero legs are
 skipped), so existing analytic capacitor tests are bit-unchanged.
 
 ### Defaults (opt-in, cited)
@@ -147,10 +147,10 @@ true`) or names a per-ref override. This keeps global behaviour unchanged.
 | Electrolytic | 1.0 Ω   | 5 nH   | Nichicon / Panasonic alum-poly datasheets|
 | Tantalum     | 0.5 Ω   | 3 nH   | KEMET T49x / AVX TAJ datasheets          |
 
-MLCC ESR is the high-frequency series-resistance minimum; ESL is the mounted
+MLCC ESR is the high-frequency series-resistance minimum. ESL is the mounted
 self-inductance (body plus a short pad loop). Electrolytic / tantalum ESR is the
 datasheet 100 kHz figure for a mid-value part. These are deliberately
-representative class defaults, not a per-MPN table; a per-part override
+representative class defaults, not a per-MPN table. A per-part override
 (`esr_ohms` / `esl_henries`) wins when a datasheet number is known.
 
 The footprint inference (`EsrEsl::from_footprint`, split into the unit-testable
@@ -158,8 +158,8 @@ The footprint inference (`EsrEsl::from_footprint`, split into the unit-testable
 electrolytic, explicit tantalum markers (TANTALUM/TANT, EIA case codes,
 `CASE-A..D`) as tantalum, and MLCC footprints by their size code in *either*
 imperial (`0402`) or the equivalent metric form (`1005Metric`), with a dedicated
-0201 class (highest ESR of the ladder); it falls back to 0603 MLCC for an
-unrecognised name. Parasitics remain **opt-in**, so broadening the inference does
+0201 class (highest ESR of the ladder). It falls back to 0603 MLCC for an
+unrecognized name. Parasitics remain **opt-in**, so broadening the inference does
 not change any default solver result.
 
 ---
@@ -181,9 +181,9 @@ protection_delay_ms = 2.0     # sustained time above trip before latching (ms)
 protection_reset_a  = <trip>  # current to fall below to re-arm (A)
 ```
 
-The state machine integrates time above `trip_a`; once it exceeds `delay_s` the
-cutoff latches and the battery commands ~0 V (the rail collapses behind the
-cell's internal resistance). It re-arms after the load stays below `reset_a` for
+The state machine integrates time above `trip_a`. Once it exceeds `delay_s`
+the cutoff latches and the battery commands ~0 V (the rail collapses behind
+the cell's internal resistance). It re-arms after the load stays below `reset_a` for
 `delay_s`. A brief spike shorter than the delay does **not** trip. Verified by
 `power_supply.rs::protection_trips_on_sustained_overcurrent_and_holds_under_brief_spike`.
 
@@ -262,7 +262,7 @@ closed form in the test and checks the solver against it.
 - **ESR step + linear discharge**: a 10 uF cap (30 mΩ ESR) pre-charged to 3.3 V,
   hit by a 500 mA current step. Hand math:
   `v_node(t) = V0 - I*R_esr - (I/C)*t`. The instantaneous ESR sag is
-  `I*R_esr = 15 mV`; the discharge slope is `I/C = 50,000 V/s`. The solver
+  `I*R_esr = 15 mV`. The discharge slope is `I/C = 50,000 V/s`. The solver
   matches the full waveform to **< 1%**, the ESR sag to within 10%, and the
   slope to within 1%.
 - **First-order load-step droop**: an ideal 5 V rail behind 200 mΩ feeding a
@@ -288,7 +288,7 @@ WiFi cold-boot brownout (issues #7 / #10): the board resets / browns out when
 WiFi comes up on a cold boot under battery power.
 
 Honest scope: the board's 3V3 LDO is present in the netlist but its closed-loop
-regulation is a behavioural converter model owned by a sibling layer, not
+regulation is a behavioral converter model owned by a sibling layer, not
 stamped here, so the supply leg drives the rail directly and the rail sits at the
 source voltage (cell voltage on battery, ~5 V minus droop on USB) rather than a
 regulated 3.3 V. That does not change the demonstrated physics: the headline is
@@ -306,7 +306,7 @@ ESR/ESL decoupling on both:
 The contrast is the whole point: the same activity is fatal on a small cell and
 fine on USB, which is why the Inkplate failures were intermittent and
 supply-dependent. The trip is the protection state machine firing on the real
-solved rail current; the survival is the measured rail staying up.
+solved rail current. The survival is the measured rail staying up.
 
 ### (c) Corpus calibration: Olimex ESP32-EVB, must PASS
 
@@ -335,9 +335,9 @@ hauksbee run board.kicad_pcb --firmware fw.hex --headless --seconds 2 \
   --probe +5V,GATE --probe D13 --probe-csv out.csv
 ```
 
-- `--probe` takes a comma-separated net list and is repeatable; an unknown net is
-  a loud error (with near-matches) before the run starts, so a typo never yields
-  a silently-empty column.
+- `--probe` takes a comma-separated net list and is repeatable. An unknown net
+  is a loud error (with near-matches) before the run starts, so a typo never
+  yields a silently-empty column.
 - `--probe-csv` sets the output path. The header is `time_s` followed by one
   column per probed net, one row per chunk, feed it straight to a plotting
   script, a notebook, or a diff against a golden capture.
@@ -359,13 +359,13 @@ Not yet implemented. The sketch:
   seeds, each seed perturbing every toleranced component within its band
   (splitmix64 from `(corner_seed, ref)`, the same deterministic-PRNG pattern the
   fuzz layer already uses). Worst-case corners (all decoupling at min C / max
-  ESR, supply at min V) get explicit corners; the rest are sampled.
+  ESR, supply at min V) get explicit corners. The rest are sampled.
 - **Reporting**: re-evaluate the scenario's `rail_window` / `protection_trip`
   assertions per corner and report the worst-case margin (the corner with the
   deepest sag, the longest dip, the soonest trip), so the build fails on the
   worst corner rather than the nominal one.
 
-The hooks are already in place: the runner is seed-parameterised
+The hooks are already in place: the runner is seed-parameterized
 (`run_spec` loops seeds and an assertion must hold across all of them), and the
 deterministic-jitter pattern is established, so a corner runner is a re-run loop
 over perturbed component values plus a margin-aggregating reporter.
