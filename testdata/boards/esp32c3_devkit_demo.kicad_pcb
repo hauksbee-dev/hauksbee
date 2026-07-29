@@ -6,11 +6,6 @@
   (net 4 "LED_A")
   (net 5 "GPIO4_BLINK")
 
-  ; ESP32-C3 (RISC-V) devkit demo, mirroring the ESP32 (Xtensa) demo so the QEMU
-  ; riscv32 backend is exercised against the identical co-sim contract. GPIO2
-  ; drives an LED through a real 330R resistor (the analog current path the MNA
-  ; solver computes); GPIO4 drives a 4k7 to ground for the observable blink.
-  ; UART0 (GPIO21 TX / GPIO20 RX) is the serial bridge. The part runs at 3.3 V.
   (module RF_Module:ESP32-C3-MINI-1 (layer F.Cu)
     (at 100 100)
     (fp_text reference U1 (at 0 0) (layer F.SilkS))

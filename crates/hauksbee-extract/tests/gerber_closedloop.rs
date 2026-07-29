@@ -269,6 +269,124 @@ fn run_board(rel: &str, tag: &str) -> Option<Agreement> {
     Some(a)
 }
 
+/// Round-trip a board that ships in this repo, by absolute path.
+///
+/// The corpus version of this needs a fetch and is skipped without one. These
+/// boards are always present, so the gerber path is exercised on every run
+/// rather than only on a machine that happens to have the corpus.
+fn run_repo_board(rel: &str, tag: &str) -> Option<Agreement> {
+    let pcb = repo_root().join(rel);
+    if !pcb.is_file() {
+        return None;
+    }
+    let cli = kicad_cli()?;
+    let dir = export_fab(&cli, &pcb, tag)?;
+    let native = ExtractedBoard::from_kicad_pcb(&std::fs::read_to_string(&pcb).ok()?).ok()?;
+    let recon = from_gerber_dir(&dir).ok()?;
+    let a = agreement(&native, &recon.board);
+    eprintln!(
+        "[{tag}] native {}c/{}n  recon {}c/{}n | components {}/{} | pads {}/{} | net-partition {:.1}%",
+        native.components.len(),
+        a.native_nets,
+        recon.board.components.len(),
+        a.recon_nets,
+        a.components_matched,
+        a.native_components,
+        a.pads_located,
+        a.native_pads,
+        100.0 * a.pad_pairs_agree as f64 / a.pad_pairs.max(1) as f64,
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+    Some(a)
+}
+
+fn repo_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .ancestors()
+        .nth(2)
+        .expect("repo root")
+        .to_path_buf()
+}
+
+/// Every board that ships in this repo must survive the gerber round-trip.
+///
+/// Two different things are checked here, and conflating them would be a trap
+/// for whoever reads this next.
+///
+/// **Every board must round-trip.** kicad-cli has to load it, export gerbers,
+/// and the reconstruction has to read them back without error. This is a real
+/// gate and it has already caught a real defect: six demo boards carried
+/// Lisp-style `;` comments inside the s-expression, which KiCad's format does
+/// not have. forge-sexpr tolerated them, so nothing here noticed, while KiCad
+/// itself answered "Failed to load board" for anyone who opened our own demo
+/// board in their CAD tool.
+///
+/// **Only routed boards are judged on accuracy.** Most boards in this list are
+/// pad-and-netlist fixtures with zero segments, vias and zones: their
+/// connectivity lives in the file, not in copper. A gerber carries copper and
+/// nothing else, so on an unrouted board there is physically nothing to trace
+/// and the reconstruction can only infer from pad overlap. Those boards score
+/// 60-85% net-partition, and that number measures the fixture, not the
+/// extractor. Chasing it would be chasing a ghost.
+///
+/// Watchy is the one shipped board with a real layout (685 segments, 114 vias,
+/// 6 zones), and it recovers the electrical graph exactly. That is the result
+/// worth gating, and the wider evidence is the corpus sweep below.
+#[test]
+fn shipped_boards_survive_gerbers() {
+    // (path, has real copper: only these carry an accuracy floor)
+    const BOARDS: &[(&str, bool)] = &[
+        ("crates/hauksbee-ci/examples/boards/blinky.kicad_pcb", false),
+        ("crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb", false),
+        ("crates/hauksbee-ci/examples/boards/power_resistor.kicad_pcb", false),
+        ("crates/hauksbee-ci/examples/boards/tolerance_divider.kicad_pcb", false),
+        ("crates/hauksbee-ci/examples/boards/watchy.kicad_pcb", true),
+        ("testdata/boards/button_pullup.kicad_pcb", false),
+        ("testdata/boards/esp32_devkit_demo.kicad_pcb", false),
+        ("testdata/boards/esp32_spi_adc_demo.kicad_pcb", false),
+        ("testdata/boards/esp32c3_devkit_demo.kicad_pcb", false),
+        ("testdata/boards/stm32_adc_divider_demo.kicad_pcb", false),
+        ("testdata/boards/stm32_bluepill_demo.kicad_pcb", false),
+        ("testdata/boards/stm32_i2c_thermostat.kicad_pcb", false),
+        ("testdata/boards/stm32_spi_adc_demo.kicad_pcb", false),
+        ("testdata/boards/vcd_pulse.kicad_pcb", false),
+    ];
+    if kicad_cli().is_none() {
+        eprintln!("skipping shipped-board gerber sweep (no kicad-cli)");
+        return;
+    }
+    for (rel, routed) in BOARDS {
+        let tag = Path::new(rel).file_stem().unwrap().to_string_lossy().to_string();
+        let Some(a) = run_repo_board(rel, &tag) else {
+            panic!(
+                "{rel} did not survive the gerber round-trip. Every board that ships has \
+                 to: gerber-only extraction is a headline claim, and a demo board that \
+                 cannot even make gerbers cannot demonstrate it. If kicad-cli says \
+                 \"Failed to load board\", check the file for syntax KiCad does not \
+                 accept, such as `;` comment lines."
+            )
+        };
+        if *routed {
+            // Measured 2026-07-29 against kicad-cli 10.0.3: 100.0% over 262 of
+            // 276 pads. The floor sits just under the measurement so a real
+            // connectivity regression trips it.
+            assert!(
+                pct(&a) >= 99.0,
+                "{tag}: net partition {:.1}%, floor 99.0%. This board has real copper, \
+                 so the reconstruction has traces to follow and the electrical graph \
+                 should come back intact.",
+                pct(&a)
+            );
+            assert!(
+                a.pads_located * 100 >= a.native_pads * 90,
+                "{tag}: located only {}/{} pads",
+                a.pads_located,
+                a.native_pads
+            );
+        }
+    }
+}
+
 fn pct(a: &Agreement) -> f64 {
     100.0 * a.pad_pairs_agree as f64 / a.pad_pairs.max(1) as f64
 }
