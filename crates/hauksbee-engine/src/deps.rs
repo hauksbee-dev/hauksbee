@@ -50,6 +50,16 @@ pub struct DepStatus {
     pub manual: String,
     /// Why it is absent / partial (the resolver's own message), when absent.
     pub detail: Option<String>,
+    /// Set only on a dependency that sends the user's data off this machine,
+    /// stating plainly what leaves and where it goes.
+    ///
+    /// Every other dependency here is a local binary: installing it has no
+    /// privacy consequence, so there is nothing to say. Codex is different in
+    /// kind, not degree, and burying that difference in the `unlocks` prose
+    /// would let a UI render it as just another install button. A separate
+    /// field means a surface has to decide what to do with it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sends_data_offhost: Option<&'static str>,
 }
 
 /// Probe every dependency. Each probe runs the engine's own discovery; none of
@@ -61,7 +71,87 @@ pub fn probe_all() -> Vec<DepStatus> {
         probe_ngspice(),
         probe_kicad_cli(),
         probe_avr(),
+        probe_codex(),
     ]
+}
+
+/// Codex, the optional datasheet-to-model extractor.
+///
+/// It is listed with the co-simulation backends because it is discovered the
+/// same way and unlocks a capability the same way. It differs in one respect
+/// that the UI must not smooth over: using it sends datasheet text to OpenAI.
+/// So it is never auto-installed, never runs without being asked, and carries
+/// `sends_data_offhost` so no surface can present it as just another local
+/// tool.
+fn probe_codex() -> DepStatus {
+    let unlocks =
+        "drafting a device model from a datasheet, for a part with no model (you review it \
+         before it is saved)";
+    let cost = "an OpenAI account and the codex CLI".to_string();
+    let manual = "npm install -g @openai/codex   # then: codex login".to_string();
+    let privacy = "Using this sends the datasheet's text to OpenAI. Nothing is sent unless \
+                   you ask for an extraction, and hauksbee never runs it on its own.";
+    match which_codex() {
+        Some(p) => DepStatus {
+            id: "codex",
+            name: "Codex (datasheet extraction)",
+            present: true,
+            version: codex_version(&p),
+            path: Some(p.display().to_string()),
+            unlocks,
+            // Deliberately never auto-installable: an account and a login are
+            // the user's to give, and a one-click button for a service that
+            // takes their data would be the wrong shape whatever it said.
+            installable: false,
+            cost,
+            manual,
+            detail: None,
+            sends_data_offhost: Some(privacy),
+        },
+        None => DepStatus {
+            id: "codex",
+            name: "Codex (datasheet extraction)",
+            present: false,
+            path: None,
+            version: None,
+            unlocks,
+            installable: false,
+            cost,
+            manual,
+            detail: Some(
+                "codex not found on PATH. This is optional: every other part of hauksbee \
+                 works without it, and a model can always be written by hand (one TOML \
+                 file, see docs/extending/)."
+                    .to_string(),
+            ),
+            sends_data_offhost: Some(privacy),
+        },
+    }
+}
+
+fn which_codex() -> Option<std::path::PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path) {
+        if cfg!(windows) {
+            for ext in ["codex.exe", "codex.cmd"] {
+                let c = dir.join(ext);
+                if c.is_file() {
+                    return Some(c);
+                }
+            }
+        }
+        let c = dir.join("codex");
+        if c.is_file() {
+            return Some(c);
+        }
+    }
+    None
+}
+
+fn codex_version(bin: &std::path::Path) -> Option<String> {
+    let out = std::process::Command::new(bin).arg("--version").output().ok()?;
+    let s = String::from_utf8_lossy(&out.stdout);
+    s.lines().next().map(|l| l.trim().to_string()).filter(|l| !l.is_empty())
 }
 
 /// The `/api/deps` response body: `{"deps":[...]}`.
@@ -97,7 +187,9 @@ fn probe_renode() -> DepStatus {
     {
         match hauksbee_mcu::renode::find_renode() {
             Ok(p) => DepStatus {
-                id: "renode",
+                // A local binary: running it sends nothing anywhere.
+                sends_data_offhost: None,
+                                        id: "renode",
                 name: "Renode",
                 present: true,
                 path: Some(p.display().to_string()),
@@ -109,7 +201,9 @@ fn probe_renode() -> DepStatus {
                 detail: None,
             },
             Err(e) => DepStatus {
-                id: "renode",
+                // A local binary: running it sends nothing anywhere.
+                sends_data_offhost: None,
+                                        id: "renode",
                 name: "Renode",
                 present: false,
                 path: None,
@@ -125,7 +219,9 @@ fn probe_renode() -> DepStatus {
     #[cfg(not(feature = "renode"))]
     {
         DepStatus {
-            id: "renode",
+            // A local binary: running it sends nothing anywhere.
+            sends_data_offhost: None,
+                            id: "renode",
             name: "Renode",
             present: false,
             path: None,
@@ -161,7 +257,9 @@ fn probe_esp_qemu() -> DepStatus {
         let riscv = find_qemu(QemuArch::Riscv32);
         match (&xtensa, &riscv) {
             (Ok(x), Ok(r)) => DepStatus {
-                id: "esp-qemu",
+                // A local binary: running it sends nothing anywhere.
+                sends_data_offhost: None,
+                                        id: "esp-qemu",
                 name: "Espressif QEMU",
                 present: true,
                 path: Some(format!("{}; {}", x.display(), r.display())),
@@ -191,7 +289,9 @@ fn probe_esp_qemu() -> DepStatus {
                     )),
                 }
                 DepStatus {
-                    id: "esp-qemu",
+                    // A local binary: running it sends nothing anywhere.
+                    sends_data_offhost: None,
+                                                    id: "esp-qemu",
                     name: "Espressif QEMU",
                     present: false,
                     path: None,
@@ -208,7 +308,9 @@ fn probe_esp_qemu() -> DepStatus {
     #[cfg(not(feature = "qemu"))]
     {
         DepStatus {
-            id: "esp-qemu",
+            // A local binary: running it sends nothing anywhere.
+            sends_data_offhost: None,
+                            id: "esp-qemu",
             name: "Espressif QEMU",
             present: false,
             path: None,
@@ -274,7 +376,9 @@ fn probe_ngspice() -> DepStatus {
     .to_string();
     match find_ngspice() {
         Some(p) => DepStatus {
-            id: "ngspice",
+            // A local binary: running it sends nothing anywhere.
+            sends_data_offhost: None,
+                            id: "ngspice",
             name: "ngspice",
             present: true,
             version: ngspice_version(&p),
@@ -286,7 +390,9 @@ fn probe_ngspice() -> DepStatus {
             detail: None,
         },
         None => DepStatus {
-            id: "ngspice",
+            // A local binary: running it sends nothing anywhere.
+            sends_data_offhost: None,
+                            id: "ngspice",
             name: "ngspice",
             present: false,
             path: None,
@@ -352,7 +458,9 @@ fn probe_kicad_cli() -> DepStatus {
     let cost = "part of the full KiCad suite; the KiCad download alone is over 1 GB".to_string();
     match find_kicad_cli() {
         Some((path, ver)) => DepStatus {
-            id: "kicad-cli",
+            // A local binary: running it sends nothing anywhere.
+            sends_data_offhost: None,
+                            id: "kicad-cli",
             name: "kicad-cli",
             present: true,
             path: Some(path),
@@ -364,7 +472,9 @@ fn probe_kicad_cli() -> DepStatus {
             detail: None,
         },
         None => DepStatus {
-            id: "kicad-cli",
+            // A local binary: running it sends nothing anywhere.
+            sends_data_offhost: None,
+                            id: "kicad-cli",
             name: "kicad-cli",
             present: false,
             path: None,
@@ -392,7 +502,9 @@ fn probe_avr() -> DepStatus {
     #[cfg(feature = "avr")]
     {
         DepStatus {
-            id: "avr",
+            // A local binary: running it sends nothing anywhere.
+            sends_data_offhost: None,
+                            id: "avr",
             name: "AVR (simavr)",
             present: true,
             path: None,
@@ -407,7 +519,9 @@ fn probe_avr() -> DepStatus {
     #[cfg(not(feature = "avr"))]
     {
         DepStatus {
-            id: "avr",
+            // A local binary: running it sends nothing anywhere.
+            sends_data_offhost: None,
+                            id: "avr",
             name: "AVR (simavr)",
             present: false,
             path: None,
