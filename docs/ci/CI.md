@@ -391,6 +391,45 @@ deadline_ms = 20.0    # by this long after reset
 
 See [the boot-coverage section](#boot-coverage-watching-the-firmware-define-a-hi-z-control-net) for what problem this solves and the two-sided demo.
 
+**`model_coverage`**: how much of the board bound to a real device model.
+
+Analogue accuracy is capped by model availability, and part of that cap is
+outside your control: many vendors encrypt their SPICE and IBIS models. What
+you can control is whether the number is visible and whether it is allowed to
+fall. Pin what your board reaches today, and the day a new part drops coverage
+the build says so instead of quietly simulating a hole.
+
+```toml
+[[assert]]
+kind = "model_coverage"
+min_critical = 1.0          # every active IC binds to a real model
+max_active_unresolved = 0   # nothing unresolved sits on a connected net
+# min_resolved = 0.85       # optional: all parts, as a board-wide trend line
+```
+
+`min_critical` is the metric that matters. An unbound regulator changes the
+answer, an unbound 0402 resistor usually does not, so the ratio counts active
+ICs rather than every part on the board. `max_active_unresolved` counts the
+unresolved parts whose pins touch a real node, which are the ones whose open
+default actually moves the solve.
+
+A failure names the parts, because that list is the next action:
+
+```
+[FAIL] model_coverage
+      active ICs bound 0/4 (0.0%), floor 95.0%; 4 unresolved on connected
+      nets (limit 0): U1, U3, U2, U4
+```
+
+Each name is either a model you can write, which takes one TOML file and no
+recompile ([extending/](../extending/README.md)), or a part whose vendor keeps
+its model closed. Those need different responses, and the report tells them
+apart by naming both.
+
+At least one threshold is required. An assertion with none would sit in a spec
+looking like a coverage gate while checking nothing, which is the failure this
+assertion exists to prevent, so the spec loader rejects it.
+
 **`phase_margin` / `ac_gain`**: small-signal loop-stability and frequency-response
 gates, driven by an `[ac]` sweep block on the spec. `phase_margin` bounds the
 feedback loop's phase margin (degrees) and `ac_gain` bounds a net's magnitude

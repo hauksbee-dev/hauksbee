@@ -62,6 +62,7 @@ fn outcome_with(
     RunOutcome {
         seed: 0,
         windows,
+        bind: None,
         uart: HashMap::new(),
         faults: Vec::new(),
         toggles: HashMap::new(),

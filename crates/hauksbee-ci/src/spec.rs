@@ -713,7 +713,11 @@ pub struct FuzzSpec {
 }
 
 /// One assertion over the run.
-#[derive(Debug, Clone, Deserialize, JsonSchema)]
+///
+/// `Default` exists for tests, which would otherwise spell out thirty fields to
+/// exercise one. It yields an empty `kind`, which `validate` rejects, so a
+/// defaulted assertion cannot reach a run.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Assertion {
     /// Assertion kind. `voltage`: net stays in [min, max]. `uart`: output
@@ -725,11 +729,12 @@ pub struct Assertion {
     /// `boot-coverage`: a control net is driven to `min` volts within
     /// `deadline_ms` of reset. `phase_margin` / `ac_gain`: small-signal loop
     /// checks (need an `[ac]` block). `hwtrace`: the run reproduces a captured
-    /// hardware trace.
+    /// hardware trace. `model_coverage`: enough of the board bound to a real
+    /// device model.
     #[schemars(extend("enum" = [
         "voltage", "uart", "toggle", "no_faults", "max_current", "max_temp",
         "peripheral", "rail_window", "protection_trip", "boot-coverage",
-        "phase_margin", "ac_gain", "hwtrace"
+        "phase_margin", "ac_gain", "hwtrace", "model_coverage"
     ]))]
     pub kind: String,
     /// Optional label (defaults to a generated description).
@@ -844,6 +849,31 @@ pub struct Assertion {
     /// net must reach and hold `min` volts.
     #[serde(default)]
     pub deadline_ms: Option<f64>,
+
+    // ── model_coverage ──────────────────────────────────────────────────────
+    // How much of the board bound to a real device model. Vendors encrypt
+    // SPICE and IBIS models, so part of the ceiling is outside anyone's
+    // control here. What is inside our control is making the number visible
+    // and holding the line on it: pin what a board reaches today, and the day
+    // a new part drops coverage the build says so instead of quietly
+    // simulating a hole. Every threshold below is opt-in, and at least one is
+    // required, since an assertion that checks nothing must not read green.
+    /// model_coverage: the minimum fraction (0.0 to 1.0) of active ICs that
+    /// must bind to a real model. This is the metric that matters: an
+    /// unbound regulator changes the answer, an unbound 0402 resistor
+    /// usually does not.
+    #[serde(default)]
+    pub min_critical: Option<f64>,
+    /// model_coverage: the minimum fraction (0.0 to 1.0) of all non-ignored
+    /// parts that must bind. Coarser than `min_critical`, and useful as a
+    /// board-wide trend line.
+    #[serde(default)]
+    pub min_resolved: Option<f64>,
+    /// model_coverage: how many unresolved parts may sit on a connected net.
+    /// These are the ones whose open default actually changes the solve, so 0
+    /// is the meaningful setting on a board you trust.
+    #[serde(default)]
+    pub max_active_unresolved: Option<usize>,
 }
 
 impl Spec {
@@ -1526,9 +1556,39 @@ impl Assertion {
                     )));
                 }
             }
+            "model_coverage" => {
+                // Caught here rather than at run time: an assertion with no
+                // threshold would otherwise sit in a spec looking like a
+                // coverage gate while checking nothing, which is the exact
+                // failure this assertion exists to prevent.
+                if self.min_critical.is_none()
+                    && self.min_resolved.is_none()
+                    && self.max_active_unresolved.is_none()
+                {
+                    return Err(SpecError::Invalid(
+                        "model_coverage assertion needs at least one of `min_critical` \
+                         (fraction of active ICs bound), `min_resolved` (fraction of all \
+                         parts bound) or `max_active_unresolved` (unresolved parts on \
+                         connected nets)"
+                            .into(),
+                    ));
+                }
+                for (name, v) in [
+                    ("min_critical", self.min_critical),
+                    ("min_resolved", self.min_resolved),
+                ] {
+                    if let Some(v) = v {
+                        if !(0.0..=1.0).contains(&v) {
+                            return Err(SpecError::Invalid(format!(
+                                "model_coverage `{name}` is a fraction between 0.0 and 1.0, got {v}"
+                            )));
+                        }
+                    }
+                }
+            }
             other => {
                 return Err(SpecError::Invalid(format!(
-                    "unknown assertion kind '{other}' (expected voltage|uart|toggle|no_faults|max_current|max_temp|peripheral|rail_window|protection_trip|boot-coverage|phase_margin|ac_gain|hwtrace)"
+                    "unknown assertion kind '{other}' (expected voltage|uart|toggle|no_faults|max_current|max_temp|peripheral|rail_window|protection_trip|boot-coverage|phase_margin|ac_gain|hwtrace|model_coverage)"
                 )));
             }
         }
