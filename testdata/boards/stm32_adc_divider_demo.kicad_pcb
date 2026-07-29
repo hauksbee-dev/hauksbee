@@ -7,12 +7,6 @@
   (net 5 "PC13_LED")
   (net 6 "TEMP_SENSE")
 
-  ; The blue pill demo board PLUS an analog input: a 10k/10k divider from +3V3
-  ; feeds TEMP_SENSE into PA0 (LQFP-48 pin 10, role pa0_adc0 -> engine ADC
-  ; channel 0). The scheduler pushes the solved TEMP_SENSE voltage into the
-  ; core every chunk; the stock Renode STM32F103 platform models NO ADC, so
-  ; the backend records the injection as DROPPED — this board is the live
-  ; fixture for the co-sim ADC-coverage honesty surfaces (U3 finding 1).
   (module Package_QFP:LQFP-48_7x7mm_P0.5mm (layer F.Cu)
     (at 100 100)
     (fp_text reference U1 (at 0 0) (layer F.SilkS))
@@ -32,7 +26,6 @@
     (pad 48 smd rect (at -3 6) (net 2 "+3V3"))
   )
 
-  ; PA5 -> 330R -> LED anode (the observable analog path from the base demo).
   (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
     (at 110 100)
     (fp_text reference R1 (at 0 0) (layer F.SilkS))
@@ -49,7 +42,6 @@
     (pad K thru_hole circle (at 2 0) (net 1 "GND"))
   )
 
-  ; PC13 -> 4k7 pulldown so the blink net sits at a clean logic level.
   (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
     (at 105 110)
     (fp_text reference R2 (at 0 0) (layer F.SilkS))
@@ -58,8 +50,6 @@
     (pad 2 thru_hole circle (at 2 0) (net 1 "GND"))
   )
 
-  ; +3V3 -> 10k -> TEMP_SENSE -> 10k -> GND: the divider that puts ~1.65 V on
-  ; the ADC net, standing in for an analog sensor output (an LM35-style part).
   (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
     (at 95 110)
     (fp_text reference R3 (at 0 0) (layer F.SilkS))
