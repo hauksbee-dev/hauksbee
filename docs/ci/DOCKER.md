@@ -4,8 +4,8 @@ hauksbee ships two container images. Both are multi-arch (`linux/amd64` and
 `linux/arm64`) and both carry the prebuilt `hauksbee` and `hauksbee-ci`
 binaries plus the reference model database, so nothing is compiled at run time.
 They cover the analysis, simulation, and CI surface. The interactive 3D
-frontend is deliberately not containerised (headless WebGL is pain for no gain);
-run that from a normal checkout when you want the live viewer.
+frontend is deliberately not containerised (headless WebGL is pain for no
+gain). Run that from a normal checkout when you want the live viewer.
 
 ## The two images
 
@@ -20,21 +20,22 @@ push moves `:latest` (slim) and `:full-latest`.
 
 ### Why two
 
-The slim image is small and is all most CI needs: the static checks and the
-built-in AVR co-simulation have no external dependencies beyond `kicad-cli`. The
-full image adds the heavy external backends (Renode and the Espressif QEMU fork
-are large prebuilt toolchains, freerouting needs a JRE), so it is only worth
-pulling when you actually run STM32 / ESP32 firmware or autoroute a board.
+The slim image is small and covers most CI needs: the static checks and the
+built-in AVR co-simulation have no external dependencies beyond `kicad-cli`.
+The full image adds the heavy external backends (Renode and the Espressif
+QEMU fork are large prebuilt toolchains, freerouting needs a JRE). Pull it
+only when you actually run STM32 / ESP32 firmware or autoroute a board.
 
-The full image does **not** include esp-idf or any firmware toolchain. esp-idf
-is only needed to *build* ESP32 firmware; at run time the Espressif QEMU binary
-plus a merged flash image are enough, and esp-idf is gigabytes. Compile your
-firmware elsewhere (or in a separate build step) and feed the artifact in.
+The full image does **not** include esp-idf or any firmware toolchain. You
+need esp-idf only to *build* ESP32 firmware. At run time the Espressif QEMU
+binary plus a merged flash image are enough, and esp-idf is gigabytes. Compile
+your firmware elsewhere (or in a separate build step) and feed the artifact
+in.
 
 ### Backend wiring (full image)
 
-The co-sim backends are discovered at run time through the `HAUKSBEE_*` env
-vars, which the full image sets so everything works with no setup:
+hauksbee finds the co-sim backends at run time through the `HAUKSBEE_*` env
+vars. The full image sets these so everything works with no setup:
 
 | Variable | Value | Backend |
 |----------|-------|---------|
@@ -47,10 +48,10 @@ vars, which the full image sets so everything works with no setup:
 ## `docker run` examples
 
 The images mount your working tree at `/work` and have no fixed entrypoint, so
-the command names the tool (`hauksbee` for the engine, `hauksbee-ci` for the CI
-runner). The bundled example boards live inside the image under the binaries'
-embedded data; the boards and specs you check usually come from your own repo,
-mounted in.
+the command names the tool (`hauksbee` for the engine, `hauksbee-ci` for the
+CI runner). The bundled example boards live inside the image, under the
+binaries' embedded data. The boards and specs you check usually come from
+your own repo, mounted in.
 
 Report a board (the bind report table):
 
@@ -93,7 +94,7 @@ docker run --rm -v "$PWD:/work" ghcr.io/etm-code/hauksbee:full \
 ```
 
 On a CI runner the working tree is usually owned by the runner user, not the
-image's `hauksbee` user (uid 1000), so add `--user "$(id -u):$(id -g)"` when the
+image's `hauksbee` user (uid 1000). Add `--user "$(id -u):$(id -g)"` when the
 run needs to write output (a JUnit file, a routed board) back into the mount.
 
 ## Using it from the GitHub Action
@@ -114,14 +115,14 @@ source. Set `use-image: true`, and optionally pick the image:
 
 When `use-image` is true the Action mounts the checkout at `/work`, runs the
 container as the runner user so the JUnit XML is writable, and publishes the
-results to the Checks tab exactly as the binary path does. When it is false the
-Action keeps its existing behaviour: prefer a prebuilt release binary, fall back
-to `cargo build`.
+results to the Checks tab exactly as the binary path does. When it is false,
+the Action keeps its existing behaviour: prefer a prebuilt release binary, fall
+back to `cargo build`.
 
 ## How the images are built
 
-The images are built and pushed by `.github/workflows/docker.yml` on a release
-tag (the same `v*` tag that drives `release.yml`). It uses the standard
+`.github/workflows/docker.yml` builds and pushes the images on a release tag
+(the same `v*` tag that drives `release.yml`). It uses the standard
 `docker/setup-qemu-action` + `docker/setup-buildx-action` +
 `docker/login-action` + `docker/build-push-action` chain and pushes multi-arch
 manifests to GHCR.
@@ -135,18 +136,18 @@ The build is **multi-stage from source**, not a repackaged release tarball:
 3. A `debian:bookworm-slim` runtime stage `COPY`s in just the two binaries, the
    model db, `kicad-cli`, and the simavr runtime libraries.
 
-Multi-stage from source was chosen over consuming `scripts/bundle.sh`'s tarball
-because each architecture is built natively under buildx (`linux/amd64` and
-`linux/arm64`), with no cross-compilation and no dependency on a release tarball
-existing first. simavr is compiled per arch the same way, so the linked-in AVR
-backend is the one that actually ran on that arch. The full image then builds
-`FROM` the pushed slim image and layers the prebuilt Renode / Espressif QEMU /
-freerouting downloads on top, selecting the right per-arch asset from
-`TARGETARCH`.
+This choice of multi-stage from source over consuming `scripts/bundle.sh`'s
+tarball has two reasons. First, each architecture builds natively under
+buildx (`linux/amd64` and `linux/arm64`), with no cross-compilation and no
+dependency on a release tarball existing first. Second, simavr compiles per
+arch the same way, so the linked-in AVR backend is the one that actually ran
+on that arch. The full image then builds `FROM` the pushed slim image and
+layers the prebuilt Renode / Espressif QEMU / freerouting downloads on top,
+selecting the right per-arch asset from `TARGETARCH`.
 
 ### Build context
 
-The `forge-*` crates are vendored into this repo (`vendor/kicad-forge`; see
+The `forge-*` crates are vendored into this repo (`vendor/kicad-forge`, see
 `vendor/kicad-forge/VENDORED.md`), so the build is self-contained. The Docker
 build context is a parent directory that holds just this repo:
 
@@ -160,9 +161,9 @@ to keep the frontend and other build-irrelevant trees out of the context.
 
 ## Build it yourself and smoke-test
 
-The images are really produced by CI (that is where the multi-arch manifests get
-built and pushed). To build locally, stage this repo under a context dir, then
-build each image. These are the exact commands:
+CI really produces the images (that is where the multi-arch manifests get
+built and pushed). To build locally, stage this repo under a context dir,
+then build each image. These are the exact commands:
 
 ```bash
 # 1. Stage this repo under a context dir (forge crates are vendored inside it).
@@ -215,4 +216,4 @@ docker buildx build \
 ```
 
 Building `linux/arm64` on an amd64 host (or vice versa) goes through QEMU
-emulation, which is slow but is exactly what the CI workflow does.
+emulation. This is slow, but it is exactly what the CI workflow does.

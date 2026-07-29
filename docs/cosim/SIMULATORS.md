@@ -3,7 +3,8 @@
 > For the full capability map of hauksbee (MCU architecture coverage, which parts are proven, and the scope of the co-sim layer) see [`docs/about/CAPABILITIES.md`](../about/CAPABILITIES.md).
 
 hauksbee's MCU co-simulation layer runs firmware against the solved analog
-circuit in lockstep. Three backends cover the full supported architecture range:
+circuit in lockstep. Three backends cover the full supported architecture
+range:
 
 | Backend | Chips | Emulator | Install needed? |
 |---------|-------|----------|-----------------|
@@ -11,12 +12,13 @@ circuit in lockstep. Three backends cover the full supported architecture range:
 | `renode` | STM32 / nRF52840 / SiFive FE310 (RISC-V) / RP2040 | External headless Renode process | **Yes** |
 | `qemu` | ESP32 / ESP32-S3 (Xtensa) / ESP32-C3 (RISC-V) | External Espressif QEMU process | **Yes** |
 
-AVR links libsimavr from the system (GPL-3.0, deliberately not vendored in this
-Apache-2.0 repo): install it with `scripts/install-sims.sh --avr`, or build without AVR
-via `cargo build -p hauksbee-engine --no-default-features --features renode,qemu`.
-This document covers installing Renode and the Espressif QEMU fork for the other
-two. See [`docs/cosim/MCU.md`](MCU.md) for the full co-simulation
-architecture, per-board recipes, and proven integration test results.
+AVR links libsimavr from the system (GPL-3.0, deliberately not vendored in
+this Apache-2.0 repo). Install it with `scripts/install-sims.sh --avr`, or
+build without AVR through `cargo build -p hauksbee-engine
+--no-default-features --features renode,qemu`. This document covers
+installing Renode and the Espressif QEMU fork for the other two backends. See
+[`docs/cosim/MCU.md`](MCU.md) for the full co-simulation architecture,
+per-board recipes, and proven integration test results.
 
 ---
 
@@ -24,18 +26,19 @@ architecture, per-board recipes, and proven integration test results.
 
 Renode is EPL-licensed and ~150 MB. Espressif QEMU is GPL-2.0 and similarly
 large. Vendoring either into hauksbee would bloat the distribution, impose
-redistribution obligations, and undercut the core premise (PCB CI from the
-design files, no bulky EDA toolchain required). The same "detect, don't bundle"
-pattern used for the KiCad and ngspice oracles (see [`docs/cosim/ORACLES.md`](ORACLES.md))
-applies here. hauksbee locates an externally installed binary and uses it on
-demand; tests skip cleanly when the binary is absent rather than failing.
+redistribution obligations, and undercut the core premise: PCB CI from the
+design files, no bulky EDA toolchain required. The same "detect, don't
+bundle" pattern used for the KiCad and ngspice oracles (see
+[`docs/cosim/ORACLES.md`](ORACLES.md)) applies here. hauksbee locates an
+externally installed binary and uses it on demand. Tests skip cleanly when
+the binary is absent, rather than failing.
 
 ---
 
 ## Quick install
 
 For the ESP32-family backend, hauksbee can fetch the Espressif QEMU fork
-itself, no shell script needed:
+itself. No shell script is needed:
 
 ```
 hauksbee install esp-qemu          # prompts; add --yes for CI
@@ -45,23 +48,24 @@ This downloads Espressif's **official** prebuilt `qemu-system-xtensa` and
 `qemu-system-riscv32` from
 [github.com/espressif/qemu/releases](https://github.com/espressif/qemu/releases),
 verifies each archive's sha256 against the release's checksum manifest,
-unpacks into `~/.hauksbee-qemu-esp/` (discovery slot 3 below), and accepts
-each binary only after the same esp32-machine check the co-sim applies.
-Nothing is bundled: the fork is a separate GPL-2.0 program hauksbee talks to
-over sockets. `hauksbee run --firmware` on an ESP32-family board offers the
-same install inline when it finds the emulator missing on an interactive
-terminal (declining keeps the loud install-guidance error).
+unpacks the fork into `~/.hauksbee-qemu-esp/` (discovery slot 3 below), and
+accepts each binary only after the same esp32-machine check the co-sim
+applies. Nothing is bundled: the fork is a separate GPL-2.0 program hauksbee
+talks to over sockets. On an ESP32-family board, `hauksbee run --firmware`
+offers the same install inline when it finds the emulator missing on an
+interactive terminal (declining keeps the loud install-guidance error).
 
-For everything at once (Renode + QEMU, optionally AVR):
+To install everything at once (Renode + QEMU, optionally AVR), run:
 
 ```
 scripts/install-sims.sh
 ```
 
-That is it. The script detects your OS and architecture, resolves the latest
-release via the GitHub API, downloads the portable builds, puts them exactly
-where hauksbee auto-discovers them, and verifies the result. Re-running is safe:
-if a backend is already present it is skipped.
+That is all it takes. The script detects your OS and architecture, resolves
+the latest release through the GitHub API, downloads the portable builds,
+places them exactly where hauksbee auto-discovers them, and verifies the
+result. Re-running is safe: if a backend is already present, the script
+skips it.
 
 To install only one backend:
 
@@ -70,15 +74,16 @@ scripts/install-sims.sh --renode-only
 scripts/install-sims.sh --qemu-only
 ```
 
-To check whether hauksbee can find the simulators without installing anything:
+To check whether hauksbee can find the simulators without installing
+anything:
 
 ```
 scripts/install-sims.sh --check
 ```
 
-The `--check` flag mirrors the exact discovery logic in the Rust source. Exit 0
-means both (requested) backends are discoverable; non-zero means at least one
-is missing.
+The `--check` flag mirrors the exact discovery logic in the Rust source.
+Exit 0 means both (requested) backends are discoverable. A non-zero exit
+means at least one is missing.
 
 ---
 
@@ -89,7 +94,7 @@ is missing.
 hauksbee calls `find_renode()` in
 `crates/hauksbee-mcu/src/renode/process.rs`. It checks, in order:
 
-1. `$HAUKSBEE_RENODE`, if set, it must be the full path to the `renode`
+1. `$HAUKSBEE_RENODE`. If set, it must name the full path to the `renode`
    binary. hauksbee uses it directly and fails clearly if the path does not
    exist.
 2. `renode` on `$PATH`.
@@ -99,8 +104,8 @@ hauksbee calls `find_renode()` in
    - `~/renode_portable/renode` (underscore variant, for compatibility)
 
 The installer places the app bundle at `~/renode-portable/Renode.app`, which
-hits case 3 on macOS, and extracts the tarball to `~/renode-portable/` on Linux,
-which hits case 3 for Linux.
+hits case 3 on macOS, and extracts the tarball to `~/renode-portable/` on
+Linux, which also hits case 3.
 
 ### Espressif QEMU
 
@@ -108,26 +113,26 @@ hauksbee calls `find_qemu(arch)` in
 `crates/hauksbee-mcu/src/qemu/process.rs`. For each of `qemu-system-xtensa`
 (ESP32 / ESP32-S3) and `qemu-system-riscv32` (ESP32-C3), it checks:
 
-1. `$HAUKSBEE_QEMU_XTENSA` / `$HAUKSBEE_QEMU_RISCV32`, full path to the
-   binary; used directly if set.
-2. `$HAUKSBEE_QEMU_DIR/bin/<name>`, points at the `bin/` directory of the
-   unpacked fork.
-3. `~/.hauksbee-qemu-esp/qemu/bin/<name>`; the conventional manual-unpack
+1. `$HAUKSBEE_QEMU_XTENSA` / `$HAUKSBEE_QEMU_RISCV32`, the full path to the
+   binary. hauksbee uses it directly if set.
+2. `$HAUKSBEE_QEMU_DIR/bin/<name>`, the `bin/` directory of the unpacked
+   fork.
+3. `~/.hauksbee-qemu-esp/qemu/bin/<name>`, the conventional manual-unpack
    location.
-4. `~/.espressif/tools/qemu-*/<ver>/qemu/bin/<name>`; the location used by
-   ESP-IDF's `idf_tools.py install qemu-xtensa qemu-riscv32`.
+4. `~/.espressif/tools/qemu-*/<ver>/qemu/bin/<name>`, the location ESP-IDF's
+   `idf_tools.py install qemu-xtensa qemu-riscv32` uses.
 5. `<name>` on `$PATH`, accepted **only if** it is the Espressif fork. The
    check runs `qemu-system-xtensa -machine help` and looks for `esp32` in the
-   output. Homebrew's mainline `qemu-system-xtensa` lists only `lx60`/`kc705`/
-   `sim` and is rejected. This guard is not optional: mainline QEMU cannot boot
-   an ESP32 image.
+   output. Homebrew's mainline `qemu-system-xtensa` lists only
+   `lx60`/`kc705`/`sim` and gets rejected. This guard is not optional:
+   mainline QEMU cannot boot an ESP32 image.
 
-The installer uses `idf_tools.py` if an ESP-IDF checkout is found
+The installer uses `idf_tools.py` when it finds an ESP-IDF checkout
 (`~/esp/esp-idf`, `$IDF_PATH`, or `~/.espressif`), which puts binaries in
 discovery slot 4. Otherwise it downloads directly from
 [github.com/espressif/qemu/releases](https://github.com/espressif/qemu/releases)
-and places them in `~/.espressif/tools/qemu-xtensa/<ver>/qemu/bin/`, which also
-hits slot 4.
+and places them in `~/.espressif/tools/qemu-xtensa/<ver>/qemu/bin/`, which
+also hits slot 4.
 
 ### Env-var overrides
 
@@ -161,7 +166,7 @@ You should see at least `esp32` and `esp32s3` in the output. If the output is
 empty or shows only `lx60`/`kc705`/`sim`, you have mainline QEMU, not the
 Espressif fork, and hauksbee will reject it.
 
-Run the integration tests (they skip cleanly if the emulator is absent):
+Run the integration tests. They skip cleanly if the emulator is absent:
 
 ```
 cargo test -p hauksbee-engine --test stm32_renode_cosim -- --nocapture
@@ -179,16 +184,18 @@ installer runs:
 xattr -dr com.apple.quarantine ~/renode-portable/Renode.app
 ```
 
-Without this, Gatekeeper blocks the binary on first launch with "cannot be
-opened because the developer cannot be verified." The quarantine flag is a
-per-file extended attribute; removing it does not disable system-wide Gatekeeper.
+Without this step, Gatekeeper blocks the binary on first launch with "cannot
+be opened because the developer cannot be verified." The quarantine flag is a
+per-file extended attribute. Removing it does not disable system-wide
+Gatekeeper.
 
 If you installed Renode yourself and hauksbee hangs or fails to spawn it, run
 the `xattr` command above manually.
 
-The installer also uses `ditto` (not `cp -R`) to copy the app bundle. `ditto`
-preserves extended attributes and the symlinks inside the bundle that `cp -R`
-silently breaks on macOS (resulting in a dylib permission error at runtime).
+The installer also uses `ditto` (not `cp -R`) to copy the app bundle.
+`ditto` preserves extended attributes and the symlinks inside the bundle
+that `cp -R` silently breaks on macOS (this causes a dylib permission error
+at runtime).
 
 ---
 
@@ -221,7 +228,8 @@ Same as above, but use the `osx-x86_64-portable.dmg` asset.
 
 **Linux (x86_64)**
 
-1. Download `renode-<ver>.linux-portable-dotnet.tar.gz` from the releases page.
+1. Download `renode-<ver>.linux-portable-dotnet.tar.gz` from the releases
+   page.
 2. Extract:
 
    ```
@@ -239,17 +247,17 @@ Same as x86_64 above, but use the `linux-arm64-portable-dotnet.tar.gz` asset.
 **Windows**
 
 Download `renode-<ver>.windows-portable-dotnet.zip` and extract it into
-`%USERPROFILE%\renode-portable` (so `Renode.exe` sits directly inside), or use
-the `.msi` installer. Discovery checks, in order: `HAUKSBEE_RENODE`,
+`%USERPROFILE%\renode-portable` (so `Renode.exe` sits directly inside), or
+use the `.msi` installer. Discovery checks, in order: `HAUKSBEE_RENODE`,
 `Renode.exe`/`renode.exe` on `PATH`, the `%USERPROFILE%\renode-portable` zip
 layout (`Renode.exe` at the top or under `bin\`), then the installer trees
 under `%ProgramFiles%\Renode` and `%LOCALAPPDATA%\Programs\Renode`. These
-lookups are unit-tested on every OS and the portable-zip layout was verified
+lookups are unit-tested on every OS, and the portable-zip layout was verified
 resolving under Wine, but no firmware co-sim has run against a real Renode on
-native Windows yet. The installer script does not cover Windows (it is bash);
-the unpack is manual. If you want to close the native-Windows gap,
-`docs/about/release-and-licensing.md` section 5 has a ready-made prompt for
-pointing a coding agent at the port, and an invitation to PR the result.
+native Windows yet. The installer script does not cover Windows (it is
+bash), so the unpack stays manual. If you want to close the native-Windows
+gap, `docs/about/release-and-licensing.md` section 5 has a ready-made prompt
+for pointing a coding agent at the port, and an invitation to PR the result.
 
 ---
 
@@ -264,8 +272,8 @@ python3 ~/esp/esp-idf/tools/idf_tools.py install qemu-xtensa qemu-riscv32
 ```
 
 This places the binaries in `~/.espressif/tools/qemu-xtensa/<ver>/qemu/bin/`
-and `~/.espressif/tools/qemu-riscv32/<ver>/qemu/bin/`, which hauksbee discovers
-automatically (slot 4).
+and `~/.espressif/tools/qemu-riscv32/<ver>/qemu/bin/`, which hauksbee
+discovers automatically (slot 4).
 
 **Direct download (no ESP-IDF)**
 
@@ -282,8 +290,9 @@ automatically (slot 4).
    | Linux arm64 | `aarch64-linux-gnu.tar.bz2` |
    | Windows x86_64 | `x86_64-w64-mingw32.tar.xz` |
 
-3. Extract each into `~/.espressif/tools/<tool-name>/<ver>/qemu/`. The tarball
-   has a top-level `qemu/` directory; extract one level up and strip it:
+3. Extract each into `~/.espressif/tools/<tool-name>/<ver>/qemu/`. The
+   tarball has a top-level `qemu/` directory. Extract one level up and strip
+   it:
 
    ```
    DEST=~/.espressif/tools/qemu-xtensa/<ver>/qemu
@@ -311,13 +320,13 @@ automatically (slot 4).
      -machine help | grep esp32
    ```
 
-**Windows**: the same two layouts work with backslashes and `.exe`: unpack
+**Windows**: the same two layouts work with backslashes and `.exe`. Unpack
 into `%USERPROFILE%\.hauksbee-qemu-esp\qemu\bin\` (so
 `qemu-system-xtensa.exe` and `qemu-system-riscv32.exe` sit there), or use the
 idf-tools tree under `%USERPROFILE%\.espressif\tools\`, `C:\Espressif\tools\`
 (the ESP-IDF Windows installer default), or wherever `IDF_TOOLS_PATH` points.
 `hauksbee install esp-qemu` refuses on Windows (it shells `curl`/`tar` and has
-never run on a native box), so the unpack is manual. These discovery paths are
-unit-tested on every OS and exercised under Wine; an actual ESP32 co-sim on
-native Windows is still unproven, see
+never run on a native box), so the unpack stays manual. These discovery paths
+are unit-tested on every OS and exercised under Wine. An actual ESP32 co-sim
+on native Windows is still unproven; see
 `docs/about/release-and-licensing.md` section 5.

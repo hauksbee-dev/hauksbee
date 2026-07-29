@@ -32,9 +32,9 @@ In line with the project's zero-false-positive rule, the check fires
 ONLY when:
 
 1. the part is **positively identified** (its value / MPN string contains the
-   part token, e.g. `CYPD3177`); identification is by value string, not by a
-   model-DB entry, so it works on layout-only extraction and does not depend on a
-   device model existing; AND
+   part token, e.g. `CYPD3177`). Identification is by value string, not by a
+   model-DB entry, so it works on layout-only extraction and does not depend
+   on a device model existing. AND
 2. the configuration divider on the pin **resolves to concrete resistor values**:
    a parseable pull-up to the reference rail and a parseable pull-down to ground,
    so the pin voltage is actually computable.
@@ -66,8 +66,8 @@ permanent pull-down in parallel with any switched leg).
 > If VBUS_MIN is more than VBUS_MAX, the setting on VBUS_MAX is used as both
 > minimum and maximum.
 
-So a VBUS_MIN strapped higher than a selected VBUS_MAX detent silently clamps that
-detent: the part requests VBUS_MAX, not the (higher) labelled voltage.
+So a VBUS_MIN strapped higher than a selected VBUS_MAX detent silently clamps
+that detent: the part requests VBUS_MAX, not the (higher) labeled voltage.
 
 ### What the check resolves automatically
 
@@ -90,14 +90,15 @@ detent: the part requests VBUS_MAX, not the (higher) labelled voltage.
 
 ### What the check cannot resolve (honest limits)
 
-- It does not read the **silk-screened voltage label** next to each detent, so it
-  cannot say "the detent labelled 15 V decodes to 12 V" from the netlist alone.
-  It states which bands the selector can reach and which it cannot; a reviewer
-  reads off that "20 V" is unreachable. The exact "detent N labelled X decodes Y"
-  mismatch is proven in the unit tests against hand-derived numbers.
-- A selector wired through a part that does not bind as a multi-pad switch on the
-  config net is not enumerated. The static (permanent) divider is still decoded
-  and the Note-1 check still runs.
+- It does not read the **silk-screened voltage label** next to each detent, so
+  it cannot say "the detent labeled 15 V decodes to 12 V" from the netlist
+  alone. It states which bands the selector can reach and which it cannot. A
+  reviewer reads off that "20 V" is unreachable. The exact "detent N labeled
+  X decodes Y" mismatch is proven in the unit tests against hand-derived
+  numbers.
+- A selector wired through a part that does not bind as a multi-pad switch on
+  the config net is not enumerated. The static (permanent) divider is still
+  decoded and the Note-1 check still runs.
 
 ## The board this was calibrated on
 
@@ -120,14 +121,14 @@ pull-down) and R9 (the VBUS_MIN pull-up) are marked Do-Not-Populate**
 With DNP honored:
 
 - VBUS_MAX keeps only R11 (5.1 k pull-up) plus the per-detent switched single
-  pull-down. That is the datasheet-correct single-pull-down-per-detent topology;
-  the open detent floats to ~3.3 V (the 20 V band).
+  pull-down. That is the datasheet-correct single-pull-down-per-detent
+  topology. The open detent floats to ~3.3 V (the 20 V band).
 - VBUS_MIN loses its pull-up (R9 DNP), leaving only R10 (10 k to ground), so it
   sits near 0 V (the 5 V band) and never triggers Note 1.
 
 So the device-decode check correctly produces **no finding** on the real board:
 the permanent pull-down it would need to compute the faulty static VBUS_MAX
-divider is unpopulated. Firing here would be a false positive; the check's
+divider is unpopulated. Firing here would be a false positive. The check's
 silence on the real board is the zero-false-positive discipline doing its job.
 The decode math (the part that *is* portable and provable) is
 locked down by the unit tests.
@@ -152,8 +153,9 @@ locked down by the unit tests.
 
 ## Adding a part
 
-Write a decoder function mirroring `check_cypd3177`: identify the part by value
-string, find its config pins by function / net name, resolve each divider, decode
-against the part's own band table, and emit `LintCheck::DeviceDecode` findings.
-Add unit tests for the band edges and at least one fire / one silent case. Keep
-the identification value-string based so it does not depend on a model-DB entry.
+Write a decoder function mirroring `check_cypd3177`: identify the part by
+value string, find its config pins by function / net name, resolve each
+divider, decode against the part's own band table, and emit
+`LintCheck::DeviceDecode` findings. Add unit tests for the band edges and at
+least one fire / one silent case. Keep the identification value-string based
+so it does not depend on a model-DB entry.

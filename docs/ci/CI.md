@@ -3,45 +3,46 @@
 **On every layout change: boot the firmware on the emulated board, assert the
 rail comes up at 4.96 V, assert the UART says hello, assert the LED blinks.**
 
-Software was transformed by one habit: run the tests on every commit. A red
-build stops a regression before it reaches anyone. Hardware has had nothing like
-it. A board change goes from a layout edit to a fab order to a reflow oven to a
-bench session weeks later, and the first time anyone learns the rail browns out
-is with a multimeter in hand.
+One habit transformed software: run the tests on every commit. A red build
+stops a regression before it reaches anyone. Hardware has had nothing like it.
+A board change goes from a layout edit to a fab order to a reflow oven to a
+bench session weeks later. The first time anyone learns the rail browns out is
+with a multimeter in hand.
 
-`hauksbee-ci` closes that loop. It runs the hauksbee PCB emulator headless in a
-pipeline. Point it at a board file and (optionally) a firmware ELF, give it a
-short list of assertions in a checked-in TOML file, and it boots the firmware on
-the board the layout actually implements and tells you, with an exit code, a
-JUnit report, and inline annotations, whether the board still does what it is
-supposed to. The bug that cost weeks on the bench becomes a one-line regression
-that fails on the broken layout forever.
+`hauksbee-ci` closes that loop. It runs the hauksbee PCB emulator headless in
+a pipeline. Point it at a board file and (optionally) a firmware ELF, and give
+it a short list of assertions in a checked-in TOML file. It boots the firmware
+on the board the layout actually implements. It then reports, with an exit
+code, a JUnit report, and inline annotations, whether the board still does
+what it is supposed to. The bug that cost weeks on the bench becomes a
+one-line regression that fails on the broken layout forever.
 
-This is not lint and it is not a DRC. It is the board, alive, under assertions:
-the analogue rails, the firmware's serial output, the blink frequency, the
-stress ratings, all checked the way a test suite checks a function.
+This is not lint and it is not a DRC. It is the board, alive, under
+assertions: the analog rails, the firmware's serial output, the blink
+frequency, the stress ratings, all checked the way a test suite checks a
+function.
 
 **Where the web page fits.** `hauksbee serve`'s drop-a-board page is the quick
 look: one board, one optional firmware image, one plain-language report. The
-TOML spec on this page is the *repeatable* check: it pins down how the board is
-powered, which firmware boots, and what must hold, so a pipeline can run it on
-every commit. Assertions exist only in specs and run only through
-`hauksbee-ci`; the browser never evaluates them. When a quick look turns into
+TOML spec on this page is the *repeatable* check: it pins down how the board
+is powered, which firmware boots, and what must hold, so a pipeline can run it
+on every commit. Assertions exist only in specs and run only through
+`hauksbee-ci`. The browser never evaluates them. When a quick look turns into
 something you want to keep true, `hauksbee-ci init <board>` turns the board
 into a starter spec.
 
 ### The static-check corpus gates (a separate, complementary layer)
 
 The bring-up CI above runs *firmware on a board under assertions*. The static
-checks (`--drc`, `--lint`, `--si`) have their own enforcement: a **zero-false-
-positive corpus gate**, the standing discipline that a check ships only if it
-raises no findings on the known-good famous corpus. These are encoded as
-corpus-gated cargo tests rather than spec assertions, and are the CI-level
-guarantee for the checks the bug-hunt tooling work added:
+checks (`--drc`, `--lint`, `--si`) have their own enforcement: a
+**zero-false-positive corpus gate**, the standing discipline that a check
+ships only if it raises no findings on the known-good famous corpus. These
+are encoded as corpus-gated cargo tests rather than spec assertions. They are
+the CI-level guarantee for the checks the bug-hunt tooling work added:
 
 - **DRC clearance tolerance**: `cargo test -p hauksbee-extract --test drc`
   (boundary/at-rule/sub-rule cases) plus the `drc_corpus` / `eagle_drc_corpus`
-  sweeps stay green; the at-rule noise drops (bms-c1 137 -> 0, pd-sink 66 -> 4).
+  sweeps stay green. The at-rule noise drops (bms-c1 137 -> 0, pd-sink 66 -> 4).
 - **Trace ampacity + input-cap ripple** (`--si` checks 6, 7):
   `HAUKSBEE_REQUIRE_CORPUS=1 cargo test -p hauksbee-engine --test si_ampacity_ripple`
   asserts the checks fire on a genuinely undersized routed trace and raise
@@ -109,9 +110,9 @@ MCU SoC descriptors themselves resolve from `$HAUKSBEE_MCU_DIR` /
 `~/.config/hauksbee/mcu` before the built-ins, in CI and interactive runs
 alike (see `docs/extending/add-an-mcu-variant.md` for the full two-file
 recipe). `hauksbee-ci init`'s scaffold uses the same layered library, so the
-detected MCU matches what a run would bind. Note the spec's top-level `mcu`
-key does NOT select the MCU; it is an informational note; the board's part
-value plus the routing entries decide.
+detected MCU matches what a run would bind. Note: the spec's top-level `mcu`
+key does NOT select the MCU. It is an informational note only. The board's
+part value plus the routing entries decide.
 
 ## Spec format
 
@@ -146,11 +147,14 @@ volts = 5.0
 current_limit_a = 1.0     # bench: CC foldback above this
 ```
 
-Per kind: `bench` takes `volts`, `current_limit_a`; `wall` takes `volts`,
-`r_out_ohms`, `ripple_vpp`, `ripple_hz`; `usb` takes `usb = "5v0.5a" | "5v1.5a"
-| "5v3a"`; `battery` takes `chemistry = "liion" | "alkaline" | "nimh" |
-"lifepo4"`, `cells`, `capacity_mah`, `soc`, `r_internal_ohms`; `ideal` takes
-`volts`.
+Per kind:
+
+- `bench` takes `volts`, `current_limit_a`.
+- `wall` takes `volts`, `r_out_ohms`, `ripple_vpp`, `ripple_hz`.
+- `usb` takes `usb = "5v0.5a" | "5v1.5a" | "5v3a"`.
+- `battery` takes `chemistry = "liion" | "alkaline" | "nimh" | "lifepo4"`,
+  `cells`, `capacity_mah`, `soc`, `r_internal_ohms`.
+- `ideal` takes `volts`.
 
 ### Net drives: `[[net_drive]]`
 
@@ -189,10 +193,10 @@ value = "0.05"            # the documented milliohm sense shunt
 
 `[[override]]` swaps a component's *value string* before binding. Some boards
 differ from their design files more radically: traces cut with a knife, pins
-lifted, jumper wires soldered, parts replaced; the physical rework record.
-That delta lives in a declarative `.asbuilt.toml` overlay, and a spec can
-reference one; it is applied to the bound board before every run, ahead of any
-harness attachment:
+lifted, jumper wires soldered, parts replaced. That is the physical rework
+record. That delta lives in a declarative `.asbuilt.toml` overlay, and a spec
+can reference one. hauksbee applies it to the bound board before every run,
+ahead of any harness attachment:
 
 ```toml
 asbuilt = "tarski.asbuilt.toml"   # relative to the spec file, like `board`
@@ -201,8 +205,9 @@ asbuilt = "tarski.asbuilt.toml"   # relative to the spec file, like `board`
 The overlay is fail-loud: an entry that matches nothing (or a different number
 of devices/terminals than it declares) aborts the run with a line-numbered
 error and a did-you-mean suggestion. The flagship example is the Tarski
-board's validated surgery, `testdata/tarski.asbuilt.toml`; the same file the
-engine CLI takes as `hauksbee run board --asbuilt board.asbuilt.toml`.
+board's validated surgery, `testdata/tarski.asbuilt.toml`. This is the same
+file the engine CLI takes as `hauksbee run board --asbuilt
+board.asbuilt.toml`.
 
 ### Initial-state fuzzing: `[fuzz]`
 
@@ -218,8 +223,8 @@ nets = ["WSEL", "OE_N", "RCLK"]   # undefined power-up bits
 levels = [0.0, 5.0]               # the two states each is strapped between
 ```
 
-Seed 0 is always the all-low baseline; the rest are spread deterministically, so
-a run is reproducible.
+Seed 0 is always the all-low baseline. The rest are spread deterministically,
+so a run is reproducible.
 
 ### Component tolerances: `[[tolerance]]` + `[ensemble]`
 
@@ -243,7 +248,7 @@ mode = "monte-carlo"       # "monte-carlo" (default) | "corners"
 Rules apply in order and the **last matching rule wins** per component, so a
 broad `ref = "R*"` can be followed by a tighter `ref = "R7"`. The nominal is
 the component's board value (after any `[[override]]`). An override can also
-declare its own spread; the `value` becomes the nominal:
+declare its own spread, and then the `value` becomes the nominal:
 
 ```toml
 [[override]]
@@ -253,10 +258,10 @@ tolerance = 1.0            # the repaired shunt is a ±1% part
 ```
 
 Distributions: `"uniform"` samples the full ±tolerance band (assumes nothing
-about vendor binning, stresses the edges hardest; the default); `"gaussian"`
-uses the standard EDA convention, sigma = tolerance/3 truncated at the
-tolerance bound (a part outside its marked tolerance would have been binned
-out at the factory).
+about vendor binning, stresses the edges hardest, and is the default).
+`"gaussian"` uses the standard EDA convention, sigma = tolerance/3 truncated
+at the tolerance bound (a part outside its marked tolerance would have been
+binned out at the factory).
 
 **What a green ensemble means, and does not.** Monte-Carlo is *sampled
 coverage*: "passed 24/24 sampled tolerance seeds" is statistical evidence over
@@ -270,10 +275,10 @@ component value (dividers, ladders, most DC bias networks) the true worst
 case is a corner, so a green corner run bounds it. For non-monotonic responses
 (filters peaking mid-band, matched pairs) the interior can be worse than any
 corner, so the report claims boundedness **only for monotonic responses**.
-Full enumeration is capped at 2^10 = 1024 components' corners; above 10
-toleranced components corner mode refuses and points at Monte-Carlo. Corner
+Full enumeration is capped at 2^10 = 1024 components' corners. Above 10
+toleranced components, corner mode refuses and points at Monte-Carlo. Corner
 mode does not compose with `[fuzz]` (the corner index enumerates min/max
-combinations, not fuzz seeds), Monte-Carlo does.
+combinations, not fuzz seeds). Monte-Carlo does compose with `[fuzz]`.
 
 **Reproducibility is doctrine.** Every sampled value is a pure function of
 (spec, seed, component reference): seed 0 is always the nominal baseline, the
@@ -288,7 +293,7 @@ the exact sampled values:
       seed 8: VOUT: min=2.695V ... [R1=9.17k, R2=10.7k]; passed 19/24 seeds (failing: 8, 10, 16, 18, 19)
 ```
 
-Re-run that one build in isolation; it reproduces byte-identically:
+Re-run that one build in isolation. It reproduces byte-identically:
 
 ```bash
 hauksbee-ci run ci/divider.toml --seed 8
@@ -316,7 +321,7 @@ min = 4.9            # and/or max
 after_ms = 50        # only sample at/after this time
 ```
 
-A `min` checks the worst (lowest) the net dipped to in the window; a `max`
+A `min` checks the worst (lowest) the net dipped to in the window. A `max`
 checks the worst (highest) it rose to.
 
 **`uart`**: the firmware's serial output contains a string or matches a regex.
@@ -348,7 +353,7 @@ kind = "no_faults"
 ```
 
 **`max_current`**: a component's peak through-current stays below a ceiling.
-(Tracked for resistors and diodes; other kinds are covered by `no_faults`.)
+(Tracked for resistors and diodes. Other kinds are covered by `no_faults`.)
 
 ```toml
 [[assert]]
@@ -415,7 +420,7 @@ optional `scenario`.
 
 **`peripheral`**: a bus-slave / sensor / VCD-sink peripheral's end-of-run state,
 by `id` and `field` (e.g. a `vcd_sink`'s `transitions` count, an EEPROM's last
-address). Pairs with a `[[peripheral]]` block (below).
+address). Pairs with a `[[peripheral]]` block below.
 
 **`hwtrace`**: compare the simulated waveform against a captured scope trace
 (features like period / rise-time / overshoot within tolerance), `trace =
@@ -430,7 +435,7 @@ the `rail_window` / `protection_trip` assertions judge over). The field
 reference for each block is in [PERIPHERALS.md](../cosim/PERIPHERALS.md) (peripheral /
 sensor) and [TRANSIENTS.md](../checks/TRANSIENTS.md) (scenario). For a runnable
 `[[sensor]]` example see `lm75_thermostat.toml` in
-`crates/hauksbee-ci/examples/`; `[[peripheral]]` and `[[scenario]]` blocks are
+`crates/hauksbee-ci/examples/`. `[[peripheral]]` and `[[scenario]]` blocks are
 exercised by `crates/hauksbee-ci/tests/peripherals.rs` and
 `tests/spec_and_assertions.rs` (copy-paste-able TOML fixtures).
 
@@ -451,19 +456,22 @@ For a machine-readable single-board result outside the assertion runner,
 
 ## Worked example: the Tarski power-up brownout
 
-This is the bug that motivated the whole project, turned into a regression test.
+This is the bug that motivated the whole project, turned into a regression
+test.
 
-On the Tarski board the analogue rail `ANALOG_VDD` is fed through a part labelled
-a "shunt", `R_Shunt15301`, which is **1 kΩ**. A current-sense shunt should be
-milliohms. Separately, the 74HC595 weight registers power up in undefined states
-(no pull-ups on `OE'`/`SRCLR'`/`RCLK`, and the bootloader clocks garbage in over
-SCLK), so a stray bit can enable an inhibitory synapse weight at boot. That
-weight drives a miswired base path that pulls destruction-scale current, and
-through the 1 kΩ shunt that single cell collapses the *entire* rail.
+On the Tarski board the analog rail `ANALOG_VDD` is fed through a part
+labeled a "shunt", `R_Shunt15301`, which is **1 kΩ**. A current-sense shunt
+should be milliohms. Separately, the 74HC595 weight registers power up in
+undefined states (no pull-ups on `OE'`/`SRCLR'`/`RCLK`, and the bootloader
+clocks garbage in over SCLK), so a stray bit can enable an inhibitory synapse
+weight at boot. That weight drives a miswired base path that pulls
+destruction-scale current. Through the 1 kΩ shunt, that single cell collapses
+the *entire* rail.
 
 No single-defect tool predicts this. It is an interaction: a wrong resistor
-value, plus a floating register, plus a wiring error, compounding. On the bench
-it showed up as "voltages low enough to affect operation" and cost weeks.
+value, plus a floating register, plus a wiring error, compounding. On the
+bench it showed up as "voltages low enough to affect operation" and cost
+weeks.
 
 The flagship spec encodes it. The board is the real brownout cell, extracted
 verbatim from the 3,442-component Tarski input system and checked in as a
@@ -531,35 +539,36 @@ value = "0.05"            # milliohm-class sense shunt instead of 1 kΩ
 1/1 assertions passed - GREEN
 ```
 
-With the milliohm shunt the same enabled weight cannot drop the rail; it holds
-at **4.966 V** across all eight power-up states. The single override is the whole
-difference between RED and GREEN. That is the model: a bug that cost weeks on the
-bench is now caught in 0.1 s, on every layout change, by a regression that can
-never be silently lost.
+With the milliohm shunt the same enabled weight cannot drop the rail. It
+holds at **4.966 V** across all eight power-up states. The single override is
+the whole difference between RED and GREEN. That is the model: a bug that
+cost weeks on the bench is now caught in 0.1 s, on every layout change, by a
+regression that can never be silently lost.
 
 These two specs are also an integration test
-(`crates/hauksbee-ci/tests/flagship_brownout.rs`), so hauksbee's own CI proves the
-broken layout stays red and the fixed one stays green.
+(`crates/hauksbee-ci/tests/flagship_brownout.rs`), so hauksbee's own CI
+proves the broken layout stays red and the fixed one stays green.
 
 ## Boot-coverage: watching the firmware define a Hi-Z control net
 
-There is a class of fault the *netlist alone cannot adjudicate*. A control net
-(a MOSFET gate, a level-translator enable, a display reset, a chip-select) is
-driven only by an MCU GPIO that goes high-impedance at reset. Its power-up
-default is therefore undefined. Whether that is a *bug* depends on the intended
-default state of the controlled load, which the netlist does not encode: a
-display that must be on by default and a haptic motor that must be off by default
-have byte-identical netlist topology. Two real such faults (Watchy e-paper
-RES#, ZSWatch DISPLAY-EN) are recorded as honest misses of the static checks
-for exactly this reason - a static check firing there would be a confident false
-positive on a shipped board, on the very same topology that is correct elsewhere.
+There is a class of fault the *netlist alone cannot adjudicate*. A control
+net (a MOSFET gate, a level-translator enable, a display reset, a
+chip-select) is driven only by an MCU GPIO that goes high-impedance at reset.
+Its power-up default is therefore undefined. Whether that is a *bug* depends
+on the intended default state of the controlled load, and the netlist does
+not encode that: a display that must be on by default and a haptic motor that
+must be off by default have byte-identical netlist topology. Two real such
+faults (Watchy e-paper RES#, ZSWatch DISPLAY-EN) are recorded as honest
+misses of the static checks for exactly this reason. A static check firing
+there would be a confident false positive on a shipped board, on the very
+same topology that is correct elsewhere.
 
-The `boot-coverage` assertion makes the class decidable by running the firmware:
-instead of guessing the intended default, **watch what the firmware actually
-does**. It runs the co-sim from reset and requires the MCU to drive the named
-control net to a defined level within a deadline, and that no stress fault fires
-during the boot window before it is first driven (rails hold while the input is
-still undefined).
+The `boot-coverage` assertion makes the class decidable by running the
+firmware. Instead of guessing the intended default, it **watches what the
+firmware actually does**. It runs the co-sim from reset and requires the MCU
+to drive the named control net to a defined level within a deadline, with no
+stress fault during the boot window before the net is first driven (rails
+hold while the input is still undefined).
 
 ### The two-sided demo
 
@@ -582,50 +591,55 @@ hauksbee-ci run crates/hauksbee-ci/examples/boot_gate_fail.toml
 #          (firmware left it Hi-Z / undefined through the whole run)
 ```
 
-The check has teeth only because variant B goes RED: the same board, the same
-assertion, two firmwares, opposite verdicts. Pinned as an integration test,
-`crates/hauksbee-ci/tests/boot_coverage.rs`.
+The check has teeth only because variant B goes RED: the same board, the
+same assertion, two firmwares, opposite verdicts. This is pinned as an
+integration test, `crates/hauksbee-ci/tests/boot_coverage.rs`.
 
 ### Backend reach (stated honestly)
 
-This proof uses the **AVR (simavr)** backend, one of hauksbee's **three** co-sim
-backends; the mechanism is backend-agnostic and runs on all three. Besides
-AVR, the **Renode** backend co-sims STM32, **nRF52**, and SiFive RISC-V, and the
-**QEMU** backend co-sims ESP32 / ESP32-S3 / ESP32-C3 (see `docs/cosim/MCU.md` for the
-full matrix). nRF52 is turnkey today: `hauksbee run` boots the bundled
+This proof uses the **AVR (simavr)** backend, one of hauksbee's **three**
+co-sim backends. The mechanism is backend-agnostic and runs on all three.
+Besides AVR, the **Renode** backend co-sims STM32, **nRF52**, and SiFive
+RISC-V, and the **QEMU** backend co-sims ESP32 / ESP32-S3 / ESP32-C3 (see
+`docs/cosim/MCU.md` for the full matrix). nRF52 works out of the box today:
+`hauksbee run` boots the bundled
 `testdata/firmware/renode_demos/nrf52840-zephyr_shell.board` +
-`nrf52840-zephyr_shell.elf` pair to the Zephyr `uart:~$` prompt through Renode.
+`nrf52840-zephyr_shell.elf` pair to the Zephyr `uart:~$` prompt through
+Renode.
 
-Both faulted boards named above are covered by a backend: ZSWatch
-is nRF52 (Renode) and Watchy is ESP32 (QEMU), and both architectures co-sim.
-What each still needs to run *this* boot-coverage check is its own firmware
-image built for the target.
+A backend covers both faulted boards named above: ZSWatch is nRF52 (Renode)
+and Watchy is ESP32 (QEMU), and both architectures co-sim. What each still
+needs to run *this* boot-coverage check is its own firmware image built for
+the target.
 
 Honest per-backend caveat for boot-coverage: GPIO-drive detection reads the
-port's output register once per co-sim chunk. On AVR (cycle-accurate simavr) and
-Renode (STM32/nRF52 ODR poll) that read is direct; on the ESP32 QEMU model,
-which does not expose GPIO output read-back, the firmware must mirror its output
-word to the RAM mailbox the backend reads (the bundled ESP32 demo does). Edges
-faster than the chunk alias on the poll bridge either way, so match the firmware
-switching rate to the chunk size (see `docs/cosim/MCU.md` limitations).
+port's output register once per co-sim chunk. On AVR (cycle-accurate simavr)
+and Renode (STM32/nRF52 ODR poll) that read is direct. The ESP32 QEMU model
+does not expose GPIO output read-back, so the firmware must mirror its output
+word to the RAM mailbox the backend reads (the bundled ESP32 demo does).
+Edges faster than the chunk alias on the poll bridge either way, so match the
+firmware switching rate to the chunk size (see `docs/cosim/MCU.md`
+limitations).
 
 ## Schematic-stage CI
 
 **Catch it before you even lay out the board.** Point a spec's `board` at a
 `.kicad_sch` and hauksbee-ci runs the same headless co-simulation against the
-schematic, with no PCB in existence yet. The netlist is derived geometrically
-from the schematic the way eeschema derives it (wires, pins, junctions, labels,
-power symbols, hierarchy); see `docs/ingest/SCHEMATICS.md`. Everything else in this
-document, supplies, drives, fuzzing, every assertion kind, works unchanged.
+schematic, with no PCB in existence yet. hauksbee derives the netlist
+geometrically from the schematic, the way eeschema derives it (wires, pins,
+junctions, labels, power symbols, hierarchy). See `docs/ingest/SCHEMATICS.md`.
+Everything else in this document, supplies, drives, fuzzing, every assertion
+kind, works unchanged.
 
-This is where the most expensive hardware bugs are cheapest to catch. They are
-schematic-level faults: the original Raspberry Pi 4's USB-C port that would not
-charge from compliant cables was a *schematic* mistake (the two CC pins shared
-one resistor instead of one each), shipped on millions of boards. A rail that
-browns out, a missing pull-up, a power pin on the wrong net, an interaction
-between a wrong value and a floating strap, these are all decidable from the
-schematic alone, weeks before a layout exists. Schematic-stage CI is the commit
-that turns "we found it on the bench" into "the build went red."
+This is where the most expensive hardware bugs are cheapest to catch. They
+are schematic-level faults: the original Raspberry Pi 4's USB-C port that
+would not charge from compliant cables was a *schematic* mistake (the two CC
+pins shared one resistor instead of one each), shipped on millions of boards.
+A rail that browns out, a missing pull-up, a power pin on the wrong net, an
+interaction between a wrong value and a floating strap: these are all
+decidable from the schematic alone, weeks before a layout exists.
+Schematic-stage CI is the commit that turns "we found it on the bench" into
+"the build went red."
 
 ```toml
 # A schematic-stage spec: board is a .kicad_sch hierarchy root.
@@ -657,12 +671,12 @@ hauksbee-ci run crates/hauksbee-ci/examples/pic_programmer_schematic.toml
 
 ### Load the hierarchy root, not a sub-sheet
 
-A `.kicad_sch` board is loaded **by path** so its sheet hierarchy resolves:
-sub-sheets live in sibling files, and only the path-based loader follows them.
-Point the spec at the **hierarchy root**. If you point it at a sub-sheet (a file
-referenced by another `.kicad_sch` in the same or parent directory), hauksbee-ci
-stops with a clear error naming the root, rather than silently extracting one
-page and running a partial board:
+hauksbee loads a `.kicad_sch` board **by path** so its sheet hierarchy
+resolves: sub-sheets live in sibling files, and only the path-based loader
+follows them. Point the spec at the **hierarchy root**. If you point it at a
+sub-sheet (a file referenced by another `.kicad_sch` in the same or parent
+directory), hauksbee-ci stops with a clear error naming the root, rather than
+silently extracting one page and running a partial board:
 
 ```
 invalid spec: board pic_sockets.kicad_sch is a sub-sheet of
@@ -673,26 +687,28 @@ pic_programmer.kicad_sch. Point the spec at the hierarchy root
 ### The agreement guarantee
 
 For a project that has *both* a schematic and a layout, the same spec run at
-either stage returns the same verdict. The schematic netlist and the PCB netlist
-are validated to induce the identical partition of pins into nets (see
-hauksbee-extract's cross-validation tests), so a `voltage` / `no_faults` / blink
-check passes on the `.kicad_sch` exactly when it passes on the `.kicad_pcb`.
+either stage returns the same verdict. Tests validate that the schematic
+netlist and the PCB netlist induce the identical partition of pins into nets
+(see hauksbee-extract's cross-validation tests), so a `voltage` / `no_faults`
+/ blink check passes on the `.kicad_sch` exactly when it passes on the
+`.kicad_pcb`.
 
-That is a powerful property: the schematic-stage check is not a weaker
-approximation you re-do later, it is the *same* check, available earlier. It is
-enforced as an integration test
-(`crates/hauksbee-ci/tests/schematic_ci.rs`): the `pic_programmer` spec is run
-against both the schematic and the layout and the per-assertion results must
-agree.
+That property matters: the schematic-stage check is not a weaker
+approximation you re-do later. It is the *same* check, available earlier. An
+integration test enforces this
+(`crates/hauksbee-ci/tests/schematic_ci.rs`): it runs the `pic_programmer`
+spec against both the schematic and the layout, and the per-assertion results
+must agree.
 
 ### Editor integration: the honest state
 
 KiCad's PCB editor (pcbnew) has an action-plugin API, and hauksbee-ci ships a
-plugin for it (`integrations/kicad-plugin`). The **schematic editor (eeschema)
-has no equivalent yet**: KiCad's new IPC plugin API is implemented for the PCB
-editor only in KiCad 9 and 10, schematic-editor support is explicitly future
-work, and headless operation through `kicad-cli` only arrives in KiCad 11. We do
-not fake an eeschema button that cannot exist.
+plugin for it (`integrations/kicad-plugin`). The **schematic editor
+(eeschema) has no equivalent yet**: KiCad's new IPC plugin API is implemented
+for the PCB editor only in KiCad 9 and 10, schematic-editor support is
+explicitly future work, and headless operation through `kicad-cli` only
+arrives in KiCad 11. This documentation does not fake an eeschema button that
+cannot exist.
 
 So drive schematic-stage CI the way it is actually natural to drive it:
 
@@ -708,14 +724,15 @@ So drive schematic-stage CI the way it is actually natural to drive it:
   project's `.kicad_sch`, so you can run a schematic-stage check from the PCB
   editor on the same project today.
 
-When eeschema gains a plugin API, the entry point drops in next to the existing
-one: the shared core (`hauksbee_ci_core.py`) is already file-type-agnostic, it
-only handles the spec path and the binary does the rest.
+When eeschema gains a plugin API, the entry point drops in next to the
+existing one: the shared core (`hauksbee_ci_core.py`) is already
+file-type-agnostic. It only handles the spec path, and the binary does the
+rest.
 
 ## Wiring it into your repo
 
 - **Pre-commit (schematic or layout)**: copy the `repos:` entry from
-  `integrations/pre-commit/.pre-commit-config.yaml` into your repo and
+  `integrations/pre-commit/.pre-commit-config.yaml` into your repo and run
   `pre-commit install`. Hardware checks then run before a commit lands. See
   `integrations/pre-commit/README.md`.
 - **GitHub Actions**: copy `integrations/github-action/example-workflow.yml`
@@ -724,7 +741,7 @@ only handles the spec path and the binary does the rest.
   the Checks tab. See `integrations/github-action/README.md`.
 - **KiCad (pcbnew)**: install the pcbnew action plugin from
   `integrations/kicad-plugin` to run a spec on the open board and see the
-  verdict in a dialog. eeschema has no plugin API yet (see above); use the
+  verdict in a dialog. eeschema has no plugin API yet (see above). Use the
   pre-commit hook or CLI for schematic-stage checks.
 - **Any CI**: call `hauksbee-ci run spec.toml --junit results.xml` and consume
   the exit code and the JUnit file.
@@ -746,8 +763,8 @@ Two commands gate, with two deliberately different contracts:
 `--check`, bare `--json`) are **report commands: they exit 0 even when they
 print a serious finding**, unless you pass `--strict` (alias
 `--fail-on-findings`). Gating a pipeline on `hauksbee run` without `--strict`
-gates on nothing; when a gate-grade finding is printed without `--strict`, the
-CLI says so on stderr.
+gates on nothing. When a gate-grade finding is printed without `--strict`,
+the CLI says so on stderr.
 
 | exit | meaning |
 |---|---|
@@ -756,26 +773,27 @@ CLI says so on stderr.
 | 3 | invalid for analysis (aborted analog solve, zero-activity co-sim under `--strict`, thermal table with no usable coverage) |
 
 What `--strict` gates on, per report: `--drc` true copper shorts (clearance
-notes never gate); `--lint` high/medium findings; `--si` any real finding;
-`--usb-c` a serious CC verdict; `--check` / bare `--json` the union of these.
-On a board format newer than the validated range (KiCad 10+), possibly-phantom
-shorts do not gate; the printed caveat says to cross-check.
+notes never gate), `--lint` high/medium findings, `--si` any real finding,
+`--usb-c` a serious CC verdict, and `--check` / bare `--json` the union of
+these. On a board format newer than the validated range (KiCad 10+),
+possibly-phantom shorts do not gate. The printed caveat says to cross-check.
 
 ## Limitations
 
 - The MCU co-sim runs on three backends, each co-simming its own cores (no
   silent fall-back to AVR): **AVR** (ATmega/ATtiny via simavr), **Renode**
-  (STM32, nRF52, SiFive RISC-V), and **QEMU** (ESP32/-S3/-C3). Renode and QEMU
-  are external emulators located at run time; if the emulator is not installed,
-  instantiation fails with a clear install message rather than degrading to a
-  different core. `hauksbee doctor --backends` reports which backends this build
-  can actually locate. GPIO edges are sampled once per co-sim chunk, so signals
-  faster than the chunk alias (see `docs/cosim/MCU.md`).
-- `max_current` peak tracking covers resistors and diodes directly; other
-  component kinds are covered by the `no_faults` stress monitor rather than a
+  (STM32, nRF52, SiFive RISC-V), and **QEMU** (ESP32/-S3/-C3). Renode and
+  QEMU are external emulators located at run time. If the emulator is not
+  installed, instantiation fails with a clear install message rather than
+  degrading to a different core. `hauksbee doctor --backends` reports which
+  backends this build can actually locate. GPIO edges are sampled once per
+  co-sim chunk, so signals faster than the chunk alias (see
+  `docs/cosim/MCU.md`).
+- `max_current` peak tracking covers resistors and diodes directly. The
+  `no_faults` stress monitor covers other component kinds instead of a
   numeric ceiling.
-- Fuzzing perturbs the named nets' initial logic levels (the undefined power-up
-  bits); it does not yet randomize internal MCU RAM.
+- Fuzzing perturbs the named nets' initial logic levels (the undefined
+  power-up bits). It does not yet randomize internal MCU RAM.
 - Tolerance-ensemble members run serially. Each member is an independent
   bind+solve, so a parallel runner is a natural follow-up, but the co-sim
   backend's thread-safety is unproven and a racy runner would be worse than a
@@ -783,16 +801,17 @@ shorts do not gate; the printed caveat says to cross-check.
 - Tolerance sampling lives in the CI spec layer. Deck-level `{mc(nominal,
   tol)}` / `{gauss(nominal, tol, sigma)}` parameter functions for
   `hauksbee sim` SPICE decks are a planned follow-up, not yet implemented.
-- Schematic-stage CI loads the hierarchy root and recurses its sub-sheets. The
-  "you pointed at a sub-sheet" guard is best-effort: it detects a sub-sheet
-  referenced from the same or parent directory (the layouts real projects use).
-  A hierarchy nested more than one directory deep can slip past the guard; the
-  fix is the same either way, point the spec at the root `.kicad_sch`.
+- Schematic-stage CI loads the hierarchy root and recurses its sub-sheets.
+  The "you pointed at a sub-sheet" guard is best-effort: it detects a
+  sub-sheet referenced from the same or parent directory (the layouts real
+  projects use). A hierarchy nested more than one directory deep can slip
+  past the guard. The fix is the same either way: point the spec at the root
+  `.kicad_sch`.
 - Bus membership in schematics is not yet modelled, so a design that carries
   nets over buses extracts those nets split into their members (it never
   over-connects). Cross-validated corpus projects without buses match their
-  layout net-for-net; see `docs/ingest/SCHEMATICS.md`.
-- The flagship brownout fixture is a trimmed cell of the full Tarski board, so
-  the regression runs in milliseconds. The full 3,442-component board extracts
-  in ~0.3 s but is heavier to co-simulate; trim to the subcircuit a given check
-  cares about, the way the fixture does.
+  layout net-for-net. See `docs/ingest/SCHEMATICS.md`.
+- The flagship brownout fixture is a trimmed cell of the full Tarski board,
+  so the regression runs in milliseconds. The full 3,442-component board
+  extracts in ~0.3 s but is heavier to co-simulate. Trim to the subcircuit a
+  given check cares about, the way the fixture does.

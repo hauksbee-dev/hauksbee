@@ -4,8 +4,8 @@
 `[sensor]` TOML file that the generic engine interpreter
 (`RegisterMapSensor` in `crates/hauksbee-engine/src/peripherals/register_map.rs`)
 realizes as a bus slave. No Rust. The worked example is the Bosch BME280
-(humidity/pressure/temperature); the shipped spec this walkthrough retraces is
-`testdata/sensor-specs/bme280.toml`.
+(humidity, pressure, temperature). The shipped spec this walkthrough
+retraces is `testdata/sensor-specs/bme280.toml`.
 
 **What you need:** the part's datasheet (register map + electrical worked
 example), and `hauksbee models lint`.
@@ -20,16 +20,16 @@ spec declares three things:
 2. **Registers**: address → either constant bytes (`const`, for chip IDs and
    config registers) or a value: an `expr` over the inputs plus an `encoding`
    that packs the number into wire bytes.
-3. **Protocol**: how the firmware addresses registers (`i2c_pointer`:
-   write the register pointer, read N bytes, auto-increment; or `spi_reg`:
-   command byte = R/W bit + address).
+3. **Protocol**: how the firmware addresses registers. `i2c_pointer` writes
+   the register pointer, reads N bytes, and auto-increments. `spi_reg` uses
+   a command byte made of the R/W bit plus the address.
 
 The schema and validator live in
-`crates/hauksbee-models/src/sensor_spec.rs`; the engine evaluates expressions
-and speaks the bus. The spec is the shared contract both sides validate
-against.
+`crates/hauksbee-models/src/sensor_spec.rs`. The engine evaluates
+expressions and speaks the bus. The spec is the shared contract both sides
+validate against.
 
-## Step 1, bus, address, and the input decision
+## Step 1: bus, address, and the input decision
 
 ```toml
 [sensor]
@@ -44,15 +44,16 @@ datasheet's forward formula. The BME280 cannot do that, and the reason is worth
 understanding because you will hit it on other parts:
 
 > **Why the BME280 exposes raw ADC counts, not °C/Pa.** The spec's `expr`
-> mechanism is *forward*: physical input → the number packed into register
-> bytes. The BME280 datasheet gives the *reverse* (raw → physical Bosch
-> compensation), it is non-invertible per register (pressure and humidity both
-> depend on `t_fine`, derived from the temperature ADC, coupled, not
-> per-register), and the fixed-point routine needs integer bit ops `evalexpr`
-> does not have. So the shipped spec's inputs are `adc_press`, `adc_temp`,
-> `adc_hum`, the natural register-map quantities, and the raw→physical
-> compensation is applied by the *consumer* (the firmware in a real co-sim,
-> the fixture test otherwise). The full rationale is the header comment of
+> mechanism runs *forward*: physical input to the number packed into
+> register bytes. The BME280 datasheet gives the *reverse* (raw to physical
+> Bosch compensation). This reverse path is non-invertible per register:
+> pressure and humidity both depend on `t_fine`, derived from the
+> temperature ADC, so they are coupled, not per-register. Also, the
+> fixed-point routine needs integer bit ops that `evalexpr` does not have.
+> So the shipped spec's inputs are `adc_press`, `adc_temp`, and `adc_hum`,
+> the natural register-map quantities, and the *consumer* applies the
+> raw-to-physical compensation (the firmware in a real co-sim, the fixture
+> test otherwise). The full rationale is the header comment of
 > `testdata/sensor-specs/bme280.toml`.
 
 ```toml
@@ -64,10 +65,10 @@ default = 519888.0   # datasheet worked example → t_fine=128422 → 25.08 °C
 Defaults matter: pick the datasheet's worked-example values so the sensor is
 in a known-good state before any test drives it.
 
-## Step 2, identity and control registers (const bytes)
+## Step 2: identity and control registers (const bytes)
 
-Everything the firmware reads but your model doesn't compute is a `const`
-register. The chip ID is the one you cannot skip, drivers hard-gate on it:
+Everything the firmware reads but your model does not compute is a `const`
+register. The chip ID is the one you cannot skip, since drivers hard-gate on it:
 
 ```toml
 [[sensor.register]]
@@ -78,13 +79,13 @@ const = [0x60]       # BME280 = 0x60; a BMP280 reports 0x58 here
 Same pattern for `reset` (0xE0), `ctrl_hum` (0xF2), `status` (0xF3),
 `ctrl_meas` (0xF4), `config` (0xF5).
 
-## Step 3, calibration blocks, one const byte per address
+## Step 3: calibration blocks, one const byte per address
 
 The BME280 firmware burst-reads 26 calibration bytes from 0x88. In
-`i2c_pointer` protocol a burst auto-increments across the register map, so the
-calibration block is declared as **one const register per byte address**, with
-no gaps (the shipped spec even declares the reserved 0xA0 so the burst stays
-contiguous):
+`i2c_pointer` protocol, a burst auto-increments across the register map. So
+you declare the calibration block as **one const register per byte
+address**, with no gaps (the shipped spec even declares the reserved 0xA0
+so the burst stays contiguous):
 
 ```toml
 [[sensor.register]]
@@ -97,13 +98,13 @@ const = [0x6B]
 ```
 
 Use the datasheet Appendix's example trimming values, and note each byte's
-meaning in a comment; the fixture test in step 6 depends on these exact
+meaning in a comment. The fixture test in step 6 depends on these exact
 numbers.
 
-## Step 4, data registers: encoding + expr
+## Step 4: data registers, encoding and expr
 
-A multi-byte value is **one** register with a multi-byte encoding; the burst
-covers its interior bytes via the register's read length:
+A multi-byte value is **one** register with a multi-byte encoding. The
+burst covers its interior bytes through the register's read length:
 
 ```toml
 [[sensor.register]]
@@ -120,9 +121,10 @@ expr     = "adc_hum"
 Available encodings (`Encoding` in `sensor_spec.rs`): `u8`, `u16_be`,
 `u16_le`, `i16_be`, `i16_le`, `q7.1_be` (the LM75A packing), `u20_be_xlsb`
 (the Bosch 20-bit MSB/LSB/XLSB frame, added *for* the BME280), and `raw`
-(const-only). `scale`/`offset` apply a linear pre-scale before encoding,
-`encoded_value = expr * scale + offset`, e.g. a register that stores
-temperature as `T * 100 + 4000` (the SHT31-style offset-centigrade packing):
+(const-only). `scale`/`offset` apply a linear pre-scale before encoding:
+`encoded_value = expr * scale + offset`. For example, a register that
+stores temperature as `T * 100 + 4000` (the SHT31-style offset-centigrade
+packing):
 
 ```toml
 [[sensor.register]]
@@ -133,10 +135,9 @@ scale    = 100.0
 offset   = 4000.0
 ```
 
-If
-your part needs a packing none of these produce, that is a small Rust addition
-to `Encoding`; the `u20_be_xlsb` doc comment is the template for justifying
-one.
+If your part needs a packing none of these produce, that is a small Rust
+addition to `Encoding`. The `u20_be_xlsb` doc comment is the template for
+justifying one.
 
 Finish with the protocol block:
 
@@ -147,10 +148,10 @@ style = "i2c_pointer"
 
 (For the SPI variant of the same part: `bus = "spi"`, drop `i2c_address`, use
 `style = "spi_reg"` with `rw_read_is_high`/`addr_mask`, and keep the **raw
-datasheet register addresses**; the interpreter masks the R/W bit off both
+datasheet register addresses**. The interpreter masks the R/W bit off both
 sides. See `testdata/sensor-specs/icm42605.toml` for a full worked SPI spec.)
 
-## Step 5, lint it
+## Step 5: lint it
 
 ```
 cargo run -p hauksbee-engine --bin hauksbee -- models lint testdata/sensor-specs/bme280.toml
@@ -169,14 +170,14 @@ natural width, a register that is both const and expr, missing `i2c_address`,
 an SPI `addr_mask` that includes bit 7. Every failure is a named message, so
 fix what it says and re-run.
 
-**Trap, evalexpr equality is type-strict.** Every spec variable is bound as a
-float, and `evalexpr`'s `==` never equates float with integer: `pd == 0` is
-*false* even when `pd` is 0.0. Always write float literals in expressions:
-`pd == 0.0`, `if(gain_bit == 1.0, …)`. This is documented (with the rationale
-for why bit-field extraction is data, not expressions) in the write-side
-section of `sensor_spec.rs`.
+**Trap: evalexpr equality is type-strict.** The loader binds every spec
+variable as a float, and `evalexpr`'s `==` never equates float with
+integer: `pd == 0` is *false* even when `pd` is 0.0. Always write float
+literals in expressions: `pd == 0.0`, `if(gain_bit == 1.0, …)`. The
+write-side section of `sensor_spec.rs` documents this, with the rationale
+for why bit-field extraction is data, not expressions.
 
-## Step 6; the test that proves it
+## Step 6: the test that proves it
 
 The proving pattern is a **datasheet-anchored fixture**: drive the spec's
 inputs with the datasheet's worked-example values, read the registers the way
@@ -184,10 +185,10 @@ firmware would (burst reads through the interpreter), run the datasheet's own
 raw→physical math on the bytes, and assert the physical answer the datasheet
 prints. The shipped BME280 fixture
 (`declarative_bme280_decodes_datasheet_worked_example` in
-`crates/hauksbee-engine/src/peripherals/register_map.rs`) does exactly this:
-it `include_str!`s the real spec file (so the test pins the shipped data, not
-a copy), reads the calibration burst and the 0xF7 data burst, runs the Bosch
-int32 compensation, and asserts 25.08 °C / 100656 Pa.
+`crates/hauksbee-engine/src/peripherals/register_map.rs`) does exactly this.
+It `include_str!`s the real spec file, so the test pins the shipped data,
+not a copy. It reads the calibration burst and the 0xF7 data burst, runs
+the Bosch int32 compensation, and asserts 25.08 °C / 100656 Pa.
 
 ```
 cargo test -p hauksbee-engine declarative_bme280
@@ -206,12 +207,13 @@ not a number your model produced once. A fixture that asserts the model
 against itself proves nothing.
 
 One honest caveat: this closing proof pattern is a Rust test, so it needs a
-hauksbee **checkout** to run in. The data-only promise holds for *using* the
-part, writing the spec, `hauksbee models lint`, `models resolve`, and the
-co-sim attaching it at runtime need no checkout, but pinning it with a
-datasheet-anchored test the way the shipped parts are pinned does.
+hauksbee **checkout** to run. The data-only promise still holds for *using*
+the part: writing the spec, running `hauksbee models lint`, running
+`models resolve`, and attaching it to a co-sim at runtime all need no
+checkout. Pinning it with a datasheet-anchored test, the way the shipped
+parts are pinned, does need one.
 
-## Step 7, use it in a co-sim
+## Step 7: use it in a co-sim
 
 A CI spec attaches declarative sensors per run
 (`crates/hauksbee-ci/src/spec.rs`, `SensorAttach`):
@@ -235,10 +237,10 @@ side of the same schema: `[[sensor.write_register]]` (pointer-framed, with
 declared bit fields), `[[sensor.write_command]]` (command-framed, the MCP4728
 shape), `[[sensor.state]]` + `[[sensor.output]]` (per-channel state driving an
 analog net through a voltage law). The shipped `ads1115.toml`, `ina219.toml`,
-and `mcp4728.toml` specs in `testdata/sensor-specs/` are the worked examples, and
-the write side is currently modeled for I2C only, an SPI spec with write
-blocks is *rejected* by validation rather than silently mis-parsed (a stated
-limitation, not a capability).
+and `mcp4728.toml` specs in `testdata/sensor-specs/` are the worked
+examples. The write side currently models I2C only. Validation rejects an
+SPI spec with write blocks, instead of silently mis-parsing it. This is a
+stated limitation, not a capability.
 
 ---
 

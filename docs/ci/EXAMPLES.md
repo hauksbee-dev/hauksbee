@@ -6,7 +6,7 @@ run. This page indexes the [`examples/`](../../examples) tree, the distribution
 
 ## Get it running
 
-One command builds and installs it; the other two are the usual next steps.
+One command builds and installs it. The other two are the usual next steps.
 
 ```bash
 # Build both binaries and put them on PATH (no sudo; installs into ~/.local/bin)
@@ -43,10 +43,10 @@ hauksbee run crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb --drc
 
 By default these `hauksbee run` reports are informational: they print findings
 but exit 0. Add `--strict` to make them FAIL on a real problem (see
-[Gate a pipeline](#gate-a-pipeline-with---strict) below), or gate on
+[Gate a pipeline](#gate-a-pipeline-with---strict) below). Or gate on
 `hauksbee-ci` / `hauksbee check-code` for the full assertion/fault flow.
 
-`hauksbee --help` lists every command, and `hauksbee run --help` (or any
+`hauksbee --help` lists every command. `hauksbee run --help` (or any
 `<command> --help`) shows that command's flags with an example. Swap in your own
 `.kicad_pcb`, `.kicad_sch`, `.brd`, `.d356`, or a folder of gerbers.
 
@@ -54,8 +54,9 @@ but exit 0. Add `--strict` to make them FAIL on a real problem (see
 
 The expert tables assume you read electronics. Add `--plain` (or its alias
 `--explain`) to any of the report flags to get the same findings translated for
-someone who is *not* an EE: a one-line verdict, then each finding as **what it
-is**, **why it matters**, and **what to do**, ordered worst-first.
+someone who is *not* an EE. Each report gives a one-line verdict, then each
+finding as **what it is**, **why it matters**, and **what to do**, ordered
+worst-first.
 
 ```bash
 hauksbee run crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb --drc --plain
@@ -83,9 +84,9 @@ The same finding in `--plain`:
 ```
 
 `--plain` works on `--drc`, `--lint`, `--si`, `--resources`, and on the
-`--headless` co-sim faults (over-current, over-voltage, etc.). It is opt-in: the
-expert tables stay the default, and the plain text is derived from the *same*
-finding data, so the two never disagree. A clean board reads
+`--headless` co-sim faults (over-current, over-voltage, etc.). It is opt-in:
+the expert tables stay the default. hauksbee derives the plain text from the
+*same* finding data, so the two never disagree. A clean board reads
 `Looks healthy: no ... problems found.`
 
 ## Gate a pipeline (with `--strict`)
@@ -93,7 +94,7 @@ finding data, so the two never disagree. A clean board reads
 By default `--drc`/`--lint`/`--si`/`--resources` exit 0 even when they find
 problems, so existing scripts that only read the text are unaffected. Add
 `--strict` (alias `--fail-on-findings`) to make them exit non-zero when there is
-a real defect, turning a single command into a CI gate without a full
+a real defect. This turns a single command into a CI gate without a full
 `hauksbee-ci` spec:
 
 ```bash
@@ -120,9 +121,9 @@ The non-zero exit code is `2`. Without `--strict` every report still exits `0`.
 
 ## See a board live (the 2D/3D viewer)
 
-The live 2D/3D web viewer is served by `hauksbee run <board> --serve` (or the
-`hauksbee serve` subcommand). Note: bare `hauksbee run <board>` on a terminal now
-opens the full-screen terminal dashboard (TUI) instead, pass `--serve` for the
+`hauksbee run <board> --serve` (or the `hauksbee serve` subcommand) serves the
+live 2D/3D web viewer. Note: bare `hauksbee run <board>` on a terminal now
+opens the full-screen terminal dashboard (TUI) instead. Pass `--serve` for the
 web frontend. The frontend is a build artifact and is not checked in, so build it
 once:
 
@@ -134,15 +135,16 @@ hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --serve
 hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --serve
 ```
 
-The Watchy is the "point it at a real board" case: hauksbee extracts the circuit
-its copper implements, binds 56 of 75 parts from the stock model library, and
-says plainly which active parts it does not recognise (the TP4054 charger, the
-BMA423 IMU, the e-paper panel) rather than guessing. Add `--report` for the
-static verdict, or `--serve` for the live 2D/3D viewer.
+The Watchy is the "point it at a real board" case. hauksbee extracts the
+circuit its copper implements and binds 56 of 75 parts from the stock model
+library. It states plainly which active parts it does not recognise (the
+TP4054 charger, the BMA423 IMU, the e-paper panel) instead of guessing. Add
+`--report` for the static verdict, or `--serve` for the live 2D/3D viewer.
 
-It prints the URL to open (`http://127.0.0.1:3001` by default; change with
-`--port`). If you run it before building the frontend, hauksbee still starts the
-websocket and tells you exactly this build step rather than serving a blank page.
+It prints the URL to open (`http://127.0.0.1:3001` by default). Change the
+port with `--port`. If you run it before building the frontend, hauksbee still
+starts the websocket and tells you exactly this build step rather than serving
+a blank page.
 
 ## Drop a board, get a report (the web front door)
 
@@ -164,16 +166,19 @@ the page (or click to choose one), and the browser shows:
 - a simple 2D map of where the parts sit.
 
 It runs the *same* checks and the *same* plain-language translation as the CLI
-(`--drc`/`--lint`/`--si` + `--plain`); nothing is uploaded off the machine, the
-analysis runs locally in the `hauksbee serve` process.
+(`--drc`/`--lint`/`--si` + `--plain`). Nothing leaves the machine: the
+analysis runs locally, inside the `hauksbee serve` process.
 
 This local flow is the whole product for a single user. A **hosted** version
-(one URL anyone visits, no install) would additionally need: a small upload
-service running this same `analyze` behind a real web server, per-request
-sandboxing / resource limits (untrusted board files), a size/rate limit beyond
-the built-in 32 MiB body cap, and a privacy stance on uploaded boards (they are
-proprietary). The analysis core is already a pure `bytes -> JSON` function, so a
-hosted deployment is a packaging job, not new analysis work.
+(one URL anyone visits, no install) would also need:
+
+- a small upload service running this same `analyze` behind a real web server,
+- per-request sandboxing / resource limits (untrusted board files),
+- a size/rate limit beyond the built-in 32 MiB body cap, and
+- a privacy stance on uploaded boards (they are proprietary).
+
+The analysis core is already a pure `bytes -> JSON` function, so a hosted
+deployment is a packaging job, not new analysis work.
 
 ## Board-as-Code examples
 
@@ -206,13 +211,13 @@ are in the [board-as-code README](../../examples/board-as-code/README.md).
 | [`watchy_v15_display_res`](../../crates/hauksbee-ci/examples/watchy_v15_display_res.toml) / [`undriven`](../../crates/hauksbee-ci/examples/watchy_v15_display_res_undriven.toml) † | `boot-coverage` on the real Watchy v1.5 e-paper RES# (ESP32 QEMU) | PASS / FAIL |
 | [`pic_programmer_schematic.toml`](../../crates/hauksbee-ci/examples/pic_programmer_schematic.toml) † | Schematic-stage CI on a `.kicad_sch` (no PCB yet) | PASS |
 
-† These two specs run against boards in the developer board-corpus (the
-historical-revision Watchy v1.5 and KiCad's `pic_programmer` demo), which is not
-redistributed in this repo, and the Watchy one also needs the Espressif QEMU
-ESP32 backend. They come from the known-fault validation campaign the checks
-were calibrated on; their integration tests skip
-cleanly when the corpus or backend is absent. To run a real board here with no
-extra setup, use `hauksbee run boards/watchy.kicad_pcb --report` above.
+† These two specs run against boards in the developer board corpus: the
+historical-revision Watchy v1.5 and KiCad's `pic_programmer` demo. This corpus
+is not redistributed in this repo, and the Watchy spec also needs the
+Espressif QEMU ESP32 backend. Both specs come from the known-fault validation
+campaign that calibrated the checks. Their integration tests skip cleanly when
+the corpus or backend is absent. To run a real board here with no extra setup,
+use `hauksbee run boards/watchy.kicad_pcb --report` above.
 
 More detail and the run-and-expected-verdict for each:
 [ci-specs README](../../examples/ci-specs/README.md).
@@ -220,7 +225,7 @@ More detail and the run-and-expected-verdict for each:
 ## Terminal sessions (real captured output)
 
 [`examples/sessions/`](../../examples/sessions). Actual runs of the headline
-flows, each file labelled with the command that produced it.
+flows, each file labeled with the command that produced it.
 
 | Flow | Transcript |
 |---|---|
@@ -255,10 +260,10 @@ CI-safe (colours auto-disable when not on a TTY or when `NO_COLOR` is set).
 ## Releases and the GitHub Action
 
 - [`.github/workflows/release.yml`](../../.github/workflows/release.yml) builds the
-  binaries on macOS and Linux on a `vX.Y.Z` tag and attaches the bundles to the
-  GitHub Release.
+  binaries on macOS and Linux on a `vX.Y.Z` tag. It attaches the bundles to
+  the GitHub Release.
 - The composite [GitHub Action](../../integrations/github-action) **prefers a
-  prebuilt release binary** and falls back to building from source, so users do
+  prebuilt release binary** and falls back to building from source. Users do
   not have to compile.
 - The [KiCad plugin](../../integrations/kicad-plugin) finds a prebuilt or local
   binary automatically and only offers to compile as a last resort.

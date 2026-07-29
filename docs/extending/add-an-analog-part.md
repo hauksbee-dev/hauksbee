@@ -1,27 +1,28 @@
 # Add an analog part: an LDO / op-amp / discrete, one `[[models]]` entry
 
-**Goal.** Bind a stock analog part the built-in DB doesn't ship, an LDO, op-amp,
-diode, BJT, MOSFET, or comparator, by hand-writing one `[[models]]` TOML entry.
-**No recompile, no LLM in the loop, no source knowledge.** Validated fail-loud at
-load, so a typo is caught by `hauksbee models lint` before it ever reaches a run.
+**Goal.** Bind a stock analog part that the built-in DB does not ship: an LDO,
+op-amp, diode, BJT, MOSFET, or comparator. Write one `[[models]]` TOML entry by
+hand. This needs no recompile, no LLM in the loop, and no source knowledge. The
+load step validates the entry and fails loud. `hauksbee models lint` catches a
+typo before it reaches a run.
 
-When a part on your board is *not* modelled, hauksbee binds it OPEN and says so
-("N% resolved", "simulated as OPEN"); this is how you close that gap.
+When a part on your board is *not* modeled, hauksbee binds it OPEN and says so
+("N% resolved", "simulated as OPEN"). This guide shows how to close that gap.
 
-> **Shortcut:** to auto-draft this entry from a PDF datasheet instead of writing
-> it by hand, run the extractor and then lint/correct its output:
+> **Shortcut:** to auto-draft this entry from a PDF datasheet instead of
+> writing it by hand, run the extractor. Then lint and correct its output:
 > `cargo run -p hauksbee-models --bin model-extract -- part.pdf`
-> (see [../MODELS.md](../models/MODELS.md#pointing-hauksbee-at-a-datasheet)). The
-> hand-written path below is still worth reading; it is what you edit the draft
-> into, and what `hauksbee models lint` checks.
+> (see [../MODELS.md](../models/MODELS.md#pointing-hauksbee-at-a-datasheet)). Read
+> the hand-written path below too. It is the shape you edit the draft into, and
+> what `hauksbee models lint` checks.
 
 ## The shape of a model entry
 
 Every entry is one `[[models]]` block with four parts: an `id`, a `[models.match]`
 rule that maps a board part value to it, a `[models.params]` block of the
 kind-specific device parameters, and a `[models.pins]` map from footprint pad
-numbers to device roles. Optionally `[models.ratings]` for the stress/destruction
-monitor.
+numbers to device roles. Add an optional `[models.ratings]` block for the
+stress and destruction monitor.
 
 ### Example 1, an LDO regulator (`kind = "vreg"`)
 
@@ -78,15 +79,15 @@ rail_hi = 15.0         # output high rail (V) [-60 .. 60]
 
 ## The required params, per kind
 
-`hauksbee models lint` enforces these (the authoritative bounds live in
+`hauksbee models lint` enforces these. The authoritative bounds live in
 `crates/hauksbee-models/src/validation.rs`, and the full table is in
-[`crates/hauksbee-models/db/README.md`](../../crates/hauksbee-models/db/README.md)):
+[`crates/hauksbee-models/db/README.md`](../../crates/hauksbee-models/db/README.md):
 
 | kind | required params | notes |
 |---|---|---|
 | `diode` | `is`, `n`, `rs` | Shockley + series R |
 | `bjt_npn` / `bjt_pnp` | `is`, `bf`, `nf`, `vaf` | Gummel-Poon-lite |
-| `nmos` / `pmos` | `vto`, `kp` | `kp` runs into the tens–hundreds for power FETs |
+| `nmos` / `pmos` | `vto`, `kp` | `kp` runs into the tens to hundreds for power FETs |
 | `vreg` | `vout`, `dropout_v`, `iq_a` | LDO / regulator |
 | `opamp` | `gain`, `rail_lo`, `rail_hi` | `rail_lo < rail_hi` |
 | `comparator` | `out_lo`, `out_hi`, `hysteresis` | `out_lo < out_hi` |
@@ -94,22 +95,24 @@ rail_hi = 15.0         # output high rail (V) [-60 .. 60]
 
 ## Pin roles (what to put on the right of `[models.pins]`)
 
-The role strings are consumed verbatim by the binder, use these canonical names
-(a wrong role binds the pin OPEN):
+The binder reads the role strings verbatim. Use these canonical names. A wrong
+role binds the pin OPEN:
 
 - **diode:** `anode`, `cathode`
 - **bjt:** `base`, `emitter`, `collector`
 - **mosfet:** `gate`, `source`, `drain`
-- **vreg:** `in`, `out`, `gnd`, `out` is the regulated net the model sources
-- **opamp:** `out`, `in_plus`, `in_minus` (append `_a`/`_b`/`_c`/`_d` per unit on a
-  multi-op-amp package; the binder recognises the letter suffixes only, up to
-  four channels; a single-channel part uses the bare roles)
+- **vreg:** `in`, `out`, `gnd`. The `out` role is the regulated net the model
+  sources.
+- **opamp:** `out`, `in_plus`, `in_minus`. Append `_a`/`_b`/`_c`/`_d` per unit
+  on a multi-op-amp package. The binder recognizes the letter suffixes only,
+  up to four channels. A single-channel part uses the bare roles.
 - **comparator:** `out`, `in_plus`, `in_minus`
 - **analog_switch:** `com`, `s0`, `s1`, `ctrl`
 
-The fastest way to get a correct `[models.pins]` block for an unfamiliar footprint
-is to `hauksbee to-code <a board that already uses the part>` and copy the pad
-numbers, or read the closest entry in `crates/hauksbee-models/db/*.toml`.
+The fastest way to build a correct `[models.pins]` block for an unfamiliar
+footprint: run `hauksbee to-code <a board that already uses the part>` and
+copy the pad numbers, or read the closest entry in
+`crates/hauksbee-models/db/*.toml`.
 
 ## Lint it, then prove it binds
 
@@ -128,14 +131,14 @@ hauksbee run my_board.kicad_pcb --report --plain --models-dir .
 #    hauksbee models resolve my_board.kicad_pcb --models-dir .
 ```
 
-`--models-dir .` layers your file above the built-in DB for this run. To install
-it permanently, drop the file in `~/.hauksbee/models/` (loads on every run) or
-ship it as a [model pack](make-a-model-pack.md).
+`--models-dir .` layers your file above the built-in DB for this run. To
+install it permanently, drop the file in `~/.hauksbee/models/` (loads on every
+run) or ship it as a [model pack](make-a-model-pack.md).
 
 ## Adding a whole MCU / chip
 
-An MCU is a different animal; its firmware runs on an emulated core, so it needs
-a SoC descriptor (register map + backend) in addition to a routing entry. That is
-the [add-an-mcu-variant](add-an-mcu-variant.md) two-file recipe (still no
-recompile). If a board's MCU is co-simulated on a *substitute* core, the co-sim
-report tells you so and points you here.
+An MCU is a different case. Its firmware runs on an emulated core, so it also
+needs a SoC descriptor (register map + backend), not only a routing entry.
+That is the [add-an-mcu-variant](add-an-mcu-variant.md) two-file recipe,
+which also needs no recompile. If a board's MCU is co-simulated on a
+*substitute* core, the co-sim report says so and points you here.

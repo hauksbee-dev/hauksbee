@@ -38,12 +38,12 @@ Resource kinds modelled:
 
 - **RP2040 PWM slices/channels.** Each GPIO n is hardwired to PWM slice
   `(n >> 1) & 7`, channel A when n is even / B when n is odd (RP2040 datasheet
-  4.5.2; the GPIO-function table). The pair `{slice, channel}` is the resource
+  4.5.2, the GPIO-function table). The pair `{slice, channel}` is the resource
   instance: one channel can be driven out of exactly one pin at a time, and the
   two channels of a slice share the slice counter/TOP (4.5.2.1), so two PWM
   functions on one `{slice, channel}` is a hard conflict. Authored for both the
-  Pico-form module (the Olimex carrier; pad = the module's 40-pin castellation)
-  and the bare QFN-56 chip (the RP2040-minimal board; pad = the datasheet pin).
+  Pico-form module (the Olimex carrier, pad = the module's 40-pin castellation)
+  and the bare QFN-56 chip (the RP2040-minimal board, pad = the datasheet pin).
 
 - **SAMD51 QSPI pin group.** The QSPI controller on SAM D5x is NOT routable
   through the PORT mux: its six signals are fixed to PA08..PA11 (DATA0..3), PB10
@@ -59,7 +59,7 @@ Resource kinds modelled:
   wiring the flash as a 4-wire SERCOM SPI device on those pads. The physical
   discriminator, read from the net names: a CORRECT QSPI flash drives PA08..PA11
   as the quad-IO data lanes (`IO0..IO3` / `D0..D3`) with SCK/CS on the dedicated
-  PB10/PB11; the SparkFun BUG wires 4-wire SPI (`MOSI`/`MISO`/`SCK`/`CS`) onto the
+  PB10/PB11. The SparkFun BUG wires 4-wire SPI (`MOSI`/`MISO`/`SCK`/`CS`) onto the
   PA08..PA11 data pads. The check fires ONLY when a 4-wire-SPI-role net
   (MOSI/MISO/SCK/CS) lands on a QSPI DATA pad (`data = true` in the table, and
   `net_role_is_4wire_spi`), so the Metro/Feather-M4 quad-IO flash stays silent.
@@ -77,13 +77,14 @@ Resource kinds modelled:
   negative, per the calibration discipline.)
 
 The map is extensible to SERCOM-instance pad constraints, STM32 TIMx_CHy timer
-sharing, and ADC instances by the same `pad -> {resource instance}` shape; only
-the two kinds the two known bugs exercise are populated and validated here.
+sharing, and ADC instances by the same `pad -> {resource instance}` shape.
+Only the two kinds the two known bugs exercise are populated and validated
+here.
 
 ### Hand table vs codex extraction (the cross-check)
 
-The hand table is the source of truth; the automated extraction is a *check on*
-the hand authoring, not a replacement. `resource-extract`
+The hand table is the source of truth. The automated extraction is a *check
+on* the hand authoring, not a replacement. `resource-extract`
 (`crates/hauksbee-extract/src/bin/resource_extract.rs`) extends the
 `model-extract` codex pipeline: `pdftotext` the datasheet, slice the text around
 the GPIO/PWM section, prompt codex (`codex exec --sandbox workspace-write
@@ -132,8 +133,8 @@ runner with no codex and no network. The live test
 
 3. **Decide the peripheral honestly.** Reaching the HDMI connector is *not*
    automatically a PWM demand: on PicoDVI only the pixel/bit **clock** (the
-   `CK`/`CLK` net) is PWM-generated; the three TMDS **data** lanes are driven by
-   PIO+DMA and the DDC/CEC lines are I2C. The check classifies by the pin's own
+   `CK`/`CLK` net) is PWM-generated. The three TMDS **data** lanes are driven
+   by PIO+DMA and the DDC/CEC lines are I2C. The check classifies by the pin's own
    net plus the target, and only a function whose peripheral is PWM occupies a
    PWM slice. (Conflating them manufactured false PWM conflicts on the data and
    control pins - see the kill below.)
@@ -142,8 +143,8 @@ runner with no codex and no network. The live test
    functions has no valid assignment (one channel, one pin) -> **High**. A QSPI
    group with >= 2 pads committed to a non-QSPI function blocks the controller ->
    **High**. No medium tier is emitted: the two modelled instances are hard,
-   binary "serves one or the other" resources, so a half-conflict does not arise;
-   the tier was dropped rather than defined loosely.
+   binary "serves one or the other" resources, so a half-conflict does not
+   arise. The tier was dropped rather than defined loosely.
 
 Reported through the same `NetLintReport`/`LintFinding` shape the connectivity
 lint uses (`LintCheck::McuResourceConflict`), so the CLI and callers treat it
@@ -177,9 +178,9 @@ Corpus-gated tests in
 ```
 
 The full evidence chain to the s-expression level: GP12 (slice 6A) drives the
-DVI clock to the HDMI connector through the series-termination resistor R10; GP28
-(also slice 6A) drives the left audio channel to the jack through the 74LVC125
-buffer and the RC reconstruction filter. Both demand slice 6 channel A. Flagged
+DVI clock to the HDMI connector through the series-termination resistor R10.
+GP28 (also slice 6A) drives the left audio channel to the jack through the
+74LVC125 buffer and the RC reconstruction filter. Both demand slice 6 channel A. Flagged
 on **rev C and rev D**.
 
 **The rev-B discriminator (and the ground-truth that makes the rev-C/D finding
@@ -208,8 +209,8 @@ the one where it does not - the strongest form of two-sided validation.
 
 Verified at file level both ways: the Eagle `.brd` puts the flash (U4) on U2 pads
 17..20 (= TQFP64 pins 17..20 = PA08..PA11), and the `.sch` independently names
-the same MCU pins PA08..PA11. Those are the QSPI DATA0..3 pins; wired as a SERCOM
-SPI flash they commit the QSPI group.
+the same MCU pins PA08..PA11. Those are the QSPI DATA0..3 pins. Wired as a
+SERCOM SPI flash they commit the QSPI group.
 
 ## 4. Calibration (zero false positives or it does not ship)
 
@@ -253,8 +254,8 @@ defects in this check, both fixed before the finding was trusted:
    TMDS data = PIO, DDC = I2C), so only genuinely-PWM functions occupy a PWM
    slice.
 
-A check that fired on "any RP2040 with DVI and audio" would be a confident false
-positive; the rev-B silence proves it does not. The `resource_probe` example
+A check that fired on "any RP2040 with DVI and audio" would be a confident
+false positive. The rev-B silence proves it does not. The `resource_probe` example
 (`cargo run -p hauksbee-extract --example resource_probe <board>`) dumps the
 per-pad inferred function and is the re-runnable audit trail for both kills.
 
@@ -279,12 +280,12 @@ per-pad inferred function and is the re-runnable audit trail for both kills.
 - **Pad-number tables assume a known package/pinout.** The RP2040 module table is
   keyed by the Pico 40-pin castellation order and the SAMD51 table by the TQFP64
   datasheet pin numbers. A board using a different package of the same die would
-  need its own pad map; the table matches on part identity, so a mismatch is a
+  need its own pad map. The table matches on part identity, so a mismatch is a
   silent miss, not a false positive.
 
 - **Only PWM-slice and QSPI-group instances are populated.** SERCOM-instance pad
   constraints, STM32 timer-channel sharing, and ADC-instance conflicts fit the
-  same `pad -> {instance}` shape but are not authored or validated here; the two
+  same `pad -> {instance}` shape but are not authored or validated here. The two
   known bugs exercise exactly the two kinds that are.
 
 ## Reproduce
