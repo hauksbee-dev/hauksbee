@@ -152,6 +152,10 @@ impl Engine for McuDemoEngine {
                 ("A0".to_string(), self.adc_volts),
             ]
             .into(),
+            // The demo engine's synthetic nets hold their level for the whole
+            // step, so there is no envelope to report. Empty is the honest
+            // answer here, not a placeholder.
+            net_v_extremes: Default::default(),
             component_states: [(
                 "U1".to_string(),
                 [("running".to_string(), 1.0)].into_iter().collect(),
