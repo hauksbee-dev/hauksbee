@@ -12,6 +12,76 @@ in *our* tool until chased to ground truth. Two of the fixes below began as
 recorded "honest limitations" and turned out, once chased, to be hauksbee
 defects.
 
+## Structural ceilings
+
+Two limits are not defects and will never appear under "fixed". They bound the
+approach rather than the implementation, so the useful thing is to say where
+they bind and what is done about the part that can be.
+
+### Model availability caps analogue coverage
+
+A circuit hauksbee cannot model, it cannot simulate. Many vendors ship SPICE
+and IBIS models only under NDA, or encrypted, and no amount of engineering here
+changes that. If a meaningful fraction of a design is unmodellable, coverage is
+capped by something outside the project.
+
+Where it binds is lower than it first sounds, and the reason is what hauksbee
+asks. A transistor-level simulator needs the vendor's die model. Board-level CI
+asks whether a rail sags, whether a part runs past its rating, whether a pin
+conflicts, and whether the firmware drives what it thinks it drives. Those are
+answerable from terminal behaviour at datasheet grade: dropout, quiescent
+current, thermal resistance, logic thresholds, protection trip points. A
+behavioural model built from a public datasheet answers them, and it runs fast
+enough to sit in a commit hook, which an encrypted die model would not.
+
+Three things follow from that, and all three ship:
+
+- **The gap is named, not averaged away.** A part that does not bind is
+  reported by reference, and the ones sitting on a connected net are separated
+  from the ones that do not change the solve. `hauksbee run` prints the ratio.
+- **Closing a gap needs one TOML file and no recompile.** Analogue parts,
+  sensors, logic ICs and MCU variants are all declarative. See
+  [`../extending/README.md`](../extending/README.md). Model packs let a team
+  keep its own parts together, and codex extraction reads a datasheet into a
+  first draft.
+- **Coverage is gateable.** The `model_coverage` assertion pins the fraction of
+  active ICs that must bind, so the day a new part drops coverage the build
+  says so. See [`../ci/CI.md`](../ci/CI.md).
+
+The residue is real. Parts whose useful behaviour is genuinely not in the
+public datasheet, switching converters modelled past the averaged loop, and
+anything RF, stay out of reach. Those are named in the deferred section and in
+[`CAPABILITIES.md`](CAPABILITIES.md) rather than papered over.
+
+### One false positive costs more than one miss
+
+A verification tool that cries wolf gets switched off, and a switched-off tool
+catches nothing. The bar for adoption is therefore higher than the bar for
+usefulness, and there is no second first impression. This is the sharpest risk
+the project carries.
+
+What exists today is aimed straight at it. A check that fires must be right,
+and that is enforced rather than promised: every check is run across a corpus
+of real, working, shipped boards, and a check that lights up on a healthy board
+does not land, however good it is at finding the fault it was written for. See
+[`../../CONTRIBUTING.md`](../../CONTRIBUTING.md). Beyond that, a run that
+cannot produce a trustworthy answer exits 3 instead of passing, coverage holes
+travel as data fields rather than prose, and a report that would mislead says
+so instead of rendering.
+
+What is honestly missing:
+
+- **The corpus is not your board.** Zero false positives across the boards
+  measured is a real claim and a narrow one. It does not promise the same on a
+  design nobody here has seen.
+- **There is no way to overrule one finding and keep the rest.** Today a check
+  that misfires on your board can only be lived with or turned off wholesale.
+  A per-finding waiver carrying a reason and an expiry is the right answer, and
+  it is not built yet.
+- **Precision is claimed globally, not per check.** A measured number for each
+  check would be a stronger and more falsifiable statement than one figure for
+  the suite, and it would tell a new user which checks to trust first.
+
 ## Fixed
 
 ### 1. USB-C CC audit under-read on dual-receptacle boards
