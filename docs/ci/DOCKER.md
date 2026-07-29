@@ -11,8 +11,8 @@ gain). Run that from a normal checkout when you want the live viewer.
 
 | Image | Tag | Contains | Unlocks |
 |-------|-----|----------|---------|
-| slim / core | `ghcr.io/etm-code/hauksbee:slim` | `hauksbee` + `hauksbee-ci`, the model db, `kicad-cli`, the linked-in simavr | Static checks (DRC, netlint, SI, resource conflicts), board-as-code, AVR co-sim. The everyday CI image. |
-| full | `ghcr.io/etm-code/hauksbee:full` | Everything in slim, plus Renode, the Espressif QEMU fork, and freerouting (with a JRE) | STM32 / nRF52 / RISC-V co-sim (Renode), ESP32 / ESP32-S3 / ESP32-C3 co-sim (Espressif QEMU), and production autorouting of recompiled boards (freerouting). |
+| slim / core | `ghcr.io/hauksbee-dev/hauksbee:slim` | `hauksbee` + `hauksbee-ci`, the model db, `kicad-cli`, the linked-in simavr | Static checks (DRC, netlint, SI, resource conflicts), board-as-code, AVR co-sim. The everyday CI image. |
+| full | `ghcr.io/hauksbee-dev/hauksbee:full` | Everything in slim, plus Renode, the Espressif QEMU fork, and freerouting (with a JRE) | STM32 / nRF52 / RISC-V co-sim (Renode), ESP32 / ESP32-S3 / ESP32-C3 co-sim (Espressif QEMU), and production autorouting of recompiled boards (freerouting). |
 
 Each is also published with the release version baked in:
 `:slim-<version>` / `:full-<version>` (for example `:slim-0.1.0`), and a tag
@@ -56,28 +56,28 @@ your own repo, mounted in.
 Report a board (the bind report table):
 
 ```bash
-docker run --rm -v "$PWD:/work" ghcr.io/etm-code/hauksbee:slim \
+docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
   hauksbee run path/to/board.kicad_pcb --report
 ```
 
 Geometric short / clearance DRC:
 
 ```bash
-docker run --rm -v "$PWD:/work" ghcr.io/etm-code/hauksbee:slim \
+docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
   hauksbee run path/to/board.kicad_pcb --drc
 ```
 
 Run a hauksbee-ci spec and write JUnit (the CI flow):
 
 ```bash
-docker run --rm -v "$PWD:/work" ghcr.io/etm-code/hauksbee:slim \
+docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
   hauksbee-ci run ci/blinky.toml --junit hauksbee-ci-results.xml
 ```
 
 AVR firmware co-sim (built into the slim image):
 
 ```bash
-docker run --rm -v "$PWD:/work" ghcr.io/etm-code/hauksbee:slim \
+docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
   hauksbee run board.kicad_pcb --firmware fw/blinky.hex --headless --seconds 5
 ```
 
@@ -85,11 +85,11 @@ ESP32 / STM32 co-sim and autorouting need the full image:
 
 ```bash
 # ESP32 boot-coverage spec (Espressif QEMU, in the full image)
-docker run --rm -v "$PWD:/work" ghcr.io/etm-code/hauksbee:full \
+docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:full \
   hauksbee-ci run ci/esp32_boot.toml --junit results.xml
 
 # Recompile board-as-code and autoroute it (freerouting, in the full image)
-docker run --rm -v "$PWD:/work" ghcr.io/etm-code/hauksbee:full \
+docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:full \
   hauksbee from-code board.board --out routed.kicad_pcb --route
 ```
 
@@ -104,13 +104,13 @@ published image instead of downloading a release binary or compiling from
 source. Set `use-image: true`, and optionally pick the image:
 
 ```yaml
-- uses: ETM-Code/hauksbee/integrations/github-action@v0.1.0
+- uses: hauksbee-dev/hauksbee/integrations/github-action@v0.1.0
   with:
     spec: ci/blinky.toml
     use-image: true
-    # default is ghcr.io/etm-code/hauksbee:slim; use :full for ESP32 / STM32
+    # default is ghcr.io/hauksbee-dev/hauksbee:slim; use :full for ESP32 / STM32
     # co-sim or autorouting.
-    image: ghcr.io/etm-code/hauksbee:full
+    image: ghcr.io/hauksbee-dev/hauksbee:full
 ```
 
 When `use-image` is true the Action mounts the checkout at `/work`, runs the
@@ -168,7 +168,7 @@ then build each image. These are the exact commands:
 ```bash
 # 1. Stage this repo under a context dir (forge crates are vendored inside it).
 mkdir -p ctx
-git clone https://github.com/ETM-Code/hauksbee.git ctx/hauksbee
+git clone https://github.com/hauksbee-dev/hauksbee.git ctx/hauksbee
 # (or symlink an existing checkout: ln -s "$PWD/hauksbee" ctx/hauksbee)
 
 # 2. Build the slim image for your host arch.

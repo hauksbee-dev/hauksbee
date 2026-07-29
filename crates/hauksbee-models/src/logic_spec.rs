@@ -733,11 +733,7 @@ pub enum LogicSpecError {
         "memory '{name}' declares {words} x {bits} bits, over the 128 Mbit cap; widen the \
          bound deliberately rather than allocating it by accident"
     )]
-    MemoryTooLarge {
-        name: String,
-        words: u64,
-        bits: u32,
-    },
+    MemoryTooLarge { name: String, words: u64, bits: u32 },
 
     #[error(
         "memory '{name}': {words} words need exactly {expected} address pin(s) \
@@ -750,7 +746,9 @@ pub enum LogicSpecError {
         got: usize,
     },
 
-    #[error("memory '{name}': {field} lists {got} pin(s) but words are {bits} bits (one pin per bit)")]
+    #[error(
+        "memory '{name}': {field} lists {got} pin(s) but words are {bits} bits (one pin per bit)"
+    )]
     MemoryDataWidthMismatch {
         name: String,
         field: &'static str,
@@ -758,7 +756,9 @@ pub enum LogicSpecError {
         got: usize,
     },
 
-    #[error("memory '{name}' lists data_in pins but declares no write strobe (a ROM takes no data)")]
+    #[error(
+        "memory '{name}' lists data_in pins but declares no write strobe (a ROM takes no data)"
+    )]
     MemoryDataInWithoutWrite { name: String },
 
     #[error("memory '{name}': data_out pin '{pin}' is not a declared output")]

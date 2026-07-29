@@ -3,9 +3,9 @@
 # Trigger: push a tag like `v0.1.0` (same tag that drives release.yml), or run
 # manually. Produces two multi-arch (linux/amd64 + linux/arm64) images:
 #
-#   ghcr.io/etm-code/hauksbee:slim     prebuilt binaries + model db + kicad-cli
+#   ghcr.io/hauksbee-dev/hauksbee:slim     prebuilt binaries + model db + kicad-cli
 #                                      + simavr; the everyday CI image.
-#   ghcr.io/etm-code/hauksbee:full     slim plus Renode, the Espressif QEMU fork,
+#   ghcr.io/hauksbee-dev/hauksbee:full     slim plus Renode, the Espressif QEMU fork,
 #                                      and freerouting; STM32 / ESP32 co-sim and
 #                                      autorouting.
 #
@@ -33,7 +33,7 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE: ghcr.io/etm-code/hauksbee
+  IMAGE: ghcr.io/hauksbee-dev/hauksbee
 
 permissions:
   contents: read

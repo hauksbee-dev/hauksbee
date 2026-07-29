@@ -25,8 +25,8 @@ license = "Apache-2.0"
 # Every crate inherits these, so the shared metadata is stated once and cannot
 # drift between the eight published crates. `description` is deliberately NOT
 # here: each crate describes what it actually does.
-repository = "https://github.com/ETM-Code/hauksbee"
-homepage = "https://github.com/ETM-Code/hauksbee"
+repository = "https://github.com/hauksbee-dev/hauksbee"
+homepage = "https://github.com/hauksbee-dev/hauksbee"
 readme = "README.md"
 keywords = ["pcb", "eda", "simulation", "kicad", "hardware"]
 categories = ["simulation", "science", "development-tools::testing"]

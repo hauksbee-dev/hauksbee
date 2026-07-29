@@ -40,14 +40,14 @@ Point it at any PCB design and it will:
 
 ## Quickstart
 
-**Download the app (macOS): double-click, drop a board.** Grab `Hauksbee.app` (the `hauksbee-<version>-darwin-<arch>-app.zip` asset) from the [releases page](https://github.com/ETM-Code/hauksbee/releases), unzip, and double-click it. It opens your browser on the drop-zone. Drop a board file and read the report. No terminal at any point. The app is signed and notarised, so it opens without Gatekeeper warnings.
+**Download the app (macOS): double-click, drop a board.** Grab `Hauksbee.app` (the `hauksbee-<version>-darwin-<arch>-app.zip` asset) from the [releases page](https://github.com/hauksbee-dev/hauksbee/releases), unzip, and double-click it. It opens your browser on the drop-zone. Drop a board file and read the report. No terminal at any point. The app is signed and notarised, so it opens without Gatekeeper warnings.
 
 This is macOS-only today. The team is evaluating Windows but does not promise it yet. The GPL-free build cross-compiles clean, and a full run of the CLI and web surface passes under Wine, but no native Windows runner keeps it green. Status and what remains: [`docs/about/release-and-licensing.md`](docs/about/release-and-licensing.md) section 5. Linux users, take the installer line below.
 
 **One-line installer (terminal, macOS/Linux):**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ETM-Code/hauksbee/main/scripts/get-hauksbee.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
 ```
 
 This fetches the latest release for your OS/arch, verifies the sha256 checksum, and installs `hauksbee` + `hauksbee-ci` to `~/.local/bin`. If that directory is not on your `PATH`, the installer prints the exact line to add.
@@ -67,7 +67,7 @@ scripts/install.sh                                   # build hauksbee + hauksbee
 **Or run it in Docker** (no local toolchain needed: the slim image carries `hauksbee` + `hauksbee-ci`, the model db and AVR co-sim):
 
 ```bash
-docker run --rm -v "$PWD:/work" ghcr.io/etm-code/hauksbee:slim \
+docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
   hauksbee run path/to/board.kicad_pcb --report
 ```
 

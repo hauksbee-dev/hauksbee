@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Please report security issues privately, through GitHub's
-[private vulnerability reporting](https://github.com/ETM-Code/hauksbee/security/advisories/new)
+[private vulnerability reporting](https://github.com/hauksbee-dev/hauksbee/security/advisories/new)
 rather than a public issue.
 
 Include what you did, what happened, and the input that triggered it. A board
