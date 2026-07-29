@@ -40,7 +40,9 @@ export function UploadView({ session, onOpenLive }: {
   /** Open the live session already running server-side (mounts the sim). */
   onOpenLive?: () => void
 }) {
-  const { busy, uploadError, firmwareFile, handleBoard, handleFirmware, runSample } = session
+  const {
+    busy, uploadError, firmwareFile, handleBoard, handleFirmware, clearFirmware, runSample,
+  } = session
   const [dragOver, setDragOver] = useState(false)
 
   return (
@@ -192,7 +194,13 @@ export function UploadView({ session, onOpenLive }: {
           )}
 
           {/* Firmware: a quiet secondary jack below the card */}
-          <FirmwareJack firmware={firmwareFile} placement="intake" onFile={handleFirmware} locked={!!busy} />
+          <FirmwareJack
+            firmware={firmwareFile}
+            placement="intake"
+            onFile={handleFirmware}
+            onClear={clearFirmware}
+            locked={!!busy}
+          />
 
           {uploadError && (
             <div

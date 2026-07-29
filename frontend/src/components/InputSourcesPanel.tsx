@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
 import type { BoardInfoMsg, SimFrame, ClientMessage } from '../types/protocol'
+import { displayNet } from '../lib/net-name'
 
 // Virtual peripherals for the sim rail's "Inputs" card: the input-shaped nets
 // (A0..An style) as analog sliders with their live solved value, plus any
@@ -121,7 +122,7 @@ export function InputSourcesPanel({ boardInfo, frame, send }: InputSourcesPanelP
                 className="text-[11px] font-bold"
                 style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)' }}
               >
-                {net}
+                {displayNet(net)}
               </span>
               <div className="flex items-center gap-2 tnum">
                 {liveVolt !== undefined && (

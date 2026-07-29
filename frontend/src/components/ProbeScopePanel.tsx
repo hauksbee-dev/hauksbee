@@ -2,13 +2,21 @@ import { useEffect, useRef, useState } from 'react'
 import type { BoardInfoMsg, SimFrame, ClientMessage } from '../types/protocol'
 import { CloseIcon, PlusIcon, EyeIcon, EyeOffIcon } from './Icons'
 import { displayNet } from '../lib/net-name'
+import { cssToken, isLightTheme } from '../lib/theme-tokens'
 
-// The scope card: a phosphor-style rolling trace per probed net, with a
-// per-trace visibility toggle (the probe keeps buffering while hidden, so
-// showing it again has history) and the net picker to attach more probes.
-// The scope face is an instrument surface: dark in both themes.
+// The scope card: a rolling trace per probed net, with a per-trace visibility
+// toggle (the probe keeps buffering while hidden, so showing it again has
+// history) and the net picker to attach more probes. The face is phosphor CRT
+// in dark and a light graticule in light mode; all colours come from the
+// --scope-* / --trace-* tokens in index.css. The trace beams and the probe
+// dots in the list below share the SAME --trace-N token, which is how a
+// reader pairs trace to net; retune the token, never one end of the pair.
 
-const PROBE_COLORS = ['#3b82f6', '#f59e0b', '#10b981', '#ef4444', '#8b5cf6', '#ec4899']
+/** CSS token for probe slot idx; used by the canvas beams AND the list dots. */
+function traceToken(idx: number): string {
+  return `--trace-${(idx % 6) + 1}`
+}
+
 const WINDOW_SECS = 3.0
 const MAX_SAMPLES = 600
 
@@ -67,25 +75,29 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
       const H = canvas.height
 
       ctx.clearRect(0, 0, W, H)
-      // CRT-like phosphor background: very dark blue-green
-      ctx.fillStyle = '#00080f'
+      const light = isLightTheme()
+      // The face: phosphor-dark or graticule-light, from the theme tokens.
+      ctx.fillStyle = cssToken('--scope-face')
       ctx.fillRect(0, 0, W, H)
-      // Subtle scanline effect (every 3px a slightly lighter strip)
-      ctx.fillStyle = 'rgba(0,255,100,0.012)'
-      for (let sy = 0; sy < H; sy += 3) {
-        ctx.fillRect(0, sy, W, 1)
+      // Subtle scanline effect (every 3px a slightly lighter strip). The
+      // light token is fully transparent: scanlines are a CRT artifact.
+      if (!light) {
+        ctx.fillStyle = cssToken('--scope-scan')
+        for (let sy = 0; sy < H; sy += 3) {
+          ctx.fillRect(0, sy, W, 1)
+        }
       }
 
       const visible = probes.filter(p => !hiddenRef.current.has(p))
       if (probes.length === 0) {
-        ctx.fillStyle = 'rgba(0,200,80,0.25)'
+        ctx.fillStyle = cssToken('--scope-hint')
         ctx.font = '11px monospace'
         ctx.textAlign = 'center'
         ctx.fillText('Attach a probe from the net list below', W / 2, H / 2)
         return
       }
       if (visible.length === 0) {
-        ctx.fillStyle = 'rgba(0,200,80,0.25)'
+        ctx.fillStyle = cssToken('--scope-hint')
         ctx.font = '11px monospace'
         ctx.textAlign = 'center'
         ctx.fillText('All traces hidden', W / 2, H / 2)
@@ -126,8 +138,8 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
       const gridStep = vRange > 4 ? 1 : vRange > 2 ? 0.5 : 0.2
       const gridStart = Math.ceil(vMin / gridStep) * gridStep
 
-      // Grid, phosphor green grid
-      ctx.strokeStyle = 'rgba(0,200,80,0.15)'
+      // Graticule (phosphor green in dark, deep green ink in light)
+      ctx.strokeStyle = cssToken('--scope-grid')
       ctx.lineWidth = 0.5
       ctx.setLineDash([2, 4])
       for (let gv = gridStart; gv <= vMax; gv += gridStep) {
@@ -137,8 +149,8 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
         ctx.lineTo(PAD_L + plotW, gy)
         ctx.stroke()
 
-        // Voltage label, dim phosphor green
-        ctx.fillStyle = 'rgba(0,200,80,0.45)'
+        // Voltage label
+        ctx.fillStyle = cssToken('--scope-tick')
         ctx.font = '9px JetBrains Mono, monospace'
         ctx.textAlign = 'right'
         ctx.fillText(`${gv.toFixed(gv % 1 !== 0 ? 1 : 0)}V`, PAD_L - 4, gy + 3)
@@ -146,16 +158,18 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
       ctx.setLineDash([])
 
       // Time axis label
-      ctx.fillStyle = 'rgba(0,200,80,0.35)'
+      ctx.fillStyle = cssToken('--scope-axis')
       ctx.font = '9px JetBrains Mono, monospace'
       ctx.textAlign = 'center'
       ctx.fillText('← 3s window →', PAD_L + plotW / 2, H - 4)
 
-      // Traces, phosphor glow with multi-pass bloom
+      // Traces. Dark: multi-pass phosphor bloom. Light: the same passes at a
+      // fraction of the strength; a full bloom under an ink-weight trace reads
+      // as smudge on paper, but a whisper of it keeps the "beam" identity.
       probes.forEach((net, idx) => {
         if (hiddenRef.current.has(net)) return
         const buf = buffers.current.get(net) ?? []
-        const color = PROBE_COLORS[idx % PROBE_COLORS.length]
+        const color = cssToken(traceToken(idx))
 
         if (buf.length < 2) return
 
@@ -178,24 +192,24 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
         }
 
         // Pass 1: wide soft glow bloom
-        ctx.strokeStyle = color + '33'
-        ctx.lineWidth = 6
+        ctx.strokeStyle = color + (light ? '1a' : '33')
+        ctx.lineWidth = light ? 4.5 : 6
         ctx.shadowColor = color
-        ctx.shadowBlur = 12
+        ctx.shadowBlur = light ? 5 : 12
         drawPath()
 
         // Pass 2: medium halo
-        ctx.strokeStyle = color + '66'
-        ctx.lineWidth = 3
+        ctx.strokeStyle = color + (light ? '40' : '66')
+        ctx.lineWidth = light ? 2.4 : 3
         ctx.shadowColor = color
-        ctx.shadowBlur = 8
+        ctx.shadowBlur = light ? 3 : 8
         drawPath()
 
-        // Pass 3: crisp bright core (phosphor "beam")
+        // Pass 3: crisp core (the "beam")
         ctx.strokeStyle = color
-        ctx.lineWidth = 1.2
+        ctx.lineWidth = light ? 1.4 : 1.2
         ctx.shadowColor = color
-        ctx.shadowBlur = 4
+        ctx.shadowBlur = light ? 0 : 4
         drawPath()
         ctx.shadowBlur = 0
 
@@ -208,7 +222,7 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
         ctx.font = 'bold 9px JetBrains Mono, monospace'
         ctx.textAlign = 'left'
         ctx.shadowColor = color
-        ctx.shadowBlur = 4
+        ctx.shadowBlur = light ? 0 : 4
         ctx.fillText(displayNet(net), PAD_L + plotW + 4, Math.max(PAD_T + 10, Math.min(H - PAD_B - 2, labelY + 3)))
         ctx.shadowBlur = 0
       })
@@ -234,15 +248,15 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
 
   return (
     <div className="flex flex-col gap-2 px-2.5 py-2.5">
-      {/* Oscilloscope face, an instrument surface (dark in both themes) */}
+      {/* Oscilloscope face: theme-tuned via the --scope-* tokens */}
       <div
         className="relative"
         style={{
-          border: '1px solid rgba(0,180,70,0.3)',
+          border: '1px solid var(--scope-edge)',
           borderRadius: 6,
           overflow: 'hidden',
-          background: '#00080f',
-          boxShadow: '0 0 12px rgba(0,180,70,0.12), inset 0 0 20px rgba(0,0,0,0.6)',
+          background: 'var(--scope-face)',
+          boxShadow: 'var(--scope-glow)',
         }}
       >
         <canvas
@@ -257,7 +271,8 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
       {probes.length > 0 && (
         <div className="flex flex-col gap-0.5">
           {probes.map((net, idx) => {
-            const color = PROBE_COLORS[idx % PROBE_COLORS.length]
+            // The dot and the beam read the same token; see traceToken above.
+            const color = `var(${traceToken(idx)})`
             const isHidden = hidden.has(net)
             const live = frame?.net_voltages[net]
             return (
@@ -268,7 +283,7 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
               >
                 <div
                   className="w-2 h-2 rounded-full shrink-0"
-                  style={{ background: color, boxShadow: isHidden ? 'none' : `0 0 4px ${color}80` }}
+                  style={{ background: color, boxShadow: isHidden ? 'none' : `0 0 4px color-mix(in srgb, ${color} 50.2%, transparent)` }}
                 />
                 <span
                   className="text-[11px] flex-1 truncate"
@@ -285,7 +300,7 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
                   type="button"
                   onClick={() => toggleHidden(net)}
                   className="hb-press cursor-pointer"
-                  aria-label={isHidden ? `Show the ${net} trace` : `Hide the ${net} trace`}
+                  aria-label={isHidden ? `Show the ${displayNet(net)} trace` : `Hide the ${displayNet(net)} trace`}
                   title={isHidden ? 'Show this trace' : 'Hide this trace (keeps recording)'}
                   style={{ background: 'none', border: 'none', color: isHidden ? 'var(--silk-faint)' : 'var(--silk-dim)', display: 'inline-flex', padding: 4 }}
                 >
@@ -295,7 +310,7 @@ export function ProbeScopePanel({ boardInfo, frame, probes, onAddProbe, onRemove
                   type="button"
                   onClick={() => onRemoveProbe(net)}
                   className="hb-press cursor-pointer"
-                  aria-label={`Detach the probe from ${net}`}
+                  aria-label={`Detach the probe from ${displayNet(net)}`}
                   title="Detach this probe"
                   style={{ background: 'none', border: 'none', color: 'var(--silk-faint)', display: 'inline-flex', padding: 4 }}
                 >

@@ -15,6 +15,7 @@ import {
   ProbeIcon, BoltIcon, TerminalIcon, LayersIcon,
 } from './components/Icons'
 import type { ClientMessage, SimFrame, SimFault } from './types/protocol'
+import { envelopesFromHistory, envelopeSource, readNet } from './lib/net-state'
 
 interface FootprintInfo {
   ref: string
@@ -173,7 +174,7 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
   /** Replace the running session with the analyzed board (label says so). */
   onRelaunch?: () => void
 } = {}) {
-  const { connected, boardInfo, frame, status, send, replay, backlog } = useSimulation()
+  const { connected, boardInfo, frame: liveFrame, status, send, replay, backlog } = useSimulation()
 
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
   const [selectedFp, setSelectedFp] = useState<FootprintInfo | null>(null)
@@ -196,24 +197,88 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
     })
   }, [])
 
-  // Accumulate frame history for serial console
+  // Retained frames. Each is a COMPLETE state (net voltages, component states,
+  // faults, supplies, UART), which is what lets the transport walk backwards
+  // through them: the engine cannot un-step a simulation, but the client can
+  // re-show one it was already sent. Feeds the serial console too.
+  const HISTORY_LEN = 120
   useEffect(() => {
-    if (frame) {
-      frameHistory.current = [...frameHistory.current.slice(-119), frame]
+    if (liveFrame) {
+      frameHistory.current = [...frameHistory.current.slice(-(HISTORY_LEN - 1)), liveFrame]
     }
-  }, [frame])
+  }, [liveFrame])
+
+  // Where the review is looking, or null while the screen shows the live frame.
+  const [reviewIndex, setReviewIndex] = useState<number | null>(null)
+
+  // EVERYTHING below that displays sim state reads `frame`, so pointing it at a
+  // retained frame puts the whole instrument (board, scope, nets, faults) at
+  // that instant at once. The accumulating effects above deliberately keep
+  // reading `liveFrame`: re-playing an old frame through them would log its
+  // faults and UART bytes a second time.
+  const frame = reviewIndex !== null
+    ? (frameHistory.current[reviewIndex] ?? liveFrame)
+    : liveFrame
+
+  // Per-net excursion over the retained frames, for the surfaces that name a
+  // net. Recomputed per frame over a short window (see net-state.ts): the
+  // engine's own intra-chunk extremes would be better and are preferred
+  // automatically the moment the wire carries them.
+  const netEnvelopes = useMemo(
+    () => envelopesFromHistory(frameHistory.current),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [liveFrame],
+  )
+  const netEnvelopeSource = envelopeSource(liveFrame, netEnvelopes)
+
+  const stepBack = useCallback(() => {
+    // Reviewing a past frame while the sim runs on would be unreadable, and the
+    // buffer would slide under the cursor. Stepping back stops the clock.
+    send({ type: 'Pause' })
+    setReviewIndex(prev => {
+      const len = frameHistory.current.length
+      if (len === 0) return prev
+      const from = prev ?? len - 1
+      return Math.max(0, from - 1)
+    })
+  }, [send])
+
+  const stepForward = useCallback(() => {
+    setReviewIndex(prev => {
+      if (prev === null) return null
+      // Past the newest retained frame the review is over: hand the screen back
+      // to the live feed rather than sitting on a stale "latest".
+      return prev + 1 >= frameHistory.current.length - 1 ? null : prev + 1
+    })
+  }, [])
+
+  const resumeLive = useCallback(() => setReviewIndex(null), [])
+
+  const history = useMemo(() => ({
+    retained: frameHistory.current.length,
+    index: reviewIndex,
+    t: reviewIndex !== null ? (frameHistory.current[reviewIndex]?.t ?? null) : null,
+    canStepBack: frameHistory.current.length > 1
+      && (reviewIndex === null || reviewIndex > 0),
+    stepBack,
+    stepForward,
+    resume: resumeLive,
+    // `liveFrame` is in the deps on purpose though it is not read here: the
+    // counts above come out of a REF, so without it the retained total would
+    // stay frozen at whatever it was when the review last changed.
+  }), [reviewIndex, stepBack, stepForward, resumeLive, liveFrame])
 
   // Recent UART activity per MCU (drives the uart chip). A ref-tracked map of
   // last-seen wall times, surfaced as a Set via state on a slow tick.
   const uartLastSeen = useRef<Map<string, number>>(new Map())
   const [uartActive, setUartActive] = useState<Set<string>>(new Set())
   useEffect(() => {
-    if (!frame) return
+    if (!liveFrame) return
     const now = Date.now()
-    for (const [mcu, bytes] of Object.entries(frame.uart)) {
+    for (const [mcu, bytes] of Object.entries(liveFrame.uart)) {
       if (bytes.length > 0) uartLastSeen.current.set(mcu, now)
     }
-  }, [frame])
+  }, [liveFrame])
   useEffect(() => {
     const t = setInterval(() => {
       const now = Date.now()
@@ -238,7 +303,7 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
   // they must not re-toast.
   const [faultLog, setFaultLog] = useState<(SimFault & { restored?: boolean })[]>([])
   useEffect(() => {
-    const faults = frame?.faults
+    const faults = liveFrame?.faults
     if (!faults || faults.length === 0) return
     setFaultLog(prev => {
       let next: SimFault[] | null = null
@@ -251,7 +316,7 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
       }
       return next ?? prev
     })
-  }, [frame])
+  }, [liveFrame])
 
   const clearFaults = useCallback(() => {
     setFaultLog([])
@@ -273,6 +338,9 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
         setSelectedFp(null)
         setProbes([])
         frameHistory.current = []
+        // The retained frames belonged to the session that just went away;
+        // a review pointing into them would show the OLD board.
+        setReviewIndex(null)
       }
       hadInfo.current = true
       infoWasNull.current = false
@@ -444,10 +512,17 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
         boardInfo={boardInfo}
         status={status}
         // In a replay the capture-time throughput would read as the playback
-        // rate; the speed control already owns that number.
-        realtimeFactor={replay ? null : frame?.realtime_factor ?? null}
+        // rate; the speed control already owns that number. The rates come off
+        // the LIVE frame: a retained frame's rates describe the moment it was
+        // computed, and the bar is reporting how the loop is doing now.
+        realtimeFactor={replay ? null : liveFrame?.realtime_factor ?? null}
+        requestedFactor={replay ? null : liveFrame?.requested_factor ?? null}
+        rateLimited={replay ? false : liveFrame?.rate_limited ?? false}
         send={sendWrapped}
         replay={replay}
+        // A recording has a real timeline to scrub; the retained-frame walk is
+        // for the live sim, which has none.
+        history={replay ? undefined : history}
       />
 
       {/* Session-identity banner: this view is bound to what /ws streams. When
@@ -535,7 +610,7 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
               className="absolute inset-0 flex items-center justify-center"
               style={{ background: 'var(--instrument)' }}
             >
-              <div className="flex items-center gap-2 text-sm" style={{ color: '#64748b' }}>
+              <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--overlay-chip-text)' }}>
                 <span className="slot-spin" /> Waiting for the live session ...
               </div>
             </div>
@@ -568,7 +643,11 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
               <div className="pointer-events-auto" style={{ maxHeight: '100%', display: 'flex' }}>
               <SelectionCard
                 net={selectedFp ? null : selectedNet}
-                liveVolts={selectedNet && !selectedFp ? frame?.net_voltages[selectedNet] : undefined}
+                // What the net actually is, not just a number: driven, moving,
+                // or unobservable on this backend (see lib/net-state.ts).
+                reading={selectedNet && !selectedFp
+                  ? readNet(frame, selectedNet, netEnvelopes)
+                  : undefined}
                 component={selectedFp}
                 boundKind={selectedFp ? boardInfo?.component_kinds?.[selectedFp.ref] ?? null : null}
                 onQueueCheck={onQueueCheck}
@@ -584,9 +663,9 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
           <div
             className="absolute bottom-2 left-2 text-[10px] px-2 py-1 rounded pointer-events-none"
             style={{
-              background: 'rgba(10,15,30,0.8)',
-              color: inputFocused ? '#334155' : '#64748b',
-              border: '1px solid #1e293b',
+              background: 'var(--overlay-hint-bg)',
+              color: inputFocused ? 'var(--overlay-hint-dim)' : 'var(--overlay-chip-text)',
+              border: '1px solid var(--overlay-hint-border)',
               opacity: inputFocused ? 0.65 : 1,
               transition: 'opacity 0.2s ease, color 0.2s ease',
             }}
@@ -676,7 +755,13 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
             </RailCard>
 
             <RailCard id="nets" title="Net voltages" icon={<LayersIcon size={13} />} defaultOpen={false} cardState={cardState} onToggle={toggleCard}>
-              <NetPanel frame={frame} selectedNet={selectedNet} onSelectNet={setSelectedNet} />
+              <NetPanel
+                frame={frame}
+                selectedNet={selectedNet}
+                onSelectNet={setSelectedNet}
+                envelopes={netEnvelopes}
+                envelopeSource={netEnvelopeSource}
+              />
             </RailCard>
 
             <RailCard id="faults" title="Faults" icon={<BoltIcon size={13} />} badge={faultBadge} cardState={cardState} onToggle={toggleCard}>
