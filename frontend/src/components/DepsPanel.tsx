@@ -19,6 +19,11 @@ interface DepInfo {
   cost: string
   manual: string
   detail: string | null
+  /** Present only on a dependency that sends the user's data off this machine.
+   *  Every other entry here is a local binary with no privacy consequence, so
+   *  this must be rendered as its own line rather than folded into `unlocks`,
+   *  where it would read as a feature. */
+  sends_data_offhost?: string | null
 }
 
 type InstallState =
@@ -280,6 +285,22 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
                 <div className="text-[12px] mt-0.5 leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
                   {d.present ? 'Unlocks' : 'Would unlock'}: {d.unlocks}
                 </div>
+                {d.sends_data_offhost && (
+                  <div
+                    data-testid={`dep-privacy-${d.id}`}
+                    className="text-[11px] mt-1.5 leading-relaxed rounded-lg px-2 py-1.5"
+                    style={{
+                      color: 'var(--silk-dim)',
+                      background: 'var(--warn-bg)',
+                      border: '1px solid var(--warn-border)',
+                    }}
+                  >
+                    <span className="font-semibold" style={{ color: 'var(--warn-strong)' }}>
+                      Leaves your machine:{' '}
+                    </span>
+                    {d.sends_data_offhost}
+                  </div>
+                )}
                 {d.present && d.path && (
                   <div
                     className="text-[11px] mt-0.5 truncate"
