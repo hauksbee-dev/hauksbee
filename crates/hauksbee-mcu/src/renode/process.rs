@@ -44,9 +44,11 @@ pub fn find_renode() -> Result<PathBuf> {
     }
 
     bail!(
-        "Renode not found. Install it (https://renode.io) and either put `renode` \
-         on PATH, set HAUKSBEE_RENODE to the binary, or extract the portable build \
-         to ~/renode-portable."
+        "Renode not found. One-click installs exist: run `hauksbee install \
+         renode`, or in the app use Install on the Environment page. Manual \
+         routes: install it (https://renode.io) and either put `renode` on \
+         PATH, set HAUKSBEE_RENODE to the binary, or extract the portable \
+         build to ~/renode-portable."
     )
 }
 
@@ -193,6 +195,20 @@ impl RenodeProcess {
     /// The spawned Renode's OS process id (diagnostics and the reaping tests).
     pub fn pid(&self) -> u32 {
         self.child.id()
+    }
+
+    /// `Some(reason)` once the process has exited, `None` while it still runs.
+    ///
+    /// The startup wait polls this so a Renode that failed to bind its monitor
+    /// port reports that fact immediately instead of after the full timeout.
+    pub fn exit_reason(&mut self) -> Option<String> {
+        match self.child.try_wait() {
+            Ok(Some(status)) => Some(format!("exit status {status}")),
+            Ok(None) => None,
+            // A child we can no longer wait on is gone as far as we are
+            // concerned; treating it as alive would hang the caller.
+            Err(e) => Some(format!("wait failed: {e}")),
+        }
     }
 }
 

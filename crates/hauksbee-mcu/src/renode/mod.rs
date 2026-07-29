@@ -364,6 +364,45 @@ fn free_port_pair() -> Result<(u16, u16)> {
     // listeners drop here, releasing both ports for Renode to bind.
 }
 
+/// How many times to re-roll the ports before giving up on a spawn.
+///
+/// `free_port_pair` releases both listeners before Renode binds them, so the
+/// numbers are only free at the instant we read them. Under a parallel test
+/// run or a machine hosting several sessions, another process can take one in
+/// that window, and Renode then dies at startup with a bind failure that
+/// reaches the caller as an unexplained "connection refused". The window
+/// cannot be closed (Renode takes a port number, not an inherited socket), so
+/// we retry with fresh numbers instead, which makes losing the race cost a
+/// second rather than the whole run.
+const SPAWN_ATTEMPTS: usize = 3;
+
+/// Spawn Renode on a free port pair and connect its monitor, re-rolling the
+/// ports if the process dies before it binds.
+fn spawn_and_connect() -> Result<(RenodeProcess, Monitor, u16)> {
+    let mut last_err = None;
+    for attempt in 1..=SPAWN_ATTEMPTS {
+        let (monitor_port, uart_port) = free_port_pair()?;
+        let mut process = RenodeProcess::spawn(monitor_port)?;
+        let connected = Monitor::connect_while(
+            ("127.0.0.1", monitor_port),
+            RenodeProcess::startup_timeout(),
+            || process.exit_reason(),
+        );
+        match connected {
+            Ok(monitor) => return Ok((process, monitor, uart_port)),
+            Err(e) => {
+                // Drop tears the process down, so the next attempt starts from
+                // a clean slate rather than racing a half-live instance.
+                drop(process);
+                last_err = Some(e.context(format!(
+                    "Renode startup attempt {attempt} of {SPAWN_ATTEMPTS} on monitor port {monitor_port}"
+                )));
+            }
+        }
+    }
+    Err(last_err.expect("SPAWN_ATTEMPTS is non-zero, so a failure recorded an error"))
+}
+
 /// Per-connection socket read/write timeout for both bridges. A genuinely stuck
 /// peer trips this and the connection handler fails loudly rather than hanging
 /// the emulation forever.
@@ -868,15 +907,7 @@ impl RenodeBackend {
     /// Spawn a Renode process, bring up the machine from `config`, and connect
     /// the Monitor and (optional) UART socket.
     pub fn new(config: RenodeConfig) -> Result<Self> {
-        // Allocate both ports while holding both listeners, so the OS cannot
-        // hand the same ephemeral port to two consecutive calls.
-        let (monitor_port, uart_port) = free_port_pair()?;
-        let process = RenodeProcess::spawn(monitor_port)?;
-
-        let mut monitor = Monitor::connect(
-            ("127.0.0.1", monitor_port),
-            RenodeProcess::startup_timeout(),
-        )?;
+        let (process, mut monitor, uart_port) = spawn_and_connect()?;
         monitor.set_timeout(Duration::from_secs(30));
 
         // Bring up the machine.
