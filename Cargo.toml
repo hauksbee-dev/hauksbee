@@ -142,4 +142,15 @@ strip = true
 debug = false
 
 [profile.dev]
+# Level 1 on our own code: the solver and the emulator bridges are exercised
+# hard by the test suite, and unoptimized they turn a 3-minute run into a
+# quarter-hour one. Debuginfo is the other half of the bill, and full DWARF
+# buys nothing a backtrace uses, so keep the line tables and drop the rest.
 opt-level = 1
+debug = "line-tables-only"
+
+# Dependencies compile once and are then cached for months, so optimizing them
+# costs nothing in the edit-test loop and makes the code under test faster.
+[profile.dev.package."*"]
+opt-level = 2
+debug = false
