@@ -6,6 +6,7 @@ import { BoardViewer, TOOLBAR_CLEARANCE } from './BoardViewer'
 import { SelectionCard } from './SelectionCard'
 import { FirmwareJack } from './FirmwareJack'
 import { displayNet } from '../lib/net-name'
+import { cssToken, onThemeChange } from '../lib/theme-tokens'
 
 // The Board view with a report in hand: the viewer as the hero surface (with
 // its toolbar and layers panel), the plain-language verdict, and the findings.
@@ -73,7 +74,8 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
   const r = session.report!
   const {
     boardUrl, selectedNet, selectedComponent, setSelectedNet, setSelectedComponent,
-    busy, uploadError, firmwareFile, handleFirmware, boardFile, boardLabel, liveMode, onEmptyBoard,
+    busy, uploadError, firmwareFile, handleFirmware, clearFirmware, boardFile, boardLabel,
+    liveMode, onEmptyBoard,
   } = session
 
   if (!r.ok) {
@@ -331,7 +333,14 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
             swapped without starting the board over. */}
         {boardFile && !busy && (
           <div className="mt-5">
-            <FirmwareJack firmware={firmwareFile} placement="report" onFile={handleFirmware} locked={!!busy} />
+            <FirmwareJack
+              firmware={firmwareFile}
+              placement="report"
+              onFile={handleFirmware}
+              onClear={clearFirmware}
+              locked={!!busy}
+              cosimRan={r.cosim?.ran}
+            />
           </div>
         )}
       </div>
@@ -547,7 +556,7 @@ function CosimBlock({ cosim: c, liveAvailable, onDriveLive, simMounted }: {
                 style={{
                   background: 'var(--instrument)',
                   border: '1px solid var(--instrument-edge)',
-                  color: '#cbd5e1',
+                  color: 'var(--instrument-text)',
                   fontFamily: 'var(--font-mono)',
                 }}
               >
@@ -637,8 +646,8 @@ function CosimBlock({ cosim: c, liveAvailable, onDriveLive, simMounted }: {
 }
 
 // Simple 2D footprint dot map, drawn from the report's component positions
-// (board mm), for formats the client-side renderer cannot draw. Stays on the
-// dark instrument surface in both themes.
+// (board mm), for formats the client-side renderer cannot draw. Sits on the
+// instrument surface and follows the theme via the --map-* tokens.
 function BoardMap({ components }: { components: WebComponent[] }) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
 
@@ -647,36 +656,41 @@ function BoardMap({ components }: { components: WebComponent[] }) {
     if (!cv) return
     const ctx = cv.getContext('2d')
     if (!ctx) return
-    const W = cv.width, H = cv.height, pad = 28
-    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-    for (const c of components) {
-      minX = Math.min(minX, c.x); minY = Math.min(minY, c.y)
-      maxX = Math.max(maxX, c.x); maxY = Math.max(maxY, c.y)
-    }
-    const spanX = Math.max(1e-6, maxX - minX)
-    const spanY = Math.max(1e-6, maxY - minY)
-    const scale = Math.min((W - 2 * pad) / spanX, (H - 2 * pad) / spanY)
-    ctx.clearRect(0, 0, W, H)
-    // Labels only while they can be read: past a few hundred parts every
-    // reference overlaps its neighbours and the map collapses into a grey
-    // smear. Dense boards get clean position dots; the real geometry lives in
-    // the BoardViewer path.
-    const drawLabels = components.length <= 300
-    const dotR = components.length > 1000 ? 1.5 : 3
-    for (const c of components) {
-      const x = pad + (c.x - minX) * scale
-      const y = pad + (c.y - minY) * scale
-      ctx.fillStyle = '#e08a4e'
-      ctx.beginPath(); ctx.arc(x, y, dotR, 0, Math.PI * 2); ctx.fill()
-      if (drawLabels) {
-        ctx.fillStyle = '#8fa0b3'; ctx.font = '10px sans-serif'
-        ctx.fillText(c.reference, x + 5, y + 3)
+    const draw = () => {
+      const W = cv.width, H = cv.height, pad = 28
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+      for (const c of components) {
+        minX = Math.min(minX, c.x); minY = Math.min(minY, c.y)
+        maxX = Math.max(maxX, c.x); maxY = Math.max(maxY, c.y)
+      }
+      const spanX = Math.max(1e-6, maxX - minX)
+      const spanY = Math.max(1e-6, maxY - minY)
+      const scale = Math.min((W - 2 * pad) / spanX, (H - 2 * pad) / spanY)
+      ctx.clearRect(0, 0, W, H)
+      // Labels only while they can be read: past a few hundred parts every
+      // reference overlaps its neighbours and the map collapses into a grey
+      // smear. Dense boards get clean position dots; the real geometry lives in
+      // the BoardViewer path.
+      const drawLabels = components.length <= 300
+      const dotR = components.length > 1000 ? 1.5 : 3
+      for (const c of components) {
+        const x = pad + (c.x - minX) * scale
+        const y = pad + (c.y - minY) * scale
+        ctx.fillStyle = cssToken('--map-dot')
+        ctx.beginPath(); ctx.arc(x, y, dotR, 0, Math.PI * 2); ctx.fill()
+        if (drawLabels) {
+          ctx.fillStyle = cssToken('--map-label'); ctx.font = '10px sans-serif'
+          ctx.fillText(c.reference, x + 5, y + 3)
+        }
+      }
+      if (!drawLabels) {
+        ctx.fillStyle = cssToken('--map-note'); ctx.font = '11px sans-serif'
+        ctx.fillText(`${components.length} parts (labels hidden at this density)`, pad, H - 10)
       }
     }
-    if (!drawLabels) {
-      ctx.fillStyle = '#475569'; ctx.font = '11px sans-serif'
-      ctx.fillText(`${components.length} parts (labels hidden at this density)`, pad, H - 10)
-    }
+    draw()
+    // Canvas pixels do not restyle themselves when the theme flips; redraw.
+    return onThemeChange(draw)
   }, [components])
 
   return (

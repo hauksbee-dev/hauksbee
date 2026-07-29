@@ -1,8 +1,9 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import type { SimFrame, ClientMessage } from '../types/protocol'
 
-// The serial console card: one terminal per MCU (tabs when several), a dark
-// instrument scrollback in both themes, and a send line wired to the MCU's
+// The serial console card: one terminal per MCU (tabs when several), an
+// instrument scrollback (dark phosphor-ish in dark mode, ink-on-paper in
+// light mode via the --term-* tokens), and a send line wired to the MCU's
 // UART.
 
 interface SerialEntry {
@@ -113,7 +114,8 @@ function McuTerminal({ mcu, frames, send, readOnly }: { mcu: [string, string]; f
         </button>
       </div>
 
-      {/* Scrollback: an instrument surface, dark in both themes. */}
+      {/* Scrollback: an instrument surface, themed via --instrument and the
+          --term-* tokens (RX keeps its green identity in both themes). */}
       <div
         ref={scrollRef}
         onScroll={handleScroll}
@@ -124,21 +126,21 @@ function McuTerminal({ mcu, frames, send, readOnly }: { mcu: [string, string]; f
         }}
       >
         {log.length === 0 && (
-          <div style={{ color: '#31435c' }}>-- no output --</div>
+          <div style={{ color: 'var(--term-ts)' }}>-- no output --</div>
         )}
         {log.map((entry, i) => (
           <div key={i} className="flex gap-2 mb-0.5">
-            <span className="tnum" style={{ color: '#31435c', flexShrink: 0 }}>{entry.ts}</span>
+            <span className="tnum" style={{ color: 'var(--term-ts)', flexShrink: 0 }}>{entry.ts}</span>
             <span
               style={{
-                color: entry.kind === 'rx' ? '#4ade80'
-                  : entry.kind === 'tx' ? '#8ba0bb'
-                  : '#5b6c84',
+                color: entry.kind === 'rx' ? 'var(--term-rx)'
+                  : entry.kind === 'tx' ? 'var(--term-tx)'
+                  : 'var(--term-info)',
                 whiteSpace: 'pre-wrap',
                 wordBreak: 'break-all',
               }}
             >
-              {entry.kind === 'tx' && <span style={{ color: '#44546e' }}>{'> '}</span>}
+              {entry.kind === 'tx' && <span style={{ color: 'var(--term-prompt)' }}>{'> '}</span>}
               {entry.text}
             </span>
           </div>

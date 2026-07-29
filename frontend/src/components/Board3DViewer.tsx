@@ -11,6 +11,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import type { ParsedBoard } from '../lib/kicad-parser'
 import type { SimFrame, BoardInfoMsg } from '../types/protocol'
+import { isLightTheme, onThemeChange } from '../lib/theme-tokens'
 
 interface Board3DViewerProps {
   /** Pre-exported GLB, when one exists for this board. Null falls back to a
@@ -92,6 +93,10 @@ export function Board3DViewer({ glbUrl, board, frame, boardInfo, faults }: Board
     // effect re-runs only when the source (GLB vs parsed board) changes.
   }, [glbUrl, board])
 
+  // Theme toggles while the 3D view is open: retune the scene (fog, exposure)
+  // in place rather than tearing down and re-loading the model.
+  useEffect(() => onThemeChange(() => viewerRef.current?.setTheme(isLightTheme())), [])
+
   // Resize observer
   useEffect(() => {
     const container = containerRef.current
@@ -126,13 +131,13 @@ export function Board3DViewer({ glbUrl, board, frame, boardInfo, faults }: Board
     <div
       ref={containerRef}
       className="relative w-full h-full overflow-hidden"
-      style={{ background: '#020617' }}
+      style={{ background: 'var(--scene-bg)' }}
     >
-      {/* Radial gradient backdrop, gives the board a grounded space instead of flat black */}
+      {/* Radial gradient backdrop, gives the board a grounded space instead of a flat fill */}
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
-          background: 'radial-gradient(ellipse 70% 60% at 50% 58%, #0d1a2e 0%, #07101f 45%, #020617 100%)',
+          background: 'radial-gradient(ellipse 70% 60% at 50% 58%, var(--scene-glow-hi) 0%, var(--scene-glow-mid) 45%, var(--scene-bg) 100%)',
           zIndex: 0,
         }}
       />
@@ -147,9 +152,9 @@ export function Board3DViewer({ glbUrl, board, frame, boardInfo, faults }: Board
           <div className="flex flex-col items-center gap-3">
             <div
               className="w-8 h-8 border-2 rounded-full animate-spin"
-              style={{ borderColor: '#3b82f6', borderTopColor: 'transparent' }}
+              style={{ borderColor: 'var(--trace-1)', borderTopColor: 'transparent' }}
             />
-            <span className="text-sm" style={{ color: '#64748b' }}>Loading 3D model...</span>
+            <span className="text-sm" style={{ color: 'var(--overlay-chip-text)' }}>Loading 3D model...</span>
           </div>
         </div>
       )}
@@ -158,10 +163,10 @@ export function Board3DViewer({ glbUrl, board, frame, boardInfo, faults }: Board
         <div className="absolute inset-0 flex items-center justify-center">
           <div
             className="px-4 py-3 rounded-lg text-sm"
-            style={{ background: '#1e293b', color: '#f87171', border: '1px solid #991b1b', maxWidth: '80%' }}
+            style={{ background: 'var(--overlay-err-bg)', color: 'var(--err)', border: '1px solid var(--overlay-err-border)', maxWidth: '80%' }}
           >
             <div>3D view unavailable: {error}</div>
-            <div className="mt-1 text-xs" style={{ color: '#94a3b8' }}>
+            <div className="mt-1 text-xs" style={{ color: 'var(--note)' }}>
               The 2D view still works; switch back with the 2D button above.
             </div>
           </div>
@@ -171,7 +176,7 @@ export function Board3DViewer({ glbUrl, board, frame, boardInfo, faults }: Board
       {!loading && !error && (
         <div
           className="absolute bottom-2 right-2 text-[10px] px-2 py-1 rounded pointer-events-none"
-          style={{ background: 'rgba(15,23,42,0.8)', color: '#475569' }}
+          style={{ background: 'var(--overlay-chip-bg)', color: 'var(--map-note)' }}
         >
           drag=orbit · scroll=zoom · shift+drag=pan
         </div>

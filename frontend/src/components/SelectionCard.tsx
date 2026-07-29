@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { CloseIcon } from './Icons'
 import { displayNet } from '../lib/net-name'
+import { netReadoutText, type NetReading } from '../lib/net-state'
 
 // The unified selection card: what a click on the board surface reports, in
 // the same card language on the report map and the live sim. A net shows its
@@ -55,12 +56,17 @@ function OfferButton({ offer, onQueue }: {
 }
 
 export function SelectionCard({
-  net, liveVolts, component, boundKind, onQueueCheck, onClose, onPickNet,
+  net, liveVolts, reading, component, boundKind, onQueueCheck, onClose, onPickNet,
 }: {
   /** Selected net, when the click landed on copper. */
   net: string | null
   /** Live voltage for the net, when a sim frame carries it. */
+  /** Raw volts, for the report map which has no live frame semantics. */
   liveVolts?: number
+  /** The live sim's fuller answer: driven, moving, or unobservable. Preferred
+   *  over `liveVolts` when present, because "0.000 V" alone cannot say which
+   *  of those three a net is (see lib/net-state.ts). */
+  reading?: NetReading
   /** Selected component, when the click landed on a part. */
   component: SelectedComponent | null
   /** Engine-bound model kind for the component ("mcu", "bjt_npn", ...). */
@@ -123,11 +129,30 @@ export function SelectionCard({
             <span className="text-[14px] font-bold" style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)', wordBreak: 'break-all' }}>
               {displayNet(net)}
             </span>
-            {liveVolts !== undefined && (
-              <span className="text-[12px] tnum shrink-0" style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}>
-                {liveVolts.toFixed(3)} V
-              </span>
-            )}
+            {reading
+              ? reading.kind !== 'absent' && (
+                <span
+                  className="text-[12px] tnum shrink-0"
+                  data-testid="selection-reading"
+                  title={reading.kind === 'unobserved'
+                    ? 'This backend cannot see whether the MCU drives this pin; the level is the passive network idling, not a measurement.'
+                    : reading.moving
+                      ? 'The net moved over the observed span; this is its excursion, not one sampled instant.'
+                      : undefined}
+                  style={{
+                    color: reading.kind === 'unobserved' ? 'var(--silk-faint)' : 'var(--copper)',
+                    fontFamily: 'var(--font-mono)',
+                    fontStyle: reading.kind === 'unobserved' ? 'italic' : undefined,
+                  }}
+                >
+                  {netReadoutText(reading)}
+                </span>
+              )
+              : liveVolts !== undefined && (
+                <span className="text-[12px] tnum shrink-0" style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}>
+                  {liveVolts.toFixed(3)} V
+                </span>
+              )}
           </div>
         ) : component ? (
           <div className="flex items-baseline gap-2">

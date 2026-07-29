@@ -317,7 +317,7 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
                     className="rounded-lg px-3.5 py-1.5 text-[12px] font-semibold cursor-pointer transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
                     style={{
                       background: 'linear-gradient(180deg, var(--copper-hi), var(--copper))',
-                      color: '#2a1c0f',
+                      color: 'var(--on-copper)',
                     }}
                   >
                     {busyId === d.id ? 'Installing ...' : 'Install'}

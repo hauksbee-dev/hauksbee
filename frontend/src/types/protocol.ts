@@ -113,9 +113,35 @@ export interface SimFrame {
   type: 'SimFrame'
   /** Simulation time in seconds */
   t: number
+  /** Sim seconds advanced per wall second, ACHIEVED: what the loop really
+   *  delivered over a rolling window. Never the requested multiplier. */
   realtime_factor: number
-  /** net name → voltage in V */
+  /** The multiplier the user asked for (`SetSpeed`). Kept distinct from
+   *  `realtime_factor` so the UI can say "asked 1.00x, achieving 0.31x"
+   *  instead of conflating the two. Additive: absent from older servers. */
+  requested_factor?: number
+  /** True while the loop is pacing BELOW `requested_factor` because that rate
+   *  is not sustainable on this board/backend right now. Additive. */
+  rate_limited?: boolean
+  /** Nets on an MCU pin whose drive this backend cannot observe: the pin is
+   *  still tri-stated and the backend reports no direction, so the voltage
+   *  shown is the passive network's static level, NOT a measurement of MCU
+   *  activity. These must never be animated as active and should read as
+   *  "not observed" rather than as a measured zero. Additive. */
+  unobserved_drive_nets?: string[]
+  /** net name → voltage in V, sampled at the END of the chunk. A pulse
+   *  narrower than the chunk is not in this number; see `net_v_extremes`. */
   net_voltages: Record<string, number>
+  /** net name → [min, max] WITHIN the chunk this frame summarises: the only
+   *  thing that can reveal a strobe too narrow for the sample instant to catch.
+   *
+   *  NOT YET ON THE WIRE. The engine already tracks it
+   *  (`Scheduler::frame_v_extremes`, which `hauksbee-ci` consumes), but the
+   *  `SimFrame` built in `hauksbee-engine/src/engine.rs` does not include it
+   *  and `hauksbee-server/src/protocol.rs` has no field for it. Declared here
+   *  so that populating it server-side is the ONLY change needed; every net
+   *  surface already prefers it over the client-side fallback when present. */
+  net_v_extremes?: Record<string, [number, number]>
   /** component ref → state map (keys: "dissipation_mw", "running", "conducting", ...) */
   component_states: Record<string, Record<string, number>>
   /** UART bytes since last frame, per MCU reference */
@@ -132,6 +158,10 @@ export interface StatusMsg {
   type: 'Status'
   running: boolean
   sim_time: number
+  /** The session's current requested speed multiplier, so a client that joins
+   *  or reconnects can show the rate the sim is actually set to rather than
+   *  its own local default. Additive. */
+  requested_factor?: number
   options: SolverControls
 }
 
