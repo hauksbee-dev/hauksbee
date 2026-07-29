@@ -3,11 +3,11 @@
 // A voltage of 0.000 V was being shown for three different situations, and the
 // reader could not tell them apart:
 //
-//   1. driven low        — a real measurement, the net is held at 0 V
-//   2. not observed      — the backend cannot see this pin's drive at all, so
+//   1. driven low:        a real measurement, the net is held at 0 V
+//   2. not observed:      the backend cannot see this pin's drive at all, so
 //                          the number is the passive network's idle level and
 //                          is not a measurement of anything the MCU did
-//   3. moving too fast   — the net IS being driven, but the excursion happened
+//   3. moving too fast:   the net IS being driven, but the excursion happened
 //                          between samples, so the sampled instant is a true
 //                          reading of a moment that is not representative
 //

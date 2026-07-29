@@ -178,7 +178,7 @@ export function useBoardSession(opts: {
   // tell which half you were reading. A new run starts from nothing.
   //
   // This deliberately does NOT touch the run's INPUTS (boardFile, firmwareFile,
-  // lastBoardFile) — the caller has just set those — nor the live session
+  // lastBoardFile), which the caller has just set, nor the live session
   // (liveBoard/serverLive), which belongs to the server and outlives an
   // analysis. `runEpoch` lets the shell drop its own run-derived state
   // (queued checks, the checks summary) off the same signal.
