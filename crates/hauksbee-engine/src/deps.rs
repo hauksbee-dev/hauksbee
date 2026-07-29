@@ -886,12 +886,17 @@ mod tests {
     }
 
     #[test]
-    fn deps_json_reports_all_five_with_the_contract_fields() {
+    fn deps_json_reports_every_dep_with_the_contract_fields() {
         let json = deps_json();
         let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
         let deps = v["deps"].as_array().expect("deps array");
         let ids: Vec<&str> = deps.iter().filter_map(|d| d["id"].as_str()).collect();
-        assert_eq!(ids, ["renode", "esp-qemu", "ngspice", "kicad-cli", "avr"]);
+        assert_eq!(
+            ids,
+            ["renode", "esp-qemu", "ngspice", "kicad-cli", "avr", "codex"],
+            "the panel renders this list in order, so adding a probe is a \
+             deliberate change to what a user sees, not an incidental one"
+        );
         for d in deps {
             assert!(d["present"].is_boolean(), "present is a bool: {d}");
             assert!(d["installable"].is_boolean(), "installable is a bool: {d}");
@@ -907,6 +912,21 @@ mod tests {
                 assert!(
                     d["path"].as_str().is_some_and(|s| !s.is_empty()),
                     "present dep must show its resolved path: {d}"
+                );
+            }
+            // Only a dep that sends data off the machine carries the notice,
+            // and it must carry it whether or not it is installed: a user
+            // deciding WHETHER to install needs to know before they do.
+            let offhost = d["sends_data_offhost"].as_str();
+            if d["id"] == "codex" {
+                assert!(
+                    offhost.is_some_and(|s| s.contains("OpenAI")),
+                    "codex must state where the data goes: {d}"
+                );
+            } else {
+                assert!(
+                    offhost.is_none(),
+                    "a local binary must not claim to send anything: {d}"
                 );
             }
         }
