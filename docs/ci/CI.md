@@ -430,6 +430,55 @@ At least one threshold is required. An assertion with none would sit in a spec
 looking like a coverage gate while checking nothing, which is the failure this
 assertion exists to prevent, so the spec loader rejects it.
 
+## Waiving a finding you have judged
+
+A check that fires on your board and is wrong leaves you two bad options: live
+with a red build, or stop running the check. Nobody removes one rule, they drop
+the suite, and then the tool stops catching the things it was right about.
+
+A waiver is the third option. Put `hauksbee-waivers.toml` beside the board:
+
+```toml
+[[waive]]
+check = "si"                      # "si", "lint" or "drc"
+kind = "controlled_impedance"     # the rule, as it appears in --json
+nets = ["USB_DP", "USB_DM"]       # or refs = ["U3"]
+reason = "measured 92 ohm on the fab's stackup; our stackup file is wrong"
+until = "2026-12-31"
+```
+
+`hauksbee run <board> --check` and the combined `--json` report both read it.
+Findings an active waiver covers come out of the gate and appear in their own
+section:
+
+```
+== Waived (2) ==
+These findings fired and were overruled. They are not in the gate.
+  drc/short: GND to +5V on B.Cu
+      because: the pour bridges these on purpose (until 2026-12-31)
+```
+
+Four rules, all enforced rather than suggested:
+
+- **`reason` is required.** Six months on, a waiver with no reason cannot be
+  told apart from a bug.
+- **`until` is required.** A waiver that never lapses is a disabled check
+  wearing a different hat. On the date it expires the finding comes back, and
+  the report names the lapsed waiver so the red is explainable.
+- **`nets` or `refs` is required.** Without one, the waiver silences the rule
+  across the whole board, which is turning the check off with extra steps. A
+  second occurrence elsewhere still gates.
+- **Waived is not hidden.** A board carrying ten overruled findings must not
+  look like a clean one. Active waivers that matched nothing are called out
+  too, since either the finding is fixed or the waiver no longer describes what
+  fires.
+
+A waiver file that does not parse is a warning, not a failed run, and every
+finding it would have covered gates. A typo must never quietly disable a check.
+
+Clearance violations are not waivable: they do not gate on their own, so there
+is nothing to excuse them from.
+
 **`phase_margin` / `ac_gain`**: small-signal loop-stability and frequency-response
 gates, driven by an `[ac]` sweep block on the spec. `phase_margin` bounds the
 feedback loop's phase margin (degrees) and `ac_gain` bounds a net's magnitude

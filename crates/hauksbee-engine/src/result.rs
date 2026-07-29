@@ -1199,6 +1199,41 @@ pub struct JsonReport {
     /// Machine-readable co-sim summary, present only on a co-sim run.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cosim: Option<CosimJson>,
+    /// Findings that fired and were overruled by an active waiver, with the
+    /// reason and the expiry date.
+    ///
+    /// A green verdict that quietly dropped findings would be the worst of both
+    /// worlds, so the machine surface carries them exactly as the text report
+    /// prints them. A pipeline can watch this array grow.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub waived: Vec<JsonWaived>,
+}
+
+/// One overruled finding on the machine surface.
+#[derive(Debug, Clone, Serialize)]
+pub struct JsonWaived {
+    /// Which check produced it ("si" / "lint" / "drc").
+    pub check: String,
+    /// The specific rule it was matched on.
+    pub kind: String,
+    /// The finding's own message, so a reader can tell which one was overruled.
+    pub subject: String,
+    /// Why the board's owner judged it wrong or acceptable.
+    pub reason: String,
+    /// The date the waiver stops applying, after which this gates again.
+    pub until: String,
+}
+
+impl From<crate::waiver::WaivedFinding> for JsonWaived {
+    fn from(w: crate::waiver::WaivedFinding) -> Self {
+        JsonWaived {
+            check: w.check,
+            kind: w.kind,
+            subject: w.subject,
+            reason: w.reason,
+            until: w.until,
+        }
+    }
 }
 
 /// AC sweep in JSON: validity first, then the bode rows only when valid.
@@ -1267,6 +1302,7 @@ impl JsonReport {
             boot_gates: None,
             notes: Vec::new(),
             cosim: None,
+            waived: Vec::new(),
         }
     }
 
@@ -1283,11 +1319,38 @@ impl JsonReport {
     /// newer than the validated copper extraction (`version_warning` set), the
     /// same carve-out the CI gate makes.
     pub fn verdict(&self) -> (bool, &'static str, usize, usize) {
+        let (v, _) = self.verdict_with_waivers(&mut crate::waiver::WaiverSet::default());
+        v
+    }
+
+    /// As [`Self::verdict`], but findings an active waiver covers do not gate.
+    ///
+    /// Returns the verdict tuple and the waived findings, which the caller
+    /// reports. Waived is not hidden: a board carrying overruled findings has
+    /// to look like one, or the file rots into a list nobody reads.
+    #[allow(clippy::type_complexity)]
+    pub fn verdict_with_waivers(
+        &self,
+        waivers: &mut crate::waiver::WaiverSet,
+    ) -> (
+        (bool, &'static str, usize, usize),
+        Vec<crate::waiver::WaivedFinding>,
+    ) {
         let mut serious = 0usize;
         let mut actionable = 0usize;
+        let mut waived = Vec::new();
         if let Some(findings) = &self.findings {
             for f in findings {
+                // Only a gating finding can be waived. Waiving a note would
+                // suppress information without changing any outcome, which is
+                // cost with no benefit.
                 if f.severity == "serious" {
+                    if let Some(w) =
+                        waivers.take_waiver(&f.check, &f.kind, &f.nets, &f.refs, &f.message)
+                    {
+                        waived.push(w);
+                        continue;
+                    }
                     serious += 1;
                 }
                 if f.actionable {
@@ -1297,8 +1360,16 @@ impl JsonReport {
         }
         if let Some(drc) = &self.drc {
             if drc.version_warning.is_none() {
-                serious += drc.shorts.len();
-                actionable += drc.shorts.len();
+                for s in &drc.shorts {
+                    let nets = vec![s.net_a.clone(), s.net_b.clone()];
+                    let subject = format!("{} to {} on {}", s.net_a, s.net_b, s.layer);
+                    if let Some(w) = waivers.take_waiver("drc", "short", &nets, &[], &subject) {
+                        waived.push(w);
+                        continue;
+                    }
+                    serious += 1;
+                    actionable += 1;
+                }
             }
             actionable += drc.violations.len();
         }
@@ -1311,7 +1382,7 @@ impl JsonReport {
         } else {
             "pass"
         };
-        (verdict == "pass", verdict, serious, actionable)
+        ((verdict == "pass", verdict, serious, actionable), waived)
     }
 
     /// Serialize to a pretty JSON string (stable, non-interactive output). The

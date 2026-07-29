@@ -1518,18 +1518,33 @@ fn bind_component(
         Comparator => bind_comparator(comp, model, circuit, &role_nets),
         AnalogSwitch => bind_analog_switch(comp, model, circuit, &role_nets, power_nets),
         Digital | ShiftRegister => {
-            bind_digital(comp, model, circuit, &role_nets, digital);
             let kind = if model.kind == ShiftRegister {
                 "shift_register"
             } else {
                 "digital"
             };
-            (
-                BindOutcome::Digital {
-                    kind: kind.to_string(),
-                },
-                None,
-            )
+            match bind_digital(comp, model, circuit, &role_nets, digital) {
+                Ok(()) => (
+                    BindOutcome::Digital {
+                        kind: kind.to_string(),
+                    },
+                    None,
+                ),
+                // A part whose logic spec does not compile is NOT bound: its
+                // nets float. Reporting it as `Digital` anyway made a broken
+                // part look healthy in every report surface (including
+                // `critical_parts_bound`); record the truth and warn.
+                Err(e) => (
+                    BindOutcome::Unresolved {
+                        reason: format!("invalid [models.logic]: {e}"),
+                    },
+                    Some(format!(
+                        "{} ({}): invalid [models.logic] in model '{}': {e}; the part is \
+                         unmodeled and its output nets float",
+                        comp.reference, comp.value, model.id
+                    )),
+                ),
+            }
         }
         Dac => {
             // MCP4728-class quad I2C DAC: stamp Thevenin drivers on the four
@@ -1541,13 +1556,24 @@ fn bind_component(
         }
         Adc => {
             // Treated as a behavioral passthrough buffer for now.
-            bind_digital(comp, model, circuit, &role_nets, digital);
-            (
-                BindOutcome::Digital {
-                    kind: "adc".to_string(),
-                },
-                None,
-            )
+            match bind_digital(comp, model, circuit, &role_nets, digital) {
+                Ok(()) => (
+                    BindOutcome::Digital {
+                        kind: "adc".to_string(),
+                    },
+                    None,
+                ),
+                Err(e) => (
+                    BindOutcome::Unresolved {
+                        reason: format!("invalid [models.logic]: {e}"),
+                    },
+                    Some(format!(
+                        "{} ({}): invalid [models.logic] in model '{}': {e}; the part is \
+                         unmodeled and its output nets float",
+                        comp.reference, comp.value, model.id
+                    )),
+                ),
+            }
         }
         Mcu => {
             let backend = mcu_backend_string(comp, model);
@@ -2754,13 +2780,19 @@ fn bind_mcp4728_dac(
     )
 }
 
+/// Bind a digital part's [models.logic] spec. `Err` carries the logic-compile
+/// failure: the part is NOT modeled (its stamped legs are tri-stated so the
+/// output nets genuinely float) and the caller MUST record it as unresolved.
+/// Swallowing the error while still reporting the part as bound was the
+/// NEP-board study's defect 3: a part that cannot possibly work showed as a
+/// healthy `Digital` row in the bind coverage report.
 fn bind_digital(
     comp: &Component,
     model: &ModelEntry,
     circuit: &mut Circuit,
     roles: &HashMap<String, NodeId>,
     digital: &mut Vec<DigitalComponent>,
-) {
+) -> Result<(), String> {
     // A quad/dual NOR gate (74HC02) wired as cross-coupled SR spike latches: if
     // any gate pair forms a NOR latch (one gate's output net == the other gate's
     // input net and vice-versa), bind one NorLatch behavioral component per latch
@@ -2768,7 +2800,7 @@ fn bind_digital(
     if model.id.to_ascii_lowercase().contains("74hc02")
         && bind_nor_latches(comp, model, circuit, roles, digital)
     {
-        return;
+        return Ok(());
     }
 
     // Stamp a Thevenin driver on each connected output role, honouring the
@@ -2837,11 +2869,15 @@ fn bind_digital(
                     ),
                 }
             }
-            digital.push(d)
+            digital.push(d);
+            Ok(())
         }
         // Never silently downgrade a broken spec to a passthrough: the part is
         // left unmodeled LOUDLY, with its output nets genuinely floating (the
-        // stamped legs tri-stated to `roff`), matching the message below.
+        // stamped legs tri-stated to `roff`), matching the message below. The
+        // error is RETURNED, not just printed, so the bind report records the
+        // part as unresolved instead of showing a bound-looking row whose
+        // nets never drive.
         Err(e) => {
             for mut drv in leg_handles {
                 drv.set_enabled(circuit, false);
@@ -2852,6 +2888,7 @@ fn bind_digital(
                  lint`) or override it with --models-dir",
                 comp.reference, model.id
             );
+            Err(e.to_string())
         }
     }
 }
@@ -3913,7 +3950,8 @@ mod digital_ro_tests {
             roles.insert(r.into(), circuit.node(&r.to_uppercase()));
         }
         let mut digital = Vec::new();
-        bind_digital(&bare_comp("U1"), &model, &mut circuit, &roles, &mut digital);
+        bind_digital(&bare_comp("U1"), &model, &mut circuit, &roles, &mut digital)
+            .expect("the builtin 595 spec compiles");
 
         assert_eq!(digital.len(), 1, "the 595 binds");
         let drv = digital[0]
@@ -3923,6 +3961,47 @@ mod digital_ro_tests {
         assert_eq!(
             drv.ron, custom_ro,
             "driver must carry the model's ro, not DEFAULT_RO"
+        );
+    }
+
+    /// NEP-board study defect 3: a digital part whose [models.logic] fails to
+    /// compile must NOT report as bound. `bind_digital` used to print the
+    /// compile error to stderr and return unit, while the caller
+    /// unconditionally recorded `BindOutcome::Digital`, so the report (and
+    /// `critical_parts_bound`) counted a part whose nets float as healthy.
+    /// The error must come back to the caller so the row reads UNRESOLVED.
+    #[test]
+    fn broken_logic_spec_reports_unresolved_not_bound() {
+        let mut model = ModelLibrary::builtin()
+            .resolve(&ComponentQuery::new(
+                None,
+                Some("74HC595".to_string()),
+                None,
+            ))
+            .model
+            .expect("builtin 74HC595");
+        // Corrupt the spec: a comb expression referencing an undefined signal
+        // cannot compile (the shape a bad --models-dir override produces).
+        model
+            .logic
+            .comb
+            .insert("qa".to_string(), "no_such_signal & ser".to_string());
+
+        let mut circuit = Circuit::new();
+        let mut roles: HashMap<String, NodeId> = HashMap::new();
+        for r in ["srclk", "rclk", "ser", "qa", "qb"] {
+            roles.insert(r.into(), circuit.node(&r.to_uppercase()));
+        }
+        let mut digital = Vec::new();
+        let err = bind_digital(&bare_comp("U1"), &model, &mut circuit, &roles, &mut digital)
+            .expect_err("a spec that cannot compile must surface its error");
+        assert!(
+            !err.is_empty(),
+            "the returned reason must carry the compile error"
+        );
+        assert!(
+            digital.is_empty(),
+            "no DigitalComponent may be pushed for a part that failed to compile"
         );
     }
 

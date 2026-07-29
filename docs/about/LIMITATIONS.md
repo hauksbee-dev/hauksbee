@@ -60,7 +60,13 @@ catches nothing. The bar for adoption is therefore higher than the bar for
 usefulness, and there is no second first impression. This is the sharpest risk
 the project carries.
 
-What exists today is aimed straight at it. A check that fires must be right,
+A check that misfires on your board can be overruled one finding at a time,
+without switching the check off for everything else it catches. A waiver
+carries a required reason and a required expiry, so the finding comes back on
+a date rather than staying silenced forever, and waived findings are printed
+rather than hidden. See [`../ci/CI.md`](../ci/CI.md).
+
+The rest is aimed at the same thing. A check that fires must be right,
 and that is enforced rather than promised: every check is run across a corpus
 of real, working, shipped boards, and a check that lights up on a healthy board
 does not land, however good it is at finding the fault it was written for. See
@@ -74,10 +80,6 @@ What is honestly missing:
 - **The corpus is not your board.** Zero false positives across the boards
   measured is a real claim and a narrow one. It does not promise the same on a
   design nobody here has seen.
-- **There is no way to overrule one finding and keep the rest.** Today a check
-  that misfires on your board can only be lived with or turned off wholesale.
-  A per-finding waiver carrying a reason and an expiry is the right answer, and
-  it is not built yet.
 - **Precision is claimed globally, not per check.** A measured number for each
   check would be a stronger and more falsifiable statement than one figure for
   the suite, and it would tell a new user which checks to trust first.

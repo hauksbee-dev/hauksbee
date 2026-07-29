@@ -610,7 +610,13 @@ pub fn analyze_with_firmware(
             return report;
         }
     };
-    let mut cosim = run_web_cosim(&norm.board, &resolved.name, &resolved.bytes, &drc);
+    let mut cosim = run_web_cosim(
+        &norm.board,
+        file_name,
+        &resolved.name,
+        &resolved.bytes,
+        &drc,
+    );
     if let Some(note) = &resolved.note {
         // Say which image actually ran when it came out of an archive/build,
         // so a wrong-env surprise is diagnosable from the report itself.
@@ -806,8 +812,24 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
 /// Takes the ALREADY-extracted board from the caller's normalization pass
 /// (never re-reads the upload): every format the static analysis accepts,
 /// `.board` exports and gerber zips included, reaches co-sim identically.
+/// The exact terminal command that runs this co-sim outside the web report,
+/// with the REAL uploaded file names, never placeholders (a `<board>`
+/// placeholder is an instruction the user cannot follow). The binary is named
+/// by its full running path: an app user has no `hauksbee` on PATH (it lives
+/// in Hauksbee.app/Contents/Resources/bin), and the serving executable IS that
+/// binary, so its own path is the one command guaranteed to exist on this
+/// machine.
+fn cli_cosim_command(board_file: &str, fw_file: &str) -> String {
+    let exe = std::env::current_exe()
+        .ok()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "hauksbee".to_string());
+    format!("\"{exe}\" run \"{board_file}\" --firmware \"{fw_file}\" --headless")
+}
+
 fn run_web_cosim(
     board: &ExtractedBoard,
+    board_file_name: &str,
     fw_name: &str,
     fw_bytes: &[u8],
     drc: &hauksbee_extract::DrcReport,
@@ -816,6 +838,13 @@ fn run_web_cosim(
     use crate::stress::{FaultEvent, FaultKind};
     use hauksbee_server::engine::Engine;
     use std::io::Write;
+
+    /// Simulated window this synchronous report runs, mirroring run_headless's
+    /// short fixed window. Named here because the external-emulator refusal
+    /// below quotes it: the honest reason that path is skipped is that 0.2 s
+    /// of simulated time is less than such a chip's boot ROM needs, so the
+    /// user would be shown a processor that has not started.
+    const SECONDS: f64 = 0.2;
 
     // No MCU => firmware drives nothing. Inspect the bound board before paying
     // for a temp file / engine build, and say so plainly.
@@ -827,17 +856,41 @@ fn run_web_cosim(
         );
     }
     // Web path is in-process (simavr) only: external emulator backends
-    // (Renode/QEMU) advance over a TCP socket and can take many seconds, past a
-    // browser request budget. Skip them here with a clear note (the CLI co-sim
-    // still runs them).
+    // (Renode/QEMU) advance over a TCP socket, and their boot alone takes tens
+    // of seconds, past a browser request budget. Skip them here with an honest
+    // note that names the working alternatives WITH the real file names (the
+    // live sim runs these backends fine; only this synchronous quick report
+    // cannot wait for them).
     if bound
         .mcus
         .iter()
         .all(|m| m.backend.starts_with("renode:") || m.backend.starts_with("qemu:"))
     {
-        return cosim_unavailable(
-            "This board's MCU uses an external emulator (Renode/QEMU) that is too slow for the web path. Run it from the command line: hauksbee run <board> --firmware <fw> --headless.",
-        );
+        let emulator = if bound.mcus.iter().any(|m| m.backend.starts_with("qemu:")) {
+            "Espressif QEMU"
+        } else {
+            "Renode"
+        };
+        let mut section = cosim_unavailable(format!(
+            "This board's MCU runs on an external emulator ({emulator}). This quick \
+             report simulates only a {SECONDS:.1} s window, and a chip like this one \
+             spends several simulated seconds in its boot ROM before your code starts, \
+             so the report would show a processor that has not booted yet. Running it \
+             long enough is a job of tens of wall-clock seconds, which is why it is not \
+             done inside a page load. The co-sim itself works, two ways: open the live \
+             sim (\"Drive it live\") to boot this firmware here in the app, or run it \
+             from a terminal, from the folder holding your files: {}",
+            cli_cosim_command(board_file_name, fw_name)
+        ));
+        // The generic fix line ("drop a board with an in-process MCU") would be
+        // wrong advice here: the board is fine, only the quick report cannot
+        // host the emulator.
+        if let Some(f) = section.findings.first_mut() {
+            f.fix = "If the emulator is not installed yet, the Environment page installs \
+                     it with one click."
+                .to_string();
+        }
+        return section;
     }
 
     // Write the firmware bytes verbatim to a temp file (the MCU loader is
@@ -897,8 +950,8 @@ fn run_web_cosim(
         0
     };
 
-    // Short fixed window mirroring run_headless: 1 kHz frame cadence for ~0.2s.
-    let seconds = 0.2;
+    // Short fixed window mirroring run_headless: 1 kHz frame cadence.
+    let seconds = SECONDS;
     let frame_dt = 1.0 / 1000.0;
     let mut t = 0.0;
     let mut last_uart: Vec<u8> = Vec::new();

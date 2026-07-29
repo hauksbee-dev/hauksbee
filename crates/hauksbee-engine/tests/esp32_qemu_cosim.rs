@@ -371,11 +371,19 @@ fn esp32s3_test_board() -> hauksbee_engine::binder::BoundBoard {
     bind_board(&board, &ModelLibrary::builtin())
 }
 
-/// A blank 4 MB flash image: enough for the S3 ROM (in the QEMU binary) to
-/// boot and idle. Espressif QEMU requires a power-of-two flash size.
+/// A minimal 4 MB flash image: enough for the S3 ROM (in the QEMU binary) to
+/// boot and idle. Espressif QEMU requires a power-of-two flash size, and the
+/// backend's pre-boot gate requires the ESP image magic (0xE9) at the offset
+/// the S3 ROM reads (0x0); an all-0xFF image is now REFUSED before spawn
+/// (that is the boot-loop guard users hit with a wrong-chip image), so this
+/// fixture carries the magic byte but no valid bootloader after it: the
+/// machine spawns, the ROM rejects the garbage image and idles, which is all
+/// this test needs.
 fn blank_s3_flash(dir: &std::path::Path) -> PathBuf {
     let p = dir.join("flash_s3_blank.bin");
-    std::fs::write(&p, vec![0xFFu8; 4 * 1024 * 1024]).expect("write blank flash");
+    let mut img = vec![0xFFu8; 4 * 1024 * 1024];
+    img[0] = 0xE9;
+    std::fs::write(&p, img).expect("write blank flash");
     p
 }
 
