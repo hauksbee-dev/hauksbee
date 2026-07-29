@@ -133,6 +133,20 @@ pub struct SimFrame {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub unobserved_drive_nets: Vec<String>,
     pub net_voltages: HashMap<String, f64>,
+    /// Per-net `(min_v, max_v)` over the frame's whole chunk, not just the
+    /// instant `net_voltages` sampled.
+    ///
+    /// A chunk is much longer than a bit-banged strobe, so a net that swung
+    /// rail to rail a thousand times inside one chunk still lands on whatever
+    /// level it happened to hold at the sample point, and a working board
+    /// reads as a flat dead one. That is what made an EEPROM programmer look
+    /// broken to someone who knew it was fine. The envelope is what tells a
+    /// client that the flat number hides motion.
+    ///
+    /// The scheduler already tracked this for `hauksbee-ci`. Additive, and
+    /// omitted when empty, so older clients ignore it.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub net_v_extremes: HashMap<String, (f64, f64)>,
     /// reference -> small state map ("dissipation_mw", "conducting", ...).
     pub component_states: HashMap<String, HashMap<String, f64>>,
     /// UART bytes since last frame, per MCU reference.
