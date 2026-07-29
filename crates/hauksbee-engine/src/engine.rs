@@ -28,6 +28,11 @@ use crate::power_supply::{Chemistry, PowerSupply, UsbSpec};
 use crate::report::BindReport;
 use crate::scheduler::Scheduler;
 
+/// Analog chunk for boards whose MCU runs on an external emulator (Renode or
+/// QEMU). See the note in [`HauksbeeEngine::from_bound`] for why the
+/// scheduler's much finer default is wrong for those backends.
+const EXTERNAL_BACKEND_CHUNK_S: f64 = 5e-3;
+
 /// The live engine: a co-sim scheduler plus board metadata for the protocol.
 pub struct HauksbeeEngine {
     sched: Scheduler,
@@ -63,7 +68,22 @@ impl HauksbeeEngine {
         let report_store = bound.report.clone();
         let controls = SolverControls::default();
         let opts = controls_to_options(&controls);
-        let sched = Scheduler::new(bound, firmware, opts)?;
+        let mut sched = Scheduler::new(bound, firmware, opts)?;
+        // Coarsen the analog chunk for external emulators, the way every
+        // deliberate caller already does (the CLI co-sim report, the CI runner,
+        // the proven QEMU integration tests). Renode and QEMU advance the guest
+        // over a control socket, and one round-trip costs ~25 ms of wall time
+        // whatever slice of guest time it buys, so the scheduler's 100 us
+        // default (right for the in-process AVR core) spends 300 wall seconds
+        // per simulated second on round-trips alone. The live sim was the one
+        // caller that never coarsened it and inherited the default: measured at
+        // 0.0008x realtime, an ESP32 needed over an hour of wall clock to reach
+        // app_main, so "Drive it live" looked hung. 5 ms matches the value the
+        // integration tests proved and sits inside the CI runner's 1..10 ms
+        // clamp. A caller that knows better still overrides it afterwards.
+        if sched.has_external_backend() {
+            sched.chunk_s = EXTERNAL_BACKEND_CHUNK_S;
+        }
         Ok(HauksbeeEngine {
             sched,
             board_name,
@@ -334,6 +354,18 @@ impl Engine for HauksbeeEngine {
 
     fn set_peripheral(&mut self, id: &str, value: f64) -> bool {
         self.sched.set_peripheral(id, value)
+    }
+
+    /// One analog chunk, for a board on an external emulator: a step smaller
+    /// than that still pays a full control-socket round-trip and simply buys
+    /// less guest time for it. In-process cores (the AVR backend) report no
+    /// floor, so their pacing is unchanged.
+    fn min_step_dt(&self) -> f64 {
+        if self.sched.has_external_backend() {
+            self.sched.chunk_s
+        } else {
+            0.0
+        }
     }
 }
 

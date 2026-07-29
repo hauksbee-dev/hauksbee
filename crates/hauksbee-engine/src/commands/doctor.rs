@@ -45,8 +45,13 @@ pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
     backends.push(Backend {
         name: "avr",
         status: "disabled",
-        detail: "compiled out; rebuild with the default features + libsimavr \
-                 (scripts/install-sims.sh --avr)"
+        // Honest for BINARY users too: this build (the permissive download)
+        // can never gain AVR at runtime; the capable build is the other
+        // release asset, and rebuilding from source is the alternative.
+        detail: "not in this build (the permissive, Apache-2.0 download drops \
+                 the GPL simavr backend). For AVR co-sim, install the default \
+                 (GPL-3.0) download instead, or build from source with \
+                 libsimavr (scripts/install-sims.sh --avr)"
             .to_string(),
         summary: "ATmega / ATtiny firmware co-sim",
     });

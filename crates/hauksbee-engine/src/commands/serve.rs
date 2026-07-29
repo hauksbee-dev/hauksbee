@@ -37,10 +37,75 @@ fn open_browser(url: &str) {
     }
 }
 
+/// Sweep stale hauksbee temp files from TMPDIR at server start.
+///
+/// The live-sim firmware file (`hauksbee-live-fw-*`) and the merged ESP flash
+/// image (`hauksbee-esp-flash-*`) are deleted on Drop, but a process killed
+/// mid-session (the app's quit SIGTERM being the normal case) never runs Drop,
+/// so the file outlives it. The age threshold keeps this from racing another
+/// hauksbee instance whose session is live right now.
+fn sweep_stale_temp_files() {
+    const STALE_AFTER: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else { continue };
+        if !name.starts_with("hauksbee-live-fw-") && !name.starts_with("hauksbee-esp-flash-") {
+            continue;
+        }
+        let stale = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age > STALE_AFTER);
+        if stale {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
+/// Exit when the parent process named in `HAUKSBEE_EXIT_WITH_PARENT` is gone.
+///
+/// The app launcher sets the variable to its own pid when it spawns this
+/// server. Its normal Quit path SIGTERMs us, but a launcher killed by a raw
+/// signal never runs its delegate, and the server would keep serving as an
+/// orphan (observed in the cold-install audit). Opt-in via the env var only:
+/// a terminal user's `nohup hauksbee serve &` legitimately outlives its shell
+/// and must never be tied to a parent this way.
+fn exit_when_parent_dies() {
+    let Some(parent) = std::env::var("HAUKSBEE_EXIT_WITH_PARENT")
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+    else {
+        return;
+    };
+    #[cfg(unix)]
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        // kill(pid, 0) probes existence without sending a signal; ESRCH means
+        // the launcher is gone. EPERM would mean "exists but not ours", which
+        // cannot happen for our own parent, and is treated as alive anyway.
+        let gone = unsafe { libc::kill(parent as libc::pid_t, 0) } != 0
+            && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+        if gone {
+            // Normal shutdown path: the process exit drops nothing gracefully
+            // here by design; emulator children die with the process group
+            // (hauksbee_mcu::children), and the stale-temp sweep above covers
+            // the files whose Drop this skips.
+            std::process::exit(0);
+        }
+    });
+}
+
 /// `hauksbee serve [--port N] [--open]`: the local web front door
 /// (drop-a-board report).
 pub fn run(port: u16, open: bool) -> anyhow::Result<()> {
     use std::sync::Arc;
+    sweep_stale_temp_files();
+    exit_when_parent_dies();
     let rt = tokio::runtime::Runtime::new()?;
     rt.block_on(async move {
         let addr = format!("127.0.0.1:{}", port);

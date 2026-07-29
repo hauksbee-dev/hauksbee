@@ -88,13 +88,10 @@ fn probe_renode() -> DepStatus {
     } else {
         "not auto-installable on this OS; install Renode manually (renode.io)".to_string()
     };
-    let script = find_install_sims_script();
-    let manual = match &script {
-        Some(p) => format!("bash {} --renode-only", p.display()),
-        None => "install Renode from github.com/renode/renode/releases so `renode` is on \
-                 PATH or the portable build sits in ~/renode-portable"
-            .to_string(),
-    };
+    // The one-click install works from ANY binary now (the installer script is
+    // embedded; see `materialize_install_sims_script`), so the manual line can
+    // always be the subcommand that runs the same flow.
+    let manual = "hauksbee install renode".to_string();
 
     #[cfg(feature = "renode")]
     {
@@ -118,7 +115,7 @@ fn probe_renode() -> DepStatus {
                 path: None,
                 version: None,
                 unlocks,
-                installable: script.is_some() && host_is_installable_os(),
+                installable: host_is_installable_os(),
                 cost,
                 manual,
                 detail: Some(e.to_string()),
@@ -437,6 +434,40 @@ fn first_line(msg: &str) -> String {
 
 // ── install side ─────────────────────────────────────────────────────────────
 
+/// The installer script and the helper it sources, embedded at build time.
+///
+/// Why: the shipped .app carries no `scripts/` directory, so on a stranger's
+/// machine `find_install_sims_script` finds nothing and the Environment page
+/// could offer no Renode Install button at all (the cold-install audit's
+/// defect 3). Embedding the script keeps ONE maintained installer
+/// implementation while making it available from any binary, bundle or bare;
+/// an on-disk copy still wins so a user-patched script is honored.
+const INSTALL_SIMS_SH: &str = include_str!("../../../scripts/install-sims.sh");
+const COMMON_SH: &str = include_str!("../../../scripts/common.sh");
+
+/// A runnable `install-sims.sh` path: the on-disk copy when one exists, else
+/// the embedded copy (plus the `common.sh` it sources) written to a temp dir.
+fn materialize_install_sims_script() -> Result<PathBuf, String> {
+    if let Some(p) = find_install_sims_script() {
+        return Ok(p);
+    }
+    let dir = std::env::temp_dir().join(format!("hauksbee-install-sims-{}", std::process::id()));
+    std::fs::create_dir_all(&dir)
+        .map_err(|e| format!("could not stage the bundled installer script: {e}"))?;
+    let script = dir.join("install-sims.sh");
+    std::fs::write(&script, INSTALL_SIMS_SH)
+        .and_then(|_| std::fs::write(dir.join("common.sh"), COMMON_SH))
+        .map_err(|e| format!("could not write the bundled installer script: {e}"))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for f in [&script, &dir.join("common.sh")] {
+            let _ = std::fs::set_permissions(f, std::fs::Permissions::from_mode(0o755));
+        }
+    }
+    Ok(script)
+}
+
 /// Locate `scripts/install-sims.sh`: env override first (tests), then walking
 /// up from the executable (release bundles ship `scripts/` next to `bin/`),
 /// then from the current directory and the build-time checkout (source runs).
@@ -566,10 +597,12 @@ fn install_esp_qemu(progress: &mut dyn FnMut(&str)) -> Result<(), String> {
     }
 }
 
-/// Renode: shell `scripts/install-sims.sh --renode-only` (the per-backend
-/// installer this repo already maintains; release bundles ship it next to the
-/// binary). There is no Rust-side Renode installer to prefer.
-fn install_renode(progress: &mut dyn FnMut(&str)) -> Result<(), String> {
+/// Renode: shell `install-sims.sh --renode-only` (the per-backend installer
+/// this repo already maintains). The script comes from disk when present,
+/// else from the copy embedded in this binary, so the shipped .app (which
+/// carries no scripts/) installs Renode exactly like a checkout does. There
+/// is no Rust-side Renode installer to prefer.
+pub(crate) fn install_renode(progress: &mut dyn FnMut(&str)) -> Result<(), String> {
     if !host_is_installable_os() {
         return Err(format!(
             "Renode auto-install supports macOS and Linux only (this is {}); install \
@@ -577,12 +610,7 @@ fn install_renode(progress: &mut dyn FnMut(&str)) -> Result<(), String> {
             std::env::consts::OS
         ));
     }
-    let script = find_install_sims_script().ok_or_else(|| {
-        "scripts/install-sims.sh was not found next to this binary or in a source \
-         checkout; install Renode manually from github.com/renode/renode/releases \
-         (portable build into ~/renode-portable)"
-            .to_string()
-    })?;
+    let script = materialize_install_sims_script()?;
     progress("installing Renode (about an 80 MB download) ...");
     let mut cmd = Command::new("bash");
     cmd.arg(&script).arg("--renode-only");

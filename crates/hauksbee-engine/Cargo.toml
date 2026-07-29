@@ -42,6 +42,9 @@ path = "src/lib.rs"
 
 [dependencies]
 anyhow = { workspace = true }
+# serve's launcher-orphan watchdog probes its parent pid with kill(pid, 0)
+# (commands/serve.rs::exit_when_parent_dies); unix-only use.
+libc = "0.2"
 thiserror = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }

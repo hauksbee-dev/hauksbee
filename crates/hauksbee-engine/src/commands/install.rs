@@ -68,6 +68,34 @@ pub fn esp_qemu(_yes: bool) -> anyhow::Result<()> {
     )
 }
 
+/// Run the `install renode` subcommand: the same embedded/on-disk
+/// `install-sims.sh --renode-only` flow the web Environment page's Install
+/// button uses (`crate::deps::install_renode`), behind the standard CLI
+/// consent prompt. One implementation, two front doors.
+pub fn renode(yes: bool) -> anyhow::Result<()> {
+    #[cfg(feature = "renode")]
+    if let Ok(p) = hauksbee_mcu::renode::find_renode() {
+        println!("renode\talready installed\t{}", p.display());
+        return Ok(());
+    }
+    eprintln!(
+        "This downloads the Renode portable build (MIT, built and published by \
+         Antmicro at https://github.com/renode/renode/releases, about 80 MB) \
+         and unpacks it into ~/renode-portable; it is a separate program \
+         hauksbee talks to over sockets, not a part of hauksbee."
+    );
+    if !yes && !confirm("Proceed with download and install? [y/N] ")? {
+        anyhow::bail!(
+            "install declined. Re-run `hauksbee install renode` (add --yes to \
+             skip this prompt), or install manually: docs/cosim/SIMULATORS.md"
+        );
+    }
+    let mut progress = |msg: &str| eprintln!("  {msg}");
+    crate::deps::install_renode(&mut progress).map_err(|e| anyhow::anyhow!(e))?;
+    eprintln!("Done. `hauksbee doctor --backends` will now report Renode as ok.");
+    Ok(())
+}
+
 /// Co-sim pre-flight for `hauksbee run --firmware` (and anything else CLI-side
 /// that is about to boot a `qemu:` core): when one of `backends` is a
 /// `qemu:<part>` whose emulator binary is absent, offer, on a real TTY, to
