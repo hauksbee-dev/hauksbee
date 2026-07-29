@@ -193,6 +193,39 @@ a measured partition accuracy. The "comps" column in the table is the
 *native* count, not how many the reconstruction recovered (component
 recovery runs materially lower than net agreement, see Limitations).
 
+### The boards that ship in this repo
+
+The sweep above needs the corpus, which needs a fetch, so it does not run on a
+bare clone. `shipped_boards_survive_gerbers` covers the fourteen boards that
+ship here, and it runs wherever `kicad-cli` is installed.
+
+It gates two different things, and reading them as one would mislead you.
+
+**Every board must round-trip.** `kicad-cli` loads it, exports gerbers, and the
+reconstruction reads them back without error. This is not a formality: it
+caught six demo boards that KiCad itself could not open. They carried
+Lisp-style `;` comment lines inside the s-expression, which the KiCad format
+does not have, so `kicad-cli` answered "Failed to load board". Our own parser
+tolerates them, which is why the gap survived until something outside hauksbee
+was asked to read the same file. The prose moved to `<board>.notes.md`
+sidecars.
+
+**Only routed boards are judged on accuracy.** Most boards here are
+pad-and-netlist fixtures with zero segments, vias and zones: their connectivity
+lives in the file rather than in copper. A gerber carries copper and nothing
+else, so on an unrouted board there is physically nothing to trace, and the
+reconstruction can only infer from pad overlap. Those boards land at 60-85%
+net-partition, and that number measures the fixture rather than the extractor.
+
+Watchy is the one shipped board with a real layout (685 segments, 114 vias, 6
+zones), and it is the one carrying a floor:
+
+| Board | Copper | Net partition (gate) | Located (gate) |
+|-------|--------|----------------------|----------------|
+| watchy (bundled) | 685 seg / 114 vias / 6 zones | 100.0% (≥99) | 262/276 = 95% (≥90) |
+
+Measured 2026-07-29 against kicad-cli 10.0.3.
+
 Per the Tarski meta-lesson, we treated every closed-loop disagreement as our
 bug and chased it to the primitive. Two mattered: a Y-axis sign convention
 (KiCad pcb Y-down vs gerber Y-up) and the pour-containment rule above (which
