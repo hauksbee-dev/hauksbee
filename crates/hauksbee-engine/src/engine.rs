@@ -306,6 +306,10 @@ impl Engine for HauksbeeEngine {
             // presenting the passive network's idle voltage as a measurement.
             unobserved_drive_nets: self.sched.unobserved_drive_nets(),
             net_voltages: self.sched.net_voltages(),
+            // The chunk's envelope, not just the instant above. Without it a
+            // strobe narrower than the chunk is gone before the frame is
+            // serialised, and no client can tell a flat net from a fast one.
+            net_v_extremes: self.sched.frame_v_extremes().clone(),
             component_states,
             uart: result.uart,
             net_currents: Default::default(),
