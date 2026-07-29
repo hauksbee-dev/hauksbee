@@ -902,7 +902,16 @@ async fn sim_loop(
                     // an oversized step would block this loop for its full
                     // solve time and still not deliver the requested rate.
                     let (paced, rate_limited) = meter.paced_factor(speed);
-                    let step_dt = frame_dt * paced;
+                    // Never shrink a step below the engine's own floor: for an
+                    // external emulator the per-step round-trip costs the same
+                    // whatever the step buys, so a smaller step buys less at
+                    // the same price and the pacer's own measurement then
+                    // reports a still-worse cost. That feedback drove the
+                    // ESP32 live sim to the pacer's minimum factor and 0.0008x
+                    // realtime. Below the floor the loop simply takes longer
+                    // than one tick per step, which is honest: frames arrive
+                    // slower, and each one carries real simulated time.
+                    let step_dt = (frame_dt * paced).max(engine.min_step_dt());
                     let step_started = std::time::Instant::now();
                     let mut frame = engine.step(step_dt);
                     meter.record(
