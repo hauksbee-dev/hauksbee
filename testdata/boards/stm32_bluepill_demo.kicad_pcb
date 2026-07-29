@@ -6,11 +6,6 @@
   (net 4 "LED_A")
   (net 5 "PC13_LED")
 
-  ; STM32F103C8 "blue pill". PA5 drives an LED through a real 330R resistor
-  ; (the analog current path the solver computes); PC13 drives the onboard LED
-  ; net through its own resistor to ground so the blink is observable in the
-  ; solved circuit as well as via the GPIO bridge. USART1 (PA9/PA10) is the
-  ; serial bridge. The part runs at 3.3 V.
   (module Package_QFP:LQFP-48_7x7mm_P0.5mm (layer F.Cu)
     (at 100 100)
     (fp_text reference U1 (at 0 0) (layer F.SilkS))
@@ -29,8 +24,6 @@
     (pad 48 smd rect (at -3 6) (net 2 "+3V3"))
   )
 
-  ; PA5 -> 330R -> LED anode. This resistor's current is what the solver must
-  ; compute when PA5 is driven HIGH (3.3 V) at boot.
   (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
     (at 110 100)
     (fp_text reference R1 (at 0 0) (layer F.SilkS))
@@ -47,9 +40,6 @@
     (pad K thru_hole circle (at 2 0) (net 1 "GND"))
   )
 
-  ; PC13 -> 4k7 pulldown to ground so the blink net sits at a clean logic level
-  ; the solver resolves each chunk (the onboard LED on a real blue pill is
-  ; active-low to 3V3; here we keep a simple observable indicator).
   (module Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm (layer F.Cu)
     (at 105 110)
     (fp_text reference R2 (at 0 0) (layer F.SilkS))
