@@ -16,7 +16,7 @@
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/traits.md.
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use std::path::Path;
 
 /// Identifies a single GPIO pin by port letter and bit index.
@@ -129,6 +129,20 @@ pub trait Mcu {
         self.run_micros(ms * 1000)
     }
 
+    /// Hard-reset the core, as if the board's RESET line were pulsed: PC back
+    /// to the reset vector, registers and peripherals to their power-on state,
+    /// the loaded firmware kept. This is the recovery path for a wedged
+    /// firmware (e.g. one blocked forever on a serial protocol that went out
+    /// of sync); a session "Reset" that rewinds sim time but not the core
+    /// leaves the wedge in place.
+    ///
+    /// The default ERRORS rather than silently doing nothing, so a backend
+    /// that cannot reboot its core is reported loudly by the caller instead of
+    /// pretending the firmware restarted.
+    fn reset(&mut self) -> Result<()> {
+        bail!("this MCU backend cannot hard-reset its core; firmware state persists")
+    }
+
     /// The MCU's clock frequency in Hz (e.g. 16_000_000 for a 16 MHz Arduino).
     fn frequency(&self) -> u64;
 
@@ -208,7 +222,23 @@ pub trait Mcu {
     // ---- UART ----
 
     /// Inject bytes into the MCU's UART RX (as if the host sent them).
+    ///
+    /// The contract is lossless-or-loud: an implementation must either deliver
+    /// every byte to the firmware (buffering and metering them at whatever
+    /// pace the emulated UART actually accepts; host records are routinely
+    /// longer than any hardware RX fifo) or account for genuinely unavoidable
+    /// drops in [`Mcu::uart_rx_overflow`]. Silent truncation wedges every
+    /// record-based host protocol (the NEP-board study's SEV-1).
     fn uart_write(&mut self, bytes: &[u8]);
+
+    /// Host serial bytes DROPPED on their way to the firmware because even the
+    /// backend's pending buffer overflowed (a host flooding a firmware that
+    /// never drains). Zero on a healthy run; a caller can surface a non-zero
+    /// value as the loud coverage warning it is. Default 0 for backends whose
+    /// transport is already lossless.
+    fn uart_rx_overflow(&self) -> u64 {
+        0
+    }
 
     /// Register a callback that receives each byte the firmware sends over UART.
     fn on_uart(&mut self, cb: Box<dyn FnMut(u8) + Send>);
