@@ -7,7 +7,7 @@
 # of the new download is verified.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/ETM-Code/hauksbee/main/scripts/get-hauksbee.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
 #   With flags through the pipe:
 #     curl -fsSL .../get-hauksbee.sh | bash -s -- --permissive
 #   Or run locally:
@@ -34,7 +34,7 @@
 #                   export GITHUB_TOKEN="$GITHUB_TOKEN"
 set -euo pipefail
 
-REPO="ETM-Code/hauksbee"
+REPO="hauksbee-dev/hauksbee"
 # Base URLs are overridable so the installer can target a GitHub Enterprise host,
 # a self-hosted mirror, or a local mock (used to test the whole download/verify/
 # install flow while the repo is still private). Defaults are public GitHub.

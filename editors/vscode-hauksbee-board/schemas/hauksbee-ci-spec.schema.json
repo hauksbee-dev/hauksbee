@@ -1,5 +1,5 @@
 {
-  "$id": "https://github.com/ETM-Code/hauksbee/editors/vscode-hauksbee-board/schemas/hauksbee-ci-spec.schema.json",
+  "$id": "https://github.com/hauksbee-dev/hauksbee/editors/vscode-hauksbee-board/schemas/hauksbee-ci-spec.schema.json",
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "hauksbee-ci spec",
   "description": "A hauksbee-ci TOML spec: one headless board+firmware co-simulation and the assertions that must hold for the build to pass. GENERATED from `Spec` in crates/hauksbee-ci/src/spec.rs (doc comments become these descriptions; serde deny_unknown_fields becomes additionalProperties: false). Do not hand-edit; regenerate with: UPDATE_SPEC_SCHEMA=1 cargo test -p hauksbee-ci --test schema_drift",

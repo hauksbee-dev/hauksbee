@@ -11,7 +11,7 @@ In your hardware repo, add `.github/workflows/hauksbee-ci.yml`. The minimal job:
 
 ```yaml
 - uses: actions/checkout@v4
-- uses: ETM-Code/hauksbee/integrations/github-action@main
+- uses: hauksbee-dev/hauksbee/integrations/github-action@main
   with:
     spec: ci/power-up.toml          # your checked-in hauksbee-ci spec
     junit: hauksbee-ci-results.xml   # JUnit XML written here (optional)
@@ -28,7 +28,7 @@ firmware-build step.
 | `spec`            | yes      | -                        | Path to the TOML spec (relative to your repo root).                         |
 | `junit`           | no       | `hauksbee-ci-results.xml` | JUnit XML output path; empty to skip.                                       |
 | `hauksbee-ref`     | no       | `main`                   | git ref of hauksbee to build hauksbee-ci from (fallback build).               |
-| `hauksbee-repo`    | no       | `ETM-Code/hauksbee`       | owner/name of the hauksbee repo (release download + fallback build).         |
+| `hauksbee-repo`    | no       | `hauksbee-dev/hauksbee`       | owner/name of the hauksbee repo (release download + fallback build).         |
 | `hauksbee-version` | no       | (empty)                  | Release version to download a prebuilt binary from; empty auto-detects.     |
 | `prefer-prebuilt` | no       | `true`                   | Download a prebuilt release binary when available, else build from source.  |
 

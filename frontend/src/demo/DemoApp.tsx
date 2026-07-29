@@ -16,7 +16,7 @@ import type { Startup } from '../types/report'
 
 const BANNER = 'A recorded run of the real engine, byte for byte. Install to run your own boards.'
 const INSTALL_CMD =
-  'curl -fsSL https://raw.githubusercontent.com/ETM-Code/hauksbee/main/scripts/get-hauksbee.sh | bash'
+  'curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash'
 
 /** The one line that must never leave the screen, on every demo surface. */
 function HonestyBanner() {
@@ -70,7 +70,7 @@ function InstallCta({ compact }: { compact?: boolean }) {
         style={{
           background: 'var(--instrument)',
           border: '1px solid var(--hairline)',
-          color: '#8ba0bb',
+          color: 'var(--term-tx)',
           fontFamily: 'var(--font-mono)',
           cursor: 'pointer',
           wordBreak: 'break-all',

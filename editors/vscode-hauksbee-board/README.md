@@ -28,7 +28,7 @@ and renders their results as native diagnostics.
 ## Requirements
 
 The binaries are **not** bundled. Build them from the
-[hauksbee](https://github.com/ETM-Code/hauksbee) repo:
+[hauksbee](https://github.com/hauksbee-dev/hauksbee) repo:
 
 ```sh
 cargo build --release -p hauksbee-engine -p hauksbee-ci

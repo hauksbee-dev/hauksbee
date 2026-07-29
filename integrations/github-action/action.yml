@@ -20,7 +20,7 @@ inputs:
   hauksbee-repo:
     description: "owner/name of the hauksbee repo to download/build hauksbee-ci from."
     required: false
-    default: "ETM-Code/hauksbee"
+    default: "hauksbee-dev/hauksbee"
   hauksbee-version:
     description: "Release version to download a prebuilt hauksbee-ci from (e.g. 0.1.0 or a vX.Y.Z tag). Empty = try the release matching hauksbee-ref's tag, else build from source."
     required: false
@@ -34,9 +34,9 @@ inputs:
     required: false
     default: "false"
   image:
-    description: "Docker image to run when use-image is true. Use the full image (ghcr.io/etm-code/hauksbee:full) for STM32 / ESP32 co-sim or autorouting; the slim image covers static checks, board-as-code, and AVR co-sim."
+    description: "Docker image to run when use-image is true. Use the full image (ghcr.io/hauksbee-dev/hauksbee:full) for STM32 / ESP32 co-sim or autorouting; the slim image covers static checks, board-as-code, and AVR co-sim."
     required: false
-    default: "ghcr.io/etm-code/hauksbee:slim"
+    default: "ghcr.io/hauksbee-dev/hauksbee:slim"
 
 outputs:
   passed:
