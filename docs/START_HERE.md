@@ -1,35 +1,35 @@
 # Start here
 
-Hauksbee is CI for hardware. Hand it a real PCB design file (KiCad, Eagle, Altium
-`.PcbDoc`, IPC-D-356, or gerber-only fab output) and it works out the circuit the
-copper actually implements, runs that circuit headless with real device physics,
-co-simulates the firmware on an emulated MCU, and checks the board the way a test
-suite checks a function: rails, faults, shorts, USB-C compliance, signal
-integrity, thermal, loop stability. The bug that used to cost a fab spin and a
-fortnight at the bench fails a test instead.
+Hauksbee is CI for hardware. Hand it a real PCB design file (KiCad, Eagle,
+Altium `.PcbDoc`, IPC-D-356, or gerber-only fab output). Hauksbee works out
+the circuit the copper actually implements, runs that circuit headless with
+real device physics, and co-simulates the firmware on an emulated MCU. It
+then checks the board the way a test suite checks a function: rails,
+faults, shorts, USB-C compliance, signal integrity, thermal, loop
+stability. A bug that used to cost a fab spin and a fortnight at the bench
+now fails a test instead.
 
 ## Install and first run
 
 **On a Mac, no terminal needed:** download `Hauksbee.app` (the
 `hauksbee-<version>-darwin-<arch>-app.zip` asset) from the
-[releases page](https://github.com/ETM-Code/hauksbee/releases), unzip,
-double-click. Your browser opens on the drop-zone; drop a board and read the
-report. The app is unsigned today, so the first launch is right-click > Open
-past the Gatekeeper warning (details and the notarisation plan:
-[`app/macos/SIGNING.md`](../app/macos/SIGNING.md)). The app is macOS-only for
-now; Windows is tracked separately in
-[`release-and-licensing.md`](about/release-and-licensing.md), and Linux users
-take the installer line below. Release assets exist once there is a published
-public release; during private beta, build from source.
+[releases page](https://github.com/ETM-Code/hauksbee/releases). Unzip it and
+double-click it. Your browser opens on the drop-zone. Drop a board and read
+the report. The app is signed and notarised, so it opens without Gatekeeper
+warnings (signing details:
+[`app/macos/SIGNING.md`](../app/macos/SIGNING.md)). The app works on macOS
+only today. Windows support is tracked separately in
+[`release-and-licensing.md`](about/release-and-licensing.md), and Linux
+users take the installer line below.
 
-**From a terminal**, either the one-line installer:
+**From a terminal**, use either the one-line installer:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ETM-Code/hauksbee/main/scripts/get-hauksbee.sh | bash
 ```
 
-or one command that builds and installs both binaries from a checkout; then
-point it at the bundled blinky board.
+or one command that builds and installs both binaries from a checkout, then
+points it at the bundled blinky board.
 
 ```bash
 scripts/install.sh                                      # build hauksbee + hauksbee-ci onto PATH
@@ -37,19 +37,19 @@ hauksbee serve                                          # web front door: drop a
 hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report
 ```
 
-No board of your own yet? The `hauksbee serve` page has one-click samples
-(a small clean board, a real smartwatch, and a board + firmware pair that runs
-a live co-sim), so the first report needs no file at all.
+No board of your own yet? The `hauksbee serve` page has one-click samples: a
+small clean board, a real smartwatch, and a board-plus-firmware pair that
+runs a live co-sim. The first report needs no file at all.
 
 Full walkthrough, more example boards, and captured sessions: [`docs/ci/EXAMPLES.md`](ci/EXAMPLES.md).
 
 ## Prepare your own project
 
-[`PROJECT_LAYOUT.md`](PROJECT_LAYOUT.md) is the hand-holding guide: the (at
-most) three files hauksbee needs, where each comes from (KiCad `.kicad_pcb` as
-is, Eagle `.brd`, Altium `.PcbDoc`, a zip of gerbers, PlatformIO firmware), a
-recommended repo layout, and the one local command that runs it. CI wrappers
-are optional and come later.
+[`PROJECT_LAYOUT.md`](PROJECT_LAYOUT.md) is the step-by-step guide. It
+covers the three files hauksbee needs at most, where each comes from (KiCad
+`.kicad_pcb` as is, Eagle `.brd`, Altium `.PcbDoc`, a zip of gerbers,
+PlatformIO firmware), a recommended repo layout, and the one local command
+that runs it. CI wrappers are optional, and you add them later.
 
 ## Your next four reads
 
@@ -63,33 +63,41 @@ are optional and come later.
    becomes an extracted circuit, a bound model set, a partitioned solve, and a
    co-simulation.
 
-From there, the rest of `docs/` covers each capability in depth: the authoritative
-scope document ([`CAPABILITIES.md`](about/CAPABILITIES.md), every layer and the full
-MCU coverage matrix), analysis ([`AC_ANALYSIS.md`](analysis/AC_ANALYSIS.md),
-[`THERMAL.md`](checks/THERMAL.md), [`TRANSIENTS.md`](checks/TRANSIENTS.md)), checks
+From there, the rest of `docs/` covers each capability in depth: the
+authoritative scope document ([`CAPABILITIES.md`](about/CAPABILITIES.md),
+every layer and the full MCU coverage matrix), analysis
+([`AC_ANALYSIS.md`](analysis/AC_ANALYSIS.md),
+[`THERMAL.md`](checks/THERMAL.md),
+[`TRANSIENTS.md`](checks/TRANSIENTS.md)), checks
 ([`SHORTS.md`](checks/SHORTS.md), [`SI_CHECKS.md`](checks/SI_CHECKS.md),
 [`RESOURCE_CONFLICTS.md`](checks/RESOURCE_CONFLICTS.md),
-[`DEVICE_DECODE.md`](checks/DEVICE_DECODE.md)), ingest ([`SCHEMATICS.md`](ingest/SCHEMATICS.md),
-[`GERBER.md`](ingest/GERBER.md), [`ALTIUM.md`](ingest/ALTIUM.md),
-[`BOARD_AS_CODE.md`](ingest/BOARD_AS_CODE.md)), models ([`MODELS.md`](models/MODELS.md),
-[`PERIPHERALS.md`](cosim/PERIPHERALS.md)), backends and cross-checking
-([`SIMULATORS.md`](cosim/SIMULATORS.md), [`ORACLES.md`](cosim/ORACLES.md)), deployment
-([`DOCKER.md`](ci/DOCKER.md)), positioning ([`COMPARISON.md`](about/COMPARISON.md)), and the
-honest [`LIMITATIONS.md`](about/LIMITATIONS.md).
+[`DEVICE_DECODE.md`](checks/DEVICE_DECODE.md)), ingest
+([`SCHEMATICS.md`](ingest/SCHEMATICS.md), [`GERBER.md`](ingest/GERBER.md),
+[`ALTIUM.md`](ingest/ALTIUM.md),
+[`BOARD_AS_CODE.md`](ingest/BOARD_AS_CODE.md)), models
+([`MODELS.md`](models/MODELS.md), [`PERIPHERALS.md`](cosim/PERIPHERALS.md)),
+backends and cross-checking ([`SIMULATORS.md`](cosim/SIMULATORS.md),
+[`ORACLES.md`](cosim/ORACLES.md)), deployment
+([`DOCKER.md`](ci/DOCKER.md)), positioning
+([`COMPARISON.md`](about/COMPARISON.md)), and the honest
+[`LIMITATIONS.md`](about/LIMITATIONS.md).
 
-## Add your own parts & chips
+## Add your own parts and chips
 
-A part hauksbee doesn't recognise binds OPEN (the report says "N% resolved" and
-names it), closing that gap is one small TOML file, no recompile:
+A part hauksbee does not recognize binds OPEN. The report says "N%
+resolved" and names the part. Closing that gap needs one small TOML file
+and no recompile:
 
-- an **analog part** (LDO, op-amp, diode, BJT, MOSFET, comparator) →
+- an **analog part** (LDO, op-amp, diode, BJT, MOSFET, comparator):
   [`extending/add-an-analog-part.md`](extending/add-an-analog-part.md)
-- an I2C/SPI **sensor** → [`extending/add-a-sensor.md`](extending/add-a-sensor.md)
-- a **new MCU / chip** so its firmware co-sims *exactly* instead of on a
-  substitute core → [`extending/add-an-mcu-variant.md`](extending/add-an-mcu-variant.md)
-  (two TOML files). `hauksbee models list --builtin` shows the chips already shipped.
+- an I2C/SPI **sensor**: [`extending/add-a-sensor.md`](extending/add-a-sensor.md)
+- a **new MCU / chip**, so its firmware co-sims *exactly* instead of on a
+  substitute core:
+  [`extending/add-an-mcu-variant.md`](extending/add-an-mcu-variant.md) (two
+  TOML files). `hauksbee models list --builtin` shows the chips already
+  shipped.
 
-The full menu is [`extending/README.md`](extending/README.md).
+The full menu is in [`extending/README.md`](extending/README.md).
 
 ## Going deeper
 

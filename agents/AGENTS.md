@@ -1,9 +1,10 @@
 # Hauksbee for agents
 
-Hauksbee is CI for hardware: hand it a PCB design file and it reconstructs the
-circuit from the copper, simulates it with real device physics, co-simulates
-firmware on an emulated MCU, and checks the result like a test suite. Every
-surface an agent needs is machine-readable; nothing requires the browser UI.
+Hauksbee is CI for hardware. Hand it a PCB design file. Hauksbee
+reconstructs the circuit from the copper. It simulates the circuit with
+real device physics, co-simulates firmware on an emulated MCU, and checks
+the result like a test suite. Every surface an agent needs is
+machine-readable. Nothing requires the browser UI.
 
 ## The three commands
 
@@ -16,9 +17,9 @@ hauksbee-ci run <spec.toml> --json     # run the spec's assertions, JSON verdict
 `<board>` is any supported input: KiCad `.kicad_pcb` / `.kicad_sch`, Eagle
 `.brd`, Altium `.PcbDoc`, IPC-D-356 `.d356`, a gerber folder or zip, or
 Board-as-Code `.board` (bare or zipped). Firmware for co-sim
-(`--firmware <f>` on `run`, `firmware =` in a spec) is a compiled `.elf`/`.hex`,
-a PlatformIO project directory, or a zip of either; the built image inside is
-found (or built with your `pio`) automatically.
+(`--firmware <f>` on `run`, `firmware =` in a spec) is a compiled
+`.elf`/`.hex`, a PlatformIO project directory, or a zip of either. Hauksbee
+finds the built image inside automatically, or builds it with your `pio`.
 
 ## Exit codes (both binaries)
 
@@ -29,9 +30,9 @@ found (or built with your `pio`) automatically.
 | 2 | Input error: bad spec, missing board, unreadable file. |
 | 3 | Invalid for analysis: the analog solve aborted, results are not trustworthy. Never treat as green OR as an ordinary failure. |
 
-Trust the JSON's `passed` field only alongside `run_valid`: `hauksbee-ci run
---json` reports `passed` (the process verdict, false on exit 3),
-`assertions_passed`, and `run_valid` separately.
+Trust the JSON `passed` field only together with `run_valid`. `hauksbee-ci
+run --json` reports `passed` (the process verdict, false on exit 3),
+`assertions_passed`, and `run_valid` as separate fields.
 
 ## JSON output shapes
 
@@ -41,10 +42,10 @@ Trust the JSON's `passed` field only alongside `run_valid`: `hauksbee-ci run
   exit_code, analog_abort, coverage, substitutions, coverage_warnings,
   results[]}` where each result is `{label, kind, passed, invalid, detail,
   failing_seed, failing_seeds, seeds_total}`.
-- Honesty qualifiers are data, not prose: substitute MCU cores, dropped ADC
+- Honesty qualifiers are data, not prose. Substitute MCU cores, dropped ADC
   injections, and coverage holes appear in `substitutions` /
-  `coverage_warnings`. Surface them; a green run with a substitution is not
-  the same claim as a green run on the real silicon.
+  `coverage_warnings`. Surface them to the user. A green run with a
+  substitution is not the same claim as a green run on real silicon.
 
 ## The spec is the contract
 
@@ -68,25 +69,25 @@ binaries emit `::error` annotations.
 ## Other machine surfaces
 
 - `hauksbee run <board> --report|--drc|--lint|--si|--resources|--usb-c
-  --json` for single-report runs; `--strict` makes findings fail the exit code.
+  --json` runs a single report. `--strict` makes findings fail the exit code.
 - `--headless --firmware f.elf --seconds N` runs the co-sim and prints
-  summary stats; `--probe NET --probe-csv out.csv` captures waveforms.
+  summary stats. `--probe NET --probe-csv out.csv` captures waveforms.
 - `hauksbee serve` exposes the same engine over HTTP on localhost:
   `POST /api/analyze` (raw board bytes, `X-Board-Filename` header),
   `POST /api/analyze-with-firmware` (multipart `board` + `firmware`),
   `POST /api/check` (multipart `board` + `firmware` + `spec`, where `spec` is
   the TOML body without `board`/`firmware` keys). All return JSON, always
-  HTTP 200 with `{ok:false,error}` on input problems. Browser-origin
-  cross-site requests are refused; non-browser clients are unaffected.
+  HTTP 200 with `{ok:false,error}` on input problems. Hauksbee refuses
+  browser-origin cross-site requests. Non-browser clients are unaffected.
 - SPICE subset: `hauksbee sim deck.cir` with the supported/refused card
   contract in `docs/spice-compat/compatibility.md`. Refusals are loud and
-  line-numbered; never retry a refused card, change the deck.
+  line-numbered. Never retry a refused card. Change the deck instead.
 
 ## The MCP server
 
-`hauksbee-mcp` is a stdio MCP server (JSON-RPC 2.0, newline-delimited,
-protocol revision 2025-06-18; 2025-03-26 and 2024-11-05 are accepted).
-Launch it as a subprocess and speak MCP over its stdin/stdout:
+`hauksbee-mcp` is a stdio MCP server: JSON-RPC 2.0, newline-delimited,
+protocol revision 2025-06-18. It also accepts 2025-03-26 and 2024-11-05.
+Launch it as a subprocess, and speak MCP over its stdin/stdout:
 
 ```json
 { "command": "hauksbee-mcp" }
@@ -102,15 +103,15 @@ It declares only the `tools` capability. Five tools:
 | `board_to_code` | `board_path` | `{board, code}`: the editable Board-as-Code text form (text formats only) |
 | `run_script` | `source` | `{result, logs}`: code mode, below |
 
-`spec_toml` is the spec body WITHOUT `board`/`firmware` keys; the server
+`spec_toml` is the spec body WITHOUT `board`/`firmware` keys. The server
 injects them from the path arguments. Every result arrives both as a
-`content` text block and as `structuredContent` (the same object).
+`content` text block and as `structuredContent`, the same object.
 
 ### The refusal shape
 
-The exit-3 doctrine, as data. When a run cannot be vouched for (firmware on
-a board with no runnable MCU, an aborted analog solve, an assertion window
-over a failed span), the tool result is:
+This is the exit-3 doctrine, expressed as data. When a run cannot be vouched
+for (firmware on a board with no runnable MCU, an aborted analog solve, an
+assertion window over a failed span), the tool result is:
 
 ```json
 { "status": "invalid_for_analysis", "reason": "...", "report": { ... } }
@@ -118,8 +119,8 @@ over a failed span), the tool result is:
 
 (`run_checks` attaches the per-assertion data under `"result"` instead of
 `"report"`.) It is a successful tool call (`isError: false`): a refusal is an
-answer, not a malfunction. Never read it as pass or fail, never average it
-away, never retry expecting a different outcome. Genuine input errors
+answer, not a malfunction. Never read it as pass or fail. Never average it
+away. Never retry expecting a different outcome. Genuine input errors
 (missing file, bad TOML) come back with `isError: true` and an `error`
 message instead. Coverage holes on answerable runs stay data fields
 (`substitutions`, `coverage_warnings`, `cosim.adc_dropped`, ...), same as
@@ -136,13 +137,13 @@ The sandbox's only capability is the global `hauksbee` object:
 - `hauksbee.listCapabilities()`
 - `hauksbee.boardToCode(path)`
 
-Each returns the same object the corresponding tool returns. `console.log`
-is captured into `logs`. No filesystem, network, timers, or imports exist.
-The script runs as a function body: `return` its (JSON-serializable) result.
-Refusals are THROWN as the structured refusal object (`e.status ===
-"invalid_for_analysis"`), so a script cannot mistake one for data; catch it
-to branch on it. Tool input errors throw `{error}`. Scripts are killed
-after 120 seconds.
+Each returns the same object the corresponding tool returns. The sandbox
+captures `console.log` into `logs`. No filesystem, network, timers, or
+imports exist. The script runs as a function body: `return` its
+(JSON-serializable) result. The sandbox THROWS refusals as the structured
+refusal object (`e.status === "invalid_for_analysis"`), so a script cannot
+mistake one for data. Catch it to branch on it. Tool input errors throw
+`{error}`. The sandbox kills scripts after 120 seconds.
 
 ### Worked example
 
@@ -165,9 +166,9 @@ Response:
 
 ## Ground rules for agents
 
-- Reports exit 0 by default even with findings; gate on `--strict` or a spec.
+- Reports exit 0 by default even with findings. Gate on `--strict` or a spec.
 - Exit 3 means the run refused to vouch for itself. Do not average it away.
-- A finding on a known-good board is treated as a hauksbee bug, not noise;
-  false positives are the failure mode this project optimizes against.
-- The plain-language rendering (`--plain`) and the JSON carry the same facts;
-  parse the JSON, show humans the plain text.
+- Treat a finding on a known-good board as a hauksbee bug, not noise. False
+  positives are the failure mode this project optimizes against.
+- The plain-language rendering (`--plain`) and the JSON carry the same
+  facts. Parse the JSON, and show humans the plain text.

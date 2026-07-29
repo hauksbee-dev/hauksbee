@@ -1,24 +1,25 @@
 # Do-not-populate parts
 
 A DNP ("do not populate") marking means the assembler does not place that part.
-The pads are on the board; the component is not.
+The pads are on the board. The component is not.
 
-Designers use the flag for two opposite things, which is the whole difficulty:
+Designers use the flag for two opposite things, and that is the whole
+difficulty:
 
 1. **"Not on the assembly BOM, but it will be there."** A socketed module (an
-   Arduino Nano, an ESP32 carrier) bought separately and plugged into headers, a
-   footprint stuffed by hand later, a part fitted at rework. Analysing the board
-   without it answers a question nobody asked.
-2. **"This link is deliberately open."** A 0R bridge between two ground planes, a
-   solder jumper selecting a mode, a config strap. Fitting one of these merges
-   nets the designer split on purpose, and the tool would then report one ground
-   plane on a board that has two.
+   Arduino Nano, an ESP32 carrier) bought separately and plugged into headers,
+   a footprint stuffed by hand later, or a part fitted at rework. Analyzing the
+   board without it answers a question nobody asked.
+2. **"This link is deliberately open."** A 0R bridge between two ground
+   planes, a solder jumper that selects a mode, or a config strap. Fitting one
+   of these merges nets the designer split on purpose. The tool would then
+   report one ground plane on a board that has two.
 
 ## What hauksbee does by default
 
-Most DNP footprints get placed eventually, so **DNP parts are simulated as
-fitted**, with one exception: **near-zero-ohm links stay open**, because fitting
-one changes the board's topology rather than adding a component to it.
+Most DNP footprints get placed eventually, so **hauksbee simulates DNP parts
+as fitted**, with one exception: **near-zero-ohm links stay open**, because
+fitting one changes the board's topology instead of adding a component to it.
 
 A part counts as a link when it has two or fewer pins and any of:
 
@@ -26,7 +27,7 @@ A part counts as a link when it has two or fewer pins and any of:
 - a ferrite bead (value starting `FB`, or `ferrite` in the value or footprint)
 - a bridging footprint (`JUMPER`, `SOLDER_BRIDGE`, `NET_TIE`)
 
-Every run prints what it decided, so the choice is never silent:
+Every run prints its decision, so the choice is never silent:
 
 ```
 do-not-populate: DNP parts are simulated as fitted (they are usually placed
@@ -67,8 +68,9 @@ fit = ["R7"]               # fit these regardless of the policy
 no_fit = ["A101"]          # leave these open regardless of the policy
 ```
 
-Naming an unknown reference is an error, and naming the same part in both `fit`
-and `no_fit` is an error. A typo should fail loudly, not quietly change nothing.
+Naming an unknown reference is an error. Naming the same part in both `fit`
+and `no_fit` is also an error. A typo should fail loudly, not quietly change
+nothing.
 
 ## Firmware on a board with no processor
 
@@ -88,11 +90,12 @@ analyse the board without it.
 
 ## What DNP never affects
 
-Copper is copper. The geometric DRC reads the layout directly and never consults
-the DNP flag, so a DNP footprint's pads, and the traces running to them, are
-still checked for clearance and shorts. Only the component is absent.
+Copper is copper. The geometric DRC reads the layout directly and never
+consults the DNP flag, so a DNP footprint's pads, and the traces that run to
+them, are still checked for clearance and shorts. Only the component is
+absent.
 
 The component-level checks (converter topology, USB-C CC termination, crystal
-and antenna signal integrity) do skip parts that are left open, because those
-checks ask whether a part is doing its job, and a part that is not there is not
-doing anything.
+and antenna signal integrity) do skip parts left open, because those checks
+ask whether a part is doing its job, and a part that is not there does
+nothing.

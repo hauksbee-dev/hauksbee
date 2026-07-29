@@ -1,17 +1,16 @@
 # Add a board format: a toy reader
 
-**Goal.** Teach hauksbee to read a board/netlist file format it doesn't know,
-by implementing one small trait and registering it. This is the first
-extension type in these walkthroughs that requires Rust, but it is Rust
-against a stable two-method surface in a fork, not a core edit. The trait and
-registry live in `crates/hauksbee-extract/src/reader.rs`; the proving test
-pattern is `crates/hauksbee-extract/tests/reader_matrix.rs`.
+**Goal.** Teach hauksbee to read a board or netlist file format it does not
+know. Implement one small trait and register it. This is the first extension
+type in these walkthroughs that needs Rust. It uses Rust against a stable
+two-method surface in a fork, not a core edit. The trait and registry live in
+`crates/hauksbee-extract/src/reader.rs`. The proving test pattern is
+`crates/hauksbee-extract/tests/reader_matrix.rs`.
 
-**Honesty up front: this is a fork-with-one-registration-line story, not a
-plugin ABI.** A dynamic `.so` plugin interface is deliberately out of scope,
-Rust's unstable ABI makes one a maintenance sink (`reader.rs` module
-docs). You fork, add a file, add one registration line, and carry a
-small diff.
+**Fork with one registration line, not a plugin ABI.** A dynamic `.so`
+plugin interface is out of scope on purpose. Rust's unstable ABI makes one a
+maintenance sink (see the `reader.rs` module docs). You fork, add a file, add
+one registration line, and carry a small diff.
 
 ## How the registry works
 
@@ -27,23 +26,23 @@ pub trait BoardReader: Send + Sync {
 ```
 
 `Registry::builtin()` holds the six shipped readers (altium, eagle,
-kicad-netlist, kicad-schematic, kicad-pcb, ipc-d356) in a documented order;
-detection walks front-to-back and the first reader to claim the bytes wins.
-When nothing matches, the error *enumerates every reader that was tried*; the
-replacement for the old sniff ladder's arbitrary fallback.
+kicad-netlist, kicad-schematic, kicad-pcb, ipc-d356) in a documented order.
+Detection walks front to back, and the first reader to claim the bytes wins.
+When nothing matches, the error lists every reader it tried. This replaces
+the old sniff ladder's arbitrary fallback.
 
 > **Why `register` prepends.** The builtins are mutually exclusive by
-> construction (distinct magics; the Altium OLE2 container can't appear in
-> text), so order among them never matters. It only matters when a
-> *third-party* reader overlaps a builtin, and in that case the fork author
-> is the one who knows best, so `Registry::register` inserts at the **front**,
-> letting a fork deliberately shadow a builtin (say, a stricter KiCad variant
-> reader). Shadowing is a feature here, not an accident to prevent.
+> construction: they have distinct magics, and the Altium OLE2 container
+> cannot appear in text. So order among them never matters. It matters only
+> when a *third-party* reader overlaps a builtin. In that case, the fork
+> author knows best, so `Registry::register` inserts at the **front**. This
+> lets a fork deliberately shadow a builtin, for example a stricter KiCad
+> variant reader. Shadowing is a feature here, not a bug to prevent.
 
 ## Step 1, implement the trait
 
-The toy reader from the shipped test
-(`third_party_reader_registers_and_wins`), verbatim:
+This is the toy reader from the shipped test
+(`third_party_reader_registers_and_wins`), shown verbatim:
 
 ```rust
 use hauksbee_extract::reader::{BoardReader, ReadError, Registry};
@@ -65,26 +64,26 @@ impl BoardReader for ToyReader {
 }
 ```
 
-For a real format, `read` fills `ExtractedBoard`'s nets and components, study
-`EagleReader`/`from_eagle_brd` for an XML format or `Ipc356Reader` for a
-fixed-column one. `ReadError` is an alias for the crate's `ExtractError`, so
-existing parse-error conventions apply unchanged.
+For a real format, `read` fills `ExtractedBoard`'s nets and components.
+Study `EagleReader` or `from_eagle_brd` for an XML format, or `Ipc356Reader`
+for a fixed-column format. `ReadError` is an alias for the crate's
+`ExtractError`, so existing parse-error conventions still apply.
 
-The two contracts that matter:
+Two contracts matter:
 
-- **`detects` must be cheap**: a magic/structural prefix check, never a full
-  parse. The builtins scan a 2 KiB window (`MAGIC_WINDOW`) for text magics;
-  IPC-D-356 scans 64 KiB for its `3xx` records because real fab headers push
-  them past the first line.
-- **`detects` must not false-positive on other formats' files.** This is not
-  advisory: the detection-matrix test enforces it pairwise across every
-  fixture in the repo (below).
+- **`detects` must be cheap.** Use a magic or structural prefix check, never
+  a full parse. The builtins scan a 2 KiB window (`MAGIC_WINDOW`) for text
+  magics. IPC-D-356 scans 64 KiB for its `3xx` records, because real fab
+  headers push them past the first line.
+- **`detects` must not false-positive on other formats' files.** This rule
+  is not optional. The detection-matrix test enforces it pairwise across
+  every fixture in the repo (see below).
 
-**Trap, detection by path is a tie-break, never authority.** The `path`
-argument is a filename *hint*; content sniffing is authoritative and none of
-the builtin readers use the path for detection at all. A reader that claims
-files by extension alone will claim another format's file the moment someone
-renames it, and the matrix test will (rightly) fail you.
+**Trap: path-based detection is a tie-break, never authority.** The `path`
+argument is only a filename hint. Content sniffing is authoritative, and
+none of the builtin readers use the path for detection. A reader that claims
+files by extension alone will claim another format's file the moment
+someone renames it. The matrix test will fail you, correctly.
 
 ## Step 2, register it
 
@@ -94,25 +93,25 @@ registry.register(Box::new(ToyReader));   // consulted before the builtins
 let board = registry.read(&bytes, Some(path))?;
 ```
 
-That is the entire integration. In a fork you place the registration where
-your entry point builds its registry.
+That is the whole integration. In a fork, place the registration where your
+entry point builds its registry.
 
-## Step 3; the test that proves it
+## Step 3: the test that proves it
 
 Two layers, both in `crates/hauksbee-extract/tests/reader_matrix.rs`:
 
-1. **Your reader registers and wins**: the shape of
+1. **Your reader registers and wins.** This follows the shape of
    `third_party_reader_registers_and_wins`: register the reader, feed it a
-   sample, assert it claims it, then assert a builtin format *still routes
-   correctly* with your reader present (the shadowing you didn't intend is
-   the bug this catches).
-2. **The detection matrix**: `detection_matrix_every_fixture` sweeps every
-   board/netlist fixture committed to the repo plus synthesized Eagle/Altium
-   samples, asserting (a) *exactly one* reader claims each file (pairwise
-   no-false-positive) and (b) the winner matches the legacy sniff's routing
-   (no behaviour change). Add a fixture of your format to the corpus and
-   extend the expectation; if your `detects` overlaps anything, this is the
-   test that says so, with a printed matrix naming the offender.
+   sample, and confirm it claims the sample. Then confirm a builtin format
+   still routes correctly with your reader present. This step catches
+   unintended shadowing.
+2. **The detection matrix.** `detection_matrix_every_fixture` sweeps every
+   board or netlist fixture in the repo, plus synthesized Eagle and Altium
+   samples. It checks that exactly one reader claims each file, with no
+   false positives, and that the winner matches the legacy sniff's routing,
+   so behavior does not change. Add a fixture of your format to the corpus
+   and extend the expectation. If your `detects` overlaps another reader,
+   this test finds it and prints a matrix that names the offender.
 
 ```
 cargo test -p hauksbee-extract --test reader_matrix
@@ -128,20 +127,19 @@ test detection_matrix_every_fixture ... ok
 test result: ok. 3 passed; 0 failed
 ```
 
-(with the full fixture-by-reader matrix printed to stderr under
-`--nocapture`).
+The full fixture-by-reader matrix prints to stderr under `--nocapture`.
 
-## Limitations, stated
+## Limitations
 
-- **No dynamic loading.** Covered above; a fork with one registration line is
-  the supported story, and the trait is kept small precisely so that diff
-  stays small across rebases.
-- **Binary formats** must override `is_binary()`; the byte-input entry point
-  (`ExtractedBoard::from_auto_bytes`) only lets binary readers claim raw
-  bytes, so a text file handed to it falls through to the text sniffer
-  instead of being force-parsed as a container.
-- What `ExtractedBoard` can express (nets, components, pads) bounds what your
-  reader can extract; geometry-only formats like Gerber go through the
+- **No dynamic loading.** As covered above, a fork with one registration
+  line is the supported approach. The trait stays small on purpose, so the
+  diff stays small across rebases.
+- **Binary formats** must override `is_binary()`. The byte-input entry point
+  (`ExtractedBoard::from_auto_bytes`) lets only binary readers claim raw
+  bytes. A text file handed to it falls through to the text sniffer instead
+  of a forced parse as a container.
+- What `ExtractedBoard` can express (nets, components, pads) bounds what
+  your reader can extract. Geometry-only formats like Gerber go through the
   separate `gerber` pipeline, not a `BoardReader`.
 
 ---

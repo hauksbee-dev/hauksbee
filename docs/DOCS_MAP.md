@@ -1,14 +1,14 @@
 # Docs map
 
-The entry point is [`START_HERE.md`](START_HERE.md); this file maps every doc
-to the question it answers. There is no generated index (no mdbook
-`SUMMARY.md`, no `mkdocs.yml`); the repo-root `README.md` leads with
+The entry point is [`START_HERE.md`](START_HERE.md). This file maps every
+doc to the question it answers. There is no generated index: no mdbook
+`SUMMARY.md`, no `mkdocs.yml`. The repo-root `README.md` leads with
 START_HERE.
 
-The user docs are grouped by the question the reader is asking. Only the entry
-points live at the `docs/` root: START_HERE, this map, and
-[`PROJECT_LAYOUT.md`](PROJECT_LAYOUT.md) (how to prepare your own board +
-firmware + spec, and the one local command that runs them).
+The user docs are grouped by the question the reader is asking. Only the
+entry points live at the `docs/` root: START_HERE, this map, and
+[`PROJECT_LAYOUT.md`](PROJECT_LAYOUT.md), which covers how to prepare your
+own board, firmware, and spec, and the one local command that runs them.
 
 ## The user path, by question
 
@@ -79,7 +79,7 @@ firmware + spec, and the one local command that runs them).
 | Path | Covers |
 |---|---|
 | [`extending/`](extending/) | Contributor walkthroughs: add a part, sensor, logic IC, MCU variant, board format, model pack |
-| [`spice-compat/`](spice-compat/) | SPICE compatibility statement + ngspice cross-check results |
+| [`spice-compat/`](spice-compat/) | SPICE compatibility statement and ngspice cross-check results |
 | [`assets/`](assets/) | Images embedded by docs |
 
 Root: `START_HERE.md`, `PROJECT_LAYOUT.md`, and this map.
