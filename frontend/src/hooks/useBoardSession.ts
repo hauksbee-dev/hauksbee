@@ -69,8 +69,16 @@ export interface BoardSession {
   setSelectedComponent: (c: SelectedComponent | null) => void
   handleBoard: (f: File) => void
   handleFirmware: (f: File) => void
+  /** Unstage the firmware WITHOUT touching the board, and re-analyse the board
+   *  on its own so the report stops describing a co-sim that is no longer
+   *  loaded. No-op when nothing is staged. */
+  clearFirmware: () => void
   runSample: (s: SampleSpec) => void
   resetFlow: () => void
+  /** Bumped once per analysis run. Anything outside this hook that caches
+   *  run-derived state keys off it to drop that state at the same instant the
+   *  session drops its own, so no surface can show two runs at once. */
+  runEpoch: number
   /** Launch (or reconnect to) the live sim; onReady fires once it is live. */
   launchLive: (onReady: () => void) => void
   /** The KiCad file parsed to nothing drawable: fall back to the dot map. */
@@ -97,6 +105,7 @@ export function useBoardSession(opts: {
   const [boardUrl, setBoardUrl] = useState<string | null>(null)
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
   const [selectedComponent, setSelectedComponentRaw] = useState<SelectedComponent | null>(null)
+  const [runEpoch, setRunEpoch] = useState(0)
 
   // The board whose live session is currently on /ws AND was launched by THIS
   // page-load (or preloaded by `run --serve`). Only this counts as "connected":
@@ -162,9 +171,30 @@ export function useBoardSession(opts: {
     return { signal: ctrl.signal, isCurrent: () => runIdRef.current === id }
   }, [])
 
+  // Everything on screen that was DERIVED from the previous run, dropped in one
+  // place. Uploading again used to leave the old report, its error banner and
+  // the net you had clicked on the old board sitting there while the new
+  // analysis ran, so the page showed two runs at once and there was no way to
+  // tell which half you were reading. A new run starts from nothing.
+  //
+  // This deliberately does NOT touch the run's INPUTS (boardFile, firmwareFile,
+  // lastBoardFile) — the caller has just set those — nor the live session
+  // (liveBoard/serverLive), which belongs to the server and outlives an
+  // analysis. `runEpoch` lets the shell drop its own run-derived state
+  // (queued checks, the checks summary) off the same signal.
+  const clearRunState = useCallback(() => {
+    setReport(null)
+    setAnalyzedAt(null)
+    setUploadError(null)
+    setSelectedNet(null)
+    setSelectedComponentRaw(null)
+    setLaunch({ phase: 'idle' })
+    setRunEpoch(n => n + 1)
+  }, [])
+
   const analyze = useCallback(async (board: File, firmware: File | null) => {
     const { signal, isCurrent } = beginRun()
-    setUploadError(null)
+    clearRunState()
     setBusy({ board: board.name, firmware: firmware?.name ?? null })
     // Sniff the head for KiCad layout text to pick the report map's renderer.
     try {
@@ -232,6 +262,18 @@ export function useBoardSession(opts: {
     if (lastBoardFile.current) void analyze(lastBoardFile.current, f)
   }, [analyze, busy])
 
+  const clearFirmware = useCallback(() => {
+    // Removing the firmware is a real change to what was analysed, not just a
+    // change to a form field: the standing report describes a co-sim of the
+    // image being removed. Re-run the board bare so the two agree.
+    if (busy) return
+    setFirmwareFile(prev => {
+      if (!prev) return prev
+      if (lastBoardFile.current) void analyze(lastBoardFile.current, null)
+      return null
+    })
+  }, [analyze, busy])
+
   const handleBoard = useCallback((f: File) => {
     if (busy) return
     // A firmware file in the board slot is a mis-drop, not a board: route it
@@ -263,15 +305,10 @@ export function useBoardSession(opts: {
     abortRef.current?.abort()
     runIdRef.current += 1
     lastBoardFile.current = null
+    clearRunState()
     setBoardFile(null)
-    setReport(null)
-    setAnalyzedAt(null)
     setBusy(null)
-    setUploadError(null)
     setFirmwareFile(null)
-    setSelectedNet(null)
-    setSelectedComponentRaw(null)
-    setLaunch({ phase: 'idle' })
     setBoardUrl(prev => {
       if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
       return null
@@ -283,7 +320,12 @@ export function useBoardSession(opts: {
   const runSample = useCallback(async (sample: SampleSpec) => {
     if (busy) return
     const { signal, isCurrent } = beginRun()
-    setUploadError(null)
+    // Cleared here as well as inside `analyze`: the sample's files are fetched
+    // first, and a fetch that fails must not leave the previous board's report
+    // on screen under the new error.
+    clearRunState()
+    setSelectedNet(null)
+    setSelectedComponentRaw(null)
     setBusy({
       board: sample.board.split('/').pop() ?? 'sample',
       firmware: sample.firmware?.split('/').pop() ?? null,
@@ -458,8 +500,10 @@ export function useBoardSession(opts: {
     setSelectedComponent: selectComponent,
     handleBoard,
     handleFirmware,
+    clearFirmware,
     runSample: (s: SampleSpec) => void runSample(s),
     resetFlow,
+    runEpoch,
     launchLive: (onReady: () => void) => void launchLive(onReady),
     onEmptyBoard,
   }

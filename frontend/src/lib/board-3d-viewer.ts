@@ -30,6 +30,7 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js'
 import { SSAOPass } from 'three/examples/jsm/postprocessing/SSAOPass.js'
 import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js'
 import type { ParsedBoard } from './kicad-parser'
+import { isLightTheme } from './theme-tokens'
 
 // KiCad PCB standard 1.6 mm → top surface in Three.js
 const PCB_TOP_Y = 0.0016
@@ -198,6 +199,7 @@ export class Board3DViewer {
   private animHandle: number | null = null
   private disposed = false
   private composer: EffectComposer
+  private groundMat: THREE.ShadowMaterial
 
   constructor(canvas: HTMLCanvasElement) {
     // Renderer, alpha:true so the CSS gradient underneath is visible through the canvas
@@ -272,6 +274,7 @@ export class Board3DViewer {
     // Ground shadow plane (receives shadows only)
     const groundGeo = new THREE.PlaneGeometry(2, 2)
     const groundMat = new THREE.ShadowMaterial({ opacity: 0.35 })
+    this.groundMat = groundMat
     const ground = new THREE.Mesh(groundGeo, groundMat)
     ground.rotation.x = -Math.PI / 2
     ground.position.y = -0.001
@@ -322,7 +325,23 @@ export class Board3DViewer {
     const outputPass = new OutputPass()
     this.composer.addPass(outputPass)
 
+    this.setTheme(isLightTheme())
     this.startLoop()
+  }
+
+  /**
+   * Retune the scene for the page theme. The model itself (substrate, copper,
+   * bodies) is a physical object and keeps its materials; what changes is the
+   * environment around it: fog matched to the page backdrop so depth falloff
+   * blends instead of tinting, exposure eased down in light mode so the key
+   * light does not blow highlights out against a bright ground, and a softer
+   * contact shadow (a hard dark pool reads as a hole on light paper).
+   */
+  setTheme(light: boolean) {
+    const fog = this.scene.fog as THREE.FogExp2 | null
+    if (fog) fog.color.setHex(light ? 0xddd5c6 : 0x020617)
+    this.renderer.toneMappingExposure = light ? 1.35 : 1.6
+    this.groundMat.opacity = light ? 0.25 : 0.35
   }
 
   /**

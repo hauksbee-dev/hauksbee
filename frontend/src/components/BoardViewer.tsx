@@ -5,7 +5,8 @@ import { makeCamera, fitScaleFor, zoomCamera, wheelZoomFactor, panCamera, screen
 import type { Camera } from '../lib/camera'
 import { renderStaticBoard, renderDynamicOverlay, LABEL_MIN_PX } from '../lib/board-renderer'
 import type { OverlayData, RenderOptions } from '../lib/board-renderer'
-import { getLayerStyle } from '../lib/layer-colors'
+import { getLayerStyle, boardTheme } from '../lib/layer-colors'
+import { onThemeChange } from '../lib/theme-tokens'
 import type { SimFrame, BoardInfoMsg } from '../types/protocol'
 import { Board3DViewer } from './Board3DViewer'
 import { FitIcon, LayersIcon, ExpandIcon, CollapseIcon } from './Icons'
@@ -78,6 +79,11 @@ interface BoardViewerProps {
 
 const PARTICLE_COUNT = 4
 const PARTICLE_SPEED = 0.3 // t units per second
+
+/** Below this the reported per-net current is solver noise, not flow (1 µA).
+ *  The flow animation is a claim that charge is moving; it may only be made
+ *  about a net whose current the frame actually MEASURED above this floor. */
+const FLOW_CURRENT_FLOOR_A = 1e-6
 
 // Map board name to GLB URL. Extends as more boards are exported.
 const BOARD_GLB_MAP: Record<string, string> = {
@@ -271,6 +277,11 @@ export function BoardViewer({
     staticCache.current.cam = null
   }, [renderOpts])
 
+  // Theme flipped: the cached static render was painted in the other
+  // palette, so it must be redrawn (the rAF loop picks the drop up on its
+  // next tick).
+  useEffect(() => onThemeChange(() => { staticCache.current.cam = null }), [])
+
   // Smooth zoom: wheel ticks set a target scale and the animation loop glides
   // the camera toward it (anchored at the cursor), so discrete wheel notches
   // do not step visibly.
@@ -282,6 +293,8 @@ export function BoardViewer({
   const animFrame = useRef<number>(0)
   const particlePhases = useRef<Map<string, number>>(new Map())
   const hoveredNet = useRef<string | null>(null)
+  /** The footprint under the cursor, resolved with the click's hit-test. */
+  const hoveredRef = useRef<string | null>(null)
   const probePos = useRef<{ boardX: number; boardY: number } | null>(null)
   const animTimeRef = useRef(0)
 
@@ -294,11 +307,28 @@ export function BoardViewer({
     [board],
   )
 
-  // Build net voltages map (throttled by frame reference -- only recompute when frame changes)
+  // Nets whose drive this backend cannot see. The frame still carries a number
+  // for them, but that number is the passive network's static level, not a
+  // measurement of what the MCU is doing. Anything that would read as "we
+  // measured this" has to leave them out.
+  const unobservedNets = useMemo(
+    () => new Set(frame?.unobserved_drive_nets ?? []),
+    [frame?.unobserved_drive_nets],
+  )
+
+  // Build net voltages map (throttled by frame reference -- only recompute when
+  // frame changes). Unobserved nets are dropped rather than passed through as a
+  // measured value: the voltage tint says "this net is sitting here", which is
+  // a claim the backend has not earned for them. They render as bare copper,
+  // and the probe tooltip below names them as not observed.
   const netVoltagesMap = useMemo(() => {
     if (!frame?.net_voltages) return undefined
-    return new Map<string, number>(Object.entries(frame.net_voltages))
-  }, [frame?.net_voltages])
+    const m = new Map<string, number>()
+    for (const [net, v] of Object.entries(frame.net_voltages)) {
+      if (!unobservedNets.has(net)) m.set(net, v)
+    }
+    return m
+  }, [frame?.net_voltages, unobservedNets])
 
   // GLB URL for 3D view
   const glbUrl = useMemo(() => resolveGlbUrl(boardFile, boardInfo), [boardFile, boardInfo])
@@ -538,6 +568,8 @@ export function BoardViewer({
   // second on a live sim.
   const netVoltagesRef = useRef(netVoltagesMap)
   netVoltagesRef.current = netVoltagesMap
+  const unobservedNetsRef = useRef(unobservedNets)
+  unobservedNetsRef.current = unobservedNets
   const faultedRefsRef = useRef(faultedRefs)
   faultedRefsRef.current = faultedRefs
   const frameRef = useRef(frame)
@@ -588,7 +620,7 @@ export function BoardViewer({
       const st = staticCache.current
       if (!st.canvas || !st.cam) return
       if (st.canvas.width === 0 || st.canvas.height === 0) return
-      ctx.fillStyle = '#020617'
+      ctx.fillStyle = boardTheme().bg
       ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
       const k = cam.scale / st.cam.scale
       ctx.setTransform(k, 0, 0, k, cam.panX - k * st.cam.panX, cam.panY - k * st.cam.panY)
@@ -682,8 +714,41 @@ export function BoardViewer({
       if (selectedNet) hlNets.add(selectedNet)
       if (hoveredNet.current) hlNets.add(hoveredNet.current)
 
-      // Advance particles
-      const flowNet = selectedNet ?? (frame?.net_voltages ? Object.keys(frame.net_voltages)[0] : null)
+      // Which net, if any, has earned the flow animation.
+      //
+      // This used to be `selectedNet ?? Object.keys(frame.net_voltages)[0]`:
+      // whatever net happened to come first in the frame's map got animated
+      // charge flowing down it, forever, on any board that reported voltages at
+      // all. A watchy with no firmware and every net sitting at 0.000 V still
+      // showed a net visibly running. That is the viewer inventing a
+      // measurement.
+      //
+      // The animation is now a statement about `net_currents`, and only about
+      // `net_currents`: a net flows when the frame MEASURED current through it
+      // above the noise floor. No current map (no co-sim, a backend that does
+      // not report currents) means no flow, rather than a guess. A net the
+      // backend cannot observe never qualifies, however its passive level
+      // reads. A selected net does not get flow for being selected; it gets the
+      // highlight, which is a statement about the cursor, not about physics.
+      const currents = frame?.net_currents
+      const flowNet = (() => {
+        if (!currents) return null
+        let best: string | null = null
+        let bestMag = FLOW_CURRENT_FLOOR_A
+        for (const [net, a] of Object.entries(currents)) {
+          if (unobservedNetsRef.current.has(net)) continue
+          const mag = Math.abs(a)
+          if (mag > bestMag) { bestMag = mag; best = net }
+        }
+        // Prefer the net under inspection when it is genuinely carrying, so
+        // clicking a live net does not move the animation somewhere else.
+        if (selectedNet
+          && !unobservedNetsRef.current.has(selectedNet)
+          && Math.abs(currents[selectedNet] ?? 0) > FLOW_CURRENT_FLOOR_A) {
+          return selectedNet
+        }
+        return best
+      })()
       if (flowNet && netIndex?.has(flowNet)) {
         const segs = netIndex.get(flowNet)!.segments
         if (segs.length > 0) {
@@ -707,13 +772,18 @@ export function BoardViewer({
         particles.set(flowNet, ts)
       }
 
+      // The probe reads out what was measured. On a net whose drive the backend
+      // cannot see, the frame's number is the passive level, so the tooltip
+      // says so instead of printing a confident "0.000 V".
       const probeNet = hoveredNet.current
       const probeData = probeNet && probePos.current && frame?.net_voltages[probeNet] !== undefined
         ? {
             x: probePos.current.boardX,
             y: probePos.current.boardY,
             label: displayNet(probeNet),
-            value: `${(frame.net_voltages[probeNet]!).toFixed(3)} V`,
+            value: unobservedNetsRef.current.has(probeNet)
+              ? 'not observed'
+              : `${(frame.net_voltages[probeNet]!).toFixed(3)} V`,
           }
         : undefined
 
@@ -726,6 +796,7 @@ export function BoardViewer({
         componentStates: frame?.component_states,
         componentKinds: boardInfoRef.current?.component_kinds,
         faultedRefs: faultedRefsRef.current,
+        hoverRefs: hoveredRef.current ? new Set([hoveredRef.current]) : undefined,
         animTime: animTimeRef.current,
         showActivity: showActivityRef.current,
         renderOpts: renderOptsRef.current,
@@ -817,9 +888,25 @@ export function BoardViewer({
     } else {
       const { x, y } = screenToWorld(camRef.current, sx, sy)
       probePos.current = { boardX: x, boardY: y }
-      hoveredNet.current = findNearestNet(x, y)
+      // Hover resolves the cursor the SAME way the click does (see `selectAt`
+      // below): a bare trace first, then the footprint, then its label, then
+      // the nearest pad net. Hover used to test only traces and pads, so parts
+      // never lit up and the board read as though only copper were live, and
+      // worse, hovering a part's body highlighted nothing while clicking it
+      // selected the part. Both questions now get the same answer.
+      const traceNet = findNearestNet(x, y, 5, false)
+      if (traceNet) {
+        hoveredNet.current = traceNet
+        hoveredRef.current = null
+      } else {
+        const fp = findFootprintAt(x, y) ?? findLabelAt(sx, sy)
+        hoveredRef.current = fp?.ref ?? null
+        // The pad's net still feeds the probe tooltip, so reading a voltage off
+        // a part's pin keeps working exactly as before.
+        hoveredNet.current = findNearestNet(x, y, 8)
+      }
     }
-  }, [findNearestNet, setCamera])
+  }, [findNearestNet, findFootprintAt, findLabelAt, setCamera])
 
   // Shared hit-test for a tap/click that did not travel: resolves the footprint
   // and nearest net under canvas-relative screen coords (sx, sy) and fires the
@@ -871,6 +958,7 @@ export function BoardViewer({
   const handleMouseLeave = useCallback(() => {
     dragging.current = false
     hoveredNet.current = null
+    hoveredRef.current = null
     probePos.current = null
   }, [])
 
@@ -1195,11 +1283,11 @@ export function BoardViewer({
                   />
                 ))}
                 <div style={{ height: 1, background: 'var(--rule)', margin: '5px 8px' }} />
-                <LayerRow label="Pads" swatch="#c8a040" on={showPads} onToggle={() => setShowPads(v => !v)} />
+                <LayerRow label="Pads" swatch={boardTheme().pad} on={showPads} onToggle={() => setShowPads(v => !v)} />
                 <LayerRow label="Reference labels" on={showLabels} onToggle={() => setShowLabels(v => !v)} />
                 <LayerRow
                   label="Activity overlay"
-                  swatch="#ffb347"
+                  swatch={boardTheme().activity}
                   on={showActivity}
                   onToggle={() => setShowActivity(v => !v)}
                 />
@@ -1235,14 +1323,14 @@ export function BoardViewer({
           <div className="flex flex-col items-center gap-3">
             <div className="w-8 h-8 border-2 border-t-transparent rounded-full animate-spin"
               style={{ borderColor: 'var(--copper)', borderTopColor: 'transparent' }} />
-            <span className="text-sm" style={{ color: '#64748b' }}>Parsing board...</span>
+            <span className="text-sm" style={{ color: 'var(--overlay-chip-text)' }}>Parsing board...</span>
           </div>
         </div>
       )}
 
       {error && (
         <div className="absolute inset-0 flex items-center justify-center">
-          <div className="px-4 py-3 rounded-lg text-sm" style={{ background: '#1e293b', color: '#f87171', border: '1px solid #991b1b' }}>
+          <div className="px-4 py-3 rounded-lg text-sm" style={{ background: 'var(--overlay-err-bg)', color: 'var(--err)', border: '1px solid var(--overlay-err-border)' }}>
             {error}
           </div>
         </div>
@@ -1250,7 +1338,7 @@ export function BoardViewer({
 
       {board && !loading && viewMode === '2d' && (
         <div className="absolute bottom-2 right-2 text-[10px] px-2 py-1 rounded tnum"
-          style={{ background: 'rgba(15,23,42,0.8)', color: '#64748b', pointerEvents: 'none', fontFamily: 'var(--font-mono)' }}>
+          style={{ background: 'var(--overlay-chip-bg)', color: 'var(--overlay-chip-text)', pointerEvents: 'none', fontFamily: 'var(--font-mono)' }}>
           {board.footprints.length} fp · {board.segments.length} segs
           {/* Net count: NAMED nets only. The KiCad net table always carries a
               synthetic id-0 "no net" bucket; counting it here made this chip

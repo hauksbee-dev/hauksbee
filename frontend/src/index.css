@@ -7,9 +7,12 @@
    Theme tokens. Dark navy + copper is the identity and the default; light is
    a real maintained theme, not an inversion filter. Every surface, text and
    status colour in the app goes through these variables so both themes stay
-   coherent everywhere. Instrument surfaces (the board render, the scope, the
-   serial scrollback) intentionally stay dark in BOTH themes: they are screens
-   inside the tool, and the copper/phosphor palettes are tuned for dark.
+   coherent everywhere. That includes the instrument surfaces (the board
+   render, the scope, the serial scrollback): in light mode they get their own
+   re-tuned light palettes (paper substrate, inked copper, light graticule)
+   rather than staying dark islands. Canvas/WebGL code reads these tokens via
+   lib/theme-tokens.ts; the 2D board layer palette lives in lib/layer-colors.ts
+   keyed off the same data-theme attribute.
    ──────────────────────────────────────────────────────────────────────────── */
 
 :root {
@@ -53,9 +56,57 @@
   --note: #94a3b8;
   --note-accent: #475569;
 
-  /* Instrument surfaces: dark in both themes (screens inside the tool). */
+  /* Instrument surfaces (board wells, scrollbacks, log panes). */
   --instrument: #050d1a;
   --instrument-edge: #1b2735;
+  --instrument-text: #cbd5e1;
+
+  /* Floating chips/readouts drawn OVER an instrument surface (zoom chip,
+     orbit hints, loading text). Their ground is the instrument, not the app
+     surface, so they get their own pair. */
+  --overlay-chip-bg: rgba(15, 23, 42, 0.8);
+  --overlay-chip-text: #64748b;
+  --overlay-err-bg: #1e293b;
+  --overlay-err-border: #991b1b;
+  --overlay-hint-bg: rgba(10, 15, 30, 0.8);
+  --overlay-hint-border: #1e293b;
+  --overlay-hint-dim: #334155;
+
+  /* Scope face: CRT phosphor in dark. The trace colours are shared verbatim
+     by the canvas beams and the probe dots in the trace list; that pairing is
+     how a reader maps trace to net, so both ends must always read the same
+     token. */
+  --scope-face: #00080f;
+  --scope-edge: rgba(0, 180, 70, 0.3);
+  --scope-glow: 0 0 12px rgba(0, 180, 70, 0.12), inset 0 0 20px rgba(0, 0, 0, 0.6);
+  --scope-grid: rgba(0, 200, 80, 0.15);
+  --scope-tick: rgba(0, 200, 80, 0.45);
+  --scope-axis: rgba(0, 200, 80, 0.35);
+  --scope-hint: rgba(0, 200, 80, 0.25);
+  --scope-scan: rgba(0, 255, 100, 0.012);
+  --trace-1: #3b82f6;
+  --trace-2: #f59e0b;
+  --trace-3: #10b981;
+  --trace-4: #ef4444;
+  --trace-5: #8b5cf6;
+  --trace-6: #ec4899;
+
+  /* Serial console scrollback. */
+  --term-rx: #4ade80;
+  --term-tx: #8ba0bb;
+  --term-info: #5b6c84;
+  --term-ts: #31435c;
+  --term-prompt: #44546e;
+
+  /* 3D scene backdrop (the radial glow behind the board model). */
+  --scene-bg: #020617;
+  --scene-glow-hi: #0d1a2e;
+  --scene-glow-mid: #07101f;
+
+  /* Report dot map (the fallback board map drawn from component positions). */
+  --map-dot: #e08a4e;
+  --map-label: #8fa0b3;
+  --map-note: #475569;
 
   --input-bg: #0f131a;
   --code-bg: #0d1118;
@@ -104,6 +155,58 @@
   --warn-border: #e0cba0;
   --note: #57626f;
   --note-accent: #9aa4b1;
+
+  /* Instrument surfaces go genuinely light: a warm paper well, slightly
+     deeper than the app canvas so the board area still reads as a place. */
+  --instrument: #ece7dd;
+  --instrument-edge: #d9d3c7;
+  --instrument-text: #3f4854;
+
+  --overlay-chip-bg: rgba(255, 255, 255, 0.85);
+  --overlay-chip-text: #57626f;
+  --overlay-err-bg: #fdf4f3;
+  --overlay-err-border: #e2b7b3;
+  --overlay-hint-bg: rgba(255, 255, 255, 0.82);
+  --overlay-hint-border: #d9d3c7;
+  --overlay-hint-dim: #adb5bf;
+
+  /* Scope: light graticule paper with a faint green cast (bench scopes in
+     light UIs, not an inverted CRT). Scanlines are a phosphor artifact, so
+     their token goes fully transparent here. Traces drop to ink-weight
+     versions of the same six hues; the probe dots inherit them via the same
+     tokens so the pairing survives the re-tune. */
+  --scope-face: #f3f6f0;
+  --scope-edge: rgba(13, 110, 60, 0.35);
+  --scope-glow: 0 1px 2px rgba(28, 36, 49, 0.06), inset 0 0 14px rgba(13, 110, 60, 0.05);
+  --scope-grid: rgba(13, 110, 60, 0.22);
+  --scope-tick: rgba(13, 110, 60, 0.65);
+  --scope-axis: rgba(13, 110, 60, 0.5);
+  --scope-hint: rgba(13, 110, 60, 0.45);
+  --scope-scan: rgba(13, 110, 60, 0);
+  --trace-1: #1d4ed8;
+  --trace-2: #b45309;
+  --trace-3: #047857;
+  --trace-4: #b91c1c;
+  --trace-5: #6d28d9;
+  --trace-6: #be185d;
+
+  /* Light terminal: ink on paper, not inverted phosphor. RX keeps a green
+     identity at readable depth; TX and info are quiet slates. */
+  --term-rx: #157347;
+  --term-tx: #475569;
+  --term-info: #64748b;
+  --term-ts: #a3aab2;
+  --term-prompt: #8a93a0;
+
+  /* 3D scene: warm daylight backdrop, brightest under the board, falling to
+     a deeper warm edge so the model stays grounded. */
+  --scene-bg: #ddd5c6;
+  --scene-glow-hi: #f7f3ea;
+  --scene-glow-mid: #ebe4d6;
+
+  --map-dot: #b35f24;
+  --map-label: #57626f;
+  --map-note: #8a93a0;
 
   --input-bg: #ffffff;
   --code-bg: #f6f4ef;
@@ -378,6 +481,15 @@ code.hb-inline {
   border-color: var(--ok-border);
   background: var(--ok-bg);
 }
+
+/* A FILLED firmware slot. The empty jack is a drop target and stays a quiet
+   row; once something is staged it holds its own controls, so it takes the
+   board card's shadow and stops reacting to hover as a single click target. */
+.fw-slot {
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+}
+.fw-slot:hover { border-color: var(--ok-border); }
 
 /* Copper busy spinner (an arc that sweeps, like a probe settling). */
 .slot-spin {

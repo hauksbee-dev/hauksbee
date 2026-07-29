@@ -98,6 +98,17 @@ export default function App() {
   )
 }
 
+// Name the emulator a launch failure is missing, or null when the failure is
+// something the Environment page cannot fix. Matched on the backends' own
+// "not found" wording (hauksbee-mcu's `find_qemu` / `find_renode`), which is
+// the text the launch error carries verbatim.
+function missingEmulator(error: string): 'Espressif QEMU' | 'Renode' | null {
+  if (!/not found/i.test(error)) return null
+  if (/espressif qemu|qemu-system-/i.test(error)) return 'Espressif QEMU'
+  if (/renode/i.test(error)) return 'Renode'
+  return null
+}
+
 const VIEW_TITLES: Record<AppView, string> = {
   board: 'Board',
   checks: 'Checks',
@@ -214,6 +225,17 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
       setChecksSummary(null)
     }
   }, [reportIdentity])
+
+  // The shell's share of the one reset path (see `clearRunState` in
+  // useBoardSession): a check queued from a click on the OLD board is about a
+  // net the new board may not even have, and the summary chips describe a run
+  // that no longer exists. Both go the moment a new run starts, not when its
+  // report happens to land.
+  const runEpoch = session.runEpoch
+  useEffect(() => {
+    setQueuedChecks([])
+    setChecksSummary(null)
+  }, [runEpoch])
 
   const chip = (
     label: string,
@@ -467,6 +489,25 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
               Live launch failed
             </span>
             {session.launch.error}
+            {/* A missing emulator is the one launch failure this app can fix
+                by itself: the Environment page installs Renode and Espressif
+                QEMU with one click. Sending the user to a release page they
+                have to find, unpack and PATH themselves (which the backend
+                error text alone used to do) is the terminal-forcing moment
+                the cold-install audit caught. */}
+            {missingEmulator(session.launch.error) && (
+              <div className="mt-2.5">
+                <button
+                  type="button"
+                  data-testid="launch-error-open-env"
+                  onClick={() => navigate('env')}
+                  className="hb-btn-primary hb-press px-3 text-[12px]"
+                  style={{ height: 30 }}
+                >
+                  Install {missingEmulator(session.launch.error)} on the Environment page
+                </button>
+              </div>
+            )}
           </div>
         )}
 

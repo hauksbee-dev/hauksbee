@@ -15,6 +15,7 @@ import type { BoardInfoMsg, SimFrame } from '../types/protocol'
 import type { ClientMessage } from '../types/protocol'
 import { toWireSupply, supplyNetNames, appliedVolts } from '../lib/supply-wire'
 import type { SupplyConfig, SupplyType } from '../lib/supply-wire'
+import { displayNet } from '../lib/net-name'
 
 const SUPPLY_DEFAULTS: Record<SupplyType, SupplyConfig> = {
   Ideal:   { type: 'Ideal',   volts: 5.0, currentLimit: 10,   ripple: 0,    capacity: 0 },
@@ -94,7 +95,7 @@ export function PowerPanel({ boardInfo, frame, send }: PowerPanelProps) {
                 className="text-[12px] font-bold truncate"
                 style={{ color: 'var(--silk)', fontFamily: 'var(--font-mono)' }}
               >
-                {net}
+                {displayNet(net)}
               </span>
               <span className="text-[11px] shrink-0 tnum" style={{ color: 'var(--silk-faint)', fontFamily: 'var(--font-mono)' }}>
                 {liveVolts !== undefined && (

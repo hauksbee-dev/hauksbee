@@ -15,7 +15,7 @@ import { worldToScreen } from './camera'
 import type {
   ParsedBoard, Pad, Point, Segment,
 } from './kicad-parser'
-import { getLayerStyle, isCopperLayer, PAD_COLOR, PAD_GLOW, VIA_COLOR, VIA_DRILL_COLOR } from './layer-colors'
+import { getLayerStyle, isCopperLayer, boardTheme } from './layer-colors'
 import { footprintHitBoxes } from './kicad-parser'
 import type { FootprintBox } from './kicad-parser'
 
@@ -194,7 +194,7 @@ function drawPad(ctx: CanvasRenderingContext2D, cam: Camera, pad: Pad, color: st
     const drill = pad.drill
     if (drill) {
       ctx.shadowBlur = 0
-      ctx.fillStyle = VIA_DRILL_COLOR
+      ctx.fillStyle = boardTheme().viaDrill
       ctx.beginPath()
       if (drill.oval && drill.dx && drill.dy) {
         const dw = drill.dx * cam.scale
@@ -242,9 +242,10 @@ export function renderStaticBoard(
   opts?: RenderOptions,
 ) {
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+  const theme = boardTheme()
 
   // Background
-  ctx.fillStyle = '#020617'
+  ctx.fillStyle = theme.bg
   ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
 
   // Subtle radial vignette so the board area stands out against the flat background
@@ -252,8 +253,8 @@ export function renderStaticBoard(
     const W = ctx.canvas.width
     const H = ctx.canvas.height
     const grad = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, Math.max(W, H) * 0.65)
-    grad.addColorStop(0, 'rgba(10,18,40,0)')
-    grad.addColorStop(1, 'rgba(0,0,0,0.55)')
+    grad.addColorStop(0, theme.vignette0)
+    grad.addColorStop(1, theme.vignette1)
     ctx.fillStyle = grad
     ctx.fillRect(0, 0, W, H)
   }
@@ -402,21 +403,21 @@ export function renderStaticBoard(
     if (sx + r < 0 || sx - r > ctx.canvas.width || sy + r < 0 || sy - r > ctx.canvas.height) continue
     const dr = (v.drill / 2) * cam.scale
     ctx.beginPath()
-    ctx.fillStyle = VIA_COLOR
+    ctx.fillStyle = theme.via
     ctx.arc(sx, sy, r, 0, Math.PI * 2)
     ctx.fill()
     ctx.beginPath()
-    ctx.fillStyle = VIA_DRILL_COLOR
+    ctx.fillStyle = theme.viaDrill
     ctx.arc(sx, sy, Math.max(dr, 0.5), 0, Math.PI * 2)
     ctx.fill()
   }
 
   // ── Pads ──
   if (opts?.showPads !== false) {
-    const padGlow = glowOk ? PAD_GLOW : undefined
+    const padGlow = glowOk ? theme.padGlow : undefined
     for (const fp of board.footprints) {
       for (const pad of fp.pads) {
-        drawPad(ctx, cam, pad, PAD_COLOR, padGlow)
+        drawPad(ctx, cam, pad, theme.pad, padGlow)
       }
     }
   }
@@ -430,7 +431,7 @@ export function renderStaticBoard(
   ctx.save()
   ctx.textAlign = 'center'
   ctx.textBaseline = 'bottom'
-  ctx.shadowColor = 'rgba(0,0,0,0.9)'
+  ctx.shadowColor = theme.labelShadow
   ctx.shadowBlur = 3
   const cw = ctx.canvas.width
   const chh = ctx.canvas.height
@@ -454,7 +455,7 @@ export function renderStaticBoard(
     const fontPx = Math.min(13, Math.max(9, extentPx * 0.18))
     ctx.globalAlpha = fade * 0.9
     ctx.font = `${fontPx}px ui-monospace, monospace`
-    ctx.fillStyle = '#cdd6e4'
+    ctx.fillStyle = theme.label
     ctx.fillText(fp.ref, cx, topY - 3)
   }
   ctx.globalAlpha = 1
@@ -489,6 +490,11 @@ export interface OverlayData {
   componentKinds?: Record<string, string>
   /** References of faulted components for pulsing red highlight */
   faultedRefs?: Set<string>
+  /** The footprint under the cursor. Drawn with the same highlight ink as a
+   *  hovered net, over the same extent the click hit-test uses, so hovering a
+   *  part and clicking it agree about what the cursor is on. Steady, not
+   *  pulsing: it tracks the pointer, and a pulse would fight the motion. */
+  hoverRefs?: Set<string>
   /** Animation time in seconds (for pulsing effects) */
   animTime?: number
   /** The activity overlay (voltage tints, flow particles, component glows).
@@ -510,8 +516,8 @@ function heatColor(t: number): string {
 /**
  * Compute a tinted copper colour from a net voltage.
  * 0 V     = base layer colour (pass-through)
- * +5 V    = warm bright (#ffb347 blended with base)
- * negative= cool blue (#60a0ff blended with base)
+ * +5 V    = warm (the theme's rail-amber blended with base)
+ * negative= cool (the theme's blue blended with base)
  * Smooth lerp; only applied to nets present in netVoltages.
  */
 function voltageTintColor(baseColor: string, voltage: number, maxV = 5): string {
@@ -522,14 +528,15 @@ function voltageTintColor(baseColor: string, voltage: number, maxV = 5): string 
   const bg = parseInt(baseColor.slice(3, 5), 16)
   const bb = parseInt(baseColor.slice(5, 7), 16)
 
+  const theme = boardTheme()
   let tr: number, tg: number, tb: number, strength: number
   if (t > 0) {
-    // Warm: brighter amber-orange for high voltage (3.3V / 5V rails)
-    tr = 0xff; tg = 0xc0; tb = 0x40
+    // Warm amber for high voltage (3.3V / 5V rails)
+    tr = theme.voltWarm.r; tg = theme.voltWarm.g; tb = theme.voltWarm.b
     strength = t * 0.72
   } else if (t < 0) {
     // Cool blue: negative voltage
-    tr = 0x60; tg = 0xa0; tb = 0xff
+    tr = theme.voltCool.r; tg = theme.voltCool.g; tb = theme.voltCool.b
     strength = (-t) * 0.72
   } else {
     return baseColor
@@ -560,6 +567,7 @@ export function renderDynamicOverlay(
   overlay: OverlayData,
 ) {
   ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height)
+  const theme = boardTheme()
 
   const { highlightNets, dimOthers, netVoltages, faultedRefs, animTime = 0, renderOpts } = overlay
   const activityOn = overlay.showActivity !== false
@@ -575,7 +583,7 @@ export function renderDynamicOverlay(
   // orientation context was lost; the highlight only needs contrast, not a
   // blackout.
   if (hasHighlight && dimOthers) {
-    ctx.fillStyle = 'rgba(2,6,23,0.45)'
+    ctx.fillStyle = theme.dimVeil
     ctx.fillRect(0, 0, ctx.canvas.width, ctx.canvas.height)
   }
 
@@ -589,14 +597,14 @@ export function renderDynamicOverlay(
         if (s.layer !== layer || !s.netName) continue
         const v = netVoltages.get(s.netName)
         if (v === undefined || Math.abs(v) < 0.05) continue
-        const glow = glowOk ? (v > 0 ? '#ffb347cc' : '#60a0ffcc') : undefined
+        const glow = glowOk ? (v > 0 ? theme.voltWarmGlow : theme.voltCoolGlow) : undefined
         strokeSeg(ctx, cam, s, voltageTintColor(style.color, v), glow)
       }
       for (const a of board.arcs) {
         if (a.layer !== layer || !a.netName) continue
         const v = netVoltages.get(a.netName)
         if (v === undefined || Math.abs(v) < 0.05) continue
-        const glow = glowOk ? (v > 0 ? '#ffb347cc' : '#60a0ffcc') : undefined
+        const glow = glowOk ? (v > 0 ? theme.voltWarmGlow : theme.voltCoolGlow) : undefined
         drawArc(ctx, cam, a.start, a.mid, a.end, voltageTintColor(style.color, v), glow, a.width)
       }
     }
@@ -607,11 +615,11 @@ export function renderDynamicOverlay(
   if (hasHighlight) {
     for (const s of board.segments) {
       if (!s.netName || !highlightNets.has(s.netName)) continue
-      strokeSeg(ctx, cam, s, '#ffffff', '#80c0ff')
+      strokeSeg(ctx, cam, s, theme.highlight, theme.highlightGlow)
     }
     for (const a of board.arcs) {
       if (!a.netName || !highlightNets.has(a.netName)) continue
-      drawArc(ctx, cam, a.start, a.mid, a.end, '#ffffff', '#80c0ff', a.width)
+      drawArc(ctx, cam, a.start, a.mid, a.end, theme.highlight, theme.highlightGlow, a.width)
     }
     ctx.shadowBlur = 0
     for (const v of board.vias) {
@@ -620,21 +628,54 @@ export function renderDynamicOverlay(
       const r = (v.size / 2) * cam.scale
       if (r < 0.5) continue
       ctx.beginPath()
-      ctx.fillStyle = '#ffffffcc'
-      ctx.shadowColor = '#80c0ff'
+      ctx.fillStyle = theme.highlightVia
+      ctx.shadowColor = theme.highlightGlow
       ctx.shadowBlur = 6
       ctx.arc(sx, sy, r, 0, Math.PI * 2)
       ctx.fill()
       ctx.shadowBlur = 0
       ctx.beginPath()
-      ctx.fillStyle = VIA_DRILL_COLOR
+      ctx.fillStyle = theme.viaDrill
       ctx.arc(sx, sy, Math.max((v.drill / 2) * cam.scale, 0.5), 0, Math.PI * 2)
       ctx.fill()
     }
     for (const fp of board.footprints) {
       for (const pad of fp.pads) {
         if (!pad.netName || !highlightNets.has(pad.netName)) continue
-        drawPad(ctx, cam, pad, '#ffdd44', '#ffe080')
+        drawPad(ctx, cam, pad, theme.highlightPad, theme.highlightPadGlow)
+      }
+    }
+  }
+
+  // ── Hovered footprint: the part answers the cursor ──
+  // Traces lit up under the pointer and parts did not, so a board read as if
+  // only the copper were interactive. This uses `faultBoxesFor`, the same
+  // extent the click hit-test resolves against, so what lights up is exactly
+  // what a click would select. Drawn before the fault pass so a faulted part
+  // under the cursor still reads as faulted.
+  const hoverRefs = overlay.hoverRefs
+  if (hoverRefs && hoverRefs.size > 0) {
+    const boxes = faultBoxesFor(board)
+    for (const fp of board.footprints) {
+      if (!hoverRefs.has(fp.ref)) continue
+      const box = boxes.get(fp.ref)
+      if (box) {
+        const [x1, y1] = ws(cam, box.x1, box.y1)
+        const [x2, y2] = ws(cam, box.x2, box.y2)
+        const pad = 3
+        const bx = Math.min(x1, x2) - pad
+        const by = Math.min(y1, y2) - pad
+        const bw = Math.abs(x2 - x1) + pad * 2
+        const bh = Math.abs(y2 - y1) + pad * 2
+        ctx.strokeStyle = theme.highlight
+        ctx.lineWidth = 1.5
+        ctx.shadowColor = theme.highlightGlow
+        ctx.shadowBlur = 8
+        ctx.strokeRect(bx, by, bw, bh)
+        ctx.shadowBlur = 0
+      }
+      for (const p of fp.pads) {
+        drawPad(ctx, cam, p, theme.highlightPad, theme.highlightPadGlow)
       }
     }
   }
@@ -657,18 +698,18 @@ export function renderDynamicOverlay(
         const by = Math.min(y1, y2) - pad
         const bw = Math.abs(x2 - x1) + pad * 2
         const bh = Math.abs(y2 - y1) + pad * 2
-        ctx.fillStyle = `rgba(248,60,50,${0.18 + faultPulse * 0.2})`
+        ctx.fillStyle = `rgba(${theme.faultFillRGB},${0.18 + faultPulse * 0.2})`
         ctx.fillRect(bx, by, bw, bh)
-        ctx.strokeStyle = `rgba(248,71,71,${0.55 + faultPulse * 0.45})`
+        ctx.strokeStyle = `rgba(${theme.faultStrokeRGB},${0.55 + faultPulse * 0.45})`
         ctx.lineWidth = 1.5
-        ctx.shadowColor = '#ff2222'
+        ctx.shadowColor = theme.faultShadow
         ctx.shadowBlur = 10 * faultPulse
         ctx.strokeRect(bx, by, bw, bh)
         ctx.shadowBlur = 0
       }
-      const padColor = `rgba(248,${Math.round(50 + faultPulse * 50)},50,1)`
+      const padColor = theme.faultPad(faultPulse)
       for (const p of fp.pads) {
-        drawPad(ctx, cam, p, padColor, '#ff2222')
+        drawPad(ctx, cam, p, padColor, theme.faultPadGlow)
       }
     }
   }
@@ -696,9 +737,9 @@ export function renderDynamicOverlay(
       if (kind === 'mcu' && running > 0) {
         // Faint cyan glow for running MCU
         const grad = ctx.createRadialGradient(fpX, fpY, 0, fpX, fpY, radius)
-        grad.addColorStop(0, 'rgba(34,211,238,0.18)')
-        grad.addColorStop(0.6, 'rgba(34,211,238,0.06)')
-        grad.addColorStop(1, 'rgba(34,211,238,0)')
+        grad.addColorStop(0, theme.mcuGlow0)
+        grad.addColorStop(0.6, theme.mcuGlow1)
+        grad.addColorStop(1, theme.mcuGlow2)
         ctx.fillStyle = grad
         ctx.beginPath()
         ctx.arc(fpX, fpY, radius, 0, Math.PI * 2)
@@ -728,10 +769,10 @@ export function renderDynamicOverlay(
       const [x2, y2] = ws(cam, s.end.x, s.end.y)
       if (segOffscreen(ctx, x1, y1, x2, y2)) continue
       ctx.beginPath()
-      ctx.strokeStyle = 'rgba(100,200,255,0.35)'
+      ctx.strokeStyle = theme.netGlowStroke
       ctx.lineWidth = Math.max(2, s.width * cam.scale * 3)
       ctx.lineCap = 'round'
-      ctx.shadowColor = '#40a0ff'
+      ctx.shadowColor = theme.netGlowShadow
       ctx.shadowBlur = 12
       ctx.moveTo(x1, y1)
       ctx.lineTo(x2, y2)
@@ -751,8 +792,8 @@ export function renderDynamicOverlay(
         const [sx, sy] = ws(cam, px, py)
         const r = Math.max(2, s.width * cam.scale * 0.6)
         ctx.beginPath()
-        ctx.fillStyle = '#60ff80'
-        ctx.shadowColor = '#00ff40'
+        ctx.fillStyle = theme.particle
+        ctx.shadowColor = theme.particleGlow
         ctx.shadowBlur = r * 2
         ctx.arc(sx, sy, r, 0, Math.PI * 2)
         ctx.fill()
@@ -776,10 +817,10 @@ export function renderDynamicOverlay(
     const bx = sx + 12
     const by = sy - boxH - 8
 
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.92)'
-    ctx.strokeStyle = '#3b82f6'
+    ctx.fillStyle = theme.probeBg
+    ctx.strokeStyle = theme.probeBorder
     ctx.lineWidth = 1.5
-    ctx.shadowColor = '#3b82f6'
+    ctx.shadowColor = theme.probeBorder
     ctx.shadowBlur = 8
     ctx.beginPath()
     ctx.roundRect(bx, by, boxW, boxH, 6)
@@ -787,15 +828,15 @@ export function renderDynamicOverlay(
     ctx.stroke()
     ctx.shadowBlur = 0
 
-    ctx.fillStyle = '#94a3b8'
+    ctx.fillStyle = theme.probeLabel
     ctx.fillText(label, bx + padding, by + padding + fontSize)
-    ctx.fillStyle = '#60a5fa'
+    ctx.fillStyle = theme.probeValue
     ctx.fillText(value, bx + padding, by + padding + fontSize * 2 + 4)
 
     // Crosshair dot
     ctx.beginPath()
     ctx.arc(sx, sy, 4, 0, Math.PI * 2)
-    ctx.fillStyle = '#60a5fa'
+    ctx.fillStyle = theme.probeValue
     ctx.fill()
   }
 
@@ -808,9 +849,9 @@ export function renderDynamicOverlay(
     const ringR = 14 + pulse * 6
 
     ctx.save()
-    ctx.strokeStyle = '#f87171'
+    ctx.strokeStyle = theme.markerStroke
     ctx.lineWidth = 2
-    ctx.shadowColor = '#ef4444'
+    ctx.shadowColor = theme.markerShadow
     ctx.shadowBlur = 10
     ctx.globalAlpha = 0.9 - pulse * 0.4
     ctx.beginPath()
@@ -836,14 +877,14 @@ export function renderDynamicOverlay(
       const w = ctx.measureText(shown).width + 14
       const bx = Math.min(Math.max(6, sx - w / 2), ctx.canvas.width - w - 6)
       const by = sy + ringR + 8
-      ctx.fillStyle = 'rgba(15, 23, 42, 0.92)'
-      ctx.strokeStyle = '#ef4444'
+      ctx.fillStyle = theme.markerLabelBg
+      ctx.strokeStyle = theme.markerLabelBorder
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.roundRect(bx, by, w, fontSize + 12, 5)
       ctx.fill()
       ctx.stroke()
-      ctx.fillStyle = '#fca5a5'
+      ctx.fillStyle = theme.markerLabelText
       ctx.fillText(shown, bx + 7, by + fontSize + 4)
     }
     ctx.restore()
