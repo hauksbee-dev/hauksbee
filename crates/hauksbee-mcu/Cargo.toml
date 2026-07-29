@@ -15,13 +15,17 @@ description = "Generalized MCU emulation bridge (simavr-backed AVR)"
 [features]
 # `avr` links libsimavr (GPL-3.0) and builds the AvrMcu backend.
 # `renode` builds the process-driven RenodeBackend (pure std, no native link).
-# `qemu` builds the process-driven QemuBackend for the ESP32 family (pure std,
-#   talks to an external Espressif QEMU over QMP + gdbstub + a UART socket).
+# `qemu` builds the process-driven QemuBackend for the ESP32 family (no native
+#   link; talks to an external Espressif QEMU over QMP + gdbstub + a UART
+#   socket). Pulls `espflash` (pure Rust, MIT/Apache-2.0) so a bare app `.elf`
+#   can be turned into the merged bootloader+partition-table+app flash image
+#   QEMU actually boots; without that, an uploaded ELF is unbootable on a
+#   machine that has no esptool.
 # All on by default; any can be disabled for a lighter build.
 default = ["avr", "renode", "qemu"]
 avr = []
 renode = []
-qemu = []
+qemu = ["dep:espflash", "dep:tempfile"]
 
 [dependencies]
 anyhow = { workspace = true }
@@ -38,6 +42,13 @@ serde = { workspace = true }
 # sensor_spec.rs uses (unknown backend, zero-width port, duplicate controller…).
 toml = "0.8"
 thiserror = { workspace = true }
+# ELF -> merged-flash-image conversion for the QEMU backend (see the `qemu`
+# feature note above). default-features = false drops the CLI and serialport
+# halves; only the image_format/target code is compiled in.
+espflash = { version = "4.5.0", default-features = false, optional = true }
+# The merged image QEMU boots from is staged as a temp file that must outlive
+# the QEMU process; NamedTempFile ties its lifetime to the backend struct.
+tempfile = { workspace = true, optional = true }
 
 [build-dependencies]
 bindgen = "0.71"

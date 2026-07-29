@@ -43,8 +43,28 @@ const ADC_GETIRQ: u32 = avr_ioctl_def(b'a', b'd', b'c', b'0');
 const TWI_GETIRQ: u32 = avr_ioctl_def(b't', b'w', b'i', 0);
 const SPI_GETIRQ: u32 = avr_ioctl_def(b's', b'p', b'i', 0);
 
-const UART_IRQ_INPUT: i32 = 0;
-const UART_IRQ_OUTPUT: i32 = 1;
+/// UART IRQ indices, bindgen-sourced from the linked simavr's `avr_uart.h`
+/// for the same version-skew reason as `IOPORT_IRQ_REG_PORT` below.
+const UART_IRQ_INPUT: i32 = ffi::UART_IRQ_INPUT as i32;
+const UART_IRQ_OUTPUT: i32 = ffi::UART_IRQ_OUTPUT as i32;
+/// Raised by simavr (value 1) whenever its 64-byte RX input fifo has room
+/// again: on RXEN enable, and whenever the firmware drains the fifo empty.
+/// This is the emulator's own "clear to send" signal; the pending-byte queue
+/// drains against it instead of guessing at fifo capacity.
+const UART_IRQ_OUT_XON: i32 = ffi::UART_IRQ_OUT_XON as i32;
+/// Raised by simavr with value 1 the instant its RX input fifo becomes full
+/// (edge-filtered). Any `UART_IRQ_INPUT` raise after that is silently
+/// DISCARDED by simavr, which is exactly how host records longer than 64
+/// bytes used to vanish; the queue stops draining on it.
+const UART_IRQ_OUT_XOFF: i32 = ffi::UART_IRQ_OUT_XOFF as i32;
+
+/// Upper bound on host bytes queued toward the UART while the firmware is not
+/// accepting them. Generous by design: the largest realistic burst is a whole
+/// firmware/EEPROM image push (tens of KB). Past this the host is flooding a
+/// receiver that is genuinely not draining, and the honest move is to drop
+/// LOUDLY (counted in `uart_rx_overflow`, reported on stderr) rather than grow
+/// without bound; a real fixed-size device buffer would have overrun long ago.
+const UART_PENDING_CAP: usize = 256 * 1024;
 const TWI_IRQ_INPUT: i32 = 0;
 const TWI_IRQ_OUTPUT: i32 = 1;
 const SPI_IRQ_INPUT: i32 = 0; // MISO (from peripheral into MCU)
@@ -210,8 +230,90 @@ struct SharedState {
     /// transaction gets no fabricated data ACKs / read bytes.
     twi_acked: bool,
 
+    /// Host serial bytes waiting to enter the UART. `uart_write` queues here
+    /// instead of raising `UART_IRQ_INPUT` directly: simavr's RX input fifo is
+    /// only 64 bytes and it silently discards raises while full (or while RXEN
+    /// is clear), so fire-and-forget injection truncated any host record
+    /// longer than the fifo, wedging protocol firmwares mid-record. The queue
+    /// drains under the emulator's own XON/XOFF flow control (see
+    /// `drain_uart_pending`), so nothing is lost and pacing follows what the
+    /// emulated UART actually accepts.
+    uart_pending: std::collections::VecDeque<u8>,
+    /// Latest flow-control state from the UART's XON/XOFF IRQs. Starts false:
+    /// simavr drops RX bytes until the firmware enables the receiver, and the
+    /// enable itself raises XON, so "wait for the first XON" is exactly "wait
+    /// until injected bytes can no longer vanish".
+    uart_clear_to_send: bool,
+    /// Bytes dropped because `uart_pending` hit `UART_PENDING_CAP`: the one
+    /// genuinely unavoidable overflow (host floods a firmware that never
+    /// drains). Counted and surfaced instead of swallowed.
+    uart_rx_overflow: u64,
+
     /// User-installed callbacks.
     callbacks: Callbacks,
+}
+
+/// Drain queued host bytes into the UART while the emulator signals room.
+///
+/// The lock is RELEASED around each `avr_raise_irq`: raising `UART_IRQ_INPUT`
+/// synchronously re-enters our XOFF hook the instant the byte fills the fifo,
+/// and that hook needs the same mutex (a held lock would deadlock). Popping
+/// one byte per lock acquisition keeps the flow-control flag it re-checks
+/// fresh, so a byte is never pushed into a fifo that just reported full, the
+/// reentrant-XOFF contract simavr's own `avr_uart.h` documentation describes.
+fn drain_uart_pending(state: &Arc<Mutex<SharedState>>) {
+    loop {
+        let (avr, byte) = {
+            let mut s = match state.lock() {
+                Ok(s) => s,
+                Err(_) => return,
+            };
+            if !s.uart_clear_to_send || s.avr_ptr.is_null() {
+                return;
+            }
+            match s.uart_pending.pop_front() {
+                Some(b) => (s.avr_ptr, b),
+                None => return,
+            }
+        };
+        unsafe {
+            let irq = ffi::avr_io_getirq(avr, uart_getirq(b'0'), UART_IRQ_INPUT);
+            if !irq.is_null() {
+                ffi::avr_raise_irq(irq, byte as u32);
+            }
+        }
+    }
+}
+
+/// XON: the UART's input fifo has room (fires on RXEN enable and whenever the
+/// firmware drains the fifo empty). Mark clear-to-send and top the fifo back
+/// up from the pending queue immediately, mid-`avr_run`, so a firmware
+/// blocking on `Serial.available()` inside a long chunk is fed without waiting
+/// for the next chunk boundary.
+unsafe extern "C" fn uart_xon_hook(
+    _irq: *mut ffi::avr_irq_t,
+    _value: u32,
+    param: *mut std::os::raw::c_void,
+) {
+    let state = unsafe { &*(param as *const Arc<Mutex<SharedState>>) };
+    if let Ok(mut s) = state.lock() {
+        s.uart_clear_to_send = true;
+    }
+    drain_uart_pending(state);
+}
+
+/// XOFF: value 1 means the input fifo is FULL (stop sending; further raises
+/// would be discarded), value 0 means it has room again. Fired synchronously
+/// from inside `drain_uart_pending`'s own raise when a byte fills the fifo.
+unsafe extern "C" fn uart_xoff_hook(
+    _irq: *mut ffi::avr_irq_t,
+    value: u32,
+    param: *mut std::os::raw::c_void,
+) {
+    let state = unsafe { &*(param as *const Arc<Mutex<SharedState>>) };
+    if let Ok(mut s) = state.lock() {
+        s.uart_clear_to_send = value == 0;
+    }
 }
 
 // SAFETY: avr_ptr is only used while the AvrMcu is alive, from the same thread
@@ -696,6 +798,9 @@ impl AvrMcu {
             twi_read: false,
             twi_known_addrs: None,
             twi_acked: false,
+            uart_pending: std::collections::VecDeque::new(),
+            uart_clear_to_send: false,
+            uart_rx_overflow: 0,
             callbacks: Callbacks {
                 on_pin_change: None,
                 on_uart: None,
@@ -708,11 +813,21 @@ impl AvrMcu {
         let leaked = Box::into_raw(Box::new(state.clone()));
         let callback_ptr = leaked as *mut std::os::raw::c_void;
 
-        // Register UART output hook immediately (it's always wanted).
+        // Register UART output hook immediately (it's always wanted), plus the
+        // XON/XOFF flow-control hooks that meter host RX bytes into the 64-byte
+        // input fifo (see `drain_uart_pending`).
         unsafe {
             let uart_irq = ffi::avr_io_getirq(avr, uart_getirq(b'0'), UART_IRQ_OUTPUT);
             if !uart_irq.is_null() {
                 ffi::avr_irq_register_notify(uart_irq, Some(uart_output_hook), callback_ptr);
+            }
+            let xon = ffi::avr_io_getirq(avr, uart_getirq(b'0'), UART_IRQ_OUT_XON);
+            if !xon.is_null() {
+                ffi::avr_irq_register_notify(xon, Some(uart_xon_hook), callback_ptr);
+            }
+            let xoff = ffi::avr_io_getirq(avr, uart_getirq(b'0'), UART_IRQ_OUT_XOFF);
+            if !xoff.is_null() {
+                ffi::avr_irq_register_notify(xoff, Some(uart_xoff_hook), callback_ptr);
             }
         }
 
@@ -884,16 +999,6 @@ impl AvrMcu {
         Ok(())
     }
 
-    /// Inject a single byte into UART0 RX.
-    fn uart_inject_byte(&mut self, byte: u8) {
-        unsafe {
-            let irq = ffi::avr_io_getirq(self.avr, uart_getirq(b'0'), UART_IRQ_INPUT);
-            if !irq.is_null() {
-                ffi::avr_raise_irq(irq, byte as u32);
-            }
-        }
-    }
-
     /// Drive an individual input pin externally (indices 0-7 within the port).
     /// Same persistent-drive path as the synchronous responder
     /// ([`drive_ioport_input`]): the chunk-boundary net-voltage sync is also
@@ -937,6 +1042,40 @@ impl Mcu for AvrMcu {
         // reload doesn't inherit the previous image's timing remainders.
         self.run_target = self.raw_cycle();
         self.cycle_carry = 0;
+        Ok(())
+    }
+
+    fn reset(&mut self) -> Result<()> {
+        // A real MCU reset (the board's RESET line): PC to the reset vector,
+        // registers/SREG/IO cleared, cycle timers and every IO module reset
+        // (simavr's UART reset flushes its RX fifo and clears RXEN). This is
+        // what lets a user recover a wedged firmware from the UI instead of
+        // killing the server. `avr_reset` also recovers a cpu_Crashed/Done
+        // core (state back to cpu_Running) and zeroes `avr->cycle`.
+        unsafe { ffi::avr_reset(self.avr) };
+        // The cycle counter restarted, so the timing anchors must too.
+        self.run_target = 0;
+        self.cycle_carry = 0;
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        // The reset restarts the serial story: queued host bytes belonged to
+        // the wedged conversation, and RXEN is cleared until the rebooted
+        // firmware re-enables it (which re-raises XON).
+        s.uart_pending.clear();
+        s.uart_clear_to_send = false;
+        s.uart_rx_overflow = 0;
+        // IO registers were zeroed, so the edge-detection shadows must match
+        // or the firmware's first PORT/DDR writes would mis-diff.
+        for ps in s.port_state.values_mut() {
+            ps.current = 0;
+            ps.output_dir = 0;
+        }
+        // A reset aborts any in-flight I2C transaction.
+        s.twi_active = false;
+        s.twi_read = false;
+        s.twi_acked = false;
+        // `ext_drive` is deliberately KEPT: it mirrors simavr's persistent
+        // external-pull state (the outside world still holds those lines),
+        // which `avr_reset` also leaves in place.
         Ok(())
     }
 
@@ -1048,9 +1187,34 @@ impl Mcu for AvrMcu {
     }
 
     fn uart_write(&mut self, bytes: &[u8]) {
-        for &b in bytes {
-            self.uart_inject_byte(b);
+        {
+            let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            let room = UART_PENDING_CAP.saturating_sub(s.uart_pending.len());
+            let accepted = bytes.len().min(room);
+            s.uart_pending.extend(&bytes[..accepted]);
+            let dropped = (bytes.len() - accepted) as u64;
+            if dropped > 0 {
+                // Loud, but once per flood rather than per write call; the
+                // cumulative count stays readable via `uart_rx_overflow`.
+                if s.uart_rx_overflow == 0 {
+                    eprintln!(
+                        "ERROR: UART RX overflow: the firmware is not draining serial input \
+                         and the {UART_PENDING_CAP}-byte pending buffer is full; dropping \
+                         {dropped} host byte(s). The firmware may be wedged; try Reset."
+                    );
+                }
+                s.uart_rx_overflow += dropped;
+            }
         }
+        // Feed the fifo immediately if the UART already signalled room, so a
+        // byte arriving while the firmware idles between chunks is available
+        // to the very next `run_micros` without an extra round trip.
+        drain_uart_pending(&self.state);
+    }
+
+    fn uart_rx_overflow(&self) -> u64 {
+        let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        s.uart_rx_overflow
     }
 
     fn on_uart(&mut self, cb: Box<dyn FnMut(u8) + Send>) {

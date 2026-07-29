@@ -106,6 +106,13 @@ fn main() {
         // Emit the real value via bindgen so it tracks whatever simavr is linked.
         .allowlist_item("IOPORT_.*")
         .allowlist_var("IOPORT_.*")
+        // The UART IRQ enum is sourced from the linked simavr for the same
+        // version-skew reason as IOPORT above. UART_IRQ_OUT_XON/XOFF are the
+        // emulator's own RX flow control (its input fifo is only 64 bytes);
+        // the AVR backend subscribes to them so host serial records longer
+        // than the fifo are metered in instead of silently truncated.
+        .allowlist_item("UART_.*")
+        .allowlist_var("UART_.*")
         .generate()
         .expect("Unable to generate simavr bindings");
 
