@@ -33,6 +33,7 @@ fn load_spec(name: &str, toml: &str) -> Spec {
 /// and faults. Everything else is empty / valid.
 fn outcome_with(peak_temp_c: HashMap<String, f64>, faults: Vec<RunFault>) -> RunOutcome {
     RunOutcome {
+        bind: None,
         seed: 0,
         windows: HashMap::new(),
         uart: HashMap::new(),

@@ -284,12 +284,33 @@ impl BindSummary {
 /// Whether a reference designator names an active IC (prefix U / IC / MCU),
 /// matching the binder's MCU-candidate convention.
 fn is_active_ic_ref(reference: &str) -> bool {
+    // Eagle names any element the designer left unnamed `U$12`, and that covers
+    // mounting holes, fiducials, logos, frames and test points. They take the
+    // `U` prefix without being parts at all, so counting them inflated the
+    // active-IC denominator by 17x on a real SparkFun board (69 "active ICs"
+    // where the board has four). Any `<letters>$<digits>` reference is
+    // machine-generated, never a designator someone chose.
+    if is_tool_generated_ref(reference) {
+        return false;
+    }
     let prefix: String = reference
         .chars()
         .take_while(|c| c.is_ascii_alphabetic())
         .map(|c| c.to_ascii_uppercase())
         .collect();
     matches!(prefix.as_str(), "U" | "IC" | "MCU")
+}
+
+/// Whether a reference is a CAD tool's placeholder for an unnamed element
+/// (Eagle's `U$12` form) rather than a designator a person assigned.
+fn is_tool_generated_ref(reference: &str) -> bool {
+    let Some((head, tail)) = reference.split_once('$') else {
+        return false;
+    };
+    !head.is_empty()
+        && head.chars().all(|c| c.is_ascii_alphabetic())
+        && !tail.is_empty()
+        && tail.chars().all(|c| c.is_ascii_digit())
 }
 
 /// Whether a resolved row's `warning` indicates a GENUINE open/undriven-pin
@@ -1418,6 +1439,31 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
 mod tests {
     use super::*;
     use hauksbee_extract::{DrcFinding, Item, ItemKind};
+
+    #[test]
+    fn eagle_auto_named_elements_are_not_active_ics() {
+        // Measured on SparkFun's SAMD51 Thing Plus: 69 references start with U,
+        // and 65 of them are Eagle's `U$n` placeholder for an unnamed element
+        // (mounting holes, fiducials, the logo). Counting those made the board
+        // report 0/69 active ICs bound when the honest ratio is 0/4, which is a
+        // different and much smaller problem. A coverage gate reading the
+        // inflated number would be unpassable on every Eagle board.
+        for auto in ["U$1", "U$12", "IC$3", "R$7"] {
+            assert!(
+                !is_active_ic_ref(auto),
+                "{auto} is a CAD placeholder, not a part"
+            );
+        }
+        for real in ["U1", "U12", "IC3", "MCU1"] {
+            assert!(is_active_ic_ref(real), "{real} is a designator");
+        }
+        // A `$` that is not the auto-name form leaves the prefix rule alone.
+        assert!(
+            is_active_ic_ref("U$"),
+            "no digits is not the placeholder form"
+        );
+        assert!(!is_active_ic_ref("R1"), "passives are not active ICs");
+    }
 
     #[test]
     fn cosim_faults_become_json_findings() {

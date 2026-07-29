@@ -133,6 +133,7 @@ fn outcome_for(ckt: &Circuit, net: &str) -> RunOutcome {
     ac.margins.insert(net.to_string(), st.margins());
     ac.bode.insert(net.to_string(), resp.bode(ckt, net));
     RunOutcome {
+        bind: None,
         seed: 0,
         windows: Default::default(),
         uart: Default::default(),
@@ -251,6 +252,7 @@ fn ac_gain_assertion_evaluates_rc_corner() {
     let mut ac = AcOutcome::default();
     ac.bode.insert("out".to_string(), resp.bode(&ckt, "out"));
     let outcome = RunOutcome {
+        bind: None,
         seed: 0,
         windows: Default::default(),
         uart: Default::default(),

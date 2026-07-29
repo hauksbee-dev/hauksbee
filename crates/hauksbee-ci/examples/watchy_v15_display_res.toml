@@ -15,6 +15,14 @@
 # firmware does not mirror GPIO; see docs/cosim/MCU.md). boot-coverage watches whether
 # the firmware brings RES to its required HIGH state in time.
 
+# Chip pairing, stated because it has been misread: the CORPUS Watchy v1.5
+# board carries an ESP32-PICO-D4 (classic Xtensa esp32), and testdata's
+# flash.bin is merged for that chip (bootloader at 0x1000). The repo's OTHER
+# watchy board (crates/hauksbee-ci/examples/boards/watchy.kicad_pcb) is an
+# ESP32-S3 and needs the S3 image in demo/firmware/watchy_display_init_s3/
+# (bootloader at 0x0; provenance demo/firmware/build-watchy-s3.sh). Cross the
+# pairs and the backend now refuses with a named bootloader-offset error.
+
 name = "boot-coverage: Watchy v1.5 e-paper RES# driven HIGH at boot (reduced firmware)"
 board = "../../../../board-corpus/famous/watchy_history/v1.5/Watchy.kicad_pcb"
 firmware = "../../../testdata/firmware/watchy_display_init/flash.bin"
