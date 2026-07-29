@@ -119,8 +119,10 @@ pub fn find_qemu(arch: QemuArch) -> Result<PathBuf> {
     }
 
     bail!(
-        "Espressif QEMU ({name}) not found. Install the fork's prebuilt binary \
-         (https://github.com/espressif/qemu/releases) and unpack it to \
+        "Espressif QEMU ({name}) not found. One-click installs exist: run \
+         `hauksbee install esp-qemu`, or in the app use Install on the \
+         Environment page. Manual routes: unpack the fork's prebuilt binary \
+         (https://github.com/espressif/qemu/releases) to \
          ~/.hauksbee-qemu-esp/qemu, set {} to the binary, or install it via \
          esp-idf `idf_tools.py install qemu-xtensa qemu-riscv32`. Homebrew's \
          mainline qemu-system-xtensa has no esp32 machine and will not work.",
@@ -221,6 +223,12 @@ pub(crate) fn is_esp_fork(bin: &std::path::Path) -> bool {
 pub struct QemuProcess {
     child: Child,
     pub qmp_port: u16,
+    /// QEMU's stderr, redirected to a temp file so that when the process dies
+    /// (bad image, bad machine, bad drive size) the caller can surface QEMU's
+    /// own words instead of a bare "exited" or a downstream socket error. A
+    /// pipe would need a drain thread to avoid blocking a chatty process; a
+    /// file needs nothing and is read only on failure.
+    stderr_log: Option<tempfile::NamedTempFile>,
 }
 
 impl QemuProcess {
@@ -271,9 +279,21 @@ impl QemuProcess {
         cmd.arg("-global").arg(format!(
             "driver=timer.{machine}.timg,property=wdt_disable,value=true"
         ));
+        // stderr goes to a temp file (not /dev/null) so a failed boot can be
+        // explained with QEMU's actual complaint; see the struct field note.
+        let stderr_log = tempfile::Builder::new()
+            .prefix("hauksbee-qemu-stderr-")
+            .suffix(".log")
+            .tempfile()
+            .ok();
+        let stderr_sink = stderr_log
+            .as_ref()
+            .and_then(|t| t.reopen().ok())
+            .map(Stdio::from)
+            .unwrap_or_else(Stdio::null);
         cmd.stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(stderr_sink);
         #[cfg(unix)]
         {
             use std::os::unix::process::CommandExt;
@@ -290,7 +310,24 @@ impl QemuProcess {
             .with_context(|| format!("spawning Espressif QEMU from {}", bin.display()))?;
         crate::children::register(child.id());
 
-        Ok(QemuProcess { child, qmp_port })
+        Ok(QemuProcess {
+            child,
+            qmp_port,
+            stderr_log,
+        })
+    }
+
+    /// What QEMU wrote to stderr so far, trimmed, capped to its last 2 KiB.
+    /// Empty string when there is nothing (or the log could not be created).
+    pub fn stderr_output(&self) -> String {
+        let Some(log) = &self.stderr_log else {
+            return String::new();
+        };
+        let Ok(bytes) = std::fs::read(log.path()) else {
+            return String::new();
+        };
+        let tail = &bytes[bytes.len().saturating_sub(2048)..];
+        String::from_utf8_lossy(tail).trim().to_string()
     }
 
     /// How long to wait for the QMP port to come up after spawn.

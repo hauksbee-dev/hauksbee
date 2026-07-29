@@ -23,6 +23,21 @@ pub trait Engine: Send + 'static {
     fn set_peripheral(&mut self, _id: &str, _value: f64) -> bool {
         false
     }
+
+    /// Smallest step worth asking this engine for, in simulated seconds.
+    ///
+    /// An engine whose cost is dominated by a FIXED per-step price (an external
+    /// emulator advances its guest over a control socket: one round-trip costs
+    /// tens of milliseconds of wall time whatever slice of guest time it buys)
+    /// gets no cheaper as the step shrinks, so the sim loop's "pace by taking
+    /// smaller steps" degrades into paying full price for nothing. Reporting a
+    /// floor here tells the loop to spend longer than one tick on a step
+    /// instead of shrinking it below the point where the overhead dominates.
+    /// Zero (the default) means the engine has no such price and may be paced
+    /// arbitrarily fine.
+    fn min_step_dt(&self) -> f64 {
+        0.0
+    }
 }
 
 /// Demo engine: an emulated AVR running real firmware with a synthetic

@@ -84,6 +84,7 @@
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/qemu.md.
 
+mod flashimage;
 mod gdb;
 pub mod install;
 mod process;
@@ -413,6 +414,69 @@ fn validate_flash_image_arch(flash_image: &Path, expected: u16, mcu_label: &str)
     crate::elf::validate_arch(report, expected, mcu_label)
 }
 
+/// `s` unless it is empty, else the fallback: error messages that embed a
+/// captured stderr must say "nothing" rather than trail off into blank space.
+fn nonempty_or<'a>(s: &'a str, fallback: &'a str) -> &'a str {
+    if s.is_empty() {
+        fallback
+    } else {
+        s
+    }
+}
+
+/// Refuse a merged flash image whose 2nd-stage bootloader is not at the offset
+/// this machine's ROM reads (0x1000 on esp32/esp32s2, 0x0 on esp32s3/esp32c3).
+///
+/// Why: booting such an image does not error, the ROM just loops printing
+/// "invalid header: 0xffffffff" on UART forever, and the co-sim's failure then
+/// surfaces minutes later as an opaque control-channel timeout. The classic way
+/// to hit it is an image merged for one ESP32 family member run on a board that
+/// binds another (e.g. a classic-esp32 image, bootloader at 0x1000, on an
+/// ESP32-S3 board whose ROM reads 0x0); when the bootloader IS present at the
+/// other family's offset, the error says exactly that.
+fn validate_bootloader_magic(image: &Path, machine: &str) -> Result<()> {
+    use std::io::{Read, Seek, SeekFrom};
+    /// First byte of every ESP image (bootloader or app): the esptool magic.
+    const ESP_IMAGE_MAGIC: u8 = 0xE9;
+
+    let offset = flashimage::bootloader_offset(machine);
+    let mut f = std::fs::File::open(image)
+        .with_context(|| format!("opening flash image {}", image.display()))?;
+    let len = f.metadata().map(|m| m.len()).unwrap_or(0);
+    let mut byte_at = |off: u64| -> Option<u8> {
+        if off >= len {
+            return None;
+        }
+        let mut b = [0u8; 1];
+        f.seek(SeekFrom::Start(off)).ok()?;
+        f.read_exact(&mut b).ok()?;
+        Some(b[0])
+    };
+    if byte_at(offset) == Some(ESP_IMAGE_MAGIC) {
+        return Ok(());
+    }
+    let other_offset = if offset == 0x1000 { 0x0 } else { 0x1000 };
+    let hint = if byte_at(other_offset) == Some(ESP_IMAGE_MAGIC) {
+        format!(
+            "It DOES have one at {other_offset:#x}, so it looks like an image \
+             merged for a different ESP32 family member; rebuild it for this \
+             chip (idf.py set-target, then merge with the bootloader at \
+             {offset:#x})."
+        )
+    } else {
+        "It does not look like an esptool merged flash image at all; pass the \
+         app .elf your build produced instead (hauksbee builds the bootable \
+         image from it), or produce a merged image with esptool merge_bin."
+            .to_string()
+    };
+    bail!(
+        "flash image {} has no bootloader at offset {offset:#x}, where the \
+         '{machine}' ROM boots from, so it would boot-loop on an invalid \
+         header instead of running. {hint}",
+        image.display()
+    );
+}
+
 /// Allocate three distinct free TCP ports (QMP, gdbstub, UART), holding all
 /// listeners until every number is read so the OS cannot reissue one to
 /// another. QEMU binds each shortly after we release them.
@@ -484,6 +548,10 @@ pub struct QemuBackend {
     gdb: Option<GdbStub>,
     uart: UartSocket,
     _process: QemuProcess,
+    /// When the caller handed us a bare app ELF, this is the merged flash
+    /// image built from it (see [`flashimage`]); QEMU boots from this file, so
+    /// it must live exactly as long as the process does.
+    _flash_temp: Option<tempfile::NamedTempFile>,
 
     /// Last-read OUT register per bank letter, for edge synthesis.
     last_out: HashMap<char, u32>,
@@ -539,40 +607,67 @@ pub struct QemuBackend {
 }
 
 impl QemuBackend {
-    /// Boot an Espressif QEMU machine from `config` running the merged flash
-    /// image at `flash_image`, and connect the QMP, gdbstub, and UART channels.
+    /// Boot an Espressif QEMU machine from `config` running the firmware at
+    /// `flash_image`, and connect the QMP, gdbstub, and UART channels.
     ///
     /// Unlike the Renode backend (which loads firmware via a Monitor command
-    /// after the machine is up), QEMU boots from the flash image given on the
-    /// command line, so the image path is needed at spawn time. The image is the
-    /// merged 2nd-stage bootloader + partition table + app produced by
-    /// `esptool merge_bin` (see testdata/firmware/esp32_blinky/build.sh).
+    /// after the machine is up), QEMU boots from a merged flash image
+    /// (2nd-stage bootloader + partition table + app, the `esptool merge_bin`
+    /// layout) given on the command line, so the image path is needed at spawn
+    /// time. Two input shapes are accepted:
+    ///
+    /// - a merged flash image (`flash.bin`): booted as-is, after a check that
+    ///   its bootloader sits where THIS chip's ROM reads it (a wrong-chip
+    ///   image otherwise boot-loops forever with no diagnostic);
+    /// - a bare app ELF, the artifact a user's build actually produces: the
+    ///   merged image is built from it in-process (see [`flashimage`]) with
+    ///   the default bootloader + partition table, exactly what
+    ///   `esptool merge_bin` would have produced on the build machine.
     pub fn new(config: QemuConfig, flash_image: &Path) -> Result<Self> {
         if !flash_image.exists() {
             bail!(
-                "ESP32 flash image not found: {}. Build it with esp-idf and \
-                 esptool merge_bin (see testdata/firmware/esp32_blinky/build.sh).",
+                "ESP32 firmware not found: {}. Pass the app .elf your build \
+                 produced, or a merged flash image (esptool merge_bin; see \
+                 testdata/firmware/esp32_blinky/build.sh).",
                 flash_image.display()
             );
         }
 
         // Arch gate (BEFORE spawning QEMU): the persona-esp32-iot hunt loaded an
         // Xtensa image onto a RISC-V ESP32-C3 and got 136 MB of UART garbage with
-        // no error. QEMU boots from the merged `.bin`, which is raw and carries no
-        // ISA, so we cannot check the flash image directly, but the esp-idf build
-        // emits the app ELF (which DOES carry e_machine) right beside it. If the
-        // image itself is an ELF, check it; otherwise check a sibling app ELF if
-        // one is present. A raw `.bin` with no sibling ELF is left unchecked
-        // (we never false-error), but the common build layout (flash.bin next to
-        // <name>.elf) is now caught.
-        validate_flash_image_arch(flash_image, config.expected_e_machine, &config.mcu_label)?;
+        // no error. An ELF carries its ISA; a merged `.bin` is raw, so for those
+        // we check a sibling app ELF when one exists (see
+        // `validate_flash_image_arch`), and never false-error otherwise.
+        let is_elf = crate::elf::read_e_machine(flash_image)?.is_some();
+        let (boot_image, flash_temp) = if is_elf {
+            crate::elf::validate_arch(flash_image, config.expected_e_machine, &config.mcu_label)?;
+            // A bare ELF is NOT bootable by QEMU (its flash model takes only
+            // 2/4/8/16 MB raw images, and the ROM wants an image header, not
+            // an ELF header). Build the real merged image from it.
+            let tmp = flashimage::merged_image_from_elf(flash_image, &config.machine)
+                .with_context(|| {
+                    format!(
+                        "building a bootable flash image from {}",
+                        flash_image.display()
+                    )
+                })?;
+            (tmp.path().to_path_buf(), Some(tmp))
+        } else {
+            validate_flash_image_arch(flash_image, config.expected_e_machine, &config.mcu_label)?;
+            // Refuse an image whose bootloader is not where this chip's ROM
+            // will look, BEFORE spawning: booted anyway, the ROM loops on
+            // "invalid header: 0xffffffff" forever and the failure would
+            // surface much later as an opaque control-channel error.
+            validate_bootloader_magic(flash_image, &config.machine)?;
+            (flash_image.to_path_buf(), None)
+        };
 
         let (qmp_port, gdb_port, uart_port) = free_port_triple()?;
 
         let mut process = QemuProcess::spawn(
             config.arch,
             &config.machine,
-            flash_image,
+            &boot_image,
             config.icount_shift,
             qmp_port,
             uart_port,
@@ -582,18 +677,43 @@ impl QemuBackend {
         // connect using `human-monitor-command gdbserver`, which attaches a stub
         // without restarting. That keeps the spawn argument list stable.
 
-        // Give QEMU a moment; if it died immediately the image/args were bad.
+        // Give QEMU a moment; if it died immediately the image/args were bad,
+        // and its own stderr says why (bad drive size, unknown machine, ...).
         std::thread::sleep(Duration::from_millis(150));
         if process.has_exited() {
             bail!(
-                "Espressif QEMU exited immediately booting {}. The image or \
-                 machine '{}' was rejected.",
+                "Espressif QEMU exited immediately booting {} on machine '{}'. \
+                 QEMU said: {}",
                 flash_image.display(),
-                config.machine
+                config.machine,
+                nonempty_or(&process.stderr_output(), "(nothing on stderr)"),
             );
         }
 
-        let mut qmp = Qmp::connect(("127.0.0.1", qmp_port), QemuProcess::startup_timeout())?;
+        let mut qmp = match Qmp::connect(("127.0.0.1", qmp_port), QemuProcess::startup_timeout()) {
+            Ok(q) => q,
+            Err(e) => {
+                // Losing the control socket almost always means QEMU died
+                // between the spawn check and the handshake; report the death
+                // and QEMU's stderr rather than the raw socket error.
+                if process.has_exited() {
+                    bail!(
+                        "Espressif QEMU exited while booting {} on machine '{}'. \
+                         QEMU said: {}",
+                        flash_image.display(),
+                        config.machine,
+                        nonempty_or(&process.stderr_output(), "(nothing on stderr)"),
+                    );
+                }
+                return Err(e).with_context(|| {
+                    format!(
+                        "connecting to the QEMU control (QMP) socket for machine \
+                         '{}'; the emulator is running but did not answer",
+                        config.machine
+                    )
+                });
+            }
+        };
         qmp.set_timeout(Duration::from_secs(20));
         // The guest is running at boot; pause it so the first chunk starts from a
         // known stopped state (the lockstep is cont -> window -> stop).
@@ -623,6 +743,7 @@ impl QemuBackend {
             gdb,
             uart,
             _process: process,
+            _flash_temp: flash_temp,
             last_out,
             in_shadow,
             active_ports: None,
