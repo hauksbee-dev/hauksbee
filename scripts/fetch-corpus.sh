@@ -116,7 +116,13 @@ fetch_git() {
     # instead and check out the pinned revision by name. Checking out
     # FETCH_HEAD here would silently land on the default branch head, which
     # looks like success and quietly discards the pin.
-    git -C "$dest.partial" fetch -q --tags origin || return 1
+    #
+    # The refspec is explicit on purpose. This repo was made by `git init`, so
+    # it has no configured remote.fetch, and a bare `fetch --tags origin`
+    # brings back tags and NOT ONE BRANCH. The checkout then failed with
+    # "pathspec did not match", which reads like a moved upstream rather than
+    # our own missing refspec, and it took out 16 of 28 boards.
+    git -C "$dest.partial" fetch -q origin '+refs/heads/*:refs/remotes/origin/*' --tags || return 1
     git -C "$dest.partial" checkout -q "$rev" || return 1
   fi
 
