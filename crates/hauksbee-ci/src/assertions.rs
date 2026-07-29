@@ -431,10 +431,115 @@ fn check_seed(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         "rail_window" => check_rail_window(a, out),
         "protection_trip" => check_protection_trip(a, out),
         "boot-coverage" => check_boot_coverage(a, out),
+        "model_coverage" => check_model_coverage(a, out),
         "phase_margin" => check_phase_margin(a, out),
         "ac_gain" => check_ac_gain(a, out),
         other => (false, format!("unknown assertion kind '{other}'")),
     }
+}
+
+/// model_coverage: hold the line on how much of the board bound to a real model.
+///
+/// The failure text names the parts rather than only the shortfall, because the
+/// list IS the user's next action: each name is either a model to write (the
+/// extending guides take one TOML file) or a part whose vendor keeps its model
+/// encrypted, and those two need different responses.
+fn check_model_coverage(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, String) {
+    let Some(bind) = out.bind.as_ref() else {
+        return (
+            false,
+            "no bind summary was captured for this run, so coverage cannot be judged".to_string(),
+        );
+    };
+
+    let mut checks: Vec<(bool, String)> = Vec::new();
+
+    if let Some(floor) = a.min_critical {
+        // A board with no active ICs has nothing to bind. Reading that as 100%
+        // would let the assertion pass on a board it never looked at, so it
+        // fails and says which case it is.
+        if bind.critical_parts_total == 0 {
+            checks.push((
+                false,
+                "min_critical was set, but the board has no active ICs to bind".to_string(),
+            ));
+        } else {
+            let got = bind.critical_parts_bound_n as f64 / bind.critical_parts_total as f64;
+            checks.push((
+                got >= floor,
+                format!(
+                    "active ICs bound {} ({:.1}%), floor {:.1}%",
+                    bind.critical_parts_bound,
+                    got * 100.0,
+                    floor * 100.0
+                ),
+            ));
+        }
+    }
+
+    if let Some(floor) = a.min_resolved {
+        if bind.non_ignored == 0 {
+            checks.push((
+                false,
+                "min_resolved was set, but the board has no simulatable parts".to_string(),
+            ));
+        } else {
+            let got = bind.resolved as f64 / bind.non_ignored as f64;
+            checks.push((
+                got >= floor,
+                format!(
+                    "parts bound {}/{} ({:.1}%), floor {:.1}%",
+                    bind.resolved,
+                    bind.non_ignored,
+                    got * 100.0,
+                    floor * 100.0
+                ),
+            ));
+        }
+    }
+
+    if let Some(ceiling) = a.max_active_unresolved {
+        let n = bind.active_path_unresolved.len();
+        let named: Vec<&str> = bind
+            .active_path_unresolved
+            .iter()
+            .take(8)
+            .map(|u| u.reference.as_str())
+            .collect();
+        let tail = if n > named.len() {
+            format!(" and {} more", n - named.len())
+        } else {
+            String::new()
+        };
+        checks.push((
+            n <= ceiling,
+            if n == 0 {
+                "no unresolved parts on connected nets".to_string()
+            } else {
+                format!(
+                    "{n} unresolved on connected nets (limit {ceiling}): {}{tail}",
+                    named.join(", ")
+                )
+            },
+        ));
+    }
+
+    if checks.is_empty() {
+        return (
+            false,
+            "model_coverage needs at least one of min_critical, min_resolved or \
+             max_active_unresolved; an assertion with no threshold checks nothing"
+                .to_string(),
+        );
+    }
+
+    let passed = checks.iter().all(|(ok, _)| *ok);
+    let detail = checks
+        .into_iter()
+        .map(|(_, d)| d)
+        .collect::<Vec<_>>()
+        .join("; ");
+    (passed, detail)
 }
 
 /// rail_window: judge a rail's behaviour over a scenario window: min/max bounds,
@@ -1268,9 +1373,134 @@ fn truncate(s: &str, max: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        all_green_detail, boot_below_threshold_msg, check_protection_trip, key_belongs_to_ref,
+        all_green_detail, boot_below_threshold_msg, check_model_coverage, check_protection_trip,
+        key_belongs_to_ref,
     };
     use crate::tolerance::Mode;
+
+    mod model_coverage {
+        use super::check_model_coverage;
+        use crate::runner::RunOutcome;
+        use crate::spec::Assertion;
+        use hauksbee_engine::result::{BindSummary, UnresolvedActive};
+
+        /// A board where 3 of 4 active ICs bound and one unresolved part sits
+        /// on a connected net: the shape a real partly-modelled board has.
+        fn partly_bound() -> BindSummary {
+            BindSummary {
+                resolved: 40,
+                unresolved: 10,
+                non_ignored: 50,
+                critical_parts_bound: "3/4".to_string(),
+                critical_parts_bound_n: 3,
+                critical_parts_total: 4,
+                mcu_bound: true,
+                active_path_unresolved: vec![UnresolvedActive {
+                    reference: "U7".to_string(),
+                    value: "LTC4020".to_string(),
+                    reason: "no model".to_string(),
+                    consequence: "open circuit".to_string(),
+                    active_ic: true,
+                }],
+                resolved_but_open_active: vec![],
+            }
+        }
+
+        fn assertion(f: impl FnOnce(&mut Assertion)) -> Assertion {
+            let mut a = Assertion {
+                kind: "model_coverage".to_string(),
+                ..Default::default()
+            };
+            f(&mut a);
+            a
+        }
+
+        fn outcome(bind: Option<BindSummary>) -> RunOutcome {
+            RunOutcome {
+                bind,
+                ..Default::default()
+            }
+        }
+
+        #[test]
+        fn critical_floor_fails_when_an_active_ic_is_missing() {
+            let (passed, detail) = check_model_coverage(
+                &assertion(|a| a.min_critical = Some(0.9)),
+                &outcome(Some(partly_bound())),
+            );
+            assert!(!passed, "3 of 4 active ICs is below a 90% floor: {detail}");
+            assert!(
+                detail.contains("3/4"),
+                "detail must show the ratio: {detail}"
+            );
+        }
+
+        #[test]
+        fn critical_floor_passes_at_the_boundary() {
+            let (passed, detail) = check_model_coverage(
+                &assertion(|a| a.min_critical = Some(0.75)),
+                &outcome(Some(partly_bound())),
+            );
+            assert!(passed, "3/4 meets a 75% floor exactly: {detail}");
+        }
+
+        #[test]
+        fn unresolved_on_a_connected_net_is_named_not_just_counted() {
+            let (passed, detail) = check_model_coverage(
+                &assertion(|a| a.max_active_unresolved = Some(0)),
+                &outcome(Some(partly_bound())),
+            );
+            assert!(!passed, "one unresolved part exceeds a limit of 0");
+            assert!(
+                detail.contains("U7"),
+                "the part list is the user's next action: {detail}"
+            );
+        }
+
+        #[test]
+        fn an_empty_board_cannot_pass_a_critical_floor() {
+            // 0 of 0 is not 100%. Reading it that way would let the assertion
+            // vouch for a board it never looked at.
+            let mut bind = partly_bound();
+            bind.critical_parts_total = 0;
+            bind.critical_parts_bound_n = 0;
+            let (passed, detail) = check_model_coverage(
+                &assertion(|a| a.min_critical = Some(0.9)),
+                &outcome(Some(bind)),
+            );
+            assert!(
+                !passed,
+                "a board with no active ICs must not pass: {detail}"
+            );
+        }
+
+        #[test]
+        fn a_run_without_bind_data_fails_rather_than_passing_blind() {
+            let (passed, detail) =
+                check_model_coverage(&assertion(|a| a.min_critical = Some(0.5)), &outcome(None));
+            assert!(
+                !passed,
+                "no bind data means no answer, not a green: {detail}"
+            );
+        }
+
+        #[test]
+        fn every_threshold_must_hold_not_just_one() {
+            // min_resolved passes (40/50 = 80%) while min_critical fails, so the
+            // assertion as a whole must fail.
+            let (passed, detail) = check_model_coverage(
+                &assertion(|a| {
+                    a.min_resolved = Some(0.75);
+                    a.min_critical = Some(0.99);
+                }),
+                &outcome(Some(partly_bound())),
+            );
+            assert!(
+                !passed,
+                "one failing threshold fails the assertion: {detail}"
+            );
+        }
+    }
 
     #[test]
     fn protection_trip_empty_scenario_is_run_wide_like_unset() {
@@ -1285,6 +1515,7 @@ mod tests {
             let mut protection_tripped = HashMap::new();
             protection_tripped.insert("BATT".to_string(), false);
             RunOutcome {
+                bind: None,
                 seed: 0,
                 windows: HashMap::new(),
                 uart: HashMap::new(),
@@ -1359,6 +1590,7 @@ mod tests {
                 },
             );
             RunOutcome {
+                bind: None,
                 seed,
                 windows,
                 uart: HashMap::new(),
@@ -1718,6 +1950,7 @@ mod tests {
             let mut rail_windows = HashMap::new();
             rail_windows.insert(("load".to_string(), "VBUS".to_string()), win);
             RunOutcome {
+                bind: None,
                 seed: 0,
                 windows: HashMap::new(),
                 uart: HashMap::new(),
@@ -1795,6 +2028,7 @@ mod tests {
             peak_temp_c.insert("SW1_q1".to_string(), 100.0);
             peak_temp_c.insert("SW1_q3".to_string(), 100.0);
             RunOutcome {
+                bind: None,
                 seed: 0,
                 windows: HashMap::new(),
                 uart: HashMap::new(),
@@ -1862,6 +2096,7 @@ mod tests {
             protection_tripped_scoped.insert(("inrush".to_string(), "BATT".to_string()), true);
             protection_tripped_scoped.insert(("steady".to_string(), "BATT".to_string()), false);
             RunOutcome {
+                bind: None,
                 seed: 0,
                 windows: HashMap::new(),
                 uart: HashMap::new(),

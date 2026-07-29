@@ -351,7 +351,7 @@
           "default": null
         },
         "kind": {
-          "description": "Assertion kind. `voltage`: net stays in [min, max]. `uart`: output\ncontains/matches. `toggle`: net toggles at `freq_hz` or >= `min_toggles`.\n`no_faults`: no stress faults raised. `max_current`: I(ref) <= amps.\n`max_temp`: Tj(ref) <= celsius (or device max). `peripheral`: peripheral\nstate check. `rail_window`: rail dip/recovery bounds over a scenario\nwindow. `protection_trip`: battery protection trips (or must not).\n`boot-coverage`: a control net is driven to `min` volts within\n`deadline_ms` of reset. `phase_margin` / `ac_gain`: small-signal loop\nchecks (need an `[ac]` block). `hwtrace`: the run reproduces a captured\nhardware trace.",
+          "description": "Assertion kind. `voltage`: net stays in [min, max]. `uart`: output\ncontains/matches. `toggle`: net toggles at `freq_hz` or >= `min_toggles`.\n`no_faults`: no stress faults raised. `max_current`: I(ref) <= amps.\n`max_temp`: Tj(ref) <= celsius (or device max). `peripheral`: peripheral\nstate check. `rail_window`: rail dip/recovery bounds over a scenario\nwindow. `protection_trip`: battery protection trips (or must not).\n`boot-coverage`: a control net is driven to `min` volts within\n`deadline_ms` of reset. `phase_margin` / `ac_gain`: small-signal loop\nchecks (need an `[ac]` block). `hwtrace`: the run reproduces a captured\nhardware trace. `model_coverage`: enough of the board bound to a real\ndevice model.",
           "type": "string",
           "enum": [
             "voltage",
@@ -366,7 +366,8 @@
             "boot-coverage",
             "phase_margin",
             "ac_gain",
-            "hwtrace"
+            "hwtrace",
+            "model_coverage"
           ]
         },
         "matches": {
@@ -386,6 +387,16 @@
           "format": "double",
           "default": null
         },
+        "max_active_unresolved": {
+          "description": "model_coverage: how many unresolved parts may sit on a connected net.\nThese are the ones whose open default actually changes the solve, so 0\nis the meaningful setting on a board you trust.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint",
+          "default": null,
+          "minimum": 0
+        },
         "mcu": {
           "description": "Which MCU's UART (by reference). Defaults to all MCUs concatenated.",
           "type": [
@@ -396,6 +407,24 @@
         },
         "min": {
           "description": "Lower bound (volts / dB / degrees / peripheral field). Voltage-class\nassertions need at least one of `min`/`max`.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "min_critical": {
+          "description": "model_coverage: the minimum fraction (0.0 to 1.0) of active ICs that\nmust bind to a real model. This is the metric that matters: an\nunbound regulator changes the answer, an unbound 0402 resistor\nusually does not.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
+        "min_resolved": {
+          "description": "model_coverage: the minimum fraction (0.0 to 1.0) of all non-ignored\nparts that must bind. Coarser than `min_critical`, and useful as a\nboard-wide trend line.",
           "type": [
             "number",
             "null"

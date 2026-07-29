@@ -200,6 +200,14 @@ pub struct RunOutcome {
     /// heuristic tier is documented actively wrong (merges two transactions in
     /// one chunk; truncates a boundary-spanning one).
     pub spi_framing: HashMap<String, String>,
+    /// How much of the board bound to a real device model, from the binder.
+    ///
+    /// Analogue accuracy is capped by model availability, and part of that cap
+    /// sits outside the project: vendors encrypt SPICE and IBIS models. So the
+    /// number a board reaches has to be visible and gateable rather than a line
+    /// in a report, or coverage falls silently the day a new part lands.
+    /// `None` only in test-constructed outcomes, never in a real run.
+    pub bind: Option<hauksbee_engine::result::BindSummary>,
 }
 
 /// The shared AC analysis outcome attached to every seed's run.
@@ -1283,6 +1291,9 @@ fn run_one(
         protection_tripped,
         protection_tripped_scoped,
         ambient_c: spec.ambient_c,
+        bind: Some(hauksbee_engine::result::BindSummary::from_report(
+            engine.report(),
+        )),
         sim_ms: engine.scheduler().sim_time * 1000.0,
         boot_first_cross_ms,
         boot_drop_after_cross_ms,
