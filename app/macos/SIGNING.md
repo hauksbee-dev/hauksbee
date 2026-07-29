@@ -1,16 +1,18 @@
 # Signing and notarisation status
 
-Release builds of Hauksbee.app are currently **unsigned and not notarised**.
-macOS Gatekeeper will therefore warn on first launch that the app is from an
-unidentified developer. This is expected and honest: we do not fake,
-self-sign, or strip quarantine on the user's behalf.
+Release builds of Hauksbee.app are **signed with a Developer ID identity and
+notarised** (ticket stapled), so a normal download opens with a plain
+double-click and no Gatekeeper warning. `spctl --assess --type execute` on a
+quarantined release bundle reports `accepted, source=Notarized Developer ID`.
 
-The plumbing for signing IS in place: `build-app.sh` signs and notarises when
-given credentials (see "How to produce a signed build" below). What is missing
-is the credentials themselves, in the keychain of whatever machine or CI
-runner builds the release.
+`build-app.sh` does the signing and notarisation when given credentials (see
+"How to produce a signed build" below; the release flow uses the `notary`
+notarytool keychain profile). A build made WITHOUT credentials is unsigned and
+Gatekeeper will warn on first launch; that is expected for local dev builds
+and honest: we do not fake, self-sign, or strip quarantine on the user's
+behalf.
 
-## What users do today
+## What users of an unsigned dev build do
 
 First launch only:
 

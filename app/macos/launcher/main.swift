@@ -38,6 +38,15 @@ final class LauncherDelegate: NSObject, NSApplicationDelegate {
         let proc = Process()
         proc.executableURL = bin
         proc.arguments = ["serve"]
+        // Belt and braces for the quit path: applicationWillTerminate SIGTERMs
+        // the child on a normal Quit, but a raw SIGTERM/SIGKILL to the
+        // launcher itself never reaches the delegate, and the child then
+        // serves on as an orphan. This env var tells serve to watch its parent
+        // and exit when the launcher is gone. Opt-in per spawn, so a terminal
+        // user's backgrounded `hauksbee serve` is never affected.
+        var env = ProcessInfo.processInfo.environment
+        env["HAUKSBEE_EXIT_WITH_PARENT"] = String(ProcessInfo.processInfo.processIdentifier)
+        proc.environment = env
         // Pipes, not the launcher's (nonexistent) TTY: serve sees a non-TTY
         // stdout and auto-opens the browser at whatever port it really bound.
         proc.standardInput = FileHandle.nullDevice
