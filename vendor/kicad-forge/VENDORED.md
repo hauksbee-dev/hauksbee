@@ -1,42 +1,48 @@
-# Vendored: kicad-forge forge-* crates
+# Vendored: the kicad-forge forge-* crates
 
-This directory is a vendored copy of three crates from the sibling `kicad-forge`
-repository. They are vendored so that a fresh clone of this repo builds with no
-external sibling checkout and no network access.
+This directory holds three crates that make up `kicad-forge`, the KiCad file
+layer hauksbee reads and writes boards through. They are vendored rather than
+depended on, so a fresh clone of this repo builds with no sibling checkout and
+no network access.
 
-## Why vendored (and not a git dependency)
+`kicad-forge` has no public repository. Hauksbee is where it is used, and this
+directory is its source of record: edit the crates here, and the update
+procedure below is history rather than a live import path.
 
-The workspace previously declared these as path dependencies on
-`../kicad-forge/crates/*`, a sibling repo that exists only on the author's
+## Why vendored (and not a dependency)
+
+The workspace once declared these as path dependencies on
+`../kicad-forge/crates/*`, a sibling repo that existed only on the author's
 machine. Cargo loads every workspace member manifest during `cargo metadata`,
 so a clone without that sibling failed before any build could start, even for
-crates that never touch board-as-code. This was the number-one adoption blocker.
+crates that never touch board-as-code. This was the number-one adoption
+blocker.
 
-A git dependency was rejected: the exact forge sources hauksbee builds against
-live on an unpushed local branch of kicad-forge and are not reachable from any
-public ref, so a `rev`-pinned git dep could not fetch them on a clean clone.
-Vendoring captures the exact sources, builds offline, and is deterministic.
+A git dependency does not solve it either. The exact forge sources hauksbee
+builds against live on an unpushed branch and are not reachable from any
+public ref, so a `rev`-pinned git dependency could not fetch them on a clean
+clone. Vendoring captures the exact sources, builds offline, and is
+deterministic.
 
-## Source
+## Provenance
 
-- Repository: https://github.com/ETM-Code/kicad-forge.git
-- Commit: `d3f1a18293387e721dddaa2f93af8c34d0eb3691`
-  (branch `feat/decompile-board-example`)
-- License: Apache-2.0 (relicensed with this workspace; the upstream sibling repo is the same author)
+- Imported from commit `d3f1a18293387e721dddaa2f93af8c34d0eb3691`
+  (branch `feat/decompile-board-example`) of the private kicad-forge checkout.
+- License: Apache-2.0, matching this workspace. The upstream is the same
+  author, so the relicense needed no third-party permission.
 
-## What was and was not copied
-
-Copied, per crate: `Cargo.toml` and the full `src/` tree. Not copied: `tests/`,
-`examples/`, and their fixtures (hauksbee links the libraries, not the test or
-example targets). The `[[test]]` targets were removed from
-`crates/forge-model/Cargo.toml` accordingly. Nothing else was edited.
+Copied, per crate: `Cargo.toml` and the full `src/` tree. Not copied:
+`tests/`, `examples/`, and their fixtures, since hauksbee links the libraries
+rather than the test or example targets. The `[[test]]` targets were removed
+from `crates/forge-model/Cargo.toml` accordingly. Nothing else was edited.
 
 External crate dependencies: only `thiserror` (crates.io), used by
 `forge-model`. The three crates otherwise depend on each other and std.
 
-## Update procedure
+## Re-importing from a kicad-forge checkout
 
-When the upstream forge crates change and hauksbee needs the new version:
+Kept for the maintainer, who still has one. Everyone else edits the crates
+here directly.
 
 1. In a kicad-forge checkout, note the commit: `git -C <kicad-forge> rev-parse HEAD`.
 2. From this repo root, re-copy the sources:
@@ -48,10 +54,14 @@ When the upstream forge crates change and hauksbee needs the new version:
      cp "$SRC/crates/$c/Cargo.toml" "vendor/kicad-forge/crates/$c/Cargo.toml"
    done
    ```
-3. Re-strip the `[[test]]` targets from `crates/forge-model/Cargo.toml` (they
-   reference `tests/` files that are not vendored).
-4. Update the commit hash in this file.
+3. Re-strip the `[[test]]` targets from `crates/forge-model/Cargo.toml`. They
+   reference `tests/` files that are not vendored.
+4. Update the commit hash above.
 5. Verify: `cargo build -p hauksbee-engine && cargo test -p hauksbee-extract`.
+
+Re-importing overwrites any edit made here, so a change that should last needs
+to go into both places, or into this directory alone once the checkout is
+retired.
 
 ## Local forge development
 
