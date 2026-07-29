@@ -7,7 +7,7 @@ clear before it lands.
 ## Getting a build
 
 ```bash
-git clone https://github.com/ETM-Code/hauksbee
+git clone https://github.com/hauksbee-dev/hauksbee
 cd hauksbee
 cargo build --workspace
 ```

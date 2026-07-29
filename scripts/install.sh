@@ -107,8 +107,14 @@ else
   info "  export PATH=\"$BINDIR:\$PATH\""
 fi
 printf '\n'
-ok "Everything is current: web UI (frontend/dist) + hauksbee + hauksbee-ci."
-info "  Re-run this script any time (e.g. after 'git pull') to rebuild them all."
+# Layout-aware closing line: "frontend/dist" is checkout-speak that means
+# nothing to a bundle user, whose web UI is embedded in the binary.
+if [ "$DO_BUILD" -eq 1 ]; then
+  ok "Everything is current: web UI (frontend/dist) + hauksbee + hauksbee-ci."
+  info "  Re-run this script any time (e.g. after 'git pull') to rebuild them all."
+else
+  ok "Installed: hauksbee + hauksbee-ci (the web UI is embedded; \`hauksbee serve\` opens it)."
+fi
 printf '\n'
 log "Done. Verify with:"
 # The example paths differ per layout: a checkout keeps them under crates/,

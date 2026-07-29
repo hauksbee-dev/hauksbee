@@ -37,7 +37,7 @@ while [ $# -gt 0 ]; do
 done
 
 VERSION_BARE="${TAG#v}"
-REPO="ETM-Code/hauksbee"
+REPO="hauksbee-dev/hauksbee"
 OS="$(uname -s)"; ARCH="$(uname -m)"
 TARGET="$(echo "$OS" | tr '[:upper:]' '[:lower:]')-${ARCH}"
 ASSET="hauksbee-${VERSION_BARE}-${TARGET}"

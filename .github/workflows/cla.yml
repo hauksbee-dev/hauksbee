@@ -27,6 +27,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           path-to-signatures: signatures/cla.json
-          path-to-document: https://github.com/ETM-Code/hauksbee/blob/main/CLA.md
+          path-to-document: https://github.com/hauksbee-dev/hauksbee/blob/main/CLA.md
           branch: cla-signatures
           allowlist: ETM-Code,dependabot[bot]

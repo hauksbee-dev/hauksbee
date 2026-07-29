@@ -305,7 +305,7 @@ first-contribution shape: it is self-contained, the definition of done is
 mechanical, and an agent can drive most of it. If you have Windows and an agent
 (Claude Code, Codex, or similar), this prompt is a working starting point:
 
-> Port hauksbee (github.com/ETM-Code/hauksbee) to Windows. Clone it, install a
+> Port hauksbee (github.com/hauksbee-dev/hauksbee) to Windows. Clone it, install a
 > stable MSVC Rust toolchain (add the target to the toolchain rust-toolchain.toml
 > pins), and confirm `cargo build --workspace --no-default-features --features
 > renode,qemu` compiles cleanly. The cross-compile baseline in section 5 says

@@ -73,7 +73,7 @@ const REF_KINDS = ['max_current', 'max_temp']
 // The published GitHub action, pinned to a release tag (the version in
 // Cargo.toml), never a moving branch: a workflow generated today must not
 // change behavior when main moves. Bump on each hauksbee release.
-const ACTION_REF = 'ETM-Code/hauksbee/integrations/github-action@v0.1.0'
+const ACTION_REF = 'hauksbee-dev/hauksbee/integrations/github-action@v0.1.0'
 
 interface CheckResult {
   label: string

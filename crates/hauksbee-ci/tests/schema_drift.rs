@@ -21,7 +21,7 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 
 /// The published `$id`; kept from the original hand-written schema.
-const SCHEMA_ID: &str = "https://github.com/ETM-Code/hauksbee/editors/vscode-hauksbee-board/schemas/hauksbee-ci-spec.schema.json";
+const SCHEMA_ID: &str = "https://github.com/hauksbee-dev/hauksbee/editors/vscode-hauksbee-board/schemas/hauksbee-ci-spec.schema.json";
 
 const REGEN: &str = "UPDATE_SPEC_SCHEMA=1 cargo test -p hauksbee-ci --test schema_drift";
 

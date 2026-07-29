@@ -13,7 +13,7 @@ now fails a test instead.
 
 **On a Mac, no terminal needed:** download `Hauksbee.app` (the
 `hauksbee-<version>-darwin-<arch>-app.zip` asset) from the
-[releases page](https://github.com/ETM-Code/hauksbee/releases). Unzip it and
+[releases page](https://github.com/hauksbee-dev/hauksbee/releases). Unzip it and
 double-click it. Your browser opens on the drop-zone. Drop a board and read
 the report. The app is signed and notarised, so it opens without Gatekeeper
 warnings (signing details:
@@ -25,7 +25,7 @@ users take the installer line below.
 **From a terminal**, use either the one-line installer:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ETM-Code/hauksbee/main/scripts/get-hauksbee.sh | bash
+curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
 ```
 
 or one command that builds and installs both binaries from a checkout, then

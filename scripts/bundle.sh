@@ -171,41 +171,6 @@ if [ "$DO_BUILD" -eq 1 ]; then
   fi
   ( cd "$HAUKSBEE_ROOT" && "$CARGO" build --release -p hauksbee-engine -p hauksbee-ci "${FEATURE_ARGS[@]}" )
 
-  # ── prove the shape before packaging it ────────────────────────────────────
-  # Each shape makes a licensing claim, and a claim nobody checks is a rumour.
-  #   default    MUST have the avr backend compiled in. If it does not, the
-  #              download labelled "AVR included, GPL-3.0" is neither, and the
-  #              biggest slice of the audience silently gets a tool that cannot
-  #              do the thing they came for.
-  #   permissive MUST NOT. If it does, GPL code ships under an Apache-2.0 label,
-  #              which is the serious direction of wrong.
-  #
-  # Ask the binary, not its symbol table. `nm` cannot answer this here: the
-  # workspace sets `strip = true` in [profile.release], so rustc strips at link
-  # time and a release binary of EITHER shape shows zero simavr symbols. That
-  # was measured, and it is why this check is behavioural. `hauksbee doctor`
-  # reports the backends the build can actually reach, and its avr line reads
-  # `builtin` only when libsimavr really linked in.
-  #
-  # hauksbee-ci has no doctor subcommand, and needs none: both binaries come out
-  # of the single cargo invocation above with the identical feature set, so they
-  # cannot disagree about `avr`.
-  shape_doctor="$("$SRC/hauksbee" doctor 2>&1 || true)"
-  avr_line="$(printf '%s\n' "$shape_doctor" | grep -E '^avr[[:space:]]' || true)"
-  [ -n "$avr_line" ] || die "shape check could not read an avr line from \`hauksbee doctor\`. Refusing to package a bundle whose licensing claim is unverified. Doctor said:
-$shape_doctor"
-  log "Shape check: $avr_line"
-  case "$SHAPE" in
-    default)
-      printf '%s' "$avr_line" | grep -qE '^avr[[:space:]]+builtin' \
-        || die "shape 'default' produced a binary with the avr backend NOT compiled in (doctor says: $avr_line). This bundle would be labelled GPL-3.0 and AVR-capable while being neither. Install libsimavr with scripts/install-sims.sh --avr, or point SIMAVR_INCLUDE_DIR/SIMAVR_LIB_DIR at an existing install."
-      ;;
-    permissive)
-      printf '%s' "$avr_line" | grep -qE '^avr[[:space:]]+disabled' \
-        || die "shape 'permissive' produced a binary with the avr backend compiled IN (doctor says: $avr_line). GPL libsimavr would ship under an Apache-2.0 label. Fix the feature graph (docs/about/release-and-licensing.md section 2); never weaken this check."
-      ;;
-  esac
-
   log "Stripping release binaries"
   for bin in hauksbee hauksbee-ci; do
     strip "$SRC/$bin" 2>/dev/null || true
@@ -214,6 +179,45 @@ fi
 for bin in hauksbee hauksbee-ci; do
   [ -x "$SRC/$bin" ] || die "$SRC/$bin missing (build first, or drop --no-build)."
 done
+
+# ── prove the shape before packaging it ──────────────────────────────────────
+# Each shape makes a licensing claim, and a claim nobody checks is a rumour.
+#   default    MUST have the avr backend compiled in. If it does not, the
+#              download labelled "AVR included, GPL-3.0" is neither, and the
+#              biggest slice of the audience silently gets a tool that cannot
+#              do the thing they came for.
+#   permissive MUST NOT. If it does, GPL code ships under an Apache-2.0 label,
+#              which is the serious direction of wrong.
+#
+# This runs on the --no-build path too, and must: --no-build packages whatever
+# binaries happen to sit in target/release, which is exactly the case where the
+# label and the binary are most likely to disagree.
+#
+# Ask the binary, not its symbol table. `nm` cannot answer this here: the
+# workspace sets `strip = true` in [profile.release], so rustc strips at link
+# time and a release binary of EITHER shape shows zero simavr symbols. That
+# was measured, and it is why this check is behavioural. `hauksbee doctor`
+# reports the backends the build can actually reach, and its avr line reads
+# `builtin` only when libsimavr really linked in.
+#
+# hauksbee-ci has no doctor subcommand, and needs none: both binaries come out
+# of a single cargo invocation with the identical feature set, so they cannot
+# disagree about `avr`.
+shape_doctor="$("$SRC/hauksbee" doctor 2>&1 || true)"
+avr_line="$(printf '%s\n' "$shape_doctor" | grep -E '^avr[[:space:]]' || true)"
+[ -n "$avr_line" ] || die "shape check could not read an avr line from \`hauksbee doctor\`. Refusing to package a bundle whose licensing claim is unverified. Doctor said:
+$shape_doctor"
+log "Shape check: $avr_line"
+case "$SHAPE" in
+  default)
+    printf '%s' "$avr_line" | grep -qE '^avr[[:space:]]+builtin' \
+      || die "shape 'default' has a binary with the avr backend NOT compiled in (doctor says: $avr_line). This bundle would be labelled GPL-3.0 and AVR-capable while being neither. Install libsimavr with scripts/install-sims.sh --avr, or point SIMAVR_INCLUDE_DIR/SIMAVR_LIB_DIR at an existing install."
+    ;;
+  permissive)
+    printf '%s' "$avr_line" | grep -qE '^avr[[:space:]]+disabled' \
+      || die "shape 'permissive' has a binary with the avr backend compiled IN (doctor says: $avr_line). GPL libsimavr would ship under an Apache-2.0 label. Fix the feature graph (docs/about/release-and-licensing.md section 2); never weaken this check."
+    ;;
+esac
 
 NAME="hauksbee-${VERSION}-${TARGET}${NAME_SUFFIX}"
 OUT_ABS="$(mkdir -p "$OUT" && cd "$OUT" && pwd)"
@@ -230,7 +234,14 @@ install -m 0755 "$SRC/hauksbee-ci" "$ROOTDIR/bin/hauksbee-ci"
 # ~/.hauksbee/models override and is handy documentation.
 cp -R "$HAUKSBEE_ROOT/crates/hauksbee-models/db" "$ROOTDIR/db"
 cp -R "$HAUKSBEE_ROOT/integrations" "$ROOTDIR/integrations"
-cp -R "$HAUKSBEE_ROOT/scripts" "$ROOTDIR/scripts"
+# Ship only the scripts a bundle USER needs (the ones README-BUNDLE names,
+# plus the helpers they source). The rest of scripts/ is maintainer tooling
+# (release mirroring, benchmarking, demo capture) that has no business in a
+# user tarball.
+mkdir -p "$ROOTDIR/scripts"
+for s in install.sh doctor.sh ci.sh install-sims.sh common.sh; do
+  install -m 0755 "$HAUKSBEE_ROOT/scripts/$s" "$ROOTDIR/scripts/$s"
+done
 # Examples: ship the specs, boards and READMEs (skip any scratch dirs).
 mkdir -p "$ROOTDIR/examples"
 cp -R "$HAUKSBEE_ROOT/crates/hauksbee-ci/examples/." "$ROOTDIR/examples/ci-specs"
@@ -292,7 +303,7 @@ WHAT THIS MEANS FOR YOU
 
 CORRESPONDING SOURCE (GPL-3.0 section 6)
   hauksbee (Apache-2.0), at the exact commit this was built from:
-    https://github.com/ETM-Code/hauksbee
+    https://github.com/hauksbee-dev/hauksbee
     commit ${GIT_SHA}
   simavr (GPL-3.0), at the pinned tag this build links:
     https://github.com/buserror/simavr
@@ -329,7 +340,7 @@ Verified, not asserted, and you can re-run the verification yourself:
 
     bin/hauksbee doctor
 
-The avr line must read \`disabled  compiled out\`. That answer is decided at
+The avr line must read \`disabled  not in this build\`. That answer is decided at
 compile time, so it cannot be true of a binary that linked libsimavr. The build
 refuses to package this shape unless it reads that way, and the release
 workflow re-checks the extracted tarball before publishing. The build also
@@ -347,7 +358,7 @@ WHAT IS NOT IN THIS BUILD
   own machine, making the combination yours rather than something anyone
   distributed to you.
 
-Source: https://github.com/ETM-Code/hauksbee  commit ${GIT_SHA}
+Source: https://github.com/hauksbee-dev/hauksbee  commit ${GIT_SHA}
 EOF
 fi
 
