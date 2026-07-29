@@ -1131,6 +1131,21 @@ impl Scheduler {
         out
     }
 
+    /// Host serial bytes dropped on their way into each MCU's UART because
+    /// even the backend's pending buffer overflowed (a host flooding a
+    /// firmware that never drains). Zero everywhere on a healthy run; report
+    /// surfaces can mirror `adc_dropped` with it. Ordered by MCU reference.
+    pub fn uart_rx_overflow(&self) -> Vec<(String, u64)> {
+        let mut out: Vec<(String, u64)> = self
+            .mcus
+            .iter()
+            .map(|m| (m.binding.reference.clone(), m.core.uart_rx_overflow()))
+            .filter(|(_, n)| *n > 0)
+            .collect();
+        out.sort();
+        out
+    }
+
     /// Record `bus`/`id` as unexercised when NO live MCU backend models a
     /// matching controller, and warn on stderr immediately (the same at-build
     /// loudness as a chip substitution). A board with no live MCUs stays
@@ -2506,6 +2521,10 @@ impl Scheduler {
     /// and a firmware clock already offset by the carry.
     /// These are all "since the run began" accumulators; a reset must clear
     /// them. Board topology, bindings, and forced overrides are left intact.
+    ///
+    /// The MCU cores are REBOOTED (reset vector, power-on registers, firmware
+    /// kept), not merely re-clocked: rewinding time while the firmware kept
+    /// its wedged PC made Reset a lie for the one part users press it for.
     pub fn reset_run_state(&mut self) {
         self.sim_time = 0.0;
         self.micros_carry = 0.0;
@@ -2536,6 +2555,52 @@ impl Scheduler {
         if self.stress.destructive {
             self.circuit = self.original_circuit.clone();
         }
+        // Reboot the MCU cores. Restarting the sim clock while the firmware
+        // kept its old PC and SRAM left a wedged firmware wedged forever (the
+        // NEP-board study's defect 2: the UI's Reset button restarted the
+        // story for everything EXCEPT the processor, and the only recovery
+        // from a stuck serial protocol was killing the server). A reset that
+        // rewinds time must also pulse the cores' RESET line.
+        for mi in 0..self.mcus.len() {
+            match self.mcus[mi].core.reset() {
+                Ok(()) => {
+                    let m = &mut self.mcus[mi];
+                    // The core's IO registers are back at power-on, so the
+                    // coupling caches must match: stale levels would replay
+                    // the wedged run's pin state onto the rebooted firmware.
+                    m.last_levels.clear();
+                    m.configured_outputs.clear();
+                    m.digital_in_levels.clear();
+                    if let Ok(mut sh) = m.shared.lock() {
+                        sh.pin_edges.clear();
+                        sh.pin_edge_log.clear();
+                        sh.uart_out.clear();
+                    }
+                    // GPIO drivers back to Hi-Z until the rebooted firmware
+                    // configures its pins again (the promotion/edge paths
+                    // re-enable them), matching real reset-line behaviour.
+                    for drv in self.mcus[mi].binding.gpio_drivers.values_mut() {
+                        drv.set_enabled(&mut self.circuit, false);
+                    }
+                }
+                // A backend that cannot reboot keeps ALL its coupling state:
+                // clearing caches for a core that did not actually restart
+                // would tri-state its drivers with no firmware edges coming
+                // to re-enable them. Loud, not silent, so the user knows the
+                // firmware survived the reset.
+                Err(e) => eprintln!(
+                    "WARNING: {}: reset did not reboot the MCU core ({e}); \
+                     firmware state persists across this reset",
+                    self.mcus[mi].binding.reference
+                ),
+            }
+        }
+        // The analog operating point restarts with the story: drop the warm
+        // start and the previous run's solved node state so the first chunk
+        // after reset re-solves from the same cold start as construction.
+        self.last_dc_seed = None;
+        self.node_volts.iter_mut().for_each(|v| *v = 0.0);
+        self.branch_x.iter_mut().for_each(|v| *v = 0.0);
     }
 
     fn update_stats(&mut self) {
@@ -3487,9 +3552,10 @@ pub struct StepResult {
 /// `~/.config/hauksbee/mcu` → the embedded builtin, so a user descriptor can
 /// add a new part, or override a builtin, purely as data (06 §6.4).
 ///
-/// For the QEMU backend the firmware path is the merged flash image, which QEMU
-/// boots from at spawn; there is no separate load step (the trait's
-/// `load_firmware` is a no-op for QEMU).
+/// For the QEMU backend the firmware path is either the app `.elf` (the
+/// backend builds the bootable merged image from it in-process) or an
+/// esptool-merged flash image; QEMU boots it at spawn, so there is no separate
+/// load step (the trait's `load_firmware` is a no-op for QEMU).
 /// Route one SPI byte to the correct bus among all attached slaves (05 §2.3).
 ///
 /// A single bus is always the target; this is the single-slave path and it must
@@ -3576,7 +3642,8 @@ fn instantiate_mcu(
 }
 
 /// Build an Espressif-QEMU-backed core for a `qemu:<part>` backend string. The
-/// firmware path is the merged flash image and is required (QEMU boots from it).
+/// firmware path (required; QEMU boots from it) is the app `.elf` or a merged
+/// flash image; see `QemuBackend::new` for the two accepted shapes.
 #[cfg(feature = "qemu")]
 fn instantiate_qemu(
     part: &str,
@@ -3586,8 +3653,9 @@ fn instantiate_qemu(
     let config = resolve_qemu_config(part)?;
     let flash = firmware.ok_or_else(|| {
         anyhow::anyhow!(
-            "the qemu:{part} backend needs a merged flash image as the firmware \
-             path (build it with esp-idf + esptool merge_bin)"
+            "the qemu:{part} backend needs firmware to boot: pass the app .elf \
+             your build produced (a merged flash image from esptool merge_bin \
+             also works)"
         )
     })?;
     Ok(Box::new(QemuBackend::new(config, flash)?))
@@ -5890,6 +5958,120 @@ mod tests {
         assert!(
             !sched.analog_abort_tripped(),
             "reset must clear the consecutive-failure streak"
+        );
+    }
+
+    /// A trait-level core that records whether `reset` was called, for proving
+    /// the scheduler actually pulses the RESET line rather than only rewinding
+    /// its own clock (NEP-board study defect 2).
+    struct ResetCore {
+        was_reset: Arc<Mutex<bool>>,
+    }
+
+    impl Mcu for ResetCore {
+        fn load_firmware(&mut self, _path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn run_cycles(&mut self, n: u64) -> anyhow::Result<u64> {
+            Ok(n)
+        }
+        fn run_micros(&mut self, _us: u64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn frequency(&self) -> u64 {
+            16_000_000
+        }
+        fn set_digital_in(&mut self, _pin: PinId, _high: bool) {}
+        fn set_analog_in(&mut self, _channel: u8, _volts: f64) {}
+        fn on_pin_change(&mut self, _cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {}
+        fn uart_write(&mut self, _bytes: &[u8]) {}
+        fn on_uart(&mut self, _cb: Box<dyn FnMut(u8) + Send>) {}
+        fn on_i2c(&mut self, _cb: Box<dyn FnMut(hauksbee_mcu::I2cEvent) -> Option<u8> + Send>) {}
+        fn on_spi(&mut self, _cb: Box<dyn FnMut(hauksbee_mcu::SpiEvent) -> u8 + Send>) {}
+        fn reset(&mut self) -> anyhow::Result<()> {
+            *self.was_reset.lock().unwrap() = true;
+            Ok(())
+        }
+        fn state(&self) -> hauksbee_mcu::McuState {
+            hauksbee_mcu::McuState {
+                pc: 0,
+                cycles: 0,
+                sleeping: false,
+                done: false,
+                crashed: false,
+            }
+        }
+    }
+
+    /// NEP-board study defect 2: `reset_run_state` must reboot the MCU cores
+    /// and drop the per-MCU coupling caches, or a rewound run replays the
+    /// wedged firmware's stale pin state onto a clock that claims t=0.
+    #[test]
+    fn reset_run_state_reboots_mcu_cores_and_clears_coupling_caches() {
+        let board = hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let bound = crate::binder::bind_board(&board, &lib);
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let was_reset = Arc::new(Mutex::new(false));
+        let core = ResetCore {
+            was_reset: was_reset.clone(),
+        };
+        let binding = McuBinding {
+            reference: "U1".into(),
+            backend: "simavr:test".into(),
+            requested_part: String::new(),
+            pad_roles: HashMap::new(),
+            role_nets: HashMap::new(),
+            gpio_drivers: HashMap::new(),
+            adc_nets: HashMap::new(),
+            adc_pin: HashMap::new(),
+            module: false,
+            max_supply_v: None,
+        };
+        sched.mcus.push(core_with_hooks(Box::new(core), binding));
+        sched.responder_registries.push(None);
+        sched.relayout();
+
+        // Simulate a run's leftovers in every per-MCU coupling cache.
+        {
+            let m = sched.mcus.last_mut().unwrap();
+            m.last_levels.insert(('B', 5), true);
+            m.configured_outputs.insert(('B', 5));
+            m.digital_in_levels.insert(('D', 2), true);
+            let mut sh = m.shared.lock().unwrap();
+            sh.pin_edges.insert(('B', 5), true);
+            sh.pin_edge_log.push(PinEdge {
+                cycle: 123,
+                port: 'B',
+                bit: 5,
+                level: true,
+            });
+            sh.uart_out.extend_from_slice(b"stale");
+        }
+
+        sched.reset_run_state();
+
+        assert!(
+            *was_reset.lock().unwrap(),
+            "reset_run_state must call the core's reset (pulse the RESET line)"
+        );
+        let m = sched.mcus.last().unwrap();
+        assert!(
+            m.last_levels.is_empty(),
+            "stale GPIO levels must be dropped"
+        );
+        assert!(
+            m.configured_outputs.is_empty(),
+            "stale DDR shadow must be dropped"
+        );
+        assert!(
+            m.digital_in_levels.is_empty(),
+            "stale input-sync hysteresis must be dropped"
+        );
+        let sh = m.shared.lock().unwrap();
+        assert!(
+            sh.pin_edges.is_empty() && sh.pin_edge_log.is_empty() && sh.uart_out.is_empty(),
+            "stale capture buffers must be dropped"
         );
     }
 }

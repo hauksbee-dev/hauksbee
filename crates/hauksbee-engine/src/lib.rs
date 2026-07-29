@@ -49,6 +49,7 @@ pub mod tarski_decomp;
 pub mod tarski_prep;
 pub mod thermal;
 pub mod tui;
+pub mod waiver;
 pub mod web_dist;
 pub mod webcheck;
 

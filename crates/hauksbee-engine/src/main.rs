@@ -244,6 +244,12 @@ enum InstallCommand {
         #[arg(long, short = 'y')]
         yes: bool,
     },
+    /// Fetch the Renode portable build (STM32 / nRF52 / RISC-V co-sim).
+    Renode {
+        /// Skip the confirmation prompt (for CI / scripts).
+        #[arg(long, short = 'y')]
+        yes: bool,
+    },
 }
 
 #[derive(Parser)]
@@ -880,6 +886,7 @@ fn main() -> anyhow::Result<()> {
         }
         Command::Install(args) => match args.command {
             InstallCommand::EspQemu { yes } => hauksbee_engine::commands::install::esp_qemu(yes),
+            InstallCommand::Renode { yes } => hauksbee_engine::commands::install::renode(yes),
         },
     };
     if let Err(e) = &result {

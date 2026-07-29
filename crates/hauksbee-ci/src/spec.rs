@@ -713,10 +713,11 @@ pub struct FuzzSpec {
 }
 
 /// One assertion over the run.
-///
-/// `Default` exists for tests, which would otherwise spell out thirty fields to
-/// exercise one. It yields an empty `kind`, which `validate` rejects, so a
-/// defaulted assertion cannot reach a run.
+// `Default` exists for tests, which would otherwise spell out thirty fields to
+// exercise one. It yields an empty `kind`, which `validate` rejects, so a
+// defaulted assertion cannot reach a run. Kept off the doc comment on purpose:
+// that text becomes the schema `description`, which is what an editor shows
+// someone hovering a TOML key, and this is a note for Rust readers.
 #[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct Assertion {
