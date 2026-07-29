@@ -28,6 +28,21 @@ impl Monitor {
     /// Connect to a Renode Monitor listening on `addr`, retrying until
     /// `connect_timeout` elapses (Renode takes several seconds to bind).
     pub fn connect<A: ToSocketAddrs + Clone>(addr: A, connect_timeout: Duration) -> Result<Self> {
+        Self::connect_while(addr, connect_timeout, || None)
+    }
+
+    /// As `connect`, but `dead` is polled between attempts and short-circuits
+    /// the wait when the peer process has already exited.
+    ///
+    /// Without this, a Renode that died at startup (most often because another
+    /// process took the port between our probe and its bind) costs the caller
+    /// the whole connect timeout and then reports "connection refused", which
+    /// names the symptom and hides the cause.
+    pub fn connect_while<A: ToSocketAddrs + Clone>(
+        addr: A,
+        connect_timeout: Duration,
+        mut dead: impl FnMut() -> Option<String>,
+    ) -> Result<Self> {
         let deadline = Instant::now() + connect_timeout;
         loop {
             // Resolve fresh each attempt; the port may not be open yet.
@@ -53,6 +68,9 @@ impl Monitor {
                     return Ok(m);
                 }
                 Err(e) => {
+                    if let Some(reason) = dead() {
+                        bail!("Renode exited before its monitor port came up ({reason}): {e}");
+                    }
                     if Instant::now() >= deadline {
                         bail!(
                             "could not connect to Renode monitor within {:?}: {}",
