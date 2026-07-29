@@ -92,9 +92,9 @@ write_literal = "allow"
 
 [workspace.dependencies]
 # The forge-* crates are VENDORED into this repo (vendor/kicad-forge/crates/*)
-# so a fresh clone builds with no sibling checkout and no network. They come from
-# https://github.com/ETM-Code/kicad-forge.git; source commit and update procedure
-# are in vendor/kicad-forge/VENDORED.md.
+# so a fresh clone builds with no sibling checkout and no network. kicad-forge
+# has no public repository of its own, so the vendored copy is the source of
+# record. Provenance and update procedure: vendor/kicad-forge/VENDORED.md.
 #
 # To develop against a live kicad-forge checkout instead, comment out the three
 # vendored lines below and uncomment these sibling-path overrides:
