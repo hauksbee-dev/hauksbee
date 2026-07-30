@@ -12,7 +12,9 @@
 //!
 //! The install side shells KILLABLE children and streams their output:
 //! `hauksbee install esp-qemu --yes` (this very binary's own Rust installer,
-//! checksum-verified, see `hauksbee_mcu::qemu::install`) for the Espressif
+//! which verifies each asset against the release's checksum manifest when it
+//! can fetch it and falls back to TLS plus a post-install machine check when it
+//! cannot, see `hauksbee_mcu::qemu::install`) for the Espressif
 //! QEMU fork, and `scripts/install-sims.sh --renode-only` for Renode (the
 //! script is shipped in release bundles next to the binary). One install runs
 //! at a time (RAII slot, same pattern as `webcheck::WebCheckSlot`), a hard
@@ -319,9 +321,18 @@ fn probe_esp_qemu() -> DepStatus {
     let unlocks = "ESP32, ESP32-S3 and ESP32-C3 firmware co-simulation";
     // Real numbers from the espressif/qemu release assets (esp-develop-9.2.x):
     // the two per-arch tarballs total ~8 MB on macOS and ~35 MB on Linux.
+    // The checksum wording is conditional on purpose. The installer verifies
+    // against the release's own manifest when it can fetch it, and falls back
+    // to TLS plus a post-install machine check when it cannot, so an
+    // unconditional "checksum-verified" would promise a guarantee that any
+    // single failed request downgrades.
     let cost = match std::env::consts::OS {
-        "macos" => "two small downloads, about 8 MB total (checksum-verified)".to_string(),
-        "linux" => "two downloads, about 35 MB total (checksum-verified)".to_string(),
+        "macos" => "two small downloads, about 8 MB total (checksum-verified when the \
+                    release manifest is reachable)"
+            .to_string(),
+        "linux" => "two downloads, about 35 MB total (checksum-verified when the release \
+                    manifest is reachable)"
+            .to_string(),
         _ => "not auto-installable on this OS; see github.com/espressif/qemu/releases".to_string(),
     };
     let manual = "hauksbee install esp-qemu".to_string();

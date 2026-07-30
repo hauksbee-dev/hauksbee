@@ -8,7 +8,14 @@
 //! args string and returns a JSON result string, one native log sink, and a
 //! JS prelude that wraps them in the typed `hauksbee` object. Everything else
 //! (no filesystem, no network, no timers, no imports) simply does not exist in
-//! the QuickJS instance we build. The honesty contract holds inside the
+//! the QuickJS instance we build.
+//!
+//! Read that narrowly. The JS environment has no filesystem, but the bridge it
+//! reaches through does: `analyzeBoard` is an unrestricted read of any path,
+//! and `runChecks` can build a firmware project, which runs that project's own
+//! build scripts. The sandbox bounds what the SCRIPT can invent, not what the
+//! tools it calls can do, and a caller who reads the first sentence without
+//! the second will trust it further than it deserves. The honesty contract holds inside the
 //! sandbox: refusals are THROWN as structured errors so a script cannot
 //! mistake them for data, and a script may catch and branch on them.
 
@@ -18,9 +25,31 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-/// Memory ceiling for a script run. Generous for JSON crunching, small enough
-/// that a runaway script cannot take the server down with it.
+/// Memory ceiling for a script run, enforced on the QuickJS heap.
+///
+/// Note what this does NOT cover: anything the bridge copies out of JS into
+/// Rust. `rt.set_memory_limit` bounds the interpreter's own allocator, so a
+/// script that logs in a loop frees each JS string immediately after we copy
+/// it, keeps the JS heap flat, and grows the Rust side without ever touching
+/// this limit. Measured before the caps below existed: a one-line script
+/// logging a 200-character string in a loop reached 2.6 GB resident in five
+/// seconds and was still climbing, which at the 120 s timeout is roughly 8 GB.
+/// See `MAX_LOG_LINES` and `MAX_LOG_LINE_BYTES`.
 const MEMORY_LIMIT_BYTES: usize = 256 * 1024 * 1024;
+
+/// How many log lines one script may keep.
+///
+/// The captured log is returned in the response, so it is bounded twice over:
+/// once because it lives in Rust memory the JS heap limit cannot see, and once
+/// because a multi-gigabyte log becomes a multi-gigabyte JSON response on one
+/// stdout line. A script that needs more output than this is not debugging, it
+/// is streaming.
+const MAX_LOG_LINES: usize = 10_000;
+
+/// How much of a single log line is kept. Longer lines are truncated with a
+/// marker rather than dropped, so a script logging one enormous string still
+/// sees that it logged.
+const MAX_LOG_LINE_BYTES: usize = 8 * 1024;
 
 /// The JS prelude evaluated before the user script: builds `console.log` and
 /// the `hauksbee` object over the two native bridge functions. Refusals
@@ -122,7 +151,34 @@ fn install_bridge(ctx: &Ctx<'_>, logs: Rc<RefCell<Vec<String>>>) -> rquickjs::Re
     globals.set(
         "__hauksbee_log",
         Function::new(ctx.clone(), move |line: String| {
-            logs.borrow_mut().push(line);
+            let mut logs = logs.borrow_mut();
+            // Past the ceiling, say so once and then stay silent. Pushing a
+            // notice per call would reintroduce exactly the growth being
+            // capped.
+            if logs.len() >= MAX_LOG_LINES {
+                if logs.len() == MAX_LOG_LINES {
+                    logs.push(format!(
+                        "[hauksbee] log truncated at {MAX_LOG_LINES} lines; further output \
+                         is discarded"
+                    ));
+                }
+                return;
+            }
+            if line.len() > MAX_LOG_LINE_BYTES {
+                // Cut on a char boundary: slicing a multibyte glyph mid-way
+                // panics, and a script can log anything.
+                let mut end = MAX_LOG_LINE_BYTES;
+                while end > 0 && !line.is_char_boundary(end) {
+                    end -= 1;
+                }
+                logs.push(format!(
+                    "{}... [{} more bytes discarded]",
+                    &line[..end],
+                    line.len() - end
+                ));
+            } else {
+                logs.push(line);
+            }
         })?,
     )?;
     globals.set(
@@ -183,4 +239,71 @@ fn exception_message(v: &JsValue) -> String {
         return format!("{name}: {message}");
     }
     format!("a non-Error value of type {:?}", v.type_of())
+}
+
+#[cfg(test)]
+mod log_bounds_tests {
+    use super::*;
+
+    /// Both arms carry `logs`, so read it without caring which we got.
+    fn logs_of(out: Result<Value, Value>) -> Vec<Value> {
+        let v = match out {
+            Ok(v) | Err(v) => v,
+        };
+        v.get("logs")
+            .and_then(|l| l.as_array())
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    fn run_script(src: &str) -> Vec<Value> {
+        logs_of(run(src, Duration::from_secs(30)))
+    }
+
+    /// A script that logs in a loop must not grow memory without bound.
+    ///
+    /// `rt.set_memory_limit` bounds the QuickJS heap, and the captured log does
+    /// not live there: each line is copied into Rust and the JS string is freed
+    /// straight after, so the interpreter stays flat while the Vec grows. A
+    /// security review reproduced 2.6 GB resident in five seconds from one line
+    /// of script, still climbing, which at the 120 s timeout is roughly 8 GB.
+    /// One `tools/call` did it, and an MCP server is driven by a model relaying
+    /// content it did not write.
+    #[test]
+    fn a_logging_loop_cannot_grow_the_log_without_bound() {
+        let logs = run_script(
+            "const s='y'.repeat(200); for(let i=0;i<200000;i++){console.log(s);} return 1;",
+        );
+        assert!(
+            logs.len() <= MAX_LOG_LINES + 1,
+            "200k log calls kept {} lines, over the {MAX_LOG_LINES} cap",
+            logs.len()
+        );
+    }
+
+    /// One enormous line is truncated rather than kept whole, and the truncation
+    /// says so. Dropping it silently would let a script think it logged.
+    #[test]
+    fn one_huge_line_is_truncated_and_says_so() {
+        let logs = run_script("console.log('z'.repeat(500000)); return 1;");
+        let first = logs.first().and_then(|v| v.as_str()).unwrap_or("");
+        assert!(
+            first.len() < 500_000,
+            "the line was kept whole at {} bytes",
+            first.len()
+        );
+        assert!(
+            first.contains("more bytes discarded"),
+            "truncation must be visible, got: {}",
+            &first[..first.len().min(120)]
+        );
+    }
+
+    /// Truncation must cut on a char boundary. A script can log anything, and
+    /// slicing a multibyte glyph in half panics the server.
+    #[test]
+    fn truncating_a_multibyte_line_does_not_panic() {
+        let logs = run_script("console.log('\u{1F50C}'.repeat(100000)); return 1;");
+        assert!(!logs.is_empty(), "a multibyte overlong line must survive");
+    }
 }
