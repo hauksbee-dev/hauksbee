@@ -127,7 +127,20 @@ fn famous_altium_boards_extract_and_are_short_clean() {
         }
     }
 
-    assert!(scanned >= 1, "at least one famous Altium board was scanned");
+    if scanned == 0 {
+        // board-corpus exists, but the Altium famous-board set is not in
+        // corpus.toml yet (see docs/ingest/ALTIUM.md: sources are recorded in
+        // the maintainers' private board-corpus/famous/SOURCES.md, not the
+        // public fetch manifest). That is a different state from "no corpus
+        // at all" and must not report as a clean pass, nor read as
+        // "hauksbee is broken" to a contributor running the public fetch.
+        let msg = "none of the famous Altium boards is present under \
+                    board-corpus/famous/altium (this family is not yet in \
+                    corpus.toml's public fetch; see docs/ingest/ALTIUM.md).";
+        assert!(!require_corpus(), "HAUKSBEE_REQUIRE_CORPUS set and {msg}");
+        eprintln!("skipping famous Altium sweep: {msg}");
+        return;
+    }
     assert!(
         offenders.is_empty(),
         "real Altium boards must extract sanely and be short-clean; chase any \
@@ -235,7 +248,18 @@ fn cross_validate_against_kicad_altium_importer() {
         }
     }
 
-    assert!(compared >= 1, "at least one board was cross-validated");
+    if compared == 0 {
+        // Same three-state reasoning as the sweep above: board-corpus exists
+        // but this family is not in the public fetch manifest, which is not
+        // the same as "no corpus" and must not read as a clean pass. It also
+        // needs kicad-cli, so a machine with the boards and no KiCad lands
+        // here too.
+        let msg = "no famous Altium board could be cross-validated (the family is not in \
+                   corpus.toml's public fetch, or kicad-cli is absent).";
+        assert!(!require_corpus(), "HAUKSBEE_REQUIRE_CORPUS set and {msg}");
+        eprintln!("skipping the Altium cross-validation: {msg}");
+        return;
+    }
     assert!(
         offenders.is_empty(),
         "hauksbee's Altium extraction must agree with KiCad's independent Altium \
