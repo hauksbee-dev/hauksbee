@@ -151,6 +151,8 @@ pub type DatasheetExtractor =
 /// explicit accept, and it re-validates the TOML it is handed rather than
 /// trusting that it is the same text the extractor produced.
 pub type DatasheetSaver = Arc<dyn Fn(&str, &str, &str) -> Result<String, String> + Send + Sync>;
+/// Validate a model and describe what it is, without writing anything.
+pub type DatasheetChecker = Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
 
 /// The datasheet-extraction backend, as one value. The three calls are a single
 /// consent contract (can it run, run it, keep the result) and a deployment that
@@ -159,6 +161,8 @@ pub struct DatasheetHooks {
     pub ready: DatasheetReady,
     pub extract: DatasheetExtractor,
     pub save: DatasheetSaver,
+    /// Validate a model without keeping it, for the write-your-own editor.
+    pub check: DatasheetChecker,
 }
 
 /// The engine-backed hooks the browser's tool panels need beyond board
@@ -443,6 +447,7 @@ pub fn datasheet_routes(hooks: DatasheetHooks) -> Router {
         .route("/api/models/extract/ready", get(datasheet_ready_handler))
         .route("/api/models/extract", post(datasheet_extract_handler))
         .route("/api/models/save", post(datasheet_save_handler))
+        .route("/api/models/check", post(datasheet_check_handler))
         .layer(DefaultBodyLimit::max(MAX_DATASHEET_BYTES))
         .with_state(state)
 }
@@ -574,6 +579,46 @@ async fn datasheet_save_handler(
         ),
         Ok(Err(msg)) => json_error(&msg),
         Err(_) => json_error("the save task panicked; see the server log"),
+    }
+}
+
+/// POST `/api/models/check`: validate a model without saving it.
+///
+/// The editor calls this while someone types. It runs the SAME checks the save
+/// path runs, so a model cannot validate here and be refused there, which
+/// would be worse than offering no editor at all.
+async fn datasheet_check_handler(
+    State(state): State<Arc<DatasheetState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp;
+    }
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return json_error("the check request body is not JSON");
+    };
+    let toml = value
+        .get("toml")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let check = state.hooks.check.clone();
+    match tokio::task::spawn_blocking(move || (check)(&toml)).await {
+        Ok(Ok(summary)) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            serde_json::json!({ "ok": true, "summary": summary }).to_string(),
+        ),
+        Ok(Err(msg)) => (
+            // 200 with ok:false, not a 4xx. A model in progress is not a failed
+            // request, and an editor that logs a console error on every
+            // keystroke while someone types is unusable.
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            serde_json::json!({ "ok": false, "error": msg }).to_string(),
+        ),
+        Err(_) => json_error("the check task panicked; see the server log"),
     }
 }
 
