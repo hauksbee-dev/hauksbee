@@ -59,3 +59,29 @@ description = "Solder jumper (footprint-matched)"
 
 [models.match]
 footprint_re = "(?i)SolderJumper|Jumper"
+
+# ── Momentary tactile switches (SW / BTN) ─────────────────────────────────────
+#
+# Watchy SW1..SW4. NOT modelled as a device, and the reason is worth recording
+# because the obvious answer is wrong.
+#
+# A tactile switch is a two-terminal contact pair with no control input. The
+# closest existing kind is `analog_switch`, and it does not fit: that kind is a
+# three-terminal part the binder resolves through a control role, so a
+# two-terminal switch bound to it matches, loads, and then reports "analog
+# switch path not connected" against the board. That is a WORSE outcome than
+# saying nothing, because it reads as a wiring fault in the user's design
+# rather than as a part hauksbee has no shape for.
+#
+# Ignoring it is the honest answer for now. A pressed button is a short and an
+# unpressed one is an open, and the resting state is open, which is what the
+# surrounding network already gives. What is genuinely missing is a
+# two-terminal switch kind, which is a change to the engine rather than an
+# entry in a database, and inventing a bad fit here would hide the need for it.
+[[models]]
+id = "tactile_switch"
+kind = "ignore"
+description = "momentary tactile push switch: no two-terminal switch kind exists yet"
+
+[models.match]
+value_re = "(?i)^(BTN[0-9]*|SW[0-9]*|TACT|PUSH(BUTTON)?)$"
