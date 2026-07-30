@@ -87,34 +87,28 @@ fn probe_codex() -> DepStatus {
     let unlocks =
         "drafting a device model from a datasheet, for a part with no model (you review it \
          before it is saved)";
-    let cost = "an OpenAI account and the codex CLI".to_string();
+    // The cost line is the one most likely to change someone's mind, so it
+    // leads with the fact rather than the price: codex signs in with a ChatGPT
+    // account, and most people who would want datasheet extraction already pay
+    // for one. For them this is free, and the only thing standing between them
+    // and it is not knowing.
+    let cost = "free if you already pay for ChatGPT: codex signs in with that account"
+        .to_string();
     let manual = "npm install -g @openai/codex   # then: codex login".to_string();
     let privacy = "Using this sends the datasheet's text to OpenAI. Nothing is sent unless \
                    you ask for an extraction, and hauksbee never runs it on its own.";
-    match which_codex() {
-        Some(p) => DepStatus {
-            id: "codex",
-            name: "Codex (datasheet extraction)",
-            present: true,
-            version: codex_version(&p),
-            path: Some(p.display().to_string()),
-            unlocks,
-            // Deliberately never auto-installable: an account and a login are
-            // the user's to give, and a one-click button for a service that
-            // takes their data would be the wrong shape whatever it said.
-            installable: false,
-            cost,
-            manual,
-            detail: None,
-            sends_data_offhost: Some(privacy),
-        },
-        None => DepStatus {
+
+    let Some(bin) = which_codex() else {
+        return DepStatus {
             id: "codex",
             name: "Codex (datasheet extraction)",
             present: false,
             path: None,
             version: None,
             unlocks,
+            // Deliberately never auto-installable: an account and a login are
+            // the user's to give, and a one-click button for a service that
+            // takes their data would be the wrong shape whatever it said.
             installable: false,
             cost,
             manual,
@@ -125,7 +119,84 @@ fn probe_codex() -> DepStatus {
                     .to_string(),
             ),
             sends_data_offhost: Some(privacy),
+        };
+    };
+
+    // Installed is not the same as usable. An installed-but-unauthenticated
+    // codex fails at the worst possible moment: after the user has picked a
+    // part, read the privacy notice, and said yes. Report which of the two
+    // states they are in, and the one command that fixes it.
+    match codex_login_state(&bin) {
+        CodexLogin::LoggedIn(how) => DepStatus {
+            id: "codex",
+            name: "Codex (datasheet extraction)",
+            present: true,
+            version: codex_version(&bin),
+            path: Some(bin.display().to_string()),
+            unlocks,
+            installable: false,
+            cost,
+            manual,
+            detail: how,
+            sends_data_offhost: Some(privacy),
         },
+        CodexLogin::NotLoggedIn => DepStatus {
+            id: "codex",
+            name: "Codex (datasheet extraction)",
+            // Present means usable, and this is not: saying otherwise would
+            // send someone into an extraction that cannot run.
+            present: false,
+            path: Some(bin.display().to_string()),
+            version: codex_version(&bin),
+            unlocks,
+            installable: false,
+            cost,
+            manual: "codex login".to_string(),
+            detail: Some(
+                "codex is installed but not signed in, so an extraction would fail once \
+                 you had already asked for it. Run `codex login`. It signs in with a \
+                 ChatGPT account, so if you have one there is nothing else to pay."
+                    .to_string(),
+            ),
+            sends_data_offhost: Some(privacy),
+        },
+    }
+}
+
+/// Whether codex can actually run, and how it is authenticated.
+enum CodexLogin {
+    /// Signed in. Carries codex's own description, e.g. "Logged in using ChatGPT".
+    LoggedIn(Option<String>),
+    NotLoggedIn,
+}
+
+/// Ask codex itself. Its own answer cannot drift from what an extraction hits.
+fn codex_login_state(bin: &std::path::Path) -> CodexLogin {
+    let out = std::process::Command::new(bin)
+        .args(["login", "status"])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => {
+            // codex writes "Logged in using ChatGPT" to STDERR, not stdout.
+            // Reading stdout alone lost the description while still getting
+            // the state right from the exit code, so the row said "installed"
+            // and could not say how it was authenticated.
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&o.stdout),
+                String::from_utf8_lossy(&o.stderr)
+            );
+            let line = text
+                .lines()
+                .map(str::trim)
+                .find(|l| !l.is_empty())
+                .map(str::to_string);
+            CodexLogin::LoggedIn(line)
+        }
+        // A non-zero exit is codex saying no. An error running it at all means
+        // we cannot tell, and the safe reading is the one that does not send
+        // the user into a failing extraction.
+        _ => CodexLogin::NotLoggedIn,
     }
 }
 
@@ -936,6 +1007,69 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A shim standing in for a codex that answers a given way. Real codex
+    /// cannot be logged out on the machine running this, and the logged-out
+    /// branch is the one that matters, so it is the one worth a fixture.
+    #[cfg(unix)]
+    fn codex_shim(dir: &std::path::Path, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let p = dir.join("codex");
+        std::fs::write(&p, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        p
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unauthenticated_codex_is_not_reported_as_usable() {
+        // Installed is not usable. Reporting presence here would send someone
+        // into an extraction that fails after they had already read the privacy
+        // notice and said yes, which is the worst moment to find out.
+        let dir = tempfile::tempdir().unwrap();
+        let shim = codex_shim(
+            dir.path(),
+            r#"if [ "$1" = "login" ]; then echo "Not logged in" >&2; exit 1; fi
+echo "codex-cli 0.0.0""#,
+        );
+        assert!(
+            matches!(codex_login_state(&shim), CodexLogin::NotLoggedIn),
+            "a codex that refuses `login status` is not signed in"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_signed_in_codex_reports_how_it_is_authenticated() {
+        // codex writes this to STDERR, which is why the probe reads both
+        // streams: reading stdout alone got the state right from the exit code
+        // and silently lost the description.
+        let dir = tempfile::tempdir().unwrap();
+        let shim = codex_shim(
+            dir.path(),
+            r#"if [ "$1" = "login" ]; then echo "Logged in using ChatGPT" >&2; exit 0; fi
+echo "codex-cli 0.0.0""#,
+        );
+        match codex_login_state(&shim) {
+            CodexLogin::LoggedIn(how) => assert_eq!(
+                how.as_deref(),
+                Some("Logged in using ChatGPT"),
+                "the how must survive, and it arrives on stderr"
+            ),
+            CodexLogin::NotLoggedIn => panic!("a codex exiting 0 is signed in"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_codex_we_cannot_run_counts_as_not_signed_in() {
+        // Failing closed: if we cannot tell, the reading that does not walk the
+        // user into a broken extraction is the right one.
+        assert!(matches!(
+            codex_login_state(std::path::Path::new("/no/such/codex")),
+            CodexLogin::NotLoggedIn
+        ));
     }
 
     /// AVR is linked at build time: it must never be offered as installable,
