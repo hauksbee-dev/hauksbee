@@ -167,7 +167,17 @@ pub fn run(port: u16, open: bool) -> anyhow::Result<()> {
             println!("      http://{bound}\n");
             println!("  Drop a board file (.kicad_pcb / .kicad_sch / .brd / .board / gerber zip) to get a");
             println!("  plain-language report. Optionally drop firmware (.elf / .hex) to run a");
-            println!("  short co-sim. Nothing leaves your machine. Ctrl-C to stop.\n");
+            // Was "Nothing leaves your machine", which stopped being true when
+            // this same server grew /api/models/extract. That path has its own
+            // consent notice and never runs unasked, but a blanket promise in
+            // the first thing a user reads is the wrong place to be approximate.
+            println!(
+                "  short co-sim. Your board never leaves this machine. The one thing that"
+            );
+            println!(
+                "  can is a datasheet you explicitly send for model extraction, which asks"
+            );
+            println!("  first. Ctrl-C to stop.\n");
         } else {
             println!("\n  hauksbee serve needs the web app built once:\n");
             println!("      cd frontend && bun install && bun run build\n");
