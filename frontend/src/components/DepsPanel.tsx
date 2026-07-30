@@ -293,6 +293,19 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
                     {d.detail}
                   </div>
                 )}
+                {/* The cost, for a dep with no Install button. It used to render
+                    only inside the install block, so a dependency we
+                    deliberately never auto-install (codex: an account and a
+                    login are the user's to give) could never show its cost at
+                    all. That hid the single most persuasive fact about it,
+                    "free if you already pay for ChatGPT", from the exact place
+                    someone decides whether to bother. */}
+                {!d.present && !d.installable && d.cost && (
+                  <div className="text-[11px] mt-1 leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
+                    <span style={{ color: 'var(--silk-faint)' }}>Cost: </span>
+                    {d.cost}
+                  </div>
+                )}
                 {!d.present && d.manual && (
                   <div className="text-[11px] mt-1.5 flex items-center flex-wrap" style={{ color: 'var(--silk-faint)' }}>
                     <span className="mr-1">Terminal:</span>
