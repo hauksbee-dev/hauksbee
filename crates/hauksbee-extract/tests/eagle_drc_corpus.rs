@@ -36,6 +36,10 @@ fn corpus_root() -> Option<PathBuf> {
     p.exists().then_some(p)
 }
 
+fn require_corpus() -> bool {
+    std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok()
+}
+
 /// The eight famous Eagle main board files (the "Main board file" column of
 /// `board-corpus/famous/SOURCES.md`), relative to `board-corpus/famous`.
 const FAMOUS_EAGLE: &[(&str, &str)] = &[
@@ -85,10 +89,13 @@ const FAMOUS_EAGLE: &[(&str, &str)] = &[
 #[test]
 fn famous_eagle_boards_have_no_true_shorts() {
     let Some(root) = corpus_root() else {
+        assert!(
+            !require_corpus(),
+            "HAUKSBEE_REQUIRE_CORPUS set but board-corpus is absent"
+        );
         eprintln!("board-corpus not present; skipping famous Eagle DRC sweep");
         return;
     };
-    let famous = root.join("famous");
 
     let mut scanned = 0usize;
     let mut offenders: Vec<String> = Vec::new();
@@ -98,7 +105,9 @@ fn famous_eagle_boards_have_no_true_shorts() {
         "board", "shorts", "clrnce", "rule(mm)", "prims", "time"
     );
     for (name, rel) in FAMOUS_EAGLE {
-        let path = famous.join(rel);
+        // These board ids are fetched flat (board-corpus/<id>/...) by
+        // scripts/fetch-corpus.sh; there is no "famous/" prefix on disk.
+        let path = root.join(rel);
         let Ok(text) = std::fs::read_to_string(&path) else {
             // A board we expect should be present; if the corpus is partial we
             // skip the missing one rather than fail the whole sweep.
@@ -139,7 +148,21 @@ fn famous_eagle_boards_have_no_true_shorts() {
         }
     }
 
-    assert!(scanned >= 1, "at least one famous Eagle board was scanned");
+    if scanned == 0 {
+        // board-corpus exists but none of the ten famous Eagle boards is in
+        // it: a partial fetch, not "no corpus". Skip loud rather than red, so
+        // this reads as "not run" and not "hauksbee is broken" - unless the
+        // caller demanded a full corpus, in which case a thin fetch is exactly
+        // the failure HAUKSBEE_REQUIRE_CORPUS exists to catch.
+        let msg = "none of the ten famous Eagle boards is present in board-corpus \
+                    (partial fetch). Get them with `scripts/fetch-corpus.sh --only \
+                    arduino_uno_r3_official,adafruit_circuit_playground,adafruit_feather_m0,\
+                    adafruit_metro_m4,adafruit_qtpy,adafruit_trinket_m0,sparkfun_redboard,\
+                    sparkfun_pro_micro,sparkfun_thingplus_samd51,sparkfun_thingplus_rp2040`.";
+        assert!(!require_corpus(), "HAUKSBEE_REQUIRE_CORPUS set and {msg}");
+        eprintln!("skipping famous Eagle DRC sweep: {msg}");
+        return;
+    }
     assert!(
         offenders.is_empty(),
         "the famous Eagle boards shipped and must be short-clean; if one really \

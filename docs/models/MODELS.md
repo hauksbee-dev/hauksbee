@@ -12,10 +12,13 @@ The four authoring routes:
   that ships with hauksbee. It covers the common families (BC847, 1N4148,
   7805, 74HC595, ATmega328P, and so on) plus passives resolved straight from
   the `Value` field.
-- **Datasheet (codex) extraction** (`model-extract` binary): when a part is
-  not in the DB, point hauksbee at the part's PDF datasheet and an LLM
-  backend (codex by default) extracts a model entry in the same TOML
-  schema. The result lands in `~/.hauksbee/models/` and loads as a
+- **Datasheet extraction**: when a part is not in the DB, point hauksbee at
+  the part's PDF datasheet and an LLM backend (codex by default) drafts a
+  model entry in the same TOML schema. It runs from the web report, from
+  `hauksbee models extract`, or from the standalone `model-extract` binary.
+  Every one of the three states what leaves your machine and asks before it
+  sends anything. The result is a draft to check, carries provenance
+  `datasheet-extracted`, lands in `~/.hauksbee/models/`, and loads as a
   user-dir entry.
 - **Hand-written behavioural** TOML: a `[models.behavioral]` entry you
   author by hand for a power IC (see "Behavioural device models" below).
@@ -39,17 +42,27 @@ land), then the built-in DB.
 
 ## Pointing hauksbee at a datasheet
 
-```bash
-# build the extractor
-cargo build -p hauksbee-models --bin model-extract
+The shortest path is the web report: drop a board, and any part with no model
+carries a "draft a model from a datasheet" button. It states what gets sent
+before it asks for the file.
 
-# extract a model from a PDF datasheet
-./target/debug/model-extract \
+From a terminal:
+
+```bash
+hauksbee models extract \
     --pdf testdata/datasheets/BC847.pdf \
     --part BC847 \
     --kind bjt_npn \
     --out-dir ~/.hauksbee/models       # default if omitted
 ```
+
+It prints what will leave your machine and waits for a yes. In a script, where
+there is nobody to ask, it refuses rather than assuming: pass `--yes` when you
+mean it.
+
+The older standalone binary still works and holds the same contract
+(`cargo build -p hauksbee-models --bin model-extract`, then
+`HAUKSBEE_EXTRACT_YES=1` for the scripted case).
 
 `--kind` is one of: `passive | diode | bjt_npn | bjt_pnp | nmos | pmos |
 vreg | opamp | comparator | analog_switch | digital | dac | adc |
@@ -121,10 +134,17 @@ from, so an extracted model stays auditable.
 
 ## The pipeline, end to end
 
-`crates/hauksbee-models/src/bin/model_extract.rs`:
+`crates/hauksbee-models/src/datasheet.rs`:
 
-1. **PDF to text** through `pdftotext` (if present). When it is absent, the
-   backend is told to read the PDF directly from its working directory.
+0. **A sandbox** is built first: a scratch directory holding a copy of the
+   datasheet and nothing of yours. The agent runs there, so what it can write
+   is bounded even though it runs unattended. Read the module doc for what
+   that does and does not buy: the profile confines writes and kills network,
+   it does not confine reads.
+1. **PDF to text** through `pdftotext` (if present), and **one image per page**
+   through `pdftoppm` at 150 DPI, capped at fourteen pages. The renders matter
+   more than the text: an absolute-maximum table survives a render and becomes
+   a column of loose numbers in a text dump.
 2. **Prompt** built per kind, listing the required params, the ratings to
    pull, and the physical bounds each value must respect.
 3. **Backend call**:
