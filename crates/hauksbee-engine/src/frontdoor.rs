@@ -127,6 +127,36 @@ pub struct BindSummaryWeb {
     /// those nets is not trustworthy; the web banner must say so loudly.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub active_path_unresolved: Vec<String>,
+    /// The parts behind that list, one entry each, with what went wrong and what
+    /// it costs the analysis.
+    ///
+    /// The refs alone are enough for the banner but not for doing anything about
+    /// it: the moment a user learns they need a model is the moment they are
+    /// looking at this list, and offering "draft one from the datasheet" there
+    /// needs the part's value (the MPN to extract) and whether it is missing a
+    /// model at all (`bound`; a resolved-but-open part already has one, so
+    /// drafting a second would not help).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub open_parts: Vec<WebOpenPart>,
+}
+
+/// One part on the open-active-path list, in the shape the browser renders.
+#[derive(Debug, Clone, Serialize)]
+pub struct WebOpenPart {
+    pub reference: String,
+    /// The board's value field: usually the manufacturer part number, and so the
+    /// prefill for a datasheet extraction.
+    pub value: String,
+    /// Why it could not be bound, or the open-pin warning it carries.
+    pub reason: String,
+    /// What that does to the analysis, in one plain line.
+    pub consequence: String,
+    /// True for a reference the binder treats as an active IC (U/IC/MCU).
+    pub active_ic: bool,
+    /// True when the part DID bind and is merely open on the live circuit. Those
+    /// parts need wiring or pin attention, not a model, so no extraction is
+    /// offered for them.
+    pub bound: bool,
 }
 
 impl BindSummaryWeb {
@@ -153,9 +183,38 @@ impl BindSummaryWeb {
         };
         active_path_unresolved.sort_by_key(ref_key);
         active_path_unresolved.dedup();
+
+        // Same two buckets, same active-IC filter, same order as the ref list
+        // above, so the banner and the per-part detail can never name different
+        // parts. `bound` is what separates the buckets: an unresolved part has no
+        // model, a resolved-but-open one has a model and a wiring problem.
+        let mut open_parts: Vec<WebOpenPart> = s
+            .active_path_unresolved
+            .iter()
+            .filter(|u| u.active_ic)
+            .map(|u| (u, false))
+            .chain(
+                s.resolved_but_open_active
+                    .iter()
+                    .filter(|u| u.active_ic)
+                    .map(|u| (u, true)),
+            )
+            .map(|(u, bound)| WebOpenPart {
+                reference: u.reference.clone(),
+                value: u.value.clone(),
+                reason: u.reason.clone(),
+                consequence: u.consequence.clone(),
+                active_ic: u.active_ic,
+                bound,
+            })
+            .collect();
+        open_parts.sort_by_key(|p| ref_key(&p.reference));
+        open_parts.dedup_by(|a, b| a.reference == b.reference);
+
         BindSummaryWeb {
             critical_parts_bound: s.critical_parts_bound.clone(),
             active_path_unresolved,
+            open_parts,
         }
     }
 

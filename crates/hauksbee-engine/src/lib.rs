@@ -52,6 +52,7 @@ pub mod tui;
 pub mod waiver;
 pub mod web_dist;
 pub mod webcheck;
+pub mod webextract;
 
 pub use behavioral::{BehavioralDevice, CustomBehavior, CustomRegistry};
 pub use binder::{bind_board, bind_board_with, is_ground, power_rail_voltage, BoundBoard};

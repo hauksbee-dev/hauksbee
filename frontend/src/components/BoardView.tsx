@@ -5,6 +5,7 @@ import { CheckIcon, WarningIcon } from './Icons'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './BoardViewer'
 import { SelectionCard } from './SelectionCard'
 import { FirmwareJack } from './FirmwareJack'
+import { DatasheetExtract } from './DatasheetExtract'
 import { displayNet } from '../lib/net-name'
 import { cssToken, onThemeChange } from '../lib/theme-tokens'
 
@@ -222,6 +223,11 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
             </span>
           </div>
         )}
+
+        {/* Directly under the line that says a model is missing: the offer to
+            draft one. This is the moment the user learns they need it, and the
+            only moment they have the part number and the datasheet in mind. */}
+        <DatasheetExtract openParts={r.bind?.open_parts ?? []} />
 
         {/* Top-level honesty notes. The bind-role note restates exactly what
             the amber unresolved-parts line above already says (the JSON carries

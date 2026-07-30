@@ -46,6 +46,21 @@ hauksbee models resolve <board>  # per component: which entry won, which layer
 `~/.hauksbee/packs/<name>@<version>/` and are recorded in
 `~/.hauksbee/packs.toml` (the lockfile-ish record, sibling of the packs dir).
 
+### Publishing a drafted model
+
+A model drafted from a datasheet (either with `hauksbee models extract` or from
+the report page's "Draft a model from a datasheet", see
+[MODELS.md](MODELS.md)) lands in `~/.hauksbee/models/` carrying the provenance
+string `datasheet-extracted`. That is the same spelling `[pack] provenance`
+accepts, so packaging one needs no relabelling: copy the TOML into a pack's
+`models/` directory and set `provenance = "datasheet-extracted"` in
+`pack.toml`.
+
+Do not relabel it `vendor` or `hand-written` to make it look better. The
+provenance is how anyone installing the pack knows which numbers were read off
+a datasheet by a machine and are worth re-checking, and a pack that lies about
+that is worse than one with no models in it.
+
 ## Resolution priority
 
 Every model source has an explicit layer (`SourceLayer` in
