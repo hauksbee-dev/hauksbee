@@ -112,6 +112,67 @@ pub type DepsStatus = Arc<dyn Fn() -> String + Send + Sync>;
 /// on failure the message already carries the child's real output tail.
 pub type DepInstaller = Arc<dyn Fn(&str, &mut dyn FnMut(&str)) -> Result<(), String> + Send + Sync>;
 
+/// Everything one datasheet extraction needs. A struct rather than a tuple of
+/// four strings and a byte vector: the last time this was positional, `part`
+/// and `reference` were passed the wrong way round and the model came back
+/// named after a board refdes.
+pub struct DatasheetJob {
+    /// The uploaded PDF's own file name, for the progress log only.
+    pub pdf_name: String,
+    pub pdf: Vec<u8>,
+    /// The board reference this model is meant to bind (e.g. `U3`). Carried so
+    /// the reviewed card can say which part on the board it came from.
+    pub reference: String,
+    /// The manufacturer part number the model is for.
+    pub part: String,
+    /// The component-kind hint (`vreg`, `bjt_npn`, `i2c_sensor`, ...).
+    pub kind: String,
+}
+
+/// Whether an extraction could run at all, as a JSON string: `() -> JSON`.
+///
+/// Asked BEFORE the user is offered a file picker. An extraction that fails
+/// because codex is missing (or installed but not signed in) fails after the
+/// user has read the privacy notice, said yes, and chosen a datasheet, which is
+/// the worst possible moment to learn it was never going to work.
+pub type DatasheetReady = Arc<dyn Fn() -> String + Send + Sync>;
+
+/// Run one extraction, streaming human-readable progress through the sink:
+/// `(job, line_sink) -> Ok(model_card_json) | Err(message)`.
+///
+/// The Ok payload is the reviewable model card, NOT a saved file: nothing
+/// reaches the user's model library until they accept it through
+/// [`DatasheetSaver`].
+pub type DatasheetExtractor =
+    Arc<dyn Fn(DatasheetJob, &mut dyn FnMut(&str)) -> Result<String, String> + Send + Sync>;
+
+/// Save a reviewed model card into the user's model library:
+/// `(part, kind, toml) -> Ok(JSON) | Err(message)`. Called only after an
+/// explicit accept, and it re-validates the TOML it is handed rather than
+/// trusting that it is the same text the extractor produced.
+pub type DatasheetSaver = Arc<dyn Fn(&str, &str, &str) -> Result<String, String> + Send + Sync>;
+
+/// The datasheet-extraction backend, as one value. The three calls are a single
+/// consent contract (can it run, run it, keep the result) and a deployment that
+/// wired up one without the others would offer a flow that dead-ends.
+pub struct DatasheetHooks {
+    pub ready: DatasheetReady,
+    pub extract: DatasheetExtractor,
+    pub save: DatasheetSaver,
+}
+
+/// The engine-backed hooks the browser's tool panels need beyond board
+/// analysis: the dependency probe and installer, and datasheet extraction.
+///
+/// Grouped because they arrive together (one embedding binary supplies all of
+/// them, or none) and because the alternative was a router signature carrying
+/// five more positional `Arc`s.
+pub struct ToolHooks {
+    pub deps_status: DepsStatus,
+    pub install: DepInstaller,
+    pub datasheet: DatasheetHooks,
+}
+
 /// Largest board upload accepted (256 MiB). Real flagship layouts blow past a
 /// timid cap (the 3,443-component Tarski InputSystem .kicad_pcb is 44 MiB), and
 /// the server is localhost-only, so the limit exists solely to stop a
@@ -342,6 +403,185 @@ async fn deps_install_handler(
             Err(e) => tx.blocking_send(sse_event("error", &e)),
         };
     });
+    sse_response(rx)
+}
+
+/// Largest datasheet accepted (32 MiB). A datasheet is tens of pages of vector
+/// art; the largest real ones (a 600-page MCU reference manual) are under 30 MiB.
+/// The board limit would be absurd here, and the extraction copies the file and
+/// renders its pages, so an enormous upload costs disk and CPU before anything
+/// has been checked.
+const MAX_DATASHEET_BYTES: usize = 32 * 1024 * 1024;
+
+struct DatasheetState {
+    hooks: DatasheetHooks,
+}
+
+/// The datasheet-extraction API:
+/// `GET /api/models/extract/ready` (can an extraction run on this machine, and
+/// what does it cost), `POST /api/models/extract` (multipart `datasheet` +
+/// `part` + `kind` + `reference`; streams progress as SSE and ends with the
+/// reviewable model card), and `POST /api/models/save` (JSON `{part, kind,
+/// toml}`; writes an ACCEPTED card into the user's model library).
+///
+/// The split is the consent contract, not a convenience: extraction sends the
+/// datasheet off this machine, so it happens only on an explicit request, and
+/// its result is never written anywhere until a second explicit request says to
+/// keep it. Both mutating routes carry `reject_cross_site`; the extract route
+/// spends the user's LLM credit and the save route writes to their model
+/// library, so neither may be triggered by a page in another tab.
+pub fn datasheet_routes(hooks: DatasheetHooks) -> Router {
+    let state = Arc::new(DatasheetState { hooks });
+    Router::new()
+        .route("/api/models/extract/ready", get(datasheet_ready_handler))
+        .route("/api/models/extract", post(datasheet_extract_handler))
+        .route("/api/models/save", post(datasheet_save_handler))
+        .layer(DefaultBodyLimit::max(MAX_DATASHEET_BYTES))
+        .with_state(state)
+}
+
+/// GET `/api/models/extract/ready`: relay the engine's readiness JSON. The
+/// probe asks codex for its own login state (a subprocess), so it runs on the
+/// blocking pool.
+async fn datasheet_ready_handler(State(state): State<Arc<DatasheetState>>) -> impl IntoResponse {
+    let ready = state.hooks.ready.clone();
+    let json = tokio::task::spawn_blocking(move || (ready)())
+        .await
+        .unwrap_or_else(|_| {
+            "{\"ready\":false,\"reason\":\"the readiness probe panicked; see the server log\"}"
+                .to_string()
+        });
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "application/json")],
+        json,
+    )
+}
+
+/// POST `/api/models/extract`: run one extraction and stream it as SSE, the
+/// same framing the dependency installs use (`log` lines, then exactly one
+/// `card` or `error`). Streaming rather than one long request because a codex
+/// extraction runs for minutes: a silent request is indistinguishable from a
+/// hang, and this one is spending the user's money while it looks dead.
+///
+/// The `card` payload is the model for review. Nothing has been written at that
+/// point; `POST /api/models/save` is what keeps it.
+async fn datasheet_extract_handler(
+    State(state): State<Arc<DatasheetState>>,
+    headers: HeaderMap,
+    mut multipart: Multipart,
+) -> axum::response::Response {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp.into_response();
+    }
+    let parts = match parse_upload(&mut multipart).await {
+        Ok(p) => p,
+        Err(msg) => return sse_once("error", &msg),
+    };
+    let Some(pdf) = parts.datasheet_bytes else {
+        return sse_once(
+            "error",
+            "no datasheet in the upload (expected a 'datasheet' part)",
+        );
+    };
+    let (part, kind) = match (parts.part, parts.kind) {
+        (Some(p), Some(k)) if !p.trim().is_empty() && !k.trim().is_empty() => (p, k),
+        _ => {
+            return sse_once(
+                "error",
+                "the extraction request needs a 'part' (the manufacturer part number) and a \
+                 'kind' (the component kind) part",
+            )
+        }
+    };
+    let job = DatasheetJob {
+        pdf_name: parts.datasheet_name,
+        pdf,
+        reference: parts.reference.unwrap_or_default(),
+        part,
+        kind,
+    };
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<String>(256);
+    let extract = state.hooks.extract.clone();
+    tokio::task::spawn_blocking(move || {
+        let result = {
+            let tx = tx.clone();
+            let mut sink = move |line: &str| {
+                // A send failure means the browser went away. Unlike an
+                // install, there is nothing worth finishing for: the card would
+                // have nobody to review it. The extraction still runs to the
+                // end because it has already been paid for and cannot be
+                // recalled, we just stop relaying.
+                let _ = tx.blocking_send(sse_event("log", line));
+            };
+            (extract)(job, &mut sink)
+        };
+        let _ = match result {
+            Ok(card_json) => tx.blocking_send(sse_event("card", &card_json)),
+            Err(e) => tx.blocking_send(sse_event("error", &e)),
+        };
+    });
+    sse_response(rx)
+}
+
+/// POST `/api/models/save`: write an accepted model card into the user's model
+/// library. Body is JSON `{part, kind, toml}`; `toml` is the text the user saw
+/// and accepted (they may have edited it), so the engine re-validates it before
+/// writing rather than assuming it is still the extractor's own output.
+async fn datasheet_save_handler(
+    State(state): State<Arc<DatasheetState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> impl IntoResponse {
+    if let Some(resp) = reject_cross_site(&headers) {
+        return resp;
+    }
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(&body) else {
+        return json_error("the save request body is not JSON");
+    };
+    let field = |k: &str| {
+        value
+            .get(k)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    let (part, kind, toml) = (field("part"), field("kind"), field("toml"));
+    if part.trim().is_empty() || toml.trim().is_empty() {
+        return json_error("the save request needs a non-empty 'part' and 'toml'");
+    }
+    let save = state.hooks.save.clone();
+    match tokio::task::spawn_blocking(move || (save)(&part, &kind, &toml)).await {
+        Ok(Ok(json)) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "application/json")],
+            json,
+        ),
+        Ok(Err(msg)) => json_error(&msg),
+        Err(_) => json_error("the save task panicked; see the server log"),
+    }
+}
+
+/// An SSE response carrying exactly one frame, for a request rejected before
+/// any work started. The client reads this endpoint as a stream, so a refusal
+/// has to arrive in the stream's own language or it shows up as a parse failure
+/// instead of the reason.
+fn sse_once(kind: &str, text: &str) -> axum::response::Response {
+    axum::response::Response::builder()
+        .status(StatusCode::OK)
+        .header(header::CONTENT_TYPE, "text/event-stream")
+        .header(header::CACHE_CONTROL, "no-cache")
+        .body(axum::body::Body::from(sse_event(kind, text)))
+        .expect("static headers build")
+}
+
+/// Wrap a worker's line channel as a `text/event-stream` body. Shared by the
+/// dependency installs and datasheet extraction so the two streams cannot drift
+/// in framing or headers (the compression layer exempts `text/event-stream`,
+/// which is why lines reach the browser as they happen rather than sitting in a
+/// gzip buffer).
+fn sse_response(rx: tokio::sync::mpsc::Receiver<String>) -> axum::response::Response {
     use tokio_stream::StreamExt as _;
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx)
         .map(|s| Ok::<Bytes, std::convert::Infallible>(Bytes::from(s)));
@@ -387,6 +627,12 @@ struct UploadedParts {
     fw_name: String,
     fw_bytes: Option<Vec<u8>>,
     spec: Option<String>,
+    /// The datasheet PDF and what to extract from it (`/api/models/extract`).
+    datasheet_name: String,
+    datasheet_bytes: Option<Vec<u8>>,
+    part: Option<String>,
+    kind: Option<String>,
+    reference: Option<String>,
 }
 
 /// Drain a multipart body into [`UploadedParts`], or return the user-facing
@@ -402,6 +648,7 @@ struct UploadedParts {
 async fn parse_upload(multipart: &mut Multipart) -> Result<UploadedParts, String> {
     let mut parts = UploadedParts {
         board_name: "board".to_string(),
+        datasheet_name: "datasheet.pdf".to_string(),
         ..Default::default()
     };
     loop {
@@ -432,6 +679,22 @@ async fn parse_upload(multipart: &mut Multipart) -> Result<UploadedParts, String
                 }
             }
             "spec" => parts.spec = Some(String::from_utf8_lossy(&data).into_owned()),
+            "datasheet" => {
+                if let Some(f) = filename {
+                    parts.datasheet_name = f;
+                }
+                if !data.is_empty() {
+                    parts.datasheet_bytes = Some(data.to_vec());
+                }
+            }
+            // The extraction's three text fields. Trimmed here because a
+            // browser form happily posts a trailing newline and a part number
+            // with one on the end matches nothing.
+            "part" => parts.part = Some(String::from_utf8_lossy(&data).trim().to_string()),
+            "kind" => parts.kind = Some(String::from_utf8_lossy(&data).trim().to_string()),
+            "reference" => {
+                parts.reference = Some(String::from_utf8_lossy(&data).trim().to_string())
+            }
             _ => {}
         }
     }

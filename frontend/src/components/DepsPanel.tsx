@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { CheckIcon } from './Icons'
+import { readSseStream } from '../lib/sse'
 
 // The dependency panel (landing page): which optional co-sim backends and
 // oracles this machine has, what each unlocks, and a one-click install where
@@ -30,18 +31,6 @@ type InstallState =
   | { phase: 'idle' }
   | { phase: 'running'; id: string; log: string[] }
   | { phase: 'ended'; id: string; ok: boolean; message: string; log: string[] }
-
-/** Parse one SSE frame (the text between blank lines) into event + data. */
-function parseSseFrame(raw: string): { event: string; data: string } {
-  let event = 'log'
-  const data: string[] = []
-  for (const line of raw.split('\n')) {
-    if (line.startsWith('event: ')) event = line.slice(7).trim()
-    else if (line.startsWith('data: ')) data.push(line.slice(6))
-    else if (line === 'data:') data.push('')
-  }
-  return { event, data: data.join('\n') }
-}
 
 function CopyCmd({ text }: { text: string }) {
   const [copied, setCopied] = useState(false)
@@ -137,23 +126,12 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
         end(false, `the server refused the install (${res.status} ${res.statusText})`)
         return
       }
-      const reader = res.body.getReader()
-      const dec = new TextDecoder()
-      let buf = ''
       let ended = false
-      for (;;) {
-        const { done, value } = await reader.read()
-        if (done) break
-        buf += dec.decode(value, { stream: true })
-        let idx: number
-        while ((idx = buf.indexOf('\n\n')) >= 0) {
-          const { event, data } = parseSseFrame(buf.slice(0, idx))
-          buf = buf.slice(idx + 2)
-          if (event === 'log') append(data)
-          else if (event === 'done') { ended = true; end(true, 'Installed and verified.') }
-          else if (event === 'error') { ended = true; end(false, data) }
-        }
-      }
+      await readSseStream(res.body, ({ event, data }) => {
+        if (event === 'log') append(data)
+        else if (event === 'done') { ended = true; end(true, 'Installed and verified.') }
+        else if (event === 'error') { ended = true; end(false, data) }
+      })
       if (!ended) end(false, 'the connection closed before the install reported a result')
     } catch (e) {
       end(false, `install request failed: ${e instanceof Error ? e.message : String(e)}`)

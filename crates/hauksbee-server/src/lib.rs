@@ -16,7 +16,7 @@ use axum::response::IntoResponse;
 use axum::routing::get;
 use axum::Router;
 use engine::Engine;
-use frontdoor::{CheckRunner, DepInstaller, DepsStatus, FirmwareAnalyzer, LiveLauncher};
+use frontdoor::{CheckRunner, FirmwareAnalyzer, LiveLauncher, ToolHooks};
 use protocol::{ClientMessage, ServerMessage, SessionBacklog, SimFrame, Status};
 use std::path::Path;
 use std::sync::Arc;
@@ -337,7 +337,7 @@ impl Server {
         board_file: Option<(String, String)>,
         analyze: FirmwareAnalyzer,
         check: Option<CheckRunner>,
-        deps: Option<(DepsStatus, DepInstaller)>,
+        tools: Option<ToolHooks>,
         launch: Option<LiveLauncher>,
         startup_json: String,
     ) -> Router {
@@ -347,7 +347,7 @@ impl Server {
             board_file,
             Some(analyze),
             check,
-            deps,
+            tools,
             launch,
             startup_json,
         )
@@ -363,7 +363,7 @@ impl Server {
         board_file: Option<(String, String)>,
         analyze: FirmwareAnalyzer,
         check: Option<CheckRunner>,
-        deps: Option<(DepsStatus, DepInstaller)>,
+        tools: Option<ToolHooks>,
         launch: Option<LiveLauncher>,
         startup_json: String,
     ) -> anyhow::Result<()> {
@@ -373,7 +373,7 @@ impl Server {
             board_file,
             analyze,
             check,
-            deps,
+            tools,
             launch,
             startup_json,
         );
@@ -393,7 +393,7 @@ impl Server {
         board_file: Option<(String, String)>,
         analyze: FirmwareAnalyzer,
         check: Option<CheckRunner>,
-        deps: Option<(DepsStatus, DepInstaller)>,
+        tools: Option<ToolHooks>,
         launch: Option<LiveLauncher>,
         startup_json: String,
     ) -> anyhow::Result<()> {
@@ -402,7 +402,7 @@ impl Server {
             board_file,
             analyze,
             check,
-            deps,
+            tools,
             launch,
             startup_json,
         );
@@ -423,7 +423,7 @@ fn unified_router(
     board_file: Option<(String, String)>,
     analyze: Option<FirmwareAnalyzer>,
     check: Option<CheckRunner>,
-    deps: Option<(DepsStatus, DepInstaller)>,
+    tools: Option<ToolHooks>,
     launch: Option<LiveLauncher>,
     startup_json: String,
 ) -> Router {
@@ -453,10 +453,14 @@ fn unified_router(
         router = router.merge(frontdoor::check_route(check));
     }
     // The dependency panel's backend (`GET /api/deps`, `POST
-    // /api/deps/install/{id}`): present whenever the embedding binary supplied
-    // the engine's probe + installer hooks.
-    if let Some((status, install)) = deps {
-        router = router.merge(frontdoor::deps_routes(status, install));
+    // /api/deps/install/{id}`) and the datasheet-extraction backend
+    // (`/api/models/*`): present whenever the embedding binary supplied the
+    // engine's hooks. Mounted together because they are one panel's worth of
+    // capability, and because a UI that can see codex in the dependency list
+    // but cannot reach the extract route would offer a button that 404s.
+    if let Some(tools) = tools {
+        router = router.merge(frontdoor::deps_routes(tools.deps_status, tools.install));
+        router = router.merge(frontdoor::datasheet_routes(tools.datasheet));
     }
     // `/api/startup`: the frontend reads this once on load to decide whether to
     // show the drop zone (serve) or a preloaded board's report (run --serve).
@@ -520,7 +524,7 @@ pub async fn serve_frontdoor(
     static_dir: Option<&Path>,
     analyze: FirmwareAnalyzer,
     check: Option<CheckRunner>,
-    deps: Option<(DepsStatus, DepInstaller)>,
+    tools: Option<ToolHooks>,
     startup_json: String,
 ) -> anyhow::Result<()> {
     let (listener, _bound) = bind_frontdoor(addr).await?;
@@ -529,7 +533,7 @@ pub async fn serve_frontdoor(
         static_dir,
         analyze,
         check,
-        deps,
+        tools,
         None,
         startup_json,
     )
@@ -557,7 +561,7 @@ pub async fn serve_frontdoor_on(
     static_dir: Option<&Path>,
     analyze: FirmwareAnalyzer,
     check: Option<CheckRunner>,
-    deps: Option<(DepsStatus, DepInstaller)>,
+    tools: Option<ToolHooks>,
     launch: Option<LiveLauncher>,
     startup_json: String,
 ) -> anyhow::Result<()> {
@@ -570,7 +574,7 @@ pub async fn serve_frontdoor_on(
         None,
         Some(analyze),
         check,
-        deps,
+        tools,
         launch,
         startup_json,
     );
