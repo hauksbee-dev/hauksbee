@@ -296,8 +296,10 @@ struct ModelsExtractArgs {
     /// The part number the model is for (e.g. BC847B).
     #[arg(long)]
     part: String,
-    /// What kind of device it is (e.g. bjt_npn, ldo, opamp, i2c_sensor).
-    #[arg(long, default_value = "bjt_npn")]
+    /// What kind of device it is (bjt_npn, vreg, opamp, i2c_sensor, ...).
+    /// Omit it and the model works it out from the datasheet, which is usually
+    /// what you want: it is about to read the page that says so.
+    #[arg(long, default_value = "")]
     kind: String,
     /// Where to write the model card. Defaults to the user model directory.
     #[arg(long)]
