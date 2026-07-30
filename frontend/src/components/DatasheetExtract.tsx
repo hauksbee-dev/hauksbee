@@ -580,7 +580,10 @@ export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
                     />
                   </label>
                   <label className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
-                    <span className="block mb-1">What kind of part is it</span>
+                    <span className="block mb-1">
+                      What kind of part is it{' '}
+                      <span style={{ color: 'var(--silk-faint)' }}>(optional)</span>
+                    </span>
                     <select
                       data-testid="extract-kind"
                       className="hb-input text-[12px]"
@@ -588,7 +591,12 @@ export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
                       value={kind}
                       onChange={e => setKind(e.target.value)}
                     >
-                      <option value="">choose a kind ...</option>
+                      {/* The default. The datasheet says what the part is on
+                          its first page and the model is about to read it, so
+                          making someone classify their part first is a barrier
+                          at exactly the wrong moment. The picker stays for
+                          anyone who knows better than the model. */}
+                      <option value="">work it out from the datasheet</option>
                       {info.kinds.map(k => (
                         <option key={k.id} value={k.id}>{k.id} · {k.label}</option>
                       ))}
@@ -610,7 +618,7 @@ export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
                   <button
                     type="button"
                     data-testid="extract-run"
-                    disabled={!file || !kind || part.trim().length === 0}
+                    disabled={!file || part.trim().length === 0}
                     onClick={() => void run()}
                     className="hb-btn-primary hb-press px-3.5 text-[12px]"
                     style={{ height: 30 }}
