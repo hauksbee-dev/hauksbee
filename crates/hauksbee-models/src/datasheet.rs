@@ -56,13 +56,25 @@ const RENDER_DPI: u32 = 150;
 
 /// A private scratch directory holding everything one extraction may touch.
 ///
-/// This is the sandbox boundary. Codex runs full-auto with write access to its
-/// working directory, and that directory used to be *the folder the datasheet
-/// happened to sit in*: pointing the tool at `~/Downloads/part.pdf` handed an
-/// autonomous agent write access to the whole of Downloads. Now it gets a
-/// scratch copy and nothing else. It can still read, render, write scratch
-/// files and check its own work, which is the point; it just cannot reach
-/// anything of the user's while doing it.
+/// Codex runs full-auto with write access to its working directory, and that
+/// directory used to be *the folder the datasheet happened to sit in*: pointing
+/// the tool at `~/Downloads/part.pdf` handed an autonomous agent write access
+/// to the whole of Downloads. It now gets a scratch copy instead.
+///
+/// Be precise about what that does and does not buy, because the difference
+/// matters. `--sandbox workspace-write` confines WRITES to the writable roots
+/// (this directory, plus `$TMPDIR` and `/tmp`, which is where this directory
+/// lives anyway) and disables network access. It does NOT confine reads: under
+/// that profile the agent can still read anything the user can, including
+/// `~/.ssh`, and could copy what it read into `model.toml`, which we then parse
+/// and save. So this bounds blast radius and side effects; it is not a
+/// confidentiality boundary against a hostile model.
+///
+/// What makes that tolerable is the rest of the contract rather than the flag:
+/// the run happens only when the user asked for it, the output is a small TOML
+/// document validated against a schema before anything is saved, and the user
+/// reviews the card. A read-restricting profile would be better, and is worth
+/// revisiting if codex grows one.
 ///
 /// Dropping this removes the directory, so a killed run leaves nothing behind.
 #[derive(Debug)]
@@ -779,8 +791,14 @@ fn call_backend(prompt: &str, args: &Args) -> Result<String> {
 ///   * `--cd <pdf_dir>` so codex can open the datasheet PDF / extracted text
 ///     directly when pdftotext was unavailable.
 ///   * stdin must be closed/empty or codex blocks "Reading additional input
-///     from stdin..." forever. We give it an empty stdin and read only stdout
-///     (the final agent message); all session logging goes to stderr.
+///     from stdin..." forever. We give it an empty stdin and read only stdout;
+///     the answer itself comes from --output-last-message.
+///   * the prompt goes in a FILE inside the sandbox, not in argv. It embeds up
+///     to 40,000 characters of the datasheet, and argv is world-readable on
+///     Linux via /proc/<pid>/cmdline and visible to `ps -ww` on macOS. Putting
+///     the very text the user consented to send to OpenAI where any local user
+///     can read it would undo the consent. It also kept a large datasheet
+///     clear of ARG_MAX, which would otherwise fail as a generic spawn error.
 fn call_codex_backend(prompt: &str, args: &Args) -> Result<String> {
     // The sandbox is a scratch copy, never the user's own directory. See
     // `Workspace`: the agent runs full-auto, so what it can reach is the whole
@@ -886,9 +904,11 @@ fn run_codex_once(prompt: &str, ws: &Workspace) -> Result<String> {
     let mut cmd = Command::new("codex");
     cmd.args([
         "exec",
-        // Write access is confined to --cd, which is the scratch copy. The
-        // agent needs to write: it renders, greps and re-checks its own answer
-        // in there. What it must not reach is anything of the user's.
+        // Writes are confined to the writable roots: --cd plus $TMPDIR and
+        // /tmp. The agent needs to write, since it renders, greps and
+        // re-checks its own answer in there. Reads are NOT confined by this
+        // profile; see the Workspace doc for what that means and why the rest
+        // of the contract carries the weight.
         "--sandbox",
         "workspace-write",
         // Without this codex refuses to run outside a git repo, and the
@@ -906,11 +926,25 @@ fn run_codex_once(prompt: &str, ws: &Workspace) -> Result<String> {
     for page in &ws.pages {
         cmd.arg("--image").arg(page);
     }
+    // See the note above: the prompt is a file, and argv carries only its name.
+    let prompt_path = ws.dir.path().join("prompt.md");
+    std::fs::write(&prompt_path, prompt).context("writing the prompt into the sandbox")?;
     let mut child = cmd
-        .arg(prompt)
+        .arg(
+            "Read prompt.md in your working directory and follow it exactly. \
+             Write your answer to model.toml.",
+        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        // NOT piped. codex logs its whole session to stderr, and the poll loop
+        // below reads no pipe until the child has exited. A ten-minute agentic
+        // run overflows the 64 KiB pipe buffer, codex blocks in write(2),
+        // try_wait never reports an exit, and the loop burns the entire
+        // CODEX_TIMEOUT before killing it. The failure then reads "codex timed
+        // out with no answer", which points the blame at the model rather than
+        // at us. The answer arrives via --output-last-message, so the session
+        // log is not something we need to keep.
+        .stderr(Stdio::null())
         .spawn()
         .context(
             "spawning codex (is it installed and on PATH? `brew install codex` or set \
@@ -948,11 +982,14 @@ fn run_codex_once(prompt: &str, ws: &Workspace) -> Result<String> {
         .wait_with_output()
         .context("collecting codex output")?;
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
+        // stderr is not captured (see the spawn above), so report what codex
+        // put on stdout. Its session log is on the terminal, where a user
+        // watching a long run wants it anyway.
+        let tail = String::from_utf8_lossy(&output.stdout);
         bail!(
             "codex exited with status {}: {}",
             output.status,
-            stderr.lines().rev().take(5).collect::<Vec<_>>().join(" | ")
+            tail.lines().rev().take(5).collect::<Vec<_>>().join(" | ")
         );
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
