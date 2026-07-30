@@ -54,8 +54,16 @@ was measured against. This repository does **not** vendor the boards. They
 carry CC BY-SA, GPL-3.0, and CERN-OHL licences, and fetching means you get
 each one from its author under that author's terms rather than through us.
 
-Without the corpus, corpus-dependent tests report as ignored, never as passed.
-To make a missing corpus a hard failure instead (recommended in CI):
+Expect a partial fetch. Around 23 of the 28 boards land on a good day: one
+upstream hangs, one moved the revision its pin names, and two are skipped by
+default because their licence could not be confirmed. That is fine and it is
+not a broken checkout. A corpus test whose boards are absent skips and names
+what is missing, with the `--only <id>` line that fetches it, rather than
+failing in a way that reads as hauksbee being broken.
+
+Without the corpus at all, corpus-dependent tests report as ignored, never as
+passed. To make a missing or thin corpus a hard failure instead (recommended in
+CI):
 
 ```bash
 HAUKSBEE_REQUIRE_CORPUS=1 cargo test --workspace --features avr
