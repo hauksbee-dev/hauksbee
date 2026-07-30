@@ -610,7 +610,24 @@ async fn bind_with_fallback(addr: &str) -> anyhow::Result<tokio::net::TcpListene
     }
 }
 
-async fn ws_handler(ws: WebSocketUpgrade, State(hub): State<Arc<LiveHub>>) -> impl IntoResponse {
+async fn ws_handler(
+    ws: WebSocketUpgrade,
+    headers: axum::http::HeaderMap,
+    State(hub): State<Arc<LiveHub>>,
+) -> impl IntoResponse {
+    // The same-origin policy does not cover WebSockets. Any page in any tab can
+    // open ws://127.0.0.1:<port>/ws, and the port is guessable because the
+    // fallback ladder is a twenty-port range. Without this check that page
+    // receives the BoardInfo frame on connect, which is the netlist of whatever
+    // proprietary board the user is simulating, then every SimFrame after it,
+    // and can send Reset / Play / SetPowerSupply / Serial back down the same
+    // socket. The HTTP endpoints are guarded by `reject_cross_site`, but that
+    // reads `Sec-Fetch-Site`, which browsers do NOT send on a WS handshake, so
+    // this needs its own check against `Origin`.
+    if let Err(why) = origin_is_ours(&headers) {
+        return (StatusCode::FORBIDDEN, why).into_response();
+    }
+
     // No session yet (a `serve` front door before any live launch): refuse the
     // upgrade with a clear status instead of accepting a socket that would
     // never speak. The frontend only opens `/ws` after a successful launch, so
@@ -620,6 +637,45 @@ async fn ws_handler(ws: WebSocketUpgrade, State(hub): State<Arc<LiveHub>>) -> im
     };
     ws.on_upgrade(move |socket| handle_socket(socket, shared))
         .into_response()
+}
+
+/// Whether a WebSocket handshake came from our own page.
+///
+/// A browser always sends `Origin` on a WS handshake and cannot forge it from
+/// page script, so it is the reliable signal here. Only loopback origins pass:
+/// the server binds 127.0.0.1 only, so our own page is always served from one,
+/// and any other origin is by definition somebody else's site.
+///
+/// A missing `Origin` is allowed, because non-browser clients (a test, a CLI
+/// tool, `websocat`) do not send one and they are not the threat: this defends
+/// against a hostile PAGE, which cannot omit it.
+fn origin_is_ours(headers: &axum::http::HeaderMap) -> Result<(), &'static str> {
+    let Some(origin) = headers.get(axum::http::header::ORIGIN) else {
+        return Ok(());
+    };
+    let Ok(origin) = origin.to_str() else {
+        return Err("cross-origin websocket refused: unreadable Origin header");
+    };
+    let host = origin
+        .split("://")
+        .nth(1)
+        .unwrap_or(origin)
+        .split('/')
+        .next()
+        .unwrap_or("");
+    // Strip the port: any loopback port is our own server or another local
+    // tool, and the alternative is guessing which port we ended up on after
+    // the fallback ladder.
+    let hostname = host.rsplit_once(':').map(|(h, _)| h).unwrap_or(host);
+    if matches!(hostname, "127.0.0.1" | "localhost" | "[::1]" | "::1") {
+        Ok(())
+    } else {
+        Err(
+            "cross-origin websocket refused: this socket carries the board you are \
+             simulating and accepts control messages, so it answers only the hauksbee \
+             page itself",
+        )
+    }
 }
 
 /// GET `/boards/{name}`: the CURRENT live session's own board file, for the
@@ -1018,6 +1074,19 @@ async fn sim_loop(
                     // backlog instead of losing them on reload.
                     ClientMessage::AddProbe { net } => {
                         let mut backlog = shared.backlog.lock().expect("backlog lock");
+                        // Bounded because `net` is an arbitrary client string and
+                        // the whole list is replayed to every new subscriber, so an
+                        // uncapped list is both unbounded memory and unbounded work
+                        // per reconnect. A board with more nets than this does not
+                        // exist, so the cap only ever bites on a client sending
+                        // rubbish.
+                        const MAX_PROBES: usize = 512;
+                        if backlog.probes.len() >= MAX_PROBES {
+                            continue;
+                        }
+                        if net.len() > 256 {
+                            continue;
+                        }
                         if !backlog.probes.contains(&net) {
                             backlog.probes.push(net);
                         }
