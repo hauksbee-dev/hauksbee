@@ -53,8 +53,31 @@ pub fn corpus_dir(manifest_dir: &str) -> Option<PathBuf> {
 }
 
 /// One board inside the corpus, by path relative to the corpus root.
+///
+/// Two layouts are accepted, and that is not tidiness: the tests were written
+/// against a hand-built corpus laid out as `famous/<id>/...`, and
+/// `scripts/fetch-corpus.sh` writes `<id>/...` with no `famous/` level. They
+/// had never agreed, so every corpus test skipped for anyone who followed
+/// CONTRIBUTING and ran the fetch: the directory existed, so the skip did not
+/// fire, and no board was ever found at the path a test asked for. A gate that
+/// silently matches nothing is worse than no gate, because it reports as
+/// evidence. Resolving both layouts fixes it for both users without forcing
+/// either to move their corpus.
 pub fn corpus_board(manifest_dir: &str, rel: &str) -> Option<PathBuf> {
-    let p = corpus_dir(manifest_dir)?.join(rel);
+    let root = corpus_dir(manifest_dir)?;
+    let direct = root.join(rel);
+    if direct.exists() {
+        return Some(direct);
+    }
+    // The fetch layout: the same path with the `famous/` level removed.
+    if let Some(stripped) = rel.strip_prefix("famous/") {
+        let p = root.join(stripped);
+        if p.exists() {
+            return Some(p);
+        }
+    }
+    // The hand-built layout, for a rel that did not carry the prefix.
+    let p = root.join("famous").join(rel);
     p.exists().then_some(p)
 }
 
