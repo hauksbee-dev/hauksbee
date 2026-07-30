@@ -593,63 +593,39 @@ fn user_model_dir() -> Option<PathBuf> {
 /// what arrives here is not necessarily what the extractor produced, and writing
 /// an invalid model into the library would turn every later run's bind step into
 /// a puzzle.
-/// Report what hauksbee can do with a pasted SPICE model, card by card.
+/// Report what hauksbee can do with a pasted SPICE deck.
 ///
 /// Someone arriving with a vendor `.lib` deserves to know what of it we handle
-/// BEFORE they commit to it, and to be told why for anything we refuse. An
-/// unexplained "unsupported" is where trust goes: the user cannot tell whether
-/// their file is wrong, their part is exotic, or we are simply thin.
+/// BEFORE they commit, and to be told why for anything refused. An unexplained
+/// "unsupported" is where trust goes: the user cannot tell whether their file
+/// is wrong, their part is exotic, or we are simply thin.
 ///
-/// Be honest about the shape of the support. The SPICE reader parses `.model`
-/// and `.subckt` cards and keeps their parameters and ports; it is not a SPICE
-/// evaluator. A `.model` of a type we map (a BJT, a diode, a MOSFET) becomes a
-/// device the solver runs. A `.subckt` is a netlist of other parts, and we
-/// report it rather than pretending to flatten it.
+/// The answer comes from the REAL front end, `hauksbee_ir::SpiceLoader`, and
+/// that matters. An earlier version of this asked a minimal card scanner in
+/// hauksbee-models instead, and reported that a `.subckt` "will not simulate on
+/// its own". That was false: the loader flattens subcircuits at load, mangling
+/// internal names, mapping formal ports to actual nodes, recursing through
+/// nested calls with a depth guard, and substituting per-instance parameters.
+/// Most vendor models ship as a subckt, so telling those users we could not
+/// run theirs would have turned a supported path into a refusal. Ask the thing
+/// that would actually do the work.
 pub fn spice_report(text: &str) -> Result<String, String> {
-    let cards = hauksbee_models::spice_input::parse_spice_text(text)
-        .map_err(|e| format!("this does not parse as SPICE: {e}"))?;
-    if cards.is_empty() {
-        return Err(
-            "no .model or .subckt card found. Paste the card itself, not a whole netlist \
-             or a schematic export."
-                .to_string(),
-        );
+    if text.trim().is_empty() {
+        return Err("nothing to check yet".to_string());
     }
-    let mut lines = Vec::new();
-    for c in &cards {
-        match c.kind {
-            hauksbee_models::spice_input::SpiceCardKind::Model => {
-                let ty = c.model_type.as_deref().unwrap_or("?");
-                let mapped = matches!(
-                    ty.to_ascii_uppercase().as_str(),
-                    "NPN" | "PNP" | "D" | "NMOS" | "PMOS"
-                );
-                if mapped {
-                    lines.push(format!(
-                        "SUPPORTED  .model {} ({}), {} parameter(s): hauksbee runs this as a \
-                         device",
-                        c.name,
-                        ty,
-                        c.params.len()
-                    ));
-                } else {
-                    lines.push(format!(
-                        "NOT MAPPED .model {} ({}): hauksbee maps NPN, PNP, D, NMOS and PMOS \
-                         cards. This type is parsed but has no device behind it yet.",
-                        c.name, ty
-                    ));
-                }
-            }
-            hauksbee_models::spice_input::SpiceCardKind::Subckt => lines.push(format!(
-                "SUBCIRCUIT .subckt {} ({} port(s)): a subcircuit is a netlist of other \
-                 parts rather than a device. hauksbee reads its ports and text but does not \
-                 flatten it into a solvable circuit, so it will not simulate on its own.",
-                c.name,
-                c.ports.len()
-            )),
-        }
+    match hauksbee_ir::SpiceLoader::load(text) {
+        Ok(circuit) => Ok(format!(
+            "hauksbee loads this: {} device(s) over {} node(s) after flattening. \
+             Subcircuits are spliced in, so what the solver sees is a flat deck.",
+            circuit.devices.len(),
+            circuit.node_count()
+        )),
+        // The loader's own error, verbatim. It already names the line, the
+        // directive and, inside a spliced subckt body, both the body line and
+        // the call site. Rewording it would lose exactly the part that lets
+        // someone find the problem in their file.
+        Err(e) => Err(format!("hauksbee cannot load this deck: {e}")),
     }
-    Ok(lines.join("\n"))
 }
 
 /// Validate a hand-written model WITHOUT saving it.
