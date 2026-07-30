@@ -163,6 +163,8 @@ pub struct DatasheetHooks {
     pub save: DatasheetSaver,
     /// Validate a model without keeping it, for the write-your-own editor.
     pub check: DatasheetChecker,
+    /// Report what the SPICE front end makes of a pasted deck.
+    pub spice_check: DatasheetChecker,
 }
 
 /// The engine-backed hooks the browser's tool panels need beyond board
@@ -603,7 +605,18 @@ async fn datasheet_check_handler(
         .and_then(serde_json::Value::as_str)
         .unwrap_or("")
         .to_string();
-    let check = state.hooks.check.clone();
+    // Two formats through one endpoint, because the editor is one box with a
+    // toggle and a second route would only duplicate the cross-site guard and
+    // the blocking-pool handoff.
+    let spice = value
+        .get("format")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|f| f.eq_ignore_ascii_case("spice"));
+    let check = if spice {
+        state.hooks.spice_check.clone()
+    } else {
+        state.hooks.check.clone()
+    };
     match tokio::task::spawn_blocking(move || (check)(&toml)).await {
         Ok(Ok(summary)) => (
             StatusCode::OK,
