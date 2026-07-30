@@ -43,3 +43,20 @@ codex-routing-mosfet-review.log
 
 # Agent verification screenshots (scratch, never repo content)
 uifix/
+
+# The board corpus is fetched, never vendored. Every board comes from its own
+# author under CC BY-SA, GPL-3.0 or CERN-OHL, and obtaining each one directly
+# from that author under that author's terms is the whole reason this
+# repository does not carry them. CONTRIBUTING tells people to run
+# scripts/fetch-corpus.sh, so without this line a `git add -A` after following
+# our own instructions commits a few hundred MB of third-party hardware into a
+# repo that has no right to redistribute it.
+board-corpus/
+
+# Boards that a fetch dropped at the repository root rather than under
+# board-corpus/. Ignored so they cannot be committed by accident; delete them
+# when you find them.
+/crkbd/
+/lily58/
+/mppt_1210_hus/
+/zswatch_devkit_1_2_0/
