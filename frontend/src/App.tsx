@@ -281,6 +281,11 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
   // Fault chips count faulted PARTS (the card in the sim rail counts its own
   // fault conditions and labels itself); every surface must say what it counts.
   const faultChipLabel = `${simStatus.faults} part${simStatus.faults === 1 ? '' : 's'} faulted`
+  // A session that was live and lost its socket is not "paused": the chip said
+  // so anyway, which read as a sim sitting there waiting for a play button.
+  // `simMounted` is what proves there WAS a session to lose (the view only
+  // mounts on a real launch), so a not-yet-connected shell never reads as one.
+  const simOffline = simMounted && !simStatus.connected
 
   const chips: React.ReactNode[] = []
   if (view === 'sim') {
@@ -288,7 +293,9 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
     // analyzed board's findings/checks chips belong to the Board/Checks
     // surfaces, and "another session is live: X" while viewing exactly that
     // session mislabeled the very surface the user was on.
-    if (sessionMatchesCurrent) {
+    if (simOffline) {
+      chips.push(chip('sim offline', 'err', undefined, 'chip-sim'))
+    } else if (sessionMatchesCurrent) {
       if (simStatus.faults > 0) {
         chips.push(chip(faultChipLabel, 'err', () => setView('sim'), 'chip-faults'))
       }
@@ -318,7 +325,9 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
       else if (invalid > 0) chips.push(chip(`checks ${invalid} invalid`, 'warn', () => setView('checks'), 'chip-checks'))
       else chips.push(chip(`checks ${passed} passed`, 'ok', () => setView('checks'), 'chip-checks'))
     }
-    if (simMounted && sessionMatchesCurrent) {
+    if (simOffline) {
+      chips.push(chip('sim offline', 'err', () => setView('sim'), 'chip-sim'))
+    } else if (simMounted && sessionMatchesCurrent) {
       if (simStatus.faults > 0) {
         chips.push(chip(faultChipLabel, 'err', () => setView('sim'), 'chip-faults'))
       }
