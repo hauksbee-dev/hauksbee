@@ -409,3 +409,61 @@ fn run_tool(tool: &str, args: &[&str], doing: &str) -> anyhow::Result<()> {
     }
     Ok(())
 }
+
+/// `hauksbee models extract`: draft a device model from a PDF datasheet.
+///
+/// The consent gate is the point of this wrapper. The extractor sends the
+/// datasheet's text to an LLM backend, so the command states that and stops
+/// unless the caller has said yes, either interactively or with `--yes` for a
+/// script. Running the extraction and mentioning the fact afterwards would be
+/// the wrong order: the user cannot unsend it.
+pub fn extract(
+    pdf: &std::path::Path,
+    part: &str,
+    kind: &str,
+    out_dir: Option<&std::path::Path>,
+    assume_yes: bool,
+) -> anyhow::Result<()> {
+    use hauksbee_models::datasheet;
+
+    if !pdf.is_file() {
+        anyhow::bail!("no datasheet at '{}'", pdf.display());
+    }
+
+    println!("Extract a model for {part} ({kind}) from {}", pdf.display());
+    println!();
+    println!("{}", datasheet::CONSENT_NOTICE);
+    println!();
+
+    if !assume_yes {
+        // A tty can answer. A pipe cannot, and guessing "yes" on its behalf
+        // would send someone's datasheet because they ran the wrong command.
+        if !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+            anyhow::bail!(
+                "refusing to send anything without consent. This is not a terminal, so \
+                 there is nobody to ask: pass --yes if you meant it."
+            );
+        }
+        print!("Send the datasheet and draft a model? [y/N] ");
+        use std::io::Write;
+        std::io::stdout().flush().ok();
+        let mut answer = String::new();
+        std::io::stdin().read_line(&mut answer)?;
+        if !matches!(answer.trim().to_ascii_lowercase().as_str(), "y" | "yes") {
+            println!("Nothing was sent.");
+            return Ok(());
+        }
+    }
+
+    let args = datasheet::Args::new(pdf.to_path_buf(), part.to_string(), kind.to_string())
+        .out_dir(out_dir.map(std::path::Path::to_path_buf));
+    datasheet::run(args)?;
+
+    println!();
+    println!(
+        "This model is a draft with provenance \"datasheet-extracted\". Read it before you \
+         trust a result that depends on it, and check any value the datasheet did not state \
+         outright."
+    );
+    Ok(())
+}

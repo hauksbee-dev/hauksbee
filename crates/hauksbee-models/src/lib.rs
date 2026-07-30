@@ -38,6 +38,7 @@
 //! ```
 
 pub mod behavioral;
+pub mod datasheet;
 pub mod logic_spec;
 pub mod matcher;
 pub mod pack;

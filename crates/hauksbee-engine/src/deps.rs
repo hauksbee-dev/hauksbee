@@ -149,9 +149,15 @@ fn which_codex() -> Option<std::path::PathBuf> {
 }
 
 fn codex_version(bin: &std::path::Path) -> Option<String> {
-    let out = std::process::Command::new(bin).arg("--version").output().ok()?;
+    let out = std::process::Command::new(bin)
+        .arg("--version")
+        .output()
+        .ok()?;
     let s = String::from_utf8_lossy(&out.stdout);
-    s.lines().next().map(|l| l.trim().to_string()).filter(|l| !l.is_empty())
+    s.lines()
+        .next()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
 }
 
 /// The `/api/deps` response body: `{"deps":[...]}`.
@@ -189,7 +195,7 @@ fn probe_renode() -> DepStatus {
             Ok(p) => DepStatus {
                 // A local binary: running it sends nothing anywhere.
                 sends_data_offhost: None,
-                                        id: "renode",
+                id: "renode",
                 name: "Renode",
                 present: true,
                 path: Some(p.display().to_string()),
@@ -203,7 +209,7 @@ fn probe_renode() -> DepStatus {
             Err(e) => DepStatus {
                 // A local binary: running it sends nothing anywhere.
                 sends_data_offhost: None,
-                                        id: "renode",
+                id: "renode",
                 name: "Renode",
                 present: false,
                 path: None,
@@ -221,7 +227,7 @@ fn probe_renode() -> DepStatus {
         DepStatus {
             // A local binary: running it sends nothing anywhere.
             sends_data_offhost: None,
-                            id: "renode",
+            id: "renode",
             name: "Renode",
             present: false,
             path: None,
@@ -259,7 +265,7 @@ fn probe_esp_qemu() -> DepStatus {
             (Ok(x), Ok(r)) => DepStatus {
                 // A local binary: running it sends nothing anywhere.
                 sends_data_offhost: None,
-                                        id: "esp-qemu",
+                id: "esp-qemu",
                 name: "Espressif QEMU",
                 present: true,
                 path: Some(format!("{}; {}", x.display(), r.display())),
@@ -291,7 +297,7 @@ fn probe_esp_qemu() -> DepStatus {
                 DepStatus {
                     // A local binary: running it sends nothing anywhere.
                     sends_data_offhost: None,
-                                                    id: "esp-qemu",
+                    id: "esp-qemu",
                     name: "Espressif QEMU",
                     present: false,
                     path: None,
@@ -310,7 +316,7 @@ fn probe_esp_qemu() -> DepStatus {
         DepStatus {
             // A local binary: running it sends nothing anywhere.
             sends_data_offhost: None,
-                            id: "esp-qemu",
+            id: "esp-qemu",
             name: "Espressif QEMU",
             present: false,
             path: None,
@@ -378,7 +384,7 @@ fn probe_ngspice() -> DepStatus {
         Some(p) => DepStatus {
             // A local binary: running it sends nothing anywhere.
             sends_data_offhost: None,
-                            id: "ngspice",
+            id: "ngspice",
             name: "ngspice",
             present: true,
             version: ngspice_version(&p),
@@ -392,7 +398,7 @@ fn probe_ngspice() -> DepStatus {
         None => DepStatus {
             // A local binary: running it sends nothing anywhere.
             sends_data_offhost: None,
-                            id: "ngspice",
+            id: "ngspice",
             name: "ngspice",
             present: false,
             path: None,
@@ -460,7 +466,7 @@ fn probe_kicad_cli() -> DepStatus {
         Some((path, ver)) => DepStatus {
             // A local binary: running it sends nothing anywhere.
             sends_data_offhost: None,
-                            id: "kicad-cli",
+            id: "kicad-cli",
             name: "kicad-cli",
             present: true,
             path: Some(path),
@@ -474,7 +480,7 @@ fn probe_kicad_cli() -> DepStatus {
         None => DepStatus {
             // A local binary: running it sends nothing anywhere.
             sends_data_offhost: None,
-                            id: "kicad-cli",
+            id: "kicad-cli",
             name: "kicad-cli",
             present: false,
             path: None,
@@ -504,7 +510,7 @@ fn probe_avr() -> DepStatus {
         DepStatus {
             // A local binary: running it sends nothing anywhere.
             sends_data_offhost: None,
-                            id: "avr",
+            id: "avr",
             name: "AVR (simavr)",
             present: true,
             path: None,
@@ -521,7 +527,7 @@ fn probe_avr() -> DepStatus {
         DepStatus {
             // A local binary: running it sends nothing anywhere.
             sends_data_offhost: None,
-                            id: "avr",
+            id: "avr",
             name: "AVR (simavr)",
             present: false,
             path: None,
