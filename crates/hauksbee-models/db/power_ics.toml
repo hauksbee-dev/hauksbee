@@ -172,6 +172,13 @@ description = "Nordic nPM1300 PMIC (behavioural: SHPHLD internal pull-up to VSYS
 value_re = "(?i)nPM1300"
 
 [models.params]
+# KNOWN GAP: this seeds the vreg path for BUCK1, but no BUCK1 pin is mapped
+# below, so the binder finds no output net and the part reports "vreg output
+# not connected" on any board carrying it. The seven mapped pins are the ones
+# the ship-hold behaviour needs. Filling it means the real BUCK1 output pin
+# number from the Nordic nPM1300 datasheet; guessing one would regulate
+# whatever net happened to sit on that pin. Exempted by name in
+# tests/pin_roles.rs so that test still guards every other model.
 vout = 1.8          # liveness seed for the vreg path (BUCK1)
 dropout_v = 0.2
 iq_a = 0.001
@@ -322,3 +329,73 @@ vil       = 0.8
 # Source: LM5109 datasheet SNVSA31C, Table 7.1 Absolute Maximum Ratings.
 max_voltage_v       = 15.0    # VDD abs max (V), datasheet
 max_junction_temp_c = 150.0   # Tj max (C), datasheet
+
+# ── TP4054: 800 mA single-cell Li-ion linear charger, SOT-23-5 ────────────────
+#
+# Watchy U3. A constant-current / constant-voltage linear charger: it drives
+# BAT from VCC at a current the PROG resistor programs, until the cell reaches
+# the fixed 4.2 V float, then holds that voltage while the current tapers.
+#
+# Source: NanJing Top Power ASIC Corp "TP4054, 800mA Standalone Linear Li-Ion
+#   Battery Charger with Thermal Regulation in SOT-23-5", datasheet rev 1.4.
+#
+# Datasheet figures used (Electrical Characteristics, VCC = 5 V, TA = 25 C
+# unless noted):
+#   VFLOAT   = 4.2 V +/-1%              the regulated cell voltage
+#   IBAT     = 1000 / RPROG (A)         @ RPROG in ohms, current-mode
+#                                        (RPROG = 10k gives 100 mA; watchy fits
+#                                         a 5k1, which programs ~196 mA)
+#   VCC      = 4.25 V to 6.5 V          recommended operating input
+#   ICC(sd)  = 50 uA typ                @ standby, charge terminated
+#   VUVLO    = 3.8 V typ (rising)       under-voltage lockout
+#   RON      = 0.4 ohm typ              internal pass element, VCC = 5 V
+#   ITERM    = 0.1 * IBAT               charge terminates at C/10
+#
+# MODELLED AS a voltage source behind the pass element, which is what the board
+# can observe: the rail the cell sits on, how hard it is driven, and what the
+# charger draws while doing it. The CC-to-CV handover is a current limit on that
+# source, so a discharged cell sees the programmed current and a full one sees
+# the float voltage, which is the behaviour every other part on this board
+# reacts to.
+#
+# DELIBERATELY NOT MODELLED, because the datasheet's numbers do not support it
+# and a plausible guess would be worse than the gap: the thermal-regulation loop
+# that folds IBAT back above 120 C die temperature (stated as a behaviour, with
+# no transfer function given), the recharge-threshold hysteresis, and the
+# CHRG pin's open-drain status timing. None of them change a rail voltage on
+# this board, which is what hauksbee is asked about here.
+[[models]]
+id = "tp4054"
+kind = "vreg"
+description = "TP4054 single-cell Li-ion linear charger (behavioural: CC/CV to a 4.2 V float)"
+
+[models.match]
+value_re = "(?i)TP4054"
+
+[models.params]
+# The float voltage IS the output rail once the cell is charged, which is the
+# steady state a board check cares about.
+vout = 4.2
+# VCC - VBAT headroom the pass element needs. At the 800 mA ceiling and
+# RON = 0.4 ohm that is 0.32 V; 0.4 V is the honest round number and stays
+# above the measured drop rather than under it.
+dropout_v = 0.4
+iq_a = 0.00005     # 50 uA standby, datasheet typ
+
+[models.pins]
+# SOT-23-5 pinout, datasheet Pin Configuration. The role names are the BINDER's
+# vocabulary, not the datasheet's: the vreg path looks for `out` and `in`, so
+# naming pin 3 "bat" after the datasheet left the model matching the part and
+# then reporting "vreg output not connected", which reads as a board fault
+# rather than a model that named its own pins wrongly.
+"1" = "temp"       # TEMP, battery thermistor sense
+"2" = "gnd"
+"3" = "out"        # BAT on the datasheet: charge current out to the cell
+"4" = "in"         # VCC on the datasheet: input supply
+"5" = "prog"       # PROG, charge-current program resistor to ground
+
+[models.ratings]
+# Abs max VCC is 8 V; the recommended ceiling is 6.5 V, and a check should fire
+# on the recommended limit rather than waiting for the destruct limit.
+max_voltage_v = 6.5
+max_junction_temp_c = 125.0
