@@ -182,8 +182,23 @@ impl VcdSink {
     }
 
     /// Write the VCD to the configured path (no-op if none set).
+    /// Create the output's parent directory if it is not there.
+    ///
+    /// Naming an output under a directory that does not exist yet is an
+    /// ordinary thing to do, and the bare failure is "No such file or
+    /// directory (os error 2)" with no mention of which path or why. A run
+    /// that has already done the simulation should not throw the result away
+    /// over a missing folder.
+    fn ensure_parent(path: &Path) -> std::io::Result<()> {
+        match path.parent() {
+            Some(dir) if !dir.as_os_str().is_empty() => std::fs::create_dir_all(dir),
+            _ => Ok(()),
+        }
+    }
+
     pub fn write(&self) -> std::io::Result<()> {
         if let Some(p) = &self.path {
+            Self::ensure_parent(p)?;
             let mut f = std::fs::File::create(p)?;
             f.write_all(self.render().as_bytes())?;
         }
@@ -192,6 +207,7 @@ impl VcdSink {
 
     /// Write the VCD to an explicit path.
     pub fn write_to(&self, path: &Path) -> std::io::Result<()> {
+        Self::ensure_parent(path)?;
         let mut f = std::fs::File::create(path)?;
         f.write_all(self.render().as_bytes())?;
         Ok(())
