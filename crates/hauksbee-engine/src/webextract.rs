@@ -112,6 +112,7 @@ pub fn hooks() -> DatasheetHooks {
         ready: Arc::new(ready_json),
         extract: Arc::new(|job, progress| extract(job, progress)),
         save: Arc::new(save),
+        check: Arc::new(check),
     }
 }
 
@@ -592,6 +593,64 @@ fn user_model_dir() -> Option<PathBuf> {
 /// what arrives here is not necessarily what the extractor produced, and writing
 /// an invalid model into the library would turn every later run's bind step into
 /// a puzzle.
+/// Validate a hand-written model WITHOUT saving it.
+///
+/// The same checks `save` runs, in the same order, minus the write. Someone
+/// typing a model needs to know it is wrong while they are typing, not after
+/// they commit to keeping it, and the errors they see here have to be the ones
+/// that would actually stop the save. Re-implementing a friendlier check would
+/// mean a model that validates in the editor and is refused on save, which is
+/// worse than no editor at all.
+///
+/// Returns a one-line description of what the model IS on success, because
+/// "valid" alone does not tell an author whether they wrote the part they
+/// meant to.
+pub fn check(toml_text: &str) -> Result<String, String> {
+    if toml_text.trim().is_empty() {
+        return Err("nothing to check yet".to_string());
+    }
+    if is_sensor(toml_text) {
+        let spec = hauksbee_models::SensorSpec::from_toml(toml_text)
+            .map_err(|e| format!("this is not a valid sensor spec: {e}"))?;
+        return Ok(format!(
+            "valid sensor spec: {} on {:?}",
+            spec.sensor.name, spec.sensor.bus
+        ));
+    }
+    let db: hauksbee_models::schema::DbFile =
+        toml::from_str(toml_text).map_err(|e| format!("this is not valid model TOML: {e}"))?;
+    let entry = db
+        .models
+        .first()
+        .ok_or_else(|| "there is no [[models]] entry here yet".to_string())?;
+    if let Err(errors) = hauksbee_models::validation::validate(entry) {
+        return Err(errors
+            .iter()
+            .map(std::string::ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; "));
+    }
+    // Same reason save does it: a model that lints clean and fails to compile
+    // breaks at bind time, a long way from the person who wrote it.
+    if !entry.logic.is_empty() {
+        crate::logic::LogicComponent::compile(&entry.id, &entry.logic)
+            .map_err(|e| format!("the [models.logic] block does not compile: {e}"))?;
+    }
+    // Echo what the model IS, not just that it parsed. An author who typed
+    // the wrong kind gets a valid model of the wrong device, and this line is
+    // where they notice.
+    Ok(format!(
+        "valid: {} is a {:?}{}",
+        entry.id,
+        entry.kind,
+        if entry.description.is_empty() {
+            String::new()
+        } else {
+            format!(" ({})", entry.description)
+        }
+    ))
+}
+
 pub fn save(part: &str, kind: &str, toml_text: &str) -> Result<String, String> {
     let sensor = is_sensor(toml_text);
     if sensor {
