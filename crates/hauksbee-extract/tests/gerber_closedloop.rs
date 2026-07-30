@@ -38,10 +38,11 @@ use hauksbee_extract::gerber::from_gerber_dir;
 use hauksbee_extract::ExtractedBoard;
 
 fn corpus(rel: &str) -> Option<PathBuf> {
-    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join(rel);
-    p.exists().then_some(p)
+    // Through the shared resolver, which accepts both the hand-built
+    // `famous/<id>` layout and the `<id>` layout scripts/fetch-corpus.sh
+    // produces. Joining the path directly is what made this sweep skip
+    // silently for anyone who used the documented fetch.
+    hauksbee_testkit::corpus_board(env!("CARGO_MANIFEST_DIR"), rel)
 }
 
 fn require_corpus() -> bool {

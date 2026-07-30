@@ -153,16 +153,25 @@ floor sits in parentheses where it is looser than the observed value, so
 you can see exactly what CI guarantees versus what a representative run
 produced.
 
-| Board | Layers | Native nets / comps | Net partition (gate) | Located (gate) | Time |
-|-------|--------|---------------------|----------------------|----------------|------|
-| reform OLED | 2 | 14 / 14 | 100.0% (≥99) | 38/40 = 95% (≥85) | ~7 ms |
-| LumenPnP ring-light | 2 | 14 / 36 | 100.0% (≥99) | 57/66 = 86% (≥80) | ~44 ms |
-| Watchy | 2 | 85 / 86 | 100.0% (≥99) | 271/312 = 87% (≥80) | ~24 ms |
-| RP2040 minimal | 2 | 53 / 34 | 99.6% (≥99) | 216/225 = 96% | ~0.2 s |
-| reform trackball2 | 2 | 65 / 67 | 99.7% (≥99) | 200/241 = 83% (≥75) | ~0.4 s |
-| Corne (crkbd) | 2 | 159 / 180 | 99.7% (≥99) | 476/950 = 50% (≥45) | ~0.4 s |
-| Lily58 Pro V2 | 2 | 241 / 312 | 99.0% (≥98.5) | 716/1246 = 57% (≥50) | ~6 s |
-| reform motherboard | 6 | 682 / 529 | 99.8% (≥99) | 2044/2276 = 90% (≥85) | ~15-41 s |
+| Board | Native nets / comps | Net partition (gate) | Located (gate) |
+|-------|---------------------|----------------------|----------------|
+| reform OLED | 13 / 13 | 100.0% (≥99) | 38/38 = 100% (≥85) |
+| Watchy | 84 / 84 | 100.0% (≥99) | 262/276 = 95% (≥80) |
+| reform trackball2 | 64 / 65 | 99.8% (≥99) | 202/220 = 92% (≥75) |
+| reform motherboard | 681 / 522 | 99.7% (≥99) | 1785/2184 = 82% (≥78) |
+
+Measured 2026-07-30 against kicad-cli 9.0.3, over the boards
+`scripts/fetch-corpus.sh` actually delivers. Four boards, not eight: the
+LumenPnP ring-light, Corne and Lily58 rows are gone because those boards do
+not currently fetch (one upstream hangs, two land outside the corpus tree),
+and a row measured on a board nobody can obtain is not evidence. RP2040
+minimal has its own tighter test rather than a row here.
+
+These numbers moved from the previous table, and the reason is worth stating:
+the sweep had never run. The tests resolve boards under `board-corpus/famous/`
+and the fetch script writes `board-corpus/` with no such level, so every
+lookup missed while the directory-exists check kept the skip from firing. The
+gate reported green having examined nothing. Both layouts resolve now.
 
 Over the located pads, net-partition agreement runs 99.0-100% on every
 board: the recovered electrical graph is essentially identical where we
