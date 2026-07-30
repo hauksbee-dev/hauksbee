@@ -68,3 +68,43 @@ fn check_and_save_agree_about_what_is_invalid() {
         assert!(saved.is_err(), "save unexpectedly accepted:\n{bad}");
     }
 }
+
+/// A pasted SPICE model must be told, card by card, what hauksbee will do with
+/// it. "Unsupported" with no reason is where a user stops trusting the tool:
+/// they cannot tell whether their file is wrong, their part is exotic, or we
+/// are simply thin.
+#[test]
+fn a_mapped_spice_model_is_reported_as_supported() {
+    let r = webextract::spice_report(".model BC847 NPN (IS=1e-14 BF=200 VAF=100)")
+        .expect("a BJT card parses");
+    assert!(r.contains("SUPPORTED"), "a BJT is a device we run: {r}");
+    assert!(r.contains("BC847"), "and it must name the card: {r}");
+}
+
+#[test]
+fn an_unmapped_model_type_says_which_types_are_mapped() {
+    let r = webextract::spice_report(".model MYSW SW (RON=1 ROFF=1e9)").expect("parses");
+    assert!(r.contains("NOT MAPPED"), "{r}");
+    assert!(
+        r.contains("NPN") && r.contains("NMOS"),
+        "a refusal has to say what IS handled, or the user cannot act on it: {r}"
+    );
+}
+
+#[test]
+fn a_subcircuit_is_not_claimed_to_simulate() {
+    // The reader keeps a subckt's ports and text. It does not flatten it, and
+    // saying otherwise would promise a simulation that never happens.
+    let r = webextract::spice_report(".subckt OPA333 1 2 3 4 5\n.ends").expect("parses");
+    assert!(r.contains("SUBCIRCUIT"), "{r}");
+    assert!(
+        r.contains("does not flatten"),
+        "the limit has to be stated, not implied: {r}"
+    );
+}
+
+#[test]
+fn a_whole_netlist_with_no_card_says_what_to_paste() {
+    let err = webextract::spice_report("V1 in 0 5\nR1 in out 1k\n").expect_err("no cards");
+    assert!(err.contains("Paste the card itself"), "{err}");
+}
