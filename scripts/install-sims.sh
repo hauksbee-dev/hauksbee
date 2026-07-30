@@ -49,6 +49,11 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
 usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//; $d'; }
 
+# Beside this script, so a release bundle that ships scripts/ carries the hashes
+# with the installer that needs them. Resolved here rather than inside
+# verify_asset: at top level BASH_SOURCE unambiguously names this file.
+RENODE_CHECKSUMS="${RENODE_CHECKSUMS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/renode-checksums.txt}"
+
 # ── defaults ────────────────────────────────────────────────────────────────
 DO_RENODE=1
 DO_QEMU=1
@@ -93,7 +98,8 @@ case "$ARCH" in
 esac
 
 # ── fallback pinned versions (used if GitHub API is unreachable) ─────────────
-RENODE_FALLBACK_VER="1.16.1"
+# Pinned Renode release. See resolve_renode_version and renode-checksums.txt.
+RENODE_VERSION="1.16.1"
 QEMU_FALLBACK_VER="esp_develop_9.0.0_20240606"
 
 # Pinned simavr release tag (buserror/simavr). Bumping this is a deliberate,
@@ -113,14 +119,45 @@ github_api() {
 }
 
 # Resolve the latest Renode release tag (e.g. "1.16.1"), stripping any leading "v".
+# The Renode version is PINNED, not resolved.
+#
+# This used to ask GitHub for `latest` at install time and interpolate the
+# answer straight into the download URL, which meant nothing in this repository
+# governed what actually got downloaded and executed, and there was no version
+# to hold a checksum against. A `latest` that moves is a `latest` nobody
+# reviewed. Bumping this is a deliberate change: update the version, download
+# the assets, and record their hashes in renode-checksums.txt beside this
+# script, the same discipline SIMAVR_TAG already gets.
 resolve_renode_version() {
-  local tag
-  if tag="$(github_api "https://api.github.com/repos/renode/renode/releases/latest" \
-             2>/dev/null | grep '"tag_name"' | sed 's/.*"tag_name": *"v\{0,1\}\([^"]*\)".*/\1/')"; then
-    [ -n "$tag" ] && printf '%s' "$tag" && return 0
+  printf '%s' "$RENODE_VERSION"
+}
+
+# Verify a downloaded asset against the pinned hash, and REFUSE if there is no
+# hash for it.
+#
+# Failing closed matters here more than usual: this install is reachable from a
+# browser button, and the macOS path strips the Gatekeeper quarantine flag from
+# what it unpacks. Stripping the last OS-level guard from a download whose only
+# provenance check was TLS is not a trade worth making silently, so an asset
+# with no recorded hash stops the install and tells the user to install
+# manually.
+verify_asset() {
+  local file="$1" name="$2"
+  local sums="$RENODE_CHECKSUMS"
+  [ -f "$sums" ] || die "no checksum file at $sums; refusing to install an unverified Renode. Install it manually from renode.io."
+  local want
+  want="$(awk -v n="$name" '$2 == n { print $1 }' "$sums" | head -1)"
+  [ -n "$want" ] || die "no recorded checksum for $name (pinned version $RENODE_VERSION). Refusing to install it unverified: add its hash to $sums after checking it, or install Renode manually from renode.io."
+  local got
+  if command -v shasum >/dev/null 2>&1; then
+    got="$(shasum -a 256 "$file" | cut -d" " -f1)"
+  elif command -v sha256sum >/dev/null 2>&1; then
+    got="$(sha256sum "$file" | cut -d" " -f1)"
+  else
+    die "neither shasum nor sha256sum is available, so the download cannot be verified. Install Renode manually from renode.io."
   fi
-  warn "GitHub API unreachable; using pinned Renode version $RENODE_FALLBACK_VER"
-  printf '%s' "$RENODE_FALLBACK_VER"
+  [ "$got" = "$want" ] || die "checksum mismatch for $name: expected $want, got $got. The download is not what we pinned; do not use it."
+  log "Renode: checksum verified"
 }
 
 # Resolve the latest Espressif QEMU release tag (e.g. "esp-develop-9.0.0-20240606").
@@ -437,8 +474,12 @@ install_renode() {
 
       log "Renode: downloading $ASSET..."
       info "  from: $DOWNLOAD_URL"
-      curl --location --progress-bar --output "$TMPDIR/$ASSET" "$DOWNLOAD_URL" \
+      # --fail: without it a 404 or a captive-portal page is written to disk
+      # and handed to hdiutil, which then fails with something unrelated to the
+      # actual problem.
+      curl --fail --location --progress-bar --output "$TMPDIR/$ASSET" "$DOWNLOAD_URL" \
         || die "Download failed. Check the URL or download manually: $DOWNLOAD_URL"
+      verify_asset "$TMPDIR/$ASSET" "$ASSET"
 
       MOUNTPOINT="$TMPDIR/renode_mnt"
       mkdir -p "$MOUNTPOINT"
@@ -471,8 +512,12 @@ install_renode() {
 
       log "Renode: downloading $ASSET..."
       info "  from: $DOWNLOAD_URL"
-      curl --location --progress-bar --output "$TMPDIR/$ASSET" "$DOWNLOAD_URL" \
+      # --fail: without it a 404 or a captive-portal page is written to disk
+      # and handed to hdiutil, which then fails with something unrelated to the
+      # actual problem.
+      curl --fail --location --progress-bar --output "$TMPDIR/$ASSET" "$DOWNLOAD_URL" \
         || die "Download failed. Check the URL or download manually: $DOWNLOAD_URL"
+      verify_asset "$TMPDIR/$ASSET" "$ASSET"
 
       mkdir -p "$HOME/renode-portable"
       log "Renode: extracting to ~/renode-portable/ ..."
