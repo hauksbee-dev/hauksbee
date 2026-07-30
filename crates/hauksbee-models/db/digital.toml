@@ -54,7 +54,7 @@ max_voltage_v = 7.0
 # SRCLR L clears the shift register asynchronously and DOMINATES SRCLK (the
 # "SRCLR L, SRCLK X" row); SRCLK rising shifts SER toward QH (QA is the first
 # stage, so bit 0 = QA); RCLK rising copies shift -> storage (with tied
-# clocks the storage register is one clock behind — simultaneous-commit
+# clocks the storage register is one clock behind, simultaneous-commit
 # semantics); OE L enables QA..QH (QH' , the serial cascade tap, is not
 # OE-gated).
 inputs  = ["ser", "srclk", "rclk", "srclr_n", "oe_n"]
@@ -141,10 +141,10 @@ max_voltage_v = 7.0
 # Behaviour source: TI SN74HC165 datasheet (SCLS052I), function table: PL_n
 # (SH/LD) LOW loads A..H asynchronously (dominant over the clock); with PL_n
 # HIGH and CLK_INH LOW, a CLK rising edge shifts the data one stage TOWARD QH
-# (QH shows H after a load, then G, F, ... — shift_left with QH = bit 7) while
+# (QH shows H after a load, then G, F, ..., shift_left with QH = bit 7) while
 # SER enters at the first stage. QH_n is the complement output.
 # NOTE: the pre-migration hardcoded tick shifted the OPPOSITE direction (a
-# modeling artifact nothing exercised — the real readback path is the
+# modeling artifact nothing exercised, the real readback path is the
 # edge-driven Hc165Chain, which always had the datasheet direction). This spec
 # is the silicon behaviour; tests/logic_migration.rs documents the difference.
 inputs  = ["pl_n", "clk", "clk_inh", "ser", "a", "b", "c", "d", "e", "f", "g", "h"]
@@ -273,9 +273,9 @@ max_voltage_v = 7.0
 
 [models.logic]
 # Behaviour source: TI SN74HC27 datasheet (SCLS089), function table: each
-# Y = NOR(A, B, C) — any input HIGH pulls the output LOW. (Before the
+# Y = NOR(A, B, C), any input HIGH pulls the output LOW. (Before the
 # declarative migration this part fell back to the generic a*->y* buffer,
-# which mirrored only the A input — a real misbehaviour this block fixes.)
+# which mirrored only the A input, a real misbehaviour this block fixes.)
 inputs  = ["a1", "b1", "c1", "a2", "b2", "c2", "a3", "b3", "c3"]
 outputs = ["y1", "y2", "y3"]
 
@@ -342,7 +342,7 @@ max_voltage_v = 7.0
 # wired as cross-coupled SR latch PAIRS are intercepted by the binder's latch
 # detection (bind_nor_latches) and fused into one NOR-latch spec instance per
 # pair, because a cross-couple THROUGH BOARD NETS cannot settle at analog
-# chunk granularity — the fused latch resolves it in one evaluator fixpoint.
+# chunk granularity, the fused latch resolves it in one evaluator fixpoint.
 inputs  = ["g1a", "g1b", "g2a", "g2b", "g3a", "g3b", "g4a", "g4b"]
 outputs = ["g1y", "g2y", "g3y", "g4y"]
 

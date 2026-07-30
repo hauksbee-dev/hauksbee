@@ -5,7 +5,7 @@
 [[models]]
 id = "mounting_hole"
 kind = "ignore"
-description = "Mechanical mounting hole — no electrical function"
+description = "Mechanical mounting hole, no electrical function"
 
 [models.match]
 footprint_re = "(?i)MountingHole"
@@ -15,7 +15,7 @@ footprint_re = "(?i)MountingHole"
 [[models]]
 id = "test_point"
 kind = "ignore"
-description = "Test point pad — no model, appears as floating net in netlist"
+description = "Test point pad, no model, appears as floating net in netlist"
 
 [models.match]
 footprint_re = "(?i)TestPoint"
@@ -45,7 +45,7 @@ footprint_re = "(?i)Symbol|Logo"
 [[models]]
 id = "solder_jumper"
 kind = "ignore"
-description = "Solder jumper — treated as open during simulation"
+description = "Solder jumper, treated as open during simulation"
 
 [models.match]
 lib_id = "Device:SolderJumper"

@@ -18,7 +18,7 @@ value_re = "(?i)^2N7002[A-Z0-9-]*$"
 [models.params]
 # Source: Nexperia 2N7002 datasheet Rev. 4 2021, SPICE model
 vto    = 2.5      # threshold voltage (V)
-kp     = 0.04     # transconductance parameter (A/V²) — k'*(W/L)
+kp     = 0.04     # transconductance parameter (A/V²), k'*(W/L)
 lambda = 0.01     # channel-length modulation (1/V)
 rd     = 2.0      # drain ohmic resistance (Ω)
 rs     = 0.5      # source ohmic resistance (Ω)
@@ -47,8 +47,8 @@ description = "BSS138 N-channel MOSFET SOT-23, 50V, 200mA, Vth≈1.5V"
 # Package/config-suffix variants of the same logic-level N-MOSFET die:
 # BSS138 (SOT-23), BSS138W (SOT-323), BSS138PS (dual SOT-363), BSS138-7-F,
 # BSS138BK/K/P. Suffix space is package codes, so the suffixed parts share
-# this die's model. "BSS138" is a specific, complete prefix — no unrelated
-# device shares it — so the trailing-$ relax cannot mis-bind.
+# this die's model. "BSS138" is a specific, complete prefix, no unrelated
+# device shares it, so the trailing-$ relax cannot mis-bind.
 value_re = "(?i)^BSS138[A-Z0-9-]*$"
 
 [models.params]
@@ -72,6 +72,77 @@ max_power_w = 0.36
 max_voltage_v = 50.0
 
 # ─────────────────────────────────────────────────────────────────────────────
+# AO3400A: Alpha & Omega Semiconductor N-channel trench MOSFET, SOT-23.
+# Source: AOS "AO3400A 30V N-Channel MOSFET" datasheet, Rev 3.1 July 2023
+#   (www.aosmd.com/res/datasheets/AO3400A.pdf).
+# AOS publishes no redistributable SPICE card for this part, so the level-1
+# params below are derived from the datasheet's own stated test points, and the
+# derivation is recorded here so it can be re-checked.
+#
+# Datasheet figures used (Electrical Characteristics, TJ=25C):
+#   VGS(th) = 0.65 / 1.05 / 1.45 V     @ VDS=VGS, ID=250 mA        -> vto
+#   RDS(on) typ 18 mOhm  (max 26.5)    @ VGS=10 V,  ID=5.7 A
+#   RDS(on) typ 19 mOhm  (max 32)      @ VGS=4.5 V, ID=5 A
+#   RDS(on) typ 24 mOhm  (max 48)      @ VGS=2.5 V, ID=3 A
+#   gFS     typ 33 S                   @ VDS=5 V, ID=5.7 A
+#   Ciss 630 pF / Coss 75 pF / Crss 50 pF @ VGS=0, VDS=15 V, f=1 MHz
+#   VSD typ 0.7 V (max 1 V) @ IS=1 A
+#
+# kp: two independent routes agree, which is why we trust the number.
+#   (a) from gFS: level-1 saturation gm = sqrt(2*kp*ID), so
+#       kp = gFS^2 / (2*ID) = 33^2 / (2*5.7) = 95.5 A/V^2.
+#   (b) from the two extreme RDS(on) points: on-resistance is modelled as
+#       channel + ohmic, R(VGS) = 1/(kp*(VGS-vto)) + (rd+rs). Subtracting the
+#       VGS=10 V and VGS=2.5 V rows eliminates (rd+rs) and gives
+#       kp = (1/1.45 - 1/8.95) / (0.024 - 0.018) = 96.3 A/V^2.
+#   The two disagree by under 1%, so kp = 96.0 is used.
+# rd+rs: the residue at the VGS=10 V row, 0.018 - 1/(96*8.95) = 16.8 mOhm,
+#   split evenly between drain and source as the sibling entries do.
+# VALIDATED: with those numbers the model predicts RDS(on) = 19.8 mOhm at
+#   VGS=4.5 V (datasheet typ 19) and 24.0 mOhm at VGS=2.5 V (datasheet typ 24).
+#   The 4.5 V row was NOT used in the fit, so it is a genuine out-of-sample
+#   check; tests/ao3400a_cj2301_s8050.rs pins all three.
+# NOT MODELLED: the body diode (VSD is on the datasheet but `body_is` is left
+#   at the engine default of 0, matching every other MOSFET entry in this file),
+#   and `lambda`, which no datasheet states.
+[[models]]
+id = "ao3400a"
+kind = "nmos"
+description = "AO3400A N-channel MOSFET SOT-23, 30V, 5.7A, Rds(on) 18mOhm typ @ Vgs=10V"
+
+[models.match]
+# Same N-channel trench die across suffixes: AO3400, AO3400A, AO3400L. The
+# P-channel AO3401/AO3401A starts "AO3401" and is correctly rejected, so this
+# cannot mis-bind to the opposite polarity.
+value_re = "(?i)^AO3400[A-Z0-9-]*$"
+
+[models.params]
+# Source: AOS AO3400A datasheet Rev 3.1 July 2023, Electrical Characteristics.
+vto    = 1.05      # VGS(th) typ (V) @ VDS=VGS, ID=250mA (min 0.65, max 1.45)
+kp     = 96.0      # A/V², from gFS=33S @ ID=5.7A and the RDS(on) pair (see above)
+rd     = 0.0084    # half the 16.8 mOhm ohmic residue of RDS(on) @ VGS=10V
+rs     = 0.0084    # other half
+cgd    = 5.0e-11   # = Crss, 50 pF @ VGS=0, VDS=15V, 1MHz
+cgs    = 5.8e-10   # = Ciss - Crss = 630 - 50 = 580 pF, same test condition
+
+[models.pins]
+# SOT-23 (AOS datasheet package drawing, top view): 1=Gate, 2=Source, 3=Drain.
+# This is also the KiCad Package_TO_SOT_SMD:SOT-23 / Q_NMOS_GSD numbering, so
+# the map is explicit rather than inferred by the SOT-23 pin rule.
+"1" = "gate"
+"2" = "source"
+"3" = "drain"
+
+[models.ratings]
+# Source: AOS AO3400A datasheet Rev 3.1, Absolute Maximum Ratings TA=25C.
+max_current_a       = 5.7     # ID continuous at TA=25C (A)
+max_surge_current_a = 30.0    # IDM pulsed (A)
+max_power_w         = 1.4     # PD at TA=25C (W)
+max_voltage_v       = 30.0    # VDS (V)
+theta_ja_c_per_w    = 100.0   # RthJA steady-state typ (max 125; the t<=10s value is 70)
+max_junction_temp_c = 150.0   # TJ max (C)
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 # ── P-channel ─────────────────────────────────────────────────────────────────
 
@@ -87,7 +158,7 @@ value_re = "(?i)^AO3401[A-Z0-9-]*$"
 
 [models.params]
 # Source: Alpha & Omega AO3401A datasheet, SPICE parameters
-vto    = -1.1     # threshold voltage (V) — negative for PMOS
+vto    = -1.1     # threshold voltage (V), negative for PMOS
 kp     = 4.5      # transconductance (A/V²)
 lambda = 0.04
 rd     = 0.08
@@ -104,6 +175,73 @@ cgs    = 1.0e-12
 max_current_a = 4.0
 max_power_w = 1.4
 max_voltage_v = 30.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CJ2301: Jiangsu Changjing (JSCJ) P-channel trench MOSFET, SOT-23.
+# Source: JSCJ "CJ2301 P-Channel 20-V(D-S) MOSFET" datasheet, Rev. - 2.1
+#   (www.jscj-elec.com; the copy read is evelta.com/content/datasheets/217-CJ2301.pdf).
+# JSCJ publishes no SPICE card, so the level-1 params are derived from the
+# datasheet's stated test points and the derivation is recorded here.
+#
+# Datasheet figures used (MOSFET Electrical Characteristics, Ta=25C):
+#   VGS(th) = -0.4 / -0.7 / -1.0 V     @ VDS=VGS, ID=-250 uA        -> vto
+#   RDS(on) typ 0.090 Ohm (max 0.112)  @ VGS=-4.5 V, ID=-2.8 A
+#   RDS(on) typ 0.110 Ohm (max 0.142)  @ VGS=-2.5 V, ID=-2.0 A
+#   gfs typ 6.5 S                      @ VDS=-5 V, ID=-2.8 A
+#   Ciss 405 pF / Coss 75 pF / Crss 55 pF @ VDS=-10 V, VGS=0, f=1 MHz
+#   VSD typ -0.8 V (max -1.2 V) @ IS=-0.7 A
+#
+# kp and rd+rs are solved from the two RDS(on) rows against
+# R(VGS) = 1/(kp*(|VGS|-|vto|)) + (rd+rs):
+#   kp    = (1/1.8 - 1/3.8) / (0.110 - 0.090) = 14.6 A/V^2
+#   rd+rs = 0.090 - 1/(14.6*3.8)              = 0.072 Ohm, split evenly.
+# DELIBERATE CHOICE, recorded because it is a real approximation: this fit
+# implies gm = sqrt(2*kp*2.8) = 9.0 S at the gfs test point, where the
+# datasheet says 6.5 S. A level-1 square law cannot satisfy both the
+# on-resistance pair and the saturation transconductance, and this part is used
+# as a load switch (Watchy Q1), so on-resistance is the fidelity target. The
+# AO3400A entry above is the happy case where both routes agree.
+# NOT MODELLED: the body diode (`body_is` left at the engine default 0, as
+# elsewhere in this file) and `lambda`, which the datasheet does not state.
+#
+# NOTE ON THE BOARD: the KiCad symbol on Watchy carries the description
+# "2A Id, 20V Vds, P-Channel MOSFET, 70mOhm Ron". The 70 mOhm is the symbol
+# library's generic blurb, not this die; the datasheet's own figure is 90 mOhm
+# typ / 112 mOhm max at VGS=-4.5 V, and the datasheet wins.
+[[models]]
+id = "cj2301"
+kind = "pmos"
+description = "CJ2301 P-channel MOSFET SOT-23, -20V, -2.3A, Rds(on) 90mOhm typ @ Vgs=-4.5V"
+
+[models.match]
+# Package/lot-suffix variants of the same die: CJ2301, CJ2301-S1 (the LCSC
+# ordering code). "CJ2301" is a complete prefix and no other JSCJ part shares
+# it, so the relaxed suffix class cannot mis-bind.
+value_re = "(?i)^CJ2301[A-Z0-9-]*$"
+
+[models.params]
+# Source: JSCJ CJ2301 datasheet Rev. - 2.1, Electrical Characteristics.
+vto    = -0.7      # VGS(th) typ (V), negative for PMOS (min -0.4, max -1.0)
+kp     = 14.6      # A/V², solved from the two RDS(on) rows (see above)
+rd     = 0.036     # half the 72 mOhm ohmic residue
+rs     = 0.036     # other half
+cgd    = 5.5e-11   # = Crss, 55 pF @ VDS=-10V, VGS=0, 1MHz
+cgs    = 3.5e-10   # = Ciss - Crss = 405 - 55 = 350 pF, same test condition
+
+[models.pins]
+# SOT-23, stated explicitly on datasheet page 1: 1. GATE, 2. SOURCE, 3. DRAIN.
+"1" = "gate"
+"2" = "source"
+"3" = "drain"
+
+[models.ratings]
+# Source: JSCJ CJ2301 datasheet Rev. - 2.1, Maximum ratings (Ta=25C).
+max_current_a       = 2.3     # ID continuous (A), magnitude of -2.3 A
+max_surge_current_a = 10.0    # IDM pulsed (A), magnitude of -10 A
+max_power_w         = 0.4     # PD (W)
+max_voltage_v       = 20.0    # |VDS| (V)
+theta_ja_c_per_w    = 312.5   # RthJA (C/W), datasheet value for t <= 5 s
+max_junction_temp_c = 150.0   # TJ max (C)
 
 # ── Generic power-FET fallback models ────────────────────────────────────────
 #
@@ -135,7 +273,7 @@ max_voltage_v = 30.0
 [[models]]
 id = "generic_nmos_power_pkg"
 kind = "nmos"
-description = "Generic N-ch power FET fallback (DPAK/D2PAK/TO-220/TO-252/TO-263/PowerPAK/LFPAK) — PLACEHOLDER, not datasheet-sourced"
+description = "Generic N-ch power FET fallback (DPAK/D2PAK/TO-220/TO-252/TO-263/PowerPAK/LFPAK), PLACEHOLDER, not datasheet-sourced"
 
 [models.match]
 # Matches common SMD and THT power-FET packages by footprint string.
@@ -144,7 +282,7 @@ description = "Generic N-ch power FET fallback (DPAK/D2PAK/TO-220/TO-252/TO-263/
 footprint_re = "(?i)(DPAK|D2PAK|TO[_-]252|TO[_-]263|TO[_-]220|PowerPAK|PQFN|TDSON|LFPAK|SOT[_-]669|DFN[_-]8)"
 
 [models.params]
-# GENERIC PLACEHOLDER — representative of a medium Rds_on power FET.
+# GENERIC PLACEHOLDER, representative of a medium Rds_on power FET.
 # rd + rs sum to ~20 mOhm (0.020 ohm) Rds_on at Vgs=10V.
 # These are NOT datasheet values for any specific part.
 vto    = 3.0       # threshold voltage (V), typical for standard-threshold N-ch power FET
@@ -160,12 +298,12 @@ rs     = 0.010     # source resistance portion of Rds_on, ~10 mOhm
 
 [models.ratings]
 # Conservative package-class ratings for DPAK/D2PAK/TO-252 family.
-# GENERIC — a real part will almost certainly have higher ratings.
+# GENERIC: a real part will almost certainly have higher ratings.
 # Used only for dissipation/Tj estimation when the real datasheet is absent.
-max_current_a       = 20.0    # Id continuous — conservative for this package class (A)
+max_current_a       = 20.0    # Id continuous, conservative for this package class (A)
 max_surge_current_a = 60.0    # Id pulsed estimate (3x continuous, generic)
 max_power_w         = 30.0    # Pd TO-252/DPAK range ~2.5-40W; 30W is mid-conservative
-max_voltage_v       = 30.0    # Vds — conservatively low (real parts typically 20-650V)
+max_voltage_v       = 30.0    # Vds, conservatively low (real parts typically 20-650V)
 theta_ja_c_per_w    = 50.0    # still-air TO-252 estimate, representative (C/W)
 max_junction_temp_c = 150.0   # standard silicon power-FET junction limit
 
@@ -174,7 +312,7 @@ max_junction_temp_c = 150.0   # standard silicon power-FET junction limit
 [[models]]
 id = "generic_pmos_power_pkg"
 kind = "pmos"
-description = "Generic P-ch power FET fallback (DPAK/D2PAK/TO-220/TO-252/TO-263/PowerPAK/LFPAK) — PLACEHOLDER, not datasheet-sourced"
+description = "Generic P-ch power FET fallback (DPAK/D2PAK/TO-220/TO-252/TO-263/PowerPAK/LFPAK), PLACEHOLDER, not datasheet-sourced"
 
 [models.match]
 # Same package-footprint catch-all as the N-ch entry above; the binder uses
@@ -182,7 +320,7 @@ description = "Generic P-ch power FET fallback (DPAK/D2PAK/TO-220/TO-252/TO-263/
 footprint_re = "(?i)(DPAK|D2PAK|TO[_-]252|TO[_-]263|TO[_-]220|PowerPAK|PQFN|TDSON|LFPAK|SOT[_-]669|DFN[_-]8)"
 
 [models.params]
-# GENERIC PLACEHOLDER — P-ch mirror of the N-ch fallback.
+# GENERIC PLACEHOLDER, P-ch mirror of the N-ch fallback.
 # vto is negative (P-channel). rd + rs sum to ~20 mOhm Rds_on at |Vgs|=10V.
 vto    = -3.0      # threshold voltage (V), negative for P-channel
 kp     = 10.0      # generous kp (A/V²)
@@ -206,7 +344,7 @@ max_junction_temp_c = 150.0
 # ── Specific datasheet-sourced power-FET entries ───────────────────────────────
 
 # ─────────────────────────────────────────────────────────────────────────────
-# IPA045N10N3G — Infineon OptiMOS 3 N-channel power MOSFET
+# IPA045N10N3G: Infineon OptiMOS 3 N-channel power MOSFET
 # Source: Infineon IPA045N10N3G datasheet, Rev 2.6 2019-02-15 (Infineon document
 #   IPA045N10N3G, "OptiMOS(TM)3 Power-Transistor").
 # Package: TO-220-3 (1=Gate, 2=Drain, 3=Source per TO-220 pinout)
@@ -228,7 +366,7 @@ value_re = "(?i)^IPA045N10N3G$"
 [models.params]
 # Source: Infineon IPA045N10N3G datasheet Rev 2.6 2019-02-15, Table 1 & SPICE
 vto    = 3.8       # Vgs(th) typ (V), datasheet Table 1
-kp     = 200.0     # A/V² — generous kp approximating a 100A hard-switch FET
+kp     = 200.0     # A/V², generous kp approximating a 100A hard-switch FET
 lambda = 0.005     # channel-length modulation, estimated typical for 100V N-ch
 rd     = 0.00175   # drain ohmic resistance, ~half Rds(on) typ (0.0035/2 ohm)
 rs     = 0.00175   # source ohmic resistance, ~half Rds(on) typ
@@ -249,7 +387,7 @@ theta_ja_c_per_w    = 62.0    # theta_JA TO-220 PCB-mounted estimate (C/W), data
 max_junction_temp_c = 175.0   # Tj max (C), datasheet (OptiMOS3 = 175C rated)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# IRF9358 — Infineon dual P-channel power MOSFET, SO-8
+# IRF9358: Infineon dual P-channel power MOSFET, SO-8
 # Source: Infineon IRF9358 datasheet, Rev 2.1 (HEXFET Power MOSFET, IRF9358).
 # Package: SO-8 DUAL P-channel.
 # Pinout (per IRF9358 datasheet pin diagram and confirmed in pd-sink-trigger.md):
@@ -276,7 +414,7 @@ value_re = "(?i)^IRF9358$"
 # Rds(on) max = 16.3 mOhm @ Vgs=-10V. We model the typical which is ~ 13 mOhm.
 # rd+rs split evenly to sum to typical Rds(on). vto is negative (P-channel).
 vto    = -1.4      # Vgs(th) typ (V), datasheet
-kp     = 15.0      # A/V² — generous kp for a -9.2A switch FET
+kp     = 15.0      # A/V², generous kp for a -9.2A switch FET
 lambda = 0.01      # channel-length modulation, estimated
 rd     = 0.0065    # drain ohmic resistance, ~half Rds(on) typ (0.013/2 ohm)
 rs     = 0.0065    # source ohmic resistance, ~half Rds(on) typ
@@ -305,7 +443,7 @@ theta_ja_c_per_w    = 62.5    # theta_JA SO-8 still-air (C/W), datasheet
 max_junction_temp_c = 150.0   # Tj max (C), datasheet
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SIR182DP — Vishay N-channel power MOSFET, PowerPAK SO-8
+# SIR182DP: Vishay N-channel power MOSFET, PowerPAK SO-8
 # Source: Vishay SIR182DP datasheet, Document Number 66664, Rev. E 13-Jul-22.
 # Package: PowerPAK SO-8 (single N-ch, exposed pad = drain).
 # Key datasheet values:
@@ -325,7 +463,7 @@ value_re = "(?i)^SIR182DP$"
 # Source: Vishay SIR182DP datasheet Document No. 66664 Rev. E 13-Jul-22
 # Rds(on) typ = 13 mOhm @ Vgs=10V, Tj=25C. Split rd+rs evenly.
 vto    = 3.5       # Vgs(th) typ (V), datasheet
-kp     = 30.0      # A/V² — approximating a 21A switch FET at full turn-on
+kp     = 30.0      # A/V², approximating a 21A switch FET at full turn-on
 lambda = 0.005     # channel-length modulation, estimated for 100V N-ch
 rd     = 0.0065    # drain ohmic resistance, ~half Rds(on) typ (0.013/2 ohm)
 rs     = 0.0065    # source ohmic resistance, ~half Rds(on) typ

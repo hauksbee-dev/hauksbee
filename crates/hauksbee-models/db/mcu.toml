@@ -10,7 +10,7 @@ value_re   = "(?i)^ATmega328P?$"
 mpn_re     = "(?i)^ATmega328P"
 
 [models.params]
-# hauksbee-mcu backend identifier — tells the co-sim layer which emulator core
+# hauksbee-mcu backend identifier, tells the co-sim layer which emulator core
 # to instantiate.
 backend = "simavr:atmega328p"
 
@@ -173,7 +173,7 @@ note = "BOOT0 low boots main flash; high enters system bootloader/SRAM"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # STM32F401C (UFQFPN48): the 48-pin F401 (F401CB/CC/CD/CE). Modelled primarily so
-# the boot strap-pin lint covers its BOOT0 — the rest of the modern STM32 line was
+# the boot strap-pin lint covers its BOOT0, the rest of the modern STM32 line was
 # otherwise unmodelled. Co-sim, when wired, reuses the same
 # renode STM32F4 platform the binder's family fallback already selects, so adding
 # this DB entry does not change the co-sim path. The pin map is intentionally
@@ -198,7 +198,7 @@ backend = "renode:stm32f4"
 # memory. BOOT0=0 -> main flash (normal). BOOT0=1 -> system bootloader / SRAM.
 # The STM32F4 BOOT0 pin has NO internal pull, so a floating BOOT0 leaves the boot
 # source genuinely undefined and the part can come up in the bootloader instead
-# of the application — every ST reference design ties it through an external
+# of the application, every ST reference design ties it through an external
 # resistor. Ref: ST RM0368 sec 2.4 "Boot configuration"; DS9716 pin definitions.
 [[models.straps]]
 role = "boot0"

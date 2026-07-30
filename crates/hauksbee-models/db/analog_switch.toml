@@ -13,8 +13,8 @@ mpn_re   = "(?i)SN74LVC1G3157"
 # Source: Texas Instruments SN74LVC1G3157 datasheet (SCES668H), Table 6.5
 # ron at 5V supply: typ 6 Ω, max 11 Ω
 ron  = 6.0       # on-resistance (Ω) @ Vcc=5V typical
-roff = 1.0e9     # off-resistance (Ω) — effectively open
-vth  = 1.5       # switch threshold (V) — midpoint of Vih/Vil at 3.3V
+roff = 1.0e9     # off-resistance (Ω), effectively open
+vth  = 1.5       # switch threshold (V), midpoint of Vih/Vil at 3.3V
 # Charge injection: negligible for behavioral simulation; marked ignore here.
 # bandwidth: −3 dB at ~180 MHz (Table 6.5), not modelled.
 
