@@ -479,6 +479,95 @@ One caveat, stated plainly: building a project executes its build scripts
 (`extra_scripts` in `platformio.ini` is arbitrary code). That is the nature
 of building software; only hand hauksbee projects you would build yourself.
 
+## Talking to the board from your own software (`--serial-attach`)
+
+A co-sim that only reports at the end is a closed box. `--serial-attach` opens a
+host serial port onto the emulated MCU's UART, so software on your own machine
+drives the simulated board the way it drives real hardware over USB serial: the
+same pyserial script, the same vendor configuration tool, the same `minicom`
+session, unchanged.
+
+```bash
+hauksbee run board.kicad_pcb --firmware fw.elf --serial-attach --serial-wait 30 --seconds 10
+# host serial: pty on /dev/ttys006
+# host serial: attach your own software with one of:
+# host serial:   python3 -c "import serial; s=serial.Serial('/dev/ttys006', 115200, timeout=1); ..."
+# host serial:   minicom -D /dev/ttys006
+# host serial:   screen /dev/ttys006 115200
+# host serial: wired to the UART of U1
+# host serial: waiting up to 30s for a peer to open /dev/ttys006 ...
+# host serial: peer ATTACHED on /dev/ttys006
+# host serial: peer DETACHED (92 byte(s) in, 8 byte(s) out so far); the co-sim keeps running
+# host serial: session over /dev/ttys006 (6.000s simulated in 10.02s wall): 92 byte(s)
+#              host->MCU, 8 byte(s) MCU->host, 1 peer attach(es)
+```
+
+Then, in another terminal, ordinary client code:
+
+```python
+import serial
+s = serial.Serial("/dev/ttys006", 115200, timeout=2)
+s.write(bytes([0x05]))          # this firmware's "identify yourself" command
+print(s.read_until(bytes([0x04])).hex(" "))   # -> 06 30 31 30 04  (ACK, v0.1.0, TRN_END)
+```
+
+Nothing in that script knows it is talking to a simulator.
+
+**Why a pty and not a socket.** A pseudo-terminal has a device path, so
+unmodified software works unmodified; a TCP socket would make you rewrite your
+tool, and a closed-source vendor tool cannot be rewritten at all. `pty` is
+therefore the default. `--serial-transport tcp` gives a loopback port for a tool
+that already speaks sockets, or for a platform with no pty.
+
+| flag | what it does |
+|------|--------------|
+| `--serial-attach` | open the endpoint and run the live co-sim (needs `--firmware`) |
+| `--serial-transport pty\|tcp` | how the host attaches; `pty` (default) needs no changes to your tool |
+| `--serial-wait SECS` | hold the co-sim at t=0 until your tool opens the port, then fail loudly if it never does |
+| `--serial-no-pace` | let the co-sim free-run instead of pacing sim time to wall-clock time |
+| `--serial-mcu REF` | which MCU's UART to bridge on a multi-MCU board (default: all of them) |
+
+**What the session guarantees, and what it says when it cannot.**
+
+- **Sim time is paced to wall-clock time** by default, because a host tool's
+  `timeout=2` and `time.sleep(0.1)` are wall-clock quantities. A free-running
+  AVR co-sim would be over before the script's first write. `--serial-no-pace`
+  turns pacing off for a client that does not care.
+- **Output produced before you attach is held** (bounded, 64 KiB) and flushed on
+  attach, so a boot banner is not lost to the gap between reading the device
+  path and starting your tool. Past the cap the newest bytes are dropped and
+  counted, and the summary says so; it is never silent.
+- **Attach and detach are printed.** A user who cannot tell whether their tool
+  is connected debugs the wrong thing. A peer may attach late, disconnect
+  mid-run, and reattach; the co-sim keeps running throughout, and both attaches
+  are counted.
+- **A host record longer than the emulated RX fifo arrives whole.** `uart_write`
+  queues bytes and meters them under the emulated UART's own flow control (the
+  fifo-truncation defect described above), so a 90-byte or 4 KiB single write is
+  delivered in order rather than truncated at 64. If the firmware genuinely does
+  not drain its receiver, the session reports the overflow per MCU rather than
+  pretending the bytes arrived.
+- **The link is byte-transparent**: NUL, `0x0A` and `0x0D` pass through
+  untouched in both directions. This is not free on a pty (the default cooked
+  line discipline echoes and rewrites those bytes), so the endpoint forces raw
+  mode on every attach.
+- **A session nobody attached to is reported as such**, not as a quiet success.
+
+Honest limits: no baud-rate emulation (the endpoint is transparent, and the
+firmware's own UART divisor sets the pace at which simavr delivers bytes), no
+modem-control lines (no RTS/CTS/DTR, no hardware flow control), and no pty on
+Windows, where `--serial-transport tcp` is the only option. `--serial-attach` and
+the report flags (`--headless`, `--json`, `--plain`) are separate surfaces: a
+serial session prints its own narration and summary, not the co-sim activity
+table.
+
+Proofs: `crates/hauksbee-mcu/tests/host_serial_pty.rs` (transport: binary
+transparency with a cooked-mode premise test, late attach, disconnect and
+reattach, an oversized single write, hangup on teardown) and
+`crates/hauksbee-engine/tests/host_serial_cosim.rs` (the whole path against a
+real emulated ATmega328P, driven by a peer that only ever sees the printed
+device path).
+
 ## Recipes
 
 ### STM32F103 blue pill (the proven demo)
