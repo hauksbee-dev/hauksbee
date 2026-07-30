@@ -394,7 +394,14 @@ async fn deps_install_handler(
             let mut sink = move |line: &str| {
                 // A send failure means the browser went away; the install
                 // continues (see the handler doc), we just stop relaying.
-                let _ = tx.blocking_send(sse_event("log", line));
+                // try_send, NOT blocking_send. A client that opens this POST
+                // and then stops reading applies TCP backpressure, the channel
+                // fills, and a blocking send parks this thread inside the very
+                // loop that enforces the timeout: the child is never killed,
+                // the RAII slot is never released, and every later install is
+                // refused for the life of the process. Dropping a progress line
+                // for a peer that is not listening costs nothing worth having.
+                let _ = tx.try_send(sse_event("log", line));
             };
             (install)(&id, &mut sink)
         };
@@ -513,7 +520,14 @@ async fn datasheet_extract_handler(
                 // have nobody to review it. The extraction still runs to the
                 // end because it has already been paid for and cannot be
                 // recalled, we just stop relaying.
-                let _ = tx.blocking_send(sse_event("log", line));
+                // try_send, NOT blocking_send. A client that opens this POST
+                // and then stops reading applies TCP backpressure, the channel
+                // fills, and a blocking send parks this thread inside the very
+                // loop that enforces the timeout: the child is never killed,
+                // the RAII slot is never released, and every later install is
+                // refused for the life of the process. Dropping a progress line
+                // for a peer that is not listening costs nothing worth having.
+                let _ = tx.try_send(sse_event("log", line));
             };
             (extract)(job, &mut sink)
         };
