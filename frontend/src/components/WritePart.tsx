@@ -15,6 +15,21 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 /** A starting point that validates, so the first thing someone sees is a
  *  working model rather than an empty box and a schema to guess at. */
+type Format = 'toml' | 'spice'
+
+/** A deck that loads, so the SPICE box also opens on something that works
+ *  rather than an empty area and a format to guess at. The title line is not
+ *  decoration: the first line of a SPICE deck is always a comment, so a deck
+ *  without one silently loses its first real card. */
+const SPICE_STARTER = `* my divider
+.subckt divider in out
+R1 in out 1k
+R2 out 0 1k
+.ends
+V1 vin 0 5
+X1 vin mid divider
+`
+
 const STARTER = `[[models]]
 id = "my_resistor"
 kind = "passive"
@@ -33,7 +48,11 @@ type CheckState =
 
 export function WritePart({ onSaved }: { onSaved?: () => void }) {
   const [open, setOpen] = useState(false)
+  const [format, setFormat] = useState<Format>('toml')
   const [toml, setToml] = useState(STARTER)
+  const [spice, setSpice] = useState(SPICE_STARTER)
+  const body = format === 'toml' ? toml : spice
+  const setBody = format === 'toml' ? setToml : setSpice
   const [part, setPart] = useState('')
   const [check, setCheck] = useState<CheckState>({ phase: 'idle' })
   const [saveMsg, setSaveMsg] = useState<string | null>(null)
@@ -51,7 +70,7 @@ export function WritePart({ onSaved }: { onSaved?: () => void }) {
           const res = await fetch('/api/models/check', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ toml }),
+            body: JSON.stringify({ toml: body, format }),
           })
           const j = (await res.json()) as { ok?: boolean; summary?: string; error?: string }
           if (j.ok) setCheck({ phase: 'ok', summary: j.summary ?? 'valid' })
@@ -62,7 +81,7 @@ export function WritePart({ onSaved }: { onSaved?: () => void }) {
       })()
     }, 400)
     return () => { if (timer.current) window.clearTimeout(timer.current) }
-  }, [toml, open])
+  }, [body, format, open])
 
   const save = useCallback(async () => {
     setSaveMsg(null)
@@ -70,7 +89,7 @@ export function WritePart({ onSaved }: { onSaved?: () => void }) {
       const res = await fetch('/api/models/save', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ part: part.trim() || 'model', kind: '', toml }),
+        body: JSON.stringify({ part: part.trim() || 'model', kind: '', toml: body }),
       })
       const j = (await res.json()) as { ok?: boolean; path?: string; error?: string }
       if (j.ok === false) setSaveMsg(j.error ?? 'the save failed and did not say why')
@@ -81,7 +100,7 @@ export function WritePart({ onSaved }: { onSaved?: () => void }) {
     } catch (e) {
       setSaveMsg(e instanceof Error ? e.message : String(e))
     }
-  }, [part, toml, onSaved])
+  }, [part, body, onSaved])
 
   if (!open) {
     return (
@@ -121,12 +140,43 @@ export function WritePart({ onSaved }: { onSaved?: () => void }) {
         </button>
       </div>
 
-      <p className="text-[11px] mb-2 leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
-        Hauksbee's own model format. `id` names the entry, `kind` says what sort of
-        device it is, and `[models.match]` decides which parts on a board it claims.
-        Everything is checked as you type by the same validator that runs when you
-        save, so what passes here will save.
-      </p>
+      <div className="flex items-center gap-1.5 mb-2">
+        {(['toml', 'spice'] as Format[]).map(f => (
+          <button
+            key={f}
+            type="button"
+            data-testid={`write-part-format-${f}`}
+            onClick={() => setFormat(f)}
+            className="text-[11px] rounded px-2.5 py-1 cursor-pointer transition-all"
+            style={{
+              border: `1px solid ${format === f ? 'var(--copper-deep)' : 'var(--hairline)'}`,
+              background: format === f ? 'rgba(224,138,78,0.12)' : 'transparent',
+              color: format === f ? 'var(--copper-hi)' : 'var(--silk-faint)',
+            }}
+          >
+            {f === 'toml' ? 'hauksbee model' : 'SPICE'}
+          </button>
+        ))}
+      </div>
+
+      {format === 'toml' ? (
+        <p className="text-[11px] mb-2 leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
+          Hauksbee's own model format, and the one the binder and the checks reason
+          about directly. `id` names the entry, `kind` says what sort of device it is,
+          and `[models.match]` decides which parts on a board it claims. Everything is
+          checked as you type by the same validator that runs when you save, so what
+          passes here will save.
+        </p>
+      ) : (
+        <p className="text-[11px] mb-2 leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
+          Paste a vendor model or a whole deck. Subcircuits are supported: hauksbee
+          flattens a `.subckt` at load, mapping its ports to your nodes and recursing
+          through nested calls, so a vendor part that ships as a subcircuit runs like
+          any other. The first line of a SPICE file is its title and is always treated
+          as a comment. What you see below is the real loader's answer, so a refusal
+          names the line in your own file.
+        </p>
+      )}
 
       <label className="text-[11px] block mb-2" style={{ color: 'var(--silk-faint)' }}>
         <span className="block mb-1">Part number (names the saved file)</span>
@@ -140,10 +190,30 @@ export function WritePart({ onSaved }: { onSaved?: () => void }) {
         />
       </label>
 
+      {format === 'spice' && (
+        <label className="text-[11px] block mb-2" style={{ color: 'var(--silk-faint)' }}>
+          <span className="block mb-1">Or load a file (.lib, .mod, .cir, .sp, .txt)</span>
+          <input
+            data-testid="write-part-spice-file"
+            type="file"
+            accept=".lib,.mod,.cir,.sp,.txt,.spi,.ckt"
+            className="text-[12px]"
+            style={{ color: 'var(--silk-dim)' }}
+            onChange={e => {
+              const f = e.target.files?.[0]
+              if (!f) return
+              // Read it into the same box the paste path uses, so one editor
+              // and one check answer for both routes in.
+              void f.text().then(t => setSpice(t))
+            }}
+          />
+        </label>
+      )}
+
       <textarea
         data-testid="write-part-toml"
-        value={toml}
-        onChange={e => setToml(e.target.value)}
+        value={body}
+        onChange={e => setBody(e.target.value)}
         spellCheck={false}
         className="hb-input w-full text-[12px]"
         style={{ minHeight: 220, fontFamily: 'var(--font-mono)', lineHeight: 1.5, padding: 10 }}
@@ -166,6 +236,13 @@ export function WritePart({ onSaved }: { onSaved?: () => void }) {
       </div>
 
       <div className="flex items-center gap-2 mt-2.5">
+        {format === 'spice' ? (
+          <span className="text-[11px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
+            A SPICE deck is checked here, not saved as a model. Point a board or a CI
+            spec at the file to simulate it. To make a reusable part from it, switch to
+            the hauksbee format and write the entry that claims your component.
+          </span>
+        ) : (
         <button
           type="button"
           data-testid="write-part-save"
@@ -179,7 +256,8 @@ export function WritePart({ onSaved }: { onSaved?: () => void }) {
         >
           Save to my models
         </button>
-        {check.phase !== 'ok' && (
+        )}
+        {format === 'toml' && check.phase !== 'ok' && (
           <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
             the model has to check clean before it can be saved
           </span>

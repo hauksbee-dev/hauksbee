@@ -113,6 +113,7 @@ pub fn hooks() -> DatasheetHooks {
         extract: Arc::new(|job, progress| extract(job, progress)),
         save: Arc::new(save),
         check: Arc::new(check),
+        spice_check: Arc::new(spice_report),
     }
 }
 
