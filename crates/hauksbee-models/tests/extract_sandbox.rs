@@ -3,8 +3,12 @@
 //! Codex runs full-auto with write access to its working directory. That
 //! directory used to be *the folder the datasheet happened to sit in*, so
 //! `--pdf ~/Downloads/part.pdf` handed an autonomous agent write access to the
-//! whole of Downloads. The boundary is the entire security story here, so it
-//! gets a test rather than a comment.
+//! whole of Downloads. These tests pin the copy-not-the-original property.
+//!
+//! What they do NOT establish, and what the module doc is careful about: the
+//! `workspace-write` profile confines writes, not reads. These tests cover
+//! where the agent can WRITE and what we hand it, which is what the sandbox
+//! actually controls.
 
 use std::path::Path;
 
@@ -52,7 +56,11 @@ fn the_agent_never_sees_the_directory_the_datasheet_came_from() {
 
 #[test]
 fn the_sandbox_is_removed_when_the_run_ends() {
-    // A killed or failed extraction must not leave the datasheet copy behind.
+    // A failed extraction must not leave the datasheet copy behind. This covers
+    // Drop, which runs on both the error path and a panic. It does NOT cover
+    // SIGKILL: no Drop runs there, and the copy plus its page renders stay in
+    // $TMPDIR until the OS reaps it. The directory is 0700, so that is disk
+    // residue rather than exposure.
     let users_dir = tempfile::tempdir().unwrap();
     let pdf = users_dir.path().join("part.pdf");
     std::fs::write(&pdf, STUB_PDF).unwrap();
@@ -100,7 +108,13 @@ fn a_missing_datasheet_fails_before_a_sandbox_exists() {
 /// A real multi-page datasheet must actually render, since the whole reason for
 /// page images is that a text dump loses the tables. A silently empty render
 /// would degrade every extraction with nothing to show it happened.
+///
+/// Ignored rather than silently skipped. It needs a real PDF, which the repo
+/// cannot ship because datasheets are not ours to redistribute, and as a silent
+/// skip it had never run once: nothing in the repo sets the variable. `cargo
+/// test` now REPORTS it as ignored instead of counting it among the passes.
 #[test]
+#[ignore = "needs a real datasheet PDF: set HAUKSBEE_TEST_DATASHEET and run with --ignored"]
 fn a_real_datasheet_renders_its_pages() {
     let Some(pdf) = std::env::var_os("HAUKSBEE_TEST_DATASHEET").map(std::path::PathBuf::from)
     else {

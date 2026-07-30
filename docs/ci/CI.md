@@ -447,9 +447,8 @@ reason = "measured 92 ohm on the fab's stackup; our stackup file is wrong"
 until = "2026-12-31"
 ```
 
-`hauksbee run <board> --check` and the combined `--json` report both read it.
-Findings an active waiver covers come out of the gate and appear in their own
-section:
+`hauksbee run <board> --check` reads it. Findings an active waiver covers come
+out of the gate and appear in their own section:
 
 ```
 == Waived (2) ==
@@ -478,6 +477,15 @@ finding it would have covered gates. A typo must never quietly disable a check.
 
 Clearance violations are not waivable: they do not gate on their own, so there
 is nothing to excuse them from.
+
+**Where waivers do not reach yet, stated plainly.** Only the `--check` surface
+consults them. The single-check reports (`--drc`, `--si`, `--lint`, the USB-C
+report), the bare `--json` combined report, and `hauksbee-ci` all still gate on
+a waived finding. So the same board with the same waiver file goes green under
+`--check --strict` and red under `--drc --strict`, which is worse than not
+having waivers at all, because it looks like they worked. Do not rely on a
+waiver in a pipeline until this is fixed. It is tracked and it is the next
+thing to land on this feature.
 
 **`phase_margin` / `ac_gain`**: small-signal loop-stability and frequency-response
 gates, driven by an `[ac]` sweep block on the spec. `phase_margin` bounds the

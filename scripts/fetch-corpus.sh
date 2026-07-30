@@ -103,13 +103,34 @@ wanted() {
 
 # A shallow fetch of one revision: cheaper than a full clone, and the pin is
 # what makes the corpus reproducible, so history is of no use to us.
+# A hung remote must not eat the whole run. One board that stops responding
+# used to stall the fetch indefinitely, leaving a `.partial` directory behind
+# and no way to tell a slow clone from a dead one. These bound it: git gives up
+# on a transfer that has moved less than a byte a second for a minute, and the
+# whole fetch for one board is capped outright.
+GIT_STALL_ARGS=(-c http.lowSpeedLimit=1 -c http.lowSpeedTime=60)
+FETCH_TIMEOUT_S="${HAUKSBEE_FETCH_TIMEOUT:-600}"
+
+# `timeout` is GNU coreutils and absent on a stock macOS. Fall back to running
+# the command unbounded rather than failing, since an unbounded fetch is what
+# every previous run did anyway.
+run_bounded() {
+  if command -v timeout >/dev/null 2>&1; then
+    timeout "$FETCH_TIMEOUT_S" "$@"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    gtimeout "$FETCH_TIMEOUT_S" "$@"
+  else
+    "$@"
+  fi
+}
+
 fetch_git() {
   local id="$1" url="$2" rev="$3" dest="$4"
   rm -rf "$dest.partial"
   mkdir -p "$dest.partial"
   git -C "$dest.partial" init -q
   git -C "$dest.partial" remote add origin "$url"
-  if git -C "$dest.partial" fetch -q --depth 1 origin "$rev" 2>/dev/null; then
+  if run_bounded git "${GIT_STALL_ARGS[@]}" -C "$dest.partial" fetch -q --depth 1 origin "$rev" 2>/dev/null; then
     git -C "$dest.partial" checkout -q FETCH_HEAD || return 1
   else
     # Some hosts refuse to serve an arbitrary commit directly. Fetch history
@@ -122,7 +143,8 @@ fetch_git() {
     # brings back tags and NOT ONE BRANCH. The checkout then failed with
     # "pathspec did not match", which reads like a moved upstream rather than
     # our own missing refspec, and it took out 16 of 28 boards.
-    git -C "$dest.partial" fetch -q origin '+refs/heads/*:refs/remotes/origin/*' --tags || return 1
+    run_bounded git "${GIT_STALL_ARGS[@]}" -C "$dest.partial" fetch -q origin \
+      '+refs/heads/*:refs/remotes/origin/*' --tags || return 1
     git -C "$dest.partial" checkout -q "$rev" || return 1
   fi
 
