@@ -92,8 +92,7 @@ fn probe_codex() -> DepStatus {
     // account, and most people who would want datasheet extraction already pay
     // for one. For them this is free, and the only thing standing between them
     // and it is not knowing.
-    let cost = "free if you already pay for ChatGPT: codex signs in with that account"
-        .to_string();
+    let cost = "free if you already pay for ChatGPT: codex signs in with that account".to_string();
     let manual = "npm install -g @openai/codex   # then: codex login".to_string();
     let privacy = "Using this sends the datasheet's text to OpenAI. Nothing is sent unless \
                    you ask for an extraction, and hauksbee never runs it on its own.";

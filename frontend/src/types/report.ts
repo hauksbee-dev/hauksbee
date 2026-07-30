@@ -37,6 +37,21 @@ export interface BindSummaryWeb {
   critical_parts_bound: string
   /** Active ICs left open on the live circuit; may be omitted when empty. */
   active_path_unresolved?: string[]
+  /** The same parts with their detail, so the report can offer to do something
+   *  about them rather than only naming them. Omitted when empty. */
+  open_parts?: WebOpenPart[]
+}
+
+/** One part on the open-active-path list. `bound: false` means it has no model
+ *  at all, which is the case a datasheet extraction can fix; `bound: true` means
+ *  it bound and is open on the live circuit, which is a wiring matter. */
+export interface WebOpenPart {
+  reference: string
+  value: string
+  reason: string
+  consequence: string
+  active_ic: boolean
+  bound: boolean
 }
 
 export interface WebGpioNet {
@@ -133,6 +148,59 @@ export interface LiveLaunchResponse {
   board_name?: string
   /** True when an existing live session was replaced by this launch. */
   replaced?: boolean
+}
+
+/** What `GET /api/models/extract/ready` returns: whether a datasheet extraction
+ *  can run on this machine, and everything the consent step must say. The notice
+ *  and the kind list come from the engine so the browser cannot drift from what
+ *  `hauksbee models extract` shows and accepts. */
+export interface ExtractReady {
+  ready: boolean
+  /** "codex" | "api" | "mock" */
+  backend: string
+  /** Why it cannot run (only when ready is false). */
+  reason?: string | null
+  /** The one command that fixes it (only when ready is false). */
+  fix?: string | null
+  /** The exact notice the user must read before anything is sent. */
+  consent_notice: string
+  /** "datasheet-extracted" */
+  provenance: string
+  kinds: { id: string; label: string }[]
+  cost: string
+}
+
+/** One value in a drafted model, with the datasheet citation beside it. */
+export interface CardValue {
+  section: string
+  key: string
+  value: string
+  source: string
+  assumed: boolean
+}
+
+/** A drafted model, returned by `POST /api/models/extract` for review. Nothing
+ *  has been written when this arrives; `POST /api/models/save` is what keeps it. */
+export interface ModelCard {
+  ok: boolean
+  reference: string
+  part: string
+  kind: string
+  provenance: string
+  model_id: string
+  description: string
+  file_name: string
+  toml: string
+  values: CardValue[]
+  assumptions: string[]
+}
+
+/** What `POST /api/models/save` returns. */
+export interface ModelSaveResult {
+  ok: boolean
+  error?: string
+  path?: string
+  note?: string
 }
 
 /** One check queued from a board surface (a net or component click on the

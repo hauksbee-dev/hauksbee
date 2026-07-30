@@ -59,6 +59,46 @@ The tool writes `<part>.toml` to the output directory. The library loads any
 TOML in `~/.hauksbee/models/` as a user-dir entry the next time it builds,
 so an extracted part becomes immediately resolvable by value/MPN.
 
+## From the browser
+
+`hauksbee serve` offers the same extraction, and holds the same consent
+contract, on the report page. Where the report lists the parts that could not
+be bound ("Parts with no model"), each one carries **Draft a model from a
+datasheet**. The flow is fixed in this order, and the order is the contract:
+
+1. **Can it run at all**, from `GET /api/models/extract/ready`. If codex is
+   missing, or installed but not signed in, the blocker and the one command
+   that fixes it are shown here and the file picker is never reached. Learning
+   that codex is unauthenticated *after* choosing a datasheet would be a
+   consent question asked for nothing.
+2. **The consent notice**, served verbatim from
+   `hauksbee_models::datasheet::CONSENT_NOTICE` so the page cannot soften the
+   CLI's wording, plus the cost line: codex signs in with a ChatGPT account,
+   so for anyone already paying for one this costs nothing extra. An explicit
+   click is required.
+3. **The datasheet**, the part number (prefilled from the board's value field)
+   and the kind (a picker generated from the engine's own kind list, so it
+   cannot offer a kind the extractor rejects).
+4. **Progress**, streamed from `POST /api/models/extract` as Server-Sent
+   events, the same framing the dependency installs use. codex is silent for
+   one to three minutes, so the stream heartbeats elapsed time rather than
+   inventing a percentage.
+5. **Review**. The draft comes back as a model card: every value with the
+   datasheet citation beside it, every value the model admitted it assumed
+   flagged separately, the provenance shown as `datasheet-extracted`, and the
+   whole TOML editable. **Nothing has been written at this point.**
+6. **Accept or reject**. Accept calls `POST /api/models/save`, which
+   re-validates the TOML it is handed (the card is editable, so it is not
+   necessarily what the extractor produced), refuses to overwrite an existing
+   model, and writes one file into `~/.hauksbee/models/`. Reject writes
+   nothing.
+
+The extraction itself is the same `hauksbee_models::datasheet` code the CLI
+runs, with the same scratch sandbox: the agent gets a copy of the PDF and its
+page renders, never the directory the user's file came from. The web plumbing
+is `crates/hauksbee-engine/src/webextract.rs` (the engine hooks) and
+`crates/hauksbee-server/src/frontdoor.rs` (`datasheet_routes`).
+
 ## What gets extracted
 
 The extractor pulls two things from the datasheet:
