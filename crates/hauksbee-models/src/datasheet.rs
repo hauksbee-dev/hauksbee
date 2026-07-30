@@ -169,15 +169,31 @@ fn prepare_workspace(pdf: &Path) -> Result<Workspace> {
 
 /// Run one extraction end to end, as the CLI does.
 pub fn run(args: Args) -> Result<()> {
+    // 1. Extract text from PDF
+    let pdf_text = extract_pdf_text(&args.pdf)?;
+
+    // An empty kind means "you work it out". Being made to classify a part
+    // before the tool will look at it is a barrier at exactly the wrong
+    // moment: the datasheet says what the part is on its first page, the model
+    // is about to read that page, and the person asking for a model is
+    // precisely the one who may not know which of our categories their part
+    // falls into.
+    let mut args = args;
+    if args.kind_str.trim().is_empty() {
+        let chosen = identify_kind(&args, &pdf_text)?;
+        eprintln!(
+            "[model-extract] identified {} as kind '{}'",
+            args.part, chosen
+        );
+        args.kind_str = chosen;
+    }
+
     eprintln!(
         "[model-extract] part={} kind={} pdf={}",
         args.part,
         args.kind_str,
         args.pdf.display()
     );
-
-    // 1. Extract text from PDF
-    let pdf_text = extract_pdf_text(&args.pdf)?;
 
     // Declarative register-map sensor kinds (`i2c_sensor` / `spi_sensor`) emit a
     // `[sensor]` spec validated against hauksbee-models::sensor_spec, NOT the
@@ -418,7 +434,9 @@ pub fn parse_args() -> Result<Args> {
     let mut args = std::env::args().skip(1);
     let mut pdf: Option<PathBuf> = None;
     let mut part: Option<String> = None;
-    let mut kind_str = "bjt_npn".to_string();
+    // Empty means "the model works it out from the datasheet". Defaulting to
+    // bjt_npn silently produced a transistor model for whatever was handed in.
+    let mut kind_str = String::new();
     let mut out_dir: Option<PathBuf> = None;
 
     while let Some(arg) = args.next() {
@@ -742,6 +760,17 @@ fn required_params_for_kind(kind: &str) -> &'static str {
         "analog_switch" => "ron, roff, vth",
         "digital" | "shift_register" => "voh, vol, vih, vil, tpd_s, supply_pin, gnd_pin",
         "dac" => "bits, vref_int, i2c_addr (or spi mode)",
+        // These three were offered without guidance, so their prompts fell to
+        // the generic hint and the model had to guess what hauksbee wanted.
+        "adc" => "bits, vref_int, i2c_addr (or spi mode), and the input range",
+        "passive" => {
+            "the nominal value and its tolerance, plus esr/esl for a capacitor and the \
+             self-resonant frequency if the datasheet states one"
+        }
+        "connector" => {
+            "pin count and the pin-to-net roles; a connector carries no device physics, so \
+             what matters is which pin is which"
+        }
         "mcu" => "backend (e.g. simavr:atmega328p)",
         "charger" => "vout, dropout_v, iq_a  (the converter behaviour is in [models.behavioral])",
         "pmic" => "vout, dropout_v, iq_a  (the pin pulls are in [models.behavioral])",
@@ -854,6 +883,99 @@ fn call_codex_backend(prompt: &str, args: &Args) -> Result<String> {
 
     unreachable!()
 }
+
+/// Ask the backend what kind of part this is, from the kinds we support.
+///
+/// A separate, cheap call rather than folded into the extraction prompt,
+/// because validation has to pick a schema before it can check anything: the
+/// kind is an input to the extraction, not an output of it. Two calls also
+/// means the user is told which kind was chosen BEFORE the model commits to
+/// it, and a mis-identified kind is the one error they are best placed to
+/// catch.
+fn identify_kind(args: &Args, pdf_text: &str) -> Result<String> {
+    // The front of the datasheet is where the part describes itself. Sending
+    // the whole thing to answer one question would cost far more for no gain.
+    let head = truncate_to_chars(pdf_text, 6000);
+    let prompt = format!(
+        "You are identifying what kind of electronic part a datasheet describes, so a \
+         simulator can pick the right model schema.\n\n\
+         Part number: {}\n\n\
+         Answer with EXACTLY ONE of these identifiers and nothing else:\n\
+         {}\n\n\
+         If the part does not fit any of them, answer exactly: unsupported\n\n\
+         Do not explain. Do not add punctuation. One word.\n\n\
+         Datasheet (first pages):\n{}",
+        args.part,
+        SUPPORTED_KINDS.join("\n"),
+        head
+    );
+    let raw = call_backend(&prompt, args)?;
+    // The model may answer with surrounding prose despite the instruction, so
+    // look for a supported kind rather than trusting the whole reply.
+    let reply = raw.to_ascii_lowercase();
+    let found: Vec<&str> = SUPPORTED_KINDS
+        .iter()
+        .copied()
+        .filter(|k| {
+            reply
+                .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+                .any(|w| w == *k)
+        })
+        .collect();
+    match found.as_slice() {
+        [one] => Ok((*one).to_string()),
+        [] if reply.contains("unsupported") => bail!(
+            "the datasheet for {} does not describe a part hauksbee models yet. That is an \
+             honest answer rather than a failure: forcing it into the nearest kind would \
+             produce a confident model of the wrong device. Supported kinds: {}",
+            args.part,
+            SUPPORTED_KINDS.join(", ")
+        ),
+        [] => bail!(
+            "could not identify what kind of part {} is from its datasheet. Say so \
+             explicitly with --kind <one of: {}>.",
+            args.part,
+            SUPPORTED_KINDS.join(", ")
+        ),
+        many => bail!(
+            "the datasheet for {} matched several part kinds ({}), so the choice is not \
+             ours to guess. Pick one with --kind.",
+            args.part,
+            many.join(", ")
+        ),
+    }
+}
+
+/// Every kind the extractor can produce a model for.
+///
+/// One list, used by the identification prompt, the CLI help and the web
+/// picker, so the three cannot drift into disagreeing about what is possible.
+pub const SUPPORTED_KINDS: &[&str] = &[
+    "passive",
+    "diode",
+    "bjt_npn",
+    "bjt_pnp",
+    "nmos",
+    "pmos",
+    "vreg",
+    "opamp",
+    "comparator",
+    "analog_switch",
+    "digital",
+    "dac",
+    "adc",
+    "shift_register",
+    "mcu",
+    "connector",
+    "i2c_sensor",
+    "spi_sensor",
+    // Behavioural families. They resolve to a base kind (charger and pmic to
+    // vreg, balancer to digital) but carry their own parameter guidance, so a
+    // caller naming one gets a better prompt than naming the base.
+    "charger",
+    "pmic",
+    "balancer",
+];
 
 /// The part of the prompt that tells the model to check its own work.
 ///
@@ -1152,6 +1274,35 @@ fn parse_and_validate_reply(
 }
 
 /// snake_case discriminant for a kind (mirrors the serde `rename_all`).
+/// Whether a kind string names something the extractor can bind.
+///
+/// The inverse of `kind_discriminant`, derived from it rather than restated,
+/// so the offered list and the accepted set cannot drift apart.
+#[cfg(test)]
+fn kind_accepts(kind: &str) -> bool {
+    use crate::ComponentKind::*;
+    [
+        Passive,
+        Diode,
+        BjtNpn,
+        BjtPnp,
+        Nmos,
+        Pmos,
+        Vreg,
+        Opamp,
+        Comparator,
+        AnalogSwitch,
+        Digital,
+        Dac,
+        Adc,
+        ShiftRegister,
+        Mcu,
+        Connector,
+    ]
+    .iter()
+    .any(|k| kind_discriminant(*k) == kind)
+}
+
 fn kind_discriminant(kind: crate::ComponentKind) -> &'static str {
     use crate::ComponentKind::*;
     match kind {
@@ -1699,5 +1850,57 @@ style = "i2c_pointer"
 "#;
         // Requested spi_sensor but the spec is i2c → reject.
         assert!(validate_sensor_reply(i2c_reply, "LM75", "spi_sensor").is_err());
+    }
+}
+
+#[cfg(test)]
+mod kind_tests {
+    use super::*;
+
+    /// The identifier list is shared by the identification prompt, the CLI help
+    /// and the web picker. If it offers a kind the extractor cannot bind, a
+    /// user picks something that then fails after the datasheet has been sent.
+    #[test]
+    fn every_supported_kind_binds_to_a_component_kind() {
+        for kind in SUPPORTED_KINDS {
+            if is_sensor_kind(kind) {
+                continue; // separate [sensor] schema, validated on its own path
+            }
+            let base = behavioral_family_base_kind(kind).unwrap_or(kind);
+            assert!(
+                kind_accepts(base),
+                "{kind} is offered but does not resolve to a component kind"
+            );
+        }
+    }
+
+    /// Three kinds were offered with no parameter guidance at all (passive,
+    /// adc, connector), so their prompts fell to the generic hint while
+    /// charger, pmic and balancer had guidance but were never offered. Neither
+    /// half is fatal, and both are the kind of drift that only shows up as a
+    /// worse extraction, so pin it.
+    #[test]
+    fn every_offered_kind_has_its_own_parameter_guidance() {
+        let generic = required_params_for_kind("__definitely_not_a_kind__");
+        let missing: Vec<&str> = SUPPORTED_KINDS
+            .iter()
+            .copied()
+            .filter(|k| !is_sensor_kind(k))
+            .filter(|k| required_params_for_kind(k) == generic)
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "offered with only the generic prompt hint: {missing:?}"
+        );
+    }
+
+    /// An empty kind is the "you work it out" signal, so nothing may treat it
+    /// as a valid kind by accident.
+    #[test]
+    fn the_empty_kind_is_not_itself_a_kind() {
+        assert!(
+            !SUPPORTED_KINDS.contains(&""),
+            "the empty string means 'identify it', not a part type"
+        );
     }
 }
