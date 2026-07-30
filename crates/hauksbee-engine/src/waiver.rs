@@ -331,15 +331,41 @@ fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
+/// The earliest date this build will believe from the system clock.
+///
+/// Expiry is only meaningful if "now" cannot move backwards. A clock behind
+/// this date re-arms every lapsed waiver, silently, which fails OPEN: the one
+/// direction this feature must never fail in. It happens for ordinary reasons,
+/// not just malice: a container with no RTC before NTP settles, a machine with
+/// a dead CMOS battery, a deliberately backdated job.
+///
+/// Set to the day this check was written. A build running before it is either
+/// mis-clocked or being backdated, and either way its answer about what has
+/// expired cannot be trusted.
+const CLOCK_FLOOR_EPOCH_DAYS: i64 = 20_663; // 2026-07-29
+
 /// Today, as days since the Unix epoch, from the system clock.
+///
+/// A clock that reads earlier than `CLOCK_FLOOR_EPOCH_DAYS` is treated as that
+/// floor, not as what it says. That keeps the failure direction right: an
+/// implausible clock makes waivers look expired, so findings gate, rather than
+/// resurrecting waivers somebody deliberately let lapse.
 pub fn today_epoch_days() -> i64 {
-    std::time::SystemTime::now()
+    let read = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| (d.as_secs() / 86_400) as i64)
-        // A clock before 1970 is not a reason to crash a board check. Treating
-        // it as the epoch makes every waiver read as expired, which fails
-        // closed: findings gate the build rather than being silently dropped.
-        .unwrap_or(0)
+        // A clock before 1970 is not a reason to crash a board check.
+        .unwrap_or(0);
+    if read < CLOCK_FLOOR_EPOCH_DAYS {
+        eprintln!(
+            "WARNING: the system clock reads earlier than this build was made, so it \
+             cannot be trusted to decide what has expired. Treating every waiver dated \
+             before {} as lapsed.",
+            "2026-07-29"
+        );
+        return CLOCK_FLOOR_EPOCH_DAYS;
+    }
+    read
 }
 
 #[cfg(test)]
@@ -522,6 +548,49 @@ until = "2030-01-01"
         assert_eq!(days_from_civil(1970, 1, 2), 1);
         assert_eq!(days_from_civil(1969, 12, 31), -1);
         assert_eq!(days_from_civil(2000, 3, 1), 11017);
+    }
+
+    #[test]
+    fn a_clock_behind_the_build_cannot_resurrect_a_lapsed_waiver() {
+        // The fail-open direction. A container with no RTC, or a backdated job,
+        // reads a clock from before this build existed; believing it would make
+        // every expired waiver active again and silently reopen gates somebody
+        // closed on purpose.
+        let dir = tempfile::tempdir().unwrap();
+        let p = write(
+            dir.path(),
+            r#"
+[[waive]]
+check = "si"
+kind = "controlled_impedance"
+nets = ["USB_DP"]
+reason = "expired on purpose"
+until = "2026-01-01"
+"#,
+        );
+        // A clock reading 2020, well before the waiver's own expiry.
+        let mut set = WaiverSet::load_at(&p, days_from_civil(2020, 1, 1)).unwrap();
+        // load_at takes the caller's date verbatim, which is what makes it
+        // testable; the floor lives in today_epoch_days, so assert that.
+        assert!(
+            today_epoch_days() >= CLOCK_FLOOR_EPOCH_DAYS,
+            "the clock read must never fall below the floor"
+        );
+        // And with the floor applied, the waiver is lapsed.
+        let mut floored = WaiverSet::load_at(&p, CLOCK_FLOOR_EPOCH_DAYS).unwrap();
+        assert!(
+            floored
+                .take_waiver("si", "controlled_impedance", &["USB_DP".into()], &[], "x")
+                .is_none(),
+            "a waiver dated 2026-01-01 is lapsed at the floor"
+        );
+        // Sanity: the un-floored 2020 read WOULD have resurrected it, which is
+        // the bug the floor prevents.
+        assert!(
+            set.take_waiver("si", "controlled_impedance", &["USB_DP".into()], &[], "x")
+                .is_some(),
+            "this is the failure mode: believing a backdated clock re-arms it"
+        );
     }
 
     #[test]

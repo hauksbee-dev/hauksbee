@@ -337,9 +337,18 @@ fn shipped_boards_survive_gerbers() {
     // (path, has real copper: only these carry an accuracy floor)
     const BOARDS: &[(&str, bool)] = &[
         ("crates/hauksbee-ci/examples/boards/blinky.kicad_pcb", false),
-        ("crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb", false),
-        ("crates/hauksbee-ci/examples/boards/power_resistor.kicad_pcb", false),
-        ("crates/hauksbee-ci/examples/boards/tolerance_divider.kicad_pcb", false),
+        (
+            "crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb",
+            false,
+        ),
+        (
+            "crates/hauksbee-ci/examples/boards/power_resistor.kicad_pcb",
+            false,
+        ),
+        (
+            "crates/hauksbee-ci/examples/boards/tolerance_divider.kicad_pcb",
+            false,
+        ),
         ("crates/hauksbee-ci/examples/boards/watchy.kicad_pcb", true),
         ("testdata/boards/button_pullup.kicad_pcb", false),
         ("testdata/boards/esp32_devkit_demo.kicad_pcb", false),
@@ -352,11 +361,31 @@ fn shipped_boards_survive_gerbers() {
         ("testdata/boards/vcd_pulse.kicad_pcb", false),
     ];
     if kicad_cli().is_none() {
-        eprintln!("skipping shipped-board gerber sweep (no kicad-cli)");
+        // This used to skip unconditionally, and CI has no KiCad, so it never
+        // ran once while its own doc comment called it "a real gate". A gate
+        // that silently does not run is worse than no gate: it reads as
+        // evidence. HAUKSBEE_REQUIRE_KICAD=1 makes a missing kicad-cli a hard
+        // failure, and scripts/make-public.sh sets it, so the release gate
+        // exercises the claim even though a per-PR runner does not.
+        if std::env::var_os("HAUKSBEE_REQUIRE_KICAD").is_some() {
+            panic!(
+                "HAUKSBEE_REQUIRE_KICAD is set but kicad-cli was not found. Gerber \
+                 reverse extraction is a headline claim and this run cannot test it."
+            );
+        }
+        eprintln!(
+            "skipping shipped-board gerber sweep: no kicad-cli, so THIS RUN HAS NOT \
+             tested gerber reverse extraction. Set HAUKSBEE_REQUIRE_KICAD=1 to make \
+             that a failure."
+        );
         return;
     }
     for (rel, routed) in BOARDS {
-        let tag = Path::new(rel).file_stem().unwrap().to_string_lossy().to_string();
+        let tag = Path::new(rel)
+            .file_stem()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
         let Some(a) = run_repo_board(rel, &tag) else {
             panic!(
                 "{rel} did not survive the gerber round-trip. Every board that ships has \
