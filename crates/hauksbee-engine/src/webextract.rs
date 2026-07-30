@@ -593,6 +593,65 @@ fn user_model_dir() -> Option<PathBuf> {
 /// what arrives here is not necessarily what the extractor produced, and writing
 /// an invalid model into the library would turn every later run's bind step into
 /// a puzzle.
+/// Report what hauksbee can do with a pasted SPICE model, card by card.
+///
+/// Someone arriving with a vendor `.lib` deserves to know what of it we handle
+/// BEFORE they commit to it, and to be told why for anything we refuse. An
+/// unexplained "unsupported" is where trust goes: the user cannot tell whether
+/// their file is wrong, their part is exotic, or we are simply thin.
+///
+/// Be honest about the shape of the support. The SPICE reader parses `.model`
+/// and `.subckt` cards and keeps their parameters and ports; it is not a SPICE
+/// evaluator. A `.model` of a type we map (a BJT, a diode, a MOSFET) becomes a
+/// device the solver runs. A `.subckt` is a netlist of other parts, and we
+/// report it rather than pretending to flatten it.
+pub fn spice_report(text: &str) -> Result<String, String> {
+    let cards = hauksbee_models::spice_input::parse_spice_text(text)
+        .map_err(|e| format!("this does not parse as SPICE: {e}"))?;
+    if cards.is_empty() {
+        return Err(
+            "no .model or .subckt card found. Paste the card itself, not a whole netlist \
+             or a schematic export."
+                .to_string(),
+        );
+    }
+    let mut lines = Vec::new();
+    for c in &cards {
+        match c.kind {
+            hauksbee_models::spice_input::SpiceCardKind::Model => {
+                let ty = c.model_type.as_deref().unwrap_or("?");
+                let mapped = matches!(
+                    ty.to_ascii_uppercase().as_str(),
+                    "NPN" | "PNP" | "D" | "NMOS" | "PMOS"
+                );
+                if mapped {
+                    lines.push(format!(
+                        "SUPPORTED  .model {} ({}), {} parameter(s): hauksbee runs this as a \
+                         device",
+                        c.name,
+                        ty,
+                        c.params.len()
+                    ));
+                } else {
+                    lines.push(format!(
+                        "NOT MAPPED .model {} ({}): hauksbee maps NPN, PNP, D, NMOS and PMOS \
+                         cards. This type is parsed but has no device behind it yet.",
+                        c.name, ty
+                    ));
+                }
+            }
+            hauksbee_models::spice_input::SpiceCardKind::Subckt => lines.push(format!(
+                "SUBCIRCUIT .subckt {} ({} port(s)): a subcircuit is a netlist of other \
+                 parts rather than a device. hauksbee reads its ports and text but does not \
+                 flatten it into a solvable circuit, so it will not simulate on its own.",
+                c.name,
+                c.ports.len()
+            )),
+        }
+    }
+    Ok(lines.join("\n"))
+}
+
 /// Validate a hand-written model WITHOUT saving it.
 ///
 /// The same checks `save` runs, in the same order, minus the write. Someone
