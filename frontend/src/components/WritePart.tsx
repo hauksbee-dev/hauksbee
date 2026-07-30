@@ -1,0 +1,196 @@
+import { useCallback, useEffect, useRef, useState } from 'react'
+
+// Write a part by hand, in hauksbee's native TOML, with the real validator
+// answering as you type.
+//
+// Datasheet extraction covers "I have a PDF and want a draft". It does nothing
+// for someone who already knows their part, and that person previously had no
+// route at all except editing a file on disk and restarting the server.
+//
+// The validation comes from POST /api/models/check, which runs the SAME checks
+// the save path runs. Writing a friendlier client-side validator was the
+// tempting shortcut and would have been the wrong one: an editor that accepts
+// what the save refuses teaches an author their model is fine and then loses
+// their work at the last step.
+
+/** A starting point that validates, so the first thing someone sees is a
+ *  working model rather than an empty box and a schema to guess at. */
+const STARTER = `[[models]]
+id = "my_resistor"
+kind = "passive"
+description = "what this part is, in a few words"
+
+# Which parts on a board this entry claims. Regexes over the value field.
+[models.match]
+value = ["^10k$"]
+`
+
+type CheckState =
+  | { phase: 'idle' }
+  | { phase: 'checking' }
+  | { phase: 'ok'; summary: string }
+  | { phase: 'bad'; error: string }
+
+export function WritePart({ onSaved }: { onSaved?: () => void }) {
+  const [open, setOpen] = useState(false)
+  const [toml, setToml] = useState(STARTER)
+  const [part, setPart] = useState('')
+  const [check, setCheck] = useState<CheckState>({ phase: 'idle' })
+  const [saveMsg, setSaveMsg] = useState<string | null>(null)
+  const timer = useRef<number | null>(null)
+
+  // Debounced, because this runs the real validator on the server and a request
+  // per keystroke would queue behind itself while someone types a paragraph.
+  useEffect(() => {
+    if (!open) return
+    if (timer.current) window.clearTimeout(timer.current)
+    setCheck({ phase: 'checking' })
+    timer.current = window.setTimeout(() => {
+      void (async () => {
+        try {
+          const res = await fetch('/api/models/check', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ toml }),
+          })
+          const j = (await res.json()) as { ok?: boolean; summary?: string; error?: string }
+          if (j.ok) setCheck({ phase: 'ok', summary: j.summary ?? 'valid' })
+          else setCheck({ phase: 'bad', error: j.error ?? 'the check did not say why' })
+        } catch (e) {
+          setCheck({ phase: 'bad', error: e instanceof Error ? e.message : String(e) })
+        }
+      })()
+    }, 400)
+    return () => { if (timer.current) window.clearTimeout(timer.current) }
+  }, [toml, open])
+
+  const save = useCallback(async () => {
+    setSaveMsg(null)
+    try {
+      const res = await fetch('/api/models/save', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ part: part.trim() || 'model', kind: '', toml }),
+      })
+      const j = (await res.json()) as { ok?: boolean; path?: string; error?: string }
+      if (j.ok === false) setSaveMsg(j.error ?? 'the save failed and did not say why')
+      else {
+        setSaveMsg(`Saved to ${j.path ?? 'your model directory'}. Re-analyze the board to use it.`)
+        onSaved?.()
+      }
+    } catch (e) {
+      setSaveMsg(e instanceof Error ? e.message : String(e))
+    }
+  }, [part, toml, onSaved])
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        data-testid="write-part-open"
+        onClick={() => setOpen(true)}
+        className="text-[12px] rounded-lg px-3 py-1.5 cursor-pointer transition-all hover:opacity-80"
+        style={{
+          border: '1px solid var(--hairline)',
+          background: 'var(--surface)',
+          color: 'var(--silk-dim)',
+        }}
+      >
+        Write a part yourself
+      </button>
+    )
+  }
+
+  return (
+    <div
+      data-testid="write-part"
+      className="rounded-xl px-4 py-3.5 mt-3"
+      style={{ border: '1px solid var(--hairline)', background: 'var(--surface)' }}
+    >
+      <div className="flex items-center justify-between mb-2">
+        <span className="text-[12px] font-semibold" style={{ color: 'var(--silk)' }}>
+          Write a part
+        </span>
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="text-[11px] rounded px-2 py-1 cursor-pointer"
+          style={{ border: '1px solid var(--hairline)', color: 'var(--silk-dim)' }}
+        >
+          Close
+        </button>
+      </div>
+
+      <p className="text-[11px] mb-2 leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
+        Hauksbee's own model format. `id` names the entry, `kind` says what sort of
+        device it is, and `[models.match]` decides which parts on a board it claims.
+        Everything is checked as you type by the same validator that runs when you
+        save, so what passes here will save.
+      </p>
+
+      <label className="text-[11px] block mb-2" style={{ color: 'var(--silk-faint)' }}>
+        <span className="block mb-1">Part number (names the saved file)</span>
+        <input
+          data-testid="write-part-name"
+          className="hb-input text-[12px]"
+          style={{ height: 30, width: '17rem' }}
+          value={part}
+          onChange={e => setPart(e.target.value)}
+          placeholder="e.g. BC847B"
+        />
+      </label>
+
+      <textarea
+        data-testid="write-part-toml"
+        value={toml}
+        onChange={e => setToml(e.target.value)}
+        spellCheck={false}
+        className="hb-input w-full text-[12px]"
+        style={{ minHeight: 220, fontFamily: 'var(--font-mono)', lineHeight: 1.5, padding: 10 }}
+      />
+
+      <div
+        data-testid="write-part-status"
+        className="text-[11px] mt-2 rounded-lg px-2.5 py-2 leading-relaxed"
+        style={{
+          background: check.phase === 'bad' ? 'var(--warn-bg)' : 'var(--code-bg)',
+          border: `1px solid ${check.phase === 'bad' ? 'var(--warn-border)' : 'var(--hairline)'}`,
+          color: check.phase === 'bad' ? 'var(--silk)' : 'var(--silk-dim)',
+          fontFamily: 'var(--font-mono)',
+        }}
+      >
+        {check.phase === 'checking' && 'checking ...'}
+        {check.phase === 'ok' && check.summary}
+        {check.phase === 'bad' && check.error}
+        {check.phase === 'idle' && 'start typing to check it'}
+      </div>
+
+      <div className="flex items-center gap-2 mt-2.5">
+        <button
+          type="button"
+          data-testid="write-part-save"
+          disabled={check.phase !== 'ok' || part.trim().length === 0}
+          onClick={() => void save()}
+          className="rounded-lg px-3.5 py-1.5 text-[12px] font-semibold cursor-pointer transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+          style={{
+            background: 'linear-gradient(180deg, var(--copper-hi), var(--copper))',
+            color: 'var(--on-copper)',
+          }}
+        >
+          Save to my models
+        </button>
+        {check.phase !== 'ok' && (
+          <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+            the model has to check clean before it can be saved
+          </span>
+        )}
+      </div>
+
+      {saveMsg && (
+        <div className="text-[11px] mt-2" style={{ color: 'var(--silk-dim)' }}>
+          {saveMsg}
+        </div>
+      )}
+    </div>
+  )
+}
