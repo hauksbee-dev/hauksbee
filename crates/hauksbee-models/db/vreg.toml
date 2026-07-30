@@ -283,3 +283,104 @@ iq_a      = 6.0e-3
 max_current_a = 1.5
 max_voltage_v = 40.0  # 24V part tolerates a higher abs-max input
 max_power_w = 2.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RT9080-33: Richtek 2uA-IQ, 600 mA low-dropout linear regulator, 3.3 V fixed.
+# Source: Richtek "RT9080 2uA IQ, 600mA Low-Dropout Linear Voltage Regulator"
+#   datasheet DS9080-09, December 2024
+#   (richtek.com/assets/product_file/RT9080/DS9080-09.pdf).
+#
+# Watchy carries this as U2 with the value string "RT908033" (the ordering-code
+# concatenation of RT9080 + the "33" output-voltage code, per the datasheet's
+# Ordering Information: 33 = 3.3 V). The KiCad symbol behind it is the stock
+# AP2112K-3.3, so the footprint description on the board still reads "3.8V-6V
+# input"; that is the SYMBOL's text, not this part. The RT9080's own
+# Recommended Operating Conditions are VIN 1.2 V to 5.5 V, and the numbers
+# below are all the RT9080's.
+#
+# Datasheet figures used (Section 14 Electrical Characteristics, TA = 25 C,
+# VVOUT + 1 V < VIN < 5.5 V unless noted):
+#   VOUT_ACC   = +/-2%            @ ILOAD = 1 mA
+#   VDROP      = 0.31 V typ, 0.53 V max  @ ILOAD = 600 mA, 3 V <= VOUT
+#                (Note 7: dropout is VIN - VOUT at the point VOUT falls to 98%
+#                 of its normal value)
+#   IQ         = 2 uA typ, 4 uA max  @ ILOAD = 0 mA, VOUT <= 5.5 V,
+#                                       VIN >= VOUT + VDROP
+#   ISHDN      = 0.1 uA typ, 0.5 uA max  @ VEN = 0 V
+#   ILIM       = 610 mA min, 1100 mA typ  @ VOUT = 90% of VOUT(normal)
+#   VEN_R      = 0.9 V min (rising), VEN_F = 0.4 V max (falling)  @ VIN = 5 V
+#   Line reg   = 0.13% typ  @ ILOAD = 1 mA, 1.8 V <= VIN < 5.5 V
+#   Load reg   = 0.5% typ   @ 1 mA < ILOAD < 600 mA
+#   PSRR       = 75 dB typ  @ VIN = 3 V, ILOAD = 50 mA, COUT = 1 uF,
+#                              VOUT = 2.5 V, f = 1 kHz
+#   TOTP       = 150 C typ, 20 C hysteresis
+#   RDISCHG    = 80 Ohm typ  @ EN = 0 V, VOUT = 0.1 V (output active discharge)
+# Absolute Maximum Ratings (Section 10): VIN/VOUT/SNS/EN to GND -0.3 V to
+#   6.5 V; junction temperature 150 C.
+# Thermal Information (Section 13): theta_JA = 189.4 C/W for TSOT-23-5,
+#   JEDEC standard board.
+#
+# Sanity check before believing the numbers: 0.31 V of dropout at 600 mA is a
+# 0.52 Ohm pass element, which is what a modern 600 mA PMOS LDO looks like, and
+# 2 uA of quiescent current is microamps as an LDO's must be. An earlier
+# machine reading of this same PDF returned "IQ 35 uA" and "current limit
+# 250 mA"; both are wrong (the second is below the part's own 600 mA output
+# rating, which is impossible), which is why every figure here was read off the
+# datasheet pages rather than taken from a summary.
+#
+# DELIBERATELY NOT MODELLED, because the `vreg` kind has nowhere to put them
+# and inventing a place would be worse than the gap:
+#   - The EN input. `bind_vreg` stamps an unconditional ideal source on the
+#     output net; it never reads an enable. The pin map below names pad 3 "en"
+#     so the role is at least visible in the bind report, but the model does NOT
+#     gate on it. On Watchy EN is tied to the same net as VIN (Net-(D1-K)), so
+#     the part is unconditionally enabled and the model matches the board; on a
+#     board that sequences EN it would NOT, and that is a real limitation.
+#   - Current limit (610 mA min / 1100 mA typ). `max_current_a` below carries
+#     the 600 mA continuous output rating, which is the figure the stress
+#     monitor should judge against; the foldback behaviour itself is not
+#     modelled because the ideal-source vreg path has no CC mode.
+#   - Line/load regulation, PSRR, output noise, active discharge (RDISCHG),
+#     over-temperature protection. The output is an ideal 3.3 V source, so all
+#     of these are exactly zero / absent in simulation rather than wrong.
+[[models]]
+id = "rt9080_3v3"
+kind = "vreg"
+description = "RT9080-33 Richtek 600mA LDO, 3.3V fixed, 2uA IQ, TSOT-23-5"
+
+[models.match]
+# Covers the datasheet's ordering codes for the 3.3 V option (RT9080-33GJ5,
+# RT9080-33GQZ, RT9080N-33GJ5) and the bare board value "RT908033" that Watchy
+# writes with no separator. The "33" is required, so RT9080-08 (0.8 V) or any
+# other output-voltage code cannot bind here and silently regulate to 3.3 V.
+value_re = "(?i)^RT9080N?-?33([A-Z0-9-]*)?$"
+mpn_re   = "(?i)^RT9080N?-?33"
+
+[models.params]
+# Source: Richtek RT9080 datasheet DS9080-09 December 2024 (see above).
+vout      = 3.3      # output-voltage option "33"; accuracy +/-2% @ ILOAD = 1 mA
+dropout_v = 0.31     # VDROP typ @ ILOAD = 600 mA, 3 V <= VOUT (max is 0.53 V)
+iq_a      = 2.0e-6   # IQ typ @ ILOAD = 0 mA, VIN >= VOUT + VDROP (max is 4 uA)
+
+[models.pins]
+# TSOT-23-5, datasheet Section 7 Pin Configuration / Section 8 Functional Pin
+# Description. Pad 4 is SNS on the RT9080N sense-pin option and NO INTERNAL
+# CONNECTION on the plain RT9080; Watchy fits the plain part and leaves pad 4
+# unconnected, which is what the datasheet says to do. It is named "nc" here
+# rather than "sns" so no binder mistakes it for a feedback node.
+"1" = "in"
+"2" = "gnd"
+"3" = "en"
+"4" = "nc"
+"5" = "out"
+
+[models.ratings]
+# Source: RT9080 datasheet DS9080-09, Section 10 Absolute Maximum Ratings and
+# Section 13 Thermal Information (TSOT-23-5 column).
+max_current_a = 0.6          # 600 mA output current (VIN >= 2.3 V), Section 3
+max_voltage_v = 6.5          # VIN/VOUT/EN to GND abs max
+max_junction_temp_c = 150.0  # TJ abs max
+theta_ja_c_per_w = 189.4     # JEDEC-standard board, TSOT-23-5
+# max_power_w is deliberately absent: the datasheet publishes no package power
+# rating, only TJ(max) and theta_JA, and the thermal monitor derives the
+# junction temperature from those two directly.
