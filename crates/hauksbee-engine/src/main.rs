@@ -283,6 +283,28 @@ enum ModelsCommand {
     List(ModelsListArgs),
     /// Show, per board component, which model entry won and from which layer.
     Resolve(ModelsResolveArgs),
+    /// Draft a device model from a PDF datasheet. Asks first: this sends the
+    /// datasheet's text to an LLM backend.
+    Extract(ModelsExtractArgs),
+}
+
+#[derive(Parser)]
+struct ModelsExtractArgs {
+    /// The datasheet PDF to read.
+    #[arg(long)]
+    pdf: PathBuf,
+    /// The part number the model is for (e.g. BC847B).
+    #[arg(long)]
+    part: String,
+    /// What kind of device it is (e.g. bjt_npn, ldo, opamp, i2c_sensor).
+    #[arg(long, default_value = "bjt_npn")]
+    kind: String,
+    /// Where to write the model card. Defaults to the user model directory.
+    #[arg(long)]
+    out_dir: Option<PathBuf>,
+    /// Skip the prompt. For scripts that have already got the user's consent.
+    #[arg(long)]
+    yes: bool,
 }
 
 #[derive(Parser)]
@@ -879,6 +901,13 @@ fn main() -> anyhow::Result<()> {
                 &args.board,
                 args.models_dir.as_deref(),
                 args.json,
+            ),
+            ModelsCommand::Extract(args) => hauksbee_engine::commands::models::extract(
+                &args.pdf,
+                &args.part,
+                &args.kind,
+                args.out_dir.as_deref(),
+                args.yes,
             ),
         },
         Command::Watch(args) => {

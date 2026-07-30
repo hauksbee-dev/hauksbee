@@ -25,9 +25,12 @@ once_cell = "1"
 
 serde_json = { workspace = true }
 
+# The extraction sandbox needs a scratch directory at run time: the agent gets
+# a copy of the datasheet and nothing of the user's.
+tempfile = { workspace = true }
+
 [dev-dependencies]
 forge-sexpr = { workspace = true }
-tempfile = { workspace = true }
 
 [lints]
 workspace = true
