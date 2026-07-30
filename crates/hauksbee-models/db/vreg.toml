@@ -83,7 +83,7 @@ max_voltage_v = 16.0
 # matches ONLY that part's two-digit code (05/06/08/09/12/15/18/24), optionally
 # behind a manufacturer prefix (LM/L/MC/UA/KA/NJM/AN/SPX) and a current-class
 # letter (78L/78M/78S). A single unanchored "78xx" rule used to bind the whole
-# family — 7809/7812/7815 included — as +5V, silently simulating the wrong rail.
+# family: 7809/7812/7815 included, as +5V, silently simulating the wrong rail.
 # Source: ST L78xx datasheet DS0422, Table (typical). Dropout ~2 V, Iq ~6 mA.
 
 [[models]]

@@ -7,7 +7,7 @@
 [[models]]
 id = "generic_r"
 kind = "passive"
-description = "Generic resistor — value parsed from component Value field"
+description = "Generic resistor, value parsed from component Value field"
 
 [models.match]
 lib_id = "Device:R"
@@ -35,7 +35,7 @@ lib_id = "Device:R_Small"
 [[models]]
 id = "generic_c"
 kind = "passive"
-description = "Generic capacitor — value parsed from component Value field"
+description = "Generic capacitor, value parsed from component Value field"
 
 [models.match]
 lib_id = "Device:C"
@@ -97,7 +97,7 @@ polarized = true
 [[models]]
 id = "generic_l"
 kind = "passive"
-description = "Generic inductor — value parsed from component Value field"
+description = "Generic inductor, value parsed from component Value field"
 
 [models.match]
 lib_id = "Device:L"
@@ -125,7 +125,7 @@ lib_id = "Device:L_Small"
 [[models]]
 id = "ferrite_bead"
 kind = "passive"
-description = "Ferrite bead — modelled as series RL"
+description = "Ferrite bead, modelled as series RL"
 
 [models.match]
 lib_id = "Device:Ferrite_Bead"
@@ -144,7 +144,7 @@ ohms = 0.35
 [[models]]
 id = "crystal"
 kind = "passive"
-description = "Quartz crystal — series resonant LC model"
+description = "Quartz crystal, series resonant LC model"
 
 [models.match]
 lib_id = "Device:Crystal"
@@ -158,7 +158,7 @@ lib_id = "Device:Crystal"
 [[models]]
 id = "fuse"
 kind = "passive"
-description = "Fuse — zero-ohm wire (pre-fault)"
+description = "Fuse, zero-ohm wire (pre-fault)"
 
 [models.match]
 lib_id = "Device:Fuse"

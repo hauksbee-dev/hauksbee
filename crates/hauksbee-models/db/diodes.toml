@@ -279,6 +279,145 @@ max_power_w = 0.2
 max_voltage_v = 30.0
 
 # ─────────────────────────────────────────────────────────────────────────────
+# USBLC6-2P6: STMicroelectronics very-low-capacitance ESD protection array.
+# Source: ST "USBLC6-2 Very low capacitance ESD protection" datasheet,
+#   Doc ID 11265 Rev 5, October 2011 (st.com/resource/en/datasheet/usblc6-2.pdf).
+# ST publishes a SPICE/IBIS deck for this part under a licence that does not
+# permit redistribution, so nothing here is copied from it; every number below
+# comes from the datasheet's own tables and its Section 2.1 worked example.
+#
+# TOPOLOGY (datasheet Figure 1 and Section 2.1, "rail to rail topology"):
+# five junctions on one die, per I/O line a pair of steering diodes and one
+# transil across the supply rails.
+#
+#            VBUS (pin 5)
+#              |     |
+#             ///   ///          two steering diodes, one per I/O, cathodes
+#              |     |           to VBUS: I/O -> VBUS conducts on a positive
+#          I/O1     I/O2         surge
+#              |     |
+#             ///   ///          two steering diodes, anodes on GND: GND ->
+#              |     |           I/O conducts on a negative surge
+#            GND (pin 2)
+#              |
+#            transil (VBR 6 V) between VBUS and GND, cathode on VBUS
+#
+# SOT-666 pinout (Figure 1, top view): 1=I/O1, 2=GND, 3=I/O2, 4=I/O2,
+# 5=VBUS, 6=I/O1. Pins 1/6 are the same internal node, as are 3/4.
+#
+# Datasheet figures used (Table 2, Electrical characteristics, Tamb=25C):
+#   IRM  = 10 nA typ, 150 nA max  @ VRM = 5.25 V   (the standoff voltage)
+#   VBR  >= 6 V                   @ IR = 1 mA      (VBUS to GND)
+#   VF   <= 1.1 V                 @ IF = 10 mA
+#   VCL  <= 12 V @ IPP = 1 A, 8/20 us, any I/O pin to GND
+#   VCL  <= 17 V @ IPP = 5 A, 8/20 us, any I/O pin to GND
+#   Ci/o-GND = 2.5 pF typ, 3.5 pF max @ VR = 1.65 V
+# Section 2.1 states the piecewise model ST itself uses:
+#   VF = VT + Rd*Ip with VT = 1.1 V and Rd = 0.5 Ohm (steering diodes)
+#   VTRANSIL = VBR + Rd_TRANSIL*Ip with VBR = 6.1 V and Rd_TRANSIL = 0.5 Ohm
+#
+# WHAT THIS ENTRY STAMPS. The binder stamps one SPICE diode per `diode` entry,
+# so the anode/cathode roles are given to the transil (GND -> VBUS), which is
+# the junction with DC consequence on a board: it clamps the 5 V rail at its
+# breakdown. The four I/O steering diodes are stamped instead as behavioural
+# clamp laws below, using ST's own piecewise numbers, so the whole five-junction
+# topology is present rather than one fifth of it.
+#
+# WHAT THIS ENTRY DOES NOT STAMP, said plainly: the 2.5 pF I/O-to-GND line
+# capacitance and the 150 nA leakage. Both are stated on the datasheet; neither
+# is modelled, because the array has no per-I/O SPICE device to hang them on.
+# The consequence is that USB eye-diagram / line-loading questions are NOT
+# answered by this model. Everything the model does answer (rail clamping,
+# surge conduction paths) is datasheet-backed.
+[[models]]
+id = "usblc6_2"
+kind = "diode"
+description = "USBLC6-2P6/2SC6 ST 2-line ESD array, 5.25V standoff, VBR 6V, rail-to-rail"
+
+[models.match]
+# Both package options of the same die: USBLC6-2P6 (SOT-666) and USBLC6-2SC6
+# (SOT23-6L), plus the bare "USBLC6-2". No other ST part shares the prefix.
+value_re = "(?i)^USBLC6-?2[A-Z0-9-]*$"
+
+[models.params]
+# The VBUS-to-GND transil. Source: ST USBLC6-2 datasheet Doc ID 11265 Rev 5.
+# `n` is the one number here that the datasheet does not print. It is chosen as
+# 2.0, an ordinary recombination-dominated emission coefficient, and `is` then
+# follows from the single stated forward point: is = 10 mA / exp(1.095 V /
+# (2 * 25.85 mV)) = 6.3e-12 A, where 1.095 V is the 1.1 V maximum less the
+# 5 mV dropped across rs at 10 mA. Fitting the MAXIMUM forward drop is
+# deliberate: it is the only forward figure the sheet guarantees.
+is  = 6.3e-12   # from VF <= 1.1 V at IF = 10 mA with n = 2.0 (see above)
+n   = 2.0       # NOT a datasheet value; see the note above
+rs  = 0.5       # Rd_TRANSIL typ, datasheet Section 2.1
+bv  = 6.0       # VBR min at IR = 1 mA (Section 2.1 uses 6.1 V as the typical)
+
+# Parameters for the four steering-diode clamp laws further down, both from
+# datasheet Section 2.1: the forward threshold VT and the dynamic resistance Rd
+# that ST uses in its own clamping-voltage calculation. They live in `params`
+# because that is where the behavioural runtime reads law variables from; the
+# diode reader ignores keys it does not know.
+vt_clamp = 1.1  # VT, forward threshold of a steering diode (V)
+rd_clamp = 0.5  # Rd, dynamic resistance of a steering diode (Ohm)
+
+[models.pins]
+# SOT-666 / SOT23-6L, datasheet Figure 1 (top view).
+# The transil is the diode the binder stamps, so GND carries the "anode" role
+# and VBUS the "cathode" role: below breakdown that junction is reverse biased
+# by VBUS, and it conducts forward if VBUS is driven below GND. Both are the
+# real behaviour of the rail-to-rail transil.
+"1" = "io1"       # I/O1
+"2" = "anode"     # GND, anode of the VBUS-GND transil
+"3" = "io2"       # I/O2
+"4" = "io2"       # I/O2 (second pad, same internal node as pin 3)
+"5" = "cathode"   # VBUS, cathode of the VBUS-GND transil
+"6" = "io1"       # I/O1 (second pad, same internal node as pin 1)
+
+[models.ratings]
+# The datasheet publishes no continuous current or power rating for this part:
+# it is a surge device rated by IEC 61000-4-2 pulse level, not by DC. Only the
+# figures it does state appear here.
+max_voltage_v = 5.25        # VRM, the reverse standoff voltage (leakage test condition)
+max_junction_temp_c = 125.0 # Tj operating max, datasheet Table 1
+
+# The four I/O steering diodes, as piecewise-linear clamp laws. Each conducts
+# only once its junction is forward biased past VT, so in every normal operating
+# condition (VBUS at 5 V, data lines between 0 V and 3.3 V) all four evaluate to
+# exactly zero current and the part is the open circuit it really is. They come
+# alive only when a line is driven above VBUS + 1.1 V or below GND - 1.1 V,
+# which is the surge case ST's Section 2.1 describes.
+# `v_anode` is the GND pin and `v_cathode` the VBUS pin; see the pin map above
+# for why those role names carry the rails.
+
+[[models.behavioral.laws]]
+name = "io1_to_vbus"
+kind = "current"
+a = "io1"
+b = "cathode"
+expr = "max(0.0, (v_io1 - v_cathode - vt_clamp) / rd_clamp)"
+
+[[models.behavioral.laws]]
+name = "gnd_to_io1"
+kind = "current"
+a = "anode"
+b = "io1"
+expr = "max(0.0, (v_anode - v_io1 - vt_clamp) / rd_clamp)"
+
+[[models.behavioral.laws]]
+name = "io2_to_vbus"
+kind = "current"
+a = "io2"
+b = "cathode"
+expr = "max(0.0, (v_io2 - v_cathode - vt_clamp) / rd_clamp)"
+
+[[models.behavioral.laws]]
+name = "gnd_to_io2"
+kind = "current"
+a = "anode"
+b = "io2"
+expr = "max(0.0, (v_anode - v_io2 - vt_clamp) / rd_clamp)"
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
 id = "schottky_generic"
