@@ -237,7 +237,7 @@ value_re = "(?i)^bq76952"
 
 [models.ratings]
 # Source: bq76952 datasheet SLUSDX9C, Table 7.1 Absolute Maximum Ratings
-max_voltage_v       = 85.0    # VPACK abs max (V), datasheet — stack voltage limit
+max_voltage_v       = 85.0    # VPACK abs max (V), datasheet, stack voltage limit
 max_junction_temp_c = 125.0   # Tj max (C), datasheet
 
 # ── LM5107 / LM5109: TI half-bridge gate drivers ─────────────────────────────
@@ -310,7 +310,7 @@ vil       = 0.8
 # WSON-8 / SOIC-8. Source: LM5109 datasheet SNVSA31C, Section 7.1 Pin Functions.
 # Same physical pin map as LM5107; LIN is active-low in this variant.
 "1" = "hin"   # High-side input (active high)
-"2" = "lin"   # Low-side input (active LOW for LM5109 — inverted vs LM5107)
+"2" = "lin"   # Low-side input (active LOW for LM5109, inverted vs LM5107)
 "3" = "vdd"   # Supply
 "4" = "gnd"   # Ground
 "5" = "lo"    # Low-side gate drive output

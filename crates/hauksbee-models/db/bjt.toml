@@ -1,4 +1,4 @@
-# BJT models — NPN and PNP.
+# BJT models, NPN and PNP.
 # Gummel-Poon basics: is, bf, nf, vaf, br, rb, rc, re, cje, cjc, tf.
 
 # ── NPN ───────────────────────────────────────────────────────────────────────
@@ -100,7 +100,7 @@ tf  = 3.5e-10
 
 # ─────────────────────────────────────────────────────────────────────────────
 
-# BCM847BS — matched NPN pair, SOT-363 (6-pin)
+# BCM847BS: matched NPN pair, SOT-363 (6-pin)
 # Each transistor in the pair shares the same SPICE model as BC847.
 # Pin mapping: SOT-363 pin 1=B1, 2=E1, 3=E2, 4=B2, 5=C2, 6=C1
 
@@ -108,6 +108,82 @@ tf  = 3.5e-10
 max_current_a = 0.1
 max_power_w = 0.625
 max_voltage_v = 45.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# S8050: NPN silicon epitaxial planar transistor, SOT-23.
+# Source: Galaxy Microelectronics (gmesemi.com) "NPN Silicon Epitaxial Planar
+#   Transistor S8050" product specification, document STM0043A, August 2020.
+# This is a multi-source Chinese jellybean; the Galaxy sheet is the one read,
+# and its ratings match the other second sources (VCEO 25 V, IC 500 mA,
+# PC 300 mW), so the entry is not specific to one vendor's lot.
+#
+# Datasheet figures used (Electrical Characteristics, Ta=25C):
+#   hFE     = 120 .. 350   @ VCE=1 V, IC=50 mA   (ranks L 120-200, H 200-350)
+#   hFE     >= 50          @ VCE=1 V, IC=500 mA
+#   VCE(sat) <= 0.6 V      @ IC=500 mA, IB=50 mA
+#   VBE(sat) <= 1.2 V      @ IC=500 mA, IB=50 mA
+#   fT      >= 150 MHz     @ VCE=6 V, IC=20 mA, f=30 MHz
+#   V(BR)CEO = 25 V, V(BR)CBO = 40 V, V(BR)EBO = 5 V
+#   Figure 3 (typical VBE(sat)/VCE(sat) vs IC at IC=10*IB) reads
+#   VBE(sat) ~ 0.70 V at IC=50 mA and ~0.95 V at IC=500 mA, and
+#   VCE(sat) ~ 0.3 V at IC=500 mA.
+#
+# bf: the datasheet's own 50 mA window is 120..350 across both hFE ranks;
+#   200 is the L/H rank boundary and within 3% of the geometric mean of the
+#   window (205), so it is the least arbitrary single number the sheet supports.
+# is: fitted to Figure 3. With nf=1 the intrinsic VBE at IC=50 mA is
+#   Vt*ln(IC/is) = 25.85 mV * ln(5e11) = 0.697 V, which lands on the curve.
+# rb: fitted to the SAME curve at the other end. At IC=500 mA, IB=50 mA the
+#   model gives 0.756 V intrinsic + 3.3*0.05 = 0.165 V base drop + 0.05*0.55 =
+#   0.028 V emitter drop = 0.95 V, matching Figure 3 and comfortably under the
+#   1.2 V table maximum.
+# rc, re: chosen so VCE(sat) at the datasheet test point (IC=500 mA, IB=50 mA)
+#   is ~0.1 V intrinsic + 0.3*0.5 + 0.05*0.55 = 0.28 V, matching Figure 3's
+#   typical and staying under the 0.6 V table maximum.
+# tf: from the fT specification. tau_ec = 1/(2*pi*fT) = 1.06 ns at fT=150 MHz,
+#   of which the junction-charging term at IC=20 mA is a few tens of ps, so
+#   tf ~ 1.0 ns.
+#
+# DELIBERATELY OMITTED, because this datasheet states none of them and we will
+# not invent them: vaf and var (left at the engine default of infinity, i.e. no
+# base-width modulation), br (default 1.0), cje and cjc (default 0). The Early
+# voltage is not printed on the sheet at all; Figure 1's output slope is only
+# consistent with a value of order 10^2 V, which is too coarse to pin.
+[[models]]
+id = "s8050"
+kind = "bjt_npn"
+description = "S8050 NPN general-purpose SOT-23, 25V VCEO, 500mA, hFE 120-350 @ Ic=50mA"
+
+[models.match]
+# Grade/lot suffixes of the same die: S8050, S8050-L, S8050-H, S8050C, S8050D
+# (all hFE bins). The higher-current SS8050 (1.5 A) starts "SS8050" and is
+# correctly rejected by the leading anchor, so it cannot mis-bind here.
+value_re = "(?i)^S8050[A-Z0-9-]*$"
+
+[models.params]
+# Source: Galaxy Microelectronics S8050 spec STM0043A August 2020 (see above).
+is  = 1.0e-13   # fitted to VBE ~0.70 V at IC=50 mA (datasheet Figure 3)
+bf  = 200.0     # hFE, datasheet 120-350 @ VCE=1V, IC=50mA; 200 = L/H rank edge
+nf  = 1.0       # ideal forward junction
+rb  = 3.3       # base ohmic, fitted to VBE(sat) ~0.95 V @ IC=500mA, IB=50mA
+rc  = 0.3       # collector ohmic, part of VCE(sat) ~0.28 V at that point
+re  = 0.05      # emitter ohmic, remainder of the same VCE(sat) fit
+tf  = 1.0e-9    # forward transit time from fT >= 150 MHz @ VCE=6V, IC=20mA
+
+[models.pins]
+# SOT-23 NPN (Galaxy S8050 package outline; also the KiCad Q_NPN_BEC /
+# Package_TO_SOT_SMD:SOT-23 numbering used on the Watchy board).
+"1" = "base"
+"2" = "emitter"
+"3" = "collector"
+
+[models.ratings]
+# Source: Galaxy Microelectronics S8050 spec STM0043A, Maximum Rating Ta=25C.
+max_current_a = 0.5     # IC continuous (A)
+max_power_w = 0.3       # PC collector dissipation (W)
+max_voltage_v = 25.0    # VCEO (V)
+
+# ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
 id = "bcm847bs"

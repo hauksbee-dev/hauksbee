@@ -12,7 +12,7 @@ mpn_re   = "(?i)MCP4728"
 [models.params]
 # Source: Microchip MCP4728 datasheet DS22187E, Section 1.0 Electrical Specs
 bits       = 12
-vref_int   = 2.048       # internal reference voltage (V) — Vref_int
+vref_int   = 2.048       # internal reference voltage (V), Vref_int
 vref_ext   = 5.0         # assumed external VDD reference option (V)
 lsb_size_v = 0.000488    # 2.048 / 4096 V per LSB
 i2c_addr   = 0x60        # default unshifted 7-bit I2C address (A2A1A0=000)

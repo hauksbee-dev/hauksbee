@@ -11,8 +11,8 @@ value_re = "(?i)^LM358"
 [models.params]
 # Source: Texas Instruments LM358 datasheet (SNOSC16D), typical parameters
 gain    = 100000.0  # open-loop DC gain (V/V), typ 100 dB
-rail_lo = 0.0       # output low rail (V) — approx. Vss + 0 V (1-supply)
-rail_hi = 32.0      # output high rail (V) — single supply
+rail_lo = 0.0       # output low rail (V), approx. Vss + 0 V (1-supply)
+rail_hi = 32.0      # output high rail (V), single supply
 
 [models.pins]
 # Pin numbers for DIP-8 / SOIC-8 LM358 (unit A, pin numbers vary by schematic)
@@ -174,8 +174,8 @@ value_re = "(?i)^LM393"
 
 [models.params]
 # Source: Texas Instruments LM393 datasheet (SNOSC16D), typical
-out_lo     = 0.0    # output pulled low (V) — open-collector at 0
-out_hi     = 5.0    # output high (V) — pulled up externally (assumed 5V)
+out_lo     = 0.0    # output pulled low (V), open-collector at 0
+out_hi     = 5.0    # output high (V), pulled up externally (assumed 5V)
 hysteresis = 0.005  # ~5 mV, datasheet input offset
 
 [models.pins]
@@ -216,7 +216,7 @@ supply_static_ua = 900.0
 "4" = "in_minus"
 "5" = "vcc"
 
-# ── INA180 / INA181 / INA186 — TI current-sense amplifiers ───────────────────
+# ── INA180 / INA181 / INA186, TI current-sense amplifiers ───────────────────
 #
 # Source: Texas Instruments INA180 datasheet, SBOS774D (Rev D, 2019).
 #         Texas Instruments INA181 datasheet, SBOS744C (Rev C, 2019).
@@ -326,7 +326,7 @@ rail_hi = 26.0
 max_voltage_v       = 26.0
 max_junction_temp_c = 150.0
 
-# ── INA2181 — TI dual current-sense amplifier ─────────────────────────────────
+# ── INA2181, TI dual current-sense amplifier ─────────────────────────────────
 #
 # Source: Texas Instruments INA2181 datasheet, SBOS831A (Rev A, 2021).
 # DUAL channel version of the INA181 in an MSOP-10 / VSSOP-10 package.
@@ -345,7 +345,7 @@ value_re = "(?i)^INA2181"
 
 [models.params]
 # Source: INA2181 datasheet SBOS831A, Table 7.5.
-# Gain is suffix-dependent (A1=20, A2=50, A3=100, A4=200 V/V) — same family.
+# Gain is suffix-dependent (A1=20, A2=50, A3=100, A4=200 V/V), same family.
 gain    = 100.0    # representative (A3 suffix); actual gain from part suffix
 rail_lo = 0.0
 rail_hi = 26.0

@@ -27,8 +27,8 @@
 #
 # ── User extension ───────────────────────────────────────────────────────────
 # Drop a `pin_rules.toml` (any file with a [[pin_rules]] array) into a model
-# directory — `~/.config/hauksbee/models`, `~/.hauksbee/models`, or a
-# `--models-dir` path — and its rules are layered AHEAD of these built-ins, so a
+# directory: `~/.config/hauksbee/models`, `~/.hauksbee/models`, or a
+# `--models-dir` path, and its rules are layered AHEAD of these built-ins, so a
 # user rule overrides or extends the defaults without recompiling. Example: to
 # flip the diode convention for a house footprint, add a rule with the same
 # footprint family and the opposite pad→role map.
@@ -60,7 +60,7 @@ roles = { "1" = "cathode", "2" = "anode" }
 
 # ── SOT-23 BJT ────────────────────────────────────────────────────────────────
 # The KiCad SOT-23 transistor pinout (Package_TO_SOT_SMD:SOT-23) is
-# 1=base, 2=emitter, 3=collector — the convention KiCad's Q_NPN_BEC / Q_PNP_BEC
+# 1=base, 2=emitter, 3=collector, the convention KiCad's Q_NPN_BEC / Q_PNP_BEC
 # symbols and the SOT-23 footprint use.
 [[pin_rules]]
 id = "bjt_sot23_b1_e2_c3"
