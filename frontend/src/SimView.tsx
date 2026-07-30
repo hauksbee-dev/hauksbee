@@ -329,8 +329,14 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
   // carrying them over made a replaced sim show the previous board's faults.
   const hadInfo = useRef(false)
   const infoWasNull = useRef(true)
+  // Mirrors `hadInfo` as STATE, because the disconnect surface has to re-render
+  // on it. A dropped socket clears boardInfo, so without this the view fell
+  // back to its first-connect "Waiting for the live session ..." spinner and
+  // sat there forever: a loading state for a session that had already ended.
+  const [everHadSession, setEverHadSession] = useState(false)
   useEffect(() => {
     if (boardInfo) {
+      setEverHadSession(true)
       if (infoWasNull.current && hadInfo.current) {
         setFaultLog([])
         setSelectedFaultRef(null)
@@ -504,6 +510,12 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
   // "ran WITH the shorts bridged" note (or the version-warning refusal).
   const shorts = boardInfo?.shorts ?? null
 
+  // The session was live and the socket has since dropped. Distinct from "not
+  // connected yet": the first is a loss to report, the second is a wait. The
+  // whole surface (canvas, banner, rail) reads this so it stops presenting the
+  // empty cards of a dead session as though they described a real board.
+  const sessionLost = everHadSession && !connected
+
   return (
     <div className="flex flex-col h-full overflow-hidden" style={{ background: 'var(--canvas)' }}>
       {/* Transport row */}
@@ -607,12 +619,47 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
         >
           {boardUrl === null ? (
             <div
-              className="absolute inset-0 flex items-center justify-center"
+              className="absolute inset-0 flex items-center justify-center px-6"
               style={{ background: 'var(--instrument)' }}
+              data-testid={sessionLost ? 'sim-session-lost' : 'sim-waiting'}
             >
-              <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--overlay-chip-text)' }}>
-                <span className="slot-spin" /> Waiting for the live session ...
-              </div>
+              {sessionLost ? (
+                // The session ENDED; a spinner here claimed it was still
+                // arriving. Name the loss, say what the client is doing about
+                // it, and point at the one thing that actually recovers.
+                <div className="text-center" style={{ maxWidth: '28rem' }}>
+                  <div className="text-[15px] font-semibold" style={{ color: 'var(--err-strong)' }}>
+                    The live session ended.
+                  </div>
+                  <div className="mt-2 text-[13px] leading-relaxed" style={{ color: 'var(--overlay-chip-text)' }}>
+                    The connection to <code className="hb-inline">/ws</code> dropped, so the board,
+                    the rails and the scope below have nothing to read. Everything this page
+                    already recorded is kept; nothing new arrives until a session is back.
+                  </div>
+                  <div className="mt-2 text-[12px] flex items-center justify-center gap-2" style={{ color: 'var(--overlay-hint-dim)' }}>
+                    <span className="slot-spin" /> Retrying every 2 seconds.
+                  </div>
+                  {onRelaunch && expectedBoard && (
+                    <button
+                      type="button"
+                      data-testid="sim-relaunch-after-loss"
+                      onClick={onRelaunch}
+                      className="hb-btn-primary hb-press px-3.5 text-[12px] mt-3"
+                      style={{ height: 30 }}
+                    >
+                      Launch {expectedBoard} again
+                    </button>
+                  )}
+                  <div className="mt-2.5 text-[12px]" style={{ color: 'var(--overlay-hint-dim)' }}>
+                    If the server itself is gone, restart it with{' '}
+                    <code className="hb-inline">hauksbee serve</code> and reload this page.
+                  </div>
+                </div>
+              ) : (
+                <div className="flex items-center gap-2 text-sm" style={{ color: 'var(--overlay-chip-text)' }}>
+                  <span className="slot-spin" /> Waiting for the live session ...
+                </div>
+              )}
             </div>
           ) : (
           <BoardViewer
@@ -711,6 +758,23 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
               scrollPaddingTop: 10,
             }}
           >
+            {/* Without this the rail's cards ("No nets loaded", "No MCUs in
+                board info", an empty scope) read as findings ABOUT the board
+                rather than as the aftermath of a lost connection. */}
+            {sessionLost && (
+              <div
+                data-testid="rail-session-lost"
+                className="rounded-lg px-3 py-2.5 text-[12px] leading-relaxed shrink-0"
+                style={{ background: 'var(--err-bg)', border: '1px solid var(--err-border)', color: 'var(--silk)' }}
+              >
+                <span className="text-[10px] font-bold tracking-widest uppercase block mb-1" style={{ color: 'var(--err-strong)' }}>
+                  Session ended
+                </span>
+                These cards are empty because the live link dropped, not because
+                the board has nothing on it.
+              </div>
+            )}
+
             {mcus.length > 0 && (
               <RailCard id="mcu" title="MCU" icon={<CpuIcon size={13} />} cardState={cardState} onToggle={toggleCard}>
                 <McuChips mcus={mcus} frame={frame} uartActive={uartActive} />
@@ -803,16 +867,19 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
         }}
       >
         {/* Running indicator */}
+        {/* "paused" is a claim about a sim that is still there. A dropped
+            session is not paused, and saying so sent readers looking for a
+            play button that could not help them. */}
         <div className="flex items-center gap-1.5">
           <div
             className={running ? 'run-dot' : undefined}
             style={{
               width: 6, height: 6, borderRadius: 3,
-              background: running ? 'var(--ok)' : 'var(--silk-faint)',
+              background: sessionLost ? 'var(--err)' : running ? 'var(--ok)' : 'var(--silk-faint)',
             }}
           />
-          <span style={{ color: running ? 'var(--ok)' : 'var(--silk-faint)' }}>
-            {running ? 'running' : 'paused'}
+          <span style={{ color: sessionLost ? 'var(--err)' : running ? 'var(--ok)' : 'var(--silk-faint)' }}>
+            {sessionLost ? 'session ended' : running ? 'running' : 'paused'}
           </span>
         </div>
 
