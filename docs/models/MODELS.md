@@ -46,13 +46,23 @@ The shortest path is the web report: drop a board, and any part with no model
 carries a "draft a model from a datasheet" button. It states what gets sent
 before it asks for the file.
 
+Beside it is "write a part yourself", for the two cases extraction does not
+serve: you already know the part, or you already have a model. It takes
+hauksbee's own TOML, checked as you type by the same validator that runs on
+save, so what passes there will save. It also takes SPICE, pasted or loaded
+from a `.lib`, `.mod`, `.cir`, `.sp` or `.ckt`. Subcircuits are supported:
+hauksbee flattens a `.subckt` at load, maps its ports to your nodes and
+recurses through nested calls, so a vendor part that ships as a subcircuit runs
+like any other. A SPICE deck is checked there rather than saved as a model,
+because a deck is something to simulate; turning one into a reusable part means
+writing the entry that claims your component.
+
 From a terminal:
 
 ```bash
 hauksbee models extract \
     --pdf testdata/datasheets/BC847.pdf \
     --part BC847 \
-    --kind bjt_npn \
     --out-dir ~/.hauksbee/models       # default if omitted
 ```
 
@@ -64,9 +74,20 @@ The older standalone binary still works and holds the same contract
 (`cargo build -p hauksbee-models --bin model-extract`, then
 `HAUKSBEE_EXTRACT_YES=1` for the scripted case).
 
-`--kind` is one of: `passive | diode | bjt_npn | bjt_pnp | nmos | pmos |
-vreg | opamp | comparator | analog_switch | digital | dac | adc |
-shift_register | mcu | connector | ignore`.
+`--kind` is optional, and leaving it off is usually right: the datasheet says
+what the part is on its first page, and the model is about to read that page.
+It identifies the kind, prints which one it chose before committing to it, and
+extracts against that kind's schema, so a wrong identification fails validation
+rather than producing a plausible model of the wrong device. A part that fits
+none of the supported kinds is reported as exactly that, rather than forced
+into the nearest one.
+
+Pass it when you know better than the model, which is a real case: a part that
+reads like a regulator and behaves like a charger is where a human override
+earns its place. `--kind` is one of `passive | diode | bjt_npn | bjt_pnp |
+nmos | pmos | vreg | opamp | comparator | analog_switch | digital | dac | adc |
+shift_register | mcu | connector | i2c_sensor | spi_sensor`, plus the
+behavioural families `charger | pmic | balancer`.
 
 The tool writes `<part>.toml` to the output directory. The library loads any
 TOML in `~/.hauksbee/models/` as a user-dir entry the next time it builds,
