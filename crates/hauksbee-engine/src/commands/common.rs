@@ -37,19 +37,19 @@ pub fn file_name(p: &Path) -> String {
         .to_string()
 }
 
-/// The dependency panel's backend hooks, shared by `hauksbee serve` and
-/// `run --serve`: status is the engine's own discovery (`deps::deps_json`),
-/// installs go through the engine's streaming installer (`deps::install_dep`,
-/// which enforces its own one-at-a-time slot, timeout, and output cap).
-pub fn deps_hooks() -> (
-    hauksbee_server::frontdoor::DepsStatus,
-    hauksbee_server::frontdoor::DepInstaller,
-) {
+/// The browser tool panels' backend hooks, shared by `hauksbee serve` and
+/// `run --serve`: dependency status is the engine's own discovery
+/// (`deps::deps_json`), installs go through the engine's streaming installer
+/// (`deps::install_dep`, which enforces its own one-at-a-time slot, timeout, and
+/// output cap), and datasheet extraction goes through `webextract` (which holds
+/// the same consent contract `hauksbee models extract` holds).
+pub fn deps_hooks() -> hauksbee_server::frontdoor::ToolHooks {
     use std::sync::Arc;
-    let status: hauksbee_server::frontdoor::DepsStatus = Arc::new(crate::deps::deps_json);
-    let install: hauksbee_server::frontdoor::DepInstaller =
-        Arc::new(|id, progress| crate::deps::install_dep(id, progress));
-    (status, install)
+    hauksbee_server::frontdoor::ToolHooks {
+        deps_status: Arc::new(crate::deps::deps_json),
+        install: Arc::new(|id, progress| crate::deps::install_dep(id, progress)),
+        datasheet: crate::webextract::hooks(),
+    }
 }
 
 /// The web live-launch callback: turn an uploaded board (and optional

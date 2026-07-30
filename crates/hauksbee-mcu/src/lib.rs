@@ -55,6 +55,7 @@ pub mod ffi {
 pub mod avr;
 pub mod children;
 pub mod elf;
+pub mod hostserial;
 pub mod traits;
 
 #[cfg(feature = "renode")]
@@ -66,6 +67,7 @@ pub mod qemu;
 /// Data-driven MCU/SoC descriptors: the `db/mcu/*.soc.toml` loader (06 §2).
 pub mod soc;
 
+pub use hostserial::{HostSerial, HostSerialStats, HostSerialTransport, PeerEvent};
 pub use traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
 
 use std::path::{Path, PathBuf};

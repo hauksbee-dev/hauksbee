@@ -213,6 +213,23 @@ frontend keeps working unchanged):
   (e.g. `{"pressed":1}`, `{"position":0.5}`, `{"temp_c":40}`,
   `{"transitions":20}`).
 
+## The host is a peripheral too: `run --serial-attach`
+
+The peripherals above are things hauksbee models on the board's behalf. The
+other half of "attach something to the running board" is attaching *your own
+software* to it, which is a host serial port rather than a `Peripheral`:
+
+```
+hauksbee run board.kicad_pcb --firmware fw.elf --serial-attach --serial-wait 30
+```
+
+That prints a device path (`/dev/ttys006`), and your pyserial script, vendor
+tool, or `minicom` opens it exactly as it opens a real USB serial cable. The
+mechanism, the attach/detach reporting, and its honest limits are documented in
+[MCU.md](MCU.md#talking-to-the-board-from-your-own-software---serial-attach).
+The two layers compose: peripherals answer the firmware's buses while your
+software drives its command protocol, in the same co-sim run.
+
 ## hauksbee-ci: the `[[peripheral]]` spec section
 
 A spec attaches peripherals for a headless run, with type-specific config and
