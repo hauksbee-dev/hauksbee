@@ -58,6 +58,19 @@ pub struct RunConfig {
     pub no_fit: Vec<String>,
     /// What to do with the DNP parts neither list names.
     pub dnp_policy: hauksbee_extract::dnp::DnpPolicy,
+    /// Open a host-facing serial endpoint for the co-sim, so the user's own
+    /// software can talk to the emulated MCU's UART (see
+    /// `commands::hostserial`).
+    pub serial_attach: bool,
+    /// `pty` (default: unmodified serial software works unmodified) or `tcp`.
+    pub serial_transport: hauksbee_mcu::hostserial::HostSerialTransport,
+    /// Hold the co-sim at t=0 until a host tool attaches, at most this long.
+    pub serial_wait: Option<f64>,
+    /// Let the co-sim run as fast as it can instead of pacing it to wall-clock
+    /// time.
+    pub serial_no_pace: bool,
+    /// Which MCU reference to bridge, when a board carries more than one.
+    pub serial_mcu: Option<String>,
     /// `.asbuilt.toml` overlay: the declarative physical delta (cuts, jumpers,
     /// fitted values) between the design files and the real reworked board,
     /// applied to the bound board before the engine is built.
@@ -122,6 +135,16 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // rather than silently ignore the flag.
     if !cfg.probe.is_empty() && !cfg.headless {
         anyhow::bail!("--probe records co-sim waveforms and needs --headless");
+    }
+
+    // --serial-attach bridges a host serial port to the firmware's UART, so
+    // without firmware there is nothing on the far end to answer. Refuse here,
+    // before any binding work, rather than open a port onto silence.
+    if cfg.serial_attach && cfg.firmware.is_none() {
+        anyhow::bail!(
+            "--serial-attach connects your own software to the emulated MCU's UART, so it \
+             needs firmware to talk to: add --firmware <FILE>"
+        );
     }
 
     // --list-nets: print the board's net names so the user can pick one for
@@ -277,7 +300,15 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // Altium boards reach here with an empty `text` (binary parsed from bytes);
     // the TUI's text-based build path can't analyse those, so they keep the
     // websocket flow.
-    let launch_tui = !cfg.serve && !cfg.headless && !is_altium && (cfg.tui || stdout_is_tty);
+    // `--serial-attach` is a live co-sim session driven from another terminal, so
+    // it must never be swallowed by the TTY-default dashboard: the whole point is
+    // that this terminal narrates the serial endpoint while the user's tool talks
+    // to it.
+    let launch_tui = !cfg.serve
+        && !cfg.headless
+        && !cfg.serial_attach
+        && !is_altium
+        && (cfg.tui || stdout_is_tty);
     if launch_tui {
         return crate::tui::run(
             &cfg.board,
@@ -378,6 +409,27 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             cfg.json,
             cfg.strict_thermal,
         );
+    }
+
+    // --serial-attach: a live co-sim with a host-facing serial port. Placed before
+    // the headless report path because it IS a co-sim run, just one whose stimulus
+    // comes from the user's own software instead of a report flag; it prints its
+    // own endpoint narration and session summary.
+    if cfg.serial_attach {
+        let scfg = crate::commands::hostserial::SerialSessionConfig {
+            transport: cfg.serial_transport,
+            wait_secs: cfg.serial_wait,
+            pace: !cfg.serial_no_pace,
+            mcu: cfg.serial_mcu.clone(),
+            chunk_us: cfg.chunk_us,
+        };
+        let mut say = |line: &str| eprintln!("{line}");
+        let summary =
+            crate::commands::hostserial::run_session(&mut engine, cfg.seconds, &scfg, &mut say)?;
+        for line in crate::commands::hostserial::summary_lines(&summary) {
+            eprintln!("{line}");
+        }
+        return Ok(());
     }
 
     if cfg.headless {

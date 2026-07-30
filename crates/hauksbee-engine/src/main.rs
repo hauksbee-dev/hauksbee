@@ -348,6 +348,27 @@ struct ModelsResolveArgs {
     json: bool,
 }
 
+/// CLI spelling of the host-serial transport. Separate from
+/// `hauksbee_mcu::hostserial::HostSerialTransport` because the mcu crate carries
+/// no clap dependency; the conversion below is the whole binding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum SerialTransportArg {
+    /// A pseudo-terminal with a real device path: unmodified serial software
+    /// works unmodified.
+    Pty,
+    /// A loopback TCP port, for a tool that speaks sockets.
+    Tcp,
+}
+
+impl From<SerialTransportArg> for hauksbee_mcu::hostserial::HostSerialTransport {
+    fn from(a: SerialTransportArg) -> Self {
+        match a {
+            SerialTransportArg::Pty => Self::Pty,
+            SerialTransportArg::Tcp => Self::Tcp,
+        }
+    }
+}
+
 #[derive(Parser)]
 // The five "print one report and exit" flags pick the report to show, so they
 // are mutually exclusive: pass at most one (clap errors clearly if you pass two,
@@ -576,6 +597,45 @@ struct RunArgs {
     /// (`--chunk-us 1` for a 2 us strobe); runtime scales inversely.
     #[arg(long, value_name = "US", help_heading = "Advanced / analyses")]
     chunk_us: Option<f64>,
+
+    /// Open a host serial port onto the emulated MCU's UART and run a live
+    /// co-sim, so your own software talks to the simulated board the way it
+    /// talks to real hardware. Prints a device path (e.g. /dev/ttys006) to
+    /// paste into another terminal, and reports when your tool attaches and
+    /// detaches. Needs --firmware. Sim time is paced to wall-clock time so a
+    /// script's timeouts and sleeps mean what they say.
+    #[arg(long, help_heading = "Host serial")]
+    serial_attach: bool,
+
+    /// How the host attaches under --serial-attach. `pty` gives a real device
+    /// path, so unmodified serial software (pyserial, minicom, a vendor tool)
+    /// works unmodified; `tcp` gives a loopback port for a tool that speaks
+    /// sockets, or for a platform with no pty.
+    #[arg(
+        long,
+        value_name = "KIND",
+        default_value = "pty",
+        help_heading = "Host serial"
+    )]
+    serial_transport: SerialTransportArg,
+
+    /// Hold the co-sim at t=0 until your software opens the port, waiting at
+    /// most N seconds (then failing loudly rather than running a session with
+    /// nobody on the far end). Without this the run starts immediately and any
+    /// output before you attach is held and flushed on attach.
+    #[arg(long, value_name = "SECS", help_heading = "Host serial")]
+    serial_wait: Option<f64>,
+
+    /// Let the co-sim run as fast as it can under --serial-attach instead of
+    /// pacing it to wall-clock time. Faster, but a host tool's timeouts and
+    /// sleeps no longer line up with the emulated board's sense of time.
+    #[arg(long, help_heading = "Host serial")]
+    serial_no_pace: bool,
+
+    /// Which MCU's UART to bridge when the board carries more than one
+    /// (reference designator, e.g. U1). Default: every MCU on the board.
+    #[arg(long, value_name = "REF", help_heading = "Host serial")]
+    serial_mcu: Option<String>,
 
     /// Simulate these Do-Not-Populate parts as fitted, whatever the DNP policy
     /// says. Comma-separated and/or repeatable: `--fit A101,R7`. An unknown
@@ -971,6 +1031,11 @@ fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
         probe: a.probe,
         probe_csv: a.probe_csv,
         chunk_us: a.chunk_us,
+        serial_attach: a.serial_attach,
+        serial_transport: a.serial_transport.into(),
+        serial_wait: a.serial_wait,
+        serial_no_pace: a.serial_no_pace,
+        serial_mcu: a.serial_mcu,
         fit: a.fit,
         no_fit: a.no_fit,
         dnp_policy: if a.honour_dnp {
