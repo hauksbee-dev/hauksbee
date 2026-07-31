@@ -15,7 +15,7 @@
   `windows-x86_64` suffix and `.zip` assets so the release workflow and the
   installer cannot drift when that leg lands. Until a `windows-x86_64` asset
   exists on a release, the download step will report 404: build from source
-  instead (https://github.com/ETM-Code/hauksbee#quickstart).
+  instead (https://github.com/hauksbee-dev/hauksbee#quickstart).
 
   Which build you get:
     Default: the full build, AVR / ATmega co-simulation included. It statically
@@ -38,7 +38,7 @@
   Install the GPL-free build instead of the default one.
 
 .EXAMPLE
-  irm https://raw.githubusercontent.com/ETM-Code/hauksbee/main/scripts/get-hauksbee.ps1 | iex
+  irm https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.ps1 | iex
 
 .EXAMPLE
   .\get-hauksbee.ps1 -Version v0.1.0 -Permissive
@@ -56,7 +56,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$Repo = "ETM-Code/hauksbee"
+$Repo = "hauksbee-dev/hauksbee"
 # Base URLs are overridable for the same reason as the bash installer: a
 # GitHub Enterprise host, a self-hosted mirror, or a local mock for testing
 # the download/verify/install flow.
