@@ -7,11 +7,12 @@ probe against the per-quantity tolerance declared in that deck's
 `expect.toml`.
 
 - Oracle: **ngspice ngspice-45.2**
-- Decks: **34**
-- Passing: **34/34**
+- Decks: **38**
+- Passing: **38/38**
 
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Where | Result |
 |------|----------|----------|------------------|-----------|-------|--------|
+| ao3400a_rdson | op | `V(d)` | 1.473e-7 | 1.0e-2 | op | PASS |
 | bjt_bias | op | `V(coll)` | 1.088e-5 | 5.0e-3 | op | PASS |
 |  |  | `V(base)` | 1.922e-6 | 5.0e-3 | op | PASS |
 |  |  | `V(emit)` | 2.563e-6 | 5.0e-3 | op | PASS |
@@ -23,6 +24,7 @@ probe against the per-quantity tolerance declared in that deck's
 | cccs_mirror | tran | `V(out)` | 1.873e-4 | 1.0e-2 | t=1.644e-6s | PASS |
 | cccs_subckt | tran | `V(out)` | 1.873e-4 | 1.0e-2 | t=1.644e-6s | PASS |
 | ccvs_transres | tran | `V(out)` | 8.614e-3 | 1.0e-2 | t=9.225e-6s | PASS |
+| cj2301_rdson | op | `V(d)` | 9.710e-8 | 1.0e-2 | op | PASS |
 | diode_iv_dc | dc | `V(d)` | 1.093e-4 | 2.0e-2 | sweep=8.500e-1 | PASS |
 |  |  | `V(a,d)` | 9.617e-4 | 2.0e-2 | sweep=6.500e-1 | PASS |
 | diode_op | op | `V(d)` | 4.572e-6 | 1.0e-3 | op | PASS |
@@ -52,6 +54,9 @@ probe against the per-quantity tolerance declared in that deck's
 |  |  | `V(in)` | 0.000e0 | 1.0e-4 | op | PASS |
 |  |  | `I(V1)` | 6.250e-9 | 1.0e-4 | op | PASS |
 | rlc_series | tran | `V(out)` | 8.504e-3 | 2.0e-2 | t=2.925e-6s | PASS |
+| s8050_datasheet_point | op | `V(base)` | 7.150e-6 | 5.0e-3 | op | PASS |
+|  |  | `V(coll)` | 2.965e-7 | 5.0e-3 | op | PASS |
+| usblc6_forward | op | `V(a)` | 4.543e-3 | 1.0e-2 | op | PASS |
 | vccs_gm | tran | `V(out)` | 3.025e-3 | 1.0e-2 | t=1.010e-4s | PASS |
 | vcvs_gain | tran | `V(out)` | 8.650e-3 | 1.0e-2 | t=9.327e-6s | PASS |
 | xfmr_1to2 | tran | `V(sec)` | 1.118e-2 | 2.0e-2 | t=3.914e-5s | PASS |
@@ -62,6 +67,7 @@ probe against the per-quantity tolerance declared in that deck's
 
 ## Deck descriptions
 
+- **ao3400a_rdson**: AO3400A NMOS on-resistance at VGS = 10 V
 - **bjt_bias**: NPN common-emitter bias point
 - **bjt_ce_amp**: bypassed-emitter CE amplifier, 20 kHz sine gain
 - **bjt_switch_tail**: saturated switch turn-off: storage delay + charge-limited rise
@@ -71,6 +77,7 @@ probe against the per-quantity tolerance declared in that deck's
 - **cccs_mirror**: CCCS mirror (gain 2 into 500 || 100n) of an ammeter current
 - **cccs_subckt**: CCCS in a subckt controlled by its own local ammeter
 - **ccvs_transres**: CCVS transresistance (3k on a 2k-sourced ammeter) into RC
+- **cj2301_rdson**: CJ2301 PMOS on-resistance at VGS = -5 V
 - **diode_iv_dc**: Diode forward V-I DC sweep (Vin 0..1 V): junction voltage V(d) and the drop V(a,d) across the 100 ohm series resistor, re-solving the nonlinear OP at every sweep point.
 - **diode_op**: diode forward-drop DC operating point
 - **diode_rectifier**: half-wave rectifier with RC smoothing
@@ -91,6 +98,8 @@ probe against the per-quantity tolerance declared in that deck's
 - **rc_lowpass**: RC low-pass step response (tau = 100 us)
 - **resistor_divider**: resistive divider DC operating point
 - **rlc_series**: series RLC underdamped step response
+- **s8050_datasheet_point**: S8050 NPN at the datasheet's 50 mA VBE test point
+- **usblc6_forward**: USBLC6-2P6 forward drop at the datasheet's 10 mA test current
 - **vccs_gm**: VCCS gm-block (1 mS into 2k || 50n) pulse response
 - **vcvs_gain**: VCVS gain-4 block driving an RC low-pass (1 kHz sine)
 - **xfmr_1to2**: 1:2 transformer, k=0.999, 10 kHz sine, 1k load: ratio + loading
