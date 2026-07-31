@@ -202,7 +202,7 @@ docker run --rm hauksbee:full java -jar /opt/freerouting.jar --help
 
 # Run a real check against a board in your checkout.
 docker run --rm -v "$PWD:/work" hauksbee:slim \
-  hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report
+  hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --report
 ```
 
 For a multi-arch local build (both arches at once, without pushing) use buildx:

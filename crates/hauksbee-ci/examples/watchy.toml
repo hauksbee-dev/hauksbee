@@ -1,0 +1,37 @@
+# hauksbee-ci example: the first spec to run on a fresh clone.
+#
+#   hauksbee-ci run crates/hauksbee-ci/examples/watchy.toml
+#
+# The board is the SQFMI Watchy, an ESP32-S3 e-paper smartwatch, vendored
+# unmodified from the upstream project under its MIT licence. 86 parts, 685
+# copper segments, two rails, a battery charger and a boost converter. It is
+# here because a first run should meet a board someone actually fabricated,
+# not a fixture with one footprint on it.
+#
+# Runs in about half a second, so it is cheap to run before you trust it.
+
+name = "Watchy power-up"
+board = "boards/watchy.kicad_pcb"
+duration_ms = 200
+
+# USB-powered, the way it charges. `kind = "usb"` models the port's real source
+# impedance and current limit rather than a stiff 5 V, so an inrush the port
+# could not actually supply shows up as a sag instead of passing silently.
+[[supply]]
+net = "VBUS"
+kind = "usb"
+usb = "5v0.5a"
+
+# Nothing on the board exceeds a rating: no over-current, over-voltage,
+# over-power, reverse-bias or over-temperature, at any point in the run.
+[[assert]]
+kind = "no_faults"
+
+# The 3.3 V rail is in tolerance once it has settled. `after_ms` skips the
+# power-up ramp, so this asks "does it hold", not "did it start at zero".
+[[assert]]
+kind = "voltage"
+net = "+3V3"
+min = 3.0
+max = 3.6
+after_ms = 50
