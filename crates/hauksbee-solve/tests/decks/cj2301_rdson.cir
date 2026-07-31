@@ -1,0 +1,18 @@
+CJ2301 PMOS on-resistance at its datasheet VGS
+* The entry in crates/hauksbee-models/db/mosfet.toml solves kp and the ohmic
+* residue rd+rs from the CJ2301 datasheet's two RDS(on) rows, the same method
+* the AO3400A entry uses. This deck asks an independent simulator whether those
+* numbers reproduce the on-resistance they were derived from.
+*
+* Resistively loaded rather than current-forced. The forced-current form does
+* not converge in hauksbee when the device has no independent resistive path,
+* which is the same limit the S8050 deck ran into: see the note in the
+* .expect.toml. A 5 ohm load against a 5 V rail draws about 1 A, so V(d)
+* against the rail reads the channel drop.
+VS s 0 DC 5
+VG g 0 DC 0
+RL d 0 5
+M1 d g s s CJ2301 L=1u W=1u
+.model CJ2301 PMOS(VTO=-0.7 KP=14.6 RD=0.036 RS=0.036 CGDO=0 CGSO=0)
+.op
+.end

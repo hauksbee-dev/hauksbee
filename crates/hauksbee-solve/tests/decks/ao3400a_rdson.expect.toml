@@ -1,0 +1,21 @@
+# The AO3400A library entry, cross-checked against ngspice.
+#
+# The entry in crates/hauksbee-models/db/mosfet.toml solves kp and the ohmic
+# residue rd+rs from two RDS(on) rows of the AOS datasheet (Rev 3.1). That is
+# arithmetic in a comment, and arithmetic in a comment is not a measurement.
+#
+# Running this deck through ngspice gives V(d) = 0.017965 V at a forced 1 A, so
+# RDS(on) = 17.97 mOhm against the datasheet's 18 mOhm typ at VGS = 10 V,
+# ID = 5.7 A. The derivation lands within 0.2% of the figure it was derived
+# from, confirmed by a simulator that had no part in deriving it.
+#
+# Note this deck DOES force a device current, the shape the S8050 deck could not
+# use. It converges here because the drain node has a resistive path to ground
+# through the channel, where a BJT base node has only the junction. That is the
+# distinction worth keeping in mind when writing the next one of these.
+analysis = "op"
+description = "AO3400A NMOS on-resistance at VGS = 10 V"
+
+[[probe]]
+expr = "V(d)"
+reltol = 0.01

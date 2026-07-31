@@ -1,0 +1,26 @@
+# The CJ2301 library entry, cross-checked against ngspice.
+#
+# The entry solves kp and the ohmic residue from the datasheet's two RDS(on)
+# rows. This deck asks whether those numbers reproduce the resistance they came
+# from, judged by a simulator that had no part in the derivation.
+#
+# ngspice gives V(d) = 4.9134 V against a 5 V rail through a 5 ohm load, so
+# 0.983 A through a channel dropping 86.6 mV: 88.1 mOhm. The entry's own
+# arithmetic predicts 1/(kp * overdrive) + (rd+rs) = 1/(14.6 * 4.3) + 0.072 =
+# 87.9 mOhm at this gate drive. Under a quarter of a milliohm apart, so the
+# derivation is sound rather than merely plausible.
+#
+# Resistively loaded, not current-forced. The forced-current form is the natural
+# one for reading an on-resistance, and hauksbee does not converge on it here:
+# ".op did not converge: KCL residual 2.565e-5 A". Same limit the S8050 deck hit
+# from the other direction, and the pattern is now clear enough to state: a
+# forced current through a device whose node has no independent resistive path
+# to ground leaves Newton with an exponential and nothing damping it. The
+# AO3400A deck DOES force a current and converges, because its drain reaches
+# ground through the channel. Recorded as its own task.
+analysis = "op"
+description = "CJ2301 PMOS on-resistance at VGS = -5 V"
+
+[[probe]]
+expr = "V(d)"
+reltol = 0.01

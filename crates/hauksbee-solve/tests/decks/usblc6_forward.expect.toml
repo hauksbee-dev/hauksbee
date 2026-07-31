@@ -1,0 +1,16 @@
+# The USBLC6-2P6 library entry, cross-checked against ngspice.
+#
+# This entry is the one most worth checking, because it carries a fitted
+# parameter AND an assumed one: `is` was fitted to the ST datasheet's
+# VF <= 1.1 V at IF = 10 mA, and the entry states plainly that n = 2.0 is NOT a
+# datasheet value. A pair like that is exactly where a plausible-looking model
+# goes quietly wrong.
+#
+# ngspice gives V(a) = 1.1009 V at a forced 10 mA, which lands on the
+# datasheet's stated limit. The fit does what the entry claims it does.
+analysis = "op"
+description = "USBLC6-2P6 forward drop at the datasheet's 10 mA test current"
+
+[[probe]]
+expr = "V(a)"
+reltol = 0.01
