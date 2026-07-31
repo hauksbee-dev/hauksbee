@@ -12,8 +12,11 @@
 mod analog_active_resolve;
 mod bjt_regex_polarity;
 mod codex_behavioral_fixture;
+mod codex_prompt_delivery;
 mod digital_pin_maps;
 mod exact_override_tiebreak;
+mod extract_model_choice;
+mod negative_rail_validation;
 mod pack_format;
 mod pack_layering;
 mod pack_store;

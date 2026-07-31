@@ -278,6 +278,8 @@ export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
   const [flow, setFlow] = useState<Flow>({ step: 'consent' })
   const [part, setPart] = useState('')
   const [kind, setKind] = useState('')
+  // Empty means "use the default", which the server names in `default_model`.
+  const [model, setModel] = useState('')
   const [file, setFile] = useState<File | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -350,6 +352,7 @@ export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
     form.append('datasheet', file, file.name)
     form.append('part', part)
     form.append('kind', kind)
+    form.append('model', model)
     form.append('reference', active.reference)
     try {
       const res = await fetch('/api/models/extract', { method: 'POST', body: form })
@@ -601,6 +604,30 @@ export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
                         <option key={k.id} value={k.id}>{k.id} · {k.label}</option>
                       ))}
                     </select>
+                  </label>
+                  <label className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+                    <span className="block mb-1">
+                      Model to read it with{' '}
+                      <span style={{ color: 'var(--silk-faint)' }}>(optional)</span>
+                    </span>
+                    <input
+                      data-testid="extract-model"
+                      className="hb-input text-[12px]"
+                      style={{ height: 30, width: '17rem' }}
+                      value={model}
+                      onChange={e => setModel(e.target.value)}
+                      placeholder={`${info.default_model} (${info.default_effort} effort)`}
+                    />
+                    {/* Reading a datasheet is not a cheap task. The values are
+                        easy; the pin map is where a weaker model fails, because
+                        package drawings are rotated, mirrored and often
+                        unnumbered, and a wrong pin map still binds cleanly. So
+                        the default is the strong tier, and this box is for
+                        someone who has a reason to differ. */}
+                    <span className="block mt-1" style={{ color: 'var(--silk-faint)' }}>
+                      Leave blank for {info.default_model}. A weaker model reads pin
+                      numbering wrong, and a wrong pin map simulates a different circuit.
+                    </span>
                   </label>
                   <label className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
                     <span className="block mb-1">Datasheet PDF</span>

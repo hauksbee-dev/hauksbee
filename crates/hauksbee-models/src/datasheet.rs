@@ -397,6 +397,9 @@ pub struct Args {
     pub out_dir: Option<PathBuf>,
     /// Retry count for LLM calls (default 1)
     pub retries: usize,
+    /// Model the extraction agent runs on. `None` takes
+    /// `HAUKSBEE_CODEX_MODEL`, then [`DEFAULT_CODEX_MODEL`].
+    pub model: Option<String>,
 }
 
 impl Args {
@@ -409,11 +412,20 @@ impl Args {
             kind_str,
             out_dir: None,
             retries: 1,
+            model: None,
         }
     }
 
     pub fn out_dir(mut self, dir: Option<PathBuf>) -> Self {
         self.out_dir = dir;
+        self
+    }
+
+    /// Pick the model the extraction agent runs on. An empty string means "not
+    /// chosen", which is what a form field the user left alone posts, and must
+    /// fall through to the default rather than become `--model ""`.
+    pub fn model(mut self, model: Option<String>) -> Self {
+        self.model = model.filter(|m| !m.trim().is_empty());
         self
     }
 }
@@ -438,6 +450,7 @@ pub fn parse_args() -> Result<Args> {
     // bjt_npn silently produced a transistor model for whatever was handed in.
     let mut kind_str = String::new();
     let mut out_dir: Option<PathBuf> = None;
+    let mut model: Option<String> = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -453,6 +466,9 @@ pub fn parse_args() -> Result<Args> {
             "--out-dir" => {
                 out_dir = Some(args.next().context("--out-dir requires a value")?.into());
             }
+            "--model" => {
+                model = Some(args.next().context("--model requires a value")?);
+            }
             "--help" | "-h" => {
                 print_help();
                 std::process::exit(0);
@@ -467,6 +483,7 @@ pub fn parse_args() -> Result<Args> {
         kind_str,
         out_dir,
         retries: 1,
+        model,
     })
 }
 
@@ -488,10 +505,14 @@ OPTIONS:
                           i2c_sensor|spi_sensor  (declarative register-map
                           sensors → a [sensor] spec, not a SPICE model)
     --out-dir <dir>       Output directory (default: ~/.hauksbee/models/)
+    --model <id>          Model for the extraction agent
+                          (default: gpt-5.6-sol at high reasoning effort)
 
 ENVIRONMENT:
     HAUKSBEE_LLM_API_KEY   API key for OpenAI-compatible backend
-    HAUKSBEE_LLM_MODEL     Model ID for API backend (e.g. gpt-4o)
+    HAUKSBEE_CODEX_MODEL   Model for the codex backend (default: gpt-5.6-sol)
+    HAUKSBEE_CODEX_EFFORT  Reasoning effort for it (default: high)
+    HAUKSBEE_LLM_MODEL     Model ID for API backend (e.g. gpt-5.6-sol)
     HAUKSBEE_LLM_BASE_URL  Base URL (default: https://api.openai.com/v1)
 "
     );
@@ -587,6 +608,13 @@ The entry must use [[models]] array syntax and include:
 - [models.ratings] section with the absolute-maximum ratings (see below)
 - [models.pins] section mapping pad numbers to pin roles
 
+PIN ROLE NAMES for kind="{kind}": {pin_roles}
+  Use these exact spellings. They are looked up by exact string, so "output"
+  instead of "out", or "ground" instead of "gnd", makes the part bind OPEN: it
+  contributes nothing to the circuit and every result on its nets is wrong.
+  A pin with no role in the list (a NC, a tab, a second ground) can be given
+  any descriptive name, or left out.
+
 For kind="{kind}", the required params are:
 {required_params}
 
@@ -594,6 +622,43 @@ For kind="{kind}", the required params are:
 "limiting values" table. Include every field the datasheet gives a number for;
 omit a field entirely if the datasheet does not state it (do NOT invent it):
 {ratings_hint}
+
+PIN NUMBERING, read this before you fill in [models.pins]:
+
+  The pin map is the one field where being wrong is worse than being absent. A
+  wrong value makes a simulation inaccurate; a wrong pin map makes it a
+  simulation of a different circuit, and it still binds cleanly, so nobody
+  finds out. Treat it as the hardest part of this job, not the easiest.
+
+  P1. PREFER A NUMBERED TABLE. If the datasheet has a pin-function or terminal
+      table with a "Pin"/"No."/"Terminal" column, that table is the answer. Use
+      it and cite it. Do not re-derive the numbering from a picture when a
+      table exists.
+  P2. A PACKAGE DRAWING IS NOT A PIN TABLE. Drawings are routinely rotated 90
+      degrees, drawn from the BOTTOM, or drawn as a "front view" with the leads
+      pointing sideways. Reading such a figure top-to-bottom and calling the
+      first label pin 1 is the single most common way to get this wrong. If you
+      must use a figure:
+        - say which view it is (top / bottom / front) and which way it is
+          rotated, in the comment;
+        - work out where pin 1 actually is (the dot, the notch, the bevel, the
+          tab) and count from there in the direction the package standard
+          requires, not in the direction the labels happen to be printed;
+        - remember a bottom view mirrors the numbering left-to-right.
+  P3. CROSS-CHECK AGAINST A SECOND PLACE IN THE DOCUMENT. The typical
+      application schematic, the package outline, and the pin table should all
+      agree. Say in the comment which two you checked. If they disagree, do NOT
+      pick one: write the pin map you believe and add
+      `# UNRESOLVED: <figure A> says X, <figure B> says Y` on the affected
+      lines.
+  P4. NEAR-IDENTICAL PARTS OFTEN DIFFER. A negative regulator does not share
+      its positive sibling's pinout; a SOT-23 and a SOT-89 of the same part
+      often differ. If the datasheet covers several packages, state which one
+      this map is for in the description, and pick the package the value/
+      footprint you were given implies.
+  P5. If after all that you are still unsure, say so in a comment on the pins
+      block rather than presenting a guess as read. An honest
+      `# LOW CONFIDENCE: ...` is useful. A confident wrong map is not.
 
 IMPORTANT RULES:
 1. Add a comment on each param/rating line citing where in the datasheet you found
@@ -613,7 +678,12 @@ IMPORTANT RULES:
    - vaf (Early V): 1 to 500
    - vto (MOSFET threshold): -10 to +10
    - kp (transconductance): 1e-6 to 1.0
-   - vout (LDO): 0.5 to 30
+   - vout (LDO): magnitude 0.5 to 30, EITHER SIGN. Write the signed output
+     voltage as the datasheet states it: a negative regulator (79xx, and any
+     part whose output is below GND) takes a NEGATIVE vout, e.g. -5.0 for an
+     LM7905. It is stamped as a source against ground, so writing the magnitude
+     instead produces a part that regulates the wrong side of ground and turns
+     a negative supply into a second positive one.
    - ron (switch): 0.01 to 10000
    - roff (switch): 1e3 to 1e12
 {behavioral_hint}
@@ -624,6 +694,7 @@ OUTPUT (TOML only, starting with [[models]]):
         kind = kind,
         pdf_text = truncate_to_chars(&pdf_text, 40_000),
         required_params = required_params_for_kind(kind),
+        pin_roles = pin_roles_for_kind(kind),
         ratings_hint = ratings_hint_for_kind(kind),
         behavioral_hint = behavioral_hint_for_kind(kind),
     )
@@ -749,6 +820,25 @@ fn ratings_hint_for_kind(kind: &str) -> &'static str {
     }
 }
 
+/// The pin role names the BINDER accepts for a kind, verbatim.
+///
+/// The binder looks these up by exact string (`roles.get("out")`), so a model
+/// that calls the pin "output" passes every other check and then binds OPEN.
+/// Validation catches that, but only once the run is over, and a retry costs
+/// another three minutes and another bill. Stating the vocabulary up front is
+/// the cheap half of the same guarantee.
+fn pin_roles_for_kind(kind: &str) -> &'static str {
+    match kind {
+        "diode" => "anode, cathode",
+        "bjt_npn" | "bjt_pnp" => "collector, base, emitter",
+        "nmos" | "pmos" => "drain, gate, source",
+        "vreg" | "charger" | "pmic" => "in, out, gnd  (and en / adj / fb when the part has them)",
+        "opamp" | "comparator" => "in_plus, in_minus, out, vcc, vee",
+        "analog_switch" => "in_out_a, in_out_b (SPST) or com, s0, s1 (SPDT)",
+        _ => "",
+    }
+}
+
 fn required_params_for_kind(kind: &str) -> &'static str {
     match kind {
         "diode" => "is, n, rs  (also cjo, vj, m, bv if available)",
@@ -842,7 +932,7 @@ fn call_codex_backend(prompt: &str, args: &Args) -> Result<String> {
     let mut prompt = format!("{prompt}\n\n{}", verification_clause(&ws));
     for attempt in 0..=args.retries {
         let started = Instant::now();
-        let raw_stdout = run_codex_once(&prompt, &ws)?;
+        let raw_stdout = run_codex_once(&prompt, &ws, args.model.as_deref())?;
         // Prefer the file we asked for. Falling back to stdout keeps a model
         // that answered in prose from failing outright, but the file is the
         // reliable path: stdout also carries the agent's narration, and one
@@ -1020,12 +1110,50 @@ fn verification_clause(ws: &Workspace) -> String {
     )
 }
 
+/// The model the extraction agent runs on, and how hard it is asked to think.
+///
+/// Reading a datasheet is not a cheap task. The values are easy (a table cell
+/// is a table cell); the pin map is where a weak model fails, because package
+/// drawings are rotated, mirrored, and labelled without numbers, and getting
+/// one wrong produces a part that binds cleanly and simulates a different
+/// device. So the default is the strongest tier at high reasoning effort rather
+/// than whatever codex happens to default to.
+///
+/// Override with `--model` or `HAUKSBEE_CODEX_MODEL` / `HAUKSBEE_CODEX_EFFORT`.
+pub const DEFAULT_CODEX_MODEL: &str = "gpt-5.6-sol";
+pub const DEFAULT_CODEX_EFFORT: &str = "high";
+
+/// Resolve the model and reasoning effort for a codex run: an explicit
+/// `--model` wins, then the environment, then the default above.
+pub fn codex_model(explicit: Option<&str>) -> (String, String) {
+    let model = explicit
+        .map(str::to_string)
+        .or_else(|| std::env::var("HAUKSBEE_CODEX_MODEL").ok())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_CODEX_MODEL.to_string());
+    let effort = std::env::var("HAUKSBEE_CODEX_EFFORT")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_CODEX_EFFORT.to_string());
+    (model, effort)
+}
+
 /// One codex invocation with a hard timeout. Returns stdout (the agent's final
 /// message) on success.
-fn run_codex_once(prompt: &str, ws: &Workspace) -> Result<String> {
+fn run_codex_once(prompt: &str, ws: &Workspace, model: Option<&str>) -> Result<String> {
+    let (model, effort) = codex_model(model);
     let mut cmd = Command::new("codex");
     cmd.args([
         "exec",
+        // Pick the model rather than inheriting codex's default, which varies
+        // by the user's plan and config and silently decides how good the
+        // extraction is.
+        "--model",
+    ])
+    .arg(&model)
+    .arg("-c")
+    .arg(format!("model_reasoning_effort=\"{effort}\""))
+    .args([
         // Writes are confined to the writable roots: --cd plus $TMPDIR and
         // /tmp. The agent needs to write, since it renders, greps and
         // re-checks its own answer in there. Reads are NOT confined by this
@@ -1051,32 +1179,47 @@ fn run_codex_once(prompt: &str, ws: &Workspace) -> Result<String> {
     // See the note above: the prompt is a file, and argv carries only its name.
     let prompt_path = ws.dir.path().join("prompt.md");
     std::fs::write(&prompt_path, prompt).context("writing the prompt into the sandbox")?;
+    let log_path = ws.dir.path().join("codex-stderr.log");
+    let log = std::fs::File::create(&log_path)
+        .map(Stdio::from)
+        .unwrap_or_else(|_| Stdio::null());
+    // The instruction goes in on STDIN, never as a trailing positional argument.
+    //
+    // codex's `--image` takes many values, and an extraction passes one per
+    // rendered page, so a trailing `<prompt>` parses as one more image path and
+    // codex then reports "No prompt provided via stdin". A `--` separator also
+    // avoids that, but stdin cannot be broken by the next flag that learns to
+    // take many values.
     let mut child = cmd
-        .arg(
-            "Read prompt.md in your working directory and follow it exactly. \
-             Write your answer to model.toml.",
-        )
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        // NOT piped. codex logs its whole session to stderr, and the poll loop
+        // NOT a pipe. codex logs its whole session to stderr, and the poll loop
         // below reads no pipe until the child has exited. A ten-minute agentic
         // run overflows the 64 KiB pipe buffer, codex blocks in write(2),
         // try_wait never reports an exit, and the loop burns the entire
         // CODEX_TIMEOUT before killing it. The failure then reads "codex timed
         // out with no answer", which points the blame at the model rather than
-        // at us. The answer arrives via --output-last-message, so the session
-        // log is not something we need to keep.
-        .stderr(Stdio::null())
+        // at us.
+        //
+        // A file, not /dev/null: codex explains itself on stderr, and a refused
+        // model name or a rate limit is the whole diagnosis. Discarding it
+        // leaves `codex exited with status 1: ` and nothing after the colon.
+        // Its tail goes into the error below.
+        .stderr(log)
         .spawn()
         .context(
             "spawning codex (is it installed and on PATH? `brew install codex` or set \
              HAUKSBEE_LLM_API_KEY)",
         )?;
 
-    // Close stdin immediately: codex appends piped stdin to the prompt and
-    // blocks waiting for EOF if we leave it open.
+    // Feed the instruction, then EOF. codex reads its prompt from stdin when no
+    // positional one survived arg parsing, and it blocks waiting for EOF if the
+    // pipe is left open.
     if let Some(mut stdin) = child.stdin.take() {
-        let _ = stdin.write_all(b"");
+        let _ = stdin.write_all(
+            b"Read prompt.md in your working directory and follow it exactly. \
+              Write your answer to model.toml.",
+        );
         // dropping `stdin` here sends EOF
     }
 
@@ -1108,10 +1251,38 @@ fn run_codex_once(prompt: &str, ws: &Workspace) -> Result<String> {
         // put on stdout. Its session log is on the terminal, where a user
         // watching a long run wants it anyway.
         let tail = String::from_utf8_lossy(&output.stdout);
+        // codex puts the reason it gave up on stderr, so a failure with an
+        // empty stdout (a refused model, a rate limit, a bad config key) has
+        // its whole explanation in the log file and none of it here.
+        let err_tail = std::fs::read_to_string(&log_path)
+            .map(|t| {
+                t.lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .rev()
+                    .take(5)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            })
+            .unwrap_or_default();
+        let detail = [
+            tail.lines().rev().take(5).collect::<Vec<_>>().join(" | "),
+            err_tail,
+        ]
+        .into_iter()
+        .filter(|s| !s.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(" || ");
         bail!(
-            "codex exited with status {}: {}",
+            "codex exited with status {}{}",
             output.status,
-            tail.lines().rev().take(5).collect::<Vec<_>>().join(" | ")
+            if detail.is_empty() {
+                " and said nothing on stdout or stderr".to_string()
+            } else {
+                format!(": {detail}")
+            }
         );
     }
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
@@ -1121,7 +1292,7 @@ fn run_codex_once(prompt: &str, ws: &Workspace) -> Result<String> {
 fn call_api_backend(prompt: &str, args: &Args) -> Result<String> {
     let api_key = std::env::var("HAUKSBEE_LLM_API_KEY").unwrap();
     let model =
-        std::env::var("HAUKSBEE_LLM_MODEL").unwrap_or_else(|_| "gpt-5.3-chat-latest".to_string());
+        std::env::var("HAUKSBEE_LLM_MODEL").unwrap_or_else(|_| DEFAULT_CODEX_MODEL.to_string());
     let base_url = std::env::var("HAUKSBEE_LLM_BASE_URL")
         .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
@@ -1537,6 +1708,7 @@ max_current_a = 0.1\n\
             kind_str: "bjt_npn".to_string(),
             out_dir: Some(dir.clone()),
             retries: 1,
+            model: None,
         };
         let prompt = build_prompt(&args.part, &args.kind_str, "irrelevant");
         let raw = call_backend(&prompt, &args).expect("mock backend should succeed");
@@ -1577,6 +1749,7 @@ max_current_a = 0.1\n\
             kind_str: "bjt_npn".to_string(),
             out_dir: Some(std::env::temp_dir()),
             retries: 1,
+            model: None,
         };
 
         let raw = call_backend(&prompt, &args).expect("codex backend call");
@@ -1622,6 +1795,7 @@ max_current_a = 0.1\n\
             kind_str: "charger".to_string(),
             out_dir: Some(std::env::temp_dir()),
             retries: 1,
+            model: None,
         };
         let raw = call_backend(&prompt, &args).expect("codex backend call");
         let entry = parse_and_validate_reply(&raw, "LTC4020", "charger").expect("parse + validate");
