@@ -374,6 +374,32 @@ pub fn plain_drc(report: &DrcReport) -> PlainReport {
 pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
     let mut out = PlainReport::new("Copper spacing (DRC)");
 
+    // Nothing to check is not the same as nothing wrong.
+    //
+    // A netlist (.net, IPC-D-356) carries connectivity and no copper, so the
+    // clearance sweep examines zero primitives and finds zero problems. Left
+    // alone, that rendered "Looks healthy: no copper spacing problems found",
+    // which a reader takes as "your copper is fine". It was never looked at.
+    // Found by running the flagship board in as a newcomer would, where the
+    // whole report came back clean on input that has no copper in it.
+    //
+    // Guarded on the primitive count rather than the file extension, so this
+    // covers every format that arrives without copper, including ones added
+    // later. The web front door has a narrower version of this for gerbers
+    // only; this is the general case.
+    if st.primitive_count == 0 {
+        out.push_note(HeadsUp::glossed(
+            "No copper was checked: this file carries connectivity but no traces or pours."
+                .to_string(),
+            "Clearance DRC compares copper shapes against each other, and a netlist \
+             describes which pins connect without saying where any copper runs. \
+             Everything else in this report still applies.",
+            "Run hauksbee against the layout file (.kicad_pcb, .brd, .PcbDoc) or a \
+             gerber archive to check spacing.",
+        ));
+        return out;
+    }
+
     // On an unvalidated board format (KiCad 10+), the shorts may be phantom (an
     // unhandled zone fill engulfing every net), so they carry a downgraded
     // severity (set once in DrcStructured::from_report). Surface the caveat as a
