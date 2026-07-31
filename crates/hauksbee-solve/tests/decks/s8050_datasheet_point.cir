@@ -1,0 +1,19 @@
+S8050 NPN near its datasheet VBE test point
+* The library entry in crates/hauksbee-models/db/bjt.toml claims these
+* parameters were fitted to the Galaxy Microelectronics S8050 datasheet
+* (STM0043A) Figure 3: VBE about 0.70 V at IC = 50 mA. This deck holds hauksbee
+* and ngspice to the SAME answer for those parameters, so the entry is not only
+* argued for in a comment but cross-checked against an independent simulator.
+*
+* Resistor-fed base rather than a current source into the base node. The
+* current-source form is the one a datasheet's test conditions suggest, and
+* hauksbee's .op does not converge on it while ngspice does: see the note in
+* the .expect.toml and the task that records it. This shape asks the same
+* question and is what the other BJT decks here use.
+VCC vcc 0 DC 12
+RC vcc coll 100
+RB vcc base 45.2k
+Q1 coll base 0 S8050
+.model S8050 NPN(IS=1e-13 BF=200 NF=1.0 RB=3.3 RC=0.3 RE=0.05 TF=1e-9)
+.op
+.end

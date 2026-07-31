@@ -1,0 +1,45 @@
+# The S8050 library entry, cross-checked against ngspice.
+#
+# This deck exists so that crates/hauksbee-models/db/bjt.toml's parameters are
+# validated by an independent simulator rather than only by the reasoning in
+# their comment. If hauksbee and ngspice disagree about what those numbers
+# produce, one of the two solvers is wrong and the entry's claims cannot be
+# trusted either way.
+#
+# It also closes the loop on the datasheet. The entry says `is` was fitted so
+# that VBE lands on Figure 3's curve at IC = 50 mA. Running this deck through
+# ngspice gives V(base) = 0.70009 V with the collector at 7.0 V, which is
+# exactly 50 mA through the 100 ohm collector resistor from a 12 V rail. So the
+# claim in the comment is now a number an independent simulator agrees with,
+# rather than an assertion about a fit nobody re-ran.
+#
+# Writing this turned up a solver gap, recorded rather than papered over. The
+# natural deck for a datasheet check forces the device current and reads the
+# junction voltage, because that is how a datasheet states its conditions:
+#
+#   IB base 0 DC -250u
+#   Q1 coll base 0 S8050
+#
+# ngspice solves that. hauksbee refuses with ".op did not converge: KCL residual
+# 1.076e-5 A". A current source into a base node is stiff, since the node has no
+# resistive path to ground except through the junction. The refusal is the right
+# failure direction, naming the residual and the node instead of returning a
+# wrong answer, but ngspice solving what we refuse is a capability gap and it is
+# the first thing anyone validating a model against a datasheet will hit.
+#
+# This deck therefore feeds the base through a resistor, which is the shape the
+# other BJT decks use, and asks the same question.
+#
+# Tolerance matches the other BJT decks: percent-level, which covers the small
+# Gummel-Poon differences between the two solvers without being loose enough to
+# hide a real parameter error.
+analysis = "op"
+description = "S8050 NPN at the datasheet's 50 mA VBE test point"
+
+[[probe]]
+expr = "V(base)"
+reltol = 0.005
+
+[[probe]]
+expr = "V(coll)"
+reltol = 0.005
