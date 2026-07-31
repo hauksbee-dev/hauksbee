@@ -1,28 +1,84 @@
 # Voltage regulator models (LDO and switching).
 
+# ─────────────────────────────────────────────────────────────────────────────
+# AMS1117-3.3: the LDO on more hobby boards than any other part, usually as the
+# 5 V-to-3.3 V step on a SOT-223 pad.
+#
+# Source: Advanced Monolithic Systems, Inc. "AMS1117 1A Low Dropout Voltage
+#   Regulator" datasheet (advanced-monolithic.com/pdf/ds1117.pdf). The copy read
+#   carries NO revision code and NO date on any of its eight pages. An earlier
+#   version of this entry cited "Rev. H, Table 1"; neither the revision nor a
+#   numbered table exists in the document, so that citation is gone rather than
+#   repeated. Everything below is from the sheet's two-page ELECTRICAL
+#   CHARACTERISTICS block, headed "at IOUT = 0 mA, and TJ = +25 C unless
+#   otherwise specified".
+#
+# Datasheet figures used:
+#   VOUT       = 3.251 / 3.300 / 3.349 V (min/typ/max)  @ VIN = 4.8 V
+#                (over the full operating temperature range: 3.201 / 3.399)
+#   Dropout    = 1.1 V typ, 1.3 V max  @ IOUT = 0.8 A, dVOUT/dVREF = 1%
+#                (Note 4: dropout is specified only up to 0.8 A; above that it
+#                 is higher, and the sheet does not say by how much)
+#   IQ         = 5 mA typ, 11 mA max   @ (VIN - VOUT) = 1.5 V
+#   Current lim= 900 mA min, 1100 mA typ, 1500 mA max  @ (VIN - VOUT) = 1.5 V
+#   Line reg   = 0.5 mV typ, 10 mV max  @ 1.5 V <= (VIN - VOUT) <= 12 V
+#   Load reg   = 3 mV typ, 15 mV max    @ VIN = 4.75 V, 0 <= IOUT <= 0.8 A
+#   Ripple rej = 60 dB min, 72 dB typ   @ f = 120 Hz, COUT = 22 uF tantalum,
+#                                          IOUT = 1 A, VIN = 4.75 V
+#   RMS noise  = 0.003% of VOUT typ     @ TA = 25 C, 10 Hz <= f <= 10 kHz
+# Absolute Maximum Ratings: input voltage 15 V; operating junction temperature
+#   -40 to +125 C (both control section and power transistor); power dissipation
+#   "Internally limited".
+# Thermal Resistance: theta_JA = 90 C/W for SOT-223 (80 for TO-252, 160 for
+#   SO-8), theta_JC = 15 C/W max for all packages. The sheet notes theta_JA for
+#   SOT-223 varies from 46 C/W to over 90 C/W with the copper area the tab is
+#   soldered to, so 90 is the pessimistic end and the right one for a check.
+#   Note 2 additionally caps package dissipation at 1.2 W for SOT-223, 2.2 W for
+#   TO-252 and 780 mW for 8-lead SOIC.
+#
+# The ratings below are the SOT-223 ones, because that is the package a hobby
+# board fits. A TO-252 or SO-8 build has a different theta_JA and this entry
+# will judge its junction temperature wrongly; the match rule cannot tell them
+# apart from the value string, and guessing from the footprint was rejected
+# (see the note on ANDed match rules at the top of db/README.md).
+#
+# DELIBERATELY NOT MODELLED: `bind_vreg` stamps an ideal DC source on the output
+# net, so line and load regulation, ripple rejection, output noise and the
+# current limit are all exactly absent in simulation rather than wrong. The
+# 1100 mA current limit in particular is NOT modelled; `max_current_a` below
+# carries the 1 A continuous rating the stress monitor should judge against.
+# `max_power_w` is deliberately absent: the datasheet's own Absolute Maximum
+# Ratings say power dissipation is internally limited, and the thermal monitor
+# derives the junction temperature from TJ(max) and theta_JA directly. An
+# earlier version of this entry carried `max_power_w = 1.0` with the comment
+# "SOT-223 on typical pad, thermally limited", which is not a figure this
+# datasheet states anywhere.
 [[models]]
 id = "ams1117_3v3"
 kind = "vreg"
-description = "AMS1117-3.3 / LM1117-3.3 LDO, 1A, 3.3V fixed"
+description = "AMS1117-3.3 / LM1117-3.3 LDO, 1A, 3.3V fixed, SOT-223"
 
 [models.match]
 value_re = "(?i)^(AMS|LM)1117.?3[._]?3"
 
 [models.params]
-# Source: Advanced Monolithic Systems AMS1117 datasheet Rev. H, Table 1
-vout      = 3.3     # output voltage (V)
-dropout_v = 1.1     # max dropout voltage (V) @ Iout=800mA
-iq_a      = 5.0e-3  # quiescent current (A) typ
+# Source: Advanced Monolithic Systems AMS1117 datasheet (see above).
+vout      = 3.3     # 3.251 / 3.300 / 3.349 V @ VIN = 4.8 V, IOUT = 0 mA, TJ = 25 C
+dropout_v = 1.1     # VIN - VOUT typ @ IOUT = 0.8 A (1.3 V max at the same point)
+iq_a      = 5.0e-3  # IQ typ @ (VIN - VOUT) = 1.5 V (11 mA max)
 
 [models.pins]
-"1" = "gnd"
-"2" = "out"
-"3" = "in"
+# Datasheet PIN CONNECTIONS, "3 PIN FIXED/ADJUSTABLE VERSION".
+"1" = "gnd"   # Ground/Adjust
+"2" = "out"   # VOUT
+"3" = "in"    # VIN
 
 [models.ratings]
-max_current_a = 1.0
-max_voltage_v = 15.0  # input
-max_power_w = 1.0     # SOT-223 on typical pad, thermally limited
+max_current_a = 1.0          # 1 A continuous output, datasheet FEATURES
+max_voltage_v = 15.0         # input voltage, Absolute Maximum Ratings
+max_junction_temp_c = 125.0  # TJ abs max, control section and power transistor
+theta_ja_c_per_w = 90.0      # SOT-223, Thermal Resistance (46 to >90 with copper)
+theta_jc_c_per_w = 15.0      # all packages, max
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -86,18 +142,64 @@ max_voltage_v = 16.0
 # family: 7809/7812/7815 included, as +5V, silently simulating the wrong rail.
 # Source: ST L78xx datasheet DS0422, Table (typical). Dropout ~2 V, Iq ~6 mA.
 
+# The 7805 is read off the datasheet in full, because it is the one a hobbyist
+# actually reaches for. Its siblings below still carry the older summary
+# figures, including a `max_power_w = 2.0` that is NOT in the datasheet.
+#
+# Source: STMicroelectronics "L78 Positive voltage regulator ICs" datasheet
+#   DS0422 Rev 38, February 2025, Table 3 "Electrical characteristics of
+#   L7805A" (VI = 10 V, IO = 1 A, TJ = 0 to 125 C unless otherwise specified).
+#
+# Datasheet figures used:
+#   VO      = 4.9 / 5 / 5.1 V           @ TJ = 25 C
+#   VO      = 4.8 / 5 / 5.2 V           @ IO = 5 mA to 1 A, VI = 7.5 to 18 V
+#   Iq      = 4.3 mA typ, 6 mA max      @ TJ = 25 C
+#   dIq     = 0.5 mA max                @ IO = 5 mA to 1 A
+#   Vd      = 2 V typ                   @ IO = 1 A, TJ = 25 C
+#   Line reg= 7 mV typ, 50 mV max       @ VI = 7.5 to 25 V, IO = 500 mA, TJ = 25 C
+#   Load reg= 25 mV typ, 100 mV max     @ IO = 5 mA to 1 A
+#   SVR     = 68 dB typ                 @ VI = 8 to 18 V, f = 120 Hz, IO = 500 mA
+#   RO      = 17 mOhm typ               @ f = 1 kHz
+#   eN      = 10 uV/VO typ              @ TA = 25 C, B = 10 Hz to 100 kHz
+#   ISC     = 0.2 A typ                 @ VI = 35 V, TA = 25 C
+#   IScp    = 2.2 A typ                 @ TJ = 25 C   (peak, short-circuit)
+#   dVO/dT  = -1.1 mV/C typ
+#   Minimum load current for regulation is 5 mA (table note).
+# Absolute maximum ratings (Table 1): VI 35 V for the 5 V to 18 V output codes
+#   (40 V for the 20 V and 24 V codes); IO and PD both "internally limited";
+#   operating junction temperature 0 to 125 C for the C/AC grades, -40 to 125 C
+#   for the AB grade.
+# Thermal data (Table 2): RthJC / RthJA = 5 / 50 C/W for TO-220, 5 / 60 for
+#   TO-220FP, 8 / 100 for DPAK, 3 / 62.5 for D2PAK.
+#
+# `iq_a` moves from 6 mA to the 4.3 mA typical: 6 mA is the table MAXIMUM, and
+# every other quiescent current in this file is a typical, so stamping the max
+# here silently made the 7805 the thirstiest LDO in the library.
+#
+# DELIBERATELY NOT MODELLED: the output is an ideal DC source, so line and load
+# regulation, SVR, output resistance, noise and the temperature drift are absent
+# rather than wrong; so is the internal current limit (ISC folds back to 0.2 A
+# at 35 V in, which no ideal source does) and the thermal shutdown. The 5 mA
+# minimum load current for regulation is also not enforced, so this model holds
+# 5 V into an open circuit where the real part's output would drift.
+# `max_power_w` is gone: the datasheet states PD is internally limited and
+# publishes RthJC/RthJA instead, which is what the thermal monitor wants. The
+# 2.0 W it used to carry ("TO-220 no heatsink") is not a datasheet figure.
+# The ratings below are the TO-220 ones; a DPAK or D2PAK build has a different
+# RthJA and this entry will judge its junction temperature wrongly.
 [[models]]
 id = "7805"
 kind = "vreg"
-description = "78xx / LM7805 linear regulator +5V, TO-220 / TO-92"
+description = "78xx / LM7805 linear regulator +5V, TO-220"
 
 [models.match]
 value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?78[LMS]?05"
 
 [models.params]
-vout      = 5.0
-dropout_v = 2.0     # typical (V)
-iq_a      = 6.0e-3
+# Source: ST L78 datasheet DS0422 Rev 38, Table 3 (L7805A). See above.
+vout      = 5.0     # 4.9 / 5 / 5.1 V @ TJ = 25 C, VI = 10 V, IO = 1 A
+dropout_v = 2.0     # Vd typ @ IO = 1 A, TJ = 25 C
+iq_a      = 4.3e-3  # Iq typ @ TJ = 25 C (6 mA max)
 
 [models.pins]
 "1" = "in"
@@ -105,9 +207,11 @@ iq_a      = 6.0e-3
 "3" = "out"
 
 [models.ratings]
-max_current_a = 1.5
-max_voltage_v = 35.0
-max_power_w = 2.0  # TO-220 no heatsink
+max_current_a = 1.5          # "Output current up to 1.5 A", datasheet Features
+max_voltage_v = 35.0         # VI abs max for the 5 V to 18 V output codes
+max_junction_temp_c = 125.0  # TOP abs max
+theta_ja_c_per_w = 50.0      # TO-220, Table 2 Thermal data
+theta_jc_c_per_w = 5.0       # TO-220, Table 2 Thermal data
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -384,3 +488,93 @@ theta_ja_c_per_w = 189.4     # JEDEC-standard board, TSOT-23-5
 # max_power_w is deliberately absent: the datasheet publishes no package power
 # rating, only TJ(max) and theta_JA, and the thermal monitor derives the
 # junction temperature from those two directly.
+
+# ─────────────────────────────────────────────────────────────────────────────
+# XC6206-3.3: Torex 200 mA, 1 uA-IQ CMOS LDO in SOT-23. The MCP1700-class part
+# that sits next to almost every ESP8266 and ESP32 module on a hobby board,
+# usually feeding 3.3 V from a USB 5 V rail.
+#
+# Source: Torex Semiconductor Ltd "XC6206 Series, Low ESR Cap. Compatible
+#   Positive Voltage Regulators", document ETR03005-009
+#   (product.torexsemi.com/system/files/series/xc6206.pdf).
+#
+# Datasheet figures used (ELECTRICAL CHARACTERISTICS, Ta = 25 C; unless stated
+# otherwise the test condition is VIN = VOUT(T) + 1.0 V, i.e. 4.3 V here). The
+# per-voltage numbers come from the Electrical Characteristics Chart on the
+# following page, read on the VOUT(T) = 3.3 row:
+#   VOUT(E)  = x0.98 .. x1.02 of nominal  @ IOUT = 30 mA (the +/-2% "standard"
+#              accuracy grade, order code 2; the +/-1% grade is order code 1)
+#   IDD      = 1.0 uA typ, 3.0 uA max     @ output open (test circuit 1)
+#   Vdif1    = 75 mV typ, 350 mV max      @ IOUT = 30 mA
+#   Vdif2    = 250 mV typ, 680 mV max     @ IOUT = 100 mA, VOUT(T) > 1.8 V
+#              (Vdif is VIN1 - VOUT1, where VOUT1 is 98% of the output voltage
+#               and VIN1 is the input voltage at which it appears as the input
+#               is gradually decreased)
+#   Load reg = 60 mV max                  @ 1 mA <= IOUT <= 100 mA
+#   Line reg = 0.05 %/V typ, 0.25 %/V max @ VOUT(T)+1.0 V <= VIN <= 6.0 V,
+#                                            IOUT = 30 mA
+#   IOUTMAX  = 200 mA min                 @ VOUT >= VOUT(E) x 0.9
+#   ISHORT   = 100 mA typ                 @ VOUT = VSS (foldback current limit)
+#   VIN      = 1.8 V min, 6.0 V max
+#   dVOUT/dT = +/-100 ppm/C               @ IOUT = 30 mA, -40 C <= Topr <= 85 C
+# Absolute Maximum Ratings (Ta = 25 C): VIN -0.3 to 7.0 V; IOUT 500 mA, itself
+#   capped by IOUT <= Pd / (VIN - VOUT); VOUT -0.3 V to VIN + 0.3 V; Pd 250 mW
+#   for SOT-23 as a bare IC (500 mW mounted on a 40 x 40 mm standard board),
+#   500/1000 mW for SOT-89, 120/1000 mW for USP-6B; Topr -40 to 85 C.
+#
+# The datasheet publishes no junction-temperature limit and no theta_JA, only
+# the package dissipation figures and an AMBIENT temperature range, so this
+# entry carries `max_power_w` and no thermal-resistance fields. That is the
+# datasheet's own shape, not an omission.
+#
+# PACKAGE PINOUT HAZARD, and why the match rule is narrow. The three packages do
+# NOT share a pin order (datasheet PIN ASSIGNMENT):
+#   SOT-23 : 1 = VSS, 2 = VOUT, 3 = VIN
+#   SOT-89 : 1 = VSS, 2 = VIN,  3 = VOUT     <- VIN and VOUT swapped
+#   USP-6B : 2 = VSS, 4 = VIN,  6 = VOUT
+# The order code carries the package (MR-G = SOT-23, PR-G = SOT-89, DR-G =
+# USP-6B), so the value string can tell them apart without a `footprint_re`
+# conjunction. The map below is the SOT-23 one and the regex accepts ONLY the
+# SOT-23 and package-less forms; a board that names the SOT-89 or USP-6B order
+# code resolves to nothing and is reported as unresolved. That is deliberate:
+# binding the SOT-23 map to a SOT-89 part would put the regulated rail on the
+# input pad, which is worse than an honest gap.
+#
+# DELIBERATELY NOT MODELLED: `bind_vreg` stamps an ideal DC source, so the
+# +/-2% accuracy window, load and line regulation, the temperature coefficient
+# and the foldback current limiter are absent rather than wrong. The current
+# limiter matters here in a way it does not on a bigger LDO: the datasheet's
+# ISHORT of 100 mA typ is BELOW the part's own 200 mA output rating, because it
+# is a foldback measured into a dead short. `max_current_a` carries the 200 mA
+# figure, which is the one a stress check should judge against.
+[[models]]
+id = "xc6206_3v3"
+kind = "vreg"
+description = "XC6206-3.3 Torex 200mA LDO, 3.3V fixed, 1uA IQ, SOT-23"
+
+[models.match]
+# Accepts XC6206P332MR, XC6206P332MR-G, XC6206P331MR (the +/-1% grade),
+# XC6206P332, XC6206P33, XC6206-3.3 and XC6206 3.3V. Rejects the SOT-89 (PR)
+# and USP-6B (DR) order codes, whose pinouts differ, and every other output
+# voltage code, so an XC6206P502MR cannot bind here and regulate to 3.3 V.
+value_re = "(?i)^XC6206(P33[12]?(MR-?G?)?|[-_ ]?3[._]3V?)$"
+
+[models.params]
+# Source: Torex XC6206 datasheet ETR03005-009, VOUT(T) = 3.3 row. See above.
+vout      = 3.3      # nominal; effective output is x0.98 .. x1.02 @ IOUT = 30 mA
+dropout_v = 0.25     # Vdif2 typ @ IOUT = 100 mA (680 mV max); Vdif1 is 75 mV
+                     # typ @ IOUT = 30 mA. The 100 mA figure is the useful one
+                     # for a 200 mA part.
+iq_a      = 1.0e-6   # IDD typ, output open (3.0 uA max)
+
+[models.pins]
+# SOT-23, datasheet PIN ASSIGNMENT. See the package hazard note above before
+# reusing this map for any other XC6206 package.
+"1" = "gnd"   # VSS
+"2" = "out"   # VOUT
+"3" = "in"    # VIN
+
+[models.ratings]
+max_current_a = 0.2   # IOUTMAX min for the 3.0-3.9 V codes, @ VOUT >= 0.9 x VOUT(E)
+max_voltage_v = 7.0   # VIN abs max
+max_power_w = 0.25    # SOT-23 Pd as a bare IC; 500 mW on a 40 x 40 mm board
