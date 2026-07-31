@@ -3,7 +3,7 @@
   "displayName": "Hauksbee",
   "description": "Hauksbee hardware checks in VS Code: syntax highlighting for .board files, run CI specs and board checks, findings as diagnostics, spec TOML schema.",
   "version": "0.2.0",
-  "publisher": "tarski",
+  "publisher": "hauksbee-dev",
   "license": "Apache-2.0",
   "engines": {
     "vscode": "^1.75.0"
