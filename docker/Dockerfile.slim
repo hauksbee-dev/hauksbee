@@ -1,12 +1,13 @@
 # hauksbee slim/core image: the everyday CI image.
 #
 # Contains the prebuilt `hauksbee` + `hauksbee-ci` binaries (built here from
-# source, default features so simavr is linked in), the reference model db,
-# kicad-cli for SVG/Gerber export, and the simavr runtime libraries. This is
-# everything the static checks (DRC, netlint, SI, resource conflicts),
-# board-as-code, and the built-in AVR co-simulation need. It deliberately does
-# NOT carry Renode, the Espressif QEMU fork, or freerouting; reach for the
-# `full` image when you need STM32 / ESP32 co-sim or production autorouting.
+# source, default features so simavr is linked in), the reference model db, and
+# the simavr runtime libraries. This is everything the static checks (DRC,
+# netlint, SI, resource conflicts), board-as-code, and the built-in AVR
+# co-simulation need. It deliberately does NOT carry Renode, the Espressif QEMU
+# fork, or freerouting; reach for the `full` image when you need STM32 / ESP32
+# co-sim or production autorouting. It also carries no kicad-cli (see the
+# runtime stage for why that is neither possible on this base nor needed).
 #
 # BUILD CONTEXT: the forge-* crates are vendored into this repo
 # (vendor/kicad-forge; see vendor/kicad-forge/VENDORED.md), so the build is
@@ -23,12 +24,25 @@
 # cross-compile), which is why the image builds simavr from a versioned source
 # tag rather than trusting a distro package that may lag.
 
+# Pinned base image versions. These MUST sit above the first FROM: an ARG
+# declared inside a stage is scoped to that stage, so a later `FROM rust:${...}`
+# expanded to the empty string and the build died with "failed to parse stage
+# name". Declaring them here makes them global, and each stage that wants one in
+# a RUN re-declares it below.
+# Keep RUST_CHANNEL equal to the channel in rust-toolchain.toml. When they
+# differ, rustup honours the toolchain file and downloads a whole second
+# toolchain at build time, so the pin here buys nothing and costs a download on
+# every build.
+ARG RUST_CHANNEL=1.92.0
+ARG RUST_TAG=${RUST_CHANNEL}-bookworm
+ARG SIMAVR_VERSION=v1.8
+
 # ---------------------------------------------------------------------------
 # Stage 1: build simavr (static lib) so the `avr` feature can link it.
 # ---------------------------------------------------------------------------
 FROM debian:bookworm-slim AS simavr-build
 
-ARG SIMAVR_VERSION=v1.8
+ARG SIMAVR_VERSION
 
 # build-essential + gcc, libelf-dev (libelf.pc, the only hard simavr dep), git
 # (simavr derives its version from `git describe`, so the clone must carry tags).
@@ -59,7 +73,7 @@ RUN git clone https://github.com/buserror/simavr.git \
 # ---------------------------------------------------------------------------
 # Stage 2: build the hauksbee binaries against that simavr.
 # ---------------------------------------------------------------------------
-ARG RUST_TAG=1.85.1-bookworm
+ARG RUST_TAG
 FROM rust:${RUST_TAG} AS rust-build
 
 # clang/libclang are needed by bindgen (the simavr build.rs generates bindings);
@@ -86,6 +100,15 @@ ENV LIBRARY_PATH=/usr/local/lib \
     PKG_CONFIG_PATH=/usr/local/lib/pkgconfig \
     BINDGEN_EXTRA_CLANG_ARGS="-I/usr/local/include -I/usr/local/include/simavr"
 
+# Use the toolchain the base image already has, ignoring rust-toolchain.toml.
+# That file lists rust-analyzer so contributors' editors follow the project pin,
+# which is right for a laptop and wrong here: an image build would fetch a
+# ~200 MB editor component it can never use, on every build, and fail the whole
+# image if static.rust-lang.org is unreachable. RUST_TAG above keeps the version
+# the same either way, so this changes what is downloaded, not what is compiled.
+ARG RUST_CHANNEL
+ENV RUSTUP_TOOLCHAIN=${RUST_CHANNEL}
+
 WORKDIR /build
 # The forge-* crates are vendored inside this repo (vendor/kicad-forge), so only
 # this repo is copied; no sibling checkout is needed.
@@ -104,19 +127,24 @@ RUN cargo build --release -p hauksbee-engine -p hauksbee-ci \
 FROM debian:bookworm-slim AS runtime
 
 LABEL org.opencontainers.image.title="hauksbee (slim)" \
-      org.opencontainers.image.description="Universal PCB emulator: static checks, board-as-code, AVR co-sim. Prebuilt hauksbee + hauksbee-ci with kicad-cli and simavr." \
-      org.opencontainers.image.source="https://github.com/ETM-Code/hauksbee" \
-      org.opencontainers.image.licenses="MIT"
+      org.opencontainers.image.description="Universal PCB emulator: static checks, board-as-code, AVR co-sim. Prebuilt hauksbee + hauksbee-ci with simavr linked in." \
+      org.opencontainers.image.source="https://github.com/hauksbee-dev/hauksbee" \
+      org.opencontainers.image.licenses="Apache-2.0"
 
 # Runtime libraries only:
 #   libelf1 + zlib1g  the shared libs the statically-linked simavr still needs
-#   kicad-cli         SVG/Gerber export for board-as-code relayout visuals
 #   ca-certificates   TLS for anything that fetches over HTTPS
+#
+# No kicad-cli. Debian bookworm carries KiCad 6, which predates the kicad-cli
+# tool entirely, so `apt-get install kicad-cli` cannot succeed here and the
+# image never built. It is not needed either: hauksbee reads .kicad_pcb natively
+# through the vendored forge crates. kicad-cli is only the optional geometric
+# DRC oracle that hauksbee cross-checks itself against when one is installed,
+# and its absence is reported rather than assumed (see reports/drc.rs).
 # hadolint ignore=DL3008
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
-        kicad-cli \
         libelf1 \
         zlib1g \
     && rm -rf /var/lib/apt/lists/*

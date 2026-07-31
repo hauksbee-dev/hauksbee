@@ -11,7 +11,7 @@ gain). Run that from a normal checkout when you want the live viewer.
 
 | Image | Tag | Contains | Unlocks |
 |-------|-----|----------|---------|
-| slim / core | `ghcr.io/hauksbee-dev/hauksbee:slim` | `hauksbee` + `hauksbee-ci`, the model db, `kicad-cli`, the linked-in simavr | Static checks (DRC, netlint, SI, resource conflicts), board-as-code, AVR co-sim. The everyday CI image. |
+| slim / core | `ghcr.io/hauksbee-dev/hauksbee:slim` | `hauksbee` + `hauksbee-ci`, the model db, the linked-in simavr | Static checks (DRC, netlint, SI, resource conflicts), board-as-code, AVR co-sim. The everyday CI image. |
 | full | `ghcr.io/hauksbee-dev/hauksbee:full` | Everything in slim, plus Renode, the Espressif QEMU fork, and freerouting (with a JRE) | STM32 / nRF52 / RISC-V co-sim (Renode), ESP32 / ESP32-S3 / ESP32-C3 co-sim (Espressif QEMU), and production autorouting of recompiled boards (freerouting). |
 
 Each is also published with the release version baked in:
@@ -21,7 +21,8 @@ push moves `:latest` (slim) and `:full-latest`.
 ### Why two
 
 The slim image is small and covers most CI needs: the static checks and the
-built-in AVR co-simulation have no external dependencies beyond `kicad-cli`.
+built-in AVR co-simulation have no external dependencies at all. Boards are
+read through the vendored forge crates, not through KiCad.
 The full image adds the heavy external backends (Renode and the Espressif
 QEMU fork are large prebuilt toolchains, freerouting needs a JRE). Pull it
 only when you actually run STM32 / ESP32 firmware or autoroute a board.
@@ -71,14 +72,14 @@ Run a hauksbee-ci spec and write JUnit (the CI flow):
 
 ```bash
 docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
-  hauksbee-ci run ci/blinky.toml --junit hauksbee-ci-results.xml
+  hauksbee-ci run ci/watchy.toml --junit hauksbee-ci-results.xml
 ```
 
 AVR firmware co-sim (built into the slim image):
 
 ```bash
 docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
-  hauksbee run board.kicad_pcb --firmware fw/blinky.hex --headless --seconds 5
+  hauksbee run board.kicad_pcb --firmware fw/firmware.hex --headless --seconds 5
 ```
 
 ESP32 / STM32 co-sim and autorouting need the full image:
@@ -106,7 +107,7 @@ source. Set `use-image: true`, and optionally pick the image:
 ```yaml
 - uses: hauksbee-dev/hauksbee/integrations/github-action@v0.1.0
   with:
-    spec: ci/blinky.toml
+    spec: ci/watchy.toml
     use-image: true
     # default is ghcr.io/hauksbee-dev/hauksbee:slim; use :full for ESP32 / STM32
     # co-sim or autorouting.
@@ -134,7 +135,7 @@ The build is **multi-stage from source**, not a repackaged release tarball:
 2. A `rust:bookworm` stage builds `hauksbee` and `hauksbee-ci` with
    `cargo build --release` and strips them.
 3. A `debian:bookworm-slim` runtime stage `COPY`s in just the two binaries, the
-   model db, `kicad-cli`, and the simavr runtime libraries.
+   model db, and the simavr runtime libraries.
 
 This choice of multi-stage from source over consuming `scripts/bundle.sh`'s
 tarball has two reasons. First, each architecture builds natively under
@@ -167,9 +168,14 @@ then build each image. These are the exact commands:
 
 ```bash
 # 1. Stage this repo under a context dir (forge crates are vendored inside it).
+#    The directory MUST be named `hauksbee`: the Dockerfile copies that path.
 mkdir -p ctx
 git clone https://github.com/hauksbee-dev/hauksbee.git ctx/hauksbee
-# (or symlink an existing checkout: ln -s "$PWD/hauksbee" ctx/hauksbee)
+
+#    From a checkout you already have, export it rather than symlinking:
+#    docker does not follow symlinks out of the build context, so a link here
+#    fails with "/hauksbee: not found" partway through the build.
+#    mkdir -p ctx/hauksbee && git -C /path/to/checkout archive HEAD | tar -x -C ctx/hauksbee
 
 # 2. Build the slim image for your host arch.
 docker build \
@@ -191,9 +197,6 @@ Smoke-test the result:
 # Binaries present and runnable.
 docker run --rm hauksbee:slim hauksbee --help
 docker run --rm hauksbee:slim hauksbee-ci --help
-
-# kicad-cli present (slim) and the AVR backend linked in.
-docker run --rm hauksbee:slim kicad-cli version
 
 # Full image: the co-sim backends resolve.
 docker run --rm hauksbee:full renode --version
