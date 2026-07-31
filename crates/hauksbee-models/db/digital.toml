@@ -733,3 +733,493 @@ data_in = "d2"
 "q_n1" = "!ff1[0]"
 "q2" = "ff2[0]"
 "q_n2" = "!ff2[0]"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 74HC14: hex inverter with SCHMITT-TRIGGER inputs. The part a hobbyist reaches
+# for to debounce a switch or square up a slow RC edge, which is exactly the job
+# the plain '04 cannot do.
+#
+# Source: Texas Instruments "SNx4HC14 Hex Inverters with Schmitt-Trigger
+#   Inputs" datasheet SCLS085L, December 1982, revised February 2025.
+#
+# Datasheet figures used (Section 5.5 Electrical Characteristics - 74,
+# TA = 25 C, typicals measured at 25 C):
+#   VT+     = 1.55 min, 2.5 typ, 3.13 max V   @ VCC = 4.5 V
+#   VT-     = 0.9 min,  1.6 typ, 2.45 max V   @ VCC = 4.5 V
+#   dVT     = 0.4 min,  0.9 typ, 2.1 max V    @ VCC = 4.5 V (VT+ minus VT-)
+#   VOH     = 4.4 min, 4.499 typ V   @ IOH = -20 uA, VCC = 4.5 V
+#   VOH     = 3.98 min, 4.3 typ V    @ IOH = -4 mA,  VCC = 4.5 V
+#   VOL     = 0.001 typ, 0.1 max V   @ IOL = 20 uA,  VCC = 4.5 V
+#   VOL     = 0.17 typ, 0.26 max V   @ IOL = 4 mA,   VCC = 4.5 V
+#   II      = +/-0.1 typ, +/-1 max uA  @ VI = VCC or 0, VCC = 6 V
+#   ICC     = 2 typ, 20 max uA       @ VI = VCC or 0, IO = 0, VCC = 6 V
+#   Ci      = 3 typ, 10 max pF       @ VCC = 5 V
+#   Cpd     = 20 pF per gate typ     @ no load, VCC = 2 V to 6 V (Section 5.9)
+#   tpd     = 12 typ, 25 max ns      @ VCC = 4.5 V, CL = 50 pF (Sections 5.7, 6)
+#   tt      = 8 typ, 15 max ns       @ VCC = 4.5 V
+# Absolute Maximum Ratings (Section 5.1): VCC -0.5 to 7 V; input clamp current
+#   IIK and output clamp current IOK +/-20 mA; continuous output current IO
+#   +/-25 mA at VO = 0 to VCC; continuous current through VCC or GND +/-50 mA;
+#   junction temperature 150 C.
+# Thermal Information (Section 5.4): R-theta-JA = 133.6 C/W for D (SOIC-14),
+#   60.7 for N (PDIP-14), 114.8 for DB (SSOP), 122.6 for NS (SO), 151.7 for
+#   PW (TSSOP).
+#
+# vih and vil are VT+ and VT- rather than the family's usual 0.7/0.3 x VCC. That
+# is the whole point of the part: `LogicLevels::decide` holds a pin's previous
+# level between vil and vih, so writing the Schmitt thresholds into those two
+# fields makes the engine's hysteresis the DATASHEET's hysteresis. The TYPICALS
+# are used, not the guaranteed min/max window: the guaranteed window is 3.13 V
+# down to 0.9 V, which is wider than a plain '04's 3.15/1.35 and would model the
+# '14 as switching LATER than a non-Schmitt inverter, the opposite of the truth.
+# The spread is real, though, and a board relying on a precise trip point should
+# be judged against the min/max rows above rather than against this model.
+#
+# ICC is stamped at the datasheet's 2 uA TYPICAL. The sibling '04 entry stamps
+# 10 uA because its own TI sheet prints only a 20 uA package maximum and half of
+# it was the honest reading; this sheet prints a typical, so no such halving is
+# needed here.
+#
+# The ratings below are the D (SOIC-14) thermal ones. A PDIP build has
+# R-theta-JA = 60.7 C/W and this entry will over-estimate its junction
+# temperature; the value string cannot tell the packages apart.
+#
+# DELIBERATELY NOT MODELLED: the input capacitance Ci (3 pF typ), which is what
+# actually sets the RC time constant in the debounce circuit this part is bought
+# for, and the input clamp diodes behind the +/-20 mA IIK rating. The `digital`
+# kind stamps a Thevenin driver on each output and samples each input as a pure
+# voltage, so an input presents no load and no clamp. tpd_s below is carried for
+# documentation; the engine's scheduler does not read it.
+[[models]]
+id = "74hc14"
+kind = "digital"
+description = "74HC14 hex inverter with Schmitt-trigger inputs"
+
+[models.match]
+value_re = "(?i)^(SN)?74HC14"
+
+[models.params]
+# Source: TI SN74HC14 datasheet SCLS085L, VCC = 4.5 V column. See above.
+voh       = 4.4      # VOH min @ IOH = -20 uA (3.98 V min at -4 mA)
+vol       = 0.1      # VOL max @ IOL = 20 uA (0.26 V max at 4 mA)
+vih       = 2.5      # VT+ typ (1.55 min, 3.13 max)
+vil       = 1.6      # VT- typ (0.9 min, 2.45 max); VT+ - VT- = 0.9 V typ
+tpd_s     = 1.2e-8   # tpd typ @ CL = 50 pF (25 ns max)
+supply_static_ua = 2.0    # ICC typ @ VI = VCC or 0, IO = 0, VCC = 6 V (20 uA max)
+supply_cpd_pf    = 20.0   # Cpd per gate typ, no load, VCC = 2 V to 6 V
+supply_pin = "14"
+gnd_pin    = "7"
+
+[models.pins]
+# Section 4 Pin Functions, D/DB/N/NS/PW/J/W 14-pin package.
+"1"  = "a1"
+"2"  = "y1"
+"3"  = "a2"
+"4"  = "y2"
+"5"  = "a3"
+"6"  = "y3"
+"7"  = "gnd"
+"8"  = "y4"
+"9"  = "a4"
+"10" = "y5"
+"11" = "a5"
+"12" = "y6"
+"13" = "a6"
+"14" = "vcc"
+
+[models.ratings]
+max_pin_current_a = 0.025    # IO continuous output current @ VO = 0 to VCC
+max_voltage_v = 7.0          # VCC abs max
+max_junction_temp_c = 150.0  # TJ abs max
+theta_ja_c_per_w = 133.6     # D (SOIC-14); PDIP is 60.7
+
+[models.logic]
+# Behaviour source: SCLS085L Section 3 Description, "Each gate performs the
+# Boolean function Y = !A in positive logic". The Schmitt behaviour is in the
+# vih/vil thresholds above, not here.
+inputs  = ["a1", "a2", "a3", "a4", "a5", "a6"]
+outputs = ["y1", "y2", "y3", "y4", "y5", "y6"]
+
+[models.logic.comb]
+"y1" = "!a1"
+"y2" = "!a2"
+"y3" = "!a3"
+"y4" = "!a4"
+"y5" = "!a5"
+"y6" = "!a6"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ULN2003A: seven Darlington sinks with common flyback diodes. The part between
+# a 3.3 V GPIO header and a relay bank or a 28BYJ-48 stepper on more hobby
+# boards than any other driver.
+#
+# Source: Texas Instruments "ULN200x, ULQ200x High-Voltage, High-Current
+#   Darlington Transistor Arrays" datasheet SLRS027T, December 1976, revised
+#   March 2025. All figures below are the ULN2003A column of Section 5.6,
+#   TA = 25 C.
+#
+# Datasheet figures used:
+#   VCE(sat) = 0.9 typ, 1.1 max V   @ II = 250 uA, IC = 100 mA
+#   VCE(sat) = 1.0 typ, 1.3 max V   @ II = 350 uA, IC = 200 mA
+#   VCE(sat) = 1.2 typ, 1.6 max V   @ II = 500 uA, IC = 350 mA
+#   VI(on)   = 2.4 max V            @ VCE = 2 V, IC = 200 mA
+#   VI(on)   = 2.7 max V            @ VCE = 2 V, IC = 250 mA
+#   VI(on)   = 3.0 max V            @ VCE = 2 V, IC = 300 mA
+#   II       = 0.93 typ, 1.35 max mA  @ VI = 3.85 V
+#   ICEX     = 50 max uA            @ VCE = 50 V, II = 0
+#   II(off)  = 50 min, 65 typ uA    @ VCE = 50 V, TA = 70 C, IC = 500 uA
+#   VF       = 1.7 typ, 2.0 max V   @ IF = 350 mA   (COM clamp diode)
+#   IR       = 50 max uA            @ VR = 50 V     (COM clamp diode)
+#   Ci       = 15 typ, 25 max pF    @ VI = 0, f = 1 MHz
+#   tPLH = tPHL = 0.25 us typ, 1 us max   (Section 5.10)
+# Absolute Maximum Ratings (Section 5.1, 25 C): collector-emitter voltage 50 V;
+#   clamp diode reverse voltage 50 V; input voltage 30 V; peak collector current
+#   500 mA per channel (derated by duty cycle and channel count, Figures 5-4 and
+#   5-5); output clamp current 500 mA; TOTAL emitter-terminal current -2.5 A;
+#   operating virtual junction temperature 150 C.
+# Thermal Information (Section 5.4): R-theta-JA = 88.6 C/W for D (SOIC-16),
+#   66.7 for N (PDIP-16), 95.0 for NS (SO), 114.1 for PW (TSSOP).
+#
+# HOW vol AND ro WERE DERIVED. The outputs are open-collector Darlingtons, so
+# their low level is a saturation voltage that RISES with the current drawn
+# through it, not a fixed rail. The engine drives an output through a Thevenin
+# leg (source `vol` behind resistance `ro`), which is exactly the right shape
+# for that: fitting a straight line to the three VCE(sat) typical rows above
+# gives the slope and the offset directly.
+#   slope  ro  = (1.2 - 0.9) V / (350 - 100) mA = 1.2 ohm
+#   offset vol = 0.9 - 1.2 * 0.100 = 0.78 V
+# Checked against the row that took no part in the fit: at IC = 200 mA the model
+# gives 0.78 + 1.2 * 0.200 = 1.02 V against the datasheet's 1.0 V typ, 2% out.
+# So the two numbers reproduce all three published rows, not just the two they
+# were solved from.
+#
+# `voh` IS DELIBERATELY ABSENT. An open-collector output has no high-drive
+# state; it either sinks or it is high impedance. Every output below is declared
+# tri-state on its own channel input, so the driver is DISABLED whenever the
+# channel is off and `LogicLevels::drive_volts(true)` is never reached. Writing
+# a voh here would put a number in the entry that the datasheet does not have
+# and the engine does not use.
+#
+# `vil` IS NOT A DATASHEET FIGURE and is written out so that is visible. The
+# sheet publishes VI(on) (the guaranteed turn-ON voltage) but no VI(off) voltage
+# at all: its only off-state input spec is a CURRENT, II(off) = 50 uA min at
+# VCE = 50 V and TA = 70 C. 1.35 V below is the engine's own default, made
+# explicit rather than left implicit. A board whose GPIO idles between 1.35 V
+# and 2.4 V will be modelled as holding its previous state, which is the
+# engine's hysteresis rule and not a claim about this part.
+#
+# There is no supply pin, so no `supply_pin` and no `supply_static_ua`: the
+# array is powered entirely through its outputs and its COM clamp rail. Pin 8
+# (E) is mapped `gnd` because the datasheet calls it the "common emitter shared
+# by all channels (typically tied to ground)", and because the engine's output
+# drivers are referenced to circuit ground regardless. A board that lifts E
+# above ground is therefore NOT modelled correctly.
+#
+# DELIBERATELY NOT MODELLED:
+#   - The COM clamp diodes (VF 1.7 V typ at 350 mA). No diode is stamped, so an
+#     inductive load's flyback is unclamped in simulation. On a relay or stepper
+#     board that is the single most important thing the part does electrically,
+#     and it is absent. The `digital` kind has nowhere to put a diode; doing it
+#     properly needs a behavioural block or a synthesised diode in the binder.
+#   - The input current (II = 0.93 mA typ at VI = 3.85 V). Inputs are sampled as
+#     pure voltages, so a driving GPIO sees no load from this part, where a real
+#     ULN2003 pulls about a milliamp per asserted channel.
+#   - The duty-cycle and channel-count derating of the 500 mA peak collector
+#     current (Figures 5-4, 5-5). `max_current_a` carries the flat 500 mA.
+#   - The -2.5 A total emitter-terminal limit, which is a package limit across
+#     all seven channels at once and has no per-pin field to live in.
+[[models]]
+id = "uln2003"
+kind = "digital"
+description = "ULN2003A seven-channel Darlington sink array, open collector, 50V/500mA"
+
+[models.match]
+# ULN2003, ULN2003A, ULN2003AN/AD/APG and the ULQ2003A automotive grade share
+# this pinout and these figures. ULN2002A and ULN2004A are EXCLUDED: they are
+# the same silicon behind different input networks and their VI(on) thresholds
+# differ (the '2004A needs 5 V at IC = 125 mA where the '2003A needs 2.4 V at
+# 200 mA), so binding them here would model the wrong input threshold.
+value_re = "(?i)^UL[NQ]2003[A-Z0-9]*$"
+
+[models.params]
+# Source: TI ULN2003A datasheet SLRS027T, Section 5.6. See the derivation above.
+vol       = 0.78     # VCE(sat) intercept from the three-row fit
+ro        = 1.2      # VCE(sat) slope from the same fit (ohms)
+vih       = 2.4      # VI(on) max @ VCE = 2 V, IC = 200 mA
+vil       = 1.35     # NOT a datasheet figure: the engine default, made visible
+tpd_s     = 2.5e-7   # tPLH = tPHL typ (1 us max)
+gnd_pin   = "8"
+
+[models.pins]
+# Section 4 Table 4-1 Pin Functions, D/N/NS/PW 16-pin package.
+"1"  = "in1"    # 1B, channel 1 Darlington base input
+"2"  = "in2"
+"3"  = "in3"
+"4"  = "in4"
+"5"  = "in5"
+"6"  = "in6"
+"7"  = "in7"
+"8"  = "gnd"    # E, common emitter shared by all channels
+"9"  = "com"    # common cathode node for the flyback diodes
+"10" = "out7"   # 7C, channel 7 Darlington collector output
+"11" = "out6"
+"12" = "out5"
+"13" = "out4"
+"14" = "out3"
+"15" = "out2"
+"16" = "out1"
+
+[models.ratings]
+max_current_a = 0.5          # peak collector current, per channel, undereated
+max_voltage_v = 50.0         # collector-emitter voltage; clamp diode VR is also 50 V
+max_junction_temp_c = 150.0  # operating virtual junction temperature
+theta_ja_c_per_w = 88.6      # D (SOIC-16); PDIP is 66.7
+
+[models.logic]
+# Behaviour source: SLRS027T Section 4, "Channel 1 through 7 Darlington base
+# input" driving "Channel 1 through 7 Darlington collector output". Each channel
+# is a non-inverting SINK: a HIGH input saturates the Darlington and pulls its
+# collector down; a LOW input leaves the collector open. That second half is why
+# every output is tri-stated on its own input rather than driven to a high
+# level: an open collector floats, it does not source.
+inputs  = ["in1", "in2", "in3", "in4", "in5", "in6", "in7"]
+outputs = ["out1", "out2", "out3", "out4", "out5", "out6", "out7"]
+
+[models.logic.comb]
+"out1" = "0"
+"out2" = "0"
+"out3" = "0"
+"out4" = "0"
+"out5" = "0"
+"out6" = "0"
+"out7" = "0"
+
+[models.logic.tristate]
+"out1" = { enable = "in1", active = "high" }
+"out2" = { enable = "in2", active = "high" }
+"out3" = { enable = "in3", active = "high" }
+"out4" = { enable = "in4", active = "high" }
+"out5" = { enable = "in5", active = "high" }
+"out6" = { enable = "in6", active = "high" }
+"out7" = { enable = "in7", active = "high" }
+
+# ─────────────────────────────────────────────────────────────────────────────
+# USB-to-UART bridges: CH340G and CP2102.
+#
+# WHAT THESE TWO ENTRIES ARE AND ARE NOT. A bridge's job is to move bytes
+# between a USB host and a UART, and hauksbee simulates no USB host, so there is
+# no [models.logic] block on either entry and NOTHING these parts do at the
+# protocol level is modelled. What is modelled is everything a board-level check
+# actually asks about: which pad is which, what the rail draw is, what logic
+# levels the UART pins present and accept, and what the absolute maxima are. The
+# binder stamps output drivers only on roles beginning with `y`; no role here
+# does, so TXD, RTS# and the rest are left floating rather than driven to a
+# fabricated level. A board whose MCU RX pin is fed only by one of these bridges
+# will show that net as undriven, which is the truth about what this model
+# knows.
+
+# CH340G: WCH USB-to-serial bridge, SOP-16, needs an external 12 MHz crystal.
+#
+# Source: Nanjing Qinheng Microelectronics (WCH) "USB to Serial Port Chip CH340
+#   Datasheet", Version 3B (wch.cn). Sections 4 Pin definitions and 6
+#   Parameters.
+#
+# Datasheet figures used (Section 6.2 Electrical characteristics (5V),
+# TA = 25 C, VCC = 5 V, pins connected to the USB bus excluded):
+#   VCC   = 4.0 min, 5 typ, 5.3 max V   (V3 connected only to an external
+#                                        capacitor, not to VCC)
+#   ICC   = 7 typ, 20 max mA            (CH340G/C/N/K/E/X/T/R)
+#   ISLP  = 0.09 typ, 0.2 max mA        (total supply current, USB suspended)
+#   VIL   = 0 to 0.9 V
+#   VIH   = 2.3 V min to VCC
+#   VOL   = 0.5 V max                   @ 6 mA sunk
+#   VOH   = VCC - 0.6 V min             @ 2 mA sourced (100 uA during chip reset)
+#   IUP   = 3 / 150 / 300 uA            (sunk current of an input with its
+#                                        integrated pull-up)
+#   IDN   = -40 / -100 / -300 uA        (integrated pull-down)
+#   VR    = 2.4 / 2.6 / 2.8 V           (power-on reset threshold)
+# Section 6.3 gives a SECOND set for 3.3 V operation (VCC = V3 = 3.3 V):
+#   VCC 2.9/3.3/3.6 V, ICC 4 typ / 12 max mA, VIL 0 to 0.8 V, VIH 1.9 V min,
+#   VOL 0.5 V max at 4 mA sunk, VOH VCC - 0.6 V at 2 mA sourced.
+# Section 6.4 Timing: FCLK 11.98 / 12.00 / 12.02 MHz on XI; TPR (power-up reset
+#   time) 20 / 35 / 50 ms.
+# Section 6.1 Absolute maximum ratings: TA -40 to 85 C for the CH340G; VCC -0.5
+#   to 6.0 V; voltage on any input or output pin -0.5 V to VCC + 0.5 V.
+#
+# THIS ENTRY CARRIES THE 5 V NUMBERS, because a CH340G on a hobby board is
+# almost always fed straight from USB VBUS with V3 decoupled to ground, which is
+# the arrangement Section 6.2 describes and the datasheet's own Section 7.2
+# reference schematic draws. A board running the part at 3.3 V (VCC tied to V3)
+# has the Section 6.3 levels instead, and this model's vih of 2.3 V will read a
+# 3.3 V logic high correctly but will judge a marginal input against the wrong
+# threshold. The value string cannot distinguish the two supply modes, so the
+# alternative was a footprint or supply guess, and an explicit note is better.
+#
+# DELIBERATELY NOT MODELLED: the USB side entirely (UD+/UD- are named and mapped
+# so the pads resolve, and nothing is stamped on them); the 12 MHz crystal
+# oscillator on XI/XO; the integrated pull-up on RXD and pull-down on R232,
+# which are real DC loads the `digital` kind has no field for; and the power-on
+# reset. No `supply_cpd_pf` is set because the datasheet publishes no power
+# dissipation capacitance, so the supply draw is the flat 7 mA typ with no
+# per-transition term.
+[[models]]
+id = "ch340g"
+kind = "digital"
+description = "CH340G USB-to-UART bridge, SOP-16, 5V operation, external 12MHz crystal"
+
+[models.match]
+# The G suffix is required. The CH340C/N/K/E/X/B variants have integrated clocks
+# AND different packages and pinouts (SOP-16 with TNOW in place of R232, SOP-8,
+# ESSOP-10, MSOP-10), so binding them to this SOP-16 map would put roles on the
+# wrong pads. They resolve to nothing until they get their own entries.
+value_re = "(?i)^CH340G([-_ ].*)?$"
+
+[models.params]
+# Source: WCH CH340 datasheet Version 3B, Section 6.2 (5 V column). See above.
+voh       = 4.4      # VCC - 0.6 V min @ 2 mA sourced, VCC = 5 V
+vol       = 0.5      # VOL max @ 6 mA sunk
+vih       = 2.3      # VIH min
+vil       = 0.9      # VIL max
+supply_static_ua = 7000.0   # ICC typ (20 mA max); 90 uA typ with USB suspended
+supply_pin = "16"
+gnd_pin    = "1"
+
+[models.pins]
+# Section 4 Pin definitions, SOP-16 column, cross-checked against the CH340G
+# package symbol in Section 3.
+"1"  = "gnd"
+"2"  = "txd"     # UART transmit, output
+"3"  = "rxd"     # UART receive, input (integrated configurable pull-up/down)
+"4"  = "v3"      # internal 3.3 V node; decouple to ground at VCC = 5 V, or tie
+                 # to VCC at VCC = 3.3 V. NOT a supply the board may draw from.
+"5"  = "ud_p"    # USB D+
+"6"  = "ud_n"    # USB D-
+"7"  = "xi"      # 12 MHz crystal in
+"8"  = "xo"      # 12 MHz crystal out
+"9"  = "cts_n"
+"10" = "dsr_n"
+"11" = "ri_n"
+"12" = "dcd_n"
+"13" = "dtr_n"
+"14" = "rts_n"
+"15" = "r232"    # assistant RS232 enable, active high, integrated pull-down
+"16" = "vcc"
+
+[models.ratings]
+max_voltage_v = 6.0    # VCC abs max, Section 6.1
+# No max_current_a: the datasheet's 20 mA is a maximum OPERATING supply current,
+# not a rating the part is destroyed by exceeding, and there is no package
+# current limit on the sheet. No junction-temperature or thermal-resistance
+# fields either; Section 6.1 gives only an ambient range (-40 to 85 C).
+
+# ─────────────────────────────────────────────────────────────────────────────
+# CP2102: Silicon Labs USB-to-UART bridge, QFN-28, no external crystal.
+#
+# Source: Silicon Laboratories "CP2102/9 Single-Chip USB-to-UART Bridge"
+#   datasheet Rev. 1.8, 1/17.
+#
+# Datasheet figures used (Table 4 UART and Suspend I/O DC Electrical
+# Characteristics, VDD = 3.0 to 3.6 V, -40 to +85 C, CP2102 rows):
+#   VOH   = VDD - 0.1 V min   @ IOH = -10 uA
+#   VOH   = VDD - 0.7 V min   @ IOH = -3 mA
+#   VOH   = VDD - 0.8 V typ   @ IOH = -10 mA
+#   VOL   = 0.1 V max         @ IOL = 10 uA
+#   VOL   = 0.6 V max         @ IOL = 8.5 mA
+#   VOL   = 1.0 V typ         @ IOL = 25 mA
+#   VIH   = 2.0 V min
+#   VIL   = 0.8 V max
+#   IL    = 25 typ, 50 max uA (input leakage)
+#   Baud rate 921600 bps max
+# Table 3 Recommended Operating Conditions:
+#   VDD     = 3.0 / 3.3 / 3.6 V
+#   IREGIN  = 20 typ, 26 max mA   (normal operation, VREG enabled)
+#   IREGIN  = 80 typ, 100 max uA  (bus powered, suspended, VREG enabled)
+#   IPU     = 200 typ, 230 max uA (USB pull-up supply current, a CALCULATED
+#                                  value per the USB spec, added to the above)
+#   theta-JA = 32 C/W  (multi-layer PCB, exposed pad soldered to a pad)
+# Table 6 Voltage Regulator: VREGIN 4.0 to 5.25 V in, VDDOUT 3.0 / 3.3 / 3.6 V
+#   at an output current of 1 to 100 mA (100 mA is the maximum regulator supply
+#   current); VBUS detection threshold 1.0 / 1.8 / 2.9 V; bias current 90 uA typ.
+# Table 2 Absolute Maximum Ratings: VDD -0.3 to 4.2 V; any I/O pin, VBUS or RST
+#   -0.3 to 5.8 V; maximum total current through VDD and GND 500 mA; maximum
+#   output current sunk by RST or any I/O pin 100 mA; TBIAS -55 to 125 C.
+#
+# THE ON-CHIP 3.3 V REGULATOR IS NOT MODELLED, and that is the biggest gap here.
+# A CP2102 board very often takes 5 V in on REGIN and powers its own 3.3 V rail
+# out of VDD (pin 6), which is a real regulated output with a real 100 mA limit.
+# The `digital` kind has no regulated output to stamp, so pin 6 is mapped `vdd`,
+# a supply INPUT role: this model DRAWS from that net, it never sources it. A
+# board that expects its 3.3 V rail from this part will show that rail as
+# unpowered. Splitting the part into a digital block plus a vreg is what fixing
+# that needs; it is not a number that can be guessed.
+#
+# DELIBERATELY NOT MODELLED: the USB side (D+/D- are mapped, nothing is
+# stamped); the internal 48 MHz oscillator; the USB pull-up current IPU, which
+# the datasheet itself marks as calculated rather than measured and which is
+# drawn through the pull-up on D+ rather than as package supply; the VBUS
+# detection threshold; and the open-drain RST behaviour. No `supply_cpd_pf`: the
+# datasheet publishes no power dissipation capacitance, so the supply draw is
+# the flat 20 mA typ. `tpd_s` is absent because the datasheet publishes no I/O
+# propagation delay at all, only a maximum baud rate.
+[[models]]
+id = "cp2102"
+kind = "digital"
+description = "CP2102 USB-to-UART bridge, QFN-28, internal oscillator and 3.3V regulator"
+
+[models.match]
+# CP2102, CP2102-GM, CP2102-GMR. CP2109 shares this pinout but has different
+# VOH/VOL and a 3.45 V regulator output, and CP2102N is a different die in a
+# different package; both are excluded rather than silently bound here.
+value_re = "(?i)^CP2102(-[A-Z0-9]+)*$"
+
+[models.params]
+# Source: Silicon Labs CP2102/9 datasheet Rev. 1.8, Table 4, CP2102 rows,
+# evaluated at the nominal VDD = 3.3 V. See above.
+voh       = 3.2      # VDD - 0.1 V min @ IOH = -10 uA (VDD - 0.7 V at -3 mA)
+vol       = 0.1      # VOL max @ IOL = 10 uA (0.6 V max at 8.5 mA)
+vih       = 2.0      # VIH min
+vil       = 0.8      # VIL max
+supply_static_ua = 20000.0  # IREGIN typ, normal operation, VREG enabled
+                            # (26 mA max; 80 uA typ suspended)
+supply_pin = "6"
+gnd_pin    = "3"
+
+[models.pins]
+# Table 9 CP2102/9 Pin Definitions, QFN-28, cross-checked against Figure 2.
+"1"  = "dcd_n"
+"2"  = "ri_n"
+"3"  = "gnd"
+"4"  = "ud_p"      # USB D+
+"5"  = "ud_n"      # USB D-
+"6"  = "vdd"       # 3.0-3.6 V supply input, or the internal regulator's 3.3 V
+                   # output. Modelled as an input only; see the note above.
+"7"  = "regin"     # 5 V input to the on-chip regulator
+"8"  = "vbus"      # VBUS sense input
+"9"  = "rst_n"     # open-drain reset, driven by the internal POR / VDD monitor
+"10" = "nc"
+"11" = "suspend_n" # driven LOW in USB suspend
+"12" = "suspend"   # driven HIGH in USB suspend
+"13" = "nc"
+"14" = "nc"
+"15" = "nc"
+"16" = "nc"
+"17" = "nc"
+"18" = "nc"        # VPP on the CP2109; no internal connection on the CP2102
+"19" = "nc"
+"20" = "nc"
+"21" = "nc"
+"22" = "nc"
+"23" = "cts_n"
+"24" = "rts_n"
+"25" = "rxd"
+"26" = "txd"
+"27" = "dsr_n"
+"28" = "dtr_n"
+
+[models.ratings]
+max_voltage_v = 4.2       # VDD abs max; any I/O pin, VBUS or RST is -0.3 to 5.8 V
+max_current_a = 0.5       # maximum total current through VDD and GND
+max_pin_current_a = 0.1   # maximum output current sunk by RST or any I/O pin
+theta_ja_c_per_w = 32.0   # multi-layer PCB, exposed pad soldered
+# No max_junction_temp_c: the datasheet gives an ambient-under-bias range
+# (-55 to 125 C) and no junction limit, so there is nothing to put here.
