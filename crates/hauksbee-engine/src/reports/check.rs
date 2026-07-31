@@ -136,6 +136,7 @@ pub fn emit(
                 println!("\n== USB-C CC compliance ==");
                 print!("{}", u.render_plain());
             }
+            print!("{}", what_this_pass_did_not_check(summary.mcu_bound));
         }
         OutputMode::Text => {
             print!("{}", bound.report.render_table());
@@ -165,6 +166,44 @@ pub fn emit(
         std::process::exit(2);
     }
     Ok(())
+}
+
+/// What a static pass cannot see, said at the end of one.
+///
+/// Every section of this report can come back healthy on a board with a real
+/// fault in it, because these checks read the copper and the netlist and never
+/// run the board. The flagship regression this project was built around is
+/// exactly that shape: a rail that collapses on a fuzzed power-up, invisible to
+/// any static check and found only by booting the firmware against the solved
+/// circuit.
+///
+/// Someone who reads "Looks healthy" and stops has been misled by omission,
+/// even though nothing here is false. Tested against the real board: a bare
+/// upload gives a full bind and a clean report, and mentions the dynamic checks
+/// nowhere at all.
+fn what_this_pass_did_not_check(mcu_bound: bool) -> String {
+    let mut s = String::from("\n== What this pass did not check ==\n");
+    s.push_str(
+        "These checks read the board. They do not run it, so nothing above can \
+         see a fault that only appears while the board is powered: a rail that \
+         sags on inrush, a brownout at power-up, a part that overheats under \
+         load.\n",
+    );
+    if mcu_bound {
+        s.push_str(
+            "\nThis board has a processor hauksbee can emulate, so it can boot your \
+             firmware against the solved circuit and assert on what happens.\n\n  \
+             hauksbee-ci init <board>     scaffold a spec beside the board\n  \
+             hauksbee-ci run <spec>       run it, here or in a pipeline\n",
+        );
+    } else {
+        s.push_str(
+            "\nNo processor bound on this board, so there is no firmware to boot. \
+             You can still assert on rails and stress under a power-up scenario:\n\n  \
+             hauksbee-ci init <board>     scaffold a spec beside the board\n",
+        );
+    }
+    s
 }
 
 /// Load the waivers that apply to this board, or none.
