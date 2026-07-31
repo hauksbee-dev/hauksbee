@@ -30,9 +30,9 @@ fn framed_mcp3008_read(bus: &mut SpiBus, channel: u8) -> u16 {
 }
 
 /// FAILURE MODE (a): two CS-framed transactions inside ONE chunk must be framed
-/// SEPARATELY. The old chunk-boundary heuristic reset only once per chunk, so a
-/// second transaction's bytes appended to the first slave's sequence counter and
-/// decoded against stale state. Real CS edges separate them.
+/// SEPARATELY. A chunk-boundary heuristic resets only once per chunk, so a
+/// second transaction's bytes append to the first slave's sequence counter and
+/// decode against stale state. Real CS edges separate them.
 #[test]
 fn two_transactions_one_chunk_are_framed_separately() {
     let mut adc = Mcp3008::new(5.0);
@@ -79,8 +79,8 @@ fn two_transactions_one_chunk_are_framed_separately() {
 /// FAILURE MODE (b): a transaction that SPANS a chunk boundary must NOT be reset
 /// mid-way. On a bus that frames itself (resolved CS pin), the scheduler skips the
 /// chunk-boundary deselect, so the command state machine survives the boundary and
-/// the reply completes intact. The old debug warning fired precisely because the
-/// heuristic truncated here.
+/// the reply completes intact. This is exactly where a chunk-boundary heuristic
+/// truncates instead.
 #[test]
 fn transaction_spanning_a_chunk_boundary_is_not_reset() {
     // Seed an EEPROM with two bytes at address 0.

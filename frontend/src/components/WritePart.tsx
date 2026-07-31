@@ -4,8 +4,8 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 // answering as you type.
 //
 // Datasheet extraction covers "I have a PDF and want a draft". It does nothing
-// for someone who already knows their part, and that person previously had no
-// route at all except editing a file on disk and restarting the server.
+// for someone who already knows their part, whose only other route is editing
+// a file on disk and restarting the server.
 //
 // The validation comes from POST /api/models/check, which runs the SAME checks
 // the save path runs. Writing a friendlier client-side validator was the

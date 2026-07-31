@@ -10,8 +10,7 @@ import { readFirmwareInfo, formatBytes, type FirmwareInfo } from '../lib/firmwar
 // the same gesture as the board card. Filled, it stops being a drop target and
 // becomes a SLOT: it names what is staged, offers Replace and Remove as two
 // separate deliberate controls, and opens an inspection panel describing the
-// bytes. Replace used to be the same undifferentiated click as everything else
-// and Remove did not exist at all, so a staged firmware was a one-way door.
+// bytes. Without those two controls a staged firmware is a one-way door.
 
 /** Where the jack is being rendered, which is all that changes about the copy. */
 export type FirmwareJackPlacement = 'intake' | 'report'
@@ -29,8 +28,8 @@ interface FirmwareJackProps {
    *  clicks (one upload at a time) and dims to say so. */
   locked?: boolean
   /** Whether the finished report actually co-simulated this firmware
-   *  (`cosim.ran`). The report placement's subtitle used to claim
-   *  "co-simulated in this report" unconditionally, which sat under a
+   *  (`cosim.ran`). The report placement's subtitle must not claim
+   *  "co-simulated in this report" unconditionally, which would sit under a
    *  "Co-sim not available" banner whenever the board's MCU needs an external
    *  emulator. Undefined where the answer is not known yet. */
   cosimRan?: boolean

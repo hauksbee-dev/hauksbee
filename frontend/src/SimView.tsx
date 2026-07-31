@@ -324,9 +324,10 @@ export default function SimView({ onQueueCheck, onStatus, expectedBoard, session
   }, [])
 
   // A session REPLACEMENT reconnects the socket: boardInfo drops to null, then
-  // the new session's BoardInfo arrives. The old session's fault log, frame
-  // history, selection and probes are that session's story, not this one's;
-  // carrying them over made a replaced sim show the previous board's faults.
+  // the new session's BoardInfo arrives. The previous session's fault log,
+  // frame history, selection and probes are that session's story, not this
+  // one's, and carrying them over makes a replaced sim show the old board's
+  // faults.
   const hadInfo = useRef(false)
   const infoWasNull = useRef(true)
   // Mirrors `hadInfo` as STATE, because the disconnect surface has to re-render
