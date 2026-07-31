@@ -2208,8 +2208,27 @@ fn bjt_model_from(model: &ModelEntry) -> BjtModel {
         cjc: p.get_f64("cjc").unwrap_or(d.cjc),
         tf: p.get_f64("tf").unwrap_or(d.tf),
         tr: p.get_f64("tr").unwrap_or(d.tr),
+        // A library entry may carry the full SGP set, so a part sourced from a
+        // vendor card keeps its beta roll-off and its low-current droop. A
+        // knee written as zero means "no roll-off" (SPICE's convention), not a
+        // knee at zero amps, which would switch the device off entirely.
+        ikf: knee(p.get_f64("ikf"), d.ikf),
+        ikr: knee(p.get_f64("ikr"), d.ikr),
+        ise: p.get_f64("ise").unwrap_or(d.ise),
+        ne: p.get_f64("ne").unwrap_or(d.ne),
+        isc: p.get_f64("isc").unwrap_or(d.isc),
+        nc: p.get_f64("nc").unwrap_or(d.nc),
         xti: p.get_f64("xti").unwrap_or(d.xti),
         eg: p.get_f64("eg").unwrap_or(d.eg),
+    }
+}
+
+/// A non-positive high-injection knee disables the roll-off (SPICE convention).
+fn knee(v: Option<f64>, default: f64) -> f64 {
+    match v {
+        Some(x) if x > 0.0 => x,
+        Some(_) => f64::INFINITY,
+        None => default,
     }
 }
 

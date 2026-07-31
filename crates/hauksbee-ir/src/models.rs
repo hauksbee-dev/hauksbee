@@ -180,6 +180,29 @@ pub struct BjtModel {
     /// Forward and reverse transit times (s).
     pub tf: f64,
     pub tr: f64,
+    /// High-current (Webster) knee currents (A); `INFINITY` disables the roll-off.
+    ///
+    /// Without these, beta never falls at high injection, and a vendor model
+    /// card is not merely approximated but contradicted: the real ON
+    /// Semiconductor 2N3904 card gives beta 164 at 20 mA, and the same card with
+    /// IKF and ISE dropped gives 440. Every general-purpose card in circulation
+    /// carries them, so a library sourced from vendor SPICE cannot be honest
+    /// without them.
+    #[serde(with = "nonfinite_f64", default = "f64_infinity")]
+    pub ikf: f64,
+    #[serde(with = "nonfinite_f64", default = "f64_infinity")]
+    pub ikr: f64,
+    /// Base-emitter and base-collector leakage (recombination) saturation
+    /// currents (A) and their emission coefficients. These are the low-current
+    /// beta droop; zero leakage disables each term.
+    #[serde(default)]
+    pub ise: f64,
+    #[serde(default = "f64_two")]
+    pub ne: f64,
+    #[serde(default)]
+    pub isc: f64,
+    #[serde(default = "f64_two")]
+    pub nc: f64,
     /// Saturation-current temperature exponent and bandgap (eV).
     pub xti: f64,
     pub eg: f64,
@@ -203,10 +226,24 @@ impl Default for BjtModel {
             cjc: 0.0,
             tf: 0.0,
             tr: 0.0,
+            ikf: f64::INFINITY,
+            ikr: f64::INFINITY,
+            ise: 0.0,
+            ne: 2.0,
+            isc: 0.0,
+            nc: 2.0,
             xti: 3.0,
             eg: EG_SI,
         }
     }
+}
+
+/// serde defaults for the SGP parameters whose "off" value is not zero.
+fn f64_infinity() -> f64 {
+    f64::INFINITY
+}
+fn f64_two() -> f64 {
+    2.0
 }
 
 impl BjtModel {
