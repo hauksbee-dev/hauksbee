@@ -34,12 +34,12 @@ points it at the bundled blinky board.
 ```bash
 scripts/install.sh                                      # build hauksbee + hauksbee-ci onto PATH
 hauksbee serve                                          # web front door: drop a board, read the report
-hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report
+hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --report
 ```
 
 No board of your own yet? The `hauksbee serve` page has one-click samples: a
-small clean board, a real smartwatch, and a board-plus-firmware pair that
-runs a live co-sim. The first report needs no file at all.
+real smartwatch, a board-plus-firmware pair that runs a live co-sim, and a
+minimal board to compare against. The first report needs no file at all.
 
 Full walkthrough, more example boards, and captured sessions: [`docs/ci/EXAMPLES.md`](ci/EXAMPLES.md).
 

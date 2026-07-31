@@ -9,10 +9,15 @@ import { FirmwareJack } from './FirmwareJack'
 // file at all.
 
 // Bundled one-click samples (files under frontend/public/samples/, see its
-// README for provenance). A ladder: tiny clean board → real product → a
-// board + firmware pair that exercises the co-sim.
+// README for provenance).
+//
+// Watchy leads deliberately. Most people try exactly one sample and decide from
+// it, so the first one has to be a board someone actually fabricated: 86 parts,
+// 685 copper segments, a real spacing report with real net names in it. Blinky
+// is one footprint and one trace, and its whole DRC report is the single line
+// "Looks healthy", which shows nothing and reads as though the tool does
+// nothing. It stays, last, as the minimal case to compare against.
 const SAMPLES: { label: string; desc: string; board: string; firmware?: string }[] = [
-  { label: 'Blinky', desc: 'small clean board', board: '/samples/blinky.kicad_pcb' },
   { label: 'Watchy', desc: 'a real smartwatch', board: '/samples/watchy.kicad_pcb' },
   {
     label: 'Boot gate + firmware',
@@ -20,6 +25,7 @@ const SAMPLES: { label: string; desc: string; board: string; firmware?: string }
     board: '/samples/boot_gate.kicad_pcb',
     firmware: '/samples/boot_gate.hex',
   },
+  { label: 'Blinky', desc: 'a minimal board', board: '/samples/blinky.kicad_pcb' },
 ]
 
 // Keyboard activation for the label-wrapped file inputs (U3 a11y): a styled
