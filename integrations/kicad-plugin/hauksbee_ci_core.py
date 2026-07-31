@@ -53,7 +53,7 @@ class CiRun:
         if self.error:
             return f"hauksbee-ci could not run: {self.error}"
         verdict = "GREEN" if self.passed else "RED"
-        return f"{self.pass_count}/{self.total} assertions passed — {verdict}"
+        return f"{self.pass_count}/{self.total} assertions passed - {verdict}"
 
 
 def find_specs(*search_dirs: str) -> List[str]:
