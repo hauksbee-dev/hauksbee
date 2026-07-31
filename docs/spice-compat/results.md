@@ -7,8 +7,8 @@ probe against the per-quantity tolerance declared in that deck's
 `expect.toml`.
 
 - Oracle: **ngspice ngspice-45.2**
-- Decks: **38**
-- Passing: **38/38**
+- Decks: **39**
+- Passing: **39/39**
 
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Where | Result |
 |------|----------|----------|------------------|-----------|-------|--------|
@@ -34,6 +34,8 @@ probe against the per-quantity tolerance declared in that deck's
 | diode_reverse_recovery | tran | `V(a)` | 3.864e-2 | 5.0e-2 | t=1.308e-6s | PASS |
 | diode_zener_breakdown | op | `V(out)` | 2.009e-5 | 5.0e-3 | op | PASS |
 | flyback_diode | tran | `V(out)` | 1.578e-2 | 5.0e-2 | t=2.557e-5s | PASS |
+| forced_base_current | op | `V(base)` | 7.555e-6 | 5.0e-3 | op | PASS |
+|  |  | `V(coll)` | 3.510e-9 | 5.0e-3 | op | PASS |
 | mos_body_bias | dc | `V(d)` | 6.591e-3 | 3.0e-2 | sweep=1.800e0 | PASS |
 | mos_body_diode | tran | `V(d)` | 1.216e-1 | 2.5e-1 | t=2.049e-6s | PASS |
 | mos_load_switch | tran | `V(d)` | 3.287e-1 | 5.0e-1 | t=1.141e-6s | PASS |
@@ -85,6 +87,7 @@ probe against the per-quantity tolerance declared in that deck's
 - **diode_reverse_recovery**: switching diode driven from forward into reverse (recovery tail)
 - **diode_zener_breakdown**: zener-style breakdown clamp voltage past BV
 - **flyback_diode**: flyback-shaped: pulsed primary, inverted secondary, catch diode into C||R
+- **forced_base_current**: forced base current, the shape a datasheet test condition takes
 - **mos_body_bias**: reverse body bias shifts the threshold via GAMMA/PHI
 - **mos_body_diode**: body-diode reverse conduction, then synchronous channel takeover
 - **mos_load_switch**: NMOS low-side switch: gate-charge-shaped turn-on/turn-off timing

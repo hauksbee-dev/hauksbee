@@ -15,6 +15,20 @@
 //! physics; it only routes.
 
 use crate::{dc_operating_point, AcAnalysis, AcSpec, SolverOptions, Sweep, Transient, Workspace};
+
+/// The KCL residual a reported operating point must satisfy.
+///
+/// Read in two places, and they have to be the same number. `sim.rs` refuses to
+/// PRESENT a point above it, and `newton.rs` refuses to CALL one converged.
+/// When only the outer check existed, Newton would accept an iterate the
+/// reporter then rejected, and the homotopy rungs that would have rescued the
+/// solve never ran because Newton had already declared success.
+///
+/// 1e-6 A: every genuinely converged outcome lands at nA or below, while a
+/// forced-OFF forward diode leaves an amp-scale imbalance, so this keeps three
+/// orders of headroom either side. It is far above `opts.abstol` (1e-12 A), so
+/// legitimate step-norm-terminated solves are never rejected.
+pub(crate) const OP_KCL_TOL: f64 = 1e-6;
 use hauksbee_ir::{AcDirective, AcSweep, Circuit, DcDirective, Device, NodeId, SourceKind};
 
 /// One output quantity requested from a run.
@@ -162,7 +176,6 @@ pub fn run_op(
     // each side and is far above `opts.abstol` (1e-12 A) so legitimate
     // step-norm-terminated solves are never rejected. Do NOT reject on
     // `used_staged_dc()` alone: most staged outcomes are true roots.
-    const OP_KCL_TOL: f64 = 1e-6;
     let res = ws.dc_residual_inf_norm(circuit, opts);
     if !res.is_finite() || res > OP_KCL_TOL {
         let (worst, node) = ws.dc_residual_argmax(circuit, opts);
