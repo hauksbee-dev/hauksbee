@@ -14,7 +14,7 @@ inputs:
     required: false
     default: "hauksbee-ci-results.xml"
   hauksbee-ref:
-    description: "git ref of the hauksbee repo to build hauksbee-ci from (branch, tag, or SHA)."
+    description: "git ref of the hauksbee repo to build hauksbee-ci from (branch, tag, or SHA). Setting this to anything other than main is treated as a deliberate pin: the action builds that ref from source rather than downloading a release that would be a different build."
     required: false
     default: "main"
   hauksbee-repo:
@@ -22,7 +22,7 @@ inputs:
     required: false
     default: "hauksbee-dev/hauksbee"
   hauksbee-version:
-    description: "Release version to download a prebuilt hauksbee-ci from (e.g. 0.1.0 or a vX.Y.Z tag). Empty = try the release matching hauksbee-ref's tag, else build from source."
+    description: "Release version to download a prebuilt hauksbee-ci from (e.g. 0.1.0 or a vX.Y.Z tag). Empty: use the release named by hauksbee-ref if that is a tag, the newest release if hauksbee-ref is the default, and otherwise build the pinned ref from source."
     required: false
     default: ""
   prefer-prebuilt:
@@ -85,20 +85,21 @@ runs:
           ARM64) arch=arm64 ;;
           *) echo "no prebuilt for $RUNNER_ARCH; will build from source"; exit 0 ;;
         esac
-        # Choose the release tag: explicit version, else the ref if it is a tag.
-        tag=""
-        if [ -n "$VERSION" ]; then
-          case "$VERSION" in v*) tag="$VERSION" ;; *) tag="v$VERSION" ;; esac
-        elif printf '%s' "$REF" | grep -Eq '^v[0-9]'; then
-          tag="$REF"
+        # Which release, if any (see pick-release-tag.sh for why a pinned ref
+        # must not silently resolve to the latest release).
+        choice="$("$GITHUB_ACTION_PATH/pick-release-tag.sh" "$VERSION" "$REF" main)"
+        if [ "$choice" = "SOURCE" ]; then
+          echo "hauksbee-ref is pinned to '$REF', which is not a release tag."
+          echo "Building that ref from source rather than downloading a different build."
+          exit 0
         fi
         asset_glob="hauksbee-*-${os}-${arch}.tar.gz"
         dl=".hauksbee-prebuilt"
         mkdir -p "$dl"
-        if [ -n "$tag" ]; then
-          gh release download "$tag" --repo "$REPO" --pattern "$asset_glob" --dir "$dl" 2>/dev/null || true
-        else
+        if [ "$choice" = "LATEST" ]; then
           gh release download --repo "$REPO" --pattern "$asset_glob" --dir "$dl" 2>/dev/null || true
+        else
+          gh release download "$choice" --repo "$REPO" --pattern "$asset_glob" --dir "$dl" 2>/dev/null || true
         fi
         tarball="$(ls "$dl"/hauksbee-*-"${os}"-"${arch}".tar.gz 2>/dev/null | head -n1 || true)"
         if [ -z "$tarball" ]; then
