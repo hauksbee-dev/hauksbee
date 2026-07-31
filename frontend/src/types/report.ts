@@ -167,6 +167,11 @@ export interface ExtractReady {
   /** "datasheet-extracted" */
   provenance: string
   kinds: { id: string; label: string }[]
+  /** The model that runs when the user does not pick one, and how hard it
+   *  thinks. Named on the page rather than described as "the default", since it
+   *  is what is about to read their datasheet and bill their account. */
+  default_model: string
+  default_effort: string
   cost: string
 }
 

@@ -54,6 +54,26 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         };
     }
 
+    /// Like [`check_range`], but on the MAGNITUDE, so a rail below ground is
+    /// judged by how big it is rather than rejected for its sign. NaN and the
+    /// infinities are still refused, for the same reason as above.
+    macro_rules! check_signed_range {
+        ($key:expr, $min:expr, $max:expr) => {
+            if let Some(v) = entry.params.get_f64($key) {
+                if !v.is_finite() || v.abs() < $min || v.abs() > $max {
+                    errors.push(ValidationError {
+                        id: entry.id.clone(),
+                        message: format!(
+                            "param '{}' = {} is outside physical range (magnitude {} to {}, \
+                             either sign)",
+                            $key, v, $min, $max
+                        ),
+                    });
+                }
+            }
+        };
+    }
+
     // Require `$lo` < `$hi` when both are present. A swapped/degenerate pair
     // (e.g. an opamp with rail_lo=5, rail_hi=0) is otherwise accepted as valid
     // and gives the solver an empty/inverted saturation band, silently pinning
@@ -115,7 +135,16 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
             require_f64!("vout");
             require_f64!("dropout_v");
             require_f64!("iq_a");
-            check_range!("vout", 0.5, 30.0);
+            // Magnitude, not value: a negative rail is a real regulator. The
+            // 79xx family and every dual-supply analog board regulate BELOW
+            // ground, and `vout` is stamped as a DC source against ground, so
+            // the sign carries the whole meaning.
+            //
+            // Bounding this positive-only would be worse than refusing the
+            // part: the honest way to satisfy such a bound is to drop the sign,
+            // and a -5 V regulator recorded as +5 V validates, binds, and turns
+            // every op-amp's negative supply into a second positive one.
+            check_signed_range!("vout", 0.5, 30.0);
             check_range!("dropout_v", 0.0, 10.0);
             check_range!("iq_a", 0.0, 1.0);
         }

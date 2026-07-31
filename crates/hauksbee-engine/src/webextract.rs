@@ -191,6 +191,11 @@ pub fn ready_json() -> String {
         "consent_notice": datasheet::CONSENT_NOTICE,
         "provenance": PROVENANCE,
         "kinds": kinds,
+        // The model that will run if the user does not pick one, so the page can
+        // name it instead of saying "the default" and leaving them to guess what
+        // is about to read their datasheet and bill their account.
+        "default_model": datasheet::DEFAULT_CODEX_MODEL,
+        "default_effort": datasheet::DEFAULT_CODEX_EFFORT,
         // The cost line is the one that changes minds, and it is the same one
         // the Environment page shows for codex: most people who would want
         // datasheet extraction already pay for ChatGPT, and the only thing
@@ -278,7 +283,8 @@ pub fn extract(job: DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Stri
     );
 
     let args = datasheet::Args::new(pdf_path, job.part.clone(), job.kind.clone())
-        .out_dir(Some(out_dir.clone()));
+        .out_dir(Some(out_dir.clone()))
+        .model(Some(job.model.clone()));
 
     // On its own thread so the heartbeat below can run: `datasheet::run` is one
     // long blocking call with no callback of its own.
@@ -405,6 +411,14 @@ fn looks_assumed(comment: &str) -> bool {
         "read off",
         "from the graph",
         "derived",
+        // The two markers the pin-numbering rules ask for by name. A pin map is
+        // the one field where being wrong beats being absent: a wrong value
+        // makes the simulation inaccurate, a wrong pin map makes it a
+        // simulation of a different circuit, and it binds cleanly either way.
+        // If the agent says it could not settle the numbering, that has to
+        // reach the reviewer, not sit in a comment nobody opens.
+        "low confidence",
+        "unresolved",
     ]
     .iter()
     .any(|needle| c.contains(needle))
@@ -763,6 +777,8 @@ mod tests {
             reference: "U3".to_string(),
             part: "TP4054".to_string(),
             kind: "vreg".to_string(),
+            // Empty is what the form posts when the user does not pick one.
+            model: String::new(),
         }
     }
 
@@ -870,6 +886,42 @@ max_current_a = 0.5 # Source: absolute maximum ratings
         for (id, label) in KINDS {
             assert!(!id.is_empty() && !label.is_empty(), "{id} has a label");
             assert!(!id.contains(' '), "{id} is a machine kind, not a phrase");
+        }
+    }
+
+    /// A pin map the agent could not settle must reach the reviewer.
+    ///
+    /// The extraction prompt asks it to write `# UNRESOLVED: ...` when two
+    /// figures disagree, and `# LOW CONFIDENCE: ...` when it had only an
+    /// ambiguous drawing to go on. Both must reach the reviewer rather than
+    /// sitting in the ordinary values list reading like a number off a table.
+    /// A wrong pin map does not make a simulation inaccurate, it makes it a
+    /// simulation of a different circuit, and it binds cleanly either way, so
+    /// this is the one field where the caveat matters more than the value.
+    #[test]
+    fn an_unsettled_pin_map_is_flagged_not_buried() {
+        for comment in [
+            "UNRESOLVED: Figure 1 says pin 1 = GND, the application circuit says pin 1 = IN",
+            "LOW CONFIDENCE: only a rotated front-view drawing, no pin table",
+            "low confidence, package outline is a bottom view",
+        ] {
+            assert!(
+                looks_assumed(comment),
+                "must be surfaced as an assumption: {comment}"
+            );
+        }
+    }
+
+    /// And the detector still has to say no to an ordinary citation, or every
+    /// value arrives flagged and the flag stops meaning anything.
+    #[test]
+    fn a_real_citation_is_not_flagged() {
+        for comment in [
+            "Source: Table 6.5, typ column",
+            "Source: Pin Functions table, TO-220 column",
+            "Source: Absolute Maximum Ratings",
+        ] {
+            assert!(!looks_assumed(comment), "false positive on: {comment}");
         }
     }
 }

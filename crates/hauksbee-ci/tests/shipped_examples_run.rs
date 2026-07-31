@@ -2,9 +2,9 @@
 //!
 //! The examples are the first thing a new user copies, and they are referenced
 //! from the README, the install script's closing lines, the bundle's VERIFY
-//! block and the Docker page. Nothing checked they still worked. A spec whose
-//! board moved, whose net was renamed, or whose assertion key drifted would
-//! fail for the reader and pass for us.
+//! block and the Docker page. A spec whose board moved, whose net was renamed,
+//! or whose assertion key drifted fails for the reader and, without this gate,
+//! passes for us.
 //!
 //! The gate is deliberately about the SPEC, not the verdict: exit 2 is
 //! "hauksbee could not make sense of this file". RED is a legitimate outcome
