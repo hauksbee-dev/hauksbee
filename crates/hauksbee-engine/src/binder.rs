@@ -4018,10 +4018,10 @@ mod digital_ro_tests {
     }
 
     /// NEP-board study defect 3: a digital part whose [models.logic] fails to
-    /// compile must NOT report as bound. `bind_digital` used to print the
-    /// compile error to stderr and return unit, while the caller
-    /// unconditionally recorded `BindOutcome::Digital`, so the report (and
-    /// `critical_parts_bound`) counted a part whose nets float as healthy.
+    /// compile must NOT report as bound. A compile error that only reaches
+    /// stderr, with the caller recording `BindOutcome::Digital` regardless,
+    /// makes the report (and `critical_parts_bound`) count a part whose nets
+    /// float as healthy.
     /// The error must come back to the caller so the row reads UNRESOLVED.
     #[test]
     fn broken_logic_spec_reports_unresolved_not_bound() {

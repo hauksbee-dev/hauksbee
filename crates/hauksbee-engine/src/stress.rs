@@ -226,9 +226,10 @@ pub fn strip_unit_suffix(name: &str) -> &str {
 /// device in the solver (an MCU / logic IC): the part's supply NET is checked
 /// against the model's `max_voltage_v` each chunk. These parts deliberately get
 /// no whole-device [`DeviceMeta`] (their per-pin currents are covered by the
-/// pin-driver metas), which used to mean a rail driven far past the chip's
-/// absolute-maximum Vcc raised nothing at all, an honesty gap: the model DB
-/// carries the rating (e.g. ATmega328P `max_voltage_v = 6.0`), so we check it.
+/// pin-driver metas). Without this check a rail driven far past the chip's
+/// absolute-maximum Vcc would raise nothing at all, which is an honesty gap the
+/// model DB can close: it carries the rating (e.g. ATmega328P
+/// `max_voltage_v = 6.0`).
 #[derive(Debug, Clone)]
 pub struct SupplyWatch {
     /// Component reference designator the fault names (e.g. "U1").

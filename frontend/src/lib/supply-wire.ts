@@ -1,8 +1,8 @@
 // Mapping between the PowerPanel's UI-side supply config and the server's
 // tagged wire enum (protocol.rs `PowerSupplyConfig`, `#[serde(tag = "kind",
 // rename_all = "snake_case")]`). Extracted from PowerPanel so the wire shapes
-// are unit-testable: sending the raw UI object used to fail serde
-// deserialization on the server and the panel silently did nothing.
+// are unit-testable: the raw UI object fails serde deserialization on the
+// server, and the panel then silently does nothing.
 
 import type { PowerSupplyWire, UsbSpecWire } from '../types/protocol'
 
@@ -69,7 +69,7 @@ export const USB_VBUS_V = 5
  *
  *  `toWireSupply` drops `volts` for USB and Battery (a USB spec is 5 V by
  *  definition; a battery sits at its chemistry's cell voltage), so typing 12
- *  into the voltage box used to leave the box reading 12 while the rail ran at
+ *  into the voltage box would leave the box reading 12 while the rail ran at
  *  5.000 V with nothing said. The panel asks here instead of assuming the box
  *  is the setpoint. */
 export function appliedVolts(cfg: SupplyConfig): { volts: number; fixedBy?: string } {

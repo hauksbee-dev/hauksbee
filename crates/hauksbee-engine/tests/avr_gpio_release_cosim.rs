@@ -1,9 +1,9 @@
 //! Regression: a GPIO the firmware hands back (DDR output -> input) must have
 //! its Thevenin driver DISABLED, not left clamped at the stale driven level.
 //!
-//! The old scheduler enabled a pin's driver on its first firmware edge (and
-//! from `pins_configured_output`) but never released it, so an open-drain bus
-//! hand-off left the net latched at the last driven voltage forever; the
+//! Enabling a pin's driver on its first firmware edge (and from
+//! `pins_configured_output`) without ever releasing it leaves an open-drain bus
+//! hand-off latched at the last driven voltage forever; the
 //! exact "latched bus" failure the AVR backend's DDR hook comments say was
 //! fixed on the observation side.
 //!

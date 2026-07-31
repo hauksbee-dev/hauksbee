@@ -1,9 +1,8 @@
 //! Datasheet extraction: draft a device model from a PDF, then validate it.
 //!
-//! This is a library module and a binary (`model-extract`) is a thin wrapper
-//! over it. It used to be only the binary, which meant the engine could not
-//! offer extraction at all: a capability reachable solely by running a second
-//! executable is one most users never find.
+//! This is a library module, with the binary (`model-extract`) a thin wrapper
+//! over it, so the engine can offer extraction directly. A capability reachable
+//! only by running a second executable is one most users never find.
 //!
 //! Nothing here runs on its own. Extraction sends the datasheet's text to an
 //! LLM backend, so it happens when a caller asks and not before. The caller
@@ -56,10 +55,10 @@ const RENDER_DPI: u32 = 150;
 
 /// A private scratch directory holding everything one extraction may touch.
 ///
-/// Codex runs full-auto with write access to its working directory, and that
-/// directory used to be *the folder the datasheet happened to sit in*: pointing
-/// the tool at `~/Downloads/part.pdf` handed an autonomous agent write access
-/// to the whole of Downloads. It now gets a scratch copy instead.
+/// Codex runs full-auto with write access to its working directory, so that
+/// directory must never be the folder the datasheet happens to sit in: pointing
+/// the tool at `~/Downloads/part.pdf` would hand an autonomous agent write
+/// access to the whole of Downloads. It gets a scratch copy instead.
 ///
 /// Be precise about what that does and does not buy, because the difference
 /// matters. `--sandbox workspace-write` confines WRITES to the writable roots
@@ -97,7 +96,7 @@ impl Workspace {
 
     /// Where codex must write its answer. Reading a file beats scraping stdout:
     /// stdout carries the agent's narration too, and a model that says "here
-    /// is the TOML" twice used to produce two candidate blocks.
+    /// is the TOML" twice leaves two candidate blocks to choose between.
     pub fn answer_path(&self) -> PathBuf {
         self.dir.path().join("model.toml")
     }
@@ -936,7 +935,7 @@ fn call_codex_backend(prompt: &str, args: &Args) -> Result<String> {
         // Prefer the file we asked for. Falling back to stdout keeps a model
         // that answered in prose from failing outright, but the file is the
         // reliable path: stdout also carries the agent's narration, and one
-        // that says "here is the TOML" twice used to yield two candidates.
+        // that says "here is the TOML" twice yields two candidates.
         let raw = match std::fs::read_to_string(ws.answer_path()) {
             Ok(t) if !t.trim().is_empty() => extract_toml_block(&t),
             _ => extract_toml_block(&raw_stdout),

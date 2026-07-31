@@ -8,8 +8,8 @@ import { readNet, type Envelopes, type EnvelopeSource } from '../lib/net-state'
 // A row says three things now, because a bare instant said too little: the
 // sampled level, how far the net MOVED over the observed span, and whether the
 // backend could observe it at all. A bit-banged bus whose strobe lands between
-// samples used to read as a flat rail and sort to the bottom next to the dead
-// nets; it now shows its excursion and sorts by it.
+// samples would otherwise read as a flat rail and sort to the bottom next to
+// the dead nets, so a row shows its excursion and sorts by it.
 
 interface NetPanelProps {
   frame: SimFrame | null

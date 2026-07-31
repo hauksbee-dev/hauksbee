@@ -293,8 +293,8 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
                     {d.detail}
                   </div>
                 )}
-                {/* The cost, for a dep with no Install button. It used to render
-                    only inside the install block, so a dependency we
+                {/* The cost, for a dep with no Install button. Rendering it
+                    only inside the install block hides it for a dependency we
                     deliberately never auto-install (codex: an account and a
                     login are the user's to give) could never show its cost at
                     all. That hid the single most persuasive fact about it,

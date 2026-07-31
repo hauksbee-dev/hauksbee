@@ -72,8 +72,9 @@ interface BoardViewerProps {
    *
    *  `'capture-on-focus'` suits a map embedded in a scrolling document (the
    *  report): a plain wheel scrolls the PAGE, and the canvas only takes the
-   *  wheel once the reader has clicked it, or while ctrl/cmd is held. Skimming
-   *  past the map used to zoom the board down to 1% and leave a blank panel. */
+   *  wheel once the reader has clicked it, or while ctrl/cmd is held. Without
+   *  that, skimming past the map zooms the board down to 1% and leaves a blank
+   *  panel. */
   wheelMode?: 'always' | 'capture-on-focus'
 }
 
@@ -496,7 +497,7 @@ export function BoardViewer({
   // ── Find footprint at board coordinate ──
   // Pads and the part origin first (the precise targets), then the part BODY:
   // clicking the plastic between an IC's pads, or the silkscreen box around a
-  // two-pad passive, is a click on that part and used to select nothing.
+  // two-pad passive, is a click on that part and must select it.
   const findFootprintAt = useCallback((bx: number, by: number): FootprintInfo | null => {
     if (!board) return null
     let best: FootprintInfo | null = null
@@ -716,8 +717,8 @@ export function BoardViewer({
 
       // Which net, if any, has earned the flow animation.
       //
-      // This used to be `selectedNet ?? Object.keys(frame.net_voltages)[0]`:
-      // whatever net happened to come first in the frame's map got animated
+      // Deliberately not `selectedNet ?? Object.keys(frame.net_voltages)[0]`:
+      // whatever net comes first in the frame's map would get animated
       // charge flowing down it, forever, on any board that reported voltages at
       // all. A watchy with no firmware and every net sitting at 0.000 V still
       // showed a net visibly running. That is the viewer inventing a
@@ -890,9 +891,9 @@ export function BoardViewer({
       probePos.current = { boardX: x, boardY: y }
       // Hover resolves the cursor the SAME way the click does (see `selectAt`
       // below): a bare trace first, then the footprint, then its label, then
-      // the nearest pad net. Hover used to test only traces and pads, so parts
-      // never lit up and the board read as though only copper were live, and
-      // worse, hovering a part's body highlighted nothing while clicking it
+      // the nearest pad net. Testing only traces and pads leaves parts unlit,
+      // so the board reads as though only copper were live, and worse,
+      // hovering a part's body highlights nothing while clicking it
       // selected the part. Both questions now get the same answer.
       const traceNet = findNearestNet(x, y, 5, false)
       if (traceNet) {

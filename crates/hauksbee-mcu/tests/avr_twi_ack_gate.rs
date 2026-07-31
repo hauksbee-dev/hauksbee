@@ -1,9 +1,9 @@
 //! Regression: the hardware-TWI (I2C) bridge must ACK only modeled slave
 //! addresses.
 //!
-//! The old bridge discarded the `on_i2c` callback's return value and raised
-//! `TWI_COND_ACK` unconditionally, so a firmware bus scanner "found" a device
-//! at every address and firmware NACK-handling paths were untestable. The fix
+//! A bridge that discards the `on_i2c` callback's return value and raises
+//! `TWI_COND_ACK` unconditionally lets a firmware bus scanner "find" a device
+//! at every address, and leaves firmware NACK-handling paths untestable. The fix
 //! gates the address ACK on the known-address set installed through
 //! [`Mcu::set_i2c_slave_addresses`] (the engine populates it from the attached
 //! bus), NACKs unknown addresses, and never fabricates ACKed read data for
