@@ -55,7 +55,10 @@ pub mod webcheck;
 pub mod webextract;
 
 pub use behavioral::{BehavioralDevice, CustomBehavior, CustomRegistry};
-pub use binder::{bind_board, bind_board_with, is_ground, power_rail_voltage, BoundBoard};
+pub use binder::{
+    bind_board, bind_board_with, is_ground, names_a_supply_of_unknown_voltage, power_rail_voltage,
+    BoundBoard,
+};
 pub use board_input::{BoardInputError, InputKind, NormalizedBoard};
 pub use boardcode::{
     check_board_text, check_code, code_to_board_text, decompile_any_to_code,

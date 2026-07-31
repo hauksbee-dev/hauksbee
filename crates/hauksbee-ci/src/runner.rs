@@ -189,6 +189,11 @@ pub struct RunOutcome {
     /// report surfaces every entry, or a GREEN silently vouches for co-sim
     /// paths that never ran.
     pub coverage_warnings: Vec<String>,
+    /// Nets that name themselves a supply, carry a rail's worth of parts, and
+    /// nothing powers. See [`dead_rails`]: the operating point around one is
+    /// fiction, so every analog number in this outcome has to be read knowing
+    /// they were dead.
+    pub dead_rails: Vec<String>,
     /// Ids of bus peripherals that were bound but NEVER exercised (their
     /// platform models no matching bus controller). A `peripheral` assertion
     /// against one of these ids FAILS loudly instead of green-passing on the
@@ -219,6 +224,82 @@ pub struct AcOutcome {
     /// Loop-stability margins per net (T = -V_net convention), for any net a
     /// `phase_margin` assertion references.
     pub margins: HashMap<String, hauksbee_solve::StabilityMargins>,
+}
+
+/// How many parts must hang off a supply-named net before its silence counts as
+/// a dead rail rather than an oddly-named signal. An enable called `VCC_EN`
+/// reaches a handful of pins; a rail reaches the board.
+const DEAD_RAIL_MIN_PARTS: usize = 6;
+
+/// Nets that name themselves a supply, carry a rail's worth of parts, and are
+/// powered by nothing.
+///
+/// The binder refuses to guess a voltage for `ANALOG_VDD` or bare `VDD`, which
+/// is right: inventing one would over- or under-drive every part on the net.
+/// What it did not do is say so. The net then sits at 0 V, the operating point
+/// around it is fiction, and the stress monitor reports on that fiction with
+/// the same confidence it reports a real overload. On the flagship board that
+/// produced a named accusation against a specific 0402 resistor, from a run
+/// where five of six rails were dead.
+///
+/// A first-time user cannot tell that report from a true one. That is the
+/// asymmetry worth spending code on: a missed fault costs them a bug, a
+/// confident false one costs them the tool.
+///
+/// Returns the net names, ordered, deduped.
+pub fn unpowered_supply_nets(
+    board: &ExtractedBoard,
+    bound: &BoundBoard,
+    also_powered: &[&str],
+) -> Vec<String> {
+    let mut powered: std::collections::BTreeSet<&str> = bound
+        .supplies
+        .iter()
+        .map(|leg| leg.net_name.as_str())
+        .collect();
+    powered.extend(also_powered.iter().copied());
+
+    // Distinct parts per net id, so a two-pin device straddling the net counts
+    // once and a bypass-capacitor farm counts as the many parts it is.
+    let mut parts_on: HashMap<i64, std::collections::BTreeSet<&str>> = HashMap::new();
+    for comp in &board.components {
+        for pin in &comp.pins {
+            if let Some(id) = pin.net {
+                parts_on
+                    .entry(id)
+                    .or_default()
+                    .insert(comp.reference.as_str());
+            }
+        }
+    }
+
+    let mut out: Vec<String> = board
+        .nets
+        .iter()
+        .filter(|net| !powered.contains(net.name.as_str()))
+        .filter(|net| hauksbee_engine::names_a_supply_of_unknown_voltage(&net.name))
+        .filter(|net| {
+            parts_on
+                .get(&net.id)
+                .is_some_and(|p| p.len() >= DEAD_RAIL_MIN_PARTS)
+        })
+        .map(|net| net.name.clone())
+        .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// [`unpowered_supply_nets`] for a run: anything the spec powers or drives has
+/// had its question answered, whatever the name says.
+fn dead_rails(board: &ExtractedBoard, bound: &BoundBoard, spec: &Spec) -> Vec<String> {
+    let answered: Vec<&str> = spec
+        .supplies
+        .iter()
+        .map(|s| s.net.as_str())
+        .chain(spec.net_drives.iter().map(|d| d.net.as_str()))
+        .collect();
+    unpowered_supply_nets(board, bound, &answered)
 }
 
 /// Run the spec and return one [`RunOutcome`] per seed (>=1).
@@ -865,6 +946,11 @@ fn run_one(
         attach_supply(&mut bound, s)?;
     }
 
+    // Everything that can power a rail has now been applied, so anything still
+    // unpowered is unpowered for the whole run. Any analog number below has to
+    // be read knowing it.
+    let dead_rails = dead_rails(&board, &bound, spec);
+
     // 3. Fuzz the per-seed initial states by choosing which fuzzed nets are
     //    strapped high vs low. We then express these as net drives.
     let fuzz_drives = fuzz_net_drives(spec, seed);
@@ -1344,6 +1430,7 @@ fn run_one(
                     .map(|b| b.message()),
             )
             .collect(),
+        dead_rails,
         unexercised_bus_ids: engine
             .scheduler()
             .unexercised_buses()

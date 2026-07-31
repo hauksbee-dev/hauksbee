@@ -76,6 +76,11 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     }
     rails.sort_by(|a, b| a.0.cmp(&b.0));
 
+    // Rails the binder found by name but could not put a voltage to. Same
+    // detector the run uses, so the scaffold asks about exactly the nets the
+    // report would later warn about.
+    let unpowered = runner::unpowered_supply_nets(&extracted, &bound, &[]);
+
     // Reference rail voltage the boot-coverage "driven high" threshold keys off:
     // the highest detected supply or rail, falling back to 3.3 V.
     let vref = supplies
@@ -204,6 +209,36 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
             );
             let _ = writeln!(s, "kind = \"ideal\"");
             let _ = writeln!(s, "volts = {}", fmt1(*v));
+        }
+    }
+    // Rails whose name says "supply" and nothing else. Nobody can read a voltage
+    // off ANALOG_VDD or bare VDD, so the binder refuses to invent one and the net
+    // sits at 0 V. Leaving that for the user to discover means their first run
+    // solves a board with a rail dead and reports whatever that implies. Only the
+    // person who drew the schematic knows the number, so the scaffold asks rather
+    // than guessing, and puts the question where they are already editing.
+    if !unpowered.is_empty() {
+        let _ = writeln!(s);
+        let _ = writeln!(
+            s,
+            "# These nets name a supply but not a voltage, so nothing can work out"
+        );
+        let _ = writeln!(
+            s,
+            "# what to feed them and they will sit at 0 V. Fill in the voltage and"
+        );
+        let _ = writeln!(
+            s,
+            "# uncomment each one, or every analog result is solved around a dead rail."
+        );
+        for net in &unpowered {
+            let _ = writeln!(s, "# [[supply]]");
+            let _ = writeln!(s, "# net = \"{net}\"");
+            let _ = writeln!(s, "# kind = \"ideal\"");
+            let _ = writeln!(
+                s,
+                "# volts =                     # what does this rail run at?"
+            );
         }
     }
     let _ = writeln!(s);
