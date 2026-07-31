@@ -138,6 +138,17 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         analog_abort,
         coverage,
         substitutions,
+        // A rail dead in one member is dead in every member (nothing per-seed
+        // powers a rail), but union rather than assume, on the same discipline
+        // as substitutions: a hole in ONE member is a hole in the ensemble.
+        dead_rails: {
+            let mut seen = std::collections::BTreeSet::new();
+            outcomes
+                .iter()
+                .flat_map(|o| o.dead_rails.iter().cloned())
+                .filter(|n| seen.insert(n.clone()))
+                .collect()
+        },
         coverage_warnings,
     })
 }

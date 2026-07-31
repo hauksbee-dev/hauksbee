@@ -1542,6 +1542,7 @@ mod tests {
                 net_series: HashMap::new(),
                 substitutions: Vec::new(),
                 coverage_warnings: Vec::new(),
+                dead_rails: Vec::new(),
                 unexercised_bus_ids: std::collections::HashSet::new(),
                 spi_framing: HashMap::new(),
             }
@@ -1617,6 +1618,7 @@ mod tests {
                 net_series: HashMap::new(),
                 substitutions: Vec::new(),
                 coverage_warnings: Vec::new(),
+                dead_rails: Vec::new(),
                 unexercised_bus_ids: std::collections::HashSet::new(),
                 spi_framing: HashMap::new(),
             }
@@ -1977,6 +1979,7 @@ mod tests {
                 net_series: HashMap::new(),
                 substitutions: Vec::new(),
                 coverage_warnings: Vec::new(),
+                dead_rails: Vec::new(),
                 unexercised_bus_ids: std::collections::HashSet::new(),
                 spi_framing: HashMap::new(),
             }
@@ -2055,6 +2058,7 @@ mod tests {
                 net_series: HashMap::new(),
                 substitutions: Vec::new(),
                 coverage_warnings: Vec::new(),
+                dead_rails: Vec::new(),
                 unexercised_bus_ids: std::collections::HashSet::new(),
                 spi_framing: HashMap::new(),
             }
@@ -2123,6 +2127,7 @@ mod tests {
                 net_series: HashMap::new(),
                 substitutions: Vec::new(),
                 coverage_warnings: Vec::new(),
+                dead_rails: Vec::new(),
                 unexercised_bus_ids: std::collections::HashSet::new(),
                 spi_framing: HashMap::new(),
             }
