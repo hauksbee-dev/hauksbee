@@ -122,7 +122,7 @@ code --install-extension hauksbee-board-0.2.0.vsix
 
 ```sh
 ln -s "$(pwd)/editors/vscode-hauksbee-board" \
-    ~/.vscode/extensions/tarski.hauksbee-board-dev
+    ~/.vscode/extensions/hauksbee-dev.hauksbee-board-dev
 ```
 
 ## Publishing to the marketplace (maintainers)
@@ -131,9 +131,9 @@ Publishing needs a human-owned account; it is deliberately not automated yet.
 
 1. Create (once) an Azure DevOps organisation and a
    [marketplace publisher](https://marketplace.visualstudio.com/manage) named
-   `tarski` (must match `publisher` in package.json).
+   `hauksbee-dev` (must match `publisher` in package.json).
 2. Create a Personal Access Token with the **Marketplace → Manage** scope.
-3. `bunx @vscode/vsce login tarski` (paste the PAT).
+3. `bunx @vscode/vsce login hauksbee-dev` (paste the PAT).
 4. `bun run build && bunx @vscode/vsce publish` (or
    `bunx @vscode/vsce publish --packagePath hauksbee-board-0.2.0.vsix`).
 5. Tag the release; later, wire this into the release-automation CI job
