@@ -21,3 +21,4 @@ mod power_fet_afe_resolve;
 mod power_ic_resolve;
 mod user_dir_layering;
 mod vreg_78xx_resolve;
+mod vreg_79xx_negative;
