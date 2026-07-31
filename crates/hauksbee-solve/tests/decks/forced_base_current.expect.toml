@@ -1,0 +1,21 @@
+# A forced base current with no resistive path to ground.
+#
+# The regression guard for the DC convergence fix. Before it, hauksbee declined
+# this deck: `.op did not converge: KCL residual 1.076e-5 A`. The residual did
+# not move when the iteration cap was raised to 2000, because Newton had settled
+# rather than run out of room. A node whose only conductance to ground is a
+# collapsed junction tangent leaves an effectively empty Jacobian row, so the
+# step is tiny however wrong the point is.
+#
+# ngspice solved it the whole time, which is what made it worth chasing rather
+# than accepting.
+analysis = "op"
+description = "forced base current, the shape a datasheet test condition takes"
+
+[[probe]]
+expr = "V(base)"
+reltol = 0.005
+
+[[probe]]
+expr = "V(coll)"
+reltol = 0.005

@@ -229,8 +229,26 @@ impl Workspace {
         opts: &SolverOptions,
         use_ic: bool,
     ) -> f64 {
-        let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
         let empty = ReactiveState::new(circuit.devices.len());
+        self.dc_residual_inf_norm_with_state(circuit, opts, use_ic, &empty)
+    }
+
+    /// As [`Self::dc_residual_inf_norm_with`], but borrowing a reactive state
+    /// the caller already holds instead of building one.
+    ///
+    /// The convergence test calls this from inside the Newton loop, and
+    /// `ReactiveState::new` allocates a vector per call. `alloc_audit` requires
+    /// that loop to be allocation-free and caught it immediately: 600
+    /// allocations over 50 solves. A DC caller always has an empty state in
+    /// scope already, so lending it costs nothing.
+    pub fn dc_residual_inf_norm_with_state(
+        &mut self,
+        circuit: &Circuit,
+        opts: &SolverOptions,
+        use_ic: bool,
+        empty: &ReactiveState,
+    ) -> f64 {
+        let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
         self.matrix.clear_values();
         for v in self.rhs.iter_mut() {
             *v = 0.0;
@@ -243,7 +261,7 @@ impl Workspace {
             x_prev: &self.x,
             time: 0.0,
             coeffs,
-            state: &empty,
+            state: empty,
             dc: true,
             use_ic,
             gmin: opts.gmin,
@@ -837,7 +855,67 @@ pub fn newton_solve(
             census_prev_norm = census_step_norm;
         }
 
-        if undamped_converged {
+        // A settled step is not the same as a solved circuit.
+        //
+        // `converged` above is the step-norm half of SPICE's criterion: every
+        // unknown moved less than its tolerance. The other half, which was
+        // missing, is that the currents actually balance. They usually coincide,
+        // and they come apart exactly when a node's only conductance to ground
+        // is a junction tangent that has collapsed toward zero: the Jacobian row
+        // is then effectively empty, so the computed step is tiny however wrong
+        // the point is, and Newton settles at a fixed point that is not a root.
+        //
+        // The consequence was not a wrong answer, because `.op` re-checks the
+        // real residual and refuses (see sim.rs). It was a LOST RESCUE: this
+        // returned converged, so the gmin and source-stepping rungs below never
+        // ran on circuits that needed them, and ngspice solved shapes we
+        // declined. Being too lax here made us too strict overall.
+        //
+        // The bar is the same one `.op` will apply, deliberately. An inner test
+        // laxer than the outer gate accepts iterates the caller then rejects,
+        // which is how this went unnoticed.
+        //
+        // DC only, and only while Newton is solving the PRISTINE circuit.
+        //
+        // The residual is computed against the unmodified network: default
+        // gmin, full source scale, no branch regularizer, no frozen discrete
+        // states. The ladder and the co-sim deliberately solve something else:
+        // gmin stepping runs at 1e-2 on its way down, source stepping at a
+        // fraction of full drive, the staged path adds a branch regularizer,
+        // and the event-driven path freezes comparator and switch states. Held
+        // to the pristine residual, those iterates read as wildly unconverged
+        // because they are roots of a different circuit, which is the right
+        // answer to the wrong question.
+        //
+        // Measured, not assumed: gating unconditionally made the MCP4728
+        // co-simulation report a 16.76 mA imbalance and drive its DAC output to
+        // 0 V instead of 2.048 V, because that solve runs with frozen states.
+        //
+        // The case this fix exists for is the plain cold start, where Newton is
+        // already solving the real circuit, so restricting the gate to those
+        // conditions loses nothing and keeps every regularized path
+        // bit-identical.
+        let pristine = gmin == opts.gmin
+            && src_scale == 1.0
+            && branch_reg == 0.0
+            && ws.cmp_freeze.is_none()
+            && ws.switch_freeze.is_none();
+        let residual_ok = if undamped_converged && dc && pristine {
+            let res = ws.dc_residual_inf_norm_with_state(circuit, opts, use_ic, state);
+            let ok = res.is_finite() && res <= crate::sim::OP_KCL_TOL;
+            if !ok && dbg_newton {
+                eprintln!(
+                    "[newton] iter {iters}: step converged but KCL residual {res:.3e} A \
+                     exceeds {:.0e} A; not a root, continuing",
+                    crate::sim::OP_KCL_TOL
+                );
+            }
+            ok
+        } else {
+            true
+        };
+
+        if undamped_converged && residual_ok {
             if census_on {
                 crate::census::newton_exit(crate::census::NewtonExit::Full, iters);
             }
@@ -902,7 +980,9 @@ pub fn newton_solve(
                 }
             }
         }
-        // KNOWN FALSE-CONVERGENCE MODE, diagnosed 2026-07-30 and not yet fixed.
+        // FIXED. Kept as the record of what the fix was for.
+        //
+        // (Was: a known false-convergence mode, diagnosed 2026-07-30.)
         //
         // The step-norm test above can be satisfied while the KCL residual is
         // not. It happens when a node's only conductance to ground is a
@@ -923,10 +1003,19 @@ pub fn newton_solve(
         // node reaches ground through a channel, which is what identifies the
         // rule.
         //
-        // The fix is to reject an iterate whose residual is still above abstol
-        // rather than trusting the step norm alone. That re-judges every solve
-        // currently accepted on step norm, so it needs its own test pass rather
-        // than being slipped in here.
+        // The fix is the residual gate above: an iterate whose KCL residual is
+        // still above OP_KCL_TOL is no longer called converged, so the loop
+        // keeps going and, failing that, the ladder below finally runs.
+        //
+        // Two things the fix had to learn, both caught by tests rather than by
+        // reasoning. The residual must be computed WITHOUT allocating, because
+        // alloc_audit holds this loop to zero heap allocations and the first cut
+        // took 600 over 50 solves. And it must only be judged when Newton is
+        // solving the pristine circuit: gating it during gmin stepping, source
+        // stepping, staged regularization or event freezes measures a root of a
+        // deliberately different network, which drove the MCP4728 co-simulation
+        // to report 16.76 mA of imbalance and put 0 V on a DAC output that
+        // should read 2.048 V.
         if iters >= opts.max_newton {
             if census_on {
                 crate::census::newton_exit(crate::census::NewtonExit::MaxIters, iters);

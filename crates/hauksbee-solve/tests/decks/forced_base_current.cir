@@ -1,0 +1,17 @@
+BJT base driven by a forced current, no resistive path to ground
+* REGRESSION. This deck was declined before the DC convergence test grew its
+* residual half: the step norm settled while the KCL residual sat at 1.076e-5 A
+* against a 1e-6 A bar, so Newton reported converged at a fixed point that was
+* not a root, and the gmin and source-stepping rungs that would have rescued it
+* never ran. ngspice solved it throughout.
+*
+* The shape matters because it is how a datasheet states a test condition:
+* force the device current, read the junction voltage. It is the first deck
+* anyone writes when validating a model, so it is worth keeping one.
+VCC vcc 0 DC 12
+RC vcc coll 100
+IB base 0 DC -250u
+Q1 coll base 0 S8050
+.model S8050 NPN(IS=1e-13 BF=200 NF=1.0 RB=3.3 RC=0.3 RE=0.05 TF=1e-9)
+.op
+.end
