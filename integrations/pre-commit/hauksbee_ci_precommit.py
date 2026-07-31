@@ -82,13 +82,51 @@ def resolve_board(spec_path: str) -> str | None:
     return os.path.normpath(os.path.join(os.path.dirname(spec_path), board))
 
 
+def invoked_by_hand() -> bool:
+    """True when a person ran this directly rather than git running it as a hook.
+
+    Git exports these into a hook's environment; a shell does not. The
+    distinction decides whether "nothing to do" is worth saying out loud: on
+    every commit it would be noise, and to someone testing their setup silence
+    is the whole problem.
+    """
+    return not any(
+        os.environ.get(v) for v in ("GIT_INDEX_FILE", "GIT_DIR", "GIT_AUTHOR_DATE")
+    )
+
+
 def main() -> int:
+    # Anyone setting a hook up runs it by hand once to see whether it works, and
+    # typing --help is how they ask. It used to be swallowed: the hook found no
+    # staged board, printed nothing, and exited 0, which is indistinguishable
+    # from a hook that does not work.
+    if any(a in ("-h", "--help") for a in sys.argv[1:]):
+        print(__doc__.strip())
+        return 0
+    if len(sys.argv) > 1:
+        print(
+            f"hauksbee-ci: unexpected argument {sys.argv[1]!r}. This hook takes "
+            "no arguments; it reads the staged files and the environment. "
+            "Run it with --help for the details.",
+            file=sys.stderr,
+        )
+        return 2
+
     spec_dirs = os.environ.get("HAUKSBEE_CI_SPECS", "ci:.").split(":")
     root = git_root()
-    spec_dirs = [os.path.join(root, d) for d in spec_dirs]
-    specs = core.find_specs(*spec_dirs)
+    searched = [os.path.join(root, d) for d in spec_dirs]
+    specs = core.find_specs(*searched)
     if not specs:
-        # No specs configured: nothing to do, do not block the commit.
+        # No specs configured: nothing to do, do not block the commit. Silence is
+        # right during an actual commit and wrong when someone ran the hook by
+        # hand to check their setup, so only the second case gets an answer.
+        if invoked_by_hand():
+            print(
+                "hauksbee-ci: no spec found, so nothing would run on a commit.\n"
+                "  looked in: " + ", ".join(searched) + "\n"
+                "  scaffold one with `hauksbee-ci init <board>`, put it in `ci/`,\n"
+                "  or point HAUKSBEE_CI_SPECS at where yours lives."
+            )
         return 0
 
     staged = set(staged_files())
@@ -124,6 +162,11 @@ def main() -> int:
             failed = True
 
     if failed:
+        # The reports went to stdout and this line goes to stderr, which is
+        # block-buffered and line-buffered respectively. Without this flush the
+        # user reads "commit blocked" before the report that explains why, and
+        # in a terminal the two interleave unpredictably.
+        sys.stdout.flush()
         print("hauksbee-ci: hardware check RED - commit blocked.", file=sys.stderr)
         return 1
     return 0

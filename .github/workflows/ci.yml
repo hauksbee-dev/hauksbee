@@ -74,6 +74,17 @@ jobs:
       # instead of shipping into the docs.
       - run: python3 scripts/lint-diagrams.py
 
+  integrations:
+    name: integrations (KiCad plugin, pre-commit hook)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # These two ship to users and nothing here ran them, so a break in either
+      # reached the person installing it before it reached us. Both suites are
+      # pure Python with no pcbnew/wx import, so they run anywhere.
+      - run: python3 integrations/kicad-plugin/test_hauksbee_ci_core.py
+      - run: python3 integrations/pre-commit/test_hauksbee_ci_precommit.py
+
   docs:
     name: cargo doc (rendered module docs stay valid)
     runs-on: ubuntu-latest
