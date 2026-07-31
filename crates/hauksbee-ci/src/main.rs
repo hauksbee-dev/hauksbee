@@ -112,6 +112,14 @@ fn main() -> ExitCode {
         Command::Init(args) => return cmd_init(args),
     };
 
+    // A co-sim is minutes of silence otherwise, which reads as a hang. Only for
+    // a human watching: `--quiet` asked for silence, `--json` output is parsed,
+    // and a CI log wants the result rather than a hundred progress lines. The
+    // sink itself also declines a non-terminal stderr.
+    if !args.quiet && !args.json && std::env::var_os("GITHUB_ACTIONS").is_none() {
+        hauksbee_ci::progress::to_stderr();
+    }
+
     let cfg = RunConfig {
         spec: args.spec.clone(),
         seed: args.seed,

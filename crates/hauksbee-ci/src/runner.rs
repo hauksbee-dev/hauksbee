@@ -251,7 +251,13 @@ pub fn run_spec_with_lib(
     // Read + extract the board once; clone per seed (binding mutates nothing on
     // the ExtractedBoard, but overrides do, so we re-derive per run).
     let board_path = spec.board_path();
+    crate::progress::say(&format!("  reading {}", board_path.display()));
     let base = load_board(&board_path)?;
+    crate::progress::say(&format!(
+        "  read {} components across {} nets",
+        base.components.len(),
+        base.nets.len()
+    ));
 
     // Validate referenced nets against the board's net names before running.
     let known: Vec<String> = base.nets.iter().map(|n| n.name.clone()).collect();
@@ -1032,7 +1038,17 @@ fn run_one(
     let hwtrace_nets = crate::hwtrace::assert_nets(spec)?;
     let mut net_series: HashMap<String, Vec<(f64, f64)>> = HashMap::new();
 
+    // The transient is where the minutes go, so it is the phase worth reporting
+    // on. Label it with the ensemble member when there is more than one, since
+    // otherwise the bar appears to restart from zero for no visible reason.
+    let mut tick = crate::progress::Ticker::new(if member_count > 1 {
+        format!("simulating (member {} of {member_count})", plan.seed + 1)
+    } else {
+        "simulating".to_string()
+    });
+
     while t < total_s - 1e-12 {
+        tick.at(t / total_s);
         let frame = engine.step(frame_dt);
         let t_ms = frame.t * 1000.0;
 
@@ -1228,6 +1244,7 @@ fn run_one(
 
         t += frame_dt;
     }
+    tick.done();
 
     // Analog-validity outcome (05 §3b). We do NOT `process::exit` here anymore:
     // the refusal is carried in the outcome and resolved at the `CiResult` layer,

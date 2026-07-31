@@ -27,6 +27,7 @@ pub mod assertions;
 pub mod error;
 pub mod hwtrace;
 pub mod init;
+pub mod progress;
 pub mod report;
 pub mod runner;
 pub mod scenarios;

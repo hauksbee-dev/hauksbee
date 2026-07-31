@@ -59,6 +59,7 @@ hauksbee-testkit = { path = "../hauksbee-testkit" }
 # The firmware-input parity test zips a committed .hex to prove a spec's
 # `firmware = "fw.zip"` resolves exactly like `run --firmware` does.
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+tempfile = { workspace = true }
 
 [lints]
 workspace = true
