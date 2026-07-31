@@ -3152,8 +3152,28 @@ fn bjt_from_card(card: &ModelCard) -> BjtModel {
         cjc: card.get_or("cjc", d.cjc),
         tf: card.get_or("tf", d.tf),
         tr: card.get_or("tr", d.tr),
+        // High-injection knees and junction leakage. SPICE treats IKF=0 as "no
+        // roll-off", which is the same meaning as our INFINITY, so a card that
+        // writes the parameter out as zero (IKR=0 is common) must not be read
+        // as "the knee is at zero amps" and shut the device off.
+        ikf: positive_or_infinite(card.get("ikf").or_else(|| card.get("jbf")), d.ikf),
+        ikr: positive_or_infinite(card.get("ikr").or_else(|| card.get("jbr")), d.ikr),
+        ise: card.get("ise").or_else(|| card.get("c2")).unwrap_or(d.ise),
+        ne: card.get_or("ne", d.ne),
+        isc: card.get("isc").or_else(|| card.get("c4")).unwrap_or(d.isc),
+        nc: card.get_or("nc", d.nc),
         xti: card.get_or("xti", d.xti),
         eg: card.get_or("eg", d.eg),
+    }
+}
+
+/// A knee current of zero (or negative) means "no high-injection roll-off" in
+/// SPICE, which this model spells INFINITY. Cards routinely write `IKR=0`.
+fn positive_or_infinite(v: Option<f64>, default: f64) -> f64 {
+    match v {
+        Some(x) if x > 0.0 => x,
+        Some(_) => f64::INFINITY,
+        None => default,
     }
 }
 

@@ -1,0 +1,21 @@
+# The Gummel-Poon terms hauksbee did not have, held to ngspice on a real card.
+#
+# Before this, `bjt_from_card` read the parameters it knew and silently ignored
+# IKF, IKR, ISE, NE, ISC and NC. Every general-purpose vendor card in
+# circulation carries them, so pasting a genuine model into hauksbee produced a
+# transistor with 2.7x the gain of the one on the card, with no warning of any
+# kind. That is worse than refusing the card.
+#
+# This deck is the guard: it uses the ON Semiconductor 2N3904 card verbatim and
+# holds hauksbee to what an independent simulator says the card means. The
+# current through VC is the collector current, through VB the base current.
+analysis = "op"
+description = "2N3904 vendor card at VBE = 0.75 V, where the high-injection knee bites"
+
+[[probe]]
+expr = "I(VC)"
+reltol = 0.02
+
+[[probe]]
+expr = "I(VB)"
+reltol = 0.02

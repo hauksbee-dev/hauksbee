@@ -1829,16 +1829,63 @@ fn stamp_bjt<S: StampSink>(
     } else {
         1.0
     };
-    let q1_inv = early.max(0.1); // = 1/qb (SGP q1 reciprocal), clamped far from use
+    let q1_inv_early = early.max(0.1); // = 1/q1, clamped far from use
 
-    // Transport (collector) current and the two base components.
+    // High-injection (Webster) roll-off, the second half of the SGP base charge:
+    //
+    //   q2 = cf/IKF + cr/IKR
+    //   qb = (q1/2)·(1 + sqrt(1 + 4·q2))       so   1/qb = (1/q1)·qbfac
+    //   qbfac = 2/(1 + sqrt(1 + 4·q2))
+    //
+    // With both knees at INFINITY, q2 is 0, the square root is 1, and qbfac is
+    // exactly 1.0, so every model that does not set a knee is bit-identical to
+    // before. That matters: the legacy Jacobian path is pinned by a fixture
+    // hash, and this must not move it.
+    //
+    // Without this term beta never falls with current, which is not a small
+    // approximation. The genuine ON Semiconductor 2N3904 card gives beta 164 at
+    // 20 mA; the same card with IKF and ISE dropped gives 440.
+    let q2 = if ctx.opts.effects.early_effect {
+        let mut q = 0.0;
+        if model.ikf.is_finite() && model.ikf > 0.0 {
+            q += (cf / model.ikf).max(0.0);
+        }
+        if model.ikr.is_finite() && model.ikr > 0.0 {
+            q += (cr / model.ikr).max(0.0);
+        }
+        q
+    } else {
+        0.0
+    };
+    let sq = (1.0 + 4.0 * q2).sqrt();
+    let qbfac = 2.0 / (1.0 + sq);
+    let q1_inv = q1_inv_early * qbfac; // = 1/qb
+
+    // Transport (collector) current and the base components. The two leakage
+    // terms are the low-current beta droop: recombination in the junction
+    // depletion regions, with their own (typically n = 2) emission coefficients
+    // and NO 1/qb dependence, since they are not transport current.
     let ict = (cf - cr) * q1_inv;
-    let ibe = cf / model.bf;
-    let ibc = cr / model.br;
+    let nve = model.ne * vt;
+    let nvc = model.nc * vt;
+    let (ile, gle) = if model.ise > 0.0 {
+        let e = (vbe / nve).clamp(-40.0, 40.0).exp();
+        (model.ise * (e - 1.0), model.ise * e / nve)
+    } else {
+        (0.0, 0.0)
+    };
+    let (ilc, glc) = if model.isc > 0.0 {
+        let e = (vbc / nvc).clamp(-40.0, 40.0).exp();
+        (model.isc * (e - 1.0), model.isc * e / nvc)
+    } else {
+        (0.0, 0.0)
+    };
+    let ibe = cf / model.bf + ile;
+    let ibc = cr / model.br + ilc;
 
     // Conductances (derivatives wrt the junction voltages).
-    let gpi = is * ef / (nvf * model.bf); // d ibe / d vbe
-    let gmu = is * er / (nvr * model.br); // d ibc / d vbc
+    let gpi = is * ef / (nvf * model.bf) + gle; // d ibe / d vbe
+    let gmu = is * er / (nvr * model.br) + glc; // d ibc / d vbc
     let gif = is * ef / nvf; // d cf / d vbe
     let gir = is * er / nvr; // d cr / d vbc
     let gm = (gif * q1_inv).max(ctx.opts.gmin); // forward transconductance
@@ -1896,9 +1943,38 @@ fn stamp_bjt<S: StampSink>(
         } else {
             0.0
         };
-        // gif·q1_inv (gmin-floored like the legacy path) plus the VAR term.
-        let gc_be = gm + var_deriv;
-        let gc_bc = -gir * q1_inv - gmu + early_deriv;
+        // The high-injection factor's partials. qbfac = 2/(1 + s) with
+        // s = sqrt(1 + 4·q2), so
+        //   ∂qbfac/∂q2 = -4 / (s·(1 + s)²)
+        // and q2 depends on each junction through its own transport current:
+        //   ∂q2/∂vbe = gif/IKF,  ∂q2/∂vbc = gir/IKR.
+        //
+        // Getting this wrong does not produce a wrong answer, only a slower or
+        // stalled Newton, which is the failure mode that looks like a modelling
+        // bug and is not. Both terms vanish when the knees are infinite.
+        let dqbfac = -4.0 / (sq * (1.0 + sq) * (1.0 + sq));
+        let (dq2_dvbe, dq2_dvbc) = if q2 > 0.0 {
+            (
+                if model.ikf.is_finite() && model.ikf > 0.0 {
+                    gif / model.ikf
+                } else {
+                    0.0
+                },
+                if model.ikr.is_finite() && model.ikr > 0.0 {
+                    gir / model.ikr
+                } else {
+                    0.0
+                },
+            )
+        } else {
+            (0.0, 0.0)
+        };
+        let knee_be = (cf - cr) * q1_inv_early * dqbfac * dq2_dvbe;
+        let knee_bc = (cf - cr) * q1_inv_early * dqbfac * dq2_dvbc;
+        // gif·q1_inv (gmin-floored like the legacy path) plus the VAR term,
+        // each Early partial scaled by qbfac since the two factors multiply.
+        let gc_be = gm + var_deriv * qbfac + knee_be;
+        let gc_bc = -gir * q1_inv - gmu + early_deriv * qbfac + knee_bc;
         // Row c: gc_be·vbe + gc_bc·vbc; row b: gpi·vbe + gmu·vbc; row e is
         // minus their sum (KCL). Each junction-voltage dependence is a
         // transconductance from the terminal pair into (b, x).
