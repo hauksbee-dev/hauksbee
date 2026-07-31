@@ -902,6 +902,31 @@ pub fn newton_solve(
                 }
             }
         }
+        // KNOWN FALSE-CONVERGENCE MODE, diagnosed 2026-07-30 and not yet fixed.
+        //
+        // The step-norm test above can be satisfied while the KCL residual is
+        // not. It happens when a node's only conductance to ground is a
+        // junction tangent that has collapsed toward zero: the Jacobian row is
+        // effectively empty, so the computed update is tiny no matter how wrong
+        // the point is, and Newton reports converged at a fixed point that is
+        // not a root.
+        //
+        // `.op` catches it after the fact (sim.rs re-checks the real residual
+        // and refuses), so nothing wrong is ever reported. What is lost is the
+        // ladder: this returns converged, so the gmin and source-stepping rungs
+        // below never run on a circuit that needs them, and ngspice solves
+        // shapes we decline.
+        //
+        // Reproduces with a forced current into a BJT base or across a PMOS
+        // source-to-drain (residuals 1.076e-5 and 2.565e-5 against a 1e-6 bar,
+        // unchanged at 2000 iterations). It does NOT reproduce when the forced
+        // node reaches ground through a channel, which is what identifies the
+        // rule.
+        //
+        // The fix is to reject an iterate whose residual is still above abstol
+        // rather than trusting the step norm alone. That re-judges every solve
+        // currently accepted on step norm, so it needs its own test pass rather
+        // than being slipped in here.
         if iters >= opts.max_newton {
             if census_on {
                 crate::census::newton_exit(crate::census::NewtonExit::MaxIters, iters);
