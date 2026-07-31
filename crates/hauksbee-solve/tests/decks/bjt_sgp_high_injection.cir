@@ -1,0 +1,21 @@
+2N3904 beta at 20 mA, from the genuine vendor model card
+* The ON Semiconductor 2N3904 card, used verbatim, including the two terms
+* hauksbee used to drop on the floor: the high-injection knee IKF and the
+* base-emitter leakage ISE/NE. Dropping them is not a small approximation.
+* ngspice on this card gives IC = 20.6 mA and IB = 125.5 uA, so beta = 164,
+* which is inside the datasheet's 100..300 window at 10..50 mA. The same card
+* with IKF and ISE deleted gives IC = 27.2 mA and IB = 61.9 uA, so beta = 440,
+* which is outside the datasheet at every current.
+*
+* VC is a zero-volt source used as an ammeter for the collector current, the
+* usual SPICE idiom; VB does the same for the base.
+VCC vcc 0 DC 5
+VB base 0 DC 0.75
+VC vcc coll DC 0
+Q1 coll base 0 Q2N3904
+.MODEL Q2N3904 NPN(IS=6.734f XTI=3 EG=1.11 VAF=74.03 BF=416.4 NE=1.259
++ ISE=6.734f IKF=66.78m XTB=1.5 BR=.7371 NC=2 ISC=0 IKR=0 RC=1
++ CJC=3.638p MJC=.3085 VJC=.75 FC=.5 CJE=4.493p MJE=.2593 VJE=.75
++ TR=239.5n TF=301.2p ITF=.4 VTF=4 XTF=2 RB=10)
+.op
+.end
