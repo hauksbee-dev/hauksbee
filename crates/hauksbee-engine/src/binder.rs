@@ -3575,6 +3575,40 @@ pub fn power_rail_voltage(name: &str) -> Option<f64> {
     }
 }
 
+/// True when a net names itself a supply but carries no magnitude anyone can
+/// read off the name, so [`power_rail_voltage`] correctly declines to guess one.
+///
+/// `ANALOG_VDD`, bare `VDD`, bare `VEE`, `AVDD`: every one is a supply, and not
+/// one of them says what voltage. Inventing a number would overdrive or
+/// underdrive every part on the net, so the binder leaves them unresolved and
+/// they sit at 0 V. That is the right call and it is invisible, which is the
+/// problem this predicate exists to fix. A caller that finds one of these with
+/// no supply attached knows the board is running with a rail dead, and can say
+/// so instead of reporting whatever the resulting operating point implies as
+/// though it were a finding about the board.
+///
+/// Deliberately name-only and deliberately loose. Callers pair it with a
+/// structural test (how many parts hang off the net) so a three-pin enable
+/// called `VCC_EN` does not read as a dead rail. Ground is excluded: `VSS` and
+/// friends are 0 V because that is what they are.
+pub fn names_a_supply_of_unknown_voltage(name: &str) -> bool {
+    if is_ground(name) || power_rail_voltage(name).is_some() {
+        return false;
+    }
+    let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
+    // A tap that watches a rail is not the rail, same exclusion power_rail_voltage
+    // makes before any of its fallbacks.
+    if name_is_rail_monitor_tap(&n) {
+        return false;
+    }
+    // The last path segment: a hierarchical sheet name must not decide this.
+    let leaf = n.rsplit('/').next().unwrap_or(&n);
+    const SUPPLY_TOKENS: [&str; 12] = [
+        "VDD", "VCC", "VEE", "VBAT", "VBUS", "VSYS", "VIN", "AVDD", "AVCC", "DVDD", "VREG", "VAUX",
+    ];
+    SUPPLY_TOKENS.iter().any(|t| leaf.contains(t))
+}
+
 /// Extract a rail magnitude from a voltage token embedded MID-name, for
 /// suffixed rails like `VDD_1V8`, `AVCC_2V5`, `VCC_1V2` whose voltage is neither
 /// the canonical 5 V nor 3.3 V and whose name does not START with the digit (so

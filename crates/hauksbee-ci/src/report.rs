@@ -38,6 +38,13 @@ pub struct CiResult {
     /// like `substitutions`, a GREEN over an un-run co-sim path must be
     /// qualified everywhere a pipeline reads.
     pub coverage_warnings: Vec<String>,
+    /// Nets that name themselves a supply, carry a rail's worth of parts, and
+    /// nothing powers (see `runner::dead_rails`). Surfaced FIRST in every
+    /// format, ahead of the assertion list: with a rail dead the operating
+    /// point is fiction, so this changes how every result below it reads, and a
+    /// reader who meets it after a named component fault has already believed
+    /// the fault.
+    pub dead_rails: Vec<String>,
 }
 
 /// What a tolerance-ensemble run covered, for the report headline.
@@ -134,6 +141,7 @@ impl CiResult {
             "coverage": self.coverage.as_ref().map(|c| c.describe()),
             "substitutions": self.substitutions,
             "coverage_warnings": self.coverage_warnings,
+            "dead_rails": self.dead_rails,
             "results": self.results,
         });
         serde_json::to_string(&value).unwrap_or_else(|e| {
@@ -171,6 +179,31 @@ impl CiResult {
         }
     }
 
+    /// The unpowered-rail warning, or empty when every rail is fed.
+    ///
+    /// Printed BEFORE the assertions, because it changes what they mean rather
+    /// than adding to them. A rail sitting at 0 V because nobody could work out
+    /// its voltage makes the operating point around it fiction, and the stress
+    /// monitor will report on that fiction as confidently as on a real
+    /// overload. Someone who reads "R_Shunt15301 overpower" first and the
+    /// caveat afterwards has already believed the accusation.
+    fn dead_rail_banner(&self) -> String {
+        if self.dead_rails.is_empty() {
+            return String::new();
+        }
+        let mut s = String::from("\n  UNPOWERED RAIL: ");
+        s.push_str(&self.dead_rails.join(", "));
+        s.push('\n');
+        s.push_str(
+            "        These nets name a supply but not a voltage, so nothing powered\n\
+             \x20       them and they sat at 0 V. Every analog result below was solved\n\
+             \x20       around that, so a fault it names may be an artifact rather than\n\
+             \x20       a finding about your board. Add a [[supply]] for each, then run\n\
+             \x20       again before acting on anything here.\n",
+        );
+        s
+    }
+
     /// Human-readable terminal report.
     pub fn render_human(&self) -> String {
         let mut out = String::new();
@@ -181,6 +214,7 @@ impl CiResult {
         if let Some(cov) = &self.coverage {
             out.push_str(&format!("  {}\n", cov.describe()));
         }
+        out.push_str(&self.dead_rail_banner());
         out.push('\n');
         for r in &self.results {
             let mark = if r.invalid {
@@ -315,6 +349,16 @@ impl CiResult {
             ));
             out.push_str("    </testcase>\n");
         }
+        // A dead rail rides the same suite-level channel: a dashboard reader who
+        // only ever sees the JUnit tab must not read a fault as a finding when
+        // the operating point it came from had a rail at 0 V.
+        if !self.dead_rails.is_empty() {
+            out.push_str(&format!(
+                "    <system-out>UNPOWERED RAIL: {} sat at 0 V; \
+                 any analog result here may be an artifact</system-out>\n",
+                xml_escape(&self.dead_rails.join(", "))
+            ));
+        }
         // Substitution honesty as a suite-level system-out note (dashboards show
         // it alongside the results): a pass over a substitute core is qualified.
         for msg in &self.substitutions {
@@ -361,6 +405,14 @@ impl CiResult {
                     gh_escape(&r.detail)
                 ));
             }
+        }
+        // A dead rail makes every analog number above questionable, so it is a
+        // warning in its own right rather than a footnote on the summary.
+        if !self.dead_rails.is_empty() {
+            out.push_str(&format!(
+                "::warning title=hauksbee-ci UNPOWERED RAIL::{} sat at 0 V (no voltage could be read from the name and no [[supply]] fed it); any analog result above may be an artifact\n",
+                gh_escape(&self.dead_rails.join(", "))
+            ));
         }
         // Substitution honesty: a warning annotation (a pass over a substitute
         // core cannot vouch for firmware on the real silicon).
@@ -598,6 +650,7 @@ mod substitution_tests {
                     .to_string(),
             ],
             coverage_warnings: Vec::new(),
+            dead_rails: Vec::new(),
         };
         let human = result.render_human();
         assert!(
@@ -640,6 +693,7 @@ mod substitution_tests {
                  analog solve but this platform has no ADC injection map"
                     .to_string(),
             ],
+            dead_rails: Vec::new(),
         };
         let human = result.render_human();
         assert!(
@@ -659,6 +713,7 @@ mod substitution_tests {
         // No hole → no mention on any surface.
         let clean = CiResult {
             coverage_warnings: Vec::new(),
+            dead_rails: Vec::new(),
             ..result
         };
         assert!(!clean.render_human().contains("COVERAGE HOLE"));

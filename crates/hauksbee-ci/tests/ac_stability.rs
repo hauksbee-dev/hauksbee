@@ -162,6 +162,7 @@ fn outcome_for(ckt: &Circuit, net: &str) -> RunOutcome {
         net_series: std::collections::HashMap::new(),
         substitutions: Vec::new(),
         coverage_warnings: Vec::new(),
+        dead_rails: Vec::new(),
         unexercised_bus_ids: Default::default(),
         spi_framing: Default::default(),
     }
@@ -279,6 +280,7 @@ fn ac_gain_assertion_evaluates_rc_corner() {
         net_series: std::collections::HashMap::new(),
         substitutions: Vec::new(),
         coverage_warnings: Vec::new(),
+        dead_rails: Vec::new(),
         unexercised_bus_ids: Default::default(),
         spi_framing: Default::default(),
     };
