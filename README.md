@@ -73,12 +73,16 @@ docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
 
 The slim and full images and more `docker run` examples are in [`docs/ci/DOCKER.md`](docs/ci/DOCKER.md).
 
-**Then use it, first run, against a board that ships in this repo:**
+**Then use it, first run, against a real board that ships in this repo.** That
+board is the [SQFMI Watchy](https://github.com/sqfmi/watchy-hardware), an
+ESP32-S3 e-paper smartwatch, vendored unmodified under its MIT licence: 86
+parts, 685 copper segments, a charger and a boost converter. Every command
+below finishes in about a second.
 
 ```bash
-hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report --plain   # which parts were modelled, plain bottom line
-hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --drc --plain      # the copper-short report, in plain language
-hauksbee-ci run crates/hauksbee-ci/examples/blinky.toml                             # run a CI spec the way a pipeline would
+hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --report --plain   # which parts were modelled, plain bottom line
+hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --drc --plain      # the copper-short report, in plain language
+hauksbee-ci run crates/hauksbee-ci/examples/watchy.toml                             # run a CI spec the way a pipeline would
 ```
 
 **Then swap in your own board** (`my_board.kicad_pcb` is a placeholder for your file):

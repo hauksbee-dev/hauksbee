@@ -119,9 +119,11 @@ printf '\n'
 log "Done. Verify with:"
 # The example paths differ per layout: a checkout keeps them under crates/,
 # a release bundle ships them under examples/ci-specs.
-if [ -f "$HAUKSBEE_ROOT/crates/hauksbee-ci/examples/boards/blinky.kicad_pcb" ]; then
-  info "  hauksbee run $HAUKSBEE_ROOT/crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report"
-  info "  hauksbee-ci run $HAUKSBEE_ROOT/crates/hauksbee-ci/examples/blinky.toml"
+# Point at the Watchy, not the minimal blinky board: the first thing someone
+# runs after installing should meet a board that was actually fabricated.
+if [ -f "$HAUKSBEE_ROOT/crates/hauksbee-ci/examples/boards/watchy.kicad_pcb" ]; then
+  info "  hauksbee run $HAUKSBEE_ROOT/crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --report"
+  info "  hauksbee-ci run $HAUKSBEE_ROOT/crates/hauksbee-ci/examples/watchy.toml"
 else
-  info "  hauksbee run $HAUKSBEE_ROOT/examples/ci-specs/boards/blinky.kicad_pcb --report"
+  info "  hauksbee run $HAUKSBEE_ROOT/examples/ci-specs/boards/watchy.kicad_pcb --report"
 fi

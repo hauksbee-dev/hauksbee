@@ -397,8 +397,9 @@ INSTALL
     PREFIX=\$HOME/.local scripts/install.sh --no-build --symlink
 
 VERIFY (no external files needed - the static checks run on the bundled board)
-  hauksbee run examples/ci-specs/boards/blinky.kicad_pcb --report
-  hauksbee run examples/ci-specs/boards/blinky.kicad_pcb --drc
+  hauksbee run examples/ci-specs/boards/watchy.kicad_pcb --report
+  hauksbee run examples/ci-specs/boards/watchy.kicad_pcb --drc
+  hauksbee-ci run examples/ci-specs/watchy.toml
 
 The binaries are self-contained (model db compiled in). Optional firmware
 backends (qemu, renode) are detected at runtime; run scripts/doctor.sh to see
