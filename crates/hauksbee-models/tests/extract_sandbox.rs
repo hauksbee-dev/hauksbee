@@ -1,8 +1,8 @@
 //! The extraction sandbox must contain a copy, never the user's own directory.
 //!
-//! Codex runs full-auto with write access to its working directory. That
-//! directory used to be *the folder the datasheet happened to sit in*, so
-//! `--pdf ~/Downloads/part.pdf` handed an autonomous agent write access to the
+//! Codex runs full-auto with write access to its working directory. If that
+//! directory were the folder the datasheet sits in, `--pdf
+//! ~/Downloads/part.pdf` would hand an autonomous agent write access to the
 //! whole of Downloads. These tests pin the copy-not-the-original property.
 //!
 //! What they do NOT establish, and what the module doc is careful about: the

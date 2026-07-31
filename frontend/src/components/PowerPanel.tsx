@@ -63,8 +63,9 @@ export function PowerPanel({ boardInfo, frame, send }: PowerPanelProps) {
   function updateConfig(net: string, patch: Partial<SupplyConfig>) {
     setConfigs(prev => {
       const next = { ...prev, [net]: { ...(prev[net] ?? SUPPLY_DEFAULTS.Ideal), ...patch } }
-      // The server deserializes a tagged enum; the raw UI config used to fail
-      // serde and the panel silently did nothing. Map to the wire shape.
+      // The server deserializes a tagged enum, and the raw UI config fails
+      // serde there, leaving the panel silently doing nothing. Map to the wire
+      // shape.
       send({ type: 'SetPowerSupply', net, supply: toWireSupply(next[net]) })
       return next
     })
@@ -199,9 +200,10 @@ export function PowerPanel({ boardInfo, frame, send }: PowerPanelProps) {
  *
  *  The box and the value the sim is running on must never disagree. `min`/`max`
  *  on a number input are advisory (the browser lets you type straight past
- *  them), so a typed 60 in a 0..48 box used to sit there in red while the panel
- *  passed 60 down; and a supply type that sets its own voltage (USB, battery)
- *  left the box reading whatever was last typed while the rail ran at 5 V. So:
+ *  them), so a typed 60 in a 0..48 box would sit there in red while the panel
+ *  passed 60 down, and a supply type that sets its own voltage (USB, battery)
+ *  would leave the box reading whatever was last typed while the rail ran at
+ *  5 V. So:
  *
  *  - out-of-range input is clamped to the bound, applied clamped, and the box
  *    snaps to what was applied on commit (blur / Enter), saying "capped at N";

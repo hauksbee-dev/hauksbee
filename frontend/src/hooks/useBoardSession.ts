@@ -3,9 +3,9 @@ import type { LiveLaunchResponse, LiveStatus, WebReport } from '../types/report'
 import type { SelectedComponent } from '../components/SelectionCard'
 
 // The board session: one uploaded (or preloaded) board, its report, its staged
-// firmware, and the live-sim affordance for it. This used to live inside the
-// Landing component; the app shell needs it shared across the Board, Checks
-// and Live Sim views, so it is a hook the shell owns.
+// firmware, and the live-sim affordance for it. The app shell needs this shared
+// across the Board, Checks and Live Sim views, so it is a hook the shell owns
+// rather than state inside Landing.
 
 // Fetch aborts (a newer run superseded this one) are expected, not errors.
 const isAbort = (e: unknown) => e instanceof Error && e.name === 'AbortError'
@@ -172,9 +172,9 @@ export function useBoardSession(opts: {
   }, [])
 
   // Everything on screen that was DERIVED from the previous run, dropped in one
-  // place. Uploading again used to leave the old report, its error banner and
-  // the net you had clicked on the old board sitting there while the new
-  // analysis ran, so the page showed two runs at once and there was no way to
+  // place. Without it, uploading again leaves the old report, its error banner
+  // and the net you had clicked on the old board sitting there while the new
+  // analysis runs, so the page shows two runs at once and there is no way to
   // tell which half you were reading. A new run starts from nothing.
   //
   // This deliberately does NOT touch the run's INPUTS (boardFile, firmwareFile,

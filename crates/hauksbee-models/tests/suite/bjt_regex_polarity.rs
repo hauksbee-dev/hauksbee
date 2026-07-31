@@ -44,7 +44,7 @@ fn bc2xx_npn_entry_is_not_over_broad() {
             "{v} should be the NPN entry"
         );
     }
-    // The old range caught BC240-259; those should no longer bind here.
+    // BC240-259 are a different family and must not bind here.
     for v in ["BC240", "BC250", "BC259"] {
         assert_ne!(
             resolved_id(&lib, v).as_deref(),

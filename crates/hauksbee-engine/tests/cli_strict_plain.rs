@@ -289,8 +289,8 @@ fn ac_loop_cli_reports_real_one_pole_phase_margin() {
 fn ac_csv_is_written_even_with_json() {
     // R19: `--ac-csv FILE` and `--json` are orthogonal, a CI/tooling caller
     // legitimately wants structured JSON on stdout AND a CSV artifact on disk.
-    // The CSV writer used to sit AFTER the `--json` early return, so passing both
-    // silently dropped the CSV (never written, no diagnostic, exit 0).
+    // A CSV writer placed AFTER the `--json` early return drops the CSV whenever
+    // both are passed: never written, no diagnostic, exit 0.
     let b = ac_loop_board();
     let models = ac_loop_models();
     let csv_path = std::env::temp_dir().join(format!(
@@ -384,9 +384,9 @@ fn ac_partial_json_surfaces_a_not_found_node() {
 
 #[test]
 fn plain_check_surfaces_open_active_ic_bind_honesty() {
-    // R22 (L4-01): `--check --plain` used to print ONLY the DRC/lint/SI verdicts
-    // and drop the bind-role honesty that the text/JSON/web surfaces all carry,
-    // so a board whose active ICs are unmodelled read "healthy" while
+    // R22 (L4-01): `--check --plain` must carry the bind-role honesty the
+    // text/JSON/web surfaces carry. Printing only the DRC/lint/SI verdicts makes
+    // a board whose active ICs are unmodelled read "healthy" while
     // firmware/analog/AC/thermal on their nets were never covered. The plain
     // persona must warn about the open active ICs like the sibling --bind plain
     // mode does. Watchy has active-IC (U-prefix) parts and, run without
@@ -411,9 +411,9 @@ fn plain_check_surfaces_open_active_ic_bind_honesty() {
         stdout.contains("copper checks below are unaffected"),
         "the heads-up must keep the copper verdict trustworthy; got:\n{stdout}"
     );
-    // R39: the heads-up must point at a REAL flag. It used to say "run --bind",
-    // but the bind table is produced by `--report`, following "--bind" errors
-    // with clap's "unexpected argument". The guidance must name --report.
+    // R39: the heads-up must point at a REAL flag. The bind table comes from
+    // `--report`; naming "--bind" instead earns clap's "unexpected argument",
+    // so the guidance must say --report.
     assert!(
         stdout.contains("--report") && !stdout.contains("--bind"),
         "the bind-table heads-up must reference the real --report flag, not --bind; got:\n{stdout}"
