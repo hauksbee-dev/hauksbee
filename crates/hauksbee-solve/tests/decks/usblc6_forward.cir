@@ -1,0 +1,13 @@
+USBLC6-2P6 ESD array forward drop at its datasheet test current
+* The entry in crates/hauksbee-models/db/diodes.toml fits `is` so the forward
+* voltage lands on the ST datasheet's VF <= 1.1 V at IF = 10 mA, with n = 2.0
+* declared in the entry as NOT a datasheet value. That makes it exactly the
+* kind of claim worth checking against another simulator: a fitted parameter
+* plus an assumed one.
+*
+* Forcing 10 mA through one rail diode makes V(a) read VF directly.
+IF a 0 DC -10m
+D1 a 0 USBLC6
+.model USBLC6 D(IS=6.3e-12 N=2.0 RS=0.5 BV=6.0)
+.op
+.end

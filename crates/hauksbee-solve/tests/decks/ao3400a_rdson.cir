@@ -1,0 +1,17 @@
+AO3400A NMOS on-resistance at its datasheet VGS
+* The library entry in crates/hauksbee-models/db/mosfet.toml derives kp and the
+* ohmic residue rd+rs by solving the AOS AO3400A datasheet's two RDS(on) rows
+* (Rev 3.1): 18 mOhm typ at VGS = 10 V, ID = 5.7 A, and 24 mOhm typ at
+* VGS = 2.5 V, ID = 3 A. Subtracting the two rows eliminates the ohmic term and
+* leaves kp; the residue at the 10 V row is rd+rs.
+*
+* This deck holds hauksbee and ngspice to the same answer for those parameters,
+* so the derivation is checked by an independent simulator rather than only by
+* the arithmetic in its comment. The device is driven hard into the linear
+* region at VGS = 10 V, where V(d) / 1 A reads RDS(on) directly.
+VG g 0 DC 10
+ID d 0 DC -1
+M1 d g 0 0 AO3400A L=1u W=1u
+.model AO3400A NMOS(VTO=1.05 KP=96.0 RD=0.0084 RS=0.0084 CGDO=0 CGSO=0)
+.op
+.end
