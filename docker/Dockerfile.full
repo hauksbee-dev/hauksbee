@@ -100,8 +100,8 @@ RUN curl -fsSL -o /opt/freerouting-${FREEROUTING_VERSION}.jar \
 
 LABEL org.opencontainers.image.title="hauksbee (full)" \
       org.opencontainers.image.description="hauksbee slim plus Renode, the Espressif QEMU fork, and freerouting: STM32 / ESP32 co-sim and production autorouting." \
-      org.opencontainers.image.source="https://github.com/ETM-Code/hauksbee" \
-      org.opencontainers.image.licenses="MIT"
+      org.opencontainers.image.source="https://github.com/hauksbee-dev/hauksbee" \
+      org.opencontainers.image.licenses="Apache-2.0"
 
 # Wire the backend discovery env vars so the tools are found with no setup:
 #   HAUKSBEE_RENODE       full path to the renode launcher
