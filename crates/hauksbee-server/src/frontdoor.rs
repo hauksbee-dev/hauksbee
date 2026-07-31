@@ -127,6 +127,10 @@ pub struct DatasheetJob {
     pub part: String,
     /// The component-kind hint (`vreg`, `bjt_npn`, `i2c_sensor`, ...).
     pub kind: String,
+    /// Model the extraction agent should run on. Empty means "the default",
+    /// which is the strong tier at high reasoning effort; see
+    /// `hauksbee_models::datasheet::codex_model`.
+    pub model: String,
 }
 
 /// Whether an extraction could run at all, as a JSON string: `() -> JSON`.
@@ -514,6 +518,7 @@ async fn datasheet_extract_handler(
         reference: parts.reference.unwrap_or_default(),
         part,
         kind,
+        model: parts.model.unwrap_or_default(),
     };
 
     let (tx, rx) = tokio::sync::mpsc::channel::<String>(256);
@@ -705,6 +710,7 @@ struct UploadedParts {
     part: Option<String>,
     kind: Option<String>,
     reference: Option<String>,
+    model: Option<String>,
 }
 
 /// Drain a multipart body into [`UploadedParts`], or return the user-facing
@@ -764,6 +770,7 @@ async fn parse_upload(multipart: &mut Multipart) -> Result<UploadedParts, String
             // with one on the end matches nothing.
             "part" => parts.part = Some(String::from_utf8_lossy(&data).trim().to_string()),
             "kind" => parts.kind = Some(String::from_utf8_lossy(&data).trim().to_string()),
+            "model" => parts.model = Some(String::from_utf8_lossy(&data).trim().to_string()),
             "reference" => {
                 parts.reference = Some(String::from_utf8_lossy(&data).trim().to_string())
             }

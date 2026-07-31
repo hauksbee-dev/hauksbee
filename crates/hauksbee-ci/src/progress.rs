@@ -1,11 +1,10 @@
 //! Say what a run is doing while it does it.
 //!
-//! A co-simulation is minutes of work with no output until it finishes. On the
-//! flagship board the first run a newcomer makes takes over three minutes, and
-//! before this module it printed nothing at all for every second of it. A
-//! silent process that takes that long is indistinguishable from a hung one,
-//! and the reasonable thing for a first-time user to do with a hung process is
-//! kill it.
+//! A co-simulation is minutes of work with nothing to show until it finishes:
+//! on the flagship board a newcomer's first run takes over three minutes. A
+//! silent process that runs that long is indistinguishable from a hung one, and
+//! the reasonable thing for a first-time user to do with a hung process is kill
+//! it.
 //!
 //! Progress goes to **stderr**, never stdout, so `--json` output stays a clean
 //! parse and a redirect keeps working. It is off unless something installs a
