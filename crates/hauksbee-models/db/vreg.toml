@@ -578,3 +578,110 @@ iq_a      = 1.0e-6   # IDD typ, output open (3.0 uA max)
 max_current_a = 0.2   # IOUTMAX min for the 3.0-3.9 V codes, @ VOUT >= 0.9 x VOUT(E)
 max_voltage_v = 7.0   # VIN abs max
 max_power_w = 0.25    # SOT-23 Pd as a bare IC; 500 mW on a 40 x 40 mm board
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Negative regulators, the 79xx series.
+#
+# THE PINOUT IS NOT THE 78xx PINOUT. A 7805 in TO-220 is 1=IN, 2=GND, 3=OUT; a
+# 7905 is 1=GND, 2=IN, 3=OUT. Dropping a 79xx into a 78xx footprint is one of
+# the most common ways a dual-rail supply gets built wrong, and it is exactly
+# the kind of thing this library exists to catch, so the maps below are worth
+# more than the electrical parameters.
+#
+# The numbering deserves a note, because the datasheet figure is easy to read
+# backwards. TI SNOSBQ7C Figure 1 is a TO-220 FRONT view drawn rotated, tab to
+# the left and leads pointing right, labelled top to bottom OUTPUT, INPUT,
+# GROUND. Un-rotating it puts pin 1 at the bottom of that drawing, so the
+# numbering is 1=GROUND, 2=INPUT, 3=OUTPUT, which is what every 79xx footprint
+# assumes.
+#
+# `vout` is stamped as a DC source against ground, so the negative sign here is
+# the whole point: the rail comes out below ground, and a board that assumed
+# otherwise reads as a fault rather than passing quietly.
+#
+# Source for all three: Texas Instruments LM7905/LM7912/LM7915 datasheet
+# SNOSBQ7C, June 1999, revised May 2013. Electrical Characteristics tables and
+# the DESIGN CONSIDERATIONS thermal table.
+
+[[models]]
+id = "7905"
+kind = "vreg"
+description = "79xx / LM7905 negative linear regulator -5V, TO-220"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?79[LMS]?05"
+
+[models.params]
+vout      = -5.0     # VO at TJ = 25 C: -4.8 / -5.0 / -5.2 V
+dropout_v = 1.1      # Dropout voltage typ @ IOUT = 1 A, TJ = 25 C
+iq_a      = 1.0e-3   # IQ typ @ TJ = 25 C (2 mA max)
+
+[models.pins]
+"1" = "gnd"
+"2" = "in"
+"3" = "out"
+
+[models.ratings]
+max_current_a = 1.5          # "1.5A Output Current", Features
+max_voltage_v = 25.0         # Input voltage abs max for the -5 V part, as a
+                             # magnitude; the -12 V and -15 V parts are 35 V
+max_junction_temp_c = 125.0  # Operating junction temperature range abs max
+theta_jc_c_per_w = 3.0       # TO-220 typ (5.0 max), DESIGN CONSIDERATIONS
+theta_ja_c_per_w = 60.0      # TO-220 typ. The datasheet's table prints Typ 60
+                             # against Max 40, which cannot both be right; the
+                             # larger figure is the conservative one to judge a
+                             # junction temperature with, so it is used here.
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "7912"
+kind = "vreg"
+description = "79xx / LM7912 negative linear regulator -12V, TO-220"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?79[LMS]?12"
+
+[models.params]
+vout      = -12.0    # VO at TJ = 25 C: -11.5 / -12.0 / -12.5 V
+dropout_v = 1.1      # Dropout voltage typ @ IOUT = 1 A, TJ = 25 C
+iq_a      = 1.5e-3   # IQ typ @ TJ = 25 C (3 mA max)
+
+[models.pins]
+"1" = "gnd"
+"2" = "in"
+"3" = "out"
+
+[models.ratings]
+max_current_a = 1.5
+max_voltage_v = 35.0         # Input voltage abs max (magnitude) for -12/-15 V
+max_junction_temp_c = 125.0
+theta_jc_c_per_w = 3.0
+theta_ja_c_per_w = 60.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "7915"
+kind = "vreg"
+description = "79xx / LM7915 negative linear regulator -15V, TO-220"
+
+[models.match]
+value_re = "(?i)^(LM|L|MC|UA|KA|NJM|AN|SPX)?79[LMS]?15"
+
+[models.params]
+vout      = -15.0    # VO at TJ = 25 C: -14.4 / -15.0 / -15.6 V
+dropout_v = 1.1      # Dropout voltage typ @ IOUT = 1 A, TJ = 25 C
+iq_a      = 1.5e-3   # IQ typ @ TJ = 25 C (3 mA max)
+
+[models.pins]
+"1" = "gnd"
+"2" = "in"
+"3" = "out"
+
+[models.ratings]
+max_current_a = 1.5
+max_voltage_v = 35.0
+max_junction_temp_c = 125.0
+theta_jc_c_per_w = 3.0
+theta_ja_c_per_w = 60.0
