@@ -25,3 +25,4 @@ mod power_ic_resolve;
 mod user_dir_layering;
 mod vreg_78xx_resolve;
 mod vreg_79xx_negative;
+mod zener_family;

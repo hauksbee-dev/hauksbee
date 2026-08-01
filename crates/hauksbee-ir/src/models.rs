@@ -114,6 +114,19 @@ pub struct DiodeModel {
     /// Reverse breakdown voltage (V); `f64::INFINITY` disables breakdown.
     #[serde(with = "nonfinite_f64")]
     pub bv: f64,
+    /// Current at which the breakdown knee is placed (A), SPICE's `IBV`.
+    ///
+    /// `bv` alone does not pin a Zener down. A datasheet states its voltage AT
+    /// a test current (a 1N4733A is 5.1 V at 49 mA), and the pair is what makes
+    /// the knee sharp enough to regulate. Scaling breakdown by `is` instead
+    /// makes the knee as soft as the forward saturation current, which puts a
+    /// 5.1 V part at 5.8 V under a normal shunt load. Every vendor Zener card
+    /// carries BV and IBV together, so both are read here.
+    ///
+    /// Defaults to `is`, which is the continuous-at-`-bv` behaviour a model
+    /// that names no IBV had before.
+    #[serde(default)]
+    pub ibv: Option<f64>,
     /// Saturation-current temperature exponent.
     pub xti: f64,
     /// Activation energy / bandgap (eV).
@@ -131,6 +144,7 @@ impl Default for DiodeModel {
             m: 0.5,
             tt: 0.0,
             bv: f64::INFINITY,
+            ibv: None,
             xti: 3.0,
             eg: EG_SI,
         }
