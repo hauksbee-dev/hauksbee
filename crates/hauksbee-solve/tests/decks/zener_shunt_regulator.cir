@@ -1,0 +1,16 @@
+1N4733A Zener shunt regulator, the circuit the part exists for
+* A 12 V rail through a series resistor into a 5.1 V Zener: the classic shunt
+* reference every hobbyist builds. It is here because it exercises the one
+* thing a Zener model must get right, conduction BELOW -bv, which an ordinary
+* diode model leaves open. With the breakdown branch missing the node sits at
+* 12 V and the check that the rail is clamped passes for the wrong reason.
+*
+* The library entry in crates/hauksbee-models/db/diodes.toml carries these
+* parameters; this deck holds hauksbee and ngspice to the same answer for them.
+VIN vin 0 DC 12
+RS vin vz 470
+D1 0 vz DZ5V1
+RL vz 0 10k
+.model DZ5V1 D(IS=1e-9 N=1.6 RS=1.0 BV=5.1 IBV=49m)
+.op
+.end

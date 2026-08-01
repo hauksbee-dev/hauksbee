@@ -3088,6 +3088,9 @@ fn diode_from_card(card: Option<&ModelCard>) -> DiodeModel {
             m: c.get_or("m", d.m),
             tt: c.get_or("tt", d.tt),
             bv: c.get("bv").unwrap_or(d.bv),
+            // The knee current a Zener card states its voltage at. Without it a
+            // vendor Zener model reads as a soft-kneed rectifier.
+            ibv: c.get("ibv").filter(|v| *v > 0.0),
             xti: c.get_or("xti", d.xti),
             eg: c.get_or("eg", d.eg),
         },

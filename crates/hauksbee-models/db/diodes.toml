@@ -595,3 +595,376 @@ bv  = 5.0
 max_current_a = 0.025
 max_surge_current_a = 0.1
 max_voltage_v = 5.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Zener diodes, the 1N47xxA family: 1 W, DO-41 axial, Vz tolerance +/-5%.
+#
+# A Zener is an ordinary diode whose REVERSE breakdown is the point of the part,
+# so `bv` carries the whole model and comes straight off the datasheet. The
+# solver conducts below -bv with ngspice's own breakdown shape, so a shunt
+# regulator or a clamp behaves rather than sitting open until something melts.
+#
+# The forward parameters are a FIT, not a table lookup, and are shared across
+# the family: this datasheet gives one forward number, VF <= 1.2 V at
+# IF = 200 mA, and no SPICE card. `is`, `n` and `rs` below put VF near 1.0 V at
+# that current, inside the limit. Anyone who needs an accurate forward drop from
+# a Zener is using the part backwards, and the comment says so rather than
+# implying the numbers were read off a curve.
+#
+# Source for every Vz, Izt, Zzt and rating: Multicomp 1N4728A-1N4764A datasheet
+# V1.1 (06/04/11), "Specification Table" and "Absolute Maximum Ratings".
+#
+# The family is listed as the datasheet prints it, which is abridged: it skips
+# from 3.9 V to 4.7 V and from 10 V to 62 V. The missing codes are real parts,
+# and they are left out rather than interpolated.
+
+[[models]]
+id = "1n4728a"
+kind = "diode"
+description = "1N4728A Zener diode 3.3 V, 1 W, DO-41"
+
+[models.match]
+# Accepts the bare code and the A/B/C tolerance suffixes; the voltage is set by
+# the code, so a suffix cannot change which rail this clamps at.
+value_re = "(?i)^1N4728[ABC]?$"
+
+[models.params]
+bv  = 3.3        # VZnom at IZT = 76 mA, Specification Table
+ibv = 0.076      # the knee sits at IZT, so V(bv) is the datasheet VZ there
+is  = 1.0e-9      # forward fit, shared across the family (see the note above)
+n   = 1.6         # forward fit
+rs  = 1.0         # forward fit; puts VF near 1.0 V at IF = 200 mA (1.2 V max)
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
+max_voltage_v = 3.3      # reverse working voltage is the Zener voltage itself
+max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
+theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
+
+[[models]]
+id = "1n4729a"
+kind = "diode"
+description = "1N4729A Zener diode 3.6 V, 1 W, DO-41"
+
+[models.match]
+# Accepts the bare code and the A/B/C tolerance suffixes; the voltage is set by
+# the code, so a suffix cannot change which rail this clamps at.
+value_re = "(?i)^1N4729[ABC]?$"
+
+[models.params]
+bv  = 3.6        # VZnom at IZT = 69 mA, Specification Table
+ibv = 0.069      # the knee sits at IZT, so V(bv) is the datasheet VZ there
+is  = 1.0e-9      # forward fit, shared across the family (see the note above)
+n   = 1.6         # forward fit
+rs  = 1.0         # forward fit; puts VF near 1.0 V at IF = 200 mA (1.2 V max)
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
+max_voltage_v = 3.6      # reverse working voltage is the Zener voltage itself
+max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
+theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
+
+[[models]]
+id = "1n4730a"
+kind = "diode"
+description = "1N4730A Zener diode 3.9 V, 1 W, DO-41"
+
+[models.match]
+# Accepts the bare code and the A/B/C tolerance suffixes; the voltage is set by
+# the code, so a suffix cannot change which rail this clamps at.
+value_re = "(?i)^1N4730[ABC]?$"
+
+[models.params]
+bv  = 3.9        # VZnom at IZT = 64 mA, Specification Table
+ibv = 0.064      # the knee sits at IZT, so V(bv) is the datasheet VZ there
+is  = 1.0e-9      # forward fit, shared across the family (see the note above)
+n   = 1.6         # forward fit
+rs  = 1.0         # forward fit; puts VF near 1.0 V at IF = 200 mA (1.2 V max)
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
+max_voltage_v = 3.9      # reverse working voltage is the Zener voltage itself
+max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
+theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
+
+[[models]]
+id = "1n4732a"
+kind = "diode"
+description = "1N4732A Zener diode 4.7 V, 1 W, DO-41"
+
+[models.match]
+# Accepts the bare code and the A/B/C tolerance suffixes; the voltage is set by
+# the code, so a suffix cannot change which rail this clamps at.
+value_re = "(?i)^1N4732[ABC]?$"
+
+[models.params]
+bv  = 4.7        # VZnom at IZT = 53 mA, Specification Table
+ibv = 0.053      # the knee sits at IZT, so V(bv) is the datasheet VZ there
+is  = 1.0e-9      # forward fit, shared across the family (see the note above)
+n   = 1.6         # forward fit
+rs  = 1.0         # forward fit; puts VF near 1.0 V at IF = 200 mA (1.2 V max)
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
+max_voltage_v = 4.7      # reverse working voltage is the Zener voltage itself
+max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
+theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
+
+[[models]]
+id = "1n4733a"
+kind = "diode"
+description = "1N4733A Zener diode 5.1 V, 1 W, DO-41"
+
+[models.match]
+# Accepts the bare code and the A/B/C tolerance suffixes; the voltage is set by
+# the code, so a suffix cannot change which rail this clamps at.
+value_re = "(?i)^1N4733[ABC]?$"
+
+[models.params]
+bv  = 5.1        # VZnom at IZT = 49 mA, Specification Table
+ibv = 0.049      # the knee sits at IZT, so V(bv) is the datasheet VZ there
+is  = 1.0e-9      # forward fit, shared across the family (see the note above)
+n   = 1.6         # forward fit
+rs  = 1.0         # forward fit; puts VF near 1.0 V at IF = 200 mA (1.2 V max)
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
+max_voltage_v = 5.1      # reverse working voltage is the Zener voltage itself
+max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
+theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
+
+[[models]]
+id = "1n4734a"
+kind = "diode"
+description = "1N4734A Zener diode 5.6 V, 1 W, DO-41"
+
+[models.match]
+# Accepts the bare code and the A/B/C tolerance suffixes; the voltage is set by
+# the code, so a suffix cannot change which rail this clamps at.
+value_re = "(?i)^1N4734[ABC]?$"
+
+[models.params]
+bv  = 5.6        # VZnom at IZT = 45 mA, Specification Table
+ibv = 0.045      # the knee sits at IZT, so V(bv) is the datasheet VZ there
+is  = 1.0e-9      # forward fit, shared across the family (see the note above)
+n   = 1.6         # forward fit
+rs  = 1.0         # forward fit; puts VF near 1.0 V at IF = 200 mA (1.2 V max)
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
+max_voltage_v = 5.6      # reverse working voltage is the Zener voltage itself
+max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
+theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
+
+[[models]]
+id = "1n4735a"
+kind = "diode"
+description = "1N4735A Zener diode 6.2 V, 1 W, DO-41"
+
+[models.match]
+# Accepts the bare code and the A/B/C tolerance suffixes; the voltage is set by
+# the code, so a suffix cannot change which rail this clamps at.
+value_re = "(?i)^1N4735[ABC]?$"
+
+[models.params]
+bv  = 6.2        # VZnom at IZT = 41 mA, Specification Table
+ibv = 0.041      # the knee sits at IZT, so V(bv) is the datasheet VZ there
+is  = 1.0e-9      # forward fit, shared across the family (see the note above)
+n   = 1.6         # forward fit
+rs  = 1.0         # forward fit; puts VF near 1.0 V at IF = 200 mA (1.2 V max)
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
+max_voltage_v = 6.2      # reverse working voltage is the Zener voltage itself
+max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
+theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
+
+[[models]]
+id = "1n4736a"
+kind = "diode"
+description = "1N4736A Zener diode 6.8 V, 1 W, DO-41"
+
+[models.match]
+# Accepts the bare code and the A/B/C tolerance suffixes; the voltage is set by
+# the code, so a suffix cannot change which rail this clamps at.
+value_re = "(?i)^1N4736[ABC]?$"
+
+[models.params]
+bv  = 6.8        # VZnom at IZT = 37 mA, Specification Table
+ibv = 0.037      # the knee sits at IZT, so V(bv) is the datasheet VZ there
+is  = 1.0e-9      # forward fit, shared across the family (see the note above)
+n   = 1.6         # forward fit
+rs  = 1.0         # forward fit; puts VF near 1.0 V at IF = 200 mA (1.2 V max)
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
+max_voltage_v = 6.8      # reverse working voltage is the Zener voltage itself
+max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
+theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
+
+[[models]]
+id = "1n4737a"
+kind = "diode"
+description = "1N4737A Zener diode 7.5 V, 1 W, DO-41"
+
+[models.match]
+# Accepts the bare code and the A/B/C tolerance suffixes; the voltage is set by
+# the code, so a suffix cannot change which rail this clamps at.
+value_re = "(?i)^1N4737[ABC]?$"
+
+[models.params]
+bv  = 7.5        # VZnom at IZT = 34 mA, Specification Table
+ibv = 0.034      # the knee sits at IZT, so V(bv) is the datasheet VZ there
+is  = 1.0e-9      # forward fit, shared across the family (see the note above)
+n   = 1.6         # forward fit
+rs  = 1.0         # forward fit; puts VF near 1.0 V at IF = 200 mA (1.2 V max)
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
+max_voltage_v = 7.5      # reverse working voltage is the Zener voltage itself
+max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
+theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
+
+[[models]]
+id = "1n4738a"
+kind = "diode"
+description = "1N4738A Zener diode 8.2 V, 1 W, DO-41"
+
+[models.match]
+# Accepts the bare code and the A/B/C tolerance suffixes; the voltage is set by
+# the code, so a suffix cannot change which rail this clamps at.
+value_re = "(?i)^1N4738[ABC]?$"
+
+[models.params]
+bv  = 8.2        # VZnom at IZT = 31 mA, Specification Table
+ibv = 0.031      # the knee sits at IZT, so V(bv) is the datasheet VZ there
+is  = 1.0e-9      # forward fit, shared across the family (see the note above)
+n   = 1.6         # forward fit
+rs  = 1.0         # forward fit; puts VF near 1.0 V at IF = 200 mA (1.2 V max)
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
+max_voltage_v = 8.2      # reverse working voltage is the Zener voltage itself
+max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
+theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
+
+[[models]]
+id = "1n4739a"
+kind = "diode"
+description = "1N4739A Zener diode 9.1 V, 1 W, DO-41"
+
+[models.match]
+# Accepts the bare code and the A/B/C tolerance suffixes; the voltage is set by
+# the code, so a suffix cannot change which rail this clamps at.
+value_re = "(?i)^1N4739[ABC]?$"
+
+[models.params]
+bv  = 9.1        # VZnom at IZT = 28 mA, Specification Table
+ibv = 0.028      # the knee sits at IZT, so V(bv) is the datasheet VZ there
+is  = 1.0e-9      # forward fit, shared across the family (see the note above)
+n   = 1.6         # forward fit
+rs  = 1.0         # forward fit; puts VF near 1.0 V at IF = 200 mA (1.2 V max)
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
+max_voltage_v = 9.1      # reverse working voltage is the Zener voltage itself
+max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
+theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
+
+[[models]]
+id = "1n4740a"
+kind = "diode"
+description = "1N4740A Zener diode 10.0 V, 1 W, DO-41"
+
+[models.match]
+# Accepts the bare code and the A/B/C tolerance suffixes; the voltage is set by
+# the code, so a suffix cannot change which rail this clamps at.
+value_re = "(?i)^1N4740[ABC]?$"
+
+[models.params]
+bv  = 10.0        # VZnom at IZT = 25 mA, Specification Table
+ibv = 0.025      # the knee sits at IZT, so V(bv) is the datasheet VZ there
+is  = 1.0e-9      # forward fit, shared across the family (see the note above)
+n   = 1.6         # forward fit
+rs  = 1.0         # forward fit; puts VF near 1.0 V at IF = 200 mA (1.2 V max)
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
+max_voltage_v = 10.0      # reverse working voltage is the Zener voltage itself
+max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
+theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
+
+[[models]]
+id = "1n4759a"
+kind = "diode"
+description = "1N4759A Zener diode 62.0 V, 1 W, DO-41"
+
+[models.match]
+# Accepts the bare code and the A/B/C tolerance suffixes; the voltage is set by
+# the code, so a suffix cannot change which rail this clamps at.
+value_re = "(?i)^1N4759[ABC]?$"
+
+[models.params]
+bv  = 62.0        # VZnom at IZT = 4 mA, Specification Table
+ibv = 0.004      # the knee sits at IZT, so V(bv) is the datasheet VZ there
+is  = 1.0e-9      # forward fit, shared across the family (see the note above)
+n   = 1.6         # forward fit
+rs  = 1.0         # forward fit; puts VF near 1.0 V at IF = 200 mA (1.2 V max)
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
+max_voltage_v = 62.0      # reverse working voltage is the Zener voltage itself
+max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
+theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance

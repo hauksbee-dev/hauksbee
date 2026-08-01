@@ -2094,6 +2094,9 @@ fn diode_model_from(model: &ModelEntry) -> DiodeModel {
         m: p.get_f64("m").unwrap_or(d.m),
         tt: p.get_f64("tt").unwrap_or(d.tt),
         bv: p.get_f64("bv").unwrap_or(d.bv),
+        // A Zener entry states its voltage at a test current; both are needed
+        // for the knee to be sharp enough to regulate.
+        ibv: p.get_f64("ibv").filter(|v| *v > 0.0),
         xti: p.get_f64("xti").unwrap_or(d.xti),
         eg: p.get_f64("eg").unwrap_or(d.eg),
     }

@@ -1109,12 +1109,14 @@ fn vcrit(is: f64, vt: f64) -> f64 {
 /// * forward / weak reverse (`vd >= -3 n·Vt`): the Shockley exponential;
 /// * reverse (`-bv <= vd < -3 n·Vt`): tiny constant leakage `-Is`;
 /// * breakdown (`vd < -bv`, only when the model gives a finite `bv`):
-///   `i = -Is·exp(-(bv+vd)/(n·Vt))`, ngspice's `-IBV·exp(-(BV+v)/VT)` shape
-///   with `Is` standing in for `IBV`. The SIGN is the point: the current is
-///   REVERSE (negative, cathode->anode) and grows exponentially as `vd` drops
-///   below `-bv`. Using `Is` as the scale makes the current CONTINUOUS at
-///   `vd == -bv` (both branches give `-Is` there); decks that must match an
-///   ngspice `IBV` reconcile by setting `IBV=IS` on the ngspice side. The
+///   `i = -IBV·exp(-(bv+vd)/(n·Vt))`, ngspice's own shape. The SIGN is the
+///   point: the current is REVERSE (negative, cathode->anode) and grows
+///   exponentially as `vd` drops below `-bv`. `IBV` is the current the knee is
+///   placed at, and it is what makes a Zener regulate: a datasheet states its
+///   voltage AT a test current, and scaling breakdown by `Is` instead puts a
+///   5.1 V part at 5.8 V under a normal shunt load. A model that names no
+///   `ibv` falls back to `Is`, which is continuous at `vd == -bv` (both
+///   branches give `-Is` there). The
 ///   exponent is clamped like the BJT's (`exp(40)·Is` bounds the current to a
 ///   few kA at typical `Is`), and `stamp_diode` additionally junction-limits
 ///   the per-iteration move in MIRRORED coordinates (see there), so a Newton
@@ -1129,16 +1131,28 @@ pub(crate) fn diode_eval(model: &DiodeModel, vd: f64, t_c: f64, temp_on: bool) -
         let id = is * (e - 1.0);
         let gd = is * e / nvt;
         (id, gd)
-    } else if !model.bv.is_finite() || vd >= -model.bv {
-        // Reverse region: tiny linear leakage, conductance ~ gmin handled outside.
+    } else if !model.bv.is_finite() {
+        // Reverse region with no breakdown modelled: tiny linear leakage,
+        // conductance ~ gmin handled outside.
         let id = -is;
         let gd = is / nvt * 1e-3;
         (id, gd)
     } else {
-        // Reverse breakdown: exponentially growing REVERSE current.
+        // Reverse, with breakdown: leakage PLUS the breakdown exponential, as
+        // one continuous expression rather than two regions meeting at -bv.
+        //
+        // The two only meet there when the breakdown scale equals `is`. A Zener
+        // states its knee at a test current (49 mA for a 1N4733A), so `ibv` is
+        // seven orders above `is` and a hard switch at -bv is a step
+        // discontinuity of that size. Newton oscillates across it and one
+        // iterate lands deep enough that the clamped exponential evaluates to
+        // ibv*exp(40), which is 1e16 A. Summing is also the more honest curve:
+        // above the knee the exponential is negligible and the leakage is what
+        // is left, below it the exponential dominates.
+        let ibv = model.ibv.filter(|v| *v > 0.0).unwrap_or(is);
         let e = (-(model.bv + vd) / nvt).min(40.0).exp();
-        let id = -is * e;
-        let gd = is * e / nvt;
+        let id = -(is + ibv * e);
+        let gd = is / nvt * 1e-3 + ibv * e / nvt;
         (id, gd)
     }
 }
@@ -1636,6 +1650,13 @@ fn stamp_diode<S: StampSink>(
     let vt = hauksbee_ir_thermal(t_c, temp_on);
     let nvt = model.n * vt;
     let vc = vcrit(is, nvt);
+    // The breakdown branch is scaled by IBV, not IS, so it needs its own
+    // critical voltage. Limiting a knee placed at 49 mA against a vcrit derived
+    // from a 1 nA saturation current lets a Newton iterate land far enough past
+    // -bv that the clamped exponential still evaluates to IBV*exp(40), which is
+    // 1e16 A and destroys the step.
+    let ibv = model.ibv.filter(|v| *v > 0.0).unwrap_or(is);
+    let vc_bd = vcrit(ibv, nvt);
 
     // §3.4: series resistance is promised by the toggle but not stamped yet
     // (series-node insertion lands with the BJT's rb/re/rc, dev-plan 04 §3.2).
@@ -1660,7 +1681,7 @@ fn stamp_diode<S: StampSink>(
     // the region test unsatisfiable, keeping every deck without a breakdown
     // voltage on the plain pnjlim path.
     let mut vd = if model.bv.is_finite() && vd_raw < (10.0 * nvt - model.bv).min(0.0) {
-        -(pnjlim(-(vd_raw + model.bv), -(vd_last + model.bv), nvt, vc) + model.bv)
+        -(pnjlim(-(vd_raw + model.bv), -(vd_last + model.bv), nvt, vc_bd) + model.bv)
     } else {
         pnjlim(vd_raw, vd_last, nvt, vc)
     };
@@ -2842,9 +2863,15 @@ mod diode_physics_tests {
         }
     }
 
-    /// Breakdown branch: REVERSE (negative) current growing exponentially
-    /// below -bv, continuous with the -Is leakage at -bv, and bounded by the
-    /// exponent clamp far past breakdown.
+    /// Breakdown: REVERSE (negative) current growing exponentially below -bv,
+    /// smooth across -bv, and bounded by the exponent clamp far past it.
+    ///
+    /// Leakage and breakdown are separate mechanisms and the reverse current is
+    /// their sum, so at exactly -bv the exponential contributes its full scale
+    /// on top of the leakage. With no `ibv` named that scale is `is`, giving
+    /// -2*is at the knee. What matters is that the curve has no step in it: a
+    /// step is what Newton cannot cross, and with a Zener's knee current it
+    /// would be a step of seven orders rather than a factor of two.
     #[test]
     fn breakdown_current_is_reverse_continuous_and_bounded() {
         let m = DiodeModel {
@@ -2854,8 +2881,14 @@ mod diode_physics_tests {
         let nvt = m.n * hauksbee_ir::thermal_voltage_c(27.0);
         let (i_at, _) = diode_eval(&m, -6.2, 27.0, false);
         assert!(
-            (i_at + m.is).abs() < 1e-3 * m.is,
-            "not continuous at -bv: {i_at:e}"
+            (i_at + 2.0 * m.is).abs() < 1e-3 * m.is,
+            "leakage plus a full-scale exponential at -bv: {i_at:e}"
+        );
+        // No step across the knee: the two sides agree to a hair.
+        let (i_below, _) = diode_eval(&m, -6.2 - 1e-6, 27.0, false);
+        assert!(
+            (i_below - i_at).abs() < 1e-3 * m.is,
+            "the curve steps at -bv: {i_at:e} -> {i_below:e}"
         );
         let (i_past, g_past) = diode_eval(&m, -6.2 - 5.0 * nvt, 27.0, false);
         assert!(
@@ -2863,7 +2896,7 @@ mod diode_physics_tests {
             "breakdown current must be REVERSE, got {i_past:e}"
         );
         assert!(
-            (i_past + m.is * 5.0f64.exp()).abs() < 1e-6 * m.is * 5.0f64.exp(),
+            (i_past + m.is * (1.0 + 5.0f64.exp())).abs() < 1e-6 * m.is * 5.0f64.exp(),
             "wrong exponential shape: {i_past:e}"
         );
         assert!(g_past > 0.0);
