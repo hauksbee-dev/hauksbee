@@ -1,0 +1,19 @@
+# A Zener clamping a rail, cross-checked against ngspice.
+#
+# `bv` is the whole model for this part, and the branch it selects only runs
+# when the junction is pushed past reverse breakdown. Nothing else in the deck
+# corpus exercises that branch against an independent simulator, so a
+# regression in it would show up as a Zener that never clamps: the node would
+# sit at the open-circuit divider voltage and every rail assertion built on a
+# shunt reference would silently pass.
+#
+# The tolerance is percent-level, matching the other DC decks. The two solvers
+# use the same breakdown shape (i = -Is*exp(-(bv+v)/(n*Vt))), so they should
+# agree closely; the allowance covers the small differences in how each damps
+# the junction during the solve, not a modelling disagreement.
+analysis = "op"
+description = "1N4733A shunt regulator: a 12 V rail clamped to about 5.1 V"
+
+[[probe]]
+expr = "V(vz)"
+reltol = 0.01

@@ -6,9 +6,9 @@ ngspice `-b` and the hauksbee solver, then compares the worst-case error per
 probe against the per-quantity tolerance declared in that deck's
 `expect.toml`.
 
-- Oracle: **ngspice ngspice-45.2**
-- Decks: **40**
-- Passing: **40/40**
+- Oracle: **ngspice ngspice-46**
+- Decks: **41**
+- Passing: **41/41**
 
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Where | Result |
 |------|----------|----------|------------------|-----------|-------|--------|
@@ -19,8 +19,8 @@ probe against the per-quantity tolerance declared in that deck's
 | bjt_ce_amp | tran | `V(c)` | 2.071e-4 | 2.0e-3 | t=6.213e-5s | PASS |
 | bjt_sgp_high_injection | op | `I(VC)` | 7.446e-6 | 2.0e-2 | op | PASS |
 |  |  | `I(VB)` | 7.213e-6 | 2.0e-2 | op | PASS |
-| bjt_switch_tail | tran | `V(c)` | 3.362e-5 | 1.0e-3 | t=2.045e-6s | PASS |
-| bsource_clamp | tran | `V(out)` | 1.037e-4 | 1.0e-2 | t=6.614e-4s | PASS |
+| bjt_switch_tail | tran | `V(c)` | 3.333e-5 | 1.0e-3 | t=2.060e-6s | PASS |
+| bsource_clamp | tran | `V(out)` | 1.869e-4 | 1.0e-2 | t=1.996e-3s | PASS |
 | bsource_opamp_subckt | tran | `V(out)` | 1.016e-4 | 1.0e-2 | t=1.436e-3s | PASS |
 | bsource_time | tran | `V(out)` | 2.334e-4 | 1.0e-2 | t=3.654e-6s | PASS |
 | cccs_mirror | tran | `V(out)` | 1.873e-4 | 1.0e-2 | t=1.644e-6s | PASS |
@@ -33,41 +33,42 @@ probe against the per-quantity tolerance declared in that deck's
 |  |  | `I(V1)` | 5.044e-7 | 5.0e-3 | op | PASS |
 | diode_rectifier | tran | `V(out)` | 4.860e-4 | 2.0e-2 | t=1.114e-3s | PASS |
 | diode_rectifier_charge | tran | `V(out)` | 3.313e-4 | 2.0e-2 | t=2.192e-5s | PASS |
-| diode_reverse_recovery | tran | `V(a)` | 3.864e-2 | 5.0e-2 | t=1.308e-6s | PASS |
+| diode_reverse_recovery | tran | `V(a)` | 3.863e-2 | 5.0e-2 | t=1.308e-6s | PASS |
 | diode_zener_breakdown | op | `V(out)` | 2.009e-5 | 5.0e-3 | op | PASS |
-| flyback_diode | tran | `V(out)` | 1.578e-2 | 5.0e-2 | t=2.557e-5s | PASS |
+| flyback_diode | tran | `V(out)` | 1.599e-2 | 5.0e-2 | t=2.557e-5s | PASS |
 | forced_base_current | op | `V(base)` | 7.555e-6 | 5.0e-3 | op | PASS |
 |  |  | `V(coll)` | 3.510e-9 | 5.0e-3 | op | PASS |
 | mos_body_bias | dc | `V(d)` | 6.591e-3 | 3.0e-2 | sweep=1.800e0 | PASS |
 | mos_body_diode | tran | `V(d)` | 1.216e-1 | 2.5e-1 | t=2.049e-6s | PASS |
-| mos_load_switch | tran | `V(d)` | 3.287e-1 | 5.0e-1 | t=1.141e-6s | PASS |
-|  |  | `V(g)` | 6.853e-2 | 1.5e-1 | t=5.680e-6s | PASS |
+| mos_load_switch | tran | `V(d)` | 3.222e-1 | 5.0e-1 | t=5.238e-6s | PASS |
+|  |  | `V(g)` | 6.854e-2 | 1.5e-1 | t=5.680e-6s | PASS |
 | mos_rds_on | dc | `V(d)` | 1.752e-5 | 5.0e-3 | sweep=1.000e-1 | PASS |
 | opamp_subckt | tran | `V(out)` | 8.650e-3 | 1.0e-2 | t=9.327e-6s | PASS |
 | param_divider | op | `V(out)` | 7.500e-10 | 1.0e-4 | op | PASS |
 |  |  | `V(in)` | 0.000e0 | 1.0e-4 | op | PASS |
 |  |  | `I(V1)` | 6.250e-9 | 1.0e-4 | op | PASS |
-| pmos_load_switch | tran | `V(d)` | 6.973e-1 | 1.2e0 | t=1.110e-6s | PASS |
+| pmos_load_switch | tran | `V(d)` | 6.718e-1 | 1.2e0 | t=1.110e-6s | PASS |
 |  |  | `V(g)` | 7.108e-2 | 1.5e-1 | t=5.110e-6s | PASS |
 | rc_ac_bode | ac | `V(out) mag` | 2.760e-7 | 1.0e-2 | f=1.259e4Hz | PASS |
 |  |  | `V(out) phase(deg)` | 2.706e-4 | 1.0e0 | f=2.512e5Hz | PASS |
 | rc_ic_decay | tran | `V(out)` | 1.000e-4 | 2.0e-2 | t=0.000e0s | PASS |
-| rc_ladder | tran | `V(n8)` | 7.200e-4 | 1.0e-2 | t=3.118e-5s | PASS |
+| rc_ladder | tran | `V(n8)` | 7.197e-4 | 1.0e-2 | t=3.118e-5s | PASS |
 | rc_lowpass | tran | `V(out)` | 8.912e-4 | 1.0e-2 | t=1.396e-6s | PASS |
 | resistor_divider | op | `V(out)` | 7.500e-10 | 1.0e-4 | op | PASS |
 |  |  | `V(in)` | 0.000e0 | 1.0e-4 | op | PASS |
 |  |  | `I(V1)` | 6.250e-9 | 1.0e-4 | op | PASS |
-| rlc_series | tran | `V(out)` | 8.504e-3 | 2.0e-2 | t=2.925e-6s | PASS |
+| rlc_series | tran | `V(out)` | 8.520e-3 | 2.0e-2 | t=3.151e-6s | PASS |
 | s8050_datasheet_point | op | `V(base)` | 7.150e-6 | 5.0e-3 | op | PASS |
 |  |  | `V(coll)` | 2.965e-7 | 5.0e-3 | op | PASS |
 | usblc6_forward | op | `V(a)` | 4.543e-3 | 1.0e-2 | op | PASS |
-| vccs_gm | tran | `V(out)` | 3.025e-3 | 1.0e-2 | t=1.010e-4s | PASS |
+| vccs_gm | tran | `V(out)` | 3.075e-3 | 1.0e-2 | t=1.010e-4s | PASS |
 | vcvs_gain | tran | `V(out)` | 8.650e-3 | 1.0e-2 | t=9.327e-6s | PASS |
 | xfmr_1to2 | tran | `V(sec)` | 1.118e-2 | 2.0e-2 | t=3.914e-5s | PASS |
 |  |  | `V(pri)` | 5.589e-3 | 2.0e-2 | t=3.914e-5s | PASS |
 | xfmr_ac | ac | `V(sec) mag` | 4.783e-7 | 1.0e-2 | f=1.259e2Hz | PASS |
 |  |  | `V(sec) phase(deg)` | 2.673e-5 | 1.0e0 | f=6.310e2Hz | PASS |
 | xfmr_k1 | tran | `V(sec)` | 8.638e-3 | 2.0e-2 | t=4.907e-4s | PASS |
+| zener_shunt_regulator | op | `V(vz)` | 2.800e-3 | 1.0e-2 | op | PASS |
 
 ## Deck descriptions
 
@@ -111,4 +112,5 @@ probe against the per-quantity tolerance declared in that deck's
 - **xfmr_1to2**: 1:2 transformer, k=0.999, 10 kHz sine, 1k load: ratio + loading
 - **xfmr_ac**: 1:2 transformer Bode: V(sec) magnitude+phase, 100 Hz .. 1 MHz
 - **xfmr_k1**: perfect coupling k=1 transformer: the singular-L-matrix trap
+- **zener_shunt_regulator**: 1N4733A shunt regulator: a 12 V rail clamped to about 5.1 V
 
