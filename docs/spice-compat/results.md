@@ -7,8 +7,8 @@ probe against the per-quantity tolerance declared in that deck's
 `expect.toml`.
 
 - Oracle: **ngspice ngspice-45.2**
-- Decks: **39**
-- Passing: **39/39**
+- Decks: **40**
+- Passing: **40/40**
 
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Where | Result |
 |------|----------|----------|------------------|-----------|-------|--------|
@@ -17,6 +17,8 @@ probe against the per-quantity tolerance declared in that deck's
 |  |  | `V(base)` | 1.922e-6 | 5.0e-3 | op | PASS |
 |  |  | `V(emit)` | 2.563e-6 | 5.0e-3 | op | PASS |
 | bjt_ce_amp | tran | `V(c)` | 2.071e-4 | 2.0e-3 | t=6.213e-5s | PASS |
+| bjt_sgp_high_injection | op | `I(VC)` | 7.446e-6 | 2.0e-2 | op | PASS |
+|  |  | `I(VB)` | 7.213e-6 | 2.0e-2 | op | PASS |
 | bjt_switch_tail | tran | `V(c)` | 3.362e-5 | 1.0e-3 | t=2.045e-6s | PASS |
 | bsource_clamp | tran | `V(out)` | 1.037e-4 | 1.0e-2 | t=6.614e-4s | PASS |
 | bsource_opamp_subckt | tran | `V(out)` | 1.016e-4 | 1.0e-2 | t=1.436e-3s | PASS |
@@ -72,6 +74,7 @@ probe against the per-quantity tolerance declared in that deck's
 - **ao3400a_rdson**: AO3400A NMOS on-resistance at VGS = 10 V
 - **bjt_bias**: NPN common-emitter bias point
 - **bjt_ce_amp**: bypassed-emitter CE amplifier, 20 kHz sine gain
+- **bjt_sgp_high_injection**: 2N3904 vendor card at VBE = 0.75 V, where the high-injection knee bites
 - **bjt_switch_tail**: saturated switch turn-off: storage delay + charge-limited rise
 - **bsource_clamp**: B-source tanh soft clamp (V-output) of a divided 1 kHz sine
 - **bsource_opamp_subckt**: behavioral opamp subckt (B gain stage), closed-loop x10 sine
