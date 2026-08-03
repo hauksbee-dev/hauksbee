@@ -18,7 +18,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
-use hauksbee_ci::{init, run, RunConfig};
+use hauksbee_ci::{run, RunConfig};
 
 /// CI for hardware: run a board+firmware spec headless and assert on the result.
 ///
@@ -43,28 +43,40 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Run a hauksbee-ci spec and assert on the result.
+    /// Run one or more hauksbee-ci specs and assert on the result.
     ///
-    /// Example:
+    /// Examples:
     ///   hauksbee-ci run ci/power-up.toml --junit results.xml
+    ///   hauksbee-ci run ci/*.toml --junit results.xml   (merged report, worst exit code)
+    ///
+    /// Exit codes (the pipeline contract): 0 every assertion held (GREEN);
+    /// 1 at least one assertion failed (RED); 2 spec/board error (bad TOML,
+    /// missing board, unknown net); 3 invalid for analysis (the analog solve
+    /// aborted, so the result is not trustworthy and the run refuses to
+    /// pretend).
     Run(RunArgs),
 
     /// Scaffold a starter spec from a board, so your first spec is an edit.
     ///
-    /// Loads and binds the board, then writes `<board-stem>.toml` beside it with
-    /// the detected MCU, supplies and rails already filled in and every line
-    /// commented. Refuses to overwrite an existing spec.
+    /// Loads and binds the board, then writes `<board-stem>.toml` into the
+    /// current directory (or --out) with the detected MCU, supplies and rails
+    /// already filled in and every line commented; the spec's `board = "..."`
+    /// path is written relative to where the spec lands. Refuses to overwrite
+    /// an existing spec.
     ///
     /// Example:
-    ///   hauksbee-ci init hardware/board.kicad_pcb
+    ///   cd ci && hauksbee-ci init ../hardware/board.kicad_pcb
     Init(InitArgs),
 }
 
 #[derive(Parser)]
 struct RunArgs {
-    /// The hauksbee-ci TOML spec to run.
-    #[arg(value_name = "SPEC")]
-    spec: PathBuf,
+    /// The hauksbee-ci TOML spec(s) to run. More than one (spelled out or via
+    /// a shell glob, `hauksbee-ci run ci/*.toml`) runs each in turn,
+    /// aggregates one summary, merges everything into one --junit file, and
+    /// exits with the worst code of the set (severity order 3 > 2 > 1 > 0).
+    #[arg(value_name = "SPEC", num_args = 1.., required = true)]
+    specs: Vec<PathBuf>,
 
     /// Write JUnit XML to this path (for the CI test-report step).
     #[arg(long, value_name = "OUT.XML")]
@@ -100,6 +112,12 @@ struct InitArgs {
     /// Board file to scaffold a spec from (.kicad_pcb, .kicad_sch, .net, .brd, .d356).
     #[arg(value_name = "BOARD")]
     board: PathBuf,
+
+    /// Where to write the spec: a path ending in .toml is the spec file, and
+    /// anything else is a directory (created if missing) that gets
+    /// <board-stem>.toml inside it. Default: the current directory.
+    #[arg(long, value_name = "PATH")]
+    out: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -120,93 +138,137 @@ fn main() -> ExitCode {
         hauksbee_ci::progress::to_stderr();
     }
 
-    let cfg = RunConfig {
-        spec: args.spec.clone(),
-        seed: args.seed,
-        models_dir: args.models_dir.clone(),
-    };
-    let result = match run(&cfg) {
-        Ok(r) => r,
-        Err(e) => {
-            // Spec / board errors: surface as a GitHub error too, then exit 2.
-            if args.json {
-                println!(
-                    "{}",
-                    serde_json::json!({ "ok": false, "error": e.to_string() })
-                );
+    // Multi-spec aggregation (one summary, one merged JUnit document, worst
+    // exit code of the set). A single spec is the one-element case of the same
+    // loop, so the two paths cannot drift.
+    let github = std::env::var_os("GITHUB_ACTIONS").is_some();
+    let multi = args.specs.len() > 1;
+    let mut suites: Vec<hauksbee_ci::report::JunitSuite> = Vec::new();
+    // Exit severity is 3 > 2 > 1 > 0 (an untrustworthy run outranks a plain
+    // spec error, which outranks a red assertion), which is numeric max.
+    let mut worst: u8 = 0;
+    // Per-spec verdict lines for the aggregate summary.
+    let mut verdicts: Vec<(String, u8)> = Vec::new();
+
+    for spec in &args.specs {
+        let cfg = RunConfig {
+            spec: spec.clone(),
+            seed: args.seed,
+            models_dir: args.models_dir.clone(),
+        };
+        match run(&cfg) {
+            Ok(result) => {
+                if args.json {
+                    // One JSON object per spec, one per line (NDJSON): the
+                    // single-spec shape is byte-identical to before, and a
+                    // multi-spec consumer splits on newlines.
+                    println!("{}", result.render_json());
+                } else if !args.quiet {
+                    if multi {
+                        println!("=== {} ===", spec.display());
+                    }
+                    print!("{}", result.render_human());
+                }
+                if args.junit.is_some() {
+                    suites.push(result.junit_suite());
+                }
+                if github {
+                    print!("{}", result.render_github_annotations());
+                }
+                let code = result.exit_code() as u8;
+                verdicts.push((spec.display().to_string(), code));
+                worst = worst.max(code);
             }
-            eprintln!("hauksbee-ci: {e}");
-            // Emit JUnit even on this error path when --junit was requested: a CI
-            // that only reads the Checks/JUnit tab would otherwise see nothing at
-            // all for an exit-2 (a desynced spec, a missing board). Write a
-            // single errored testcase carrying the message.
-            if let Some(path) = &args.junit {
-                let xml = hauksbee_ci::report::render_junit_error(&e.to_string());
-                if let Err(werr) = std::fs::write(path, xml) {
-                    eprintln!(
-                        "hauksbee-ci: could not write JUnit XML to {}: {werr}",
-                        path.display()
+            Err(e) => {
+                // Spec / board errors: surface as a GitHub error too, count
+                // toward the merged JUnit, and keep running the REST of the
+                // set: in a multi-spec invocation one desynced spec must not
+                // hide the others' verdicts.
+                if args.json {
+                    println!(
+                        "{}",
+                        serde_json::json!({ "ok": false, "error": e.to_string() })
                     );
                 }
+                eprintln!("hauksbee-ci: {}: {e}", spec.display());
+                // Emit JUnit even on this error path when --junit was
+                // requested: a CI that only reads the Checks/JUnit tab would
+                // otherwise see nothing at all for an exit-2 (a desynced spec,
+                // a missing board), a single errored testcase carries the message.
+                if args.junit.is_some() {
+                    suites.push(hauksbee_ci::report::junit_error_suite(
+                        &spec.display().to_string(),
+                        &e.to_string(),
+                    ));
+                }
+                if github {
+                    // Percent first, then control chars (else the %0A/%0D we
+                    // insert get their own % re-encoded to %25, garbling the
+                    // annotation).
+                    let msg = e
+                        .to_string()
+                        .replace('%', "%25")
+                        .replace('\r', "%0D")
+                        .replace('\n', "%0A");
+                    println!("::error title=hauksbee-ci spec error::{msg}");
+                }
+                verdicts.push((spec.display().to_string(), 2));
+                worst = worst.max(2);
             }
-            if std::env::var_os("GITHUB_ACTIONS").is_some() {
-                // Percent first, then control chars (else the %0A/%0D we insert
-                // get their own % re-encoded to %25, garbling the annotation).
-                let msg = e
-                    .to_string()
-                    .replace('%', "%25")
-                    .replace('\r', "%0D")
-                    .replace('\n', "%0A");
-                println!("::error title=hauksbee-ci spec error::{msg}");
-            }
-            return ExitCode::from(2);
         }
-    };
-
-    if args.json {
-        println!("{}", result.render_json());
-    } else if !args.quiet {
-        print!("{}", result.render_human());
     }
 
     if let Some(path) = &args.junit {
-        if let Err(e) = std::fs::write(path, result.render_junit()) {
+        let xml = hauksbee_ci::report::render_junit_document(&suites);
+        if let Err(e) = std::fs::write(path, xml) {
             eprintln!(
                 "hauksbee-ci: could not write JUnit XML to {}: {e}",
                 path.display()
             );
-            return ExitCode::from(2);
+            return ExitCode::from(2u8.max(worst));
         }
-        if !args.quiet {
+        if !args.quiet && !args.json {
             println!("wrote JUnit XML to {}", path.display());
         }
     }
 
-    if std::env::var_os("GITHUB_ACTIONS").is_some() {
-        print!("{}", result.render_github_annotations());
+    // The aggregate summary, only when there was a set to aggregate.
+    if multi && !args.quiet && !args.json {
+        println!("\n=== {} specs ===", verdicts.len());
+        for (spec, code) in &verdicts {
+            let word = match code {
+                0 => "GREEN",
+                1 => "RED",
+                2 => "SPEC ERROR",
+                _ => "INVALID",
+            };
+            println!("  [{word}] {spec}");
+        }
+        println!("worst exit code of the set: {worst} (severity order 3 > 2 > 1 > 0)");
     }
 
-    ExitCode::from(result.exit_code() as u8)
+    ExitCode::from(worst)
 }
 
 /// `hauksbee-ci init <board>`: scaffold a starter spec and print where it landed.
 /// Board / bind errors carry the crate's loud, did-you-mean style; exit 2 on any
 /// failure to match the spec-error contract of `run`.
 fn cmd_init(args: InitArgs) -> ExitCode {
-    match init(&args.board) {
+    match hauksbee_ci::init::init_to(&args.board, args.out.as_deref()) {
         Ok(path) => {
             println!("wrote starter spec to {}", path.display());
             println!("edit it, then run:  hauksbee-ci run {}", path.display());
-            // Where the documented pre-commit hook looks. init deliberately
-            // writes the spec beside its board (so the relative `board = "..."`
-            // stays valid); the hook searches `ci/` and the repo root by default
-            // (HAUKSBEE_CI_SPECS, colon-separated). Say so, rather than silently
-            // relocating the file, so a scaffolded spec is actually discovered.
+            // Where the documented pre-commit hook looks: `ci/` and the repo
+            // root by default (HAUKSBEE_CI_SPECS, colon-separated). The spec
+            // just landed wherever the user asked (default: right here), so
+            // the advice is one line of orientation, not a relocation chore.
             println!(
-                "\nto have the pre-commit hook run this automatically, put the spec where it\n\
-                 searches: `ci/` or the repo root by default (override with HAUKSBEE_CI_SPECS,\n\
-                 colon-separated). Either move it into `ci/` (and fix the `board = \"...\"` path\n\
-                 to stay relative to it), or add its directory to HAUKSBEE_CI_SPECS."
+                "\nthe pre-commit hook and the GitHub action discover specs in `ci/` and the\n\
+                 repo root (override with HAUKSBEE_CI_SPECS, colon-separated). This one is at\n\
+                 {}; if that is somewhere else, either move it or add its directory to\n\
+                 HAUKSBEE_CI_SPECS. The `board = \"...\"` path inside it is already relative\n\
+                 to the spec's own directory.",
+                path.display()
             );
             ExitCode::from(0)
         }
