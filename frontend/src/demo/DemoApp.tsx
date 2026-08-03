@@ -119,6 +119,11 @@ function SessionInfo({ entry }: { entry: ManifestSession }) {
  *  session id, so a scenario switch is a REMOUNT and the hook identity the
  *  SimSource contract requires stays constant per mount. */
 function ReplayProvider({ session, children }: { session: LoadedSession; children: React.ReactNode }) {
+  // This is not a hook call, it is a hook DEFINITION handed down the tree: the
+  // SimSource contract is "give me a hook", and the consumer calls it from its own
+  // component body. rules-of-hooks cannot tell the two apart, and the remount-per-
+  // session keying above is what keeps the identity stable.
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   const hook = useMemo(() => () => useReplaySimulation(session), [session])
   return <SimSourceContext.Provider value={hook}>{children}</SimSourceContext.Provider>
 }
@@ -177,7 +182,7 @@ export default function DemoApp() {
         <Player
           manifest={manifest}
           session={load.session}
-          onPick={pick}
+          onPick={entry => void pick(entry)}
           onBack={() => setLoad({ kind: 'idle' })}
           theme={theme}
           onToggleTheme={toggleTheme}
@@ -187,7 +192,7 @@ export default function DemoApp() {
           manifest={manifest}
           manifestError={manifestError}
           load={load}
-          onPick={pick}
+          onPick={entry => void pick(entry)}
           onDismissError={() => setLoad({ kind: 'idle' })}
         />
       )}

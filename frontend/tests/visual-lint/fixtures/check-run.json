@@ -1,0 +1,38 @@
+{
+ "analog_abort": false,
+ "assertions_passed": true,
+ "board": "watchy.kicad_pcb",
+ "coverage": null,
+ "coverage_warnings": [],
+ "dead_rails": [],
+ "elapsed_s": 0.860419292,
+ "exit_code": 0,
+ "ok": true,
+ "passed": true,
+ "results": [
+  {
+   "detail": "no stress faults",
+   "failing_seed": null,
+   "failing_seeds": [],
+   "invalid": false,
+   "kind": "no_faults",
+   "label": "no stress faults raised",
+   "passed": true,
+   "seeds_total": 1
+  },
+  {
+   "detail": "GND: min=0.000V (>= -0.1V), max=0.000V (<= 0.1V) [settled 0.000V]",
+   "failing_seed": null,
+   "failing_seeds": [],
+   "invalid": false,
+   "kind": "voltage",
+   "label": "GND in [-0.1, 0.1] V",
+   "passed": true,
+   "seeds_total": 1
+  }
+ ],
+ "run_valid": true,
+ "seeds": 1,
+ "spec_name": "watchy checks",
+ "substitutions": []
+}

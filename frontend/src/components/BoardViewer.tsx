@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
 import { parseKicadPcb, buildNetIndex, footprintHitBoxes, pickFootprintBox } from '../lib/kicad-parser'
 import type { ParsedBoard } from '../lib/kicad-parser'
-import { makeCamera, fitScaleFor, zoomCamera, wheelZoomFactor, panCamera, screenToWorld, MIN_SCALE, MAX_SCALE } from '../lib/camera'
+import { makeCamera, fitScaleFor, zoomCamera, wheelZoomFactor, panCamera, screenToWorld, maxScaleFor, MIN_SCALE } from '../lib/camera'
 import type { Camera } from '../lib/camera'
 import { renderStaticBoard, renderDynamicOverlay, LABEL_MIN_PX } from '../lib/board-renderer'
 import type { OverlayData, RenderOptions } from '../lib/board-renderer'
@@ -76,6 +76,13 @@ interface BoardViewerProps {
    *  that, skimming past the map zooms the board down to 1% and leaves a blank
    *  panel. */
   wheelMode?: 'always' | 'capture-on-focus'
+  /** The engine's PART count for this board, when the embedding view has a
+   *  report to hand. The footer chip counts FOOTPRINTS, which is a larger
+   *  number on nearly every real board: test points, mounting holes, fiducials
+   *  and logos are all footprints and none of them is a part. Shown as
+   *  "86 footprints (82 parts)" so the two numbers on screen explain each other
+   *  instead of contradicting each other. */
+  partCount?: number
 }
 
 const PARTICLE_COUNT = 4
@@ -208,6 +215,7 @@ export function BoardViewer({
   onEmptyBoard, faultedRefs, netOptions, focusPoint, onViewModeChange,
   fullscreen = false, onToggleFullscreen,
   wheelMode = 'always',
+  partCount,
 }: BoardViewerProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const overlayRef = useRef<HTMLCanvasElement>(null)
@@ -597,7 +605,7 @@ export function BoardViewer({
     const canvas = canvasRef.current
     const { width: cw, height: ch } = canvas.getBoundingClientRect()
     if (cw < 2 || ch < 2) return
-    const scale = Math.min(MAX_SCALE, Math.max(fitScaleRef.current * 5, camRef.current.scale))
+    const scale = Math.min(maxScaleFor(fitScaleRef.current), Math.max(fitScaleRef.current * 5, camRef.current.scale))
     userMovedCamera.current = true
     zoomTarget.current = null
     setCamera({
@@ -688,11 +696,11 @@ export function BoardViewer({
         const cur = camRef.current
         const logRatio = Math.log(zt.scale / cur.scale)
         if (Math.abs(logRatio) < 0.005) {
-          setCamera(zoomCamera(cur, zt.scale / cur.scale, zt.sx, zt.sy))
+          setCamera(zoomCamera(cur, zt.scale / cur.scale, zt.sx, zt.sy, maxScaleFor(fitScaleRef.current)))
           zoomTarget.current = null
         } else {
           const step = Math.exp(logRatio * Math.min(1, dt * 16))
-          setCamera(zoomCamera(cur, step, zt.sx, zt.sy))
+          setCamera(zoomCamera(cur, step, zt.sx, zt.sy, maxScaleFor(fitScaleRef.current)))
         }
       }
 
@@ -836,7 +844,11 @@ export function BoardViewer({
       const sy = e.clientY - rect.top
       const factor = wheelZoomFactor(e)
       const base = zoomTarget.current?.scale ?? camRef.current.scale
-      const target = Math.max(MIN_SCALE, Math.min(MAX_SCALE, base * factor))
+      // Clamped against the FIT scale, not the absolute px-per-mm ceiling:
+      // see MAX_ZOOM_RATIO in lib/camera.ts for why 3000 px/mm was not a
+      // limit at all on a small board. Fit is unaffected, and zooming out
+      // still goes to MIN_SCALE.
+      const target = Math.max(MIN_SCALE, Math.min(maxScaleFor(fitScaleRef.current), base * factor))
       zoomTarget.current = { scale: target, sx, sy }
       camMovedAt.current = performance.now()
       userMovedCamera.current = true
@@ -1002,7 +1014,7 @@ export function BoardViewer({
         const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2
         const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2
         const rect = canvasRef.current!.getBoundingClientRect()
-        setCamera(zoomCamera(camRef.current, factor, cx - rect.left, cy - rect.top))
+        setCamera(zoomCamera(camRef.current, factor, cx - rect.left, cy - rect.top, maxScaleFor(fitScaleRef.current)))
       }
       lastTouchDist.current = dist
     }
@@ -1141,8 +1153,13 @@ export function BoardViewer({
       )}
 
       {/* ── Viewer toolbar ── */}
-      <div className="absolute top-3 left-3 right-3 z-20 flex items-start justify-between pointer-events-none">
-        <div className="flex items-center gap-2 pointer-events-auto">
+      {/* Wraps. Held to one row, `justify-between` pushed the Layers button and
+          the expand control clean off a 320px viewport, where nothing could
+          scroll to them: the map's own controls were unreachable on a phone.
+          The groups keep their order and Layers stays right-aligned on whatever
+          line it lands on. */}
+      <div className="absolute top-3 left-3 right-3 z-20 flex flex-wrap items-start justify-between gap-2 pointer-events-none">
+        <div className="flex flex-wrap items-center gap-2 pointer-events-auto">
           {/* 2D / 3D segmented control */}
           <div
             className="flex rounded-lg overflow-hidden"
@@ -1205,6 +1222,7 @@ export function BoardViewer({
               </button>
               <span
                 ref={zoomReadoutRef}
+                data-testid="zoom-readout"
                 className="tnum"
                 aria-label="Zoom level relative to fit"
                 style={{
@@ -1243,7 +1261,7 @@ export function BoardViewer({
         </div>
 
         {viewMode === '2d' && board && (
-          <div className="flex flex-col items-end gap-2 pointer-events-auto">
+          <div className="flex flex-col items-end gap-2 ml-auto pointer-events-auto">
             <button
               type="button"
               onClick={() => setLayersOpen(o => !o)}
@@ -1340,7 +1358,19 @@ export function BoardViewer({
       {board && !loading && viewMode === '2d' && (
         <div className="absolute bottom-2 right-2 text-[10px] px-2 py-1 rounded tnum"
           style={{ background: 'var(--overlay-chip-bg)', color: 'var(--overlay-chip-text)', pointerEvents: 'none', fontFamily: 'var(--font-mono)' }}>
-          {board.footprints.length} fp · {board.segments.length} segs
+          {/* "fp" was a footgun as well as an abbreviation: the report banner
+              says "82 parts" and this chip said "86 fp", two numbers about the
+              same board with no way to tell whether one of them was wrong.
+              Neither was: the extra two are a test point and a mounting hole,
+              which are footprints and are not parts. Say the word, and name the
+              part count next to it when the embedding view has one. */}
+          {board.footprints.length} footprint{board.footprints.length === 1 ? '' : 's'}
+          {partCount !== undefined && partCount !== board.footprints.length && (
+            <span title="Footprints include test points, mounting holes, fiducials and logos; parts are the components the analysis reasons about.">
+              {' '}({partCount} part{partCount === 1 ? '' : 's'})
+            </span>
+          )}
+          {' · '}{board.segments.length} segs
           {/* Net count: NAMED nets only. The KiCad net table always carries a
               synthetic id-0 "no net" bucket; counting it here made this chip
               disagree with the report banner (which counts real nets) by

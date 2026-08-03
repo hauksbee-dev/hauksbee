@@ -53,10 +53,41 @@ export function screenToWorld(cam: Camera, sx: number, sy: number): { x: number;
 export const MIN_SCALE = 0.05
 export const MAX_SCALE = 3000
 
+/** How far past zoom-to-fit the map is allowed to go, as a multiple of the fit
+ *  scale. The readout is expressed against fit ("100%" IS fit), so 16x reads as
+ *  1600%.
+ *
+ *  This is a relative cap rather than an absolute px-per-mm one because the
+ *  absolute cap (MAX_SCALE, 3000 px/mm) is meaningless as a limit: on a 40 mm
+ *  board it is reached at roughly 20000%, which is a viewport showing about
+ *  four microns of copper. There is nothing on a PCB at that scale; the
+ *  renderer draws one flat colour, the pan gesture moves the board a screen
+ *  width per pixel of mouse travel, and the only way back is Fit. 16x is
+ *  already past the finest thing on a board (a 4 mil trace is ~10 px at fit on
+ *  a 100 mm board, so ~160 px here). Fit itself is untouched, and MIN_SCALE
+ *  still allows zooming out past fit. */
+export const MAX_ZOOM_RATIO = 16
+
+/** The largest scale the user may zoom to, for a given zoom-to-fit scale. */
+export function maxScaleFor(fitScale: number): number {
+  if (!Number.isFinite(fitScale) || fitScale <= 0) return MAX_SCALE
+  return Math.min(MAX_SCALE, fitScale * MAX_ZOOM_RATIO)
+}
+
 /** Multiplicative zoom anchored at a screen point: the board point under
- *  (focusSX, focusSY) stays under it. `factor` > 1 zooms in. */
-export function zoomCamera(cam: Camera, factor: number, focusSX: number, focusSY: number): Camera {
-  const newScale = Math.max(MIN_SCALE, Math.min(MAX_SCALE, cam.scale * factor))
+ *  (focusSX, focusSY) stays under it. `factor` > 1 zooms in.
+ *
+ *  `maxScale` defaults to the absolute ceiling; callers that know the board's
+ *  fit scale pass `maxScaleFor(fit)` so the cap is the one a reader can see in
+ *  the zoom readout. */
+export function zoomCamera(
+  cam: Camera,
+  factor: number,
+  focusSX: number,
+  focusSY: number,
+  maxScale: number = MAX_SCALE,
+): Camera {
+  const newScale = Math.max(MIN_SCALE, Math.min(maxScale, cam.scale * factor))
   const panX = focusSX - (focusSX - cam.panX) * (newScale / cam.scale)
   const panY = focusSY - (focusSY - cam.panY) * (newScale / cam.scale)
   return { panX, panY, scale: newScale }

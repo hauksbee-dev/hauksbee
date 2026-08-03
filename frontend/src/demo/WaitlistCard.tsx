@@ -78,7 +78,7 @@ export function WaitlistCard() {
           {submit.message}
         </div>
       ) : (
-        <form onSubmit={onSubmit} className="flex gap-1.5">
+        <form onSubmit={e => void onSubmit(e)} className="flex gap-1.5">
           <input
             type="email"
             required
