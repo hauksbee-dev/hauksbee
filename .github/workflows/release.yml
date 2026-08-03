@@ -1,10 +1,11 @@
 # Build hauksbee release binaries and attach them to a GitHub Release on a tag.
 #
-# Trigger: push a tag like `v0.1.0`. The workflow builds the `hauksbee` and
-# `hauksbee-ci` binaries on four native runners, packages each with
+# Trigger: push a tag like `v0.1.0`. The workflow builds the `hauksbee`,
+# `hauksbee-ci` and `hauksbee-mcp` binaries on four native runners, packages each with
 # scripts/bundle.sh into a versioned tarball (+ sha256), and uploads them as
 # release assets. scripts/get-hauksbee.sh downloads, verifies the sha256, and
-# installs the two binaries; the composite Action and the KiCad plugin also
+# installs the binaries (hauksbee, hauksbee-ci, hauksbee-mcp); the composite
+# Action and the KiCad plugin also
 # prefer these assets and fall back to building from source.
 #
 # ============================================================================
@@ -192,6 +193,17 @@ jobs:
       # build-app.sh (--no-build) picks them up for Hauksbee.app.
       - name: Build default bundle (avr+renode+qemu; GPL-3.0 binary)
         shell: bash
+        env:
+          # macOS legs only (bundle.sh signs on Darwin hosts and is a no-op
+          # elsewhere): sign the tarball binaries and notarise them with the
+          # same secrets the app step below uses. Bare Mach-Os take no staple;
+          # Gatekeeper checks their notarisation ticket online. Notarisation is
+          # required at launch, same as the app gate: from the launch release
+          # onward these secrets must be present and the submission must pass.
+          HAUKSBEE_SIGN_IDENTITY: ${{ secrets.HAUKSBEE_SIGN_IDENTITY }}
+          HAUKSBEE_NOTARY_APPLE_ID: ${{ secrets.HAUKSBEE_NOTARY_APPLE_ID }}
+          HAUKSBEE_NOTARY_TEAM_ID: ${{ secrets.HAUKSBEE_NOTARY_TEAM_ID }}
+          HAUKSBEE_NOTARY_PASSWORD: ${{ secrets.HAUKSBEE_NOTARY_PASSWORD }}
         run: |
           # Point build.rs at the prefix the install step used. Set here rather
           # than in an `env:` block, which cannot expand $HOME.
@@ -208,12 +220,20 @@ jobs:
       # compiled Swift launcher, and zips it as
       # `hauksbee-<version>-<label>-app.zip` per the section-3 naming contract in
       # docs/about/release-and-licensing.md. The app therefore carries the same
-      # GPL-3.0 binary as the default tarball, and can do AVR co-sim. The app is
-      # unsigned (see app/macos/SIGNING.md); the README states the Gatekeeper
-      # caveat where the download is offered.
+      # GPL-3.0 binary as the default tarball, and can do AVR co-sim. Signing +
+      # notarisation credentials come from the secrets below (see
+      # app/macos/SIGNING.md); the gate step after this one refuses to let an
+      # unsigned or un-notarised app zip reach the release, so a release that
+      # publishes an app zip has, by construction, published a signed and
+      # notarised app.
       - name: Build Hauksbee.app (macOS only)
         if: runner.os == 'macOS'
         shell: bash
+        env:
+          HAUKSBEE_SIGN_IDENTITY: ${{ secrets.HAUKSBEE_SIGN_IDENTITY }}
+          HAUKSBEE_NOTARY_APPLE_ID: ${{ secrets.HAUKSBEE_NOTARY_APPLE_ID }}
+          HAUKSBEE_NOTARY_TEAM_ID: ${{ secrets.HAUKSBEE_NOTARY_TEAM_ID }}
+          HAUKSBEE_NOTARY_PASSWORD: ${{ secrets.HAUKSBEE_NOTARY_PASSWORD }}
         run: |
           chmod +x hauksbee/app/macos/build-app.sh
           cd hauksbee
@@ -221,6 +241,36 @@ jobs:
             --version "${{ steps.ver.outputs.version }}" \
             --target "${{ matrix.label }}" \
             --out dist
+
+      # Gate: an app zip may only ship if the app inside it is signed AND
+      # notarised. The public claim is "signed and notarised", and this step is
+      # what makes that claim structural rather than aspirational: unsigned or
+      # un-stapled builds fail the job here, before any upload step can see the
+      # zip. If this fails, wire up the signing secrets per app/macos/SIGNING.md.
+      - name: Gate the app zip on signing + notarisation (macOS only)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd hauksbee/dist
+          ZIP="hauksbee-${{ steps.ver.outputs.version }}-${{ matrix.label }}-app.zip"
+          work="$(mktemp -d)"
+          ditto -x -k "$ZIP" "$work"
+          APP="$work/Hauksbee.app"
+          fail=0
+          if ! codesign --verify --deep --strict --verbose=2 "$APP"; then
+            echo "::error title=Unsigned app::$ZIP contains an unsigned (or badly signed) Hauksbee.app. Set the signing secrets per app/macos/SIGNING.md; an unsigned app zip must not be released."
+            fail=1
+          fi
+          if ! spctl -a -t exec -vv "$APP"; then
+            echo "::error title=Gatekeeper rejects the app::spctl -a -t exec rejected Hauksbee.app (signed-but-unnotarised apps are rejected by policy). Complete notarisation per app/macos/SIGNING.md."
+            fail=1
+          fi
+          if ! xcrun stapler validate "$APP"; then
+            echo "::error title=No stapled ticket::Hauksbee.app has no stapled notarisation ticket. Run notarytool + stapler per app/macos/SIGNING.md."
+            fail=1
+          fi
+          exit "$fail"
 
       # ── shape 2 of 2: the PERMISSIVE download (no avr, no GPL) ─────────────
       # Runs after the app step, because it overwrites target/release with
@@ -235,6 +285,12 @@ jobs:
           # then label it permissive.
           SIMAVR_INCLUDE_DIR: /nonexistent/simavr-must-not-be-linked
           SIMAVR_LIB_DIR: /nonexistent/simavr-must-not-be-linked
+          # Same darwin signing + notarisation contract as the default bundle
+          # step above; bundle.sh ignores these on non-macOS runners.
+          HAUKSBEE_SIGN_IDENTITY: ${{ secrets.HAUKSBEE_SIGN_IDENTITY }}
+          HAUKSBEE_NOTARY_APPLE_ID: ${{ secrets.HAUKSBEE_NOTARY_APPLE_ID }}
+          HAUKSBEE_NOTARY_TEAM_ID: ${{ secrets.HAUKSBEE_NOTARY_TEAM_ID }}
+          HAUKSBEE_NOTARY_PASSWORD: ${{ secrets.HAUKSBEE_NOTARY_PASSWORD }}
         run: |
           cd hauksbee
           if ! scripts/bundle.sh --shape permissive \
@@ -305,9 +361,73 @@ jobs:
           for d in "$def" "$perm"; do
             test -s "$d/LICENSE" && test -s "$d/NOTICE" \
               || { echo "::error::$d is missing LICENSE or NOTICE"; fail=1; }
+            # hauksbee-mcp ships in every bundle, both shapes.
+            test -x "$d/bin/hauksbee-mcp" \
+              || { echo "::error::$d is missing bin/hauksbee-mcp"; fail=1; }
           done
 
+          # Version parity: every binary in this leg must come from the same
+          # commit. A tarball/app pair whose `--version` git hashes differ
+          # means one of them was packaged from stale target/release contents.
+          def_ver="$("$def/bin/hauksbee" --version)"
+          perm_ver="$("$perm/bin/hauksbee" --version)"
+          echo "default:    $def_ver"
+          echo "permissive: $perm_ver"
+          if [ "$def_ver" != "$perm_ver" ]; then
+            echo "::error title=Version mismatch::default and permissive tarballs report different versions ('$def_ver' vs '$perm_ver')."
+            fail=1
+          fi
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            # Every binary inside BOTH darwin tarballs must carry a valid
+            # Developer ID signature; an unsigned darwin tarball must not be
+            # released. Notarisation of these bare Mach-Os cannot be checked
+            # by stapler (no bundle to staple); Gatekeeper verifies the ticket
+            # online at first run. Notarisation is required at launch, same as
+            # the app gate above: the bundle steps submit via notarytool and
+            # fail on rejection when the notary secrets are present.
+            for d in "$def" "$perm"; do
+              for b in hauksbee hauksbee-ci hauksbee-mcp; do
+                if ! codesign --verify --strict --verbose=2 "$d/bin/$b"; then
+                  echo "::error title=Unsigned tarball binary::$d/bin/$b failed codesign --verify --strict. Set HAUKSBEE_SIGN_IDENTITY per app/macos/SIGNING.md; an unsigned darwin tarball must not be released."
+                  fail=1
+                fi
+              done
+            done
+            appwork="$(mktemp -d)"
+            ditto -x -k "hauksbee-$V-$L-app.zip" "$appwork"
+            APPRES="$appwork/Hauksbee.app/Contents/Resources"
+            app_ver="$("$APPRES/bin/hauksbee" --version)"
+            echo "app:        $app_ver"
+            if [ "$app_ver" != "$def_ver" ]; then
+              echo "::error title=Version mismatch::the app bundle's hauksbee reports '$app_ver' but the default tarball reports '$def_ver'."
+              fail=1
+            fi
+            test -x "$APPRES/bin/hauksbee-mcp" \
+              || { echo "::error::the app zip is missing Contents/Resources/bin/hauksbee-mcp"; fail=1; }
+            # The licence set must travel inside the app too.
+            for f in LICENSE NOTICE LICENSE-BINARY.txt LICENSE-GPL-3.0.txt; do
+              test -s "$APPRES/$f" \
+                || { echo "::error::the app zip is missing Contents/Resources/$f"; fail=1; }
+            done
+          fi
+
           exit "$fail"
+
+      # Every checksum next to every artifact must verify before anything is
+      # uploaded, so a stale or half-rewritten .sha256 can never ride along.
+      - name: Verify every dist checksum
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd hauksbee/dist
+          for sum in *.sha256; do
+            echo "checking $sum"
+            if command -v shasum >/dev/null 2>&1; then
+              shasum -a 256 -c "$sum"
+            else
+              sha256sum --check "$sum"
+            fi
+          done
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -327,6 +447,34 @@ jobs:
     # produces downloadable build artifacts (above).
     if: startsWith(github.ref, 'refs/tags/')
     steps:
+      - name: Checkout (for the slug preflight)
+        uses: actions/checkout@v4
+        with:
+          path: hauksbee
+
+      # The bundles, installer and OCI labels all point at the public slug
+      # hauksbee-dev/hauksbee. Publishing a release whose baked-in pointers
+      # 404 would ship dead corresponding-source URLs (a GPL-3.0 section 6
+      # problem, not just a cosmetic one), so check the slug resolves first.
+      # Skips gracefully when no token is available (e.g. a local act run).
+      - name: Preflight the public slug
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if ! grep -rq 'hauksbee-dev/hauksbee' hauksbee/scripts/get-hauksbee.sh; then
+            echo "::warning::scripts/get-hauksbee.sh no longer references hauksbee-dev/hauksbee; update this preflight to the new slug."
+          fi
+          if [ -z "${GH_TOKEN:-}" ]; then
+            echo "No GH_TOKEN available; skipping the public-slug existence check."
+            exit 0
+          fi
+          if ! gh api repos/hauksbee-dev/hauksbee --jq .full_name; then
+            echo "::error title=Public slug missing::gh api repos/hauksbee-dev/hauksbee failed. The release assets bake in URLs under that slug (installer, LICENSE-BINARY corresponding-source pointers, OCI labels); create/publish the public repo before releasing."
+            exit 1
+          fi
+
       - name: Download all build artifacts
         uses: actions/download-artifact@v4
         with:

@@ -114,7 +114,7 @@ if [ "$DO_BUILD" -eq 1 ]; then
   "$HAUKSBEE_ROOT/scripts/bundle.sh" --version "$VERSION" --out "$BUNDLE_OUT" \
     ${BUNDLE_FLAGS[@]+"${BUNDLE_FLAGS[@]}"}
 fi
-for bin in hauksbee hauksbee-ci; do
+for bin in hauksbee hauksbee-ci hauksbee-mcp; do
   [ -x "$SRC/$bin" ] || die "$SRC/$bin missing (build first, or drop --no-build)."
 done
 
@@ -130,8 +130,40 @@ swiftc -O -o "$APP/Contents/MacOS/Hauksbee" \
   "$HAUKSBEE_ROOT/app/macos/launcher/main.swift"
 
 log "Staging binaries"
-install -m 0755 "$SRC/hauksbee"    "$APP/Contents/Resources/bin/hauksbee"
-install -m 0755 "$SRC/hauksbee-ci" "$APP/Contents/Resources/bin/hauksbee-ci"
+install -m 0755 "$SRC/hauksbee"     "$APP/Contents/Resources/bin/hauksbee"
+install -m 0755 "$SRC/hauksbee-ci"  "$APP/Contents/Resources/bin/hauksbee-ci"
+install -m 0755 "$SRC/hauksbee-mcp" "$APP/Contents/Resources/bin/hauksbee-mcp"
+
+# Licence terms travel inside the app, same as inside the tarball: the app
+# wraps the DEFAULT-shape binaries, which statically link GPL-3.0 libsimavr,
+# so the binaries are GPL-3.0 while hauksbee's source stays Apache-2.0.
+log "Staging licence files"
+cp "$HAUKSBEE_ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
+cp "$HAUKSBEE_ROOT/NOTICE"  "$APP/Contents/Resources/NOTICE"
+[ -s "$HAUKSBEE_ROOT/licenses/gpl-3.0.txt" ] \
+  || die "licenses/gpl-3.0.txt missing; the app carries GPL-3.0 binaries and must enclose the licence text."
+cp "$HAUKSBEE_ROOT/licenses/gpl-3.0.txt" "$APP/Contents/Resources/LICENSE-GPL-3.0.txt"
+GIT_SHA="$(cd "$HAUKSBEE_ROOT" && git rev-parse HEAD 2>/dev/null || echo unknown)"
+cat > "$APP/Contents/Resources/LICENSE-BINARY.txt" <<EOF
+Hauksbee.app ${VERSION} (${TARGET}) - licence of the enclosed binaries
+======================================================================
+
+THE BINARIES IN Contents/Resources/bin/ ARE LICENSED TO YOU UNDER GPL-3.0.
+
+hauksbee's own source code is Apache-2.0 (see LICENSE and NOTICE, next to
+this file). This app wraps the default-shape build, whose optional avr
+co-simulation backend STATICALLY LINKS libsimavr (GPL-3.0); statically
+linking GPL-3.0 code makes the executable a combined work, so these binaries
+are distributed under GPL-3.0. Running the app imposes no obligations at
+all; GPL-3.0 constrains redistribution, not use.
+
+Full GPL-3.0 text: LICENSE-GPL-3.0.txt, next to this file.
+Corresponding source (GPL-3.0 section 6):
+  https://github.com/hauksbee-dev/hauksbee   commit ${GIT_SHA}
+  https://github.com/buserror/simavr         (tag: see scripts/install-sims.sh)
+If you cannot take GPL code, use the -permissive tarball from the same
+release: the same tool without the avr backend, licensed Apache-2.0.
+EOF
 
 log "Writing Info.plist"
 cat > "$APP/Contents/Info.plist" <<EOF
@@ -196,6 +228,8 @@ if [ -n "${HAUKSBEE_SIGN_IDENTITY:-}" ]; then
   codesign --force --options runtime --timestamp \
     --sign "$HAUKSBEE_SIGN_IDENTITY" "$APP/Contents/Resources/bin/hauksbee-ci"
   codesign --force --options runtime --timestamp \
+    --sign "$HAUKSBEE_SIGN_IDENTITY" "$APP/Contents/Resources/bin/hauksbee-mcp"
+  codesign --force --options runtime --timestamp \
     --sign "$HAUKSBEE_SIGN_IDENTITY" "$APP/Contents/MacOS/Hauksbee"
   codesign --force --options runtime --timestamp \
     --sign "$HAUKSBEE_SIGN_IDENTITY" "$APP"
@@ -241,12 +275,18 @@ fi
 
 log "Zipping $NAME"
 ZIP="$OUT_ABS/$NAME.zip"
-rm -f "$ZIP"
+# The zip and its .sha256 are one artifact: remove BOTH up front so a failure
+# between the two writes can never leave a fresh zip next to a stale checksum,
+# write the checksum in the same step that produced the zip, and verify the
+# pair before claiming success.
+rm -f "$ZIP" "$ZIP.sha256"
 # ditto preserves the bundle structure and extended attributes the way
 # Archive Utility expects; a plain `zip -r` can produce a bundle Finder
 # quarantines more aggressively.
 ( cd "$STAGE" && ditto -c -k --keepParent "Hauksbee.app" "$ZIP" )
 ( cd "$OUT_ABS" && shasum -a 256 "$NAME.zip" > "$NAME.zip.sha256" )
+( cd "$OUT_ABS" && shasum -a 256 -c "$NAME.zip.sha256" >/dev/null ) \
+  || die "checksum self-verification failed for $ZIP"
 
 ok "App:      $APP"
 ok "Zip:      $ZIP"

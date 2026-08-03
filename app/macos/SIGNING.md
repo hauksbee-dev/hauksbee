@@ -47,6 +47,32 @@ Note on `spctl`: a signed but NOT-yet-notarised app is still **rejected** by
 Gatekeeper policy; the script prints that rejection rather than pretending
 otherwise. Only after notarisation + stapling does `spctl --assess` accept.
 
+## Tarball binaries
+
+The plain darwin tarballs get the same treatment from `scripts/bundle.sh`,
+driven by the same env vars: `HAUKSBEE_SIGN_IDENTITY` codesigns the three
+staged binaries (`hauksbee`, `hauksbee-ci`, `hauksbee-mcp`) with hardened
+runtime and a secure timestamp, then verifies each with `codesign --verify
+--strict`; the notary credentials (`HAUKSBEE_NOTARY_PROFILE`, or the
+`HAUKSBEE_NOTARY_APPLE_ID` / `HAUKSBEE_NOTARY_TEAM_ID` /
+`HAUKSBEE_NOTARY_PASSWORD` triple) trigger a `notarytool submit --wait` of a
+zip of the signed binaries. Without the vars the tarball ships unsigned, with
+a printed note naming them.
+
+One difference from the app: a bare Mach-O cannot carry a stapled ticket
+(`stapler` staples bundles, disk images and packages, not standalone
+executables), so there is nothing to staple after the submission is accepted.
+The ticket lives on Apple's servers, and Gatekeeper looks it up **online** the
+first time a quarantined binary runs. An offline first run of a
+browser-downloaded tarball binary therefore falls back to the unsigned-build
+flow above; a copy installed by `get-hauksbee.sh` or `install.sh` never
+carries the quarantine flag in the first place.
+
+The release workflow's "Verify the two shapes" step runs `codesign --verify
+--strict` on every binary inside both darwin tarballs and fails the job if any
+is unsigned. Notarisation of the tarball binaries is required at launch, on
+the same terms as the app gate.
+
 ## What the signing setup needs (one-time)
 
 To make the warning disappear entirely the release pipeline needs:

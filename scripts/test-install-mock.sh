@@ -15,9 +15,20 @@
 #   4. Runs get-hauksbee.sh against the mock (via curl|bash, like the README) into
 #      a throwaway prefix, with HAUKSBEE_API_BASE / HAUKSBEE_RELEASES_BASE pointed
 #      at the mock.
-#   5. Verifies the freshly-installed binary actually runs, then tears down.
+#   5. Verifies the freshly-installed binaries actually run.
+#   6. Negative test: serves a CORRUPTED tarball next to the genuine checksum
+#      and asserts the installer refuses it and installs nothing.
+#   Then tears down.
+#
+# Prerequisites: cargo (bundle.sh builds the release binaries unless
+# --no-build), python3 (the mock HTTP server), curl, tar, shasum/sha256sum.
 #
 # Usage: scripts/test-install-mock.sh [--port N] [--no-build] [--version vX.Y.Z]
+#                                     [--shape permissive]
+#
+#   --shape permissive   ALSO build the permissive bundle, publish it in the
+#                        mock, and run a second install with --permissive into
+#                        its own prefix. The default flow is unchanged.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -26,15 +37,18 @@ PORT=8091
 BUILD_FLAG=""          # passed through to bundle.sh (e.g. --no-build)
 TAG="v0.1.0"
 
+SHAPE="default"
 while [ $# -gt 0 ]; do
   case "$1" in
     --port) PORT="${2:?}"; shift 2 ;;
     --no-build) BUILD_FLAG="--no-build"; shift ;;
     --version) TAG="${2:?}"; shift 2 ;;
+    --shape) SHAPE="${2:?--shape needs default or permissive}"; shift 2 ;;
     -h|--help) sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//; $d'; exit 0 ;;
     *) echo "unknown arg: $1" >&2; exit 1 ;;
   esac
 done
+case "$SHAPE" in default|permissive) ;; *) echo "unknown --shape: $SHAPE" >&2; exit 1 ;; esac
 
 VERSION_BARE="${TAG#v}"
 REPO="hauksbee-dev/hauksbee"
@@ -57,6 +71,14 @@ bash "$HERE/bundle.sh" $BUILD_FLAG --version "$VERSION_BARE" --target "$TARGET" 
 TARBALL="$ROOT/dist/${ASSET}.tar.gz"
 [ -f "$TARBALL" ] || { echo "FAIL: bundle not produced at $TARBALL" >&2; exit 1; }
 
+if [ "$SHAPE" = permissive ]; then
+  echo "==> Building permissive bundle ($TARGET)"
+  bash "$HERE/bundle.sh" $BUILD_FLAG --shape permissive \
+    --version "$VERSION_BARE" --target "$TARGET" >/dev/null
+  TARBALL_PERM="$ROOT/dist/${ASSET}-permissive.tar.gz"
+  [ -f "$TARBALL_PERM" ] || { echo "FAIL: permissive bundle not produced at $TARBALL_PERM" >&2; exit 1; }
+fi
+
 echo "==> Laying out mock GitHub tree"
 mkdir -p "$MOCK/repos/${REPO}/releases" \
          "$MOCK/${REPO}/releases/download/${TAG}" \
@@ -64,7 +86,21 @@ mkdir -p "$MOCK/repos/${REPO}/releases" \
 printf '{"tag_name":"%s","name":"hauksbee %s"}\n' "$TAG" "$TAG" \
   > "$MOCK/repos/${REPO}/releases/latest"
 cp "$TARBALL" "$TARBALL.sha256" "$MOCK/${REPO}/releases/download/${TAG}/"
+if [ "$SHAPE" = permissive ]; then
+  cp "$TARBALL_PERM" "$TARBALL_PERM.sha256" "$MOCK/${REPO}/releases/download/${TAG}/"
+fi
 cp "$HERE/get-hauksbee.sh" "$MOCK/raw/get-hauksbee.sh"
+
+# The negative-test tree: the SAME release, but the tarball is corrupted after
+# the genuine checksum was taken. Served under bad/ so the URL bases select it.
+echo "==> Laying out the corrupted mock tree (negative test)"
+mkdir -p "$MOCK/bad/repos/${REPO}/releases" \
+         "$MOCK/bad/${REPO}/releases/download/${TAG}"
+printf '{"tag_name":"%s","name":"hauksbee %s"}\n' "$TAG" "$TAG" \
+  > "$MOCK/bad/repos/${REPO}/releases/latest"
+cp "$TARBALL.sha256" "$MOCK/bad/${REPO}/releases/download/${TAG}/"
+cp "$TARBALL" "$MOCK/bad/${REPO}/releases/download/${TAG}/${ASSET}.tar.gz"
+printf 'corrupt' >> "$MOCK/bad/${REPO}/releases/download/${TAG}/${ASSET}.tar.gz"
 
 echo "==> Serving mock at http://127.0.0.1:${PORT}"
 ( cd "$MOCK" && exec python3 -m http.server "$PORT" >/dev/null 2>&1 ) &
@@ -83,7 +119,41 @@ curl -fsSL "http://127.0.0.1:${PORT}/raw/get-hauksbee.sh" | bash -s -- --prefix 
 echo "==> Verifying the installed binaries run"
 "$PREFIX/bin/hauksbee" --version
 [ -x "$PREFIX/bin/hauksbee-ci" ] || { echo "FAIL: hauksbee-ci not installed" >&2; exit 1; }
+[ -x "$PREFIX/bin/hauksbee-mcp" ] || { echo "FAIL: hauksbee-mcp not installed" >&2; exit 1; }
 "$PREFIX/bin/hauksbee" run "$ROOT/crates/hauksbee-ci/examples/boards/blinky.kicad_pcb" --drc --plain >/dev/null
+
+if [ "$SHAPE" = permissive ]; then
+  echo "==> Running the install again with --permissive"
+  PREFIX_PERM="$WORK/prefix-permissive"
+  curl -fsSL "http://127.0.0.1:${PORT}/raw/get-hauksbee.sh" \
+    | bash -s -- --prefix "$PREFIX_PERM" --permissive
+  echo "==> Verifying the permissive install"
+  "$PREFIX_PERM/bin/hauksbee" --version
+  [ -x "$PREFIX_PERM/bin/hauksbee-ci" ]  || { echo "FAIL: permissive hauksbee-ci not installed" >&2; exit 1; }
+  [ -x "$PREFIX_PERM/bin/hauksbee-mcp" ] || { echo "FAIL: permissive hauksbee-mcp not installed" >&2; exit 1; }
+  # The permissive binary must have the avr backend compiled out. Capture the
+  # doctor output first: doctor exits non-zero when external backends are
+  # absent, and under pipefail that would fail the pipeline even on a match.
+  perm_doctor="$("$PREFIX_PERM/bin/hauksbee" doctor 2>&1 || true)"
+  printf '%s' "$perm_doctor" | grep -qE '^avr[[:space:]]+disabled' \
+    || { echo "FAIL: permissive install does not report avr as disabled" >&2; exit 1; }
+fi
+
+echo "==> Negative test: corrupted tarball must be refused, nothing installed"
+PREFIX_BAD="$WORK/prefix-bad"
+if HAUKSBEE_API_BASE="http://127.0.0.1:${PORT}/bad/repos/${REPO}" \
+   HAUKSBEE_RELEASES_BASE="http://127.0.0.1:${PORT}/bad/${REPO}/releases/download" \
+   bash "$HERE/get-hauksbee.sh" --prefix "$PREFIX_BAD" >/dev/null 2>&1; then
+  echo "FAIL: the installer accepted a tarball whose sha256 does not match" >&2
+  exit 1
+fi
+for b in hauksbee hauksbee-ci hauksbee-mcp; do
+  if [ -e "$PREFIX_BAD/bin/$b" ]; then
+    echo "FAIL: corrupted download still installed $b" >&2
+    exit 1
+  fi
+done
+echo "    refused, and nothing was installed. Good."
 
 echo ""
 echo "PASS: get-hauksbee.sh installed and ran from a mocked private release."

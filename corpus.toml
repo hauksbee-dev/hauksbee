@@ -206,7 +206,49 @@ id = "rp2040_minimal_kicad"
 name = "Raspberry Pi RP2040 minimal design (official)"
 url = "https://pip.raspberrypi.com/documents/RP-008296-DS-Minimal-KiCAD.zip"
 kind = "zip"
-license = "BSD-3-Clause (Raspberry Pi hardware design terms)"
+license = "MIT (stated in the bundled LICENSE.txt)"
+
+# Revision 2 of the same design, which is a different board from the r3 the
+# entry above now serves. r3 dropped the crystal: it has no `Y1`, so the three
+# SI values crates/hauksbee-extract/tests/si_corpus.rs pins (Y1 = ABM8-272-T3
+# driven by 15 pF caps, a routed USB D+/D- pair, no `(stackup)` block) are facts
+# about r2 and not about its successor. Both revisions are wanted for that
+# reason, not by accident.
+#
+# Raspberry Pi publishes one URL per document and overwrites it in place, so
+# there is no upstream pin for r2 any more: pip.raspberrypi.com and the older
+# datasheets.raspberrypi.com/rp2040/Minimal-KiCAD.zip both now redirect to
+# RP-008296-DS-2-Minimal-KiCAD.zip, which is r3, and RP-008296-DS-1 redirects
+# there too. There is no git-hosted upstream to pin instead; Raspberry Pi has
+# never published this design in a repository. The one third-party git copy
+# (janelia-kicad/RP2040_minimal) was re-saved in KiCad 7.0.11 and its
+# .kicad_pcb differs from Raspberry Pi's by 16 KB, so pinning it would measure
+# a derivative and call the result r2.
+#
+# The pin is therefore an Internet Archive capture of Raspberry Pi's own asset,
+# which is immutable and content-addressed by timestamp. Verified: the fetched
+# zip is byte-identical to every later capture through 2026-02-20, and
+# minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_pcb has sha256
+# d501017bdfaa924781a3b0d4e1f9e6f39345e035e7815c237b202f2d0543b749, matching the
+# hand-built corpus file the r2 values were measured on, byte for byte across
+# the whole extracted tree.
+#
+# The r2 zip carries no LICENSE file. Raspberry Pi's stated position on these
+# design files is that they are "made available openly, with no limitations",
+# and the r3 release of the same design ships MIT (Copyright Raspberry Pi Ltd);
+# neither statement is in r2's own bytes, hence the qualifier below.
+#
+# STILL NOT ENOUGH ON ITS OWN: fetch-corpus.sh writes each board to
+# `<corpus>/<id>`, and this zip unpacks to `minimal/...`, so the fetch lands the
+# board at `rp2040_minimal_r2/minimal/RP2040_minimal_r2/`. si_corpus.rs and
+# gerber_closedloop.rs list both the hand-built and this fetch path, so the
+# RP2040 gates run from either layout.
+[[board]]
+id = "rp2040_minimal_r2"
+name = "Raspberry Pi RP2040 minimal design, revision 2 (official, superseded upstream)"
+url = "https://web.archive.org/web/20240521000034id_/https://datasheets.raspberrypi.com/rp2040/Minimal-KiCAD.zip"
+kind = "zip"
+license = "MIT (the archived r2 zip carries no licence file; the same design's current upstream package states MIT in its bundled LICENSE.txt)"
 
 # ---------------------------------------------------------------------------
 # Gerber-only, for the reverse-extraction tier
@@ -223,14 +265,19 @@ license = "BSD-3-Clause (Raspberry Pi hardware design terms)"
 id = "inkplate6_gerber"
 name = "Soldered Inkplate 6 main board (gerbers only)"
 url = "https://github.com/SolderedElectronics/Inkplate-6-hardware"
-rev = "main"
+# Upstream has no `main`: the default branch is `master`. The old `main` pin
+# resolved to nothing and took this board out of every fetch. Pinned to the
+# commit rather than the branch, per the note at the top of this file.
+rev = "e14476d3bbddfb0e76815f4b1ffa6f7e26e54bad"
 license = "MIT"
 
 [[board]]
 id = "uconsole_gerber"
 name = "ClockworkPi uConsole CPI 3.14 mainboard (gerbers only)"
 url = "https://github.com/clockworkpi/uConsole"
-rev = "main"
+# Same dead pin as inkplate6 above: upstream's default branch is `master`, and
+# a branch was never a valid pin here anyway.
+rev = "53a05efca806ca024aab4fbfd28a680688c2541c"
 license = "unconfirmed"
 license_confirmed = false
 
@@ -238,7 +285,7 @@ license_confirmed = false
 id = "uconsole_cm4_adapter_gerber"
 name = "ClockworkPi RPI CM4 to CPI v3.14 adapter (gerbers only)"
 url = "https://github.com/clockworkpi/uConsole"
-rev = "main"
+rev = "53a05efca806ca024aab4fbfd28a680688c2541c"
 license = "unconfirmed"
 license_confirmed = false
 

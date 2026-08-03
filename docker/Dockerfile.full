@@ -98,10 +98,15 @@ RUN curl -fsSL -o /opt/freerouting-${FREEROUTING_VERSION}.jar \
       "https://github.com/freerouting/freerouting/releases/download/v${FREEROUTING_VERSION}/freerouting-${FREEROUTING_VERSION}.jar" \
     && ln -s /opt/freerouting-${FREEROUTING_VERSION}.jar /opt/freerouting.jar
 
+# licenses is GPL-3.0-only, matching the slim base: the hauksbee binaries in
+# this image are the default (avr) shape, statically linking GPL-3.0
+# libsimavr, and this image additionally bundles GPL-licensed tools
+# (freerouting is GPL-3.0; the Espressif QEMU fork is GPL-2.0). The licence
+# files live in /usr/share/doc/hauksbee/, inherited from the slim base.
 LABEL org.opencontainers.image.title="hauksbee (full)" \
       org.opencontainers.image.description="hauksbee slim plus Renode, the Espressif QEMU fork, and freerouting: STM32 / ESP32 co-sim and production autorouting." \
       org.opencontainers.image.source="https://github.com/hauksbee-dev/hauksbee" \
-      org.opencontainers.image.licenses="Apache-2.0"
+      org.opencontainers.image.licenses="GPL-3.0-only"
 
 # Wire the backend discovery env vars so the tools are found with no setup:
 #   HAUKSBEE_RENODE       full path to the renode launcher

@@ -5,8 +5,9 @@
 # this repo is Apache-2.0, so simavr is NOT vendored — it is linked from the system by
 # deliberate choice; `--avr` below builds and installs it for you. The Renode
 # and Espressif QEMU backends require externally installed binaries. This script
-# installs any of them into the exact locations hauksbee auto-discovers,
-# resolving versions from the GitHub API and verifying after install.
+# installs any of them into the exact locations hauksbee auto-discovers, from
+# release versions PINNED in this file, verifying every download against a
+# recorded sha256 and checking the result after install.
 #
 # Usage:
 #   scripts/install-sims.sh [--renode-only | --qemu-only | --avr]
@@ -53,6 +54,7 @@ usage() { sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//; $d'
 # with the installer that needs them. Resolved here rather than inside
 # verify_asset: at top level BASH_SOURCE unambiguously names this file.
 RENODE_CHECKSUMS="${RENODE_CHECKSUMS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/renode-checksums.txt}"
+QEMU_CHECKSUMS="${QEMU_CHECKSUMS:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/espressif-qemu-checksums.txt}"
 
 # ── defaults ────────────────────────────────────────────────────────────────
 DO_RENODE=1
@@ -97,10 +99,16 @@ case "$ARCH" in
     ;;
 esac
 
-# ── fallback pinned versions (used if GitHub API is unreachable) ─────────────
+# ── pinned versions ──────────────────────────────────────────────────────────
 # Pinned Renode release. See resolve_renode_version and renode-checksums.txt.
 RENODE_VERSION="1.16.1"
-QEMU_FALLBACK_VER="esp_develop_9.0.0_20240606"
+
+# Pinned espressif/qemu release tag. Same discipline as RENODE_VERSION: bumping
+# it means downloading the new assets, hashing them, and replacing the lines in
+# espressif-qemu-checksums.txt. Kept in step with FALLBACK_TAG in
+# crates/hauksbee-mcu/src/qemu/install.rs and ESP_QEMU_TAG in
+# docker/Dockerfile.full, which pin the same release.
+QEMU_VERSION="esp-develop-9.2.2-20260417"
 
 # Pinned simavr release tag (buserror/simavr). Bumping this is a deliberate,
 # reviewed change — see the licensing note in the header.
@@ -108,18 +116,7 @@ SIMAVR_TAG="v1.8"
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 
-# Fetch JSON from GitHub API (unauthenticated; may be rate-limited on shared IPs).
-# Returns non-zero if curl fails.
-github_api() {
-  local url="$1"
-  curl --silent --fail --location \
-    -H "Accept: application/vnd.github+json" \
-    -H "X-GitHub-Api-Version: 2022-11-28" \
-    "$url"
-}
-
-# Resolve the latest Renode release tag (e.g. "1.16.1"), stripping any leading "v".
-# The Renode version is PINNED, not resolved.
+# Resolve the Renode release tag (e.g. "1.16.1"). PINNED, not resolved.
 #
 # This used to ask GitHub for `latest` at install time and interpolate the
 # answer straight into the download URL, which meant nothing in this repository
@@ -141,57 +138,68 @@ resolve_renode_version() {
 # provenance check was TLS is not a trade worth making silently, so an asset
 # with no recorded hash stops the install and tells the user to install
 # manually.
+#
+# $1 file  $2 asset name  $3 checksum file  $4 backend label  $5 pinned version
+# $6 what to tell the user to do by hand instead.
 verify_asset() {
-  local file="$1" name="$2"
-  local sums="$RENODE_CHECKSUMS"
-  [ -f "$sums" ] || die "no checksum file at $sums; refusing to install an unverified Renode. Install it manually from renode.io."
+  local file="$1" name="$2" sums="$3" what="$4" version="$5" manual="$6"
+  [ -f "$sums" ] || die "no checksum file at $sums; refusing to install an unverified $what. $manual"
   local want
   want="$(awk -v n="$name" '$2 == n { print $1 }' "$sums" | head -1)"
-  [ -n "$want" ] || die "no recorded checksum for $name (pinned version $RENODE_VERSION). Refusing to install it unverified: add its hash to $sums after checking it, or install Renode manually from renode.io."
+  [ -n "$want" ] || die "no recorded checksum for $name (pinned version $version). Refusing to install it unverified: add its hash to $sums after checking it. $manual"
   local got
   if command -v shasum >/dev/null 2>&1; then
     got="$(shasum -a 256 "$file" | cut -d" " -f1)"
   elif command -v sha256sum >/dev/null 2>&1; then
     got="$(sha256sum "$file" | cut -d" " -f1)"
   else
-    die "neither shasum nor sha256sum is available, so the download cannot be verified. Install Renode manually from renode.io."
+    die "neither shasum nor sha256sum is available, so the download cannot be verified. $manual"
   fi
   [ "$got" = "$want" ] || die "checksum mismatch for $name: expected $want, got $got. The download is not what we pinned; do not use it."
-  log "Renode: checksum verified"
+  log "$what: checksum verified"
 }
 
-# Resolve the latest Espressif QEMU release tag (e.g. "esp-develop-9.0.0-20240606").
+verify_renode_asset() {
+  verify_asset "$1" "$2" "$RENODE_CHECKSUMS" "Renode" "$RENODE_VERSION" \
+    "Install it manually from renode.io."
+}
+
+verify_qemu_asset() {
+  verify_asset "$1" "$2" "$QEMU_CHECKSUMS" "Espressif QEMU" "$QEMU_VERSION" \
+    "Install it manually from https://github.com/espressif/qemu/releases/tag/${QEMU_VERSION}."
+}
+
+# Resolve the Espressif QEMU release tag. PINNED, not resolved.
+#
+# This used to ask GitHub for `latest` at install time and interpolate the
+# answer into the download URL, so what got downloaded and executed was decided
+# by whatever upstream had tagged that morning, and no hash could be held
+# against it. Same reasoning as resolve_renode_version: a `latest` that moves is
+# a `latest` nobody reviewed.
 resolve_qemu_tag() {
-  local tag
-  if tag="$(github_api "https://api.github.com/repos/espressif/qemu/releases/latest" \
-             2>/dev/null | grep '"tag_name"' | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/')"; then
-    [ -n "$tag" ] && printf '%s' "$tag" && return 0
-  fi
-  warn "GitHub API unreachable; using pinned QEMU tag $QEMU_FALLBACK_VER"
-  printf '%s' "$QEMU_FALLBACK_VER"
+  printf '%s' "$QEMU_VERSION"
 }
 
-# Resolve the actual release asset name for a tool+platform by listing the
-# release's assets, instead of constructing the name. Upstream has changed
-# both the version separator (hyphens -> underscores inside the version) and
-# the compression (.tar.bz2 -> .tar.xz) across releases; a constructed name
-# 404s and the "archive" we then extract is a GitHub error page. Matching
-# against the published asset list survives both kinds of rename.
-resolve_qemu_asset() {
-  local tag="$1" tool_name="$2" os_arch_suffix="$3" asset
-  asset="$(github_api "https://api.github.com/repos/espressif/qemu/releases/tags/${tag}" \
-            2>/dev/null \
-          | grep '"name"' \
-          | sed 's/.*"name": *"\([^"]*\)".*/\1/' \
-          | grep "^${tool_name}-softmmu-.*-${os_arch_suffix}\.tar\.\(bz2\|xz\|gz\)$" \
-          | head -1)"
-  [ -n "$asset" ] && printf '%s' "$asset"
-}
-
-# Convert an espressif/qemu release tag (e.g. "esp-develop-9.0.0-20240606") to
-# the directory-name form used by idf_tools ("esp_develop_9.0.0_20240606").
+# Convert an espressif/qemu release tag (e.g. "esp-develop-9.2.2-20260417") to
+# the version form used inside asset names and by idf_tools directory layout
+# ("esp_develop_9.2.2_20260417").
 qemu_tag_to_dir_ver() {
-  printf '%s' "$1" | tr '-' '_' | sed 's/^esp_/esp_/'
+  printf '%s' "$1" | tr '-' '_'
+}
+
+# The release asset name for a tool+platform.
+#
+# This used to be resolved by listing the release's assets over the API, because
+# upstream has changed both the version separator (hyphens -> underscores inside
+# the version) and the compression (.tar.bz2 -> .tar.xz) across releases, so a
+# name constructed against a FLOATING tag 404s and the "archive" we then extract
+# is a GitHub error page. With the tag pinned the name is fixed and known good,
+# and espressif-qemu-checksums.txt is the backstop: a name this builds that the
+# release does not publish has no recorded hash, so the install stops rather
+# than unpacking whatever came back.
+qemu_asset_name() {
+  local dir_ver="$1" tool_name="$2" os_arch_suffix="$3"
+  printf '%s' "${tool_name}-softmmu-${dir_ver}-${os_arch_suffix}.tar.xz"
 }
 
 # ── AVR / simavr prefix + discovery ──────────────────────────────────────────
@@ -375,6 +383,7 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
 
   if [ "$DO_RENODE" -eq 1 ]; then
     log "Renode (STM32 / nRF52 / RP2040 / RISC-V backend)"
+    info "  pinned release: $RENODE_VERSION  (installs come from this, hash-checked)"
     rnode_bin="$(find_renode_bin 2>/dev/null || true)"
     if [ -n "$rnode_bin" ]; then
       ok "FOUND  $rnode_bin"
@@ -395,6 +404,7 @@ if [ "$CHECK_ONLY" -eq 1 ]; then
 
   if [ "$DO_QEMU" -eq 1 ]; then
     log "Espressif QEMU (ESP32 / ESP32-S3 / ESP32-C3 backend)"
+    info "  pinned release: $QEMU_VERSION  (installs come from this, hash-checked)"
     for arch_info in "qemu-system-xtensa:HAUKSBEE_QEMU_XTENSA" "qemu-system-riscv32:HAUKSBEE_QEMU_RISCV32"; do
       name="${arch_info%%:*}"
       envvar="${arch_info##*:}"
@@ -479,7 +489,7 @@ install_renode() {
       # actual problem.
       curl --fail --location --progress-bar --output "$TMPDIR/$ASSET" "$DOWNLOAD_URL" \
         || die "Download failed. Check the URL or download manually: $DOWNLOAD_URL"
-      verify_asset "$TMPDIR/$ASSET" "$ASSET"
+      verify_renode_asset "$TMPDIR/$ASSET" "$ASSET"
 
       MOUNTPOINT="$TMPDIR/renode_mnt"
       mkdir -p "$MOUNTPOINT"
@@ -517,7 +527,7 @@ install_renode() {
       # actual problem.
       curl --fail --location --progress-bar --output "$TMPDIR/$ASSET" "$DOWNLOAD_URL" \
         || die "Download failed. Check the URL or download manually: $DOWNLOAD_URL"
-      verify_asset "$TMPDIR/$ASSET" "$ASSET"
+      verify_renode_asset "$TMPDIR/$ASSET" "$ASSET"
 
       mkdir -p "$HOME/renode-portable"
       log "Renode: extracting to ~/renode-portable/ ..."
@@ -571,12 +581,12 @@ install_qemu() {
   fi
 
   # ── direct download from espressif/qemu releases ─────────────────────────
-  log "Espressif QEMU: no ESP-IDF found; resolving latest release from GitHub..."
+  log "Espressif QEMU: no ESP-IDF found; using the pinned release..."
   QEMU_TAG="$(resolve_qemu_tag)"
   QEMU_DIR_VER="$(qemu_tag_to_dir_ver "$QEMU_TAG")"
   info "  tag: $QEMU_TAG  (dir ver: $QEMU_DIR_VER)"
 
-  # Asset names: qemu-<arch>-softmmu-<tag>-<os>-<arch>.tar.bz2
+  # Asset names: qemu-<arch>-softmmu-<dir-ver>-<os>-<arch>.tar.xz
   case "${PLATFORM}-${ARCH_NORM}" in
     darwin-arm64)  OS_ARCH_SUFFIX="aarch64-apple-darwin" ;;
     darwin-x86_64) OS_ARCH_SUFFIX="x86_64-apple-darwin" ;;
@@ -598,14 +608,7 @@ install_qemu() {
       continue
     fi
 
-    # Prefer the asset name the release actually publishes (see
-    # resolve_qemu_asset); the constructed form is a fallback for when the
-    # API is unreachable, and carries the historical naming.
-    ASSET="$(resolve_qemu_asset "$QEMU_TAG" "$tool_name" "$OS_ARCH_SUFFIX")"
-    if [ -z "$ASSET" ]; then
-      warn "Could not list release assets; falling back to constructed name."
-      ASSET="${tool_name}-softmmu-${QEMU_TAG}-${OS_ARCH_SUFFIX}.tar.bz2"
-    fi
+    ASSET="$(qemu_asset_name "$QEMU_DIR_VER" "$tool_name" "$OS_ARCH_SUFFIX")"
     DOWNLOAD_URL="https://github.com/espressif/qemu/releases/download/${QEMU_TAG}/${ASSET}"
 
     log "Espressif QEMU: downloading $ASSET..."
@@ -613,13 +616,16 @@ install_qemu() {
 
     if ! curl --fail --location --progress-bar --output "$TMPDIR/$ASSET" "$DOWNLOAD_URL" 2>/dev/null; then
       warn "Automatic download failed for $ASSET"
-      warn "Asset naming conventions change between releases. Download manually:"
+      warn "Download it manually from the pinned release:"
       warn "  https://github.com/espressif/qemu/releases/tag/${QEMU_TAG}"
-      warn "Pick the ${OS_ARCH_SUFFIX} asset for ${tool_name} and extract it so that"
+      warn "Pick the ${OS_ARCH_SUFFIX} asset for ${tool_name}, check its sha256 against"
+      warn "  $QEMU_CHECKSUMS"
+      warn "and extract it so that"
       warn "  ~/.espressif/tools/${tool_name}/${QEMU_DIR_VER}/qemu/bin/${bin_name}"
       warn "exists, then re-run with --check."
       continue
     fi
+    verify_qemu_asset "$TMPDIR/$ASSET" "$ASSET"
 
     DEST_DIR="$HOME/.espressif/tools/${tool_name}/${QEMU_DIR_VER}/qemu"
     mkdir -p "$DEST_DIR"

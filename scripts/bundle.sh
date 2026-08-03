@@ -2,7 +2,7 @@
 # bundle.sh - build a versioned, distributable hauksbee binary bundle.
 #
 # Produces dist/<base>.tar.gz containing:
-#   bin/hauksbee, bin/hauksbee-ci   the release binaries
+#   bin/hauksbee, bin/hauksbee-ci, bin/hauksbee-mcp   the release binaries
 #   db/                           the reference model database (the binaries
 #                                 embed it; this copy is for the layered
 #                                 ~/.hauksbee/models override mechanism and docs)
@@ -55,6 +55,13 @@
 # and `hauksbee serve` works from a bare install. embed-web only adds rust-embed
 # (permissive), so it has no bearing on the GPL guard. Needs bun or npm on PATH;
 # without a JS toolchain and no existing dist/, the bundle builds without a UI.
+#
+# macOS signing: on a Darwin host, when HAUKSBEE_SIGN_IDENTITY is set, each
+# staged binary is codesigned (hardened runtime + timestamp) and verified; the
+# notary env vars build-app.sh documents (HAUKSBEE_NOTARY_PROFILE, or the
+# APPLE_ID/TEAM_ID/PASSWORD triple) additionally notarise the signed binaries.
+# Without the vars the bundle ships unsigned, with a printed note. See
+# app/macos/SIGNING.md.
 set -euo pipefail
 # shellcheck source=scripts/common.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
@@ -169,14 +176,16 @@ if [ "$DO_BUILD" -eq 1 ]; then
   if [ "$SHAPE" = default ]; then
     info "  the avr backend links libsimavr (GPL-3.0): this binary will be GPL-3.0"
   fi
-  ( cd "$HAUKSBEE_ROOT" && "$CARGO" build --release -p hauksbee-engine -p hauksbee-ci "${FEATURE_ARGS[@]}" )
+  # `${arr[@]+...}` guards empty-array expansion under `set -u` on bash 3.2
+  # (the macOS default), where a bare `"${arr[@]}"` on an empty array errors.
+  ( cd "$HAUKSBEE_ROOT" && "$CARGO" build --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp ${FEATURE_ARGS[@]+"${FEATURE_ARGS[@]}"} )
 
   log "Stripping release binaries"
-  for bin in hauksbee hauksbee-ci; do
+  for bin in hauksbee hauksbee-ci hauksbee-mcp; do
     strip "$SRC/$bin" 2>/dev/null || true
   done
 fi
-for bin in hauksbee hauksbee-ci; do
+for bin in hauksbee hauksbee-ci hauksbee-mcp; do
   [ -x "$SRC/$bin" ] || die "$SRC/$bin missing (build first, or drop --no-build)."
 done
 
@@ -227,8 +236,61 @@ ROOTDIR="$STAGE/$NAME"
 mkdir -p "$ROOTDIR/bin"
 
 log "Staging $NAME"
-install -m 0755 "$SRC/hauksbee"    "$ROOTDIR/bin/hauksbee"
-install -m 0755 "$SRC/hauksbee-ci" "$ROOTDIR/bin/hauksbee-ci"
+install -m 0755 "$SRC/hauksbee"     "$ROOTDIR/bin/hauksbee"
+install -m 0755 "$SRC/hauksbee-ci"  "$ROOTDIR/bin/hauksbee-ci"
+install -m 0755 "$SRC/hauksbee-mcp" "$ROOTDIR/bin/hauksbee-mcp"
+
+# ── darwin codesigning + notarisation (same env contract as build-app.sh) ────
+# The STAGED copies are signed, never the target/release originals, so the
+# tarball's signatures cannot be invalidated by a later rebuild. Signing is
+# optional and env-driven exactly like app/macos/build-app.sh: unsigned local
+# builds keep working, release builds set the vars. Non-darwin targets are
+# untouched.
+#
+# Notarisation, when credentials are present, submits a zip of the signed
+# binaries via `notarytool submit --wait`. One difference from the app: a bare
+# Mach-O cannot carry a stapled ticket (stapler wants a bundle / dmg / pkg),
+# so there is nothing to staple here. The ticket lives on Apple's servers and
+# Gatekeeper looks it up ONLINE the first time a quarantined binary runs. See
+# app/macos/SIGNING.md, "Tarball binaries".
+notarize_staged_binaries() {
+  # Credential convention copied from build-app.sh: a notarytool keychain
+  # profile, or the apple-id + team-id + app-specific-password triple.
+  NOTARY_ARGS=()
+  if [ -n "${HAUKSBEE_NOTARY_PROFILE:-}" ]; then
+    NOTARY_ARGS=(--keychain-profile "$HAUKSBEE_NOTARY_PROFILE")
+  elif [ -n "${HAUKSBEE_NOTARY_APPLE_ID:-}" ] && [ -n "${HAUKSBEE_NOTARY_TEAM_ID:-}" ] && [ -n "${HAUKSBEE_NOTARY_PASSWORD:-}" ]; then
+    NOTARY_ARGS=(--apple-id "$HAUKSBEE_NOTARY_APPLE_ID" \
+                 --team-id "$HAUKSBEE_NOTARY_TEAM_ID" \
+                 --password "$HAUKSBEE_NOTARY_PASSWORD")
+  fi
+  if [ "${#NOTARY_ARGS[@]}" -eq 0 ]; then
+    info "No notary credentials set; binaries are signed but NOT notarised."
+    info "Set HAUKSBEE_NOTARY_PROFILE (or the APPLE_ID/TEAM_ID/PASSWORD triple) to notarise."
+    return 0
+  fi
+  log "Notarising the signed binaries (notarytool submit --wait)"
+  NOTARY_ZIP="$STAGE/notary-bins.zip"
+  ( cd "$ROOTDIR" && ditto -c -k bin "$NOTARY_ZIP" )
+  xcrun notarytool submit "$NOTARY_ZIP" ${NOTARY_ARGS[@]+"${NOTARY_ARGS[@]}"} --wait
+  ok "Notarised. Bare binaries take no staple; Gatekeeper checks the ticket online."
+}
+
+if [ "$(uname -s)" = "Darwin" ]; then
+  if [ -n "${HAUKSBEE_SIGN_IDENTITY:-}" ]; then
+    log "Codesigning staged binaries with: $HAUKSBEE_SIGN_IDENTITY"
+    for bin in hauksbee hauksbee-ci hauksbee-mcp; do
+      codesign --force --options runtime --timestamp \
+        --sign "$HAUKSBEE_SIGN_IDENTITY" "$ROOTDIR/bin/$bin"
+      codesign --verify --strict --verbose=2 "$ROOTDIR/bin/$bin"
+    done
+    ok "codesign --verify --strict: passed for hauksbee, hauksbee-ci, hauksbee-mcp"
+    notarize_staged_binaries
+  else
+    info "HAUKSBEE_SIGN_IDENTITY not set; darwin binaries ship UNSIGNED."
+    info "Release builds must set it to a 'Developer ID Application' identity (see app/macos/SIGNING.md)."
+  fi
+fi
 
 # Reference assets. Binaries embed the model db; this copy supports the layered
 # ~/.hauksbee/models override and is handy documentation.
@@ -250,6 +312,22 @@ cp -R "$HAUKSBEE_ROOT/crates/hauksbee-ci/examples/." "$ROOTDIR/examples/ci-specs
 find "$ROOTDIR" -name '__pycache__' -type d -prune -exec rm -rf {} + 2>/dev/null || true
 find "$ROOTDIR" -name '*.pyc' -delete 2>/dev/null || true
 
+# ── flagship-board gate ──────────────────────────────────────────────────────
+# The flagship board is private (see scripts/build-public-mirror.sh, whose
+# BOARD_EXCLUDE / BOARD_GLOB lists this mirrors). Its hauksbee-ci example specs
+# live in crates/hauksbee-ci/examples/ and would otherwise ride into every
+# bundle with the rest of the examples. The two known specs are dropped by
+# name; anything ELSE named after the board, anywhere in the staged tree, is a
+# hard failure rather than a silent drop, because a new board-named file
+# appearing in the staging set means the enumeration is stale and a human has
+# to look.
+rm -f "$ROOTDIR/examples/ci-specs/tarski_brownout.toml" \
+      "$ROOTDIR/examples/ci-specs/tarski_brownout_repaired.toml"
+BOARD_LEAK="$(find "$ROOTDIR" -iname '*tarski*' -print 2>/dev/null || true)"
+[ -z "$BOARD_LEAK" ] || die "flagship board data staged into the bundle; refusing to package:
+$BOARD_LEAK
+Remove it from the staging inputs (and extend the drop list above if it is a new legitimate path)."
+
 printf '%s\n' "$VERSION" > "$ROOTDIR/VERSION"
 GIT_SHA="$(cd "$HAUKSBEE_ROOT" && git rev-parse HEAD 2>/dev/null || echo unknown)"
 GIT_SHA_SHORT="${GIT_SHA:0:7}"
@@ -270,18 +348,14 @@ PERMISSIVE_NAME="hauksbee-${VERSION}-${TARGET}-permissive.tar.gz"
 DEFAULT_NAME="hauksbee-${VERSION}-${TARGET}.tar.gz"
 
 if [ "$SHAPE" = default ]; then
-  # GPL-3.0 §4 wants a copy of the licence alongside the binary, not just a URL.
-  # Fetch it best-effort; if the builder is offline, say so rather than pretend.
+  # GPL-3.0 §4 wants a copy of the licence alongside the binary, not just a
+  # URL. The text is vendored in the repo (licenses/gpl-3.0.txt) so packaging
+  # never depends on the network; a missing copy is a broken checkout, not a
+  # downgrade to a link.
   GPL_NOTE="  Full GPL-3.0 text: LICENSE-GPL-3.0.txt, next to this file."
-  if have curl && curl -fsSL --max-time 20 https://www.gnu.org/licenses/gpl-3.0.txt \
-       -o "$STAGE/gpl-3.0.txt" 2>/dev/null && [ -s "$STAGE/gpl-3.0.txt" ]; then
-    cp "$STAGE/gpl-3.0.txt" "$ROOTDIR/LICENSE-GPL-3.0.txt"
-  else
-    GPL_NOTE="  Full GPL-3.0 text: https://www.gnu.org/licenses/gpl-3.0.txt
-  (this bundle was built without network access, so the text is not enclosed;
-   the release assets published by .github/workflows/release.yml do enclose it)"
-    warn "Could not fetch the GPL-3.0 text; LICENSE-BINARY.txt will link to it instead."
-  fi
+  [ -s "$HAUKSBEE_ROOT/licenses/gpl-3.0.txt" ] \
+    || die "licenses/gpl-3.0.txt missing; the default shape must enclose the GPL-3.0 text (GPL-3.0 section 4). Restore it from https://www.gnu.org/licenses/gpl-3.0.txt"
+  cp "$HAUKSBEE_ROOT/licenses/gpl-3.0.txt" "$ROOTDIR/LICENSE-GPL-3.0.txt"
 
   cat > "$ROOTDIR/LICENSE-BINARY.txt" <<EOF
 hauksbee ${VERSION} (${TARGET}) - licence of THIS binary
@@ -382,6 +456,7 @@ A universal PCB emulator: bind a board, bring it to life, assert it in CI.
 CONTENTS
   bin/hauksbee       the CLI (run / to-code / from-code / check-code)
   bin/hauksbee-ci    the headless CI runner (TOML specs, JUnit, GH annotations)
+  bin/hauksbee-mcp   the MCP server (hauksbee as structured tools over stdio)
   db/               reference model database (the binaries already embed it;
                     drop extra parts here or in ~/.hauksbee/models to extend)
   examples/         runnable demos: board-as-code + hauksbee-ci specs + sessions
@@ -391,8 +466,8 @@ CONTENTS
   LICENSE-BINARY.txt what this particular download is licensed under, and why
 
 INSTALL
-  Copy the two binaries onto your PATH:
-    install -m 0755 bin/hauksbee bin/hauksbee-ci /usr/local/bin/
+  Copy the binaries onto your PATH:
+    install -m 0755 bin/hauksbee bin/hauksbee-ci bin/hauksbee-mcp /usr/local/bin/
   or run the bundled installer (no sudo, installs into ~/.local/bin):
     PREFIX=\$HOME/.local scripts/install.sh --no-build --symlink
 
