@@ -1,0 +1,123 @@
+title = "Gate my repo"
+persona = "A hardware lead adding the tool to a repository's CI for the first time."
+goal = """
+Get from "a board file in a repo" to "a spec that gates the pipeline" without
+reading the assertion reference first, then find out what happens when the board
+moves on and the spec does not.
+"""
+success = """
+`init` writes a scaffold whose commented blocks become a working spec by
+uncommenting them and nothing else. The spec runs green. When the board's net
+names change underneath it, the run fails loud at exit 2 (a spec/board error,
+not a red), names every place the spec referenced the missing net, and suggests
+the net that replaced it.
+"""
+
+[[step]]
+name = "a repo with a board in it"
+do = "copy"
+src = "crates/hauksbee-ci/examples/boards/blinky.kicad_pcb"
+dst = "hardware/blinky.kicad_pcb"
+
+[[step]]
+name = "and a ci/ directory, where the hook and the action look for specs"
+do = "write"
+file = "ci/.gitkeep"
+text = ""
+
+[[step]]
+name = "scaffold the first spec from the board"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "init", "hardware/blinky.kicad_pcb", "--out", "ci"]
+exit = 0
+max_seconds = 30
+contains = [
+  "wrote starter spec to",
+  "edit it, then run:",
+  # A first-time user needs to know where the hook and the action look for specs.
+  "HAUKSBEE_CI_SPECS",
+  "already relative",
+]
+
+[[step]]
+name = "the scaffold detected the board's MCU and rail, and commented everything"
+do = "run"
+cmd = ["cat", "ci/blinky.toml"]
+exit = 0
+contains = [
+  "board = \"../hardware/blinky.kicad_pcb\"",
+  "mcu = \"atmega328p\"",
+  "# detected supply rail",
+  "kind = \"ideal\"",
+  "volts = 5.0",
+  "# [[assert]]",
+  "# kind = \"voltage\"",
+]
+
+[[step]]
+name = "uncomment the rail assertion, which is the whole edit"
+do = "uncomment"
+file = "ci/blinky.toml"
+marker = "kind = \"voltage\""
+
+[[step]]
+name = "the uncommented scaffold runs green"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "ci/blinky.toml"]
+exit = 0
+max_seconds = 30
+contains = [
+  "[PASS] no stress faults raised",
+  "[PASS] +5V in [4.75, 5.25] V after 50ms",
+  "GREEN",
+]
+matches = ["^2/2 assertions passed in [0-9.]+s - GREEN$"]
+# A scaffold must not generate a spec the tool then complains about. The
+# scaffold writes an ideal supply on the rail and a voltage assertion on the
+# same rail, which is exactly the shape the coverage check warns is unfalsifiable,
+# so following the scaffold's own instructions produces a warning about the
+# scaffold's own output.
+not_contains = ["COVERAGE HOLE"]
+
+[[step]]
+name = "someone renames the rail in the layout and does not touch the spec"
+do = "patch"
+file = "hardware/blinky.kicad_pcb"
+find = "\"+5V\""
+replace = "\"+5VDC\""
+all = true
+
+[[step]]
+name = "the desync fails loud at exit 2, not as a red and not as a pass"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "ci/blinky.toml"]
+exit = 2
+max_seconds = 30
+contains = [
+  "spec references net(s) not found on the board:",
+  # Both sites, so the reader fixes the spec in one pass instead of two.
+  "'+5V' (in supply)",
+  "'+5V' (in assert)",
+  "did you mean: +5VDC",
+]
+# A desync is not a failing assertion and must not read as one.
+not_contains = ["[FAIL]", "[PASS]", "RED", "GREEN", "assertions passed"]
+
+# The same first command, in the far more likely repo that has no ci/ directory
+# yet. `--out` documents a directory or a .toml path, and the tool's own advice
+# is that specs belong in `ci/`, so `--out ci` on a fresh repo has to land at
+# `ci/<board>.toml`.
+[[step]]
+name = "init --out into a ci/ directory that does not exist yet"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "init", "hardware/blinky.kicad_pcb", "--out", "checks"]
+exit = 0
+max_seconds = 30
+contains = ["wrote starter spec to checks/blinky.toml"]
+
+[[step]]
+name = "the spec is discoverable where the tool said it would be"
+do = "run"
+cmd = ["test", "-f", "checks/blinky.toml"]
+exit = 0
+

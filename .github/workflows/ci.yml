@@ -161,6 +161,35 @@ jobs:
           path: frontend/test-results/visual-lint
           if-no-files-found: ignore
 
+  scenario-qc:
+    name: scenario QC (ten real-user sessions, end to end)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      # No build job exists to borrow artifacts from, and the suite has to
+      # measure a release build: the flows it times are sub-second in release
+      # and slow enough in debug to trip its own wall-clock ceilings.
+      - name: build the binaries the suite drives
+        run: cargo build --release --bin hauksbee --bin hauksbee-ci
+      # Every other job here checks a unit, a report, or a rendered page. This
+      # one checks the session: the verdict wording a person reads, the exit
+      # code a pipeline branches on, whether a diagnosis names the number it
+      # measured, whether a bad input lands somewhere the user can act from.
+      # Those can each be correct while the whole flow is unusable, and nothing
+      # else in this file would notice.
+      - name: qc/run.sh
+        run: qc/run.sh
+      # The transcript is the point on a failure: it carries every command, exit
+      # code and stream, so a red here is diagnosable without a local repro.
+      - name: scenario transcripts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenario-qc-report
+          path: qc/results
+          if-no-files-found: ignore
+
   gpl-free-check:
     name: cargo check (GPL-free renode+qemu shape)
     runs-on: ubuntu-latest

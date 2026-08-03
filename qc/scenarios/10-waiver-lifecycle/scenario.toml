@@ -1,0 +1,224 @@
+title = "Waiver lifecycle"
+persona = "A lead who has judged one finding wrong and needs the rest of the suite to keep gating."
+goal = """
+Overrule a single finding with a reason and an expiry, confirm both gates agree
+about it, confirm it is still visible, then let it lapse and confirm the finding
+comes back and explains the red.
+"""
+success = """
+Both gates read the same waiver file and reach the same verdict: the copper gate
+and the assertion runner. A waived finding is printed with its reason and its
+expiry and is out of the gate. On expiry both gates go red again and name the
+lapsed waiver, so the new red is explainable without opening the file. A waiver
+missing its reason, or naming no net and no ref, is refused with the file ignored
+and everything gating.
+"""
+
+[[step]]
+name = "two boards in a working directory"
+do = "copy"
+src = "crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb"
+dst = "boot_gate.kicad_pcb"
+
+[[step]]
+name = "and the thermal board"
+do = "copy"
+src = "crates/hauksbee-ci/examples/boards/power_resistor.kicad_pcb"
+dst = "power_resistor.kicad_pcb"
+
+[[step]]
+name = "a spec whose thermal assertion fails"
+do = "write"
+file = "hot.toml"
+text = """
+name = "power resistor over thermal limit (hot ambient)"
+board = "power_resistor.kicad_pcb"
+duration_ms = 20
+ambient_c = 90
+
+[[supply]]
+net = "+5V"
+kind = "bench"
+volts = 5.0
+current_limit_a = 2.0
+
+[[assert]]
+kind = "max_temp"
+ref = "R1"
+celsius = 125
+"""
+
+[[step]]
+name = "before any waiver: the copper gate is red"
+do = "run"
+cmd = ["{bin}/hauksbee", "run", "boot_gate.kicad_pcb", "--check", "--strict", "--plain"]
+exit = 2
+max_seconds = 30
+contains = ["[SERIOUS]", "\"GND\" and \"+5V\", are touching"]
+not_contains = ["Waived"]
+
+[[step]]
+name = "before any waiver: the assertion runner is red"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "hot.toml"]
+exit = 1
+max_seconds = 30
+contains = ["[FAIL] Tj(R1) <= 125 C", "RED"]
+not_contains = ["[WAIVED]"]
+
+[[step]]
+name = "one waiver file beside the boards, covering one finding on each gate"
+do = "write"
+file = "hauksbee-waivers.toml"
+text = """
+[[waive]]
+check = "drc"
+kind = "short"
+nets = ["GND", "+5V"]
+reason = "measured open on the assembled panel; the pad geometry in the file is wrong"
+until = "2027-01-01"
+
+[[waive]]
+check = "ci"
+kind = "max_temp"
+refs = ["R1"]
+reason = "bench-verified at 90 C with the enclosure heatsink fitted"
+until = "2027-01-01"
+"""
+
+[[step]]
+name = "the copper gate: visible, explained, and out of the gate"
+do = "run"
+cmd = ["{bin}/hauksbee", "run", "boot_gate.kicad_pcb", "--check", "--strict", "--plain"]
+exit = 0
+max_seconds = 30
+contains = [
+  "== Waived (2) ==",
+  "These findings fired and were overruled. They are not in the gate.",
+  "drc/short: GND to +5V on B.Cu",
+  "drc/short: GND to +5V on F.Cu",
+  # The reason and the expiry both have to be on screen, or the waived section
+  # is a list nobody can audit.
+  "because: measured open on the assembled panel; the pad geometry in the file is wrong (until 2027-01-01)",
+]
+# Waived is not hidden: a board carrying overruled findings must not read as clean.
+matches = ["Waived \\(2\\)"]
+
+[[step]]
+name = "the same file reaches the single-check gate too"
+do = "run"
+cmd = ["{bin}/hauksbee", "run", "boot_gate.kicad_pcb", "--drc", "--strict", "--plain"]
+exit = 0
+max_seconds = 30
+contains = ["== Waived (2) ==", "because: measured open on the assembled panel"]
+
+[[step]]
+name = "parity: the assertion runner reads the same file and agrees"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "hot.toml"]
+exit = 0
+max_seconds = 30
+contains = [
+  "[WAIVED] Tj(R1) <= 125 C",
+  # The measured value stays on screen: a waiver overrules a finding, it does
+  # not delete it.
+  "Tj(R1) peak 156.7C > ceiling 125C",
+  "waived: bench-verified at 90 C with the enclosure heatsink fitted (until 2027-01-01)",
+  "visible here, not gating the build",
+  "GREEN",
+]
+matches = ["GREEN \\(1 failure\\(s\\) waived, visible above\\)"]
+
+[[step]]
+name = "the JUnit surface reports a waived failure as skipped, not as a pass"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "hot.toml", "--junit", "waived.xml"]
+exit = 0
+max_seconds = 30
+xml_file = "waived.xml"
+xml_required_tags = ["skipped"]
+xml_root_attrs = { failures = "0" }
+
+[[step]]
+name = "time passes: the expiry is now in the past"
+do = "patch"
+file = "hauksbee-waivers.toml"
+find = "2027-01-01"
+replace = "2026-01-01"
+all = true
+
+[[step]]
+name = "the copper gate goes red again and names the lapsed waiver"
+do = "run"
+cmd = ["{bin}/hauksbee", "run", "boot_gate.kicad_pcb", "--check", "--strict", "--plain"]
+exit = 2
+max_seconds = 30
+contains = [
+  "[SERIOUS]",
+  "waiver(s) have lapsed and no longer apply:",
+  "drc/short expired 2026-01-01: measured open on the assembled panel",
+]
+not_contains = ["== Waived (2) =="]
+
+[[step]]
+name = "and so does the assertion runner"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "hot.toml"]
+exit = 1
+max_seconds = 30
+contains = [
+  "[FAIL] Tj(R1) <= 125 C",
+  "lapsed 2026-01-01; its finding gates again",
+  "RED",
+]
+not_contains = ["[WAIVED]"]
+
+[[step]]
+name = "a waiver with no reason"
+do = "write"
+file = "hauksbee-waivers.toml"
+text = """
+[[waive]]
+check = "drc"
+kind = "short"
+nets = ["GND", "+5V"]
+until = "2027-01-01"
+"""
+
+[[step]]
+name = "the file is ignored, every finding gates, and the warning says so"
+do = "run"
+cmd = ["{bin}/hauksbee", "run", "boot_gate.kicad_pcb", "--check", "--strict", "--plain"]
+exit = 2
+max_seconds = 30
+contains = [
+  "WARNING: ignoring the waiver file",
+  "missing field `reason`",
+  "Every finding it would have covered gates this run.",
+  "[SERIOUS]",
+]
+
+[[step]]
+name = "a waiver naming neither a net nor a ref"
+do = "write"
+file = "hauksbee-waivers.toml"
+text = """
+[[waive]]
+check = "drc"
+kind = "short"
+reason = "the pour bridges these on purpose"
+until = "2027-01-01"
+"""
+
+[[step]]
+name = "refused, because that silences the rule board-wide"
+do = "run"
+cmd = ["{bin}/hauksbee", "run", "boot_gate.kicad_pcb", "--check", "--strict", "--plain"]
+exit = 2
+max_seconds = 30
+contains = [
+  "WARNING: ignoring the waiver file",
+  "needs `nets` or `refs`",
+  "which is the same as turning the check off",
+  "[SERIOUS]",
+]

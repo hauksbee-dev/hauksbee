@@ -1,0 +1,71 @@
+title = "Untrustworthy result"
+persona = "An engineer who asked a question the analysis cannot honestly answer."
+goal = """
+Ask for an analysis whose result would be meaningless, and get a refusal that is
+structurally distinct from both a pass and a fail, so no pipeline can read it as
+either.
+"""
+success = """
+Exit 3, not 0 and not 1. The message says what was refused, why the number would
+have been meaningless, and what to change. No table of zeros is printed. The same
+analysis on a deck that can be answered exits 0 and prints real data, so the
+refusal is discriminating rather than a blanket bail-out.
+"""
+
+[[step]]
+name = "a DC-only divider: nothing in it carries an AC stimulus"
+do = "write"
+file = "no-ac-source.cir"
+text = """
+* A resistive divider with a DC source only. The .ac card asks for a
+* small-signal sweep, but no source declares an AC magnitude, so the drive is
+* identically zero and every answer would be zero.
+V1 in 0 DC 5
+R1 in out 1k
+R2 out 0 1k
+.ac dec 10 1 1k
+.end
+"""
+
+[[step]]
+name = "the AC sweep is refused rather than answered with zeros"
+do = "run"
+cmd = ["{bin}/hauksbee", "sim", "no-ac-source.cir", "--ac"]
+exit = 3
+max_seconds = 30
+contains = [
+  "AC analysis refused",
+  "has no AC stimulus",
+  "no source carries an `AC <mag> [phase]` spec",
+  # It has to say what would have been wrong with the answer, not just refuse.
+  "the small-signal drive is identically zero",
+  "a meaningless all-zeros table",
+  # And how to make the question answerable.
+  "Add `AC 1` to the driving source",
+]
+# The refusal must not be accompanied by the output it refused to produce.
+not_matches = [
+  "^frequency,",
+  "^[0-9]\\.[0-9]+e[+-]?[0-9]+,",
+  "panicked at",
+]
+
+[[step]]
+name = "the same sweep on a deck that can be answered"
+do = "run"
+cmd = ["{bin}/hauksbee", "sim", "{repo}/examples/learn/02-mna-by-hand/rc_lowpass_ac.cir", "--ac", "--print", "V(out)"]
+exit = 0
+max_seconds = 30
+matches = [
+  "^frequency,V\\(out\\),V\\(out\\):phase_deg$",
+  "^[0-9]\\.[0-9]+e[+-]?[0-9]+,",
+]
+not_contains = ["refused"]
+
+[[step]]
+name = "a spec/board error is exit 2, and an untrustworthy run is not the same thing"
+do = "run"
+cmd = ["{bin}/hauksbee", "sim", "no-ac-source.cir", "--format", "both"]
+exit = 2
+max_seconds = 30
+contains = ["--out"]
