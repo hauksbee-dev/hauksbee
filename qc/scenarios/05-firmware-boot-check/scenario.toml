@@ -1,0 +1,74 @@
+title = "Firmware boot check"
+persona = "An engineer with a MOSFET gate that the netlist cannot adjudicate."
+goal = """
+Find out whether the firmware actually drives a control net to a defined level
+in time, which is a question no static check can answer, and get opposite
+verdicts from two firmware images on the same board.
+"""
+success = """
+The firmware that drives the gate passes and exits 0. The firmware that leaves it
+Hi-Z fails and exits 1, naming the net, the level it never reached, the deadline
+it missed, the range it was observed over, and a why line pointing at both
+plausible causes. Same board, same assertion, opposite outcome.
+"""
+requires_paths = [
+  "testdata/firmware/boot_gate_a/boot_gate.hex",
+  "testdata/firmware/boot_gate_b/boot_gate.hex",
+]
+
+[[step]]
+name = "firmware A drives the gate promptly"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "{repo}/crates/hauksbee-ci/examples/boot_gate_pass.toml"]
+exit = 0
+max_seconds = 30
+contains = [
+  "[PASS] GATE_CTRL driven to >= 3 V within 20 ms of reset",
+  "boot window clean",
+  "[PASS] no stress faults raised",
+  "GREEN",
+]
+matches = [
+  # The time it was driven at has to be reported, not just "in time".
+  "driven to >= 3 V at [0-9.]+ ms \\(<= 20 ms\\)",
+  "^2/2 assertions passed in [0-9.]+s - GREEN$",
+]
+not_contains = ["[FAIL]", "RED"]
+
+[[step]]
+name = "firmware B never configures the pin: the gate floats"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "{repo}/crates/hauksbee-ci/examples/boot_gate_fail.toml"]
+exit = 1
+max_seconds = 30
+contains = [
+  "[FAIL] GATE_CTRL driven to >= 3 V within 20 ms of reset",
+  "was never driven to >= 3 V",
+  "firmware left it Hi-Z / undefined through the whole run",
+  "observed range",
+  # The why line has to name both things worth checking, since a never-driven
+  # net is as often a wrong firmware path as a firmware bug.
+  "why: the firmware never drove the control net in time",
+  "points at the right image",
+  "RED",
+]
+matches = ["^0/1 assertions passed in [0-9.]+s - RED$"]
+not_contains = ["[PASS]", "GREEN"]
+
+[[step]]
+name = "both specs in one invocation exit with the worse of the two"
+do = "run"
+cmd = [
+  "{bin}/hauksbee-ci", "run",
+  "{repo}/crates/hauksbee-ci/examples/boot_gate_pass.toml",
+  "{repo}/crates/hauksbee-ci/examples/boot_gate_fail.toml",
+]
+exit = 1
+max_seconds = 40
+contains = [
+  "MOSFET gate driven promptly (PASS)",
+  "MOSFET gate left floating (FAIL)",
+  "=== 2 specs ===",
+  "worst exit code of the set: 1 (severity order 3 > 2 > 1 > 0)",
+]
+matches = ["^  \\[GREEN\\] .*boot_gate_pass\\.toml$", "^  \\[RED\\] .*boot_gate_fail\\.toml$"]

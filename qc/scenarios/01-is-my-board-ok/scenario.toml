@@ -1,0 +1,82 @@
+title = "Is my board OK?"
+persona = "Someone who has never run the tool, holding a board they did not design."
+goal = """
+Point the tool at a real board, get an answer in plain language, and be able to
+tell from the answer whether anything needs doing. Nothing in what comes back
+should require knowing how the tool is built.
+"""
+success = """
+The plain report names each check it ran, states a verdict for each one in
+words a non-engineer can act on, says out loud where the analysis is
+incomplete, and closes by naming the next command. No struct field, JSON key,
+or Rust identifier appears anywhere in the text.
+"""
+
+[[step]]
+name = "the whole static suite in plain language"
+do = "run"
+cmd = ["{bin}/hauksbee", "run", "{repo}/crates/hauksbee-ci/examples/boards/watchy.kicad_pcb", "--check", "--plain"]
+exit = 0
+max_seconds = 30
+# Every section a --check pass owes the reader, each with its own verdict line.
+contains = [
+  "== Copper spacing (DRC) ==",
+  "== Connectivity / lint ==",
+  "== Signal integrity ==",
+  "== What this pass did not check ==",
+  "Why it matters:",
+  "What to do:",
+  # The honesty banner: two active ICs have no model, and the report has to say
+  # so rather than reading healthy.
+  "active IC(s) are unresolved/open",
+  "INCOMPLETE",
+  # And it must hand the reader the next command rather than stopping at a verdict.
+  "hauksbee-ci init <board>",
+]
+matches = [
+  # Per-section verdicts, worded for a person: a count plus a severity read.
+  "^[0-9]+ issues found, none serious",
+  "^Looks healthy: no connectivity problems found\\.$",
+  "^No signal-integrity failures, but [0-9]+ things worth a look",
+  "^Summary: [0-9]+ short\\(s\\), [0-9]+ net pair\\(s\\) below the clearance rule",
+  # The heads-up points at `--report` for the bind table. If it puts a part count
+  # in that sentence, the count has to be the size of the table it is pointing
+  # at. Watchy binds 67 non-ignored parts into an 82-row table, so the only
+  # honest forms are no count at all or a count in that range. A much smaller
+  # number sends a first-time user looking for a table that does not exist.
+  "run --report for the (bind table|(6[0-9]|7[0-9]|8[0-9])-part bind table)",
+]
+# The internals must not leak into the persona surface. These are the real
+# identifiers the JSON/struct layer uses; in plain text they are noise a
+# non-engineer cannot act on.
+not_matches = [
+  "critical_parts_bound",
+  "active_path_unresolved",
+  "serious_count",
+  "actionable_count",
+  "schema_version",
+  "\\bBindSummary\\b",
+  "\\bJsonReport\\b",
+  "\\bSpecError\\b",
+  "\\bOutputMode\\b",
+  "unwrap\\(\\)",
+  "panicked at",
+  "RUST_BACKTRACE",
+  # A doubled article is the classic template-assembly tell.
+  "\\ba a\\b",
+  "\\bthe the\\b",
+]
+
+[[step]]
+name = "the same board, --report, agrees about the bind"
+do = "run"
+cmd = ["{bin}/hauksbee", "run", "{repo}/crates/hauksbee-ci/examples/boards/watchy.kicad_pcb", "--report"]
+exit = 0
+max_seconds = 30
+contains = ["bind summary:", "Critical parts modelled:"]
+matches = [
+  "^[0-9]+ of [0-9]+ non-ignored components resolved",
+  # The suggestion --check --plain makes about --report has to be true of the
+  # table --report actually prints; this pins the table's real size.
+  "^bind summary: [0-9]+ of [0-9]+ non-ignored parts resolved",
+]

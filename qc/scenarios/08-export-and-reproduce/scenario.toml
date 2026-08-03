@@ -1,0 +1,90 @@
+title = "Export and reproduce"
+persona = "A build engineer wiring the result into a dashboard and a test report."
+goal = """
+Get the same run out as machine-readable JSON and as JUnit XML, and be able to
+consume both without guessing: the JSON against the schema the repo ships, the
+XML as well-formed XML with honest counts.
+"""
+success = """
+The JSON carries a schema_version, parses, and validates against
+crates/hauksbee-engine/schemas/hauksbee-run-report.schema.json. The JUnit file
+parses as XML, has a testsuites root with a test count, and its failure count
+agrees with the verdict the human report gave. Two runs of the same board produce
+byte-identical JSON.
+"""
+
+[[step]]
+name = "the machine-readable report"
+do = "run"
+cmd = ["{bin}/hauksbee", "run", "{repo}/crates/hauksbee-ci/examples/boards/watchy.kicad_pcb", "--check", "--json"]
+exit = 0
+max_seconds = 30
+json_stdout = true
+json_schema = "crates/hauksbee-engine/schemas/hauksbee-run-report.schema.json"
+json_required_keys = [
+  "schema_version", "board", "bind", "ok", "verdict", "serious_count", "actionable_count",
+]
+json_equals = { "schema_version" = 1, "verdict" = "pass", "ok" = true, "serious_count" = 0, "bind.mcu_bound" = true }
+# The JSON surface is where the internal names belong, and it must not be
+# polluted with the plain-language rendering.
+not_contains = ["Why it matters:", "What to do:", "== Copper spacing"]
+
+[[step]]
+name = "the same board twice gives the same JSON"
+do = "write"
+file = "compare.sh"
+text = """
+set -e
+"$1/hauksbee" run "$2" --check --json > a.json 2>/dev/null
+"$1/hauksbee" run "$2" --check --json > b.json 2>/dev/null
+cmp a.json b.json && echo "IDENTICAL"
+"""
+
+[[step]]
+name = "determinism: byte-identical across runs"
+do = "run"
+cmd = ["sh", "compare.sh", "{bin}", "{repo}/crates/hauksbee-ci/examples/boards/watchy.kicad_pcb"]
+exit = 0
+max_seconds = 40
+contains = ["IDENTICAL"]
+
+[[step]]
+name = "the JUnit report for the same board"
+do = "run"
+cmd = [
+  "{bin}/hauksbee", "run", "{repo}/crates/hauksbee-ci/examples/boards/watchy.kicad_pcb",
+  "--check", "--junit", "watchy.xml",
+]
+exit = 0
+max_seconds = 30
+xml_file = "watchy.xml"
+xml_required_tags = ["testsuite", "testcase"]
+xml_root_attrs = { failures = "0" }
+file_matches = { "watchy.xml" = [
+  "^<\\?xml version=\"1\\.0\" encoding=\"UTF-8\"\\?>",
+  "<testsuites name=\"hauksbee watchy\\.kicad_pcb\" tests=\"[0-9]+\" failures=\"0\">",
+] }
+
+[[step]]
+name = "a JUnit report from the assertion runner, on a board that fails"
+do = "run"
+cmd = [
+  "{bin}/hauksbee-ci", "run", "{repo}/crates/hauksbee-ci/examples/power_resistor_hot.toml",
+  "--junit", "hot.xml",
+]
+exit = 1
+max_seconds = 30
+xml_file = "hot.xml"
+xml_required_tags = ["testsuite", "testcase", "failure"]
+# The XML must not claim a green suite while the process exits 1.
+xml_root_attrs = { failures = "1" }
+
+[[step]]
+name = "and the same failing run as one JSON object"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "{repo}/crates/hauksbee-ci/examples/power_resistor_hot.toml", "--json"]
+exit = 1
+max_seconds = 30
+json_stdout = true
+json_required_keys = ["exit_code", "passed", "run_valid", "results", "spec_name", "board"]
+json_equals = { "exit_code" = 1, "passed" = false, "run_valid" = true }
