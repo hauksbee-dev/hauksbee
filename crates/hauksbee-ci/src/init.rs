@@ -16,21 +16,112 @@ use hauksbee_models::ModelLibrary;
 use crate::error::SpecError;
 use crate::runner;
 
-/// Scaffold `<board-stem>.toml` beside the board and return its path. Refuses to
-/// overwrite an existing file: the point is a starting point, not a clobber of
+/// Scaffold `<board-stem>.toml` into the CURRENT DIRECTORY and return its
+/// path. The old default (beside the board) put the spec where no CI tooling
+/// looks; writing where the user is standing means `hauksbee-ci init
+/// hardware/board.kicad_pcb` run from `ci/` lands the spec in `ci/`, which is
+/// exactly where the pre-commit hook and the action's auto-detect search.
+/// The generated `board = "..."` path is computed relative to the output
+/// directory, so the spec is valid wherever it lands. Refuses to overwrite an
+/// existing file: the point is a starting point, not a clobber of
 /// hand-written work.
 pub fn init(board: &Path) -> Result<PathBuf, SpecError> {
-    let out = board.with_file_name(format!("{}.toml", board_stem(board)));
+    init_to(board, None)
+}
+
+/// [`init`] with an explicit destination (`--out`): a path ending in `.toml` is
+/// the spec file itself, and anything else is a directory that gets
+/// `<board-stem>.toml` inside it (created if it does not exist yet). `None`
+/// means the current directory.
+///
+/// The suffix decides, not the filesystem. `--out ci` on a repo that has no
+/// `ci/` yet is the common first command, and the guidance printed right after
+/// says specs are discovered in `ci/`; resolving that to a FILE named `ci`
+/// would scaffold a spec no tool ever finds, which is a gate that silently
+/// checks nothing.
+pub fn init_to(board: &Path, out: Option<&Path>) -> Result<PathBuf, SpecError> {
+    let out = match out {
+        None => {
+            let cwd = std::env::current_dir()
+                .map_err(|e| SpecError::Io(format!("reading the current directory: {e}")))?;
+            cwd.join(format!("{}.toml", board_stem(board)))
+        }
+        Some(p) => {
+            // A `.toml` suffix names the spec file; every other spelling is a
+            // directory to write `<board-stem>.toml` into, whether or not it
+            // exists yet.
+            if p.is_dir() || !names_a_spec_file(p) {
+                std::fs::create_dir_all(p)
+                    .map_err(|e| SpecError::Io(format!("creating {}: {e}", p.display())))?;
+                p.join(format!("{}.toml", board_stem(board)))
+            } else {
+                if let Some(parent) = p.parent().filter(|d| !d.as_os_str().is_empty()) {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        SpecError::Io(format!("creating {}: {e}", parent.display()))
+                    })?;
+                }
+                p.to_path_buf()
+            }
+        }
+    };
     if out.exists() {
         return Err(SpecError::Invalid(format!(
             "{} already exists; refusing to overwrite it. Move it aside (or delete it) to regenerate the starter spec.",
             out.display()
         )));
     }
-    let spec = render_spec(board)?;
+    let spec_dir = out
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let spec = render_spec_at(board, &spec_dir)?;
     std::fs::write(&out, spec)
         .map_err(|e| SpecError::Io(format!("writing {}: {e}", out.display())))?;
     Ok(out)
+}
+
+/// The USB profile scaffolded for a detected USB rail: a BC1.2 / USB-C 1.5 A
+/// port, the commonest thing a hobby board is plugged into. Generous enough
+/// that the starter spec stays green on a board that behaves, tight enough that
+/// a real inrush shows as droop.
+const USB_PROFILE: &str = "5v1.5a";
+
+/// The bench-PSU current limit scaffolded for a detected rail with no better
+/// story. A bench supply is the honest default for "something outside the board
+/// feeds this net": it holds `volts` until the board asks for more than this,
+/// then folds back, which is what makes a rail assertion on the net falsifiable.
+const BENCH_LIMIT_A: f64 = 2.0;
+
+/// Does this detected rail read as a USB port, so the scaffold can model the
+/// actual source instead of a generic bench supply? Both halves must agree: the
+/// name says USB and the detected voltage is the 5 V a USB port supplies. A
+/// `VBUS_3V3` level-shifter net is not a port.
+fn is_usb_port_rail(net: &str, volts: f64) -> bool {
+    let n = net.to_ascii_uppercase();
+    (n.contains("VBUS") || n.contains("USB")) && (volts - 5.0).abs() < 0.1
+}
+
+/// Is this `--out` value the spec file itself rather than a directory to put
+/// the spec in? A `.toml` extension (any case) says file; everything else,
+/// including a bare name like `ci` and an explicit `ci/`, says directory.
+fn names_a_spec_file(p: &Path) -> bool {
+    p.extension()
+        .is_some_and(|e| e.eq_ignore_ascii_case("toml"))
+}
+
+/// Does a net NAME read as a power net even though the rail detector could
+/// not price it (so `power_rail_voltage` returned `None`)? Used only to keep
+/// the scaffold's boot/toggle examples off nets like `VSUP_UNLIMITED` or
+/// `PWR_EN_RAIL`; a false positive here just means the example falls back to
+/// a placeholder, so the heuristic can afford to be broad.
+fn looks_like_power_name(net: &str) -> bool {
+    let n = net.to_ascii_uppercase();
+    [
+        "VSUP", "VDD", "VCC", "VBUS", "VBAT", "BAT+", "PWR", "POWER", "SUPPLY", "VIN", "RAIL",
+    ]
+    .iter()
+    .any(|tag| n.contains(tag))
 }
 
 fn board_stem(board: &Path) -> String {
@@ -41,9 +132,64 @@ fn board_stem(board: &Path) -> String {
         .to_string()
 }
 
-/// Render the starter spec's TOML text for `board`. Split out from [`init`] so
-/// it can be exercised without touching disk.
+/// Render the starter spec's TOML text for `board`, with the `board = "..."`
+/// reference written relative to the board's own directory (the historical
+/// beside-the-board shape). Kept for callers that place the file themselves.
 pub fn render_spec(board: &Path) -> Result<String, SpecError> {
+    let dir = board
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    render_spec_at(board, &dir)
+}
+
+/// The path string the generated spec's `board = "..."` line carries: relative
+/// from `spec_dir` to the board when both resolve, absolute otherwise. A spec
+/// whose board reference is wrong on arrival would fail its very first run,
+/// the opposite of "your first spec is an edit".
+fn board_reference(board: &Path, spec_dir: &Path) -> String {
+    let board_abs = std::fs::canonicalize(board).unwrap_or_else(|_| board.to_path_buf());
+    let dir_abs = std::fs::canonicalize(spec_dir).unwrap_or_else(|_| spec_dir.to_path_buf());
+    match relative_path(&dir_abs, &board_abs) {
+        Some(rel) => rel.display().to_string(),
+        None => board_abs.display().to_string(),
+    }
+}
+
+/// `to` expressed relative to the directory `from` (both absolute), walking up
+/// with `..` where needed. `None` when they share no root (different drives).
+fn relative_path(from: &Path, to: &Path) -> Option<PathBuf> {
+    use std::path::Component;
+    let from: Vec<Component> = from.components().collect();
+    let to: Vec<Component> = to.components().collect();
+    // Different prefixes (Windows drives) cannot be related; same-root paths
+    // always share at least the root component.
+    let common = from
+        .iter()
+        .zip(to.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+    if common == 0 {
+        return None;
+    }
+    let mut rel = PathBuf::new();
+    for _ in common..from.len() {
+        rel.push("..");
+    }
+    for c in &to[common..] {
+        rel.push(c.as_os_str());
+    }
+    if rel.as_os_str().is_empty() {
+        rel.push(".");
+    }
+    Some(rel)
+}
+
+/// Render the starter spec's TOML text for `board` as it should read when the
+/// file lives in `spec_dir`. Split out from [`init_to`] so it can be exercised
+/// without touching disk.
+pub fn render_spec_at(board: &Path, spec_dir: &Path) -> Result<String, SpecError> {
     let extracted = runner::load_board(board)?;
     // Same layered library as a run (builtin → packs → user model dirs), so
     // the scaffold detects the MCU/supplies a run would actually bind.
@@ -93,12 +239,20 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
 
     // A concrete control net for the boot-coverage assertion: the first
     // non-rail, non-ground signal net (what the firmware is most likely to
-    // drive). None such -> a named placeholder the user replaces.
+    // drive). Power-ish NAMES the rail detector does not price (VSUP_*,
+    // VBAT_*, PWR_*) are excluded too: a scaffolded boot/toggle example on a
+    // power net reads as nonsense on arrival and teaches the wrong shape.
+    // None such -> a named placeholder the user replaces.
     let boot_net = extracted
         .nets
         .iter()
         .map(|n| n.name.as_str())
-        .find(|n| !n.is_empty() && !is_ground(n) && power_rail_voltage(n).is_none())
+        .find(|n| {
+            !n.is_empty()
+                && !is_ground(n)
+                && power_rail_voltage(n).is_none()
+                && !looks_like_power_name(n)
+        })
         .map(str::to_string);
 
     // Detected MCU (first, if any). The binder's backend string is
@@ -125,10 +279,7 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     );
 
     let stem = board_stem(board);
-    let board_file = board
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("board.kicad_pcb");
+    let board_file = board_reference(board, spec_dir);
 
     let mut s = String::new();
     let _ = writeln!(
@@ -147,8 +298,8 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     let _ = writeln!(
         s,
         "# Full assertion catalog (docs/ci/CI.md): voltage, uart, toggle, no_faults,\n\
-         #   max_current, max_temp, rail_window, protection_trip, boot-coverage,\n\
-         #   phase_margin, ac_gain, peripheral, hwtrace."
+         #   max_current, max_temp, rail_window, protection_trip, boot_coverage,\n\
+         #   phase_margin, ac_gain, peripheral, hwtrace, model_coverage."
     );
     let _ = writeln!(s);
     let _ = writeln!(
@@ -160,13 +311,29 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
         "board = \"{board_file}\"          # the design file this spec checks"
     );
 
-    // MCU + firmware placeholder.
+    // MCU + firmware placeholder. The informational value is what the BOARD
+    // says (the part value), not the coarse backend family it collapses to:
+    // printing "atmega328p" for an RP2040 board because of a family fallback
+    // would teach the user a falsehood on line three of their first spec.
+    // When the modelled core differs from the requested part, both are named.
     match &mcu_kind {
         Some(kind) => {
-            let _ = writeln!(
-                s,
-                "mcu = \"{kind}\"                # detected MCU (informational; the binder auto-detects)"
-            );
+            let requested = bound
+                .mcus
+                .first()
+                .map(|m| m.requested_part.as_str())
+                .unwrap_or("");
+            if !requested.is_empty() && !requested.eq_ignore_ascii_case(kind) {
+                let _ = writeln!(
+                    s,
+                    "mcu = \"{requested}\"                # board's MCU (informational); co-simmed on the {kind} core"
+                );
+            } else {
+                let _ = writeln!(
+                    s,
+                    "mcu = \"{kind}\"                # detected MCU (informational; the binder auto-detects)"
+                );
+            }
         }
         None => {
             let _ = writeln!(
@@ -182,14 +349,39 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     let _ = writeln!(s, "duration_ms = 200               # simulated time to run");
     let _ = writeln!(s);
 
-    // Supplies (enabled): one leg per detected rail.
+    // Supplies (enabled): one leg per detected rail, modelled BEHAVIORALLY.
     let _ = writeln!(
         s,
         "# Supplies: power the rails the board expects. kind is one of"
     );
+    let _ = writeln!(s, "# ideal | bench | wall | usb | battery.");
     let _ = writeln!(
         s,
-        "# ideal | bench | wall | usb | battery (ideal = a stiff rail at `volts`)."
+        "# Each detected rail is scaffolded as a behavioral source (a bench PSU with a"
+    );
+    let _ = writeln!(
+        s,
+        "# current limit, or a USB port with its droop), never as kind = \"ideal\", so"
+    );
+    let _ = writeln!(
+        s,
+        "# that the rail assertions further down are gates rather than decoration: an"
+    );
+    let _ = writeln!(
+        s,
+        "# ideal source pins its net to `volts` whatever the board draws, so a voltage"
+    );
+    let _ = writeln!(
+        s,
+        "# or rail_window check on that net cannot fail for a board reason and its green"
+    );
+    let _ = writeln!(
+        s,
+        "# vouches for nothing. A bench PSU folds back at its limit and a USB port sags"
+    );
+    let _ = writeln!(
+        s,
+        "# across its cable, so the rail can move and the check can fire."
     );
     if supplies.is_empty() {
         let _ = writeln!(
@@ -198,8 +390,9 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
         );
         let _ = writeln!(s, "# [[supply]]");
         let _ = writeln!(s, "# net = \"+5V\"");
-        let _ = writeln!(s, "# kind = \"ideal\"");
+        let _ = writeln!(s, "# kind = \"bench\"");
         let _ = writeln!(s, "# volts = 5.0");
+        let _ = writeln!(s, "# current_limit_a = 2.0");
     } else {
         for (net, v) in &supplies {
             let _ = writeln!(s, "[[supply]]");
@@ -207,8 +400,23 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
                 s,
                 "net = \"{net}\"                   # detected supply rail"
             );
-            let _ = writeln!(s, "kind = \"ideal\"");
-            let _ = writeln!(s, "volts = {}", fmt1(*v));
+            if is_usb_port_rail(net, *v) {
+                let _ = writeln!(
+                    s,
+                    "kind = \"usb\"                     # the name and the 5 V say this rail is a USB port"
+                );
+                let _ = writeln!(
+                    s,
+                    "usb = \"{USB_PROFILE}\"               # what the port negotiates: 5v0.5a | 5v1.5a | 5v3a"
+                );
+            } else {
+                let _ = writeln!(s, "kind = \"bench\"");
+                let _ = writeln!(s, "volts = {}", fmt1(*v));
+                let _ = writeln!(
+                    s,
+                    "current_limit_a = {BENCH_LIMIT_A:.1}            # what the source delivers before it folds back; set yours"
+                );
+            }
         }
     }
     // Rails whose name says "supply" and nothing else. Nobody can read a voltage
@@ -262,7 +470,7 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     let _ = writeln!(s);
     let _ = writeln!(
         s,
-        "# boot-coverage: a control net (a gate / enable / reset / chip-select) the"
+        "# boot_coverage: a control net (a gate / enable / reset / chip-select) the"
     );
     let _ = writeln!(
         s,
@@ -323,7 +531,7 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
         let _ = writeln!(s, "#   held-LOW net too.");
     }
     let _ = writeln!(s, "{cc}[[assert]]");
-    let _ = writeln!(s, "{cc}kind = \"boot-coverage\"");
+    let _ = writeln!(s, "{cc}kind = \"boot_coverage\"");
     match &boot_net {
         Some(net) => {
             let _ = writeln!(
@@ -349,7 +557,15 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     );
     let _ = writeln!(s);
 
-    // Commented voltage assertions on the rails.
+    // Commented voltage assertions on the rails. A rail the BOARD derives (a
+    // regulator output, whatever hangs off the input rail) is the strongest gate
+    // the scaffold can offer, because every part between the source and that net
+    // is under test, so those come first and are named as such. The rails fed
+    // straight from a declared supply leg come after; they gate too, but only
+    // because the supply above is behavioral.
+    let (derived, source_fed): (Vec<_>, Vec<_>) = rails
+        .iter()
+        .partition(|(net, _)| !supplies.iter().any(|(s, _)| s == net));
     let _ = writeln!(
         s,
         "# voltage: a rail stays within bounds (min = worst dip, max = worst rise)."
@@ -365,12 +581,28 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
         let _ = writeln!(s, "# min = 4.75");
         let _ = writeln!(s, "# max = 5.25");
     } else {
-        for (net, v) in &rails {
+        if !derived.is_empty() {
+            let _ = writeln!(
+                s,
+                "# These rails the board makes for itself, so a check on them measures the"
+            );
+            let _ = writeln!(
+                s,
+                "# regulator, the filtering and the load between the input and the net:"
+            );
+        }
+        for (net, v) in derived.iter().chain(source_fed.iter()) {
+            let derived_here = derived.iter().any(|(n, _)| n == net);
+            let note = if derived_here {
+                "derived by the board"
+            } else {
+                "fed by the supply above"
+            };
             let _ = writeln!(s, "# [[assert]]");
             let _ = writeln!(s, "# kind = \"voltage\"");
             let _ = writeln!(
                 s,
-                "# net = \"{net}\"                  # rail detected at ~{} V",
+                "# net = \"{net}\"                  # rail detected at ~{} V, {note}",
                 fmt1(*v)
             );
             let _ = writeln!(s, "# min = {}", fmt2(v * 0.95));
@@ -388,7 +620,7 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     // --transient` flag; brownout/inrush lives here in the spec. Commented so
     // the starter stays GREEN on no_faults alone; the user opts in and tunes the
     // load profile to their board. See docs/checks/TRANSIENTS.md.
-    if let Some((rail, _)) = supplies.first() {
+    if let Some((rail, rail_v)) = supplies.first() {
         let _ = writeln!(s);
         let _ = writeln!(
             s,
@@ -428,6 +660,18 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
         let _ = writeln!(s, "#");
         let _ = writeln!(s, "# [[scenario]]");
         let _ = writeln!(s, "# id = \"step\"");
+        // `part` is required by the scenario loader (the load attaches to a
+        // component); scaffold it with the detected MCU so uncommenting the
+        // block as written always parses.
+        let scenario_part = bound
+            .mcus
+            .first()
+            .map(|m| m.reference.clone())
+            .unwrap_or_else(|| "U1".to_string());
+        let _ = writeln!(
+            s,
+            "# part = \"{scenario_part}\"                   # the component drawing the load"
+        );
         let _ = writeln!(s, "# profile = \"load_step\"");
         let _ = writeln!(
             s,
@@ -439,10 +683,14 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
         let _ = writeln!(s, "# kind = \"rail_window\"");
         let _ = writeln!(s, "# scenario = \"step\"");
         let _ = writeln!(s, "# net = \"{rail}\"");
+        // The floor is derived from THIS rail's own detected voltage (-5%),
+        // never from the board-wide reference: a 4.5 V floor scaffolded onto
+        // a 1.1 V core rail is wrong on arrival and teaches the wrong shape.
         let _ = writeln!(
             s,
-            "# min = {}                    # the rail must never sag below this (V)",
-            fmt2(vref * 0.9)
+            "# min = {}                    # 5% below the rail's detected {} V; tune to your budget",
+            fmt2(rail_v * 0.95),
+            fmt1(*rail_v)
         );
     }
 
@@ -483,6 +731,34 @@ pub fn render_spec(board: &Path) -> Result<String, SpecError> {
     }
 
     Ok(s)
+}
+
+#[cfg(test)]
+mod relative_path_tests {
+    use super::relative_path;
+    use std::path::{Path, PathBuf};
+
+    #[test]
+    fn sibling_parent_and_nested_shapes_all_resolve() {
+        let rel = |from: &str, to: &str| relative_path(Path::new(from), Path::new(to));
+        assert_eq!(
+            rel("/repo/ci", "/repo/hardware/board.kicad_pcb"),
+            Some(PathBuf::from("../hardware/board.kicad_pcb"))
+        );
+        assert_eq!(
+            rel("/repo", "/repo/hardware/board.kicad_pcb"),
+            Some(PathBuf::from("hardware/board.kicad_pcb"))
+        );
+        assert_eq!(
+            rel("/repo/a/b", "/repo/board.kicad_pcb"),
+            Some(PathBuf::from("../../board.kicad_pcb"))
+        );
+        // Same directory: the bare file name.
+        assert_eq!(
+            rel("/repo", "/repo/board.kicad_pcb"),
+            Some(PathBuf::from("board.kicad_pcb"))
+        );
+    }
 }
 
 /// Round to one decimal place.
