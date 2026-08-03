@@ -1,7 +1,11 @@
-import { useState } from 'react'
+import React from 'react'
 import type { BoardSession } from '../hooks/useBoardSession'
 import { BoardTargetIcon } from './Icons'
 import { FirmwareJack } from './FirmwareJack'
+import { BOARD_FORMATS, acceptedVendors } from '../lib/board-formats'
+import { ArriveOnce, PressCard, SkeletonBar, useDropTarget, useSkeletonSwap } from '../motion'
+import { motion, useReducedMotion } from 'motion/react'
+import { CELL, INSTANT } from '../motion/tokens'
 
 // The Board view before a board exists: the drop-a-board intake. One elevated
 // card holds the drop area + primary action (the single focal point); firmware
@@ -12,11 +16,12 @@ import { FirmwareJack } from './FirmwareJack'
 // README for provenance).
 //
 // Watchy leads deliberately. Most people try exactly one sample and decide from
-// it, so the first one has to be a board someone actually fabricated: 86 parts,
-// 685 copper segments, a real spacing report with real net names in it. Blinky
-// is one footprint and one trace, and its whole DRC report is the single line
-// "Looks healthy", which shows nothing and reads as though the tool does
-// nothing. It stays, last, as the minimal case to compare against.
+// it, so the first one has to be a board someone actually fabricated: 86
+// footprints resolving to 82 distinct parts, 685 copper segments, and a real
+// spacing report with real net names in it. Blinky is one footprint and one
+// trace, and its whole DRC report is the single line "Looks healthy", which
+// shows nothing and reads as though the tool does nothing. It stays, last, as
+// the minimal case to compare against.
 const SAMPLES: { label: string; desc: string; board: string; firmware?: string }[] = [
   { label: 'Watchy', desc: 'a real smartwatch', board: '/samples/watchy.kicad_pcb' },
   {
@@ -41,15 +46,64 @@ function activateOnEnterSpace(inputId: string) {
   }
 }
 
+/** The shape of the report that is coming, while it is still being computed.
+ *
+ *  A spinner says "wait"; this says "wait, and here is what will be here": the
+ *  verdict bar, then the findings. It is drawn from the real report's layout, so
+ *  when the analysis lands the content arrives INTO these positions instead of
+ *  pushing the page around. That is the whole reason it is a skeleton and not a
+ *  spinner, and it is why a generic three-grey-bars block would not have done. */
+function ReportSkeleton() {
+  return (
+    <div aria-hidden data-testid="report-skeleton" className="mt-4">
+      {/* the verdict headline, two lines and its board/parts/nets sub-line */}
+      <div className="rounded-xl px-4 py-3.5" style={{ border: '1px solid var(--hairline)', background: 'var(--surface)' }}>
+        <SkeletonBar width="88%" height={12} />
+        <div className="mt-2"><SkeletonBar width="54%" height={12} /></div>
+        <div className="mt-3"><SkeletonBar width="32%" height={9} /></div>
+      </div>
+      {/* the findings sections */}
+      {[0, 1, 2].map(i => (
+        <div
+          key={i}
+          className="mt-3 rounded-xl px-4 py-3.5"
+          style={{ border: '1px solid var(--hairline)', background: 'var(--surface)' }}
+        >
+          <SkeletonBar width={i === 0 ? '28%' : i === 1 ? '36%' : '22%'} height={9} />
+          <div className="mt-2.5"><SkeletonBar width="96%" height={10} /></div>
+          <div className="mt-2"><SkeletonBar width={i === 1 ? '71%' : '84%'} height={10} /></div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 export function UploadView({ session, onOpenLive }: {
   session: BoardSession
   /** Open the live session already running server-side (mounts the sim). */
   onOpenLive?: () => void
 }) {
   const {
-    busy, uploadError, firmwareFile, handleBoard, handleFirmware, clearFirmware, runSample,
+    busy, uploadError, uploadNotice, dismissNotice, firmwareFile,
+    handleBoard, handleFirmware, clearFirmware, runSample,
   } = session
-  const [dragOver, setDragOver] = useState(false)
+  const reduced = useReducedMotion()
+
+  // Drag feedback: 'over' when files are genuinely being dragged, 'reject'
+  // when the drag carries something that is not a file at all (a text
+  // selection, a link). There is no 'accept': the browser withholds file names
+  // during a drag, so a green tick before the drop would be a guess. See
+  // ../motion/DropField for the rest of that argument.
+  const drop = useDropTarget(files => { if (files[0]) handleBoard(files[0]) })
+  const dragOver = drop.state === 'over'
+  const dragReject = drop.state === 'reject'
+
+  // The report skeleton is derived from `busy`, so it cannot outlive the
+  // request: the moment the analysis resolves (report OR error), `busy` clears
+  // and the skeleton is on its way out in the same tick. It also does not
+  // appear at all for a fast local board, and once it appears it stays long
+  // enough not to flicker.
+  const { showSkeleton } = useSkeletonSwap({ ready: !busy, delay: 140, minVisible: 400 })
 
   return (
     <div className="landing h-full overflow-y-auto view-enter">
@@ -144,43 +198,57 @@ export function UploadView({ session, onOpenLive }: {
               </div>
             </div>
           ) : (
-            <label
+            <motion.label
               data-testid="drop-zone"
               htmlFor="board-file"
               role="button"
               tabIndex={0}
               aria-label="Choose a board file to analyze"
               onKeyDown={activateOnEnterSpace('board-file')}
-              onDragEnter={e => { e.preventDefault(); setDragOver(true) }}
-              onDragOver={e => { e.preventDefault(); setDragOver(true) }}
-              onDragLeave={e => { e.preventDefault(); setDragOver(false) }}
-              onDrop={e => {
-                e.preventDefault()
-                setDragOver(false)
-                const f = e.dataTransfer.files[0]
-                if (f) handleBoard(f)
-              }}
+              {...drop.bind}
               className="drop-card block cursor-pointer px-8 py-11 text-center"
               data-active={dragOver ? 'true' : 'false'}
+              data-reject={dragReject ? 'true' : 'false'}
+              // The card lifts a hair and settles when files come over it. The
+              // move is 2 px and spring-damped: enough that the target reads as
+              // armed, small enough that nothing on it becomes hard to read
+              // mid-drag. A refused drag does not lift at all, which is the
+              // point of distinguishing the two.
+              initial={false}
+              animate={reduced ? {} : { y: dragOver ? -2 : 0, scale: dragOver ? 1.004 : 1 }}
+              transition={reduced ? INSTANT : CELL}
+              style={dragReject
+                ? { borderColor: 'var(--err-border)', background: 'var(--err-bg)' }
+                : undefined}
             >
               {/* icon in a soft copper disc */}
-              <span
+              <motion.span
                 className="inline-flex items-center justify-center mx-auto"
+                initial={false}
+                animate={reduced ? {} : { scale: dragOver ? 1.06 : 1 }}
+                transition={reduced ? INSTANT : CELL}
                 style={{
                   width: 56, height: 56, borderRadius: 14,
-                  background: 'var(--copper-tint)',
-                  border: '1px solid var(--copper-deep)',
-                  color: dragOver ? 'var(--copper-hi)' : 'var(--copper)',
+                  background: dragReject ? 'var(--err-bg)' : 'var(--copper-tint)',
+                  border: `1px solid ${dragReject ? 'var(--err-border)' : 'var(--copper-deep)'}`,
+                  color: dragReject ? 'var(--err)' : dragOver ? 'var(--copper-hi)' : 'var(--copper)',
                 }}
               >
                 <BoardTargetIcon size={26} />
-              </span>
+              </motion.span>
 
-              <div className="mt-5 text-[17px] font-semibold" style={{ color: 'var(--silk)' }}>
-                {dragOver ? 'Drop to analyze' : 'Drop a board to analyze it'}
+              <div
+                className="mt-5 text-[17px] font-semibold"
+                style={{ color: dragReject ? 'var(--err-strong)' : 'var(--silk)' }}
+              >
+                {dragReject
+                  ? 'That is not a file'
+                  : dragOver ? 'Drop to analyze' : 'Drop a board to analyze it'}
               </div>
               <div className="mt-1 text-[13px]" style={{ color: 'var(--silk-dim)' }}>
-                or click anywhere in this card to choose a file
+                {dragReject
+                  ? 'Drag a board file out of your file manager, or click to choose one.'
+                  : 'or click anywhere in this card to choose a file'}
               </div>
 
               {/* primary action, visual only; the label handles activation */}
@@ -188,16 +256,46 @@ export function UploadView({ session, onOpenLive }: {
                 <BoardTargetIcon size={15} /> Choose a board
               </span>
 
-              {/* accepted formats */}
+              {/* Accepted formats, rendered from the one list in
+                  lib/board-formats. Hand-written before, and out of step with
+                  both the picker's `accept` attribute and the rejection card's
+                  version of the same sentence. */}
               <div className="mt-6 text-[12px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
-                KiCad <code className="hb-inline">.kicad_pcb</code> <code className="hb-inline">.kicad_sch</code> ·
-                Eagle <code className="hb-inline">.brd</code> ·
-                Altium <code className="hb-inline">.PcbDoc</code> · IPC <code className="hb-inline">.d356</code> ·
-                gerber <code className="hb-inline">.zip</code> ·
-                board-as-code <code className="hb-inline">.board</code>
+                {/* On a phone the card is narrower than "KiCad .kicad_pcb
+                    .kicad_sch" is wide, and that entry ran 46px past its edge.
+                    An extension list nobody can read whole is worth less than
+                    the vendor names, which is what `acceptedVendors` is for; the
+                    picker still accepts exactly the same set either way. */}
+                <span className="sm:hidden">{acceptedVendors()}</span>
+                <span className="hidden sm:inline">
+                  {BOARD_FORMATS.filter(f => !f.quiet).map((f, i) => (
+                    <React.Fragment key={f.vendor}>
+                      {/* The separator sits OUTSIDE the nowrap span, and is the
+                          only place a line may break. Inside it, the list became
+                          one unbreakable line that ran off the card's right edge;
+                          with no nowrap at all, a vendor was stranded at the end
+                          of a line with its extension starting the next, which
+                          reads as two entries. */}
+                      {i > 0 && ' · '}
+                      <span style={{ whiteSpace: 'nowrap' }}>
+                        {f.vendor}{' '}
+                        {f.exts.map(e => (
+                          <code key={e} className="hb-inline">{e}</code>
+                        )).reduce<React.ReactNode[]>((acc, el, j) => (
+                          j === 0 ? [el] : [...acc, ' ', el]
+                        ), [])}
+                      </span>
+                    </React.Fragment>
+                  ))}
+                </span>
               </div>
-            </label>
+            </motion.label>
           )}
+
+          {/* The report's shape while the report is still being computed. Lives
+              under the busy card so the wait is not a bare spinner on an
+              otherwise empty page. */}
+          {showSkeleton && <ReportSkeleton />}
 
           {/* Firmware: a quiet secondary jack below the card */}
           <FirmwareJack
@@ -208,14 +306,36 @@ export function UploadView({ session, onOpenLive }: {
             locked={!!busy}
           />
 
+          {/* Something the app did on the user's behalf. Not an error: the drop
+              worked, it just went to the other slot. It says which slot and
+              why, because the alternative is the user watching their firmware
+              appear in the firmware jack and having to work out how. */}
+          {uploadNotice && (
+            <ArriveOnce
+              className="mt-6 rounded-lg px-4 py-3 text-[13px] leading-relaxed"
+              style={{ background: 'var(--warn-bg)', border: '1px solid var(--warn-border)', color: 'var(--silk)' }}
+            >
+              <div data-testid="upload-notice" aria-live="polite">
+                {uploadNotice}
+                <button
+                  type="button"
+                  onClick={dismissNotice}
+                  className="hb-press ml-2 text-[12px] cursor-pointer"
+                  style={{ background: 'none', border: 'none', color: 'var(--copper)' }}
+                >
+                  Got it
+                </button>
+              </div>
+            </ArriveOnce>
+          )}
+
           {uploadError && (
-            <div
-              aria-live="polite"
+            <ArriveOnce
               className="mt-6 rounded-lg px-4 py-3 text-sm text-center"
               style={{ background: 'var(--err-bg)', border: '1px solid var(--err-border)', color: 'var(--err-strong)' }}
             >
-              {uploadError}
-            </div>
+              <div data-testid="upload-error" aria-live="polite">{uploadError}</div>
+            </ArriveOnce>
           )}
 
           {/* Samples, a first report with no file needed at all */}
@@ -228,15 +348,20 @@ export function UploadView({ session, onOpenLive }: {
                   is too narrow for it. Never a two-then-one rag. */}
               <div className="sample-row mt-3">
                 {SAMPLES.map(s => (
-                  <button
+                  // A card that rises 1 px on hover and sinks 1 px on press.
+                  // The press tracking is the substance here, not the movement:
+                  // it releases when the pointer leaves the card mid-press, when
+                  // the window loses focus, and on a keyboard Space-hold, none
+                  // of which :active gets right. See ../motion/PressCard.
+                  <PressCard
                     key={s.label}
-                    type="button"
-                    onClick={() => runSample(s)}
-                    className="hb-btn hb-press px-3.5 py-2.5 text-[13px]"
+                    data-testid={`sample-${s.label.toLowerCase().replace(/[^a-z]+/g, '-')}`}
+                    onPress={() => runSample(s)}
+                    className="hb-btn px-3.5 py-2.5 text-[13px]"
                   >
                     <span className="block font-semibold" style={{ color: 'var(--silk)' }}>{s.label}</span>
                     <span className="block text-[12px] mt-0.5">{s.desc}</span>
-                  </button>
+                  </PressCard>
                 ))}
               </div>
             </div>

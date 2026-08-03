@@ -1,0 +1,97 @@
+{
+ "backend": "codex",
+ "consent_notice": "This sends the datasheet's text to an LLM backend (codex, or the API backend when HAUKSBEE_LLM_API_KEY is set). Nothing is sent until you ask for it. The result is a draft for you to check, not a measurement: a model it writes carries provenance \"datasheet-extracted\".",
+ "cost": "Codex signs in with a ChatGPT account, so if you already pay for one this costs nothing extra. Otherwise it bills against whatever account you sign in with.",
+ "default_effort": "high",
+ "default_model": "gpt-5.6-sol",
+ "fix": null,
+ "kinds": [
+  {
+   "id": "passive",
+   "label": "resistor, capacitor, inductor"
+  },
+  {
+   "id": "diode",
+   "label": "diode, Schottky, Zener, LED"
+  },
+  {
+   "id": "bjt_npn",
+   "label": "NPN bipolar transistor"
+  },
+  {
+   "id": "bjt_pnp",
+   "label": "PNP bipolar transistor"
+  },
+  {
+   "id": "nmos",
+   "label": "N-channel MOSFET"
+  },
+  {
+   "id": "pmos",
+   "label": "P-channel MOSFET"
+  },
+  {
+   "id": "vreg",
+   "label": "linear regulator or LDO"
+  },
+  {
+   "id": "opamp",
+   "label": "operational amplifier"
+  },
+  {
+   "id": "comparator",
+   "label": "comparator"
+  },
+  {
+   "id": "analog_switch",
+   "label": "analogue switch or load switch"
+  },
+  {
+   "id": "digital",
+   "label": "logic gate or digital part"
+  },
+  {
+   "id": "dac",
+   "label": "digital-to-analogue converter"
+  },
+  {
+   "id": "adc",
+   "label": "analogue-to-digital converter"
+  },
+  {
+   "id": "shift_register",
+   "label": "shift register"
+  },
+  {
+   "id": "mcu",
+   "label": "microcontroller"
+  },
+  {
+   "id": "connector",
+   "label": "connector"
+  },
+  {
+   "id": "charger",
+   "label": "battery charger (behavioural)"
+  },
+  {
+   "id": "pmic",
+   "label": "power-management IC (behavioural)"
+  },
+  {
+   "id": "balancer",
+   "label": "cell balancer or monitor (behavioural)"
+  },
+  {
+   "id": "i2c_sensor",
+   "label": "I2C sensor (register-map spec)"
+  },
+  {
+   "id": "spi_sensor",
+   "label": "SPI sensor (register-map spec)"
+  }
+ ],
+ "provenance": "datasheet-extracted",
+ "ready": true,
+ "reason": null
+}

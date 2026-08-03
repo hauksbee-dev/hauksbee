@@ -1,0 +1,77 @@
+{
+ "deps": [
+  {
+   "cost": "about an 80 MB download, a few hundred MB unpacked (macOS and Linux; Windows needs a manual install)",
+   "detail": null,
+   "id": "renode",
+   "installable": true,
+   "manual": "hauksbee install renode",
+   "name": "Renode",
+   "path": null,
+   "present": false,
+   "unlocks": "STM32, nRF52 and RISC-V firmware co-simulation",
+   "version": null
+  },
+  {
+   "cost": "two small downloads, about 8 MB total (checksum-verified when the release manifest is reachable)",
+   "detail": null,
+   "id": "esp-qemu",
+   "installable": true,
+   "manual": "hauksbee install esp-qemu",
+   "name": "Espressif QEMU",
+   "path": null,
+   "present": false,
+   "unlocks": "ESP32, ESP32-S3 and ESP32-C3 firmware co-simulation",
+   "version": null
+  },
+  {
+   "cost": "a package-manager install",
+   "detail": null,
+   "id": "ngspice",
+   "installable": false,
+   "manual": "brew install ngspice",
+   "name": "ngspice",
+   "path": "/opt/homebrew/bin/ngspice",
+   "present": true,
+   "unlocks": "cross-checking hauksbee's analog solver against ngspice, the SPICE oracle",
+   "version": "ngspice-45.2"
+  },
+  {
+   "cost": "part of the full KiCad suite; the KiCad download alone is over 1 GB",
+   "detail": null,
+   "id": "kicad-cli",
+   "installable": false,
+   "manual": "brew install --cask kicad   # or download from kicad.org",
+   "name": "kicad-cli",
+   "path": "/Applications/KiCad10/KiCad.app/Contents/MacOS/kicad-cli",
+   "present": true,
+   "unlocks": "cross-checking copper DRC findings against KiCad's own DRC (the layout oracle), and SVG/Gerber export of re-laid-out boards",
+   "version": "10.0.3"
+  },
+  {
+   "cost": "linked into this binary at build time",
+   "detail": "simavr is linked into this binary; no separate install",
+   "id": "avr",
+   "installable": false,
+   "manual": "",
+   "name": "AVR (simavr)",
+   "path": null,
+   "present": true,
+   "unlocks": "ATmega and ATtiny firmware co-simulation",
+   "version": null
+  },
+  {
+   "cost": "free if you already pay for ChatGPT: codex signs in with that account",
+   "detail": "Logged in using ChatGPT",
+   "id": "codex",
+   "installable": false,
+   "manual": "npm install -g @openai/codex   # then: codex login",
+   "name": "Codex (datasheet extraction)",
+   "path": "/opt/homebrew/bin/codex",
+   "present": true,
+   "sends_data_offhost": "Using this sends the datasheet's text to OpenAI. Nothing is sent unless you ask for an extraction, and hauksbee never runs it on its own.",
+   "unlocks": "drafting a device model from a datasheet, for a part with no model (you review it before it is saved)",
+   "version": "codex-cli 0.145.0"
+  }
+ ]
+}

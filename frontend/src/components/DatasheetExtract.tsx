@@ -73,7 +73,7 @@ function CopyText({ text, label = 'Copy' }: { text: string; label?: string }) {
   return (
     <button
       type="button"
-      onClick={copy}
+      onClick={() => void copy()}
       className="hb-press ml-2 rounded px-2 py-0.5 text-[11px] font-semibold cursor-pointer"
       style={{
         background: copied ? 'var(--ok-bg)' : 'var(--copper-tint)',
@@ -244,8 +244,8 @@ function ReviewCard({
           data-testid="extract-accept"
           disabled={saving}
           onClick={() => onAccept(toml)}
-          className="hb-btn-primary hb-press px-3.5 text-[12px]"
-          style={{ height: 30 }}
+          className="hb-btn-primary hb-press px-3.5 py-1 text-[12px] max-w-full"
+          style={{ minHeight: 30 }}
         >
           {saving ? 'Saving ...' : 'Accept and save to my models'}
         </button>
@@ -453,10 +453,15 @@ export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
                 data-testid={`extract-start-${p.reference}`}
                 disabled={active !== null}
                 onClick={() => begin(p)}
-                className="hb-btn hb-press px-3 text-[12px]"
-                style={{ height: 28, flexShrink: 0 }}
+                title="Draft a model from a datasheet"
+                className="hb-btn hb-press px-3 py-1 text-[12px] shrink-0 max-w-full whitespace-nowrap w-full sm:w-auto"
+                style={{ minHeight: 28 }}
               >
-                Draft a model from a datasheet
+                {/* The row already wraps, so on a phone this sits on its own line
+                    across the card. Even then 320px has no room for the long
+                    spelling, and the short one says the same thing. */}
+                <span className="hidden min-[400px]:inline">Draft a model from a datasheet</span>
+                <span className="min-[400px]:hidden">Draft from a datasheet</span>
               </button>
             </div>
           ))}
@@ -548,8 +553,8 @@ export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
                         type="button"
                         data-testid="extract-consent-accept"
                         onClick={() => setFlow({ step: 'attach' })}
-                        className="hb-btn-primary hb-press px-3.5 text-[12px]"
-                        style={{ height: 30 }}
+                        className="hb-btn-primary hb-press px-3.5 py-1 text-[12px] max-w-full"
+                        style={{ minHeight: 30 }}
                       >
                         I understand, let me attach the datasheet
                       </button>
@@ -571,26 +576,26 @@ export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
             {flow.step === 'attach' && info && (
               <div className="mt-2.5">
                 <div className="flex flex-wrap gap-3 items-end">
-                  <label className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+                  <label className="text-[11px] block min-w-0 max-w-full" style={{ color: 'var(--silk-faint)' }}>
                     <span className="block mb-1">Part number</span>
                     <input
                       data-testid="extract-part"
-                      className="hb-input text-[12px]"
-                      style={{ height: 30, width: '12rem', fontFamily: 'var(--font-mono)' }}
+                      className="hb-input text-[12px] block w-full"
+                      style={{ height: 30, maxWidth: '12rem', fontFamily: 'var(--font-mono)' }}
                       value={part}
                       onChange={e => setPart(e.target.value)}
                       placeholder="e.g. TP4054"
                     />
                   </label>
-                  <label className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+                  <label className="text-[11px] block min-w-0 max-w-full" style={{ color: 'var(--silk-faint)' }}>
                     <span className="block mb-1">
                       What kind of part is it{' '}
                       <span style={{ color: 'var(--silk-faint)' }}>(optional)</span>
                     </span>
                     <select
                       data-testid="extract-kind"
-                      className="hb-input text-[12px]"
-                      style={{ height: 30, width: '17rem' }}
+                      className="hb-input text-[12px] block w-full"
+                      style={{ height: 30, maxWidth: '17rem' }}
                       value={kind}
                       onChange={e => setKind(e.target.value)}
                     >
@@ -599,21 +604,32 @@ export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
                           making someone classify their part first is a barrier
                           at exactly the wrong moment. The picker stays for
                           anyone who knows better than the model. */}
-                      <option value="">work it out from the datasheet</option>
+                      <option value="">from the datasheet</option>
+                      {/* The kind's own name only. What each kind COVERS used to
+                          ride along in the option text ("passive · resistor,
+                          capacitor, inductor"), which made the widest option
+                          wider than this card is on a phone: the browser cut it,
+                          and a picker you cannot read is worse than one without
+                          the descriptions. They moved below, where they wrap. */}
                       {info.kinds.map(k => (
-                        <option key={k.id} value={k.id}>{k.id} · {k.label}</option>
+                        <option key={k.id} value={k.id}>{k.id}</option>
                       ))}
                     </select>
+                    <span className="block mt-1" style={{ color: 'var(--silk-faint)' }}>
+                      {kind
+                        ? (info.kinds.find(k => k.id === kind)?.label ?? '')
+                        : 'The datasheet names the part on its first page and the model reads it there. Pick a kind only if you know better.'}
+                    </span>
                   </label>
-                  <label className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+                  <label className="text-[11px] block min-w-0 max-w-full" style={{ color: 'var(--silk-faint)' }}>
                     <span className="block mb-1">
                       Model to read it with{' '}
                       <span style={{ color: 'var(--silk-faint)' }}>(optional)</span>
                     </span>
                     <input
                       data-testid="extract-model"
-                      className="hb-input text-[12px]"
-                      style={{ height: 30, width: '17rem' }}
+                      className="hb-input text-[12px] block w-full"
+                      style={{ height: 30, maxWidth: '17rem' }}
                       value={model}
                       onChange={e => setModel(e.target.value)}
                       placeholder={`${info.default_model} (${info.default_effort} effort)`}
@@ -629,14 +645,14 @@ export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
                       numbering wrong, and a wrong pin map simulates a different circuit.
                     </span>
                   </label>
-                  <label className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+                  <label className="text-[11px] block min-w-0 max-w-full" style={{ color: 'var(--silk-faint)' }}>
                     <span className="block mb-1">Datasheet PDF</span>
                     <input
                       data-testid="extract-file"
                       type="file"
                       accept="application/pdf,.pdf"
                       onChange={e => setFile(e.target.files?.[0] ?? null)}
-                      className="text-[12px]"
+                      className="text-[12px] block w-full max-w-full"
                       style={{ color: 'var(--silk-dim)' }}
                     />
                   </label>
@@ -647,8 +663,8 @@ export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
                     data-testid="extract-run"
                     disabled={!file || part.trim().length === 0}
                     onClick={() => void run()}
-                    className="hb-btn-primary hb-press px-3.5 text-[12px]"
-                    style={{ height: 30 }}
+                    className="hb-btn-primary hb-press px-3.5 py-1 text-[12px] max-w-full"
+                    style={{ minHeight: 30 }}
                   >
                     Send the datasheet and draft the model
                   </button>

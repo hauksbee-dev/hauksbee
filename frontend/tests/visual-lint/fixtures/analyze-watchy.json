@@ -1,0 +1,1221 @@
+{
+ "ok": true,
+ "error": null,
+ "board_name": "",
+ "file_name": "watchy.kicad_pcb",
+ "num_components": 82,
+ "num_nets": 84,
+ "headline": "50 issues found, none serious. Worth a look before you order boards.",
+ "serious": 0,
+ "total": 50,
+ "sections": [
+  {
+   "title": "Copper spacing (DRC)",
+   "verdict": "50 issues found, none serious (worth a look).",
+   "findings": [
+    {
+     "level": "warning",
+     "what": "\"+3V3\" and \"/32K_P\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.154 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 81.787721,
+     "y": 85.4454035
+    },
+    {
+     "level": "warning",
+     "what": "\"+3V3\" and \"ACC_INT_1\" are very close but not quite touching at 2 locations on the front copper layer (F.Cu) (tightest 0.161 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 81.618109,
+     "y": 84.8104035
+    },
+    {
+     "level": "warning",
+     "what": "\"+3V3\" and \"ADC\" are very close but not quite touching at 1 location on the back copper layer (B.Cu) (tightest 0.174 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 81.883692,
+     "y": 85.530989
+    },
+    {
+     "level": "warning",
+     "what": "\"+3V3\" and \"BTN1\" are very close but not quite touching at 1 location on the back copper layer (B.Cu) (tightest 0.174 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 81.646835,
+     "y": 84.754962
+    },
+    {
+     "level": "warning",
+     "what": "\"+3V3\" and \"BTN3\" are very close but not quite touching at 3 locations on the back copper layer (B.Cu) (tightest 0.174 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 74.15339775000001,
+     "y": 81.47449999999999
+    },
+    {
+     "level": "warning",
+     "what": "\"+3V3\" and \"BUSY\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.179 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 88.3875,
+     "y": 94.8337955
+    },
+    {
+     "level": "warning",
+     "what": "\"+3V3\" and \"EN\" are very close but not quite touching at 10 locations on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 87.66489025,
+     "y": 81.98996174999999
+    },
+    {
+     "level": "warning",
+     "what": "\"+3V3\" and \"MOSI\" are very close but not quite touching at 2 locations on the front copper layer (F.Cu) (tightest 0.168 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 86.04999999999998,
+     "y": 90.27155725
+    },
+    {
+     "level": "warning",
+     "what": "\"+3V3\" and \"Net-(U4-XTAL_P)\" are very close but not quite touching at 2 locations on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 89.56,
+     "y": 83.4088
+    },
+    {
+     "level": "warning",
+     "what": "\"+3V3\" and \"RESE\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.183 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 94.6674565,
+     "y": 104.86619999999999
+    },
+    {
+     "level": "warning",
+     "what": "\"+BATT\" and \"BTN2\" are very close but not quite touching at 1 location on the back copper layer (B.Cu) (tightest 0.174 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 99.961601,
+     "y": 86.276601
+    },
+    {
+     "level": "warning",
+     "what": "\"/40M_P\" and \"/40M_N\" are very close but not quite touching at 3 locations on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 92.09875,
+     "y": 87.14929375
+    },
+    {
+     "level": "warning",
+     "what": "\"ACC_INT_1\" and \"ACC_INT_2\" are very close but not quite touching at 8 locations on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 81.036142,
+     "y": 83.9070435
+    },
+    {
+     "level": "warning",
+     "what": "\"ADC\" and \"BTN1\" are very close but not quite touching at 8 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 82.894398,
+     "y": 83.2317775
+    },
+    {
+     "level": "warning",
+     "what": "\"ADC\" and \"BTN2\" are very close but not quite touching at 14 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 89.031229,
+     "y": 88.3226
+    },
+    {
+     "level": "warning",
+     "what": "\"ADC\" and \"USB_D-\" are very close but not quite touching at 3 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 83.224806,
+     "y": 87.95962
+    },
+    {
+     "level": "warning",
+     "what": "\"BTN1\" and \"BTN2\" are very close but not quite touching at 4 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 82.83617975,
+     "y": 81.11665775
+    },
+    {
+     "level": "warning",
+     "what": "\"BTN1\" and \"BTN4\" are very close but not quite touching at 8 locations on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 83.9215645,
+     "y": 81.8833605
+    },
+    {
+     "level": "warning",
+     "what": "\"BTN1\" and \"STAT\" are very close but not quite touching at 11 locations on the back copper layer (B.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 94.62725,
+     "y": 97.23081599999999
+    },
+    {
+     "level": "warning",
+     "what": "\"BTN2\" and \"BTN3\" are very close but not quite touching at 9 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 82.575661,
+     "y": 80.428481
+    },
+    {
+     "level": "warning",
+     "what": "\"BUSY\" and \"RES\" are very close but not quite touching at 8 locations on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 88.3325,
+     "y": 90.37456375
+    },
+    {
+     "level": "warning",
+     "what": "\"DC\" and \"CS\" are very close but not quite touching at 7 locations on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 88.08250000000001,
+     "y": 91.71546849999999
+    },
+    {
+     "level": "warning",
+     "what": "\"DN\" and \"DP\" are very close but not quite touching at 3 locations on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 97.08307500000001,
+     "y": 92.39
+    },
+    {
+     "level": "warning",
+     "what": "\"EN\" and \"BTN2\" are very close but not quite touching at 4 locations on the front copper layer (F.Cu) (tightest 0.179 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 76.74050000000001,
+     "y": 80.95
+    },
+    {
+     "level": "warning",
+     "what": "\"EN\" and \"BTN3\" are very close but not quite touching at 10 locations on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 87.1988145,
+     "y": 81.9606105
+    },
+    {
+     "level": "warning",
+     "what": "\"GND\" and \"+3V3\" are very close but not quite touching at 2 locations on the front copper layer (F.Cu) (tightest 0.179 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 81.08,
+     "y": 83.07
+    },
+    {
+     "level": "warning",
+     "what": "\"GND\" and \"+3V3\" are very close but not quite touching at 2 locations on In2.Cu (tightest 0.155 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 85.49,
+     "y": 93.39249999999998
+    },
+    {
+     "level": "warning",
+     "what": "\"GND\" and \"+BATT\" are very close but not quite touching at 1 location on In2.Cu (tightest 0.154 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 99.83200000000001,
+     "y": 92.41499999999999
+    },
+    {
+     "level": "warning",
+     "what": "\"GND\" and \"/40M_N\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.155 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 91.5075,
+     "y": 90.3175
+    },
+    {
+     "level": "warning",
+     "what": "\"GND\" and \"/40M_P\" are very close but not quite touching at 2 locations on the front copper layer (F.Cu) (tightest 0.155 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 93.22,
+     "y": 90.355
+    },
+    {
+     "level": "warning",
+     "what": "\"GND\" and \"BTN2\" are very close but not quite touching at 3 locations on the back copper layer (B.Cu) (tightest 0.174 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 87.12216675,
+     "y": 88.18449999999999
+    },
+    {
+     "level": "warning",
+     "what": "\"GND\" and \"BTN4\" are very close but not quite touching at 1 location on the back copper layer (B.Cu) (tightest 0.154 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 73.17202975000001,
+     "y": 98.99202975000001
+    },
+    {
+     "level": "warning",
+     "what": "\"GND\" and \"BUSY\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.179 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 88.8675,
+     "y": 90.6262045
+    },
+    {
+     "level": "warning",
+     "what": "\"GND\" and \"SDA\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.179 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 78.13000000000001,
+     "y": 81.30050000000001
+    },
+    {
+     "level": "warning",
+     "what": "\"GND\" and \"STAT\" are very close but not quite touching at 1 location on the back copper layer (B.Cu) (tightest 0.191 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 91.18259624999999,
+     "y": 94.7645
+    },
+    {
+     "level": "warning",
+     "what": "\"MOSI\" and \"SCK\" are very close but not quite touching at 10 locations on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 87.10249999999999,
+     "y": 93.5202675
+    },
+    {
+     "level": "warning",
+     "what": "\"PREVGH\" and \"PREVGL\" are very close but not quite touching at 13 locations on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 76.4188,
+     "y": 100.53834
+    },
+    {
+     "level": "warning",
+     "what": "\"RES\" and \"DC\" are very close but not quite touching at 8 locations on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 88.4075,
+     "y": 91.6783365
+    },
+    {
+     "level": "warning",
+     "what": "\"RESE\" and \"GDR\" are very close but not quite touching at 6 locations on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 93.8368565,
+     "y": 103.59934349999999
+    },
+    {
+     "level": "warning",
+     "what": "\"SCK\" and \"CS\" are very close but not quite touching at 7 locations on the front copper layer (F.Cu) (tightest 0.150 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 87.4525,
+     "y": 93.5323995
+    },
+    {
+     "level": "warning",
+     "what": "\"SDA\" and \"ACC_INT_2\" are very close but not quite touching at 9 locations on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 81.65744925,
+     "y": 83.82893625
+    },
+    {
+     "level": "warning",
+     "what": "\"SDA\" and \"BTN4\" are very close but not quite touching at 3 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 79.832207,
+     "y": 88.64941950000001
+    },
+    {
+     "level": "warning",
+     "what": "\"SDA\" and \"SCL\" are very close but not quite touching at 3 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 79.38703199999999,
+     "y": 90.1335785
+    },
+    {
+     "level": "warning",
+     "what": "\"SDA\" and \"SCL\" are very close but not quite touching at 7 locations on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 82.10191775,
+     "y": 83.72012174999999
+    },
+    {
+     "level": "warning",
+     "what": "\"STAT\" and \"BTN4\" are very close but not quite touching at 6 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 81.67621249999999,
+     "y": 83.239386
+    },
+    {
+     "level": "warning",
+     "what": "\"USB_D-\" and \"USB_D+\" are very close but not quite touching at 11 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 84.3310155,
+     "y": 90.2914935
+    },
+    {
+     "level": "warning",
+     "what": "\"USB_DET\" and \"USB_D+\" are very close but not quite touching at 7 locations on the back copper layer (B.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 87.34306400000001,
+     "y": 92.0099
+    },
+    {
+     "level": "warning",
+     "what": "\"VBUS\" and \"DN\" are very close but not quite touching at 2 locations on the front copper layer (F.Cu) (tightest 0.155 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 97.09,
+     "y": 93.33500000000001
+    },
+    {
+     "level": "warning",
+     "what": "\"VBUS\" and \"Net-(D1-K)\" are very close but not quite touching at 4 locations on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 94.8768865,
+     "y": 94.0893135
+    },
+    {
+     "level": "warning",
+     "what": "\"VBUS\" and \"Net-(U3-PROG)\" are very close but not quite touching at 1 location on the front copper layer (F.Cu) (tightest 0.152 mm, below your 0.200 mm rule).",
+     "why": "They are not shorted today, but at least one spot is below the spacing the board asks for. Small manufacturing variation, a solder smear, or contamination could bridge them, so it is a reliability risk rather than a guaranteed failure.",
+     "fix": "Open up the spacing between these two so the gap meets your clearance rule, or relax the rule deliberately if you know this spot is fine.",
+     "x": 98.22748899999999,
+     "y": 101.91
+    }
+   ]
+  },
+  {
+   "title": "Connectivity & wiring",
+   "verdict": "Looks healthy: no connectivity problems found.",
+   "findings": []
+  },
+  {
+   "title": "Signal integrity",
+   "verdict": "No signal-integrity failures, but 3 things worth a look (see below).",
+   "findings": [],
+   "heads_up": [
+    {
+     "what": "A high-speed trace pair (DP / DN) is off its impedance target (W~0.150 mm, S~0.350 mm microstrip -> Zdiff ~ 146 ohm [target 90 ohm, USB differential]: estimate +62% from target).",
+     "why": "Fast links like USB (90 ohm differential) or Ethernet need their traces to present a specific impedance so the signal does not reflect off the wire and smear. This is a computed estimate, flagged only because the board did not formally declare a controlled-impedance stackup; it is informational, not a confirmed failure, but a value well off target on a real high-speed net can make the link marginal or fail to enumerate.",
+     "fix": "If this pair is NOT a high-speed link (USB/Ethernet/HDMI), you can ignore it. If it is: adjust the trace width and pair spacing for your actual layer stackup so the estimate lands near the target (the formulas are in docs/checks/SI_CHECKS.md), or ask your fab to build a controlled-impedance stackup to spec."
+    },
+    {
+     "what": "A high-speed trace pair (USB_D+ / USB_D-) is off its impedance target (W~0.150 mm, S~0.173 mm microstrip -> Zdiff ~ 125 ohm [target 90 ohm, USB differential]: estimate +39% from target).",
+     "why": "Fast links like USB (90 ohm differential) or Ethernet need their traces to present a specific impedance so the signal does not reflect off the wire and smear. This is a computed estimate, flagged only because the board did not formally declare a controlled-impedance stackup; it is informational, not a confirmed failure, but a value well off target on a real high-speed net can make the link marginal or fail to enumerate.",
+     "fix": "If this pair is NOT a high-speed link (USB/Ethernet/HDMI), you can ignore it. If it is: adjust the trace width and pair spacing for your actual layer stackup so the estimate lands near the target (the formulas are in docs/checks/SI_CHECKS.md), or ask your fab to build a controlled-impedance stackup to spec."
+    },
+    {
+     "what": "A single-ended trace (Net-(U4-LNA_IN/RF)) is off its impedance target (W~0.320 mm microstrip -> Z0 ~ 63 ohm [target 50 ohm, single-ended]: estimate +25% from target).",
+     "why": "A 50 ohm single-ended line is the convention for an RF or antenna feed: the trace has to present that impedance end to end or part of the signal reflects back instead of reaching the antenna, costing range and sensitivity. This is a computed estimate, flagged only because the board did not formally declare a controlled-impedance stackup.",
+     "fix": "If this is not a controlled-impedance RF path, this estimate is informational. If it is: widen or narrow the trace for your actual layer stackup so the estimate lands near 50 ohm (the formulas are in docs/checks/SI_CHECKS.md), or ask your fab to build a controlled-impedance stackup to spec."
+    }
+   ]
+  }
+ ],
+ "components": [
+  {
+   "reference": "Q3",
+   "value": "AO3400A",
+   "x": 96.84,
+   "y": 106.9,
+   "rot": -90
+  },
+  {
+   "reference": "L2",
+   "value": "47uH 0.5A",
+   "x": 75.19,
+   "y": 106.35,
+   "rot": -90
+  },
+  {
+   "reference": "D5",
+   "value": "MBR0530",
+   "x": 74.55,
+   "y": 100.29,
+   "rot": -90
+  },
+  {
+   "reference": "R17",
+   "value": "2.2",
+   "x": 90.4,
+   "y": 96.04,
+   "rot": -90
+  },
+  {
+   "reference": "D4",
+   "value": "MBR0530",
+   "x": 72.25,
+   "y": 100.29,
+   "rot": -90
+  },
+  {
+   "reference": "C21",
+   "value": "4.7uF/50V",
+   "x": 74.42,
+   "y": 103.37,
+   "rot": 0
+  },
+  {
+   "reference": "C20",
+   "value": "4.7uF/50V",
+   "x": 74.42,
+   "y": 109.33,
+   "rot": 0
+  },
+  {
+   "reference": "U3",
+   "value": "TP4054",
+   "x": 100.7,
+   "y": 100.18,
+   "rot": -90
+  },
+  {
+   "reference": "R16",
+   "value": "1M",
+   "x": 91.34,
+   "y": 96.04,
+   "rot": 90
+  },
+  {
+   "reference": "J1",
+   "value": "Battery",
+   "x": 96.83,
+   "y": 84.72,
+   "rot": 90
+  },
+  {
+   "reference": "D3",
+   "value": "MBR0530",
+   "x": 69.95,
+   "y": 100.29,
+   "rot": 90
+  },
+  {
+   "reference": "J3",
+   "value": "FPC24(0.5MM)",
+   "x": 85.65,
+   "y": 100.27,
+   "rot": 0
+  },
+  {
+   "reference": "M1",
+   "value": "Vibration_Motor",
+   "x": 70.15,
+   "y": 85.155,
+   "rot": 90
+  },
+  {
+   "reference": "J2",
+   "value": "Micro USB",
+   "x": 100.08,
+   "y": 93.68,
+   "rot": 90
+  },
+  {
+   "reference": "TP4",
+   "value": "3V3",
+   "x": 93.92,
+   "y": 105.82,
+   "rot": 0
+  },
+  {
+   "reference": "TP5",
+   "value": "GND",
+   "x": 93.92,
+   "y": 108.36,
+   "rot": 0
+  },
+  {
+   "reference": "C29",
+   "value": "1uF/50V",
+   "x": 79.74,
+   "y": 96.06,
+   "rot": -90
+  },
+  {
+   "reference": "C25",
+   "value": "1uF/50V",
+   "x": 82.5,
+   "y": 96.06,
+   "rot": 90
+  },
+  {
+   "reference": "C3",
+   "value": "1uF",
+   "x": 85.05,
+   "y": 79.94,
+   "rot": 90
+  },
+  {
+   "reference": "C2",
+   "value": "1uF",
+   "x": 84.13,
+   "y": 79.94,
+   "rot": 90
+  },
+  {
+   "reference": "R4",
+   "value": "100K",
+   "x": 101.11,
+   "y": 110.47,
+   "rot": 180
+  },
+  {
+   "reference": "Y2",
+   "value": "40MHz",
+   "x": 91.94,
+   "y": 90.06,
+   "rot": 180
+  },
+  {
+   "reference": "C27",
+   "value": "1uF/50V",
+   "x": 78.82,
+   "y": 96.06,
+   "rot": 90
+  },
+  {
+   "reference": "SW1",
+   "value": "BTN2",
+   "x": 100.54,
+   "y": 79.93,
+   "rot": -90
+  },
+  {
+   "reference": "C6",
+   "value": "100nF",
+   "x": 90.7,
+   "y": 82.7,
+   "rot": 90
+  },
+  {
+   "reference": "C10",
+   "value": "10uF",
+   "x": 92.27,
+   "y": 96.06,
+   "rot": 90
+  },
+  {
+   "reference": "R13",
+   "value": "1K",
+   "x": 78.45,
+   "y": 87.17,
+   "rot": 0
+  },
+  {
+   "reference": "L1",
+   "value": "TBD",
+   "x": 88.72,
+   "y": 80.86,
+   "rot": -90
+  },
+  {
+   "reference": "C22",
+   "value": "1uF/50V",
+   "x": 81.58,
+   "y": 96.06,
+   "rot": 90
+  },
+  {
+   "reference": "R2",
+   "value": "100K",
+   "x": 97.49,
+   "y": 103.05,
+   "rot": -90
+  },
+  {
+   "reference": "Q2",
+   "value": "S8050",
+   "x": 75.45,
+   "y": 84.73,
+   "rot": 90
+  },
+  {
+   "reference": "U4",
+   "value": "ESP32-S3",
+   "x": 86.12,
+   "y": 85.91,
+   "rot": -90
+  },
+  {
+   "reference": "R18",
+   "value": "10K",
+   "x": 78.17,
+   "y": 82.64,
+   "rot": -90
+  },
+  {
+   "reference": "R5",
+   "value": "51K",
+   "x": 96.55,
+   "y": 103.05,
+   "rot": -90
+  },
+  {
+   "reference": "TP6",
+   "value": "SCL",
+   "x": 82.99,
+   "y": 93.58,
+   "rot": 0
+  },
+  {
+   "reference": "R3",
+   "value": "10K",
+   "x": 98.43,
+   "y": 103.05,
+   "rot": 90
+  },
+  {
+   "reference": "SW2",
+   "value": "BTN1",
+   "x": 100.54,
+   "y": 106.33,
+   "rot": -90
+  },
+  {
+   "reference": "C15",
+   "value": "1uF",
+   "x": 84,
+   "y": 91.41,
+   "rot": 0
+  },
+  {
+   "reference": "TP2",
+   "value": "RX",
+   "x": 93.16,
+   "y": 84.65,
+   "rot": 0
+  },
+  {
+   "reference": "R1",
+   "value": "10K",
+   "x": 83.2,
+   "y": 79.96,
+   "rot": 90
+  },
+  {
+   "reference": "C9",
+   "value": "TBD",
+   "x": 90.1,
+   "y": 81.33,
+   "rot": 0
+  },
+  {
+   "reference": "Q1",
+   "value": "CJ2301",
+   "x": 97.2,
+   "y": 100.2,
+   "rot": -90
+  },
+  {
+   "reference": "R15",
+   "value": "100K",
+   "x": 91,
+   "y": 93.51,
+   "rot": 90
+  },
+  {
+   "reference": "C4",
+   "value": "1uF",
+   "x": 91.62,
+   "y": 82.7,
+   "rot": 90
+  },
+  {
+   "reference": "U6",
+   "value": "BMA423",
+   "x": 79.89,
+   "y": 82.32,
+   "rot": 0
+  },
+  {
+   "reference": "C23",
+   "value": "1uF/50V",
+   "x": 89.47,
+   "y": 96.06,
+   "rot": 90
+  },
+  {
+   "reference": "C1",
+   "value": "10uF",
+   "x": 92.54,
+   "y": 82.7,
+   "rot": 90
+  },
+  {
+   "reference": "AE1",
+   "value": "Antenna_Chip",
+   "x": 74.255,
+   "y": 79.18,
+   "rot": 0
+  },
+  {
+   "reference": "TP1",
+   "value": "TX",
+   "x": 93.66,
+   "y": 87.56,
+   "rot": 0
+  },
+  {
+   "reference": "C24",
+   "value": "1uF/50V",
+   "x": 83.42,
+   "y": 96.06,
+   "rot": 90
+  },
+  {
+   "reference": "C28",
+   "value": "1uF/50V",
+   "x": 84.34,
+   "y": 96.06,
+   "rot": 90
+  },
+  {
+   "reference": "C5",
+   "value": "100nF",
+   "x": 85.97,
+   "y": 79.94,
+   "rot": 90
+  },
+  {
+   "reference": "R14",
+   "value": "51K",
+   "x": 91.94,
+   "y": 93.51,
+   "rot": -90
+  },
+  {
+   "reference": "C16",
+   "value": "22pF",
+   "x": 94.105,
+   "y": 89.47,
+   "rot": -90
+  },
+  {
+   "reference": "C11",
+   "value": "100nF",
+   "x": 101.22,
+   "y": 88.62,
+   "rot": 0
+  },
+  {
+   "reference": "C19",
+   "value": "22pF",
+   "x": 89.78,
+   "y": 90.94,
+   "rot": 90
+  },
+  {
+   "reference": "SW3",
+   "value": "BTN3",
+   "x": 70.66,
+   "y": 79.92,
+   "rot": 90
+  },
+  {
+   "reference": "C14",
+   "value": "100nF",
+   "x": 75.51,
+   "y": 81.9,
+   "rot": -90
+  },
+  {
+   "reference": "U2",
+   "value": "RT908033",
+   "x": 95.06,
+   "y": 96.58,
+   "rot": 180
+  },
+  {
+   "reference": "C7",
+   "value": "TBD",
+   "x": 87.34,
+   "y": 80.22,
+   "rot": 180
+  },
+  {
+   "reference": "C26",
+   "value": "1uF/50V",
+   "x": 80.66,
+   "y": 96.06,
+   "rot": 90
+  },
+  {
+   "reference": "TP7",
+   "value": "SDA",
+   "x": 82.09,
+   "y": 91.79,
+   "rot": 0
+  },
+  {
+   "reference": "R9",
+   "value": "360K",
+   "x": 101.24,
+   "y": 87.69,
+   "rot": 0
+  },
+  {
+   "reference": "D2",
+   "value": "1N4001",
+   "x": 73.9,
+   "y": 81.45,
+   "rot": -90
+  },
+  {
+   "reference": "C18",
+   "value": "18pF",
+   "x": 78.43,
+   "y": 86.24,
+   "rot": 180
+  },
+  {
+   "reference": "TP3",
+   "value": "BOOT",
+   "x": 80.26,
+   "y": 88.42,
+   "rot": 0
+  },
+  {
+   "reference": "U5",
+   "value": "USBLC6-2P6",
+   "x": 95.6075,
+   "y": 91.48,
+   "rot": 0
+  },
+  {
+   "reference": "C17",
+   "value": "18pF",
+   "x": 78.43,
+   "y": 84.56,
+   "rot": 180
+  },
+  {
+   "reference": "R12",
+   "value": "TBD",
+   "x": 91.17,
+   "y": 84.08,
+   "rot": 0
+  },
+  {
+   "reference": "R8",
+   "value": "100K",
+   "x": 101.24,
+   "y": 86.75,
+   "rot": 180
+  },
+  {
+   "reference": "R11",
+   "value": "100K",
+   "x": 70.07,
+   "y": 110.47,
+   "rot": 0
+  },
+  {
+   "reference": "R20",
+   "value": "10K",
+   "x": 80.21,
+   "y": 80.6,
+   "rot": 0
+  },
+  {
+   "reference": "SW4",
+   "value": "BTN4",
+   "x": 70.66,
+   "y": 106.33,
+   "rot": 90
+  },
+  {
+   "reference": "C12",
+   "value": "100nF",
+   "x": 96.2,
+   "y": 89.92,
+   "rot": 180
+  },
+  {
+   "reference": "C13",
+   "value": "100nF",
+   "x": 84,
+   "y": 90.49,
+   "rot": 0
+  },
+  {
+   "reference": "U1",
+   "value": "SR2HARU",
+   "x": 76.95,
+   "y": 82.66,
+   "rot": 180
+  },
+  {
+   "reference": "R6",
+   "value": "100K",
+   "x": 95.61,
+   "y": 103.05,
+   "rot": 90
+  },
+  {
+   "reference": "D1",
+   "value": "MBR0530",
+   "x": 94.76,
+   "y": 93.73,
+   "rot": 0
+  },
+  {
+   "reference": "R19",
+   "value": "100K",
+   "x": 88.54,
+   "y": 96.04,
+   "rot": -90
+  },
+  {
+   "reference": "Y1",
+   "value": "32.768KHz",
+   "x": 80.24,
+   "y": 85.4,
+   "rot": -90
+  },
+  {
+   "reference": "R7",
+   "value": "100K",
+   "x": 91.35,
+   "y": 87.4,
+   "rot": 90
+  },
+  {
+   "reference": "R10",
+   "value": "100K",
+   "x": 75.52,
+   "y": 80.06,
+   "rot": -90
+  }
+ ],
+ "bind": {
+  "critical_parts_bound": "4/6",
+  "active_path_unresolved": [
+   "U1",
+   "U6"
+  ],
+  "open_parts": [
+   {
+    "reference": "U1",
+    "value": "SR2HARU",
+    "reason": "no model",
+    "consequence": "U1 is an active IC left OPEN; analog/AC/thermal results on its nets are NOT trustworthy",
+    "active_ic": true,
+    "bound": false
+   },
+   {
+    "reference": "U6",
+    "value": "BMA423",
+    "reason": "no model",
+    "consequence": "U6 is an active IC left OPEN; analog/AC/thermal results on its nets are NOT trustworthy",
+    "active_ic": true,
+    "bound": false
+   }
+  ]
+ },
+ "notes": [
+  {
+   "kind": "bind_role",
+   "message": "Active IC(s) left open on the live circuit: U1, U6. Analog/AC/thermal results on their nets are NOT trustworthy."
+  }
+ ],
+ "nets": [
+  "+3V3",
+  "+BATT",
+  "/32K_N",
+  "/32K_P",
+  "/40M_N",
+  "/40M_P",
+  "ACC_INT_1",
+  "ACC_INT_2",
+  "ADC",
+  "BTN1",
+  "BTN2",
+  "BTN3",
+  "BTN4",
+  "BUSY",
+  "CS",
+  "DC",
+  "DN",
+  "DP",
+  "EN",
+  "GDR",
+  "GND",
+  "MOSI",
+  "Net-(AE1-FEED)",
+  "Net-(D1-K)",
+  "Net-(D2-A)",
+  "Net-(D3-K)",
+  "Net-(D5-A)",
+  "Net-(J3-Pin_18)",
+  "Net-(J3-Pin_20)",
+  "Net-(J3-Pin_22)",
+  "Net-(J3-Pin_24)",
+  "Net-(J3-Pin_5)",
+  "Net-(Q2-B)",
+  "Net-(U3-PROG)",
+  "Net-(U3-STAT)",
+  "Net-(U4-LNA_IN{slash}RF)",
+  "Net-(U4-U0RXD{slash}PROG{slash}GPIO44)",
+  "Net-(U4-U0TXD{slash}PROG{slash}GPIO43)",
+  "Net-(U4-XTAL_P)",
+  "PREVGH",
+  "PREVGL",
+  "RES",
+  "RESE",
+  "SCK",
+  "SCL",
+  "SDA",
+  "STAT",
+  "USB_D+",
+  "USB_D-",
+  "USB_DET",
+  "VBUS",
+  "VDD",
+  "VIB_PWM",
+  "unconnected-(J2-ID-Pad4)",
+  "unconnected-(J3-Pin_1-Pad1)",
+  "unconnected-(J3-Pin_19-Pad19)",
+  "unconnected-(J3-Pin_4-Pad4)",
+  "unconnected-(J3-Pin_6-Pad6)",
+  "unconnected-(J3-Pin_7-Pad7)",
+  "unconnected-(U1-NC-Pad4)",
+  "unconnected-(U2-NC-Pad4)",
+  "unconnected-(U4-GPIO18{slash}ADC2_CH7{slash}DAC_1-Pad24)",
+  "unconnected-(U4-GPIO1{slash}ADC1_CH0-Pad6)",
+  "unconnected-(U4-GPIO2{slash}ADC1_CH1-Pad7)",
+  "unconnected-(U4-GPIO37-Pad42)",
+  "unconnected-(U4-GPIO38-Pad43)",
+  "unconnected-(U4-GPIO3{slash}ADC1_CH2-Pad8)",
+  "unconnected-(U4-GPIO45-Pad51)",
+  "unconnected-(U4-GPIO46-Pad52)",
+  "unconnected-(U4-GPIO4{slash}ADC1_CH3-Pad9)",
+  "unconnected-(U4-GPIO5{slash}ADC1_CH4-Pad10)",
+  "unconnected-(U4-MTCK{slash}JTAG{slash}GPIO39-Pad44)",
+  "unconnected-(U4-MTDI{slash}JTAG{slash}GPIO41-Pad47)",
+  "unconnected-(U4-MTDO{slash}JTAG{slash}GPIO40-Pad45)",
+  "unconnected-(U4-MTMS{slash}JTAG{slash}GPIO42-Pad48)",
+  "unconnected-(U4-SPICLK{slash}GPIO30-Pad33)",
+  "unconnected-(U4-SPICS0{slash}GPIO29-Pad32)",
+  "unconnected-(U4-SPID{slash}GPIO32-Pad35)",
+  "unconnected-(U4-SPIHD{slash}GPIO27-Pad30)",
+  "unconnected-(U4-SPIQ{slash}GPIO31-Pad34)",
+  "unconnected-(U4-SPIWP{slash}GPIO28-Pad31)",
+  "unconnected-(U4-SPI_CS1{slash}GPIO26-Pad28)",
+  "unconnected-(U6-ASCL-Pad11)",
+  "unconnected-(U6-ASDA-Pad4)"
+ ],
+ "component_kinds": {
+  "C1": "passive",
+  "C10": "passive",
+  "C11": "passive",
+  "C12": "passive",
+  "C13": "passive",
+  "C14": "passive",
+  "C15": "passive",
+  "C16": "passive",
+  "C17": "passive",
+  "C18": "passive",
+  "C19": "passive",
+  "C2": "passive",
+  "C20": "passive",
+  "C21": "passive",
+  "C22": "passive",
+  "C23": "passive",
+  "C24": "passive",
+  "C25": "passive",
+  "C26": "passive",
+  "C27": "passive",
+  "C28": "passive",
+  "C29": "passive",
+  "C3": "passive",
+  "C4": "passive",
+  "C5": "passive",
+  "C6": "passive",
+  "D1": "diode",
+  "D2": "diode",
+  "D3": "diode",
+  "D4": "diode",
+  "D5": "diode",
+  "J1": "ignore",
+  "J2": "ignore",
+  "J3": "ignore",
+  "L2": "passive",
+  "Q1": "pmos",
+  "Q2": "bjtnpn",
+  "Q3": "nmos",
+  "R1": "passive",
+  "R10": "passive",
+  "R11": "passive",
+  "R13": "passive",
+  "R14": "passive",
+  "R15": "passive",
+  "R16": "passive",
+  "R17": "passive",
+  "R18": "passive",
+  "R19": "passive",
+  "R2": "passive",
+  "R20": "passive",
+  "R3": "passive",
+  "R4": "passive",
+  "R5": "passive",
+  "R6": "passive",
+  "R7": "passive",
+  "R8": "passive",
+  "R9": "passive",
+  "SW1": "ignore",
+  "SW2": "ignore",
+  "SW3": "ignore",
+  "SW4": "ignore",
+  "TP1": "ignore",
+  "TP2": "ignore",
+  "TP3": "ignore",
+  "TP4": "ignore",
+  "TP5": "ignore",
+  "TP6": "ignore",
+  "TP7": "ignore",
+  "U2": "vreg",
+  "U3": "vreg",
+  "U4": "mcu",
+  "U5": "diode",
+  "Y1": "ignore",
+  "Y2": "ignore"
+ },
+ "supplies": [
+  {
+   "net": "VBUS",
+   "volts": 5
+  }
+ ]
+}

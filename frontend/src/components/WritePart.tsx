@@ -83,6 +83,27 @@ export function WritePart({ onSaved }: { onSaved?: () => void }) {
     return () => { if (timer.current) window.clearTimeout(timer.current) }
   }, [body, format, open])
 
+  // Escape closes the editor, the same key that dismisses every other
+  // in-page surface in this app (the layers panel, the fullscreen map, the add
+  // menu). It was the one panel that trapped you into finding the Close button
+  // with the mouse.
+  //
+  // Bound on the document rather than the panel, because the panel is not a
+  // focus trap: the file input, the format buttons and the textarea can all
+  // hold focus, and a keydown on the textarea does not reach a container
+  // handler unless it is bubbled all the way. Two guards keep it from stealing
+  // the key: it only listens while open, and it ignores an Escape that came
+  // from a native picker or an autocomplete (`defaultPrevented`).
+  useEffect(() => {
+    if (!open) return
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      setOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [open])
+
   const save = useCallback(async () => {
     setSaveMsg(null)
     try {
@@ -132,11 +153,12 @@ export function WritePart({ onSaved }: { onSaved?: () => void }) {
         </span>
         <button
           type="button"
+          data-testid="write-part-close"
           onClick={() => setOpen(false)}
           className="text-[11px] rounded px-2 py-1 cursor-pointer"
           style={{ border: '1px solid var(--hairline)', color: 'var(--silk-dim)' }}
         >
-          Close
+          Close <span style={{ color: 'var(--silk-faint)' }}>Esc</span>
         </button>
       </div>
 
@@ -180,10 +202,13 @@ export function WritePart({ onSaved }: { onSaved?: () => void }) {
 
       <label className="text-[11px] block mb-2" style={{ color: 'var(--silk-faint)' }}>
         <span className="block mb-1">Part number (names the saved file)</span>
+        {/* 17rem is what a part number wants, not what the card always has: on a
+            phone the card is narrower than that, so the width is a ceiling and the
+            field takes the column below it. */}
         <input
           data-testid="write-part-name"
-          className="hb-input text-[12px]"
-          style={{ height: 30, width: '17rem' }}
+          className="hb-input text-[12px] block w-full"
+          style={{ height: 30, maxWidth: '17rem' }}
           value={part}
           onChange={e => setPart(e.target.value)}
           placeholder="e.g. BC847B"
@@ -197,7 +222,10 @@ export function WritePart({ onSaved }: { onSaved?: () => void }) {
             data-testid="write-part-spice-file"
             type="file"
             accept=".lib,.mod,.cir,.sp,.txt,.spi,.ckt"
-            className="text-[12px]"
+            // A file input's intrinsic width is its button plus the file name the
+            // browser chooses to show, which is wider than a phone's card. Held to
+            // the column, the UA shortens the name instead of the card losing its edge.
+            className="text-[12px] block w-full max-w-full"
             style={{ color: 'var(--silk-dim)' }}
             onChange={e => {
               const f = e.target.files?.[0]
