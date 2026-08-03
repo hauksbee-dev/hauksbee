@@ -19,7 +19,7 @@ giving up the speed that made it many times faster than ngspice.
 
 ![The pipeline from board and schematic files through extraction, model binding and the circuit IR, into a hybrid solver running in lockstep with an emulated MCU, and out to the server and frontend](../assets/diagrams/pipeline-stack.svg)
 
-## Solver philosophy (why we beat ngspice)
+## Solver philosophy (where the speed comes from)
 
 1. **Partition before solving.** hauksbee splits the connectivity graph at
    device boundaries into islands. Purely linear islands get state-space form
@@ -52,10 +52,13 @@ The static checks and the dynamic analyses each have their own write-up:
 - **AC / small-signal** (Bode, phase margin, gain crossover, averaged small-signal about the DC operating point, not cycle-by-cycle switching): [AC_ANALYSIS.md](../analysis/AC_ANALYSIS.md).
 - **Steady-state thermal** (per-device junction temperature `Tj = Tambient + P * theta_JA`, not a board thermal field solve): [THERMAL.md](../checks/THERMAL.md).
 
-Each report runs from `hauksbee run <board> --drc/--lint/--si/--resources/--thermal` or `--ac`. They are informational and exit 0 by default. Add `--plain` (alias `--explain`) for a non-engineer verdict, or `--strict` (alias `--fail-on-findings`) to fail a pipeline directly. For the full assertion flow, including `phase_margin` / `ac_gain` / `max_temp`, see [CI.md](../ci/CI.md). Runnable examples, including the `hauksbee serve` web front door, are in [EXAMPLES.md](../ci/EXAMPLES.md).
+Each report runs from `hauksbee run <board> --report/--drc/--lint/--si/--resources/--ampacity/--usb-c/--thermal` or `--ac`, or all the static ones at once with `--check` (alias `--all`). They are informational and exit 0 by default. Add `--plain` (alias `--explain`) for a non-engineer verdict, or `--strict` (alias `--fail-on-findings`) to fail a pipeline directly. For the full assertion flow, including `phase_margin` / `ac_gain` / `max_temp`, see [CI.md](../ci/CI.md). Runnable examples, including the `hauksbee serve` web front door, are in [EXAMPLES.md](../ci/EXAMPLES.md).
 
-## Repos
+## Layout
 
-- `kicad-forge` (sibling): lossless KiCad parse/produce, typed model,
-  board-to-code with repeat detection.
-- `hauksbee` (this repo): extraction, models, solver, MCU co-sim, server, UI.
+- `vendor/kicad-forge` (vendored in this repo): lossless KiCad parse/produce,
+  typed model, board-to-code with repeat detection.
+- The workspace crates: extraction, models, solver, MCU co-sim, server, UI.
+- The server layer ships as three binaries: `hauksbee` (CLI + web front door),
+  `hauksbee-ci` (the CI gate), and `hauksbee-mcp` (a stdio MCP server exposing
+  the same engine to coding agents; see `agents/AGENTS.md`).

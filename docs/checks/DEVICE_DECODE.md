@@ -40,8 +40,16 @@ ONLY when:
    so the pin voltage is actually computable.
 
 If the divider cannot be resolved to known values, the check stays **silent**. A
-check that cannot resolve the divider does not fire. It is **DNP-aware**: a
-Do-Not-Populate resistor is not assembled, so it is not counted in the divider.
+check that cannot resolve the divider does not fire.
+
+It is **DNP-aware**, but through the shared DNP policy rather than a rule of its
+own: `resistor_ohms` skips any component still carrying the Do-Not-Populate flag
+when the check runs. What that means on a given run depends on the policy, and the
+default is `FitExceptLinks` (`crates/hauksbee-extract/src/dnp.rs`), which clears
+the flag on every DNP part that is not a near-zero-ohm link *before* the checks see
+the board. So by default a DNP divider resistor **is** counted, and
+`--honour-dnp` is what leaves it out. The walkthrough below is exactly this
+difference on a real board.
 
 ## CYPD3177 seed
 
@@ -113,25 +121,64 @@ detent 4 ("15 V") decodes to the 12 V band and detent 5 ("20 V") decodes to the
 synthetic-board tests confirm the check fires (Medium unreachable-top-band + High
 Note-1) on exactly that topology.
 
-On the board **as actually assembled**, though, that topology never exists. In
-both `USB-C_PD_Trigger.kicad_pcb` and `.kicad_sch`, **R12 (the permanent VBUS_MAX
-pull-down) and R9 (the VBUS_MIN pull-up) are marked Do-Not-Populate**
-(`(attr smd exclude_from_bom dnp)` / `(dnp yes)`).
+On the board **as shipped for assembly**, that topology is not built. In both
+`USB-C_PD_Trigger.kicad_pcb` and `.kicad_sch`, **R12 (the permanent VBUS_MAX
+pull-down, 10 k) and R9 (the VBUS_MIN pull-up, 5.1 k) are marked Do-Not-Populate**
+(`(attr smd exclude_from_bom dnp)` / `(dnp yes)`), along with R16 and R19 on the
+ISNK current-sense straps, which this check does not read.
 
-With DNP honored:
+So what the run reports depends entirely on the DNP policy, and both answers are
+correct answers to different questions.
+
+**Default policy: the check fires.** hauksbee assumes an unpopulated footprint
+gets stuffed eventually, so R12 and R9 come back and the faulty static divider is
+the one that gets decoded:
+
+```
+$ hauksbee run USB-C_PD_Trigger.kicad_pcb --lint
+do-not-populate: DNP parts are simulated as fitted (they are usually placed eventually), except near-zero-ohm links, which stay open because fitting one merges the nets it bridges
+  fitted:    R19 (10k), DNP, fitted by default
+  fitted:    R12 (10k), DNP, fitted by default
+  fitted:    R16 (5k1), DNP, fitted by default
+  fitted:    R9 (5k1), DNP, fitted by default
+net-lint: 2 finding(s)
+  [medium] device_decode - U1 VBUS_MAX selector on net 'VBUS_max' decodes (Table 2) to {5V [SW1.1 (GND) -> 0 mV], 9V [SW1.2 (R13) -> 499 mV], 12V [SW1.3 (R14) -> 908 mV], 12V [SW1.4 (R15) -> 1315 mV], 19V [SW1.5 (open) -> 2185 mV], 19V [SW1.NC -> 2185 mV]}, but cannot reach {15V, 20V}: the divider's permanent pull-down plus switched-parallel legs cannot reproduce the datasheet's per-detent codes, so the top setting(s) are unreachable
+  [high] device_decode - U1 VBUS_MIN net 'Net-(U1-VBUS_MIN)' decodes (Table 2) to 19V (2185 mV), GREATER than 4 of the VBUS_MAX selector's reachable detents (top band 19V): per EZ-PD BCR datasheet Note 1 (VBUS_MIN > VBUS_MAX), VBUS_MAX is used as both minimum and maximum, so the hard-wired VBUS_MIN silently overrides and defeats those selector positions
+note: gate-grade finding(s) above, but this is a report command so the exit code is 0. Add --strict to exit 2 on them (exit contract: 0 = clean or report-only, 2 = findings under --strict, 3 = invalid for analysis), or gate CI with hauksbee-ci.
+```
+
+Those are the same two findings, with the same detent voltages, that the unit
+tests derive by hand. The real board reproduces them on the default policy.
+
+**`--honour-dnp`: the check goes quiet.** Build only what the fab would build and
+the divider the finding rests on is not there:
+
+```
+$ hauksbee run USB-C_PD_Trigger.kicad_pcb --lint --honour-dnp
+do-not-populate: DNP parts are left out of the simulation, matching the board file
+  left open: R19 (10k), DNP, left open
+  left open: R12 (10k), DNP, left open
+  left open: R16 (5k1), DNP, left open
+  left open: R9 (5k1), DNP, left open
+net-lint: no findings.
+```
 
 - VBUS_MAX keeps only R11 (5.1 k pull-up) plus the per-detent switched single
-  pull-down. That is the datasheet-correct single-pull-down-per-detent
-  topology. The open detent floats to ~3.3 V (the 20 V band).
+  pull-down. That is the datasheet-correct single-pull-down-per-detent topology,
+  and with no static pull-down the fixed divider is uncomputable, so there is
+  nothing to judge. The open detent floats to ~3.3 V (the 20 V band).
 - VBUS_MIN loses its pull-up (R9 DNP), leaving only R10 (10 k to ground), so it
   sits near 0 V (the 5 V band) and never triggers Note 1.
 
-So the device-decode check correctly produces **no finding** on the real board:
-the permanent pull-down it would need to compute the faulty static VBUS_MAX
-divider is unpopulated. Firing here would be a false positive. The check's
-silence on the real board is the zero-false-positive discipline doing its job.
-The decode math (the part that *is* portable and provable) is
-locked down by the unit tests.
+The split is deliberate. DNP carries two opposite meanings in practice, "not on
+this assembly BOM but it will be there" and "this link is deliberately open", and
+hauksbee cannot tell which one a given footprint means. Defaulting to fitted
+surfaces the latent fault, which is the useful answer for a board still in design:
+stuff R12 and R9 and the selector really is mis-coded. `--honour-dnp` answers the
+other question, what the fab builds today. Neither is a false positive, because
+every run prints the policy line and the per-part fitted/left-open decision above
+the findings, so which board was analysed is never in doubt. `--fit R12` /
+`--no-fit R12` override a single part by name.
 
 ## Tests
 
@@ -147,8 +194,9 @@ locked down by the unit tests.
   populated, VBUS_MIN = 19 V) fires the High Note-1 finding.
 - `unreachable_top_band_fires_medium` - the same board fires the Medium finding.
 - `clean_config_is_silent` - a consistent / unresolvable config is silent.
-- `dnp_permanent_pulldown_makes_check_silent` - the real board's actual state
-  (R12 / R9 DNP) leaves the static divider uncomputable, so the check is silent.
+- `dnp_permanent_pulldown_makes_check_silent` - the same board with R12 / R9 still
+  flagged DNP, the state `--honour-dnp` produces: the static divider is
+  uncomputable, so the check is silent.
 - `non_cypd_part_is_ignored` - a non-CYPD board is never touched.
 
 ## Adding a part

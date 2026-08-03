@@ -25,8 +25,8 @@ walkthrough assumes you can read TOML and run `cargo`. Except for
 The rows above go from cheapest to most invasive:
 
 1. **Data.** Model TOML, sensor specs, logic specs, and SoC descriptors. No
-   recompile is needed. The loader validates each file at load time and
-   fails loud on error.
+   recompile is needed. Where each kind is validated differs, and it matters:
+   see "Where validation actually happens" below.
 2. **Packs.** Versioned bundles of the data layer above. Share and pin a pack
    ([docs/models/PACKS.md](../models/PACKS.md)).
 3. **Plugins-by-trait.** Board readers, and I2C/SPI peripherals, implement a
@@ -36,11 +36,62 @@ The rows above go from cheapest to most invasive:
    enforced checklist guards this layer, so a missed integration site cannot
    ship.
 
-One design rule applies to every layer: bad data fails loud. Every validator
-in these walkthroughs produces a named error for each failure category. It
-never produces a generic parse error, and it never falls back silently. When
-a walkthrough shows a validation rule, that rule exists because a past run
-without it corrupted a result.
+One design rule applies to every layer: bad data fails loud *where it is
+validated*. Every validator in these walkthroughs produces a named error for
+each failure category, never a generic parse error and never a silent
+fallback. When a walkthrough shows a validation rule, that rule exists because
+a past run without it corrupted a result.
+
+## Where validation actually happens
+
+Three different gates, at three different moments. Knowing which one covers
+your file is the difference between "hauksbee will catch my mistake" and "my
+mistake ships".
+
+| Your file | Checked at load? | Checked by `models lint`? | Checked at install? |
+|---|---|---|---|
+| a `[[models]]` db file in a user dir or `--models-dir` | parse, non-empty `[match]`, regex compile only | yes, fully | n/a |
+| a `[[models]]` db file inside a pack | as above | yes, fully | **yes, fully, before anything is copied** |
+| a `.soc.toml` MCU descriptor | **yes, fully, and aborts the run** | no | n/a |
+
+The row to read twice is the first. Loading a model db file checks that the TOML
+parses, that every entry has at least one populated `[match]` rule (an
+all-empty one would match every component on the board), and that every regex
+compiles. It does **not** run the per-kind parameter validation. That lives in
+`hauksbee models lint`, and nothing calls it for you.
+
+The gap is not hypothetical: two entries in hauksbee's own built-in database
+load fine and fail lint. `hauksbee models lint crates/hauksbee-models/db/bjt.toml`
+reports `model 's8050': missing required param 'vaf'`, and the diodes file
+reports `model 'led_blue': param 'is' = 0.0000000000000000000001 is outside
+physical range`. Both still resolve and bind. Put either entry inside a pack and
+`hauksbee models add` refuses to install it, because the pack path *does* run the
+full validation up front:
+
+```
+$ hauksbee models add ./badpack
+error: pack model file 'parts.toml' failed validation: model 's8050': model 's8050': missing required param 'vaf'
+```
+
+So: **run `hauksbee models lint <file>` on anything you author.** It is not
+redundant with loading, and packaging is the only route that runs it
+automatically.
+
+A `[sensor]` register-map spec and a `[models.logic]` block ride the same three
+gates as the model entry they sit in: `models lint` checks both standalone, and
+`hauksbee models add` re-checks them (compiling every logic block through the
+engine's own bind path) before it copies a pack.
+
+The `.soc.toml` row is the strict one. A descriptor that exists but does not
+validate aborts the run, naming the file and the field, rather than falling back
+to a lower-priority descriptor:
+
+```
+$ HAUKSBEE_MCU_DIR=./mcu hauksbee run board.kicad_pcb --firmware app.elf --headless
+error: resolving MCU descriptor for 'renode:stm32f103': invalid SoC descriptor
+./mcu/stm32f103.soc.toml: unknown e_machine "EM_NONSENSE": expected one of
+EM_ARM, EM_RISCV, EM_XTENSA, EM_AVR
+```
 
 ## Shared tooling
 
@@ -53,12 +104,18 @@ without it corrupted a result.
   to debug.
 - `hauksbee models add | list | remove` manages packs
   ([make-a-model-pack.md](make-a-model-pack.md)).
-- `model-extract` drafts a model TOML from a PDF datasheet with an LLM. Use
-  this draft as a starting point, then lint and correct it. This is a
-  separate binary, not a `hauksbee` subcommand, and it is not installed on
-  PATH. Run it from a checkout:
-  `cargo run -p hauksbee-models --bin model-extract -- <datasheet.pdf>`. See
-  [../MODELS.md](../models/MODELS.md#pointing-hauksbee-at-a-datasheet) for the workflow.
+- `hauksbee models extract --pdf <datasheet.pdf> --part <PART>` drafts a model
+  TOML from a PDF datasheet with an LLM. Use the draft as a starting point,
+  then lint and correct it. Both flags are required and there are no
+  positional arguments: the part number is what the entry claims, so the
+  command will not guess it. `--kind` is optional (omit it and the extractor
+  works it out from the datasheet), `--out-dir` defaults to your user model
+  directory, and `--yes` skips the consent prompt for scripts that already have
+  it. The same extractor also ships as a standalone binary that takes the same
+  flags, for use without the engine:
+  `cargo run -p hauksbee-models --bin model-extract -- --pdf <p> --part <PART>`.
+  See
+  [the datasheet workflow in MODELS.md](../models/MODELS.md#pointing-hauksbee-at-a-datasheet).
 
 ## Deeper references
 

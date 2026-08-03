@@ -1,4 +1,4 @@
-# Board as Code
+# Board-as-Code
 
 A PCB is a program that draws itself. Hauksbee makes that program *executable*
 and *editable*: you can decompile a real `.kicad_pcb` into readable code, edit
@@ -16,13 +16,21 @@ layer: it carries full pad-level connectivity and round-trips.
 
 ![The Board-as-Code loop: a .kicad_pcb decompiles to editable board.board text, edits to values, wiring, parts and layout hints recompile through from-code into a connectivity-equal board, and check-code runs the same code through extract, bind, co-simulation, the stress monitor and a report](../assets/diagrams/board-as-code-roundtrip.svg)
 
-Three CLI verbs, alongside the existing `hauksbee run`:
+Four CLI verbs, alongside the existing `hauksbee run`:
 
 | command | what it does |
 |---|---|
 | `hauksbee to-code <board>` | decompile a board into Board-as-Code text |
-| `hauksbee from-code <code>` | recompile code back into a `.kicad_pcb` (optionally re-laid-out with `--relayout`/`--incremental` and routed with `--route`) |
+| `hauksbee from-code <code>` | recompile code back into a `.kicad_pcb`. Bare, it emits the coordinates the code carries; `--relayout` / `--incremental` re-place, `--route` / `--route-grid` route |
+| `hauksbee merge-ses <code> <ses>` | merge an externally routed Specctra SES back onto the board the code recompiles to |
 | `hauksbee check-code <code>` | recompile, bind, simulate with the stress monitor, print a fault report |
+
+`from-code --route` runs the router inside the command, on hauksbee's clock.
+`--route-dsn <file>` is the other half: it writes the Specctra DSN and stops,
+so you can route it with anything Specctra-capable for as long as you like,
+then bring the result back with `merge-ses`. The SES then becomes a cacheable,
+diffable artifact: keep it and re-merge at will, instead of re-routing on every
+build.
 
 ## The DSL
 
@@ -33,31 +41,60 @@ component carrying its concrete pads and per-pad net assignments:
 
 ```text
 # Board-as-Code (hauksbee board DSL v1)
-board version 20171130
+board version 20241229
 
-# block block_2c_led_0805_2012metric_c_0805_2012metric: 2 slot(s), 3 instance(s)
-fn block_2c_led_0805_2012metric_c_0805_2012metric {
-    slot 0 lib "Capacitor_SMD:C_0805_2012Metric" val "1k" pads 2
+# block block_2c_r_0805_2012metric_led_0805_2012metric: 2 slot(s), 3 instance(s)
+fn block_2c_r_0805_2012metric_led_0805_2012metric {
+    slot 0 lib "Resistor_SMD:R_0805_2012Metric" val "1k" pads 2
     slot 1 lib "LED_SMD:LED_0805_2012Metric" val "LED" pads 2
 }
 
 fn main {
     net "+5V"
-    net "/DTR"
+    net "GND"
+    net "LED1_A"
 
-    comp R9 lib "Capacitor_SMD:C_0805_2012Metric" val "1K" layer "F.Cu" at 172.82 66.04 rot 0 {
-        pad "2" smd roundrect at 0.9375 0 size 0.975 1.4 layers [F.Cu F.Paste F.Mask] net "+5V"
-        pad "1" smd roundrect at -0.9375 0 size 0.975 1.4 layers [F.Cu F.Paste F.Mask] net "/DTR"
+    instance block_2c_r_0805_2012metric_led_0805_2012metric {
+        comp R1 lib "Resistor_SMD:R_0805_2012Metric" val "1k" layer "F.Cu" at 172.82 66.04 rot 0 {
+            pad "1" smd roundrect at -0.9375 0 size 0.975 1.4 layers [F.Cu F.Paste F.Mask] net "+5V"
+            pad "2" smd roundrect at 0.9375 0 size 0.975 1.4 layers [F.Cu F.Paste F.Mask] net "LED1_A"
+        }
+        comp D1 lib "LED_SMD:LED_0805_2012Metric" val "LED" layer "F.Cu" at 176.82 66.04 rot 0 {
+            pad "2" smd roundrect at -0.9375 0 size 0.975 1.4 layers [F.Cu F.Paste F.Mask] net "LED1_A"
+            pad "1" smd roundrect at 0.9375 0 size 0.975 1.4 layers [F.Cu F.Paste F.Mask] net "GND"
+        }
     }
+    # ... two more instances of the same block, on LED2_A and LED3_A
 }
 ```
+
+That excerpt is a loadable file on its own, elision comment included:
+`hauksbee check-code` on it reports `2 components, 3 nets, 100% resolved`.
 
 The bar for the recompile is **connectivity equivalence**, not
 byte-exactness: `board -> code -> board` preserves the component set and
 every net's wiring (up to net renaming). On a clean round-trip it also
-preserves placement. This is verified on stormduino, pic_programmer,
-microwave and the full 3443-component Tarski InputSystem board
-(`forge-codegen` test `dsl_roundtrip`).
+preserves placement.
+
+Two things back that claim. In-repo, `crates/hauksbee-engine/tests/boardcode_run.rs`
+round-trips a board through `to-code` then `from-code` and asserts the
+recompiled text binds the *same* IR device set as the original
+(`board_as_code_run_matches_kicad_pcb`), and does the same for a netlist with no
+layout at all (`netlist_to_board_preserves_components_and_nets`). Second, you can
+run the round-trip yourself on the bundled Watchy board and check the net
+partition:
+
+```bash
+hauksbee to-code crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --out w.board
+hauksbee from-code w.board --out w_rebuilt.kicad_pcb
+hauksbee to-code w_rebuilt.kicad_pcb --out w2.board
+# w.board and w2.board carry the same 274 `(ref, pad)` keys and partition them
+# into the same 84 nets.
+```
+
+`forge-codegen` also exposes `compare_connectivity` (in `rebuild.rs`) for
+programmatic use, though nothing in the test suite calls it today: the shipped
+gate is the bind-equivalence pair above.
 
 ## Authoring a board from scratch
 
@@ -67,12 +104,15 @@ is a complete, hand-authored three-part board, a 2-pin header driving an LED
 through a series resistor, written from nothing and richly commented. Build
 one up the same way:
 
-1. **Header + `fn main`.** Every file starts with `board version <N>` (N is
-   any integer tag) and one `fn main { ... }` block that holds the whole
-   board.
+1. **Header + `fn main`.** A file is one `fn main { ... }` block that holds the
+   whole board, usually preceded by `board version <N>` (N is any integer tag).
+   The header is optional: omit it and the version defaults to `20241229`.
 2. **Declare the nets.** List every net with `net "<name>"` before you wire a
-   pad to it. Wiring a pad to an undeclared net is a load error, so the net
-   list also acts as your connectivity contract.
+   pad to it. This is documentation, not a contract: the recompiler
+   auto-declares any net it first meets on a pad, so a pad wired to a net you
+   forgot to list still lands on that net rather than erroring. Declaring nets
+   up front fixes their id order and gives a reader the board's net list in one
+   place, which is why the decompiler always emits them.
 3. **Add components.** Each `comp` has a reference, a footprint
    `lib "<lib_id>"`, a `val`, a `layer`, and an `at X Y rot` placement, then
    a `{ ... }` body of pads. A footprint `lib_id` is a KiCad `Library:Footprint`
@@ -89,9 +129,11 @@ one up the same way:
 
 ```bash
 hauksbee check-code examples/board-as-code/starter.board --seconds 0.01
-#   Board-as-Code check:
-#     3 components, 3 nets, 100% resolved, 0 active nets
-#     no faults: circuit is within ratings.
+# Board-as-Code check:
+#   3 components, 3 nets, 100% resolved, 0 active nets (nothing toggles without
+#   firmware; `hauksbee run <board> --firmware <f> --headless` exercises it)
+#   simulated 0.010s
+#   no faults: circuit is within ratings.
 ```
 
 ## Statement & field reference
@@ -101,51 +143,71 @@ One statement per line, inside `fn main` (or an `fn <block>` you instantiate).
 
 | statement | form | notes |
 |---|---|---|
-| board header | `board version <N>` | required first line; `N` is an integer tag |
+| board header | `board version <N>` | optional; `N` is an integer tag, default `20241229` |
 | board outline | `board size <W> <H>` or `board outline <X0> <Y0> <X1> <Y1>` | optional; constrains re-layout |
-| net | `net "<name>"` | declare before wiring; a pad's `net` must name a declared net |
-| component | `comp <REF> lib "<lib_id>" val "<value>" [layer "<layer>"] at <X> <Y> [rot <deg>] {` | `layer` defaults `F.Cu`, `rot` defaults `0`; body ends with `}` |
+| net | `net "<name>"` | declares the net and fixes its id order; a pad may also name a net that was never declared, and the recompiler auto-declares it |
+| block | `fn <name> { slot <i> lib "<lib_id>" val "<value>" pads <n> ... }` | the shared slot layout of a repeated cluster, at file top level |
+| instance | `instance <block> { comp ... }` | one concrete instance of a block, inside `fn main`; the decompiler emits one per detected cluster instance (55 of them in the bundled Watchy board) |
+| component | `comp <REF> lib "<lib_id>" val "<value>" [layer "<layer>"] at <X> <Y> [rot <deg>] {` | `layer` defaults `F.Cu`, `rot` defaults `0`; body ends with `}`. Legal at the top of `fn main` or inside an `instance` block |
 | pad | `pad "<num>" <kind> <shape> at <x> <y> size <w> <h> [drill <D>] layers [<L> ...] (net "<name>" \| nonet)` | `x`/`y` are relative to the comp origin |
 | clearance | `space <mm>` (in a comp body) or `space fn <block> <mm>` (in `fn main`) | hard minimum clear distance for the placer |
 | edge constraint | `pin <REF> edge <left\|right\|top\|bottom>` | holds a part against a board edge |
 | lock | `lock <REF>` | freezes a part at its coordinates as a keep-out |
 
-Closed token sets:
+The token sets the parser enforces (closed sets, validated at parse time):
 
-- **pad `kind`:** `smd`, `thru_hole`, `np_thru_hole`, `connect` (a
+- **pad `kind`:** exactly `smd`, `thru_hole`, `np_thru_hole`, `connect` (a
   `thru_hole` / `np_thru_hole` pad needs a `drill`).
-- **pad `shape`:** `rect`, `roundrect`, `circle`, `oval`, `trapezoid` (the
-  KiCad pad shapes; an omitted shape defaults to `rect`).
+- **pad `shape`:** exactly `rect`, `roundrect`, `circle`, `oval`, `trapezoid`
+  (the KiCad pad shapes minus `custom`, which the DSL cannot carry).
 - **`layers`:** KiCad layer names in `[ ]`, e.g. `[F.Cu F.Paste F.Mask]` for
   a top SMD pad, `[F.Cu B.Cu]` for a through-hole pad.
 
+`kind` and `shape` are positional, not optional, and any token outside the
+closed set is a line-numbered parse error naming the offender and the valid
+values (``line 6: pad kind: expected smd|thru_hole|np_thru_hole|connect, got
+`banana` ``). Omitting `shape` fails the same way: the token in the shape slot
+would be `at`, which is not a valid shape.
+
 ## Worked example: decompile and recompile
 
-```bash
-# build the CLI
-cargo build -p hauksbee-engine
+Against the Watchy board that ships in this repository, so this runs on a bare
+clone:
 
-BIN=target/debug/hauksbee
-BOARD="../board-corpus/stormduino/stormduino Rev2.kicad_pcb"
+```bash
+BOARD=crates/hauksbee-ci/examples/boards/watchy.kicad_pcb
 
 # 1. decompile to code
-$BIN to-code "$BOARD" --out storm.board
+hauksbee to-code "$BOARD" --out w.board
 
 # 2. recompile back to a board (connectivity-equal to the original)
-$BIN from-code storm.board --out storm_rebuilt.kicad_pcb
+hauksbee from-code w.board --out w_rebuilt.kicad_pcb
 
-# 3. run the rebuilt board through the bind + co-sim + stress loop
-$BIN check-code storm.board --seconds 0.05
+# 3. run the recompiled board through the bind + co-sim + stress loop
+hauksbee check-code w.board --seconds 0.05
 ```
 
-`check-code` prints a report like:
+`check-code` prints:
 
 ```text
-Board-as-Code check: stormduino
-  51 components, 57 nets, 84% resolved, 0 active nets
+Board-as-Code check:
+  84 components, 84 nets, 88% resolved, 0 active nets (nothing toggles without firmware; `hauksbee run <board> --firmware <f> --headless` exercises it)
+  8 unresolved (simulated as OPEN; add models with --models-dir):
+    - C7 (TBD)
+    - C9 (TBD)
+    - R12 (TBD)
+    - U6 (BMA423)
+    - L1 (TBD)
+    - M1 (Vibration_Motor)
+    - U1 (SR2HARU)
+    - AE1 (Antenna_Chip)
   simulated 0.050s
   no faults: circuit is within ratings.
 ```
+
+`examples/board-as-code/blinky.board` is the same loop with no corpus at all:
+`hauksbee check-code examples/board-as-code/blinky.board --seconds 0.01`
+reports `5 components, 5 nets, 100% resolved` and a clean report.
 
 ## Worked example: a fix, expressed as a code edit
 
@@ -219,9 +281,9 @@ board size 60 45                 # constrain the board to 60 x 45 mm
 fn main {
     pin J1 edge left             # hold connector J1 against the left edge
     pin J2 edge right
-    lock U5                       # never move the MCU; keep its placement
+    lock U5                      # never move the MCU; keep its placement
     space fn block_synapse 8     # every synapse instance gets 8 mm clear
-    ...
+    # ... the nets and comps
 }
 ```
 
@@ -233,19 +295,22 @@ placer enforces as a hard minimum clear distance:
 ```text
 comp TP1 lib "TestPoint:TestPoint_Pad_D1" val "TP" layer "F.Cu" at 0 0 rot 0 {
     space 5                       # keep 5 mm clear around this test point
-    pad "1" smd circle at 0 0 size 1 1 layers [F.Cu] net N
+    pad "1" smd circle at 0 0 size 1 1 layers [F.Cu] net "PROBE"
 }
 
 fn main {
     space fn block_synapse 8      # every synapse instance gets 8 mm breathing room
-    ...
+    # ... the rest of the board
 }
 ```
 
 ### Before / after
 
-Full re-layout of stormduino, exported with `kicad-cli pcb export svg`
-(`assets/storm_before.svg`, `assets/storm_after.svg`):
+Full re-layout of a 51-part Arduino-style board, exported with
+`kicad-cli pcb export svg` (`assets/storm_before.svg`,
+`assets/storm_after.svg`). These three figures were rendered from a board that
+is not redistributable, so they are illustrations rather than something a clone
+can regenerate; the runnable equivalents are the transcripts above.
 
 | before | after |
 |---|---|
@@ -260,47 +325,54 @@ Regenerate both, the routed board, and the incremental diff with one
 command:
 
 ```bash
-hauksbee/scripts/board_as_code_assets.sh
+scripts/board_as_code_assets.sh
 ```
 
-## Incremental recompile (the preferred default)
+## Keeping the placement: bare `from-code`, and `--incremental`
 
-Full re-layout throws away the existing placement. Incremental recompile
-keeps it: the *original* board is the base, components whose identity and
-placement stay unchanged keep their exact coordinates, and only new, moved
-or value-changed parts get re-placed, into free space near their net
-neighbours, without disturbing the settled board.
+For a fix workflow you almost always want no re-placement at all, and that is
+what **bare `from-code` already does**: it emits each component at exactly the
+`at X Y rot` the code carries. Edit one resistor's value or one pad's net, and
+the recompiled board differs from the original in that one thing. No flag
+needed.
+
+`--incremental` adds one narrow behaviour on top: it compares each component
+against a base index keyed by reference, keeps every component whose placement
+and rotation match the base, and re-places the rest into free space near their
+net neighbours. At the CLI the base is the same file you passed in, so the only
+components that can miss the index are ones whose **reference designator
+collides with another component's**. Everything else is byte-identical to the
+bare run.
 
 ```bash
-$BIN from-code storm.board --incremental --out storm_patched.kicad_pcb
-# re-layout: 0 groups, 4 moved, 47 kept
+hauksbee from-code w.board --incremental --out w_patched.kicad_pcb
+# re-layout: 0 groups, 2 moved, 84 kept
 ```
 
-This is the right default for a fix workflow: you edited one resistor or one
-wire, so only that part should move. The `forge-codegen` test
-`incremental_keeps_unchanged` exercises this: it moves a single component
-and asserts exactly that one component gets re-placed, while every other
-part keeps its coordinates and the connectivity stays preserved.
+The `2 moved` on the unedited Watchy board above is exactly that: Watchy ships
+two components called `TP4` and two called `TP5`, so the first of each pair
+loses its slot in the reference-keyed index and gets re-placed. A board with
+unique references reports `0 moved` and produces the same bytes as bare
+`from-code`. So reach for `--incremental` when you are patching a board with
+duplicate designators and want them separated; otherwise leave it off.
 
-(The `4 moved` on the unedited stormduino above is an honest artifact of
-that board carrying duplicate reference designators: the base index is
-keyed by reference, so the colliding duplicates read as changed. Boards
-with unique references report `0 moved` on an unedited round-trip.)
+The re-placement engine itself takes a distinct base program
+(`forge_codegen::relayout(&mut prog, &base, &cfg)` in `layout.rs`), so a caller
+that holds the pre-edit program can get true old-versus-new incremental
+placement. The CLI does not expose that second input today.
 
 ### Before / after / diff
 
-The visualisation below uses `pic_programmer` (which has unique references
-for a clean diff): the original board, the board after one textual edit
-(move a single resistor) recompiled incrementally, and a diff that
+The visualisation below shows one textual edit (move a single resistor)
+recompiled: the original board, the recompiled board, and a diff that
 highlights the moved part in orange (with a dashed ghost at its old
-position and an arrow to the new one), new parts in green, and the 62
+position and an arrow to the new one), new parts in green, and the
 untouched parts in grey.
 
 ![incremental recompile before/after/diff](../assets/incremental_recompile.png)
 
 The middle and diff panels are identical to the original except for that
-one part: incremental recompile keeps every untouched component exactly
-where it was. Regenerate with `hauksbee/scripts/board_as_code_assets.sh`
+one part. Regenerate with `scripts/board_as_code_assets.sh`
 (renderer: `scripts/make_incremental_viz.py`).
 
 ## Routing
@@ -312,9 +384,43 @@ router.
 
 ```bash
 # route with freerouting (the default when it is installed)
-$BIN from-code storm.board --relayout --route --out storm_routed.kicad_pcb
-# routed: 49/50 nets (98%), 678 segments, 45 vias, 39.1s (freerouting)
+hauksbee from-code examples/board-as-code/blinky.board --relayout --route \
+    --out blinky_routed.kicad_pcb
+# re-layout: 3 groups, 5 moved, 0 kept
+# routing: freerouting handoff (DSN -> freerouting -> SES); DSN at freerouting-work/board.dsn
+# merged 27 segments, 0 vias in 35.4s (freerouting-1.9.0)
+# routed: 9/9 connections, 0 unrouted (freerouting-1.9.0); endpoint-net violations: 0
+# DRC: 0 serious, 0 total
 ```
+
+Read the last two lines together. `connections` counts real routed connections
+(rat-lines closed), not nets: a four-pad net is three connections, so
+`9/9 connections` on a five-part board is a fully routed board. The DRC line is
+the same internal short/clearance sweep `hauksbee run --drc` runs, over the
+board that just came out of the router, and `--route-strict` turns any open
+connection, serious DRC finding, or wrong-net endpoint into a non-zero exit.
+
+If you would rather route on your own clock, split the run in two:
+
+```bash
+hauksbee from-code examples/board-as-code/blinky.board \
+    --route-dsn b.dsn --out b_placed.kicad_pcb
+# wrote routing DSN to b.dsn
+# ... the unrouted board is still written to --out
+
+java -jar freerouting.jar -de b.dsn -do b.ses -mp 10   # any Specctra router, any budget
+
+hauksbee merge-ses examples/board-as-code/blinky.board b.ses --out b_routed.kicad_pcb
+# merged 21 segments, 0 vias from b.ses (merged-ses)
+# routed: 9/9 connections, 0 unrouted (merged-ses); endpoint-net violations: 0
+# DRC: 0 serious, 0 total
+```
+
+`merge-ses` recompiles the board from the same source and re-runs the same
+post-route audit, so the merged result is judged exactly as the in-process route
+is. One caveat: it recompiles *bare*, so if you exported the DSN after
+`--relayout` or `--incremental`, the pads land somewhere else and the merge
+scores badly. Export the DSN from the same placement you intend to merge onto.
 
 The hand-off, in `forge-codegen`'s `route_freerouting` module:
 
@@ -330,7 +436,7 @@ The hand-off, in `forge-codegen`'s `route_freerouting` module:
    wires and vias back and write them onto the board as copper segments and
    vias on the correct nets.
 
-![routed stormduino (freerouting)](../assets/storm_routed.png)
+![the same board routed by freerouting](../assets/storm_routed.png)
 
 ### Installing freerouting
 
@@ -365,12 +471,14 @@ freerouting for real boards.
 
 | piece | path |
 |---|---|
-| executable DSL (emit / parse / build) | `kicad-forge/crates/forge-codegen/src/dsl/` |
-| re-layout + incremental + grid router | `kicad-forge/crates/forge-codegen/src/layout.rs` |
-| freerouting handoff (DSN / invoke / SES) | `kicad-forge/crates/forge-codegen/src/route_freerouting.rs` |
-| re-runnable asset/export script | `hauksbee/scripts/board_as_code_assets.sh`, `scripts/make_incremental_viz.py` |
-| connectivity-only board comparison | `kicad-forge/crates/forge-codegen/src/rebuild.rs` (`compare_connectivity`) |
-| edit -> simulate loop + CLI glue | `hauksbee/crates/hauksbee-engine/src/boardcode.rs` |
-| CLI subcommands | `hauksbee/crates/hauksbee-engine/src/main.rs` |
-| DSL round-trip + layout tests | `kicad-forge/crates/forge-codegen/tests/dsl_roundtrip.rs` |
-| miswire edit -> simulate demo | `hauksbee/crates/hauksbee-engine/tests/boardcode_miswire.rs` |
+| executable DSL (emit / parse / build) | `vendor/kicad-forge/crates/forge-codegen/src/dsl/` |
+| re-layout + incremental + grid router | `vendor/kicad-forge/crates/forge-codegen/src/layout.rs` |
+| freerouting handoff (DSN / invoke / SES) | `vendor/kicad-forge/crates/forge-codegen/src/route_freerouting.rs` |
+| connectivity-only board comparison | `vendor/kicad-forge/crates/forge-codegen/src/rebuild.rs` (`compare_connectivity`) |
+| KiCad library-parity DRC test | `vendor/kicad-forge/crates/forge-codegen/tests/kicad_drc_parity.rs` |
+| edit -> simulate loop | `crates/hauksbee-engine/src/boardcode.rs` |
+| CLI subcommands (`to-code` / `from-code` / `merge-ses` / `check-code`) | `crates/hauksbee-engine/src/commands/boardcode.rs` |
+| round-trip bind-equivalence tests | `crates/hauksbee-engine/tests/boardcode_run.rs` |
+| CLI-level tests (DSN export, SES merge, JSON shapes) | `crates/hauksbee-engine/tests/cli_boardcode.rs` |
+| miswire edit -> simulate demo | `crates/hauksbee-engine/tests/boardcode_miswire.rs` |
+| re-runnable asset/export script | `scripts/board_as_code_assets.sh`, `scripts/make_incremental_viz.py` |

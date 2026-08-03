@@ -16,11 +16,14 @@
 | Bind report (`--report`) | Component → device-model mapping for every part on the board | Utility / transparency | No |
 | Signal integrity (`--si`) | SI physics: controlled-impedance USB/Ethernet estimates, stubs, series termination | Differentiated | No |
 | Trace ampacity (`--ampacity`) | IPC-2221 current-capacity vs routed trace width | Differentiated | No |
-| Thermal (`--thermal`) | Steady-state junction temperature per dissipating device (Tj = Tambient + P × θJA) | Differentiated | No |
+| Thermal (`--thermal`) | Steady-state junction temperature per dissipating device (Tj = Tambient + P × θJA) | Differentiated | AVR: no. Other MCUs: same as co-sim (it runs a short headless co-sim) |
+| USB-C CC compliance (`--usb-c`) | The attach a compliant source sees from the receptacle's CC termination, and whether it applies VBUS. Flags the Raspberry-Pi-4-class shared-CC-pulldown fault | Differentiated | No |
+| Full static suite (`--check`, alias `--all`) | Bind report + DRC + lint + SI in one pass | Convenience over the rows above | No |
 | AC analysis (`--ac`) | Small-signal Bode, gain crossover, phase margin | Differentiated | No |
 | Firmware co-sim (`--firmware --headless`) | Firmware-driven GPIO/peripheral faults, actual rail voltages under real firmware load | **The differentiator** | AVR: no. STM32/nRF52/RISC-V: Renode. ESP32 family: Espressif QEMU |
 | Behavioral goal assertions (`hauksbee-ci run`) | Whether the firmware makes the hardware do its job: rails, UART output, blink rate, boot timing, temperature, loop stability | **The differentiator** | Same as co-sim above |
 | Board-as-Code (`to-code` / `from-code` / `check-code`) | Edit-simulate loop: catch miswire, stress faults, and thermal issues in a pre-commit hook | Differentiated | Optional (co-sim in `check-code` uses whichever backend the board's MCU needs) |
+| MCP server (`hauksbee-mcp`) | The same engine exposed to coding agents as a stdio MCP server | Differentiated | Same as the analysis it runs |
 
 ---
 
@@ -101,6 +104,27 @@ produces a Bode table (magnitude dB + phase) for one or more output nets. Use
 `--ac-loop <net>` to extract gain crossover and phase margin for a feedback
 loop. Outputs to terminal or to CSV with `--ac-csv`. Full details in
 [`docs/analysis/AC_ANALYSIS.md`](../analysis/AC_ANALYSIS.md).
+
+### `--usb-c`
+
+USB-C CC compliance report: models the attach a compliant source sees from
+the receptacle's CC termination (Rd/Ra classification per the USB Type-C
+spec's voltage windows) and reports whether the source applies VBUS. Flags
+the Raspberry-Pi-4-class shared-CC-pulldown fault, and independent-Rd,
+double-termination, and multi-receptacle cases.
+
+### `--check` (alias `--all`)
+
+The whole static suite in one pass: bind report, DRC, lint, and signal
+integrity. This is the flag a pre-commit hook or a first look wants.
+
+### Waivers
+
+A finding that is wrong for your board can be overruled one finding at a
+time, without switching the check off. A `hauksbee-waivers.toml` beside the
+board names the finding, a required reason, and a required expiry; waived
+findings are printed rather than hidden, and a lapsed waiver brings the
+finding back. Syntax and rules: [docs/ci/CI.md](../ci/CI.md).
 
 ---
 
@@ -208,10 +232,13 @@ scheduler couples to any of them without change. The trait lives in
 `crates/hauksbee-mcu/src/traits.rs`. The backends live in
 `crates/hauksbee-mcu/src/`.
 
-STM32, nRF52840, ESP32, and ESP32-C3 are all proven end-to-end on this branch
-by named integration tests: `crates/hauksbee-engine/tests/stm32_renode_cosim.rs`,
-`esp32_qemu_cosim.rs`, and `renode_riscv_arm_cosim.rs`. The external simulators
-install via `scripts/install-sims.sh` and are found automatically at runtime.
+Proof levels in the current release, by named integration tests
+(`crates/hauksbee-engine/tests/stm32_renode_cosim.rs`, `esp32_qemu_cosim.rs`,
+`renode_riscv_arm_cosim.rs`): AVR, STM32, ESP32, and ESP32-C3 are proven
+end-to-end (firmware drives a net through the solved circuit); nRF52840 and
+FE310 are proven to UART boot; ESP32-S3 is wiring-proven (machine boots and
+locksteps, app proof pending a flash image). The external simulators install
+via `scripts/install-sims.sh` and are found automatically at runtime.
 
 #### AVR, `AvrMcu` (libsimavr, linked in-process)
 
@@ -250,10 +277,10 @@ renode,qemu` build is GPL-free.
 Shipped named configs and proven support status (from `crates/hauksbee-mcu/src/renode/mod.rs`
 and [`docs/cosim/MCU.md`](../cosim/MCU.md)):
 
-| Config constructor | Platform | Proven on this branch |
+| Config constructor | Platform | Proven in the current release |
 |---|---|---|
 | `RenodeConfig::stm32f103()` | STM32F103C8 (Cortex-M3, "blue pill"), PA-PG, USART1, 8 MHz HSI | **Proven**: UART boot banner, GPIO toggle, solved LED current |
-| `RenodeConfig::stm32f4_discovery()` | STM32F4 Discovery (STM32F407, Cortex-M4), PA-PE, USART2, 16 MHz | Config shipped, not run on this branch |
+| `RenodeConfig::stm32f4_discovery()` | STM32F4 Discovery (STM32F407, Cortex-M4), PA-PE, USART2, 16 MHz | Config shipped, not exercised by a named test |
 | `RenodeConfig::nrf52840()` | nRF52840 (Cortex-M4, two 32-bit GPIO ports), gpio0/gpio1, uart0, 64 MHz | **Proven (UART boot)**: Zephyr shell `uart:~$` |
 | `RenodeConfig::sifive_fe310()` | SiFive FE310 / HiFive1 (RISC-V RV32), gpio0, uart0, 16 MHz | **Proven (UART boot)**: Zephyr shell boot with PRCI clock fix |
 
@@ -267,7 +294,7 @@ config is claimed for it.
 GPIO exchange mechanism: after each `RunFor` chunk the backend reads each
 port's output-data register (ODR) over the Monitor, diffs the snapshot, and
 fires per-bit edge callbacks. Offsets: STM32F1 ODR `0x0C`, STM32F4 `0x14`,
-nRF52 `0x4` (peripheral-relative, see `db/mcu/nrf52840.soc.toml`), FE310
+nRF52 `0x4` (peripheral-relative, see `crates/hauksbee-mcu/db/mcu/nrf52840.soc.toml`), FE310
 `0x0C`. GPIO input: `sysbus.<port> OnGPIO <bit> <bool>`.
 
 GPIO drive **direction** is also observable on the dir-mapped platforms. The
@@ -296,7 +323,7 @@ peripherals (an `II2CPeripheral` / `ISPIPeripheral` per slave address), so a
 hardware-TWI/SPI sensor co-simulates on Renode exactly as it does on simavr.
 See the `i2c_sensor_cosim_renode` / `spi_sensor_cosim_renode` integration
 tests. Controllers by platform: STM32F103 (`i2c1`, `spi1`), STM32F4 Discovery
-(`i2c1`, `spi1-3`), nRF52840 (`twi0`/`twi1`, `spi2`, names live-verified with
+(`i2c1`, `spi2`/`spi3`), nRF52840 (`twi0`/`twi1`, `spi2`, names live-verified with
 bridge registration, an end-to-end nRF sensor round-trip still awaits an nRF
 bus firmware fixture). FE310 and RP2040 model no bus controllers. hauksbee
 records a sensor bound on such a platform as **unexercised** and surfaces that
@@ -317,7 +344,7 @@ path.
 
 Shipped named configs:
 
-| Config constructor | Machine | Architecture | Proven on this branch |
+| Config constructor | Machine | Architecture | Proven in the current release |
 |---|---|---|---|
 | `QemuConfig::esp32()` | `esp32` | Xtensa LX6 (dual-core, 240 MHz) | **Proven**: UART boot, GPIO toggle, solved LED current, stable across runs |
 | `QemuConfig::esp32s3()` | `esp32s3` | Xtensa LX7 (240 MHz) | **Wiring proven**: binds `qemu:esp32s3`, machine boots (blank flash), QMP/gdbstub/UART connect, lockstep steps. App proof pending an S3 flash image (needs esp-idf's esp32s3 toolchain) |
@@ -364,7 +391,8 @@ preserving the exit code. GitHub Actions annotations appear automatically
 when `GITHUB_ACTIONS` is set.
 
 Exit codes: 0 all assertions passed, 1 at least one assertion failed, 2 spec
-or usage error.
+or usage error, 3 invalid-for-analysis (the run refuses to vouch for its own
+result). The full contract is in [docs/ci/CI.md](../ci/CI.md#exit-codes-the-pipeline-contract).
 
 ### Spec anatomy
 
@@ -391,9 +419,14 @@ min  = 4.9
 after_ms = 50
 ```
 
-Board files: `.kicad_pcb`, `.kicad_sch`, `.brd`, `.d356`, or gerbers.
+Board files: `.kicad_pcb`, `.kicad_sch`, `.brd`, `.PcbDoc`, `.net` (KiCad
+netlist), `.d356`, Board-as-Code `.board`, or gerbers.
 
-### Assertion kinds (from `crates/hauksbee-ci/src/spec.rs`)
+### Assertion kinds
+
+All fourteen kinds, validated by the kind list in
+`crates/hauksbee-ci/src/spec.rs` (near line 1590) and implemented in
+`crates/hauksbee-ci/src/assertions.rs`:
 
 | Kind | What it checks |
 |---|---|
@@ -409,6 +442,8 @@ Board files: `.kicad_pcb`, `.kicad_sch`, `.brd`, `.d356`, or gerbers.
 | `boot-coverage` | A control net is driven to at least `min` volts within `deadline_ms` of reset, with no fault during the boot window. Answers whether firmware drives a Hi-Z control input in time |
 | `phase_margin` | Loop phase margin from the AC sweep is within `[min, max]` degrees |
 | `ac_gain` | A net's AC gain is within `[min, max]` dB at an optional `freq_hz` |
+| `hwtrace` | Checks the sim's waveforms feature-by-feature against a captured hardware trace (scope CSV or logic-analyzer VCD) |
+| `model_coverage` | Pins the fraction of active ICs that must bind to a device model |
 
 Additional spec features: `[[supply]]` (ideal / bench / wall / USB / battery
 models with ripple and BMS protection), `[[net_drive]]` (force a net to a
@@ -466,13 +501,38 @@ Three commands form the edit-simulate loop:
 
 `check-code` drops straight into a script or pre-commit hook.
 
+The rest of the CLI surface, one line each:
+
+- **`hauksbee merge-ses <code> <ses>`**: the return half of `from-code
+  --route-dsn`: merge a FreeRouting `.ses` session back into the recompiled
+  board.
+- **`hauksbee sim <deck>`**: run a SPICE deck through the solver directly.
+- **`hauksbee watch <board|code|spec>`**: re-run the right check on every
+  file change (a `.kicad_pcb` runs `run --check`, a `.board` runs
+  `check-code`, a `.toml` runs the spec).
+- **`hauksbee doctor`**: report which co-sim backends this build can reach
+  and where each simulator was found.
+- **`hauksbee install esp-qemu`**: download Espressif's official prebuilt
+  QEMU fork into the discovery path.
+
+---
+
+## The MCP server (`hauksbee-mcp`)
+
+`hauksbee-mcp` is the third binary in every release bundle (alongside
+`hauksbee` and `hauksbee-ci`): a stdio MCP server exposing the same engine,
+so a coding agent can analyze boards, run specs, and read reports over
+JSON-RPC without shelling out to the CLI. Documented in
+[`agents/AGENTS.md`](../../agents/AGENTS.md).
+
 ---
 
 ## Input formats
 
 `hauksbee run` and `hauksbee-ci` accept `.kicad_pcb`, `.kicad_sch`,
 `.brd` (Eagle), `.PcbDoc` (Altium, see [`docs/ingest/ALTIUM.md`](../ingest/ALTIUM.md)),
-`.d356` (IPC-D-356 netlist), or a directory of gerbers
+`.net` (KiCad netlist export), `.d356` (IPC-D-356 netlist),
+Board-as-Code `.board`, or a directory of gerbers
 (reverse-extracted from copper geometry alone, see [`docs/ingest/GERBER.md`](../ingest/GERBER.md)).
 
 ---

@@ -31,5 +31,6 @@ how users tell the maintained project apart from anything else, and it is the
 one thing that cannot be forked without destroying its meaning. Most
 established open-source projects draw the same line.
 
-Questions and permission requests: open an issue or use the security contact
-in `SECURITY.md` for private queries.
+Questions and permission requests: open an issue, or for private queries use
+the private contact in `SECURITY.md` (`security@hauksbee.dev` or GitHub
+private reporting).

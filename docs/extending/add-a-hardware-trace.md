@@ -75,8 +75,14 @@ kind = "period"                # level|min|max|period|duty|pulse_width|edge_coun
 reltol = 0.10                  # ±10%: the MCU's RC clock tolerance, not a guess
 ```
 
-Every feature needs an `abstol`, a `reltol`, or both (the loader refuses one
-without: "hardware traces carry their own error bars and must state them").
+Every feature needs an `abstol`, a `reltol`, or both. The loader refuses one
+without, naming the channel and the feature:
+
+```
+invalid spec: channel 'D13' feature 'period' needs an `abstol` and/or `reltol`:
+a hardware trace carries its own error bars and must state them
+```
+
 Derive them from physics, not from what makes the test pass: clock tolerance
 for timing features, datasheet V_OH spread plus probe loading for levels.
 Optional per-feature fields: `after_ms` (skip the boot transient) and
@@ -126,11 +132,28 @@ hauksbee-ci run testdata/hwtraces/avr-blinky/led-blink-scope/spec.toml
 ```
 
 ```
+hauksbee-ci: avr-blinky vs hardware trace (scope CSV)
+  board: ../../../../crates/hauksbee-ci/examples/boards/blinky.kicad_pcb
+  seeds: 1
+
   [PASS] hwtrace D13 period
-        D13 period: sim 201.0000 ms vs captured 200.1500 ms (Δ +0.8500 ms within ±20.0150 ms)
+        D13 period: sim 201.0000 ms vs captured 200.1500 ms (Δ +0.8500 ms within ±20.0150 ms) [SYNTHETIC trace: validates the harness, not the hardware]
+  [PASS] hwtrace D13 duty
+        D13 duty: sim 0.4988 frac vs captured 0.5004 frac (Δ -0.0016 frac within ±0.0600 frac) [SYNTHETIC trace: validates the harness, not the hardware]
+  [PASS] hwtrace D13 pulse_width
+        D13 pulse_width: sim 100.2500 ms vs captured 100.1200 ms (Δ +0.1300 ms within ±12.0144 ms) [SYNTHETIC trace: validates the harness, not the hardware]
   [PASS] hwtrace D13 max
-        D13 max: sim 4.5947 V vs captured 4.7443 V (Δ -0.1496 V within ±0.3000 V)
+        D13 max: sim 4.6009 V vs captured 4.7443 V (Δ -0.1434 V within ±0.3000 V) [SYNTHETIC trace: validates the harness, not the hardware]
+  [PASS] hwtrace D13 min
+        D13 min: sim 0.0000 V vs captured 0.0035 V (Δ -0.0035 V within ±0.2000 V) [SYNTHETIC trace: validates the harness, not the hardware]
+  [PASS] hwtrace D13 edge_count
+        D13 edge_count: sim 9.0000 edges vs captured 10.0000 edges (Δ -1.0000 edges within ±2.0000 edges) [SYNTHETIC trace: validates the harness, not the hardware]
+
+6/6 assertions passed in 1.38s - GREEN
 ```
+
+The seed traces shipped here are synthetic, and every single line says so. That
+suffix is the point of the next section.
 
 When a feature fails, the line carries both values. That is the point.
 A real disagreement between sim and hardware is a *finding*, not a nuisance.
@@ -147,9 +170,9 @@ someone built them from datasheet-typical behavior, another simulator, or
 by hand. A synthetic trace is legitimate scaffolding (the seed traces are
 synthetic, and say so), but it validates the **harness**, not the simulator.
 
-The report appends `[SYNTHETIC trace, validates the harness, not the
-hardware]` to every one of its lines, so a green run can never quietly
-impersonate hardware validation. A trace file without the field does not
+The report appends `[SYNTHETIC trace: validates the harness, not the
+hardware]` to every one of its lines, as the transcript above shows, so a green
+run can never quietly impersonate hardware validation. A trace file without the field does not
 load. If you regenerate a synthetic capture, keep its generator script
 beside it (see `testdata/hwtraces/avr-blinky/gen_synthetic.py`), so the
 construction stays inspectable.

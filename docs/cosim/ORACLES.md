@@ -36,8 +36,14 @@ hauksbee run board.kicad_pcb --drc --oracle
 ```
 
 It prints hauksbee's result, then runs `kicad-cli pcb drc` and a one-line
-cross-check. "A short" means different things in each tool. hauksbee
-reconciles the two honestly:
+cross-check. The cross-check is a text surface only: `--oracle` combined with
+`--json` does nothing, because the oracle's verdict has no place in the JSON
+schema, so `kicad-cli` is never invoked at all
+(`crates/hauksbee-engine/src/reports/drc.rs`). Run the text form when you want
+the cross-check.
+
+"A short" means different things in each tool. hauksbee reconciles the two
+honestly:
 
 - hauksbee: copper of two nets at gap <= 0 (touching).
 - KiCad: a `shorting_items` violation (connectivity merged the nets) **or** a
@@ -51,17 +57,33 @@ rows), so the verdict is about **presence and over-reporting**, not exact
 equality: "agree", "hauksbee likely over-reports (N >> M)", "likely hauksbee
 false positives", or "hauksbee may be missing shorts".
 
-Worked examples (this repo's hunt boards):
+Worked example, on a board that ships in this repo so you can rerun it:
 
-| Board | hauksbee | oracle (kicad-cli 10.0.3) | verdict |
-|-------|----------|---------------------------|---------|
-| `bms-prototype` (REG1_3V3↔GND) | 4 shorts | 5 touching-copper | **agree**: real short confirmed |
-| `VENDETTAESC` (KiCad 10) | 121 shorts | 12 touching-copper (10 `shorting_items`) | hauksbee over-reports ~109 (the U12 GND-pad antipad artifacts); 10 are real |
-| `FUSB302Breakout` | 0 | 0 | **agree**: clean |
+```
+$ hauksbee run crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb --drc --oracle
+DRC: 20 primitive(s), clearance rule 0.200 mm
 
-That ESC line is exactly how we adjudicated the residual false-positive
-count: the oracle confirms ~10-12 genuine touches, so the other ~109 are
-hauksbee artifacts.
+SHORTS (2):
+  [SERIOUS] GND touches +5V on B.Cu (gap 0.0000 mm) at x=112.0, y=100.0
+  [SERIOUS] GND touches +5V on F.Cu (gap 0.0000 mm) at x=112.0, y=100.0
+
+2 short(s), 0 below-rule group(s), 0 at-limit group(s).
+
+oracle (kicad-cli 10.0.3): 7 touching-copper violation(s), 26 total DRC violation(s), 6 unconnected.
+hauksbee: 2 short(s), 0 clearance. -> agree: both find touching copper (2 hauksbee / 7 oracle; counts differ by decomposition).
+```
+
+That is the decomposition point made concrete. One deliberate GND-to-+5V touch
+spanning both copper layers, and the two tools slice it into 2 rows and 7 rows
+respectively, yet the verdict is **agree**, because both place touching copper on
+the same nets. Reading the counts as a pass/fail equality would have called this
+a disagreement; reading them for presence and over-reporting calls it what it is.
+
+That decomposition gap is also how a residual false-positive count gets
+adjudicated on a large board: when hauksbee's total runs an order of magnitude
+above the oracle's, the excess is hauksbee artifact rather than silicon, and the
+verdict string says so instead of averaging the two numbers into a fake
+agreement.
 
 ## Installing the KiCad oracle
 

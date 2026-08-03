@@ -11,15 +11,15 @@ emulated MCUs, rendered live on the actual board.
 
 | | PCB file in | Analog accuracy | MCU firmware | Live board render | Open |
 |---|---|---|---|---|---|
-| **Hauksbee** | KiCad 5-10, Eagle, IPC-D-356, gerber/P&P | SPICE-class devices, validated vs ngspice | AVR, STM32, ESP32/-C3, nRF52840, RISC-V FE310 | yes, adaptive to any board | yes |
-| Proteus VSM | no (own schematic, PCB is output-only) | mixed-mode SPICE | yes, 750+ MCUs | no (schematic anim.) | no, $$$ |
-| Wokwi | no (breadboard JSON) | behavioral only | yes (avr8js etc., closed glue) | breadboard, not PCB | partially |
-| SimulIDE | no | simplified nodal, "not very accurate" | simavr/gpsim | schematic anim. | GPL |
-| KiCad + ngspice | schematic only, layout uninvolved | ngspice | no | no | yes |
-| LTspice | no | excellent | no | no | freeware |
-| Qucs-S | no | ngspice/Xyce backends | no | no | yes |
-| Falstad CircuitJS | no | didactic | no | no | yes |
-| Altium SI | layout (SI/PI only) | signal-integrity extraction | no | partial | no |
+| **Hauksbee** | KiCad 5-10, Eagle, Altium `.PcbDoc`, IPC-D-356, gerber/P&P | SPICE-class devices, validated vs ngspice | AVR, STM32, ESP32/-C3, nRF52840, RISC-V FE310 | yes, adaptive to any board | yes (Apache-2.0 source; default binary GPL-3.0, permissive binary Apache-2.0) |
+| Proteus VSM | no (own schematic, PCB is output-only) | mixed-mode SPICE | yes, 750+ MCUs | no (schematic anim.) | no (proprietary; paid) |
+| Wokwi | no (breadboard JSON) | behavioral only | yes (avr8js etc., closed glue) | breadboard, not PCB | partial (open cores, closed glue; free web tier) |
+| SimulIDE | no | simplified nodal; its own README calls its models "not very accurate" | simavr/gpsim | schematic anim. | yes (GPL-3.0; free) |
+| KiCad + ngspice | schematic only, layout uninvolved | ngspice | no | no | yes (GPL-3.0; free) |
+| LTspice | no | excellent | no | no | no (closed source; freeware) |
+| Qucs-S | no | ngspice/Xyce backends | no | no | yes (GPL-2.0+; free) |
+| Falstad CircuitJS | no | didactic | no | no | yes (GPL-2.0; free) |
+| Altium SI | layout (SI/PI only) | signal-integrity extraction | no | partial | no (proprietary; paid) |
 
 ## Performance vs ngspice
 
@@ -65,8 +65,8 @@ production board extracts to a bound circuit in under a second.
 bind with zero failures across KiCad 5-10 and Eagle formats. The Jetson AGX
 Thor baseboard resolves 81.4% of simulatable parts, pic_programmer 92.3%.
 The stormduino Uno clone goes further: hauksbee finds and instantiates its
-ATmega328P, and it boots demo firmware through the solved circuit
-(`docs/record/TEST_CAMPAIGN.md`).
+ATmega328P, and it boots demo firmware through the solved circuit (the same
+board ships as [`examples/board-as-code/stormduino.board`](../../examples/board-as-code/stormduino.board)).
 
 Honest engineering note: the matrix-exponential fast path wins where circuits
 fragment into many small islands (exactly the PCB regime: per-component RC
@@ -90,10 +90,11 @@ corner-cutting. Still, the asserted guarantee is accuracy, not a speed ratio.
   simulation. hauksbee derived one production miswire independently from the
   netlist this way. The board is private, so the reproducing tests are
   catalogued in `docs/about/PRIVATE_SUITE.md` rather than shipped.
-- Datasheet → model extraction (codex-backed) when a part has no model.
+- Datasheet → model extraction, backed by an LLM coding agent (codex), when a
+  part has no model.
 - Board-to-code decompilation (kicad-forge): repeated blocks become
   functions. Layout anomalies become diffs. hauksbee found 19 block clusters
-  covering 99.8% of a 3,443-component production board.
+  covering 99.8% of a 3,442-component production board.
 - Solver debugging dials: every physical effect is a toggle, granularity is
   continuous, and a user can force partitioning off for ground truth.
 - Strict lossless parsing that caught real corruption in KiCad's own demo
@@ -113,7 +114,7 @@ corner-cutting. Still, the asserted guarantee is accuracy, not a speed ratio.
   Wokwi and Proteus emulate more part numbers, but from their own non-PCB
   inputs. hauksbee's breadth is across CPU architectures co-simulated against
   a circuit extracted from the real layout.
-- Known-fault validation (`docs/record/KNOWN_FAULTS_VALIDATION.md`): eight in-scope
+- Known-fault validation (`docs/evidence/KNOWN_FAULTS_VALIDATION.md`): eight in-scope
   faults documented in real boards' revision history, six caught statically, one
   executed via firmware co-sim, one honest static miss. Every catch is proven
   two-sided: it also stays silent on a clean counterpart, the fixed revision

@@ -10,15 +10,26 @@ backend, not touching the co-sim loop.
 ## The `Mcu` trait (the uniform contract)
 
 ```
+load_firmware(path)       load one compiled .elf / .hex image into the core
 run_micros(us)            advance firmware by us microseconds (lockstep step)
 set_digital_in(pin, hi)   drive an external input pin
 set_analog_in(ch, volts)  inject an ADC voltage
-on_pin_change(cb)         callback per GPIO output edge: (PinId{port,bit}, level)
+on_pin_change(cb)         callback per GPIO output edge:
+                          (PinId{port,bit}, level, cycle stamp)
 on_input_responder(cb)    SYNCHRONOUS responder: per output edge, returns input
                           pins to drive immediately (before the next instruction)
 uart_write(bytes)         inject UART RX bytes
 on_uart(cb)               callback per UART TX byte
+on_i2c(cb) / on_spi(cb)   intercept bus bytes, return the slave's reply
+on_spi_controller(name,cb)  same, routed to ONE named SPI controller (a slave on
+                          spi2 must not see spi3's traffic)
 ```
+
+That is the coupling surface, the part a peripheral model or the scheduler
+drives. The trait (`crates/hauksbee-mcu/src/traits.rs`) also carries status and
+fidelity accessors the engine reads rather than drives: `state`, `frequency`,
+`reset`, `cycle_exact`, `pins_configured_output`, `uart_rx_overflow`,
+`set_active_ports`.
 
 ### `on_input_responder`, closing a readback inside the firmware's bit-bang loop
 
@@ -121,7 +132,7 @@ in-process AVR backend and bridged/contracted on the external emulators.
 | UART (`uart_write` / `on_uart`) | yes | yes | yes (serial socket) |
 | ADC inject (`set_analog_in`) | yes | per-platform `AdcChannelMap` (Monitor feed command or result-word write); **no shipped Renode platform carries a map** (their stock `.repl`s model no ADC, verified live), so injections there are DROPPED and surfaced as a coverage warning on every report surface (see "ADC / bus coverage by platform") | yes, RAM-mailbox count slots (firmware contract) |
 | I2C slave models (`on_i2c`) | yes (TWI decode) | yes on platforms whose descriptor names controllers (STM32F103/F4 `i2c1`, nRF52840 `twi0`/`twi1`); a slave bound on a controller-less platform is recorded as UNEXERCISED and surfaced on every report surface, and a CI `peripheral` assertion against it FAILS | yes, RAM-mailbox bus cells (firmware contract); plus temperature pushes into the machine's own tmp105 |
-| SPI slave models (`on_spi`) | yes | yes on platforms with named controllers (STM32F103 `spi1` via `extra_repl`, F4 `spi1-3`, nRF52840 `spi2`); controller-less platforms get the same UNEXERCISED recording/surfacing | yes, RAM-mailbox bus cells (firmware contract) |
+| SPI slave models (`on_spi`) | yes | yes on platforms with named controllers (STM32F103 `spi1` via `extra_repl`, F4 `spi2`/`spi3`, nRF52840 `spi2`); controller-less platforms get the same UNEXERCISED recording/surfacing | yes, RAM-mailbox bus cells (firmware contract) |
 | Drive direction (`pins_configured_output`) | yes (DDR hooks) | yes on dir-mapped platforms: STM32F103 (CRL/CRH), STM32F4 (MODER), nRF52840 (DIR), polled alongside the ODR; RP2040/FE310 carry no verified dir map and stay direction-blind | no (mailbox carries levels only) |
 
 Drive direction is what lets a boot-state check tell a held-LOW output from
@@ -177,10 +188,19 @@ warnings). A CI `peripheral` assertion against an unexercised bus device
 |----------|-------------------|-----------------|-----------------|
 | `simavr:atmega328p` | exact (in-process, always) | native TWI decode | native |
 | `renode:stm32f103` | **none**: stock `stm32f103.repl` models no ADC (verified live); injections drop + warn | `i2c1` | `spi1` (via `extra_repl`) |
-| `renode:stm32f4_discovery` | **none**: same reason | `i2c1` | `spi1`, `spi2`, `spi3` |
+| `renode:stm32f4_discovery` | **none**: same reason | `i2c1` | `spi2`, `spi3` (see below) |
 | `renode:nrf52840` | **none**: the live repl models no ADC/SAADC | `twi0`, `twi1` (live-verified: bridge registers on both) | `spi2` (live-verified registration) |
 | `renode:sifive_fe310` / `renode:rp2040` | none | none (unverified peripherals, a bound slave warns + fails CI assertions) | none |
 | `qemu:esp32/-s3/-c3` | RAM-mailbox contract | RAM-mailbox contract + machine tmp105 | RAM-mailbox contract |
+
+Why the F4 lists `spi2`/`spi3` and not `spi1`: the base `stm32f4.repl` that
+`stm32f4_discovery.repl` includes already defines all three. Registering `spi1`
+again (the `extra_repl` trick the F103 needs, because its platform defines no
+SPI at all) raises a Renode redefinition/address conflict: the Monitor dumps the
+peripheral's method list instead of accepting the command, and the bridge
+registration that follows then panics. So the F4 descriptor omits `extra_repl`
+and binds bridges to the already-existing `spi2`/`spi3`
+(`crates/hauksbee-mcu/db/mcu/stm32f4_discovery.soc.toml`).
 
 Why no Renode ADC maps: Renode 1.16.1's shipped STM32F1/F4/nRF52840
 platform descriptions register no ADC peripheral at all, and Renode's
@@ -356,9 +376,12 @@ the firmware runs unmodified.
 
 A row is **Proven** only if it was actually run end-to-end on this branch (a
 real emulator booting real firmware against the solved circuit, with the
-output recorded). We label anything not run for real honestly. Every row's
-config is a `db/mcu/<part>.soc.toml` descriptor, named by the `backend:part`
-in the first column; the built-in constructors load these files.
+output recorded). We label anything not run for real honestly. Every
+`renode:`/`qemu:` row's config is a `db/mcu/<part>.soc.toml` descriptor, named
+by the `backend:part` in the first column; the built-in constructors load these
+files. The AVR row has none by design (simavr's own part database does the
+work), and the bottom two rows have none because they have no backend to
+configure.
 
 | Architecture | Backend | Emulator / platform | Proof run on this branch |
 |--------------|---------|---------------------|--------------------------|
@@ -441,12 +464,15 @@ ESP32 parts are proven through QEMU above.
 ### Co-sim fidelity notes (debugging all-zero or "never driven" results)
 
 - **Crystal-clocked boards.** A crystal/resonator is bound high-impedance
-  (`ComponentKind::Ignore`); the clock comes from the MCU model. Before
-  this fix a crystal valued `16Mhz` (or any `C`-referenced one) was
-  mis-bound as a 16-gigafarad capacitor that made the solve singular and
-  drove **every** net to 0 V / "never driven". If you see board-wide
-  all-zero co-sim voltages, confirm you are on a build with `39128bb`+ and
-  check `--report` for any passive with an absurd capacitance. See
+  (`ComponentKind::Ignore`); the clock comes from the MCU model. The binder
+  catches a crystal-like part before the passive first-char heuristic
+  (`crates/hauksbee-engine/src/binder.rs`, `is_crystal_like`), because a
+  reference such as `Crystal1` starting with `C` and a value such as `16MHz`
+  would otherwise parse as a 16-megafarad capacitor: an absurd cap makes the
+  solve collapse and drives **every** net to 0 V / "never driven" on
+  essentially any crystal-clocked MCU board. The two load caps are genuine
+  passives and stay. If you see board-wide all-zero co-sim voltages, check
+  `--report` for any passive with an absurd capacitance. See
   [`LIMITATIONS.md`](../about/LIMITATIONS.md) Fixed #4.
 - **ESP32 GPIO needs the firmware mailbox** (stock third-party firmware is
   GPIO-invisible). The reason is empirically validated (the fork's GPIO
@@ -673,8 +699,12 @@ Renode. The board is a minimal nRF52840-DK-style skeleton: the SoC on a
 broken out as the UART. The LED stays dark; the shell firmware never
 toggles P0.13, so 0 V is the correct, predicted result, not a miss.
 
-Backend: `RenodeConfig::nrf52840()` (ports gpio0/gpio1, OUT register at
-0x504, uart0). Firmware: any nRF52840 ELF (e.g. a Zephyr blinky). Renode
+Backend: `RenodeConfig::nrf52840()` (ports gpio0/gpio1, OUT register at 0x4
+peripheral-relative, uart0). That 0x4 is the datasheet's block-relative 0x504
+minus the 0x500 register window Renode registers `gpio0`/`gpio1` at, the footgun
+the descriptor header spells out; a read at 0x504 logs an unhandled offset and
+returns 0, so no edge could ever fire. Firmware: any nRF52840 ELF (e.g. a
+Zephyr blinky). Renode
 ships `platforms/cpus/nrf52840.repl` and
 `platforms/boards/nrf52840dk_nrf52840.repl`. The built-in pin map wires pad
 3 -> P0.13 (LED), pads 5/6 -> P0.06/P0.08 (UART); a board that pins the
@@ -719,16 +749,29 @@ pattern above):
 [[models]]
 id = "fe310"
 kind = "mcu"
+description = "SiFive FE310-G002 (RISC-V RV32IMAC, HiFive1)"
+
 [models.match]
-value_re = "(?i)^(FE310|HiFive1)"
+value_re = "(?i)^(FE310|FE310-G00[0-9]|HiFive1)"
+mpn_re   = "(?i)^FE310"
+
 [models.params]
+# Renode backend: brings up sifive-fe310.repl. One 32-bit gpio0 port; roles
+# "p0<bit>".
 backend = "renode:sifive_fe310"
+
 [models.pins]
-"1" = "p019"   # HiFive1 LED is on GPIO 19
-"2" = "vdd"
-"3" = "vss"
-"4" = "p017"   # uart0 TX
-"5" = "p016"   # uart0 RX
+"1"  = "vss"
+"2"  = "vdd"
+"3"  = "p019"       # HiFive1 LED is on GPIO 19
+"4"  = "p021"       # second GPIO for blink
+"5"  = "p017_txd"   # uart0 TX
+"6"  = "p016_rxd"   # uart0 RX
+
+[models.ratings]
+max_pin_current_a = 0.02
+max_current_a = 0.1
+max_voltage_v = 3.6
 ```
 
 Backend: `RenodeConfig::sifive_fe310()` (one 32-bit gpio0, output value

@@ -92,8 +92,30 @@ have their own shape (`arch`, `icount_shift`, mailbox-style `banks`), see
   `EM_AVR`). hauksbee checks firmware ELFs against this field, so an ESP32
   binary refuses loudly on an ARM part. `mcu_label` is the report string.
 - `[[soc.ports]]`, one per GPIO port: `letter`, the platform `peripheral`
-  name (**without** `sysbus.`, the backend prepends it when polling), the
-  ODR register offset, and the pin width.
+  name (**without** `sysbus.`, the backend prepends it when polling),
+  `odr_offset` (the output-data register's byte offset), and `width` (the port's
+  bit count, usually 16 on STM32 and 32 on nRF52).
+- `[[soc.ports]].dir`, optional, an inline sub-table saying where and how to read
+  that port's direction/mode register:
+
+  ```toml
+  dir = { offset = 0x00, encoding = "stm32f1_crl_crh" }
+  ```
+
+  `offset` is the register's byte offset within the peripheral. `encoding` is one
+  of three:
+
+  | encoding | register shape |
+  |---|---|
+  | `moder` | STM32F4/L4/F7 MODER: 2 bits per pin, `0b01` = general-purpose output. AF mode is deliberately not counted as an output |
+  | `stm32f1_crl_crh` | STM32F1 CRL/CRH: 4 bits per pin, CRL at `offset` covers pins 0-7 and CRH is read at `offset + 4` for pins 8-15. Any non-zero MODE field is an output |
+  | `dir_bits` | one bit per pin, 1 = output (nRF52 `DIR`, RP2040 SIO `GPIO_OE`) |
+
+  Omit `dir` and direction stays unobservable: every ODR bit change is reported
+  as a drive. That is the conservative answer, and it is the right default.
+  **A wrong `dir` map is worse than none**, because a mask that reads as zero
+  suppresses every edge silently. Only add one once you have verified both the
+  offset and the Renode model's read-back against a live machine.
 - `[soc.i2c]` / `[soc.spi]`, controller names. `spi.extra_repl` splices in a
   peripheral definition the stock platform lacks. The F103 file adds SPI1
   this way, with a comment that explains why the IRQ-less single line
@@ -204,25 +226,34 @@ error. `cargo test -p hauksbee-engine --lib soc_wiring` pins that the
 scheduler's backend instantiation actually consults the override dirs (the
 product path, not just the library function).
 
-The end-to-end proof is a real boot. This transcript uses an `stm32f101`
-descriptor (a copy of the F103 file, since the F101 shares the F1 GPIO
-layout) plus the routing entry above adjusted to F101, running the bundled
-blinky firmware on an F101 board. Renode must be installed. `hauksbee doctor`
-checks backend availability:
+The end-to-end proof is a real boot, and you can run it from a clone. Copy the
+shipped F103 descriptor into an override directory and point
+`HAUKSBEE_MCU_DIR` at it: the resolver then loads *your* file rather than the
+embedded one, which is the same path your new part will take. Renode must be
+installed; `hauksbee doctor` reports whether it was found.
 
 ```
-$ HAUKSBEE_MCU_DIR=./mcu hauksbee run boards/stm32f101_demo.kicad_pcb \
-    --firmware testdata/firmware/stm32_blinky/blinky.elf \
-    --headless --seconds 1 --models-dir ./models
+$ mkdir mcu && cp crates/hauksbee-mcu/db/mcu/stm32f103.soc.toml mcu/
+$ HAUKSBEE_MCU_DIR=./mcu hauksbee run testdata/boards/stm32_bluepill_demo.kicad_pcb \
+    --firmware testdata/firmware/stm32_blinky/blinky.elf --headless --seconds 1
 
-simulated 1.000s over 5 nets
+co-sim: 1.00s on an external emulator (slow: roughly wall-clock per simulated second; this is normal for Renode/QEMU). Progress:
+  ... 0.20 / 1.00s simulated
+  ... 0.40 / 1.00s simulated
+  ... 0.60 / 1.00s simulated
+  ... 0.80 / 1.00s simulated
+
+simulated 1.000s in 13.37s wall (0.075x realtime) over 5 nets
 
 most active nets:
 ┌────────────────────────────┬──────────┬──────────┬──────────┐
 │ Net                        │ min (V)  │ max (V)  │ toggles  │
 ├────────────────────────────┼──────────┼──────────┼──────────┤
 │ PC13_LED                   │    0.000 │    3.265 │        6 │
-│ ...                        │          │          │          │
+│ LED_A                      │    1.905 │    1.905 │        0 │
+│ PA5_OUT                    │    3.116 │    3.116 │        0 │
+│ +3V3                       │    3.300 │    3.300 │        0 │
+│ GND                        │    0.000 │    0.000 │        0 │
 └────────────────────────────┴──────────┴──────────┴──────────┘
 
 UART output (18 bytes):
@@ -230,9 +261,17 @@ hello from stm32
 ```
 
 The toggling PC13 and the UART banner show the descriptor's port map and
-`uart` field doing real work. The same board and firmware in a hauksbee-ci
-spec passes with `hauksbee-ci run spec.toml --models-dir ./models` (plus
-`HAUKSBEE_MCU_DIR`, or the descriptor installed in `~/.config/hauksbee/mcu`).
+`uart` field doing real work. Your own part needs one more piece, the
+`[[models]]` routing entry from step 4, plus `--models-dir` pointing at it, so
+the board's MCU value resolves to `renode:<yourpart>`. The same board, firmware
+and override run in a `hauksbee-ci` spec the same way.
+
+**Try the footgun, once.** Edit `mcu/stm32f103.soc.toml` and change every
+`odr_offset = 0x0C` to `0x14` (the F4 family's offset), then re-run. The board
+still boots, the UART banner still prints, and `PC13_LED` reports
+`0.000 / 0.000 / 0 toggles`. Nothing errors. That silent, plausible, entirely
+wrong result is why the register offsets are reviewed data instead of code, and
+why the walkthrough keeps saying to check them against the reference manual.
 
 ## The honest boundary
 

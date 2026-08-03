@@ -111,7 +111,8 @@ Every model source has an explicit layer (`SourceLayer` in
 |---|---|
 | built-in db | 0 |
 | **installed packs** | **10** |
-| user model dirs (`~/.hauksbee/models`, `~/.config/hauksbee/models`) | 20 |
+| `~/.hauksbee/models` | 20 |
+| `~/.config/hauksbee/models` | 25 |
 | `--models-dir` flag | 30 |
 | user SPICE cards | 40 |
 
@@ -135,37 +136,57 @@ When a board does not bind what you expected:
 $ hauksbee models resolve my_board.kicad_pcb
 layer priority: builtin(0) < pack(10) < user-dir(20) < models-dir(30) < spice(40); specificity breaks ties within a layer
 Ref        Value                    Model                        Layer            Origin
-U3         ACME7400                 acme-7400                    pack             acme-logic@1.0.0/models/parts.toml
-R1         10k                      resistor                     builtin          passives.toml
+U3         ACME7400                 acme-7400                    pack(10)         acme-logic@1.0.0
+R1         10k                      r_fallback                   engine-fallback  engine-fallback
+D1         1N4148                   1n4148                       builtin(0)       diodes
 ```
 
 This shows, per component, which entry won, from which layer, from which
-file. Run this command first when a pack "does not work". Nine times out of
-ten the entry lost a specificity tie inside its layer, or the
-`match.value_re` does not hit the board's Value field.
+source. Three things to read off it:
+
+- The **Layer** column prints the layer name with its priority, so `pack(10)`
+  and `builtin(0)` rather than bare names. Priorities are ordered, so you can
+  see at a glance who could have overridden whom.
+- **Origin** for a pack entry is `<name>@<version>`, not a path inside the pack.
+  For a built-in it is the db file's stem (`diodes`), with no `.toml`.
+- `engine-fallback` is not a layer at all. It means no model entry claimed the
+  part and the engine stamped a generic device from the Value field instead
+  (`r_fallback` for a plain resistance). Seeing it against a part your pack was
+  supposed to claim is the signal that your `match.value_re` did not hit.
+
+The banner line abbreviates: it omits `user-config-dir(25)`, which sits between
+`user-dir(20)` and `models-dir(30)`. The table above is the full list.
+
+Run this command first when a pack "does not work". Nine times out of ten the
+entry lost a specificity tie inside its layer, or the `match.value_re` does not
+hit the board's Value field.
 
 ## The test that proves it
 
 The lifecycle above *is* the acceptance test, pinned in
-`crates/hauksbee-models/tests/`: `pack_format.rs` (manifest validation, every
-named error), `pack_store.rs` (`install_list_remove_round_trip`,
-`install_refuses_invalid_pack_before_copying`), `pack_layering.rs`
-(pack-beats-builtin, user-dir-beats-pack, same-layer conflict reporting), plus
-the CLI-level resolve report in
+`crates/hauksbee-models/tests/suite/`: `pack_format.rs` (manifest validation,
+every named error, 14 tests), `pack_store.rs`
+(`install_list_remove_round_trip`, `install_refuses_invalid_pack_before_copying`,
+2 tests), `pack_layering.rs` (pack-beats-builtin, user-dir-beats-pack,
+same-layer conflict reporting, 6 tests), plus the CLI-level resolve report in
 `crates/hauksbee-engine/tests/models_resolve_layers.rs`.
 
-```
-cargo test -p hauksbee-models --test pack_format --test pack_store --test pack_layering
-```
-
-A green run prints one `test result: ok` block per test file (14 + 2 + 6
-tests at the time of writing):
+Everything under `tests/suite/` compiles into one test binary named `suite`
+(`tests/suite/main.rs` is its entry point), so there is one command, not three:
 
 ```
-test result: ok. 14 passed; 0 failed; ...   (pack_format)
-test result: ok. 2 passed; 0 failed; ...    (pack_store)
-test result: ok. 6 passed; 0 failed; ...    (pack_layering)
+cargo test -p hauksbee-models --test suite pack
 ```
+
+A green run:
+
+```
+running 22 tests
+......................
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 60 filtered out; finished in 0.04s
+```
+
+Drop the `pack` filter to run all 82 tests in the suite.
 
 And for *your* pack, the proof is the live transcript in step 4 plus a
 `models resolve` against a board that names your parts, showing them win at

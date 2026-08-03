@@ -185,16 +185,32 @@ sheet boundary under a different name and must map member-wise by index.
 
 The `sch_diag` example is the tool behind these tests:
 
+It takes a corpus-relative project directory and the project stem. Run against
+the Watchy board, which `scripts/fetch-corpus.sh` delivers by default and which
+ships both a `.kicad_sch` and a `.kicad_pcb`:
+
 ```
-cargo run -p hauksbee-extract --example sch_diag -- \
-    kicad-demos-src/demos/pic_programmer pic_programmer
-# SCH: 63 comps, 111 nets, 34 multi-pin nets
-# PCB: 63 comps, 111 nets, 34 multi-pin nets
+cargo run -p hauksbee-extract --example sch_diag -- watchy Watchy
+# SCH: 82 comps, 85 nets, 53 multi-pin nets
+# PCB: 82 comps, 84 nets, 53 multi-pin nets
+# shared pins: 266
 # PCB nets that split in SCH: 0
 # SCH nets that merge PCB nets: 0
 ```
 
+Zero splits and zero merges over all 266 shared pins is the exact result: the
+netlist derived from the schematic induces the same partition as the layout. The
+one extra net on the schematic side is a net with no pin the layout also carries,
+which is why the comparison is over shared pins rather than net counts.
+
 `DETAIL=1` / `MERGE=1` print the offending nets when a board does not match.
+
+The six projects in the table above live under the KiCad demo tree
+(`corpus.toml` board id `kicad_demos`). `tests/schematic.rs` asks for them at
+`kicad-demos-src/demos/<project>`, so unless your corpus is laid out that way
+those cross-validations skip with a printed `corpus pair … missing` note rather
+than failing. Point `HAUKSBEE_CORPUS_DIR` at a corpus with that layout to run
+them.
 
 ## KiCad version coverage
 
@@ -203,25 +219,27 @@ validated corpus spans version stamps 20250114 (KiCad 9) through 20260101
 (KiCad 10). The format stays stable across this range, and the parser keys
 off structure, not the version number.
 
-**KiCad 5 legacy `.sch`** is a different, non-s-expression format (the
-`stormduino` board is the corpus example). This module does **not** parse
-it. That board's layout is still handled by the PCB extractor; only its
-legacy schematic is out of scope. Adding the legacy parser is future work.
+**KiCad 5 legacy `.sch`** is a different, non-s-expression format. This module
+does **not** parse it. A project whose only schematic is a legacy `.sch` still
+has its layout read by the PCB extractor, which carries the full netlist
+anyway; only the schematic path is out of scope. Adding the legacy parser is
+future work.
 
 ## Known limitations
 
-- **Bus aliases referenced as `{ALIAS}` are expanded.** A `(bus_alias …)`
-  definition is recorded per sheet and substituted for its member list when
-  a group bus references it (`MEM{ADDR}`). The `bus_alias_top` /
-  `bus_alias_child` fixture pair (a `MEM{ADDR}` reference crossing a sheet
-  boundary) covers this end-to-end, along with expander unit tests. No
-  *corpus* board uses an alias reference, so the corpus cross-validations do
-  not exercise this path; the synthetic fixture does, and would fail if the
-  alias were left unexpanded.
-- **Group-bus member qualification** follows KiCad's `PREFIX.member` form
-  for named groups. The corpus exercises only vector buses, so unit tests on
-  the expander and the `bus_alias_*` fixtures (`MEM{ADDR}` -> `MEM.A1`,
-  `MEM.A0`) cover group qualification, not a corpus board.
+- **Bus aliases referenced as `{ALIAS}` have no corpus coverage.** The
+  expansion is implemented (a `(bus_alias …)` definition is recorded per sheet
+  and substituted for its member list when a group bus references it, as in
+  `MEM{ADDR}`) and the `bus_alias_top` / `bus_alias_child` fixture pair covers
+  a `MEM{ADDR}` reference crossing a sheet boundary end-to-end. But **no board
+  in the corpus uses an alias reference**, so the cross-validation against real
+  layouts, the evidence that actually catches subtle expansion bugs, never
+  touches this path. A synthetic fixture proves the mechanism runs; it does not
+  prove the mechanism is right about a real design's intent.
+- **Group-bus member qualification has no corpus coverage either.** The
+  `PREFIX.member` form KiCad uses for named groups is implemented and unit
+  tested (`MEM{ADDR}` -> `MEM.A1`, `MEM.A0`), but **the corpus exercises only
+  vector buses**, so the same caveat applies.
 - **Net-tie footprints** (two pads tied only in copper) have no schematic
   counterpart; a board relying on them would show a split that is correct
   for the schematic. None of the exactly-validated projects use them.

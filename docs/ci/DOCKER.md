@@ -11,7 +11,7 @@ gain). Run that from a normal checkout when you want the live viewer.
 
 | Image | Tag | Contains | Unlocks |
 |-------|-----|----------|---------|
-| slim / core | `ghcr.io/hauksbee-dev/hauksbee:slim` | `hauksbee` + `hauksbee-ci`, the model db, the linked-in simavr | Static checks (DRC, netlint, SI, resource conflicts), board-as-code, AVR co-sim. The everyday CI image. |
+| slim / core | `ghcr.io/hauksbee-dev/hauksbee:slim` | `hauksbee` + `hauksbee-ci`, the model db, the linked-in simavr (the AVR microcontroller emulator) | Static checks (DRC, netlint, SI, resource conflicts), board-as-code, AVR co-sim (running firmware on the emulated MCU against the live analog solve). The everyday CI image. |
 | full | `ghcr.io/hauksbee-dev/hauksbee:full` | Everything in slim, plus Renode, the Espressif QEMU fork, and freerouting (with a JRE) | STM32 / nRF52 / RISC-V co-sim (Renode), ESP32 / ESP32-S3 / ESP32-C3 co-sim (Espressif QEMU), and production autorouting of recompiled boards (freerouting). |
 
 Each is also published with the release version baked in:
@@ -20,7 +20,8 @@ push moves `:latest` (slim) and `:full-latest`.
 
 ### Why two
 
-The slim image is small and covers most CI needs: the static checks and the
+The slim image is roughly 183 MB (measured on a local amd64 build) and covers
+most CI needs: the static checks and the
 built-in AVR co-simulation have no external dependencies at all. Boards are
 read through the vendored forge crates, not through KiCad.
 The full image adds the heavy external backends (Renode and the Espressif
@@ -68,10 +69,14 @@ docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
   hauksbee run path/to/board.kicad_pcb --drc
 ```
 
-Run a hauksbee-ci spec and write JUnit (the CI flow):
+Run a hauksbee-ci spec and write JUnit (the CI flow). On a CI runner the
+working tree is usually owned by the runner user, not the image's `hauksbee`
+user (uid 1000), so add `--user "$(id -u):$(id -g)"` whenever the run writes
+output (a JUnit file, a routed board) back into the mount:
 
 ```bash
-docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
+docker run --rm -v "$PWD:/work" --user "$(id -u):$(id -g)" \
+  ghcr.io/hauksbee-dev/hauksbee:slim \
   hauksbee-ci run ci/watchy.toml --junit hauksbee-ci-results.xml
 ```
 
@@ -85,7 +90,7 @@ docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
 ESP32 / STM32 co-sim and autorouting need the full image:
 
 ```bash
-# ESP32 boot-coverage spec (Espressif QEMU, in the full image)
+# ESP32 boot_coverage spec (Espressif QEMU, in the full image)
 docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:full \
   hauksbee-ci run ci/esp32_boot.toml --junit results.xml
 
@@ -93,10 +98,6 @@ docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:full \
 docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:full \
   hauksbee from-code board.board --out routed.kicad_pcb --route
 ```
-
-On a CI runner the working tree is usually owned by the runner user, not the
-image's `hauksbee` user (uid 1000). Add `--user "$(id -u):$(id -g)"` when the
-run needs to write output (a JUnit file, a routed board) back into the mount.
 
 ## Using it from the GitHub Action
 
@@ -134,8 +135,9 @@ The build is **multi-stage from source**, not a repackaged release tarball:
    `avr` feature links it.
 2. A `rust:bookworm` stage builds `hauksbee` and `hauksbee-ci` with
    `cargo build --release` and strips them.
-3. A `debian:bookworm-slim` runtime stage `COPY`s in just the two binaries, the
-   model db, and the simavr runtime libraries.
+3. A `debian:bookworm-slim` runtime stage `COPY`s in just the two binaries and
+   the model db (simavr is statically linked into the binaries); the shared
+   libraries it still needs, `libelf1` and `zlib1g`, come from apt.
 
 This choice of multi-stage from source over consuming `scripts/bundle.sh`'s
 tarball has two reasons. First, each architecture builds natively under
@@ -208,9 +210,14 @@ docker run --rm -v "$PWD:/work" hauksbee:slim \
   hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --report
 ```
 
-For a multi-arch local build (both arches at once, without pushing) use buildx:
+For a multi-arch local build (both arches at once, without pushing) use
+buildx. A two-platform build cannot be exported with `--load` (the classic
+docker image store holds one platform per tag), so either enable the
+containerd image store in Docker's settings, or create a `docker-container`
+builder and keep the result in the build cache / push it to a registry:
 
 ```bash
+docker buildx create --name hauksbee-builder --driver docker-container --use
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
   -f ctx/hauksbee/docker/Dockerfile.slim \
