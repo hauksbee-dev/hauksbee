@@ -1,0 +1,42 @@
+# Hooks this repository exports to the pre-commit framework. A consumer points
+# at this repo and a release tag:
+#
+#   repos:
+#     - repo: https://github.com/hauksbee-dev/hauksbee
+#       rev: v0.x.y
+#       hooks:
+#         - id: hauksbee-check
+#
+# Both entries are `language: script`: pre-commit clones this repo and runs
+# the executable at the given path (relative to this repo's root) directly,
+# so no Python packaging is needed. The scripts themselves only need a
+# python3 on PATH (their shebang) and a hauksbee / hauksbee-ci binary.
+# See integrations/pre-commit/README.md.
+
+- id: hauksbee-check
+  name: hauksbee board check
+  description: >-
+    Zero-config gate: runs `hauksbee run <board> --check --strict` on every
+    staged board file. Gate-grade findings (exit 2) and invalid-for-analysis
+    runs (exit 3) block the commit. Needs the `hauksbee` binary on PATH or
+    HAUKSBEE_BIN set.
+  entry: integrations/pre-commit/hauksbee_check_precommit.py
+  language: script
+  # The board formats `hauksbee run` accepts as single files: KiCad layout and
+  # schematic, KiCad netlist, Eagle .brd, IPC-D-356, Altium .PcbDoc, and
+  # Board-as-Code .board. (Gerber folders/zips cannot be matched per-file.)
+  files: '(?i)\.(kicad_pcb|kicad_sch|net|brd|d356|pcbdoc|board)$'
+
+- id: hauksbee-ci
+  name: hauksbee-ci hardware check
+  description: >-
+    Spec-driven gate: discovers hauksbee-ci specs (HAUKSBEE_CI_SPECS, default
+    `ci:.`) and runs the ones whose board is staged in this commit. Blocks the
+    commit if any assertion is RED. Needs the `hauksbee-ci` binary on PATH or
+    HAUKSBEE_CI_BIN set.
+  entry: integrations/pre-commit/hauksbee_ci_precommit.py
+  language: script
+  # Trigger when a board or a spec changes; the hook itself then runs only the
+  # specs whose board was actually staged.
+  files: '\.(kicad_sch|kicad_pcb|net|brd|d356)$|/ci/.*\.toml$'
+  pass_filenames: false

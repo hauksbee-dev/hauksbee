@@ -1,0 +1,39 @@
+{
+    "$schema": "https://go.kicad.org/pcm/schemas/v1",
+    "name": "hauksbee-ci",
+    "description": "Run hauksbee-ci hardware checks on the open board: boot the firmware on the emulated PCB and assert rails, UART, and blink.",
+    "description_full": "A pcbnew action plugin that runs hauksbee-ci on the board you have open in KiCad and shows the pass/fail results in a dialog: does the rail come up, does the UART say hello, does the LED blink.\n\nThe plugin is deliberately thin. It discovers hauksbee-ci specs (*.toml) next to the board or in a sibling ci/ directory, shells out to the hauksbee-ci binary, parses the JUnit XML it writes, and renders a GREEN/RED verdict with each assertion's detail. All the simulation lives in the Rust runner.\n\nRequires a hauksbee-ci binary: download a prebuilt release from the repository, put it on PATH or set HAUKSBEE_CI_BIN, or let the plugin offer to build it with cargo. See the repository README for spec examples and CI setup.",
+    "identifier": "com.github.hauksbee-dev.hauksbee",
+    "type": "plugin",
+    "author": {
+        "name": "Eoghan Collins",
+        "contact": {
+            "web": "https://github.com/hauksbee-dev"
+        }
+    },
+    "maintainer": {
+        "name": "Eoghan Collins",
+        "contact": {
+            "web": "https://github.com/hauksbee-dev"
+        }
+    },
+    "license": "Apache-2.0",
+    "resources": {
+        "homepage": "https://github.com/hauksbee-dev/hauksbee",
+        "repository": "https://github.com/hauksbee-dev/hauksbee",
+        "issues": "https://github.com/hauksbee-dev/hauksbee/issues"
+    },
+    "tags": [
+        "simulation",
+        "ci",
+        "testing",
+        "firmware"
+    ],
+    "versions": [
+        {
+            "version": "0.1.0",
+            "status": "development",
+            "kicad_version": "7.0"
+        }
+    ]
+}

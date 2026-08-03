@@ -56,9 +56,42 @@ ln -s "$PWD/target/release/hauksbee-ci" /usr/local/bin/hauksbee-ci
 
 ## Install
 
-KiCad loads action plugins from a per-user plugins directory. Find yours via
-KiCad's menu: **Tools -> External Plugins -> Open Plugin Directory**, or use the
-default for your OS:
+Three ways in, pick one. All three end the same way: in the PCB editor run
+**Tools -> External Plugins -> Refresh Plugins** (or restart KiCad after a PCM
+install) and a "hauksbee-ci: run hardware check" entry appears, plus a toolbar
+button.
+
+### Plugin and Content Manager, from file (available now)
+
+Build the PCM package and hand it to KiCad's Plugin and Content Manager:
+
+```bash
+bash integrations/kicad-plugin/build-pcm.sh
+# -> integrations/kicad-plugin/dist/hauksbee-ci-pcm-v<version>.zip
+```
+
+In KiCad: **Plugin and Content Manager -> Install from File...**, pick the zip,
+apply. PCM handles updates and clean uninstall from then on. The package layout
+(metadata.json at the zip root, sources under `plugins/`) follows the KiCad
+addons spec; `metadata.json` in this directory is the package manifest and is
+validated against the PCM schema (https://go.kicad.org/pcm/schemas/v1).
+
+### Plugin and Content Manager, from the official listing (at launch)
+
+At launch we submit the package to the KiCad addon registry
+(https://gitlab.com/kicad/addons/metadata), after which it appears in the PCM's
+built-in listing and installs with one click, no zip handling. The submission
+is the same `metadata.json` plus the `versions[]` download fields
+(`download_url`, `download_sha256`, `download_size`, `install_size`) that
+`build-pcm.sh` computes and prints, with `download_url` pointing at the zip
+attached to the GitHub release. Until that lands, use "Install from File..."
+above.
+
+### Symlink (development)
+
+KiCad also loads action plugins from a per-user plugins directory. Find yours
+via KiCad's menu: **Tools -> External Plugins -> Open Plugin Directory**, or
+use the default for your OS:
 
 - Linux: `~/.local/share/kicad/<version>/scripting/plugins/`
 - macOS: `~/Documents/KiCad/<version>/scripting/plugins/`
@@ -71,8 +104,9 @@ PLUGINS=~/.local/share/kicad/8.0/scripting/plugins   # adjust for your OS/versio
 ln -s "$PWD/integrations/kicad-plugin" "$PLUGINS/hauksbee_ci"
 ```
 
-Then in the PCB editor: **Tools -> External Plugins -> Refresh Plugins**. A
-"hauksbee-ci: run hardware check" entry appears (and a toolbar button).
+Edits to the checkout show up on the next Refresh Plugins, which is why this is
+the development path. The build script only ever copies files into a staging
+directory, so building the PCM zip never disturbs a live symlink install.
 
 ## Use
 
@@ -124,5 +158,11 @@ PY
   format report. Hardened XML parsing (rejects DOCTYPE/entities). Shared with
   the pre-commit hook in `../pre-commit`.
 - `hauksbee_ci_action.py` - the `pcbnew.ActionPlugin` + wx results dialog.
-- `__init__.py` - registers the plugin on import.
+- `__init__.py` - registers the plugin on import (a no-op outside KiCad, so
+  pytest can collect this directory).
 - `test_hauksbee_ci_core.py` - core unit tests (no pcbnew/wx needed).
+- `metadata.json` - the KiCad PCM package manifest. Its `versions[0].version`
+  must match the workspace Cargo.toml version; `build-pcm.sh` enforces that.
+- `build-pcm.sh` - builds `dist/hauksbee-ci-pcm-v<version>.zip` in the PCM
+  layout and prints the sha256/size fields a registry listing needs. `dist/`
+  is gitignored (repo root `dist/` pattern).
