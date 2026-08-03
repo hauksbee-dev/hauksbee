@@ -1,6 +1,7 @@
 # Example .pre-commit-config.yaml for running hauksbee-ci as a local pre-commit
 # hook. Copy the `repos:` entry into the .pre-commit-config.yaml at your repo
-# root, then `pre-commit install`.
+# root, then `pre-commit install`. (Consuming hauksbee as a remote hook repo is
+# usually simpler: see ../../.pre-commit-hooks.yaml and ./README.md.)
 #
 # This catches schematic-level and layout-level faults at commit time, which is
 # the natural integration point for schematic-stage CI: eeschema has no in-editor

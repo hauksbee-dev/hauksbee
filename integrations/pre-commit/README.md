@@ -1,17 +1,48 @@
-# hauksbee-ci pre-commit hook (schematic-stage and layout-stage)
+# hauksbee pre-commit hooks
 
-Run hauksbee-ci hardware checks before a commit lands. When a staged file is a
-board that a checked-in spec targets, the matching check runs; if any assertion
-is RED, the commit is blocked.
+Block a commit when a staged board is broken. This repo exports two hooks to
+the [pre-commit](https://pre-commit.com) framework (declared in
+`.pre-commit-hooks.yaml` at the repo root):
 
-This is the most natural home for **schematic-stage** CI. KiCad's schematic
-editor (eeschema) has no in-editor plugin API yet: the IPC API in KiCad 9 and 10
-is implemented for the PCB editor only, and headless operation through
-`kicad-cli` is a KiCad 11 feature. So the place to catch a schematic-level fault
-before it ever reaches a layout is the commit, not eeschema. (It works for
-`.kicad_pcb` boards too, identically.)
+- **`hauksbee-check`**: zero-config. Runs `hauksbee run <board> --check
+  --strict` on every staged board file. No spec needed.
+- **`hauksbee-ci`**: spec-driven. Discovers checked-in hauksbee-ci specs and
+  runs the ones whose board is staged, full co-simulation included.
 
-## How it works
+## Quick start (remote hook)
+
+Add to the `.pre-commit-config.yaml` at your repo root, then `pre-commit
+install`:
+
+```yaml
+repos:
+  - repo: https://github.com/hauksbee-dev/hauksbee
+    rev: v0.x.y
+    hooks:
+      - id: hauksbee-check
+```
+
+That is the whole setup, provided the `hauksbee` binary is on `PATH` (or
+`HAUKSBEE_BIN` points at it). Every staged `.kicad_pcb`, `.kicad_sch`, `.net`,
+`.brd`, `.d356`, `.PcbDoc`, or `.board` file is checked; gate-grade findings
+block the commit. Exit codes pass through unchanged: `2` means findings, `3`
+means the run was invalid for analysis (the analog solve aborted), and both
+block. See `docs/ci/CI.md` (Exit codes) for the exact gating semantics of
+`--check --strict`.
+
+## The spec-driven hook: hauksbee-ci
+
+When you want more than the default check union (supplies, stimuli, timed
+assertions, MCU firmware co-simulation), write a hauksbee-ci spec and use the
+`hauksbee-ci` hook instead of (or alongside) `hauksbee-check`:
+
+```yaml
+repos:
+  - repo: https://github.com/hauksbee-dev/hauksbee
+    rev: v0.x.y
+    hooks:
+      - id: hauksbee-ci
+```
 
 `hauksbee_ci_precommit.py` reuses the pcbnew-free core from
 `../kicad-plugin/hauksbee_ci_core.py`, which is file-type-agnostic: it only ever
@@ -25,31 +56,39 @@ from content. The hook:
 3. runs only the specs whose `board` resolves to a staged file, and
 4. exits non-zero (blocking the commit) if any spec is RED.
 
-## Install
+This is the most natural home for **schematic-stage** CI. KiCad's schematic
+editor (eeschema) has no in-editor plugin API yet: the IPC API in KiCad 9 and 10
+is implemented for the PCB editor only, and headless operation through
+`kicad-cli` is a KiCad 11 feature. So the place to catch a schematic-level fault
+before it ever reaches a layout is the commit, not eeschema. (It works for
+`.kicad_pcb` boards too, identically.)
 
-With the [pre-commit](https://pre-commit.com) framework: copy the `repos:` entry
-from `.pre-commit-config.yaml` here into your repo-root `.pre-commit-config.yaml`,
-then:
+Configure which directories are searched for specs with `HAUKSBEE_CI_SPECS`
+(colon-separated, default `ci:.`), and point at a binary that is not on `PATH`
+with `HAUKSBEE_CI_BIN`.
+
+## Local install (working inside this repo, or without the framework)
+
+The `.pre-commit-config.yaml` in this directory shows the `repo: local` form:
+copy its `repos:` entry into your repo-root `.pre-commit-config.yaml`, then:
 
 ```bash
 pre-commit install
 ```
 
-Or as a plain git hook:
+Or skip the framework entirely and use a plain git hook:
 
 ```bash
 ln -s ../../integrations/pre-commit/hauksbee_ci_precommit.py .git/hooks/pre-commit
 ```
 
-Point the hook at your built binary if it is not on `PATH`:
+Point the hooks at your built binaries if they are not on `PATH`:
 
 ```bash
-cargo build --release -p hauksbee-ci
-export HAUKSBEE_CI_BIN="$PWD/target/release/hauksbee-ci"
+cargo build --release -p hauksbee-engine -p hauksbee-ci
+export HAUKSBEE_BIN="$PWD/target/release/hauksbee"        # hauksbee-check
+export HAUKSBEE_CI_BIN="$PWD/target/release/hauksbee-ci"  # hauksbee-ci
 ```
-
-Configure which directories are searched for specs with `HAUKSBEE_CI_SPECS`
-(colon-separated, default `ci:.`).
 
 ## A schematic-stage spec
 
@@ -82,10 +121,13 @@ agreement guarantee with the layout-stage check.
 
 ## Testing without git
 
-The hook's logic lives in the shared core; its discovery and board-detection
-helpers (`find_specs`, `spec_board`, `spec_targets_schematic`) are covered by
-`../kicad-plugin/test_hauksbee_ci_core.py`. Run them with plain python:
+The hooks' decision logic is covered by plain-python tests:
 
 ```bash
+python3 integrations/pre-commit/test_hauksbee_check_precommit.py
+python3 integrations/pre-commit/test_hauksbee_ci_precommit.py
 python3 integrations/kicad-plugin/test_hauksbee_ci_core.py
 ```
+
+The last one covers the shared core's discovery and board-detection helpers
+(`find_specs`, `spec_board`, `spec_targets_schematic`).

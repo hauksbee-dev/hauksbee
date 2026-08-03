@@ -7,12 +7,29 @@ branding:
 
 inputs:
   spec:
-    description: "Path to the hauksbee-ci TOML spec to run (relative to the repo root)."
-    required: true
+    description: "Path to a single hauksbee-ci TOML spec to run (relative to the repo root). Mutually exclusive with specs."
+    required: false
+    default: ""
+  specs:
+    description: "Newline- or space-separated list of spec paths and/or globs (e.g. ci/*.toml). All of them run in ONE hauksbee-ci invocation, producing one merged JUnit file (a <testsuite> per spec) and exiting with the worst severity. Mutually exclusive with spec."
+    required: false
+    default: ""
+  board:
+    description: "Path to a board file for mode: check (hauksbee run <board> --check --strict)."
+    required: false
+    default: ""
+  mode:
+    description: "What to run. 'spec' runs hauksbee-ci on spec/specs; 'check' runs hauksbee run <board> --check --strict; 'auto' (the default) infers from which inputs are set, and when neither is set detects: exactly one *.toml in ci/ runs as a spec, else exactly one *.kicad_pcb in the repo runs as a check, else the action fails listing what it found."
+    required: false
+    default: "auto"
   junit:
     description: "Path to write JUnit XML to. Empty to skip."
     required: false
     default: "hauksbee-ci-results.xml"
+  publish-report:
+    description: "Publish the JUnit XML to the Checks tab via mikepenz/action-junit-report. Set to false when the workflow lacks checks: write (fork PRs) and publish from a separate workflow_run workflow instead (see the README)."
+    required: false
+    default: "true"
   hauksbee-ref:
     description: "git ref of the hauksbee repo to build hauksbee-ci from (branch, tag, or SHA). Setting this to anything other than main is treated as a deliberate pin: the action builds that ref from source rather than downloading a release that would be a different build."
     required: false
@@ -40,7 +57,7 @@ inputs:
 
 outputs:
   passed:
-    description: "true if every assertion passed, false otherwise."
+    description: "true if every assertion passed (mode spec) or the check gate came up green (mode check), false otherwise."
     # When use-image is true the image step ran; otherwise the binary step did.
     value: ${{ inputs.use-image == 'true' && steps.run-image.outputs.passed != '' && steps.run-image.outputs.passed || steps.run.outputs.passed }}
   junit:
@@ -55,12 +72,64 @@ runs:
 
     # When use-image is true, all the binary-acquisition steps below are
     # skipped: hauksbee-ci runs inside the published Docker image instead (see
-    # the "Run hauksbee-ci (image)" step). The image already carries the binary,
-    # the model db, and (in the full image) the co-sim backends.
+    # the "Run the hardware check (image)" step). The image already carries the
+    # binaries, the model db, and (in the full image) the co-sim backends.
 
-    # 1. Try to download a prebuilt hauksbee-ci from a GitHub Release, so most
-    #    users never compile. Sets steps.prebuilt.outputs.bin on success, and
-    #    leaves it empty (without failing) when no matching asset exists.
+    # 0. Work out what this run actually runs: which mode (spec or check),
+    #    which specs (globs expanded), or which board. The logic lives in
+    #    resolve-inputs.sh so it can be tested.
+    - name: Resolve what to run
+      id: resolve
+      shell: bash
+      env:
+        IN_MODE: ${{ inputs.mode }}
+        IN_SPEC: ${{ inputs.spec }}
+        IN_SPECS: ${{ inputs.specs }}
+        IN_BOARD: ${{ inputs.board }}
+      run: '"$GITHUB_ACTION_PATH/resolve-inputs.sh"'
+
+    # 1. Decide which release, if any, the prebuilt path downloads (see
+    #    pick-release-tag.sh for why a pinned ref must not silently resolve to
+    #    the latest release). LATEST is pinned here to the concrete tag it
+    #    means right now, so the download cache below can key on it. If no
+    #    release exists yet (or the API hiccups) the tag stays empty: no
+    #    cache, and the fetch step still tries a plain latest download before
+    #    falling back to source.
+    - name: Pick prebuilt release tag
+      id: reltag
+      if: ${{ inputs.use-image != 'true' && inputs.prefer-prebuilt == 'true' }}
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        REPO: ${{ inputs.hauksbee-repo }}
+        REF: ${{ inputs.hauksbee-ref }}
+        VERSION: ${{ inputs.hauksbee-version }}
+      run: |
+        set -euo pipefail
+        choice="$("$GITHUB_ACTION_PATH/pick-release-tag.sh" "$VERSION" "$REF" main)"
+        tag=""
+        if [ "$choice" = "LATEST" ]; then
+          tag="$(gh api "repos/$REPO/releases/latest" --jq .tag_name 2>/dev/null || true)"
+        elif [ "$choice" != "SOURCE" ]; then
+          tag="$choice"
+        fi
+        echo "choice=$choice" >> "$GITHUB_OUTPUT"
+        echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+    # A warm cache skips the release download entirely. The key is the
+    # concrete release tag, so a new release is a new key and a stale binary
+    # is never served.
+    - name: Cache prebuilt hauksbee
+      if: ${{ inputs.use-image != 'true' && inputs.prefer-prebuilt == 'true' && steps.reltag.outputs.tag != '' }}
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      with:
+        path: .hauksbee-prebuilt
+        key: hauksbee-prebuilt-${{ runner.os }}-${{ runner.arch }}-${{ steps.reltag.outputs.tag }}
+
+    # 2. Try to download a prebuilt bundle from a GitHub Release, so most
+    #    users never compile. Sets steps.prebuilt.outputs.bin (hauksbee-ci)
+    #    and engine-bin (hauksbee) on success, and leaves them empty (without
+    #    failing) when no matching asset exists.
     - name: Fetch prebuilt hauksbee-ci
       id: prebuilt
       if: ${{ inputs.use-image != 'true' && inputs.prefer-prebuilt == 'true' }}
@@ -69,7 +138,8 @@ runs:
         GH_TOKEN: ${{ github.token }}
         REPO: ${{ inputs.hauksbee-repo }}
         REF: ${{ inputs.hauksbee-ref }}
-        VERSION: ${{ inputs.hauksbee-version }}
+        CHOICE: ${{ steps.reltag.outputs.choice }}
+        TAG: ${{ steps.reltag.outputs.tag }}
         RUNNER_OS: ${{ runner.os }}
         RUNNER_ARCH: ${{ runner.arch }}
       run: |
@@ -85,40 +155,48 @@ runs:
           ARM64) arch=arm64 ;;
           *) echo "no prebuilt for $RUNNER_ARCH; will build from source"; exit 0 ;;
         esac
-        # Which release, if any (see pick-release-tag.sh for why a pinned ref
-        # must not silently resolve to the latest release).
-        choice="$("$GITHUB_ACTION_PATH/pick-release-tag.sh" "$VERSION" "$REF" main)"
-        if [ "$choice" = "SOURCE" ]; then
+        if [ "$CHOICE" = "SOURCE" ]; then
           echo "hauksbee-ref is pinned to '$REF', which is not a release tag."
           echo "Building that ref from source rather than downloading a different build."
           exit 0
         fi
-        asset_glob="hauksbee-*-${os}-${arch}.tar.gz"
         dl=".hauksbee-prebuilt"
         mkdir -p "$dl"
-        if [ "$choice" = "LATEST" ]; then
-          gh release download --repo "$REPO" --pattern "$asset_glob" --dir "$dl" 2>/dev/null || true
+        find_bins() {
+          ci_bin="$(ls "$dl"/hauksbee-*/bin/hauksbee-ci 2>/dev/null | head -n1 || true)"
+          run_bin="$(ls "$dl"/hauksbee-*/bin/hauksbee 2>/dev/null | head -n1 || true)"
+        }
+        # A cache hit already holds the extracted bundle: reuse it.
+        find_bins
+        if [ -n "$ci_bin" ]; then
+          echo "prebuilt bundle restored from cache; skipping download"
         else
-          gh release download "$choice" --repo "$REPO" --pattern "$asset_glob" --dir "$dl" 2>/dev/null || true
+          asset_glob="hauksbee-*-${os}-${arch}.tar.gz"
+          if [ -n "$TAG" ]; then
+            gh release download "$TAG" --repo "$REPO" --pattern "$asset_glob" --dir "$dl" 2>/dev/null || true
+          else
+            gh release download --repo "$REPO" --pattern "$asset_glob" --dir "$dl" 2>/dev/null || true
+          fi
+          tarball="$(ls "$dl"/hauksbee-*-"${os}"-"${arch}".tar.gz 2>/dev/null | head -n1 || true)"
+          if [ -z "$tarball" ]; then
+            echo "no prebuilt asset ($asset_glob) found; will build from source"
+            exit 0
+          fi
+          tar -xzf "$tarball" -C "$dl"
+          find_bins
         fi
-        tarball="$(ls "$dl"/hauksbee-*-"${os}"-"${arch}".tar.gz 2>/dev/null | head -n1 || true)"
-        if [ -z "$tarball" ]; then
-          echo "no prebuilt asset ($asset_glob) found; will build from source"
+        if [ -z "$ci_bin" ] || [ ! -x "$ci_bin" ] || [ -z "$run_bin" ] || [ ! -x "$run_bin" ]; then
+          echo "prebuilt bundle had no usable binaries; will build from source"
           exit 0
         fi
-        tar -xzf "$tarball" -C "$dl"
-        bin="$(ls "$dl"/hauksbee-*/bin/hauksbee-ci 2>/dev/null | head -n1 || true)"
-        if [ -z "$bin" ] || [ ! -x "$bin" ]; then
-          echo "prebuilt tarball had no usable binary; will build from source"
-          exit 0
-        fi
-        echo "bin=$bin" >> "$GITHUB_OUTPUT"
-        echo "Using prebuilt hauksbee-ci: $bin"
+        echo "bin=$ci_bin" >> "$GITHUB_OUTPUT"
+        echo "engine-bin=$run_bin" >> "$GITHUB_OUTPUT"
+        echo "Using prebuilt binaries from $dl"
 
-    # 2. Fallback: build from source only when no prebuilt binary was obtained.
+    # 3. Fallback: build from source only when no prebuilt bundle was obtained.
     - name: Checkout hauksbee (fallback build)
       if: ${{ inputs.use-image != 'true' && steps.prebuilt.outputs.bin == '' }}
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       with:
         repository: ${{ inputs.hauksbee-repo }}
         ref: ${{ inputs.hauksbee-ref }}
@@ -126,13 +204,17 @@ runs:
 
     - name: Install Rust toolchain (fallback build)
       if: ${{ inputs.use-image != 'true' && steps.prebuilt.outputs.bin == '' }}
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@4cda84d5c5c54efe2404f9d843567869ab1699d4 # stable branch, 2026-08-03
+      with:
+        # The SHA pin no longer names the toolchain the way @stable did, so it
+        # is named explicitly here.
+        toolchain: stable
 
     # Cache the cargo registry, git index, and the hauksbee build so only the
     # first run pays the compile cost. Keyed on the hauksbee ref + lockfile.
     - name: Cache cargo (fallback build)
       if: ${{ inputs.use-image != 'true' && steps.prebuilt.outputs.bin == '' }}
-      uses: actions/cache@v4
+      uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: |
           ~/.cargo/registry/index
@@ -144,31 +226,53 @@ runs:
           hauksbee-ci-${{ runner.os }}-${{ inputs.hauksbee-ref }}-
           hauksbee-ci-${{ runner.os }}-
 
-    - name: Build hauksbee-ci (fallback build)
+    - name: Build hauksbee (fallback build)
       if: ${{ inputs.use-image != 'true' && steps.prebuilt.outputs.bin == '' }}
       shell: bash
-      run: cargo build --release -p hauksbee-ci --manifest-path .hauksbee/Cargo.toml
+      env:
+        MODE: ${{ steps.resolve.outputs.mode }}
+      run: |
+        set -euo pipefail
+        # Only the binary the resolved mode needs is built: the engine for a
+        # board check, hauksbee-ci for a spec run.
+        if [ "$MODE" = "check" ]; then
+          cargo build --release -p hauksbee-engine --manifest-path .hauksbee/Cargo.toml
+        else
+          cargo build --release -p hauksbee-ci --manifest-path .hauksbee/Cargo.toml
+        fi
 
-    - name: Run hauksbee-ci
+    # 4. Run the check. Spec mode fans every resolved spec into ONE
+    #    hauksbee-ci invocation, which writes one merged JUnit file (a
+    #    <testsuite> per spec) and exits with the worst severity. Check mode
+    #    runs the engine's --check gate; under GITHUB_ACTIONS with --strict it
+    #    emits its own inline annotations.
+    - name: Run the hardware check
       id: run
       if: ${{ inputs.use-image != 'true' }}
       shell: bash
       env:
-        SPEC: ${{ inputs.spec }}
+        MODE: ${{ steps.resolve.outputs.mode }}
+        BOARD: ${{ steps.resolve.outputs.board }}
+        SPECS: ${{ steps.resolve.outputs.specs }}
         JUNIT: ${{ inputs.junit }}
-        PREBUILT_BIN: ${{ steps.prebuilt.outputs.bin }}
+        PREBUILT_CI: ${{ steps.prebuilt.outputs.bin }}
+        PREBUILT_ENGINE: ${{ steps.prebuilt.outputs.engine-bin }}
       run: |
         set +e
-        if [ -n "$PREBUILT_BIN" ]; then
-          BIN="$PREBUILT_BIN"
+        if [ "$MODE" = "check" ]; then
+          BIN="${PREBUILT_ENGINE:-.hauksbee/target/release/hauksbee}"
+          CMD=("$BIN" run "$BOARD" --check --strict)
         else
-          BIN=.hauksbee/target/release/hauksbee-ci
+          BIN="${PREBUILT_CI:-.hauksbee/target/release/hauksbee-ci}"
+          CMD=("$BIN" run)
+          while IFS= read -r s; do
+            [ -n "$s" ] && CMD+=("$s")
+          done <<<"$SPECS"
         fi
-        ARGS=(run "$SPEC")
         if [ -n "$JUNIT" ]; then
-          ARGS+=(--junit "$JUNIT")
+          CMD+=(--junit "$JUNIT")
         fi
-        "$BIN" "${ARGS[@]}"
+        "${CMD[@]}"
         code=$?
         if [ "$code" -eq 0 ]; then
           echo "passed=true" >> "$GITHUB_OUTPUT"
@@ -178,27 +282,39 @@ runs:
         echo "junit=$JUNIT" >> "$GITHUB_OUTPUT"
         exit $code
 
-    # 3. Image path: run hauksbee-ci inside the published Docker image. The
-    #    calling repo's checkout (spec + board + firmware) is the runner
+    # 5. Image path: the same two modes, inside the published Docker image.
+    #    The calling repo's checkout (spec + board + firmware) is the runner
     #    workspace, mounted read-write at /work so the JUnit XML lands back in
-    #    the workspace for the publish step. Run as the host user so that file is
-    #    writable by the runner (the image's default user is uid 1000).
-    - name: Run hauksbee-ci (image)
+    #    the workspace for the publish step. Run as the host user so that file
+    #    is writable by the runner (the image's default user is uid 1000).
+    #    GITHUB_ACTIONS is passed through so the binary still emits inline
+    #    annotations.
+    - name: Run the hardware check (image)
       id: run-image
       if: ${{ inputs.use-image == 'true' }}
       shell: bash
       env:
-        SPEC: ${{ inputs.spec }}
+        MODE: ${{ steps.resolve.outputs.mode }}
+        BOARD: ${{ steps.resolve.outputs.board }}
+        SPECS: ${{ steps.resolve.outputs.specs }}
         JUNIT: ${{ inputs.junit }}
         IMAGE: ${{ inputs.image }}
       run: |
         set +e
-        ARGS=(hauksbee-ci run "$SPEC")
+        if [ "$MODE" = "check" ]; then
+          ARGS=(hauksbee run "$BOARD" --check --strict)
+        else
+          ARGS=(hauksbee-ci run)
+          while IFS= read -r s; do
+            [ -n "$s" ] && ARGS+=("$s")
+          done <<<"$SPECS"
+        fi
         if [ -n "$JUNIT" ]; then
           ARGS+=(--junit "$JUNIT")
         fi
         docker run --rm \
           --user "$(id -u):$(id -g)" \
+          -e GITHUB_ACTIONS \
           -v "$GITHUB_WORKSPACE:/work" \
           -w /work \
           "$IMAGE" "${ARGS[@]}"
@@ -211,11 +327,13 @@ runs:
         echo "junit=$JUNIT" >> "$GITHUB_OUTPUT"
         exit $code
 
-    # Always publish the JUnit results, even when the hardware check failed, so
-    # the assertions show up in the PR's Checks tab.
+    # Always publish the JUnit results, even when the hardware check failed,
+    # so the assertions show up in the PR's Checks tab. Opt out with
+    # publish-report: false (fork PRs lack the checks: write this needs; the
+    # README documents the two-workflow pattern for that case).
     - name: Publish test report
-      if: ${{ always() && inputs.junit != '' }}
-      uses: mikepenz/action-junit-report@v4
+      if: ${{ always() && inputs.junit != '' && inputs.publish-report == 'true' }}
+      uses: mikepenz/action-junit-report@db71d41eb79864e25ab0337e395c352e84523afe # v4.3.1
       with:
         report_paths: ${{ inputs.junit }}
         check_name: "hauksbee-ci (hardware)"
