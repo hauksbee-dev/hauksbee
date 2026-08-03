@@ -1,0 +1,22 @@
+# A power Schottky has to sit on BOTH of its published forward points.
+#
+# This is the deck that decides whether the library can carry rectifiers at all.
+# One forward point can be matched by any model; two can only be matched when
+# the bulk resistance is real, because the rise between them is ohmic. With
+# RS unstamped the same card lands about a third low at 3.1 A, and the only way
+# to fit both without it is an ideality factor of 10.26 against a physical bound
+# of 3.0.
+#
+# Holding hauksbee and ngspice to the same answer here also pins that the two
+# solvers agree about what RS means in a diode card, which is the whole reason
+# a vendor model can be used verbatim.
+analysis = "op"
+description = "1N5817 at 1.0 A and 3.1 A, the two forward points Vishay 88525 publishes"
+
+[[probe]]
+expr = "V(v1a)"
+reltol = 0.002
+
+[[probe]]
+expr = "V(v31a)"
+reltol = 0.002

@@ -729,7 +729,7 @@ fn seed_reactive_state(
             Device::Diode { a, k, model, .. }
                 if crate::stamp::diode_has_charge(model, &opts.effects) =>
             {
-                state.x1[i] = diode_q(model, node_v(ws, *a) - node_v(ws, *k), opts);
+                state.x1[i] = diode_q(model, diode_vj(ws, id, *a, *k), opts);
                 state.x2[i] = state.x1[i];
                 state.dx1[i] = 0.0;
             }
@@ -889,7 +889,7 @@ fn advance_reactive_state(
             Device::Diode { a, k, model, .. }
                 if crate::stamp::diode_has_charge(model, &opts.effects) =>
             {
-                let q_new = diode_q(model, node_v(ws, *a) - node_v(ws, *k), opts);
+                let q_new = diode_q(model, diode_vj(ws, id, *a, *k), opts);
                 let q_old = state.x1[i];
                 let dq = if trapz {
                     2.0 * (q_new - q_old) / h - state.dx1[i]
@@ -992,6 +992,21 @@ fn advance_reactive_state(
 }
 
 #[inline]
+/// A diode's JUNCTION voltage, which is not its terminal voltage when the model
+/// carries a series resistance: the junction sits on the intrinsic anode and
+/// `rs` bridges it out.
+///
+/// The charge state has to be integrated against the same voltage the stamp
+/// linearised. Reading the terminals here instead makes the two disagree, and
+/// the co-simulation stops converging rather than merely drifting.
+fn diode_vj(ws: &Workspace, id: hauksbee_ir::DeviceId, a: NodeId, k: NodeId) -> f64 {
+    let anode = match ws.layout.diode_internal(id) {
+        Some(i) => ws.x[i],
+        None => node_v(ws, a),
+    };
+    anode - node_v(ws, k)
+}
+
 fn node_v(ws: &Workspace, node: NodeId) -> f64 {
     match ws.layout.node(node) {
         Some(i) => ws.x[i],
@@ -1061,7 +1076,7 @@ fn lte_estimate(
             Device::Diode { a, k, model, .. }
                 if crate::stamp::diode_has_charge(model, &opts.effects) =>
             {
-                let q = diode_q(model, node_v(ws, *a) - node_v(ws, *k), opts);
+                let q = diode_q(model, diode_vj(ws, id, *a, *k), opts);
                 (q, opts.chgtol)
             }
             // A charge-storing BJT participates through BOTH junction
