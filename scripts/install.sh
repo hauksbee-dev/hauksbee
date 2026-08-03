@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # install.sh - one command to build hauksbee and put it on your PATH.
 #
-# Builds the `hauksbee` and `hauksbee-ci` release binaries from this checkout and
-# installs (copies) them into a bin directory on your PATH. Idempotent: re-runs
-# rebuild only what cargo decides is stale and overwrite the installed copies.
+# Builds the `hauksbee`, `hauksbee-ci` and `hauksbee-mcp` release binaries from
+# this checkout and installs (copies) them into a bin directory on your PATH.
+# Idempotent: a re-run rebuilds only what cargo decides is stale and overwrites
+# the installed copies.
 #
 # Usage:
 #   scripts/install.sh [--prefix DIR] [--no-build] [--symlink] [--help]
@@ -58,37 +59,76 @@ fi
 
 if [ "$DO_BUILD" -eq 1 ]; then
   have "$CARGO" || die "cargo not found. Install Rust from https://rustup.rs, then re-run (or pass --no-build to install prebuilt binaries)."
+
+  # Preflight the default-features build BEFORE the multi-minute cargo run.
+  # The `avr` backend (on by default) runs bindgen (needs clang/libclang) and
+  # statically links libsimavr; missing either used to surface as a build.rs
+  # panic four minutes in. Mirror hauksbee-mcu/build.rs's discovery: explicit
+  # SIMAVR_LIB_DIR override, else <prefix>/lib for /opt/homebrew (Apple
+  # Silicon) or /usr/local (everything else).
+  if ! have clang; then
+    die "clang not found, and the default build needs it (bindgen over the simavr headers).
+    Install it (Xcode CLT on macOS: xcode-select --install; Debian/Ubuntu: apt install clang libclang-dev),
+    or build without the avr backend: cargo build --release --no-default-features --features renode,qemu"
+  fi
+  _simavr_prefix="/usr/local"
+  [ "$(uname -s)" = Darwin ] && [ "$(uname -m)" = arm64 ] && _simavr_prefix="/opt/homebrew"
+  _simavr_lib="${SIMAVR_LIB_DIR:-$_simavr_prefix/lib}/libsimavr.a"
+  if [ ! -f "$_simavr_lib" ]; then
+    die "libsimavr.a not found (looked for $_simavr_lib), and the default build links it.
+    Either install it first:   scripts/install-sims.sh --avr
+    or point at an existing install:   SIMAVR_INCLUDE_DIR=<prefix>/include SIMAVR_LIB_DIR=<prefix>/lib scripts/install.sh
+    or build without the avr backend:  cargo build --release --no-default-features --features renode,qemu"
+  fi
+
   # Build the web front door bundle first. `hauksbee serve` serves
   # frontend/dist/, which is gitignored (a build artifact), so a fresh `git
-  # pull` + install would otherwise keep serving a stale bundle — the classic
+  # pull` + install would otherwise keep serving a stale bundle: the classic
   # "I rebuilt but the page is old" trap. Rebuild it here so an install always
-  # ships the current UI. Skipped (with a warning) only if no JS toolchain is
-  # present; `serve` then falls back to any existing dist/ or the bundled note.
+  # ships the current UI. Skipped (with a warning) if no JS toolchain is
+  # present or the JS build fails; `serve` then falls back to any existing
+  # dist/ or the bundled note. A broken frontend toolchain must not take the
+  # whole install down with it.
   if have bun; then
     log "Building web front door (frontend/dist via bun)"
-    ( cd "$HAUKSBEE_ROOT/frontend" && bun install --silent && bun run build )
+    ( cd "$HAUKSBEE_ROOT/frontend" && bun install --silent && bun run build ) \
+      || warn "Frontend build via bun FAILED; continuing without a fresh web UI."
   elif have npm; then
     log "Building web front door (frontend/dist via npm)"
-    ( cd "$HAUKSBEE_ROOT/frontend" && npm install --silent && npm run build )
+    ( cd "$HAUKSBEE_ROOT/frontend" && npm install --silent && npm run build ) \
+      || warn "Frontend build via npm FAILED; continuing without a fresh web UI."
   else
     warn "No bun/npm found; skipping the frontend build."
-    warn "\`hauksbee serve\` will use the existing frontend/dist/ if present."
     warn "Install bun (https://bun.sh) and re-run to refresh the web UI."
   fi
 
-  log "Building hauksbee + hauksbee-ci (release)"
-  ( cd "$HAUKSBEE_ROOT" && "$CARGO" build --release -p hauksbee-engine -p hauksbee-ci )
+  # Embed the web UI into the binary (same mechanism as bundle.sh): rust-embed
+  # needs frontend/dist to exist at COMPILE time, so gate on it being present,
+  # whether from the build above or an earlier one.
+  EMBED_ARGS=()
+  if [ -d "$HAUKSBEE_ROOT/frontend/dist" ]; then
+    EMBED_ARGS=(--features embed-web)
+    log "Building hauksbee + hauksbee-ci + hauksbee-mcp (release, embed-web)"
+  else
+    warn "frontend/dist is missing, so the binaries are built WITHOUT the web UI:"
+    warn "  \`hauksbee serve\` will have no web front door."
+    warn "  Fix: install bun (https://bun.sh), then re-run scripts/install.sh."
+    log "Building hauksbee + hauksbee-ci + hauksbee-mcp (release)"
+  fi
+  # `${arr[@]+...}` guards empty-array expansion under `set -u` on bash 3.2
+  # (the macOS default), where a bare `"${arr[@]}"` on an empty array errors.
+  ( cd "$HAUKSBEE_ROOT" && "$CARGO" build --release -p hauksbee-engine -p hauksbee-ci -p hauksbee-mcp ${EMBED_ARGS[@]+"${EMBED_ARGS[@]}"} )
 else
   log "Skipping build (--no-build)"
 fi
 
-for bin in hauksbee hauksbee-ci; do
+for bin in hauksbee hauksbee-ci hauksbee-mcp; do
   [ -x "$SRC/$bin" ] || die "$SRC/$bin missing. Run without --no-build, or 'cargo build --release' first."
 done
 
 mkdir -p "$BINDIR"
 log "Installing into $BINDIR"
-for bin in hauksbee hauksbee-ci; do
+for bin in hauksbee hauksbee-ci hauksbee-mcp; do
   dest="$BINDIR/$bin"
   if [ "$USE_SYMLINK" -eq 1 ]; then
     ln -sf "$SRC/$bin" "$dest"
@@ -100,7 +140,8 @@ for bin in hauksbee hauksbee-ci; do
 done
 
 printf '\n'
-if printf '%s' ":$PATH:" | grep -q ":$BINDIR:"; then
+case ":${PATH}:" in *":${BINDIR}:"*) PATH_HAS_BINDIR=1 ;; *) PATH_HAS_BINDIR=0 ;; esac
+if [ "${PATH_HAS_BINDIR}" = 1 ]; then
   ok "$BINDIR is already on your PATH"
 else
   warn "$BINDIR is not on your PATH. Add it:"
@@ -110,10 +151,10 @@ printf '\n'
 # Layout-aware closing line: "frontend/dist" is checkout-speak that means
 # nothing to a bundle user, whose web UI is embedded in the binary.
 if [ "$DO_BUILD" -eq 1 ]; then
-  ok "Everything is current: web UI (frontend/dist) + hauksbee + hauksbee-ci."
+  ok "Everything is current: web UI (frontend/dist) + hauksbee + hauksbee-ci + hauksbee-mcp."
   info "  Re-run this script any time (e.g. after 'git pull') to rebuild them all."
 else
-  ok "Installed: hauksbee + hauksbee-ci (the web UI is embedded; \`hauksbee serve\` opens it)."
+  ok "Installed: hauksbee + hauksbee-ci + hauksbee-mcp (the web UI is embedded; \`hauksbee serve\` opens it)."
 fi
 printf '\n'
 log "Done. Verify with:"

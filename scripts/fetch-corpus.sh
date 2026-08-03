@@ -130,8 +130,10 @@ fetch_git() {
   mkdir -p "$dest.partial"
   git -C "$dest.partial" init -q
   git -C "$dest.partial" remote add origin "$url"
+  local direct=0
   if run_bounded git "${GIT_STALL_ARGS[@]}" -C "$dest.partial" fetch -q --depth 1 origin "$rev" 2>/dev/null; then
     git -C "$dest.partial" checkout -q FETCH_HEAD || return 1
+    direct=1
   else
     # Some hosts refuse to serve an arbitrary commit directly. Fetch history
     # instead and check out the pinned revision by name. Checking out
@@ -150,14 +152,27 @@ fetch_git() {
 
   local got want
   got="$(git -C "$dest.partial" rev-parse HEAD)"
-  want="$(git -C "$dest.partial" rev-parse "${rev}^{commit}" 2>/dev/null || echo "")"
+  # --verify --quiet matters: a bare `rev-parse <name>` ECHOES an unresolvable
+  # name back to stdout (alongside the non-zero exit), so `want` came out as
+  # the literal string "9.0.0^{commit}" instead of empty and the comparison
+  # below failed every tag pin the direct fetch path served.
+  want="$(git -C "$dest.partial" rev-parse --verify --quiet "${rev}^{commit}" || echo "")"
   # The manifest may pin an abbreviated sha, a tag, or a branch. Accept a match
   # on the resolved commit, or an abbreviated sha that prefixes what we got.
+  #
+  # A tag pin taken through the DIRECT path is a special case: `git fetch
+  # origin <tag>` leaves no local tag ref behind, so `rev-parse <tag>^{commit}`
+  # resolves nothing here even though the transport served exactly the ref we
+  # named (an annotated tag arrives peeled to its commit in FETCH_HEAD). That
+  # used to fail the pin check with "asked for 9.0.0, landed on <commit>" where
+  # <commit> WAS 9.0.0's commit. The wrong-commit hazard this check exists for
+  # (a history fetch landing on the default branch head) is confined to the
+  # fallback path, where the strict comparison still applies.
   if [ -n "$want" ] && [ "$got" != "$want" ]; then
     err "$id: asked for $rev, landed on ${got:0:12}"
     return 1
   fi
-  if [ -z "$want" ] && [ "${got#"$rev"}" = "$got" ]; then
+  if [ -z "$want" ] && [ "$direct" -ne 1 ] && [ "${got#"$rev"}" = "$got" ]; then
     err "$id: asked for $rev, landed on ${got:0:12}"
     return 1
   fi

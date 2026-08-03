@@ -126,10 +126,14 @@ RUN cargo build --release -p hauksbee-engine -p hauksbee-ci \
 # ---------------------------------------------------------------------------
 FROM debian:bookworm-slim AS runtime
 
+# licenses is GPL-3.0-only, not Apache-2.0: this image ships the default
+# (avr) shape, which statically links GPL-3.0 libsimavr, so the BINARIES in
+# the image are GPL-3.0 combined works even though hauksbee's source stays
+# Apache-2.0. The full terms travel in /usr/share/doc/hauksbee/.
 LABEL org.opencontainers.image.title="hauksbee (slim)" \
       org.opencontainers.image.description="Universal PCB emulator: static checks, board-as-code, AVR co-sim. Prebuilt hauksbee + hauksbee-ci with simavr linked in." \
       org.opencontainers.image.source="https://github.com/hauksbee-dev/hauksbee" \
-      org.opencontainers.image.licenses="Apache-2.0"
+      org.opencontainers.image.licenses="GPL-3.0-only"
 
 # Runtime libraries only:
 #   libelf1 + zlib1g  the shared libs the statically-linked simavr still needs
@@ -157,6 +161,33 @@ RUN useradd --create-home --uid 1000 hauksbee
 COPY --from=rust-build /build/hauksbee/target/release/hauksbee    /usr/local/bin/hauksbee
 COPY --from=rust-build /build/hauksbee/target/release/hauksbee-ci /usr/local/bin/hauksbee-ci
 COPY --from=rust-build /build/hauksbee/crates/hauksbee-models/db  /opt/hauksbee/db
+
+# Licence terms travel with the image, same as with the tarballs: hauksbee's
+# Apache-2.0 source terms + attribution, the GPL-3.0 text (the binaries link
+# libsimavr statically, so GPL-3.0 section 4 wants the text enclosed), and a
+# note stating plainly which licence the binaries carry and why.
+COPY --from=rust-build /build/hauksbee/LICENSE               /usr/share/doc/hauksbee/LICENSE
+COPY --from=rust-build /build/hauksbee/NOTICE                /usr/share/doc/hauksbee/NOTICE
+COPY --from=rust-build /build/hauksbee/licenses/gpl-3.0.txt  /usr/share/doc/hauksbee/LICENSE-GPL-3.0.txt
+RUN printf '%s\n' \
+      'hauksbee container image - licence of the binaries' \
+      '===================================================' \
+      '' \
+      'THE BINARIES /usr/local/bin/hauksbee AND /usr/local/bin/hauksbee-ci ARE' \
+      'LICENSED TO YOU UNDER GPL-3.0.' \
+      '' \
+      "hauksbee's own source code is Apache-2.0 (LICENSE and NOTICE, in this" \
+      'directory). This image builds the default shape, whose avr co-simulation' \
+      'backend STATICALLY LINKS libsimavr (GPL-3.0); statically linking GPL-3.0' \
+      'code makes the executables combined works, so they are distributed under' \
+      'GPL-3.0. Running the image imposes no obligations at all; GPL-3.0' \
+      'constrains redistribution, not use.' \
+      '' \
+      'Full GPL-3.0 text: LICENSE-GPL-3.0.txt, in this directory.' \
+      'Corresponding source (GPL-3.0 section 6):' \
+      '  https://github.com/hauksbee-dev/hauksbee' \
+      '  https://github.com/buserror/simavr' \
+      > /usr/share/doc/hauksbee/LICENSE-BINARY.txt
 
 USER hauksbee
 WORKDIR /work

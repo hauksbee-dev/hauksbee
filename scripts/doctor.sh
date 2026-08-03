@@ -82,10 +82,16 @@ resolve_hauksbee_bin() {
   if [ -n "${HAUKSBEE_BIN:-}" ] && [ -x "${HAUKSBEE_BIN}" ]; then
     printf '%s\n' "$HAUKSBEE_BIN"; return 0
   fi
-  local built
+  local built onpath
   built="$(hauksbee_target_bin)/hauksbee"
-  if [ -x "$built" ]; then printf '%s\n' "$built"; return 0; fi
-  command -v hauksbee 2>/dev/null || true
+  onpath="$(command -v hauksbee 2>/dev/null || true)"
+  if [ -x "$built" ]; then
+    if [ -n "$onpath" ] && ! cmp -s "$built" "$onpath"; then
+      warn "backend probe uses the checkout build $built; the installed $onpath differs (re-run scripts/install.sh to refresh it)."
+    fi
+    printf '%s\n' "$built"; return 0
+  fi
+  printf '%s\n' "$onpath"
 }
 
 # Mirror of the engine's Espressif-fork check (qemu/process.rs `is_esp_fork`):

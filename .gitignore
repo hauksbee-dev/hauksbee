@@ -16,6 +16,9 @@ testdata/datasheets/rp2040-datasheet.pdf
 __pycache__/
 *.pyc
 
+# freerouting writes logs/freerouting.log into the checkout it runs from.
+logs/
+
 # Claude Code session data / agent worktrees
 .claude/
 .playwright-cli/
@@ -43,6 +46,10 @@ codex-routing-mosfet-review.log
 
 # Agent verification screenshots (scratch, never repo content)
 uifix/
+
+# Visual-lint output: the screenshots of violating states, written fresh on
+# every run (frontend/tests/visual-lint).
+frontend/test-results/
 
 # The board corpus is fetched, never vendored. Every board comes from its own
 # author under CC BY-SA, GPL-3.0 or CERN-OHL, and obtaining each one directly
