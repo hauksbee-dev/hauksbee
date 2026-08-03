@@ -968,3 +968,113 @@ max_power_w = 1.0            # Pv at Tamb <= 50 C, Absolute Maximum Ratings
 max_voltage_v = 62.0      # reverse working voltage is the Zener voltage itself
 max_junction_temp_c = 200.0  # Tj, Absolute Maximum Ratings
 theta_ja_c_per_w = 100.0     # RthJA, Maximum Thermal Resistance
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1N581x Schottky barrier rectifiers, 1 A, DO-41.
+#
+# Source for every number: Vishay 1N5817/1N5818/1N5819 datasheet, document
+# 88525, revision 01-Jul-2020. Ratings from "MAXIMUM RATINGS", forward voltages
+# from "ELECTRICAL CHARACTERISTICS", junction capacitance from the same table,
+# thermal resistance from "THERMAL CHARACTERISTICS".
+#
+# These are the parts that made the series resistance worth stamping. The
+# datasheet gives TWO forward points, VF at 1.0 A and at 3.1 A, and the rise
+# between them is bulk resistance rather than the exponential. Fitting both with
+# rs = 0 needs an ideality factor above 10, four times anything physical and
+# past what validation accepts; fitting one leaves the other a third out. With
+# rs in the model, `is`, `n` and `rs` reproduce both published points exactly,
+# which is what the ngspice deck schottky_1n5817_two_points checks.
+#
+# `n = 1.05` is the assumption the fit rests on, and it is the only one: it is
+# an ordinary Schottky ideality factor, and the datasheet does not publish one.
+# `is` and `rs` then follow from the two VF points with no freedom left.
+
+[[models]]
+id = "1n5817"
+kind = "diode"
+description = "1N5817 Schottky barrier rectifier, 20 V, 1 A, DO-41"
+
+[models.match]
+value_re = "(?i)^1N5817$"
+
+[models.params]
+is  = 7.105e-06     # fitted with n and rs to both forward points, see the note above
+n   = 1.05      # assumed, an ordinary Schottky ideality factor
+rs  = 0.1282     # fitted; carries the 1.0 A to 3.1 A rise the datasheet publishes
+cjo = 1.25e-10    # CJ typ at VR = 4.0 V, 1.0 MHz
+vj  = 0.4       # assumed, a Schottky barrier height; the datasheet gives none
+m   = 0.4       # assumed grading coefficient, ditto
+tt  = 1.0e-11   # majority-carrier device: negligible stored charge, assumed
+bv  = 20.0      # VRRM, Maximum repetitive peak reverse voltage
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0             # IF(AV) at TL = 90 C
+max_surge_current_a = 25.0      # IFSM, 8.3 ms single half sine-wave
+max_voltage_v = 20.0            # VRRM
+max_junction_temp_c = 125.0     # TJ maximum
+theta_ja_c_per_w = 50.0         # RthJA typ, junction to ambient
+theta_jc_c_per_w = 15.0         # RthJL typ, junction to lead
+
+[[models]]
+id = "1n5818"
+kind = "diode"
+description = "1N5818 Schottky barrier rectifier, 30 V, 1 A, DO-41"
+
+[models.match]
+value_re = "(?i)^1N5818$"
+
+[models.params]
+is  = 2.767e-07     # fitted with n and rs to both forward points, see the note above
+n   = 1.05      # assumed, an ordinary Schottky ideality factor
+rs  = 0.1401     # fitted; carries the 1.0 A to 3.1 A rise the datasheet publishes
+cjo = 1.1e-10    # CJ typ at VR = 4.0 V, 1.0 MHz
+vj  = 0.4       # assumed, a Schottky barrier height; the datasheet gives none
+m   = 0.4       # assumed grading coefficient, ditto
+tt  = 1.0e-11   # majority-carrier device: negligible stored charge, assumed
+bv  = 30.0      # VRRM, Maximum repetitive peak reverse voltage
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0             # IF(AV) at TL = 90 C
+max_surge_current_a = 25.0      # IFSM, 8.3 ms single half sine-wave
+max_voltage_v = 30.0            # VRRM
+max_junction_temp_c = 125.0     # TJ maximum
+theta_ja_c_per_w = 50.0         # RthJA typ, junction to ambient
+theta_jc_c_per_w = 15.0         # RthJL typ, junction to lead
+
+[[models]]
+id = "1n5819"
+kind = "diode"
+description = "1N5819 Schottky barrier rectifier, 40 V, 1 A, DO-41"
+
+[models.match]
+value_re = "(?i)^1N5819$"
+
+[models.params]
+is  = 2.828e-08     # fitted with n and rs to both forward points, see the note above
+n   = 1.05      # assumed, an ordinary Schottky ideality factor
+rs  = 0.1282     # fitted; carries the 1.0 A to 3.1 A rise the datasheet publishes
+cjo = 1.1e-10    # CJ typ at VR = 4.0 V, 1.0 MHz
+vj  = 0.4       # assumed, a Schottky barrier height; the datasheet gives none
+m   = 0.4       # assumed grading coefficient, ditto
+tt  = 1.0e-11   # majority-carrier device: negligible stored charge, assumed
+bv  = 40.0      # VRRM, Maximum repetitive peak reverse voltage
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0             # IF(AV) at TL = 90 C
+max_surge_current_a = 25.0      # IFSM, 8.3 ms single half sine-wave
+max_voltage_v = 40.0            # VRRM
+max_junction_temp_c = 125.0     # TJ maximum
+theta_ja_c_per_w = 50.0         # RthJA typ, junction to ambient
+theta_jc_c_per_w = 15.0         # RthJL typ, junction to lead

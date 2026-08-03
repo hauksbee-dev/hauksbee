@@ -22,6 +22,7 @@ mod pack_layering;
 mod pack_store;
 mod power_fet_afe_resolve;
 mod power_ic_resolve;
+mod schottky_1n58xx;
 mod user_dir_layering;
 mod vreg_78xx_resolve;
 mod vreg_79xx_negative;

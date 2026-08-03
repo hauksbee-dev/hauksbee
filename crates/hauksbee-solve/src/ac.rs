@@ -438,7 +438,13 @@ fn stamp_ac(
             // diffusion capacitance frozen at the operating point, an AC
             // answer without it would silently miss the pole the transient
             // model has. Charge-free models add exactly 0.0j: bit-identical.
-            let vd = op.v(*a) - op.v(*k);
+            // The junction, not the terminals: with a series resistance the
+            // small-signal model must linearise about the same operating point
+            // the DC solve settled at, or the pole moves with `rs`.
+            let vd = match layout.diode_internal(id) {
+                Some(i) => op.x[i] - op.v(*k),
+                None => op.v(*a) - op.v(*k),
+            };
             let (idc, gd_raw) =
                 crate::stamp::diode_eval(model, vd, opts.model_temp(), opts.effects.temperature);
             let gd = gd_raw.max(opts.gmin);

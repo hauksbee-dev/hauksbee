@@ -330,6 +330,13 @@ pub fn reserve_pattern(circuit: &Circuit, layout: &Layout, m: &mut SparseMatrix)
         if let Some(ints) = layout.mos_internal(id) {
             ns.extend(ints.iter().copied());
         }
+        // A series-resistance diode's intrinsic anode. Reserving is not
+        // bookkeeping: a coordinate outside the pattern is silently discarded,
+        // so an allocated-but-unreserved node leaves the junction stamped
+        // nowhere and the diode stops conducting entirely.
+        if let Some(int) = layout.diode_internal(id) {
+            ns.push(Some(int));
+        }
         // All-pairs structural coupling among a device's nodes covers every
         // companion/tangent stamp it can produce.
         for i in 0..ns.len() {
@@ -1609,13 +1616,6 @@ pub(crate) fn mos_junction_voltages(
 pub(crate) mod effect_log {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    /// Diode `rs` is parsed but not stamped. The BJT's rb/re/rc landed the
-    /// internal-node machinery (dev-plan 04 §3.2), but wiring the diode's RS
-    /// through it is deliberately deferred: the diode's §3.1 numbers are a
-    /// regression surface this arc must not move (its decks omit RS for
-    /// exactly this reason).
-    pub static DIODE_SERIES_R: AtomicBool = AtomicBool::new(false);
-
     /// Log `msg` the first time this flag fires; a no-op afterwards.
     ///
     /// This is an engine-internal dev note (it references a dev-plan section and
@@ -1623,6 +1623,7 @@ pub(crate) mod effect_log {
     /// debug channel rather than straight to stderr: on a user's CI run it was
     /// leaking `[effects] ... (dev-plan 04 §3.2)` into the output. The flag still
     /// flips exactly once (tests read it), the print is just now channel-gated.
+    #[allow(dead_code)]
     pub fn log_once(flag: &AtomicBool, msg: &str) {
         if !flag.swap(true, Ordering::Relaxed) {
             hauksbee_ir::debug::note("effects", msg);
@@ -1658,18 +1659,30 @@ fn stamp_diode<S: StampSink>(
     let ibv = model.ibv.filter(|v| *v > 0.0).unwrap_or(is);
     let vc_bd = vcrit(ibv, nvt);
 
-    // §3.4: series resistance is promised by the toggle but not stamped yet
-    // (series-node insertion lands with the BJT's rb/re/rc, dev-plan 04 §3.2).
-    if ctx.opts.effects.series_resistance && model.rs > 0.0 {
-        effect_log::log_once(
-            &effect_log::DIODE_SERIES_R,
-            "series_resistance: diode RS is not stamped yet; \
-             the model field is ignored",
-        );
+    // Series resistance: the junction moves onto an intrinsic anode and `rs`
+    // bridges it to the external one, the shape the BJT's rb/re/rc and the
+    // MOSFET's rd/rs already use. It is not a refinement for the parts that
+    // carry a real one: a power Schottky's whole 1 A to 3 A rise is this
+    // resistance rather than the exponential, and an LED at rs = 6 drops
+    // 120 mV at 20 mA.
+    let a_ext = ctx.layout.node(a);
+    let k_i = ctx.layout.node(k);
+    let mut a_eff = a_ext;
+    if let Some(a_int) = ctx.layout.diode_internal(id) {
+        if ctx.opts.effects.series_resistance && model.rs > 0.0 {
+            add_pair(sink, a_ext, Some(a_int), 1.0 / model.rs);
+            a_eff = Some(a_int);
+        } else {
+            sink.g(a_int, a_int, 1.0);
+        }
     }
-
-    let vd_raw = ctx.v(a) - ctx.v(k);
-    let vd_last = ctx.last_vd(a, k);
+    // Read the junction at the EFFECTIVE unknowns. With no series resistor
+    // `a_eff` IS `layout.node(a)`, reproducing `ctx.v(a) - ctx.v(k)` exactly:
+    // the bit-identity fast path every existing deck takes.
+    let vx = |i: Option<usize>| i.map(|i| ctx.x[i]).unwrap_or(0.0);
+    let vx_prev = |i: Option<usize>| i.map(|i| ctx.x_prev[i]).unwrap_or(0.0);
+    let vd_raw = vx(a_eff) - vx(k_i);
+    let vd_last = vx_prev(a_eff) - vx_prev(k_i);
     // Junction limiting. The forward exponential is limited by pnjlim toward
     // vcrit; the breakdown exponential is the same curve MIRRORED about
     // vd = -bv, so in the breakdown region (vd below -bv, with a 10·nvt skirt,
@@ -1709,8 +1722,8 @@ fn stamp_diode<S: StampSink>(
     let gd = gd_raw.max(ctx.opts.gmin);
     // Newton equivalent current: ieq = id - gd*vd.
     let ieq = idc - gd * vd;
-    stamp_cond(sink, ctx.layout, a, k, gd);
-    stamp_current(sink, ctx.layout, a, k, ieq);
+    stamp_cond_idx(sink, a_eff, k_i, gd);
+    stamp_current_idx(sink, a_eff, k_i, ieq);
 
     // Charge storage (dev-plan 04 §3.1): junction (depletion) + diffusion
     // capacitance as a CHARGE-BASED companion in parallel with the DC
@@ -1741,8 +1754,8 @@ fn stamp_diode<S: StampSink>(
     };
     let geq = ctx.coeffs.g * c;
     let ieq_q = (ctx.coeffs.g * q - ieq_hist) - geq * vd;
-    stamp_cond(sink, ctx.layout, a, k, geq);
-    stamp_current(sink, ctx.layout, a, k, ieq_q);
+    stamp_cond_idx(sink, a_eff, k_i, geq);
+    stamp_current_idx(sink, a_eff, k_i, ieq_q);
 }
 
 fn stamp_bjt<S: StampSink>(
@@ -2738,6 +2751,31 @@ fn stamp_comparator<S: StampSink>(
 // --- low-level stamp helpers ------------------------------------------------
 
 #[inline]
+/// [`stamp_cond`] against already-resolved unknown indices, so a device whose
+/// intrinsic sits on an internal node can stamp there.
+fn stamp_cond_idx<S: StampSink>(sink: &mut S, a: Option<usize>, b: Option<usize>, g: f64) {
+    if let Some(ai) = a {
+        sink.g(ai, ai, g);
+    }
+    if let Some(bi) = b {
+        sink.g(bi, bi, g);
+    }
+    if let (Some(ai), Some(bi)) = (a, b) {
+        sink.g(ai, bi, -g);
+        sink.g(bi, ai, -g);
+    }
+}
+
+/// [`stamp_current`] against already-resolved unknown indices.
+fn stamp_current_idx<S: StampSink>(sink: &mut S, a: Option<usize>, b: Option<usize>, i: f64) {
+    if let Some(ai) = a {
+        sink.i(ai, -i);
+    }
+    if let Some(bi) = b {
+        sink.i(bi, i);
+    }
+}
+
 fn add_pair<S: StampSink>(sink: &mut S, a: Option<usize>, b: Option<usize>, gval: f64) {
     if let Some(a) = a {
         sink.g(a, a, gval);
@@ -2790,11 +2828,7 @@ fn inject<S: StampSink>(sink: &mut S, node: Option<usize>, val: f64) {
 
 // Junction-voltage memory for limiting is carried on the context via the
 // previous Newton iterate; these helpers read it back.
-impl StampCtx<'_> {
-    fn last_vd(&self, a: NodeId, k: NodeId) -> f64 {
-        self.v_prev(a) - self.v_prev(k)
-    }
-}
+impl StampCtx<'_> {}
 
 #[cfg(test)]
 mod diode_physics_tests {
@@ -2980,13 +3014,17 @@ mod diode_physics_tests {
         assert_eq!(r_on0.to_bits(), r_off0.to_bits());
     }
 
-    /// §3.4 contract: the one toggle the stamps still cannot honor (diode RS,
-    /// deliberately deferred, see `effect_log::DIODE_SERIES_R`) LOGS ONCE
-    /// instead of silently ignoring the parsed model field. RS is the only
-    /// such field: cje/cjc/tf/tr and rb/re/rc are real stamps (§3.2), asserted
-    /// by the toggle tests below.
+    /// Diode RS is a real stamp: the junction moves onto an intrinsic anode and
+    /// `rs` bridges it to the external one. Every model field the parser accepts
+    /// now reaches the matrix.
+    ///
+    /// Two things have to hold together. The layout must allocate the intrinsic
+    /// node, and `reserve_pattern` must reserve it, because a coordinate outside
+    /// the sparsity pattern is silently discarded: an allocated-but-unreserved
+    /// node leaves the junction stamped nowhere and the diode stops conducting
+    /// at all.
     #[test]
-    fn dishonored_effects_log_once() {
+    fn diode_series_resistance_is_stamped() {
         let mut c = Circuit::new();
         let a = c.node("a");
         c.add(Device::Diode {
@@ -3001,7 +3039,8 @@ mod diode_physics_tests {
         let layout = Layout::new(&c);
         let mut m = SparseMatrix::new(layout.size);
         reserve_pattern(&c, &layout, &mut m);
-        let x = vec![0.6];
+        // Sized from the layout: the intrinsic anode is an unknown too.
+        let x = vec![0.6; layout.size];
         let state = ReactiveState::new(1);
         let opts = SolverOptions::default();
         let coeffs =
@@ -3027,8 +3066,46 @@ mod diode_physics_tests {
         };
         let mut rhs = vec![0.0; layout.size];
         stamp_all(&ctx, &mut m, &mut rhs);
-        use std::sync::atomic::Ordering;
-        assert!(effect_log::DIODE_SERIES_R.load(Ordering::Relaxed));
+
+        let int = layout
+            .diode_internal(DeviceId(0))
+            .expect("a diode with rs > 0 gets an intrinsic anode");
+        assert_eq!(layout.size, 2, "one external node plus the intrinsic anode");
+        let at = |r: usize, c: usize| {
+            m.row(r)
+                .iter()
+                .find(|(j, _)| *j == c)
+                .map(|(_, v)| *v)
+                .unwrap_or(0.0)
+        };
+        // The ohmic bridge: 1/rs between the external and intrinsic anode.
+        let g_bridge = at(0, int).abs();
+        assert!(
+            (g_bridge - 1.0 / 0.5).abs() < 1e-9,
+            "expected the off-diagonal to carry 1/rs = 2 S, got {g_bridge}"
+        );
+        // And the junction landed on the intrinsic node, not the external one.
+        assert!(
+            at(int, int) > 1.0 / 0.5,
+            "the intrinsic diagonal carries the bridge plus the junction"
+        );
+    }
+
+    /// A diode with no series resistance allocates nothing, so every deck that
+    /// omits RS keeps its node numbering and its numbers exactly.
+    #[test]
+    fn a_diode_without_rs_allocates_no_internal_node() {
+        let mut c = Circuit::new();
+        let a = c.node("a");
+        c.add(Device::Diode {
+            name: "D1".into(),
+            a,
+            k: hauksbee_ir::NodeId::GROUND,
+            model: DiodeModel::default(),
+        });
+        let layout = Layout::new(&c);
+        assert!(layout.diode_internal(DeviceId(0)).is_none());
+        assert_eq!(layout.size, 1, "just the one external node");
     }
 }
 
