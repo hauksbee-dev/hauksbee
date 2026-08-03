@@ -80,6 +80,39 @@ list of what gets looked at; a surface with no entry is a surface nobody
 measures. Add one, with the clicks a user would make to reach it. Never open the
 viewer's 3D tab from the lint: three.js on a GPU-less CI runner wedges the page.
 
+### Scenario QC
+
+```bash
+cargo build --release
+qc/run.sh
+```
+
+Ten simulated engineering sessions, run end to end against the release
+binaries: a first run on an unfamiliar board, a rail that sags and then does
+not, a part swap, scaffolding a repo's gate and then desyncing it, two firmware
+images with opposite verdicts, five kinds of wrong spec, an analysis refused
+rather than faked, the JSON and JUnit exports, six unusable input files, and a
+waiver from creation to expiry.
+
+These check the thing no unit test looks at: what a person experiences. The
+wording of a verdict, the exit code a pipeline branches on, whether a diagnosis
+names the value it measured, whether an error message leaves you somewhere you
+can act from. Each of those can be individually correct while the session as a
+whole is unusable.
+
+Each scenario is a directory under `qc/scenarios/` holding a `scenario.toml`
+(persona, goal, success criteria, and the steps with their assertions) and an
+`EXPECT.md` saying what the session should feel like and why each assertion is
+the one it is. `qc/run.sh --scenario 04` runs one, `--list` shows what exists,
+and every run writes a full transcript to `qc/results/<timestamp>/report.md`.
+CI runs the suite in the `scenario-qc` job.
+
+**A change to user-facing behaviour updates the scenarios in the same PR.** New
+wording, a new exit code, a renamed section heading, a message that grew a
+sentence: pin the new behaviour, in the commit that changes it. Never loosen an
+assertion to turn a red run green. That is not a passing suite, it is a suite
+that has stopped checking, and it fails silently forever after.
+
 ### The board corpus
 
 hauksbee's central claim is that its checks produce zero false positives across

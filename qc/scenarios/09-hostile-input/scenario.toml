@@ -1,0 +1,113 @@
+title = "Hostile input"
+persona = "Anyone who dragged the wrong file onto the tool, or a half-written one."
+goal = """
+Hand the tool five things that are not a usable board and get five human error
+messages, each naming the file and saying what is wrong with it. Never a panic,
+never a backtrace, never a truncated sentence.
+"""
+success = """
+Every case exits non-zero with a message that names the file and the problem. A
+missing file gets a runnable example to try instead. A truncated file gets a line
+and byte offset. Nothing prints a Rust panic, a backtrace, a doubled article, or a
+sentence ending mid-clause.
+"""
+
+[[step]]
+name = "a file with nothing in it"
+do = "write"
+file = "empty.kicad_pcb"
+text = ""
+
+[[step]]
+name = "an empty board is named and explained"
+do = "run"
+cmd = ["{bin}/hauksbee", "run", "empty.kicad_pcb", "--check"]
+exit = [1, 2]
+max_seconds = 30
+contains = ["empty.kicad_pcb", "this file is empty"]
+not_matches = ["panicked at", "RUST_BACKTRACE", "\\bunwrap\\b", "\\ba a\\b", "\\bthe the\\b"]
+
+[[step]]
+name = "half a board file"
+do = "copy"
+src = "crates/hauksbee-ci/examples/boards/watchy.kicad_pcb"
+dst = "truncated.kicad_pcb"
+
+[[step]]
+name = "cut it off mid-structure"
+do = "truncate"
+file = "truncated.kicad_pcb"
+bytes = 400
+
+[[step]]
+name = "the parse error carries a line and a byte offset"
+do = "run"
+cmd = ["{bin}/hauksbee", "run", "truncated.kicad_pcb", "--check"]
+exit = [1, 2]
+max_seconds = 30
+contains = ["truncated.kicad_pcb", "unclosed list"]
+matches = ["parse error at line [0-9]+ \\(byte [0-9]+\\)"]
+not_matches = ["panicked at", "RUST_BACKTRACE", "\\ba a\\b"]
+
+[[step]]
+name = "a path that does not exist"
+do = "run"
+cmd = ["{bin}/hauksbee", "run", "does-not-exist.kicad_pcb", "--check"]
+exit = [1, 2]
+max_seconds = 30
+contains = [
+  "does-not-exist.kicad_pcb",
+  "Check the path",
+  # A dead end is not an error message: it has to offer something runnable.
+  "try a bundled example",
+  "hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report",
+]
+not_matches = ["panicked at", "RUST_BACKTRACE"]
+
+[[step]]
+name = "a text file that is not a board at all"
+do = "write"
+file = "notes.kicad_pcb"
+text = """
+Remember to ask the fab about the stackup before ordering.
+Also: R14 might want to be a 1% part.
+"""
+
+[[step]]
+name = "prose in a .kicad_pcb is refused, not half-parsed"
+do = "run"
+cmd = ["{bin}/hauksbee", "run", "notes.kicad_pcb", "--check"]
+exit = [1, 2]
+max_seconds = 30
+contains = ["notes.kicad_pcb"]
+not_matches = ["panicked at", "RUST_BACKTRACE", "\\bunwrap\\b"]
+
+[[step]]
+name = "a directory where a board should be"
+do = "write"
+file = "adir/placeholder"
+text = "x"
+
+[[step]]
+name = "a directory is refused with its own message, not a read error"
+do = "run"
+cmd = ["{bin}/hauksbee", "run", "adir", "--check"]
+exit = [1, 2]
+max_seconds = 30
+contains = ["adir"]
+not_matches = ["panicked at", "RUST_BACKTRACE", "Os \\{ code"]
+
+[[step]]
+name = "a real board renamed to an unknown extension still works, by sniffing"
+do = "copy"
+src = "crates/hauksbee-ci/examples/boards/blinky.kicad_pcb"
+dst = "board.txt"
+
+[[step]]
+name = "the extension is a hint, not a gate"
+do = "run"
+cmd = ["{bin}/hauksbee", "run", "board.txt", "--report"]
+exit = 0
+max_seconds = 30
+contains = ["bind summary:"]
+not_matches = ["panicked at", "RUST_BACKTRACE"]

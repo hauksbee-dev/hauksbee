@@ -1,0 +1,166 @@
+title = "Why does the rail sag?"
+persona = "A firmware engineer whose board browns out when the radio transmits."
+goal = """
+Express "does the 5 V rail hold through a burst" as a spec, watch it go red,
+read the report to find out why, change one thing, and watch it go green.
+"""
+success = """
+The failing report names the bound it checked, the value it actually observed,
+and a why line that reads as a diagnosis rather than a restatement. Swapping the
+port for one that can supply the burst turns the same spec green with no other
+edit, and the observed value moves in the direction the diagnosis predicted.
+"""
+
+[[step]]
+name = "take a board and a spec into a working directory"
+do = "copy"
+src = "crates/hauksbee-ci/examples/boards/blinky.kicad_pcb"
+dst = "blinky.kicad_pcb"
+
+[[step]]
+name = "author the rail window: 5 V must not dip below 4.85 V through the burst"
+do = "write"
+file = "rail.toml"
+text = """
+name = "does the 5V rail hold through the radio burst"
+board = "blinky.kicad_pcb"
+duration_ms = 60
+
+# A 0.5 A USB port: the source impedance is the port's, not a stiff bench rail.
+[[supply]]
+net = "+5V"
+kind = "usb"
+usb = "5v0.5a"
+
+# 20 mA idle, then a 490 mA burst for 10 ms every 100 ms: a radio transmit.
+[[profile]]
+id = "radio_burst"
+[[profile.segment]]
+level_a = 0.02
+rise_s = 0.001
+duration_s = 0.0
+[[profile.segment]]
+level_a = 0.49
+rise_s = 0.0005
+duration_s = 0.010
+period_s = 0.100
+idle_a = 0.02
+
+[[scenario]]
+id = "burst"
+part = "U1"
+profile = "radio_burst"
+supply_net = "+5V"
+start_ms = 1.0
+
+[[assert]]
+kind = "rail_window"
+scenario = "burst"
+net = "+5V"
+min = 4.85
+"""
+
+[[step]]
+name = "run it: the rail does not hold"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "rail.toml"]
+exit = 1
+max_seconds = 30
+contains = [
+  "[FAIL]",
+  "RED",
+  # The bound it checked, the value it saw, and the gap between them.
+  "+5V window: min >= 4.85 V [burst]",
+  "min=4.755V < required 4.85V",
+  "FAILED HERE",
+  "why: +5V sagged to 4.755 V in the window, 0.095 V below your 4.85 V floor",
+]
+matches = ["^0/1 assertions passed in [0-9.]+s - RED$"]
+# A diagnosis, not a stack trace.
+not_matches = ["panicked at", "unwrap\\(\\)", "\\ba a\\b"]
+
+[[step]]
+name = "the fix: a port that can actually supply the burst"
+do = "patch"
+file = "rail.toml"
+find = "usb = \"5v0.5a\""
+replace = "usb = \"5v1.5a\""
+
+[[step]]
+name = "same spec, same board, same assertion: green"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "rail.toml"]
+exit = 0
+max_seconds = 30
+contains = [
+  "[PASS]",
+  "GREEN",
+  # The rail now sits above the floor, and the number moved the way the
+  # diagnosis said it would.
+  "min=4.918V (>= 4.85V)",
+]
+matches = ["^1/1 assertions passed in [0-9.]+s - GREEN$"]
+not_contains = ["[FAIL]", "RED"]
+
+# The same question, asked past the port's rating: a 600 mA burst on a 500 mA
+# port. A brownout is the honest answer and a red is expected. What must never
+# appear is a NEGATIVE steady-state voltage on a positive rail, because this
+# board has no protection to latch and no ESL in the path, so there is nothing
+# that could physically drive one. (A negative excursion IS physical after a
+# protection cutoff latches while inductive current is still flowing, which is
+# what docs/checks/TRANSIENTS.md records for the battery-side Inkplate case.
+# That case has a mechanism; this one does not, so do not loosen this assertion
+# by pointing at that table.)
+[[step]]
+name = "over the port's rating: a brownout, but a physical one"
+do = "write"
+file = "overdraw.toml"
+text = """
+name = "the burst is bigger than the port"
+board = "blinky.kicad_pcb"
+duration_ms = 60
+
+[[supply]]
+net = "+5V"
+kind = "usb"
+usb = "5v0.5a"
+
+[[profile]]
+id = "radio_burst"
+[[profile.segment]]
+level_a = 0.02
+rise_s = 0.001
+duration_s = 0.0
+[[profile.segment]]
+level_a = 0.6
+rise_s = 0.0005
+duration_s = 0.010
+period_s = 0.100
+idle_a = 0.02
+
+[[scenario]]
+id = "burst"
+part = "U1"
+profile = "radio_burst"
+supply_net = "+5V"
+start_ms = 1.0
+
+[[assert]]
+kind = "rail_window"
+scenario = "burst"
+net = "+5V"
+min = 4.85
+"""
+
+[[step]]
+name = "a positive rail is never reported below zero"
+do = "run"
+cmd = ["{bin}/hauksbee-ci", "run", "overdraw.toml"]
+exit = 1
+max_seconds = 30
+contains = ["[FAIL]", "RED"]
+not_matches = [
+  "min=-[0-9]",
+  "sagged to -[0-9]",
+  "max=-[0-9]",
+]

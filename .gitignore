@@ -70,3 +70,9 @@ board-corpus/
 
 # The landing site is a separate repository (personal asset, not part of the project)
 site/
+
+# Scenario QC (qc/): the binaries it runs are copied out of target/ so a
+# concurrent rebuild cannot swap them mid-suite, and every run writes a
+# timestamped transcript directory. Both are regenerated, never reviewed.
+qc/.bin-cache/
+qc/results/
