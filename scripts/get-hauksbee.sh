@@ -2,7 +2,8 @@
 # get-hauksbee.sh - download and install prebuilt hauksbee + hauksbee-ci binaries.
 #
 # Detects OS/arch, fetches the latest GitHub Release asset (or a pinned version),
-# verifies the sha256 checksum, and extracts the two binaries to ~/.local/bin.
+# verifies the sha256 checksum, and installs hauksbee, hauksbee-ci and (when the
+# release carries it) hauksbee-mcp to ~/.local/bin.
 # Safe to re-run: an existing install is only overwritten once the checksum
 # of the new download is verified.
 #
@@ -47,6 +48,47 @@ PREFIX="${HOME}/.local"
 # "-permissive" = the GPL-free download (no avr, Apache-2.0 binary).
 SHAPE_SUFFIX=""
 
+# Usage text lives in this heredoc, not in a sed over the script file: under
+# `curl | bash` there is no script file on disk and BASH_SOURCE is unset, so
+# reading the file would crash --help in exactly the mode the README documents.
+usage() {
+  cat <<'USAGE'
+get-hauksbee.sh - download and install prebuilt hauksbee binaries.
+
+Detects OS/arch, fetches the latest GitHub Release asset (or a pinned
+version), verifies the sha256 checksum, and installs hauksbee, hauksbee-ci
+and (when the release carries it) hauksbee-mcp to ~/.local/bin. Safe to
+re-run: an existing install is only overwritten once the checksum of the new
+download is verified.
+
+Usage:
+  curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
+  With flags through the pipe:
+    curl -fsSL .../get-hauksbee.sh | bash -s -- --permissive
+  Or run locally:
+    bash scripts/get-hauksbee.sh [--version v0.1.0] [--prefix ~/.local] [--permissive]
+
+Options:
+  --version TAG   Install a specific release tag (default: latest).
+  --prefix DIR    Install binaries to DIR/bin (default: ~/.local).
+  --permissive    Install the GPL-free build instead of the default one.
+  --help          Show this help.
+
+Which build you get:
+  Default: the full build, AVR / ATmega co-simulation included. It statically
+  links libsimavr, so THE BINARY is GPL-3.0 (hauksbee's source stays
+  Apache-2.0). GPL-3.0 constrains redistributing the binary, not running it.
+  --permissive: the same tool without the avr backend, so no GPL code is
+  linked and the binary is Apache-2.0. Take it if you redistribute or embed
+  hauksbee. It cannot do AVR co-sim; Renode and Espressif QEMU still work.
+  Either way, LICENSE-BINARY.txt inside the tarball spells out the terms.
+
+Environment:
+  GITHUB_TOKEN    Optional. Set to avoid GitHub API rate limits (60 req/hr
+                  unauthed vs 5000 authed).
+USAGE
+}
+
 # ---------------------------------------------------------------------------
 # Argument parsing
 # ---------------------------------------------------------------------------
@@ -73,7 +115,7 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     -h|--help)
-      sed -n '2,/^set -euo/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//; $d'
+      usage
       exit 0
       ;;
     *)
@@ -91,6 +133,14 @@ ARCH="$(uname -m)"
 
 case "${OS}" in
   Linux)
+    # The prebuilt Linux binaries are glibc builds. On musl systems (Alpine
+    # and friends) they fail at load time with a misleading "not found" for
+    # the binary itself, so refuse up front and point at the source build.
+    if { ldd --version 2>&1 | grep -qi musl; } || ls /lib/ld-musl-* >/dev/null 2>&1; then
+      echo "This system uses musl libc; the prebuilt binaries are glibc-linked and will not run." >&2
+      echo "Build from source instead: https://github.com/${REPO}#quickstart" >&2
+      exit 1
+    fi
     # The release matrix (release.yml) builds all four promised targets natively:
     # linux-x86_64, linux-aarch64, darwin-arm64, darwin-x86_64.
     case "${ARCH}" in
@@ -104,6 +154,14 @@ case "${OS}" in
     esac
     ;;
   Darwin)
+    # A shell running under Rosetta 2 reports x86_64 from `uname -m` even on
+    # Apple Silicon. Installing the Intel build there works but runs
+    # translated forever; detect the translation and take the native arm64
+    # asset instead.
+    if [ "${ARCH}" = "x86_64" ] && [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)" = "1" ]; then
+      echo "Rosetta 2 detected (this shell is x86_64-translated on Apple Silicon); installing the native arm64 build."
+      ARCH="arm64"
+    fi
     case "${ARCH}" in
       arm64)   ASSET_SUFFIX="darwin-arm64" ;;
       x86_64)  ASSET_SUFFIX="darwin-x86_64" ;;
@@ -126,31 +184,36 @@ echo "Detected platform: ${OS}/${ARCH} -> asset suffix: ${ASSET_SUFFIX}"
 # ---------------------------------------------------------------------------
 # Resolve the release tag (latest or pinned)
 # ---------------------------------------------------------------------------
+# Prints the latest tag on stdout; returns non-zero on any failure. Every
+# command inside is guarded so a network error surfaces as this function's
+# return status rather than `set -e` killing the whole script before the
+# caller can print its guidance.
 resolve_latest_tag() {
   local url="${API_BASE}/releases/latest"
-  local auth_header=""
+  local response tag
+
   if [ -n "${GITHUB_TOKEN:-}" ]; then
-    auth_header="Authorization: Bearer ${GITHUB_TOKEN}"
-  fi
-
-  local response
-  if [ -n "${auth_header}" ]; then
-    response="$(curl -fsSL -H "${auth_header}" "${url}")"
+    response="$(curl -fsSL -H "Authorization: Bearer ${GITHUB_TOKEN}" "${url}" 2>/dev/null)" || return 1
   else
-    response="$(curl -fsSL "${url}")"
+    response="$(curl -fsSL "${url}" 2>/dev/null)" || return 1
   fi
 
-  # Extract the tag_name field. Use grep + sed rather than jq (may not be installed).
-  printf '%s' "${response}" | grep '"tag_name"' | head -1 \
-    | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/'
+  # Extract the tag_name field. Use grep + sed rather than jq (may not be
+  # installed); `|| true` keeps a no-match from aborting under pipefail, and
+  # the emptiness check below is the real verdict.
+  tag="$(printf '%s' "${response}" | { grep '"tag_name"' || true; } | head -1 \
+    | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
+  [ -n "${tag}" ] || return 1
+  printf '%s\n' "${tag}"
 }
 
 if [ -z "${VERSION}" ]; then
   echo "Fetching latest release tag..."
-  VERSION="$(resolve_latest_tag)"
-  if [ -z "${VERSION}" ]; then
-    echo "Could not determine the latest release tag from GitHub API." >&2
-    echo "Pass --version vX.Y.Z explicitly, or check https://github.com/${REPO}/releases" >&2
+  if ! VERSION="$(resolve_latest_tag)" || [ -z "${VERSION}" ]; then
+    echo "Could not determine the latest release tag from the GitHub API." >&2
+    echo "Check your network connection and https://www.githubstatus.com," >&2
+    echo "or pass --version vX.Y.Z explicitly (releases are listed at" >&2
+    echo "https://github.com/${REPO}/releases)." >&2
     exit 1
   fi
 fi
@@ -172,17 +235,34 @@ CHECKSUM_URL="${RELEASES_BASE}/${VERSION}/${CHECKSUM_NAME}"
 # ---------------------------------------------------------------------------
 # Download to a temp directory; verify; then install
 # ---------------------------------------------------------------------------
-TMPDIR_WORK="$(mktemp -d "${TMPDIR:-/tmp}/get-hauksbee.XXXXXX")"
+# Strip any trailing slash from TMPDIR first: mktemp would otherwise build a
+# doubled-slash template (e.g. /var/tmp//get-hauksbee.XXXXXX).
+TMPDIR_BASE="${TMPDIR:-/tmp}"
+TMPDIR_BASE="${TMPDIR_BASE%/}"
+TMPDIR_WORK="$(mktemp -d "${TMPDIR_BASE}/get-hauksbee.XXXXXX")"
 trap 'rm -rf "${TMPDIR_WORK}"' EXIT
 
 TARBALL_PATH="${TMPDIR_WORK}/${TARBALL_NAME}"
 CHECKSUM_PATH="${TMPDIR_WORK}/${CHECKSUM_NAME}"
 
+# download_asset URL DEST WHAT: a curl wrapper that names the failing URL and
+# what to check, instead of dying with a bare non-zero under `set -e`.
+download_asset() {
+  local url="$1" dest="$2" what="$3"
+  if ! curl -fsSL --retry 3 --retry-delay 2 -o "${dest}" "${url}"; then
+    echo "Failed to download ${what}:" >&2
+    echo "  ${url}" >&2
+    echo "Check your network connection, and that the release ${VERSION} exists" >&2
+    echo "with a ${ASSET_SUFFIX}${SHAPE_SUFFIX} asset: https://github.com/${REPO}/releases" >&2
+    exit 1
+  fi
+}
+
 echo "Downloading ${TARBALL_NAME}..."
-curl -fsSL --retry 3 --retry-delay 2 -o "${TARBALL_PATH}" "${TARBALL_URL}"
+download_asset "${TARBALL_URL}" "${TARBALL_PATH}" "the release tarball"
 
 echo "Downloading checksum..."
-curl -fsSL --retry 3 --retry-delay 2 -o "${CHECKSUM_PATH}" "${CHECKSUM_URL}"
+download_asset "${CHECKSUM_URL}" "${CHECKSUM_PATH}" "the sha256 checksum"
 
 # ---------------------------------------------------------------------------
 # Verify sha256 checksum
@@ -220,19 +300,50 @@ if [ ! -x "${BIN_DIR}/hauksbee" ] || [ ! -x "${BIN_DIR}/hauksbee-ci" ]; then
   exit 1
 fi
 
+# hauksbee-mcp ships in current bundles; older releases lack it. Install it
+# when present, and say nothing scary when it is not.
+BINARIES="hauksbee hauksbee-ci"
+if [ -x "${BIN_DIR}/hauksbee-mcp" ]; then
+  BINARIES="${BINARIES} hauksbee-mcp"
+fi
+
 # ---------------------------------------------------------------------------
 # Install to PREFIX/bin
 # ---------------------------------------------------------------------------
 INSTALL_DIR="${PREFIX}/bin"
 mkdir -p "${INSTALL_DIR}"
 
-install -m 0755 "${BIN_DIR}/hauksbee"    "${INSTALL_DIR}/hauksbee"
-install -m 0755 "${BIN_DIR}/hauksbee-ci" "${INSTALL_DIR}/hauksbee-ci"
+# Two phases so the install is all-or-nothing: stage every binary under a
+# temp name INSIDE the final directory first (same filesystem, so the later
+# mv is an atomic rename), then rename them into place. A failure mid-way
+# through staging leaves the existing install untouched; it can never leave a
+# mixed old/new pair.
+STAGED=""
+cleanup_staged() {
+  for _s in ${STAGED}; do rm -f "${_s}"; done
+}
+for b in ${BINARIES}; do
+  staged="${INSTALL_DIR}/.${b}.new.$$"
+  if ! install -m 0755 "${BIN_DIR}/${b}" "${staged}"; then
+    echo "Failed to stage ${b} into ${INSTALL_DIR}; existing install left untouched." >&2
+    cleanup_staged
+    exit 1
+  fi
+  STAGED="${STAGED} ${staged}"
+done
+for b in ${BINARIES}; do
+  if ! mv -f "${INSTALL_DIR}/.${b}.new.$$" "${INSTALL_DIR}/${b}"; then
+    echo "Failed to move ${b} into place in ${INSTALL_DIR}." >&2
+    cleanup_staged
+    exit 1
+  fi
+done
 
 echo ""
 echo "Installed:"
-echo "  ${INSTALL_DIR}/hauksbee"
-echo "  ${INSTALL_DIR}/hauksbee-ci"
+for b in ${BINARIES}; do
+  echo "  ${INSTALL_DIR}/${b}"
+done
 
 # ---------------------------------------------------------------------------
 # PATH hint
@@ -258,20 +369,39 @@ esac
 if [ "${OS}" = "Darwin" ]; then
   echo ""
   echo "macOS Gatekeeper note:"
-  echo "  The binaries are not notarized. If macOS blocks them on first run,"
-  echo "  remove the quarantine attribute:"
+  echo "  Release binaries are signed with a Developer ID identity and, from"
+  echo "  launch onward, notarized, so macOS runs them without complaint. If a"
+  echo "  pre-release or dev bundle is blocked on first run, remove the"
+  echo "  quarantine attribute:"
   echo ""
-  echo "    xattr -d com.apple.quarantine \"${INSTALL_DIR}/hauksbee\""
-  echo "    xattr -d com.apple.quarantine \"${INSTALL_DIR}/hauksbee-ci\""
-  echo ""
-  echo "  Or, to clear both at once:"
-  echo "    xattr -d com.apple.quarantine \"${INSTALL_DIR}/hauksbee\" \"${INSTALL_DIR}/hauksbee-ci\""
+  for b in ${BINARIES}; do
+    echo "    xattr -d com.apple.quarantine \"${INSTALL_DIR}/${b}\""
+  done
 fi
 
 if [ -n "${SHAPE_SUFFIX}" ]; then
   LICENCE_LINE="Apache-2.0 binary (permissive build: no avr backend, no libsimavr, no GPL code)."
 else
   LICENCE_LINE="GPL-3.0 binary (includes the avr backend, which links GPL-3.0 libsimavr); hauksbee's source is Apache-2.0."
+fi
+
+# ---------------------------------------------------------------------------
+# Post-install smoke test: an installed binary that cannot start is a failed
+# install, not a success. The default (avr) shape links libelf dynamically,
+# and minimal Linux images do not ship it.
+# ---------------------------------------------------------------------------
+if ! "${INSTALL_DIR}/hauksbee" --version >/dev/null 2>&1; then
+  echo "" >&2
+  echo "ERROR: installed, but ${INSTALL_DIR}/hauksbee cannot start on this system." >&2
+  "${INSTALL_DIR}/hauksbee" --version 2>&1 | head -2 | sed 's/^/  /' >&2 || true
+  if "${INSTALL_DIR}/hauksbee" --version 2>&1 | grep -q 'libelf'; then
+    echo "  The default download needs the system libelf runtime:" >&2
+    echo "    Debian/Ubuntu:  apt-get install libelf1" >&2
+    echo "    Fedora/RHEL:    dnf install elfutils-libelf" >&2
+    echo "  Or take the Apache-2.0 build, which has no such dependency:" >&2
+    echo "    re-run this installer with:  --permissive" >&2
+  fi
+  exit 1
 fi
 
 echo ""

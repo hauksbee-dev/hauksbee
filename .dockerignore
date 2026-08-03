@@ -1,0 +1,13 @@
+# Keep the docker build context lean and free of build products and private
+# working data when this repo itself is used as the context. (The CI workflow
+# builds from a parent directory and writes its own context-root
+# .dockerignore; see .github/workflows/docker.yml.)
+target/
+**/target/
+node_modules/
+**/node_modules/
+frontend/dist/
+dist/
+board-corpus/
+logs/
+scratchpad/

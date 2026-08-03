@@ -103,6 +103,64 @@ jobs:
       # docs, so this builds them.
       - run: cargo doc --workspace --no-deps
 
+  docs-currency:
+    name: docs currency (no dead links, gravestones, or stale paths in shipped docs)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Shipped docs must describe the present tense of the tree: every relative
+      # link resolves, no gravestone or review-process language, no references
+      # into internal-only paths, no em-dashes, no stale backticked repo paths.
+      - run: python3 scripts/lint-docs-currency.py
+
+  frontend-visual-lint:
+    name: frontend visual lint (overflow + fit, five viewports)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      # A layout defect is invisible to every other job here: tsc and eslint are
+      # happy with a button hanging off its card, and cargo test never renders
+      # anything. This measures the real thing in a real browser at five
+      # viewports (360, 768, 1440, plus 320 and 1920x600 as the stress ratios):
+      # page-level horizontal scroll, children escaping their container, clipped
+      # single-line text, broken or stretched images, and sticky chrome sitting
+      # on top of a control.
+      - name: install frontend deps
+        working-directory: frontend
+        run: bun install --frozen-lockfile
+      - name: chromium for playwright
+        working-directory: frontend
+        run: bunx playwright install --with-deps chromium
+      - name: build the frontend
+        working-directory: frontend
+        run: bun run build
+      # The site is a separate build and is linted tolerantly: if this step
+      # fails or is skipped the app's lint still runs, and the lint reports the
+      # site as skipped rather than failing on it.
+      - name: build the site (optional)
+        continue-on-error: true
+        working-directory: site
+        run: bun install --frozen-lockfile && bun run build
+      # No engine build in this job. The lint serves frontend/dist with
+      # tests/visual-lint/fixture-server.ts, which replays real `hauksbee serve`
+      # responses from tests/visual-lint/fixtures/ (re-record them with
+      # capture-fixtures.ts). Building the Rust workspace for one report would
+      # make a three-minute job a twenty-minute one.
+      #
+      # No 3D view anywhere in the lint: three.js on a GPU-less runner wedges
+      # the page, so no surface opens the viewer's 3D tab.
+      - name: visual lint
+        working-directory: frontend
+        run: bun run visual-lint
+      - name: screenshots of the violating states
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-lint-screenshots
+          path: frontend/test-results/visual-lint
+          if-no-files-found: ignore
+
   gpl-free-check:
     name: cargo check (GPL-free renode+qemu shape)
     runs-on: ubuntu-latest

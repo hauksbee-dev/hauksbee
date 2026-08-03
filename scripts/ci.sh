@@ -48,14 +48,24 @@ done
 
 [ "${#SPECS[@]}" -gt 0 ] || die "no spec given. Usage: scripts/ci.sh SPEC [SPEC ...] (try --help)"
 
-# Locate hauksbee-ci: explicit env, then PATH, then a local release build.
+# Locate hauksbee-ci: explicit env, then the checkout's release build, then
+# PATH. The checkout build wins because it is the one this working tree just
+# produced; an installed copy on PATH can lag behind it by weeks. When both
+# exist and differ, say which one runs and where the other lives.
 find_bin() {
   if [ -n "${HAUKSBEE_CI_BIN:-}" ] && [ -x "${HAUKSBEE_CI_BIN}" ]; then
     printf '%s\n' "$HAUKSBEE_CI_BIN"; return 0
   fi
-  if have hauksbee-ci; then command -v hauksbee-ci; return 0; fi
-  local local_bin; local_bin="$(hauksbee_target_bin)/hauksbee-ci"
-  [ -x "$local_bin" ] && { printf '%s\n' "$local_bin"; return 0; }
+  local local_bin path_bin
+  local_bin="$(hauksbee_target_bin)/hauksbee-ci"
+  path_bin="$(command -v hauksbee-ci 2>/dev/null || true)"
+  if [ -x "$local_bin" ]; then
+    if [ -n "$path_bin" ] && ! cmp -s "$local_bin" "$path_bin"; then
+      warn "using the checkout build $local_bin; the installed $path_bin differs (re-run scripts/install.sh to refresh it)."
+    fi
+    printf '%s\n' "$local_bin"; return 0
+  fi
+  if [ -n "$path_bin" ]; then printf '%s\n' "$path_bin"; return 0; fi
   return 1
 }
 
@@ -83,7 +93,9 @@ for spec in "${SPECS[@]}"; do
   junit="$JUNIT_DIR/$base.xml"
   log "Running spec: $spec"
   set +e
-  "$BIN" run "$spec" --junit "$junit" "${QUIET_ARG[@]}"
+  # `${arr[@]+...}` guards empty-array expansion under `set -u` on bash 3.2
+  # (the macOS default), where a bare `"${arr[@]}"` on an empty array errors.
+  "$BIN" run "$spec" --junit "$junit" ${QUIET_ARG[@]+"${QUIET_ARG[@]}"}
   code=$?
   set -e
   if [ "$code" -eq 0 ]; then
