@@ -7,6 +7,14 @@
 
 name: hardware-ci
 
+# contents: read checks out the repo; checks: write lets the action publish
+# the JUnit results to the Checks tab. On a pull request from a FORK the token
+# is read-only regardless, so pass publish-report: false there and publish
+# from a separate workflow_run workflow (see the README).
+permissions:
+  contents: read
+  checks: write
+
 on:
   push:
     paths:
@@ -31,17 +39,19 @@ jobs:
       # - name: Build firmware
       #   run: make -C firmware
 
-      # 3. Run the hardware check. The action builds hauksbee-ci, runs your
-      #    spec, writes JUnit XML, and emits inline annotations.
+      # 3. Run the hardware check. The action fetches hauksbee-ci, runs your
+      #    spec, writes JUnit XML, and emits inline annotations. Pin the
+      #    action to a released tag (or a full commit SHA, stricter still),
+      #    not @main.
       - name: hauksbee-ci power-up check
-        uses: hauksbee-dev/hauksbee/integrations/github-action@main
+        uses: hauksbee-dev/hauksbee/integrations/github-action@v0.1.0
         with:
           spec: ci/power-up.toml
           junit: hauksbee-ci-results.xml
-          hauksbee-ref: main
 
   # A matrix is the natural way to run several specs (power-up, blink,
-  # brown-out across supplies) in parallel.
+  # brown-out across supplies) in parallel. To run them all in ONE job with
+  # one merged JUnit file instead, pass `specs: ci/*.toml`.
   checks:
     runs-on: ubuntu-latest
     strategy:
@@ -53,7 +63,7 @@ jobs:
           - ci/brownout.toml
     steps:
       - uses: actions/checkout@v4
-      - uses: hauksbee-dev/hauksbee/integrations/github-action@main
+      - uses: hauksbee-dev/hauksbee/integrations/github-action@v0.1.0
         with:
           spec: ${{ matrix.spec }}
           junit: results-${{ strategy.job-index }}.xml
