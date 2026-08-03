@@ -250,33 +250,94 @@ max_voltage_v = 1000.0     # VRRM 1N4007
 # ─────────────────────────────────────────────────────────────────────────────
 
 [[models]]
-id = "bat54"
+id = "bat43"
 kind = "diode"
-description = "BAT54 / BAT43 Schottky diode, SOT-23 or DO-35"
+description = "BAT43 small-signal Schottky diode, 30 V, 200 mA, DO-35"
 
 [models.match]
-value_re = "(?i)^BAT5[0-9]$|^BAT43$"
+# BAT42 is the same die with a different forward grade, so it gets its own
+# numbers rather than sharing these. The W and LL suffixes are the SOD-123 and
+# MiniMELF packages of the same part.
+value_re = "(?i)^BAT43(W(-V)?)?$|^LL43$"
 
 [models.params]
-# Source: Nexperia BAT54 datasheet Rev. 8 2021, SPICE model
-is  = 2.2e-8
-n   = 1.69
-rs  = 3.0
-cjo = 1.2e-12
-vj  = 0.4
-m   = 0.4
-tt  = 1.0e-11
-bv  = 30.0
+# Source: Vishay BAT42/BAT43 datasheet, document 85660, Rev. 2.2, 12-May-2025.
+# ELECTRICAL CHARACTERISTICS for the forward voltages, ABSOLUTE MAXIMUM RATINGS
+# and THERMAL CHARACTERISTICS for the rest.
+#
+# Fitted, not quoted: the datasheet publishes no SPICE model. `is`, `n` and `rs`
+# are a least-squares fit to the three BAT43 VF rows (330 mV at 2 mA, 450 mV at
+# 15 mA, 1000 mV at 200 mA) and reproduce all three to 0.1 mV. Those are the MAX
+# column, so this is a worst-case part: pessimistic against a typical one, which
+# is the right direction for a checker.
+is  = 1.329e-6
+n   = 1.72
+rs  = 2.35
+cjo = 7.0e-12   # CD typ at VR = 1 V, f = 1 MHz
+vj  = 0.4       # assumed barrier height; the datasheet gives none
+m   = 0.4       # assumed grading coefficient, ditto
+tt  = 1.0e-11   # majority-carrier device; trr max 5 ns
+bv  = 30.0      # V(BR) min at IR = 100 uA
 
 [models.pins]
 "A" = "anode"
 "K" = "cathode"
 
 [models.ratings]
-max_current_a = 0.2
-max_surge_current_a = 0.6
-max_power_w = 0.2
-max_voltage_v = 30.0
+max_current_a = 0.2             # IF, forward continuous current
+max_surge_current_a = 4.0       # IFSM, tp < 10 ms
+max_power_w = 0.2               # Ptot at Tamb = 65 C
+max_voltage_v = 30.0            # VRRM
+max_junction_temp_c = 125.0     # Tj
+theta_ja_c_per_w = 300.0        # RthJA, junction to ambient air
+
+# ──────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "bat54"
+kind = "diode"
+description = "BAT54 Schottky barrier diode, 30 V, 200 mA, SOT23"
+
+[models.match]
+# The plain single diode only. BAT54A, BAT54C and BAT54S are two diodes in one
+# SOT23 with three different internal connections, so they need their own pin
+# maps and must not silently bind here. BAT43 and the BAT4x parts are separate
+# devices with their own forward curves.
+value_re = "(?i)^BAT54(/DG)?$"
+
+[models.params]
+# Source: Nexperia BAT54 datasheet, 1 July 2022, Table 7 "Characteristics".
+#
+# Fitted, not quoted: that datasheet publishes no SPICE model. `is`, `n` and
+# `rs` are a least-squares fit to the whole VF column, five points spanning
+# 0.1 mA to 100 mA (240, 320, 400, 500 and 800 mV), and they reproduce it to
+# 11 mV rms. Those are MAX figures with no typ column, so this models a
+# worst-case part: it will read a little pessimistic against a typical one,
+# which is the right direction for a checker.
+is  = 4.834e-9
+n   = 1.0
+rs  = 3.6
+cjo = 1.0e-11   # Cd max at VR = 1 V, f = 1 MHz, Table 7
+vj  = 0.4       # assumed barrier height; the datasheet gives none
+m   = 0.4       # assumed grading coefficient, ditto
+tt  = 1.0e-11   # majority-carrier device, negligible stored charge; trr max 5 ns
+bv  = 30.0      # VR, Table 5 "Limiting values"
+
+[models.pins]
+# Table 2 "Pinning information": SOT23 with the middle pin unconnected.
+"1" = "anode"
+"2" = "nc"
+"3" = "cathode"
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 0.2             # IF at Tamb = 25 C, Table 5
+max_surge_current_a = 0.6       # IFSM, tp < 10 ms, Table 5
+max_power_w = 0.25              # Ptot at Tamb <= 25 C, Table 5
+max_voltage_v = 30.0            # VR, Table 5
+max_junction_temp_c = 150.0     # Tj, Table 5
+theta_ja_c_per_w = 500.0        # Rth(j-a) in free air, Table 6
 
 # ─────────────────────────────────────────────────────────────────────────────
 # USBLC6-2P6: STMicroelectronics very-low-capacitance ESD protection array.
