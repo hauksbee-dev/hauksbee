@@ -121,9 +121,9 @@ CLI surfaces it: `hauksbee run <board> --drc` prints the table and exits, and
 `ExtractedBoard::drc(text)` is the library entry point, alongside the existing
 `lint()`.
 
-## Eagle `.brd` detection (`hauksbee-extract/src/drc.rs`, `eagle_drc`)
+## Eagle `.brd` detection (`hauksbee-extract/src/drc.rs`, `eagle_drc_from_text`)
 
-The most famous open-hardware boards (Arduino Uno, five Adafruit, two SparkFun)
+The most famous open-hardware boards (Arduino Uno, five Adafruit, four SparkFun)
 are Eagle, not KiCad, so they used to get `n/a` for DRC. The Eagle path closes
 that gap: it reads copper *geometry* per net out of the `.brd` XML and feeds it
 to the same `sweep_buckets` engine the KiCad path uses. There is one detection
@@ -218,17 +218,21 @@ The CLI exposes `--apply-shorts` to bridge every detected short before a run.
 
 ## Performance (measured on board-corpus, release build, warm)
 
-The R-tree sweep plus the zone edge-indexing keeps even very large boards to
-a few seconds. The s-expression parse dominates the wall time on the biggest
-files.
+The R-tree sweep plus the zone edge-indexing keeps even very large boards
+tractable. The s-expression parse dominates the wall time on the biggest files,
+so time tracks file size more closely than primitive count: the largest board
+below takes roughly 10 to 16 s, the corpus's biggest fetchable KiCad file
+(`mnt_reform/reform2-motherboard25`, 16 MB, 398,079 primitives, clean) about
+4.8 s, and a mid-size board like `pic_programmer` about 0.2 s end to end through
+the CLI.
 
-| Board | Size | Copper primitives | Shorts | Clearance | Time |
-|-------|------|-------------------|--------|-----------|------|
-| jetson-agx-thor-baseboard | 85 MB | 573,619 | 0 | 25,226 | ~2.6 s |
-| vme-wren | 69 MB | 988,848 | 0 | 46,154 | ~3.4 s |
-| video | 5.8 MB | 133,415 | 0 | ~34 | ~0.4 s |
-| tinytapeout-demo | 4.5 MB | 85,816 | 0 | 347 | ~0.5 s |
-| pic_programmer | 0.6 MB | 11,087 | 0 | 0 | ~20 ms |
+| Board | Size | Copper primitives | Shorts | Clearance |
+|-------|------|-------------------|--------|-----------|
+| jetson-agx-thor-baseboard | 85 MB | 600,007 | 0 | 25,226 |
+| vme-wren | 69 MB | 1,032,732 | 0 | 46,154 |
+| video | 5.8 MB | 135,031 | 0 | 0 |
+| tinytapeout-demo | 4.5 MB | 86,626 | 0 | 347 |
+| pic_programmer | 0.6 MB | 11,087 | 0 | 0 |
 
 A full sweep of the corpus (54 boards, ~50 parse successfully. One,
 RoyalBlue54L-Feather, is malformed at the s-expression level and rejected
@@ -239,33 +243,32 @@ boards and are expected.
 ### Eagle famous-board sweep (release build, warm, the board's own rule)
 
 All ten famous Eagle boards report **zero true shorts**, each judged against
-its own embedded design-rule clearance. The first eight carry the measured
-copper/clearance/time figures below (observed on a release build, warm). The
-last two were added later as regression guards and are asserted short-clean by
-the corpus test without re-measuring the timings:
+its own embedded design-rule clearance:
 
-| Board | Rule | Copper primitives | Shorts | Clearance | Time |
-|-------|------|-------------------|--------|-----------|------|
-| Arduino Uno R3 (official) | 0.2032 mm | 1,407 | 0 | 0 | ~13 ms |
-| Adafruit Circuit Playground Express | 0.1778 mm | 1,252 | 0 | 1 | ~36 ms |
-| Adafruit Feather M0 Basic | 0.2032 mm | 873 | 0 | 0 | ~7 ms |
-| Adafruit Metro M4 Express | 0.2032 mm | 1,430 | 0 | 0 | ~48 ms |
-| Adafruit QT Py | 0.1524 mm | 637 | 0 | 0 | ~10 ms |
-| Adafruit Trinket M0 | 0.2032 mm | 369 | 0 | 0 | ~12 ms |
-| SparkFun RedBoard | 0.2032 mm | 851 | 0 | 1 | ~32 ms |
-| SparkFun Pro Micro | 0.1016 mm | 868 | 0 | 0 | ~7 ms |
-| SparkFun Thing Plus SAMD51 | 0.127 mm | 906 | 0 | 0 | not measured |
-| SparkFun Thing Plus RP2040 | 0.1016 mm | 1,179 | 0 | 0 | not measured |
+| Board | Rule | Copper primitives | Shorts | Clearance |
+|-------|------|-------------------|--------|-----------|
+| Arduino Uno R3 (official) | 0.2032 mm | 1,403 | 0 | 0 |
+| Adafruit Circuit Playground Express | 0.1778 mm | 1,252 | 0 | 1 |
+| Adafruit Feather M0 Basic | 0.2032 mm | 873 | 0 | 0 |
+| Adafruit Metro M4 Express | 0.2032 mm | 1,424 | 0 | 0 |
+| Adafruit QT Py | 0.1524 mm | 637 | 0 | 0 |
+| Adafruit Trinket M0 | 0.2032 mm | 369 | 0 | 0 |
+| SparkFun RedBoard | 0.2032 mm | 797 | 0 | 0 |
+| SparkFun Pro Micro | 0.1016 mm | 834 | 0 | 0 |
+| SparkFun Thing Plus SAMD51 | 0.127 mm | 906 | 0 | 0 |
+| SparkFun Thing Plus RP2040 | 0.1016 mm | 1,179 | 0 | 0 |
 
-The last two were the round-3 additions: the RP2040 Thing Plus in particular is
-the regression guard for the Eagle mirror-transform fix in `drc.rs` (its MR0
-micro-SD socket J6 used to drop pads ~23 mm onto the V_USB/EN bottom traces and
-report 5 false shorts), so it must stay short-clean.
+The RP2040 Thing Plus is the regression guard for the Eagle mirror transform in
+`drc.rs`: get the mirrored-element handedness wrong and its `MR0` micro-SD socket
+J6 lands ~23 mm off, dropping pads onto the V_USB/EN bottom traces and reporting
+5 false shorts. It must stay short-clean.
 
-The two residual clearance violations (one on Circuit Playground Express, one on
-RedBoard) are genuine sub-rule near-misses on densely-routed copper, not shorts.
-Time is dominated by the XML parse (the Eagle reader streams the file twice: once
-for copper geometry, once for the `contactref` net map).
+The single residual clearance violation, `3.3V` against `N$3` on `F.Cu` of the
+Circuit Playground Express (tightest gap 0.113 mm against that board's 0.1778 mm
+rule), is a genuine sub-rule near-miss on densely-routed copper, not a short.
+Every board here sweeps in a fraction of a second, dominated by the XML parse
+(the Eagle reader streams the file twice: once for copper geometry, once for the
+`contactref` net map).
 
 ### A documented corpus finding
 
@@ -279,21 +282,26 @@ allowlist. The corpus test (`tests/drc_corpus.rs`) documents this.
 
 ## Tests
 
-- `hauksbee-extract/tests/drc.rs`: 11 synthetic fixtures, one per geometry kind
+- `hauksbee-extract/tests/drc.rs`: 26 synthetic fixtures, one per geometry kind
   (segment-segment, segment-pad, pad-pad, via-zone, via-spans-layers) plus
-  clearance-only, cross-layer non-shorts, same-footprint abutment, and the
-  clearance-override classification.
+  clearance-only, cross-layer non-shorts, same-footprint abutment, the
+  clearance-override classification, the at-rule / micron-under-rule /
+  genuinely-sub-rule boundary cases, the per-netclass and diff-pair clearance
+  rules (including `.kicad_pro` assignments and a malformed class), blind and
+  buried via spans on a 4-layer stack, and a mask-only pad carrying no copper.
 - `hauksbee-extract/tests/drc_corpus.rs`: the corpus sweep asserting zero true
   shorts across the parseable boards (skipped gracefully if the corpus is
   absent).
-- `hauksbee-extract/tests/eagle_drc.rs`: 16 synthetic minimal `.brd` fixtures, one
+- `hauksbee-extract/tests/eagle_drc.rs`: 22 synthetic minimal `.brd` fixtures, one
   per Eagle geometry kind (wire-wire short, wire-smd, smd-smd, via-wire,
   via-spans-layers, octagon pad, curved wire) plus the clearance-only, no-rule
   fallback, cross-layer non-short, shared-footprint (jumper) abutment, mirrored
-  package placed on the bottom, via-restring derivation, and the design-rule
-  clearance respected / overridden cases.
+  package placed on the bottom, mirror handedness on offset pads, via-restring
+  derivation, format dispatch, `POPULATE="no"` mapping to DNP, same-named
+  packages in different libraries staying distinct, an element with a missing
+  package, and the design-rule clearance respected / overridden cases.
 - `hauksbee-extract/tests/eagle_drc_corpus.rs`: the famous-Eagle sweep over all
-  eight boards (Arduino Uno, five Adafruit, two SparkFun), asserting zero true
+  ten boards (Arduino Uno, five Adafruit, four SparkFun), asserting zero true
   shorts and recording per-board clearance counts, rule, primitive count and
   timing (skipped gracefully if the corpus is absent).
 - `hauksbee-engine/tests/shorts.rs`: end-to-end, detect a copper short from a

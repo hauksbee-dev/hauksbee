@@ -9,7 +9,7 @@ range:
 | Backend | Chips | Emulator | Install needed? |
 |---------|-------|----------|-----------------|
 | `simavr` | ATmega328P (AVR / Arduino) | libsimavr, linked in-process | **Yes** (source build), `scripts/install-sims.sh --avr` |
-| `renode` | STM32 / nRF52840 / SiFive FE310 (RISC-V) / RP2040 | External headless Renode process | **Yes** |
+| `renode` | STM32 / nRF52840 / SiFive FE310 (RISC-V) / RP2040 (opt-in) | External headless Renode process | **Yes** |
 | `qemu` | ESP32 / ESP32-S3 (Xtensa) / ESP32-C3 (RISC-V) | External Espressif QEMU process | **Yes** |
 
 AVR links libsimavr from the system (GPL-3.0, deliberately not vendored in
@@ -19,6 +19,21 @@ build without AVR through `cargo build -p hauksbee-engine
 installing Renode and the Espressif QEMU fork for the other two backends. See
 [`docs/cosim/MCU.md`](MCU.md) for the full co-simulation architecture,
 per-board recipes, and proven integration test results.
+
+Two entries in that table need reading carefully:
+
+- **simavr accepts any part name simavr knows.** `AvrMcu::new` passes the name
+  straight through, so `atmega2560` or an ATtiny constructs and runs. Only the
+  **ATmega328P port map** is auto-registered, though: pin hooks are installed
+  for ports A through D, so a part with ports beyond those needs
+  `register_port_hooks` called for them, and the shipped board recipes are
+  ATmega328P.
+- **RP2040 on Renode is opt-in and unproven.** The built-in MCU database entry
+  carries no `backend` param, so a bound RP2040 board is not auto-routed into
+  Renode; a board asks for it explicitly with a user model layer setting
+  `backend = "renode:rp2040"` (alias `renode:pico`). Renode 1.16.1 portable
+  ships no `rp2040.repl`, so until your Renode carries the platform, that
+  opt-in gets a loud platform-load error rather than a silent skip.
 
 ---
 
@@ -37,23 +52,38 @@ the binary is absent, rather than failing.
 
 ## Quick install
 
-For the ESP32-family backend, hauksbee can fetch the Espressif QEMU fork
-itself. No shell script is needed:
+hauksbee can fetch either external backend itself. No shell script is needed:
 
 ```
 hauksbee install esp-qemu          # prompts; add --yes for CI
+hauksbee install renode
 ```
 
-This downloads Espressif's **official** prebuilt `qemu-system-xtensa` and
-`qemu-system-riscv32` from
+`install esp-qemu` downloads Espressif's **official** prebuilt
+`qemu-system-xtensa` and `qemu-system-riscv32` from
 [github.com/espressif/qemu/releases](https://github.com/espressif/qemu/releases),
-verifies each archive's sha256 against the release's checksum manifest,
 unpacks the fork into `~/.hauksbee-qemu-esp/` (discovery slot 3 below), and
 accepts each binary only after the same esp32-machine check the co-sim
-applies. Nothing is bundled: the fork is a separate GPL-2.0 program hauksbee
-talks to over sockets. On an ESP32-family board, `hauksbee run --firmware`
-offers the same install inline when it finds the emulator missing on an
-interactive terminal (declining keeps the loud install-guidance error).
+applies. `install renode` fetches Antmicro's published Renode portable build
+and unpacks it into `~/renode-portable`, the same flow as
+`scripts/install-sims.sh --renode-only`. Nothing is bundled: each is a separate
+program hauksbee talks to over sockets. Both subcommands prompt for consent and
+take `--yes` to skip it, and both report "already installed" and exit when the
+binary is already discoverable.
+
+Archive integrity is best-effort to *obtain* and strict once obtained. The
+installer fetches the release's `qemu-<ver>-checksum.sha256` manifest; when it
+has a hash for an archive it verifies it and a mismatch aborts the install
+("sha256 MISMATCH ... Refusing to install it"). When the manifest cannot be
+fetched, or carries no line for that asset, the installer says so on stderr and
+proceeds **without** hash verification, leaving TLS and the esp32-machine check
+as the gates. So do not read "verifies the sha256" as unconditional: an offline
+or rate-limited GitHub degrades it, loudly, rather than failing the install.
+
+On an ESP32-family board, `hauksbee run --firmware` offers the same install
+inline when it finds the emulator missing on an interactive terminal (declining
+keeps the loud install-guidance error). Every "not found" error from either
+backend names its `hauksbee install` subcommand, so the fix is in the message.
 
 To install everything at once (Renode + QEMU, optionally AVR), run:
 
@@ -114,18 +144,28 @@ hauksbee calls `find_qemu(arch)` in
 (ESP32 / ESP32-S3) and `qemu-system-riscv32` (ESP32-C3), it checks:
 
 1. `$HAUKSBEE_QEMU_XTENSA` / `$HAUKSBEE_QEMU_RISCV32`, the full path to the
-   binary. hauksbee uses it directly if set.
+   binary. hauksbee uses it directly if it exists, and errors naming the
+   variable if it does not. This is the one slot that takes your word for it:
+   the esp-fork check below is **not** applied, so an override pointed at
+   mainline QEMU will be accepted here and fail later at boot.
 2. `$HAUKSBEE_QEMU_DIR/bin/<name>`, the `bin/` directory of the unpacked
    fork.
-3. `~/.hauksbee-qemu-esp/qemu/bin/<name>`, the conventional manual-unpack
-   location.
-4. `~/.espressif/tools/qemu-*/<ver>/qemu/bin/<name>`, the location ESP-IDF's
-   `idf_tools.py install qemu-xtensa qemu-riscv32` uses.
-5. `<name>` on `$PATH`, accepted **only if** it is the Espressif fork. The
-   check runs `qemu-system-xtensa -machine help` and looks for `esp32` in the
-   output. Homebrew's mainline `qemu-system-xtensa` lists only
-   `lx60`/`kc705`/`sim` and gets rejected. This guard is not optional:
-   mainline QEMU cannot boot an ESP32 image.
+3. `~/.hauksbee-qemu-esp/qemu/bin/<name>`, both the conventional manual-unpack
+   location and where `hauksbee install esp-qemu` puts it. The legacy
+   `~/.galvani-qemu-esp/qemu/bin/<name>` is still honoured right after it, so
+   a fork unpacked before the rename keeps resolving.
+4. `<idf-tools-root>/tools/qemu-*/<ver>/qemu/bin/<name>`, the location
+   ESP-IDF's `idf_tools.py install qemu-xtensa qemu-riscv32` uses. The roots
+   tried, in order, are `$IDF_TOOLS_PATH`, `~/.espressif`, and on Windows
+   `C:\Espressif`.
+5. `<name>` on `$PATH`.
+
+**Every slot except the explicit per-arch override in slot 1 is gated on the
+esp-fork check**, not just `$PATH`: a candidate is accepted only if running
+`<binary> -machine help` lists `esp32`. Homebrew's mainline
+`qemu-system-xtensa` shows only `lx60`/`kc705`/`sim` and gets rejected wherever
+it sits, including under `$HAUKSBEE_QEMU_DIR` or an idf-tools tree. This guard
+is not optional: mainline QEMU cannot boot an ESP32 image.
 
 The installer uses `idf_tools.py` when it finds an ESP-IDF checkout
 (`~/esp/esp-idf`, `$IDF_PATH`, or `~/.espressif`), which puts binaries in
@@ -150,7 +190,30 @@ conventional paths:
 
 ## Verifying the install
 
-Run the check mode:
+Ask the binary itself. `hauksbee doctor --backends` runs the engine's own
+`find_qemu` / `find_renode`, so it can never disagree with what a co-sim would
+resolve, and prints one tab-separated `NAME<TAB>STATUS<TAB>PATH-OR-HINT` line
+per backend (add `--json` for machine consumption). On this machine:
+
+```
+$ hauksbee doctor --backends
+hauksbee co-sim backends (resolved by the engine's own discovery)
+    avr           ATmega / ATtiny firmware co-sim
+avr	builtin	simavr linked into this binary
+    qemu-xtensa   ESP32 / ESP32-S3 firmware co-sim (Espressif QEMU fork)
+qemu-xtensa	ok	/Users/you/.hauksbee-qemu-esp/qemu/bin/qemu-system-xtensa
+    qemu-riscv32  ESP32-C3 firmware co-sim (Espressif QEMU fork)
+qemu-riscv32	ok	/Users/you/.hauksbee-qemu-esp/qemu/bin/qemu-system-riscv32
+    renode        STM32 / nRF52 / RISC-V firmware co-sim
+renode	ok	/Users/you/renode-portable/Renode.app/Contents/MacOS/renode
+```
+
+The indented lines are the human header on stderr; the flush lines are the
+machine-readable report on stdout. A backend that resolves to mainline QEMU is
+reported absent here exactly as the co-sim rejects it. Anything missing is one
+command away: `hauksbee install renode` or `hauksbee install esp-qemu`.
+
+The shell script has an equivalent check mode:
 
 ```
 scripts/install-sims.sh --check
@@ -278,33 +341,45 @@ discovers automatically (slot 4).
 **Direct download (no ESP-IDF)**
 
 1. Go to [github.com/espressif/qemu/releases](https://github.com/espressif/qemu/releases)
-   and find the latest release (tags like `esp-develop-9.0.0-20240606`).
+   and find the latest release. Tags look like `esp-develop-9.2.2-20260417`;
+   the asset names carry the same version with **underscores**
+   (`esp_develop_9.2.2_20260417`), so the tag is not a substring of the asset.
 2. Download the asset for your platform for **both** `qemu-xtensa` and
-   `qemu-riscv32`:
+   `qemu-riscv32`. Every current asset is `.tar.xz`:
 
-   | Platform | Asset suffix |
-   |----------|-------------|
-   | macOS arm64 | `aarch64-apple-darwin.tar.bz2` |
-   | macOS x86_64 | `x86_64-apple-darwin.tar.bz2` |
-   | Linux x86_64 | `x86_64-linux-gnu.tar.bz2` |
-   | Linux arm64 | `aarch64-linux-gnu.tar.bz2` |
-   | Windows x86_64 | `x86_64-w64-mingw32.tar.xz` |
+   | Platform | Asset |
+   |----------|-------|
+   | macOS arm64 | `qemu-<tool>-softmmu-<ver>-aarch64-apple-darwin.tar.xz` |
+   | macOS x86_64 | `qemu-<tool>-softmmu-<ver>-x86_64-apple-darwin.tar.xz` |
+   | Linux x86_64 | `qemu-<tool>-softmmu-<ver>-x86_64-linux-gnu.tar.xz` |
+   | Linux arm64 | `qemu-<tool>-softmmu-<ver>-aarch64-linux-gnu.tar.xz` |
+   | Windows x86_64 | `qemu-<tool>-softmmu-<ver>-x86_64-w64-mingw32.tar.xz` |
 
+   `<tool>` is `xtensa` or `riscv32`; `<ver>` is the underscored version. The
+   release also publishes `qemu-<ver>-checksum.sha256`, which lists
+   `<sha256hex> *<asset-name>` for each. Upstream has changed both the
+   separator convention and the compression (`.tar.bz2` to `.tar.xz`) across
+   releases, which is why `hauksbee install esp-qemu` resolves the name by
+   listing the release's published assets rather than constructing it. Check
+   the release page before assuming a suffix.
 3. Extract each into `~/.espressif/tools/<tool-name>/<ver>/qemu/`. The
    tarball has a top-level `qemu/` directory. Extract one level up and strip
-   it:
+   it. `.tar.xz` needs `-J`, not `-z` or `-j`:
 
    ```
    DEST=~/.espressif/tools/qemu-xtensa/<ver>/qemu
    mkdir -p "$DEST"
-   tar xjf qemu-xtensa-softmmu-<tag>-aarch64-apple-darwin.tar.bz2 \
+   tar -xJf qemu-xtensa-softmmu-<ver>-aarch64-apple-darwin.tar.xz \
      -C "$DEST" --strip-components=1
 
    DEST=~/.espressif/tools/qemu-riscv32/<ver>/qemu
    mkdir -p "$DEST"
-   tar xjf qemu-riscv32-softmmu-<tag>-aarch64-apple-darwin.tar.bz2 \
+   tar -xJf qemu-riscv32-softmmu-<ver>-aarch64-apple-darwin.tar.xz \
      -C "$DEST" --strip-components=1
    ```
+
+   GNU tar and bsdtar both sniff the compression, so a bare `tar -xf` also
+   works; `-J` is explicit about what the archive is.
 
 4. Alternatively, unpack both into `~/.hauksbee-qemu-esp/qemu/` (slot 3):
 

@@ -1,10 +1,11 @@
 # Device models: built-in, SPICE, and datasheet extraction
 
 Every component the binder meets needs a simulation model. Physics arrives
-by **four** authoring routes, but they collapse into **three** resolution
-tiers: the codex-extracted models and the hand-written behavioural models
-are both just TOML entries that land in the same user-TOML tier, so the
-resolver does not treat them as separate sources.
+by **four** authoring routes, and the resolver sorts whatever they produce into
+**six** priority layers. The routes and the layers are not the same list: the
+codex-extracted models and the hand-written behavioural models are both just
+TOML entries, and where they land depends on which directory you put them in,
+not on how they were written.
 
 The four authoring routes:
 
@@ -27,18 +28,28 @@ The four authoring routes:
 - **User SPICE**: a `.model` / `.subckt` card you supply always wins, so you
   can override anything with a vendor-provided SPICE deck.
 
-The three resolution tiers, layered by priority (later wins):
+The resolution layers, by priority (higher wins outright; specificity only
+breaks ties *within* a layer):
 
 ```
-builtin TOML DB   <   user TOML (extracted + hand-written)   <   user SPICE
-   (lowest)                                                       (highest)
+builtin(0)  <  pack(10)  <  user-dir(20)  <  user-config-dir(25)
+            <  models-dir(30)  <  spice(40)
 ```
 
-The resolution order itself lives in `ModelLibrary::resolve`
-(`crates/hauksbee-models/src/lib.rs`), which returns a `source` of exactly
-one of `"spice"`, `"user"`, or `"builtin"`: SPICE cards first, then user
-TOML entries (where both extracted *and* hand-written behavioural models
-land), then the built-in DB.
+`SourceLayer` in `crates/hauksbee-models/src/lib.rs` is the authority for that
+list, and [PACKS.md](PACKS.md#resolution-priority) is the reference page for it.
+Two things about it catch people out. Installed **packs** are a layer of their
+own between the built-ins and your own directories, so a pack overrides a
+built-in and you override a pack. And the two standing user directories are
+*distinct* layers: `~/.config/hauksbee/models` (25) beats `~/.hauksbee/models`
+(20), so a model you hand-corrected in your config dir deterministically wins
+over an auto-extracted one of the same id.
+
+`ModelLibrary::resolve` returns a coarser `source` string for report consumers,
+one of `"builtin"`, `"pack"`, `"user"` or `"spice"`. All three user layers
+(user-dir, user-config-dir, `--models-dir`) collapse to `"user"` there. When you
+need the real layer, `hauksbee models resolve <board>` prints it with its
+priority, for example `user-config-dir(25)`.
 
 ## Pointing hauksbee at a datasheet
 
@@ -67,8 +78,26 @@ hauksbee models extract \
 ```
 
 It prints what will leave your machine and waits for a yes. In a script, where
-there is nobody to ask, it refuses rather than assuming: pass `--yes` when you
-mean it.
+there is nobody to ask, it refuses rather than assuming: pass `--yes` (or `-y`)
+when you mean it.
+
+### Choosing a backend
+
+`--backend` picks which LLM does the reading. All three run the same prompt,
+the same validation, and the same retry-with-feedback loop:
+
+| backend | requirement | flags |
+|---------|-------------|-------|
+| `codex` (default) | `codex` CLI in PATH, signed in | `--backend codex`, `--model` |
+| `claude-code` | `claude` CLI in PATH, signed in | `--backend claude-code`, `--model` |
+| `api` | key in the env var named by `--api-key-env` (default `OPENAI_API_KEY`; a set `HAUKSBEE_LLM_API_KEY` is honoured) | `--backend api`, `--api-base`, `--model`, `--api-key-env` |
+
+With no `--backend`, a set `HAUKSBEE_LLM_API_KEY` selects the api backend,
+matching the behaviour from before the flag existed. `--api-key-env` takes the
+NAME of an environment variable, never the key itself: the key is read from
+the environment at call time and is never stored or logged. A missing CLI or
+an unset key variable errors up front with the exact fix (install the tool, or
+`export OPENAI_API_KEY=...`), before anything is sent.
 
 The older standalone binary still works and holds the same contract
 (`cargo build -p hauksbee-models --bin model-extract`, then
@@ -168,15 +197,19 @@ from, so an extracted model stays auditable.
    a column of loose numbers in a text dump.
 2. **Prompt** built per kind, listing the required params, the ratings to
    pull, and the physical bounds each value must respect.
-3. **Backend call**:
+3. **Backend call** (see the backend matrix above):
    - **codex** (default): `codex exec --sandbox workspace-write
      --skip-git-repo-check --cd <pdf_dir>`. stdin is closed so codex does
      not block; the final agent message (clean TOML) comes back on stdout
      while session logging goes to stderr. A hard timeout (10 min) kills a
      stuck run.
-   - **API** (optional): set `HAUKSBEE_LLM_API_KEY` (+ `HAUKSBEE_LLM_MODEL`,
-     `HAUKSBEE_LLM_BASE_URL`) to use an OpenAI-compatible chat endpoint
-     instead.
+   - **claude-code** (`--backend claude-code`): headless `claude -p` in the
+     same sandbox, with the same prompt file, answer file (`model.toml`),
+     timeout, and retry contract.
+   - **api** (`--backend api`): an OpenAI-compatible chat endpoint at
+     `--api-base` (default `https://api.openai.com/v1`, or
+     `HAUKSBEE_LLM_BASE_URL`), model from `--model` or `HAUKSBEE_LLM_MODEL`,
+     key read at call time from the env var named by `--api-key-env`.
 4. **Parse and validate**: the tool parses the reply as TOML, checks the
    device kind against the requested kind, and range-checks every param
    (`crates/hauksbee-models/src/validation.rs`). A failure feeds the error
@@ -187,10 +220,12 @@ from, so an extracted model stays auditable.
 
 The extractor fails loudly and usefully:
 
-- **No backend**: a clear error listing codex / `HAUKSBEE_LLM_API_KEY` /
-  the offline mock as options.
-- **codex timeout**: killed after 10 minutes with a message to tighten the
-  prompt or use the API backend.
+- **Missing tool or key**: a selected CLI backend whose tool is not in PATH,
+  or an api backend whose key variable is unset, errors with the exact fix
+  (the install command, or `export OPENAI_API_KEY=...`) before anything is
+  sent.
+- **CLI timeout**: a codex/claude run is killed after 10 minutes with a
+  message to tighten the prompt or switch backend.
 - **Empty / prose reply**: rejected with "empty reply" or "no [[models]]
   table" rather than a confusing TOML parse error.
 - **Wrong kind**: a diode card returned for a `bjt_npn` request is rejected
@@ -284,7 +319,7 @@ would need a `[models.behavioral]` block (see the LTC4020 entry in
     no codex, no network.
   - `hauksbee-engine` `fixture_*` physical-validation tests simulate canned
     models and assert the datasheet numbers.
-  - `hauksbee-models` `tests/power_fet_afe_resolve.rs` (10 tests): resolves
+  - `hauksbee-models` `tests/suite/power_fet_afe_resolve.rs` (10 tests): resolves
     each new specific part (IPA045N10N3G, IRF9358, SIR182DP, bq76952,
     LM5107, LM5109, INA181, INA2181) by value and asserts kind + sane
     ratings; it also asserts that the generic power-FET fallback binds an
@@ -386,14 +421,16 @@ validations.
 
 ## Adding a custom part without recompiling
 
-Models layer `builtin < user TOML < user SPICE` (later wins), and both
-datasheet-extracted and hand-written behavioural models share the user-TOML
-tier. A custom behavioural part is just a TOML file dropped into a user
-directory:
+A custom behavioural part is just a TOML file dropped into a user directory.
+Which directory sets its priority, and how it was authored does not:
 
-- `~/.hauksbee/models/`, where datasheet extraction writes.
-- `~/.config/hauksbee/models/`, your own custom models.
-- any `--models-dir <dir>` passed to `hauksbee run` (highest priority).
+- `~/.hauksbee/models/` (layer 20), where datasheet extraction writes.
+- `~/.config/hauksbee/models/` (layer 25), your own custom models. Beats the
+  extraction directory, so a hand-corrected model of the same id wins.
+- any `--models-dir <dir>` passed to `hauksbee run` (layer 30, highest of the
+  three).
+
+A user SPICE card (layer 40) still beats all of them.
 
 ### Worked example: a "crazy" custom charger
 
@@ -538,5 +575,5 @@ constants at zero because the datasheet excerpt did not state the
 programming equation (the hand model calibrated those from the documented
 60 W/88 W revision evidence, which the datasheet alone does not contain).
 The captured output is regression-locked offline in
-`crates/hauksbee-models/tests/codex_behavioral_fixture.rs`; the live run is
+`crates/hauksbee-models/tests/suite/codex_behavioral_fixture.rs`; the live run is
 the `#[ignore]`d `extract_ltc4020_charger_live`.

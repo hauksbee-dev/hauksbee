@@ -1,14 +1,15 @@
 # Docs map
 
-The entry point is [`START_HERE.md`](START_HERE.md). This file maps every
-doc to the question it answers. There is no generated index: no mdbook
+The entry point is [`START_HERE.md`](START_HERE.md). This file maps the
+user-path docs to the question each one answers. There is no generated index: no mdbook
 `SUMMARY.md`, no `mkdocs.yml`. The repo-root `README.md` leads with
 START_HERE.
 
 The user docs are grouped by the question the reader is asking. Only the
-entry points live at the `docs/` root: START_HERE, this map, and
+entry points live at the `docs/` root: START_HERE, this map,
 [`PROJECT_LAYOUT.md`](PROJECT_LAYOUT.md), which covers how to prepare your
-own board, firmware, and spec, and the one local command that runs them.
+own board, firmware, and spec, and the one local command that runs them, and
+[`STYLE.md`](STYLE.md), the contract every user-facing surface is held to.
 
 ## The user path, by question
 
@@ -16,7 +17,8 @@ own board, firmware, and spec, and the one local command that runs them.
 
 | File | Covers |
 |---|---|
-| [`ingest/ALTIUM.md`](ingest/ALTIUM.md) | Altium `.PcbDoc` binary ingest |
+| [`ingest/ALTIUM.md`](ingest/ALTIUM.md) | Altium `.PcbDoc`: the user path, then the binary ingest internals |
+| [`ingest/EAGLE.md`](ingest/EAGLE.md) | Eagle `.brd` (and Fusion 360 Electronics): what is read, what is not |
 | [`ingest/GERBER.md`](ingest/GERBER.md) | Gerber + pick-and-place reverse extraction |
 | [`ingest/SCHEMATICS.md`](ingest/SCHEMATICS.md) | Schematic (`.kicad_sch`) extraction |
 | [`ingest/DNP.md`](ingest/DNP.md) | Do-not-populate parts: what gets simulated, and how to change it |
@@ -64,6 +66,21 @@ own board, firmware, and spec, and the one local command that runs them.
 | [`ci/EXAMPLES.md`](ci/EXAMPLES.md) | Install, first run, every runnable example |
 | [`ci/DOCKER.md`](ci/DOCKER.md) | Container images and how to run them |
 
+**"What is the evidence?"**: [`evidence/`](evidence/)
+
+| File | Covers |
+|---|---|
+| [`evidence/KNOWN_FAULTS_VALIDATION.md`](evidence/KNOWN_FAULTS_VALIDATION.md) | Eight documented faults on four famous boards: which ones hauksbee catches, and the honest miss |
+| [`evidence/BUG_HUNT.md`](evidence/BUG_HUNT.md) | The Raspberry Pi 4 USB-C fault re-derived cold, with the hand-checked numbers |
+| [`evidence/FAMOUS_SWEEP.md`](evidence/FAMOUS_SWEEP.md) | The famous-board sweep: zero findings, zero false positives, and what that proves |
+
+**"How does it actually work, from first principles?"**: [`learn/`](learn/) and [`how-and-why/`](how-and-why/)
+
+| Path | Covers |
+|---|---|
+| [`learn/`](learn/) | The ten-chapter course: from copper to a co-simulated solve, taught from this codebase |
+| [`how-and-why/`](how-and-why/) | Per-crate deep dives: how each crate works and why it is built that way |
+
 **"What is this thing, honestly?"**: [`about/`](about/)
 
 | File | Covers |
@@ -82,4 +99,15 @@ own board, firmware, and spec, and the one local command that runs them.
 | [`spice-compat/`](spice-compat/) | SPICE compatibility statement and ngspice cross-check results |
 | [`assets/`](assets/) | Images embedded by docs |
 
-Root: `START_HERE.md`, `PROJECT_LAYOUT.md`, and this map.
+`record/` and `teach/` are internal working notes rather than user-path
+docs, and this map does not index them.
+
+## Outside `docs/`
+
+| Path | Covers |
+|---|---|
+| [`../COMPLIANCE.md`](../COMPLIANCE.md) | Licence compliance, one row per shipped artifact and what redistributing it obliges |
+| [`../crates/hauksbee-mcp/README.md`](../crates/hauksbee-mcp/README.md) | The stdio MCP server: the five tools, install, and how to register it |
+| [`../agents/AGENTS.md`](../agents/AGENTS.md) | The agent-facing contract: JSON shapes, exit codes, full MCP tool schemas |
+
+Root: `START_HERE.md`, `PROJECT_LAYOUT.md`, `STYLE.md`, and this map.

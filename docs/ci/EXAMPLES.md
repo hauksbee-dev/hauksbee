@@ -4,6 +4,10 @@ Everything you need to run hauksbee and learn from it, in files you can open and
 run. This page indexes the [`examples/`](../../examples) tree, the distribution
 [`scripts/`](../../scripts), and the captured terminal sessions.
 
+Prerequisites: a checkout of this repo plus a Rust toolchain (the install
+script below builds from source), or the prebuilt release bundle if you would
+rather not compile.
+
 ## Get it running
 
 One command builds and installs it. The other two are the usual next steps.
@@ -38,13 +42,15 @@ board, which has a deliberate copper short:
 
 ```bash
 hauksbee run crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb --drc
-# -> a table with two GND/+5V shorts and a "2 short(s)" summary
+# -> a SHORTS list with two GND/+5V touches and a "2 short(s)" summary
 ```
 
 By default these `hauksbee run` reports are informational: they print findings
 but exit 0. Add `--strict` to make them FAIL on a real problem (see
 [Gate a pipeline](#gate-a-pipeline-with---strict) below). Or gate on
-`hauksbee-ci` / `hauksbee check-code` for the full assertion/fault flow.
+`hauksbee-ci` / `hauksbee check-code` (the same gate for Board-as-Code `.board`
+sources, see [BOARD_AS_CODE.md](../ingest/BOARD_AS_CODE.md)) for the full
+assertion/fault flow.
 
 `hauksbee --help` lists every command. `hauksbee run --help` (or any
 `<command> --help`) shows that command's flags with an example. Swap in your own
@@ -62,10 +68,16 @@ worst-first.
 hauksbee run crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb --drc --plain
 ```
 
-The expert output (default) for that board is a table row:
+The expert output (default) for that board:
 
 ```
-│ short    │ GND  │ +5V  │ B.Cu │ 0.0000 │ 112.0,100.0 │
+DRC: 20 primitive(s), clearance rule 0.200 mm
+
+SHORTS (2):
+  [SERIOUS] GND touches +5V on B.Cu (gap 0.0000 mm) at x=112.0, y=100.0
+  [SERIOUS] GND touches +5V on F.Cu (gap 0.0000 mm) at x=112.0, y=100.0
+
+2 short(s), 0 below-rule group(s), 0 at-limit group(s).
 ```
 
 The same finding in `--plain`:
@@ -73,15 +85,24 @@ The same finding in `--plain`:
 ```
 2 issues found, 2 serious.
 
-1. [SERIOUS] Two separate connections, "GND" and "+5V", are touching
-   (a component pad touches a component pad), near x=112.0 mm, y=100.0 mm on layer B.Cu.
+1. [SERIOUS] Two separate connections, "GND" and "+5V", are touching,
+   near x=112.0 mm, y=100.0 mm on the back copper layer (B.Cu).
      Why it matters: These are meant to be electrically separate. Where they
        touch they become one connection (a short), so "GND" and "+5V" will be
        forced to the same voltage ... if one is a power rail it can pull large
        current and overheat.
      What to do:     Pull the two pieces of copper apart so there is a clear gap
        between them, or remove the bit of copper that bridges them ...
+
+Summary: 2 short(s), 0 net pair(s) below the clearance rule, 0 at minimum clearance (no margin).
 ```
+
+On a board with many similar near-miss clearance findings, `--plain` prints
+the first few in full and condenses the rest into one line per rule and layer
+("...and 17 more net pairs like this on the back copper layer (B.Cu) (89
+locations, tightest 0.150 mm vs your 0.200 mm rule); pass --verbose for every
+instance."), then closes with the same one-line summary. `--verbose` restores
+every instance; `--json` always carries the complete set.
 
 `--plain` works on `--drc`, `--lint`, `--si`, `--resources`, and on the
 `--headless` co-sim faults (over-current, over-voltage, etc.). It is opt-in:
@@ -136,8 +157,8 @@ hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --serve
 ```
 
 The Watchy is the "point it at a real board" case. hauksbee extracts the
-circuit its copper implements and binds 56 of 75 parts from the stock model
-library. It states plainly which active parts it does not recognise (the
+circuit its copper implements and binds 59 of its 67 simulatable parts from
+the stock model library. It states plainly which active parts it does not recognise (the
 TP4054 charger, the BMA423 IMU, the e-paper panel) instead of guessing. Add
 `--report` for the static verdict, or `--serve` for the live 2D/3D viewer.
 
@@ -167,18 +188,9 @@ the page (or click to choose one), and the browser shows:
 
 It runs the *same* checks and the *same* plain-language translation as the CLI
 (`--drc`/`--lint`/`--si` + `--plain`). Nothing leaves the machine: the
-analysis runs locally, inside the `hauksbee serve` process.
-
-This local flow is the whole product for a single user. A **hosted** version
-(one URL anyone visits, no install) would also need:
-
-- a small upload service running this same `analyze` behind a real web server,
-- per-request sandboxing / resource limits (untrusted board files),
-- a size/rate limit beyond the built-in 32 MiB body cap, and
-- a privacy stance on uploaded boards (they are proprietary).
-
-The analysis core is already a pure `bytes -> JSON` function, so a hosted
-deployment is a packaging job, not new analysis work.
+analysis runs locally, inside the `hauksbee serve` process. (A hosted
+version would be a packaging job around the same `bytes -> JSON` core, not new
+analysis work.)
 
 ## Board-as-Code examples
 
@@ -207,17 +219,19 @@ are in the [board-as-code README](../../examples/board-as-code/README.md).
 | [`tarski_brownout_repaired.toml`](../../crates/hauksbee-ci/examples/tarski_brownout_repaired.toml) | Same board, milliohm-shunt repair applied | **GREEN** |
 | [`blinky.toml`](../../crates/hauksbee-ci/examples/blinky.toml) | Rail + UART + blink + no-faults assertions (the template spec) | **GREEN** |
 | [`olimex_wifi_burst_transient.toml`](../../examples/ci-specs/olimex_wifi_burst_transient.toml) | Scenario/transient: a `rail_window` assertion riding an ESP32 WiFi burst | **GREEN** |
-| [`boot_gate_pass`](../../crates/hauksbee-ci/examples/boot_gate_pass.toml) / [`fail`](../../crates/hauksbee-ci/examples/boot_gate_fail.toml) | `boot-coverage`: does the firmware drive a Hi-Z gate in time? | PASS / FAIL |
-| [`watchy_v15_display_res`](../../crates/hauksbee-ci/examples/watchy_v15_display_res.toml) / [`undriven`](../../crates/hauksbee-ci/examples/watchy_v15_display_res_undriven.toml) † | `boot-coverage` on the real Watchy v1.5 e-paper RES# (ESP32 QEMU) | PASS / FAIL |
-| [`pic_programmer_schematic.toml`](../../crates/hauksbee-ci/examples/pic_programmer_schematic.toml) † | Schematic-stage CI on a `.kicad_sch` (no PCB yet) | PASS |
+| [`boot_gate_pass`](../../crates/hauksbee-ci/examples/boot_gate_pass.toml) / [`fail`](../../crates/hauksbee-ci/examples/boot_gate_fail.toml) | `boot_coverage`: does the firmware drive a Hi-Z gate in time? | **GREEN** / **RED** |
+| [`watchy_v15_display_res`](../../crates/hauksbee-ci/examples/watchy_v15_display_res.toml) / [`undriven`](../../crates/hauksbee-ci/examples/watchy_v15_display_res_undriven.toml) † | `boot_coverage` on the real Watchy v1.5 e-paper RES# (ESP32 QEMU) | **GREEN** / **RED** |
+| [`pic_programmer_schematic.toml`](../../crates/hauksbee-ci/examples/pic_programmer_schematic.toml) † | Schematic-stage CI on a `.kicad_sch` (no PCB yet) | **GREEN** |
 
-† These two specs run against boards in the developer board corpus: the
-historical-revision Watchy v1.5 and KiCad's `pic_programmer` demo. This corpus
-is not redistributed in this repo, and the Watchy spec also needs the
-Espressif QEMU ESP32 backend. Both specs come from the known-fault validation
-campaign that calibrated the checks. Their integration tests skip cleanly when
-the corpus or backend is absent. To run a real board here with no extra setup,
-use `hauksbee run boards/watchy.kicad_pcb --report` above.
+† These three specs (the Watchy v1.5 pair and the pic_programmer schematic)
+run against boards in the developer board corpus: the historical-revision
+Watchy v1.5 and KiCad's `pic_programmer` demo. That corpus is not
+redistributed in this repo, and the Watchy pair also needs the Espressif QEMU
+ESP32 backend. All three come from the validation work that calibrated the
+checks against boards with known, documented faults. Their integration tests
+skip cleanly when the corpus or backend is absent. To run a real board here
+with no extra setup, use `hauksbee run boards/watchy.kicad_pcb --report`
+above.
 
 More detail and the run-and-expected-verdict for each:
 [ci-specs README](../../examples/ci-specs/README.md).

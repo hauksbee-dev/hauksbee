@@ -78,14 +78,15 @@ comparison, …) are documented in [`CI.md`](ci/CI.md), with runnable examples i
 
 ```bash
 hauksbee-ci run ci/power-up.toml
-echo $?          # 0 = green, 1 = red
+echo $?          # 0 = green, 1 = red, 2 = spec/usage error, 3 = invalid for analysis
 ```
 
 That is the whole loop. Hauksbee extracts the circuit from the board file,
 binds every component to a device model, attaches the supplies, and boots
 the firmware on the emulated MCU, if given. It then runs the simulation and
-evaluates the assertions. It exits non-zero if any assertion fails, and it
-writes a JUnit XML report and inline annotations any CI system can ingest.
+evaluates the assertions. It exits non-zero if any assertion fails. Pass
+`--junit <path>` to write a JUnit XML report any CI system can ingest, and
+under GitHub Actions it also emits inline annotations.
 
 For a quick look without a spec, point `hauksbee` straight at the board:
 

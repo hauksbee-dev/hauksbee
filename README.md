@@ -14,14 +14,22 @@ No other tool does this from the layout. Schematic simulators never see the boar
 
 ## What it does
 
-The fastest way in needs no terminal at all. Run `hauksbee serve` and open the page it prints. Either drop a board (optionally with firmware, or a zip of the whole PlatformIO project), or click one of the bundled samples. That gives a first report with no file at all. The report renders the board's real copper (zoom in and part labels appear). The checks panel lets you compose the rules that must hold (rail voltages, blink, UART output, nothing over-stressed) in plain language. You run them on the spot through the real `hauksbee-ci`, and download the resulting `.toml` plus the GitHub workflow that enforces it on every push. The browser is the quick look and the on-ramp. The checked-in spec is the repeatable check a pipeline gates on. Everything runs on the same engine, from the command line.
+The fastest way in needs no terminal at all:
+
+1. Run `hauksbee serve` and open the page it prints.
+2. Drop a board (optionally with firmware, or a zip of the whole PlatformIO project), or click a bundled sample. The first report needs no file at all.
+3. Read the report. It renders the board's real copper (zoom in and part labels appear).
+4. Compose the rules that must hold (rail voltages, blink, UART output, nothing over-stressed) in plain language, and run them on the spot through the real `hauksbee-ci`.
+5. Download the resulting `.toml` plus the GitHub workflow that enforces it on every push.
+
+The browser is the quick look and the on-ramp. The checked-in spec is the repeatable check a pipeline gates on. Everything runs on the same engine, from the command line.
 
 ![The web checks builder: plain-language rules, the exact TOML, and a green run](frontend/screenshots/beauty/web-checks.png)
 
 Point it at any PCB design and it will:
 
-- **Ingest** it: KiCad, Eagle, Altium `.PcbDoc` ([`docs/ingest/ALTIUM.md`](docs/ingest/ALTIUM.md)), IPC-D-356, and gerber-only boards that ship no CAD at all. Hauksbee reverse-extracts these from copper geometry alone ([`docs/ingest/GERBER.md`](docs/ingest/GERBER.md), [`docs/about/ARCHITECTURE.md`](docs/about/ARCHITECTURE.md)).
-- **Simulate** the analogue circuit with real device physics, co-simulating the firmware in lockstep on an emulated MCU. This spans AVR, STM32, ESP32/-C3, nRF52840, and SiFive RISC-V. GPIO and UART co-sim run on every backend. ADC injection and I2C/SPI peripheral-slave models run on the AVR backend today. [`docs/cosim/MCU.md`](docs/cosim/MCU.md) states the per-backend coverage matrix and the reason plainly.
+- **Ingest** it: KiCad, Eagle `.brd` ([`docs/ingest/EAGLE.md`](docs/ingest/EAGLE.md)), Altium `.PcbDoc` ([`docs/ingest/ALTIUM.md`](docs/ingest/ALTIUM.md)), IPC-D-356, and gerber-only boards that ship no CAD at all. Hauksbee reverse-extracts these from copper geometry alone ([`docs/ingest/GERBER.md`](docs/ingest/GERBER.md), [`docs/about/ARCHITECTURE.md`](docs/about/ARCHITECTURE.md)). Every EDA tool can produce fab output, so the gerber path is the on-ramp that works whatever you drew the board in.
+- **Simulate** the analogue circuit with real device physics, co-simulating the firmware in lockstep on an emulated MCU. AVR, STM32, ESP32, and ESP32-C3 are proven end-to-end; nRF52840 and SiFive RISC-V are proven to UART boot; ESP32-S3 wiring is proven, with the full app proof pending a flash image. GPIO and UART co-sim run on every backend. I2C/SPI peripheral-slave models run on AVR (exact), on Renode platforms whose descriptors name the controllers, and on ESP32 QEMU through a firmware mailbox. ADC injection is exact on AVR only; stock Renode platforms drop it loudly. [`docs/cosim/MCU.md`](docs/cosim/MCU.md) states the per-backend coverage matrix and the reason plainly.
 - **Check** it: copper shorts, USB-C CC compliance, boot strap-pins, MCU resource conflicts, trace ampacity, behavioural power-IC models, and transient brownouts. Signal integrity checks now include a controlled-impedance estimate for USB and Ethernet from trace geometry and stackup (quasi-static closed-form, not a field solve). Each check is tuned against a known-good corpus, so it does not cry wolf ([`docs/checks/SHORTS.md`](docs/checks/SHORTS.md), [`docs/checks/RESOURCE_CONFLICTS.md`](docs/checks/RESOURCE_CONFLICTS.md), [`docs/checks/SI_CHECKS.md`](docs/checks/SI_CHECKS.md), [`docs/checks/TRANSIENTS.md`](docs/checks/TRANSIENTS.md)).
 - **Analyse** it past the static checks: a small-signal AC sweep for Bode plots, phase margin, and gain crossover. This is averaged about the DC operating point, not cycle-by-cycle switching ([`docs/analysis/AC_ANALYSIS.md`](docs/analysis/AC_ANALYSIS.md)). Also a steady-state thermal pass. It turns each part's dissipation into a junction temperature and flags the ones that run too hot (per-device `Tj = Tambient + P * theta_JA`, not a board thermal field solve) ([`docs/checks/THERMAL.md`](docs/checks/THERMAL.md)).
 - **Catch** the bug before you fab, in a headless pipeline with a GitHub Action, a KiCad plugin, and a pre-commit hook. Assertions cover rails, faults, temperature, and loop stability ([`docs/ci/CI.md`](docs/ci/CI.md)). Runnable examples are in [`docs/ci/EXAMPLES.md`](docs/ci/EXAMPLES.md).
@@ -32,17 +40,17 @@ Point it at any PCB design and it will:
 
 ## The evidence
 
-**Validated against documented faults.** Four famous boards (ZSWatch DevKit, Watchy, Olimex ESP32-EVB, MNT Reform) fixed eight in-scope faults between two public design revisions. Hauksbee runs on both the faulty and the fixed file for each. The revision history is the ground truth. Static checks caught six, firmware co-sim executed one two-sided, and one is an honest miss whose firmware-decidable path is named. We did not force any check to inflate the count. Full matrix and the rejected-check evidence: [`docs/record/KNOWN_FAULTS_VALIDATION.md`](docs/record/KNOWN_FAULTS_VALIDATION.md).
+**Validated against documented faults.** Four famous boards (ZSWatch DevKit, Watchy, Olimex ESP32-EVB, MNT Reform) fixed eight in-scope faults between two public design revisions. Hauksbee runs on both the faulty and the fixed file for each. The revision history is the ground truth. Static checks caught six, firmware co-sim executed one two-sided, and one is an honest miss whose firmware-decidable path is named. We did not force any check to inflate the count. Full matrix and the rejected-check evidence: [`docs/evidence/KNOWN_FAULTS_VALIDATION.md`](docs/evidence/KNOWN_FAULTS_VALIDATION.md).
 
-**The most famous USB-C fault ever shipped, re-derived cold.** Feed hauksbee's generic USB-C classifier a reconstruction of the Raspberry Pi 4's USB-C power-in: CC1 and CC2 tied to one shared 5.1 kΩ pulldown, the design that shipped on tens of millions of units. It derives the failure from spec thresholds alone. Both CC pins land at 0.1338 V, below the 0.20 V vRa threshold, so a compliant source declares an Audio Adapter Accessory and withholds VBUS. A hand recomputation from the USB Type-C spec matched every solved voltage to better than 0.01%. Full derivation: [`docs/record/BUG_HUNT.md`](docs/record/BUG_HUNT.md).
+**The most famous USB-C fault ever shipped, re-derived cold.** Feed hauksbee's generic USB-C classifier a reconstruction of the Raspberry Pi 4's USB-C power-in: CC1 and CC2 tied to one shared 5.1 kΩ pulldown, the design that shipped on tens of millions of units. It derives the failure from spec thresholds alone. Both CC pins land at 0.1338 V, below the 0.20 V vRa threshold, so a compliant source declares an Audio Adapter Accessory and withholds VBUS. A hand recomputation from the USB Type-C spec matched every solved voltage to better than 0.01%. Full derivation: [`docs/evidence/BUG_HUNT.md`](docs/evidence/BUG_HUNT.md).
 
 ---
 
 ## Quickstart
 
-**Download the app (macOS): double-click, drop a board.** Grab `Hauksbee.app` (the `hauksbee-<version>-darwin-<arch>-app.zip` asset) from the [releases page](https://github.com/hauksbee-dev/hauksbee/releases), unzip, and double-click it. It opens your browser on the drop-zone. Drop a board file and read the report. No terminal at any point. The app is signed and notarised, so it opens without Gatekeeper warnings.
+**Download the app (macOS): double-click, drop a board.** Grab `Hauksbee.app` (the `hauksbee-<version>-darwin-<arch>-app.zip` asset) from the [releases page](https://github.com/hauksbee-dev/hauksbee/releases), unzip, and double-click it. It opens your browser on the drop-zone. Drop a board file and read the report. No terminal at any point. Released apps are signed and notarised, so Gatekeeper accepts a plain double-click. The full signing story is under the installer below.
 
-This is macOS-only today. The team is evaluating Windows but does not promise it yet. The GPL-free build cross-compiles clean, and a full run of the CLI and web surface passes under Wine, but no native Windows runner keeps it green. Status and what remains: [`docs/about/release-and-licensing.md`](docs/about/release-and-licensing.md) section 5. Linux users, take the installer line below.
+This is macOS-only today. We are evaluating Windows but do not promise it yet. The GPL-free build cross-compiles clean, and a full run of the CLI and web surface passes under Wine, but no native Windows runner keeps it green. Status and what remains: [`docs/about/release-and-licensing.md`](docs/about/release-and-licensing.md) section 5. Linux users, take the installer line below.
 
 **One-line installer (terminal, macOS/Linux):**
 
@@ -50,19 +58,19 @@ This is macOS-only today. The team is evaluating Windows but does not promise it
 curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
 ```
 
-This fetches the latest release for your OS/arch, verifies the sha256 checksum, and installs `hauksbee` + `hauksbee-ci` to `~/.local/bin`. If that directory is not on your `PATH`, the installer prints the exact line to add.
+This fetches the latest release for your OS/arch, verifies the sha256 checksum, and installs `hauksbee`, `hauksbee-ci`, and `hauksbee-mcp` to `~/.local/bin`. If that directory is not on your `PATH`, the installer prints the exact line to add. The installer itself needs only `curl` and CA certificates (on minimal Debian/Ubuntu: `apt-get install -y curl ca-certificates`).
 
-macOS users: if Gatekeeper blocks the binary on first run, remove the quarantine flag with `xattr -d com.apple.quarantine ~/.local/bin/hauksbee ~/.local/bin/hauksbee-ci`.
-
-`scripts/test-install-mock.sh` runs the whole download/verify/install flow against a local mock. This proves the installer works before any release goes out.
+**macOS signing, stated plainly.** Every macOS release binary is signed with a Developer ID identity. `Hauksbee.app` is signed and notarised with the ticket stapled, and the release workflow refuses to publish an app zip that is not, so the app opens on a double-click with no Gatekeeper warning. The tarball binaries are signed too, and notarised from launch onward; a bare command-line binary cannot carry a stapled ticket, so Gatekeeper confirms the notarisation online on first run, and a tarball fetched through a browser opens cleanly. Only a pre-release or locally built unsigned bundle still needs the one-time fallback `xattr -d com.apple.quarantine ~/.local/bin/hauksbee ~/.local/bin/hauksbee-ci ~/.local/bin/hauksbee-mcp`, while a copy installed by the curl line above never carries the quarantine flag at all.
 
 Two downloads exist, and each says so on the tin. The default one includes the AVR/ATmega backend, which statically links libsimavr, so that **binary** is GPL-3.0 while hauksbee's source stays Apache-2.0. If you redistribute or embed hauksbee, add `--permissive` (`curl ... | bash -s -- --permissive`) for the Apache-2.0 build, which drops AVR co-sim and links no GPL code at all.
 
 **Build from source:**
 
 ```bash
-scripts/install.sh                                   # build hauksbee + hauksbee-ci, put them on PATH
+scripts/install.sh                                   # build hauksbee + hauksbee-ci + hauksbee-mcp, put them on PATH
 ```
+
+Building needs Rust via rustup (the pinned toolchain builds automatically), plus `scripts/install-sims.sh --avr` for the default AVR feature, or `--no-default-features --features renode,qemu` to skip it. Details: [`CONTRIBUTING.md`](CONTRIBUTING.md).
 
 **Or run it in Docker** (no local toolchain needed: the slim image carries `hauksbee` + `hauksbee-ci`, the model db and AVR co-sim):
 
@@ -76,19 +84,29 @@ The slim and full images and more `docker run` examples are in [`docs/ci/DOCKER.
 **Then use it, first run, against a real board that ships in this repo.** That
 board is the [SQFMI Watchy](https://github.com/sqfmi/watchy-hardware), an
 ESP32-S3 e-paper smartwatch, vendored unmodified under its MIT licence: 86
-parts, 685 copper segments, a charger and a boost converter. Every command
-below finishes in about a second.
+footprints making 82 distinct parts, 685 copper segments, a charger and a
+boost converter. Every command
+below finishes in about a second. The `crates/...` paths are from a checkout;
+if you took the curl installer, the same files sit at
+`examples/ci-specs/boards/watchy.kicad_pcb` inside the extracted bundle, or
+skip files entirely with `hauksbee serve` and its bundled samples.
 
 ```bash
-hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --report --plain   # which parts were modelled, plain bottom line
-hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --drc --plain      # the copper-short report, in plain language
-hauksbee-ci run crates/hauksbee-ci/examples/watchy.toml                             # run a CI spec the way a pipeline would
+hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --report --plain  # which parts were modelled, plain bottom line
+hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --drc --plain     # clearance + shorts report, in plain language
+hauksbee-ci run crates/hauksbee-ci/examples/watchy.toml                            # run a CI spec the way a pipeline would
 ```
+
+On this board the DRC report finds no shorts and about fifty clearance
+warnings, spots where two nets sit closer than the board's own 0.2 mm rule.
+That is the honest verdict on a shipped design. To see what a real copper
+short looks like, run the `boot_gate` example in
+[`docs/ci/EXAMPLES.md`](docs/ci/EXAMPLES.md).
 
 **Then swap in your own board** (`my_board.kicad_pcb` is a placeholder for your file):
 
 ```bash
-hauksbee run my_board.kicad_pcb                       # no flags on a terminal: a full-screen dashboard (TUI)
+hauksbee run my_board.kicad_pcb                      # no flags on a terminal: a full-screen dashboard (TUI)
 hauksbee run my_board.kicad_pcb --si --plain         # signal integrity (USB/Ethernet impedance, rise times)
 hauksbee run my_board.kicad_pcb --list-nets          # list net names (for --ac-node / --ac-loop)
 hauksbee run my_board.kicad_pcb --lint --strict      # exit non-zero on a real defect, to gate a pipeline
@@ -111,7 +129,13 @@ For `hauksbee-ci run`:
 - **2**: spec/board error.
 - **3**: analog result not trustworthy.
 
-**Native for agents, not just humans.** Every surface is machine-readable by design. `hauksbee run --json` and `hauksbee-ci run --json` emit one structured verdict object. Exit codes distinguish green / failed / bad-input / not-trustworthy (an aborted analog solve exits 3 rather than pretending). Honesty qualifiers (substitute MCU cores, coverage holes) come as data fields rather than prose, and the whole analyze/check flow is reachable over localhost HTTP. An AI agent can scaffold a spec with `hauksbee-ci init` and iterate it to green. It can wire the result into CI without ever opening the browser. [`agents/AGENTS.md`](agents/AGENTS.md) is the agent-facing contract. Runnable specs, board-as-code examples and captured sessions are in [`docs/ci/EXAMPLES.md`](docs/ci/EXAMPLES.md). The test campaign is in [`docs/record/TEST_CAMPAIGN.md`](docs/record/TEST_CAMPAIGN.md).
+**Native for agents, not just humans.** Every surface is machine-readable by design. `hauksbee run --json` and `hauksbee-ci run --json` emit one structured verdict object. Exit codes distinguish green / failed / bad-input / not-trustworthy (an aborted analog solve exits 3 rather than pretending). Honesty qualifiers (substitute MCU cores, coverage holes) come as data fields rather than prose, and the whole analyze/check flow is reachable over localhost HTTP. An AI agent can scaffold a spec with `hauksbee-ci init` and iterate it to green. It can wire the result into CI without ever opening the browser. For MCP-speaking agents, the bundled `hauksbee-mcp` binary is a stdio MCP server that exposes the same flow as structured tools: analyse a board, run a spec, list capabilities, decompile to Board-as-Code, and drive a scripted session. Registering it with Claude Code is one line:
+
+```bash
+claude mcp add --transport stdio hauksbee -- hauksbee-mcp
+```
+
+[`crates/hauksbee-mcp/README.md`](crates/hauksbee-mcp/README.md) covers the five tools, the generic `mcpServers` JSON, and where the binary comes from; [`agents/AGENTS.md`](agents/AGENTS.md) is the agent-facing contract, including the MCP tool schemas. Runnable specs, board-as-code examples and captured sessions are in [`docs/ci/EXAMPLES.md`](docs/ci/EXAMPLES.md).
 
 ---
 
@@ -154,7 +178,7 @@ MOSFET gate is actively driven within 20 ms of reset (the full example is
 [`crates/hauksbee-ci/examples/boot_gate_pass.toml`](crates/hauksbee-ci/examples/boot_gate_pass.toml)):
 
 ```toml
-name = "boot-coverage: MOSFET gate driven promptly"
+name = "boot_coverage: MOSFET gate driven promptly"
 board = "boards/boot_gate.kicad_pcb"      # .kicad_pcb / .kicad_sch / .brd / .d356
 firmware = "firmware/boot_gate.hex"       # optional; ELF or hex, relative to the spec
 mcu = "atmega328p"                        # usually auto-detected from the board
@@ -166,7 +190,7 @@ kind = "ideal"
 volts = 5.0
 
 [[assert]]                               # 1+ assertions; all must hold
-kind = "boot-coverage"                    # the gate net must reach a logic high...
+kind = "boot_coverage"                    # the gate net must reach a logic high...
 net = "GATE_CTRL"
 min = 3.0
 deadline_ms = 20.0                        # ...within 20 ms of reset
@@ -176,7 +200,7 @@ kind = "no_faults"                        # and nothing is over-stressed meanwhi
 ```
 
 Assertions cover rails and forced net drives, timed peripheral events (button
-presses, sensor inputs), `voltage` / `toggle` / `boot-coverage` / `no_faults`,
+presses, sensor inputs), `voltage` / `toggle` / `boot_coverage` / `no_faults`,
 thermal limits, and tolerance/AC sweeps. More runnable specs and board-as-code
 examples are in [`docs/ci/EXAMPLES.md`](docs/ci/EXAMPLES.md). The top of
 [`crates/hauksbee-ci/src/spec.rs`](crates/hauksbee-ci/src/spec.rs) documents the full spec schema.
@@ -219,21 +243,21 @@ Gatekeeper note for macOS.
 
 ## The honest verdict on the hunt
 
-Pointed at two dozen famous open-hardware boards over five rounds, hauksbee found no unreported defect, and zero false positives from the lint. These are shipped, reviewed, working boards, so a clean electrical verdict is the correct one. The real yield was about ten bugs in hauksbee itself. These were surprises that turned out to be tool defects rather than board defects, each chased to ground and fixed. The clean sweep is evidence of the tool's honesty. The known-fault table is the proof of its teeth. Full write-up: [`docs/record/FAMOUS_SWEEP.md`](docs/record/FAMOUS_SWEEP.md).
+**The famous-board sweep: zero findings, zero false positives.** Pointed at two dozen famous open-hardware boards over five rounds, hauksbee found no unreported defect, and zero false positives from the lint. These are shipped, reviewed, working boards, so a clean electrical verdict is the correct one. The real yield was about ten bugs in hauksbee itself. These were surprises that turned out to be tool defects rather than board defects, each chased to ground and fixed. The clean sweep is evidence of the tool's honesty. The known-fault table is the proof of its teeth. Full write-up: [`docs/evidence/FAMOUS_SWEEP.md`](docs/evidence/FAMOUS_SWEEP.md).
 
-Then we pointed it where unknown bugs actually survive: **thin-review, single-maintainer, freshly-shipped boards with no issue history**: the opposite of the famous survivors. Across five such boards, hauksbee turned up **three genuine, previously-unreported findings**. Each was chased to the design file, hand-verified, prior-art-checked, and put past a fresh context-isolated skeptic:
+**The thin-review hunts: three findings.** Then we pointed it where unknown bugs actually survive: **thin-review, single-maintainer, freshly-shipped boards with no issue history**, the opposite of the famous survivors. Across five such boards came three genuine, previously-unreported findings: two straight from the tool, and one tool-assisted by hand analysis. Each was chased to the design file, hand-verified, prior-art-checked, and put past a fresh context-isolated skeptic:
 
 - **FPV-Drone-STM32F411 ESC board**: a **+3.3 V-to-GND copper short** on the bottom copper (GND pour overlaps the 3.3 V trace, actual clearance 0.0000 mm). KiCad's own DRC confirms it independently, and it is present byte-for-byte in the exported gerber. Built as drawn, the ESC is dead on arrival. This is a DRC-class defect: KiCad's built-in DRC catches it too. The board was simply never run through DRC before shipping.
 - **LibreSolar mppt-1210-hus**: the input bulk electrolytic runs at **~1.66x its ripple-current rating** (~5.0 A rms vs 3.0 A) at the board's rated 10 A charge. This is a lifetime/derating overstress, not a power-up failure. This is a hauksbee-assisted hand finding: hauksbee extracted the topology and part values, and the analyst worked out the ripple physics.
 - **INGBZGMBH PD-Sink-Trigger-Board**: the rotary voltage selector **mis-codes its top two detents** against the CYPD3177 EZ-PD BCR decode table. "15 V" requests 12 V, and "20 V" never reaches 20 V, so the advertised 20 V / 100 W is unreachable. Functional defect, no safety hazard.
 
-Three real findings, zero false positives shipped, on boards nobody had reviewed. The targeting thesis (bugs survive on unproven boards, not on shipped survivors) held. Per-board write-ups and the tooling-gap backlog the hunt exposed are in [`docs/hunts/`](docs/hunts/) ([`SUMMARY.md`](docs/hunts/SUMMARY.md)).
+Two tool findings plus one tool-assisted, zero false positives shipped, on boards nobody had reviewed. The targeting thesis (bugs survive on unproven boards, not on shipped survivors) held. [`docs/evidence/FAMOUS_SWEEP.md`](docs/evidence/FAMOUS_SWEEP.md) records the sweep and summarises these companion findings.
 
-A later **firmware co-sim** hunt ([`docs/hunts/HUNT_2026-06-30.md`](docs/hunts/HUNT_2026-06-30.md)) added a fourth finding of a different character: a **cross-layer power-up ignition fault** that only the co-sim differentiator can see. The board is `explosion33/RocketryIgniter` (ATmega328P dual-igniter e-match board). Its firmware's `SoftwareSerial` constructor enables the AVR internal pull-up on its RX pin during C++ static init, before `setup()` runs. That RX pin is wired straight to one of the two MOSFET igniter gates, which has no pull-down. The gate charges to ~VCC through the ~30 kΩ pull-up, the FET turns on, and an e-match fires at power-up. The firmware's intended fire path is an unimplemented `//To Do`. hauksbee co-sim settles the gate at 5.000 V. `hauksbee run --firmware --headless --plain` names the chain: copper (no pull-down), silicon (AVR pull-up), firmware (a serial port mapped onto a pyrotechnic gate), consequence (ignition). A fresh hardware-skeptic confirmed it across seven axes. Catching it first required fixing a silent co-sim solver bug (a crystal mis-bound as a 16-gigafarad capacitor). Surfacing it to a layperson required a new boot-safety advisory. Both live in the same hunt log.
+A later **firmware co-sim** hunt added a fourth finding of a different character: a **cross-layer power-up ignition fault** that only the co-sim differentiator can see. The board is `explosion33/RocketryIgniter` (ATmega328P dual-igniter e-match board). Its firmware's `SoftwareSerial` constructor enables the AVR internal pull-up on its RX pin during C++ static init, before `setup()` runs. That RX pin is wired straight to one of the two MOSFET igniter gates, which has no pull-down. The gate charges to ~VCC through the ~30 kΩ pull-up, the FET turns on, and an e-match fires at power-up. The firmware's intended fire path is an unimplemented `//To Do`. hauksbee co-sim settles the gate at 5.000 V. `hauksbee run --firmware --headless --plain` names the chain: copper (no pull-down), silicon (AVR pull-up), firmware (a serial port mapped onto a pyrotechnic gate), consequence (ignition). A fresh hardware-skeptic confirmed it across seven axes. Catching it first required fixing a silent co-sim solver bug (a crystal mis-bound as a 16-gigafarad capacitor). Surfacing it to a layperson required a new boot-safety advisory.
 
 ## A note on speed
 
-Hauksbee's matrix-exponential fast path wins in the PCB regime: many small RC islands hang off shared rails, and exact large steps replace thousands of small ones there. Benchmarks put it at ~23x ngspice wall-clock on a half-wave rectifier and ~6x on a 90-block synapse array (`#[ignore]` benches, observations rather than guarantees). What the tests *do* assert is the accuracy: agreement with ngspice and analytic theory to fractions of a percent. An accuracy cross-check gates every speed claim. The method and the full table are in [`docs/about/COMPARISON.md`](docs/about/COMPARISON.md).
+Hauksbee's matrix-exponential fast path wins in the PCB regime: many small RC islands hang off shared rails, and exact large steps replace thousands of small ones there. Benchmarks put it at ~23x ngspice wall-clock on a half-wave rectifier and ~6x on a 90-block synapse array (`#[ignore]` benches, observations rather than guarantees). What the tests *do* assert is the accuracy: agreement with ngspice and analytic theory to fractions of a percent typically, and within a few percent at worst (the per-deck bounds are in the comparison table). An accuracy cross-check gates every speed claim. The method and the full table are in [`docs/about/COMPARISON.md`](docs/about/COMPARISON.md).
 
 ---
 
@@ -253,6 +277,8 @@ Partition the circuit at device boundaries, and give every island the cheapest s
 | `hauksbee-engine` | the whole pipeline wired together: bind → build → co-sim, plus examples and benchmarks |
 | `hauksbee-ci` | the headless CI runner |
 | `hauksbee-server` | websocket server streaming live simulation frames |
+| `hauksbee-mcp` | stdio MCP server: the analyse/check/decompile flow as structured tools for AI agents |
+| `hauksbee-testkit` | shared test plumbing: locates test assets and fixtures for the suites |
 | `frontend/` | the board, alive: 2D/3D render, signal flow, probes, scope |
 
 The KiCad file layer, `kicad-forge`, is a vendored component rather than an external dependency: lossless parse and produce (byte-exact round-trip), the typed board model hauksbee extracts from, and board-to-code decompilation. Its `forge-sexpr`, `forge-model` and `forge-codegen` crates live under [`vendor/kicad-forge`](vendor/kicad-forge), so a fresh clone builds with no sibling checkout and no network. It has no separate public repository, and hauksbee is where it is used. Provenance and the update procedure: [`vendor/kicad-forge/VENDORED.md`](vendor/kicad-forge/VENDORED.md).
@@ -261,9 +287,9 @@ The KiCad file layer, `kicad-forge`, is a vendored component rather than an exte
 
 ## Where it came from
 
-We built hauksbee for one board no simulation tool could honestly check: Tarski, a 3,443-component analogue neuromorphic accelerator (Project Tarski, University of Galway). That board got a bespoke emulator, fast because it integrated the *intended* circuit in closed form. That speed was exactly its blind spot: it could never see a base wired where a collector should be. Hauksbee simulates the board you actually drew, device by device, and finds the bugs the bespoke one was structurally incapable of finding.
+We built hauksbee for one board no simulation tool could honestly check: Tarski, a 3,442-component analogue neuromorphic accelerator (Project Tarski, University of Galway). That board got a bespoke emulator, fast because it integrated the *intended* circuit in closed form. That speed was exactly its blind spot: it could never see a base wired where a collector should be. Hauksbee simulates the board you actually drew, device by device, and finds the bugs the bespoke one was structurally incapable of finding.
 
-That board is not ours to publish. It is not in this repository, and neither are the 60 tests that run against it. [`docs/about/PRIVATE_SUITE.md`](docs/about/PRIVATE_SUITE.md) lists them by name. It says what each one covered. A suite that quietly shrinks reads as a suite that was always this size.
+That board is not ours to publish. It is not in this repository, and neither are the 60 tests that run against it. [`docs/about/PRIVATE_SUITE.md`](docs/about/PRIVATE_SUITE.md) lists them suite by suite, with counts, and says what each suite covered. A suite that quietly shrinks reads as a suite that was always this size.
 
 The name is for [Francis Hauksbee](https://en.wikipedia.org/wiki/Francis_Hauksbee), who built the first machine to make the electrostatic spark on demand. Bringing a dead board to life is roughly the same trick.
 
@@ -303,4 +329,6 @@ Hauksbee stands on a lot of open-source work. The substantial ones:
 
 Hauksbee's own source is **Apache-2.0** (see [`LICENSE`](LICENSE)). Redistributions must retain the [`NOTICE`](NOTICE) file, which is how attribution travels with the code. One caveat, stated plainly: the optional `avr` backend links **libsimavr, which is GPL-3.0**. A binary built with the default features (which include `avr`) is a combined work covered by GPL-3.0. Build with `--no-default-features --features renode,qemu` for a GPL-free binary. Renode and the Espressif QEMU fork run as separate processes reached over TCP, so they impose no link-time licence obligation.
 
-Releases ship both, labelled rather than implied. `hauksbee-<version>-<target>.tar.gz` is the default download, and is a **GPL-3.0** binary (AVR included). This constrains redistributing it, not running it. `hauksbee-<version>-<target>-permissive.tar.gz` is the **Apache-2.0** build with no GPL code linked, for anyone redistributing or embedding hauksbee. Every tarball carries a `LICENSE-BINARY.txt` that states which it is. The release workflow refuses to publish a build whose `hauksbee doctor` output contradicts its label. Full reasoning: [`docs/about/release-and-licensing.md`](docs/about/release-and-licensing.md).
+Releases ship both, labelled rather than implied. `hauksbee-<version>-<target>.tar.gz` is the default download, and is a **GPL-3.0** binary (AVR included). This constrains redistributing it, not running it. `hauksbee-<version>-<target>-permissive.tar.gz` is the **Apache-2.0** build with no GPL code linked, for anyone redistributing or embedding hauksbee. Every tarball carries a `LICENSE-BINARY.txt` that states which it is. The release workflow refuses to publish a build whose `hauksbee doctor` output contradicts its label.
+
+[`COMPLIANCE.md`](COMPLIANCE.md) is the one-page answer per artifact: source tree, both tarballs, the macOS app, the Docker images, and what each one obliges you to do if you redistribute it. [`docs/about/release-and-licensing.md`](docs/about/release-and-licensing.md) has the full reasoning and the guard that keeps the labels honest.

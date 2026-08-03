@@ -66,13 +66,21 @@ that is worse than one with no models in it.
 Every model source has an explicit layer (`SourceLayer` in
 `hauksbee-models/src/lib.rs`):
 
-| layer            | priority |
-|------------------|----------|
-| built-in db      | 0        |
-| installed packs  | 10       |
-| user model dirs  | 20       |
-| `--models-dir`   | 30       |
-| user SPICE cards | 40       |
+| layer | name in reports | priority |
+|-------|-----------------|----------|
+| built-in db | `builtin` | 0 |
+| installed packs | `pack` | 10 |
+| `~/.hauksbee/models` (where datasheet extraction writes) | `user-dir` | 20 |
+| `~/.config/hauksbee/models` (your own models) | `user-config-dir` | 25 |
+| `--models-dir <dir>` | `models-dir` | 30 |
+| user SPICE cards | `spice` | 40 |
+
+Six layers, not five: the two standing user directories are **distinct**.
+`~/.config/hauksbee/models` sits above `~/.hauksbee/models` on purpose, so a
+model you hand-corrected in your config directory deterministically wins over an
+auto-extracted one carrying the same id. Collapsing them into "user model dirs"
+would leave that ordering to load order, which is exactly the accident the
+layering exists to prevent.
 
 The higher layer wins outright. The specificity score only breaks ties within
 a layer. Two packs shipping the same model id is a same-layer conflict:

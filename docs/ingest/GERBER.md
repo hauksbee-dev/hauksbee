@@ -1,7 +1,9 @@
 # Gerber + Pick-and-Place Reverse Extraction
 
-Hauksbee normally extracts a board from native CAD (a `.kicad_pcb` carries
-every pad's net; see `docs/ingest/SCHEMATICS.md`). But a large tier of real
+Hauksbee normally extracts a board from native CAD, where every pad already
+carries its net: a `.kicad_pcb` or `.brd` layout, a `.kicad_sch` hierarchy
+([SCHEMATICS.md](SCHEMATICS.md)), or an Altium `.PcbDoc`
+([ALTIUM.md](ALTIUM.md)). But a large tier of real
 hardware ships only *manufacturing* files: RS-274X copper gerbers, an
 Excellon (or gerber) drill, a pick-and-place CSV, sometimes a BOM, and no
 CAD at all. The uConsole, Inkplate, and a long tail of famous boards live
@@ -126,7 +128,7 @@ degrades pad assignment for that part. Coincident flashes at one location (a
 through-hole pad's F.Cu + B.Cu rings + its drill discs) collapse to one pad.
 Synthesised drill discs are tagged `Via` and never counted as component pads.
 
-## Closed-loop validation (the honesty gate)
+## Closed-loop validation against native CAD
 
 Before any real-world claim, we validate the reconstruction against ground
 truth: take corpus KiCad boards, export their gerbers + drill + P&P with
@@ -147,47 +149,57 @@ reconstruction did not place, bottom-side parts the P&P marks, and pads the
 footprint window missed are excluded from the percentage, so a low located
 count caps how much the % actually proves. The located fraction is
 therefore gated alongside the partition %; both are asserted in
-`tests/gerber_closedloop.rs`. Every row below is a corpus-gated regression
-test (RP2040 is its own tight test; the rest are the sweep). The gated
-floor sits in parentheses where it is looser than the observed value, so
-you can see exactly what CI guarantees versus what a representative run
-produced.
+`crates/hauksbee-extract/tests/gerber_closedloop.rs`.
 
-| Board | Native nets / comps | Net partition (gate) | Located (gate) |
-|-------|---------------------|----------------------|----------------|
-| reform OLED | 13 / 13 | 100.0% (≥99) | 38/38 = 100% (≥85) |
-| Watchy | 84 / 84 | 100.0% (≥99) | 262/276 = 95% (≥80) |
-| reform trackball2 | 64 / 65 | 99.8% (≥99) | 202/220 = 92% (≥75) |
-| reform motherboard | 681 / 522 | 99.7% (≥99) | 1785/2184 = 82% (≥78) |
+Every number below is a **gate floor**, read straight out of that test's board
+table. Reproduce them with:
 
-Measured 2026-07-30 against kicad-cli 9.0.3, over the boards
-`scripts/fetch-corpus.sh` actually delivers. Four boards, not eight: the
-LumenPnP ring-light, Corne and Lily58 rows are gone because those boards do
-not currently fetch (one upstream hangs, two land outside the corpus tree),
-and a row measured on a board nobody can obtain is not evidence. RP2040
-minimal has its own tighter test rather than a row here.
+```bash
+HAUKSBEE_REQUIRE_CORPUS=1 cargo test -p hauksbee-extract \
+    --test gerber_closedloop -- --nocapture
+```
 
-These numbers moved from the previous table, and the reason is worth stating:
-the sweep had never run. The tests resolve boards under `board-corpus/famous/`
-and the fetch script writes `board-corpus/` with no such level, so every
-lookup missed while the directory-exists check kept the skip from firing. The
-gate reported green having examined nothing. Both layouts resolve now.
+| Board | Native nets / comps | Net-partition floor | Located-pad floor | Last measured |
+|-------|---------------------|---------------------|-------------------|---------------|
+| reform OLED | 13 / 13 | 99.0% | 85% | 100.0% over 38/38 |
+| Watchy | 84 / 84 | 99.0% | 80% | 100.0% over 262/276 = 95% |
+| LumenPnP ring-light | not recorded | 99.0% | 80% | not recorded |
+| reform trackball2 | 64 / 65 | 99.0% | 75% | 99.8% over 202/220 = 92% |
+| Corne (crkbd cherry) | not recorded | 99.0% | 70% | 74.4% located (482/648) |
+| Lily58 Pro V2 | not recorded | 98.5% | 78% | 81.0% located (687/848) |
+| reform motherboard | 681 / 522 | 99.0% | 78% | 99.7% over 1785/2184 = 82% |
 
-Over the located pads, net-partition agreement runs 99.0-100% on every
-board: the recovered electrical graph is essentially identical where we
-placed a pad. The sub-100% rows are a handful of pads on a tiny isolated
-stub (e.g. one RP2040 GND pad whose copper the export rounds just out of
-touch).
+RP2040 minimal has its own tighter test (`rp2040_minimal_exact_nets`, floor
+99.0% over more than 150 located pads) rather than a row here.
+
+Which rows a given run actually exercises depends on your corpus. Every board
+is fetched by `scripts/fetch-corpus.sh`, but a board the fetch has not
+delivered, or one the installed `kicad-cli` cannot load to make ground truth,
+is skipped with a printed note rather than failing. `HAUKSBEE_REQUIRE_CORPUS=1`
+turns "nothing ran at all" into a failure. The "Last measured" column is what a
+full run produced against kicad-cli 9.0.3, the release the floors are
+calibrated to (`CALIBRATED_KICAD_CLI` in the test); the test prints both the
+calibrated and the running version so a floor breach can be attributed to the
+side that moved.
+
+A design note earned the hard way: this sweep resolves boards through a shared
+corpus resolver that accepts both the hand-built `famous/<id>/…` layout and the
+flat `<id>/…` layout the fetch script writes. It used to join `famous/` directly,
+so on a fetched corpus every lookup missed while the directory-exists check kept
+the skip from firing, and the gate reported green having examined nothing. Both
+layouts resolve now, and a gate that cannot find its inputs says so.
+
+Over the located pads, net-partition agreement runs 99.7% to 100.0% on every
+board that has ground truth: the recovered electrical graph is essentially
+identical where we placed a pad. The sub-100% rows are a handful of pads on tiny
+isolated stubs whose copper the gerber export rounds just out of touch.
 
 The **located fraction varies a lot** and is the honest weak spot. It runs
-high (83-96%) on most boards but only ~50% on the dense keyboards (Corne,
-Lily58), where many pads sit bottom-side or on footprints the package-name
-window under-covers. Those *missing* pads are not scored by the partition
-%, so read the two columns together: "99.7% on Corne" means "99.7% over the
-50% of pads we located", not "99.7% of the board".
-
-Timings are a representative run on one laptop (Apple Silicon), not a
-guaranteed bound; the reform motherboard varies 15-41 s with machine load.
+82% to 100% on the reform and Watchy boards but drops to 74% on Corne and 81%
+on Lily58, where many pads sit bottom-side or on footprints the package-name
+window under-covers. Those *missing* pads are not scored by the partition %, so
+read the two columns together: "99.7% on the reform motherboard" means "99.7%
+over the 82% of pads we located", not "99.7% of the board".
 
 **What the closed loop does and does not cover.** The ground-truth gerbers
 are exported with `--no-protel-ext`, so they carry KiCad long layer names
@@ -223,36 +235,49 @@ sidecars.
 pad-and-netlist fixtures with zero segments, vias and zones: their connectivity
 lives in the file rather than in copper. A gerber carries copper and nothing
 else, so on an unrouted board there is physically nothing to trace, and the
-reconstruction can only infer from pad overlap. Those boards land at 60-85%
-net-partition, and that number measures the fixture rather than the extractor.
+reconstruction can only infer from pad overlap. Those boards land anywhere from
+about 40% to 100% net-partition (the smallest two-net fixtures happen to hit
+100%; a five-part unrouted board reads 41.8%), and that number measures the
+fixture rather than the extractor. None of them carries a floor, deliberately.
 
 Watchy is the one shipped board with a real layout (685 segments, 114 vias, 6
 zones), and it is the one carrying a floor:
 
-| Board | Copper | Net partition (gate) | Located (gate) |
-|-------|--------|----------------------|----------------|
-| watchy (bundled) | 685 seg / 114 vias / 6 zones | 100.0% (≥99) | 262/276 = 95% (≥90) |
+| Board | Copper | Net-partition floor | Located-pad floor | Last measured |
+|-------|--------|---------------------|-------------------|---------------|
+| watchy (bundled) | 685 seg / 114 vias / 6 zones | 99.0% | 90% | 100.0% over 262/276 = 95% |
 
-Measured 2026-07-29 against kicad-cli 10.0.3.
+Measured against kicad-cli 9.0.3, the same release the corpus floors are
+calibrated to.
 
-Per the Tarski meta-lesson, we treated every closed-loop disagreement as our
-bug and chased it to the primitive. Two mattered: a Y-axis sign convention
-(KiCad pcb Y-down vs gerber Y-up) and the pour-containment rule above (which
-moved ring-light from 35% to 100%).
+Every closed-loop disagreement was treated as our bug and chased to the
+primitive rather than tolerated. Two mattered: a Y-axis sign convention (KiCad
+pcb Y-down vs gerber Y-up) and the pour-containment rule above, which moved the
+ring-light board from 35% to 100%.
 
 ## Real-world demo: the uConsole mainboard
 
-`board-corpus/famous/uconsole_gerber/` holds the ClockworkPi uConsole
-mainboard (CPI 3.14 Mainboard V5), fetched from `clockworkpi/uConsole`
-(`PCB/CPI_3.14_Mainboard_V5_Gerber.7z`). It has **no native CAD** and ships
+The ClockworkPi uConsole mainboard (CPI 3.14 Mainboard V5) comes from
+`clockworkpi/uConsole` (`PCB/CPI_3.14_Mainboard_V5_Gerber.7z`), recorded in
+`corpus.toml` as board id `uconsole_gerber`. It has **no native CAD** and ships
 in Allegro `.art` format, a different gerber dialect, role-named layers, a
 gerber-format drill, and an Allegro `!`-delimited pick-and-place in mils.
-License is **unconfirmed** (GPL-v3 claimed in forum, not asserted in-repo;
-see `SOURCES.md`).
 
-Reverse-extracted (`cargo run --example gerber_report -- <dir>`; figures
-below are a representative run, `tests/gerber_uconsole.rs` asserts floors,
-not these exact values, since there is no ground truth to compare against):
+**This board is optional, and normally absent.** Its licence is unconfirmed
+(GPL-v3 claimed in a forum thread, not asserted in the repository), so
+`corpus.toml` marks it `license_confirmed = false` and `scripts/fetch-corpus.sh`
+skips it unless you pass `--include-unconfirmed` and decide for yourself. On top
+of that, `crates/hauksbee-extract/tests/gerber_uconsole.rs` looks for it at
+`famous/uconsole_gerber`
+under the corpus root, which is the hand-built layout rather than the flat
+layout the fetch script writes, so the test prints `skipping uConsole (corpus
+absent)` and returns unless you place the directory there or set
+`HAUKSBEE_CORPUS_DIR` at a corpus laid out that way. Treat the figures below as
+a recorded run on a maintainer's corpus, not as something a clone reproduces.
+
+Reverse-extracted (`cargo run --example gerber_report -- <dir>`; the test
+asserts loose floors, not these exact values, since there is no ground truth to
+compare against):
 
 ```
 copper layers:       5   (top, gnd02, pwr04, gnd05, bottom)
@@ -278,7 +303,7 @@ real fab-only board in an unfamiliar dialect.
   copper alone, but components cannot be bound; there is nothing to say
   which pads form which part. `from_gerber_dir` returns the nets with zero
   components. (The Inkplate 6 gerber set is exactly this case; see
-  docs/record/FAMOUS_SWEEP.md Round 5.)
+  docs/evidence/FAMOUS_SWEEP.md Round 5.)
 - **No BOM**: components still bind; their value/part-number is only the
   P&P `Val`/`Package` field rather than an enriched MPN.
 - **No drill**: single-layer boards are fine; on multi-layer boards each
@@ -306,7 +331,7 @@ identity, so it runs but finds nothing unless a current can be tied to a
 specific reconstructed net. And a board whose fab draws traces as G36/G37
 filled regions (some Altium exports, e.g. the Inkplate 6) reads every net
 as `Poured`, so the check goes inert there, the safe failure direction (a
-`Poured` net is never flagged). See docs/record/FAMOUS_SWEEP.md Round 5.
+`Poured` net is never flagged). See docs/evidence/FAMOUS_SWEEP.md Round 5.
 
 ## Excellon dialects
 
@@ -338,7 +363,7 @@ is the all-pairs touch sweep on the densest signal layers.
 
 - **The closed-loop % only scores located pads.** As the validation section
   stresses, net-partition agreement is computed over pads the
-  reconstruction placed, which ranges from ~50% (dense keyboards) to ~96%.
+  reconstruction placed, which ranges from ~74% (dense keyboards) to 100%.
   Pads we fail to locate (bottom-side parts, footprints the package-name
   window under-covers) are not counted against the percentage. The located
   fraction is gated separately so a regression that *loses* pads cannot
@@ -351,7 +376,8 @@ is the all-pairs touch sweep on the densest signal layers.
   a crystal may report its GND vias as extra pads, on the correct net, but
   over-counted) and *misses* pads (a part whose pads fall outside an
   under-sized window). Component-name match in the closed loop therefore
-  runs well below net agreement (e.g. Corne 82/180); the recovered
+  runs well below net agreement (Watchy recovers 60 of 84 component names at
+  100.0% net partition; the reform motherboard, 438 of 522); the recovered
   *connectivity* is what the simulator needs, and that stays near-exact
   over located pads.
 - **Aperture-macro coverage** is the common primitives (circle,
@@ -388,7 +414,11 @@ is the all-pairs touch sweep on the densest signal layers.
   same basename in different sub-folders of a job zip would overwrite each
   other. Job zips are flat in practice, but a deeply-nested archive is
   better extracted manually and pointed at as a directory.
-- **kicad-cli round-trip**: KiCad-10-dev-format demo boards
-  (pic_programmer, stickhub) cannot be exported by the installed kicad-cli
-  9.x to make ground truth, so they are skipped (not failed) in the closed
-  loop.
+- **kicad-cli round-trip**: the closed loop needs `kicad-cli` to make ground
+  truth, and the floors are calibrated against 9.0.3. A board a newer or older
+  CLI cannot load (KiCad-10-format demos such as `pic_programmer` and
+  `stickhub` are the ones we hit) is skipped rather than failed, with a printed
+  note naming it. The gate prints both the calibrated and the running version on
+  every run, so if a floor breaks you can tell whether the extractor regressed
+  or the exporter moved the ground truth. The right response to the latter is to
+  re-measure and record the new version, never to shave the floor.

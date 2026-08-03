@@ -7,10 +7,13 @@ performance pillar, so devices are enum variants, not trait objects. A
 checklist keeps this safe: a compile error or a test enforces every step, so
 forgetting one is impossible to ship, not merely inadvisable.
 
-The worked example is the VCVS/VCCS pair (SPICE `E`/`G` cards), which landed
-as commits `82a818f` (IR + loader + terminal classification) and `ff00d94`
-(stamps through every integration site). Read those two commits alongside
-this doc. They are the checklist executed once, with design notes.
+The worked example is the VCVS/VCCS pair (SPICE `E`/`G` cards). The shipped
+result is the checklist executed once, and every step below names the file to
+read: the IR variant and its terminal classification in
+`crates/hauksbee-ir/src/lib.rs`, the stamps in `crates/hauksbee-solve/src/stamp.rs`,
+the island decision in `crates/hauksbee-solve/src/linear.rs`, and the tests in
+`crates/hauksbee-solve/tests/controlled_sources.rs` and
+`crates/hauksbee-solve/tests/decks/vcvs_gain.cir`.
 
 **The hazard this checklist guards against**, in one sentence: several
 consumers of the `Device` enum go silently wrong, not loudly broken, when a
@@ -21,7 +24,7 @@ waveform.
 
 | # | Touchpoint | Where | Failure if missed | Enforced by |
 |---|---|---|---|---|
-| 1 | The enum variant + `examples()` | `crates/hauksbee-ir/src/lib.rs` |, | `strum::EnumCount` assert in `Device::examples` |
+| 1 | The enum variant + `examples()` | `crates/hauksbee-ir/src/lib.rs` | variant exists but nothing ever constructs one, so no enforcement test sees it | `strum::EnumCount` assert in `Device::examples` |
 | 2 | `nodes()` / `map_nodes()` | same file | device dropped from every partitioned sub-circuit | exhaustive match, no `_` arm |
 | 3 | `is_linear()` / `is_event_driven()` | same file | island misclassified; nonlinear device taints the fast path | doc-comment justification required; review |
 | 4 | `conduction_nodes()` / `sense_nodes()` | same file | tear engine reasons wrongly about the cut | the zero-row cross-check test |
@@ -32,7 +35,7 @@ Also, when the device owns a branch-current unknown (anything that fixes a
 voltage), you must update the unknown layout in
 `crates/hauksbee-solve/src/system.rs`. When it references *another device*
 (F/H control sources, K couplings), update `controlling_sources` /
-`retarget_controlling_source`.
+`retarget_controlling_source_slot`.
 
 ## Step 1, the IR variant, with its physics in the doc comment
 
@@ -91,7 +94,9 @@ Device::Vcvs { p, n, cp, cn, .. } | Device::Vccs { p, n, cp, cn, .. } => {
 **Trap: `DeviceId` references do not remap here.** `map_nodes` rewrites
 *nodes*. A device that carries a `DeviceId` (F/H `ctrl_src`, B-source
 `I(vname)` deps, K-coupling windings) needs extraction passes to retarget
-that reference via `Device::retarget_controlling_source`. Otherwise the id
+that reference via `Device::retarget_controlling_source_slot(slot, new_id)`,
+where `slot` indexes the device's control references (F/H have exactly one, slot
+0; a K coupling has two). Otherwise the id
 silently points at whatever occupies that index in the new sub-circuit. The
 comments at the `Cccs`/`Ccvs` arms of `map_nodes` state this hazard clearly.
 
@@ -152,7 +157,8 @@ The exhaustive match forces you to choose. Your options, in order of preference:
    the exactness gate proving fast-path == monolithic for it), or
 2. **Return `None`** for islands containing it, routing them to the MNA
    sub-solve, which stamps everything in full. This is exact, merely slower.
-   E/G do this (see `ff00d94`'s design note).
+   E/G do this; the `is_linear` doc comments on `Device::Vcvs` / `Device::Vccs`
+   in `crates/hauksbee-ir/src/lib.rs` record why.
 
 "Linear" and "state-space-reducible" are different properties. The
 `is_linear` doc comment for `Vcvs`/`Vccs` states this distinction so nobody
@@ -183,7 +189,8 @@ Three layers, all of which must be green:
    plus the serde round-trip in `hauksbee-ir`.
 
 2. **A monolithic + partitioned solve** of a small circuit containing the
-   device (`crates/hauksbee-solve/tests/features.rs` has the E/G cases).
+   device (`crates/hauksbee-solve/tests/controlled_sources.rs` has the E/G
+   cases).
    This is what catches a `LinearIsland` mishandling: force
    `Partitioning::Auto` on a device-in-RC-island fixture and check that the
    result matches the monolithic solve.
@@ -226,7 +233,7 @@ Three layers, all of which must be green:
 [ ] nodes() / map_nodes() arms                     (no _ arm; compile error until done)
 [ ] is_linear / is_event_driven + one-line why
 [ ] conduction_nodes / sense_nodes declared        (cross-check test verifies the claim)
-[ ] controlling_sources + retarget, if DeviceId refs
+[ ] controlling_sources + retarget_controlling_source_slot, if DeviceId refs
 [ ] stamp_all + reserve_pattern                    (every slot pre-touched)
 [ ] system.rs unknown layout, if branch unknown
 [ ] LinearIsland::compile: model it or return None (exhaustive match)
