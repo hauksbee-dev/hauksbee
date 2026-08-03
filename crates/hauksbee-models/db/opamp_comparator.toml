@@ -368,3 +368,49 @@ rail_hi = 26.0
 # Source: INA2181 datasheet SBOS831A, Table 7.1 Absolute Maximum Ratings
 max_voltage_v       = 26.0    # VS abs max (V), datasheet
 max_junction_temp_c = 150.0   # Tj max (C), datasheet
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "lm324"
+kind = "opamp"
+description = "LM324 quad op-amp, 3 V to 30 V single supply, 14-pin"
+
+[models.match]
+# The quad. LM358 is the dual and has its own entry with its own pin map; the
+# LM2902 is the automotive grade of this part on a 26 V supply, so it is left
+# out rather than given these ratings.
+value_re = "(?i)^LM[123]24[A-Z]*$"
+
+[models.params]
+# Source: Texas Instruments LM124/LM224/LM324/LM2902 datasheet SLOS066AE,
+# August 1975, revised September 2025.
+gain    = 100000.0  # AOL typ 100 V/mV, Table 6.5 (the LM324B grade's column;
+                    # the plain part shares the design and the typical)
+rail_lo = 0.0       # single-supply part: the output swings down to V- (ground)
+rail_hi = 30.0      # VCC max, Recommended Operating Conditions, LM324xx column
+                    # (the 32 V in Absolute Maximum Ratings is a damage limit)
+
+[models.pins]
+# Table 5-1 "Pin Functions", the 14-pin D/DB/J/N/NS/PW/W packages. Note the
+# supplies are NOT at the corners the way a 741 or an LM358 puts them: VCC+ is
+# pin 4 and VCC- is pin 11, in the middle of each side.
+"1"  = "out_a"
+"2"  = "in_minus_a"
+"3"  = "in_plus_a"
+"4"  = "vcc"
+"5"  = "in_plus_b"
+"6"  = "in_minus_b"
+"7"  = "out_b"
+"8"  = "out_c"
+"9"  = "in_minus_c"
+"10" = "in_plus_c"
+"11" = "vss"
+"12" = "in_plus_d"
+"13" = "in_minus_d"
+"14" = "out_d"
+
+[models.ratings]
+max_voltage_v = 32.0            # VCC, Absolute Maximum Ratings, LM324xx
+max_junction_temp_c = 150.0     # TJ, Absolute Maximum Ratings
+theta_ja_c_per_w = 83.5         # RthJA, 14-pin N (PDIP), Thermal Information
