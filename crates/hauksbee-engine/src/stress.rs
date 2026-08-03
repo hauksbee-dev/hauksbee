@@ -996,10 +996,44 @@ fn build_checks(meta: &DeviceMeta, op: &OperatingPoint) -> Vec<Check> {
 /// `vd` and temperature `temp_c`. Series resistance is ignored (first-order;
 /// the solver already accounts for it in `vd`), and the result is clamped to a
 /// sane range so a runaway forward bias does not overflow.
+/// Forward current from the diode's TERMINAL voltage.
+///
+/// The terminal voltage is not the junction voltage when the model carries a
+/// series resistance: the junction sits on an intrinsic anode and `rs` bridges
+/// it out, so the terminals read `vj + i(vj)*rs`. Feeding that straight into
+/// the exponential reports a current the device is not carrying, and this
+/// monitor is what raises over-current and over-power faults, so the error
+/// lands directly on a verdict. A red LED at `rs = 6` reads 81 A instead of
+/// 56 mA that way, because the exponential turns a 340 mV offset into three
+/// orders of magnitude.
+///
+/// So recover the junction first, solving `vj + i(vj)*rs = vd` for `vj`.
+/// Newton on a monotone scalar, started from the terminal voltage, which is an
+/// upper bound: a handful of iterations and no allocation.
 fn diode_current(model: &hauksbee_ir::DiodeModel, vd: f64, temp_c: f64) -> f64 {
     let vt = hauksbee_ir::thermal_voltage_c(temp_c) * model.n;
     if vt <= 0.0 {
         return 0.0;
+    }
+    if model.rs > 0.0 && vd > 0.0 {
+        let is = model.is_at(temp_c);
+        let mut vj = vd;
+        for _ in 0..60 {
+            let e = (vj / vt).clamp(-100.0, 200.0).exp();
+            let i = is * (e - 1.0);
+            let g = is * e / vt;
+            let df = 1.0 + g * model.rs;
+            if !df.is_finite() || df <= 0.0 {
+                break;
+            }
+            let step = (vj + i * model.rs - vd) / df;
+            vj -= step;
+            if step.abs() < 1e-12 {
+                break;
+            }
+        }
+        let e = (vj / vt).clamp(-100.0, 200.0).exp();
+        return (is * (e - 1.0)).clamp(-1e3, 1e3);
     }
     // Forward: Shockley, matching the solver's diode_eval (which never clamps
     // an accepted junction voltage: real LEDs sit at vd/nVt > 40, and a 40

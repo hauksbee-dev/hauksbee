@@ -1,0 +1,16 @@
+1N5817 at both forward currents its datasheet publishes
+* The part that makes series resistance worth stamping. Vishay 88525 gives the
+* 1N5817 as VF 0.450 V at 1.0 A and 0.750 V at 3.1 A, and the rise between the
+* two is bulk resistance, not the exponential: fitting both with RS = 0 needs an
+* ideality factor above 10.
+*
+* Two independent branches so one .op checks both points at once. Each current
+* source drives its own diode, and the node voltage IS that diode's forward
+* voltage, so V(v1a) should read 0.450 and V(v31a) 0.750.
+I1 0 v1a DC 1.0
+D1 v1a 0 SK
+I2 0 v31a DC 3.1
+D2 v31a 0 SK
+.model SK D(IS=7.105e-6 N=1.05 RS=0.1282)
+.op
+.end

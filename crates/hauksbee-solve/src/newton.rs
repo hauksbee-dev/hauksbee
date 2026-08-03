@@ -1344,6 +1344,22 @@ fn seed_mosfet_internal_nodes(ws: &mut Workspace, circuit: &Circuit) {
     }
 }
 
+/// The diode analogue of [`seed_bjt_internal_nodes`]: start each intrinsic
+/// anode at its external terminal, the no-drop-across-rs guess.
+///
+/// Left at zero while the external anode sits at a rail, the first junction
+/// voltage is the whole rail rather than a diode drop, and the limiter anchors
+/// on that.
+fn seed_diode_internal_nodes(ws: &mut Workspace, circuit: &Circuit) {
+    for (id, dev) in circuit.iter() {
+        if let Device::Diode { a, .. } = dev {
+            if let Some(int) = ws.layout.diode_internal(id) {
+                ws.x[int] = ws.layout.node(*a).map(|i| ws.x[i]).unwrap_or(0.0);
+            }
+        }
+    }
+}
+
 fn dc_solve(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -1390,6 +1406,7 @@ fn dc_solve(
     }
     seed_bjt_internal_nodes(ws, circuit);
     seed_mosfet_internal_nodes(ws, circuit);
+    seed_diode_internal_nodes(ws, circuit);
     let dbg = std::env::var("HAUKSBEE_STAGED_DBG").is_ok();
     let r = solve(ws, opts.gmin, 1.0);
     if dbg {
@@ -2335,7 +2352,38 @@ fn solve_relaxed_no_diodes(circuit: &Circuit, opts: &SolverOptions) -> Option<Ve
     dc_solve(&mut ws, &relaxed, &relaxed_opts, false, None).ok()?;
     seed_bjt_internal_nodes(&mut ws, &relaxed);
     seed_mosfet_internal_nodes(&mut ws, &relaxed);
-    Some(ws.x.clone())
+
+    // The relaxed circuit is a different SHAPE: swapping a diode for a resistor
+    // drops the intrinsic anode its series resistance owns, shortening the node
+    // block and shifting every branch index after it. Remap by identity, node
+    // voltages by NodeId and branch currents by DeviceId, rather than returning
+    // a vector indexed against the wrong layout.
+    //
+    // The BJT's internals do not need this: relaxing turns the effect off while
+    // the layout still allocates them, so the shape is preserved. The diode
+    // swap removes the device kind entirely.
+    let full = crate::system::Layout::new(circuit);
+    if full.size == ws.layout.size {
+        return Some(ws.x.clone());
+    }
+    let mut out = vec![0.0; full.size];
+    for n in 0..=circuit.max_node() {
+        let n = hauksbee_ir::NodeId(n);
+        if let (Some(fi), Some(ri)) = (full.node(n), ws.layout.node(n)) {
+            out[fi] = ws.x[ri];
+        }
+    }
+    for (id, _) in circuit.iter() {
+        if let (Some(fb), Some(rb)) = (full.branch(id), ws.layout.branch(id)) {
+            out[fb] = ws.x[rb];
+        }
+        if let Some(int) = full.diode_internal(id) {
+            if let Device::Diode { a, .. } = &circuit.devices[id.0 as usize] {
+                out[int] = full.node(*a).map(|i| out[i]).unwrap_or(0.0);
+            }
+        }
+    }
+    Some(out)
 }
 
 /// Pseudo-transient continuation: settle the FULL nonlinear circuit to its DC

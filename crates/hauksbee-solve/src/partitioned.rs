@@ -1713,7 +1713,7 @@ fn seed_sub_reactive(
             Device::Diode { a, k, model, .. }
                 if crate::stamp::diode_has_charge(model, &opts.effects) =>
             {
-                state.x1[i] = sub_diode_q(model, node_v(ws, *a) - node_v(ws, *k), opts);
+                state.x1[i] = sub_diode_q(model, sub_diode_vj(ws, id, *a, *k), opts);
                 state.x2[i] = state.x1[i];
                 state.dx1[i] = 0.0;
             }
@@ -1778,6 +1778,17 @@ fn seed_sub_reactive(
             _ => {}
         }
     }
+}
+
+/// A diode's JUNCTION voltage on an island, at the intrinsic anode when the
+/// model carries a series resistance. The island mirror of the monolithic
+/// driver's helper, and it has to agree with the stamp for the same reason.
+fn sub_diode_vj(ws: &Workspace, id: hauksbee_ir::DeviceId, a: NodeId, k: NodeId) -> f64 {
+    let anode = match ws.layout.diode_internal(id) {
+        Some(i) => ws.x[i],
+        None => node_v(ws, a),
+    };
+    anode - node_v(ws, k)
 }
 
 /// Diode stored charge at junction voltage `vd`, through the same model code
@@ -2556,7 +2567,7 @@ fn advance_sub_reactive(
             Device::Diode { a, k, model, .. }
                 if crate::stamp::diode_has_charge(model, &opts.effects) =>
             {
-                let q_new = sub_diode_q(model, node_v(ws, *a) - node_v(ws, *k), opts);
+                let q_new = sub_diode_q(model, sub_diode_vj(ws, id, *a, *k), opts);
                 let q_old = state.x1[i];
                 let dq = if trapz {
                     2.0 * (q_new - q_old) / h - state.dx1[i]

@@ -60,6 +60,7 @@ pub struct Layout {
     /// a FET with `rd == rs == 0` allocates NOTHING, preserving today's node
     /// numbering and bit-identity.
     mos_internal_of: Vec<[Option<usize>; 2]>,
+    diode_internal_of: Vec<Option<usize>>,
     /// Mutual-inductance partners per device, indexed by `DeviceId.0`
     /// (dev-plan 04 §2.3): for each inductor in a coupled group, the OTHER
     /// windings it couples to as `(partner, M)` with `M = k·sqrt(L1·L2)`
@@ -139,6 +140,29 @@ impl Layout {
                 }
             }
         }
+        // Diode series resistance: one intrinsic anode per diode that sets one,
+        // keyed on the MODEL FIELD only, so a diode with rs == 0 allocates
+        // nothing and every deck that omits RS keeps today's node numbering
+        // bit-identically. Placed last so a deck with all three device kinds
+        // has a deterministic layout (BJT internals, then MOS, then diode).
+        let mut diode_internal_of: Vec<Option<usize>> = Vec::new();
+        for (_, dev) in circuit.iter() {
+            if let Device::Diode { model, .. } = dev {
+                if model.rs > 0.0 && diode_internal_of.is_empty() {
+                    diode_internal_of = vec![None; circuit.devices.len()];
+                }
+            }
+        }
+        if !diode_internal_of.is_empty() {
+            for (id, dev) in circuit.iter() {
+                if let Device::Diode { model, .. } = dev {
+                    if model.rs > 0.0 {
+                        diode_internal_of[id.0 as usize] = Some(next);
+                        next += 1;
+                    }
+                }
+            }
+        }
         let n_nodes = next;
         for (id, dev) in circuit.iter() {
             // A VCVS fixes its output-port voltage like an ideal Vsource, so it
@@ -202,6 +226,7 @@ impl Layout {
             branch_of,
             bjt_internal_of,
             mos_internal_of,
+            diode_internal_of,
             couplings,
         }
     }
@@ -255,6 +280,15 @@ impl Layout {
     /// (the common case: default models, or not a MOSFET), so a rd/rs-free
     /// circuit takes one `is_empty` branch and nothing else.
     #[inline]
+    /// The intrinsic anode of a diode whose model sets a series resistance.
+    /// `None` when it sets none and the junction sits on the external anode.
+    pub fn diode_internal(&self, id: DeviceId) -> Option<usize> {
+        if self.diode_internal_of.is_empty() {
+            return None;
+        }
+        self.diode_internal_of[id.0 as usize]
+    }
+
     pub fn mos_internal(&self, id: DeviceId) -> Option<&[Option<usize>; 2]> {
         if self.mos_internal_of.is_empty() {
             return None;
