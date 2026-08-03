@@ -54,7 +54,7 @@ function CopyCmd({ text }: { text: string }) {
     <button
       type="button"
       data-testid="dep-manual-copy"
-      onClick={copy}
+      onClick={() => void copy()}
       className="ml-2 rounded px-1.5 py-0.5 text-[10px] font-semibold cursor-pointer transition-all hover:opacity-80"
       style={{
         background: copied ? 'var(--ok-bg)' : 'rgba(224,138,78,0.12)',
@@ -319,8 +319,12 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
                   </div>
                 )}
               </div>
+              {/* Beside the description where the row is wide enough, on its own
+                  line below it when it is not. Held to one line at every width,
+                  the button and its cost caption ran 5px off a 320px viewport and
+                  the caption took the click. */}
               {!d.present && d.installable && (
-                <div className="flex flex-col items-end gap-1" style={{ flexShrink: 0 }}>
+                <div className="flex flex-col items-end gap-1 w-full sm:w-auto min-w-0" style={{ flexShrink: 0 }}>
                   <button
                     type="button"
                     data-testid={`dep-install-${d.id}`}
@@ -334,7 +338,7 @@ export function DepsPanel({ engineVersion }: { engineVersion?: string | null }) 
                   >
                     {busyId === d.id ? 'Installing ...' : 'Install'}
                   </button>
-                  <span className="text-[10px] text-right" style={{ color: 'var(--silk-faint)', maxWidth: '14rem' }}>
+                  <span className="text-[10px] text-right max-w-full" style={{ color: 'var(--silk-faint)', maxWidth: '14rem' }}>
                     {d.cost}
                   </span>
                 </div>

@@ -372,6 +372,31 @@ code.hb-inline {
   border-color: var(--copper-deep);
 }
 
+/* The builder and the spec.toml pane sit side by side only while both can have
+   their real width. The pane will not go below 300px without becoming unreadable,
+   and the builder's rows (a net picker plus three numeric fields) need about 500,
+   so below 1024 the two columns become one: builder first, spec pane after it,
+   in reading order. The pane also stops being sticky there. A sticky pane in a
+   single column is not chrome beside the work, it is chrome ON it: it painted
+   over the very rows it describes, and the remove buttons underneath took the
+   click. */
+.checks-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(300px, 400px);
+}
+
+@media (max-width: 1023px) {
+  .checks-grid { grid-template-columns: minmax(0, 1fr); }
+  .checks-grid .checks-spec { position: static; }
+}
+
+/* Builder inputs are sized for the value they hold (a net name is wider than a
+   voltage), never for the column. Below their natural width they shrink with it
+   rather than pushing the row's last control out of the card, which is where the
+   supply row's `remove` used to go: off the card, unclickable, at every phone
+   width. */
+.checks-flush .hb-input { max-width: 100%; }
+
 /* ── Sidebar nav ────────────────────────────────────────────────────────── */
 
 .nav-item {
@@ -435,6 +460,33 @@ code.hb-inline {
 @media (prefers-reduced-motion: reduce) {
   .view-enter, .card-stagger > * { animation: none; }
   .hb-press:active:not(:disabled) { transform: none; }
+}
+
+/* ── Skeleton bars ──────────────────────────────────────────────────────── */
+
+/* The stand-in for a line of text while the report it belongs to is still
+   being computed. The sweep is slow (1.4 s) and low contrast on purpose: a
+   fast, bright shimmer reads as activity, which would be a claim about
+   progress that this surface cannot make. It says "not yet", not "35%".
+   Under reduced motion the bar stays, flat: the SHAPE is the useful part, and
+   it is the part that stops the report from jumping when it lands. */
+@keyframes skeletonSweep {
+  from { background-position: 200% 0; }
+  to { background-position: -100% 0; }
+}
+.skeleton-bar {
+  background-color: var(--surface-2);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--silk-faint) 12%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  animation: skeletonSweep 1.4s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-bar { animation: none; background-image: none; }
 }
 
 /* ── Landing upload card ────────────────────────────────────────────────── */

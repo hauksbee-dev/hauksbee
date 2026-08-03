@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { LiveLaunchResponse, LiveStatus, WebReport } from '../types/report'
 import type { SelectedComponent } from '../components/SelectionCard'
+import { analysisFailureMessage, precheckBoardFile } from '../lib/upload-guard'
+import { inspectZip, zipIsFirmwareOnly } from '../lib/zip-inspect'
 
 // The board session: one uploaded (or preloaded) board, its report, its staged
 // firmware, and the live-sim affordance for it. The app shell needs this shared
@@ -39,6 +41,12 @@ export interface BoardSession {
   /** In-progress upload; while set, further uploads are blocked. */
   busy: { board: string; firmware: string | null } | null
   uploadError: string | null
+  /** Something the app DID on the user's behalf that they did not ask for and
+   *  would otherwise have to infer (a project zip dropped on the board zone
+   *  wired up as firmware instead). Not an error: the drop worked, it just did
+   *  not do the literal thing. Cleared by the next run. */
+  uploadNotice: string | null
+  dismissNotice: () => void
   firmwareFile: File | null
   /** The uploaded board File (null when the server preloaded the board). */
   boardFile: File | null
@@ -96,6 +104,7 @@ export function useBoardSession(opts: {
   const [report, setReport] = useState<WebReport | null>(preloadedReport)
   const [busy, setBusy] = useState<{ board: string; firmware: string | null } | null>(null)
   const [uploadError, setUploadError] = useState<string | null>(null)
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null)
   const [firmwareFile, setFirmwareFile] = useState<File | null>(null)
   const [boardFile, setBoardFile] = useState<File | null>(null)
   const [analyzedAt, setAnalyzedAt] = useState<number | null>(preloadedReport ? Date.now() : null)
@@ -186,6 +195,7 @@ export function useBoardSession(opts: {
     setReport(null)
     setAnalyzedAt(null)
     setUploadError(null)
+    setUploadNotice(null)
     setSelectedNet(null)
     setSelectedComponentRaw(null)
     setLaunch({ phase: 'idle' })
@@ -209,6 +219,8 @@ export function useBoardSession(opts: {
     } catch {
       if (isCurrent()) setBoardUrl(null)
     }
+    // Carried out of the try so the catch can name the status it failed on.
+    let status: number | undefined
     try {
       let res: Response
       if (firmware) {
@@ -220,10 +232,17 @@ export function useBoardSession(opts: {
         res = await fetch('/api/analyze', {
           method: 'POST',
           headers: { 'X-Board-Filename': board.name, 'Content-Type': 'application/octet-stream' },
-          body: await board.arrayBuffer(),
+          // The File itself, NOT `await board.arrayBuffer()`. A Blob body is
+          // streamed off disk by the browser; arrayBuffer() pulled the whole
+          // upload into the JS heap on the main thread first, which froze the
+          // page for over seven minutes on a 300 MB file and showed nothing
+          // while it did. The wire format is byte-identical either way, so the
+          // `/api/analyze` contract (raw body + X-Board-Filename) is untouched.
+          body: board,
           signal,
         })
       }
+      status = res.status
       // Read the body ONCE as text, then parse defensively: a stale build, a
       // proxy, or a body-limit/panic can return plaintext, and res.json() on
       // that throws a cryptic SyntaxError instead of showing the real message.
@@ -246,11 +265,14 @@ export function useBoardSession(opts: {
     } catch (e) {
       // An abort means the flow was reset mid-run: not an error to show.
       if (isAbort(e)) return
-      if (isCurrent()) setUploadError(`Analysis failed: ${e instanceof Error ? e.message : String(e)}`)
+      // A body-limit refusal, a dropped connection and a real analysis failure
+      // are three different problems with three different next steps; they all
+      // used to arrive as "Analysis failed: Failed to fetch".
+      if (isCurrent()) setUploadError(analysisFailureMessage(e, { status, size: board.size }))
     } finally {
       if (isCurrent()) setBusy(null)
     }
-  }, [beginRun])
+  }, [beginRun, clearRunState])
 
   const looksLikeFirmware = (name: string) => /\.(elf|hex)$/i.test(name)
 
@@ -274,14 +296,10 @@ export function useBoardSession(opts: {
     })
   }, [analyze, busy])
 
-  const handleBoard = useCallback((f: File) => {
-    if (busy) return
-    // A firmware file in the board slot is a mis-drop, not a board: route it
-    // to the firmware jack instead of sending an ELF to the board extractor.
-    if (looksLikeFirmware(f.name)) {
-      handleFirmware(f)
-      return
-    }
+  /** Accept `f` as the board and run it. Split out of `handleBoard` so the
+   *  zip-classification path (which has to await a read) reaches the same
+   *  code, rather than a second copy of it that can drift. */
+  const acceptBoard = useCallback((f: File) => {
     // Switching boards must not carry the previous board's firmware or clicked
     // net along: the new board would silently co-sim the OLD firmware image.
     // Firmware staged before the FIRST board is a deliberate pairing, keep it.
@@ -296,7 +314,53 @@ export function useBoardSession(opts: {
     } else {
       void analyze(f, firmwareFile)
     }
-  }, [analyze, busy, firmwareFile, handleFirmware])
+  }, [analyze, firmwareFile])
+
+  const handleBoard = useCallback((f: File) => {
+    if (busy) return
+    // Everything the browser can know for certain about this file, before a
+    // byte of it is read or sent: empty, past the server's body limit, or a
+    // large file with an extension nothing claims. A 300 MB CAD export used to
+    // get all the way to a seven-minute frozen tab and then a 413.
+    const refusal = precheckBoardFile(f)
+    if (refusal) {
+      abortRef.current?.abort()
+      runIdRef.current += 1
+      clearRunState()
+      setBusy(null)
+      setUploadError(refusal)
+      return
+    }
+    // A firmware file in the board slot is a mis-drop, not a board: route it
+    // to the firmware jack instead of sending an ELF to the board extractor.
+    if (looksLikeFirmware(f.name)) {
+      handleFirmware(f)
+      return
+    }
+    // A zip is ambiguous by design: a gerber package and a firmware project
+    // both arrive as one. Read the archive's own file list (a tail read, not a
+    // decompression) and route on what is actually in it. Without this, a
+    // PlatformIO project dropped here got a gerber complaint about a zip that
+    // has no copper in it and never will.
+    if (/\.zip$/i.test(f.name)) {
+      void (async () => {
+        const z = await inspectZip(f)
+        if (zipIsFirmwareOnly(z)) {
+          handleFirmware(f)
+          setUploadNotice(
+            `“${f.name}” holds ${z.firmwareMarkers.join(', ')} and no board or fab files, `
+            + 'so it was wired up as FIRMWARE rather than as the board. Drop a board '
+            + `(or pick a sample) and it will be co-simulated. If you meant it as a `
+            + 'gerber package, re-export the copper layers and drill file into the zip.',
+          )
+          return
+        }
+        acceptBoard(f)
+      })()
+      return
+    }
+    acceptBoard(f)
+  }, [acceptBoard, busy, clearRunState, handleFirmware])
 
   // "Analyze another board": resolve the finished flow back to the drop zone.
   // A running live session keeps running server-side until a new launch
@@ -313,7 +377,7 @@ export function useBoardSession(opts: {
       if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
       return null
     })
-  }, [])
+  }, [clearRunState])
 
   // One-click samples: fetch a bundled board (and optionally its firmware)
   // and push it through the exact same analyze path a dropped file takes.
@@ -356,7 +420,7 @@ export function useBoardSession(opts: {
         setBusy(null)
       }
     }
-  }, [analyze, beginRun, busy])
+  }, [analyze, beginRun, busy, clearRunState])
 
   // The actual POST to /api/live/launch (no questions asked). Every path
   // resolves the phase; never a spinner forever.
@@ -470,6 +534,8 @@ export function useBoardSession(opts: {
     report,
     busy,
     uploadError,
+    uploadNotice,
+    dismissNotice: () => setUploadNotice(null),
     firmwareFile,
     boardFile,
     // A failed analysis must not crown its (possibly garbage) filename as the

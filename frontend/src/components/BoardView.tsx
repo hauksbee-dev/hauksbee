@@ -9,6 +9,8 @@ import { DatasheetExtract } from './DatasheetExtract'
 import { WritePart } from './WritePart'
 import { displayNet } from '../lib/net-name'
 import { cssToken, onThemeChange } from '../lib/theme-tokens'
+import { acceptedFormatsSentence, withoutEngineFormatList } from '../lib/board-formats'
+import { ArriveOnce, StaggerItem } from '../motion'
 
 // The Board view with a report in hand: the viewer as the hero surface (with
 // its toolbar and layers panel), the plain-language verdict, and the findings.
@@ -51,7 +53,7 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
     <button
       type="button"
       data-testid="copy-cli"
-      onClick={copy}
+      onClick={() => void copy()}
       className="hb-press ml-2 rounded px-2 py-0.5 text-[11px] font-semibold cursor-pointer"
       style={{
         background: copied ? 'var(--ok-bg)' : 'var(--copper-tint)',
@@ -76,9 +78,32 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
   const r = session.report!
   const {
     boardUrl, selectedNet, selectedComponent, setSelectedNet, setSelectedComponent,
-    busy, uploadError, firmwareFile, handleFirmware, clearFirmware, boardFile, boardLabel,
-    liveMode, onEmptyBoard,
+    busy, uploadError, uploadNotice, dismissNotice, firmwareFile, handleFirmware,
+    clearFirmware, boardFile, boardLabel, liveMode, onEmptyBoard,
   } = session
+
+  // Every hook in this component lives ABOVE the unreadable-file branch below.
+  // It used to sit under it, so a session that went from a refused file to a good
+  // one (or back) rendered a different NUMBER of hooks than the render before and
+  // React tore the tree down with "rendered more hooks than during the previous
+  // render". Hooks first, then the early return.
+  // "Show on board": pan/zoom the map to a finding's board location and drop
+  // a labeled marker there. Only wired when the real renderer is drawing
+  // (the dot map has no camera to move).
+  const [focusPoint, setFocusPoint] = useState<{ x: number; y: number; label: string; seq: number } | null>(null)
+  // Which mode the viewer's 2D/3D control is in, so the caption under the
+  // canvas describes the interactions that actually exist in that mode.
+  const [viewerMode, setViewerMode] = useState<'2d' | '3d'>('2d')
+  // Expand-to-viewport for the map. Per-view and deliberately not persisted:
+  // it is a "let me look at this properly" gesture, not a setting.
+  const [mapFullscreen, setMapFullscreen] = useState(false)
+  const focusSeq = useRef(0)
+  const mapRef = useRef<HTMLDivElement>(null)
+  const locate = useCallback((x: number, y: number, label: string) => {
+    focusSeq.current += 1
+    setFocusPoint({ x, y, label, seq: focusSeq.current })
+    mapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }, [])
 
   if (!r.ok) {
     return (
@@ -89,7 +114,7 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
             className="rounded-lg px-4 py-3.5"
             style={{ border: '1px solid var(--err-border)', background: 'var(--err-bg)', color: 'var(--err-strong)' }}
           >
-            {r.error || 'Could not read the file.'}
+            {r.error ? withoutEngineFormatList(r.error) : 'Could not read the file.'}
           </div>
           {/* The dead end must not be dead: offer the retry inline instead of
               sending the user hunting for the header button. */}
@@ -110,32 +135,20 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
             >
               Try another file
             </label>
+            {/* The one accepted-formats list (lib/board-formats). This line is
+                read by exactly one audience: someone whose file was just
+                refused. It is the worst possible place for a list to be short
+                by a format, and it had been: the engine's own refusal text
+                omits Altium, so an Altium user reading only that concluded the
+                tool cannot open their file at all. */}
             <span className="text-[12px]" style={{ color: 'var(--silk-dim)' }}>
-              accepted: KiCad, Eagle, Altium, IPC-D-356, gerber zip, .board
+              accepted: {acceptedFormatsSentence()}
             </span>
           </div>
         </div>
       </div>
     )
   }
-
-  // "Show on board": pan/zoom the map to a finding's board location and drop
-  // a labeled marker there. Only wired when the real renderer is drawing
-  // (the dot map has no camera to move).
-  const [focusPoint, setFocusPoint] = useState<{ x: number; y: number; label: string; seq: number } | null>(null)
-  // Which mode the viewer's 2D/3D control is in, so the caption under the
-  // canvas describes the interactions that actually exist in that mode.
-  const [viewerMode, setViewerMode] = useState<'2d' | '3d'>('2d')
-  // Expand-to-viewport for the map. Per-view and deliberately not persisted:
-  // it is a "let me look at this properly" gesture, not a setting.
-  const [mapFullscreen, setMapFullscreen] = useState(false)
-  const focusSeq = useRef(0)
-  const mapRef = useRef<HTMLDivElement>(null)
-  const locate = useCallback((x: number, y: number, label: string) => {
-    focusSeq.current += 1
-    setFocusPoint({ x, y, label, seq: focusSeq.current })
-    mapRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-  }, [])
 
   const bindOpen = !!(r.bind?.active_path_unresolved?.length)
   const hasHeadsUp = (r.sections || []).some(s => s.heads_up?.length)
@@ -162,17 +175,39 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
               : <>Analyzing <span style={{ fontFamily: 'var(--font-mono)' }}>{busy.board}</span> ...</>}
           </div>
         )}
+        {/* A drop the app re-routed rather than refused (a firmware project zip
+            landing on the board zone). Same wording as the intake's banner. */}
+        {uploadNotice && (
+          <ArriveOnce
+            className="mb-4 rounded-lg px-4 py-3 text-[13px] leading-relaxed"
+            style={{ background: 'var(--warn-bg)', border: '1px solid var(--warn-border)', color: 'var(--silk)' }}
+          >
+            <div data-testid="upload-notice" aria-live="polite">
+              {uploadNotice}
+              <button
+                type="button"
+                onClick={dismissNotice}
+                className="hb-press ml-2 text-[12px] cursor-pointer"
+                style={{ background: 'none', border: 'none', color: 'var(--copper)' }}
+              >
+                Got it
+              </button>
+            </div>
+          </ArriveOnce>
+        )}
         {uploadError && (
-          <div
-            aria-live="polite"
+          <ArriveOnce
             className="mb-4 rounded-lg px-4 py-3 text-sm text-center"
             style={{ background: 'var(--err-bg)', border: '1px solid var(--err-border)', color: 'var(--err-strong)' }}
           >
-            {uploadError}
-          </div>
+            <div data-testid="upload-error" aria-live="polite">{uploadError}</div>
+          </ArriveOnce>
         )}
 
-        {/* Verdict headline */}
+        {/* Verdict headline. The report's parts arrive staggered ONCE, when the
+            report itself is new: keyed on the run, so clicking a net on the map
+            does not re-run the entry. */}
+        <StaggerItem index={0}>
         <div
           data-testid="report-verdict"
           className="rounded-xl px-4 py-3.5"
@@ -185,6 +220,7 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
             {r.num_nets === 1 ? 'net' : 'nets'}
           </div>
         </div>
+        </StaggerItem>
 
         {/* No live capability registered: the CLI hint remains (the header's
             primary action covers the launch/reconnect cases). */}
@@ -273,6 +309,7 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
                 // The map sits inside a scrolling report, so it must not eat
                 // the page wheel; it zooms once clicked, or with ctrl/cmd held.
                 wheelMode="capture-on-focus"
+                partCount={r.num_components}
                 focusPoint={focusPoint}
                 onViewModeChange={setViewerMode}
                 fullscreen={mapFullscreen}
@@ -322,9 +359,15 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
           </section>
         ) : null}
 
-        {/* Check sections */}
+        {/* Check sections. Staggered arrival, capped (see ../motion/tokens): a
+            report with fourteen sections must become readable in a quarter of a
+            second, not walk down the page. The stagger index starts at 1
+            because the verdict above is index 0, so the whole report reads as
+            one arrival rather than two. */}
         {r.sections.map((s, i) => (
-          <SectionBlock key={i} section={s} onLocate={boardUrl ? locate : undefined} />
+          <StaggerItem key={i} index={i + 1}>
+            <SectionBlock section={s} onLocate={boardUrl ? locate : undefined} />
+          </StaggerItem>
         ))}
 
         {/* Firmware co-sim */}
