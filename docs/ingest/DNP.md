@@ -24,8 +24,18 @@ fitting one changes the board's topology instead of adding a component to it.
 A part counts as a link when it has two or fewer pins and any of:
 
 - a resistance of 0.5 Ω or less (`0`, `0R`, `0R0`, `R000`, `0.1`)
-- a ferrite bead (value starting `FB`, or `ferrite` in the value or footprint)
-- a bridging footprint (`JUMPER`, `SOLDER_BRIDGE`, `NET_TIE`)
+- a ferrite bead: value starting `FB`, or `ferrite` anywhere in the value **or**
+  the footprint
+- a bridging **value**: `JUMPER`, `SOLDER_BRIDGE`, `SOLDERBRIDGE`, `NET_TIE` or
+  `NETTIE`, case-insensitively
+
+Note the asymmetry in that last rule, because it bites. The bridging test reads
+the component's *value* only. Ferrite is the one kind matched against the
+footprint as well. So a genuine net tie whose footprint is
+`NetTie:NetTie-2_SMD_Pad0.5mm` but whose value is blank, or `0R`-less, or some
+house string like `TIE`, is **not** recognised as a link by that rule, and gets
+fitted. If the value happens to be `0R` the resistance rule catches it anyway;
+otherwise name it in `--no-fit` (or `no_fit` in a spec) to keep it open.
 
 Every run prints its decision, so the choice is never silent:
 
@@ -66,6 +76,13 @@ firmware = "firmware/build/app.elf"
 dnp = "fit-except-links"   # or "fit-all", or "honour"; this is the default
 fit = ["R7"]               # fit these regardless of the policy
 no_fit = ["A101"]          # leave these open regardless of the policy
+
+# A spec needs at least one assertion; without an [[assert]] block
+# `hauksbee-ci run` refuses:
+#   invalid spec: spec has no [[assert]] blocks: a check with no assertions
+#   always passes vacuously
+[[assert]]
+kind = "no_faults"
 ```
 
 Naming an unknown reference is an error. Naming the same part in both `fit`
@@ -95,7 +112,9 @@ consults the DNP flag, so a DNP footprint's pads, and the traces that run to
 them, are still checked for clearance and shorts. Only the component is
 absent.
 
-The component-level checks (converter topology, USB-C CC termination, crystal
-and antenna signal integrity) do skip parts left open, because those checks
-ask whether a part is doing its job, and a part that is not there does
-nothing.
+The component-level checks do skip parts left open, because those checks ask
+whether a part is doing its job, and a part that is not there does nothing. That
+covers more than the obvious ones: converter topology, USB-C CC termination,
+crystal and antenna signal integrity, trace ampacity, supply ripple, boot straps
+and boot-mode transistors, bus contention, device decode, and MCU pin coverage
+all consult the flag and pass over a part the policy left absent.

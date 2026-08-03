@@ -56,6 +56,7 @@ against JEDEC JESD51 and the Vishay / onsemi / TI / Nexperia package notes.
 | SMA (DO-214AC)    | 90             | Vishay SMA rectifier to recommended pad          |
 | SMB (DO-214AA)    | 75             | Vishay SMB rectifier to recommended pad          |
 | SMC (DO-214AB)    | 60             | Vishay SMC rectifier to recommended pad          |
+| DO-41 / DO-201 / DO-35 | 100       | through-hole axial rectifier / small-signal, free air |
 | QFN / DFN         | 50             | bottom thermal pad to copper                     |
 | LQFP / TQFP / QFP | 60             | moderate leadframe body                          |
 | (unrecognised)    | 200            | conservative small-SMD fallback                  |
@@ -67,6 +68,7 @@ already encodes (a 0402 at 1/16 W reaching its rated rise is the same physics):
 
 | Chip size | theta_JA (C/W) |
 |-----------|----------------|
+| 01005     | 1200           |
 | 0201      | 900            |
 | 0402      | 600            |
 | 0603      | 400            |
@@ -75,6 +77,12 @@ already encodes (a 0402 at 1/16 W reaching its rated rise is the same physics):
 | 1210      | 160            |
 | 2010      | 120            |
 | 2512      | 80             |
+
+The size token is matched smallest-body-first, and 01005 has to be tested before
+0402: KiCad names a chip footprint with the imperial code beside its metric twin,
+and 01005's metric code *is* 0402 (`R_01005_0402Metric`), so a plain substring
+search would hand the smallest, worst-cooling body the 0402 figure of 600 and
+under-estimate its temperature.
 
 `theta_jc_c_per_w` (junction-to-case) can also be carried in the model DB. It
 is informational today. The free-air estimate uses `theta_JA`. A heatsinked
@@ -146,9 +154,12 @@ estimator by design.
 - **`hauksbee-ci`**: the `max_temp` assertion (per-device or explicit ceiling)
   and the top-level `ambient_c` key. The `no_faults` assertion also catches
   over-temperature. See [CI.md](../ci/CI.md).
-- **Live UI**: per-component junction temperature is exported next to the stress
-  fraction for the heat-map, and over-temperature faults appear in the fault
-  overlay.
+- **Live UI**: an over-temperature fault rides the frame's fault list and lands
+  in the fault overlay, carrying the component, the temperature it reached, and
+  the limit it crossed. The junction temperature of every *other* part is not on
+  the wire: `crates/hauksbee-server/src/protocol.rs` has no per-component
+  temperature field, so the UI sees the parts that went over, not a live
+  heat-map. A heat-map needs a protocol addition first.
 
 ## Worked check
 

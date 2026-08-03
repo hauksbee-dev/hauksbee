@@ -29,7 +29,8 @@ project.
 
 ## Reporting
 
-Raise it privately with the maintainers through GitHub. Maintainers handle
+Raise it privately with the maintainers through GitHub, or use the private
+contact in `SECURITY.md` (`security@hauksbee.dev`). Maintainers handle
 reports discreetly and in confidence, and will not ask you to argue your case
 in public. Maintainers may remove the contributions of anyone who breaks the
 above and end their participation, without a debate about degrees.

@@ -72,9 +72,12 @@ Resource kinds modelled:
   slices or SAMD51 QSPI pins do. The only true pin-bound constraints are the
   strapping pins and the ADC2/Wi-Fi exclusion, which are a *different* class
   (boot-strap / analog), handled elsewhere. The table marks ESP32
-  `fully_routable = true` so the check states "no fixed resource conflicts in
-  this class" rather than silently having no opinion. (Honest encoding of the
-  negative, per the calibration discipline.)
+  `fully_routable = true`, and the check skips a part so marked before any pin
+  inference runs: it emits nothing at all rather than manufacturing a conflict
+  out of a routable matrix. The negative is written down in the table, not in
+  the findings, and `resource_probe` surfaces it as `fully_routable=true` next
+  to the match so the opinion is inspectable. (Honest encoding of the negative,
+  per the calibration discipline.)
 
 The map is extensible to SERCOM-instance pad constraints, STM32 TIMx_CHy timer
 sharing, and ADC instances by the same `pad -> {resource instance}` shape.
@@ -141,10 +144,14 @@ runner with no codex and no network. The live test
 
 4. **Check feasibility.** A PWM slice+channel demanded by two *distinct*
    functions has no valid assignment (one channel, one pin) -> **High**. A QSPI
-   group with >= 2 pads committed to a non-QSPI function blocks the controller ->
-   **High**. No medium tier is emitted: the two modelled instances are hard,
-   binary "serves one or the other" resources, so a half-conflict does not
-   arise. The tier was dropped rather than defined loosely.
+   group with >= 2 pads carrying two *different* non-QSPI functions has no
+   assignment that serves both either -> **High**. A group whose >= 2 committed
+   pads all belong to ONE self-consistent function is a weaker claim: nothing
+   contends at runtime, firmware driving that device as plain SERCOM SPI works,
+   and all the copper proves is that the QSPI controller can never reach those
+   pads -> **Low**, stated as exactly that. No medium tier is emitted:
+   contention on these instances is binary, so a half-conflict does not arise.
+   The tier was dropped rather than defined loosely.
 
 Reported through the same `NetLintReport`/`LintFinding` shape the connectivity
 lint uses (`LintCheck::McuResourceConflict`), so the CLI and callers treat it
@@ -168,20 +175,24 @@ Corpus-gated tests in
 `hauksbee run .../RP2040-PICO-PC_rev_D.net --resources`:
 
 ```
-[high] mcu_resource_conflict - RP2040_PLATFORM1 (...): two functions demand
-  RP2040 PWM slice/channel 6A, which can serve only one pin at a time
-  [RP2040 datasheet 4.5.2, GPIO->slice = (n>>1)&7, ch A/B by parity]:
-  PWM audio (GP28 pad 34, net '/PWM_L': /PWM_L -> U3 -> Net-(R18-Pad2) -> R18
-    -> Net-(C3-Pad2) -> C3 -> /PWM_AUDIO_L reaches AUDIO_JACK_1);
-  and PicoDVI PWM pixel clock (GP12 pad 16, net '/PICO_CK-': /PICO_CK- -> R10
-    -> /CK- reaches HDMI1)
+[high] mcu_resource_conflict - RP2040_PLATFORM1 (2X(PN1X20(F-D-1X20-LF))): two
+  functions demand RP2040 PWM slice/channel 6A, which can serve only one pin at
+  a time [RP2040 datasheet 4.5.2, GPIO->slice = (n>>1)&7, ch A/B by parity]:
+  PWM audio (GP28 pad 34, net '/PWM_L': net '/PWM_L' -> U3 -> net
+    'Net-(R18-Pad2)' -> U3 -> net 'Net-(R23-Pad2)' -> U3 -> net
+    'Net-(R22-Pad2)' -> U3 -> net 'Net-(R19-Pad2)' -> R19 -> net
+    'Net-(C6-Pad2)' -> C7 -> net '/PWM_AUDIO_R' reaches AUDIO_JACK_1
+    (3.5mm/PJ-W47S-05D2-LF)); and PicoDVI PWM pixel clock (GP12 pad 16, net
+    '/PICO_CK-': net '/PICO_CK-' -> R10 -> net '/CK-' reaches HDMI1
+    (HDMI-SWM-19))
 ```
 
 The full evidence chain to the s-expression level: GP12 (slice 6A) drives the
 DVI clock to the HDMI connector through the series-termination resistor R10.
-GP28 (also slice 6A) drives the left audio channel to the jack through the
-74LVC125 buffer and the RC reconstruction filter. Both demand slice 6 channel A. Flagged
-on **rev C and rev D**.
+GP28 (also slice 6A) carries PWM audio into the 74LVC125 buffer (U3), and the
+traced path leaves the buffer through the RC reconstruction filter (R19 and the
+AC-coupling cap C7) onto `/PWM_AUDIO_R` at the jack. Both demand slice 6
+channel A. Flagged on **rev C and rev D**.
 
 **The rev-B discriminator (and the ground-truth that makes the rev-C/D finding
 real).** Rev B is **SILENT, and that is correct.** Chased to the rev-B `.net`:
@@ -193,24 +204,43 @@ GP12/GP13 (slice 6), colliding with the audio on GP28 (slice 6A). The check
 therefore flags exactly the revisions where the fault exists and stays silent on
 the one where it does not - the strongest form of two-sided validation.
 
-### SparkFun SAMD51 Thing Plus: QSPI flash (FLAGGED, known issue #82)
+### SparkFun SAMD51 Thing Plus: QSPI group spent on plain SPI (NOTED, known issue #82)
 
 `hauksbee run .../SAMD51_Thing_Plus.brd --resources`:
 
 ```
-[high] mcu_resource_conflict - U2 (ATSAMD51J20A-A): a non-QSPI function occupies
-  4 pads of the fixed QSPI pin group 'qspi_data' (SAM D5x QSPI is pin-locked to
-  PA08..PA11/PB10/PB11, not PORT-routable) [SAM D5x/E5x Data Sheet, Table 6-1
-  function H, section 36]:
-  SPI flash on PA08 (pad 17, net 'FLASH_MOSI': reaches U4 (4Mb Flash));
-  SPI flash on PA09 (pad 18, net 'FLASH_SCK'); SPI flash on PA10 (pad 19,
-  net 'FLASH_CS'); SPI flash on PA11 (pad 20, net 'FLASH_MISO')
+[low] mcu_resource_conflict - U2 (ATSAMD51J20A-A): the fixed QSPI pin group
+  'qspi_data' is committed to one non-QSPI function across 4 pads (SAM D5x QSPI
+  is pin-locked to PA08..PA11/PB10/PB11, not PORT-routable) [SAM D5x/E5x Data
+  Sheet, Table 6-1 function H, section 36]: SPI flash on PA11 (pad 20, net
+  'FLASH_MISO': net 'FLASH_MISO' reaches U4 (4Mb Flash)); SPI flash on PA09
+  (pad 18, net 'FLASH_SCK': net 'FLASH_SCK' reaches U4 (4Mb Flash)); SPI flash
+  on PA10 (pad 19, net 'FLASH_CS': net 'FLASH_CS' reaches U4 (4Mb Flash)); SPI
+  flash on PA08 (pad 17, net 'FLASH_MOSI': net 'FLASH_MOSI' reaches U4 (4Mb
+  Flash)). Nothing contends at runtime: firmware that drives this device as
+  plain SERCOM SPI works, and boards shipping this wiring deliberately exist
+  (the SparkFun Thing Plus SAMD51's vendor firmware declares plain SPI flash on
+  exactly these pads). What the netlist does prove is that the QSPI peripheral
+  can never drive these pads, so quad-rate access to this device is off the
+  table; the netlist cannot tell deliberate plain-SPI from an unintended loss of
+  QSPI.
 ```
 
 Verified at file level both ways: the Eagle `.brd` puts the flash (U4) on U2 pads
 17..20 (= TQFP64 pins 17..20 = PA08..PA11), and the `.sch` independently names
-the same MCU pins PA08..PA11. Those are the QSPI DATA0..3 pins. Wired as a
-SERCOM SPI flash they commit the QSPI group.
+the same MCU pins PA08..PA11. Those are the QSPI DATA0..3 pins, and the four
+nets carry 4-wire-SPI roles (`FLASH_MOSI`/`MISO`/`SCK`/`CS`), so the group is
+spent on a SERCOM device.
+
+The severity is **Low**, and that is the calibrated call. All four pads carry one
+self-consistent function, so nothing fights for the pins at runtime: this board
+ships and its flash works, because the vendor firmware drives it as plain SERCOM
+SPI on exactly these pads. What the copper does settle is that the QSPI
+controller can never reach that flash, so quad-rate access to it is unavailable
+for the life of the design. The netlist cannot distinguish a deliberate plain-SPI
+choice from a botched QSPI intent, so the check reports the part it can prove and
+leaves the intent to the reader. Calling a famous working board **High** would be
+a wolf-cry against this project's own calibration bar.
 
 ## 4. Calibration (zero false positives or it does not ship)
 

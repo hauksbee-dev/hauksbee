@@ -29,10 +29,9 @@ Point 2 is the substantive one, so here is its purpose in plain words: it lets
 the project offer commercially licensed builds or change the open-source
 licence in future without tracking down every past contributor. Without this
 licence, tracking down every past contributor is what makes such changes
-impossible. The project's public releases are Apache-2.0 today, and the
-maintainers have publicly committed to keeping the core open. See
-`TRADEMARK.md` and `docs/about/release-and-licensing.md` for the wider
-licensing picture.
+impossible. The project's source is Apache-2.0 today, and the commitment to keeping the
+core open is stated in `docs/about/release-and-licensing.md` ("The core
+stays open"). See `TRADEMARK.md` for the wider licensing picture.
 
 To sign: reply to the CLA bot's comment on your first pull request with the
 sentence it asks for. This repository's signature store records the

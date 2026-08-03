@@ -2,9 +2,10 @@
 
 ## Reporting a vulnerability
 
-Please report security issues privately, through GitHub's
-[private vulnerability reporting](https://github.com/hauksbee-dev/hauksbee/security/advisories/new)
-rather than a public issue.
+Please report security issues privately rather than in a public issue:
+through GitHub's
+[private vulnerability reporting](https://github.com/hauksbee-dev/hauksbee/security/advisories/new),
+or by email to `security@hauksbee.dev`.
 
 Include what you did, what happened, and the input that triggered it. A board
 file, firmware image, or spec that reproduces the problem is the most useful

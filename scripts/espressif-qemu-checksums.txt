@@ -1,0 +1,29 @@
+# sha256 of the pinned Espressif QEMU release assets, for scripts/install-sims.sh.
+#
+# Same reasoning as renode-checksums.txt: the installer used to ask GitHub for
+# `releases/latest` and download whatever came back, so nothing in this
+# repository governed the binary that ended up executing. An asset with no hash
+# here stops the install rather than proceeding unverified.
+#
+# Measured 2026-08-03 by downloading each asset from the pinned release and
+# hashing it with `shasum -a 256`, then cross-checking every line against the
+# release's own published manifest,
+# qemu-esp_develop_9.2.2_20260417-checksum.sha256, which agrees exactly. To bump
+# the version: change QEMU_VERSION in install-sims.sh, download the new assets,
+# hash them, and replace these lines. Never copy a hash from anywhere but a
+# download you performed.
+#
+# Only the platforms install-sims.sh can install are listed. The Windows
+# (x86_64-w64-mingw32) assets and the source tarball are deliberately absent:
+# the script refuses to install what it has no hash for, and it does not serve
+# Windows.
+#
+# esp-develop-9.2.2-20260417  https://github.com/espressif/qemu/releases/tag/esp-develop-9.2.2-20260417
+bb8c15810565d3df1665dc34962430885e11bc95575b228fb44698146be1e9d6  qemu-xtensa-softmmu-esp_develop_9.2.2_20260417-aarch64-apple-darwin.tar.xz
+ae8170fe46bcdfa54a7c0d7afcdb7a066711991be680f72ff7bbc6c4ae3ad88f  qemu-xtensa-softmmu-esp_develop_9.2.2_20260417-x86_64-apple-darwin.tar.xz
+00de5985094c14e47d1b38464a006b8ed64fd0fa7a289c56da24f3a329f65339  qemu-xtensa-softmmu-esp_develop_9.2.2_20260417-aarch64-linux-gnu.tar.xz
+0eecb2a34a5586c0e59110f77b9343b7b336e82fdb0e1a30e1dc1bab8a547e35  qemu-xtensa-softmmu-esp_develop_9.2.2_20260417-x86_64-linux-gnu.tar.xz
+67bff66ff7158f272ce167fc211c0f8f4c1a79b6f6174350678a6d5035644b30  qemu-riscv32-softmmu-esp_develop_9.2.2_20260417-aarch64-apple-darwin.tar.xz
+a47c38c6e2eb9f5028eda9585dce999ce02b8983a2cdf71c48cfb10a14ae25fe  qemu-riscv32-softmmu-esp_develop_9.2.2_20260417-x86_64-apple-darwin.tar.xz
+a9f7b98636008edcf7a11c96f10b3a3ec83c2a890fc54c3e3ceb3ec9edace427  qemu-riscv32-softmmu-esp_develop_9.2.2_20260417-aarch64-linux-gnu.tar.xz
+547f03e04701a92cbb699f7f7d015adc1f5b5ef93cbb94c0dd9b7107e2d84e77  qemu-riscv32-softmmu-esp_develop_9.2.2_20260417-x86_64-linux-gnu.tar.xz

@@ -15,10 +15,10 @@ now fails a test instead.
 `hauksbee-<version>-darwin-<arch>-app.zip` asset) from the
 [releases page](https://github.com/hauksbee-dev/hauksbee/releases). Unzip it and
 double-click it. Your browser opens on the drop-zone. Drop a board and read
-the report. The app is signed and notarised, so it opens without Gatekeeper
-warnings (signing details:
-[`app/macos/SIGNING.md`](../app/macos/SIGNING.md)). The app works on macOS
-only today. Windows support is tracked separately in
+the report. Released apps are signed and notarised, so Gatekeeper accepts a
+plain double-click; the full signing story is under the installer below
+(mechanics: [`app/macos/SIGNING.md`](../app/macos/SIGNING.md)). The app works
+on macOS only today. Windows support is tracked separately in
 [`release-and-licensing.md`](about/release-and-licensing.md), and Linux
 users take the installer line below.
 
@@ -28,14 +28,32 @@ users take the installer line below.
 curl -fsSL https://raw.githubusercontent.com/hauksbee-dev/hauksbee/main/scripts/get-hauksbee.sh | bash
 ```
 
-or one command that builds and installs both binaries from a checkout, then
-points it at the bundled blinky board.
+or one command that builds and installs the binaries from a checkout, then
+points it at the bundled Watchy smartwatch board.
 
 ```bash
-scripts/install.sh                                      # build hauksbee + hauksbee-ci onto PATH
-hauksbee serve                                          # web front door: drop a board, read the report
-hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --report
+scripts/install.sh                                      # build hauksbee + hauksbee-ci + hauksbee-mcp onto PATH
+hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --report --plain
+hauksbee serve                                          # web front door (long-running; Ctrl-C to stop)
 ```
+
+**macOS signing, stated plainly.** Every macOS release binary is signed with
+a Developer ID identity. `Hauksbee.app` is signed and notarised with the
+ticket stapled, and the release workflow refuses to publish an app zip that is
+not, so the app opens on a double-click with no Gatekeeper warning. The
+tarball binaries are signed too, and notarised from launch onward; a bare
+command-line binary cannot carry a stapled ticket, so Gatekeeper confirms the
+notarisation online on first run, and a tarball fetched through a browser
+opens cleanly. Only a pre-release or locally built unsigned bundle still needs
+the one-time fallback `xattr -d com.apple.quarantine ~/.local/bin/hauksbee
+~/.local/bin/hauksbee-ci ~/.local/bin/hauksbee-mcp`, while a copy installed by
+the curl line above never carries the quarantine flag at all.
+
+Parts hauksbee does not recognise bind OPEN (simulated as disconnected) and
+are reported, never silently guessed. On the Watchy board, 59 of 67
+non-ignored parts resolve, with the MCU bound, so a few warnings about
+unresolved actives are expected, and the report's bottom line explains
+exactly what they mean for the results.
 
 No board of your own yet? The `hauksbee serve` page has one-click samples: a
 real smartwatch, a board-plus-firmware pair that runs a live co-sim, and a
@@ -63,30 +81,36 @@ that runs it. CI wrappers are optional, and you add them later.
    becomes an extracted circuit, a bound model set, a partitioned solve, and a
    co-simulation.
 
-From there, the rest of `docs/` covers each capability in depth: the
-authoritative scope document ([`CAPABILITIES.md`](about/CAPABILITIES.md),
-every layer and the full MCU coverage matrix), analysis
-([`AC_ANALYSIS.md`](analysis/AC_ANALYSIS.md),
-[`THERMAL.md`](checks/THERMAL.md),
-[`TRANSIENTS.md`](checks/TRANSIENTS.md)), checks
-([`SHORTS.md`](checks/SHORTS.md), [`SI_CHECKS.md`](checks/SI_CHECKS.md),
-[`RESOURCE_CONFLICTS.md`](checks/RESOURCE_CONFLICTS.md),
-[`DEVICE_DECODE.md`](checks/DEVICE_DECODE.md)), ingest
-([`SCHEMATICS.md`](ingest/SCHEMATICS.md), [`GERBER.md`](ingest/GERBER.md),
-[`ALTIUM.md`](ingest/ALTIUM.md),
-[`BOARD_AS_CODE.md`](ingest/BOARD_AS_CODE.md)), models
-([`MODELS.md`](models/MODELS.md), [`PERIPHERALS.md`](cosim/PERIPHERALS.md)),
-backends and cross-checking ([`SIMULATORS.md`](cosim/SIMULATORS.md),
-[`ORACLES.md`](cosim/ORACLES.md)), deployment
-([`DOCKER.md`](ci/DOCKER.md)), positioning
-([`COMPARISON.md`](about/COMPARISON.md)), and the honest
-[`LIMITATIONS.md`](about/LIMITATIONS.md).
+From there, the rest of `docs/` covers each capability in depth:
+
+| File | Covers |
+|---|---|
+| [`about/CAPABILITIES.md`](about/CAPABILITIES.md) | Authoritative scope: every layer, the full MCU coverage matrix |
+| [`analysis/AC_ANALYSIS.md`](analysis/AC_ANALYSIS.md) | AC / small-signal sweep: Bode, phase margin, gain crossover |
+| [`checks/THERMAL.md`](checks/THERMAL.md) | Steady-state junction-temperature check |
+| [`checks/TRANSIENTS.md`](checks/TRANSIENTS.md) | Transient scenarios: load steps, brownout, inrush |
+| [`checks/SHORTS.md`](checks/SHORTS.md) | Copper short / clearance detection and simulation |
+| [`checks/SI_CHECKS.md`](checks/SI_CHECKS.md) | Signal-integrity static checks (`--si`) |
+| [`checks/RESOURCE_CONFLICTS.md`](checks/RESOURCE_CONFLICTS.md) | MCU internal resource-conflict check |
+| [`checks/DEVICE_DECODE.md`](checks/DEVICE_DECODE.md) | Config-pin divider decode check |
+| [`ingest/SCHEMATICS.md`](ingest/SCHEMATICS.md) | Schematic (`.kicad_sch`) extraction |
+| [`ingest/GERBER.md`](ingest/GERBER.md) | Gerber + pick-and-place reverse extraction |
+| [`ingest/ALTIUM.md`](ingest/ALTIUM.md) | Altium `.PcbDoc` binary ingest |
+| [`ingest/BOARD_AS_CODE.md`](ingest/BOARD_AS_CODE.md) | Decompile / edit / recompile a board as editable code |
+| [`models/MODELS.md`](models/MODELS.md) | Device models: built-in, SPICE, datasheet extraction |
+| [`cosim/PERIPHERALS.md`](cosim/PERIPHERALS.md) | Runtime peripherals (buttons, pots, I2C/SPI slaves) |
+| [`cosim/SIMULATORS.md`](cosim/SIMULATORS.md) | Installing the external backends (Renode, Espressif QEMU) |
+| [`cosim/ORACLES.md`](cosim/ORACLES.md) | Ground-truth oracles (`--oracle`): kicad-cli, ngspice |
+| [`ci/DOCKER.md`](ci/DOCKER.md) | Container images and how to run them |
+| [`about/COMPARISON.md`](about/COMPARISON.md) | Feature matrix and positioning vs the field |
+| [`about/LIMITATIONS.md`](about/LIMITATIONS.md) | Honest limitations, triage and closure |
 
 ## Add your own parts and chips
 
-A part hauksbee does not recognize binds OPEN. The report says "N%
-resolved" and names the part. Closing that gap needs one small TOML file
-and no recompile:
+A part hauksbee does not recognise binds OPEN, meaning it is simulated as
+disconnected rather than silently guessed. The report says "N% resolved"
+(the share of parts bound to a device model) and names the part. Closing
+that gap needs one small TOML file and no recompile:
 
 - an **analog part** (LDO, op-amp, diode, BJT, MOSFET, comparator):
   [`extending/add-an-analog-part.md`](extending/add-an-analog-part.md)

@@ -14,24 +14,35 @@ Two mechanisms back this promise:
 1. **Fidelity.** CI cross-checks every supported card against ngspice on a
    corpus of decks with per-quantity tolerances. [`results.md`](results.md)
    holds the living results table.
-2. **No drift.** `crates/hauksbee-ir/tests/compat_drift.rs` generates the
-   "Supported" and "Refused" tables below from the loader itself, and checks
-   them against it. That test loads a minimal snippet for every card the doc
-   claims supported, and the snippet must parse. It also loads a snippet for
-   every card the doc claims refused, and the snippet must produce the
-   documented error. The doc cannot claim a capability the loader lacks, and
-   it cannot hide one the loader has, without turning the test red. The
-   tables between the `GENERATED` markers are not hand-written. Regenerate
-   them with `UPDATE_COMPAT=1 cargo test -p hauksbee-ir --test compat_drift`.
+2. **No drift.** The "Supported" and "Refused" tables below are *generated
+   from* `crates/hauksbee-ir/tests/compat_drift.rs`, and every row in them is
+   checked against the loader on every `cargo test`. Each row carries a minimal
+   snippet: a supported row's snippet must parse, and a refused row's snippet
+   must produce the documented error fragment. So the doc cannot claim a
+   capability the loader lacks, nor keep claiming a refusal the loader stopped
+   making, without turning the test red.
+
+   The one thing that mechanism does *not* do is enumerate the loader. The row
+   list is maintained by hand in that test file, so a card the loader gains and
+   nobody adds a row for is simply absent from these tables rather than
+   flagged. The tables between the `GENERATED` markers are therefore not
+   hand-written but the *inventory behind them* is. Regenerate the tables with
+   `UPDATE_COMPAT=1 cargo test -p hauksbee-ir --test compat_drift`; edit the
+   inventory in `compat_drift.rs`.
 
 Refusals are always line-numbered `SpiceError`s (`Syntax`, `UnknownElement`,
 `MissingModel`, `BadNumber`, `Unsupported`) that carry the offending text.
 There is no silent misparse of a *recognized* card, and no silent drop of an
 *unrecognized* directive. The loader either honors or refuses, with a reason,
 any card or directive it understands. It also refuses any dot-directive it
-does not recognize. The only exception is a short allowlist of directives
-that change nothing when ignored (`.end`, `.op`, `.title`, `.width`,
-`.save`), which the loader accepts as a no-op. See §4.
+does not recognize. Two carve-outs, both deliberate, both worth knowing:
+
+- A short allowlist of directives that change nothing when ignored (`.end`,
+  `.op`, `.title`, `.width`, `.save`), which the loader accepts as a no-op.
+  See §4.
+- **Unrecognized trailing `key=value` parameters on an element card or a
+  `.model` card are silently dropped.** This one is a real trap, so read §2's
+  temperature note before you trust a vendor deck.
 
 ---
 
@@ -71,8 +82,8 @@ loader ignores the deck's first line, which is its title.
 
 | Card | What it does |
 |------|--------------|
-| `.model ... D` | Diode model: `is n rs cjo vj m tt bv xti eg` (aliases `cj0`, `pb`). |
-| `.model ... NPN/PNP` | BJT model: `is bf br vaf var nf nr rb re rc cje cjc tf tr xti eg`. |
+| `.model ... D` | Diode model: `is n rs cjo vj m tt bv ibv xti eg` (aliases `cj0`, `pb`). |
+| `.model ... NPN/PNP` | BJT model: `is bf br vaf var nf nr rb re rc cje cjc tf tr ikf ikr ise ne isc nc xti eg` (aliases `va`/`vb`, `jbf`/`jbr`, `c2`/`c4`). |
 | `.model ... NMOS/PMOS` | MOSFET model, LEVEL=1 only: `vto kp lambda gamma phi tox cgso cgdo is cbd cbs pb mj rd rs`. |
 | `.model ... SW/VSWITCH` | Voltage-switch model: `vt vh ron roff`. |
 
@@ -123,6 +134,13 @@ loader ignores the deck's first line, which is its title.
 These cards work, but not identically to a full SPICE3 / ngspice front end.
 Each caveat is deliberate, and where it affects a waveform,
 [`results.md`](results.md) quantifies it.
+
+**`.model` parameters beyond the generated rows.** The row summaries in §1 are
+the full accepted set per model type, including the BJT high-current-knee and
+recombination parameters and the Berkeley aliases (`va`/`vb`, `jbf`/`jbr`,
+`c2`/`c4`) and the diode `ibv`. The BJT knee is exercised against ngspice in
+[`results.md`](results.md), so it is honored, not just parsed. Anything not in
+those rows falls under the silently-dropped rule above.
 
 - **MOSFETs are LEVEL-1 only: a switch model, not an analog model.** The DC
   channel uses the Shichman-Hodges square law. `LEVEL=2/3/BSIM` cards are
@@ -188,8 +206,24 @@ Each caveat is deliberate, and where it affects a waveform,
   rather than emit a bad waveform.
 - **`.plot` is treated as `.print`.** Output selection is honored. No ASCII
   plot is drawn.
-- **Single global temperature.** `.temp` sets one circuit temperature.
-  There is no per-device `TEMP`/`DTEMP`.
+- **Single global temperature, and a per-device `TEMP=` is dropped in
+  silence.** `.temp` sets one circuit temperature. There is no per-device
+  `TEMP`/`DTEMP`, and here is the part that can bite: an unrecognized trailing
+  `key=value` on an element or `.model` card is **discarded without a word**,
+  not refused. `R1 a 0 1k`, `R1 a 0 1k temp=125`, `R1 a 0 1k tc2=0.5` and
+  `R1 a 0 1k bogus=9` all load and all solve to the same answer. A vendor deck
+  that carries `TEMP=`, `DTEMP=` or `TC2=` on its devices therefore gets a
+  *different answer than the deck asks for*, with no diagnostic, and nothing in
+  the CLI surfaces the dropped keys today: there is no lint or verbose mode for
+  this. If your deck relies on per-device temperature or a quadratic
+  temperature coefficient, translate it by hand before trusting the result.
+
+  The one thing that *is* refused is a dropped value that looks numeric but
+  cannot be read, such as an unresolved brace expression
+  (`.model MX NMOS(LEVEL=1 VTO={VT0})` fails with a line number naming `VTO`).
+  Values that are plainly alphabetic are treated as metadata and dropped, which
+  is what makes `mfg=Vishay` harmless and `IS=abc` quietly fall back to the
+  default.
 - **`.ic` requires `uic`.** Initial conditions seed the power-on (`uic`)
   transient start. Pinning nodes *during* the DC operating-point solve is
   not implemented, so `.ic` without `uic` is refused (§3) rather than

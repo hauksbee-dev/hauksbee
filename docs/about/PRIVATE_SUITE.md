@@ -12,7 +12,8 @@ misleading test count.
 
 ## What is missing
 
-**60 tests across 13 files, plus 11 engine examples.**
+**60 tests: 50 in the 13 absent files below, plus 10 removed from files that
+otherwise ship. Also absent: 11 engine examples.**
 
 | Suite | Tests | What it covers |
 |---|---|---|
@@ -30,7 +31,7 @@ misleading test count.
 | `mcp4728_cosim` | 2 | DAC peripheral co-simulation |
 | `tarski_decomposition_analysis` | 1 | Tearing choices on a mesh that does not converge fused |
 
-Ten more tests are missing from files that otherwise ship, in
+The ten tests missing from files that otherwise ship are in
 `spec_and_assertions`, `cli_boardcode`, `dnp_processor`, `diode_fallback` and
 `extract`. Those files keep the rest of their coverage.
 

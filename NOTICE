@@ -7,6 +7,12 @@ https://hauksbee.dev
 
 This product includes software developed by Eoghan Collins.
 
+The Altium .PcbDoc binary record layouts used by the Altium ingest were
+ported field-by-field from the record-layout descriptions in KiCad's Altium
+importer (Copyright the KiCad Developers, GPL-3.0). See
+docs/ingest/ALTIUM.md and docs/about/release-and-licensing.md for the
+provenance and licensing position.
+
 Redistributions of this software, with or without modification, must retain
 this NOTICE file per section 4(d) of the Apache License 2.0. If you build
 something on hauksbee, a visible credit ("powered by hauksbee") is appreciated

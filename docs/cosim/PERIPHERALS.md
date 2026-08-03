@@ -94,8 +94,10 @@ MCU's `on_i2c` callback. It dispatches each bus event to the slave whose
 
 ### SPI
 
-`SpiBus` owns one `SpiSlave` (simavr does not surface chip-select, so only
-one slave per bus is active). Two concrete devices:
+`SpiBus` owns one `SpiSlave`, so one slave per bus is active. Chip-select,
+when it is known, frames that slave's transactions rather than selecting among
+several (three framing tiers, see "SPI transaction framing" below). Two
+concrete devices:
 
 - **25xx EEPROM** (`Spi25Eeprom`); WREN/WRDI/RDSR/READ/WRITE instruction
   set, 16-bit addressing, write-enable latch. Memory readable for
@@ -119,8 +121,20 @@ be a **TOML spec** (`testdata/sensor-specs/*.toml`, schema in
 `hauksbee-models/src/sensor_spec.rs`) that the generic `RegisterMapSensor`
 interpreter realizes as a live `I2cSlave`/`SpiSlave`. The read side maps
 physical inputs through `evalexpr` value expressions into datasheet register
-packings (BME280, MPU6050, LM75 come out byte-identical to hand-coded
-models).
+packings. LM75 is the one part with a hand-coded counterpart to check against,
+and the declarative spec comes out byte-identical to it
+(`declarative_lm75_is_byte_identical_to_handcoded` in
+`crates/hauksbee-engine/src/peripherals/register_map.rs`). BME280 and MPU6050
+have no hand-coded twin, so they are anchored to datasheet worked examples
+instead (`declarative_bme280_decodes_datasheet_worked_example`,
+`declarative_mpu6050_decodes_driven_quantities`); the `Bme280` name exported
+from `peripherals::i2c` is a type alias for `Lm75`, not a second model.
+
+A CI spec attaches one of these specs with a `[[sensor]]` block (inline `spec`
+or a `spec_file` path, plus `[sensor.inputs]` overrides and an optional SPI
+`controller`), separate from the `[[peripheral]]` list. See
+[`docs/ci/CI.md`](../ci/CI.md) and `SensorAttach` in
+`crates/hauksbee-ci/src/spec.rs`.
 
 The spec also describes the **write side**: what firmware writes do:
 
@@ -153,7 +167,13 @@ What the write side does **not** do, stated rather than faked:
   chunk solve.
 - **Undeclared writes are ACKed and counted** (`ignored_write_bytes` in the
   slave's `state()`), like a real part ACKing a command family the model
-  omits. An eaten config write is observable, never silent.
+  omits. An eaten config write is observable, never silent. The counter is a
+  single total over four distinct cases: an undeclared command family (and
+  every following byte of it), payload past a declared write register's
+  natural width, payload for a pointer register the spec does not declare, and
+  every byte of a SPI write phase. It also only appears in `state()` **when
+  the count is non-zero**, so `field = "ignored_write_bytes"` on a run that
+  ignored nothing fails with "has no state field" rather than reading 0.
 - **SSD1306 is deferred (design sketch).** A display is a write-only
   command/data STREAM, not a register map: the control byte (0x00 command /
   0x40 data) selects an interpreter, commands set an addressing-mode cursor,
@@ -178,16 +198,32 @@ all consumed inside a single `run_micros` chunk. So:
   (I2C 100 kHz / 400 kHz, SPI at the SPR/SPI2X rate). The analog chunk rate
   does **not** bound it, because the bytes never cross a chunk boundary.
 - A **bit-banged** master (software toggling SCL/SDA or SCK/MOSI on GPIO)
-  works differently: those edges alias at the chunk poll rate exactly like
-  any other GPIO (see `docs/cosim/MCU.md`). Bit-banged MHz bus traffic is
-  **not** resolved. This framework targets the hardware TWI/SPI peripherals.
+  takes a different path, and it splits by backend. On a **push** backend
+  (simavr) those edges are resolved exactly: the `Mcu::on_input_responder`
+  hook runs a responder synchronously on every GPIO output edge and applies
+  its returned input-pin drives before the firmware's next instruction, so a
+  soft bus routes into the same byte-level slave models the hardware path
+  uses. `BitBangSpiResponder` and `SoftI2cResponder`
+  (`crates/hauksbee-engine/src/responders.rs`) are the two shipped protocol
+  responders, multiplexed onto that single hook by a `ResponderRegistry`
+  keyed on watched output pin. On **poll** backends (Renode, QEMU) the hook
+  keeps its no-op default, so soft-bus edges alias at the chunk poll rate
+  exactly like any other GPIO (see `docs/cosim/MCU.md`), and bit-banged MHz
+  traffic there is **not** resolved. The push-backend proofs:
+  `crates/hauksbee-engine/tests/soft_i2c_cosim.rs` (firmware bit-bangs I2C on
+  PD2/PD3, deliberately not the hardware TWI pins, and reads the declarative
+  MPU-6050 with repeated-START framing) and
+  `crates/hauksbee-engine/tests/bitbang_spi_cosim.rs` (firmware bit-bangs SPI
+  mode 0 on PD4..PD7 and reads the declarative ICM-42605).
 - The **Renode `on_i2c` / `on_spi` hooks are wired** through generated C#
   bridge peripherals (an `II2CPeripheral` / `ISPIPeripheral` per slave
   address, loaded into the running machine over the Monitor). A
   hardware-TWI/SPI sensor therefore co-simulates on the Renode ARM/RISC-V
-  backends the same way it does on simavr; see the `i2c_sensor_cosim_renode`
-  / `spi_sensor_cosim_renode` integration tests. (Bit-banged masters are
-  still the exception above.)
+  backends the same way it does on simavr, **on the platforms whose SoC
+  descriptor names bus controllers**; see the `i2c_sensor_cosim_renode` /
+  `spi_sensor_cosim_renode` integration tests, and the coupling table in
+  `docs/cosim/MCU.md` for which platforms those are. (Bit-banged masters on
+  a poll backend stay the exception above.)
 
 ## Output sinks
 
@@ -210,8 +246,9 @@ frontend keeps working unchanged):
   fallback, so a frontend slider wired to a peripheral id works with no
   change.
 - Peripheral state folds into `SimFrame.component_states` keyed by id
-  (e.g. `{"pressed":1}`, `{"position":0.5}`, `{"temp_c":40}`,
-  `{"transitions":20}`).
+  (e.g. `{"pressed":1}`, `{"position":0.5}`, `{"transitions":20}`, and for an
+  `i2c_bus` `{"slaves":1,"0x48_temp_c":40}`, since a bus prefixes each slave's
+  keys with its address).
 
 ## The host is a peripheral too: `run --serial-attach`
 
@@ -260,11 +297,32 @@ address = 0x48
 temp_c = 40.0
 
 [[peripheral]]
+id = "U4"
+type = "i2c_eeprom"
+address = 0x50
+size = 256
+
+[[peripheral]]
+id = "U3"
+type = "spi_mcp3008"
+vref = 5.0
+cs_net = "SPI_CS"          # optional: exact SPI framing off the real CS edges
+
+[[peripheral]]
 id = "VCD"
 type = "vcd_sink"
 nets = ["CLK", "DATA"]
 vcd_path = "out/trace.vcd"
 ```
+
+A `[[scenario]]` block also attaches a peripheral, without appearing in this
+list: each one installs a `DynamicLoad` current sink on the part's supply net
+under the id `load_<scenario id>` (the scenario's own `id`, defaulting to its
+`part`). That id is what the load reports its `current_a` / `peak_a` under. It
+is not addressable by a `peripheral` assertion, though, because that
+assertion's `id` must name a declared `[[peripheral]]` or `[[sensor]]`; a
+scenario's current is asserted through `rail_window` and `protection_trip`
+scoped to the scenario instead.
 
 ### Peripheral assertions
 
@@ -272,20 +330,28 @@ vcd_path = "out/trace.vcd"
 # EEPROM contents contain bytes (hex or ASCII).
 [[assert]]
 kind = "peripheral"
-id = "U2"
+id = "U4"
 bytes = "48 69"            # or bytes = "Hi"
 
-# A peripheral state field is in range (transitions, temp_c, position, ...).
+# A peripheral state field is in range (transitions, position, ...).
 [[assert]]
 kind = "peripheral"
 id = "VCD"
 field = "transitions"
 min = 15
 max = 25
+
+# An I2C bus prefixes each slave's keys with the slave's 7-bit address.
+[[assert]]
+kind = "peripheral"
+id = "U2"
+field = "0x48_temp_c"
+min = 39.9
+max = 40.1
 ```
 
 The `field` name is per peripheral `type`; each exposes its own state keys.
-The full vocabulary (matched exactly; an unknown field errors at load):
+The full vocabulary, matched exactly:
 
 | peripheral `type` | `field` keys | meaning |
 |---|---|---|
@@ -295,11 +361,28 @@ The full vocabulary (matched exactly; an unknown field errors at load):
 | `encoder` | `detents`, `a`, `b` | accumulated detents; the two quadrature line levels |
 | `stimulus` | `value` | the last driven value |
 | `vcd_sink` | `transitions`, `nets` | edge count captured; number of nets watched |
-| `load` | `current_a`, `peak_a` | instantaneous and peak sink current |
-| `i2c_eeprom` | `size`, `ptr`, `page_size` | byte capacity; current address pointer; page size |
-| `i2c_lm75` | `temp_c`, `pointer` | configured temperature; register pointer |
+| `i2c_eeprom` | `slaves`, `0x<addr>_size`, `0x<addr>_ptr`, `0x<addr>_page_size` | slaves on the bus; byte capacity; current address pointer; page size |
+| `i2c_lm75` | `slaves`, `0x<addr>_temp_c`, `0x<addr>_pointer` | slaves on the bus; configured temperature; register pointer |
 | `spi_eeprom` | `size`, `wel` | byte capacity; write-enable-latch state |
 | `spi_mcp3008` | `vref`, `ch0`..`ch7` | reference voltage; per-channel input voltage |
+| `[[scenario]]` load | `current_a`, `peak_a` | instantaneous and peak sink current |
+
+An `i2c_*` peripheral is an `I2cBus` router, so its state is the bus's own
+`slaves` count plus each attached slave's keys **prefixed with that slave's
+7-bit address**: `0x48_temp_c` for an LM75 at the default address. A SPI
+peripheral is one `SpiBus` with one slave, so it passes the slave's keys
+through unprefixed.
+
+The assertion's `id` is checked when the spec loads (it must name a declared
+`[[peripheral]]` or `[[sensor]]`), but the `field` name is not. An unknown
+field fails at **evaluation**, surfacing as a FAILED assertion whose detail
+names the field and lists the ones the peripheral actually produced, so a typo
+costs a run rather than being caught up front:
+
+```
+[FAIL] unprefixed i2c field must fail at evaluation
+      U2 has no state field 'temp_c' (have: ["0x48_pointer", "0x48_temp_c", "slaves"])
+```
 
 (For `i2c_eeprom` / `spi_eeprom` contents, prefer the `bytes = "..."` form
 above over a `field`.) Each peripheral's `state()` in
@@ -329,20 +412,44 @@ above over a `field`.) Each peripheral's `state()` in
 
 ## Honest limitations
 
-- **Bus slaves couple on every hardware-peripheral backend.** simavr (AVR
-  TWI/SPI), the Renode ARM/RISC-V backends (generated C# bridge
-  peripherals), and the QEMU ESP32 backend (RAM-mailbox bus cells) all
-  route a slave model's traffic. The framework stays backend-agnostic at
-  the trait level.
-- **Hardware peripheral, not bit-bang.** Byte-level interception means a
-  software bit-banged bus master is not resolved (its edges alias at the
-  chunk rate, like any GPIO). Use the firmware's TWI/SPI peripheral.
-- **SPI chip-select is inferred.** simavr does not surface CS, so the bus
-  treats the co-sim chunk boundary as a CS deassert (resets the slave's
-  command state machine). Well-formed transfers complete within a chunk, so
-  this is correct in practice; pathological multi-chunk transfers with no
-  idle gap could mis-frame.
-- **One SPI slave per bus** (no CS to select among several).
+- **Bus-slave coupling is per platform, not universal.** The trait layer is
+  backend-agnostic; what routes a slave model's traffic is not. simavr
+  decodes AVR TWI/SPI directly. On Renode it works on the platforms whose SoC
+  descriptor names bus controllers (STM32F103/F4 `i2c1`, STM32F103 `spi1` and
+  F4 `spi1-3`, nRF52840 `twi0`/`twi1`/`spi2`); `sifive_fe310.soc.toml` and
+  `rp2040.soc.toml` both declare `controllers = []`, so a slave bound there
+  is recorded UNEXERCISED, surfaced on every report surface, and a CI
+  `peripheral` assertion against it FAILS. Under QEMU, hauksbee-ci emits a
+  loud warning that an `[[peripheral]]` bus slave or a `[[sensor]]` is a
+  NO-OP on that backend, and the shipped ESP32 I2C proof instead rides the
+  machine's own emulated tmp105, into which the scheduler pushes the modeled
+  LM75's temperature each chunk. The per-coupling table in
+  [MCU.md](MCU.md) is the authority.
+- **Bit-bang is push-backend only.** Byte-level interception of the hardware
+  TWI/SPI peripherals is the main path everywhere. A software bit-banged bus
+  master is resolved exactly on the push backend (simavr) through the
+  synchronous input responders above, and not at all on the poll backends
+  (Renode, QEMU), where its edges alias at the chunk rate like any GPIO.
+- **SPI transaction framing has three tiers**, reported per slave so a
+  verdict never hides which one it got:
+  - **Exact**: the peripheral's `cs_net` resolved to the MCU GPIO pin that
+    drives it, so `select`/`deselect` fire on the true active-low falling and
+    rising edges, interleaved in cycle order with the byte transfers.
+    Available on push backends (simavr).
+  - **Backend**: the emulator surfaces CS itself (Renode hardware NSS
+    `FinishTransmission` arriving as a `deselect` event), which frames the
+    transaction precisely with no resolved CS pin. Detected dynamically the
+    first time such an event lands, and it takes precedence over Exact when
+    reported.
+  - **Heuristic**: no `cs_net` and no backend CS event, so the bus treats the
+    co-sim chunk boundary as a CS deassert. Wrong in two documented ways: two
+    transactions inside one chunk merge, and a chunk-spanning transaction is
+    truncated. hauksbee-ci appends the tier to the assertion's own detail
+    text: `[SPI framing: HEURISTIC; transaction boundaries guessed at chunk
+    edges; two transactions in one chunk merge and a boundary-spanning one is
+    truncated. Wire cs_net for exact framing]`.
+- **One SPI slave per bus.** CS frames a transaction here, it does not select
+  among several slaves on one bus.
 - **The declarative write side is I2C-only and untimed** (see the section
   above): SPI write phases and conversion/update latency are stated
   non-features, and unmodeled write bytes are counted, not decoded.

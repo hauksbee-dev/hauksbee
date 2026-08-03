@@ -11,10 +11,11 @@ When a part on your board is *not* modeled, hauksbee binds it OPEN and says so
 
 > **Shortcut:** to auto-draft this entry from a PDF datasheet instead of
 > writing it by hand, run the extractor. Then lint and correct its output:
-> `cargo run -p hauksbee-models --bin model-extract -- part.pdf`
-> (see [../MODELS.md](../models/MODELS.md#pointing-hauksbee-at-a-datasheet)). Read
-> the hand-written path below too. It is the shape you edit the draft into, and
-> what `hauksbee models lint` checks.
+> `hauksbee models extract --pdf part.pdf --part MCP1700`
+> (both flags are required; there are no positional arguments. See
+> [the datasheet workflow in MODELS.md](../models/MODELS.md#pointing-hauksbee-at-a-datasheet).)
+> Read the hand-written path below too. It is the shape you edit the draft into,
+> and what `hauksbee models lint` checks.
 
 ## The shape of a model entry
 
@@ -79,9 +80,13 @@ rail_hi = 15.0         # output high rail (V) [-60 .. 60]
 
 ## The required params, per kind
 
-`hauksbee models lint` enforces these. The authoritative bounds live in
-`crates/hauksbee-models/src/validation.rs`, and the full table is in
-[`crates/hauksbee-models/db/README.md`](../../crates/hauksbee-models/db/README.md):
+`hauksbee models lint` enforces these, and
+`crates/hauksbee-models/src/validation.rs` is the authority for both the
+required set and the ranges. [`crates/hauksbee-models/db/README.md`](../../crates/hauksbee-models/db/README.md)
+carries a wider table covering the digital and MCU kinds too, but read it as a
+guide rather than a spec: it lists `vth` under `analog_switch`, which the
+validator does not require (`vth` is optional and defaults to 1.5 V). Where the
+two disagree, `validation.rs` is what runs.
 
 | kind | required params | notes |
 |---|---|---|
@@ -107,7 +112,20 @@ role binds the pin OPEN:
   on a multi-op-amp package. The binder recognizes the letter suffixes only,
   up to four channels. A single-channel part uses the bare roles.
 - **comparator:** `out`, `in_plus`, `in_minus`
-- **analog_switch:** `com`, `s0`, `s1`, `ctrl`
+- **analog_switch:** `com`, `s0`, `s1`, `ctrl`, plus `vcc` / `vss` for the
+  supply pins. `s0` is the **normally-closed** throw, the one that conducts when
+  the control is LOW; `s1` is the normally-open throw. Getting those two the
+  wrong way round routes `com` to the wrong throw in every control state, so
+  check the datasheet's NC/NO labelling rather than pin order. Alternative
+  spellings the binder accepts: `a` for `com`, `b1`/`nc` for `s0`, `b2`/`no` for
+  `s1`, and `s`/`sel`/`in` for `ctrl`.
+  - **An SPST part** (a single on/off gate) names only `com`, one throw and
+    `ctrl`. Use `s0` when the switch is closed with the control low, and any
+    other throw name (`in_out_b`) when it closes with the control high. Wiring
+    `ctrl` as one of the throws is the mistake to avoid: it fabricates a
+    conductive path from the signal to the control line.
+  - **A multi-channel part** suffixes the roles per channel:
+    `in_out_1a` / `in_out_1b` with `ctrl_1`, and so on up to `ctrl_4`.
 
 The fastest way to build a correct `[models.pins]` block for an unfamiliar
 footprint: run `hauksbee to-code <a board that already uses the part>` and

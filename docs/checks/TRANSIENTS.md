@@ -290,36 +290,70 @@ WiFi comes up on a cold boot under battery power.
 Honest scope: the board's 3V3 LDO is present in the netlist but its closed-loop
 regulation is a behavioral converter model owned by a sibling layer, not
 stamped here, so the supply leg drives the rail directly and the rail sits at the
-source voltage (cell voltage on battery, ~5 V minus droop on USB) rather than a
-regulated 3.3 V. That does not change the demonstrated physics: the headline is
-the battery-side protection tripping on the inrush while the stiff USB source
-rides it out.
+source voltage rather than a regulated 3.3 V. On the battery side that is the
+cell voltage. The USB-fed side is therefore modelled as the LDO's stiff
+*output*, a 3.3 V bench supply with a 3 A limit: the fixture has no VBUS net to
+regulate down, and stamping the USB 5 V straight onto the 3V3 net puts 5 V on the
+ESP32's VDD, which the stress monitor correctly flags as an overvoltage against
+the module's 3.6 V absolute maximum. That does not change the demonstrated
+physics: the headline is the battery-side protection tripping on the inrush while
+the stiff supply rides it out.
 
 Two sides, same firmware activity (`esp32_cold_boot_inrush`, ~1.2 A surge),
 ESR/ESL decoupling on both:
 
 | side             | supply                       | protection | rail behaviour                                   | result   |
 |------------------|------------------------------|------------|--------------------------------------------------|----------|
-| **battery**      | 1S LiPo, 0.25 Ω, 400 mAh     | 1 A / 2 ms | **TRIPS** at ~4 ms; rail collapses below 3 V for 6.4 ms (dips to ~−0.3 V on the ESL kick) | brownout caught |
-| **USB-supplemented** | USB 5V / 3A (stiff)      | none       | rail holds at **min 4.900 V**, no faults          | survives |
+| **battery**      | 1S LiPo, 0.25 Ω, 400 mAh     | 1 A / 2 ms | **TRIPS** at ~4 ms; rail collapses below 3 V for 6.40 ms (dips to -0.300 V on the ESL kick) | brownout caught |
+| **stiff supply** | 3.3 V bench, 3 A limit       | none       | rail holds at **min 3.299 V** (max 3.300 V), no faults | survives |
 
 The contrast is the whole point: the same activity is fatal on a small cell and
-fine on USB, which is why the Inkplate failures were intermittent and
-supply-dependent. The trip is the protection state machine firing on the real
-solved rail current. The survival is the measured rail staying up.
+harmless behind a stiff supply, which is why the Inkplate failures were
+intermittent and supply-dependent. The trip is the protection state machine
+firing on the real solved rail current. The survival is the measured rail staying
+up.
 
 ### (c) Corpus calibration: Olimex ESP32-EVB, must PASS
 
 `crates/hauksbee-ci/tests/olimex_burst_calibration.rs`, board
-`board-corpus/famous/olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_sch`
+`board-corpus/olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_sch`
 (corpus-gated).
 
 A standard ESP32 WiFi-TX burst (240 mA over 40 mA baseline) on the **real**
-Olimex EVB with its robust wall supply holds **+3.3V at min 3.266 V** (a 40 mV
-sag from 3.306 V), no brownout, no faults: **GREEN**. This is the calibration
-side. A robust board ridden by a normal burst must not go red, or the load /
-supply models would be too pessimistic and the Inkplate-class red could not be
-trusted. It passing is what makes the brownout meaningful.
+Olimex EVB with its robust wall supply holds **+3.3V at min 3.300 V**: the 0.1 Ω
+wall source and the board's own bulk plus decoupling swallow the burst outright,
+so the rail never leaves its nominal and never dips below the 3.1 V threshold at
+all.
+
+```
+$ hauksbee-ci run olimex_burst.toml
+hauksbee-ci: Olimex ESP32-EVB: WiFi burst on robust supply (calibration)
+  board: board-corpus/olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_sch
+  seeds: 1
+
+  UNPOWERED RAIL: VDD1A-2A
+        These nets name a supply but not a voltage, so nothing powered
+        them and they sat at 0 V. Every analog result below was solved
+        around that, so a fault it names may be an artifact rather than
+        a finding about your board. Add a [[supply]] for each, then run
+        again before acting on anything here.
+
+  [PASS] 3V3 holds through WiFi burst on a robust supply
+        +3.3V window: min=3.300V (>= 3V), dip<3.1V for 0.00ms (<= 5ms) [min=3.300V max=3.300V]
+  [PASS] no stress faults raised
+        no stress faults
+
+2/2 assertions passed in 5.24s - GREEN
+```
+
+The EVB's `VDD1A-2A` net carries no `[[supply]]` in this spec, so the runner says
+so instead of quietly solving around a 0 V rail. It is the Ethernet PHY's
+analog-supply label, a net of its own rather than part of +3.3V, so the burst and
+the rail window judging it are untouched.
+
+This is the calibration side. A robust board ridden by a normal burst must not go
+red, or the load / supply models would be too pessimistic and the Inkplate-class
+red could not be trusted. It passing is what makes the brownout meaningful.
 
 ---
 
@@ -348,24 +382,71 @@ step runs to capture the exact sag profile behind a `rail_window` verdict.
 
 ---
 
-## Stretch: tolerance corner sweep (design sketch)
+## Tolerance corner sweep
 
-Not yet implemented. The sketch:
+A board that meets its assertions only at *nominal* component values is a latent
+defect: real boards are built from ±1% resistors and ±20% X7R caps, so some
+fraction of assembled units lands outside the window. `crates/hauksbee-ci/src/tolerance.rs`
+turns that into a CI property, replaying the whole assertion set across an
+*ensemble* of component values and passing only when every member passes.
 
-- **Per-component tolerance metadata**: add an optional `tolerance_pct` to the
-  model DB / spec override for resistors and caps (e.g. `±1%` R, `±20%` X7R C),
-  and an ESR tolerance band on the parasitics.
-- **A corner / Monte-Carlo runner**: re-run a scenario across deterministic
-  seeds, each seed perturbing every toleranced component within its band
-  (splitmix64 from `(corner_seed, ref)`, the same deterministic-PRNG pattern the
-  fuzz layer already uses). Worst-case corners (all decoupling at min C / max
-  ESR, supply at min V) get explicit corners. The rest are sampled.
-- **Reporting**: re-evaluate the scenario's `rail_window` / `protection_trip`
-  assertions per corner and report the worst-case margin (the corner with the
-  deepest sag, the longest dip, the soonest trip), so the build fails on the
-  worst corner rather than the nominal one.
+- **Per-component tolerance metadata**: a `[[tolerance]]` table names components
+  by a `ref` glob (`*` is the only wildcard, kept teachable) and a `percent`
+  spread, with an optional `distribution`: `uniform` (the default, which stresses
+  the tolerance edges hardest) or `gaussian` (sigma = tol/3, truncated by
+  rejection at ±tol, the usual EDA reading of a datasheet tolerance as a 3-sigma
+  bound). Rules apply in order and the last matching rule wins, so a broad
+  `ref = "R*"` can be tightened by a later `ref = "R7"`. An `[[override]]`
+  carrying a `tolerance` is applied after all the rules, with the override's
+  `value` as the nominal.
+- **Two runners, selected by `[ensemble] mode`**: `monte-carlo` (the default)
+  runs `seeds` members (default 16), each sampling every toleranced component
+  independently. `corners` enumerates all `2^n` all-min/all-max combinations
+  deterministically: member k puts component i, in sorted-reference order, at its
+  min when bit i of k is 0 and its max when bit i is 1, so member 0 is all-min
+  and member `2^n - 1` is all-max. Corner mode refuses above
+  `CORNER_CAP = 10` toleranced components (1024 runs) and points at Monte-Carlo,
+  because silently truncating the corner set would fake the very bounded claim
+  the mode exists to make. In corner mode `seeds` is ignored and `[fuzz]` must be
+  absent: the two ensembles do not compose.
+- **Determinism**: every sampled value is a pure function of `(seed, reference,
+  rule)`, drawn from a splitmix64 stream domain-separated by a `"tol:"` tag, so a
+  failing member re-runs byte-identical under `--seed N`, and adding a tolerance
+  never changes which fuzz levels a seed straps. Seed 0 is always the nominal
+  baseline, so "nominal passes but the ensemble fails" is visible inside one run.
+- **Reporting**: every assertion is re-evaluated per member, and the report names
+  the worst member with its component values and words the strength of the claim
+  honestly. A passing Monte-Carlo ensemble is statistical evidence, not a
+  worst-case bound; corner mode bounds the worst case *only where the response is
+  monotonic in each value*, and the report says so on every verdict it backs.
 
-The hooks are already in place: the runner is seed-parameterized
-(`run_spec` loops seeds and an assertion must hold across all of them), and the
-deterministic-jitter pattern is established, so a corner runner is a re-run loop
-over perturbed component values plus a margin-aggregating reporter.
+The worked example is `crates/hauksbee-ci/examples/tolerance_divider_corners.toml`:
+a 10k/10k divider off a 5 V rail with ±10% on both resistors, so four corners.
+The divider is monotonic in each resistor, so its true worst case *is* a corner
+and VOUT spans exactly [2.25, 2.75] V. The wide window holds on all four; the
+tight one fails and names the corner that broke it, with the values that did it:
+
+```
+$ hauksbee-ci run crates/hauksbee-ci/examples/tolerance_divider_corners.toml
+hauksbee-ci: divider tolerance corners
+  board: boards/tolerance_divider.kicad_pcb
+  seeds: 4
+  tolerance corners: 4 deterministic min/max corner(s) over 2 component(s): bounds the worst case only where the response is monotonic in each value
+
+  [PASS] VOUT within the designed [2.2, 2.8] V envelope on every corner
+        VOUT: min=2.500V (>= 2.2V), max=2.500V (<= 2.8V) [settled 2.500V] (held on all 4 min/max tolerance corners: bounds the worst case only where the response is monotonic in each value)
+  [FAIL] VOUT within the tight [2.4, 2.6] V window on every corner
+        corner 1: VOUT: min=2.250V (>= 2.4V), max=2.250V (<= 2.6V) [settled 2.250V] [R1=11k(max), R2=9k(min)]; passed 2/4 corners (failing: 1, 2)
+        why: the rail left its window; check the supply feeding this net and the load pulling it down (docs/ci/CI.md, "voltage").
+
+1/2 assertions passed in 0.03s - RED
+```
+
+One piece is still missing: an **ESR tolerance band** on the capacitor parasitics
+of section 2. `[[tolerance]]` spreads a component's own value (R, C, L), so a
+corner sweep already walks a decoupling cap to its minimum capacitance, but the
+ESR and ESL stay at the package-class default from that section's table. Walking
+min-C and max-ESR together, the real worst corner for a decoupling network, needs
+the parasitics to carry their own band.
+
+Long-form how-and-why: `docs/how-and-why/hauksbee-ci/tolerance.md`.

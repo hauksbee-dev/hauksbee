@@ -6,6 +6,61 @@ high-speed digital, satellites) is authored in Altium and never touches KiCad
 or Eagle. Reading those designs natively brings that tier into hauksbee's bind
 + DRC + lint + simulation pipeline.
 
+## If you use Altium
+
+The whole path, with no conversion step and no flag:
+
+```bash
+hauksbee run MyBoard.PcbDoc --report --plain   # which parts were modelled
+hauksbee run MyBoard.PcbDoc --drc --plain      # shorts and clearance from the copper
+hauksbee run MyBoard.PcbDoc --lint --plain     # design lint in plain language
+```
+
+`hauksbee run` sniffs the file content, so a `.PcbDoc` works wherever a
+`.kicad_pcb` does, including as the `board` key of a `hauksbee-ci` spec.
+
+**Which file.** The `.PcbDoc` from your Altium project, as is. It carries the
+full net connectivity in one file, so it is the complete source of truth and you
+do not need the rest of the project.
+
+**Binary, not ASCII Protel.** hauksbee reads the binary OLE2 `.PcbDoc` that
+Altium Designer writes. There is also a text variant whose file begins
+`|RECORD=Board|`, which is what tools such as EasyEDA emit when they claim an
+Altium export, and hauksbee does not read it. If you have one of those, re-save
+it from Altium Designer as a normal binary `.PcbDoc`.
+
+**Git LFS pointers.** Large `.PcbDoc` files are commonly stored in Git LFS. A
+fresh clone without `git lfs pull` gives you a few hundred bytes of text instead
+of the board. Run `git lfs pull` first.
+
+In either of those two cases the file is not a board hauksbee recognises, and it
+says so without guessing:
+
+```
+error: unrecognized board format; tried altium, eagle, kicad-netlist,
+kicad-schematic, kicad-pcb, ipc-d356
+```
+
+**What to expect from bind coverage.** Altium keeps the displayed component
+value as a bound field that resolves through a string table hauksbee does not
+parse yet, so on many boards the `Value` column comes out blank and those parts
+report as unresolved rather than being silently guessed. Refdes, footprint, and
+connectivity are solid, so **the copper checks (DRC, netlint, signal integrity)
+are unaffected**; it is the analog, AC, thermal, and firmware results on those
+specific nets that a blank value limits, and the report's bottom line says which.
+Passives whose value you need are worth adding as models, one small TOML file
+each and no recompile
+([`../extending/add-an-analog-part.md`](../extending/add-an-analog-part.md)). The
+full statement is under "Honest limitations" below.
+
+**No Altium project at all, or an unreadable one?** Gerbers plus a
+pick-and-place file are the universal fallback, and Altium exports both.
+hauksbee reverse-extracts the board from copper geometry alone
+([`GERBER.md`](GERBER.md)).
+
+The rest of this document is the format internals: how a `.PcbDoc` is parsed,
+what is cross-validated against KiCad, and where the limits are.
+
 Entry points:
 
 - `ExtractedBoard::from_altium_pcb(bytes)` reads connectivity (nets,
@@ -85,7 +140,7 @@ Result on the routable corpus boards:
 | PiDP-11 IO expander | 30 | 23 | 95 | **100%** (95) |
 | HERON CubeSat OBC | 62 | 70 | 281 | **100%** (279) |
 | altium2kicad test-vias | 6 | 5 | 15 | **100%** (15) |
-| EBAZ4205 Zynq FPGA | 392 | 565 | 1742 | connectivity matches; see limitations |
+| EBAZ4205 Zynq FPGA | 392 | 565 | 1742 | **not cross-validated**: extracts 392 nets and 1742 netted pins and is short-clean, but the join cannot be made (see limitations) |
 
 100% net-partition agreement against a wholly independent importer is strong
 ground truth: the extraction is *correct*, not merely non-crashing. The DRC
@@ -93,19 +148,30 @@ is short-clean on every real board (they shipped, or nearly), with clearance
 violations reported on the dense ones (e.g. the EBAZ4205 BGA fanout) as
 expected.
 
-Test coverage:
+**How that table was produced, and what a clone can rerun.** The five
+cross-validated rows come from a run on the maintainers' corpus. The
+cross-validation needs two things a clone does not have: the Altium source
+boards, and a KiCad conversion of each. Neither is in the public fetch manifest.
+The Altium board family is not listed in `corpus.toml` at all, and
+`altium_xval/`, the conversion set, appears there only in the local-only
+section, deliberately absent because its licence could not be established. So
+**these five rows are not reproducible from a clone**, and nothing in the public
+test suite depends on them: `altium_corpus.rs` skips with a printed note naming
+exactly which state it is in ("no corpus at all" versus "corpus present but the
+Altium family is not in it"), and `HAUKSBEE_REQUIRE_CORPUS=1` turns either skip
+into a failure for a run that is supposed to have them.
 
-- `tests/altium.rs` exercises synthetic in-memory `.PcbDoc` fixtures (built
-  with `cfb`): the properties decoder, the `Pads6` / `Tracks6` binary
-  layouts, net / component index resolution, auto-detection, and a
-  deliberate-short DRC.
-- `tests/altium_corpus.rs` runs the real-board sweep (extraction +
-  short-clean DRC) and the KiCad cross-validation (corpus-gated;
-  `HAUKSBEE_REQUIRE_CORPUS=1`).
+What a clone *can* run is the synthetic layer, and that is where the format
+contract is pinned:
 
-Corpus boards, sources and licenses: `board-corpus/famous/SOURCES.md` (the
-Altium section). The KiCad conversions used for cross-validation are
-committed under `board-corpus/altium_xval/`.
+- `crates/hauksbee-extract/tests/altium.rs` exercises synthetic in-memory
+  `.PcbDoc` fixtures (built with `cfb`): the properties decoder, the `Pads6` /
+  `Tracks6` binary layouts, net / component index resolution, auto-detection,
+  and a deliberate-short DRC. No corpus needed.
+- `crates/hauksbee-extract/tests/altium_corpus.rs` runs the real-board sweep
+  (extraction + short-clean DRC) and the KiCad cross-validation. Corpus-gated.
+
+Board provenance and licences live in `corpus.toml` at the repository root.
 
 ## Records adapted from KiCad
 
@@ -124,12 +190,14 @@ We cross-checked against the `altium2kicad` project (thesourcerer8) and a
 Python `olefile` prototype before porting. The `cfb` crate replaces KiCad's
 vendored `CompoundFileReader`.
 
-## A real bug chased to the binary (the Tarski discipline)
+## A real bug chased to the binary
 
-An early version reported 42 "shorts" on the EBAZ4205. Per
-`docs/record/BUG_HUNT.md` the rule is: chase every short to the data before
-believing it. All 42 sat on `In2.Cu`, and every one involved a copper-pour
-polygon. The board has split power planes (10 solid pours of different nets
+An early version reported 42 "shorts" on the EBAZ4205. A short is a claim about
+the copper, so the rule is to chase every one to the data before believing it
+(see [docs/evidence/BUG_HUNT.md](../evidence/BUG_HUNT.md) for the same discipline
+applied across the checks). All 42 sat on `In2.Cu`, and every one involved a
+copper-pour polygon. The board has split power planes (10 solid pours of
+different nets
 (VCC, GND, VCCA, VCC-DDR) on one inner layer), and foreign-net vias pass
 through each plane through antipad voids that Altium carves in `Regions6`,
 which the extractor does not parse. So a via legally sitting inside a
@@ -151,8 +219,9 @@ partition agreement.
   literal resolves through `WideStrings6`, which we do not parse. The refdes
   (from `SOURCEDESIGNATOR`), footprint (`PATTERN`) and full connectivity are
   solid. The value is often left empty. The binder works off footprint +
-  connectivity regardless (see the `--report` output on the cobra board), so
-  this does not affect bind / DRC / lint / sim.
+  connectivity regardless, so this does not affect bind / DRC / lint / sim.
+  `hauksbee run <board.PcbDoc> --report` is where you see it: parts bind and
+  resolve with their `Value` column blank.
 
 - **Newest-format designators (WideStrings) on some boards.** A few newer
   Altium files (e.g. the EBAZ4205) store no `SOURCEDESIGNATOR` in
@@ -173,8 +242,8 @@ partition agreement.
 - **ASCII `.pcbdoc` is not yet supported.** Altium also has a text variant
   whose files begin `|RECORD=Board|` (e.g. SimpleFOCMini). We read only the
   binary OLE2 form today. hauksbee detects the ASCII form as "not a binary
-  board" and currently falls through. (One ASCII sample is kept in the
-  corpus for a future path.)
+  board" and currently falls through. An ASCII sample is kept in the
+  maintainers' corpus against a future path; it is not in the public fetch.
 
 - **`.SchDoc` (schematic) is not read.** The PCB was the priority because it
   carries full net connectivity in one file (the layout alone fully
