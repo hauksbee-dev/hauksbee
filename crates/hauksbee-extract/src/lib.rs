@@ -42,9 +42,9 @@ pub mod si;
 pub mod trace_current;
 
 pub use drc::{
-    clearance_rules_from_kicad_pro, drc_from_text, eagle_drc_from_text, run_drc,
+    clearance_rules_from_kicad_pro, drc_from_text, eagle_drc_from_text, is_touching, run_drc,
     run_drc_with_clearance_rules, ClearanceRules, DrcFinding, DrcReport, Item, ItemKind,
-    is_touching, NetClassRule, ViolationKind, DEFAULT_CLEARANCE_MM, SHORT_TOUCH_EPS_MM,
+    NetClassRule, ViolationKind, DEFAULT_CLEARANCE_MM, SHORT_TOUCH_EPS_MM,
 };
 pub use netlint::{render_netlint, LintCheck, LintFinding, NetLintReport, Severity};
 pub use si::{

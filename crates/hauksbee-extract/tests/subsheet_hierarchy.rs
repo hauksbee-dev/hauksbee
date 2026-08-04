@@ -67,7 +67,11 @@ fn a_sub_sheet_by_path_pulls_in_its_parent_and_is_clean() {
     assert!(
         board.components.iter().any(|c| c.reference == "R1"),
         "the parent's R1 pull-up must be in the extraction, got {:?}",
-        board.components.iter().map(|c| &c.reference).collect::<Vec<_>>()
+        board
+            .components
+            .iter()
+            .map(|c| &c.reference)
+            .collect::<Vec<_>>()
     );
     assert!(
         board.components.iter().any(|c| c.reference == "U1"),
