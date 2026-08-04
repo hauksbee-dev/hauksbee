@@ -416,10 +416,13 @@ above over a `field`.) Each peripheral's `state()` in
   backend-agnostic; what routes a slave model's traffic is not. simavr
   decodes AVR TWI/SPI directly. On Renode it works on the platforms whose SoC
   descriptor names bus controllers (STM32F103/F4 `i2c1`, STM32F103 `spi1` and
-  F4 `spi1-3`, nRF52840 `twi0`/`twi1`/`spi2`); `sifive_fe310.soc.toml` and
-  `rp2040.soc.toml` both declare `controllers = []`, so a slave bound there
-  is recorded UNEXERCISED, surfaced on every report surface, and a CI
-  `peripheral` assertion against it FAILS. Under QEMU, hauksbee-ci emits a
+  F4 `spi1-3`, nRF52840 `twi0`/`twi1`/`spi2`, RP2040 `i2c0`/`i2c1`, the last
+  proven end-to-end in both directions). `sifive_fe310.soc.toml` declares no
+  controllers at all, and `rp2040.soc.toml` declares none for SPI because the
+  vendored PL022 bit-bangs onto GPIO pins and never dispatches to a registered
+  `ISPIPeripheral`, so a bridge there would see nothing. Either way a slave
+  bound to a controller-less bus is recorded UNEXERCISED, surfaced on every
+  report surface, and a CI `peripheral` assertion against it FAILS. Under QEMU, hauksbee-ci emits a
   loud warning that an `[[peripheral]]` bus slave or a `[[sensor]]` is a
   NO-OP on that backend, and the shipped ESP32 I2C proof instead rides the
   machine's own emulated tmp105, into which the scheduler pushes the modeled
