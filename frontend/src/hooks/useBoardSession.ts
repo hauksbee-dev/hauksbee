@@ -36,6 +36,20 @@ export interface ServerLive {
 
 export type LiveMode = 'connected' | 'launch' | 'none'
 
+/** A report put back on screen from a saved browser session, with no uploaded
+ *  file behind it. Held separately from a real run because the difference is
+ *  load-bearing: everything that needs the bytes (re-analysis, a checks run, a
+ *  live launch) is unavailable, and the surfaces have to say so instead of
+ *  offering buttons that cannot work. */
+export interface RestoredFrom {
+  /** The board file the report was produced from, by name. */
+  boardName: string
+  /** The firmware that was staged at the time, by name. */
+  firmwareName: string | null
+  /** The saved session's own name. */
+  sessionName: string
+}
+
 export interface BoardSession {
   report: WebReport | null
   /** In-progress upload; while set, further uploads are blocked. */
@@ -83,6 +97,10 @@ export interface BoardSession {
   clearFirmware: () => void
   runSample: (s: SampleSpec) => void
   resetFlow: () => void
+  /** Put a saved session's report back on screen with no file behind it. */
+  restoreReport: (from: RestoredFrom & { report: WebReport; analyzedAt: number | null }) => void
+  /** Set while the report on screen came from storage rather than a run. */
+  restoredFrom: RestoredFrom | null
   /** Bumped once per analysis run. Anything outside this hook that caches
    *  run-derived state keys off it to drop that state at the same instant the
    *  session drops its own, so no surface can show two runs at once. */
@@ -115,6 +133,7 @@ export function useBoardSession(opts: {
   const [selectedNet, setSelectedNet] = useState<string | null>(null)
   const [selectedComponent, setSelectedComponentRaw] = useState<SelectedComponent | null>(null)
   const [runEpoch, setRunEpoch] = useState(0)
+  const [restoredFrom, setRestoredFrom] = useState<RestoredFrom | null>(null)
 
   // The board whose live session is currently on /ws AND was launched by THIS
   // page-load (or preloaded by `run --serve`). Only this counts as "connected":
@@ -199,6 +218,10 @@ export function useBoardSession(opts: {
     setSelectedNet(null)
     setSelectedComponentRaw(null)
     setLaunch({ phase: 'idle' })
+    // A real run replaces a restored report, and with it the "this came from
+    // storage" caveat: the surfaces would otherwise keep telling the user to
+    // re-drop a file they just dropped.
+    setRestoredFrom(null)
     setRunEpoch(n => n + 1)
   }, [])
 
@@ -379,6 +402,32 @@ export function useBoardSession(opts: {
     })
   }, [clearRunState])
 
+  // Put a saved session's report back on screen. Deliberately the same teardown
+  // `resetFlow` does (no file, no firmware, no board URL, a fresh run epoch)
+  // followed by the stored report: a restored session must not inherit a single
+  // artifact of whatever was loaded before it, and it must not pretend to have a
+  // file. `restoredFrom` is what every surface reads to say so.
+  const restoreReport = useCallback((from: RestoredFrom & { report: WebReport; analyzedAt: number | null }) => {
+    abortRef.current?.abort()
+    runIdRef.current += 1
+    lastBoardFile.current = null
+    clearRunState()
+    setBoardFile(null)
+    setBusy(null)
+    setFirmwareFile(null)
+    setBoardUrl(prev => {
+      if (prev?.startsWith('blob:')) URL.revokeObjectURL(prev)
+      return null
+    })
+    setReport(from.report)
+    setAnalyzedAt(from.analyzedAt)
+    setRestoredFrom({
+      boardName: from.boardName,
+      firmwareName: from.firmwareName,
+      sessionName: from.sessionName,
+    })
+  }, [clearRunState])
+
   // One-click samples: fetch a bundled board (and optionally its firmware)
   // and push it through the exact same analyze path a dropped file takes.
   const runSample = useCallback(async (sample: SampleSpec) => {
@@ -544,7 +593,7 @@ export function useBoardSession(opts: {
     // the name may show (the busy line names it anyway).
     boardLabel: (report && !report.ok) || (uploadError && !report)
       ? null
-      : boardFile?.name ?? preloadedBoardName,
+      : boardFile?.name ?? restoredFrom?.boardName ?? preloadedBoardName,
     boardUrl: boardUrl ?? (
       // Preloaded (`run --serve`) boards are served at /boards/<name> for the
       // live viewer; reuse that for the report map too.
@@ -569,6 +618,8 @@ export function useBoardSession(opts: {
     clearFirmware,
     runSample: (s: SampleSpec) => void runSample(s),
     resetFlow,
+    restoreReport,
+    restoredFrom,
     runEpoch,
     launchLive: (onReady: () => void) => void launchLive(onReady),
     onEmptyBoard,

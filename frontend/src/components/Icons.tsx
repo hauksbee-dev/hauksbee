@@ -138,6 +138,22 @@ export const TerminalIcon = ({ size = 14, ...p }: IconProps) =>
 export const SlidersIcon = ({ size = 14, ...p }: IconProps) =>
   svg(size, <><line x1="21" x2="14" y1="4" y2="4" /><line x1="10" x2="3" y1="4" y2="4" /><line x1="21" x2="12" y1="12" y2="12" /><line x1="8" x2="3" y1="12" y2="12" /><line x1="21" x2="16" y1="20" y2="20" /><line x1="12" x2="3" y1="20" y2="20" /><line x1="14" x2="14" y1="2" y2="6" /><line x1="8" x2="8" y1="10" y2="14" /><line x1="16" x2="16" y1="18" y2="22" /></>, p)
 
+// Lucide `download`; the export menu's trigger and every item in it.
+export const DownloadIcon = ({ size = 14, ...p }: IconProps) =>
+  svg(size, <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="7 10 12 15 17 10" /><line x1="12" x2="12" y1="15" y2="3" /></>, p)
+
+// Lucide `history`; the saved-session indicator and its switcher.
+export const HistoryIcon = ({ size = 14, ...p }: IconProps) =>
+  svg(size, <><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" /><path d="M3 3v5h5" /><path d="M12 7v5l4 2" /></>, p)
+
+// Lucide `trash-2`; deleting a saved session.
+export const TrashIcon = ({ size = 14, ...p }: IconProps) =>
+  svg(size, <><path d="M3 6h18" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6" /><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /><line x1="10" x2="10" y1="11" y2="17" /><line x1="14" x2="14" y1="11" y2="17" /></>, p)
+
+// Lucide `pencil`; renaming a saved session.
+export const PencilIcon = ({ size = 14, ...p }: IconProps) =>
+  svg(size, <><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z" /><path d="m15 5 4 4" /></>, p)
+
 // Lucide `plug-zap`; the power rails card.
 export const PowerIcon = ({ size = 14, ...p }: IconProps) =>
   svg(size, <><path d="M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z" /><path d="m2 22 3-3" /><path d="M7.5 13.5 10 11" /><path d="M10.5 16.5 13 14" /><path d="m18 3-4 4h6l-4 4" /></>, p)

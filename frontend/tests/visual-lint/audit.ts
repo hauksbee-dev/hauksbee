@@ -27,6 +27,12 @@ export const TOLERANCE = {
   escapeY: 4,
   /** nowrap text whose content is wider than its box. */
   text: 1,
+  /** A control's own label crossing its own border box. Looser than `text`
+   *  because a centred single line in a tight fixed height sits a pixel or two
+   *  past the box at some font sizes without being cut. */
+  controlText: 3,
+  /** An out-of-flow box crossing the window's edge. */
+  viewport: 2,
   /** Rendered-vs-natural image aspect, as a fraction (0.02 = 2%). */
   aspect: 0.02,
 }
@@ -66,6 +72,8 @@ export function auditPage(tol: typeof TOLERANCE): Finding[] {
   }
 
   const rect = (el: Element) => el.getBoundingClientRect()
+  const round = (n: number) => Math.round(n)
+
   /** Laid out AND painted. Both halves matter:
    *  - this app hides views rather than unmounting them, so a whole surface's
    *    worth of zero-size elements is always in the DOM;
@@ -83,6 +91,45 @@ export function auditPage(tol: typeof TOLERANCE): Finding[] {
   const vw = document.documentElement.clientWidth
   const vh = document.documentElement.clientHeight
 
+  type Box = { left: number; right: number; top: number; bottom: number; width: number }
+
+  /** The box a child is supposed to be inside.
+   *
+   *  For a block, that is its border box. For an INLINE element it is not: an
+   *  inline box's bounding rect is the union of its line boxes, which on a
+   *  wrapped inline spans the full column and starts at the first line's
+   *  indent, so comparing a child against it measures nothing on either edge.
+   *  The line boxes themselves are what the inline actually occupies, so the
+   *  bound used here is the union of `getClientRects()` (per-line), which is the
+   *  tightest true statement available about where an inline parent is. */
+  function bounds(el: Element): Box {
+    const s = style(el)
+    const r = rect(el)
+    if (s.display !== 'inline' && s.display !== 'ruby') {
+      return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width }
+    }
+    const rs = Array.from(el.getClientRects()).filter(x => x.width > 0 || x.height > 0)
+    if (rs.length === 0) {
+      return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width }
+    }
+    const left = Math.min(...rs.map(x => x.left))
+    const right = Math.max(...rs.map(x => x.right))
+    const top = Math.min(...rs.map(x => x.top))
+    const bottom = Math.max(...rs.map(x => x.bottom))
+    return { left, right, top, bottom, width: right - left }
+  }
+
+  /** Does this box draw anything, so that spilling out of it is visible? A
+   *  border, or a background that is not fully transparent. */
+  const paints = (s: CSSStyleDeclaration) =>
+    s.borderTopWidth !== '0px' || s.borderBottomWidth !== '0px'
+    || s.borderLeftWidth !== '0px' || s.borderRightWidth !== '0px'
+    || (s.backgroundColor !== 'rgba(0, 0, 0, 0)' && s.backgroundColor !== 'transparent')
+    || s.backgroundImage !== 'none'
+
+  const scrolls = (v: string) => v === 'auto' || v === 'scroll'
+  const clips = (v: string) => v === 'hidden' || v === 'clip'
+
   // ── 1. No page-level horizontal scroll ────────────────────────────────────
   // A table or a code block may scroll inside its own overflow-x container.
   // The PAGE may not: that is the defect where the whole layout slides sideways
@@ -97,46 +144,135 @@ export function auditPage(tol: typeof TOLERANCE): Finding[] {
   const all = Array.from(document.querySelectorAll<HTMLElement>('body *'))
 
   // ── 2. Nothing escapes the box that is supposed to hold it ────────────────
-  // Only where the parent does NOT clip or scroll: if the parent has
-  // overflow-x:auto the child is allowed to be wider (that is the table
-  // wrapper case, and the wrapper itself is covered by rule 1).
+  //
+  // Three things changed here after the first version of this file shipped with
+  // them written down as known blind spots:
+  //
+  //  - an INLINE parent is no longer skipped. `bounds()` above measures its
+  //    line boxes instead of its useless union rect.
+  //  - the check no longer stops at the immediate parent. A button inside three
+  //    bare layout divs inside a card was compared only against the innermost
+  //    div, which has no edges of its own, so hanging 40px off the CARD passed.
+  //    The walk carries on to the nearest ancestor that CLIPS (where the child
+  //    is genuinely cut) or PAINTS (where the spill is visible), which is the
+  //    ancestor a reader would call "the box it is in".
+  //  - out-of-flow elements are no longer exempt. They are measured against the
+  //    window, and an absolute one against its offset parent as well.
   const ESCAPE_CANDIDATES = 'button, a, img, svg, input, select, textarea, code, [role="button"]'
   for (const el of all) {
     if (!el.matches(ESCAPE_CANDIDATES)) continue
     if (!shown(el)) continue
     const parent = el.parentElement
     if (!parent || parent === document.body) continue
-    const ps = style(parent)
-    // The parent clips or scrolls: overflowing it is its business, not a defect.
-    if (ps.overflowX !== 'visible' || ps.overflowY !== 'visible') continue
-    // Inline parents are line boxes, whose rect is the union of their lines;
-    // comparing a child's box to that measures nothing.
-    if (ps.display === 'inline') continue
     const cs = style(el)
-    // Taken out of flow on purpose (a popover, a sticky bar, an overlay).
-    if (cs.position === 'absolute' || cs.position === 'fixed' || cs.position === 'sticky') continue
-    const pr = rect(parent)
-    if (pr.width <= 0) continue
     const cr = rect(el)
-    const right = cr.right - pr.right
-    const left = pr.left - cr.left
-    const worstX = Math.max(right, left)
-    if (worstX > tol.escapeX) {
-      add('escapes-container', 'error', el,
-        `child ${Math.round(cr.width)}x${Math.round(cr.height)} at x=[${Math.round(cr.left)},${Math.round(cr.right)}]`
-        + ` escapes parent x=[${Math.round(pr.left)},${Math.round(pr.right)}] by ${Math.round(worstX)}px`
-        + ` (${right > left ? 'right' : 'left'})`)
+    if (cs.position === 'fixed' || cs.position === 'sticky') {
+      offWindow(el, cr, cs)
       continue
     }
-    // Vertical spill only counts out of something that draws a box: a card,
-    // a bordered row, a filled chip. Out of a bare layout div it is invisible.
-    const draws = ps.borderTopWidth !== '0px' || ps.borderBottomWidth !== '0px'
-      || (ps.backgroundColor !== 'rgba(0, 0, 0, 0)' && ps.backgroundColor !== 'transparent')
-    const below = cr.bottom - pr.bottom
-    if (draws && below > tol.escapeY) {
-      add('escapes-container', 'error', el,
-        `child bottom=${Math.round(cr.bottom)} escapes drawn parent bottom=${Math.round(pr.bottom)}`
-        + ` by ${Math.round(below)}px`)
+    if (cs.position === 'absolute') {
+      if (!offWindow(el, cr, cs)) offOffsetParent(el, cr)
+      continue
+    }
+    escapeWalk(el, cr)
+  }
+
+  /** An out-of-flow box that has left the window. Nothing can scroll it back
+   *  (that is what taking it out of flow means), so whatever is out there is
+   *  unreachable rather than merely awkward. Returns true when it fired. */
+  function offWindow(el: Element, cr: DOMRect, cs: CSSStyleDeclaration): boolean {
+    // Parked off-screen on purpose: the screen-reader-only patterns, which are
+    // either a 1px box or clipped to nothing.
+    if (cr.width <= 4 || cr.height <= 4) return false
+    if (cs.clipPath !== 'none' || (cs.clip !== 'auto' && cs.clip !== '')) return false
+    const pastRight = cr.right - vw
+    const pastLeft = -cr.left
+    const worst = Math.max(pastRight, pastLeft)
+    if (worst <= tol.viewport) return false
+    add('offscreen', 'error', el,
+      `${cs.position} ${round(cr.width)}x${round(cr.height)} at x=[${round(cr.left)},${round(cr.right)}]`
+      + ` is ${round(worst)}px outside the ${vw}px window (${pastRight > pastLeft ? 'right' : 'left'});`
+      + ' nothing can scroll it back into view')
+    return true
+  }
+
+  /** An absolutely positioned box against its containing block.
+   *
+   *  Tuned, and here is the reasoning: an anchored overlay (a dropdown, a
+   *  popover, a floating card) is routinely WIDER than the control it hangs off,
+   *  and being wider than its offset parent is how it is supposed to work. What
+   *  is never fine is being cut off, so this fires when the containing block
+   *  CLIPS in the axis the child crosses. The other half of "not exempt any
+   *  more" is `offWindow` above, which is what catches the anchored panel that
+   *  went off the side of the phone. */
+  function offOffsetParent(el: HTMLElement, cr: DOMRect) {
+    const op = el.offsetParent
+    if (!op || op === document.body || op === document.documentElement) return
+    const ops = style(op)
+    const ob = bounds(op)
+    if (ob.width <= 0) return
+    const outX = Math.max(cr.right - ob.right, ob.left - cr.left)
+    const outY = Math.max(cr.bottom - ob.bottom, ob.top - cr.top)
+    const cutX = outX > tol.escapeX && clips(ops.overflowX) && !scrolls(ops.overflowX)
+    const cutY = outY > tol.escapeY && clips(ops.overflowY) && !scrolls(ops.overflowY)
+    if (!cutX && !cutY) return
+    add('escapes-offset-parent', 'error', el,
+      `absolute ${round(cr.width)}x${round(cr.height)} escapes its clipping containing block`
+      + ` ${path(op)} by ${round(cutX ? outX : outY)}px in ${cutX ? 'x' : 'y'}`
+      + ` (overflow ${ops.overflowX}/${ops.overflowY}), so that much of it is cut off`)
+  }
+
+  /** Walk out from an in-flow child to the box that is meant to hold it: the
+   *  nearest ancestor that CLIPS (where crossing it means being cut off) or
+   *  PAINTS (where crossing it is visible). A bare layout div is neither, so the
+   *  walk goes through it; a scroller ends the walk, because being wider than a
+   *  scroller is how a scroller is used.
+   *
+   *  The first version of this rule reported against the immediate parent
+   *  whatever it was, which was wrong in both directions: it named a bare div
+   *  with no edges instead of the card the child actually hung off, and it fired
+   *  on a wide child inside a bare div inside an `overflow-x:auto` wrapper, which
+   *  is a table that scrolls, not a defect. A child wider than a bare column with
+   *  nothing painting or clipping anywhere above it produces no finding here;
+   *  what that costs the page is page-level horizontal scroll, which is rule 1's. */
+  function escapeWalk(el: Element, cr: DOMRect) {
+    let node: Element | null = el.parentElement
+    for (let depth = 0; node && node !== document.body && depth < 12; depth++) {
+      const ns = style(node)
+      // No box of its own: whatever contains IT is the next question.
+      if (ns.display === 'contents') { node = node.parentElement; continue }
+      const nb = bounds(node)
+      if (nb.width <= 0) { node = node.parentElement; continue }
+
+      // The ancestor scrolls: overflowing it is its business, not a defect
+      // (that is the table-wrapper case, and the wrapper itself is rule 1's).
+      if (scrolls(ns.overflowX) || scrolls(ns.overflowY)) return
+
+      const cut = clips(ns.overflowX) || clips(ns.overflowY)
+      const draws = paints(ns)
+      // A bare layout box: it has no edge anyone can see the child cross.
+      if (!cut && !draws) { node = node.parentElement; continue }
+
+      const where = `${cut ? 'clipping' : 'drawn'} ${depth === 0 ? 'parent' : 'ancestor'} ${path(node)}`
+      const right = cr.right - nb.right
+      const left = nb.left - cr.left
+      const worstX = Math.max(right, left)
+      if (worstX > tol.escapeX) {
+        add(cut ? 'escapes-clipper' : 'escapes-container', 'error', el,
+          `child ${round(cr.width)}x${round(cr.height)} at x=[${round(cr.left)},${round(cr.right)}]`
+          + ` escapes ${where} x=[${round(nb.left)},${round(nb.right)}] by ${round(worstX)}px`
+          + ` (${right > left ? 'right' : 'left'})${cut ? ', and is clipped there' : ''}`)
+        return
+      }
+      const below = cr.bottom - nb.bottom
+      if (below > tol.escapeY) {
+        add(cut ? 'escapes-clipper' : 'escapes-container', 'error', el,
+          `child bottom=${round(cr.bottom)} escapes ${where} bottom=${round(nb.bottom)}`
+          + ` by ${round(below)}px${cut ? ', and is clipped there' : ''}`)
+      }
+      // This ancestor is the box a reader would name, and the child is inside
+      // it. Anything further out is a different question.
+      return
     }
   }
 
@@ -167,7 +303,56 @@ export function auditPage(tol: typeof TOLERANCE): Finding[] {
     }
   }
 
-  // ── 4. Images: loaded, and not stretched ─────────────────────────────────
+  // ── 4. A control's own label does not fit the control ─────────────────────
+  //
+  // Rule 3 catches a nowrap element wider than its own client box, which is the
+  // horizontal case AND only when the nowrap sits on the measured element. It
+  // never caught the commonest button defect: a fixed-height control whose label
+  // wrapped to two lines, so half of it is outside the button. Nothing about
+  // that shows up in `scrollWidth`, the label is not nowrap, and the label span
+  // is inline so rule 3 skips it.
+  //
+  // Measured with a Range over the control's own content, against the control's
+  // BORDER box (not its content box): text that eats its padding still reads as
+  // being on the button, text past the border does not.
+  const LABELLED_CONTROLS =
+    'button, a[href], summary, [role="button"], input[type="button"], input[type="submit"], input[type="reset"]'
+  for (const el of all) {
+    if (!el.matches(LABELLED_CONTROLS)) continue
+    if (!shown(el)) continue
+    const s = style(el)
+    if (s.display === 'inline') continue // no box of its own to be cut by
+    if (scrolls(s.overflowX) || scrolls(s.overflowY)) continue // scrolls on purpose
+    const label = (el.textContent ?? '').trim()
+    if (!label) continue // an icon-only control has no label to clip
+    let rects: DOMRect[] = []
+    try {
+      const range = document.createRange()
+      range.selectNodeContents(el)
+      rects = Array.from(range.getClientRects()).filter(r => r.width > 0.5 && r.height > 0.5)
+      range.detach()
+    } catch {
+      continue
+    }
+    if (rects.length === 0) continue
+    const r = rect(el)
+    const top = Math.min(...rects.map(x => x.top))
+    const bottom = Math.max(...rects.map(x => x.bottom))
+    const left = Math.min(...rects.map(x => x.left))
+    const right = Math.max(...rects.map(x => x.right))
+    const outY = Math.max(r.top - top, bottom - r.bottom)
+    const outX = Math.max(r.left - left, right - r.right)
+    const worst = Math.max(outX, outY)
+    if (worst <= tol.controlText) continue
+    const cut = clips(s.overflowX) || clips(s.overflowY)
+    add('control-label-overflows', 'error', el,
+      `label "${label.slice(0, 40)}" needs ${round(right - left)}x${round(bottom - top)}`
+      + ` in a ${round(r.width)}x${round(r.height)} control`
+      + ` (${round(worst)}px outside it in ${outY >= outX ? 'y' : 'x'};`
+      + ` ${cut ? `clipped by overflow:${clips(s.overflowY) ? s.overflowY : s.overflowX}` : 'spilling over what is next to it'})`)
+  }
+
+  // ── 5. Images: loaded, and not stretched ─────────────────────────────────
   for (const img of Array.from(document.images)) {
     if (!shown(img)) continue
     const ir = rect(img)
@@ -194,7 +379,7 @@ export function auditPage(tol: typeof TOLERANCE): Finding[] {
     }
   }
 
-  // ── 5. Fixed/sticky chrome must not sit on top of a control ───────────────
+  // ── 6. Fixed/sticky chrome must not sit on top of a control ───────────────
   // Measured with elementFromPoint, which answers the question the user asks
   // by clicking: what does this pixel belong to?
   const CONTROLS = 'button, a[href], input, select, textarea, summary, [role="button"]'
@@ -222,6 +407,15 @@ export function auditPage(tol: typeof TOLERANCE): Finding[] {
       node = node.parentElement
     }
     if (!overlay || overlay.contains(el)) continue
+    // A dialog, a menu or a listbox covering the page is not chrome sitting on
+    // content: it is the thing the user just opened, and the next click anywhere
+    // outside it closes it. This rule is about the OTHER case, the sticky
+    // toolbar or the pinned pane that permanently owns the pixels of a button
+    // nobody can reach. The discriminator is the overlay's own declared role,
+    // which is also what tells a screen reader the same thing.
+    const role = overlay.getAttribute('role')
+    if (role && /^(dialog|alertdialog|menu|listbox|tooltip)$/.test(role)) continue
+    if (overlay.getAttribute('aria-modal') === 'true') continue
     add('overlay-covers-control', 'error', el,
       `centre (${cx},${cy}) belongs to ${path(top)} under ${style(overlay).position} ${path(overlay)}`)
   }
