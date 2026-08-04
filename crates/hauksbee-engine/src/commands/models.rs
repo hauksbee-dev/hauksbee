@@ -295,7 +295,17 @@ fn soc_inspection(config: &hauksbee_mcu::SocConfig) -> Vec<String> {
                     "support bundle: {b} (unpacked before the platform loads)"
                 ));
             }
-            out.push(format!("cpu: {}   clock: {} Hz", c.cpu, c.frequency_hz));
+            out.push(format!(
+                "cpu: {}   clock: {} Hz (cross-checked at load against the platform's own \
+                 `cpu PerformanceInMips` / `nvic systickFrequency` declarations)",
+                c.cpu, c.frequency_hz
+            ));
+            out.push(match &c.watchdog_limitation {
+                Some(l) => format!("watchdog: {l}"),
+                None => "watchdog: this part claims full fidelity, an armed watchdog that is \
+                         never fed reboots the core the way silicon does"
+                    .to_string(),
+            });
             out.push(match &c.uart {
                 Some(u) => format!("uart bridge: {u}"),
                 None => "uart bridge: none".to_string(),
@@ -354,6 +364,17 @@ fn soc_inspection(config: &hauksbee_mcu::SocConfig) -> Vec<String> {
                 ));
             }
             out.push(format!("i2c buses: {}", name_list(&c.i2c_buses)));
+            // Unlike the Renode branch, the watchdog statement here is a
+            // property of how the backend LAUNCHES QEMU (`wdt_disable=true` for
+            // the timer groups) rather than of this file, so the descriptor has
+            // no field to read back. Say where the fact lives instead of
+            // restating the sentence: a second copy of it would be a second
+            // wording to drift.
+            out.push(
+                "watchdog: stated per-backend rather than per-descriptor for this family; the \
+                 qemu backend's own sentence is what a run reports verbatim on every surface"
+                    .to_string(),
+            );
         }
         #[cfg(not(any(feature = "renode", feature = "qemu")))]
         _ => out.push("this build carries no emulator backend".to_string()),
@@ -1201,14 +1222,26 @@ mod tests {
         );
     }
 
-    /// A minimal Renode descriptor with `{extra}` splicing in the case under test.
+    /// A minimal Renode descriptor with `{extra}` splicing in the case under
+    /// test. The platform is INLINE and declares the core clock in both places
+    /// the loader checks, because a `@platform` reference that declares neither
+    /// is now a hard load error and every case here needs a descriptor that gets
+    /// as far as the lint.
     fn soc_fixture(extra: &str) -> String {
         format!(
             r#"
 [soc]
 backend = "renode"
 machine = "m"
-platform_repl = "@platforms/cpus/stm32f072.repl"
+platform_repl = """
+using "platforms/cpus/stm32f072.repl"
+
+nvic:
+    systickFrequency: 8000000
+
+cpu:
+    PerformanceInMips: 8
+"""
 cpu_path = "sysbus.cpu"
 frequency_hz = 8_000_000
 expected_e_machine = "EM_ARM"

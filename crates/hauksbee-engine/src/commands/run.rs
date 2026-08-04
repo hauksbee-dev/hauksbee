@@ -835,6 +835,22 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                     message: b.message(),
                 });
             }
+            // Watchdog coverage, same channel and the same reason: a backend
+            // whose armed watchdog never fires lets hung firmware run forever,
+            // so a consumer that only filters notes must still learn that this
+            // run cannot vouch for the recovery path.
+            for (mcu_ref, limitation) in engine.scheduler().watchdog_limitations() {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::Coverage,
+                    message: crate::scheduler::watchdog_limitation_message(&mcu_ref, &limitation),
+                });
+            }
+            for (mcu_ref, resets) in engine.scheduler().watchdog_resets() {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::Coverage,
+                    message: crate::scheduler::watchdog_reset_message(&mcu_ref, resets),
+                });
+            }
             for w in crate::reports::cosim::heuristic_framing_warnings(
                 &engine.scheduler().spi_framing_modes(),
             ) {
@@ -948,6 +964,18 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 report
                     .heads_up
                     .push(crate::plain::HeadsUp::note(b.message()));
+            }
+            // Watchdog coverage, worded identically to the JSON notes and the
+            // default text summary.
+            for (mcu_ref, limitation) in engine.scheduler().watchdog_limitations() {
+                report.heads_up.push(crate::plain::HeadsUp::note(
+                    crate::scheduler::watchdog_limitation_message(&mcu_ref, &limitation),
+                ));
+            }
+            for (mcu_ref, resets) in engine.scheduler().watchdog_resets() {
+                report.heads_up.push(crate::plain::HeadsUp::note(
+                    crate::scheduler::watchdog_reset_message(&mcu_ref, resets),
+                ));
             }
             for w in crate::reports::cosim::heuristic_framing_warnings(
                 &engine.scheduler().spi_framing_modes(),

@@ -413,6 +413,20 @@
           "description": "Wall-clock seconds the headless co-sim loop consumed. 0 when the\nproducing path did not measure (older producers; the web mirror).",
           "format": "double",
           "type": "number"
+        },
+        "watchdog_limitations": {
+          "description": "Per-MCU statements of how this backend's watchdog fidelity falls short of\nthe part. Non-empty means an armed, never-fed watchdog does NOT reboot\nthe core here the way silicon does, so firmware that HANGS runs forever\nin simulation and every assertion about behaviour after a hang is\nfiction: the run reads healthy while proving nothing about the recovery\npath. Empty (and omitted) on a backend whose watchdog behaves.",
+          "items": {
+            "$ref": "#/definitions/CosimWatchdogLimitation"
+          },
+          "type": "array"
+        },
+        "watchdog_resets": {
+          "description": "Per-MCU counts of reboots an unserviced watchdog actually performed\nduring this run. Not an error, a FINDING: an assertion that passed across\na reboot was measuring a rebooted core, not the run it claimed. Empty\n(and omitted) when nothing rebooted.",
+          "items": {
+            "$ref": "#/definitions/CosimWatchdogResets"
+          },
+          "type": "array"
         }
       },
       "required": [
@@ -503,6 +517,42 @@
       "required": [
         "id",
         "bus"
+      ],
+      "type": "object"
+    },
+    "CosimWatchdogLimitation": {
+      "description": "One backend watchdog-fidelity gap (see [`CosimJson::watchdog_limitations`]).",
+      "properties": {
+        "limitation": {
+          "description": "The backend's whole sentence, for verbatim display. Prose for a human:\ndo not parse it or match on it exactly.",
+          "type": "string"
+        },
+        "mcu_ref": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mcu_ref",
+        "limitation"
+      ],
+      "type": "object"
+    },
+    "CosimWatchdogResets": {
+      "description": "One MCU's watchdog reboot count (see [`CosimJson::watchdog_resets`]).",
+      "properties": {
+        "mcu_ref": {
+          "type": "string"
+        },
+        "resets": {
+          "description": "Reboots observed during the run. Always >= 1: a zero is omitted.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "mcu_ref",
+        "resets"
       ],
       "type": "object"
     },
