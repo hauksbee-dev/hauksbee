@@ -1,0 +1,37 @@
+# The closest a hand-written spec gets to exit 3 (invalid for analysis), and the
+# reason it does not get there.
+#
+#   hauksbee-ci run crates/hauksbee-ci/tests/fixtures/exit3/spec.toml \
+#     --models-dir crates/hauksbee-ci/tests/fixtures/exit3/models
+#
+# U1 binds a user model whose behavioural law is `v_in / sense_ohms` with
+# `sense_ohms = 0`, so the law has no value at any operating point. An infinite
+# value entering the MNA matrix is exactly what makes an analog solve abort, and
+# an aborted solve is what exit 3 reports. This run exits 0 instead, because the
+# engine's law loop clamps a non-finite law value to zero before stamping it
+# (hauksbee-engine `behavioral.rs`, "Clamp to 0 rather than poison the matrix").
+# SENSE therefore sits at half the rail, exactly as the bare 1k/1k divider would.
+#
+# Kept as a fixture, not deleted, for two reasons. It pins that clamp: without
+# it, a hardware repo with one typo in a custom part model would get an aborted
+# co-simulation instead of a verdict. And it is the spec to promote if that ever
+# changes, which is the only known way `hauksbee-ci run` could exit 3 from
+# something a person wrote. See tests/exit3_reachability.rs for the full search
+# and the closed routes.
+
+name = "the closest a spec gets to an aborted analog solve"
+board = "board.net"
+duration_ms = 2
+frame_ms = 0.2
+
+[[supply]]
+net = "VIN"
+kind = "bench"
+volts = 5.0
+current_limit_a = 1.0
+
+[[assert]]
+kind = "voltage"
+net = "SENSE"
+min = 2.0
+max = 3.0

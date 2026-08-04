@@ -1,0 +1,44 @@
+# A user model dir (the kind `hauksbee-ci run --models-dir` layers over the
+# builtin database) carrying ONE part whose behavioural law cannot be evaluated.
+#
+# This was written to reach exit 3 (invalid for analysis) through the ordinary
+# CLI. Every other route into a non-convergent analog solve is closed by design:
+# the supply legs stamp through a non-zero STIFF_R_OHMS so a rail is never a hard
+# short, `[[net_drive]]` refuses to add a second source to a node that has one,
+# a `stimulus` peripheral injects through 50 ohms, and the Newton loop's
+# limiting / gmin / source-stepping / step-cutting carry every diode-laden board
+# in the corpus. An expression with no value looked like the exception.
+#
+# It is not, and that is the finding: the engine's law loop clamps a non-finite
+# law value to zero before stamping it, so this part contributes no current at
+# all rather than an infinite one. The fixture stays to pin that clamp, because
+# without it one typo in a hardware repo's custom model turns a verdict into an
+# aborted co-simulation. tests/exit3_reachability.rs holds the whole search.
+#
+# `sense_ohms` is deliberately 0, so `v_in / sense_ohms` is a division by zero
+# at every iterate. That is the shape of a real mistake (a params table that
+# forgot a value, or a `_from_ref` that resolved to a 0 ohm link), which is why
+# it belongs in the fixture rather than something more contrived.
+
+[[models]]
+id = "hbtest_divzero"
+kind = "digital"
+description = "Test-only part whose behavioural law divides by zero, so no iterate is usable"
+
+[models.match]
+value_re = "(?i)HBTEST-DIVZERO"
+
+[models.pins]
+"1" = "in"
+"2" = "out"
+"3" = "gnd"
+
+[models.params]
+sense_ohms = 0.0
+
+[[models.behavioral.laws]]
+name = "unevaluable_sense_current"
+kind = "current"
+a = "in"
+b = "gnd"
+expr = "v_in / sense_ohms"
