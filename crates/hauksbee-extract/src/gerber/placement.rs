@@ -189,6 +189,18 @@ fn parse_len(s: &str) -> Option<(f64, bool)> {
 /// Parse a pick-and-place CSV. Returns the placements it could read; rows it
 /// can't are skipped (honest: the caller reports how many components landed).
 pub fn parse_pnp(text: &str) -> Vec<Placement> {
+    // KiCad's own `.pos` export is whitespace-ALIGNED, not delimited, and its
+    // column header is a `#` comment line. Both facts defeat the CSV path
+    // below: the comment skip eats the header, and `split_csv` returns the
+    // whole line as one cell, so no reference or coordinate column is found and
+    // the file reads as "not a P&P file". That silently cost every KiCad fab
+    // folder its part list, which is the ONE input a gerber job needs to bind.
+    if looks_like_kicad_pos(text) {
+        let placed = parse_kicad_pos(text);
+        if !placed.is_empty() {
+            return placed;
+        }
+    }
     let mut lines = text.lines().filter(|l| !l.trim().is_empty());
     // Skip leading comment lines some tools prepend (lines starting with '#').
     let header_line = loop {
@@ -263,6 +275,100 @@ pub fn parse_pnp(text: &str) -> Vec<Placement> {
             rotation,
             top,
             dnp,
+        });
+    }
+    out
+}
+
+/// Whether this is KiCad's whitespace-aligned `.pos` placement export rather
+/// than a delimited CSV. Keys on the banner KiCad writes plus the absence of a
+/// delimiter on the column-header line, so a comma-separated file that happens
+/// to mention positions still takes the CSV path.
+fn looks_like_kicad_pos(text: &str) -> bool {
+    let head: String = text.lines().take(12).collect::<Vec<_>>().join("\n");
+    let banner = head.contains("Module positions")
+        || head.contains("Footprint positions")
+        || head.contains("## Unit =");
+    let header_row = text
+        .lines()
+        .find(|l| {
+            let t = l.trim_start().trim_start_matches('#').trim_start();
+            t.starts_with("Ref") && t.contains("PosX")
+        })
+        .map(|l| !l.contains(',') && !l.contains(';'))
+        .unwrap_or(false);
+    banner && header_row
+}
+
+/// Parse KiCad's `.pos` export:
+///
+/// ```text
+/// ### Module positions - created on ... ###
+/// ## Unit = mm, Angle = deg.
+/// ## Side : All
+/// # Ref     Val       Package     PosX      PosY      Rot     Side
+/// C1        1u        C0201       1.1750   -2.0000   180.0    top
+/// ```
+///
+/// Fields are read from BOTH ends rather than by index, because the `Val`
+/// column is the only one that can legitimately carry spaces ("10k 1%") and
+/// counting from the left would then shift every column after it.
+fn parse_kicad_pos(text: &str) -> Vec<Placement> {
+    // `## Unit = mm` / `## Unit = inches`. KiCad only writes these two.
+    let mut scale = 1.0;
+    for line in text.lines().take(12) {
+        let low = line.to_ascii_lowercase();
+        if low.contains("unit") && (low.contains("inch") || low.contains("in,")) {
+            scale = 25.4;
+        }
+    }
+
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let f: Vec<&str> = trimmed.split_whitespace().collect();
+        // ref, [val…], package, posx, posy, rot, side
+        if f.len() < 6 {
+            continue;
+        }
+        let n = f.len();
+        let side = f[n - 1].to_ascii_lowercase();
+        // The last column must actually be a side, else this is not a data row.
+        if !(side.starts_with("top")
+            || side.starts_with("bot")
+            || side == "front"
+            || side == "back")
+        {
+            continue;
+        }
+        let Ok(rotation) = f[n - 2].parse::<f64>() else {
+            continue;
+        };
+        let Ok(y) = f[n - 3].parse::<f64>() else {
+            continue;
+        };
+        let Ok(x) = f[n - 4].parse::<f64>() else {
+            continue;
+        };
+        let package = f[n - 5].to_string();
+        let reference = f[0].to_string();
+        if reference.is_empty() {
+            continue;
+        }
+        let value = f[1..n - 5].join(" ");
+        out.push(Placement {
+            reference,
+            value,
+            package,
+            x: x * scale,
+            y: y * scale,
+            rotation,
+            top: !(side.starts_with("bot") || side == "back"),
+            // A `.pos` has no populate column; KiCad simply omits DNP parts.
+            dnp: false,
         });
     }
     out

@@ -1,0 +1,6 @@
+C  every designator-bearing record is N/C
+P  UNITS CUST 0
+317N/C              R1    -1    X+0019000Y+0029450
+317N/C              R1    -2    X+0021000Y+0029450
+317GND                    -1    X+0023000Y+0029450
+999

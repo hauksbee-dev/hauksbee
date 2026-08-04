@@ -19,6 +19,14 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     let mut order: Vec<String> = Vec::new();
     let mut saw_record = false;
     let mut truncated = 0usize;
+    // Test records carrying no reference designator, split by which of the two
+    // reasons applies. Both are skipped, but a file made ENTIRELY of them needs
+    // a different explanation than a corrupt one (see the check after the loop).
+    let mut blank_ref = 0usize;
+    let mut via_ref = 0usize;
+    // Net names seen on the skipped records, so the refusal can prove the
+    // connectivity was read and name what is actually missing.
+    let mut skipped_net_names: std::collections::BTreeSet<String> = Default::default();
 
     for line in text.lines() {
         if line.len() < 3 {
@@ -58,7 +66,18 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
         let reference = get(20, 26).to_string();
         let pin_number = get(27, 31).to_string();
         if reference.is_empty() || reference == "VIA" {
-            continue; // via / bare-copper access record
+            // A via / bare-copper access record: real copper, but not part of a
+            // component, so it cannot become a pin. Counted so a file made
+            // entirely of these can say so instead of looking empty.
+            if reference.is_empty() {
+                blank_ref += 1;
+            } else {
+                via_ref += 1;
+            }
+            if !net_name.is_empty() && net_name != "N/C" {
+                skipped_net_names.insert(net_name);
+            }
+            continue;
         }
         let net = if net_name.is_empty() || net_name == "N/C" {
             None
@@ -95,6 +114,65 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
             "hauksbee: skipped {truncated} truncated IPC-D-356 test record(s) \
              (lines too short to contain their columns); the netlist may be incomplete"
         );
+    }
+
+    // Every record was skipped, so the file describes copper but names no
+    // parts. Explaining that here is the difference between an actionable
+    // refusal and the downstream "this board parsed, but is empty", which
+    // reads as "your file is blank" about a file with hundreds of records in
+    // it. Real exporters do this: several tools write a via-only / testpoint-only
+    // IPC-D-356 with columns 21-26 left blank on every record.
+    if comps.is_empty() {
+        let total = blank_ref + via_ref + truncated;
+        let nets_seen = if skipped_net_names.is_empty() {
+            "no named nets".to_string()
+        } else {
+            let sample: Vec<&str> = skipped_net_names
+                .iter()
+                .take(4)
+                .map(String::as_str)
+                .collect();
+            format!(
+                "{} named net(s) ({}{})",
+                skipped_net_names.len(),
+                sample.join(", "),
+                if skipped_net_names.len() > sample.len() {
+                    ", …"
+                } else {
+                    ""
+                }
+            )
+        };
+        let cause = if blank_ref > 0 && blank_ref >= via_ref && blank_ref >= truncated {
+            "every one leaves the reference-designator field (columns 21-26) blank"
+        } else if via_ref >= truncated {
+            "every one is a via / bare-copper access record rather than a component pad"
+        } else {
+            "every one is too short to hold its fixed columns, so the file is truncated"
+        };
+        return Err(ExtractError::Corrupt(format!(
+            "this IPC-D-356 netlist has {total} test record(s) and {nets_seen}, but \
+             {cause}. Pads cannot be grouped into parts without designators, so there \
+             is nothing to bind or simulate. Re-export the netlist with component \
+             reference designators included, or pass the original layout file \
+             (.kicad_pcb / .brd / .PcbDoc) instead"
+        )));
+    }
+
+    // Components but no nets: every record that carried a designator also
+    // carried `N/C` (no-connect), so nothing in the file says what is wired to
+    // what. Downstream this looked like an analysable board and every
+    // connectivity check passed over a netlist with no connectivity in it.
+    if nets.is_empty() {
+        return Err(ExtractError::Corrupt(format!(
+            "this IPC-D-356 netlist names {} part(s) across {} test record(s), but every \
+             record with a designator is marked N/C (no-connect), so the file carries no \
+             connectivity at all. Nothing could be checked from it. Re-export with net \
+             names included, or pass the original layout file (.kicad_pcb / .brd / \
+             .PcbDoc)",
+            comps.len(),
+            blank_ref + via_ref + comps.values().map(Vec::len).sum::<usize>(),
+        )));
     }
 
     let components = order

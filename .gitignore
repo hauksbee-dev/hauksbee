@@ -80,3 +80,11 @@ hauksbee-ci-junit/
 # timestamped transcript directory. Both are regenerated, never reviewed.
 qc/.bin-cache/
 qc/results/
+
+# The ingest-robustness corpus is several GB of third-party board files
+# harvested from public repositories on demand; the harness that rebuilds it
+# lives in testdata/ingest-robustness/corpus-harness/ and its manifest records
+# repo + commit + path for every file, so the corpus itself is regenerable and
+# is never committed.
+testdata/ingest-robustness/corpus-harness/ingest-corpus/
+testdata/ingest-robustness/corpus-harness/matrix-results.jsonl
