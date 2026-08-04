@@ -88,6 +88,10 @@ for b in doc.get("board", []):
         b.get("sha256", ""),
         b.get("hoist", ""),
         b.get("unpack", ""),
+        # Newline-free and separator-free by construction: a list of relative
+        # paths, joined with the record separator's sibling so one field can
+        # carry several.
+        "\x1e".join(b.get("drop", [])),
         b.get("name", b["id"]),
     ]))
 PY
@@ -264,7 +268,7 @@ else
   mkdir -p "$DIR"
 fi
 
-while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed dest_rel sha256 hoist unpack name; do
+while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed dest_rel sha256 hoist unpack drop name; do
   [ "$tag" = "BOARD" ] || continue
   wanted "$id" || continue
   total=$((total + 1))
@@ -315,11 +319,56 @@ while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed dest_rel 
   # category error. Everything outside the subtree goes. The subtree LEVEL stays
   # (`kicad_demos/demos/<project>`), because that is the path the corpus tests
   # resolve.
-  if [ -n "$subdir" ] && [ -d "$dest/$subdir" ]; then
-    find "$dest" -mindepth 1 -maxdepth 1 \
-      ! -name "$subdir" ! -name '.hauksbee-rev' \
-      ! -iname 'LICENSE*' ! -iname 'COPYING*' ! -iname 'README*' \
-      -exec rm -rf {} + 2>/dev/null || true
+  #
+  # `subdir` may be nested (`hardware/hackrf-one`, where the sibling boards under
+  # `hardware/` carry different terms). A per-level `find ! -name "$subdir"`
+  # cannot express that: `hardware` does not equal `hardware/hackrf-one`, so the
+  # wanted subtree's own parent was the first thing deleted. The subtree is moved
+  # aside, the tree is emptied, and the subtree is put back at its declared path.
+  if [ -n "$subdir" ]; then
+    if [ -d "$dest/$subdir" ]; then
+      keep="$dest.keep"
+      rm -rf "$keep"
+      mkdir -p "$(dirname "$keep/$subdir")"
+      mv "$dest/$subdir" "$keep/$subdir"
+      # The paperwork travels with it: a share-alike board without its licence
+      # file is not a board anyone may pass on.
+      find "$dest" -maxdepth 1 -type f \
+        \( -iname 'LICENSE*' -o -iname 'COPYING*' -o -iname 'LICENCE*' \
+           -o -iname 'README*' -o -name '.hauksbee-rev' \) \
+        -exec mv -f {} "$keep/" \; 2>/dev/null || true
+      find "$dest" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null || true
+      find "$keep" -mindepth 1 -maxdepth 1 -exec mv -f {} "$dest/" \; 2>/dev/null || true
+      rm -rf "$keep"
+    else
+      err "$id: subdir '$subdir' is declared and $dest/$subdir does not exist"
+      failed=$((failed+1)); FAILED_IDS+=("$id"); continue
+    fi
+  fi
+
+  # `drop`: paths inside the fetched tree that are not boards. An upstream that
+  # ships the manufacturing PANEL of a design beside the design, or a
+  # deliberately-broken regression fixture beside working hardware, would
+  # otherwise have both counted as coverage. The SparkFun `Production/` panels
+  # and KiCad's `demos/vme-wren` are the cases; both would be graded as
+  # known-good hardware by a false-positive gate, and neither is.
+  #
+  # A declared path that is not there is an error, not a no-op: it means the
+  # upstream moved and the entry's description of it has stopped being true.
+  if [ -n "$drop" ]; then
+    drop_missing=""
+    while IFS= read -r d; do
+      [ -n "$d" ] || continue
+      if [ -e "$dest/$d" ]; then
+        rm -rf "$dest/$d"
+      else
+        drop_missing="$drop_missing $d"
+      fi
+    done <<< "$(printf '%s' "$drop" | tr '\x1e' '\n')"
+    if [ -n "$drop_missing" ]; then
+      err "$id: drop declares$drop_missing and none of those exist in the fetched tree"
+      failed=$((failed+1)); FAILED_IDS+=("$id"); continue
+    fi
   fi
 
   # `hoist`: the upstream keeps the design one level down, and the corpus does
@@ -377,7 +426,12 @@ while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed dest_rel 
   # that walks every design file would grade the tool on five stale revisions of
   # one board and report the count as coverage. They are not boards; they are
   # undo history.
-  find "$dest" -type d -name '*-backups' -exec rm -rf {} + 2>/dev/null || true
+  #
+  # `BackupFiles` and `Backup` are the same thing under Olimex's and Duet3D's
+  # naming. Olimex's ESP32-PoE revision E ships a full second copy of the board
+  # under `BackupFiles/`, which would have been counted twice.
+  find "$dest" -type d \( -name '*-backups' -o -iname 'BackupFiles' -o -iname 'Backup' \) \
+    -exec rm -rf {} + 2>/dev/null || true
 
   # Keep only the design files and the paperwork. Upstream repos carry 3D
   # models, production archives and firmware that we never read, and that turn
@@ -387,18 +441,30 @@ while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed dest_rel 
   # (the Inkplate's EPD_board-RoundHoles.TXT and its slot files), and the gerber
   # reader cannot stitch layers without it. Matching case-insensitively would
   # drag in every readme.txt and changelog.txt in every upstream.
+  # `*.SchDoc` and `*.PrjPcb` are Altium's schematic and project files. Without
+  # them the ODrive entries landed a .PcbDoc with no schematic beside it, which is
+  # half a board: the Altium schematic reader would have had nothing to read.
   find "$dest" -type f \
     ! -iname '*.kicad_pcb' ! -iname '*.kicad_sch' ! -iname '*.kicad_pro' \
     ! -iname '*.sch' ! -iname '*.brd' ! -iname '*.net' ! -iname '*.PcbDoc' \
+    ! -iname '*.SchDoc' ! -iname '*.PrjPcb' \
     ! -iname '*.d356' ! -iname '*.art' ! -iname '*.g?[lb]' ! -iname '*.drl' \
     ! -iname '*.gbr' ! -iname '*.zip' ! -iname '*.7z' ! -name '*.TXT' \
-    ! -iname 'LICENSE*' ! -iname 'COPYING*' ! -iname 'README*' \
+    ! -iname 'LICENSE*' ! -iname 'LICENCE*' ! -iname 'COPYING*' ! -iname 'README*' \
     ! -name '.hauksbee-rev' \
     -delete 2>/dev/null || true
   find "$dest" -type d -empty -delete 2>/dev/null || true
 
+  # The board's own paperwork has to have survived all of the above. A share-alike
+  # board whose licence file was pruned is one a reader cannot pass on, and the
+  # subdir and unpack transforms both delete whole trees.
+  if ! find "$dest" -type f \( -iname 'LICENSE*' -o -iname 'LICENCE*' -o -iname 'COPYING*' -o -iname 'README*' \) \
+       | grep -q .; then
+    warn "$id: no licence or readme file survived the fetch; the terms are recorded in corpus.toml only"
+  fi
+
   boards=$(find "$dest" \( -iname '*.kicad_pcb' -o -iname '*.brd' -o -iname '*.net' -o -iname '*.PcbDoc' \) 2>/dev/null | wc -l | tr -d ' ')
-  ok "$id  ($boards board file(s))"
+  ok "$id  ($boards board file(s))  [$license]"
   fetched=$((fetched + 1))
 done <<< "$MANIFEST_LINES"
 
@@ -408,13 +474,55 @@ if [ "$LIST_ONLY" = 1 ]; then
   exit 0
 fi
 
+# What actually landed, counted rather than asserted. A human reading this can
+# tell a fetch that worked from one that reported success and wrote nothing,
+# which is the failure the awk bug produced for as long as it went unnoticed.
+count_ext() { find "$DIR" -type f -iname "$1" 2>/dev/null | wc -l | tr -d ' '; }
+pcbs=$(( $(count_ext '*.kicad_pcb') + $(count_ext '*.brd') + $(count_ext '*.PcbDoc') ))
+schs=$(( $(count_ext '*.kicad_sch') + $(count_ext '*.sch') + $(count_ext '*.SchDoc') ))
+nets=$(count_ext '*.net')
+films=$(( $(count_ext '*.gbr') + $(count_ext '*.g?[lb]') + $(count_ext '*.art') ))
+revs=$(find "$DIR" -name .hauksbee-rev 2>/dev/null | wc -l | tr -d ' ')
+size=$(du -sh "$DIR" 2>/dev/null | cut -f1)
+
 log "done: $fetched fetched, $skipped skipped, $failed failed (of $total)"
+info "landed: $revs board director(ies), $pcbs layout, $schs schematic, $nets netlist, $films film file(s), $size"
+if [ "$skipped" -gt 0 ] && [ "$INCLUDE_UNCONFIRMED" = 0 ]; then
+  info "skipped boards are either already present or licence-unconfirmed; see the lines above"
+fi
 if [ "$failed" -gt 0 ]; then
   err "failed: ${FAILED_IDS[*]}"
-  err "an upstream repository may have moved or rewritten the pinned revision."
+  err "an upstream repository may have moved or rewritten the pinned revision,"
+  err "or an entry's declaration no longer matches the tree it fetches."
   err "re-run with --only <id> to retry one, and please open an issue."
   exit 1
 fi
+
+# The manifest has to still describe what landed. This is the check that would
+# have caught `subdir = "demos"` being honoured by nothing, and it runs as part of
+# the fetch rather than as a separate step someone has to remember, because the
+# whole failure was that nobody was looking.
+#
+# `--only` fetches a subset, so the landed half of the check would report every
+# board that was deliberately not fetched. The manifest half still runs.
+CHECK="${HAUKSBEE_ROOT}/scripts/check-corpus.py"
+if [ -f "$CHECK" ]; then
+  info ""
+  check_args=(--manifest "$MANIFEST")
+  if [ -n "$ONLY" ]; then
+    check_args+=(--manifest-only)
+  else
+    check_args+=(--dir "$DIR")
+    [ "$INCLUDE_UNCONFIRMED" = 1 ] && check_args+=(--include-unconfirmed)
+  fi
+  if ! python3 "$CHECK" "${check_args[@]}"; then
+    err "the manifest no longer describes the corpus it fetched. Do not gate on this tree."
+    exit 1
+  fi
+else
+  warn "scripts/check-corpus.py is missing; the fetched tree is unchecked against the manifest"
+fi
+
 info ""
 info "point the tests at it:"
 info "  export HAUKSBEE_CORPUS_DIR=$DIR"
