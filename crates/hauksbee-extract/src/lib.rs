@@ -87,6 +87,14 @@ pub enum ExtractError {
     /// A caller-supplied reference designator does not exist on the board.
     #[error("{0}")]
     UnknownReference(String),
+    /// A hierarchical sub-sheet was handed over with no parent to be found.
+    ///
+    /// A sub-sheet's hierarchical labels connect to sheet pins in its parent, so
+    /// on its own it reports nets that touch one pin and look floating when they
+    /// are driven from a sibling sheet. Refusing is the honest answer: a netlist
+    /// derived from a fragment would be read as a fact about the board.
+    #[error("{sheet} is a hierarchical sub-sheet, not a complete design. It needs {needs}")]
+    OrphanSubSheet { sheet: String, needs: String },
 }
 
 /// One electrical net. `id` is the KiCad net number (0 = the unconnected
