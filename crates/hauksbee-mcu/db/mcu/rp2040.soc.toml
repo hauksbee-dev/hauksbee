@@ -1,12 +1,24 @@
 # RP2040 (Raspberry Pi Pico): dual Cortex-M0+, 125 MHz, one 30-pin GPIO bank
 # observed through the SIO.
 #
+# WHERE THE PLATFORM COMES FROM
+# ---------------------------------------------------------------------------
+# Not from Renode. Renode 1.16.1 ships no rp2040 platform (platforms/cpus/ has
+# picosoc and litex_picorv32, neither of which is an RP2040) and neither does
+# Renode master, so unlike the STM32F1 case there was no stock platform to
+# extend: the peripheral MODELS were missing, not just their wiring. They are
+# vendored into db/mcu/rp2040/ (MIT, from matgla/Renode_RP2040) and compiled by
+# Renode at run time through the `support_bundle` mechanism, which unpacks and
+# `include`s them before this platform is parsed. Provenance, licences and the
+# refresh procedure: db/mcu/rp2040/README.md. The mechanism itself:
+# src/renode/support.rs.
+#
 # THE SIO FOOTGUN (an honest adaptation of the F4-vs-F103 ODR discipline)
 # ---------------------------------------------------------------------------
 # On the STM32 parts the output-state register is a per-port ODR inside a GPIO
 # port peripheral (F1 at 0x0C, F4 at 0x14). RP2040 is NOT a memory-mapped GPIO
 # port bank at all: its GPIO output value lives in the SIO (single-cycle IO)
-# block at SIO_BASE = 0xD000_0000 (RP2040 datasheet §2.3.1.7):
+# block at SIO_BASE = 0xD000_0000 (RP2040 datasheet section 2.3.1.7):
 #
 #   Register      Absolute       Offset from SIO_BASE
 #   GPIO_IN       0xD000_0004    0x04
@@ -15,43 +27,64 @@
 #   GPIO_OE       0xD000_0020    0x20
 #
 # So "where do I read output state" is SIO GPIO_OUT (offset 0x10 within the SIO
-# peripheral), NOT a port ODR. The ODR-diff mechanism is pointed at the SIO
-# peripheral with odr_offset = 0x10 — the faithful adaptation: read the register
-# that actually holds the driven levels rather than invent a port-bank ODR that
-# does not exist.
+# peripheral), NOT a port ODR, and "where do I read direction" is SIO GPIO_OE
+# (offset 0x20, one plain bit per pin, hence dir_bits). The ODR-diff mechanism
+# is pointed at the SIO peripheral: read the register that actually holds the
+# driven levels rather than invent a port-bank ODR that does not exist.
 #
-# VERIFICATION STATUS — READ BEFORE TRUSTING THIS DESCRIPTOR
-# ---------------------------------------------------------------------------
-# The register offsets above are datasheet-verified. What is NOT verified is
-# Renode's side: the portable Renode v1.16.1 on this machine ships no rp2040
-# platform (platforms/cpus/ has only picosoc/litex_picorv32). So two things are
-# best-effort until a Renode build that carries the platform runs the smoke:
-#   1. the SIO peripheral's NAME in rp2040.repl (assumed "sio"; correct it here
-#      if a Renode build names it otherwise), and
-#   2. whether Renode's SIO model reads GPIO_OUT back as the driven value (the
-#      ODR-poll relies on read-back).
-# tests/renode_rp2040.rs is skip-gated on this absence and confirms/corrects both
-# the day it runs on a Renode that carries the platform.
+# Both read-backs are VERIFIED against a live machine, which is what the
+# previous revision of this file could not do. Booting the real pico-sdk 2.1.1
+# firmware in testdata/firmware/rp2040_blink_uart and reading the two registers
+# after main() had run gave GPIO_OUT = 0x02000000 and GPIO_OE = 0x02000000 (bit
+# 25, the Pico's LED pin, driven and enabled). rp2040_sio.cs backs both with a
+# valueProviderCallback onto the GPIO model's state, so neither is write-only.
+# tests/renode_rp2040.rs re-proves this end to end on every run.
 #
-# WHAT IS DELIBERATELY NOT WIRED (refuse rather than fake)
+# CAPABILITY TIERS (per-backend honesty convention, docs/cosim/MCU.md)
 # ---------------------------------------------------------------------------
-# - ADC: RP2040 has a SAR ADC, but no Renode ADC model is verified, so there is
-#   no [[soc.adc]] entry — an unmapped channel is the merged policy's LOUD
-#   once-per-channel drop, never a fake count.
-# - I2C/SPI: no controllers, because the RP2040 Renode peripheral set is
-#   unverified; the backend then installs no bridge rather than claim an
-#   unproven bus.
-# - GPIO drive DIRECTION: SIO GPIO_OE (output-enable, offset 0x20, 1 bit per
-#   pin) is the natural dir_bits map, but no installed Renode ships the rp2040
-#   platform to verify the SIO model reads OE back — and a dir map whose read
-#   fails masks EVERY edge to zero, which is strictly worse than the status
-#   quo. So no `dir` entry is carried: direction stays unobservable here until
-#   a Renode with the platform verifies `dir = { offset = 0x20, encoding =
-#   "dir_bits" }` (add it alongside the tests/renode_rp2040.rs smoke).
+#   GPIO out (SIO GPIO_OUT/GPIO_OE)  PROVEN END-TO-END. Real pico-sdk firmware
+#       drives GP25; the engine-facing edge callbacks fire; a firmware that
+#       never touches a pin produces none (tests/renode_rp2040.rs is two-sided).
+#   UART0/UART1 (PL011-shaped)       PROVEN END-TO-END for TX. The SDK's
+#       stdio_init_all + printf output arrives on the host socket in order.
+#       UART1 is defined by the platform but only UART0 is exercised.
+#   Timers / clocks / resets         PROVEN as far as "the SDK boots and
+#       sleep_ms takes the right amount of VIRTUAL time" (20 ms of virtual time
+#       per sleep_ms(20), measured). Not a fidelity claim about alarm edge
+#       cases.
+#   ADC injection, inputs 0..3       PROVEN END-TO-END. An engine-pushed voltage
+#       reaches the converter and stock pico-sdk adc_read() returns the matching
+#       12-bit code, checked at two voltages on one running machine
+#       (tests/renode_rp2040_adc.rs). Input 4 (on-die temperature) is NOT an
+#       external node and stays unmapped, so it takes the merged policy's LOUD
+#       once-per-channel drop rather than a fake count.
+#   I2C bus-slave bridge             PROVEN END-TO-END on i2c0 and i2c1. Real
+#       pico-sdk firmware writes a register index to a host-modelled slave and
+#       reads two bytes back, and prints what the host sent
+#       (tests/renode_rp2040_bus.rs). Both directions, not just registration.
+#   SPI bus-slave bridge             NOT POSSIBLE with this model. See
+#       [soc.spi] below for the root cause; it is a property of the vendored
+#       PL022, not a missing descriptor entry.
+#   Second core (cpu1)               PRESENT, NOT EXERCISED. See below.
+#   PIO                              ABSENT. The upstream PIO model needs a
+#       native library shipped x86-64-only; db/mcu/rp2040/README.md explains.
+#       Firmware whose output goes through PIO produces nothing observable.
+#
+# SECOND CORE, HONESTLY
+# ---------------------------------------------------------------------------
+# The platform declares both Cortex-M0+ cores, cpu1 starts un-halted, and the
+# SIO is genuinely shared (its GPIO registers are one set of state behind the
+# single RP2040GPIO model), so observation is core-agnostic by construction and
+# a pin driven from core 1 would be seen. What is NOT claimed: that a real
+# multicore launch works. The SDK's multicore_launch_core1 hands off through the
+# SIO FIFO and the bootrom's core-1 wait loop, and nothing here has been proven
+# against a two-core firmware. State queries (`cpu_path`) use core 0 only. Treat
+# core 1 as present-but-unproven and single-core firmware as the supported case.
 [soc]
 backend = "renode"
 machine = "rp2040"
-platform_repl = "@platforms/cpus/rp2040.repl"
+support_bundle = "rp2040"
+platform_repl = "@{support}/rp2040.repl"
 # Dual-core; the SIO GPIO registers are shared single-cycle IO, so observation is
 # core-agnostic. State queries use core 0.
 cpu_path = "sysbus.cpu0"
@@ -60,15 +93,84 @@ frequency_hz = 125_000_000
 expected_e_machine = "EM_ARM"
 mcu_label = "RP2040 (dual Cortex-M0+)"
 
+# The boot ROM's contents must be present at address 0 before firmware runs: the
+# pico-sdk runtime resolves ROM helpers through the ROM function table during
+# runtime_init. Loaded, not executed from reset; see db/mcu/rp2040/README.md.
+extra_setup = ["sysbus LoadELF @{support}/bootrom.elf"]
+
+# Renode's LoadELF leaves VectorTableOffset wherever the last load put it, and
+# for a Cortex-M the initial SP and PC are fetched FROM that table. Reset state
+# on real silicon is VTOR = 0 (the boot ROM's table), and the SDK then points it
+# at its own table itself, so pinning both cores to 0 here reproduces hardware
+# rather than second-guessing the image. Both cores, because cpu1 has its own.
+post_load_setup = [
+    "sysbus.cpu0 VectorTableOffset 0x00000000",
+    "sysbus.cpu1 VectorTableOffset 0x00000000",
+]
+
+# ADC injection. Analog.RP2040ADC is vendored and instantiated, and it exposes
+# SetDefaultVoltageOnChannel(int, double) which is Monitor-callable, so the
+# engine's modelled node voltage can be pushed straight into the converter's
+# per-channel default sample. The engine's chunk cadence suits this: the Monitor
+# is idle between RunFor windows, so the write lands before the next chunk runs
+# and every subsequent adc_read() returns it.
+#
+# Channels 0..3 only, and that is the whole story of RP2040's ADC pinout:
+# ADC0..ADC3 are GP26..GP29, and input 4 is the on-die temperature sensor, which
+# is not an external node and has its own SetOnboardTemperature. Mapping input 4
+# to a circuit voltage would be a lie about what the pin is, so it is left
+# unmapped and takes the loud once-per-channel drop.
+#
+# {volts} rather than {count} because this model takes a real voltage: feeding it
+# a raw code would be silently off by the full-scale factor.
+[[soc.adc]]
+channel = 0
+monitor_command = "sysbus.adc SetDefaultVoltageOnChannel 0 {volts}"
+full_scale_volts = 3.3
+max_count = 4095
+[[soc.adc]]
+channel = 1
+monitor_command = "sysbus.adc SetDefaultVoltageOnChannel 1 {volts}"
+full_scale_volts = 3.3
+max_count = 4095
+[[soc.adc]]
+channel = 2
+monitor_command = "sysbus.adc SetDefaultVoltageOnChannel 2 {volts}"
+full_scale_volts = 3.3
+max_count = 4095
+[[soc.adc]]
+channel = 3
+monitor_command = "sysbus.adc SetDefaultVoltageOnChannel 3 {volts}"
+full_scale_volts = 3.3
+max_count = 4095
+
 [[soc.ports]]
 # SIO GPIO_OUT is the output-state register: a single 30-pin bank (GPIO0..GPIO29),
-# port letter '0', read at SIO offset 0x10.
+# port letter '0', read at SIO offset 0x10. GPIO_OE at 0x20 is one bit per pin.
 letter = "0"
 peripheral = "sio"
 odr_offset = 0x10
 width = 30
+dir = { offset = 0x20, encoding = "dir_bits" }
 
 [soc.i2c]
-controllers = []
+# I2C.RP2040I2C is a SimpleContainer<II2CPeripheral> that dispatches to the child
+# registered at the addressed slave, which is exactly what hauksbee's generated
+# bridge peripheral needs. Proven live, both directions, with real pico-sdk
+# firmware: tests/renode_rp2040_bus.rs.
+controllers = ["i2c0", "i2c1"]
+
 [soc.spi]
+# EMPTY, AND IT CANNOT BE FILLED with this model. SPI.PL022 in
+# db/mcu/rp2040/peripherals/rp2040_spi.cs names
+# NullRegistrationPointPeripheralContainer<ISPIPeripheral> as its base class but
+# never calls RegisteredPeripheral: the word `Transmit` does not occur in the
+# file. Its Step() bit-bangs the transfer onto GPIO pins and samples MISO from a
+# GPIO pin, which is how it interworks with PIO. A slave registered at the null
+# registration point, which is what hauksbee's SPI bridge is, is never invoked,
+# so listing a controller here would install a bridge that silently sees nothing
+# and make a bound SPI sensor read as "answered zeroes". Observed exactly that:
+# tests/renode_rp2040_bus.rs::rp2040_spi_bridge_probe is the (ignored)
+# reproduction. Fixing this means either the upstream model dispatching to its
+# registered peripheral, or a pin-level SPI bridge on the hauksbee side.
 controllers = []

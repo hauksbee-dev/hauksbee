@@ -16,6 +16,7 @@ use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
 use forge_sexpr::Document;
 
 pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
+    crate::reject_merge_conflict(text)?;
     let doc = forge_sexpr::parse(text)?;
     extract_from_doc(&doc)
 }

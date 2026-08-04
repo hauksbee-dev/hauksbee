@@ -81,24 +81,24 @@ fn api_backend_sends_the_documented_request_shape() {
 
     let dir = tempfile::tempdir().unwrap();
     // A text stand-in for the PDF: the backend under test never renders it,
-    // and extract_pdf_text degrades to a placeholder when it cannot.
+    // and extract_pdf_text degrades to a placeholder when it cannot. It must
+    // still carry the %PDF magic, because `run` prechecks the magic bytes
+    // before choosing a backend so a renamed HTML page is never shipped to an
+    // LLM; a header-less stand-in is rejected before any request goes out.
     let pdf = dir.path().join("1n914test.pdf");
-    std::fs::write(&pdf, "IF=200mA VRRM=100V test datasheet body").unwrap();
+    std::fs::write(&pdf, "%PDF-1.4\nIF=200mA VRRM=100V test datasheet body").unwrap();
 
     let key_env = "HAUKSBEE_API_BACKEND_TEST_KEY";
     // SAFETY: this variable is unique to this test; nothing else reads it.
     unsafe { std::env::set_var(key_env, "test-key-123") };
 
-    let args = hauksbee_models::datasheet::Args::new(
-        pdf,
-        "1N914TEST".to_string(),
-        "diode".to_string(),
-    )
-    .out_dir(Some(dir.path().to_path_buf()))
-    .model(Some("test-model".to_string()))
-    .backend(Some(hauksbee_models::datasheet::Backend::Api))
-    .api_base(Some(base.clone()))
-    .api_key_env(Some(key_env.to_string()));
+    let args =
+        hauksbee_models::datasheet::Args::new(pdf, "1N914TEST".to_string(), "diode".to_string())
+            .out_dir(Some(dir.path().to_path_buf()))
+            .model(Some("test-model".to_string()))
+            .backend(Some(hauksbee_models::datasheet::Backend::Api))
+            .api_base(Some(base.clone()))
+            .api_key_env(Some(key_env.to_string()));
 
     hauksbee_models::datasheet::run(args).expect("extraction against the stub endpoint");
     unsafe { std::env::remove_var(key_env) };
@@ -132,8 +132,8 @@ fn api_backend_sends_the_documented_request_shape() {
     );
 
     // And the reply flowed through parse + validate to the output file.
-    let written = std::fs::read_to_string(dir.path().join("1N914TEST.toml"))
-        .expect("model card written");
+    let written =
+        std::fs::read_to_string(dir.path().join("1N914TEST.toml")).expect("model card written");
     assert!(written.starts_with("[[models]]"));
     assert!(written.contains("1n914test"));
 }

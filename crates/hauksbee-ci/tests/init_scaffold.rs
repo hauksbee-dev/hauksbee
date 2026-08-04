@@ -279,7 +279,8 @@ fn out_without_a_toml_suffix_is_a_directory_even_when_it_does_not_exist_yet() {
 
     // A nested path, still no `.toml`, still a directory (parents and all).
     let nested = root.join("nested/deeper/checks");
-    let spec = init_to(&board, Some(&nested)).expect("init scaffolds into a fresh nested directory");
+    let spec =
+        init_to(&board, Some(&nested)).expect("init scaffolds into a fresh nested directory");
     assert_eq!(spec, nested.join("blinky.toml"));
     assert!(nested.is_dir());
 
@@ -302,8 +303,11 @@ fn out_without_a_toml_suffix_is_a_directory_even_when_it_does_not_exist_yet() {
 /// uart, toggle) keep their comments, exactly as the scaffold's own notes
 /// instruct. Paragraph-scoped, because that is the unit a user actually strips.
 fn uncomment_board_blocks(text: &str) -> String {
-    let needs_firmware =
-        |p: &str| ["firmware", "boot_coverage", "\"uart\"", "\"toggle\""].iter().any(|t| p.contains(t));
+    let needs_firmware = |p: &str| {
+        ["firmware", "boot_coverage", "\"uart\"", "\"toggle\""]
+            .iter()
+            .any(|t| p.contains(t))
+    };
     let mut out = String::new();
     for paragraph in text.split("\n\n") {
         if needs_firmware(paragraph) {
@@ -338,7 +342,10 @@ fn uncommenting_the_scaffolded_rail_blocks_gates_for_real() {
         assert!(
             spec.asserts.iter().any(|a| a.kind == "voltage"),
             "{tag}: a voltage assertion is live, got kinds {:?}",
-            spec.asserts.iter().map(|a| a.kind.as_str()).collect::<Vec<_>>()
+            spec.asserts
+                .iter()
+                .map(|a| a.kind.as_str())
+                .collect::<Vec<_>>()
         );
         assert!(
             !spec.supplies.is_empty(),
@@ -373,7 +380,10 @@ fn uncommenting_the_scaffolded_rail_blocks_gates_for_real() {
         assert!(
             spec.supplies.iter().all(|s| s.kind != "ideal"),
             "{tag}: no scaffolded supply leg is ideal, got {:?}",
-            spec.supplies.iter().map(|s| s.kind.as_str()).collect::<Vec<_>>()
+            spec.supplies
+                .iter()
+                .map(|s| s.kind.as_str())
+                .collect::<Vec<_>>()
         );
     }
 }

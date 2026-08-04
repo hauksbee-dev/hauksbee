@@ -1,0 +1,12 @@
+RC low-pass frequency response (learn chapter 2)
+* A first-order RC low-pass: -3 dB corner at f = 1/(2*pi*R*C).
+* R = 1.6 kOhm, C = 100 nF  ->  fc ~= 995 Hz.
+* VIN carries an AC stimulus, so `--ac` measures V(out)/V(in) directly:
+*   hauksbee sim examples/decks/rc_lowpass_ac.cir --ac --print V(out)
+* Expect ~0 dB in the passband, rolling off -20 dB/decade above ~1 kHz.
+VIN in 0 AC 1
+R1 in out 1.6k
+C1 out 0 100n
+.ac dec 20 10 1meg
+.print ac v(out)
+.end

@@ -421,6 +421,11 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
         // geometry.
         let board = ExtractedBoard::from_gerber(path)
             .map_err(|e| BoardInputError::Gerber(gerber_path_message(path, &e.to_string())))?;
+        if board.components.is_empty() {
+            return Err(BoardInputError::Gerber(gerber_without_parts_message(
+                path, &board,
+            )));
+        }
         return Ok(with_name_fallback(
             NormalizedBoard {
                 board,
@@ -527,6 +532,11 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
                 BoardInputError::Gerber(gerber_path_message(path, &e.to_string()))
             }
         })?;
+        if board.components.is_empty() {
+            return Err(BoardInputError::Gerber(gerber_without_parts_message(
+                path, &board,
+            )));
+        }
         return Ok(with_name_fallback(
             NormalizedBoard {
                 board,
@@ -620,6 +630,13 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
     }
 
     let board = ExtractedBoard::from_auto(&text).map_err(|e| {
+        // A `Corrupt` error means the file DID parse as its format and the
+        // reader is refusing content it cannot analyse truthfully. Its message
+        // already explains what is wrong and what to do, so wrapping it in "did
+        // not parse" would state the opposite of what happened.
+        if let hauksbee_extract::ExtractError::Corrupt(msg) = &e {
+            return BoardInputError::Extract(format!("'{file_name}': {msg}"));
+        }
         // When the EXTENSION already names a format we support, the problem is
         // the content, not the format: say that, instead of reciting the
         // generic supported-formats list at someone holding a corrupt board.
@@ -720,6 +737,34 @@ fn gerber_path_message(path: &Path, e: &str) -> String {
     };
     format!(
         "gerber extraction{from} failed: {e}.{guidance} See {}.",
+        hauksbee_ir::docs_url("docs/ingest/GERBER.md")
+    )
+}
+
+/// Refuse a gerber job that reconstructed copper but no parts, saying exactly
+/// which half is missing.
+///
+/// A fab archive holds copper, drill and films. It does not hold a part list, so
+/// the reverse extraction recovers nets and pad geometry but has nothing that
+/// says which pads form which component: that lives in the pick-and-place file,
+/// which most published fab folders leave out. Measured on 60 real fab folders
+/// harvested from public repositories, not one shipped a P&P, so this is the
+/// NORMAL outcome for a gerber job, not an exotic one.
+///
+/// Without this, such a job fell through to the generic empty-board refusal,
+/// "this board parsed, but is empty", about a folder holding a fully routed
+/// two-layer board. That sends the user looking for a corrupt file instead of
+/// the one input they are actually missing.
+fn gerber_without_parts_message(path: &Path, board: &ExtractedBoard) -> String {
+    format!(
+        "'{}' is a gerber fab job: hauksbee reconstructed {} net(s) from the copper, \
+         but a fab archive carries no part list, so there is nothing to bind or \
+         simulate. Add the pick-and-place file (KiCad: 'Fabrication Outputs → \
+         Component Placement', a `.pos` or `.csv` of references and XY positions) \
+         to the same folder and retry, or pass the original layout file \
+         (.kicad_pcb / .brd / .PcbDoc) which already has both. See {}.",
+        path.display(),
+        board.nets.len(),
         hauksbee_ir::docs_url("docs/ingest/GERBER.md")
     )
 }
@@ -981,19 +1026,22 @@ fn main {
     #[test]
     fn empty_upload_says_the_file_is_empty() {
         let err = from_bytes("blank.kicad_pcb", b"").expect_err("empty must not normalize");
-        assert!(
-            err.to_string().contains("this file is empty"),
-            "got: {err}"
-        );
+        assert!(err.to_string().contains("this file is empty"), "got: {err}");
     }
 
     #[test]
     fn firmware_zip_gets_pointed_at_the_firmware_slot() {
         for (label, entry) in [
-            ("platformio", ("firmware/platformio.ini", b"[env:uno]".as_slice())),
+            (
+                "platformio",
+                ("firmware/platformio.ini", b"[env:uno]".as_slice()),
+            ),
             (
                 "pio tree",
-                ("proj/.pio/build/uno/firmware.hex", b":00000001FF".as_slice()),
+                (
+                    "proj/.pio/build/uno/firmware.hex",
+                    b":00000001FF".as_slice(),
+                ),
             ),
             ("hex image", ("blink.hex", b":00000001FF".as_slice())),
         ] {

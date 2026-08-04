@@ -72,10 +72,7 @@ fn multi_spec_run_merges_junit_and_exits_with_the_worst_code() {
     assert!(stdout.contains("=== 2 specs ==="), "{stdout}");
     assert!(stdout.contains("[GREEN]"), "{stdout}");
     assert!(stdout.contains("[SPEC ERROR]"), "{stdout}");
-    assert!(
-        stdout.contains("worst exit code of the set: 2"),
-        "{stdout}"
-    );
+    assert!(stdout.contains("worst exit code of the set: 2"), "{stdout}");
 }
 
 #[test]
@@ -101,7 +98,10 @@ fn a_red_member_makes_the_set_red_but_runs_every_member() {
     assert_eq!(out.status.code(), Some(1), "worst of {{1, 0}} is 1");
     let stdout = String::from_utf8_lossy(&out.stdout);
     // The green member still ran and is reported after the red one.
-    assert!(stdout.contains("[RED]") && stdout.contains("[GREEN]"), "{stdout}");
+    assert!(
+        stdout.contains("[RED]") && stdout.contains("[GREEN]"),
+        "{stdout}"
+    );
     // The failing bound is marked and the why names the observed shortfall.
     assert!(stdout.contains("<- FAILED HERE"), "{stdout}");
     assert!(stdout.contains("below your"), "{stdout}");
@@ -470,7 +470,10 @@ until = "2030-01-01"
     .expect("run completes");
     assert_eq!(result.exit_code(), 1, "scope is per-finding, not per-rule");
     assert!(
-        result.waiver_notes.iter().any(|n| n.contains("matched nothing")),
+        result
+            .waiver_notes
+            .iter()
+            .any(|n| n.contains("matched nothing")),
         "the unused waiver is called out as stale: {:?}",
         result.waiver_notes
     );

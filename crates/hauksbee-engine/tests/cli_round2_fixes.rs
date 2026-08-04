@@ -97,7 +97,11 @@ fn asbuilt_overlay_is_applied_and_narrated_on_report_paths() {
         "--asbuilt",
         overlay.to_str().unwrap(),
     ]);
-    assert!(with.status.success(), "overlaid report runs: {}", stderr(&with));
+    assert!(
+        with.status.success(),
+        "overlaid report runs: {}",
+        stderr(&with)
+    );
     let with_out = stdout(&with);
     assert!(
         with_out.contains("as-built overlay") && with_out.contains("applied"),
@@ -111,8 +115,11 @@ fn asbuilt_overlay_is_applied_and_narrated_on_report_paths() {
     // An overlay that does NOT describe the board (unknown ref) is a hard
     // error on the report path too, not just the simulating one.
     let bogus = tmp("bogus.asbuilt.toml");
-    std::fs::write(&bogus, "[[replace]]\nref = \"NOSUCHPART99\"\n[replace.set]\nohms = 10.0\n")
-        .unwrap();
+    std::fs::write(
+        &bogus,
+        "[[replace]]\nref = \"NOSUCHPART99\"\n[replace.set]\nohms = 10.0\n",
+    )
+    .unwrap();
     let bad = run(&[
         "run",
         b.to_str().unwrap(),
@@ -240,7 +247,7 @@ fn sim_refuses_element_free_decks() {
 
 #[test]
 fn sim_invalid_probe_is_misuse_not_nonconvergence() {
-    let deck = board("../../examples/learn/02-mna-by-hand/divider.cir");
+    let deck = board("../../examples/decks/divider.cir");
     let out = run(&["sim", deck.to_str().unwrap(), "--op", "--print", "V(nope)"]);
     assert_eq!(out.status.code(), Some(2));
     let err = stderr(&out);
@@ -370,7 +377,10 @@ fn escaped_net_names_are_displayed_as_real_names() {
     // The JSON surface carries the real names too.
     let json = run(&["run", p.to_str().unwrap(), "--list-nets", "--json"]);
     let doc = stdout(&json);
-    assert!(doc.contains("/GPIO0/XTAL1") && !doc.contains("{slash}"), "{doc}");
+    assert!(
+        doc.contains("/GPIO0/XTAL1") && !doc.contains("{slash}"),
+        "{doc}"
+    );
     let _ = std::fs::remove_file(&p);
 }
 
@@ -392,7 +402,10 @@ fn junit_and_sarif_artifacts_are_written_and_valid() {
     ]);
     assert!(out.status.success(), "{}", stderr(&out));
     let jx = std::fs::read_to_string(&junit).expect("junit written");
-    assert!(jx.contains("<testsuites") && jx.contains("<failure"), "{jx}");
+    assert!(
+        jx.contains("<testsuites") && jx.contains("<failure"),
+        "{jx}"
+    );
     let sj: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&sarif).expect("sarif written"))
             .expect("sarif parses");

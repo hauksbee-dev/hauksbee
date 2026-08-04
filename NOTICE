@@ -13,6 +13,21 @@ importer (Copyright the KiCad Developers, GPL-3.0). See
 docs/ingest/ALTIUM.md and docs/about/release-and-licensing.md for the
 provenance and licensing position.
 
+The RP2040 co-simulation platform embeds third-party files, which the binary
+therefore redistributes:
+
+  - Renode peripheral models for the RP2040 (C# sources), copied byte-for-byte
+    from matgla/Renode_RP2040, Copyright Mateusz Stadnik, MIT.
+  - RP2040.svd, from the Raspberry Pi pico-sdk, Copyright 2020 Raspberry Pi
+    (Trading) Ltd., BSD-3-Clause.
+  - The RP2040 boot ROM image (bootrom.elf), from
+    raspberrypi/pico-bootrom-rp2040, Copyright 2020 Raspberry Pi (Trading)
+    Ltd., BSD-3-Clause.
+
+Full licence texts ship beside those files in
+crates/hauksbee-mcu/db/mcu/rp2040/, whose README.md records the exact upstream
+commits and tags.
+
 Redistributions of this software, with or without modification, must retain
 this NOTICE file per section 4(d) of the Apache License 2.0. If you build
 something on hauksbee, a visible credit ("powered by hauksbee") is appreciated

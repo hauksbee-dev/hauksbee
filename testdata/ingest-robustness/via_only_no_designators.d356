@@ -1,0 +1,6 @@
+C  IPC-D-356A, exported without component designators
+P  UNITS CUST 0
+317GND                    -1    X+0019000Y+0029450
+317GND                    -2    X+0021000Y+0029450
+317+3V3                   -3    X+0023000Y+0029450
+999

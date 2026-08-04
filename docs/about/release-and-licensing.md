@@ -297,3 +297,26 @@ position is a legal judgment, not a certainty, and it is under legal review
 before launch. If the review concludes otherwise, the reader moves to the
 GPL shape or gets re-derived from the format itself. `NOTICE` carries a
 KiCad attribution line for the record layouts either way.
+
+## 8. Provenance of the vendored RP2040 platform
+
+RP2040 co-sim is the one platform Renode does not supply, so hauksbee carries
+its own, and unlike everything else in section 7 this one is *copied* rather
+than ported. Both release shapes embed it, so both redistribute it:
+
+| What | Upstream | Licence |
+|---|---|---|
+| Renode peripheral models (C# sources) | `matgla/Renode_RP2040`, at a pinned commit | MIT |
+| `RP2040.svd` (register tags) | `raspberrypi/pico-sdk`, tag `2.1.1` | BSD-3-Clause |
+| `bootrom.elf` (boot ROM image) | `raspberrypi/pico-bootrom-rp2040`, release `b2` | BSD-3-Clause |
+
+All three are permissive, so neither shape's licence position changes: the
+permissive tarball stays Apache-2.0-compatible. Two obligations follow and are
+met in the tree rather than left implicit. The licence texts ship beside the
+files in `crates/hauksbee-mcu/db/mcu/rp2040/`, and `NOTICE` carries the
+attribution, which is what travels with a redistributed binary.
+
+The C# sources are byte-for-byte copies and are deliberately never edited: a
+fix goes upstream and the file is re-copied, so the directory cannot quietly
+become a fork whose provenance line has stopped being true. The exact commit,
+the tags, and the refresh procedure are in that directory's `README.md`.

@@ -78,9 +78,7 @@ pub fn action_wired(root: &Path) -> bool {
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        let is_workflow = path
-            .extension()
-            .is_some_and(|e| e == "yml" || e == "yaml");
+        let is_workflow = path.extension().is_some_and(|e| e == "yml" || e == "yaml");
         if is_workflow {
             if let Ok(text) = fs::read_to_string(&path) {
                 if text.contains("hauksbee") {
@@ -248,7 +246,9 @@ fn spec_dirs(root: &Path) -> Vec<PathBuf> {
 /// the searched directories always come from the one source.
 fn spec_dirs_phrase() -> String {
     match std::env::var("HAUKSBEE_CI_SPECS") {
-        Ok(dirs) if !dirs.is_empty() => format!("in {} (HAUKSBEE_CI_SPECS)", dirs.replace(':', ", ")),
+        Ok(dirs) if !dirs.is_empty() => {
+            format!("in {} (HAUKSBEE_CI_SPECS)", dirs.replace(':', ", "))
+        }
         _ => "in ci/ and the repo root".to_string(),
     }
 }
@@ -324,8 +324,8 @@ pub fn hook_install(cwd: &Path) -> anyhow::Result<String> {
     };
     let config = root.join(".pre-commit-config.yaml");
     if config.exists() {
-        let text = fs::read_to_string(&config)
-            .with_context(|| format!("reading {}", config.display()))?;
+        let text =
+            fs::read_to_string(&config).with_context(|| format!("reading {}", config.display()))?;
         if text.contains("hauksbee") {
             return Ok(format!(
                 "already installed: {} already references hauksbee; nothing changed",
@@ -339,9 +339,7 @@ pub fn hook_install(cwd: &Path) -> anyhow::Result<String> {
         // linters first: they finish in milliseconds, and there is no point
         // solving a circuit for a commit `black` is about to reject anyway.
         let entry = pre_commit_entry();
-        let (new_text, did) = if let Some(pos) = text
-            .lines()
-            .position(|l| l.trim_end() == "repos:")
+        let (new_text, did) = if let Some(pos) = text.lines().position(|l| l.trim_end() == "repos:")
         {
             let lines: Vec<&str> = text.lines().collect();
             let end = repos_list_end(&lines, pos);
@@ -362,8 +360,7 @@ pub fn hook_install(cwd: &Path) -> anyhow::Result<String> {
             t.push_str(&entry);
             (t, "added a `repos:` section with the hauksbee-ci entry")
         };
-        fs::write(&config, new_text)
-            .with_context(|| format!("writing {}", config.display()))?;
+        fs::write(&config, new_text).with_context(|| format!("writing {}", config.display()))?;
         return Ok(format!(
             "{did} in {}; run `pre-commit install` to activate it\n{}",
             config.display(),
@@ -373,8 +370,7 @@ pub fn hook_install(cwd: &Path) -> anyhow::Result<String> {
 
     // No pre-commit framework: plain git hook.
     let hooks_dir = root.join(".git/hooks");
-    fs::create_dir_all(&hooks_dir)
-        .with_context(|| format!("creating {}", hooks_dir.display()))?;
+    fs::create_dir_all(&hooks_dir).with_context(|| format!("creating {}", hooks_dir.display()))?;
     let hook = hooks_dir.join("pre-commit");
     let local = hooks_dir.join(LOCAL_HOOK);
     if hook.exists() {
@@ -403,8 +399,7 @@ pub fn hook_install(cwd: &Path) -> anyhow::Result<String> {
                     hook.display()
                 );
             };
-            let has_own_logic =
-                !remainder.trim().is_empty() && remainder.trim() != "#!/bin/sh";
+            let has_own_logic = !remainder.trim().is_empty() && remainder.trim() != "#!/bin/sh";
             if has_own_logic {
                 park_local_hook(&local, &remainder)?;
             }
@@ -440,8 +435,7 @@ pub fn hook_install(cwd: &Path) -> anyhow::Result<String> {
             install_next_steps(&root)
         ));
     }
-    fs::write(&hook, plain_hook_script())
-        .with_context(|| format!("writing {}", hook.display()))?;
+    fs::write(&hook, plain_hook_script()).with_context(|| format!("writing {}", hook.display()))?;
     set_executable(&hook)?;
     Ok(format!(
         "installed {}\n{}",
@@ -576,8 +570,8 @@ pub fn hook_uninstall(cwd: &Path) -> anyhow::Result<String> {
     // it back where git looks for it, so uninstalling leaves the repo exactly
     // as install found it.
     if local.exists() {
-        let parked = fs::read_to_string(&local)
-            .with_context(|| format!("reading {}", local.display()))?;
+        let parked =
+            fs::read_to_string(&local).with_context(|| format!("reading {}", local.display()))?;
         fs::write(&hook, parked).with_context(|| format!("writing {}", hook.display()))?;
         set_executable(&hook)?;
         fs::remove_file(&local).with_context(|| format!("removing {}", local.display()))?;
@@ -631,9 +625,7 @@ fn remove_pre_commit_entry(text: &str) -> String {
         if line_indent <= indent && line.trim_start().starts_with("- ") {
             break;
         }
-        if line_indent < indent
-            || (line_indent == indent && !line.trim_start().starts_with("- "))
-        {
+        if line_indent < indent || (line_indent == indent && !line.trim_start().starts_with("- ")) {
             break;
         }
         end += 1;
@@ -725,8 +717,7 @@ pub fn github_action_write(cwd: &Path, path: &Path) -> anyhow::Result<String> {
     }
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
     }
     fs::write(path, yaml).with_context(|| format!("writing {}", path.display()))?;
@@ -747,9 +738,9 @@ pub fn green_next_step(cwd: &Path) -> Option<String> {
     let action = action_wired(&root);
     match (hook, action) {
         (true, true) => None,
-        (false, true) => Some(
-            "next: gate commits locally too: `hauksbee-ci hook install`".to_string(),
-        ),
+        (false, true) => {
+            Some("next: gate commits locally too: `hauksbee-ci hook install`".to_string())
+        }
         (true, false) => Some(
             "next: gate pushes and PRs: `hauksbee-ci github-action --write` \
              writes .github/workflows/hauksbee.yml"
@@ -815,12 +806,16 @@ mod tests {
             "the old hook must move out, not stay in the file: {text}"
         );
         assert!(
-            fs::read_to_string(&local).unwrap().contains("echo preexisting"),
+            fs::read_to_string(&local)
+                .unwrap()
+                .contains("echo preexisting"),
             "the old hook must be parked in pre-commit.local"
         );
         // The chain runs the local hook BEFORE any hauksbee logic, and
         // propagates its exit code.
-        let chain = text.find("pre-commit.local").expect("chains the local hook");
+        let chain = text
+            .find("pre-commit.local")
+            .expect("chains the local hook");
         let gate = text.find("hauksbee-ci run").expect("runs specs");
         assert!(chain < gate, "the local hook must run first:\n{text}");
         assert!(text.contains("|| exit $?"), "{text}");
@@ -829,7 +824,11 @@ mod tests {
         assert!(again.starts_with("already installed"), "{again}");
         let text2 = fs::read_to_string(&hook).unwrap();
         assert_eq!(text, text2);
-        assert_eq!(text2.matches("pre-commit.local\" \"$@\"").count(), 1, "{text2}");
+        assert_eq!(
+            text2.matches("pre-commit.local\" \"$@\"").count(),
+            1,
+            "{text2}"
+        );
     }
 
     #[test]
@@ -846,9 +845,11 @@ mod tests {
         assert!(msg.contains("never ran"), "{msg}");
         let text = fs::read_to_string(&hook).unwrap();
         assert_eq!(text, plain_hook_script());
-        assert!(fs::read_to_string(tmp.path().join(".git/hooks/pre-commit.local"))
-            .unwrap()
-            .contains("echo mine"));
+        assert!(
+            fs::read_to_string(tmp.path().join(".git/hooks/pre-commit.local"))
+                .unwrap()
+                .contains("echo mine")
+        );
     }
 
     #[test]
@@ -987,8 +988,7 @@ mod tests {
         git_repo(tmp.path());
         let sub = tmp.path().join("hardware/ci");
         fs::create_dir_all(&sub).unwrap();
-        let msg =
-            github_action_write(&sub, Path::new(".github/workflows/hauksbee.yml")).unwrap();
+        let msg = github_action_write(&sub, Path::new(".github/workflows/hauksbee.yml")).unwrap();
         assert!(msg.starts_with("wrote"), "{msg}");
         assert!(tmp.path().join(".github/workflows/hauksbee.yml").exists());
         assert!(!sub.join(".github").exists(), "not in the subdirectory");
@@ -1034,8 +1034,14 @@ mod tests {
         // U6: the installing build's identity, in the comment and in the
         // runtime comparison, both matching `hauksbee-ci --version` output.
         let installed = format!("hauksbee-ci {}", crate::version_string());
-        assert!(text.contains(&format!("# installed by {installed}")), "{text}");
-        assert!(text.contains(&format!("installed_by='{installed}'")), "{text}");
+        assert!(
+            text.contains(&format!("# installed by {installed}")),
+            "{text}"
+        );
+        assert!(
+            text.contains(&format!("installed_by='{installed}'")),
+            "{text}"
+        );
         assert!(text.contains("hauksbee-ci --version"), "{text}");
         assert!(text.contains("re-run: hauksbee-ci hook install"), "{text}");
         // U8: the blocked-commit wording, byte for byte around the count.
@@ -1055,14 +1061,18 @@ mod tests {
         hook_install(tmp.path()).unwrap();
         let hook = tmp.path().join(".git/hooks/pre-commit");
         // Simulate a hook written by an older build.
-        let stale = fs::read_to_string(&hook)
-            .unwrap()
-            .replace(&format!("installed_by='{}'", installed_by()), "installed_by='hauksbee-ci 0.0.0 (git dead)'");
+        let stale = fs::read_to_string(&hook).unwrap().replace(
+            &format!("installed_by='{}'", installed_by()),
+            "installed_by='hauksbee-ci 0.0.0 (git dead)'",
+        );
         fs::write(&hook, stale).unwrap();
         let msg = hook_install(tmp.path()).unwrap();
         assert!(msg.starts_with("refreshed"), "{msg}");
         let text = fs::read_to_string(&hook).unwrap();
-        assert!(text.contains(&format!("installed_by='{}'", installed_by())), "{text}");
+        assert!(
+            text.contains(&format!("installed_by='{}'", installed_by())),
+            "{text}"
+        );
         assert!(!text.contains("0.0.0 (git dead)"), "{text}");
     }
 
@@ -1158,8 +1168,11 @@ mod tests {
         hook_install(tmp.path()).unwrap();
         let action_only = green_next_step(tmp.path()).unwrap();
         assert!(action_only.contains("github-action") && !action_only.contains("hook install"));
-        github_action_write(tmp.path(), &tmp.path().join(".github/workflows/hauksbee.yml"))
-            .unwrap();
+        github_action_write(
+            tmp.path(),
+            &tmp.path().join(".github/workflows/hauksbee.yml"),
+        )
+        .unwrap();
         assert_eq!(green_next_step(tmp.path()), None);
     }
 }

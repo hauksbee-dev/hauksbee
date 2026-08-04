@@ -63,6 +63,32 @@ pub const DEFAULT_CLEARANCE_MM: f64 = 0.2;
 /// ~75 um) yet above the geometry's own rounding noise.
 pub const CLEARANCE_TOLERANCE_MM: f64 = 0.005;
 
+/// Gaps at or below this (mm) are copper *touching*: a short, not a clearance.
+///
+/// `gap <= 0.0` was the whole test, and it is not enough. The gap comes out of
+/// `shape_gap`, which subtracts and square-roots f64 coordinates in millimetres;
+/// on a 300 mm board that arithmetic carries an absolute error around 1e-13 mm,
+/// so two edges that meet exactly can measure a hair *positive*. A real corpus
+/// board produced a 9.77e-15 mm gap between different nets, which is touching
+/// copper by any physical reading, and the bare `> 0.0` test filed it as a
+/// clearance note instead of a short. Under-reporting a short is the worst
+/// failure this detector has: it is the one finding a board cannot ship with.
+///
+/// 1e-9 mm (one picometre) is the band. It sits four orders above the f64 noise
+/// floor described above, and three orders BELOW KiCad's nanometre coordinate
+/// grid, which is the finest gap a KiCad file can even express. So it cannot
+/// swallow a gap any real design intended: the smallest representable non-zero
+/// gap, 1e-6 mm, is a thousand times wider than this band.
+pub const SHORT_TOUCH_EPS_MM: f64 = 1e-9;
+
+/// Whether a measured gap means the copper is in contact.
+///
+/// Negative is overlap, zero is abutment, and anything inside
+/// [`SHORT_TOUCH_EPS_MM`] is one of those two measured through floating point.
+pub fn is_touching(gap_mm: f64) -> bool {
+    gap_mm <= SHORT_TOUCH_EPS_MM
+}
+
 /// Arcs are flattened into this many straight capsule links. Eight keeps the
 /// chord error under a few microns for typical track-radius arcs while staying
 /// cheap.
@@ -1973,15 +1999,16 @@ fn sweep_buckets(
                 // Zone<->Pad gap is still kept as a normal clearance note.
                 let zone_pad = (p.kind == ItemKind::Zone && q.kind == ItemKind::Pad)
                     || (p.kind == ItemKind::Pad && q.kind == ItemKind::Zone);
-                if zone_pad && gap <= 0.0 {
+                if zone_pad && is_touching(gap) {
                     continue;
                 }
-                // A genuine overlap (gap <= 0) is always a short. A positive gap
-                // is a clearance violation only when it falls more than the
+                // Copper in contact is always a short; see SHORT_TOUCH_EPS_MM for
+                // why "in contact" is a band and not `<= 0.0`. A gap clear of that
+                // band is a clearance violation only when it falls more than the
                 // tolerance below the rule; a gap sitting at (or a few microns
                 // under) the rule is routing-to-rule, not a defect, and is
                 // dropped to kill the boundary-note noise.
-                let kind = if gap <= 0.0 {
+                let kind = if is_touching(gap) {
                     ViolationKind::Short
                 } else if gap < clearance - CLEARANCE_TOLERANCE_MM {
                     ViolationKind::Clearance

@@ -53,7 +53,7 @@ not_matches = [
 [[step]]
 name = "the same sweep on a deck that can be answered"
 do = "run"
-cmd = ["{bin}/hauksbee", "sim", "{repo}/examples/learn/02-mna-by-hand/rc_lowpass_ac.cir", "--ac", "--print", "V(out)"]
+cmd = ["{bin}/hauksbee", "sim", "{repo}/examples/decks/rc_lowpass_ac.cir", "--ac", "--print", "V(out)"]
 exit = 0
 max_seconds = 30
 matches = [

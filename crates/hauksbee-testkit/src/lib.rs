@@ -93,6 +93,27 @@ pub fn corpus_boards_root(manifest_dir: &str) -> Option<PathBuf> {
     Some(if famous.is_dir() { famous } else { root })
 }
 
+/// [`corpus_boards_root`], or `None` with a visible note; a panic under
+/// `HAUKSBEE_REQUIRE_CORPUS=1`.
+///
+/// The plain resolver is fine when the caller has its own skip note. Suites that
+/// were written as `corpus_dir(..).unwrap_or_default().join("famous")` had no
+/// note to speak of: `unwrap_or_default()` turns an absent corpus into a
+/// relative path that also does not exist, so absence and wrong-layout looked
+/// identical and both read as "skip". `what` names the suite so the note says
+/// which one idled.
+pub fn corpus_boards_root_or_skip(manifest_dir: &str, what: &str) -> Option<PathBuf> {
+    match corpus_boards_root(manifest_dir) {
+        Some(p) => Some(p),
+        None => missing(
+            what,
+            "the board corpus root (either <corpus>/famous/ or <corpus>/)",
+            "board corpus",
+            "scripts/fetch-corpus.sh",
+        ),
+    }
+}
+
 /// The first of several candidate relative paths that resolves.
 ///
 /// Layout tolerance is not enough when the two corpora hold different upstream
@@ -134,6 +155,26 @@ pub fn private_asset(env_var: &str, rel: &str, what: &str) -> Option<PathBuf> {
         env_var,
         &format!("set {env_var} to a checkout containing it"),
     )
+}
+
+/// Record how many boards a corpus gate actually scanned, and fail on zero.
+///
+/// Call this in every corpus gate that got as far as having a corpus root. The
+/// count goes to stderr so a passing run says what it covered rather than
+/// leaving "ok" to imply it, and zero is a failure whether or not
+/// `HAUKSBEE_REQUIRE_CORPUS` is set: a gate that examined nothing has proved
+/// nothing, and reporting that as a pass is precisely the vacuous green this
+/// product exists to refuse. This is not the same guard as [`corpus_or_skip`],
+/// which catches an absent corpus; this catches a *present* corpus whose layout
+/// or contents mean no board was ever opened.
+pub fn scanned(gate: &str, n: usize) {
+    eprintln!("SCANNED  {gate}: {n} board(s)");
+    assert!(
+        n > 0,
+        "{gate} scanned 0 boards. The corpus root resolved but no board in the \
+         list was found or loadable, so this gate proves nothing. Check the \
+         corpus layout (scripts/fetch-corpus.sh) before trusting a pass."
+    );
 }
 
 fn missing(what: &str, rel: &str, source: &str, remedy: &str) -> Option<PathBuf> {

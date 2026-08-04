@@ -24,11 +24,15 @@ use std::path::PathBuf;
 use hauksbee_extract::gerber::connect::GerberCopperKind;
 use hauksbee_extract::gerber::from_gerber_dir;
 
+/// The Inkplate films, in whichever corpus layout this machine has.
+///
+/// `<corpus>/famous/inkplate6_gerber` was joined directly, so a fetched corpus
+/// (no `famous/` level) failed the guard below on the path rather than on the
+/// reconstruction. `scripts/fetch-corpus.sh` also has to unpack the films: the
+/// upstream repository carries them only inside a zip, and the manifest's
+/// `unpack` field is what lands the .GTL/.GBL/.TXT set in this directory.
 fn inkplate_dir() -> Option<PathBuf> {
-    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join("famous/inkplate6_gerber");
-    p.exists().then_some(p)
+    hauksbee_testkit::corpus_board(env!("CARGO_MANIFEST_DIR"), "famous/inkplate6_gerber")
 }
 
 #[test]

@@ -258,9 +258,7 @@ fn converter_vreg_regulates_and_draws_real_input_current() {
         "the buck board must solve cleanly, failed windows: {:?}",
         sched.failed_windows()
     );
-    let vout = sched
-        .net_voltage("+3.3V")
-        .expect("+3.3V is a live net");
+    let vout = sched.net_voltage("+3.3V").expect("+3.3V is a live net");
     assert!(
         (vout - 3.3).abs() < 0.05,
         "the converter regulates the rail to 3.3V, got {vout}"

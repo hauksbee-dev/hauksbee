@@ -892,7 +892,7 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
              Over those windows the co-sim held stale node voltages instead of a real \
              solve, so any voltage, current or fault reading there is fiction (see \
              {}: refuse rather than fake).{diagnosis}",
-            hauksbee_ir::docs_url("docs/learn/05-going-fast.md"),
+            hauksbee_ir::docs_url("docs/about/LIMITATIONS.md"),
         ),
         fix: "Treat electrical results inside those windows as unknown. A stiff or \
               structurally singular section (conflicting rails, an unconverging \

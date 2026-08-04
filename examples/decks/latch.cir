@@ -1,0 +1,9 @@
+cross-coupled BJT latch -- defeats plain cold Newton (learn chapter 3)
+VCC vcc 0 DC 5
+RC1 vcc c1 1k
+RC2 vcc c2 1k
+Q1 c1 c2 0 NPN1
+Q2 c2 c1 0 NPN1
+.model NPN1 NPN(IS=1e-14 BF=100)
+.op
+.end

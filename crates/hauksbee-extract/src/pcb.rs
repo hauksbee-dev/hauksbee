@@ -14,6 +14,7 @@ use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
 use forge_sexpr::{Document, List};
 
 pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
+    crate::reject_merge_conflict(text)?;
     let doc = forge_sexpr::parse(text)?;
     extract_from_doc(&doc)
 }
@@ -31,6 +32,7 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
             found: root.name().map(str::to_string),
         });
     }
+    reject_non_finite_geometry(root)?;
 
     // KiCad ≤9 declares `(net N "name")` at top level. KiCad 10 (20260206+)
     // dropped numeric ids: nets exist only as `(net "name")` references on
@@ -81,6 +83,16 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
     // same part list it does natively.
     let components = crate::merge_duplicate_references(components);
 
+    // Names invented for undeclared nets are a guess about the user's board, so
+    // say how many rather than letting `Net-(7)` appear in a report unexplained.
+    if table.synthesized_from_pads > 0 {
+        eprintln!(
+            "hauksbee: {} net(s) are referenced by pads but never declared in this \
+             board; they are reported as Net-(<id>) because the file carries no name \
+             for them. Re-save the board from KiCad to write the net table.",
+            table.synthesized_from_pads
+        );
+    }
     let mut nets = table.into_nets();
     nets.sort_by_key(|n| n.id);
 
@@ -99,9 +111,34 @@ struct NetTable {
     by_id: std::collections::BTreeMap<i64, String>,
     by_name: std::collections::HashMap<String, i64>,
     next_synthetic: i64,
+    /// How many nets were named by [`NetTable::ensure_id`] because a pad
+    /// referenced an id the file never declared. Reported to the user, since a
+    /// synthesized name is a guess about their board.
+    synthesized_from_pads: usize,
 }
 
 impl NetTable {
+    /// Make sure `id` exists in the table, naming it if it does not.
+    ///
+    /// A `.kicad_pcb` normally declares every net at top level before any pad
+    /// references it, but a hand-written or partially-generated board can carry
+    /// `(net 7)` on a pad with no `(net 7 "…")` anywhere. Before this, those
+    /// pads kept their net ids while the net TABLE stayed empty, so the board
+    /// reported zero nets while its pads were wired to 34 of them: every net-keyed
+    /// check then had nothing to look at and passed vacuously. Recording the id
+    /// under a synthetic name keeps the two views consistent; the count of
+    /// synthesized nets is surfaced by the caller so the guess is never silent.
+    fn ensure_id(&mut self, id: i64) -> i64 {
+        if !self.by_id.contains_key(&id) {
+            // KiCad's own name for a net it cannot label; the parenthesised id
+            // makes it obvious in a report that the name came from us, not the
+            // file.
+            self.declare(id, format!("Net-({id})"));
+            self.synthesized_from_pads += 1;
+        }
+        id
+    }
+
     fn declare(&mut self, id: i64, name: String) {
         // File-syntax escapes ({slash}, subscript braces) end here: the table
         // keys and the emitted Net names are the real KiCad display names.
@@ -130,6 +167,74 @@ impl NetTable {
     }
 }
 
+/// Geometry lists whose numeric arguments are coordinates or dimensions. Every
+/// distance the clearance check computes comes from one of these.
+const GEOMETRY_LISTS: &[&str] = &[
+    "at",
+    "start",
+    "end",
+    "mid",
+    "center",
+    "xy",
+    "size",
+    "width",
+    "thickness",
+    "drill",
+    "offset",
+    "rect_delta",
+    "radius",
+];
+
+/// Refuse a board carrying a coordinate that is not a finite number.
+///
+/// This is the one shape of corruption that produces a CONFIDENT WRONG ANSWER
+/// rather than a parse failure. Every distance comparison against NaN is false,
+/// so a pad at `(at nan nan)` is closer to nothing and further from nothing:
+/// the clearance check walks the whole board and reports "no shorts or
+/// clearance violations", a green verdict on geometry that does not exist. The
+/// same holds for `inf` and for a decimal exponent that overflows to infinity
+/// (`1e400`), which is how a mangled unit conversion usually arrives.
+///
+/// KiCad cannot write such a file; every instance is a hand edit, a broken
+/// generator or a corrupted transfer, so refusing costs no real board. That is
+/// measured, not assumed: zero files in a 1139-board corpus of real KiCad
+/// layouts (KiCad 4 through 10) carry a non-finite coordinate.
+fn reject_non_finite_geometry(root: &List) -> Result<(), ExtractError> {
+    let mut stack: Vec<&List> = vec![root];
+    while let Some(list) = stack.pop() {
+        if let Some(name) = list.name() {
+            if GEOMETRY_LISTS.contains(&name) {
+                for i in 0.. {
+                    let Some(token) = list.arg(i) else { break };
+                    // Quoted text is never a coordinate: a net legitimately
+                    // named "NaN" must not take the board down.
+                    if token.is_string() {
+                        continue;
+                    }
+                    // Not `as_f64`: that already filters non-finite values to
+                    // `None`, which is exactly the silent-default behaviour
+                    // being caught here. Parse the raw token.
+                    match token.value().parse::<f64>() {
+                        Ok(v) if !v.is_finite() => {
+                            return Err(ExtractError::Corrupt(format!(
+                                "board geometry is corrupt: '({name} …)' carries the \
+                                 non-numeric coordinate '{}'. Distances cannot be \
+                                 compared against it, so a clearance check would \
+                                 report a meaningless pass. Re-save the board from \
+                                 KiCad, or fix the '{name}' entry by hand",
+                                token.value()
+                            )));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        stack.extend(list.lists());
+    }
+    Ok(())
+}
+
 /// A pad/segment net reference: `(net 4 "GND")` in ≤v9, `(net "GND")` in v10.
 fn net_ref(list: &List, table: &mut NetTable) -> Option<i64> {
     let net = list.find("net")?;
@@ -145,7 +250,7 @@ fn net_ref(list: &List, table: &mut NetTable) -> Option<i64> {
             if id == 0 {
                 return None;
             }
-            return Some(id);
+            return Some(table.ensure_id(id));
         }
         let name = net.arg_value(1).filter(|n| !n.is_empty())?;
         return Some(table.id_of(&name));

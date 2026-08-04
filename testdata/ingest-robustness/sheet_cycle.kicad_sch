@@ -1,0 +1,9 @@
+(kicad_sch (version 20230121) (generator eeschema)
+  (sheet (at 0 0) (size 20 20)
+    (property "Sheetname" "itself")
+    (property "Sheetfile" "sheet_cycle.kicad_sch")
+  )
+  (sheet_instances
+    (path "/" (page "1"))
+  )
+)

@@ -55,6 +55,7 @@ fn snap(x: f64, y: f64) -> Pt {
 /// sub-sheets, they are resolved relative to `base_dir` when provided;
 /// without a directory, sub-sheets are skipped (single-sheet extraction).
 pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
+    crate::reject_merge_conflict(text)?;
     let doc = forge_sexpr::parse(text)?;
     let mut builder = NetlistBuilder::new();
     let root = builder.add_sheet_doc(&doc, "/", None, None)?;
@@ -72,10 +73,56 @@ pub fn extract_from_doc(
     builder.finish(root)
 }
 
-/// Extract from a top-level `.kicad_sch` on disk, recursing into its
-/// hierarchy. This is the path the cross-validation and the CLI use, because
-/// the hierarchy lives in sibling files.
+/// Extract from a `.kicad_sch` on disk, recursing into its hierarchy. This is
+/// the path the cross-validation and the CLI use, because the hierarchy lives in
+/// sibling files.
+///
+/// # Sub-sheets
+///
+/// A hierarchical sub-sheet is not a design. Its hierarchical labels are wired
+/// to sheet pins in the PARENT, so a net driven from a sibling sheet appears,
+/// inside the child file, as a stub touching exactly one pin. Extracting the
+/// child alone therefore produces a netlist that is not merely incomplete but
+/// *wrong* about connectivity: `net_lint`'s floating-control-pin check raised six
+/// [high] findings across four MNT Reform sub-sheets on exactly this, one of them
+/// `USB_PWR_EN`, which is driven from `reform2-lpc.kicad_sch` in the same
+/// project. The top-level `reform2-motherboard30.kicad_sch` is clean.
+///
+/// So when handed a sub-sheet, this resolves the hierarchy it belongs to and
+/// extracts from the root, which is the only file that can answer a connectivity
+/// question about it. If no parent can be found, it refuses rather than return a
+/// netlist that will be read as fact ([`ExtractError::OrphanSubSheet`]).
 pub fn extract_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| ExtractError::Xml(format!("read {}: {e}", path.display())))?;
+    crate::reject_merge_conflict(&text)?;
+    let doc = forge_sexpr::parse(&text)?;
+
+    if !is_root_sheet(&doc) {
+        return match find_hierarchy_root(path) {
+            Some(root_path) => extract_root_from_path(&root_path),
+            None => Err(ExtractError::OrphanSubSheet {
+                sheet: path.display().to_string(),
+                needs: match path.parent() {
+                    Some(dir) => format!(
+                        "the root schematic of its project. No .kicad_sch in {} \
+                         carries a (sheet_instances) block and reaches this file \
+                         through its (sheet ... Sheetfile) references. Point \
+                         hauksbee at the root schematic, or supply the whole \
+                         project directory.",
+                        dir.display()
+                    ),
+                    None => "the root schematic of its project".to_string(),
+                },
+            }),
+        };
+    }
+
+    extract_root_from_path(path)
+}
+
+/// [`extract_from_path`] with the sub-sheet question already settled.
+fn extract_root_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| ExtractError::Xml(format!("read {}: {e}", path.display())))?;
     let doc = forge_sexpr::parse(&text)?;
@@ -86,8 +133,98 @@ pub fn extract_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
         .unwrap_or_default()
         .to_string();
     let mut builder = NetlistBuilder::new();
+    // The root sheet counts as visited, so a sub-sheet pointing back at the top
+    // file closes the cycle here instead of recursing into it.
+    builder
+        .visited_sheets
+        .insert(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
     let root = builder.add_sheet_doc(&doc, "/", base.as_deref(), Some(name))?;
     builder.finish(root)
+}
+
+/// Whether a parsed schematic is the ROOT of its hierarchy.
+///
+/// KiCad writes `(sheet_instances ...)`, the map of instance paths to page
+/// numbers, into the root schematic and into no other file. Every root in the
+/// board corpus carries it and no sub-sheet does, across KiCad 6 through 10.
+/// A flat single-sheet design is its own root and carries it too, so this does
+/// not mistake a one-file project for a fragment.
+pub fn is_root_sheet(doc: &Document) -> bool {
+    doc.root()
+        .is_some_and(|r| r.find_all("sheet_instances").next().is_some())
+}
+
+/// The root schematic whose hierarchy contains `sheet`, searched among its
+/// siblings.
+///
+/// A project keeps its sheets in one directory, so the search is that directory:
+/// take every sibling that is a root, walk its `(sheet ... Sheetfile)` tree, and
+/// return the first whose tree reaches `sheet`. Walking rather than trusting a
+/// filename match matters, because two projects can sit in one directory (the
+/// MNT Reform keyboard revisions do) and only one of them owns a given sheet.
+fn find_hierarchy_root(sheet: &Path) -> Option<PathBuf> {
+    let dir = sheet.parent()?;
+    let target = std::fs::canonicalize(sheet).ok()?;
+    let mut candidates: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("kicad_sch"))
+        .collect();
+    // Deterministic order: the same corpus must resolve the same root on every
+    // machine, and read_dir order is not defined.
+    candidates.sort();
+    for cand in candidates {
+        if cand == *sheet {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&cand) else {
+            continue;
+        };
+        let Ok(doc) = forge_sexpr::parse(&text) else {
+            continue;
+        };
+        if !is_root_sheet(&doc) {
+            continue;
+        }
+        if hierarchy_reaches(&cand, &target) {
+            return Some(cand);
+        }
+    }
+    None
+}
+
+/// Whether the sheet tree rooted at `root` reaches `target` (canonicalised).
+///
+/// Depth-first over `(sheet ... Sheetfile)`, with a visited set: a KiCad
+/// hierarchy is a tree, but a hand-edited or malformed one can name the same
+/// file twice, and a cycle here would hang the extractor.
+fn hierarchy_reaches(root: &Path, target: &Path) -> bool {
+    let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(p) = stack.pop() {
+        let canon = std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
+        if !seen.insert(canon.clone()) {
+            continue;
+        }
+        if canon == *target {
+            return true;
+        }
+        let Ok(text) = std::fs::read_to_string(&p) else {
+            continue;
+        };
+        let Ok(doc) = forge_sexpr::parse(&text) else {
+            continue;
+        };
+        let Some(node) = doc.root() else { continue };
+        let Some(dir) = p.parent() else { continue };
+        for sub in node.find_all("sheet") {
+            if let Some(file) = sheet_property(sub, "Sheetfile") {
+                stack.push(dir.join(file));
+            }
+        }
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
@@ -246,7 +383,25 @@ struct NetlistBuilder {
     /// schematic path cries wolf on a deliberately-unconnected control pin.
     no_connect_nodes: Vec<usize>,
     next_sheet: SheetId,
+    /// Sub-sheet files already pulled in, canonicalized. A `Sheetfile` that
+    /// points back at an ancestor (a sheet that references itself, or two
+    /// sheets that reference each other) is a cycle, and following it recurses
+    /// until the thread's stack aborts the process. Both shapes occur in real
+    /// projects: a sheet duplicated by copy-paste keeps the original's
+    /// `Sheetfile`, and a renamed file can leave a stale mutual reference.
+    /// A visited set is also the right answer for the benign case of one
+    /// sub-sheet included twice: its contents are already in the netlist.
+    visited_sheets: std::collections::HashSet<PathBuf>,
+    /// How deep the current `Sheetfile` recursion is. The visited set stops
+    /// cycles; this stops a pathological but acyclic chain (a generated project
+    /// nesting thousands of unique sheets) from reaching the same stack limit.
+    sheet_depth: usize,
 }
+
+/// The deepest `Sheetfile` chain followed. KiCad's own hierarchies are a
+/// handful of levels; 64 is far past any real design and still nowhere near
+/// the stack budget of `add_sheet_doc`.
+const MAX_SHEET_DEPTH: usize = 64;
 
 type SheetId = u32;
 
@@ -280,6 +435,8 @@ impl NetlistBuilder {
             bus_boundaries: Vec::new(),
             no_connect_nodes: Vec::new(),
             next_sheet: 0,
+            visited_sheets: std::collections::HashSet::new(),
+            sheet_depth: 0,
         }
     }
 
@@ -802,14 +959,27 @@ impl NetlistBuilder {
         let file = sheet_property(sub, "Sheetfile");
         if let (Some(file), Some(dir)) = (file, base_dir) {
             let child = dir.join(&file);
-            if let Ok(text) = std::fs::read_to_string(&child) {
-                if let Ok(doc) = forge_sexpr::parse(&text) {
-                    let child_dir = child.parent().map(Path::to_path_buf);
-                    self.add_sheet_doc(&doc, &child_path, child_dir.as_deref(), None)?;
+            // Cycle and depth guards BEFORE the read: a sheet that references
+            // itself (or a pair that reference each other) would otherwise
+            // recurse until the stack aborts the whole process, which on
+            // `hauksbee serve` is a denial of service rather than a bad parse.
+            // Canonicalize so `sub/../a.kicad_sch` and `a.kicad_sch` are one
+            // key; fall back to the joined path when the file does not exist,
+            // which the read below then reports as a missing sub-sheet.
+            let key = child.canonicalize().unwrap_or_else(|_| child.clone());
+            if self.sheet_depth < MAX_SHEET_DEPTH && self.visited_sheets.insert(key) {
+                if let Ok(text) = std::fs::read_to_string(&child) {
+                    if let Ok(doc) = forge_sexpr::parse(&text) {
+                        let child_dir = child.parent().map(Path::to_path_buf);
+                        self.sheet_depth += 1;
+                        let result =
+                            self.add_sheet_doc(&doc, &child_path, child_dir.as_deref(), None);
+                        self.sheet_depth -= 1;
+                        result?;
+                    }
                 }
-            } else {
-                // Missing sub-sheet file: not fatal, just an incomplete board.
-                let _ = PathBuf::from(&file);
+                // A sub-sheet that cannot be read or parsed is not fatal: the
+                // board is incomplete, not unreadable.
             }
         }
         Ok(())

@@ -1915,10 +1915,8 @@ mod tests {
             ("claude-code", Backend::ClaudeCode),
             ("api", Backend::Api),
         ] {
-            let a = parse_args_from(argv(&[
-                "--pdf", "x.pdf", "--part", "P", "--backend", flag,
-            ]))
-            .unwrap();
+            let a = parse_args_from(argv(&["--pdf", "x.pdf", "--part", "P", "--backend", flag]))
+                .unwrap();
             assert_eq!(a.backend, Some(want), "--backend {flag}");
         }
     }
@@ -1926,7 +1924,12 @@ mod tests {
     #[test]
     fn parse_args_rejects_unknown_backend() {
         let err = parse_args_from(argv(&[
-            "--pdf", "x.pdf", "--part", "P", "--backend", "gemini",
+            "--pdf",
+            "x.pdf",
+            "--part",
+            "P",
+            "--backend",
+            "gemini",
         ]))
         .unwrap_err();
         let msg = err.to_string();

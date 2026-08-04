@@ -21,14 +21,10 @@ const BOARDS: &[(&str, &str, &[u8])] = &[(
 const DECKS: &[(&str, &str, &[u8])] = &[(
     "rlc_ringdown",
     "rlc_ringdown.cir",
-    include_bytes!("../../../../examples/learn/04-time-integration/rlc_ringdown.cir"),
+    include_bytes!("../../../../examples/decks/rlc_ringdown.cir"),
 )];
 
-fn materialize(
-    table: &[(&str, &str, &[u8])],
-    what: &str,
-    name: &str,
-) -> anyhow::Result<PathBuf> {
+fn materialize(table: &[(&str, &str, &[u8])], what: &str, name: &str) -> anyhow::Result<PathBuf> {
     let Some((_, file, bytes)) = table.iter().find(|(n, _, _)| *n == name) else {
         anyhow::bail!(
             "no embedded example {what} named '{name}'. Available: {}",
@@ -71,7 +67,10 @@ mod tests {
     #[test]
     fn ringdown_deck_materializes() {
         let p = deck("rlc_ringdown").unwrap();
-        assert!(std::fs::read_to_string(&p).unwrap().to_lowercase().contains(".tran"));
+        assert!(std::fs::read_to_string(&p)
+            .unwrap()
+            .to_lowercase()
+            .contains(".tran"));
     }
 
     #[test]

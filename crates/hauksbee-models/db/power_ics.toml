@@ -503,3 +503,263 @@ max_voltage_v = 8.0          # VCC abs max (the recommended ceiling is also 8 V,
 max_junction_temp_c = 145.0  # maximum junction temperature; also TLIM, the
                              # constant-temperature-mode setpoint
 theta_ja_c_per_w = 130.0     # stated with the complete-charge-cycle figure
+
+# ── MCP73831: single-cell Li-Ion linear charger, SOT-23-5 ─────────────────────
+#
+# 14 instances across the SparkFun Thing Plus RP2040 and Thing Plus SAMD51. Same
+# shape as the TP4054/TP4056 above: a CC/CV linear charger with an integrated
+# P-channel pass transistor, driving VBAT from VDD at a PROG-programmed current
+# until the cell reaches the fixed float voltage.
+#
+# Source: Microchip MCP73831/2 datasheet DS21984A Rev. A, November 2005.
+#
+# Datasheet figures used (DC CHARACTERISTICS, VDD = VREG(typ)+1 V, IOUT = 10 mA,
+# TA = -5 to 55 C unless noted):
+#   VREG     4.168 / 4.20 / 4.232 V   the -2 voltage code (+-0.75%)
+#   IREG     = 1000 V / RPROG(kOhm) in mA; measured 90/100/110 mA at RPROG=10k
+#            and 450/505/550 mA at RPROG=2.0k
+#   VSTART   3.3 / 3.45 / 3.6 V       UVLO, VDD low-to-high
+#   VSTOP    3.2 / 3.38 / 3.5 V       UVLO, high-to-low; VHYS 70 mV typ
+#   RDSON    350 mOhm typ             internal pass transistor @ VDD=3.75 V,
+#                                     TJ = 105 C
+#   ISS      510 uA typ (1500 max)    charging
+#   ISS      53 uA typ (200 max)      charge complete
+#   ISS      25 uA typ (50 max)       PROG floating, charge disabled
+#   TSD      150 C typ, 10 C hysteresis
+#   VDD      3.75 to 6 V operating; abs max 7.0 V
+#   TJ       -40 to +125 C; theta_JA 230 C/W for the 5-lead SOT-23 (4-layer
+#            JC51-7 board, natural convection)
+#
+# THE VOLTAGE CODE IS ABSENT FROM THE BOARD VALUE, AND THAT IS AN ASSUMPTION
+# THIS ENTRY MAKES KNOWINGLY. Both SparkFun boards carry the value string
+# "MCP73831" with no suffix, and the suffix is what sets the float voltage:
+# -2 = 4.20 V, -3 = 4.35 V, -4 = 4.40 V, -5 = 4.50 V. This entry uses 4.20 V,
+# the standard single-cell Li-Ion/Li-Po float and the overwhelmingly common
+# variant. A board that actually fits a -3/-4/-5 gets a rail modelled 150 to
+# 300 mV LOW. That is a bounded error in a known direction, which is why it is
+# preferred to leaving four boards unresolved, but it IS an assumption and a
+# suffixed value string will always be read literally by the match rule below.
+#
+# DELIBERATELY NOT MODELLED, because the datasheet describes these as behaviours
+# without giving a transfer function a circuit model could carry: the charge
+# state machine (precondition -> fast-charge CC -> CV -> termination -> automatic
+# recharge, Figure 4-1); the thermal-regulation foldback of IREG above the die
+# temperature limit (Figure 4-2 is a curve, not an equation); the C/10-class
+# termination ratio and the selectable 10/20/40/100% precondition ratio, which
+# are factory options rather than pin-settable; and the STAT pin's tri-state
+# timing. None of them changes the steady-state rail a board check asks about.
+[[models]]
+id = "mcp73831"
+kind = "vreg"
+description = "MCP73831 single-cell Li-Ion linear charger (behavioural: CC/CV to a 4.2 V float)"
+
+[models.match]
+# A bare MCP73831 (assumed -2, see above), an explicit -2, or the full
+# -2ACI/OT order code. The -3/-4/-5 codes are NOT matched: they float higher and
+# would need their own entries rather than this one's 4.2 V.
+value_re = "(?i)^MCP73831T?([- ]?2([A-Z]{3}/OT)?)?$"
+
+[models.params]
+vout      = 4.2       # VREG, the -2 code; the regulated cell voltage
+dropout_v = 0.35      # the pass element's own drop. At the 500 mA ceiling and
+                      # RDSON = 350 mOhm typ that is 0.175 V; 0.35 V is carried
+                      # instead because RDSON is specified at TJ = 105 C and a
+                      # hot part drops more, and because erring high here keeps
+                      # the model from claiming headroom the part does not have.
+iq_a      = 0.00051   # ISS typ while charging (53 uA typ once complete)
+
+[models.pins]
+# Table 3-1, SOT-23-5. As with the TP4054 above the role names are the BINDER's
+# vocabulary: the vreg path looks for `out` and `in`, so pin 3 is `out` rather
+# than the datasheet's "VBAT".
+"1" = "stat"     # charge status output
+"2" = "gnd"      # VSS
+"3" = "out"      # VBAT on the datasheet: charge current out to the cell
+"4" = "in"       # VDD on the datasheet: input supply
+"5" = "prog"     # current-program resistor to VSS; floating disables charging
+
+[models.ratings]
+max_current_a = 0.5          # the practical ceiling at RPROG = 2.0 kOhm
+max_voltage_v = 6.0          # recommended operating ceiling (abs max VDD 7.0 V);
+                             # a check should fire on the recommended limit
+max_junction_temp_c = 125.0  # TJ operating max (TSD trips at 150 C typ)
+theta_ja_c_per_w = 230.0     # 5-lead SOT-23, 4-layer JC51-7 board
+
+# ── MCP73833: 1 A single-cell Li-Ion charger, MSOP-10 ─────────────────────────
+#
+# Olimex ESP32-EVB U1 (5 instances). The bigger sibling of the MCP73831 above:
+# same CC/CV architecture, 1 A programmable, plus a thermistor-qualification
+# input and a Power-Good output.
+#
+# Source: Microchip MCP73833/4 datasheet DS20002005C.
+# Datasheet figures used (DC CHARACTERISTICS, VDD = VREG(typ)+1 V, IOUT = 10 mA,
+# TA = -5 to 55 C unless noted):
+#   VREG     4.168 / 4.20 / 4.232 V   the 4.2 V option (+-0.75%); the family also
+#                                     offers 4.35, 4.40, 4.45 and 4.50 V
+#   IREG     = 1000 V / RPROG(kOhm) in mA; 900/1000/1100 mA at RPROG = 1.0k
+#   IMAX     1200 mA typ              output current limit at RPROG < 833 Ohm
+#   VSTART   3.4 / 3.55 / 3.7 V       UVLO rising; VSTOP 3.3/3.45/3.6; VHYS 100 mV
+#   RDSON    300 mOhm typ             pass transistor @ VDD = 3.75 V, TJ = 105 C
+#   ISS      2000 uA typ (3000 max)   charging
+#   ISS      150 uA typ (300 max)     charge complete
+#   ISS      100 uA typ (300 max)     standby, no battery / PROG floating
+#   VT1      1.20 / 1.23 / 1.26 V     thermistor upper trip
+#   VT2      0.235 / 0.25 / 0.265 V   thermistor lower trip
+#   TSD      150 C typ, 10 C hysteresis
+#   VDD      3.75 to 6 V; abs max 7.0 V
+#   TJ       -40 to +125 C; theta_JA 113 C/W for MSOP-10 (41 C/W for the 3x3 DFN)
+#
+# Same voltage-code caveat as the MCP73831: the Olimex value string is
+# "MCP73833(MSOP10)" with no voltage option, and 4.20 V is assumed on the same
+# grounds. Same list of deliberately-unmodelled behaviours, plus two more this
+# part adds: the NTC temperature-qualification window (VT1/VT2 gate charging on
+# a thermistor voltage, which is a comparator on a sensor the model has no shape
+# for) and the selectable 0/4/6/8-hour elapsed safety timer, which is pure
+# digital timing.
+[[models]]
+id = "mcp73833"
+kind = "vreg"
+description = "MCP73833 1A single-cell Li-Ion charger, MSOP-10 (behavioural: CC/CV to 4.2 V)"
+
+[models.match]
+# The Olimex value carries the package in parentheses. The MCP73834 shares this
+# pinout except that pin 7 is TE (timer enable) instead of PG, so it is excluded.
+value_re = "(?i)^MCP73833[A-Z0-9/-]*(\\(MSOP-?10\\))?$"
+
+[models.params]
+vout      = 4.2       # VREG, 4.2 V option assumed; see the note above
+dropout_v = 0.3       # RDSON 300 mOhm typ at TJ = 105 C; at the 1 A ceiling
+                      # that is 0.3 V
+iq_a      = 0.002     # ISS typ while charging (150 uA typ once complete)
+
+[models.pins]
+# Table 3-1, MSOP-10. VDD and VBAT are each doubled up on two pins.
+"1"  = "in"       # VDD
+"2"  = "in2"      # VDD (second bond)
+"3"  = "stat1"
+"4"  = "stat2"
+"5"  = "gnd"      # VSS
+"6"  = "prog"
+"7"  = "pg"       # Power-Good output (TE on the MCP73834)
+"8"  = "therm"    # thermistor input
+"9"  = "out"      # VBAT
+"10" = "out2"     # VBAT (second bond)
+
+[models.ratings]
+max_current_a = 1.0
+max_voltage_v = 6.0          # recommended ceiling (abs max VDD 7.0 V)
+max_junction_temp_c = 125.0
+theta_ja_c_per_w = 113.0     # MSOP-10, 4-layer JC51-7 board
+
+# ── BL4054B: 800 mA single-cell Li-Ion charger, SOT-23-5 ─────────────────────
+#
+# Olimex ESP32-EVB / RP2040-PICO-PC U1 (6 instances), value "BL4054B-42TPRN".
+# Source: Shanghai Belling BL4054/BL4054B datasheet Rev 1.5.
+#
+# THE ORDER CODE DECODES CLEANLY, which is why this entry does not need the
+# assumption the two Microchip chargers above do. Per the datasheet's Ordering
+# Information diagram, "BL4054B-42TPRN" is: 42 = float voltage code 4.2 V (43 and
+# 44 give 4.3 and 4.4 V), T = trickle charge enabled (N would mean disabled),
+# P = standard Pb-free, RN = SOT23-5 package (TRN would be TSOT23-5). The B
+# suffix on the part itself means it skips the power-on battery-voltage recheck
+# that the plain BL4054 performs.
+#
+# Datasheet figures used (Electrical Characteristics, VCC = 5 V, TA = 25 C):
+#   VFLOAT   4.158 / 4.2 / 4.242 V
+#   ICHG     = 1000 V / RPROG; measured 465/500/535 mA at RPROG = 2 kOhm and
+#            93/100/107 mA at 10 kOhm. Datasheet advises keeping IREG > 40 mA.
+#   VTRIKL   2.8 / 2.9 / 3.0 V        trickle threshold; hysteresis 60/100/150 mV
+#   UVLO     3.7 / 3.9 / 4.1 V        hysteresis 150/200/300 mV
+#   VOVP     6.8 / 7.0 / 7.2 V        input over-voltage protect, 200 mV hyst
+#   VRECHRG  4.0 / 4.05 / 4.1 V       automatic recharge threshold
+#   RON      600 mOhm typ             internal pass FET
+#   TLIM     120 C typ                constant-temperature (foldback) mode
+#   ICC      100 uA typ (500 max)     standby; 2000 uA typ charging; 25 uA typ
+#                                     in UVLO or automatic shutdown
+#   VCC      4.25 to 6.5 V recommended; abs max -0.3 to +10 V
+#   TJ max 125 C; theta_JA 250 C/W (SOT23-5) / 220 (TSOT23-5), theta_JC 130 / 110
+#            C/W, "approximately 1 square of 1 oz copper" (Note 4)
+#
+# DELIBERATELY NOT MODELLED: the trickle -> CC -> CV -> standby state machine and
+# the BL4054-vs-BL4054B power-on recheck difference; the thermal foldback, which
+# the datasheet gives as the relation TA = 120 C - PD * theta_JA rather than as a
+# circuit; the ~50 us soft-start ramp; the 0.4 to 4.5 ms comparator filter times;
+# and the CHRGb pin's three-state (strong pull-down / weak pull-down / Hi-Z)
+# output, whose level depends on UVLO and charge state rather than on any fixed
+# I-V curve.
+[[models]]
+id = "bl4054b_42"
+kind = "vreg"
+description = "BL4054B-42 single-cell Li-Ion charger (behavioural: CC/CV to a 4.2 V float)"
+
+[models.match]
+# The 42 voltage code is required: -43 and -44 float 100 and 200 mV higher.
+value_re = "(?i)^BL4054B?-42[A-Z]*(\\(SOT-?23-?5\\))?$"
+
+[models.params]
+vout      = 4.2       # VFLOAT
+dropout_v = 0.48      # RON 600 mOhm typ at the 800 mA rating
+iq_a      = 0.002     # ICC typ while charging (100 uA typ standby)
+
+[models.pins]
+# Pin Description table, SOT23-5 / TSOT23-5. Role names are the binder's, as
+# with the other chargers here.
+"1" = "chrg_n"   # open-drain charge status, pulled down while charging
+"2" = "gnd"
+"3" = "out"      # BAT on the datasheet
+"4" = "in"       # VCC
+"5" = "prog"     # current program / monitor / shutdown
+
+[models.ratings]
+max_current_a = 0.8          # programmable ceiling
+max_voltage_v = 6.5          # recommended operating ceiling. The part's own OVP
+                             # trips at 7.0 V typ and abs max is 10 V, but a
+                             # check should fire at the recommended limit.
+max_junction_temp_c = 125.0
+theta_ja_c_per_w = 250.0     # SOT23-5, ~1 square of 1 oz copper (Note 4)
+theta_jc_c_per_w = 130.0     # SOT23-5
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SUPERVISORS AND THE LED DRIVER DELIBERATELY LEFT UNRESOLVED.
+#
+# NCP303LSN27T1G (onsemi, SOT-23-5) and BD5230G (Rohm, SSOP5) are voltage
+# detectors, and FAN5622SX (onsemi, SuperSOT23-6) is a constant-current LED
+# driver. All three datasheets were read; none of them is modelled, and the
+# reasons are specific rather than a shortage of numbers.
+#
+#   NCP303LSN27T1G: an N-channel OPEN-DRAIN, active-low reset output. The
+#     `comparator` kind requires `out_lo` and `out_hi`, i.e. two DRIVEN levels,
+#     and an open-drain output has no high-side drive at all: its high level is
+#     whatever the board's external pull-up makes it. Stamping an `out_hi` would
+#     invent a driver the part does not contain, and on a board whose pull-up is
+#     missing or wrongly sized that fiction would hide the very fault worth
+#     finding. Its detect DELAY is also externally programmed by a capacitor on
+#     the CD pin (RD = 1.0 MOhm typ internal pull-up), so there is no fixed
+#     figure to carry. Recorded numbers, for whenever an open-drain output kind
+#     exists: VDET- 2.646/2.700/2.754 V, VHYS 0.081/0.135/0.189 V, Iin 0.26 uA
+#     typ below threshold and 0.46 uA above, min operating VIN 0.55-0.80 V, abs
+#     max 12 V, output current 70 mA, theta_JA 250 C/W, TJ max 125 C. Source:
+#     onsemi NCP302/D Rev. 14.5, January 2005. NOTE: on the Olimex boards this
+#     part is a documented no-fit position anyway, value "NA(NCP303LSN27T1G
+#     (SOT-23-5))", so it is correctly ignored there by db/ignore.toml.
+#
+#   BD5230G: same open-drain problem, same external-capacitor delay (CT pin,
+#     RCT 9 MOhm typ). Recorded: VDET 2.970/3.0/3.030 V at 25 C (the "52" prefix
+#     is the open-drain output type and "30" is the 3.0 V threshold, per the
+#     Ordering Information decoder), hysteresis VDET x 0.03/0.05/0.08, IDD1
+#     0.80 uA typ / 2.40 max, IDD2 0.75/2.25 uA, abs max VDD 10 V, PD 540 mW
+#     (SSOP5 on the ROHM standard 70x70x1.6 mm board), -40 to +105 C. Source:
+#     ROHM TSZ02201-0GJG0G300040-1-2 Rev.009, 11 October 2021, read at the
+#     VDET = 3.0 V row of the shared BD52xx/BD53xx family table.
+#
+#   FAN5622SX: its output current is set by an external RSET resistor (5 to
+#     30 mA full scale, e.g. 19.10 kOhm for 15 mA) and then scaled by 32 dimming
+#     steps clocked in over a SINGLE-WIRE DIGITAL PULSE TRAIN on the CTRL pin.
+#     The analog output stage is a current mirror with a ratio of 240 typ from
+#     ISET, which is modellable; the brightness level is a pulse-counted DAC
+#     state, which is not, and without it the output current is undefined rather
+#     than merely approximate. Recorded: VIN 2.7-5.5 V (abs max 6.0 V),
+#     VDROPOUT 50 mV typ at 15 mA / 60 mV at 30 mA, ISD 0.3 uA typ (1.0 max),
+#     IIN 0.4 mA typ (0.8 max) at VIN=3.6 V with ILED=0, UVLO 2.70 V rising /
+#     2.30 falling, TSD 150 C typ with 20 C hysteresis, theta_JA 235 C/W.
+#     Source: Fairchild/onsemi FAN5622/24/26 Rev. 1.0.3, cover dated July 2013.

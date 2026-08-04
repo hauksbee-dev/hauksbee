@@ -149,7 +149,11 @@ fn passing_assertions_emit_no_per_assertion_notice_annotations() {
     // GitHub truncates at 10 notices per step; a 12-assertion green spec would
     // burn the whole budget on PASS lines nobody acts on. Only the rollup
     // notice remains.
-    let r = ci_result((0..12).map(|i| result_named(&format!("a{i}"), true)).collect());
+    let r = ci_result(
+        (0..12)
+            .map(|i| result_named(&format!("a{i}"), true))
+            .collect(),
+    );
     let gh = r.render_github_annotations();
     let notices = gh.matches("::notice").count();
     assert_eq!(notices, 1, "exactly the rollup notice: {gh}");
@@ -162,7 +166,11 @@ fn passing_assertions_emit_no_per_assertion_notice_annotations() {
 
 #[test]
 fn error_annotations_are_capped_with_an_overflow_line_and_the_rollup() {
-    let r = ci_result((0..15).map(|i| result_named(&format!("a{i}"), false)).collect());
+    let r = ci_result(
+        (0..15)
+            .map(|i| result_named(&format!("a{i}"), false))
+            .collect(),
+    );
     let gh = r.render_github_annotations();
     let errors = gh.matches("::error").count();
     // MAX_ERROR_ANNOTATIONS per-assertion + 1 overflow + 1 rollup = 10, which
@@ -218,14 +226,14 @@ fn a_waived_failure_is_visible_but_not_gating_on_every_surface() {
     let junit = r.render_junit();
     assert!(junit.contains("failures=\"0\""), "{junit}");
     assert!(junit.contains("skipped=\"1\""), "{junit}");
-    assert!(
-        junit.contains("<skipped message=\"waived FAIL:"),
-        "{junit}"
-    );
+    assert!(junit.contains("<skipped message=\"waived FAIL:"), "{junit}");
 
     // GitHub: a warning, not an error; the rollup is the green notice.
     let gh = r.render_github_annotations();
-    assert!(gh.contains("::warning title=hauksbee-ci WAIVED FAIL::"), "{gh}");
+    assert!(
+        gh.contains("::warning title=hauksbee-ci WAIVED FAIL::"),
+        "{gh}"
+    );
     assert!(!gh.contains("::error"), "{gh}");
 
     // JSON: the per-result waived field rides along.
@@ -298,7 +306,11 @@ fn an_active_ci_waiver_covers_the_matching_failure_and_nothing_else() {
 
     assert!(results[0].waived.is_some(), "the named finding is covered");
     assert!(
-        results[0].waived.as_deref().unwrap().contains("until 2030-01-01"),
+        results[0]
+            .waived
+            .as_deref()
+            .unwrap()
+            .contains("until 2030-01-01"),
         "the mark carries the expiry: {:?}",
         results[0].waived
     );
