@@ -85,7 +85,11 @@ have their own shape (`arch`, `icount_shift`, mailbox-style `banks`), see
 
 - `platform_repl`: the Renode platform to load. `@platforms/...` paths
   resolve inside the Renode installation. A local `.repl` file path also
-  works.
+  works, as does `@{support}/<name>.repl` for a platform that arrives in a
+  support bundle.
+- `support_bundle` (optional): the name of a bundle of peripheral models to
+  unpack and compile before the platform loads, for a part Renode models not
+  at all. See the last section below.
 - `cpu_path` / `uart`: the platform's names for the CPU and console UART
   (`sysbus.`-qualified, exactly as Renode's monitor addresses them).
 - `frequency_hz`, `expected_e_machine` (`EM_ARM`, `EM_RISCV`, `EM_XTENSA`,
@@ -285,8 +289,23 @@ Two things stay Rust, deliberately (`soc.rs` module docs):
 
 If your part needs a peripheral the Renode platform does not model (an ADC, a
 missing SPI block), `extra_repl`/`extra_setup` can splice in simple
-definitions. A genuinely unmodeled peripheral needs a Renode platform
-contribution, not a hauksbee descriptor field.
+definitions, as long as Renode has the peripheral *class* and the platform
+merely fails to instantiate it.
+
+When Renode has no model of the peripheral at all, and especially when it has
+no platform for your part at all, a `.repl` cannot help: it cannot conjure a
+class the emulator never compiled. That case is what `support_bundle` is for.
+Renode compiles C# at run time, so a bundle carries the `.cs` peripheral models
+themselves, plus whatever data files the platform reads (an SVD, a boot ROM
+image), embedded in the hauksbee binary, unpacked to a temp directory at machine
+creation, and `include`d in a declared dependency order before the platform
+parses. The descriptor then refers to the unpacked directory as `{support}`.
+Registering a new bundle means adding its files and their include order to
+`crates/hauksbee-mcu/src/renode/support.rs`; the shipped example is RP2040,
+whose whole SoC arrives this way (`crates/hauksbee-mcu/db/mcu/rp2040/`,
+provenance and licences in that directory's `README.md`). Budget for the cost:
+the compile happens on every machine creation, and RP2040's ~377 kB of C# adds
+roughly eight seconds of bring-up per run.
 
 ---
 

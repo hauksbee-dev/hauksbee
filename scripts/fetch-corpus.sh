@@ -82,13 +82,33 @@ for b in doc.get("board", []):
         b.get("subdir", ""),
         b.get("license", "unknown"),
         "1" if b.get("license_confirmed", True) else "0",
+        # Where the board lands under the corpus root. Defaults to the id; a
+        # revision pair overrides it so both halves group under one directory.
+        b.get("dest", b["id"]),
+        b.get("sha256", ""),
+        b.get("hoist", ""),
+        b.get("unpack", ""),
         b.get("name", b["id"]),
     ]))
 PY
 }
 
 MANIFEST_LINES="$(read_manifest)"
-DEFAULT_DIR="$(printf '%s\n' "$MANIFEST_LINES" | awk -F'\x1f' '$1=="DEFAULT_DIR"{print $2}')"
+
+# Read DEFAULT_DIR with the same `IFS=$'\x1f' read` the board loop below uses,
+# and for the same reason: portability. This was `awk -F'\x1f'`, and the one-true
+# awk that ships with macOS takes that pattern literally rather than as the
+# separator byte, so the field split never happened, DEFAULT_DIR came back
+# EMPTY, and DIR collapsed to "${HAUKSBEE_ROOT}/" - the repository root. Every
+# board landed loose in the checkout, `board-corpus/` was never created, and so
+# every corpus-gated test skipped while the fetch reported success. Bash's own
+# $'\x1f' is unambiguous on every platform, and it drops the awk dependency.
+DEFAULT_DIR=""
+while IFS=$'\x1f' read -r tag value _rest; do
+  [ "$tag" = "DEFAULT_DIR" ] || continue
+  DEFAULT_DIR="$value"
+done <<< "$MANIFEST_LINES"
+[ -n "$DEFAULT_DIR" ] || die "manifest has no meta.default_dir and none was parsed"
 
 if [ -z "$DIR" ]; then
   DIR="${HAUKSBEE_CORPUS_DIR:-${HAUKSBEE_ROOT}/${DEFAULT_DIR}}"
@@ -181,20 +201,55 @@ fetch_git() {
   # back to its origin without re-reading the manifest.
   printf '%s\n' "$got" > "$dest.partial/.hauksbee-rev"
   rm -rf "$dest.partial/.git"
+  mkdir -p "$(dirname "$dest")"
   mv "$dest.partial" "$dest"
 }
 
+# sha256 of a file, on either a GNU or a macOS box. `sha256sum` is coreutils and
+# absent from a stock macOS; `shasum -a 256` ships with it. Prints the bare hex.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | cut -d' ' -f1
+  else
+    return 1
+  fi
+}
+
+# A zip has no commit to pin, so its sha256 is the pin. This used to be a bare
+# curl-and-unzip with nothing checked, which meant two of the corpus boards were
+# whatever the URL served today while every git-hosted board was pinned to a
+# revision and verified against it. An archive re-published upstream could change
+# our measured results with no trace. Refuse an unpinned zip outright rather than
+# fetch it and hope: a corpus entry that cannot be reproduced is not a pin.
 fetch_zip() {
-  local id="$1" url="$2" dest="$3"
+  local id="$1" url="$2" want_sha="$3" dest="$4"
   command -v curl >/dev/null 2>&1 || die "curl is required for $id"
   command -v unzip >/dev/null 2>&1 || die "unzip is required for $id"
+  if [ -z "$want_sha" ]; then
+    err "$id: zip-hosted boards need a sha256 in corpus.toml; refusing an unverified download"
+    return 1
+  fi
   rm -rf "$dest.partial"
   mkdir -p "$dest.partial"
   local zip="$dest.partial/download.zip"
   curl -fsSL --retry 3 -o "$zip" "$url" || return 1
+  local got_sha
+  got_sha="$(sha256_of "$zip")" || { err "$id: no sha256sum or shasum available to verify the download"; return 1; }
+  if [ "$got_sha" != "$want_sha" ]; then
+    err "$id: sha256 mismatch"
+    err "  expected $want_sha"
+    err "  got      $got_sha"
+    err "  the upstream archive changed, or the download was corrupted. Do not"
+    err "  update the hash without establishing which."
+    return 1
+  fi
   unzip -q -o "$zip" -d "$dest.partial" || return 1
   rm -f "$zip"
-  printf '%s\n' "$url" > "$dest.partial/.hauksbee-rev"
+  # Record the pin, not just the URL: a URL alone cannot be checked later.
+  printf '%s\nsha256:%s\n' "$url" "$want_sha" > "$dest.partial/.hauksbee-rev"
+  mkdir -p "$(dirname "$dest")"
   mv "$dest.partial" "$dest"
 }
 
@@ -209,7 +264,7 @@ else
   mkdir -p "$DIR"
 fi
 
-while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed name; do
+while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed dest_rel sha256 hoist unpack name; do
   [ "$tag" = "BOARD" ] || continue
   wanted "$id" || continue
   total=$((total + 1))
@@ -229,29 +284,114 @@ while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed name; do
     continue
   fi
 
-  dest="$DIR/$id"
+  dest="$DIR/${dest_rel:-$id}"
   if [ -d "$dest" ] && [ "$FORCE" = 0 ]; then
     ok "$id already present"
     skipped=$((skipped + 1))
     continue
   fi
   if [ "$FORCE" = 1 ]; then rm -rf "$dest"; fi
+  mkdir -p "$(dirname "$dest")"
 
-  info "$id  <- $url${rev:+ @ $rev}"
+  # Name the destination when the manifest overrode it, and say when the pin is a
+  # hash rather than a revision. Both are visible in the log rather than
+  # something you have to go and look up in corpus.toml.
+  where=""
+  [ "$dest_rel" = "$id" ] || where=" -> $dest_rel"
+  info "$id$where  <- $url${rev:+ @ $rev}${sha256:+ @ sha256:${sha256:0:12}}"
   case "$kind" in
-    git) fetch_git "$id" "$url" "$rev" "$dest" || { failed=$((failed+1)); FAILED_IDS+=("$id"); rm -rf "$dest.partial"; warn "$id FAILED"; continue; } ;;
-    zip) fetch_zip "$id" "$url" "$dest"       || { failed=$((failed+1)); FAILED_IDS+=("$id"); rm -rf "$dest.partial"; warn "$id FAILED"; continue; } ;;
+    git) fetch_git "$id" "$url" "$rev" "$dest"          || { failed=$((failed+1)); FAILED_IDS+=("$id"); rm -rf "$dest.partial"; warn "$id FAILED"; continue; } ;;
+    zip) fetch_zip "$id" "$url" "$sha256" "$dest"       || { failed=$((failed+1)); FAILED_IDS+=("$id"); rm -rf "$dest.partial"; warn "$id FAILED"; continue; } ;;
     *) warn "$id: unknown kind '$kind'"; failed=$((failed+1)); FAILED_IDS+=("$id"); continue ;;
   esac
+
+  # `subdir`: only this part of a large upstream is wanted. KiCad's own
+  # repository is the case that forced this. The manifest has said
+  # `subdir = "demos"` since the entry was added and nothing acted on it, so the
+  # fetch pulled in KiCad's `qa/` tree too, and the zero-shorts corpus gate then
+  # ran over boards whose entire purpose is to reproduce a KiCad bug
+  # (issue14559, issue5750, vme-wren). Those are not known-good hardware; they
+  # are regression fixtures, and grading a false-positive gate on them is a
+  # category error. Everything outside the subtree goes. The subtree LEVEL stays
+  # (`kicad_demos/demos/<project>`), because that is the path the corpus tests
+  # resolve.
+  if [ -n "$subdir" ] && [ -d "$dest/$subdir" ]; then
+    find "$dest" -mindepth 1 -maxdepth 1 \
+      ! -name "$subdir" ! -name '.hauksbee-rev' \
+      ! -iname 'LICENSE*' ! -iname 'COPYING*' ! -iname 'README*' \
+      -exec rm -rf {} + 2>/dev/null || true
+  fi
+
+  # `hoist`: the upstream keeps the design one level down, and the corpus does
+  # not. The ZSWatch DevKit revisions ship as `<repo>/devkit/*` (and `dev-kit/*`
+  # at 1.1.0) while every test asks for `zswatch_devkit/v1.2.0/<file>`, so a
+  # fetched corpus had the boards on disk and no test could find one. Lift the
+  # subtree's contents into the board directory.
+  if [ -n "$hoist" ] && [ -d "$dest/$hoist" ]; then
+    # A dotglob-safe move: `mv "$dest/$hoist"/* ` misses dotfiles and breaks on
+    # a name with a space, both of which occur in this corpus.
+    find "$dest/$hoist" -mindepth 1 -maxdepth 1 -exec mv -f {} "$dest/" \; 2>/dev/null || true
+    rmdir "$dest/$hoist" 2>/dev/null || true
+  fi
+
+  # `unpack`: the board is published as an archive inside a repository, and the
+  # archive IS the board. The Inkplate 6 is the case: the repo carries the films
+  # only as `Schematics, Gerber, BOM/v1.0/... .zip`, so a fetched corpus had a zip
+  # where the reverse-extraction test wanted a directory of films.
+  #
+  # The rest of the repository then goes, and that is the point rather than
+  # tidiness. Inkplate's repo also ships a 3D-printed-case project with its own
+  # F_Cu/B_Cu films; left in place they sat in the same directory as the main
+  # board's, and the gerber reader read FOUR copper layers on a two-layer board.
+  # A reverse-extraction directory holds one board's films or it holds nonsense.
+  if [ -n "$unpack" ] && [ -f "$dest/$unpack" ]; then
+    if command -v unzip >/dev/null 2>&1; then
+      unpack_tmp="$dest/.hauksbee-unpack"
+      rm -rf "$unpack_tmp"
+      mkdir -p "$unpack_tmp"
+      if unzip -q -o -j "$dest/$unpack" -d "$unpack_tmp" 2>/dev/null; then
+        find "$dest" -mindepth 1 -maxdepth 1 \
+          ! -name '.hauksbee-unpack' ! -name '.hauksbee-rev' \
+          ! -iname 'LICENSE*' ! -iname 'COPYING*' ! -iname 'README*' \
+          -exec rm -rf {} + 2>/dev/null || true
+        find "$unpack_tmp" -mindepth 1 -maxdepth 1 -exec mv -f {} "$dest/" \; 2>/dev/null || true
+      else
+        warn "$id: could not unpack $unpack"
+      fi
+      rm -rf "$unpack_tmp"
+    else
+      warn "$id: unzip is absent, leaving $unpack packed"
+    fi
+  fi
+
+  # AppleDouble junk. Archives zipped on a Mac carry a `__MACOSX/` tree and a
+  # `._<name>` resource-fork stub beside every file, and `unzip` writes both. The
+  # Inkplate gerber zip is one: `._EPD_board.GTL` sorted alongside the real film,
+  # the gerber reader picked it up as a layer, and reverse-extraction died on
+  # "stream did not contain valid UTF-8". These are not data on any platform.
+  find "$dest" -name '__MACOSX' -type d -exec rm -rf {} + 2>/dev/null || true
+  find "$dest" -name '._*' -type f -delete 2>/dev/null || true
+
+  # KiCad's own auto-backup directories. The LumenPnP motherboard ships six
+  # historical copies of mobo.kicad_sch under `mobo-backups/`, and a corpus sweep
+  # that walks every design file would grade the tool on five stale revisions of
+  # one board and report the count as coverage. They are not boards; they are
+  # undo history.
+  find "$dest" -type d -name '*-backups' -exec rm -rf {} + 2>/dev/null || true
 
   # Keep only the design files and the paperwork. Upstream repos carry 3D
   # models, production archives and firmware that we never read, and that turn
   # a lean corpus into gigabytes.
+  #
+  # `*.TXT` is case-sensitive on purpose: it is Altium's drill-file extension
+  # (the Inkplate's EPD_board-RoundHoles.TXT and its slot files), and the gerber
+  # reader cannot stitch layers without it. Matching case-insensitively would
+  # drag in every readme.txt and changelog.txt in every upstream.
   find "$dest" -type f \
     ! -iname '*.kicad_pcb' ! -iname '*.kicad_sch' ! -iname '*.kicad_pro' \
     ! -iname '*.sch' ! -iname '*.brd' ! -iname '*.net' ! -iname '*.PcbDoc' \
     ! -iname '*.d356' ! -iname '*.art' ! -iname '*.g?[lb]' ! -iname '*.drl' \
-    ! -iname '*.gbr' ! -iname '*.zip' ! -iname '*.7z' \
+    ! -iname '*.gbr' ! -iname '*.zip' ! -iname '*.7z' ! -name '*.TXT' \
     ! -iname 'LICENSE*' ! -iname 'COPYING*' ! -iname 'README*' \
     ! -name '.hauksbee-rev' \
     -delete 2>/dev/null || true

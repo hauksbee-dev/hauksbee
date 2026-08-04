@@ -31,6 +31,12 @@ tempfile = { workspace = true }
 
 [dev-dependencies]
 forge-sexpr = { workspace = true }
+# The coverage ratchet needs to find the board corpus, which is not in this
+# repository. hauksbee-testkit is the shared locator, and it is the only thing
+# the corpus tests take from outside this crate: the ratchet reads board files
+# itself rather than depending on hauksbee-extract, which would be a
+# dev-dependency cycle (extract depends on this crate).
+hauksbee-testkit = { path = "../hauksbee-testkit" }
 
 [lints]
 workspace = true

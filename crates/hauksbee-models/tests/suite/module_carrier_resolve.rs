@@ -3,9 +3,10 @@
 //! chips (RP2040, STM32H750) would have bound, costing identification and
 //! lint coverage. These tests pin the module entries: the common KiCad/BOM
 //! value spellings resolve, the entry names the MCU it wraps, and the co-sim
-//! story stays honest, a "none:<family>" backend token (no emulator models
-//! either part in this tool) instead of a silent fall-through to the
-//! wrong-ISA simavr default or an invented emulator string.
+//! story stays honest: the Pico carries the real `renode:rp2040` backend it can
+//! now back, the Daisy Seed carries a "none:<family>" token because no STM32H7
+//! descriptor exists. Either way, never a silent fall-through to the wrong-ISA
+//! simavr default and never an invented emulator string.
 
 use hauksbee_models::{ComponentKind, ComponentQuery, ModelLibrary};
 
@@ -23,14 +24,15 @@ fn resolve_value(value: &str) -> Option<hauksbee_models::ModelEntry> {
 /// The Raspberry Pi product code (SC0918 = Pico W) is what distributor BOMs
 /// carry as the value; it must bind, not go UNRESOLVED.
 #[test]
-fn pico_product_code_sc0918_binds_with_honest_no_cosim_backend() {
+fn pico_product_code_sc0918_binds_with_rp2040_cosim_backend() {
     let model = resolve_value("SC0918").expect("SC0918 (Pico W) should resolve");
     assert_eq!(model.id, "rpi_pico");
     assert_eq!(model.kind, ComponentKind::Mcu);
-    // Honesty: nothing in this tool emulates the RP2040, so the entry must say
-    // so with the explicit none: token (the scheduler refuses it loudly),
-    // never a real backend string it cannot back.
-    assert_eq!(model.params.get_str("backend"), Some("none:rp2040"));
+    // The module routes to the same descriptor as the bare chip: RP2040 co-sim
+    // is real (support-bundle platform, proven GPIO/UART/ADC/I2C), so the entry
+    // names the backend rather than the honest-refusal none: token it carried
+    // while no platform existed.
+    assert_eq!(model.params.get_str("backend"), Some("renode:rp2040"));
     // And never the Arduino-header role mapping, which d-name modules opt into.
     assert_ne!(model.params.get_bool("module"), Some(true));
 }
@@ -38,7 +40,13 @@ fn pico_product_code_sc0918_binds_with_honest_no_cosim_backend() {
 /// The common schematic value spellings all land on the same entry.
 #[test]
 fn pico_value_spellings_bind() {
-    for value in ["Pico", "RPi_Pico", "RPi_Pico_WH", "Raspberry Pi Pico", "SC0915"] {
+    for value in [
+        "Pico",
+        "RPi_Pico",
+        "RPi_Pico_WH",
+        "Raspberry Pi Pico",
+        "SC0915",
+    ] {
         let model = resolve_value(value)
             .unwrap_or_else(|| panic!("{value:?} should resolve, not UNRESOLVED"));
         assert_eq!(model.id, "rpi_pico", "{value:?} bound the wrong entry");

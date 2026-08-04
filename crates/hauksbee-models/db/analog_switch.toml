@@ -96,3 +96,318 @@ vth  = 1.3     # control threshold (V) at Vcc=2.7V conservative
 [models.ratings]
 max_pin_current_a = 0.025
 max_voltage_v = 7.0
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Load switches and bidirectional pass-gate level translators.
+#
+# These four parts arrive here rather than in digital.toml for one reason worth
+# stating: their datasheets say, in their own words, that they are pass gates
+# and NOT logic. TI's TXS0108E sheet (section 7.3.1) reads "This design does not
+# need a direction-control signal... uses pass gate architecture with edge rate
+# accelerators (one shots)", and NXP/Nexperia's NTS0104 sheet (section 14.2)
+# reads "a pass-gate transistor (N-channel) that ties the ports together" plus
+# "an output edge-rate accelerator (one-shot)". A part like that has no boolean
+# function of its input pins, so modelling it as a `digital` entry with a logic
+# block would be a fabrication of exactly the kind this database refuses.
+# `analog_switch` is the honest shape: a resistance between two nodes, gated by
+# a control threshold.
+#
+# WHAT THE PASS-GATE ENTRIES BELOW ALL LEAVE OUT, said once: the edge-rate
+# accelerators (one-shots) and the dynamically switched internal pull-ups. Those
+# are what make these parts work on a real bus, and they are transient
+# mechanisms with no steady-state resistance to stamp. What is modelled is the
+# DC conduction path and the enable threshold, which is what tells a board check
+# whether a translated net is connected at all and how much series resistance it
+# has. Signal integrity through these parts is NOT modelled.
+#
+# ON `roff` IN THIS FILE: none of these datasheets publishes an off-state
+# resistance or an off-state leakage current, so no `roff` below is a datasheet
+# figure. Each is a deliberately conservative floor, chosen so that the off path
+# is orders of magnitude above any impedance on the boards these sit on and the
+# result is therefore insensitive to the exact value. They are labelled as such
+# at each use. This is the same convention the two TI entries above already use.
+
+# ── AP22815 / AP22615A: current-limited load switches ────────────────────────
+#
+# Source: Diodes Incorporated AP22815/AP22615 datasheet, document DS41022
+#   Rev. 6-2, April 2023. One datasheet covers both parts; they share the switch
+#   die and differ in package and in whether the current limit is fixed
+#   (AP22815) or set by an external RLIM resistor (AP22615).
+#
+# Datasheet figures used:
+#   RDS(on)  40 mOhm typ            @ VIN = 5.0 V, IOUT = 1 A
+#   ILIMIT   3.1 / 3.6 / 4.2 A      AP22815 fixed, @ VIN=5 V, VOUT=4 V; the
+#                                   AP22615 hits the same band at RLIM=1.94k and
+#                                   scales as ILIM(A) = 6800 / RLIM(Ohm) down to
+#                                   1 A typ at RLIM = 6.8k
+#   short-circuit current 1 A typ   output shorted to ground
+#   IQ       300 uA typ             enabled, OUT open
+#   ISHDN    0.1 uA typ (10 uA max) disabled, OUT open
+#   VIN      3.0 to 5.5 V operating; abs max -0.3 to 6.0 V
+#   VIH      1.2 V min (to VIN);  VIL 0.4 V max
+#   tD(ON) 2.2 ms typ, tR 1.9 ms typ, tD(OFF) 0.02 ms typ, tF 0.2 ms typ
+#            @ CL = 10 uF, RLOAD = 10 Ohm, VIN = 5 V
+#   UVLO 2.1 / 2.5 / 2.9 V rising, 180 mV hysteresis
+#   OVP  5.5 / 5.7 / 5.9 V on VOUT rising
+#   TSD  140 C typ, 35 C hysteresis; TJ abs max 150 C
+#   theta_JA 85 C/W (TSOT25) / 80 C/W (TSOT26); theta_JC 32 / 30 C/W
+#            (JEDEC 51-7, 4-layer board)
+#
+# ENABLE POLARITY IS AN ORDERING OPTION, and the value string on a board usually
+# does not carry it. Per the Ordering Information section, the "A" suffix is
+# active-HIGH enable and "B" is active-LOW: AP22815AWT-7 vs AP22815BWT-7,
+# AP22615AWU-7 vs AP22615BWU-7. The corpus value strings are "AP22815" (bare)
+# and "AP22615A", so the AP22615A is unambiguous and the bare AP22815 is not.
+# `vth` below is the active-high VIH either way; a board that fits a B part has
+# the sense of its enable inverted relative to this model, which will show as
+# the switch being off when the board intends it on. That is a visible,
+# diagnosable disagreement rather than a silent one.
+#
+# NOT MODELLED: the current limit itself (an ideal switch resistance has none),
+# the soft-start ramp, UVLO, output over-voltage protection, thermal shutdown,
+# and the FLG fault output. These are the part's whole reason for existing on a
+# USB port, and none of them is a resistance.
+[[models]]
+id = "ap22815"
+kind = "analog_switch"
+description = "AP22815 current-limited load switch, 40 mOhm, TSOT25 (Diodes Inc)"
+
+[models.match]
+value_re = "(?i)^AP22815[AB]?[A-Z0-9-]*$"
+
+[models.params]
+ron  = 0.04      # RDS(on) typ @ VIN = 5.0 V, IOUT = 1 A
+roff = 5.0e7     # NOT A DATASHEET FIGURE. Conservative floor from ISHDN
+                 # 0.1 uA typ at 5 V, which is 5e7 Ohm of equivalent leakage.
+vth  = 1.2       # EN VIH min, active-high ordering option; see the note above
+[models.pins]
+# Pinout, TSOT25 (5-pin). Pin 5 is IN; the ISET pin does not exist on this part.
+"1" = "com"      # OUT
+"2" = "vss"      # GND
+"3" = "flg"      # open-drain fault flag
+"4" = "ctrl"     # EN
+"5" = "s0"       # IN
+[models.ratings]
+max_pin_current_a = 2.0   # continuous through the switch, below the 3.1 A min
+                          # current-limit trip
+max_voltage_v = 6.0       # VIN abs max (3.0 to 5.5 V operating)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 85.0   # TSOT25, JEDEC 51-7 4-layer board
+theta_jc_c_per_w = 32.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ap22615a"
+kind = "analog_switch"
+description = "AP22615A adjustable current-limited load switch, 40 mOhm, TSOT26"
+
+[models.match]
+# The A suffix is the active-high enable variant and is what the corpus carries.
+value_re = "(?i)^AP22615A[A-Z0-9_-]*$"
+
+[models.params]
+ron  = 0.04      # same switch die as the AP22815 above
+roff = 5.0e7     # NOT A DATASHEET FIGURE; same conservative floor, see above
+vth  = 1.2       # EN VIH min, active high (the A suffix)
+[models.pins]
+# Pinout, TSOT26 (6-pin): the ISET pin is what the extra pin buys.
+"1" = "com"      # OUT
+"2" = "vss"      # GND
+"3" = "flg"
+"4" = "ctrl"     # EN
+"5" = "iset"     # RLIM to GND sets the limit: ILIM(A) = 6800 / RLIM(Ohm)
+"6" = "s0"       # IN
+[models.ratings]
+max_pin_current_a = 2.0
+max_voltage_v = 6.0
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 80.0   # TSOT26
+theta_jc_c_per_w = 30.0
+
+# ── PCA9306: dual bidirectional I2C voltage-level translator ─────────────────
+#
+# Source: Texas Instruments PCA9306 datasheet SCPS113O, October 2004, revised
+#   September 2023.
+#
+# A pure analog bidirectional switch with no direction pin: "allows
+# bidirectional voltage translations... without the use of a direction pin"
+# (Overview). Of the three pass-gate parts in this file it is the cleanest fit
+# for the `analog_switch` kind, because it has no one-shots at all, just the
+# switch and its EN gate.
+#
+# ON-RESISTANCE, AND A DISCREPANCY IN THE DATASHEET ITSELF. The feature bullets
+# claim "<3.5 Ohm", and that figure is not reproduced anywhere in the actual RON
+# table. The table's rows are:
+#   RON typ 25.5 / max 32 Ohm    @ VI = 0, IO = 15 mA,  EN = 1.5 V
+#   RON typ 3.5  / max 5.5 Ohm   @ VI = 0, IO = 64 mA,  EN = 4.5 V
+# i.e. the headline number is the high-EN, high-current row. `ron` below carries
+# the 1.5 V EN row (25.5 Ohm), because that is the row an EN driven from a 1.8 V
+# or 3.3 V logic rail actually operates on, and it is the pessimistic one. A
+# board that ties EN to 4.5 V or above gets a switch modelled ~7x more resistive
+# than it is, which errs toward reporting a marginal I2C rise time rather than
+# hiding one.
+#
+# Other datasheet figures used:
+#   VREF1 / VREF2  0 to 5.5 V operating; abs max -0.5 to 7 V
+#   EN active HIGH: "When EN is high, the translator switch is ON"
+#   VIK (EN input clamp) -1.2 V max; IIH(EN) 5 uA max at VI = 5 V
+#   IREF 5 uA max
+#   tPLH 0.8 ns max, tPHL 1.2 ns max @ EN = 3.3 V, translating down, CL = 50 pF
+#   Cio(off) 6 pF max, Cio(on) 12.5 pF max
+#   continuous channel current 128 mA abs max; IPASS 64 mA recommended max
+#   TJ max 125 C; theta_JA 275.5 C/W (DCU / VSSOP-8)
+#
+# PACKAGE NOTE: the corpus value string is "PCA9306JK", and TI's PCA9306 has NO
+# "JK" package option. The orderable packages are DCT (SSOP-8), DCU (VSSOP-8),
+# DQE (X2SON-8) and YZT (DSBGA-8). All four share an identical pinout, which is
+# why the mismatch is harmless here and the pin map below is correct regardless;
+# but the value string is a part-number error on the board, and the thermal
+# figure carried below is the DCU one.
+#
+# NOT MODELLED: this part supplies no pull-ups of its own (SDA/SCL are open-drain
+# I2C lines pulled up by the board), and it publishes no VOH/VOL, VIH/VIL or
+# quiescent supply current at all because it drives nothing. `vth` below is the
+# EN pin's threshold, not a data-path threshold.
+[[models]]
+id = "pca9306"
+kind = "analog_switch"
+description = "PCA9306 dual bidirectional I2C level translator (pass gate), VSSOP-8"
+
+[models.match]
+value_re = "(?i)^PCA9306[A-Z0-9]*$"
+
+[models.params]
+ron  = 25.5      # RON typ @ EN = 1.5 V, IO = 15 mA (32 Ohm max). See above for
+                 # why this row rather than the 3.5 Ohm feature bullet.
+roff = 1.0e9     # NOT A DATASHEET FIGURE: this sheet publishes no off-state
+                 # leakage or resistance. Conservative floor, matching the
+                 # convention of the two TI entries at the top of this file.
+vth  = 1.5       # EN threshold. TI publishes no VIH/VIL for EN; 1.5 V is the
+                 # EN level its own RON table is characterised at, so it is the
+                 # one voltage the datasheet actually commits to for this pin.
+[models.pins]
+# DCT / DCU / DQE pinout (identical numbering across all three).
+"1" = "vss"      # GND
+"2" = "vref1"    # low-side reference
+"3" = "s0"       # SCL1
+"4" = "s1"       # SDA1
+"5" = "com"      # SDA2
+"6" = "com2"     # SCL2
+"7" = "vref2"    # high-side reference
+"8" = "ctrl"     # EN, active high
+[models.ratings]
+max_pin_current_a = 0.064  # IPASS recommended max (128 mA abs max)
+max_voltage_v = 7.0        # abs max on VREF1/VREF2 (0 to 5.5 V operating)
+max_junction_temp_c = 125.0
+theta_ja_c_per_w = 275.5   # DCU / VSSOP-8
+
+# ── TXS0108E: 8-bit bidirectional pass-gate level translator ─────────────────
+#
+# MNT Reform. Source: Texas Instruments TXS0108E datasheet SCES642L, December
+#   2007, revised November 2024.
+#
+# Section 7.3.1, verbatim: "This design does not need a direction-control
+# signal... uses pass gate architecture with edge rate accelerators (one
+# shots)." So this is a switch, not a buffer, and the entry is here rather than
+# in digital.toml for that reason.
+#
+# Datasheet figures used:
+#   pass-gate on-resistance   300 to 500 Ohm ("on the order of"), section 7.3.1
+#   internal pull-ups         RPUA / RPUB, 40 kOhm while the output drives low
+#                             and 4 kOhm while it drives high, switched by the
+#                             one-shot circuitry; disabled when OE is low
+#   OE                        active HIGH; VIH 0.65 x VCCA min, VIL 0.35 x VCCA
+#                             max. Enable time 200 ns max, disable 400 ns max.
+#   VCCA 1.4 to 3.6 V, VCCB 1.65 to 5.5 V, VCCA <= VCCB always
+#   abs max VCCA -0.5 to 4.6 V, VCCB -0.5 to 6.5 V
+#   ICCA + ICCB 8 uA max over the 1.5-3.6 / 2.3-5.5 V range
+#   tPHL/tPLH 3.8 to 4.2 ns max, VCCA = VCCB = 3.3 V, push-pull driving
+#   IO +-50 mA abs max; continuous through VCCA/VCCB/GND +-100 mA
+#   TJ max 150 C; theta_JA 88.9 C/W (PW / TSSOP-20)
+#
+# `ron` = 400 Ohm, the midpoint of the datasheet's own 300-to-500 range. That
+# range is the whole of what TI publishes for the conduction path: there is no
+# RON table, no test condition, and no min/typ/max, so 400 is a midpoint of a
+# stated interval rather than a measured typical, and any result that turns on
+# the difference between 300 and 500 Ohm should not be trusted from this model.
+#
+# NOT MODELLED, and on this part the omission is large: the one-shots are what
+# let the pass gate drive a bus at all, and the 4k/40k dynamic pull-ups are what
+# hold a line high. Without them this entry represents a 400 Ohm resistor per
+# channel gated by OE. That is enough to answer "is this net connected through
+# the translator, and what series resistance does it see", and it is NOT enough
+# to answer anything about rise time, drive strength or bus contention. All eight
+# channels are independent here; nothing couples them.
+[[models]]
+id = "txs0108e"
+kind = "analog_switch"
+description = "TXS0108E 8-bit bidirectional level translator (pass gate only), TSSOP-20"
+
+[models.match]
+value_re = "(?i)^TXS0108E[A-Z]{0,4}R?$"
+
+[models.params]
+ron  = 400.0     # midpoint of the datasheet's stated 300-500 Ohm pass-gate
+                 # range; see the note above, this is an interval midpoint
+roff = 1.0e9     # NOT A DATASHEET FIGURE; conservative floor
+vth  = 2.145     # OE VIH min = 0.65 x VCCA, evaluated at VCCA = 3.3 V
+[models.pins]
+# PW (TSSOP-20).
+"1"  = "s0"     # A1
+"2"  = "vcca"
+"3"  = "s1"     # A2
+"4"  = "s2"     # A3
+"5"  = "s3"     # A4
+"6"  = "s4"     # A5
+"7"  = "s5"     # A6
+"8"  = "s6"     # A7
+"9"  = "s7"     # A8
+"10" = "ctrl"   # OE, active high
+"11" = "vss"    # GND
+"12" = "com7"   # B8
+"13" = "com6"   # B7
+"14" = "com5"   # B6
+"15" = "com4"   # B5
+"16" = "com3"   # B4
+"17" = "com2"   # B3
+"18" = "com1"   # B2
+"19" = "vccb"
+"20" = "com"    # B1
+[models.ratings]
+max_pin_current_a = 0.05   # IO abs max
+max_voltage_v = 6.5        # VCCB abs max (VCCA is 4.6 V)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 88.9    # PW / TSSOP-20
+
+# ═════════════════════════════════════════════════════════════════════════════
+# NTS0104GU12 DELIBERATELY LEFT UNRESOLVED.
+#
+# Nexperia's (originally NXP's) 4-bit dual-supply translator, XQFN-12, on the
+# ZSWatch boards. Architecturally it is the same animal as the TXS0108E above
+# and would belong here: section 14.2 of the datasheet describes "a pass-gate
+# transistor (N-channel) that ties the ports together" plus "an output edge-rate
+# accelerator (one-shot)", and each port carries an internal 10 kOhm pull-up to
+# its own VCC, disabled when OE is low.
+#
+# IT IS NOT MODELLED BECAUSE THE DATASHEET PUBLISHES NO ON-RESISTANCE. Not a
+# table row, not a range, not a test condition. The `analog_switch` kind's
+# defining parameter is `ron`, and the one number this entry would need is the
+# one number the sheet does not contain. Everything else about the part is
+# documented and none of it substitutes: VOH min 0.67 x VCCO at IO = 20 uA and
+# VOL max 0.4 V at IO = 1 mA describe the port levels, not the pass path.
+#
+# Recorded, from NXP "NTS0104" Rev. 3, 3 January 2012 (the current revision;
+# Nexperia inherited the design unchanged), for whenever a figure turns up:
+#   OE active HIGH, VIH 0.65 x VCC(A) min, VIL 0.35 x VCC(A) max; ten 200 ns max,
+#     tdis 35 ns max (-40 to 85 C)
+#   internal pull-ups 10 kOhm to VCC(A) on the A ports and to VCC(B) on the B
+#     ports, disabled when OE is low
+#   VCC(A) 1.65 to 3.6 V, VCC(B) 2.3 to 5.5 V, VCC(A) <= VCC(B) required;
+#     abs max both -0.5 to +6.5 V
+#   ICC(A) 2.4 uA max, ICC(B) 12 uA max, sum 14.4 uA max
+#   tPHL/tPLH 2.6 to 4.4 ns max at VCC(A) = VCC(B) = 3.3 V
+#   IO 50 mA max, ICC / IGND 100 mA max, Ptot 250 mW
+#   pin map, GU12 (XQFN-12): 1=VCC(A) 2=A1 3=A2 4=A3 5=A4 6=GND 7=B4 8=B3 9=B2
+#     10=B1 11=VCC(B) 12=OE
+#   no TJ max and no theta_JA published in this revision

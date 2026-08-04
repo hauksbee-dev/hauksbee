@@ -45,13 +45,19 @@ mod protel_ascii;
 pub mod reader;
 pub mod resource_conflict;
 mod schematic;
+/// Whether a parsed `.kicad_sch` is the ROOT of its hierarchy rather than a
+/// sub-sheet. Exported because the distinction decides whether a file can be
+/// extracted at all (a sub-sheet is refused, since its connectivity is only
+/// complete when read through its root), so a caller or a test needs to be able
+/// to ask the same question the reader asks.
+pub use schematic::is_root_sheet as schematic_is_root;
 pub mod si;
 pub mod trace_current;
 
 pub use drc::{
-    clearance_rules_from_kicad_pro, drc_from_text, eagle_drc_from_text, run_drc,
+    clearance_rules_from_kicad_pro, drc_from_text, eagle_drc_from_text, is_touching, run_drc,
     run_drc_with_clearance_rules, ClearanceRules, DrcFinding, DrcReport, Item, ItemKind,
-    NetClassRule, ViolationKind, DEFAULT_CLEARANCE_MM,
+    NetClassRule, ViolationKind, DEFAULT_CLEARANCE_MM, SHORT_TOUCH_EPS_MM,
 };
 pub use netlint::{render_netlint, LintCheck, LintFinding, NetLintReport, Severity};
 pub use si::{
@@ -75,6 +81,13 @@ pub enum ExtractError {
     Parse(#[from] forge_sexpr::ParseError),
     #[error("xml: {0}")]
     Xml(String),
+    /// The file parsed as its format but carries content that cannot be
+    /// analysed truthfully, so continuing would produce a confident wrong
+    /// answer rather than an error (a coordinate that is not a finite number is
+    /// the case this exists for). Already phrased as a whole human sentence,
+    /// including what to do next.
+    #[error("{0}")]
+    Corrupt(String),
     #[error("altium: {0}")]
     Altium(String),
     /// An ODB++ job input problem, already phrased as a whole human sentence.
@@ -100,6 +113,46 @@ pub enum ExtractError {
     /// A caller-supplied reference designator does not exist on the board.
     #[error("{0}")]
     UnknownReference(String),
+    /// A hierarchical sub-sheet was handed over with no parent to be found.
+    ///
+    /// A sub-sheet's hierarchical labels connect to sheet pins in its parent, so
+    /// on its own it reports nets that touch one pin and look floating when they
+    /// are driven from a sibling sheet. Refusing is the honest answer: a netlist
+    /// derived from a fragment would be read as a fact about the board.
+    #[error("{sheet} is a hierarchical sub-sheet, not a complete design. It needs {needs}")]
+    OrphanSubSheet { sheet: String, needs: String },
+}
+
+/// Refuse a file still carrying Git merge-conflict markers.
+///
+/// The s-expression formats swallow these without complaint: `<<<<<<<` and
+/// `>>>>>>>` are legal bare atoms, so a conflicted board parses, both sides of
+/// the conflict land in the netlist at once, and every number in the report is
+/// computed over a board that never existed. The file is not a board yet, and
+/// the fix is to finish the merge, so say exactly that.
+///
+/// The markers are matched at the start of a line with the exact seven-character
+/// run Git writes, so a board with a `<<<` silkscreen label or a `=======`
+/// divider in a comment is unaffected.
+pub(crate) fn reject_merge_conflict(text: &str) -> Result<(), ExtractError> {
+    for (i, line) in text.lines().enumerate() {
+        let is_marker = line.starts_with("<<<<<<< ")
+            || line.starts_with(">>>>>>> ")
+            || line == "======="
+            || line.starts_with("||||||| ");
+        if is_marker {
+            return Err(ExtractError::Corrupt(format!(
+                "this file still has an unresolved Git merge conflict (marker \
+                 '{}' on line {}). Both sides of the conflict are in the file, so \
+                 anything read out of it would describe a board that does not exist. \
+                 Resolve the conflict (`git checkout --theirs`/`--ours`, or open it \
+                 in KiCad and re-save), then retry",
+                line.chars().take(7).collect::<String>(),
+                i + 1
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// One electrical net. `id` is the KiCad net number (0 = the unconnected

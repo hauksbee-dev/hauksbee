@@ -89,6 +89,22 @@ What is honestly missing:
 These are the genuine open limitations the code carries today, each with the
 reason it is open and what would close it.
 
+### A co-sim chunk whose analog solve fails holds stale voltages
+
+The co-sim advances the circuit in chunks. If the analog solver fails to
+converge on a chunk, that chunk's node voltages are the previous chunk's, not a
+solved answer, so every voltage, current and fault reading inside that window is
+fiction. The run says so rather than hiding it: a warning names the failed chunk
+count and the time spans, `--strict` turns it into a failing exit, and the web
+report raises it as a finding on the co-sim card. What it cannot do is give you a
+number for those windows, and it will not invent one.
+
+The usual cause is structural rather than numerical: unresolved active parts
+leaving nodes floating (`hauksbee models --help` lists what is unresolved), a
+stiff or singular section, or conflicting rails. Resolve the parts or simplify
+the offending section and re-run. What would close this is per-chunk fallback
+integration, which is not built.
+
 ### nRF5340 has no co-sim backend
 
 The Renode 1.16.1 portable build ships no nRF5340 platform, so the
@@ -127,11 +143,14 @@ The working coverage first, because the boundary matters: I2C/SPI slave
 co-simulation is exact on AVR (simavr intercepts the hardware TWI/SPI
 in-process); on Renode it runs through generated C# bridge peripherals on
 every platform whose SoC descriptor names bus controllers (STM32F103 `i2c1`/
-`spi1`, STM32F4 Discovery `i2c1`/`spi2`-`spi3`, nRF52840 `twi0`/`twi1`/`spi2`);
-and on QEMU-ESP32 it runs through a firmware mailbox contract. FE310 and RP2040
-declare no bus controllers, so a sensor bound on those platforms is recorded as
-unexercised on every report surface, and a `peripheral` assertion against it
-fails rather than green-passing. Shipped proof: the
+`spi1`, STM32F4 Discovery `i2c1`/`spi2`-`spi3`, nRF52840 `twi0`/`twi1`/`spi2`,
+RP2040 `i2c0`/`i2c1`); and on QEMU-ESP32 it runs through a firmware mailbox
+contract. FE310 declares no bus controllers, and RP2040 declares none for SPI
+because the vendored PL022 model bit-bangs onto GPIO pins and never dispatches
+to a registered slave, so a bridge there would silently see nothing. A sensor
+bound to a bus with no controller is recorded as unexercised on every report
+surface, and a `peripheral` assertion against it fails rather than
+green-passing. Shipped proof: the
 `i2c_sensor_cosim_renode.rs` and `spi_sensor_cosim_renode.rs` integration
 tests in `crates/hauksbee-engine/tests/`.
 

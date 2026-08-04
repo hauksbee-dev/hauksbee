@@ -87,6 +87,111 @@ fn parallel_tracks_within_clearance_are_a_clearance_violation() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// The touching band. Copper that meets is a short; the test for "meets" cannot
+// be `gap > 0.0`, because the gap is measured through a square root in
+// millimetres and an exact meeting can come out a hair positive. A corpus board
+// produced 9.77e-15 mm between two nets and the bare test filed it as a
+// clearance note. These two pin both sides of SHORT_TOUCH_EPS_MM: inside the
+// band is a short, and the finest gap KiCad's nanometre grid can express is
+// still comfortably outside it.
+//
+// The geometry: segment A ends at (1,0), segment B starts at (2,3), so the
+// centreline distance is sqrt(10) = 3.1622776601683795, and the closest approach
+// is endpoint-to-endpoint. The two half-widths are chosen to sum to (almost
+// exactly) that distance, which is how the gap lands in the noise instead of on
+// a round number.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn a_gap_inside_the_touching_band_is_a_short_not_a_clearance_note() {
+    // Half-widths 1.5 + 1.66227766016837065 = sqrt(10) to within ~9e-15 mm.
+    // That is copper meeting copper by any physical reading.
+    let items = r#"
+  (segment (start 0 0) (end 1 0) (width 3.0) (layer "F.Cu") (net 1))
+  (segment (start 2 3) (end 5 7) (width 3.3245553203367413) (layer "F.Cu") (net 2))
+"#;
+    let report = drc(items);
+    let f = report
+        .findings
+        .iter()
+        .find(|f| {
+            let n = [f.net_a_name.as_str(), f.net_b_name.as_str()];
+            n.contains(&"A") && n.contains(&"B")
+        })
+        .expect("A and B are reported against each other");
+    // Strictly POSITIVE and inside the band is the whole point. A gap of exactly
+    // zero would be caught by the old `gap <= 0.0` test too, so this fixture
+    // would not discriminate; a positive one under the band is the case that used
+    // to be filed as a clearance note.
+    assert!(
+        f.gap_mm > 0.0 && f.gap_mm < hauksbee_extract::SHORT_TOUCH_EPS_MM,
+        "the fixture must land strictly inside the touching band on the positive \
+         side, measured {:e}",
+        f.gap_mm
+    );
+    assert_eq!(
+        f.kind,
+        ViolationKind::Short,
+        "copper meeting to within {:e} mm is a SHORT, got {:?}",
+        f.gap_mm,
+        f.kind
+    );
+    assert_eq!(report.short_count(), 1);
+}
+
+#[test]
+fn a_one_nanometre_gap_is_outside_the_touching_band() {
+    // The same geometry with segment B narrowed so the gap is 1e-6 mm: one
+    // nanometre, the smallest non-zero gap a KiCad file can express, and a
+    // thousand times the touching band. It must stay a clearance violation, or
+    // the band would be swallowing real separation.
+    let items = r#"
+  (segment (start 0 0) (end 1 0) (width 3.0) (layer "F.Cu") (net 1))
+  (segment (start 2 3) (end 5 7) (width 3.324553320336759) (layer "F.Cu") (net 2))
+"#;
+    let report = drc(items);
+    assert_eq!(
+        report.short_count(),
+        0,
+        "a one-nanometre gap is separation, not contact: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.gap_mm))
+            .collect::<Vec<_>>()
+    );
+    let f = report
+        .clearance_violations()
+        .find(|f| {
+            let n = [f.net_a_name.as_str(), f.net_b_name.as_str()];
+            n.contains(&"A") && n.contains(&"B")
+        })
+        .expect("still under the 0.2 mm rule, so still a clearance violation");
+    assert!(
+        f.gap_mm > hauksbee_extract::SHORT_TOUCH_EPS_MM,
+        "gap {:e} must be outside the touching band",
+        f.gap_mm
+    );
+}
+
+#[test]
+fn the_touching_predicate_covers_overlap_abutment_and_float_noise() {
+    use hauksbee_extract::{is_touching, SHORT_TOUCH_EPS_MM};
+    // Overlap and exact abutment: contact, and always were.
+    assert!(is_touching(-0.01));
+    assert!(is_touching(0.0));
+    // The measurement that started this: 9.77e-15 mm between two nets on a
+    // corpus board, which the old `gap <= 0.0` test called a clearance note.
+    assert!(is_touching(9.77e-15));
+    // The band is inclusive at its edge, and one ulp past it is separation.
+    assert!(is_touching(SHORT_TOUCH_EPS_MM));
+    assert!(!is_touching(SHORT_TOUCH_EPS_MM * 1.000_001));
+    // KiCad's finest expressible gap, and a real fab clearance: separation.
+    assert!(!is_touching(1e-6));
+    assert!(!is_touching(0.075));
+}
+
 #[test]
 fn well_separated_tracks_report_nothing() {
     // 5 mm apart: no finding at all.

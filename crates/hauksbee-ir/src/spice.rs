@@ -4905,7 +4905,10 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(e.contains("line 3"), "{e}");
-        assert!(e.contains("expected a number but the value is empty"), "{e}");
+        assert!(
+            e.contains("expected a number but the value is empty"),
+            "{e}"
+        );
         // The direct render, independent of any particular deck path.
         let e = SpiceError::BadNumber {
             line: 7,
@@ -4914,7 +4917,10 @@ mod tests {
         }
         .to_string();
         assert!(e.contains("line 7"), "{e}");
-        assert!(e.contains("expected a number but the value is empty"), "{e}");
+        assert!(
+            e.contains("expected a number but the value is empty"),
+            "{e}"
+        );
     }
 
     /// L10: binary input is refused up front with what the loader expected,

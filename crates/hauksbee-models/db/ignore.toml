@@ -1,6 +1,15 @@
-# Components that should be silently ignored during simulation extraction.
-# Mechanical items: mounting holes, logos, test points, fiducials, solder
-# jumpers, and anything else with no electrical model.
+# Components with no device physics to simulate.
+#
+# Two groups, and the difference between them is a real distinction rather than
+# filing convenience. `kind = "ignore"` parts are silently skipped during
+# extraction: mounting holes, logos, test points, fiducials, solder jumpers,
+# switches, and documented no-fit positions. `kind = "connector"` parts (at the
+# end of this file) are NOT skipped; they are named boundaries where the board
+# stops, and their pad map is the useful part.
+#
+# The connector entries live here rather than in a connectors.toml of their own
+# because the built-in database is assembled by an explicit `include_str!` list
+# in src/lib.rs, and adding a file means editing that list.
 
 [[models]]
 id = "mounting_hole"
@@ -8,7 +17,15 @@ kind = "ignore"
 description = "Mechanical mounting hole, no electrical function"
 
 [models.match]
-footprint_re = "(?i)MountingHole"
+# `Mounting[_ ]?Hole` rather than the bare `MountingHole` this rule started with.
+# KiCad's own library is `MountingHole:MountingHole_2.2mm_M2`, camel-cased with no
+# separator, and that is all the original regex matched. House libraries spell it
+# with a separator, and the corpus is full of them: Olimex ships
+# `OLIMEX_Other-FP:Mounting_hole_Shield_3.3mm` on 15 boards (every ESP32-EVB and
+# RP2040-PICO-PC revision), 48 instances that all fell through as unresolved
+# parts on a hole in the copper. `HOLE_M2_TH` and `M2_HOLE_PCB` (the MNT Reform
+# and Lily58 plate libraries) are the same object under another name.
+footprint_re = "(?i)Mounting[_ ]?Hole|(?:^|[:_])HOLE[_ ]|[_ ]HOLE(?:_|$)|PLATED_HOLE"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -18,7 +35,10 @@ kind = "ignore"
 description = "Test point pad, no model, appears as floating net in netlist"
 
 [models.match]
-footprint_re = "(?i)TestPoint"
+# `Test[_ ]?Pa(d|th)` as well as TestPoint: Olimex spells the same object
+# `OLIMEX_Other-FP:TESTPAD_40-ROUND` (17 instances across the ESP32-EVB
+# revisions), which the bare TestPoint spelling never matched.
+footprint_re = "(?i)Test[_ ]?Po?int|Test[_ ]?Pad|^Testpoints?:"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -78,10 +98,316 @@ footprint_re = "(?i)SolderJumper|Jumper"
 # surrounding network already gives. What is genuinely missing is a
 # two-terminal switch kind, which is a change to the engine rather than an
 # entry in a database, and inventing a bad fit here would hide the need for it.
+# That reasoning is unchanged. What follows it are two more entries that widen
+# the SAME decision to the switches the corpus actually carries, because the
+# original value_re only caught the literal strings Watchy uses. Across the
+# corpus, switches were the single largest block of unresolved parts: 252 `Choc`
+# keyswitches on the MNT Reform keyboards, 219 `SW_Push` across six board
+# families, 81 `ML`, 58 `SW_PUSH`, 38 `SWT0105-003516JSA`, 29 `RESET`, 26
+# `MOMENTARY-SWITCH-SPST-SMD-5.2MM-TALL`, 24 Olimex `T1107A`. Every one of them
+# is the same two-terminal contact pair, and every one of them was being reported
+# as an unresolved part defaulting to OPEN, which is what the resting state of a
+# button already is. Naming them costs nothing in honesty and stops the report
+# burying a real gap under a hundred buttons.
 [[models]]
 id = "tactile_switch"
 kind = "ignore"
 description = "momentary tactile push switch: no two-terminal switch kind exists yet"
 
 [models.match]
-value_re = "(?i)^(BTN[0-9]*|SW[0-9]*|TACT|PUSH(BUTTON)?)$"
+# Added beyond the original (BTN|SW|TACT|PUSH): the reset-button spellings
+# (RESET / Reset / reset / RST / SW_RST / SW_HWB), the KiCad generic symbol names
+# (SW_Push, SW_PUSH, SW_SPST, SW_DIP_x01..x08), the keyboard-switch value strings
+# (Choc, Kailh, and `ML` for the Cherry ML low-profile switch: MNT Reform's
+# historic keyboard carries 79 of them as SW1..SW79 on footprint
+# `mntcomp-keyboard:cherry-ml`, which is what fixes that value's meaning),
+# the SparkFun Eagle library spelling
+# (MOMENTARY-SWITCH-SPST-...), and three vendor part numbers used directly as the
+# value: Olimex T1107A, Diptronics SWT0105-*/SWT31*, C&K KMR2*.
+value_re = '''(?ix) ^(
+    BTN[0-9]*  | SW[0-9]*  | TACT  | PUSH(BUTTON)?
+  | SW[_-]?(PUSH|RST|RESET|HWB|SPST(x[0-9]+)?|DIP([_-]?x[0-9]+)?)
+  | RESET
+  | MOMENTARY[-_ ]SWITCH[-_ ].*
+  | CHOC | ML | KAILH.*
+  | T1107A(\(.*\))?
+  | SWT0105([-_].*)? | SWT31[A-Z0-9]*
+  | KMR2[A-Z0-9]*
+)$'''
+
+# ─────────────────────────────────────────────────────────────────────────────
+# The same decision, reached from the footprint instead of the value.
+#
+# A board that names its buttons anything at all (`S1`, a net name, a house part
+# code) still sits them on a switch footprint, and the footprint is the more
+# reliable evidence of what the part is: KiCad's `Button_Switch_SMD` /
+# `Button_Switch_THT` libraries and the keyboard-switch footprint families
+# (Cherry MX, Kailh Choc, PG1350, the hotswap sockets) contain nothing that is
+# not a mechanical switch.
+#
+# DELIBERATELY NARROW: this matches switch footprint LIBRARIES and the
+# unambiguous switch footprint names, not any footprint with "SW" in it. A rule
+# broad enough to catch every house library would eventually swallow something
+# that is not a switch, and an ignored real part is the one failure mode this
+# file must not have.
+[[models]]
+id = "tactile_switch_footprint"
+kind = "ignore"
+description = "momentary tactile / keyboard switch, matched by footprint family"
+
+[models.match]
+footprint_re = '''(?ix)
+    ^Button_Switch_(SMD|THT):
+  | keyswitch | keyswitches:
+  | PG1350                          # Kailh Choc v1
+  | MX_(SOCKET|HOLE|PLATE)          # Cherry MX sockets and plate cutouts
+  | cherry[-_]?(ml|mx)              # Cherry ML / MX switch bodies
+  | SW_(SPST|PUSH|DIP_SPST)
+  | Diptronics-PTLP
+  | KMR2[0-9]*[A-Z]*                # C&K KMR2 series
+  | WS-TASV                         # Wurth WS-TASV tactile
+  | T1107A                          # Olimex button
+  | SWT0105 | SWT31
+'''
+
+# ── Mechanical items that are copper but not circuit ──────────────────────────
+#
+# Stitching vias, breakaway tabs, board-outline frames and battery-holder
+# terminals are all real copper with real pads, and a netlist reports them as
+# components. None of them is a device: a stitching via is a stitch between two
+# copper planes that are already the same net, a breakaway tab is panel
+# rail, a frame is the drawing border, and a battery clip is a mechanical
+# contact whose cell is a source the board does not contain.
+#
+# These are separate entries rather than one regex because they are separate
+# claims, and a future maintainer should be able to disagree with one of them
+# without unpicking the others.
+[[models]]
+id = "stitching_via"
+kind = "ignore"
+description = "Stitching via between copper planes, no electrical function"
+
+[models.match]
+# flyingcarsfootprints:StitchingVia-0.3mm, 149 instances on the KiCad demo
+# boards, is the whole of this rule's corpus evidence.
+footprint_re = "(?i)Stitching[_ ]?Via"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "breakaway_tab"
+kind = "ignore"
+description = "Panel breakaway tab / mouse-bite rail, no electrical function"
+
+[models.match]
+footprint_re = "(?i)Breakaway|breakaway[0-9]*|mouse[_ ]?bite"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "drawing_frame"
+kind = "ignore"
+description = "Schematic/board drawing frame or title block, no electrical function"
+
+[models.match]
+# SparkFun's Eagle libraries place the sheet border as a component with a
+# reference of its own (FRAME1, value FRAME-LETTER / FRAME-LEDGER / FRAME-A4).
+value_re = "(?i)^FRAME[-_ ]?(LETTER|LEDGER|A[0-9]|B|C|D)?$"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "battery_holder_terminal"
+kind = "ignore"
+description = "Battery-holder clip / coin-cell terminal: the cell is not on the board"
+
+[models.match]
+# Keystone 54 (footprints:Keystone54) is a coin-cell negative clip. The cell it
+# holds is a source, and a source the board does not carry cannot be stamped;
+# a scenario spec supplies it as a rail instead.
+value_re = "(?i)^KEYSTONE[_ ]?[0-9]+$"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Not-assembled positions.
+#
+# Olimex marks a documented no-fit position by prefixing the Value with "NA",
+# and this is not a guess: the machine-readable BOM shipped in the corpus with
+# the board says so. ESP32-EVB_Rev_K2_BOM.csv, Designation column:
+#
+#     1;"PWR2";"TB2-DG306-5.0_2P";1;"NA(TB2 DG306-5.0-2P)";;;
+#    31;"R57";"R_0603_5MIL_DWS";1;"NA(1k/R0603)";;;
+#    32;"R44,R54,R48,R46,R17,R12";"R_0603_5MIL_DWS";6;"NA/R0603";;;
+#    68;"U8";"SOT-23-5";1;"NA(NCP303LSN27T1G(SOT-23-5))";;;
+#
+# The line right above the first of those reads
+#     2;"PWR1";"PWRJ-2mm(YDJ-1136)";1;"PWRJ-2mm(YDJ-1134)";;;
+# with no NA prefix, and PWR1 is fitted. So the prefix is the discriminator, the
+# parenthesised text is the part that WOULD go there, and `NA(1k/R0603)` is a
+# 1 kOhm resistor position left empty.
+#
+# An empty position is an open circuit, which is exactly what `ignore` gives, so
+# this is the one case where ignoring a resistor is the physically correct
+# answer rather than a concession. `DNP`, `DNF`, `NP` and a bare `NC` are the
+# same statement in other houses' notation.
+#
+# NOT MATCHED, deliberately: `NC` used as a PIN name, and any value that merely
+# CONTAINS "NA". The anchor is the start of the value string, and a lone "NA"
+# must be the whole of it.
+[[models]]
+id = "not_assembled"
+kind = "ignore"
+description = "Documented no-fit position (Olimex NA / DNP / DNF): open by design"
+
+[models.match]
+value_re = '''(?ix) ^(
+    NA          [/(].*        # NA/R0603, NA(1k/R0603), NA(NCP303LSN27T1G(SOT-23-5))
+  | NA
+  | DNP | DNF | DNI | NP | NC | NF
+  | NOT[_ ]?(FITTED|PLACED|ASSEMBLED)
+  | NO[_ ]?PART
+)$'''
+
+# ═════════════════════════════════════════════════════════════════════════════
+#
+# The engine already carries a `connector_fallback` that recognises the generic
+# spellings ("Battery", "Micro USB", "Conn_01x03"), and for a connector that is
+# the right answer: a connector has no physics, and the pad map is the whole of
+# what a model can usefully say about it. What the fallback cannot do is
+# recognise a house or vendor part code, and the corpus is full of those, so
+# every one of them was being reported as an unresolved active part with pins on
+# live nets.
+#
+# `kind = "connector"` is deliberate rather than `ignore`. An ignored part is an
+# open circuit and vanishes; a connector is a named boundary where the board
+# stops, which is a different statement and the one a report should make. What
+# comes through the connector is a scenario's business, not the board's.
+#
+# NOT MODELLED, for all of these: contact resistance, current rating enforcement,
+# mating-cycle life, and anything on the far side of the connector.
+
+# ── Degson / Ningbo DG306 screw terminal blocks ──────────────────────────────
+#
+# Olimex fits these as the power input and the CAN/RS485 field wiring on every
+# ESP32-EVB revision and the RP2040-PICO-PC: 26 instances across 12 boards, under
+# four different spellings of the same family. The number before "P" is the pin
+# count and 5.0 is the pitch in mm; TB2/TB3 is Olimex's own footprint prefix for
+# the 2- and 3-way parts.
+[[models]]
+id = "dg306_terminal_block"
+kind = "connector"
+description = "DG306-5.0 screw terminal block (Degson DG306 family, 5.0 mm pitch)"
+
+[models.match]
+# "DG306-5.0-3P", "TB3 DG306-5.0-3P", "TB3-DG306-5.0-3P", "TB2 DG306-5.0-2P".
+# The not-assembled spelling "NA(TB2 DG306-5.0-2P)" is handled earlier by
+# db/ignore.toml, which is correct: an unfitted connector is not a boundary, it
+# is an empty footprint.
+value_re = "(?i)^(TB[0-9][- ])?DG306-5\\.0-[0-9]+P$"
+
+[models.pins]
+# Pin 1 is the pad nearest the polarity mark on Olimex's own footprint. Only the
+# 2- and 3-way parts appear in the corpus; a wider part binds here and gets the
+# first three pads named, which is honest as far as it goes.
+"1" = "p1"
+"2" = "p2"
+"3" = "p3"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# ── 3.5 mm pluggable terminal blocks ─────────────────────────────────────────
+[[models]]
+id = "tb_3p5mm_terminal_block"
+kind = "connector"
+description = "3.5 mm pitch pluggable terminal block (HD-351 class)"
+
+[models.match]
+# "TB3-3.5mm" and Olimex's "TB3-3.5MM(HD-351 3P)". Note the corpus copy of that
+# string uses CYRILLIC ММ (U+041C) rather than Latin MM in at least one revision,
+# which is why the unit is matched loosely rather than as literal "mm".
+value_re = "(?i)^TB[0-9][- ]?3\\.5\\s*\\S{0,2}(\\(HD-?351[- ][0-9]+P\\))?$"
+
+[models.pins]
+"1" = "p1"
+"2" = "p2"
+"3" = "p3"
+
+# ── 2 mm barrel / DC power jacks ──────────────────────────────────────────────
+[[models]]
+id = "dc_barrel_jack_2mm"
+kind = "connector"
+description = "2 mm DC barrel power jack (YDJ-113x class)"
+
+[models.match]
+# Olimex PWR1 across all twelve ESP32-EVB revisions: "PWRJ-2mm(YDJ-1134)" on the
+# board, "PWRJ-2mm(YDJ-1136)" in the BOM and footprint. The suffix is the
+# vendor's own part code and both spellings appear, so it is matched loosely.
+value_re = "(?i)^PWRJ-2\\s*mm(\\(YDJ-[0-9]+\\))?$"
+
+[models.pins]
+"1" = "vin"     # centre pin, the positive terminal on this part
+"2" = "gnd"     # barrel/shell
+"3" = "sw"      # switched contact, broken by an inserted plug
+
+# ── 10-way IDC / box headers ─────────────────────────────────────────────────
+[[models]]
+id = "bh10s_idc_header"
+kind = "connector"
+description = "BH10S 2x5 2.54 mm boxed IDC header (Olimex UEXT)"
+
+[models.match]
+# UEXT1 on the Olimex boards, 11 instances across two board families, spelled
+# both bare and with the footprint code: "BH10S", "BH10S(B-D-02x5-LF)".
+value_re = "(?i)^BH10S(\\(B-D-02x5-LF\\))?$"
+
+[models.pins]
+# Olimex UEXT pinout, which is a fixed published standard rather than a guess:
+# 1=3.3V 2=GND 3=TXD 4=RXD 5=SCL 6=SDA 7=MISO 8=MOSI 9=SCK 10=SSEL.
+"1"  = "vcc"
+"2"  = "gnd"
+"3"  = "txd"
+"4"  = "rxd"
+"5"  = "scl"
+"6"  = "sda"
+"7"  = "miso"
+"8"  = "mosi"
+"9"  = "sck"
+"10" = "ssel"
+
+# ── microSD card sockets ──────────────────────────────────────────────────────
+[[models]]
+id = "microsd_socket"
+kind = "connector"
+description = "microSD card socket (TFC-WXCP11-08-LF class, 8-way push-push)"
+
+[models.match]
+value_re = "(?i)^TFC-WXCP11-08-LF$"
+
+[models.pins]
+# microSD pinout in SPI-bus naming, which is how every board in the corpus wires
+# it. The SD-mode names for the same pads are DAT2/CD-DAT3/CMD/VDD/CLK/VSS/DAT0/
+# DAT1; the socket's own two shell contacts are not numbered pads.
+"1" = "dat2"
+"2" = "cs"
+"3" = "mosi"
+"4" = "vdd"
+"5" = "sck"
+"6" = "gnd"
+"7" = "miso"
+"8" = "dat1"
+
+# ── 2x20 pin headers ─────────────────────────────────────────────────────────
+[[models]]
+id = "header_2x20_2mm54"
+kind = "connector"
+description = "2x20 2.54 mm pin header (HN2x20)"
+
+[models.match]
+# Olimex EXT1. On the ESP32-EVB this position is a documented no-fit
+# ("NA(HN2x20)", handled by db/ignore.toml); the bare spelling is fitted
+# elsewhere in the corpus.
+value_re = "(?i)^H?N2x20$"
+
+[models.pins]
+# A bare header carries no signal names of its own; only the first pad pair is
+# named so that the binder has a pad map, and the rest are the net's business.
+"1" = "p1"
+"2" = "p2"
