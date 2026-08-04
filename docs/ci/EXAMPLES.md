@@ -244,9 +244,13 @@ are in the [board-as-code README](../../examples/board-as-code/README.md).
 run against boards in the developer board corpus: the historical-revision
 Watchy v1.5 and KiCad's `pic_programmer` demo. That corpus is not redistributed
 in this repo, and the Watchy pair also needs the Espressif QEMU ESP32 backend.
-Their integration tests skip cleanly when the corpus or backend is absent.
+Their integration tests skip cleanly when the corpus or backend is absent. They
+are also **dropped from the release tarball at staging** (`scripts/bundle.sh`),
+because their `board =` paths escape the bundle and resolve to nothing there, so
+if you installed from a release you will not find these three specs at all. They
+are checkout-only, which is the only place they ever worked.
 
-**Running these yourself takes more than `fetch-corpus.sh`, and it is worth
+**Running them from a checkout takes more than `fetch-corpus.sh`, and it is worth
 saying why rather than letting you find out.** The `board` paths in those three
 specs are `board-corpus/famous/watchy_history/v1.5/...` and
 `board-corpus/kicad-demos-src/demos/pic_programmer/...`, and
