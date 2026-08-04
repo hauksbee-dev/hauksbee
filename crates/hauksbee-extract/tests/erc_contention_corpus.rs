@@ -108,9 +108,15 @@ fn output_contention_is_silent_on_known_good_corpus() {
     // these boards produced a load failure per entry rather than a scan, and the
     // failure list was the only thing that went red - never the coverage.
     hauksbee_testkit::scanned("output_contention corpus calibration", scanned);
+    // A coverage failure has to name what it could not read, or the reader has
+    // to guess which board to fetch. The offender list carries the absent and
+    // the unreadable entries, so it is printed here rather than after the
+    // count check that would otherwise hide it.
     assert!(
         scanned >= 10,
-        "expected to scan the known-good corpus, scanned {scanned}"
+        "expected to scan at least 10 known-good boards, scanned {scanned}. \
+         Missing or unreadable:\n  {}",
+        offenders.join("\n  ")
     );
     assert!(
         offenders.is_empty(),
