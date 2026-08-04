@@ -295,7 +295,17 @@ fn soc_inspection(config: &hauksbee_mcu::SocConfig) -> Vec<String> {
                     "support bundle: {b} (unpacked before the platform loads)"
                 ));
             }
-            out.push(format!("cpu: {}   clock: {} Hz", c.cpu, c.frequency_hz));
+            out.push(format!(
+                "cpu: {}   clock: {} Hz (cross-checked at load against the platform's own \
+                 `cpu PerformanceInMips` / `nvic systickFrequency` declarations)",
+                c.cpu, c.frequency_hz
+            ));
+            out.push(match &c.watchdog_limitation {
+                Some(l) => format!("watchdog: {l}"),
+                None => "watchdog: this part claims full fidelity, an armed watchdog that is \
+                         never fed reboots the core the way silicon does"
+                    .to_string(),
+            });
             out.push(match &c.uart {
                 Some(u) => format!("uart bridge: {u}"),
                 None => "uart bridge: none".to_string(),
