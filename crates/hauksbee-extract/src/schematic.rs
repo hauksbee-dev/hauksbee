@@ -55,6 +55,7 @@ fn snap(x: f64, y: f64) -> Pt {
 /// sub-sheets, they are resolved relative to `base_dir` when provided;
 /// without a directory, sub-sheets are skipped (single-sheet extraction).
 pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
+    crate::reject_merge_conflict(text)?;
     let doc = forge_sexpr::parse(text)?;
     let mut builder = NetlistBuilder::new();
     let root = builder.add_sheet_doc(&doc, "/", None, None)?;
@@ -78,6 +79,7 @@ pub fn extract_from_doc(
 pub fn extract_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| ExtractError::Xml(format!("read {}: {e}", path.display())))?;
+    crate::reject_merge_conflict(&text)?;
     let doc = forge_sexpr::parse(&text)?;
     let base = path.parent().map(Path::to_path_buf);
     let name = path
@@ -86,6 +88,11 @@ pub fn extract_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
         .unwrap_or_default()
         .to_string();
     let mut builder = NetlistBuilder::new();
+    // The root sheet counts as visited, so a sub-sheet pointing back at the top
+    // file closes the cycle here instead of recursing into it.
+    builder
+        .visited_sheets
+        .insert(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
     let root = builder.add_sheet_doc(&doc, "/", base.as_deref(), Some(name))?;
     builder.finish(root)
 }
@@ -246,7 +253,25 @@ struct NetlistBuilder {
     /// schematic path cries wolf on a deliberately-unconnected control pin.
     no_connect_nodes: Vec<usize>,
     next_sheet: SheetId,
+    /// Sub-sheet files already pulled in, canonicalized. A `Sheetfile` that
+    /// points back at an ancestor (a sheet that references itself, or two
+    /// sheets that reference each other) is a cycle, and following it recurses
+    /// until the thread's stack aborts the process. Both shapes occur in real
+    /// projects: a sheet duplicated by copy-paste keeps the original's
+    /// `Sheetfile`, and a renamed file can leave a stale mutual reference.
+    /// A visited set is also the right answer for the benign case of one
+    /// sub-sheet included twice: its contents are already in the netlist.
+    visited_sheets: std::collections::HashSet<PathBuf>,
+    /// How deep the current `Sheetfile` recursion is. The visited set stops
+    /// cycles; this stops a pathological but acyclic chain (a generated project
+    /// nesting thousands of unique sheets) from reaching the same stack limit.
+    sheet_depth: usize,
 }
+
+/// The deepest `Sheetfile` chain followed. KiCad's own hierarchies are a
+/// handful of levels; 64 is far past any real design and still nowhere near
+/// the stack budget of `add_sheet_doc`.
+const MAX_SHEET_DEPTH: usize = 64;
 
 type SheetId = u32;
 
@@ -280,6 +305,8 @@ impl NetlistBuilder {
             bus_boundaries: Vec::new(),
             no_connect_nodes: Vec::new(),
             next_sheet: 0,
+            visited_sheets: std::collections::HashSet::new(),
+            sheet_depth: 0,
         }
     }
 
@@ -802,14 +829,27 @@ impl NetlistBuilder {
         let file = sheet_property(sub, "Sheetfile");
         if let (Some(file), Some(dir)) = (file, base_dir) {
             let child = dir.join(&file);
-            if let Ok(text) = std::fs::read_to_string(&child) {
-                if let Ok(doc) = forge_sexpr::parse(&text) {
-                    let child_dir = child.parent().map(Path::to_path_buf);
-                    self.add_sheet_doc(&doc, &child_path, child_dir.as_deref(), None)?;
+            // Cycle and depth guards BEFORE the read: a sheet that references
+            // itself (or a pair that reference each other) would otherwise
+            // recurse until the stack aborts the whole process, which on
+            // `hauksbee serve` is a denial of service rather than a bad parse.
+            // Canonicalize so `sub/../a.kicad_sch` and `a.kicad_sch` are one
+            // key; fall back to the joined path when the file does not exist,
+            // which the read below then reports as a missing sub-sheet.
+            let key = child.canonicalize().unwrap_or_else(|_| child.clone());
+            if self.sheet_depth < MAX_SHEET_DEPTH && self.visited_sheets.insert(key) {
+                if let Ok(text) = std::fs::read_to_string(&child) {
+                    if let Ok(doc) = forge_sexpr::parse(&text) {
+                        let child_dir = child.parent().map(Path::to_path_buf);
+                        self.sheet_depth += 1;
+                        let result =
+                            self.add_sheet_doc(&doc, &child_path, child_dir.as_deref(), None);
+                        self.sheet_depth -= 1;
+                        result?;
+                    }
                 }
-            } else {
-                // Missing sub-sheet file: not fatal, just an incomplete board.
-                let _ = PathBuf::from(&file);
+                // A sub-sheet that cannot be read or parsed is not fatal: the
+                // board is incomplete, not unreadable.
             }
         }
         Ok(())

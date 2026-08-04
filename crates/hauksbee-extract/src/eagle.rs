@@ -81,6 +81,9 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                     b"pad" | b"smd" => {
                         if let Some(pkg) = &cur_package {
                             let a = attrs(&e);
+                            if let Some(bad) = non_finite_coord(&a) {
+                                return Err(corrupt_coord("pad", &bad.0, &bad.1));
+                            }
                             let (Some(name), Some(x), Some(y)) =
                                 (a.get("name"), num(&a, "x"), num(&a, "y"))
                             else {
@@ -94,6 +97,9 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                     }
                     b"element" => {
                         let a = attrs(&e);
+                        if let Some(bad) = non_finite_coord(&a) {
+                            return Err(corrupt_coord("element", &bad.0, &bad.1));
+                        }
                         let rot = a.get("rot").map(String::as_str).unwrap_or("R0");
                         elements.push(El {
                             name: a.get("name").cloned().unwrap_or_default(),
@@ -236,8 +242,44 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
     })
 }
 
+/// A coordinate is only usable if it is a finite number. Rust's `f64` parser
+/// accepts "NaN", "inf" and an exponent that overflows to infinity, and any of
+/// those poisons every later distance comparison: a pad at NaN is neither near
+/// nor far from anything, so the clearance check reports a clean board. Treat
+/// them as absent here and refuse at the call site.
 fn num(attrs: &HashMap<String, String>, key: &str) -> Option<f64> {
-    attrs.get(key)?.parse().ok()
+    attrs
+        .get(key)?
+        .parse::<f64>()
+        .ok()
+        .filter(|v| v.is_finite())
+}
+
+/// Coordinate attributes on Eagle geometry elements.
+const COORD_ATTRS: &[&str] = &[
+    "x", "y", "x1", "y1", "x2", "y2", "dx", "dy", "drill", "diameter",
+];
+
+/// The first coordinate attribute present but not a finite number, as
+/// (attribute, raw value).
+fn non_finite_coord(attrs: &HashMap<String, String>) -> Option<(String, String)> {
+    for key in COORD_ATTRS {
+        if let Some(raw) = attrs.get(*key) {
+            if raw.parse::<f64>().is_ok_and(|v| !v.is_finite()) {
+                return Some(((*key).to_string(), raw.clone()));
+            }
+        }
+    }
+    None
+}
+
+fn corrupt_coord(tag: &str, attr: &str, raw: &str) -> ExtractError {
+    ExtractError::Corrupt(format!(
+        "board geometry is corrupt: an Eagle <{tag}> has {attr}=\"{raw}\", which is not \
+         a finite number. Distances cannot be compared against it, so a clearance check \
+         would report a meaningless pass. Re-save the board from Eagle, or fix that \
+         {attr} value by hand"
+    ))
 }
 
 #[cfg(test)]

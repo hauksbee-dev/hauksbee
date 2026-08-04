@@ -82,6 +82,38 @@ impl<'a> Name<'a> {
     fn ext_is(&self, e: &str) -> bool {
         self.ext.as_deref() == Some(e)
     }
+
+    /// `needle` present as a whole word, i.e. not run together with other
+    /// letters. Substring matching is wrong for the bare role names: `top`
+    /// appears inside `stopmask` and `bot` inside `robot`, and a mask film read
+    /// as copper poisons the whole reconstruction. Digits count as separators so
+    /// `1 - Top`, `L2-GND` and `top2` all match their role.
+    fn has_word(&self, needle: &str) -> bool {
+        let hay = self.full.as_bytes();
+        let ned = needle.as_bytes();
+        let alpha = |b: u8| b.is_ascii_alphabetic();
+        for i in 0..hay.len().saturating_sub(ned.len()) + 1 {
+            if &hay[i..i + ned.len()] != ned {
+                continue;
+            }
+            let before_ok = i == 0 || !alpha(hay[i - 1]);
+            let j = i + ned.len();
+            let after_ok = j >= hay.len() || !alpha(hay[j]);
+            if before_ok && after_ok {
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// Extensions that hold a plotted gerber film. A file with one of these that
+/// survived every non-copper test is a candidate for the bare role-name rules.
+fn is_gerber_film_ext(n: &Name) -> bool {
+    matches!(
+        n.ext.as_deref(),
+        Some("gbr" | "ger" | "gdo" | "pho" | "grb" | "art" | "gerber")
+    )
 }
 
 /// Classify a single fab file by its path. Inner-copper indices are
@@ -126,6 +158,15 @@ pub fn classify(path: &Path) -> LayerRole {
         ("courtyard", &[][..]),
         ("fab", &[][..]),
         ("assembly", &[][..]),
+        // The `Top.gbr`/`Bottom.gbr` exporters (DipTrace and friends) ship
+        // `TopAssy.gbr` and `TopDimension.gbr` in the same folder. Those names
+        // carry the same bare role word as the copper film, so the bare-name
+        // copper rules below would read an assembly drawing as a copper layer
+        // and reconstruct nets out of it. Exclude them by their OWN word first.
+        ("assy", &[][..]),
+        ("dimension", &[][..]),
+        ("drawing", &[][..]),
+        ("keepout", &[][..]),
         ("adhes", &["gma", "gba"][..]),
         ("glue", &[][..]),
     ];
@@ -141,6 +182,7 @@ pub fn classify(path: &Path) -> LayerRole {
         || n.has("boardoutline")
         || n.has("-gko")
         || n.has("margin")
+        || n.has_word("border")
         || n.ext_is("gko")
         || n.ext_is("gm1")
         || n.ext_is("gml")
@@ -199,6 +241,41 @@ pub fn classify(path: &Path) -> LayerRole {
             index: idx,
             name: n.original.to_string(),
         };
+    }
+
+    // ── Bare role names on a plotted film ───────────────────────────────────
+    // `Top.gbr` / `Bottom.gbr`, `1 - Top.gbr` / `2 - Bottom.gbr`,
+    // `board-Front.gbr` / `board-Back.gbr`, `TOP.gbr` / `BOTTOM.gbr` with
+    // `L2-GND.gbr` inners. DipTrace, Sprint Layout, PCB Elegance and several
+    // house CAM scripts all plot copper this way, and it was the single most
+    // common shape in a 60-job corpus of real fab folders: the KiCad and Protel
+    // rules above matched none of them, so the whole job was refused with "no
+    // copper gerber layers found here" while the copper sat right there.
+    //
+    // Safe only HERE, at the end: every mask / paste / silk / assembly /
+    // dimension / outline film carrying the same role word has already been
+    // claimed by the tests above, so what is left with a bare `top` is copper.
+    if is_gerber_film_ext(&n) {
+        if n.has_word("top") || n.has_word("front") {
+            return LayerRole::Copper {
+                index: 0,
+                name: top_label(n.original),
+            };
+        }
+        if n.has_word("bottom") || n.has_word("bot") || n.has_word("back") {
+            return LayerRole::Copper {
+                index: usize::MAX,
+                name: bottom_label(n.original),
+            };
+        }
+        // Inner films named by stack position: `L2-GND.gbr`, `l3.gbr`. L1 is the
+        // top layer, so `L<n>` maps to inner index n-1.
+        if let Some(idx) = bare_stack_index(&n) {
+            return LayerRole::Copper {
+                index: idx,
+                name: n.original.to_string(),
+            };
+        }
     }
 
     // ── Allegro / Cadence `.art` exports (e.g. uConsole) ────────────────────
@@ -363,6 +440,34 @@ fn kicad_inner_index(n: &Name) -> Option<usize> {
                 // "layer" words; those were filtered already above).
                 if k >= 1 && (n.has("cu") || marker == "signal" || marker == "inner") {
                     return Some(k);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// A bare stack-position film name: `L2-GND.gbr`, `l3.gbr`, `layer4.gbr`.
+/// `L1` is the top layer by convention, so `L<k>` is inner index `k - 1`.
+/// Returns `None` for `L1` (the top rule already claimed it) and for anything
+/// past a plausible stack depth, so a project called `L500` cannot invent 500
+/// layers of copper.
+fn bare_stack_index(n: &Name) -> Option<usize> {
+    for marker in ["l", "layer"] {
+        for (pos, _) in n.full.match_indices(marker) {
+            // Must start the name or follow a separator, else the `l` inside
+            // `flrp` or `plain` matches.
+            if pos > 0 && n.full.as_bytes()[pos - 1].is_ascii_alphanumeric() {
+                continue;
+            }
+            let tail = &n.full[pos + marker.len()..];
+            let digits: String = tail.chars().take_while(|c| c.is_ascii_digit()).collect();
+            if digits.is_empty() {
+                continue;
+            }
+            if let Ok(k) = digits.parse::<usize>() {
+                if (2..=32).contains(&k) {
+                    return Some(k - 1);
                 }
             }
         }

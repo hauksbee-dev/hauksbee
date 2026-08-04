@@ -310,6 +310,19 @@ pub fn unrecognized_message(bytes: &[u8]) -> String {
                 with the real file"
             .to_string();
     }
+    // A SINGLE fab file. These arrive constantly: a user drags one layer out of
+    // the fab folder, or points at the drill file because it is the one with a
+    // readable name. The file IS a format hauksbee reads, just not on its own,
+    // so reciting the whole accepted-formats list reads as "unsupported" when
+    // the real answer is "pass the folder, not this one file".
+    if let Some(what) = lone_fab_file(&head) {
+        return format!(
+            "this is {what}, which is one file out of a fab job rather than a whole \
+             board. hauksbee reverse-extracts a board from the complete set (copper \
+             layers plus the drill file), so point it at the folder holding them, or \
+             at a .zip of that folder"
+        );
+    }
     if crate::protel_ascii::looks_like_pipe_records(bytes) {
         return format!(
             "this is an ASCII Protel export (what EasyEDA produces); hauksbee reads \
@@ -323,6 +336,29 @@ pub fn unrecognized_message(bytes: &[u8]) -> String {
      an Eagle board, an Altium .PcbDoc (binary or ASCII), an IPC-D-356 netlist, or \
      a folder or zip of gerbers"
         .to_string()
+}
+
+/// What single fab file this content is, if it is one. Keyed on the structural
+/// commands each format opens with, not on the file extension, because the
+/// extensions are a vendor free-for-all (`.gbr`, `.gtl`, `.cmp`, `.art`, `.txt`
+/// for a drill file) while the leading commands are fixed by the specs:
+/// RS-274X requires a format/unit statement, and an Excellon program opens with
+/// `M48` or gets straight to a tool definition.
+fn lone_fab_file(head: &str) -> Option<&'static str> {
+    let lines: Vec<&str> = head.lines().map(str::trim).collect();
+    let starts = |p: &str| lines.iter().any(|l| l.starts_with(p));
+    if starts("%FS") || starts("%MOMM") || starts("%MOIN") || starts("%TF.FileFunction") {
+        return Some("a single gerber layer (RS-274X)");
+    }
+    if starts("M48") || (starts("METRIC,") || starts("INCH,")) && starts("T") {
+        return Some("a single Excellon drill program");
+    }
+    // A gerber that opens with comments only: `G04` plus a later aperture
+    // definition or draw command is still unmistakably gerber.
+    if starts("G04") && (starts("%AD") || starts("D0") || starts("G54") || starts("M02")) {
+        return Some("a single gerber layer");
+    }
+    None
 }
 
 #[cfg(test)]

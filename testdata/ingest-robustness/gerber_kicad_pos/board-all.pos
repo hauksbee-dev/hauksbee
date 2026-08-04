@@ -1,0 +1,9 @@
+### Module positions - created on Fri Dec 22 20:19:47 2017 ###
+### Printed by Pcbnew version kicad (2017-04-18 revision 68a7a52)-master
+## Unit = mm, Angle = deg.
+## Side : All
+# Ref     Val              Package                PosX       PosY       Rot  Side
+R1        10k 1%           R_0402_1005Metric   10.0000    10.0000    0.0000  top
+C1        100n             C_0402_1005Metric   11.0000    10.0000  180.0000  top
+U1        ATmega328P       TQFP-32             10.5000    10.0000   90.0000  bottom
+## End
