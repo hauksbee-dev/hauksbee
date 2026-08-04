@@ -57,12 +57,19 @@ fn run_body(name: &str, body: &str) -> hauksbee_ci::CiResult {
     .expect("spec runs")
 }
 
-/// LumenPnP motherboard: the 4 low-side MOSFET gates (Q1..Q4, AO3400A) are
-/// driven by STM32F407 GPIOs that are Hi-Z at reset; only a 10k-to-GND pull
-/// (R42/R44/R46/R48, hand-verified to GND) holds each gate. We fuzz each gate
-/// node directly across its undefined boot level (0 / 3.3 V) - more conservative
-/// than fuzzing the GPIO behind the 1k series - and require the externally-held
-/// rails stay up and no part faults on any seed.
+/// LumenPnP motherboard: the low-side AO3400A MOSFET gates are driven by
+/// STM32F407 GPIOs that are Hi-Z at reset; only a 10k-to-GND pull holds each
+/// gate. We fuzz each gate node directly across its undefined boot level
+/// (0 / 3.3 V), which is more conservative than fuzzing the GPIO behind the 1k
+/// series, and require the externally-held rails stay up and no part faults on
+/// any seed.
+///
+/// The gate nets are read off the board rather than written down here. Naming
+/// them meant naming one revision's reference designators, and the revision the
+/// corpus fetches has three AO3400A gates at Q2, Q5 and Q6 where the spec said
+/// Q1 through Q4, so every net_drive and fuzz entry addressed a net that does
+/// not exist. The spec still refused rather than fuzzing nothing, which is the
+/// behaviour that surfaced this.
 #[test]
 fn lumenpnp_motor_gate_boot_states_are_safe() {
     let board = corpus().join("lumenpnp/mobo/mobo.kicad_sch");
@@ -71,6 +78,40 @@ fn lumenpnp_motor_gate_boot_states_are_safe() {
         eprintln!("corpus LumenPnP missing; skipping");
         return;
     }
+    // The same enumeration the boot-state panel uses, filtered to the low-side
+    // switching FETs this case is about, so the fuzz set is whatever the fetched
+    // revision actually carries.
+    let extracted = hauksbee_extract::ExtractedBoard::from_kicad_schematic_path(&board)
+        .expect("LumenPnP schematic reads");
+    let fets: Vec<String> = extracted
+        .components
+        .iter()
+        .filter(|c| c.value.to_ascii_uppercase().starts_with("AO3400"))
+        .map(|c| c.reference.clone())
+        .collect();
+    let gates: Vec<String> = hauksbee_engine::checks::boot::transistor_gate_nets(&extracted)
+        .into_iter()
+        .filter(|(reference, _)| fets.contains(reference))
+        .map(|(_, net)| net)
+        .collect();
+    // A fuzz over zero nets passes every assertion without exercising anything,
+    // which is the vacuous green this suite exists to refuse. Say what was
+    // covered, and fail on a discovery that found nothing.
+    hauksbee_testkit::scanned("lumenpnp boot-gate fuzz (gate nets found)", gates.len());
+    assert!(
+        gates.len() >= 3,
+        "expected the board's low-side AO3400A gates, found {gates:?} from FETs {fets:?}"
+    );
+
+    let drives: String = gates
+        .iter()
+        .map(|net| format!("[[net_drive]]\nnet = \"{net}\"\nvolts = 0.0\n"))
+        .collect();
+    let fuzz_nets: String = gates
+        .iter()
+        .map(|net| format!("\"{net}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
     let body = format!(
         r#"name = "lumenpnp boot-state fuzz (MOSFET gates undefined)"
 board = "{}"
@@ -87,21 +128,9 @@ volts = 5.0
 net = "+3.3V"
 kind = "ideal"
 volts = 3.3
-[[net_drive]]
-net = "Net-(Q1-Pad1)"
-volts = 0.0
-[[net_drive]]
-net = "Net-(Q2-Pad1)"
-volts = 0.0
-[[net_drive]]
-net = "Net-(Q3-Pad1)"
-volts = 0.0
-[[net_drive]]
-net = "Net-(Q4-Pad1)"
-volts = 0.0
-[fuzz]
+{drives}[fuzz]
 seeds = 16
-nets = ["Net-(Q1-Pad1)", "Net-(Q2-Pad1)", "Net-(Q3-Pad1)", "Net-(Q4-Pad1)"]
+nets = [{fuzz_nets}]
 levels = [0.0, 3.3]
 [[assert]]
 kind = "voltage"

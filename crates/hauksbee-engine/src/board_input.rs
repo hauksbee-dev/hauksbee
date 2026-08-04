@@ -1260,7 +1260,11 @@ fn main {
         let norm = from_path(&dir).expect("the directory resolves to the document");
         assert_eq!(norm.kind, InputKind::Ipc2581);
         // An unrelated `.xml` in the same directory is NOT claimed.
-        std::fs::write(dir.join("pom.xml"), b"<project><groupId>x</groupId></project>").unwrap();
+        std::fs::write(
+            dir.join("pom.xml"),
+            b"<project><groupId>x</groupId></project>",
+        )
+        .unwrap();
         let norm = from_path(&dir).expect("still exactly one board file");
         assert_eq!(norm.kind, InputKind::Ipc2581);
         let _ = std::fs::remove_dir_all(&dir);
@@ -1280,7 +1284,8 @@ fn main {
                 "components"
             );
             assert_eq!(other.board.nets.len(), native.board.nets.len(), "nets");
-            let pads = |b: &ExtractedBoard| -> usize { b.components.iter().map(|c| c.pins.len()).sum() };
+            let pads =
+                |b: &ExtractedBoard| -> usize { b.components.iter().map(|c| c.pins.len()).sum() };
             assert_eq!(pads(&other.board), pads(&native.board), "pads");
         }
     }
@@ -1312,12 +1317,17 @@ fn main {
         // state is unknown rather than let `dnp: false` read as "fitted".
         let odb = from_bytes("b.odb.zip", ODB_ZIP).expect("odb");
         assert!(
-            odb.notes.iter().any(|n| n.contains("cannot tell a do-not-populate")),
+            odb.notes
+                .iter()
+                .any(|n| n.contains("cannot tell a do-not-populate")),
             "got: {:?}",
             odb.notes
         );
         // A native KiCad board has nothing to add, and must not gain a note.
-        assert!(from_bytes("b.kicad_pcb", KICAD).expect("native").notes.is_empty());
+        assert!(from_bytes("b.kicad_pcb", KICAD)
+            .expect("native")
+            .notes
+            .is_empty());
     }
 
     #[test]
@@ -1327,7 +1337,10 @@ fn main {
         // about where its connectivity came from.
         assert_eq!(input_kind_phrase(InputKind::Gerber), "a gerber archive");
         assert_eq!(input_kind_phrase(InputKind::Odb), "an ODB++ job");
-        assert_eq!(input_kind_phrase(InputKind::Ipc2581), "an IPC-2581 document");
+        assert_eq!(
+            input_kind_phrase(InputKind::Ipc2581),
+            "an IPC-2581 document"
+        );
         for kind in [InputKind::Odb, InputKind::Ipc2581] {
             assert!(
                 !input_kind_phrase(kind).contains("gerber"),

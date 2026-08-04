@@ -168,10 +168,18 @@ fn assert_same_partition(
                     x.1,
                     y.0,
                     y.1,
-                    if together_a { "same net" } else { "different nets" },
+                    if together_a {
+                        "same net"
+                    } else {
+                        "different nets"
+                    },
                     pa[x],
                     pa[y],
-                    if together_b { "same net" } else { "different nets" },
+                    if together_b {
+                        "same net"
+                    } else {
+                        "different nets"
+                    },
                 ));
             }
         }
@@ -305,10 +313,17 @@ fn ipc2581_agrees_with_the_native_reading_of_the_same_board() {
         );
         assert_eq!(got.nets.len(), *nets, "{board} IPC-2581: nets");
         assert_eq!(pad_count(got), *pads, "{board} IPC-2581: pads");
-        assert_eq!(net_names(got), net_names(&truth), "{board} IPC-2581: net names");
+        assert_eq!(
+            net_names(got),
+            net_names(&truth),
+            "{board} IPC-2581: net names"
+        );
         let mut extra = refdes(got);
         for r in &split {
-            assert!(extra.remove(r), "{board}: {r} should be an extra designator");
+            assert!(
+                extra.remove(r),
+                "{board}: {r} should be an extra designator"
+            );
         }
         assert_eq!(extra, refdes(&truth), "{board} IPC-2581: designators");
         assert_eq!(out.stats.revision, "C");
@@ -323,11 +338,7 @@ fn ipc2581_agrees_with_the_native_reading_of_the_same_board() {
             if split.contains(r) || split.iter().any(|s| s.starts_with(&format!("{r}_"))) {
                 continue;
             }
-            assert_eq!(
-                gp.get(r),
-                Some(want),
-                "{board} IPC-2581: {r} pad count"
-            );
+            assert_eq!(gp.get(r), Some(want), "{board} IPC-2581: {r} pad count");
         }
         let names = pins_by_ref(got);
         let want_names = pins_by_ref(&truth);
@@ -335,11 +346,7 @@ fn ipc2581_agrees_with_the_native_reading_of_the_same_board() {
             if exceptions.contains(r) || split.iter().any(|s| s.starts_with(&format!("{r}_"))) {
                 continue;
             }
-            assert_eq!(
-                names.get(r),
-                Some(want),
-                "{board} IPC-2581: {r} pad names"
-            );
+            assert_eq!(names.get(r), Some(want), "{board} IPC-2581: {r} pad names");
         }
         let exceptions: Vec<&str> = exceptions.into_iter().collect();
         assert_same_partition(&format!("{board} IPC-2581"), &truth, got, &exceptions);
@@ -357,7 +364,11 @@ fn odbpp_agrees_with_the_native_reading_of_the_same_board() {
         assert_eq!(got.nets.len(), *nets, "{board} ODB++: nets");
         assert_eq!(pad_count(got), *pads, "{board} ODB++: pads");
         assert_eq!(refdes(got), refdes(&truth), "{board} ODB++: designators");
-        assert_eq!(net_names(got), net_names(&truth), "{board} ODB++: net names");
+        assert_eq!(
+            net_names(got),
+            net_names(&truth),
+            "{board} ODB++: net names"
+        );
         assert_eq!(out.stats.pads, *pads, "{board} ODB++: pad accounting");
         // Pads per component: counts always, names except where a pad cannot be
         // keyed by name or the exporter renamed it.
@@ -373,7 +384,9 @@ fn odbpp_agrees_with_the_native_reading_of_the_same_board() {
             if exceptions.contains(r) {
                 continue;
             }
-            let have = gp.get(r).unwrap_or_else(|| panic!("{board}: {r} is missing"));
+            let have = gp
+                .get(r)
+                .unwrap_or_else(|| panic!("{board}: {r} is missing"));
             assert_eq!(have, want, "{board} ODB++: {r} pad names");
         }
         let exceptions: Vec<&str> = exceptions.into_iter().collect();
@@ -394,12 +407,7 @@ fn the_two_exchange_readings_of_one_board_agree_with_each_other() {
         }
         assert_eq!(extra, refdes(&b), "{board}: designators");
         assert_eq!(net_names(&a), net_names(&b), "{board}: net names");
-        assert_same_partition(
-            &format!("{board} IPC-2581 vs ODB++"),
-            &a,
-            &b,
-            &exceptions,
-        );
+        assert_same_partition(&format!("{board} IPC-2581 vs ODB++"), &a, &b, &exceptions);
     }
 }
 
@@ -557,7 +565,10 @@ fn board_artwork_is_dropped_and_named_rather_than_counted_as_a_part() {
 fn the_readers_report_what_they_read_and_what_they_dropped() {
     let o = odb("watchy");
     assert_eq!(o.stats.step, "pcb");
-    assert_eq!(o.stats.placement_source, odbpp::PlacementSource::ComponentLayers);
+    assert_eq!(
+        o.stats.placement_source,
+        odbpp::PlacementSource::ComponentLayers
+    );
     assert!(
         o.stats.producer.contains("KiCad"),
         "the producing tool is recorded: {}",
@@ -578,7 +589,11 @@ fn the_readers_report_what_they_read_and_what_they_dropped() {
         o.stats.copper_features()
     );
     assert!(o.stats.drills > 0, "drills are counted: {}", o.stats.drills);
-    assert_eq!(o.stats.netlist_nets, Some(84), "the CAD netlist agrees on 84 nets");
+    assert_eq!(
+        o.stats.netlist_nets,
+        Some(84),
+        "the CAD netlist agrees on 84 nets"
+    );
     assert!(
         o.stats.disagreements.is_empty(),
         "a KiCad-written job must be self-consistent: {:?}",
@@ -591,7 +606,12 @@ fn the_readers_report_what_they_read_and_what_they_dropped() {
     assert_eq!(i.stats.net_source, ipc2581::NetSource::LayerFeature);
     assert_eq!(i.stats.copper_layers.len(), 4);
     assert!(
-        i.stats.pads_per_layer.iter().map(|(_, n)| *n).sum::<usize>() > 0,
+        i.stats
+            .pads_per_layer
+            .iter()
+            .map(|(_, n)| *n)
+            .sum::<usize>()
+            > 0,
         "pads are accounted per layer"
     );
 }
@@ -667,7 +687,11 @@ fn a_real_stackup_only_revision_b_export_refuses_and_says_why() {
 fn a_real_allegro_bom_only_revision_c_export_refuses_and_says_why() {
     // github.com/sjgallagher2/ipc2581 @ befdfb02, the IPC-2581 Consortium's
     // testcase10 BOM member (MIT).
-    let text = read_text(&fixtures().join("thirdparty").join("testcase10-bom.revC.xml"));
+    let text = read_text(
+        &fixtures()
+            .join("thirdparty")
+            .join("testcase10-bom.revC.xml"),
+    );
     assert!(ipc2581::looks_like_ipc2581(text.as_bytes()));
     let err = ipc2581::extract(&text).expect_err("a BOM is not a design");
     let msg = err.to_string();
@@ -992,8 +1016,8 @@ fn the_real_valor_npi_job_reads_and_is_internally_consistent() {
         .iter()
         .filter_map(|c| c.position.map(|(x, _, _)| x))
         .collect();
-    let span = xs.iter().cloned().fold(f64::MIN, f64::max)
-        - xs.iter().cloned().fold(f64::MAX, f64::min);
+    let span =
+        xs.iter().cloned().fold(f64::MIN, f64::max) - xs.iter().cloned().fold(f64::MAX, f64::min);
     assert!(
         span > 100.0,
         "INCH coordinates must be scaled to mm; the placement spans only {span:.1} mm"

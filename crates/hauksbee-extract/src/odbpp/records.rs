@@ -349,7 +349,8 @@ pub(crate) fn parse_eda_data(text: &str, job_units: f64) -> EdaData {
             }
             "TOP" => {
                 if matches!(state, In::Cmp) {
-                    if let (Some(c), Some(t)) = (out.components.last_mut(), parse_top(body, scale)) {
+                    if let (Some(c), Some(t)) = (out.components.last_mut(), parse_top(body, scale))
+                    {
                         c.toeprints.push(t);
                     }
                 }
