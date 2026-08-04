@@ -69,7 +69,7 @@ pub fn emit(
             }
             print!(
                 "{}",
-                super::check::render_waivers_scoped(&waived, &waivers, Some("lint"), true)
+                super::check::render_waivers_scoped(&waived, &waivers, &["lint"], true)
             );
         }
     }
@@ -201,7 +201,7 @@ pub fn emit_resources(
         // this command never ran.
         print!(
             "{}",
-            super::check::render_waivers_scoped(&waived, &waivers, Some("lint"), false)
+            super::check::render_waivers_scoped(&waived, &waivers, &["lint"], false)
         );
     }
     super::note_ungated_findings(strict, lint_fails(&report));
