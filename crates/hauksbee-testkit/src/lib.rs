@@ -31,25 +31,100 @@ pub fn require_assets() -> bool {
     std::env::var_os("HAUKSBEE_REQUIRE_CORPUS").is_some()
 }
 
+/// The name of the corpus directory, as `scripts/fetch-corpus.sh` writes it and
+/// `corpus.toml` declares it in `meta.default_dir`.
+const CORPUS_DIR_NAME: &str = "board-corpus";
+
+/// How far up the tree to look for the corpus before giving up.
+///
+/// Deep enough for a git worktree nested inside the checkout
+/// (`<checkout>/.claude/worktrees/<name>` is three levels down), shallow enough
+/// that the walk cannot wander out of the user's project tree and adopt some
+/// unrelated `board-corpus/` from a home directory.
+const CORPUS_SEARCH_DEPTH: usize = 6;
+
+/// The main worktree of the checkout `manifest_dir` belongs to, if this is a
+/// linked worktree and the main one can be identified.
+///
+/// A linked worktree's `.git` is a FILE reading `gitdir: <common>/worktrees/<n>`,
+/// where `<common>` is the main checkout's `.git` directory. The main worktree is
+/// that directory's parent. Parsed rather than shelled out to, so this stays
+/// usable from a test that must not spawn processes.
+fn main_worktree(root: &Path) -> Option<PathBuf> {
+    let dotgit = root.join(".git");
+    if !dotgit.is_file() {
+        return None;
+    }
+    let text = std::fs::read_to_string(&dotgit).ok()?;
+    let gitdir = Path::new(text.strip_prefix("gitdir:")?.trim());
+    // <common>/worktrees/<name> -> <common> -> the checkout that owns it.
+    let worktrees = gitdir.parent()?;
+    (worktrees.file_name()? == "worktrees")
+        .then(|| worktrees.parent().and_then(Path::parent))
+        .flatten()
+        .map(Path::to_path_buf)
+}
+
+/// Every directory the corpus is looked for in, nearest first.
+///
+/// Two starting points, because both are load-bearing. The checkout the test was
+/// compiled from covers the ordinary case and, by walking up, a worktree nested
+/// inside the checkout. The main worktree covers a worktree created OUTSIDE it,
+/// which no amount of walking up would ever reach.
+///
+/// The walk exists because `corpus_dir` used to check exactly two directories,
+/// the repository root and its parent. Most work on this project happens in a git
+/// worktree under `<checkout>/.claude/worktrees/<name>`, where neither of those
+/// two is the checkout, so no corpus was found, every corpus test skipped, and
+/// the skip read as a pass. An agent's whole body of corpus evidence turned out
+/// never to have run.
+pub fn corpus_search_dirs(manifest_dir: &str) -> Vec<PathBuf> {
+    let root = repo_root(manifest_dir);
+    let mut out: Vec<PathBuf> = Vec::new();
+    for start in [Some(root.clone()), main_worktree(&root)]
+        .into_iter()
+        .flatten()
+    {
+        for ancestor in start
+            .ancestors()
+            .take(CORPUS_SEARCH_DEPTH)
+            // `/board-corpus` is nobody's corpus, and adopting it would be worse
+            // than finding none.
+            .filter(|a| a.parent().is_some())
+        {
+            let candidate = ancestor.join(CORPUS_DIR_NAME);
+            if !out.contains(&candidate) {
+                out.push(candidate);
+            }
+        }
+    }
+    out
+}
+
 /// The board corpus, if this machine has one.
 ///
-/// `HAUKSBEE_CORPUS_DIR` wins; otherwise `board-corpus/` beside the checkout,
-/// which is where `scripts/fetch-corpus.sh` puts it by default.
+/// `HAUKSBEE_CORPUS_DIR` wins; otherwise the nearest `board-corpus/` at or above
+/// the checkout, which is where `scripts/fetch-corpus.sh` puts it by default.
+/// See [`corpus_search_dirs`] for the search order and why it is a walk.
 pub fn corpus_dir(manifest_dir: &str) -> Option<PathBuf> {
     if let Some(dir) = std::env::var_os("HAUKSBEE_CORPUS_DIR") {
         let p = PathBuf::from(dir);
-        return p.is_dir().then_some(p);
+        // A set-but-wrong override is a mistake, never a reason to skip. Returning
+        // `None` here sent a typo'd path down the same road as "this machine has
+        // no corpus", and the suite went quiet on a corpus the operator believed
+        // they had pointed it at.
+        assert!(
+            p.is_dir(),
+            "HAUKSBEE_CORPUS_DIR is set to {} which is not a directory. Fix the \
+             path or unset it; a corpus override that resolves to nothing would \
+             silently skip every corpus gate.",
+            p.display()
+        );
+        return Some(p);
     }
-    let root = repo_root(manifest_dir);
-    for candidate in [
-        root.join("board-corpus"),
-        root.parent()?.join("board-corpus"),
-    ] {
-        if candidate.is_dir() {
-            return Some(candidate);
-        }
-    }
-    None
+    corpus_search_dirs(manifest_dir)
+        .into_iter()
+        .find(|c| c.is_dir())
 }
 
 /// One board inside the corpus, by path relative to the corpus root.
@@ -109,9 +184,27 @@ pub fn corpus_boards_root_or_skip(manifest_dir: &str, what: &str) -> Option<Path
             what,
             "the board corpus root (either <corpus>/famous/ or <corpus>/)",
             "board corpus",
-            "scripts/fetch-corpus.sh",
+            &fetch_remedy(manifest_dir),
         ),
     }
+}
+
+/// What to tell someone whose corpus did not resolve, naming every directory
+/// that was looked in.
+///
+/// An absent corpus has to say where it looked. The failure that motivated the
+/// search walk was invisible precisely because the note said only "not found",
+/// so a worktree user read it as "I have no corpus" rather than "the resolver
+/// cannot see the corpus I do have".
+fn fetch_remedy(manifest_dir: &str) -> String {
+    let mut s = String::from("scripts/fetch-corpus.sh, or set HAUKSBEE_CORPUS_DIR");
+    if std::env::var_os("HAUKSBEE_CORPUS_DIR").is_none() {
+        s.push_str(". Looked in:");
+        for d in corpus_search_dirs(manifest_dir) {
+            s.push_str(&format!("\n           {}", d.display()));
+        }
+    }
+    s
 }
 
 /// The first of several candidate relative paths that resolves.
@@ -133,7 +226,7 @@ pub fn corpus_board_any(manifest_dir: &str, rels: &[&str]) -> Option<PathBuf> {
 pub fn corpus_or_skip(manifest_dir: &str, rel: &str, what: &str) -> Option<PathBuf> {
     match corpus_board(manifest_dir, rel) {
         Some(p) => Some(p),
-        None => missing(what, rel, "board corpus", "scripts/fetch-corpus.sh"),
+        None => missing(what, rel, "board corpus", &fetch_remedy(manifest_dir)),
     }
 }
 
@@ -238,6 +331,82 @@ mod tests {
 
         assert!(corpus_board_any(md, &["famous/acme/rev_z"]).is_none());
         std::env::remove_var("HAUKSBEE_CORPUS_DIR");
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// The failure this crate exists to prevent, reproduced against the
+    /// resolver's own search list rather than the filesystem: a test compiled
+    /// from a worktree under `<checkout>/.claude/worktrees/<name>` must still
+    /// find the corpus that sits beside the checkout.
+    ///
+    /// `corpus_search_dirs` is checked instead of `corpus_dir` because the latter
+    /// reads a process-wide env var and touches the real disk, and because the
+    /// bug was never about whether a directory existed: it was about the search
+    /// never reaching the directory that did.
+    #[test]
+    fn the_search_reaches_the_checkout_from_a_nested_worktree() {
+        // repo_root() strips two levels, so hand it a plausible crate dir.
+        let worktree = "/w/proj/.claude/worktrees/agent-1";
+        let dirs = corpus_search_dirs(&format!("{worktree}/crates/hauksbee-extract"));
+        let has = |p: &str| dirs.iter().any(|d| d == Path::new(p));
+        assert!(has(&format!("{worktree}/board-corpus")), "{dirs:?}");
+        assert!(
+            has("/w/proj/board-corpus"),
+            "the checkout the worktree belongs to: {dirs:?}"
+        );
+        assert!(
+            has("/w/board-corpus"),
+            "the hand-built corpus sits beside the checkout: {dirs:?}"
+        );
+        assert!(
+            !has("/board-corpus"),
+            "the walk must not reach the filesystem root: {dirs:?}"
+        );
+    }
+
+    /// The two-directory search that shipped before, stated as the thing that
+    /// must never be true again.
+    #[test]
+    fn the_search_is_a_walk_and_not_two_directories() {
+        let dirs = corpus_search_dirs("/home/dev/work/proj/crates/hauksbee-extract");
+        assert!(
+            dirs.len() > 2,
+            "corpus_dir checked only the repo root and its parent, which is why \
+             every corpus gate skipped from a worktree: {dirs:?}"
+        );
+    }
+
+    /// A linked worktree created OUTSIDE the checkout is reachable only through
+    /// git's own bookkeeping, so the `.git` file is parsed for it.
+    #[test]
+    fn a_worktree_outside_the_checkout_resolves_through_git() {
+        let base = std::env::temp_dir().join("hauksbee_testkit_worktree");
+        let _ = std::fs::remove_dir_all(&base);
+        let checkout = base.join("proj");
+        let worktree = base.join("elsewhere/wt");
+        std::fs::create_dir_all(checkout.join(".git/worktrees/wt")).unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::write(
+            worktree.join(".git"),
+            format!("gitdir: {}/.git/worktrees/wt\n", checkout.display()),
+        )
+        .unwrap();
+
+        assert_eq!(
+            main_worktree(&worktree).as_deref(),
+            Some(checkout.as_path())
+        );
+        let dirs = corpus_search_dirs(&format!("{}/crates/x", worktree.display()));
+        assert!(
+            dirs.contains(&checkout.join("board-corpus")),
+            "no ancestor of {} is the checkout, so only git can find it: {dirs:?}",
+            worktree.display()
+        );
+
+        // An ordinary checkout has a `.git` DIRECTORY and no main worktree to
+        // redirect to, which must not be mistaken for a parse failure worth
+        // reporting.
+        assert!(main_worktree(&checkout).is_none());
         let _ = std::fs::remove_dir_all(&base);
     }
 }
