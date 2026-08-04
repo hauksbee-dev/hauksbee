@@ -21,7 +21,7 @@ const BOARDS: &[(&str, &str, &[u8])] = &[(
 const DECKS: &[(&str, &str, &[u8])] = &[(
     "rlc_ringdown",
     "rlc_ringdown.cir",
-    include_bytes!("../../../../examples/learn/04-time-integration/rlc_ringdown.cir"),
+    include_bytes!("../../../../examples/decks/rlc_ringdown.cir"),
 )];
 
 fn materialize(table: &[(&str, &str, &[u8])], what: &str, name: &str) -> anyhow::Result<PathBuf> {

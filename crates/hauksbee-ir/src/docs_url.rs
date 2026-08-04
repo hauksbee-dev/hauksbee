@@ -38,8 +38,8 @@ mod tests {
     #[test]
     fn no_md_suffix_is_passed_through() {
         assert_eq!(
-            docs_url("docs/learn"),
-            "https://docs.hauksbee.dev/docs/learn"
+            docs_url("docs/checks"),
+            "https://docs.hauksbee.dev/docs/checks"
         );
     }
 }

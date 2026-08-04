@@ -247,7 +247,7 @@ fn sim_refuses_element_free_decks() {
 
 #[test]
 fn sim_invalid_probe_is_misuse_not_nonconvergence() {
-    let deck = board("../../examples/learn/02-mna-by-hand/divider.cir");
+    let deck = board("../../examples/decks/divider.cir");
     let out = run(&["sim", deck.to_str().unwrap(), "--op", "--print", "V(nope)"]);
     assert_eq!(out.status.code(), Some(2));
     let err = stderr(&out);

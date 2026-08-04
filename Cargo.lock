@@ -1255,6 +1255,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "forge-sexpr",
+ "hauksbee-testkit",
  "once_cell",
  "regex",
  "serde",

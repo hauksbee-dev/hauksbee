@@ -1,0 +1,6 @@
+resistive divider -- the 3x3 MNA system of learn chapter 2
+V1 in 0 DC 5
+R1 in out 1k
+R2 out 0 3k
+.op
+.end

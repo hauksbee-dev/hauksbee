@@ -51,9 +51,9 @@ pub fn run(
                 // exists inside a hauksbee source tree; elsewhere, point at
                 // the embedded example.
                 let checkout =
-                    std::path::Path::new("examples/learn/04-time-integration/rlc_ringdown.cir");
+                    std::path::Path::new("examples/decks/rlc_ringdown.cir");
                 let suggestion = if checkout.exists() {
-                    "hauksbee sim examples/learn/04-time-integration/rlc_ringdown.cir --tran --print V(out)"
+                    "hauksbee sim examples/decks/rlc_ringdown.cir --tran --print V(out)"
                 } else {
                     "hauksbee sim --example rlc_ringdown --tran --print V(out)"
                 };
