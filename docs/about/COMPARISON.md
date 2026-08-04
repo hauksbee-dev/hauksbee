@@ -30,7 +30,7 @@ load-bearing:
   not test-enforced guarantees. They come from `#[ignore]`d benches in
   `crates/hauksbee-solve/tests/perf.rs` that *print* a ratio. No test asserts a
   speed ratio, and the numbers vary with machine, ngspice build, and process
-  start-up. Treat them as "what we measured on Apple Silicon against ngspice 46,"
+  start-up. Treat them as "what we measured on Apple Silicon against ngspice-45.2,"
   not as a contract.
 - The **accuracy** figures (the `accuracy` column) are the asserted ones. The
   always-on suite (`tests/analytic.rs`, plus `tests/ngspice.rs` and
@@ -53,7 +53,7 @@ ratios flatter hauksbee; they support "not close" rather than an exact multiple.
 
 | circuit | hauksbee | vs ngspice (observed, incl. its process start) | accuracy (asserted) |
 |---|---|---|---|
-| half-wave rectifier, 5ms tran | 2.689 ms, 1125 steps | ~19x wall-clock (50.3 ms) | <2% rel |
+| half-wave rectifier, 5ms tran | 1.4-2.7 ms, 1125 steps | 19x-37x wall-clock (ngspice 50-53 ms; the spread is ours, not ngspice's) | <2% rel |
 | synapse array, 90 blocks (partitioned) | 3.7x vs own monolithic this run; 3.5-7x across machines | ~15x (60.6 ms vs 915.5 ms) | 1.405e-7 vs monolithic |
 | small RC island, exact exponential steps | 100x fewer steps at equal accuracy (~38x wall) | n/a (measured against its own monolithic reference) | 9.6e-10 vs analytic |
 | RC ladder 1000 stages | 9.5k steps/s (Auto keeps monolithic: sparse LU already optimal there) | n/a (partitioned vs monolithic comparison) | <1e-6 vs monolithic |
