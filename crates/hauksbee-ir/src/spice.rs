@@ -219,6 +219,17 @@ pub struct PrintRequest {
     pub is_plot: bool,
 }
 
+/// Render the `BadNumber` message. An empty token would print as
+/// ``malformed number ` ` ``, which names nothing; say plainly that a value
+/// is missing instead.
+fn bad_number_msg(line: usize, tok: &str, text: &str) -> String {
+    if tok.trim().is_empty() {
+        format!("line {line}: expected a number but the value is empty: `{text}`")
+    } else {
+        format!("line {line}: malformed number `{tok}`: `{text}`")
+    }
+}
+
 /// Loads SPICE netlists into the IR.
 pub struct SpiceLoader;
 
@@ -239,7 +250,7 @@ pub enum SpiceError {
         model: String,
         text: String,
     },
-    #[error("line {line}: malformed number `{tok}`: `{text}`")]
+    #[error("{}", bad_number_msg(*.line, .tok, .text))]
     BadNumber {
         line: usize,
         tok: String,
@@ -283,9 +294,20 @@ impl SpiceLoader {
         path: P,
     ) -> Result<(Circuit, Directives), SpiceError> {
         let path = path.as_ref();
-        let text = std::fs::read_to_string(path).map_err(|e| SpiceError::Syntax {
+        // Read bytes first so a binary file gets a "this is not text" message
+        // instead of read_to_string's opaque "stream did not contain valid
+        // UTF-8" (NUL bytes are valid UTF-8, so both checks are needed).
+        let bytes = std::fs::read(path).map_err(|e| SpiceError::Syntax {
             line: 0,
             msg: format!("cannot read deck `{}`: {e}", path.display()),
+            text: String::new(),
+        })?;
+        let text = String::from_utf8(bytes).map_err(|_| SpiceError::Syntax {
+            line: 0,
+            msg: format!(
+                "`{}` is not a text file (invalid UTF-8 bytes); expected a text SPICE deck",
+                path.display()
+            ),
             text: String::new(),
         })?;
         let dir = path.parent().unwrap_or_else(|| Path::new("."));
@@ -305,6 +327,20 @@ fn load_deck(
     top_name: &str,
     top_canon: Option<PathBuf>,
 ) -> Result<(Circuit, Directives), SpiceError> {
+    // NUL bytes are valid UTF-8, so binary content can survive the read; a
+    // deck with NULs is never a text netlist. Refuse it up front rather than
+    // producing a baffling per-line parse error.
+    if text.contains('\0') {
+        return Err(SpiceError::Syntax {
+            line: 0,
+            msg: format!(
+                "`{top_name}` looks like a binary file (contains NUL bytes); \
+                 expected a text SPICE deck"
+            ),
+            text: String::new(),
+        });
+    }
+
     let mut circuit = Circuit::new();
     let mut directives = Directives::default();
 
@@ -2574,43 +2610,57 @@ fn parse_spice_number(tok: &str) -> Option<f64> {
     }
     let value: f64 = t[..i].parse().ok()?;
     let suffix = t[i..].to_ascii_lowercase();
-    let mult = scale_suffix(&suffix);
+    let mult = scale_suffix(&suffix)?;
     Some(value * mult)
 }
 
 /// Engineering-suffix multiplier. Order matters: `meg`/`mil` before `m`.
-fn scale_suffix(suffix: &str) -> f64 {
+///
+/// Classic SPICE ignores EVERYTHING after a recognized scale letter, which
+/// silently corrupts values: `1kk` reads as 1k and a typo like `1x` reads as
+/// 1. We deliberately break with that leniency: after the (optional) scale
+/// suffix, only a recognized unit word may follow (`4.7nF`, `5A`, `1kohm`);
+/// anything else refuses, so the caller raises its malformed-number error.
+fn scale_suffix(suffix: &str) -> Option<f64> {
     if suffix.is_empty() {
-        return 1.0;
+        return Some(1.0);
     }
-    // Match the longest known prefix; trailing junk (units like "ohm") ignored.
+    // Match the longest known scale prefix, then validate the remainder as a
+    // bare unit word instead of discarding it.
     let s = suffix;
-    if s.starts_with("meg") {
-        1e6
-    } else if s.starts_with("mil") {
-        25.4e-6
-    } else if s.starts_with('t') {
-        1e12
-    } else if s.starts_with('g') {
-        1e9
-    } else if s.starts_with('k') {
-        1e3
-    } else if s.starts_with('m') {
-        1e-3
-    } else if s.starts_with('u') {
-        1e-6
-    } else if s.starts_with('n') {
-        1e-9
-    } else if s.starts_with('p') {
-        1e-12
-    } else if s.starts_with('f') {
-        1e-15
+    let (mult, rest) = if let Some(r) = s.strip_prefix("meg") {
+        (1e6, r)
+    } else if let Some(r) = s.strip_prefix("mil") {
+        (25.4e-6, r)
+    } else if let Some(r) = s.strip_prefix('t') {
+        (1e12, r)
+    } else if let Some(r) = s.strip_prefix('g') {
+        (1e9, r)
+    } else if let Some(r) = s.strip_prefix('k') {
+        (1e3, r)
+    } else if let Some(r) = s.strip_prefix('m') {
+        (1e-3, r)
+    } else if let Some(r) = s.strip_prefix('u') {
+        (1e-6, r)
+    } else if let Some(r) = s.strip_prefix('n') {
+        (1e-9, r)
+    } else if let Some(r) = s.strip_prefix('p') {
+        (1e-12, r)
+    } else if let Some(r) = s.strip_prefix('f') {
+        (1e-15, r)
     } else {
         // No `a`=atto branch: atto is NOT in SPICE3/ngspice's scale set
         // (T/G/Meg/K/mil/m/u/n/p/f) and 'a' collides with the ampere unit, a
-        // current source "I1 1 0 5A" must read 5 A, not 5e-18. Trailing unit
-        // letters (A/V/H/F/Ohm/S) fall through here to the identity multiplier.
-        1.0
+        // current source "I1 1 0 5A" must read 5 A, not 5e-18. Unit letters
+        // (A/V/H/F/Ohm/S) take the identity multiplier via the check below.
+        (1.0, s)
+    };
+    // The remainder must be a unit word this parser knows (or nothing). A
+    // second scale letter (`1kk`) or an unrecognized tail (`1x`, `1kfoo`) is a
+    // malformed number, never a silent identity.
+    match rest {
+        "" | "a" | "v" | "f" | "h" | "s" | "hz" | "ohm" | "ohms" => Some(mult),
+        _ => None,
     }
 }
 
@@ -2800,6 +2850,46 @@ fn parse_rcl(
     let value = eval_value(line, &toks[3], raw, env)?;
     let name = toks[0].clone();
 
+    // Anything after the value must be a key=value option this element kind
+    // understands. A stray bare token (`R1 a b 1k oops`) or an unknown option
+    // used to be dropped silently, hiding a shifted or mistyped field; refuse
+    // instead. Re-tokenize with `=` kept so `tc1=0.01` stays one token.
+    let known_keys: &[&str] = match kind {
+        RclKind::R => &["tc", "tc1"],
+        RclKind::C | RclKind::L => &["ic"],
+    };
+    let option_list = || {
+        known_keys
+            .iter()
+            .map(|k| format!("{k}="))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    for tok in tokenize_kv(raw).iter().skip(4) {
+        let Some((key, _)) = tok.split_once('=') else {
+            return Err(SpiceError::Syntax {
+                line,
+                msg: format!(
+                    "unsupported trailing token `{tok}` after the value \
+                     (expected key=value options: {})",
+                    option_list()
+                ),
+                text: raw.into(),
+            });
+        };
+        if !known_keys.contains(&key.to_ascii_lowercase().as_str()) {
+            return Err(SpiceError::Syntax {
+                line,
+                msg: format!(
+                    "unsupported option `{key}=` on this element \
+                     (supported here: {})",
+                    option_list()
+                ),
+                text: raw.into(),
+            });
+        }
+    }
+
     // Trailing key=value options (tc1=, ic=), re-scan with `=` kept,
     // resolving params/exprs and refusing malformed numeric values.
     let kv = scan_trailing_kv_eval(line, raw, env)?;
@@ -2867,6 +2957,16 @@ fn scan_trailing_kv_eval(
     let mut map = HashMap::new();
     for tok in raw.split_whitespace() {
         if let Some((k, v)) = tok.split_once('=') {
+            // `tc1=` with nothing after the `=`: eval_value would fail and the
+            // silent non-numeric fallthrough below would drop the option; an
+            // empty value is a mistake, not string metadata.
+            if v.trim().is_empty() {
+                return Err(SpiceError::BadNumber {
+                    line,
+                    tok: v.to_string(),
+                    text: raw.into(),
+                });
+            }
             match eval_value(line, v, raw, env) {
                 Ok(num) => {
                     map.insert(k.to_ascii_lowercase(), num);
@@ -4745,6 +4845,98 @@ mod tests {
         );
         // The femto scale still works with a trailing farad unit.
         assert!((parse_spice_number("2fF").unwrap() - 2e-15).abs() < 1e-25);
+    }
+
+    /// H5: classic SPICE ignores everything after a recognized scale suffix,
+    /// so `1kk` silently reads as 1k and a typo like `1x` as 1. We refuse
+    /// instead; only a known unit word may follow the scale suffix.
+    #[test]
+    fn trailing_suffix_junk_is_rejected() {
+        assert_eq!(parse_spice_number("1kk"), None, "doubled scale suffix");
+        assert_eq!(parse_spice_number("1x"), None, "unknown suffix letter");
+        assert_eq!(parse_spice_number("1kfoo"), None, "junk after scale");
+        assert_eq!(parse_spice_number("2.2uu"), None, "doubled micro");
+        // Units after the scale suffix (and bare units) still parse.
+        assert_eq!(parse_spice_number("1kohm"), Some(1e3));
+        assert_eq!(parse_spice_number("1Megohms"), Some(1e6));
+        assert_eq!(parse_spice_number("3.3V"), Some(3.3));
+
+        // Deck-level: the refusal is the line-numbered malformed-number error.
+        let e = SpiceLoader::load("divider\nV1 in 0 5\nR1 in out 1kk\nR2 out 0 1k\n.end\n")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("line 3"), "{e}");
+        assert!(e.contains("malformed number `1kk`"), "{e}");
+        let e = SpiceLoader::load("divider\nV1 in 0 5\nR1 in out 1x\nR2 out 0 1k\n.end\n")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("line 3"), "{e}");
+        assert!(e.contains("malformed number `1x`"), "{e}");
+    }
+
+    /// H5: a stray bare token after an element value used to be dropped
+    /// silently; so did an option key the element does not understand.
+    #[test]
+    fn element_card_trailing_junk_token_is_rejected() {
+        let e = SpiceLoader::load("divider\nV1 in 0 5\nR1 in out 1k oops\nR2 out 0 1k\n.end\n")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("line 3"), "{e}");
+        assert!(e.contains("unsupported trailing token `oops`"), "{e}");
+
+        let e = SpiceLoader::load("divider\nV1 in 0 5\nR1 in out 1k foo=2\nR2 out 0 1k\n.end\n")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("unsupported option `foo=`"), "{e}");
+
+        // Known key=value options still parse on every RCL kind.
+        let c = SpiceLoader::load(
+            "t\nV1 in 0 5\nR1 in out 1k tc1=0.001\nC1 out 0 1u ic=2\nL1 out 0 1m ic=0\n.end\n",
+        )
+        .unwrap();
+        assert_eq!(c.devices.len(), 4);
+    }
+
+    /// L5: an empty value token must say "the value is empty", not render the
+    /// unreadable ``malformed number ` ` ``.
+    #[test]
+    fn empty_value_token_names_the_problem() {
+        let e = SpiceLoader::load("divider\nV1 in 0 5\nR1 in out 1k tc1=\nR2 out 0 1k\n.end\n")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("line 3"), "{e}");
+        assert!(e.contains("expected a number but the value is empty"), "{e}");
+        // The direct render, independent of any particular deck path.
+        let e = SpiceError::BadNumber {
+            line: 7,
+            tok: String::new(),
+            text: "R1 a b".into(),
+        }
+        .to_string();
+        assert!(e.contains("line 7"), "{e}");
+        assert!(e.contains("expected a number but the value is empty"), "{e}");
+    }
+
+    /// L10: binary input is refused up front with what the loader expected,
+    /// not a baffling per-line parse error.
+    #[test]
+    fn binary_input_is_refused_as_not_a_text_deck() {
+        let e = SpiceLoader::load("divider\nV1 in 0 5\0\0\x01\x02\nR1 in 0 1k\n.end\n")
+            .unwrap_err()
+            .to_string();
+        assert!(e.contains("binary"), "{e}");
+        assert!(e.contains("text SPICE deck"), "{e}");
+
+        // A file that is not valid UTF-8 at all (read_to_string would only say
+        // "stream did not contain valid UTF-8").
+        let dir = std::env::temp_dir().join("hauksbee_binary_deck_test");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("not_a_deck.cir");
+        std::fs::write(&path, [0xFFu8, 0xFE, 0x00, 0x42, 0x13, 0x37]).unwrap();
+        let e = SpiceLoader::load_file(&path).unwrap_err().to_string();
+        assert!(e.contains("not a text file"), "{e}");
+        assert!(e.contains("text SPICE deck"), "{e}");
+        std::fs::remove_file(&path).ok();
     }
 
     #[test]
