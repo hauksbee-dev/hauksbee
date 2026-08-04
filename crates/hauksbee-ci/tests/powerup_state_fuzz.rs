@@ -29,10 +29,15 @@ use std::path::PathBuf;
 
 use hauksbee_ci::{run, RunConfig};
 
+/// The directory the corpus boards sit directly under, whichever layout this
+/// machine has.
+///
+/// The `famous/` level exists only in the hand-built corpus, so joining it
+/// unconditionally meant no board resolved on the corpus
+/// `scripts/fetch-corpus.sh` produces, and every case below took its
+/// board-missing branch.
 fn corpus() -> PathBuf {
-    hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join("famous")
+    hauksbee_testkit::corpus_boards_root(env!("CARGO_MANIFEST_DIR")).unwrap_or_default()
 }
 
 fn require_corpus() -> bool {

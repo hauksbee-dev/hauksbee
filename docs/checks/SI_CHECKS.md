@@ -513,13 +513,27 @@ finding carries that citation:
 1. a DB-modelled converter's output-current limit (`iout_limit_a`) on its
    output net, or
 2. a **regulator** or **connector** continuous-current rating (`max_current_a`)
-   on its non-ground power nets.
+   on its non-ground power nets, or
+3. for a part whose current the **board** programs with one resistor (a charger's
+   PROG, a load switch's ILIM/ISET), the current computed from the resistor
+   actually fitted, through the model's `[models.current_program]` equation
+   (`I = k_volts / R`), bounded above by the part's own rating.
 
 FETs are deliberately excluded (a high Id switch rating is not proof that the
 load flows through that part on the board), and a **generic / placeholder
 fallback model never seeds an attribution** (its rating is representative, not a
 datasheet figure). Everything else is left un-attributed and the IPC engine then
 skips it.
+
+For a programmable part, `max_current_a` is a **capability, not a load**, and is
+never charged to a rail. The resistance is read off the layout by walking from
+the programming pin to ground through two-terminal parts, taking the lowest
+resistance the network can select (the largest current, so a trace that survives
+it survives every jumper setting); a closed solder link counts as a short, an
+open one blocks the path, and anything the walk cannot classify stops it. When
+the resistor cannot be read the part attributes nothing and an info finding names
+which part, which pin, and what would close the gap: the alternative, falling
+back on the ceiling, reports a number nobody measured.
 
 ### The honest reach
 
@@ -542,8 +556,20 @@ skips it.
   (`crates/hauksbee-engine/tests/si_ampacity_ripple.rs`).
 - Zero-FP corpus sweep across the famous boards (gated by
   `HAUKSBEE_REQUIRE_CORPUS=1`) raises no ampacity findings. That sweep caught,
-  and forced the fix of, an attribution false positive where the generic power-
-  FET fallback's placeholder 20 A was being treated as a cited rail current.
+  and forced the fix of, two attribution false positives: the generic power-FET
+  fallback's placeholder 20 A treated as a cited rail current, and a charger's
+  datasheet ceiling treated as its load. The second one is the Olimex ESP32-EVB
+  rev D, whose MCP73833 is programmed at 200 mA by a 4.99 kΩ resistor on PROG:
+  charging the part's 1.00 A ceiling to `+5V` and the battery net raised two High
+  findings, five times over, on rails a shipped board has always driven fine.
+- Programmed-current attribution is pinned two-sided in
+  `crates/hauksbee-engine/src/checks/ampacity.rs`: the Olimex topology
+  (`PROG -> 4.99k -> closed link -> GND`) yields the equation's own answer and a
+  citation naming the resistor; an open link yields no attribution and a recorded
+  gap; a filter cap on PROG is not read as the programming element; the equation
+  cannot exceed the part's rating; and a plain regulator with no programming pin
+  still carries its full rating, so the fix did not trade a false positive for a
+  missed real one.
 - The LumenPnP motor-driver sweep (`trace_current_corpus.rs`) pins the poured-
   rail / adequately-sized-coil-trace honest negative at the TMC2226 datasheet
   maximum.

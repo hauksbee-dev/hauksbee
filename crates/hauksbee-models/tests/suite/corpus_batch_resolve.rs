@@ -95,7 +95,11 @@ fn value_strings_from_the_corpus_bind_to_the_right_entry() {
         ("TXS0108EPW", "txs0108e"),
         ("0157004.DR", "fuse_nano2_157"),
     ] {
-        assert_eq!(id_of(value), want, "value {value:?} bound to the wrong entry");
+        assert_eq!(
+            id_of(value),
+            want,
+            "value {value:?} bound to the wrong entry"
+        );
     }
 }
 
@@ -179,12 +183,28 @@ fn not_assembled_and_mechanical_parts_are_ignored_not_invented() {
         "NC",
     ] {
         let m = resolve(value);
-        assert_eq!(m.kind, ComponentKind::Ignore, "{value:?} should be an ignored no-fit");
+        assert_eq!(
+            m.kind,
+            ComponentKind::Ignore,
+            "{value:?} should be an ignored no-fit"
+        );
     }
 
     // Switches, across the six spellings the corpus uses.
-    for value in ["Choc", "SW_Push", "SW_PUSH", "RESET", "ML", "T1107A", "SW_DIP_x01"] {
-        assert_eq!(resolve(value).kind, ComponentKind::Ignore, "{value:?} is a switch");
+    for value in [
+        "Choc",
+        "SW_Push",
+        "SW_PUSH",
+        "RESET",
+        "ML",
+        "T1107A",
+        "SW_DIP_x01",
+    ] {
+        assert_eq!(
+            resolve(value).kind,
+            ComponentKind::Ignore,
+            "{value:?} is a switch"
+        );
     }
 }
 
@@ -202,7 +222,11 @@ fn a_net_tie_is_a_short_and_not_an_open() {
         })
         .model
         .expect("a net tie must resolve");
-    assert_eq!(m.kind, ComponentKind::Passive, "a net tie is a resistor, not an ignore");
+    assert_eq!(
+        m.kind,
+        ComponentKind::Passive,
+        "a net tie is a resistor, not an ignore"
+    );
     let ohms = p(&m, "ohms");
     assert!(
         ohms > 0.0 && ohms <= 0.005,
@@ -362,11 +386,11 @@ fn vf_at(m: &ModelEntry, i: f64) -> f64 {
 fn the_new_diodes_sit_on_their_published_forward_points() {
     // Anchors first, at 2 mV: these are the points each fit consumed.
     for (part, i, want) in [
-        ("1N5822", 3.0, 0.525),   // Vishay 88526, 25 C
+        ("1N5822", 3.0, 0.525), // Vishay 88526, 25 C
         ("1N5822", 9.4, 0.950),
         ("1N5819HW", 0.1, 0.320), // Diodes DS30217, 25 C
         ("1N5819HW", 3.0, 0.750),
-        ("BAV70", 0.001, 0.715),  // Nexperia BAV70 v.9, Table 7 maxima
+        ("BAV70", 0.001, 0.715), // Nexperia BAV70 v.9, Table 7 maxima
         ("BAV70", 0.150, 1.250),
     ] {
         let m = resolve(part);
@@ -385,9 +409,9 @@ fn the_diode_out_of_sample_points_land_under_the_published_maximum() {
     // against a guaranteed limit would be wrong twice, once on the number and
     // once on the direction.
     for (part, i, limit) in [
-        ("1N5822", 1.0, 0.390),   // onsemi 1N5820/D third point; entry records -5%
-        ("BAV70", 0.010, 0.855),  // entry records -6.5%
-        ("BAV70", 0.050, 1.000),  // entry records -5.1%
+        ("1N5822", 1.0, 0.390),  // onsemi 1N5820/D third point; entry records -5%
+        ("BAV70", 0.010, 0.855), // entry records -6.5%
+        ("BAV70", 0.050, 1.000), // entry records -5.1%
     ] {
         let m = resolve(part);
         let got = vf_at(&m, i);
@@ -459,13 +483,13 @@ fn the_traced_bead_and_fuse_resistances_are_their_own_parts() {
     // not the 0.01 ohm a generic fuse entry carries, which is 75 mV of rail drop
     // at its own hold current.
     for (value, want) in [
-        ("220@100MHz 1.4A", 0.10),    // Murata BLM18PG221SH1D, DCR max initial
-        ("100@100MHz 3A", 0.022),     // Murata BLM18SP101SH1D
-        ("FB0805/600R/2A", 0.060),    // Murata BLM21SP601SH1D
-        ("IMC1210ER100K", 2.1),       // Vishay IMC-1210, a wirewound, not a bead
-        ("6V 0.5A", 0.150),           // Littelfuse 0805L050, Rmin initial
-        ("0ZCJ0075AF2E", 0.090),      // Bel Fuse 0ZCJ, Rmin initial
-        ("0157004.DR", 0.0163),       // Littelfuse 157 nominal cold resistance
+        ("220@100MHz 1.4A", 0.10), // Murata BLM18PG221SH1D, DCR max initial
+        ("100@100MHz 3A", 0.022),  // Murata BLM18SP101SH1D
+        ("FB0805/600R/2A", 0.060), // Murata BLM21SP601SH1D
+        ("IMC1210ER100K", 2.1),    // Vishay IMC-1210, a wirewound, not a bead
+        ("6V 0.5A", 0.150),        // Littelfuse 0805L050, Rmin initial
+        ("0ZCJ0075AF2E", 0.090),   // Bel Fuse 0ZCJ, Rmin initial
+        ("0157004.DR", 0.0163),    // Littelfuse 157 nominal cold resistance
     ] {
         let got = p(&resolve(value), "ohms");
         assert!(
@@ -486,7 +510,10 @@ fn the_pass_gate_translators_are_switches_and_not_logic() {
         assert_eq!(m.kind, ComponentKind::AnalogSwitch, "{part} is a pass gate");
         let ron = p(&m, "ron");
         let roff = p(&m, "roff");
-        assert!(ron > 0.0 && ron < roff, "{part}: ron {ron} must be below roff {roff}");
+        assert!(
+            ron > 0.0 && ron < roff,
+            "{part}: ron {ron} must be below roff {roff}"
+        );
     }
 
     // The NTS0104 belongs in the same group and is deliberately absent: its

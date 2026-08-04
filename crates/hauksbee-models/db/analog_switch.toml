@@ -225,6 +225,13 @@ max_junction_temp_c = 150.0
 theta_ja_c_per_w = 80.0   # TSOT26
 theta_jc_c_per_w = 30.0
 
+# The current limit is the board's choice, not the part's: ILIM(A) = 6800 /
+# RLIM(Ohm) with RLIM to GND on ISET. Attributing the part's own ceiling to the
+# switched rail would invent a load, so the fitted resistor decides.
+[models.current_program]
+pin = "iset"
+k_volts = 6800.0
+
 # ── PCA9306: dual bidirectional I2C voltage-level translator ─────────────────
 #
 # Source: Texas Instruments PCA9306 datasheet SCPS113O, October 2004, revised

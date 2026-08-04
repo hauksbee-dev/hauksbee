@@ -686,6 +686,7 @@ impl ModelLibrary {
             straps: Vec::new(),
             behavioral: Default::default(),
             logic: Default::default(),
+            current_program: None,
         };
 
         Resolution {

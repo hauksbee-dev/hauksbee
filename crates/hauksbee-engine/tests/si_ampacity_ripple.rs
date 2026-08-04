@@ -286,21 +286,18 @@ fn si_ripple_attributes_and_compares_without_false_firing() {
 // Corpus sweep: zero false positives on the known-good famous boards.
 // ===========================================================================
 
-fn famous_root() -> Option<PathBuf> {
-    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join("famous");
-    if p.exists() {
-        return Some(p);
-    }
-    if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-        panic!(
-            "HAUKSBEE_REQUIRE_CORPUS set but board-corpus/famous is missing: {}",
-            p.display()
-        );
-    }
-    eprintln!("board-corpus/famous absent; skipping ampacity/ripple corpus sweep");
-    None
+/// The directory the corpus boards sit directly under, whichever layout this
+/// machine has, or `None` with a printed note.
+///
+/// Resolved through the testkit rather than by joining `famous/` here: that
+/// level exists only in the hand-built corpus, so a hard join found nothing on
+/// the corpus `scripts/fetch-corpus.sh` produces, and every sweep below walked
+/// an empty directory and reported the empty walk as a pass.
+fn corpus_root() -> Option<PathBuf> {
+    hauksbee_testkit::corpus_boards_root_or_skip(
+        env!("CARGO_MANIFEST_DIR"),
+        "SI ampacity/ripple corpus sweep",
+    )
 }
 
 /// The ampacity and ripple checks must raise zero *findings* (info notes are
@@ -308,7 +305,7 @@ fn famous_root() -> Option<PathBuf> {
 /// does not ship. This is the same discipline the other SI checks hold.
 #[test]
 fn famous_corpus_has_no_ampacity_or_ripple_findings() {
-    let Some(root) = famous_root() else { return };
+    let Some(root) = corpus_root() else { return };
     let lib = ModelLibrary::builtin();
     let mut boards_checked = 0usize;
     for entry in walk_kicad_pcbs(&root) {

@@ -330,6 +330,7 @@ mod tests {
             straps: Vec::new(),
             behavioral: Default::default(),
             logic: Default::default(),
+            current_program: None,
         }
     }
 
@@ -480,6 +481,7 @@ mod tests {
             straps: Vec::new(),
             behavioral: Default::default(),
             logic: Default::default(),
+            current_program: None,
         };
         let errs = validate(&entry).unwrap_err();
         assert!(errs.iter().any(|e| e.message.contains("'n'")));
@@ -504,6 +506,7 @@ mod tests {
             straps: Vec::new(),
             behavioral: Default::default(),
             logic: Default::default(),
+            current_program: None,
         };
         let errs = validate(&entry).unwrap_err();
         assert!(errs.iter().any(|e| e.message.contains("bf")));
@@ -529,6 +532,7 @@ mod tests {
             straps: Vec::new(),
             behavioral: Default::default(),
             logic: Default::default(),
+            current_program: None,
         };
         let errs = validate(&entry).unwrap_err();
         assert!(
@@ -553,6 +557,7 @@ mod tests {
             straps: Vec::new(),
             behavioral: Default::default(),
             logic: Default::default(),
+            current_program: None,
         };
         assert!(validate(&good).is_ok(), "a well-ordered opamp must pass");
     }
@@ -578,6 +583,7 @@ mod tests {
                 straps: Vec::new(),
                 behavioral: Default::default(),
                 logic: Default::default(),
+                current_program: None,
             };
             assert!(
                 validate(&entry).is_ok(),
@@ -600,6 +606,7 @@ mod tests {
             straps: Vec::new(),
             behavioral: Default::default(),
             logic: Default::default(),
+            current_program: None,
         };
         assert!(
             validate(&entry)
@@ -630,6 +637,7 @@ mod tests {
             straps: Vec::new(),
             behavioral: Default::default(),
             logic: Default::default(),
+            current_program: None,
         };
         let errs = validate(&entry).unwrap_err();
         assert!(
@@ -657,6 +665,7 @@ mod tests {
             straps: Vec::new(),
             behavioral: Default::default(),
             logic: Default::default(),
+            current_program: None,
         };
         let errs = validate(&entry).unwrap_err();
         assert!(
@@ -680,6 +689,7 @@ mod tests {
             straps: Vec::new(),
             behavioral: Default::default(),
             logic: Default::default(),
+            current_program: None,
         };
         assert!(
             validate(&good).is_ok(),
@@ -705,6 +715,7 @@ mod tests {
             straps: Vec::new(),
             behavioral: Default::default(),
             logic: Default::default(),
+            current_program: None,
         };
         let errs = validate(&entry).unwrap_err();
         assert!(
