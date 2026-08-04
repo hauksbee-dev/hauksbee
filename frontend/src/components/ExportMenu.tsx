@@ -126,9 +126,9 @@ export function ExportMenu({
         onClick={() => setOpen(o => !o)}
         aria-haspopup="menu"
         aria-expanded={open}
-        {/* No `title`: its words are on screen, so a tooltip repeating them only
-            adds a description identical to the name and the button announces
-            itself twice. */}
+        /* No `title`: its words are on screen, so a tooltip repeating them only
+           adds a description identical to the name, and the button announces
+           itself twice. */
         aria-label="Export this report"
         className="hb-btn hb-press inline-flex items-center justify-center gap-2 px-3 text-[12px] whitespace-nowrap"
         style={{ height: 30 }}

@@ -241,7 +241,11 @@ export function TransportBar({
       {/* Scrub, replay only: live sim time cannot be dragged backwards. */}
       {replay && replay.duration > 0 && (
         <>
-          <div className="flex items-center gap-2 flex-1 min-w-0" style={{ maxWidth: 320 }}>
+          {/* A floor under the scrub, not just a ceiling. `flex-1 min-w-0` in a
+              crowded bar resolves to zero, and a range input at zero width is a
+              focusable control with nothing to aim at: it was 0 by 4 pixels
+              inside the embedded widget. The bar gives up elsewhere first. */}
+          <div className="flex items-center gap-2 flex-1 min-w-[110px]" style={{ maxWidth: 320 }}>
             <input
               type="range"
               min={0}
