@@ -54,7 +54,12 @@ CHECKED_HERE = {"expect", "axes", "license_note"}
 AXES = {
     # format and version
     "kicad5", "kicad6", "kicad7", "kicad8", "kicad9", "kicad10",
-    "eagle", "altium-binary", "protel-ascii", "gerber-only", "odbpp", "ipc2581",
+    "eagle", "eagle-binary", "altium-binary", "protel-ascii", "gerber-only",
+    "odbpp", "ipc2581",
+    # A format hauksbee documents that it does not read. The entry exists to hold
+    # the refusal to its word on real files, and must never be counted as board
+    # coverage.
+    "unreadable-by-design",
     # board class
     "dev-board", "keyboard", "power-electronics", "motor-driver",
     "flight-controller", "audio", "rf", "industrial-sensor", "sbc", "hat",

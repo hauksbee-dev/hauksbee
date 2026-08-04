@@ -605,20 +605,64 @@ expect = [
 # ---------------------------------------------------------------------------
 # Audio and analogue
 #
-# Thirty-five Eurorack modules in Eagle: op-amp signal chains, VCAs, filters and
-# discrete analogue, with the digital content confined to one small MCU. This is
-# the largest single-entry board count in the corpus and the only place the
-# analogue checks see a design whose whole purpose is analogue.
+# Op-amp signal chains, VCAs, filters, discrete analogue and split rails, where
+# the digital content is confined to one small MCU or absent. The analogue checks
+# see nothing like this anywhere else in the corpus.
 # ---------------------------------------------------------------------------
 
 [[board]]
-id = "eurorack"
-name = "Mutable Instruments Eurorack modules (35 boards)"
+id = "cats_eurosynth"
+name = "CATs Eurosynth analogue synthesiser modules (88 boards)"
+url = "https://github.com/mzuelch/CATs-Eurosynth"
+rev = "ee70506817f1fb5fa16a87c3e2a54a6ded8ee441"
+license = "MIT"
+axes = ["kicad5", "kicad8", "audio", "avr", "no-mcu", "small"]
+expect = [
+  "Modules/CGS/Analog Switch Matrix/Electronics/Main/CGS Analog Switch Matrix Main.kicad_pcb",
+  "Modules/CGS/Analog Switch Matrix/Electronics/Main/CGS Analog Switch Matrix Main.sch",
+  "Modules/HAGIWO/Arduino VCO/Electronics/Main/Arduino VCO Main.kicad_pcb",
+]
+
+# Four revisions of one analogue audio front end: a codec, a ±12 V rail pair, and
+# jack-detect circuitry, driven by an FPGA rather than an MCU.
+[[board]]
+id = "eurorack_pmod"
+name = "apfaudio eurorack-pmod audio front end (revisions r2.2 through r3.3)"
+url = "https://github.com/apfaudio/eurorack-pmod"
+rev = "ddb9aa92fab7f74783f7ed3bf248eec56a6ceb00"
+license = "CERN-OHL-S-2.0"
+license_note = "LICENSE at this revision is the CERN-OHL-S v2 text"
+axes = ["kicad8", "audio", "no-mcu", "small"]
+subdir = "hardware"
+expect = [
+  "hardware/eurorack-pmod-r3.3/eurorack-pmod-pcb.kicad_pcb",
+  "hardware/eurorack-pmod-r3.3/eurorack-pmod-pcb.kicad_sch",
+  "hardware/eurorack-pmod-r2.2/eurorack-pmod-pcb.kicad_pcb",
+]
+
+# ---------------------------------------------------------------------------
+# Formats hauksbee refuses, on real files
+#
+# The Mutable Instruments modules are Eagle 5 and earlier, whose `.brd` and
+# `.sch` are a BINARY format. `docs/ingest/EAGLE.md` says plainly that hauksbee
+# does not read it and tells you to open the file in Eagle 6+ and re-save, so
+# these 35 boards are here to hold that refusal to its word on real files rather
+# than on a fixture: a clean "unrecognized board format" and no crash, no partial
+# read, no confident nonsense.
+#
+# They are counted as a refusal, not as coverage. A gate that walks the corpus and
+# reports 35 more boards because these landed would be reporting files it could
+# not open, and that number would be a lie about reach.
+# ---------------------------------------------------------------------------
+
+[[board]]
+id = "eurorack_binary_eagle"
+name = "Mutable Instruments Eurorack modules (35 boards, pre-Eagle-6 binary)"
 url = "https://github.com/pichenettes/eurorack"
 rev = "08460a69a7e1f7a81c5a2abcc7189c9a6b7208d4"
 license = "CC-BY-SA-3.0"
 license_note = "README states 'Hardware: cc-by-sa-3.0'; the repository carries no separate hardware licence file"
-axes = ["eagle", "audio", "stm32", "avr", "small"]
+axes = ["eagle-binary", "unreadable-by-design", "audio", "small"]
 expect = [
   "braids/hardware_design/pcb/braids_v50.brd",
   "clouds/hardware_design/pcb/clouds_v30.brd",
@@ -724,7 +768,10 @@ url = "https://pip.raspberrypi.com/documents/RP-008296-DS-Minimal-KiCAD.zip"
 kind = "zip"
 sha256 = "8fdae5c1d3d8e58f43a45cd604ce9836b1ad4649f11eca4a9bea97eec6c2093a"
 license = "MIT (stated in the bundled LICENSE.txt)"
-axes = ["kicad7", "dev-board", "rp2040", "tiny"]
+# KiCad 10: measured `(version 20260206)` on the layout and `(version 20260306)`
+# on the schematic. This is the corpus's only KiCad 10 board, and the one place
+# the reader's newest-format handling is exercised on a real file.
+axes = ["kicad10", "dev-board", "rp2040", "tiny"]
 expect = [
   "RPI-RP2040-MINIMAL_R3-S1_public/RPI-RP2040-MINIMAL_R3-S1.kicad_pcb",
   "RPI-RP2040-MINIMAL_R3-S1_public/RPI-RP2040-MINIMAL_R3-S1.kicad_sch",
