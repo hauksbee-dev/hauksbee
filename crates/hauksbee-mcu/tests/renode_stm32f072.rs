@@ -56,14 +56,29 @@ fn f072_example_descriptor_loads_with_the_verified_offsets() {
     let c = RenodeConfig::from_soc_toml(F072).expect("the example descriptor must load");
 
     assert_eq!(c.machine, "f072");
-    assert_eq!(c.platform, "@platforms/cpus/stm32f072.repl");
+    assert!(
+        c.platform
+            .contains(r#"using "platforms/cpus/stm32f072.repl""#),
+        "the example extends the stock platform rather than replacing it"
+    );
     assert_eq!(c.cpu, "sysbus.cpu");
     assert_eq!(c.uart.as_deref(), Some("sysbus.usart1"));
     assert_eq!(c.mcu_label, "STM32F072 (ARM Cortex-M0)");
     // A stock platform, so no support bundle: tier B's whole point.
     assert_eq!(c.support_bundle, None);
-    // A single-line platform path, not inline `.repl` source.
-    assert!(!c.platform.contains('\n'));
+    // Inline `.repl` source, because a Renode part has to DECLARE its own core
+    // clock and be held to it: the loader refuses a bare `@platforms/...` path,
+    // which cannot state a clock at all, and that is what let four platforms
+    // ship running 4.5x to 9x fast. Tier B is now "extend the stock platform
+    // with a `using` line" rather than "point at it".
+    assert!(c.platform.contains('\n'));
+    assert!(
+        c.platform.contains("systickFrequency: 8000000")
+            && c.platform.contains("PerformanceInMips: 8"),
+        "the example declares the part's reset-default 8 MHz in both places the \
+         loader cross-checks against frequency_hz"
+    );
+    assert_eq!(c.frequency_hz, 8_000_000);
 
     // Six ports, A..F, all at the F0/F4 layout. 0x0C here would be the F1's
     // offset and would observe the wrong register on this part.
