@@ -71,16 +71,22 @@
 //! * **Non-`PRP` component metadata**: `PRP` properties are kept verbatim, but
 //!   tool-specific routing/strategy properties are not interpreted.
 //!
-//! One thing worth knowing about the KiCad producer specifically: its ODB++
-//! export carries no populate flag, so a DNP part is indistinguishable from a
-//! fitted one in ODB++ where the same board's IPC-2581 export marks it
-//! `populate="false"`. [`crate::ipc2581`] therefore recovers DNP and this reader
-//! cannot; it sets `dnp` only from an explicit `.no_pop` attribute.
+//! ## Two things worth knowing about the KiCad producer specifically
+//!
+//! Its ODB++ export carries no populate flag, so a DNP part is
+//! indistinguishable from a fitted one where the same board's IPC-2581 export
+//! marks it `populate="false"`. [`crate::ipc2581`] therefore recovers DNP and
+//! this reader cannot; `dnp` is set only from an explicit `.no_pop` attribute.
+//!
+//! And it escapes the characters ODB++ restricts in a name, so a hierarchical
+//! net `Net-(U4-LNA_IN/RF)` is written `Net-(U4-LNA_IN{slash}RF)`. That is undone
+//! ([`crate::unescape_kicad_name`]) but ONLY when `misc/info` says KiCad wrote
+//! the job, because the brace tokens are KiCad's convention and not the format's.
 
 pub(crate) mod records;
 pub(crate) mod tree;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use crate::altium::{VALUE_UNRESOLVED_KEY, VALUE_UNRESOLVED_REASON};
@@ -146,6 +152,9 @@ pub struct OdbStats {
     pub pads: usize,
     /// Nets the CAD netlist declares, when the job ships one.
     pub netlist_nets: Option<usize>,
+    /// Placements dropped as board artwork because they have no pad at all (a
+    /// silkscreen logo, a mechanical keep-out). Named, not silently discarded.
+    pub artwork: Vec<String>,
     /// Cross-checks that did not agree, each phrased as a whole sentence.
     pub disagreements: Vec<String>,
 }
@@ -254,6 +263,21 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
         ));
     }
 
+    // The producing tool, read before anything else because KiCad escapes every
+    // name it writes and that has to be undone as the names are read.
+    let info = tree.text("misc/info").unwrap_or_default();
+    let producer = info_field(&info, "ODB_SOURCE")
+        .or_else(|| info_field(&info, "SAVE_APP"))
+        .unwrap_or_default();
+    let kicad = producer.to_ascii_uppercase().contains("KICAD");
+    let unescape = |s: &str| -> String {
+        if kicad {
+            crate::unescape_kicad_name(s)
+        } else {
+            s.to_string()
+        }
+    };
+
     let eda_path = format!("steps/{step}/eda/data");
     let eda_text = tree.text(&eda_path);
     let eda = eda_text.as_deref().map(records::parse_eda_data);
@@ -330,16 +354,11 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
         .skip(1)
         .map(|(i, name)| Net {
             id: i as i64,
-            name: name.clone(),
+            name: unescape(name),
         })
         .collect();
 
     // ── Components ───────────────────────────────────────────────────────────
-    let mut refdes_count: HashMap<&str, usize> = HashMap::new();
-    for c in &raw_components {
-        *refdes_count.entry(c.refdes.as_str()).or_default() += 1;
-    }
-    let mut used: HashSet<String> = HashSet::new();
     let mut components: Vec<Component> = Vec::with_capacity(raw_components.len());
     let mut pads = 0usize;
     let mut pin_name_mismatches = 0usize;
@@ -363,6 +382,7 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
                 (true, Some(p)) => p.to_string(),
                 (true, None) => (t.pin_index + 1).to_string(),
             };
+            let number = unescape(&number);
             let net = (t.net != 0 && t.net < net_names.len()).then_some(t.net as i64);
             if let Some(id) = net {
                 *pads_per_net.entry(id).or_default() += 1;
@@ -377,25 +397,16 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
             });
         }
 
-        // Reference designators: kept verbatim (an unannotated `REF**` is what
-        // the CAD tool holds, and rewriting it would break agreement with the
-        // native reader for the same board), with a numeric suffix only where
-        // one file really does place two parts under one designator, and a
-        // synthesised name only where there is none at all.
-        let base = if c.refdes.is_empty() {
+        // Reference designators are kept VERBATIM: an unannotated `REF**` or
+        // `G***` is what the CAD tool holds, and rewriting it would disagree
+        // with the native reading of the same board. Two placements under one
+        // designator are merged into one part below
+        // ([`crate::merge_duplicate_references`]) rather than renamed.
+        let reference = if c.refdes.is_empty() {
             format!("UNK{idx}")
         } else {
-            c.refdes.clone()
+            unescape(&c.refdes)
         };
-        let mut reference = base.clone();
-        if refdes_count.get(c.refdes.as_str()).copied().unwrap_or(0) > 1 {
-            let mut n = 2;
-            while used.contains(&reference) {
-                reference = format!("{base}_{n}");
-                n += 1;
-            }
-        }
-        used.insert(reference.clone());
 
         let mut properties: Vec<(String, String)> = Vec::new();
         let mut value = String::new();
@@ -433,13 +444,27 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
             pins,
         });
     }
+    // A placement with no pads is board artwork, not a part: a silkscreen logo,
+    // a mechanical outline, a display's keep-out. The native KiCad reader drops
+    // these for the same reason (a `Logo-` footprint binding as an inductor, and
+    // bind-rate denominators padded with decoration), so an ODB++ re-export of
+    // one board must drop them too or the two readings disagree on the part
+    // count. How many went is recorded rather than silently lost.
+    let artwork: Vec<String> = components
+        .iter()
+        .filter(|c| c.pins.is_empty())
+        .map(|c| c.reference.clone())
+        .collect();
+    let components = crate::merge_duplicate_references(
+        components.into_iter().filter(|c| !c.pins.is_empty()).collect(),
+    );
 
     if pads == 0 {
         return Err(ExtractError::Odb(format!(
             "this ODB++ job places {} components but not one of them has a pad \
              (no TOP toeprint records in {}), so it carries no connectivity. \
              hauksbee will not report on a board it cannot wire up",
-            components.len(),
+            raw_components.len(),
             placement_source.as_str()
         )));
     }
@@ -453,7 +478,19 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
     }
 
     // ── Cross-check against the CAD netlist ──────────────────────────────────
-    let netlist = find_netlist(&tree, &step).map(|t| records::parse_netlist(&t));
+    // The netlist file escapes its names the same way `eda/data` does, so it is
+    // un-escaped on the same terms: comparing an escaped name against an
+    // un-escaped one would report every hierarchical net as a disagreement.
+    let netlist = find_netlist(&tree, &step).map(|t| {
+        let parsed = records::parse_netlist(&t);
+        records::CadNetlist {
+            points_per_net: parsed
+                .points_per_net
+                .into_iter()
+                .map(|(k, v)| (unescape(&k), v))
+                .collect(),
+        }
+    });
     let netlist_nets = netlist.as_ref().map(|n| {
         n.points_per_net
             .keys()
@@ -539,10 +576,6 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
         });
     }
 
-    let info = tree.text("misc/info").unwrap_or_default();
-    let producer = info_field(&info, "ODB_SOURCE")
-        .or_else(|| info_field(&info, "SAVE_APP"))
-        .unwrap_or_default();
     // `JOB_NAME=job` is KiCad 9's fixed placeholder, not a board name; leaving
     // the name empty lets the caller fall back to the file stem the way it does
     // for a titleless KiCad layout.
@@ -565,6 +598,7 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
             drills,
             pads,
             netlist_nets,
+            artwork,
             disagreements,
         },
     })

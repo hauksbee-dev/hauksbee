@@ -414,6 +414,87 @@ impl ExtractedBoard {
     }
 }
 
+/// Reverse KiCad's `{token}` name escape.
+///
+/// ODB++ and IPC-2581 both restrict the characters a name may contain, and
+/// KiCad's exporters push every name through their own `EscapeString`, which
+/// replaces the offending characters with brace tokens. A hierarchical net
+/// `Net-(U4-LNA_IN/RF)` therefore leaves KiCad as `Net-(U4-LNA_IN{slash}RF)` in
+/// BOTH exchange formats, and a reader that takes the name literally reports a
+/// net the rest of the design does not have — the netlint's `/SHEET/SIGNAL`
+/// hierarchy matching, and any comparison against the same board's native
+/// reading, both break on it.
+///
+/// The table is KiCad's (`string_utils.cpp`). This is applied ONLY when the file
+/// says KiCad wrote it ([`odbpp::OdbStats::producer`] /
+/// [`ipc2581::Ipc2581Stats::producer`]), because the tokens are KiCad's
+/// convention and not the formats': a net another tool genuinely named
+/// `A{slash}B` must survive intact.
+pub(crate) fn unescape_kicad_name(s: &str) -> String {
+    if !s.contains('{') {
+        return s.to_string();
+    }
+    const TABLE: &[(&str, &str)] = &[
+        ("{dblquote}", "\""),
+        ("{quote}", "'"),
+        ("{lt}", "<"),
+        ("{gt}", ">"),
+        ("{backslash}", "\\"),
+        ("{slash}", "/"),
+        ("{bar}", "|"),
+        ("{colon}", ":"),
+        ("{space}", " "),
+        ("{dollar}", "$"),
+        ("{tab}", "\t"),
+        ("{return}", "\n"),
+        // `{brace}` last: a `{` restored earlier must not start a new token.
+        ("{brace}", "{"),
+    ];
+    let mut out = s.to_string();
+    for (token, ch) in TABLE {
+        if out.contains(token) {
+            out = out.replace(token, ch);
+        }
+    }
+    out
+}
+
+/// Collapse components that share a reference designator into one.
+///
+/// Two placements under one designator are one electrical part with several
+/// physical instances: a test point placed on both board sides is the ordinary
+/// case (Watchy's TP4/TP5), and a connector split into two footprints is the
+/// other. The KiCad layout reader has always done this (see `pcb.rs`), because
+/// every downstream count — bind rows, `num_components`, resolve-rate
+/// denominators, [`ExtractedBoard::component`] lookups — assumes one part per
+/// designator. The exchange readers ([`odbpp`], [`ipc2581`]) route through this
+/// so a board re-exported to ODB++ or IPC-2581 reads as the same part list it
+/// does natively, rather than growing a phantom `TP4_2`.
+///
+/// The first instance keeps its position, value and footprint; later instances
+/// contribute their pads. A part is DNP only when *every* instance is.
+pub(crate) fn merge_duplicate_references(components: Vec<Component>) -> Vec<Component> {
+    let mut out: Vec<Component> = Vec::with_capacity(components.len());
+    for c in components {
+        let prev = (!c.reference.is_empty())
+            .then(|| out.iter_mut().find(|p| p.reference == c.reference))
+            .flatten();
+        match prev {
+            Some(prev) => {
+                prev.pins.extend(c.pins);
+                prev.dnp = prev.dnp && c.dnp;
+                // A later instance can carry the value the first one lacked
+                // (KiCad puts the value on one footprint of a split part).
+                if prev.value.is_empty() && !c.value.is_empty() {
+                    prev.value = c.value;
+                }
+            }
+            None => out.push(c),
+        }
+    }
+    out
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Lint {
     /// Pins whose net id has no declaration: (reference, pin, net id).
