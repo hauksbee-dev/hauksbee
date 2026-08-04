@@ -120,9 +120,14 @@ fn a_gap_inside_the_touching_band_is_a_short_not_a_clearance_note() {
             n.contains(&"A") && n.contains(&"B")
         })
         .expect("A and B are reported against each other");
+    // Strictly POSITIVE and inside the band is the whole point. A gap of exactly
+    // zero would be caught by the old `gap <= 0.0` test too, so this fixture
+    // would not discriminate; a positive one under the band is the case that used
+    // to be filed as a clearance note.
     assert!(
-        f.gap_mm.abs() < hauksbee_extract::SHORT_TOUCH_EPS_MM,
-        "the fixture is meant to land inside the touching band, measured {:e}",
+        f.gap_mm > 0.0 && f.gap_mm < hauksbee_extract::SHORT_TOUCH_EPS_MM,
+        "the fixture must land strictly inside the touching band on the positive \
+         side, measured {:e}",
         f.gap_mm
     );
     assert_eq!(
