@@ -82,10 +82,22 @@ use serde::{Deserialize, Serialize};
 pub struct AssumptionId(pub String);
 
 impl AssumptionId {
+    /// The subject an id falls back to when the producer had none. A board can
+    /// carry an unnamed net or a footprint with a blank designator, and a gap on
+    /// one of those is still a gap worth reporting: an id naming
+    /// [`Self::UNNAMED_SUBJECT`] says so, where an id naming nothing at all would
+    /// be unciteable.
+    pub const UNNAMED_SUBJECT: &'static str = "unnamed";
+
     /// Compose an id from a kind and a subject. The subject is folded only
     /// where folding is needed to keep the id parseable: whitespace runs and
-    /// `:` become `_`.
+    /// `:` become `_`. An empty subject becomes [`Self::UNNAMED_SUBJECT`].
     pub fn new(kind: AssumptionKind, subject: &str) -> Self {
+        let subject = if subject.trim().is_empty() {
+            Self::UNNAMED_SUBJECT
+        } else {
+            subject
+        };
         let mut out = String::with_capacity(subject.len());
         let mut pending_space = false;
         for ch in subject.trim().chars() {
@@ -300,7 +312,7 @@ fn fragment(s: &str) -> String {
     // real file arrives with whatever spacing the file had, and a double space
     // is not a reason to refuse a sentence, only to tidy it.
     s.trim()
-        .trim_end_matches(['.', ';', ','])
+        .trim_end_matches(['.', ';', ',', ':', '!', '?'])
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
@@ -389,7 +401,7 @@ impl<'a> Subject<'a> {
     /// The prose form, falling back to the key. A producer that has an id but no
     /// prose still has a real gap to report, and the key names it.
     fn text_or_key(&self) -> String {
-        or_else(self.text, &fragment(self.key))
+        or_else(self.text, &or_else(self.key, AssumptionId::UNNAMED_SUBJECT))
     }
 }
 
@@ -491,6 +503,10 @@ impl Assumption {
     /// assert!(a.replacement().contains("U2"));
     /// ```
     pub fn open_part(reference: &str, value: &str, reason: &str) -> Self {
+        // A board can carry a footprint with a blank designator, and a gap on one
+        // is still a gap: naming it as unnamed beats a sentence with a hole in it
+        // or a panic inside a reader for a data reason.
+        let reference = or_else(reference, "an unnamed part");
         let value = fragment(value);
         let named = if value.is_empty() {
             reference.to_string()
@@ -509,7 +525,7 @@ impl Assumption {
         Self::build(
             AssumptionKind::OpenPart,
             AssumptionSource::Binder,
-            reference,
+            &reference,
             Scope::Parts {
                 refs: vec![reference.to_string()],
             },
@@ -539,12 +555,13 @@ impl Assumption {
     ) -> Self {
         // A producer with no name for one side still has a real gap to report,
         // so the sentence names what it can rather than leaving a hole.
+        let reference = or_else(reference, "an unnamed part");
         let requested = or_else(requested, "the part the board asks for");
         let stand_in = or_else(stand_in, "a stand-in model");
         Self::build(
             AssumptionKind::SubstituteModel,
             source,
-            reference,
+            &reference,
             Scope::Parts {
                 refs: vec![reference.to_string()],
             },
@@ -568,6 +585,7 @@ impl Assumption {
     /// A pin's role was inferred from the pin-rule table rather than read from
     /// the schematic.
     pub fn inferred_pin_role(reference: &str, pin: &str, role: &str) -> Self {
+        let reference = or_else(reference, "an unnamed part");
         let pin = or_else(pin, "an unnamed pin");
         let role = or_else(role, "inferred");
         Self::build(
@@ -595,6 +613,7 @@ impl Assumption {
 
     /// A parameter took a documented default because no input carried a value.
     pub fn default_parameter(reference: &str, parameter: &str, value: &str) -> Self {
+        let reference = or_else(reference, "an unnamed part");
         let parameter = or_else(parameter, "a parameter");
         let value = or_else(value, "the documented default");
         Self::build(
@@ -661,7 +680,7 @@ impl Assumption {
         because: &str,
         replacement: &str,
     ) -> Self {
-        let check = fragment(check);
+        let check = or_else(check, AssumptionId::UNNAMED_SUBJECT);
         let rule = rule.map(fragment).filter(|r| !r.is_empty());
         // A check that could not run one of its rules says nothing about that
         // rule, not about the whole check, and the scope has to say which or the
@@ -764,10 +783,12 @@ impl Assumption {
     /// constructor because this wording is load-bearing and appears on several
     /// surfaces.
     pub fn held_by_ideal_source(net: &str) -> Self {
+        // An unnamed net is ordinary board data, not a producer bug.
+        let net = or_else(net, "an unnamed net");
         Self::build(
             AssumptionKind::ReducedFidelity,
             AssumptionSource::Check,
-            net,
+            &net,
             Scope::Nets {
                 nets: vec![net.to_string()],
             },
@@ -824,9 +845,12 @@ impl Assumption {
     /// lets [`EvidenceMap::derive_status`] treat a lapsed waiver as undermining
     /// rather than qualifying.
     pub fn waived(check: &str, kind: &str, subject: &str, reason: &str, until: &str) -> Self {
-        let check = fragment(check);
-        let kind = fragment(kind);
-        let subject_text = fragment(subject);
+        // The check name and rule come from the waiver file's own required
+        // fields, and the subject from its nets or refs; a producer that lost one
+        // on the way here still has a waiver to surface.
+        let check = or_else(check, "an unnamed check");
+        let kind = or_else(kind, "an unnamed rule");
+        let subject_text = or_else(subject, "an unnamed subject");
         let until = fragment(until);
         Self::build(
             AssumptionKind::Waived,
@@ -1099,6 +1123,14 @@ pub struct TimeWindow {
     pub end_s: f64,
 }
 
+impl TimeWindow {
+    /// Whether both bounds are real numbers. See [`ErrorBudget::sanitized`] for
+    /// why a budget checks this before it is published.
+    pub fn is_finite(&self) -> bool {
+        self.start_s.is_finite() && self.end_s.is_finite()
+    }
+}
+
 /// One window and the integration method that produced it. The primary method
 /// covers most runs in a single entry; a per-chunk fallback ladder contributes
 /// one entry per fallback-solved window, using that machinery's own stable
@@ -1141,6 +1173,12 @@ pub struct Residual {
 /// Interval bounds a model places on a derived quantity. This is the socket for
 /// interval models: shaped before its producer exists so that work lands in
 /// this vocabulary instead of inventing a second one.
+///
+/// Both bounds are real numbers. A one-sided datasheet interval ("beta at least
+/// 100") has to be expressed with a finite other bound, because an infinity is
+/// not JSON: it would serialize as `null` against a schema that says `number`
+/// and no consumer could read it back. Whoever lands the producer picks the
+/// physical limit and says so in `basis`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct ModelUncertainty {
     /// Which parameter carries the interval ("Q2.beta", "D1.vf").
@@ -1224,6 +1262,34 @@ fn residual_is_not_a_number(v: &Option<Residual>) -> bool {
 }
 
 impl ErrorBudget {
+    /// The budget with everything that is not a real number taken out, which is
+    /// what a producer publishes.
+    ///
+    /// JSON has no NaN and no infinity. `serde_json` writes both as `null`, and a
+    /// `null` then fails to read back as the `number` this schema promises, so
+    /// one non-finite value makes the whole document unparseable. The optional
+    /// fields already skip themselves; this drops the entries that cannot, and a
+    /// dropped window or interval is honest: a span whose own bounds are not
+    /// numbers describes nothing.
+    ///
+    /// A non-finite TOLERANCE is a different thing, a producer that never set
+    /// one, so it is a debug assertion rather than a silent repair: there is no
+    /// honest value to substitute for "how close is close enough".
+    pub fn sanitized(mut self) -> Self {
+        debug_assert!(
+            self.tolerance.reltol.is_finite()
+                && self.tolerance.abstol.is_finite()
+                && self.tolerance.chgtol.is_finite(),
+            "an error budget with a non-finite tolerance says nothing about how good \
+             its numbers are"
+        );
+        self.methods.retain(|m| m.window.is_finite());
+        self.failed_windows.retain(TimeWindow::is_finite);
+        self.model_uncertainty
+            .retain(|u| u.low.is_finite() && u.high.is_finite());
+        self
+    }
+
     /// The common shape: known tolerances, nothing else measured yet.
     pub fn new(tolerance: IntegrationTolerance) -> Self {
         Self {
@@ -1284,18 +1350,25 @@ pub enum EvidenceStatus {
 ///
 /// So a reading before [`RunDate::EARLIEST_CREDIBLE_DAY`] is not believed, and
 /// [`RunDate::unknown`] is what a caller with no date passes. Either way every
-/// waiver reads as lapsed, which is the fail-closed direction. The floor here is
-/// deliberately loose, catching obvious nonsense rather than duplicating the
-/// waiver gate's own tighter build-date floor: two floors that could disagree
-/// about the same day would be worse than one.
+/// waiver reads as lapsed, which is the fail-closed direction.
+///
+/// The floor is the day this build was made, matching the waiver gate's own
+/// floor (`CLOCK_FLOOR_EPOCH_DAYS` in `crates/hauksbee-engine/src/waiver.rs`)
+/// rather than sitting years below it. A looser floor is not a safer floor: it
+/// is a window in which a broken clock is believed, and a waiver written any
+/// time inside that window comes back to life.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RunDate(Option<i64>);
 
 impl RunDate {
-    /// Days since the Unix epoch for 2020-01-01. A run of THIS build cannot
-    /// honestly be happening before it, so a reading below it is a broken clock,
-    /// not a date.
-    pub const EARLIEST_CREDIBLE_DAY: i64 = 18_262;
+    /// Days since the Unix epoch for 2026-07-29, the day this check was written.
+    /// A run of THIS build cannot honestly be happening before it, so a reading
+    /// below it is a broken clock, not a date.
+    ///
+    /// Kept equal to the waiver gate's `CLOCK_FLOOR_EPOCH_DAYS` on purpose: two
+    /// floors that disagree about the same day mean the looser one decides, and
+    /// the looser one is always the wrong one to trust.
+    pub const EARLIEST_CREDIBLE_DAY: i64 = 20_663;
 
     /// The run's date, as days since the Unix epoch. A reading below
     /// [`Self::EARLIEST_CREDIBLE_DAY`] is treated as no date at all.
@@ -1352,7 +1425,7 @@ impl RunDate {
 /// ```
 /// use hauksbee_ir::evidence::{Assumption, EvidenceMap, EvidenceStatus, RunDate};
 ///
-/// let today = RunDate::from_epoch_days(20_454); // 2026-01-01
+/// let today = RunDate::from_epoch_days(20_666); // 2026-08-01
 /// let open = Assumption::open_part("U2", "XC6206", "no model matched");
 /// let map = EvidenceMap::new("3V3 stays above 3.1 V", &[open], today)
 ///     .with_artifacts(vec![0, 2]);
@@ -1373,27 +1446,38 @@ pub struct EvidenceMap {
     /// the same forgery one indirection out.
     assertion: String,
     /// Indices into the run's `inventory`, causal only: the artifacts whose
-    /// contributions this assertion actually consumed.
+    /// contributions this assertion actually consumed. Omitted when empty, per
+    /// the module's serde convention: a check that reads no artifact says so by
+    /// carrying no key, and adding this skip after the schema publishes would be
+    /// the breaking change the once-only version bump is being saved for.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub artifacts: Vec<usize>,
     /// Models bound on the causal path.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<ModelOnPath>,
     /// Parameters read on the causal path.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub parameters: Vec<ParameterProvenance>,
-    /// On-path assumptions, by id into the run's assumption registry. Private
-    /// with a getter, because it is half of the derived-status invariant:
-    /// letting a caller push an id in after construction would let the id list
-    /// and the status disagree.
+    /// On-path assumptions, by id into the run's assumption registry.
+    // Private with a getter, because it is half of the derived-status
+    // invariant: an id pushed in after construction would let the list and the
+    // status disagree. Kept as a `//` comment so the published schema carries
+    // the description a consumer needs, not this crate's internal reasoning.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     assumptions: Vec<AssumptionId>,
     /// How good the numbers behind this assertion are.
+    // Private with `with_error_budget` as the only way in: a failed window is a
+    // claim that a quantity read inside it is not a measurement, so a mutable
+    // budget would let a later stage delete that claim rather than a record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub error_budget: Option<ErrorBudget>,
+    error_budget: Option<ErrorBudget>,
     /// Statistical coverage wording for ensemble assertions. Not an
     /// assumption: an accurate statement of method.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub coverage: Option<String>,
-    /// DERIVED, never set. See [`EvidenceMap::derive_status`].
+    /// How much this conclusion is entitled to claim, derived from the
+    /// assumptions on its causal path.
+    // DERIVED, never set: see `EvidenceMap::derive_status`.
     status: EvidenceStatus,
 }
 
@@ -1484,6 +1568,12 @@ impl EvidenceMap {
         self.status
     }
 
+    /// How good the numbers behind this assertion are, when the producing path
+    /// measured them.
+    pub fn error_budget(&self) -> Option<&ErrorBudget> {
+        self.error_budget.as_ref()
+    }
+
     /// The on-path assumption ids, deduped, in the order the traversal found
     /// them. The traversal owes that order determinism: a set-iteration order
     /// here would make the JSON, the human output and every golden file
@@ -1516,9 +1606,12 @@ impl EvidenceMap {
         self
     }
 
-    /// Attach the error budget for this assertion's numbers.
+    /// Attach the error budget for this assertion's numbers. Sanitized on the
+    /// way in ([`ErrorBudget::sanitized`]), so a published map cannot carry a
+    /// window or an interval whose own bounds are not numbers, whether or not the
+    /// producer remembered.
     pub fn with_error_budget(mut self, budget: ErrorBudget) -> Self {
-        self.error_budget = Some(budget);
+        self.error_budget = Some(budget.sanitized());
         self
     }
 
@@ -1583,10 +1676,9 @@ fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
 mod tests {
     use super::*;
 
-    /// 2026-01-01, a fixed "today" so no test depends on the wall clock.
-    /// 2026-01-01, a fixed run date so no test depends on the wall clock.
+    /// 2026-08-01, a fixed run date so no test depends on the wall clock.
     fn today() -> RunDate {
-        RunDate::from_epoch_days(20_454)
+        RunDate::from_epoch_days(20_666)
     }
 
     fn all_kinds() -> Vec<Assumption> {
@@ -1651,7 +1743,7 @@ mod tests {
                 "controlled_impedance",
                 "DDR_CLK",
                 "the fab confirmed the stackup by email",
-                "2026-06-01",
+                "2027-06-01",
             ),
         ]
     }
@@ -1703,7 +1795,7 @@ mod tests {
             "not-exercised:i2c0/U4"
         );
         assert_eq!(
-            Assumption::waived("si", "controlled_impedance", "DDR_CLK", "why", "2026-06-01")
+            Assumption::waived("si", "controlled_impedance", "DDR_CLK", "why", "2027-06-01")
                 .id
                 .as_str(),
             "waived:si/controlled_impedance/DDR_CLK"
@@ -1773,15 +1865,15 @@ mod tests {
     fn only_waived_carries_an_expiry() {
         for a in all_kinds() {
             match a.kind {
-                AssumptionKind::Waived => assert_eq!(a.expires.as_deref(), Some("2026-06-01")),
+                AssumptionKind::Waived => assert_eq!(a.expires.as_deref(), Some("2027-06-01")),
                 _ => assert!(a.expires.is_none(), "{} carries an expiry", a.id),
             }
         }
         // The two malformed shapes are construction errors, not warnings.
         let mut open = Assumption::open_part("R7", "10k", "");
-        open.expires = Some("2026-06-01".into());
+        open.expires = Some("2027-06-01".into());
         assert!(open.validate().is_err());
-        let mut waived = Assumption::waived("si", "k", "N1", "why", "2026-06-01");
+        let mut waived = Assumption::waived("si", "k", "N1", "why", "2027-06-01");
         waived.expires = None;
         assert!(waived.validate().is_err());
     }
@@ -1806,13 +1898,38 @@ mod tests {
     }
 
     /// An id with no subject names nothing: an acknowledgment file could not name
-    /// it and a diff could not track it. That is a producer bug rather than
-    /// missing data (kinds and check names are constants in the producers), so
-    /// `build` asserts its own output and a debug build says so.
+    /// it and a diff could not track it. No constructor can produce one, because
+    /// a board legitimately carries an unnamed net or a blank designator and a
+    /// gap on one of those is still a gap: it gets named as unnamed rather than
+    /// crashing a reader or shipping an unciteable id.
     #[test]
-    #[should_panic(expected = "names no subject")]
-    fn an_id_with_no_subject_is_a_construction_error() {
-        Assumption::not_checked(AssumptionSource::Reader, "", None, "no copper", "add one");
+    fn no_constructor_can_produce_an_unciteable_id() {
+        let from_nothing = [
+            Assumption::open_part("", "", ""),
+            Assumption::substitute_model(AssumptionSource::Binder, "", "", ""),
+            Assumption::inferred_pin_role("", "", ""),
+            Assumption::default_parameter("", "", ""),
+            Assumption::not_checked(AssumptionSource::Reader, "", None, "", ""),
+            Assumption::held_by_ideal_source(""),
+            Assumption::fitted_by_default(
+                AssumptionSource::Reader,
+                Subject::same(""),
+                Scope::Board,
+            ),
+            Assumption::not_exercised(
+                AssumptionSource::Scheduler,
+                Subject::same(""),
+                Scope::Board,
+                "",
+                "",
+            ),
+            Assumption::waived("", "", "", "", "2027-06-01"),
+        ];
+        for a in from_nothing {
+            a.validate().unwrap_or_else(|e| panic!("{e}"));
+            let subject = a.id().as_str().split_once(':').unwrap().1;
+            assert!(!subject.is_empty(), "{} names no subject", a.id());
+        }
     }
 
     /// Missing DATA is a different thing from a producer bug, and must not be
@@ -1854,7 +1971,7 @@ mod tests {
                 "",
                 "",
             ),
-            Assumption::waived("si", "k", "DDR_CLK", "", "2026-06-01"),
+            Assumption::waived("si", "k", "DDR_CLK", "", "2027-06-01"),
         ];
         for a in thin {
             a.validate().unwrap_or_else(|e| panic!("{e}"));
@@ -1896,7 +2013,7 @@ mod tests {
         assert_eq!(parse_ymd_epoch_days("99999999999999-12-31"), None);
         assert_eq!(parse_ymd_epoch_days("2026-02-30"), None);
         assert_eq!(parse_ymd_epoch_days("2026-13-01"), None);
-        assert_eq!(parse_ymd_epoch_days("2026-06-01"), Some(20_605));
+        assert_eq!(parse_ymd_epoch_days("2027-06-01"), Some(20_970));
     }
 
     // ── the status rule table ────────────────────────────────────────────
@@ -1987,8 +2104,8 @@ mod tests {
 
     #[test]
     fn a_lapsed_waiver_stops_covering() {
-        let w = Assumption::waived("si", "k", "DDR_CLK", "fab confirmed", "2026-06-01");
-        let expiry = parse_ymd_epoch_days("2026-06-01").unwrap();
+        let w = Assumption::waived("si", "k", "DDR_CLK", "fab confirmed", "2027-06-01");
+        let expiry = parse_ymd_epoch_days("2027-06-01").unwrap();
         // In force up to and including the expiry date (end-of-day expiry, the
         // reading the waiver gate already uses).
         assert_eq!(
@@ -2051,7 +2168,7 @@ mod tests {
             Some(RunDate::EARLIEST_CREDIBLE_DAY)
         );
         assert_eq!(
-            parse_ymd_epoch_days("2020-01-01"),
+            parse_ymd_epoch_days("2026-07-29"),
             Some(RunDate::EARLIEST_CREDIBLE_DAY),
             "the floor is the date its doc comment claims"
         );
@@ -2248,6 +2365,66 @@ mod tests {
     }
 
     #[test]
+    fn a_window_or_an_interval_that_is_not_numbers_is_dropped_not_published() {
+        // The required fields cannot skip themselves, so a span whose own bounds
+        // are not numbers has to go: it describes nothing, and one `null` makes
+        // the whole document unreadable against a schema that says `number`. A
+        // failed window is exactly where bounds go bad, and a one-sided datasheet
+        // interval is exactly where an infinity comes from.
+        let budget = ErrorBudget {
+            failed_windows: vec![
+                TimeWindow {
+                    start_s: f64::NAN,
+                    end_s: 0.1,
+                },
+                TimeWindow {
+                    start_s: 0.2,
+                    end_s: 0.3,
+                },
+            ],
+            model_uncertainty: vec![
+                ModelUncertainty {
+                    parameter: "Q2.beta".into(),
+                    low: 100.0,
+                    high: f64::INFINITY,
+                    basis: "datasheet minimum only".into(),
+                },
+                ModelUncertainty {
+                    parameter: "D1.vf".into(),
+                    low: 0.55,
+                    high: 0.75,
+                    basis: "datasheet min/max".into(),
+                },
+            ],
+            methods: vec![WindowMethod {
+                window: TimeWindow {
+                    start_s: 0.0,
+                    end_s: f64::NEG_INFINITY,
+                },
+                method: "trapezoidal".into(),
+                accuracy: String::new(),
+            }],
+            ..ErrorBudget::new(IntegrationTolerance {
+                reltol: 1e-3,
+                abstol: 1e-12,
+                chgtol: 1e-14,
+            })
+        };
+        // A map sanitizes on the way in, so a producer cannot forget.
+        let map = EvidenceMap::new("A", &[], today()).with_error_budget(budget);
+        let b = map.error_budget().unwrap();
+        assert_eq!(b.failed_windows.len(), 1);
+        assert_eq!(b.failed_windows[0].start_s, 0.2);
+        assert_eq!(b.model_uncertainty.len(), 1);
+        assert_eq!(b.model_uncertainty[0].parameter, "D1.vf");
+        assert!(b.methods.is_empty());
+        // And what comes out reads back in.
+        let v = serde_json::to_value(b).unwrap();
+        let back: ErrorBudget = serde_json::from_value(v).unwrap();
+        assert_eq!(&back, b);
+    }
+
+    #[test]
     fn provenance_and_origin_shapes() {
         let p = ParameterProvenance {
             parameter: "U2.vout".into(),
@@ -2403,6 +2580,47 @@ mod tests {
         // Half two: and it does not smear over the rest of the board.
         assert_eq!(b.status(), EvidenceStatus::Clean);
         assert!(b.assumptions().is_empty());
+
+        // Half three, the one a caller controls rather than the traversal: a
+        // board-scoped gap of an undermining kind is on every assertion's path by
+        // definition, so scoping one that way makes a whole run invalid. That is
+        // a real answer for a board with no BOM at all, and the wrong answer for
+        // a reader that knows which parts are in question. Pinned here because it
+        // is the saturated mode arriving as a scope choice rather than as a
+        // traversal bug.
+        let board_wide = vec![Assumption::fitted_by_default(
+            AssumptionSource::Reader,
+            Subject::new("odbpp", "the ODB++ archive"),
+            Scope::Board,
+        )];
+        for nets in [&["3V3"], &["VBUS"]] {
+            let map = EvidenceMap::new(
+                "any assertion",
+                &on_path_for(nets, incidence, &board_wide),
+                today(),
+            );
+            assert_eq!(map.status(), EvidenceStatus::Undermined);
+            assert_eq!(
+                map.assumptions(),
+                [AssumptionId("fitted-by-default:odbpp".into())]
+            );
+        }
+        // Scoped to the parts actually in question, it touches only those.
+        let scoped = vec![Assumption::fitted_by_default(
+            AssumptionSource::Reader,
+            Subject::new("odbpp", "the ODB++ archive"),
+            Scope::Parts {
+                refs: vec!["C1".into()],
+            },
+        )];
+        assert_eq!(
+            EvidenceMap::new("A", &on_path_for(&["3V3"], incidence, &scoped), today()).status(),
+            EvidenceStatus::Undermined
+        );
+        assert_eq!(
+            EvidenceMap::new("B", &on_path_for(&["VBUS"], incidence, &scoped), today()).status(),
+            EvidenceStatus::Clean
+        );
     }
 
     /// The saturated map, shown failing, so the discrimination test above is
