@@ -1223,3 +1223,72 @@ max_pin_current_a = 0.1   # maximum output current sunk by RST or any I/O pin
 theta_ja_c_per_w = 32.0   # multi-layer PCB, exposed pad soldered
 # No max_junction_temp_c: the datasheet gives an ambient-under-bias range
 # (-55 to 125 C) and no junction limit, so there is nothing to put here.
+
+# ═════════════════════════════════════════════════════════════════════════════
+# ADDRESSABLE RGB LEDs DELIBERATELY LEFT UNRESOLVED. This is the single largest
+# honest gap in the corpus, so it is worth writing down properly rather than
+# leaving as a silent absence.
+#
+# The corpus carries about 250 instances of integrated-controller RGB LEDs:
+# YS-SK6812MINI-E (92 on the Corne keyboards), SK6805-EC15 (85 on MNT Reform),
+# YS-SK6812MINI (58 on Lily58), WS2812-2020 (13 on the SparkFun Thing Plus
+# RP2040). Every datasheet in the family was obtained and read: Worldsemi
+# WS2812B (Adafruit mirror, undated) and WS2812B-V5/W (Modify Record V1.0
+# 2017-05-23 through V6.1 2022-09-08); Opsco SPC/SK6812MINI-E Rev. 02
+# (2019-01-18), SPC/SK6812MINI Rev. 01 (2015-07-22) and SK6805-EC15 Rev. 04
+# (2019-01-18).
+#
+# THE `digital` KIND REQUIRES voh AND vol, AND NOT ONE OF THESE DATASHEETS
+# PUBLISHES EITHER. That is the immediate blocker and it is a documentary fact,
+# not a search failure: every sheet in the family has a switching-characteristics
+# table with a DIN-to-DOUT delay (tPLZ 300 ns max on the WS2812B, TPLH/TPHL
+# 500 ns max on the SK parts) and no output-level row at all. The closest thing
+# any of them gives is the plain SK6812MINI's DOUT DRIVE CURRENTS (IDOH 49 mA
+# typ, IDOL -50 mA typ), which are currents, not levels.
+#
+# AND EVEN WITH THEM THE DATA PATH COULD NOT BE MODELLED, which is the deeper
+# reason. DOUT is not DIN delayed; it is DIN with this pixel's own 24 bits
+# stripped off the front. Every sheet in the family says so in near-identical
+# words, and the "Data transmission method" waveform in each one draws it
+# explicitly: D1 sees "first 24bit / second 24bit / third 24bit...", D2 sees only
+# "second 24bit / third 24bit...", D3 only "third 24bit...". Reproducing that
+# needs a bit counter and a 24-bit latch. There is no combinational path from the
+# input pin to the output pin at all, so no `[models.logic]` block can express
+# this part, and writing `dout = din` would be a straightforward falsehood that
+# happens to lint clean.
+#
+# The supply draw has the same shape of problem. The idle figure IS published and
+# is usable (0.6 mA typ quiescent on the WS2812B-V5/W; 1 mA typ "static power
+# consumption" on all three SK parts), but the moment a channel lights the
+# constant-current sink for it turns on (12 mA per channel on the WS2812B-V5/W
+# and SK6812MINI-E, 5 mA on the SK6805-EC15, so 36 mA and 15 mA respectively with
+# all three channels full on), and WHICH channels are on is a function of the
+# 24-bit word this particular pixel latched, which depends on how many upstream
+# pixels already consumed bits off the shared line. No sheet publishes a
+# duty-cycle-to-average-current relation. So a chain's current draw is knowable
+# only by simulating the protocol.
+#
+# WHAT WOULD FIX IT: a kind for a part that presents a supply load and passes a
+# serial stream through without a boolean relation between its pins, i.e. a
+# stateful-load kind. That is an engine change, not a database entry, and it
+# would immediately pay for itself on ~250 corpus instances plus every LED strip
+# anyone has ever put on a hobby board. Two things to carry over when it exists:
+#
+#   - THE PINOUTS ARE NOT INTERCHANGEABLE ACROSS THIS FAMILY, which is a real
+#     trap. WS2812B (5050): 1=VDD 2=DOUT 3=VSS 4=DIN. SK6812MINI-E (3528-shaped,
+#     Rev. 02): 1=VDD 2=DOUT 3=GND 4=DIN. Plain SK6812MINI (5050-shaped,
+#     Rev. 01, an older and physically different part despite the name):
+#     1=DOUT 2=VSS 3=DIN 4=VDD, i.e. rotated relative to the -E. SK6805-EC15:
+#     1=DIN 2=VDD 3=DOUT 4=GND. Four parts, four pin maps.
+#   - THE INPUT THRESHOLDS ALSO DISAGREE WITHIN THE FAMILY. SK6812MINI-E and
+#     SK6805-EC15 give VIH 0.7 x VDD / VIL 0.3 x VDD; WS2812B-V5/W gives VIH
+#     0.63 x VDD min and VIL 0.7 V max; the plain SK6812MINI gives ABSOLUTE
+#     volts, VIH 3.4 V min / VIL 1.6 V max at VDD = 5 V. Not a transcription
+#     slip: the -E and the non-E sheets genuinely specify these differently.
+#
+# WS2812-2020 additionally could not be sourced at all: every mirror of the
+# 2020-package datasheet either 403'd, sat behind a lead-capture form, or served
+# HTML instead of the PDF. A distributor spec table gives the timing and the
+# luminous intensities but NOT the pin-number-to-signal map, and the 2020
+# footprint is not the 5050 one, so even the pinout is unknown for that part.
+# It stays unresolved on the stronger ground that nothing about it was verified.
