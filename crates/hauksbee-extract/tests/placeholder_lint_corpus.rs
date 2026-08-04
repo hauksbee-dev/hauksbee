@@ -13,9 +13,10 @@
 //! placeholder-value lint produces no medium-or-high finding that is not a
 //! recorded, dated exception. Almost all of these boards shipped with fully
 //! specified BOMs, so almost any fire is a false positive by construction.
-//! Almost: see `EXCEPTIONS` below, which names the one board where the finding
-//! is real, says why, and expires. A gate with no room for a true positive is a
-//! gate that gets quietened by weakening the check.
+//! Almost: see `EXCEPTIONS` below, which names the one shipped board where the
+//! finding is real, says why, and expires. A gate with no room for a true
+//! positive is a gate that gets quietened by weakening the check. KiCad's own
+//! demonstration projects are skipped entirely, for the reason given at the walk.
 //!
 //! Corpus-gated: skipped when board-corpus is absent, with
 //! `HAUKSBEE_REQUIRE_CORPUS=1` (CI) turning absence into a hard failure so the
@@ -52,19 +53,21 @@ struct Exception {
 /// not. Keep this list at the size of the evidence, never at the size of the
 /// noise.
 const EXCEPTIONS: &[Exception] = &[Exception {
-    // The original Lily58 (KiCad 5 era, `pcb/`), not the Pro or Pro_V2
-    // revisions, whose R1/R2 carry real values ("50k" in Pro_V2).
-    board: "lily58/pcb/Lily58",
+    // The original Lily58 (`pcb/`) and the Pro (`Pro/PCB/`), on every extraction
+    // path each ships. Not Pro_V2, whose R1 carries a real value ("50k"); the
+    // reference filter below is what keeps this from reaching anything else.
+    board: "lily58/",
     refs: &["R1", "R2"],
     reason: "TRUE POSITIVE, kept on purpose. R1 and R2 are the I2C pull-ups: \
              R1 sits between SDA and VCC, R2 between SCL and VCC (Lily58.net \
              nets 6, 7 and 46), and upstream's value for both is the literal \
              string \"R\" - the KiCad library symbol name, never replaced with a \
-             resistance. A pull-up with no value is not a cosmetic BOM gap: the \
-             bus rise time the SI checks compute depends on it, and a builder \
-             ordering from this BOM has nothing to order. The check is right and \
-             is not being weakened; this records that the corpus contains one \
-             board that genuinely is under-specified.",
+             resistance. The Pro revision repeats it. A pull-up with no value is \
+             not a cosmetic BOM gap: the bus rise time the SI checks compute \
+             depends on it, and a builder ordering from this BOM has nothing to \
+             order. The check is right and is not being weakened; this records \
+             that the corpus contains a shipped keyboard that genuinely is \
+             under-specified.",
     until: "2027-08-01",
 }];
 
@@ -167,6 +170,21 @@ fn placeholder_value_is_silent_at_medium_and_above_across_corpus() {
         for entry in rd.flatten() {
             let p = entry.path();
             if p.is_dir() {
+                // KiCad's own demonstration projects are out of scope for THIS
+                // gate, and only this one. Their whole tree uses the bare library
+                // symbol name as a value - `R` on RCAN201/RCAN202 in
+                // kit-dev-coldfire-xilinx_5213, on R2 in custom_pads_test, on R1
+                // in simulation/analog-multiplier - because they illustrate
+                // features and are never ordered from. The lint is right about
+                // every one of them, and grading a "shipped boards have complete
+                // BOMs" gate on files that were never a BOM says nothing either
+                // way. They stay in the geometric gates, where being a demo does
+                // not change what the copper does.
+                if p.file_name().and_then(|s| s.to_str()) == Some("kicad_demos")
+                    || p.file_name().and_then(|s| s.to_str()) == Some("kicad-demos-src")
+                {
+                    continue;
+                }
                 stack.push(p);
                 continue;
             }

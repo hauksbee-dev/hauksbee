@@ -334,19 +334,43 @@ while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed dest_rel 
     rmdir "$dest/$hoist" 2>/dev/null || true
   fi
 
-  # `unpack`: a board published as an archive inside a repository. The Inkplate 6
-  # gerbers are the case: the repo carries them only as
-  # `Schematics, Gerber, BOM/v1.0/... .zip`, so a fetched corpus had a zip where
-  # the reverse-extraction test wanted a directory of films.
+  # `unpack`: the board is published as an archive inside a repository, and the
+  # archive IS the board. The Inkplate 6 is the case: the repo carries the films
+  # only as `Schematics, Gerber, BOM/v1.0/... .zip`, so a fetched corpus had a zip
+  # where the reverse-extraction test wanted a directory of films.
+  #
+  # The rest of the repository then goes, and that is the point rather than
+  # tidiness. Inkplate's repo also ships a 3D-printed-case project with its own
+  # F_Cu/B_Cu films; left in place they sat in the same directory as the main
+  # board's, and the gerber reader read FOUR copper layers on a two-layer board.
+  # A reverse-extraction directory holds one board's films or it holds nonsense.
   if [ -n "$unpack" ] && [ -f "$dest/$unpack" ]; then
     if command -v unzip >/dev/null 2>&1; then
-      unzip -q -o -j "$dest/$unpack" -d "$dest" 2>/dev/null || \
+      unpack_tmp="$dest/.hauksbee-unpack"
+      rm -rf "$unpack_tmp"
+      mkdir -p "$unpack_tmp"
+      if unzip -q -o -j "$dest/$unpack" -d "$unpack_tmp" 2>/dev/null; then
+        find "$dest" -mindepth 1 -maxdepth 1 \
+          ! -name '.hauksbee-unpack' ! -name '.hauksbee-rev' \
+          ! -iname 'LICENSE*' ! -iname 'COPYING*' ! -iname 'README*' \
+          -exec rm -rf {} + 2>/dev/null || true
+        find "$unpack_tmp" -mindepth 1 -maxdepth 1 -exec mv -f {} "$dest/" \; 2>/dev/null || true
+      else
         warn "$id: could not unpack $unpack"
-      rm -f "$dest/$unpack"
+      fi
+      rm -rf "$unpack_tmp"
     else
       warn "$id: unzip is absent, leaving $unpack packed"
     fi
   fi
+
+  # AppleDouble junk. Archives zipped on a Mac carry a `__MACOSX/` tree and a
+  # `._<name>` resource-fork stub beside every file, and `unzip` writes both. The
+  # Inkplate gerber zip is one: `._EPD_board.GTL` sorted alongside the real film,
+  # the gerber reader picked it up as a layer, and reverse-extraction died on
+  # "stream did not contain valid UTF-8". These are not data on any platform.
+  find "$dest" -name '__MACOSX' -type d -exec rm -rf {} + 2>/dev/null || true
+  find "$dest" -name '._*' -type f -delete 2>/dev/null || true
 
   # KiCad's own auto-backup directories. The LumenPnP motherboard ships six
   # historical copies of mobo.kicad_sch under `mobo-backups/`, and a corpus sweep

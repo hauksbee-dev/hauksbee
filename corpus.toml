@@ -31,7 +31,8 @@
 #   hoist              a directory inside the fetched tree whose CONTENTS are
 #                      lifted into the board directory, for an upstream that
 #                      keeps its design one level down.
-#   unpack             an archive inside the fetched tree to extract in place.
+#   unpack             an archive inside the fetched tree that IS the board. Its
+#                      contents replace everything else the upstream shipped.
 #   license_confirmed  false keeps the board out of the default fetch.
 #   name               the human name for logs and --list.
 #
