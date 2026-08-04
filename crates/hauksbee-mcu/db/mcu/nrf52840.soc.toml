@@ -18,12 +18,54 @@
 [soc]
 backend = "renode"
 machine = "nrf52"
-platform_repl = "@platforms/cpus/nrf52840.repl"
+platform_repl = """
+// nRF52840 platform: the stock Renode file plus this part's real core clock.
+//
+// CLOCK TRUTH (tests/clock_truth.rs). The stock nrf52840.repl declares NEITHER
+// `nvic systickFrequency` NOR `cpu PerformanceInMips`, so both fell to Renode's
+// defaults, which have no relation to this part: a SysTick-timed firmware ran
+// 6.58x fast (measured; the implied SysTick clock was ~420 MHz against the
+// part's 64 MHz). That made virtual time cheaper than the board's, which is
+// what let a time-based assertion pass at a rate no nRF52840 can hit.
+//
+// 64 MHz is not a configuration choice on this part, it is the only rate: the
+// HFCLK feeding the M4 runs at 64 MHz whether the source is the internal
+// oscillator or the crystal (nRF52840 PS v1.7 §5.3), so there is no
+// reset-default-versus-configured distinction to make. `frequency_hz` below
+// declares the same 64 MHz and is cross-checked against these two declarations
+// at machine bring-up (renode::mod `clock_declaration_mismatch`).
+//
+// PerformanceInMips is Renode's instructions-per-second knob; a Cortex-M4
+// retires roughly one instruction per cycle, so the part's core clock in MHz is
+// the right setting, the same identity db/mcu/rp2040/rp2040.repl uses (125 MIPS
+// at 125 MHz) on the one backend that already measured 1.00x.
+
+using "platforms/cpus/nrf52840.repl"
+
+nvic:
+    systickFrequency: 64000000
+
+cpu:
+    PerformanceInMips: 64
+"""
 cpu_path = "sysbus.cpu"
 uart = "sysbus.uart0"
 frequency_hz = 64_000_000
 expected_e_machine = "EM_ARM"
 mcu_label = "nRF52840 (ARM Cortex-M4)"
+
+# WATCHDOG (measured, and the reason this field exists). Renode's NRF52840 WDT
+# arms convincingly and then does nothing: with a 50 ms reload never fed,
+# RUNSTATUS reads 1, CRV reads back 1638 (50 ms at the model's correct 32768 Hz),
+# the PC sits inside the firmware's busy loop, and 1.000 s of simulated time
+# produces ZERO resets where the part gives twenty. A firmware whose recovery
+# path depends on the watchdog biting is therefore untested here, and a passing
+# run must say so rather than let the user infer otherwise.
+watchdog_limitation = """\
+The nRF52840 watchdog arms in this co-simulator (it reads back as running, with \
+a correct 32768 Hz reload) but never fires: an unserviced watchdog will NOT \
+reset the core, so watchdog recovery is untested on this run.\
+"""
 
 [[soc.ports]]
 letter = "0"

@@ -11,12 +11,58 @@
 [soc]
 backend = "renode"
 machine = "f4disco"
-platform_repl = "@platforms/boards/stm32f4_discovery.repl"
+platform_repl = """
+// STM32F4 Discovery platform: the stock board file plus this part's real core
+// clock.
+//
+// CLOCK TRUTH (tests/clock_truth.rs). The base `platforms/cpus/stm32f4.repl`
+// carries the same `systickFrequency: 72000000` copy-paste as the F1 platform,
+// and leaves `cpu PerformanceInMips` at Renode's default 100. A SysTick-timed
+// firmware therefore ran 4.51x fast (measured; exactly 72/16), and an
+// instruction busy-wait runs ~6x fast on the 100-MIPS core. That made virtual
+// time cheaper than the board's, which is what let a time-based assertion pass
+// at a rate no F4 Discovery can hit.
+//
+// 16 MHz is the F407's RESET DEFAULT: after reset the HSI is the system clock
+// (RM0090 §6.2). Firmware that brings up the 8 MHz HSE and the PLL for 168 MHz
+// is the common case on this board, but Renode's F4 platform models no clock
+// tree that would follow it, so a single fixed rate has to be declared and the
+// honest one is the rate the part runs at before firmware configures anything.
+// `frequency_hz` below declares the same 16 MHz and is cross-checked against
+// these two declarations at machine bring-up (renode::mod
+// `clock_declaration_mismatch`). A firmware that does configure the PLL to
+// 168 MHz sees its SysTick run 10.5x slow, which is a real limitation of this
+// backend and stated in docs/cosim/MCU.md rather than papered over.
+//
+// PerformanceInMips is Renode's instructions-per-second knob; a Cortex-M4
+// retires roughly one instruction per cycle, so the part's core clock in MHz is
+// the right setting, the same identity db/mcu/rp2040/rp2040.repl uses (125 MIPS
+// at 125 MHz) on the one backend that already measured 1.00x.
+
+using "platforms/boards/stm32f4_discovery.repl"
+
+nvic:
+    systickFrequency: 16000000
+
+cpu:
+    PerformanceInMips: 16
+"""
 cpu_path = "sysbus.cpu"
 uart = "sysbus.usart2"
 frequency_hz = 16_000_000
 expected_e_machine = "EM_ARM"
 mcu_label = "STM32F407 (ARM Cortex-M4)"
+
+# WATCHDOG: not measured on this part. The F103's IWDG was measured (it bites
+# once, then the core stays quiet) and the nRF52840's was measured (it arms and
+# never bites), and the two differ, so nothing about this platform's watchdog can
+# be inferred from either. Stating that is the honest position; leaving this
+# field out would claim the watchdog behaves.
+watchdog_limitation = """\
+Watchdog behaviour is UNVERIFIED on this part in this co-simulator: nobody has \
+measured whether an unserviced watchdog resets the core here, so a firmware \
+recovery path that depends on it is untested on this run.\
+"""
 
 [[soc.ports]]
 letter = "A"

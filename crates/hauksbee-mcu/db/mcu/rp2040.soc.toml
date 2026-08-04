@@ -93,6 +93,18 @@ frequency_hz = 125_000_000
 expected_e_machine = "EM_ARM"
 mcu_label = "RP2040 (dual Cortex-M0+)"
 
+# WATCHDOG: not measured on this part. The vendored watchdog model exists, and
+# WATCHDOG_CTRL reads back with its ENABLE bit clear at reset (so "off at reset"
+# is right), but nobody has run an armed, never-fed watchdog to the timeout here.
+# The two watchdogs that WERE measured disagree with each other (the F103's bites
+# once, the nRF52840's never bites), so this one cannot be inferred. Omitting the
+# field would claim it behaves.
+watchdog_limitation = """\
+Watchdog behaviour is UNVERIFIED on this part in this co-simulator: nobody has \
+measured whether an unserviced watchdog resets the core here, so a firmware \
+recovery path that depends on it is untested on this run.\
+"""
+
 # The boot ROM's contents must be present at address 0 before firmware runs: the
 # pico-sdk runtime resolves ROM helpers through the ROM function table during
 # runtime_init. Loaded, not executed from reset; see db/mcu/rp2040/README.md.
