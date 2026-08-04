@@ -168,9 +168,7 @@ fn olimex_rp2040_pico_pc_rev_b_netlist_is_clean_dvi_clock_on_slice_7() {
 #[test]
 fn sparkfun_samd51_thing_plus_qspi_flash_conflict_flagged() {
     let Some(_c) = corpus() else { return };
-    let msgs = conflicts(
-        "sparkfun_thingplus_samd51/Hardware/SAMD51_Thing_Plus.brd",
-    );
+    let msgs = conflicts("sparkfun_thingplus_samd51/Hardware/SAMD51_Thing_Plus.brd");
     assert_eq!(
         msgs.len(),
         1,
@@ -229,9 +227,7 @@ fn clean_corpus_boards_raise_no_resource_conflict() {
     for alts in clean {
         let Some(path) = alts.iter().find_map(|rel| board(rel)) else {
             if require {
-                panic!(
-                    "HAUKSBEE_REQUIRE_CORPUS=1 but known-good board missing (tried {alts:?})"
-                );
+                panic!("HAUKSBEE_REQUIRE_CORPUS=1 but known-good board missing (tried {alts:?})");
             }
             continue;
         };
