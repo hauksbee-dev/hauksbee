@@ -166,15 +166,21 @@ mod tests {
     use std::io::Write;
 
     /// Write a minimal fake ELF header with the given e_machine (little-endian)
-    /// and return its temp path.
+    /// and return its temp path. The filename carries a per-process counter as
+    /// well as the pid: several tests fabricate the SAME e_machine and the test
+    /// harness runs them in parallel threads, so a pid+machine name alone let
+    /// one test remove/rewrite a file another was mid-way through reading (a
+    /// rare but real reads_known_machines flake).
     fn fake_elf(e_machine: u16) -> std::path::PathBuf {
+        static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
         let mut buf = vec![0u8; E_MACHINE_OFFSET + 2];
         buf[..4].copy_from_slice(&ELF_MAGIC);
         buf[5] = 1; // EI_DATA = little-endian
         buf[E_MACHINE_OFFSET..].copy_from_slice(&e_machine.to_le_bytes());
         let path = std::env::temp_dir().join(format!(
-            "hauksbee-fake-elf-{}-{:04x}.elf",
+            "hauksbee-fake-elf-{}-{}-{:04x}.elf",
             std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             e_machine
         ));
         let mut f = std::fs::File::create(&path).unwrap();
