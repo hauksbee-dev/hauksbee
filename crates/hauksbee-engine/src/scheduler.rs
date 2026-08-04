@@ -262,6 +262,14 @@ pub struct Scheduler {
     /// consecutive so a diverged stretch reads as its true extent. Surfaced in the
     /// co-sim JSON so a consumer knows exactly which span cannot be trusted.
     failed_windows: Vec<(f64, f64)>,
+    /// The solver's own refusal message for each entry in `failed_windows`,
+    /// parallel and always the same length. Holds the FIRST failure's message
+    /// in a merged window, which is the one that started the divergence and so
+    /// the one worth naming. Carries the solver's blame clause (the net that
+    /// refused to settle, the devices on it, any near-zero-ohm link poisoning
+    /// the matrix), so a non-convergence names the smallest identifiable thing
+    /// instead of only a chunk count (E29).
+    failed_window_reasons: Vec<String>,
     /// Current run of back-to-back failed chunks (reset to 0 by any converged
     /// chunk). Feeds the strict/CI abort threshold.
     consecutive_failed_chunks: u32,
@@ -779,6 +787,7 @@ impl Scheduler {
             forced_node_volts: HashMap::new(),
             failed_chunks: 0,
             failed_windows: Vec::new(),
+            failed_window_reasons: Vec::new(),
             consecutive_failed_chunks: 0,
             max_consecutive_failed_chunks: 0,
             replay_chips,
@@ -1041,6 +1050,60 @@ impl Scheduler {
     /// every instantiated MCU was modelled by its exact requested part.
     pub fn substitutions(&self) -> &[McuSubstitution] {
         &self.substitutions
+    }
+
+    /// Loud notes for every net whose voltage is decided by something other
+    /// than the thing the user asked for (E30).
+    ///
+    /// Two shapes, both of which used to pass in silence:
+    ///
+    ///   - Two ideal sources pinning one net. Forcing a net to 20 V beside a
+    ///     3.3 V rail leaves it reading 3.300 V; the note names both sources
+    ///     and, by reading the settled node voltage rather than guessing at
+    ///     pivot order, says which one won.
+    ///   - A post-solve `force_net_voltage` override on a net that a stamped
+    ///     ideal source already pins. The override wins in the reported
+    ///     voltage, so the stamped source's contribution is invisible.
+    ///
+    /// Empty on any board where nothing contests a net, which is every ordinary
+    /// board, so this costs one allocation and no notes in the common case.
+    pub fn drive_conflicts(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for c in hauksbee_solve::blame::source_conflicts(&self.circuit) {
+            let settled = self.node_volts.get(c.node.0 as usize).copied();
+            out.push(c.describe(settled));
+        }
+        for (&node, &(hi, lo, t0, t1)) in &self.forced_node_volts {
+            let stamped = hauksbee_solve::blame::sources_on_node(
+                &self.circuit,
+                hauksbee_ir::NodeId(node as u32),
+            );
+            if stamped.is_empty() {
+                continue;
+            }
+            let names = stamped
+                .iter()
+                .map(|s| format!("{} ({:.3} V)", s.name, s.volts))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let net = self
+                .net_nodes
+                .iter()
+                .find(|(_, id)| id.0 as usize == node)
+                .map(|(n, _)| n.clone())
+                .unwrap_or_else(|| format!("node #{node}"));
+            let window = if t0.is_finite() || t1.is_finite() {
+                format!(" over [{t0:.6}, {t1:.6}) s")
+            } else {
+                String::new()
+            };
+            out.push(format!(
+                "net '{net}' is overridden to {hi:.3} V (else {lo:.3} V){window} AFTER each \
+                 solve, on top of stamped ideal source(s) {names}: the override wins and the \
+                 stamped source has no effect on the reported voltage"
+            ));
+        }
+        out
     }
 
     /// Bus peripherals attached on a platform that models no matching bus
@@ -2069,7 +2132,10 @@ impl Scheduler {
         // would double-count it. `sim_time` has not advanced yet, so the window
         // start matches `solve_chunk`'s.
         if mcu_run_failed && chunk_converged {
-            self.record_failed_chunk(chunk);
+            self.record_failed_chunk(
+                chunk,
+                Some("MCU refused to advance; the digital side of this chunk never ran".to_string()),
+            );
         }
         // The consecutive-failure streak resets ONLY on a fully-successful chunk
         // (analog converged AND the MCU advanced). Doing this reset inside
@@ -2336,6 +2402,13 @@ impl Scheduler {
             final_x.clear();
             final_x.extend_from_slice(s.x);
         });
+        // Keep the solver's refusal message: it carries the blame clause naming
+        // the net that refused to settle and the offending element(s). Throwing
+        // it away is what left a 259-part board diagnosable only by bisection.
+        let failure_reason = match &res {
+            Ok(()) => None,
+            Err(msg) => Some(msg.clone()),
+        };
         let converged = match res {
             Ok(()) => {
                 self.node_volts.resize(n_nodes, 0.0);
@@ -2392,7 +2465,7 @@ impl Scheduler {
         // reach this point analog-converged, and only `run_chunk`, which also
         // knows the MCU status, may reset the streak on a fully-successful chunk.
         if !converged {
-            self.record_failed_chunk(chunk);
+            self.record_failed_chunk(chunk, failure_reason);
         }
 
         // Apply any forced node-voltage overrides (the firmware-driven Tarski
@@ -2418,7 +2491,7 @@ impl Scheduler {
     /// from `solve_chunk` before `sim_time` advances, so `[sim_time, sim_time +
     /// chunk)` is the window this failed chunk covers. Consecutive failed chunks
     /// are merged into one window so a diverged stretch reads as its true extent.
-    fn record_failed_chunk(&mut self, chunk: f64) {
+    fn record_failed_chunk(&mut self, chunk: f64, reason: Option<String>) {
         self.failed_chunks += 1;
         self.consecutive_failed_chunks += 1;
         self.max_consecutive_failed_chunks = self
@@ -2431,8 +2504,14 @@ impl Scheduler {
         // ordinary float drift in `sim_time` accumulation does not split a run.
         match self.failed_windows.last_mut() {
             Some(prev) if (start - prev.1).abs() <= chunk * 1e-6 => prev.1 = end,
-            _ => self.failed_windows.push((start, end)),
+            _ => {
+                self.failed_windows.push((start, end));
+                self.failed_window_reasons.push(
+                    reason.unwrap_or_else(|| "analog march did not advance".to_string()),
+                );
+            }
         }
+        debug_assert_eq!(self.failed_windows.len(), self.failed_window_reasons.len());
     }
 
     /// Force a net's voltage to `volts` AFTER each analog solve (until cleared),
@@ -2491,6 +2570,32 @@ impl Scheduler {
         &self.failed_windows
     }
 
+    /// The solver's refusal message for each failed window, parallel to
+    /// [`Self::failed_windows`]. Each carries the blame clause naming the net
+    /// that refused to settle, the devices on it, and any element whose
+    /// conductance is outside the board's own distribution (E29). Empty on a
+    /// clean run.
+    pub fn failed_window_reasons(&self) -> &[String] {
+        &self.failed_window_reasons
+    }
+
+    /// The failed windows with their diagnoses, formatted one per line, ready
+    /// to print. Empty on a clean run.
+    pub fn failed_window_diagnoses(&self) -> Vec<String> {
+        self.failed_windows
+            .iter()
+            .zip(self.failed_window_reasons.iter())
+            .map(|((a, b), why)| {
+                format!(
+                    "{:.3}-{:.3} ms: {}",
+                    a * 1e3,
+                    b * 1e3,
+                    why
+                )
+            })
+            .collect()
+    }
+
     /// False once any chunk this run failed to solve faithfully: either the
     /// analog march diverged (held stale voltages over a window) or an MCU
     /// refused to advance (`run_micros` errored), so the digital side of that
@@ -2530,6 +2635,7 @@ impl Scheduler {
         self.micros_carry = 0.0;
         self.failed_chunks = 0;
         self.failed_windows.clear();
+        self.failed_window_reasons.clear();
         self.consecutive_failed_chunks = 0;
         self.max_consecutive_failed_chunks = 0;
         for st in self.stats.values_mut() {

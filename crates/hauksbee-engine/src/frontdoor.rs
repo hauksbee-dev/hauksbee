@@ -325,6 +325,13 @@ pub struct WebSpiFraming {
 pub struct WebFailedWindow {
     pub start_s: f64,
     pub end_s: f64,
+    /// The solver's own refusal message for this window, carrying the blame
+    /// clause that names the net which refused to settle, the devices on it,
+    /// and any near-zero-ohm link poisoning the matrix (E29). Never empty: a
+    /// window with no recorded reason gets the generic march-did-not-advance
+    /// line rather than a blank, because a blank reads as "no diagnosis
+    /// available" when in fact one was simply dropped.
+    pub reason: String,
 }
 
 /// A component for the simple 2D footprint map (positions in board mm).
@@ -831,6 +838,25 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
             .collect::<Vec<_>>()
             .join(", ")
     };
+    // The DIAGNOSIS, not just the span. "10 chunks failed" sent a user bisecting
+    // a 259-part board by model class; the solver's own refusal message names the
+    // net that refused to settle, the devices on it, and any element whose
+    // conductance is outside the board's own distribution (E29). Deduplicated,
+    // because ten failed windows on one bad jumper should say it once.
+    let mut seen: Vec<&str> = Vec::new();
+    for w in windows {
+        if !seen.contains(&w.reason.as_str()) {
+            seen.push(&w.reason);
+        }
+    }
+    let diagnosis = if seen.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " The solver's diagnosis: {}.",
+            seen.join(" | ")
+        )
+    };
     let chunk_word = if failed_chunks == 1 {
         "chunk"
     } else {
@@ -852,7 +878,7 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
             "The analog solver failed on {failed_chunks} {chunk_word} covering {spans}. \
              Over those windows the co-sim held stale node voltages instead of a real \
              solve, so any voltage, current or fault reading there is fiction (05 §3b, \
-             refuse rather than fake)."
+             refuse rather than fake).{diagnosis}"
         ),
         fix: "Treat electrical results inside those windows as unknown. A stiff or \
               structurally singular section (conflicting rails, an unconverging \
@@ -1097,6 +1123,25 @@ fn run_web_cosim(
             },
         );
     }
+    // A net whose voltage is decided by something other than what the user
+    // asked for: two ideal sources pinning one net, or a post-solve override on
+    // top of a stamped source. Loud, and it names both contenders and the winner
+    // (E30). Note-level for the same reason as the substitution caveat: it is an
+    // honesty caveat about what the run means, not a board defect.
+    for msg in sched.drive_conflicts() {
+        findings.insert(
+            0,
+            WebFinding {
+                level: "note".to_string(),
+                what: "A requested drive was overridden on its net".to_string(),
+                why: msg,
+                fix: "Remove the losing source, or suppress the rail that pins the net, so                       the drive you asked for is the one that takes effect."
+                    .to_string(),
+                x: None,
+                y: None,
+            },
+        );
+    }
     // Chip-substitution: the firmware was emulated on a less-specific core.
     for sub in sched.substitutions() {
         findings.insert(
@@ -1180,10 +1225,19 @@ fn run_web_cosim(
     // neither `analog_valid()` nor `failed_windows()` shows a diverged run as
     // quiet.
     let analog_valid = sched.analog_valid();
+    let reasons = sched.failed_window_reasons();
     let failed_windows: Vec<WebFailedWindow> = sched
         .failed_windows()
         .iter()
-        .map(|&(start_s, end_s)| WebFailedWindow { start_s, end_s })
+        .enumerate()
+        .map(|(i, &(start_s, end_s))| WebFailedWindow {
+            start_s,
+            end_s,
+            reason: reasons
+                .get(i)
+                .cloned()
+                .unwrap_or_else(|| "analog march did not advance".to_string()),
+        })
         .collect();
     if !analog_valid {
         findings.insert(

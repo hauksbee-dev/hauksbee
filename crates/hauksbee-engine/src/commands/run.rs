@@ -538,6 +538,24 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                          them are not trustworthy"
                     ),
                 });
+                // One note PER failed window naming the interval and the
+                // solver's diagnosis, so a JSON consumer gets the offending net
+                // and element without re-running the board (E29).
+                for d in engine.scheduler().failed_window_diagnoses() {
+                    jr.notes.push(JsonNote {
+                        kind: JsonNoteKind::Coverage,
+                        message: format!("analog non-convergence at {d}"),
+                    });
+                }
+            }
+            // A drive that lost to a co-located source, named on both sides
+            // (E30). Never silent: a run that reports 3.300 V on a net the user
+            // asked to force to 20 V has to say why.
+            for msg in engine.scheduler().drive_conflicts() {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::Coverage,
+                    message: msg,
+                });
             }
             // Co-sim coverage honesty (U3): dropped ADC injections and
             // never-exercised bus peripherals are silent-garbage modes; they
@@ -635,8 +653,21 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 report.heads_up.push(crate::plain::HeadsUp::note(format!(
                     "co-sim analog solve failed to converge on {failed_chunk_count} chunk(s); \
                      those windows held stale voltages and cannot be trusted (analog_valid is \
-                     false); rerun with --json to see the exact failed windows"
+                     false)"
                 )));
+                // The interval AND the diagnosis, inline. "Rerun with --json to
+                // see the windows" was the whole defect: the one surface a
+                // person actually reads named nothing (E29).
+                for d in engine.scheduler().failed_window_diagnoses() {
+                    report
+                        .heads_up
+                        .push(crate::plain::HeadsUp::note(format!(
+                            "analog non-convergence at {d}"
+                        )));
+                }
+            }
+            for msg in engine.scheduler().drive_conflicts() {
+                report.heads_up.push(crate::plain::HeadsUp::note(msg));
             }
             // Co-sim coverage honesty (U3): the same dropped-ADC / unexercised-bus
             // / heuristic-framing warnings the JSON notes carry, as plain
