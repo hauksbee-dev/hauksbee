@@ -5,180 +5,394 @@
 # hardware, pinned to the exact revision the gate was measured against.
 #
 # The boards are NOT vendored into this repository. They carry CC BY-SA,
-# GPL-3.0, CERN-OHL-S and CERN-OHL-W terms, and bundling share-alike hardware
-# into an MIT project would drag those obligations along with it. Fetching means
-# you obtain each board directly from its author, under that author's licence.
-# `scripts/fetch-corpus.sh` reads this file and does that.
+# GPL-3.0, CERN-OHL-S, CERN-OHL-W, CERN-OHL-P, TAPR-OHL and MIT terms, and
+# bundling share-alike hardware into an MIT project would drag those obligations
+# along with it. Fetching means you obtain each board directly from its author,
+# under that author's licence. `scripts/fetch-corpus.sh` reads this file and does
+# that; `scripts/check-corpus.py` checks that this file still describes what
+# lands.
 #
 # The pin is the point. An upstream board that changes must not silently change
-# our results, so `rev` is a commit or tag, never a branch. A zip-hosted board
-# has no revision to pin, so `sha256` is its pin and the fetch refuses to
-# download one without it.
+# our results, so `rev` is a full 40-character commit sha, never a branch and
+# never a tag: a branch moves, a tag can be moved, and an abbreviated sha that
+# happens to be the current branch head is indistinguishable from a pin that has
+# drifted. A zip-hosted board has no revision to pin, so `sha256` is its pin and
+# the fetch refuses to download one without it.
 #
-# Adding a board: record the upstream, the exact revision, and the licence. If
-# you cannot establish the licence, mark it `license_confirmed = false` and it
-# stays out of the default fetch.
+# Adding a board: record the upstream, the exact revision, the licence as you
+# read it in the upstream's own bytes at that revision, the axes it covers, and
+# at least one `expect` path. If you cannot establish the licence, mark it
+# `license_confirmed = false` and it stays out of the default fetch.
 #
-# Fields, all optional except `id`, `url` and `license`:
+# Fields, all required except where noted:
 #
-#   rev                a commit or tag. Required for `kind = "git"` (the default).
-#   kind               "git" or "zip".
+#   id                 the handle `--only` takes.
+#   url                the upstream.
+#   rev                a full 40-character commit sha. Required for `kind = "git"`
+#                      (the default).
+#   license            the licence, as the upstream states it AT `rev`.
+#   axes               what this board is here to stress: EDA format and version,
+#                      board class, MCU family, scale. The vocabulary is fixed in
+#                      scripts/check-corpus.py; a typo is an error rather than a
+#                      new axis.
+#   expect             paths, relative to the board's directory, that MUST exist
+#                      after the fetch. These are the paths the gates resolve, so
+#                      a fetch that lands a different tree fails here instead of
+#                      turning into a gate that matches nothing.
+#   kind               optional: "git" (default) or "zip".
 #   sha256             the archive's hash. Required for `kind = "zip"`.
-#   dest               where the board lands under the corpus root, if not `id`.
-#                      Used to group the two halves of a revision pair.
-#   subdir             the only part of a large upstream the corpus wants;
-#                      everything else is dropped, and this level is kept.
-#   hoist              a directory inside the fetched tree whose CONTENTS are
-#                      lifted into the board directory, for an upstream that
-#                      keeps its design one level down.
-#   unpack             an archive inside the fetched tree that IS the board. Its
-#                      contents replace everything else the upstream shipped.
-#   license_confirmed  false keeps the board out of the default fetch.
-#   name               the human name for logs and --list.
+#   dest               optional: where the board lands under the corpus root, if
+#                      not `id`. Used to group revision pairs and one upstream's
+#                      several boards.
+#   subdir             optional: the only part of a large upstream the corpus
+#                      wants; everything else is dropped, and this path is kept.
+#   drop               optional: paths inside the fetched tree to delete. For an
+#                      upstream that ships production panels or stale revisions
+#                      beside the design, which a corpus sweep would otherwise
+#                      count as boards.
+#   hoist              optional: a directory inside the fetched tree whose
+#                      CONTENTS are lifted into the board directory, for an
+#                      upstream that keeps its design one level down.
+#   unpack             optional: an archive inside the fetched tree that IS the
+#                      board. Its contents replace everything else.
+#   license_confirmed  optional: false keeps the board out of the default fetch.
+#   license_note       optional: how the licence was established, when the SPDX
+#                      id alone does not say.
+#   name               optional: the human name for logs and --list.
 #
-# `dest`, `subdir`, `hoist` and `unpack` exist for one reason: the paths the
-# corpus tests ask for. A fetched corpus that puts a board somewhere no test
+# `dest`, `subdir`, `drop`, `hoist` and `unpack` exist for one reason: the paths
+# the corpus tests ask for. A fetched corpus that puts a board somewhere no test
 # looks is worse than no corpus, because the tests skip and the skip reads as a
-# pass. Every one of these fields was added to close such a gap, and the note on
-# each entry says which.
+# pass. Every one of these fields was added to close such a gap.
+#
+# Every field in this file is read by something. `subdir` was declared on the
+# KiCad entry and honoured by nothing for as long as the entry existed, so the
+# fetch pulled KiCad's `qa/` tree and the zero-shorts gate graded itself on
+# boards whose whole purpose is to reproduce KiCad bugs.
+# `scripts/check-corpus.py` now fails on a field nothing honours, which is why
+# there is no longer anywhere for that failure to hide.
 
 [meta]
 # Where fetch-corpus.sh puts things when HAUKSBEE_CORPUS_DIR is unset.
 default_dir = "board-corpus"
 
 # ---------------------------------------------------------------------------
-# Native CAD, git-hosted
+# Dev boards, Eagle
+#
+# Adafruit and SparkFun publish in Eagle, which is most of this project's Eagle
+# coverage. The .brd files here are Eagle 6 through 9 XML.
 # ---------------------------------------------------------------------------
 
 [[board]]
 id = "adafruit_circuit_playground"
 name = "Adafruit Circuit Playground Express"
 url = "https://github.com/adafruit/Adafruit-Circuit-Playground-Express-PCB"
-rev = "2962c0cb"
+rev = "2962c0cb972e031d070303bbeda3ed95a2098951"
 license = "CC-BY-SA-3.0"
+axes = ["eagle", "dev-board", "samd", "small"]
+expect = ["Adafruit Circuit Playground Express.brd"]
 
 [[board]]
 id = "adafruit_feather_m0"
 name = "Adafruit Feather M0 Basic"
 url = "https://github.com/adafruit/Adafruit-Feather-M0-Basic-Proto-PCB"
-rev = "1de541ff"
+rev = "1de541ff46165575234d826ae64be64a82e8bc93"
 license = "CC-BY-SA-3.0"
+axes = ["eagle", "dev-board", "samd", "tiny"]
+expect = ["Adafruit Feather M0 Basic rev C.brd"]
 
 [[board]]
 id = "adafruit_metro_m4"
 name = "Adafruit Metro M4 Express"
 url = "https://github.com/adafruit/Adafruit-Metro-M4-PCB"
-rev = "4aafb2ac"
+rev = "4aafb2ac645c0d93eed7e4fd6cb71c8eef1a3ac6"
 license = "CC-BY-SA-3.0"
+axes = ["eagle", "dev-board", "samd", "small"]
+expect = ["Adafruit Metro M4 Express.brd"]
 
 [[board]]
 id = "adafruit_qtpy"
 name = "Adafruit QT Py (SAMD21)"
 url = "https://github.com/adafruit/Adafruit-QT-Py-PCB"
-rev = "a8caed9a"
+rev = "a8caed9ad5f2670c662f0b0a68af62cceb3cec96"
 license = "CC-BY-SA-3.0"
+axes = ["eagle", "dev-board", "samd", "tiny"]
+expect = ["Adafruit QT Py.brd"]
 
 [[board]]
 id = "adafruit_trinket_m0"
 name = "Adafruit Trinket M0"
 url = "https://github.com/adafruit/Adafruit-Trinket-M0-PCB"
-rev = "4103b9cd"
+rev = "4103b9cd2722fadc28dc3969bbe067c6873e0540"
 license = "CC-BY-SA-3.0"
+axes = ["eagle", "dev-board", "samd", "tiny"]
+expect = ["Trinket M0 rev D.brd"]
+
+# The nRF52840 half of the Eagle tier. Both boards state their licence in the
+# README and ship the CC BY-SA 3.0 legal code as license.txt.
+[[board]]
+id = "adafruit_feather_nrf52840_sense"
+name = "Adafruit Feather nRF52840 Sense"
+url = "https://github.com/adafruit/Adafruit-Feather-nRF52840-Sense-PCB"
+rev = "afeb0acb67e98c807cfdfbf7b5fe5e6e49490796"
+license = "CC-BY-SA-3.0"
+license_note = "README states Attribution/Share-Alike; license.txt is the CC BY-SA 3.0 Unported legal code"
+axes = ["eagle", "dev-board", "nrf", "industrial-sensor", "small"]
+expect = ["Adafruit Feather nRF52840 Sense Rev C.brd"]
+
+[[board]]
+id = "adafruit_clue"
+name = "Adafruit CLUE (nRF52840, nine on-board sensors)"
+url = "https://github.com/adafruit/Adafruit-CLUE-PCB"
+rev = "ce323d9f40e63fbe0ae231c9287abce5d2070663"
+license = "CC-BY-SA-3.0"
+license_note = "license.txt is the CC BY-SA 3.0 Unported legal code"
+axes = ["eagle", "dev-board", "nrf", "industrial-sensor", "small"]
+expect = ["Adafruit CLUE nRF52840 Express.brd"]
 
 [[board]]
 id = "sparkfun_redboard"
 name = "SparkFun RedBoard"
 url = "https://github.com/sparkfun/RedBoard"
-rev = "498b7cf5"
+rev = "498b7cf536c74f1a9a3a2315bf9f8feb0d7169c9"
 license = "CC-BY-SA-4.0"
+axes = ["eagle", "dev-board", "avr", "small"]
+expect = ["Hardware/RedBoard.brd"]
 
 [[board]]
 id = "sparkfun_pro_micro"
 name = "SparkFun Pro Micro (ATmega32U4)"
 url = "https://github.com/sparkfun/Pro_Micro"
-rev = "df836f3b"
+rev = "df836f3bf2955c4f1199a852f618d2ac80866d47"
 license = "CC-BY-SA-4.0"
+axes = ["eagle", "dev-board", "avr", "tiny"]
+expect = ["Hardware/v20/SparkFun_Pro_Micro.brd"]
 
 [[board]]
 id = "sparkfun_thingplus_samd51"
 name = "SparkFun Thing Plus SAMD51"
 url = "https://github.com/sparkfun/SAMD51_Thing_Plus"
-rev = "ab67e74"
+rev = "ab67e74cc7acbfd325e5a7e1409f5fb7a99d9869"
 license = "CC-BY-SA-4.0"
+axes = ["eagle", "dev-board", "samd", "small"]
+expect = ["Hardware/SAMD51_Thing_Plus.brd"]
 
 [[board]]
 id = "sparkfun_thingplus_rp2040"
 name = "SparkFun Thing Plus RP2040"
 url = "https://github.com/sparkfun/SparkFun_Thing_Plus-RP2040"
-rev = "38fd2d2"
+rev = "38fd2d27eaa2e6e9c16e8496f7d1777f83df842a"
 license = "CC-BY-SA-4.0"
+axes = ["eagle", "dev-board", "rp2040", "small"]
+expect = ["Hardware/RP2040_Thing_Plus.brd"]
+
+# The MicroMod processor boards are the smallest real boards in the corpus: one
+# module, one regulator, a handful of passives. They are here for the low end of
+# the scale axis, where a check that needs a power tree or a bus to reason about
+# has almost nothing to work with.
+#
+# `drop` takes out `Hardware/Production`, which holds the manufacturing PANEL of
+# the same design. A panel is the board stepped and repeated with tooling rails,
+# so a sweep that walked it would grade the tool on several copies of one board
+# and report the count as coverage. That is the `mobo-backups` failure in a
+# different costume.
+[[board]]
+id = "sparkfun_micromod_stm32"
+name = "SparkFun MicroMod STM32 Processor Board"
+url = "https://github.com/sparkfun/MicroMod_STM32_Processor"
+rev = "419f9807fba00844d928c920a6be062b85855e37"
+license = "CC-BY-SA-4.0"
+license_note = "license.md states CC BY-SA 4.0 for hardware"
+axes = ["eagle", "dev-board", "stm32", "tiny"]
+subdir = "Hardware"
+drop = ["Hardware/Production"]
+expect = ["Hardware/MicroMod_STM32_Processor.brd"]
+
+[[board]]
+id = "sparkfun_micromod_rp2040"
+name = "SparkFun MicroMod RP2040 Processor Board"
+url = "https://github.com/sparkfun/MicroMod_Processor-RP2040"
+rev = "831f73dc24991160939aa9fe14742cbc79e35e5a"
+license = "CC-BY-SA-4.0"
+license_note = "LICENSE.md states CC BY-SA 4.0 for hardware"
+axes = ["eagle", "dev-board", "rp2040", "tiny"]
+subdir = "Hardware"
+drop = ["Hardware/Production"]
+expect = ["Hardware/MicroMod-RP2040-ProcessorBoard.brd"]
+
+# The one entry here whose licence could not be established. The README points
+# at a LICENSE.md that is not in the repository at this revision, and no other
+# licence file is either, so SparkFun's usual CC BY-SA 4.0 is an assumption
+# rather than a reading. It stays out of the default fetch.
+[[board]]
+id = "sparkfun_micromod_nrf52840"
+name = "SparkFun MicroMod nRF52840 Processor Board"
+url = "https://github.com/sparkfun/MicroMod_Processor_Board-nRF52840"
+rev = "7a1c2d0b182387b921881dc82a0847555e982bbf"
+license = "unconfirmed"
+license_note = "the README points at a LICENSE.md that does not exist at this revision, and the repository carries no other licence file"
+license_confirmed = false
+axes = ["eagle", "dev-board", "nrf", "tiny"]
+subdir = "Hardware"
+drop = ["Hardware/Production"]
+expect = ["Hardware/MicroMod_Processor_Board-nRF52840.brd"]
+
+# ---------------------------------------------------------------------------
+# HATs and carriers
+#
+# A board with no MCU at all. Every check that reasons from a firmware model or
+# a boot sequence has nothing to stand on here, which is the point: it must stay
+# quiet rather than invent a processor.
+# ---------------------------------------------------------------------------
+
+[[board]]
+id = "sparkfun_qwiic_hat_rpi"
+name = "SparkFun Qwiic HAT for Raspberry Pi"
+url = "https://github.com/sparkfun/Qwiic_Hat_for_Raspberry_Pi"
+rev = "398c9a96426808707a5230f6aac4adc2eb47b9eb"
+license = "CC-BY-SA-4.0"
+license_note = "LICENSE.md states CC BY-SA 4.0 for hardware"
+axes = ["eagle", "hat", "no-mcu", "tiny"]
+subdir = "Hardware"
+drop = ["Hardware/Panel"]
+expect = ["Hardware/Qwiic Shield for RaspberryPi.brd"]
+
+# ---------------------------------------------------------------------------
+# Dev boards and single-board computers, KiCad
+# ---------------------------------------------------------------------------
 
 [[board]]
 id = "mnt_reform"
 name = "MNT Reform laptop (19 PCBs)"
 url = "https://source.mnt.re/reform/reform.git"
-rev = "70468a3b"
+rev = "70468a3b0b42a7e8e24d3c19c79393a3a3c27764"
 license = "CERN-OHL-S-2.0"
+axes = ["kicad6", "sbc", "imx", "large"]
+expect = [
+  "reform2-motherboard30-pcb/reform2-motherboard30.kicad_pcb",
+  "reform2-motherboard30-pcb/reform2-motherboard30.kicad_sch",
+  "reform2-motherboard25-pcb/reform2-motherboard25.kicad_pcb",
+  "reform2-motherboard-pcb/reform2-motherboard.kicad_pcb",
+  "reform2-trackball2-pcb/reform2-trackball2.kicad_pcb",
+  "historic-reform1/reform-keyboard-pcb/mntcomp-keyboard.kicad_pcb",
+]
 
 [[board]]
 id = "olimex_esp32"
 name = "Olimex ESP32-EVB (revisions A through L)"
 url = "https://github.com/OLIMEX/ESP32-EVB"
-rev = "a3ec2f44"
+rev = "a3ec2f448109cb8f35ce7cb21a027bb7c837ab61"
 license = "Apache-2.0"
+axes = ["kicad5", "kicad6", "dev-board", "esp32", "medium"]
+expect = [
+  "HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_pcb",
+  "HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_sch",
+  "HARDWARE/REV-D/ESP32-EVB_Rev_D.kicad_pcb",
+  "HARDWARE/REV-K1/ESP32-EVB_Rev_K1.net",
+]
+
+# Nine revisions of one industrial board, B1 through G1, spanning KiCad's legacy
+# `.sch` and its current `.kicad_sch`. The revision spread is what earns its
+# place: the same design read through two schematic formats has to produce the
+# same circuit.
+[[board]]
+id = "olimex_esp32_poe"
+name = "Olimex ESP32-PoE (revisions B1 through G1)"
+url = "https://github.com/OLIMEX/ESP32-POE"
+rev = "a9ccb127e4eff6bf58b2e366adc8dca24b42d9e7"
+license = "Apache-2.0"
+axes = ["kicad5", "kicad6", "dev-board", "industrial-sensor", "esp32", "medium"]
+expect = [
+  "HARDWARE/ESP32-PoE-hardware-revision-G1/ESP32-PoE_Rev_G1.kicad_pcb",
+  "HARDWARE/ESP32-PoE-hardware-revision-B1/ESP32-PoE_Rev_B1.kicad_pcb",
+]
 
 [[board]]
 id = "olimex_rp2040_pico_pc"
 name = "Olimex RP2040-PICO-PC (revisions B, C, D)"
 url = "https://github.com/OLIMEX/RP2040-PICO-PC"
-rev = "ed0402a"
+rev = "ed0402adcdf9395f33c8d50def897c33ce96b5c3"
 license = "GPL-3.0"
+axes = ["kicad6", "dev-board", "rp2040", "small"]
+expect = [
+  "HARDWARE/RP2040-PICO-PC hardware revision D/RP2040-PICO-PC_rev_D.kicad_pcb",
+  "HARDWARE/RP2040-PICO-PC hardware revision D/RP2040-PICO-PC_rev_D.net",
+  "HARDWARE/RP2040-PICO-PC hardware revision C/RP2040-PICO-PC_rev_C.kicad_pcb",
+]
+
+# The RISC-V axis, and the cheapest real board in the corpus: a CH32V003 with a
+# VGA output and almost nothing else. `subdir` keeps only HARDWARE, because the
+# SOFTWARE tree carries an unrelated ESP32-S2 breakout whose films would sit
+# beside this board's and be read as more layers of it.
+[[board]]
+id = "olimex_rvpc"
+name = "Olimex RVPC (CH32V003 RISC-V, revisions A and B)"
+url = "https://github.com/OLIMEX/RVPC"
+rev = "2b9675ba39c29370eafcc6df597609a9d5ea3297"
+license = "CERN-OHL-S-2.0"
+license_note = "README states CERN-OHL-S-2.0 for hardware; the repository LICENSE is GPL-3.0 and covers the software"
+axes = ["kicad6", "dev-board", "riscv", "tiny"]
+subdir = "HARDWARE"
+expect = [
+  "HARDWARE/RVPC-Rev.A/RVPC_Rev_A.kicad_pcb",
+  "HARDWARE/RVPC_Rev.B/RVPC_Rev_B.kicad_pcb",
+]
+
+# ---------------------------------------------------------------------------
+# Wearables, and the revision PAIRS
+#
+# A pair is two public releases of one design with a documented electrical fault
+# fixed between them. The revision history is ground truth for whether hauksbee
+# flags the right thing, so both halves are needed.
+#
+# These carry `dest`, which most boards do not need. A pair is two checkouts of
+# ONE upstream, so it cannot land at `<id>/` without the two halves reading as
+# two unrelated boards, and the tests were written against a corpus that groups
+# them: `zswatch_devkit/v1.2.0/`, not `zswatch_devkit_1_2_0/`. `dest` is what the
+# fetch writes; `id` stays the handle for `--only`.
+# ---------------------------------------------------------------------------
 
 [[board]]
 id = "watchy"
 name = "Watchy e-paper watch"
 url = "https://github.com/sqfmi/Watchy-Hardware"
-rev = "5f147972"
+rev = "5f147972aa2148d4971f3c41fc3ce39ff8c48131"
 license = "MIT"
+axes = ["kicad6", "wearable", "esp32", "small"]
+expect = ["Watchy.kicad_pcb", "Watchy.kicad_sch"]
 
-# Revision PAIRS where a documented electrical fault was fixed between two
-# public releases. The revision history is ground truth for whether hauksbee
-# flags the right thing, so both halves are needed.
-#
-# These carry `dest`, which the other boards do not need. A revision pair is two
-# checkouts of ONE upstream, so it cannot land at `<id>/` without the two halves
-# reading as two unrelated boards, and the tests were written against a corpus
-# that groups them: `zswatch_devkit/v1.2.0/`, not `zswatch_devkit_1_2_0/`. `dest`
-# is what the fetch writes; `id` stays the handle for `--only`. Without it the
-# fetch produced a corpus no corpus test could find a pair board in.
 [[board]]
 id = "watchy_history_v1_5"
 name = "Watchy v1.5 (pre-fix: display RES# pull-up, issue #14)"
 url = "https://github.com/sqfmi/Watchy-Hardware"
-rev = "64f4925"
+rev = "64f492590d8faca811b7fa2053e4329b1f2670e4"
 dest = "watchy_history/v1.5"
 license = "MIT"
+axes = ["kicad6", "wearable", "esp32", "small"]
+expect = ["Watchy.kicad_pcb"]
 
 [[board]]
 id = "watchy_history_v2_0"
 name = "Watchy v2.0 (fixed)"
 url = "https://github.com/sqfmi/Watchy-Hardware"
-rev = "9b40304"
+rev = "9b4030488fde595715fcd0073c7e52f45067ecd1"
 dest = "watchy_history/v2.0"
 license = "MIT"
+axes = ["kicad6", "wearable", "esp32", "small"]
+expect = ["Watchy.kicad_pcb"]
 
 [[board]]
 id = "zswatch_mainboard"
 name = "ZSWatch mainboard"
 url = "https://github.com/ZSWatch/Watch-HW"
-rev = "891a3d52"
+rev = "891a3d52492395230b42f3872f7ebe0537d1dd5e"
 license = "GPL-3.0"
+axes = ["kicad6", "wearable", "nrf", "medium"]
+expect = ["watch/ZSWatch-Watch.kicad_pcb", "watch/ZSWatch-Watch.kicad_sch"]
 
-# The oldest DevKit the tests reference. It was absent from the manifest, so the
-# DISPLAY-EN gold row in the known-faults record could not be reproduced from a
-# fetch: the board it is measured on simply was not there. Tag 1.1.0 resolves to
-# commit a9f27fe8a87b9cfee1b861e4e8459c8587e3d7d4, and the repository is
-# GPL-3.0 at that tag on the same terms as 1.2.0 and 1.2.1 below.
+# The oldest DevKit the tests reference. The DISPLAY-EN gold row in the
+# known-faults record is measured on this board, so without it that row could not
+# be reproduced from a fetch.
 [[board]]
 id = "zswatch_devkit_1_1_0"
 name = "ZSWatch DevKit 1.1.0"
@@ -187,30 +401,250 @@ rev = "a9f27fe8a87b9cfee1b861e4e8459c8587e3d7d4"
 dest = "zswatch_devkit/v1.1.0"
 hoist = "dev-kit"
 license = "GPL-3.0"
+axes = ["kicad6", "wearable", "nrf", "small"]
+expect = ["Dev-Kit.kicad_pcb", "Dev-Kit.kicad_sch"]
 
+# `rev` is the COMMIT tag 1.2.0 points at, not the tag object's own sha. The pin
+# used to read `5eeee19`, which is the abbreviated sha of the annotated tag
+# OBJECT: git peels it to this commit, so the fetch landed the right tree, but
+# nothing about the recorded pin said so and GitHub's commit API rejects it
+# outright. A pin you cannot look up is not a pin you can audit.
 [[board]]
 id = "zswatch_devkit_1_2_0"
 name = "ZSWatch DevKit 1.2.0 (pre-fix: I2C pull-ups, PR #158)"
 url = "https://github.com/ZSWatch/Watch-DevKit-HW"
-rev = "5eeee19"
+rev = "dbc49faf5adf560df3e7df40e6a65e9ffca75987"
 dest = "zswatch_devkit/v1.2.0"
 hoist = "devkit"
 license = "GPL-3.0"
+axes = ["kicad6", "wearable", "nrf", "small"]
+expect = ["ZSWatch-Watch-DevKit.kicad_pcb", "ZSWatch-Watch-DevKit.kicad_sch"]
 
 [[board]]
 id = "zswatch_devkit_1_2_1"
 name = "ZSWatch DevKit 1.2.1 (fixed)"
 url = "https://github.com/ZSWatch/Watch-DevKit-HW"
-rev = "77abae3"
+rev = "77abae33f3a7bc1ba051fe13a37d91fef36f026b"
 dest = "zswatch_devkit/v1.2.1"
 hoist = "devkit"
 license = "GPL-3.0"
+axes = ["kicad6", "wearable", "nrf", "small"]
+expect = ["ZSWatch-Watch-DevKit.kicad_pcb", "ZSWatch-Watch-DevKit.kicad_sch"]
 
-# `rev` is the full 40-character sha, not the abbreviated `3eab4d1` that used to
-# stand here. The short form happened to also be the tip of `main`, so a fetch
-# that silently landed on the branch head instead of the pin would have looked
-# identical; the full sha makes the pin checkable. Verified present upstream on
-# 2026-08-04: refs/heads/main == 3eab4d12cda4b97031d52c1119461cba226d1a33.
+# ---------------------------------------------------------------------------
+# Keyboards
+# ---------------------------------------------------------------------------
+
+# Upstream nests each switch variant a level deeper than the hand-built corpus
+# does: `pcbs/corne-cherry/hotswap/corne-cherry.kicad_pcb` against
+# `pcbs/corne-cherry.kicad_pcb`. The gerber closed-loop gate named only the
+# hand-built path, so on a fetched corpus this board was on disk and the gate's
+# crkbd row matched nothing. It was the one entry in the manifest contributing to
+# no gate at all. The gate now resolves both paths; `expect` pins the upstream one
+# because that is what the fetch lands.
+[[board]]
+id = "crkbd"
+name = "Corne (crkbd) split keyboard"
+url = "https://github.com/foostan/crkbd"
+rev = "63366fb7f51cf2a796462fdd90527e99dd126055"
+license = "CC-BY-4.0"
+axes = ["kicad5", "keyboard", "no-mcu", "small"]
+expect = [
+  "pcbs/corne-cherry/hotswap/corne-cherry.kicad_pcb",
+  "pcbs/corne-chocolate/hotswap/corne-chocolate.kicad_pcb",
+]
+
+[[board]]
+id = "lily58"
+name = "Lily58 split keyboard"
+url = "https://github.com/kata0510/Lily58"
+rev = "58c649797c185b7b32b9928d4546665153cfacfd"
+license = "MIT"
+axes = ["kicad5", "keyboard", "avr", "medium"]
+expect = ["Pro_V2/Pro_V2.kicad_pcb", "Pro_V2/Pro_V2.kicad_sch"]
+
+# ---------------------------------------------------------------------------
+# Power electronics
+#
+# High-current copper, switching converters and battery management. These are the
+# boards where the ampacity and ripple checks have something real to say, and
+# where a false positive costs the most: they have shipped for years.
+# ---------------------------------------------------------------------------
+
+[[board]]
+id = "mppt_1210_hus"
+name = "LibreSolar MPPT 1210 HUS solar charge controller"
+url = "https://github.com/LibreSolar/mppt-1210-hus"
+rev = "a0c386ace7cef04c25985b522b478e124d3d936f"
+license = "CERN-OHL-W-2.0"
+axes = ["kicad5", "power-electronics", "stm32", "small"]
+expect = ["kicad/mppt-1210-hus.kicad_pcb"]
+
+[[board]]
+id = "mppt_2420_hc"
+name = "LibreSolar MPPT 2420 HC solar charge controller (20 A)"
+url = "https://github.com/LibreSolar/mppt-2420-hc"
+rev = "b1c11fee826d40b0465eae3dd58a15a336be2d7c"
+license = "CERN-OHL-W-2.0"
+license_note = "LICENCE at this revision is the CERN-OHL-W v2 text"
+axes = ["kicad5", "power-electronics", "stm32", "small"]
+expect = ["kicad/mppt-2420-hc.kicad_pcb", "kicad/mppt-2420-hc.sch"]
+
+[[board]]
+id = "bms_c1"
+name = "LibreSolar BMS C1 battery management (ESP32-C3, BQ76952)"
+url = "https://github.com/LibreSolar/bms-c1"
+rev = "0ca09706f49906bdc73f6ccf99635de349d47474"
+license = "CERN-OHL-W-2.0"
+license_note = "LICENCE at this revision is the CERN-OHL-W v2 text"
+axes = ["kicad6", "power-electronics", "esp32", "riscv", "small"]
+expect = ["kicad/bms-c1.kicad_pcb", "kicad/bms-c1.kicad_sch"]
+
+# Two PCBs of one product: a control board and the high-current switch-and-sense
+# board it drives. The pair is the interesting part, because the ampacity check
+# has to reach a different conclusion on each.
+[[board]]
+id = "bms_5s50_sc"
+name = "LibreSolar BMS 5s50 SC (control and power PCBs)"
+url = "https://github.com/LibreSolar/bms-5s50-sc"
+rev = "b5f47a07253341b1e37ca70cdcb32048ffebe7a9"
+license = "CC-BY-SA-4.0"
+axes = ["kicad5", "power-electronics", "stm32", "small"]
+expect = ["control-pcb/BMS-5s.kicad_pcb", "power-pcb/Switch-N-Sense.kicad_pcb"]
+
+# ---------------------------------------------------------------------------
+# Motor drivers
+# ---------------------------------------------------------------------------
+
+# The Altium BINARY tier, and the only one in the corpus. The v2 and v3 ODrive
+# designs are OLE2 compound files (.PcbDoc, .SchDoc) with an Altium project
+# (.PrjPcb), which is a different reader from every other entry here. MIT, which
+# for a hardware release is unusually unambiguous.
+[[board]]
+id = "odrive_v3"
+name = "ODrive v3 brushless motor driver (Altium)"
+url = "https://github.com/odriverobotics/ODriveHardware"
+rev = "079f30ac58f193226fcc552e4d6ba24553027ee1"
+dest = "odrive/v3"
+subdir = "v3"
+license = "MIT"
+axes = ["altium-binary", "motor-driver", "stm32", "medium"]
+expect = ["v3/PCB.PcbDoc", "v3/Top.SchDoc", "v3/two_ax_PCB.PrjPcb"]
+
+[[board]]
+id = "odrive_v2"
+name = "ODrive v2 inverter (Altium)"
+url = "https://github.com/odriverobotics/ODriveHardware"
+rev = "079f30ac58f193226fcc552e4d6ba24553027ee1"
+dest = "odrive/v2"
+subdir = "v2"
+license = "MIT"
+axes = ["altium-binary", "motor-driver", "stm32", "medium"]
+expect = ["v2/Inverter.PcbDoc", "v2/Top.SchDoc", "v2/Inverter.PrjPcb"]
+
+[[board]]
+id = "moco"
+name = "moco PMSM/BLDC motor controllers (six boards)"
+url = "https://github.com/ziteh/moco"
+rev = "e0caae5762ac5f7731c79ccb5e8fe11ee3f4468e"
+license = "CERN-OHL-P-2.0"
+license_note = "README states CERN-OHL-P v2 for hardware; LICENSE-MIT covers the firmware"
+axes = ["kicad8", "motor-driver", "stm32", "small"]
+subdir = "hardware"
+expect = [
+  "hardware/moco-od501/moco-od501.kicad_pcb",
+  "hardware/moco-od501/moco-od501.kicad_sch",
+  "hardware/moco-pg4/moco-pg4.kicad_pcb",
+]
+
+# Four generations of a 3D-printer controller: five TMC stepper drivers, a 24 V
+# input, and a heated-bed FET, in one repository that spans KiCad's legacy `.sch`
+# and its current `.kicad_sch`. `subdir` keeps Duet2 and drops Archive_Files,
+# which holds seven older Eagle revisions of the same board.
+[[board]]
+id = "duet2"
+name = "Duet 2 WiFi, Ethernet and Maestro 3D-printer controllers"
+url = "https://github.com/Duet3D/Duet-2-Hardware"
+rev = "56958640c73c7febf3bce6e1eefbbdffd5a2db1b"
+license = "CERN-OHL-1.2"
+license_note = "LICENSE is the CERN OHL v1.2 text with an added silkscreen-attribution condition"
+axes = ["kicad5", "kicad6", "motor-driver", "medium"]
+subdir = "Duet2"
+expect = [
+  "Duet2/Duet2v1.05/Duet2.kicad_pcb",
+  "Duet2/Duet2v1.05/Duet2.sch",
+  "Duet2/Duet2v1.06/Duet2.kicad_pcb",
+  "Duet2/Duet2Maestro_v1.0/Duet2Maestro.kicad_pcb",
+]
+
+# ---------------------------------------------------------------------------
+# RF
+# ---------------------------------------------------------------------------
+
+# `subdir` is the board directory rather than the repository's whole `hardware/`
+# tree, and that is a licensing decision rather than a size one: HackRF One's own
+# LICENSE file is CERN-OHL-P v2, while the sibling designs (jawbreaker,
+# lemondrop, jellybean and the rest) carry no per-board licence and fall under
+# the repository's GPL-2.0 COPYING, which is a software licence being applied to
+# board files. Only the board whose terms are unambiguous is fetched.
+[[board]]
+id = "hackrf_one"
+name = "HackRF One software-defined radio"
+url = "https://github.com/greatscottgadgets/hackrf"
+rev = "55b1b21918e7ea697b961e5818c5493c875a0303"
+license = "CERN-OHL-P-2.0"
+license_note = "hardware/hackrf-one/LICENSE is the CERN-OHL-P v2 text, copyright Great Scott Gadgets"
+axes = ["kicad6", "rf", "medium"]
+subdir = "hardware/hackrf-one"
+expect = [
+  "hardware/hackrf-one/hackrf-one.kicad_pcb",
+  "hardware/hackrf-one/hackrf-one.kicad_sch",
+]
+
+# ---------------------------------------------------------------------------
+# Audio and analogue
+#
+# Thirty-five Eurorack modules in Eagle: op-amp signal chains, VCAs, filters and
+# discrete analogue, with the digital content confined to one small MCU. This is
+# the largest single-entry board count in the corpus and the only place the
+# analogue checks see a design whose whole purpose is analogue.
+# ---------------------------------------------------------------------------
+
+[[board]]
+id = "eurorack"
+name = "Mutable Instruments Eurorack modules (35 boards)"
+url = "https://github.com/pichenettes/eurorack"
+rev = "08460a69a7e1f7a81c5a2abcc7189c9a6b7208d4"
+license = "CC-BY-SA-3.0"
+license_note = "README states 'Hardware: cc-by-sa-3.0'; the repository carries no separate hardware licence file"
+axes = ["eagle", "audio", "stm32", "avr", "small"]
+expect = [
+  "braids/hardware_design/pcb/braids_v50.brd",
+  "clouds/hardware_design/pcb/clouds_v30.brd",
+  "blinds/hardware_design/pcb/blinds_v60.brd",
+]
+
+# ---------------------------------------------------------------------------
+# Instruments and test hardware
+# ---------------------------------------------------------------------------
+
+[[board]]
+id = "gb_hardware"
+name = "Gekkio Game Boy reverse-engineering boards (16 PCBs)"
+url = "https://github.com/Gekkio/gb-hardware"
+rev = "b5ade559bd988fd6c4f5941615d4d6d79dec9098"
+license = "CC-BY-4.0"
+axes = ["kicad6", "instrument", "no-mcu", "small"]
+expect = [
+  "GB-BENCH-G1/GB-BENCH-G1.kicad_pcb",
+  "GB-BENCH-G1/GB-BENCH-G1.kicad_sch",
+  "GB-BRK-CART/GB-BRK-CART.kicad_pcb",
+]
+
+# ---------------------------------------------------------------------------
+# Machines
+# ---------------------------------------------------------------------------
+
 [[board]]
 id = "lumenpnp"
 name = "Opulo LumenPnP motherboard and ring light"
@@ -221,35 +655,47 @@ rev = "3eab4d12cda4b97031d52c1119461cba226d1a33"
 # and the ERC calibration recorded it as unloadable.
 hoist = "pnp/pcb"
 license = "CERN-OHL-W-2.0"
+axes = ["kicad6", "motor-driver", "instrument", "medium"]
+expect = [
+  "mobo/mobo.kicad_pcb",
+  "mobo/mobo.kicad_sch",
+  "ring-light/ringLight.kicad_pcb",
+  "ring-light/ringLight.kicad_sch",
+]
 
-[[board]]
-id = "crkbd"
-name = "Corne (crkbd) split keyboard"
-url = "https://github.com/foostan/crkbd"
-rev = "63366fb"
-license = "CC-BY-4.0"
-
-[[board]]
-id = "lily58"
-name = "Lily58 split keyboard"
-url = "https://github.com/kata0510/Lily58"
-rev = "58c6497"
-license = "MIT"
-
-[[board]]
-id = "mppt_1210_hus"
-name = "LibreSolar MPPT 1210 HUS solar charge controller"
-url = "https://github.com/LibreSolar/mppt-1210-hus"
-rev = "a0c386ace7cef04c25985b522b478e124d3d936f"
-license = "CERN-OHL-W-2.0"
+# ---------------------------------------------------------------------------
+# The EDA vendor's own demo projects
+#
+# `subdir` keeps `demos` and drops the rest of KiCad's source tree, which is what
+# stops the `qa/` regression fixtures reaching the zero-shorts gate.
+#
+# `drop` takes out the four projects inside `demos` that are also fixtures rather
+# than hardware. `vme-wren` is a KiCad bug reproduction, and the three `test_*`
+# and `custom_pads` projects are pad-geometry probes with no circuit. Grading a
+# false-positive gate on a deliberately broken board is a category error whether
+# the board sits in `qa/` or in `demos/`.
+# ---------------------------------------------------------------------------
 
 [[board]]
 id = "kicad_demos"
 name = "KiCad's own demo projects"
 url = "https://gitlab.com/kicad/code/kicad.git"
-rev = "9.0.0"
+# The commit tag 9.0.0 points at, rather than the tag name. A tag can be moved.
+rev = "286b0611feca00727bf70bfa184ec2c28a745dc3"
 subdir = "demos"
+drop = [
+  "demos/vme-wren",
+  "demos/test_pads_inside_pads",
+  "demos/test_xil_95108",
+  "demos/custom_pads_test",
+]
 license = "CC0-1.0 / MIT / Apache-2.0 / ISC (mixed, see LICENSE files)"
+axes = ["kicad9", "regression-fixture", "no-mcu", "small"]
+expect = [
+  "demos/pic_programmer/pic_programmer.kicad_pcb",
+  "demos/pic_programmer/pic_programmer.kicad_sch",
+  "demos/complex_hierarchy/complex_hierarchy.kicad_pcb",
+]
 
 # ---------------------------------------------------------------------------
 # Native CAD, released as a zip rather than a repository
@@ -267,6 +713,8 @@ url = "https://docs.arduino.cc/static/6bb7a3ca51ebee82a252f60c0b418787/A000066-c
 kind = "zip"
 sha256 = "532b306cb153846eafc0ca9fe991d7a4dfa0c52dcefafa2efeaebf4b845ec820"
 license = "CC-BY-SA-4.0"
+axes = ["eagle", "dev-board", "avr", "small"]
+expect = ["A000066-cad-files/UNO-TH_Rev3e.brd"]
 
 [[board]]
 id = "rp2040_minimal_kicad"
@@ -275,6 +723,11 @@ url = "https://pip.raspberrypi.com/documents/RP-008296-DS-Minimal-KiCAD.zip"
 kind = "zip"
 sha256 = "8fdae5c1d3d8e58f43a45cd604ce9836b1ad4649f11eca4a9bea97eec6c2093a"
 license = "MIT (stated in the bundled LICENSE.txt)"
+axes = ["kicad7", "dev-board", "rp2040", "tiny"]
+expect = [
+  "RPI-RP2040-MINIMAL_R3-S1_public/RPI-RP2040-MINIMAL_R3-S1.kicad_pcb",
+  "RPI-RP2040-MINIMAL_R3-S1_public/RPI-RP2040-MINIMAL_R3-S1.kicad_sch",
+]
 
 # Revision 2 of the same design, which is a different board from the r3 the
 # entry above now serves. r3 dropped the crystal: it has no `Y1`, so the three
@@ -305,12 +758,6 @@ license = "MIT (stated in the bundled LICENSE.txt)"
 # design files is that they are "made available openly, with no limitations",
 # and the r3 release of the same design ships MIT (Copyright Raspberry Pi Ltd);
 # neither statement is in r2's own bytes, hence the qualifier below.
-#
-# STILL NOT ENOUGH ON ITS OWN: fetch-corpus.sh writes each board to
-# `<corpus>/<id>`, and this zip unpacks to `minimal/...`, so the fetch lands the
-# board at `rp2040_minimal_r2/minimal/RP2040_minimal_r2/`. si_corpus.rs and
-# gerber_closedloop.rs list both the hand-built and this fetch path, so the
-# RP2040 gates run from either layout.
 [[board]]
 id = "rp2040_minimal_r2"
 name = "Raspberry Pi RP2040 minimal design, revision 2 (official, superseded upstream)"
@@ -318,6 +765,11 @@ url = "https://web.archive.org/web/20240521000034id_/https://datasheets.raspberr
 kind = "zip"
 sha256 = "5af8f5acd52a521a93ae6ba4986a4e0cbfaefca5454223cfddf91b37e975b21f"
 license = "MIT (the archived r2 zip carries no licence file; the same design's current upstream package states MIT in its bundled LICENSE.txt)"
+axes = ["kicad6", "dev-board", "rp2040", "tiny"]
+expect = [
+  "minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_pcb",
+  "minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_sch",
+]
 
 # ---------------------------------------------------------------------------
 # Gerber-only, for the reverse-extraction tier
@@ -328,32 +780,37 @@ license = "MIT (the archived r2 zip carries no licence file; the same design's c
 # ClockworkPi publishes these without a clear licence statement, so they are
 # marked unconfirmed and skipped unless you pass --include-unconfirmed. Nothing
 # in the default test suite depends on them.
+#
+# ClockworkPi also publishes only archives, one of them a `.7z` the fetch cannot
+# open, so `expect` names the archive rather than the films inside it. Extracting
+# them is a manual step, which is a second reason nothing in the default suite
+# depends on these two.
 # ---------------------------------------------------------------------------
 
 [[board]]
 id = "inkplate6_gerber"
 name = "Soldered Inkplate 6 main board (gerbers only)"
 url = "https://github.com/SolderedElectronics/Inkplate-6-hardware"
-# Upstream has no `main`: the default branch is `master`. The old `main` pin
-# resolved to nothing and took this board out of every fetch. Pinned to the
-# commit rather than the branch, per the note at the top of this file.
 rev = "e14476d3bbddfb0e76815f4b1ffa6f7e26e54bad"
 # The films exist upstream only inside this archive. Unpacked flat into the board
 # directory, which is where gerber_inkplate.rs reads them from and where the
 # hand-built corpus has always had them. Without this the fetch left a zip and
 # the reverse-extraction gate had no films to reconstruct from.
 unpack = "Schematics, Gerber, BOM/v1.0/Inkplate 6 gerber files v1.0.zip"
-license = "MIT"
+license = "TAPR-OHL-1.0"
+license_note = "LICENSE.txt at this revision is the TAPR Open Hardware License v1.0"
+axes = ["gerber-only", "wearable", "esp32", "small"]
+expect = ["EPD_board.GTL", "EPD_board.GBL", "EPD_board-RoundHoles.TXT"]
 
 [[board]]
 id = "uconsole_gerber"
 name = "ClockworkPi uConsole CPI 3.14 mainboard (gerbers only)"
 url = "https://github.com/clockworkpi/uConsole"
-# Same dead pin as inkplate6 above: upstream's default branch is `master`, and
-# a branch was never a valid pin here anyway.
 rev = "53a05efca806ca024aab4fbfd28a680688c2541c"
 license = "unconfirmed"
 license_confirmed = false
+axes = ["gerber-only", "handheld", "no-mcu", "medium"]
+expect = ["PCB/CPI_3.14_Mainboard_V5_Gerber.7z"]
 
 [[board]]
 id = "uconsole_cm4_adapter_gerber"
@@ -362,6 +819,8 @@ url = "https://github.com/clockworkpi/uConsole"
 rev = "53a05efca806ca024aab4fbfd28a680688c2541c"
 license = "unconfirmed"
 license_confirmed = false
+axes = ["gerber-only", "handheld", "no-mcu", "small"]
+expect = ["PCB/RPI CM4 to CPI v3.14 Adapter.zip"]
 
 # ---------------------------------------------------------------------------
 # Local-only boards
@@ -376,4 +835,12 @@ license_confirmed = false
 #   eagle/                       assorted one-off Eagle files
 #   arduino_uno_r3_from_scratch/ a hand reconstruction
 #   famous/rpi4_usbc_reconstruction/  a reconstruction, not an upstream release
+#   famous/hunt/sbc-a13/         a hunt subject, licence unclear
+#   odbpp/, ipc2581/             ODB++ and IPC-2581 vendor test cases from the
+#                                IPC-2581 Consortium, Valor NPI, Allegro and
+#                                Zuken. Their redistribution terms are not stated
+#                                in the files and no upstream publishes them at a
+#                                fetchable, pinnable URL, so they cannot become
+#                                manifest entries. docs/ingest/ records what they
+#                                cover.
 # ---------------------------------------------------------------------------
