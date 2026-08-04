@@ -163,11 +163,26 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         }
     }
     let board = board;
-    // A board with zero components can prove nothing: every check would pass
-    // vacuously and a "100% clean" verdict on an empty .board is exactly the
-    // false comfort this tool exists to prevent (M6). Refuse as invalid for
-    // analysis, on every path (reports, TUI, co-sim, serve).
-    if board.components.is_empty() {
+    // A board with zero components can prove nothing ABOUT ITS PARTS: every
+    // part-level check would pass vacuously and a "100% clean" verdict on an
+    // empty board is exactly the false comfort this tool exists to prevent (M6).
+    // Refuse as invalid for analysis, on every path (reports, TUI, co-sim,
+    // serve).
+    //
+    // A copper-geometry question is not a question about parts, though. `--drc`
+    // reads copper polygons and asks whether two nets touch; `--ampacity` reads
+    // trace widths and asks how much current one can carry. Both are fully
+    // answerable from a layout carrying no footprints at all, and the
+    // capacity-only report exists precisely to answer the second one when no
+    // part attributes a current. Refusing them here turned two legitimate
+    // questions into an invalid input, and worse, turned a REAL SHORT on a
+    // copper-only board into exit 3 instead of the gating exit 2: a build that
+    // should have gone red went "cannot analyse" instead.
+    let geometry_only_request =
+        (cfg.drc || cfg.ampacity) && !(cfg.check || cfg.report || cfg.lint || cfg.si
+            || cfg.resources || cfg.usb_c || cfg.thermal || cfg.headless || cfg.serve
+            || cfg.tui || cfg.ac.is_some());
+    if board.components.is_empty() && !geometry_only_request {
         let msg = format!(
             "this board has no components ('{}' parsed, but is empty); \
              nothing to check, so a pass would be meaningless",

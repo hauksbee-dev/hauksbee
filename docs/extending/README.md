@@ -14,7 +14,8 @@ walkthrough assumes you can read TOML and run `cargo`. Except for
 | **analog part** (LDO, op-amp, diode, BJT, MOSFET, comparator) | [add-an-analog-part.md](add-an-analog-part.md) | no, one `[[models]]` entry |
 | I2C/SPI **sensor** (register map, e.g. BME280) | [add-a-sensor.md](add-a-sensor.md) | no, one TOML file |
 | **logic IC** (gates, flip-flops, shift registers) | [add-a-logic-ic.md](add-a-logic-ic.md) | no, one TOML entry |
-| **MCU / chip** (a new Renode/QEMU part, so its firmware co-sims exactly) | [add-an-mcu-variant.md](add-an-mcu-variant.md) | no, two TOML files, no recompile |
+| **MCU variant** (a sibling of a family hauksbee already supports) | [add-an-mcu-variant.md](add-an-mcu-variant.md) | no, two TOML files, no recompile |
+| **MCU family** (a part hauksbee does not support at all) | [add-a-microcontroller.md](add-a-microcontroller.md) | no for a part the emulator models; one static list for a part it does not |
 | **hardware trace** (scope/LA capture as a CI gate) | [add-a-hardware-trace.md](add-a-hardware-trace.md) | no, two TOML files + the instrument export |
 | **board file format** (a new reader) | [add-a-board-format.md](add-a-board-format.md) | yes, one trait impl in a fork |
 | **device physics** (a new solver element) | [new-device-physics.md](new-device-physics.md) | yes, core change, checklist-enforced |
@@ -52,7 +53,7 @@ mistake ships".
 |---|---|---|---|
 | a `[[models]]` db file in a user dir or `--models-dir` | parse, non-empty `[match]`, regex compile only | yes, fully | n/a |
 | a `[[models]]` db file inside a pack | as above | yes, fully | **yes, fully, before anything is copied** |
-| a `.soc.toml` MCU descriptor | **yes, fully, and aborts the run** | no | n/a |
+| a `.soc.toml` MCU descriptor | **yes, fully, and aborts the run** | yes, the loader's own validation plus the checks that catch a descriptor which runs and observes the wrong register | n/a |
 
 The row to read twice is the first. Loading a model db file checks that the TOML
 parses, that every entry has at least one populated `[match]` rule (an
@@ -97,7 +98,10 @@ EM_ARM, EM_RISCV, EM_XTENSA, EM_AVR
 
 - `hauksbee models lint <file>` validates a `[[models]]` database file,
   including any `[models.logic]` block compiled through the same path board
-  binding uses, or a `[sensor]` spec. From a checkout, run:
+  binding uses, a `[sensor]` spec, or a `[soc]` MCU descriptor (which it also
+  prints back as an inspection: which register each GPIO port reads, which buses
+  exist, which ADC channels are injectable, and which capabilities the descriptor
+  leaves absent). From a checkout, run:
   `cargo run -p hauksbee-engine --bin hauksbee -- models lint <file>`.
 - `hauksbee models resolve <board>` shows, for each component, which model
   entry won and from which priority layer. Model and pack authors use this
