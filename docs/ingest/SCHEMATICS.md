@@ -211,18 +211,30 @@ which is why the comparison is over shared pins rather than net counts.
 `DETAIL=1` / `MERGE=1` print the offending nets when a board does not match.
 
 The six projects in the table above live under the KiCad demo tree
-(`corpus.toml` board id `kicad_demos`). `tests/schematic.rs` asks for them at
-`kicad-demos-src/demos/<project>`, so unless your corpus is laid out that way
-those cross-validations skip with a printed `corpus pair … missing` note rather
-than failing. Point `HAUKSBEE_CORPUS_DIR` at a corpus with that layout to run
-them.
+(`corpus.toml` board id `kicad_demos`), which `scripts/fetch-corpus.sh` delivers by
+default. `tests/schematic.rs` resolves each under both names a corpus is delivered
+with, `kicad-demos-src/demos/<project>` in the hand-built tree and
+`kicad_demos/demos/<project>` from the fetch, so these cross-validations run on
+either. A project that resolves under neither prints a `corpus pair … missing` note
+rather than failing.
+
+The KiCad entry is fetched for format coverage and is deliberately NOT part of the
+silence gates' known-good set: these are reference designs to demonstrate KiCad, not
+products anyone manufactured, and the trace-ampacity check fires on
+`demos/pic_programmer`. `corpus.toml` records that, and the sweeps announce the
+exclusion per board. The cross-validations here are unaffected, because agreeing
+with itself about a file's topology is a claim about the reader and not about the
+hardware.
 
 ## KiCad version coverage
 
-The s-expression `.kicad_sch` format (KiCad 6 through 10) is supported. The
-validated corpus spans version stamps 20250114 (KiCad 9) through 20260101
-(KiCad 10). The format stays stable across this range, and the parser keys
-off structure, not the version number.
+The s-expression `.kicad_sch` format (KiCad 6 through 10) is supported. The fetched
+corpus carries eight distinct version stamps across 260 s-expression schematics,
+spanning 20211123 (KiCad 6) to 20260306 (KiCad 10): 20211123, 20230121, 20230221,
+20231120, 20240602, 20241209, 20250114 and 20260306. The format stays stable across
+this range, and the parser keys off structure, not the version number. Re-measure
+with `grep -ho '(version [0-9]*)' $(find "$HAUKSBEE_CORPUS_DIR" -name '*.kicad_sch')`
+rather than trusting this list after the manifest changes.
 
 **KiCad 5 legacy `.sch`** is a different, non-s-expression format. This module
 does **not** parse it. A project whose only schematic is a legacy `.sch` still

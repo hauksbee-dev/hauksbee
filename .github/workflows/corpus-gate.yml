@@ -1,10 +1,10 @@
 # The zero-false-positive board gate: do the checks stay quiet on real hardware
 # that is fine?
 #
-# Nightly rather than per-push because it fetches a hundred-odd boards from
-# their upstream projects. HAUKSBEE_REQUIRE_CORPUS=1 turns a missing board into
-# a hard failure, so the job cannot degrade into a green run that checked
-# nothing.
+# Nightly rather than per-push because it fetches 47 upstream projects, some three
+# hundred layouts, into half a gigabyte on disk. HAUKSBEE_REQUIRE_CORPUS=1 turns a
+# missing board into a hard failure, so the job cannot degrade into a green run
+# that checked nothing.
 
 name: corpus-gate
 
@@ -25,7 +25,7 @@ jobs:
   gate:
     name: zero-false-positive gate
     runs-on: ubuntu-latest
-    # Fetching and simulating a hundred boards is not a five-minute job.
+    # Fetching and simulating three hundred layouts is not a five-minute job.
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
@@ -44,6 +44,14 @@ jobs:
       - name: Fetch the corpus
         if: steps.corpus-cache.outputs.cache-hit != 'true'
         run: scripts/fetch-corpus.sh
+
+      # The fetch runs this itself, but a cache hit skips the fetch, and a cached
+      # tree is exactly the one nobody re-examines. This is the check that catches
+      # a manifest field nothing honours and an entry whose landed files stopped
+      # matching its declaration, which is the class of bug that made this whole
+      # job meaningless for as long as it went unnoticed.
+      - name: Check the manifest still describes the corpus
+        run: python3 scripts/check-corpus.py --dir board-corpus
 
       # Prove the corpus is there before running anything against it.
       #
@@ -71,12 +79,12 @@ jobs:
           # whatever depth the board's `dest` puts it.
           dirs=$(find board-corpus -name .hauksbee-rev | wc -l | tr -d ' ')
           echo "corpus: $dirs fetched board(s), $boards design file(s)"
-          # A full local fetch on 2026-08-04 gave 28 boards and 393 design files
-          # (28 of the manifest's 30 entries; the two uConsole boards are licence-
-          # unconfirmed and skipped by default). The floors sit well under both, so
-          # a broken fetch is caught without going red every time one upstream is
-          # briefly unreachable.
-          if [ "$dirs" -lt 24 ] || [ "$boards" -lt 300 ]; then
+          # A full local fetch on 2026-08-04 gave 47 board directories and 850
+          # design files (47 of the manifest's 50 entries; the two uConsole boards
+          # and the SparkFun MicroMod nRF52840 are licence-unconfirmed and skipped
+          # by default). The floors sit well under both, so a broken fetch is caught
+          # without going red every time one upstream is briefly unreachable.
+          if [ "$dirs" -lt 40 ] || [ "$boards" -lt 700 ]; then
             echo "the corpus is too small to gate on; refusing to report a pass" >&2
             find board-corpus -mindepth 1 -maxdepth 2 -type d >&2
             exit 1
@@ -118,9 +126,10 @@ jobs:
       # silently dropped about half the counts, which would have made this summary
       # its own small version of the problem it reports on.
       #
-      # EXCEPTION and NOT RUN lines come along too. A gate that excused a finding,
-      # or did not run at all, is exactly what a reader of this summary needs to
-      # see next to the counts rather than have to go looking for.
+      # EXCEPTION, NOT RUN and NOT KNOWN-GOOD lines come along too. A gate that
+      # excused a finding, did not run at all, or declined to grade itself on a
+      # board is exactly what a reader of this summary needs to see next to the
+      # counts rather than have to go looking for.
       - name: Per-gate board counts
         if: always()
         run: |
@@ -128,7 +137,7 @@ jobs:
             echo "## Boards scanned per gate"
             echo
             echo '```'
-            grep -oE '(SCANNED|EXCEPTION|NOT RUN) .*' corpus-gate.log \
+            grep -oE '(SCANNED|EXCEPTION|NOT RUN|NOT KNOWN-GOOD) .*' corpus-gate.log \
               || echo "no gate reported a count: treat this run as unaudited"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
