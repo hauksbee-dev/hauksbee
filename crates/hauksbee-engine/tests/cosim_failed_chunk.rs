@@ -90,6 +90,18 @@ fn cosim_json_from(sched: &Scheduler) -> CosimJson {
             .iter()
             .map(|&(start_s, end_s)| CosimFailedWindow { start_s, end_s })
             .collect(),
+        fallback_windows: sched
+            .fallback_windows()
+            .iter()
+            .map(
+                |&(start_s, end_s, method)| hauksbee_engine::result::CosimFallbackWindow {
+                    start_s,
+                    end_s,
+                    method: method.as_str().to_string(),
+                    accuracy: method.accuracy_note().to_string(),
+                },
+            )
+            .collect(),
         spi_framing: sched
             .spi_framing_modes()
             .into_iter()
