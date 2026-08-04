@@ -40,14 +40,23 @@ load-bearing:
   and the KiCad-authored vectors at <1% (rectifier) and <2% (3x-2N2222
   amplifier). Those are the numbers we stand behind.
 
-Same netlists, same tolerances, wall-clock. ngspice 46, Apple Silicon.
+Same netlists, same tolerances, wall-clock. One session on Apple Silicon against
+ngspice-45.2. The wall-clock columns are single samples of a few hundred
+milliseconds of work and move by up to roughly a factor of two between machines
+and between runs, so read them as observations of a direction, not as
+specifications. The accuracy column is the part that is asserted and stable.
 
-| circuit | hauksbee | vs ngspice (observed) | accuracy (asserted) |
+Every `vs ngspice` figure below **includes ngspice's process startup**, because
+ngspice runs as a separate binary and the benches time what a user waits for. On
+the millisecond-scale rows that startup is a large share of the total, so those
+ratios flatter hauksbee; they support "not close" rather than an exact multiple.
+
+| circuit | hauksbee | vs ngspice (observed, incl. its process start) | accuracy (asserted) |
 |---|---|---|---|
-| half-wave rectifier, 5ms tran | 2.05 ms | ~23x wall-clock (48.1 ms incl. process start) | <2% rel |
-| synapse array, 90 blocks (partitioned) | 6.2-7.1x vs own monolithic | ~6x | 1.05e-7 vs monolithic |
-| small RC island, exact exponential steps | 100x fewer steps at equal accuracy (~35x wall) | n/a (measured against its own monolithic reference) | 9.6e-10 vs analytic |
-| RC ladder 1000 stages | 13.7k steps/s (Auto keeps monolithic: sparse LU already optimal there) | n/a (partitioned vs monolithic comparison) | <1e-6 vs monolithic |
+| half-wave rectifier, 5ms tran | 2.689 ms, 1125 steps | ~19x wall-clock (50.3 ms) | <2% rel |
+| synapse array, 90 blocks (partitioned) | 3.7x vs own monolithic this run; 3.5-7x across machines | ~15x (60.6 ms vs 915.5 ms) | 1.405e-7 vs monolithic |
+| small RC island, exact exponential steps | 100x fewer steps at equal accuracy (~38x wall) | n/a (measured against its own monolithic reference) | 9.6e-10 vs analytic |
+| RC ladder 1000 stages | 9.5k steps/s (Auto keeps monolithic: sparse LU already optimal there) | n/a (partitioned vs monolithic comparison) | <1e-6 vs monolithic |
 | KiCad-authored vectors: rectifier / 3x-2N2222 amplifier | runs both via SpiceLoader | same netlists | 2.5e-5 / 0.92% max rel vs ngspice |
 
 The accuracy column entries marked "vs analytic" / "vs monolithic" are asserted
