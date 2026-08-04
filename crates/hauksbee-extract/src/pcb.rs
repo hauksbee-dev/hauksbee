@@ -72,23 +72,16 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
         if fp.find_all("pad").next().is_none() {
             continue;
         }
-        let c = extract_footprint(fp, &mut table);
-        // Two footprints sharing one reference designator are one electrical
-        // part with several physical instances (a testpoint placed on both
-        // board sides is the common case: Watchy's TP4/TP5). Merge the later
-        // instance's pads into the first so every downstream count (bind rows,
-        // num_components, resolve-rate denominators) sees one part per refdes.
-        // A part is DNP only when every one of its instances is.
-        let prev = (!c.reference.is_empty())
-            .then(|| components.iter_mut().find(|p| p.reference == c.reference))
-            .flatten();
-        if let Some(prev) = prev {
-            prev.pins.extend(c.pins);
-            prev.dnp = prev.dnp && c.dnp;
-            continue;
-        }
-        components.push(c);
+        components.push(extract_footprint(fp, &mut table));
     }
+    // Two footprints sharing one reference designator are one electrical part
+    // with several physical instances (a testpoint placed on both board sides is
+    // the common case: Watchy's TP4/TP5), so every downstream count (bind rows,
+    // num_components, resolve-rate denominators) must see one part per refdes.
+    // The rule lives in one place because the ODB++ and IPC-2581 readers need
+    // the same one: a board re-exported to an exchange format has to read as the
+    // same part list it does natively.
+    let components = crate::merge_duplicate_references(components);
 
     // Names invented for undeclared nets are a guess about the user's board, so
     // say how many rather than letting `Net-(7)` appear in a report unexplained.

@@ -19,6 +19,11 @@
 //! - [`ExtractedBoard::from_altium_pcb`], Altium Designer `.PcbDoc` (binary
 //!   OLE2). This unlocks the professional / enterprise / regulated tier; see
 //!   `docs/ingest/ALTIUM.md`.
+//! - [`ExtractedBoard::from_odbpp`] / [`ExtractedBoard::from_ipc2581`], the two
+//!   fab/assembly *exchange* formats. Both state the netlist rather than needing
+//!   it reverse-engineered from copper, so a board that only ever leaves its CAD
+//!   tool as an ODB++ `.tgz` or an IPC-2581 XML is fully ingestible. See
+//!   [`odbpp`] and [`ipc2581`] for what each carries and what is dropped.
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-extract/README.md (the
 //! crate tour) and docs/how-and-why/hauksbee-extract/netlist.md (the
@@ -30,9 +35,11 @@ pub mod drc;
 mod eagle;
 pub mod gerber;
 mod ipc356;
+pub mod ipc2581;
 mod netlint;
 mod netlist;
 pub mod netname;
+pub mod odbpp;
 mod pcb;
 mod protel_ascii;
 pub mod reader;
@@ -83,6 +90,12 @@ pub enum ExtractError {
     Corrupt(String),
     #[error("altium: {0}")]
     Altium(String),
+    /// An ODB++ job input problem, already phrased as a whole human sentence.
+    #[error("{0}")]
+    Odb(String),
+    /// An IPC-2581 document problem, already phrased as a whole human sentence.
+    #[error("{0}")]
+    Ipc2581(String),
     #[error("not a {expected} file (root is {found:?})")]
     WrongRoot {
         expected: &'static str,
@@ -309,6 +322,28 @@ impl ExtractedBoard {
         altium::extract(bytes)
     }
 
+    /// ODB++ (Siemens/Valor) design archive: a directory, a `.tgz` or a `.zip`.
+    /// Reads nets, components and pads from the job's own EDA data rather than
+    /// reverse-engineering them from copper, and cross-checks that data against
+    /// the job's CAD netlist. See [`odbpp`] for the accounting this discards
+    /// ([`odbpp::OdbExtraction::stats`] keeps it) and what is deliberately not
+    /// modelled.
+    pub fn from_odbpp(path: &Path) -> Result<Self, ExtractError> {
+        odbpp::from_odbpp(path).map(|e| e.board)
+    }
+
+    /// ODB++ from archive bytes (`.tgz` / `.tar` / `.zip`), for the web path
+    /// that has an upload rather than a path.
+    pub fn from_odbpp_archive(bytes: &[u8]) -> Result<Self, ExtractError> {
+        odbpp::from_odbpp_archive(bytes).map(|e| e.board)
+    }
+
+    /// IPC-2581 (DPMX) design-exchange XML, revision B or C, namespaced or not.
+    /// See [`ipc2581`]; [`ipc2581::extract`] keeps the read's accounting.
+    pub fn from_ipc2581(text: &str) -> Result<Self, ExtractError> {
+        ipc2581::extract(text).map(|e| e.board)
+    }
+
     /// ASCII Protel board export (`|RECORD=Board|KIND=Protel_Advanced_PCB`
     /// pipe-delimited text): the `.pcbdoc` form EasyEDA and several converters
     /// produce instead of Altium Designer's binary OLE2 container. Reads nets,
@@ -430,6 +465,87 @@ impl ExtractedBoard {
         }
         lint
     }
+}
+
+/// Reverse KiCad's `{token}` name escape.
+///
+/// ODB++ and IPC-2581 both restrict the characters a name may contain, and
+/// KiCad's exporters push every name through their own `EscapeString`, which
+/// replaces the offending characters with brace tokens. A hierarchical net
+/// `Net-(U4-LNA_IN/RF)` therefore leaves KiCad as `Net-(U4-LNA_IN{slash}RF)` in
+/// BOTH exchange formats, and a reader that takes the name literally reports a
+/// net the rest of the design does not have — the netlint's `/SHEET/SIGNAL`
+/// hierarchy matching, and any comparison against the same board's native
+/// reading, both break on it.
+///
+/// The table is KiCad's (`string_utils.cpp`). This is applied ONLY when the file
+/// says KiCad wrote it ([`odbpp::OdbStats::producer`] /
+/// [`ipc2581::Ipc2581Stats::producer`]), because the tokens are KiCad's
+/// convention and not the formats': a net another tool genuinely named
+/// `A{slash}B` must survive intact.
+pub(crate) fn unescape_kicad_name(s: &str) -> String {
+    if !s.contains('{') {
+        return s.to_string();
+    }
+    const TABLE: &[(&str, &str)] = &[
+        ("{dblquote}", "\""),
+        ("{quote}", "'"),
+        ("{lt}", "<"),
+        ("{gt}", ">"),
+        ("{backslash}", "\\"),
+        ("{slash}", "/"),
+        ("{bar}", "|"),
+        ("{colon}", ":"),
+        ("{space}", " "),
+        ("{dollar}", "$"),
+        ("{tab}", "\t"),
+        ("{return}", "\n"),
+        // `{brace}` last: a `{` restored earlier must not start a new token.
+        ("{brace}", "{"),
+    ];
+    let mut out = s.to_string();
+    for (token, ch) in TABLE {
+        if out.contains(token) {
+            out = out.replace(token, ch);
+        }
+    }
+    out
+}
+
+/// Collapse components that share a reference designator into one.
+///
+/// Two placements under one designator are one electrical part with several
+/// physical instances: a test point placed on both board sides is the ordinary
+/// case (Watchy's TP4/TP5), and a connector split into two footprints is the
+/// other. The KiCad layout reader has always done this (see `pcb.rs`), because
+/// every downstream count — bind rows, `num_components`, resolve-rate
+/// denominators, [`ExtractedBoard::component`] lookups — assumes one part per
+/// designator. The exchange readers ([`odbpp`], [`ipc2581`]) route through this
+/// so a board re-exported to ODB++ or IPC-2581 reads as the same part list it
+/// does natively, rather than growing a phantom `TP4_2`.
+///
+/// The first instance keeps its position, value and footprint; later instances
+/// contribute their pads. A part is DNP only when *every* instance is.
+pub(crate) fn merge_duplicate_references(components: Vec<Component>) -> Vec<Component> {
+    let mut out: Vec<Component> = Vec::with_capacity(components.len());
+    for c in components {
+        let prev = (!c.reference.is_empty())
+            .then(|| out.iter_mut().find(|p| p.reference == c.reference))
+            .flatten();
+        match prev {
+            Some(prev) => {
+                prev.pins.extend(c.pins);
+                prev.dnp = prev.dnp && c.dnp;
+                // A later instance can carry the value the first one lacked
+                // (KiCad puts the value on one footprint of a split part).
+                if prev.value.is_empty() && !c.value.is_empty() {
+                    prev.value = c.value;
+                }
+            }
+            None => out.push(c),
+        }
+    }
+    out
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
