@@ -25,6 +25,11 @@ Environment:
   HAUKSBEE_CI_BIN   path to the hauksbee-ci binary (else taken from PATH)
   HAUKSBEE_CI_SPECS colon-separated spec directories to search
                    (default: "ci:.")
+  HAUKSBEE_CI_HOOK_OPTIONAL
+                   set to 1 to SKIP the check when the binary is absent instead
+                   of blocking the commit. Without it a missing binary is a
+                   blocked commit, because a gate that passes for want of the
+                   tool is green forever on a fresh clone.
 """
 
 from __future__ import annotations
@@ -132,14 +137,27 @@ def main() -> int:
     staged = set(staged_files())
     binary = core.find_binary(os.environ.get("HAUKSBEE_CI_BIN"))
     if not binary:
+        # A gate that passes because the tool is absent is green forever on a
+        # fresh clone, which is worse than no gate: the repo looks checked. Block
+        # by default and name the opt-out, the same contract (and the same
+        # variable) the plain `.git/hooks/pre-commit` this tool installs uses.
+        if os.environ.get("HAUKSBEE_CI_HOOK_OPTIONAL") == "1":
+            print(
+                "hauksbee-ci: binary not found; HAUKSBEE_CI_HOOK_OPTIONAL=1, "
+                "skipping the hardware check.",
+                file=sys.stderr,
+            )
+            return 0
         print(
-            "hauksbee-ci: binary not found (build it and set HAUKSBEE_CI_BIN or "
-            "put it on PATH). Skipping hardware checks.",
+            "hauksbee-ci: binary not found, so the hardware check did NOT run; "
+            "commit blocked.\n"
+            "  install it and set HAUKSBEE_CI_BIN or put it on PATH,\n"
+            "  or set HAUKSBEE_CI_HOOK_OPTIONAL=1 to skip the check when it is "
+            "absent,\n"
+            "  or commit with --no-verify to override once.",
             file=sys.stderr,
         )
-        # A missing binary should not silently pass a broken board, but blocking
-        # every commit on a tooling gap is worse; warn and let it through.
-        return 0
+        return 1
 
     # Run only specs whose board was actually touched by this commit.
     to_run = []
