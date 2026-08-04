@@ -58,7 +58,7 @@ Every key below is ALWAYS present on an `ok: true` line.
 | `elapsed_s` | number | yes | wall-clock seconds |
 | `coverage` | string or `null` | yes, nullable | the tolerance-ensemble coverage claim; `null` when the run was not an ensemble |
 | `substitutions` | array of string | yes, may be empty | MCUs co-simulated on a substitute core |
-| `coverage_warnings` | array of string | yes, may be empty | co-sim coverage holes (dropped ADC injection, unexercised bus device) |
+| `coverage_warnings` | array of string | yes, may be empty | co-sim coverage holes (dropped ADC injection, unexercised bus device, a watchdog that cannot bite, a watchdog that did) |
 | `dead_rails` | array of string | yes, may be empty | nets that name a supply and that nothing powered |
 | `waiver_notes` | array of string | yes, may be empty | lapsed waivers, active waivers that matched nothing, a malformed waiver file |
 | `results` | array of object | yes | one entry per assertion, in spec order |

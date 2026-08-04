@@ -170,10 +170,20 @@ degradation so a run that silently lost fidelity never reads as healthy:
   push-pull output while an enabled modelled push-pull output was already
   driving. Entries carry `{net, mcu_ref, pin, parts[], t_s}`; waveforms touching
   the net are untrustworthy from `t_s` on.
+- `watchdog_limitations[]`, MCUs whose backend watchdog does not bite the way
+  the part's does. Entries carry `{mcu_ref, limitation}`, where `limitation` is a
+  whole sentence for a human: firmware that HANGS runs forever here, so every
+  assertion about behaviour after a hang is fiction and the run cannot vouch for
+  the recovery path.
+- `watchdog_resets[]`, MCUs whose watchdog actually rebooted the core, as
+  `{mcu_ref, resets}`. Not an error, a finding: an assertion that passed across a
+  reboot was measuring a rebooted core. Read it with `watchdog_limitations[]`,
+  since a backend that cannot reboot at all reports nothing here.
 
 Every array above (`activity_summary[]`, `failed_windows[]`, `spi_framing[]`,
 `adc_dropped[]`, `unexercised_buses[]`, `short_pulses[]`,
-`driver_contention[]`) is omitted when empty; the scalars are always present.
+`driver_contention[]`, `watchdog_limitations[]`, `watchdog_resets[]`) is omitted
+when empty; the scalars are always present.
 A clean short run on `blinky.kicad_pcb` with `testdata/firmware/demo/demo.hex`:
 
 ```json

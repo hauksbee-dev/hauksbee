@@ -103,3 +103,77 @@ fn lint_refuses_unrecognized_toml() {
     let (code, _out) = lint(&path);
     assert_eq!(code, 1, "unrecognized TOML shape must be a hard error");
 }
+
+/// The descriptor inspection must state, per part, what the co-sim will and will
+/// not do about the two facts a wrong answer hides best (F6c):
+///
+/// - the CLOCK, which is cross-checked against the platform's own declarations at
+///   load. A mismatch needs no advisory here because it is already a hard load
+///   error, surfaced through the `soc descriptor '{}': ERROR: {e}` path.
+/// - the WATCHDOG, either the part's own limitation sentence rendered verbatim,
+///   or, when the descriptor claims none, that the part claims full fidelity.
+///
+/// Proven on a shipped descriptor (nRF52840, whose watchdog arms and never
+/// fires) and on that same descriptor with the field removed, which is the only
+/// way to reach the full-fidelity branch: every shipped Renode part currently
+/// carries a limitation.
+#[cfg(feature = "renode")]
+#[test]
+fn soc_inspection_states_the_clock_cross_check_and_the_watchdog_fidelity() {
+    let stock_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hauksbee-mcu/db/mcu/nrf52840.soc.toml");
+    let (code, out) = lint(&stock_path);
+    assert_eq!(code, 0, "the shipped descriptor must lint clean:\n{out}");
+    assert!(
+        out.contains(
+            "clock: 64000000 Hz (cross-checked at load against the platform's own \
+             `cpu PerformanceInMips` / `nvic systickFrequency` declarations)"
+        ),
+        "the clock line must say the number is checked, not decorative:\n{out}"
+    );
+    assert!(
+        out.contains(
+            "watchdog: The nRF52840 watchdog arms in this co-simulator (it reads back as \
+             running, with a correct 32768 Hz reload) but never fires:"
+        ),
+        "the part's own sentence, verbatim:\n{out}"
+    );
+
+    // The other branch: a descriptor claiming no limitation says so as a claim,
+    // rather than leaving the reader to infer it from a missing line. Drop the
+    // `watchdog_limitation = """ … """` block, closing delimiter included.
+    let stock = std::fs::read_to_string(&stock_path).expect("read stock descriptor");
+    let mut silent = String::new();
+    let mut skipping = false;
+    for line in stock.lines() {
+        if line.starts_with("watchdog_limitation") {
+            skipping = true;
+            continue;
+        }
+        if skipping {
+            skipping = line.trim() != "\"\"\"";
+            continue;
+        }
+        silent.push_str(line);
+        silent.push('\n');
+    }
+    assert!(
+        !silent.contains("watchdog_limitation") && silent.contains("[[soc.ports]]"),
+        "the field must be gone and the rest of the descriptor intact:\n{silent}"
+    );
+
+    let dir = std::env::temp_dir().join(format!("hauksbee-soc-lint-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    let path = dir.join("nrf52840.soc.toml");
+    std::fs::write(&path, silent).expect("write descriptor");
+    let (code, out) = lint(&path);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(code, 0, "still a valid descriptor:\n{out}");
+    assert!(
+        out.contains(
+            "watchdog: this part claims full fidelity, an armed watchdog that is never fed \
+             reboots the core the way silicon does"
+        ),
+        "an absent limitation is a CLAIM and must be printed as one:\n{out}"
+    );
+}
