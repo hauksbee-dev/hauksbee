@@ -67,8 +67,13 @@ Names then merge nodes that never touch geometrically:
   older library symbols, e.g. a hand-drawn `VPP`, omit the flag but are
   still power symbols).
 - Net names are normalised the way KiCad does: a literal `/` inside a label
-  is escaped as `{slash}`, so `VPP/MCLR` and `VPP{slash}MCLR` are the same
-  net and must compare equal.
+  is escaped as `{slash}` in the file, so `VPP/MCLR` and `VPP{slash}MCLR` are
+  the same net and must compare equal. The name that survives into the netlist
+  and every report is the **unescaped** one, `VPP/MCLR`, the spelling the
+  schematic shows; the escaped form never reaches a user-facing surface. Every
+  parser funnels through one function for this
+  (`crates/hauksbee-extract/src/netname.rs`), which also drops sub/superscript
+  render braces, so `SCL_{2}` in the file becomes `SCL_2` in a finding.
 
 ### 4. Hierarchy
 
