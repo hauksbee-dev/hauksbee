@@ -89,8 +89,22 @@ pub(crate) mod tree;
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
-use crate::altium::{VALUE_UNRESOLVED_KEY, VALUE_UNRESOLVED_REASON};
+use crate::altium::VALUE_UNRESOLVED_KEY;
 use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
+
+/// Why a part read from an ODB++ job has no value, for the bind report to print
+/// next to its UNRESOLVED verdict.
+///
+/// It must say *ODB++*: reusing the Altium reason told users of an ODB++ job to
+/// go and look in a `.SchDoc` they do not have. ODB++ carries a component's
+/// value only as a `PRP` property, and plenty of producers (Valor NPI writes
+/// `PRP CLASS` and routing rules but no `PRP Value`) simply do not write one.
+/// The value is not fabricated from the `part_name` field, because that field is
+/// a footprint string in KiCad's export and inventing "R_0603" as a resistance
+/// is how phantom faults get reported.
+pub const VALUE_UNRESOLVED_REASON: &str =
+    "no value in the ODB++ job: it carries no `PRP Value` property for this part, \
+     and the part name is a library/footprint id rather than a value";
 
 use records::{parse_features, FeatureCounts, RawComponent};
 use tree::OdbTree;

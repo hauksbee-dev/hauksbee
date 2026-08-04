@@ -78,8 +78,19 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::Reader;
 
-use crate::altium::{VALUE_UNRESOLVED_KEY, VALUE_UNRESOLVED_REASON};
+use crate::altium::VALUE_UNRESOLVED_KEY;
 use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
+
+/// Why a part read from an IPC-2581 document has no value.
+///
+/// IPC-2581 carries values in the `<Bom>` section, as a `<Textual>`
+/// characteristic; a document exported without a BOM (a `FABRICATION` function
+/// mode, or a tool that writes CadData only) has placement and netlist but no
+/// values at all. `part` and `OEMDesignNumberRef` are device/library ids, not
+/// values, and are never promoted to one.
+pub const VALUE_UNRESOLVED_REASON: &str =
+    "no value in the IPC-2581 document: its BOM carries no `Value` characteristic \
+     for this part, and the part reference is a device id rather than a value";
 
 /// Where the netlist came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
