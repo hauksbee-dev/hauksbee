@@ -3,3 +3,8 @@
 # the demo's content, versioned so a deploy is reproducible byte for byte.
 dist/
 .wrangler/
+# The widget's build output, its test-run artifacts, and the node_modules link
+# build.sh makes into frontend's (demo/ has none of its own).
+embed-dist/
+embed-test-results/
+embed/node_modules

@@ -1,0 +1,340 @@
+/* The widget's own chrome, and the feature flag that takes the app's surface
+   down to what was recorded.
+
+   Everything inside .hb-embed-app is the real app, styled by the real app; the
+   rules here are the frame around it plus the small number of surfaces that
+   cannot work against a cache and must therefore not be offered (a hidden
+   affordance is honest, a dead one is not). Each hide says why. */
+
+.hb-embed-host {
+  position: relative;
+  display: block;
+  overflow: hidden;
+}
+
+.hb-embed-root {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 220px;
+  overflow: hidden;
+  background: var(--canvas);
+  color: var(--silk);
+  font-family: var(--font-sans);
+  border-radius: 14px;
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow-card, 0 1px 2px rgba(0, 0, 0, 0.4));
+  contain: paint;
+}
+
+/* The app is written for a viewport it owns; here it owns a box, and the box has
+   the caption under it. Without a definite height on every link in this chain
+   the app grows to its content and pushes the caption out of the widget, which
+   is the one thing that may never happen. */
+.hb-embed-app {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  position: relative;
+}
+
+.hb-embed-appmount {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  position: relative;
+}
+
+.hb-embed-appmount > .h-screen,
+.hb-embed-appmount .h-screen {
+  height: 100%;
+}
+
+/* ── Compact ─────────────────────────────────────────────────────────────── */
+
+.hb-embed-compact {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.hb-embed-compact-map {
+  position: absolute;
+  inset: 0;
+}
+
+.hb-embed-compact-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  align-items: flex-start;
+  padding: 12px 14px;
+  /* Clear of the viewer's own chrome: its toolbar along the top, its footprint
+     count along the bottom. */
+  padding-top: 56px;
+  padding-bottom: 34px;
+}
+
+.hb-embed-prompt {
+  max-width: 30rem;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--silk-dim);
+  background: color-mix(in srgb, var(--surface) 86%, transparent);
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  padding: 7px 11px;
+  backdrop-filter: blur(6px);
+}
+
+.hb-embed-prompt-strong {
+  color: var(--silk);
+  font-weight: 600;
+}
+
+.hb-embed-readout {
+  align-self: flex-end;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 6px 10px;
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--instrument) 88%, transparent);
+  border: 1px solid var(--copper-deep);
+  color: var(--silk);
+}
+
+.hb-embed-readout-net { color: var(--copper-hi); font-weight: 600; }
+.hb-embed-readout-v { color: var(--silk-dim); font-variant-numeric: tabular-nums; }
+
+/* Once, on arrival: the hint that this is live and can be touched. Three
+   pulses and done; it is a pointer, not a beacon. */
+.hb-embed-readout-pulse {
+  animation: hb-embed-pulse 1.5s cubic-bezier(0.4, 0, 0.2, 1) 3;
+}
+
+@keyframes hb-embed-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 var(--copper-glow); }
+  50% { box-shadow: 0 0 0 7px transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hb-embed-readout-pulse { animation: none; }
+}
+
+/* ── Expanded chrome ─────────────────────────────────────────────────────── */
+
+.hb-embed-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  height: 42px;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+}
+
+.hb-embed-bar-mark {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.22em;
+  color: var(--silk-dim);
+  flex: 0 0 auto;
+}
+
+.hb-embed-boards {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.hb-embed-boards::-webkit-scrollbar { display: none; }
+
+.hb-embed-board,
+.hb-embed-cta,
+.hb-embed-collapse {
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  border-radius: 999px;
+  padding: 5px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--hairline);
+  color: var(--silk-dim);
+  transition: color 0.14s, border-color 0.14s, background-color 0.14s;
+}
+
+.hb-embed-board:hover,
+.hb-embed-collapse:hover { color: var(--silk); border-color: var(--copper-deep); }
+
+.hb-embed-board[data-active='true'] {
+  color: var(--copper-hi);
+  border-color: var(--copper-deep);
+  background: var(--copper-tint);
+}
+
+.hb-embed-cta {
+  background: var(--copper);
+  border-color: var(--copper);
+  color: var(--on-copper);
+  font-weight: 600;
+  padding: 6px 14px;
+}
+.hb-embed-cta:hover { background: var(--copper-hi); border-color: var(--copper-hi); }
+
+/* The recorded specs: one click each, and each one is a run that happened. */
+
+.hb-embed-specs {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 5px 14px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.hb-embed-specs::-webkit-scrollbar { display: none; }
+
+.hb-embed-specs-label {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--silk-faint);
+  flex: 0 0 auto;
+}
+
+.hb-embed-spec {
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  white-space: nowrap;
+  border-radius: 8px;
+  padding: 4px 10px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  color: var(--silk-dim);
+  flex: 0 0 auto;
+}
+.hb-embed-spec:hover { color: var(--silk); border-color: var(--copper-deep); }
+.hb-embed-spec[data-active='true'] {
+  color: var(--copper-hi);
+  border-color: var(--copper-deep);
+  background: var(--copper-tint);
+}
+
+.hb-embed-specs-note {
+  font-size: 11px;
+  color: var(--silk-faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── The caption that is always on screen ────────────────────────────────── */
+
+.hb-embed-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 0 0 auto;
+  min-height: 34px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--hairline);
+  background: var(--surface);
+}
+
+.hb-embed-caption {
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--silk-dim);
+}
+
+.hb-embed-caption-dim { color: var(--silk-faint); }
+
+.hb-embed-loading,
+.hb-embed-error {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  color: var(--silk-faint);
+  padding: 20px;
+  text-align: center;
+}
+
+.hb-embed-error strong { color: var(--silk); font-weight: 600; }
+
+/* ── Feature flag: surfaces with no recording behind them ────────────────── */
+
+/* The environment page reports which co-sim backends and oracles are installed
+   on the machine running the engine. There is no machine here. */
+.hb-embed-root [data-testid='nav-env'] { display: none !important; }
+
+/* Saved sessions are a local-workspace feature (they re-open a board from
+   storage and re-analyze it), and re-analysis needs an engine. */
+.hb-embed-root [data-testid='session-indicator'],
+.hb-embed-root [data-testid='session-switcher'],
+.hb-embed-root [data-testid='session-resume'] { display: none !important; }
+
+/* Uploading a board: the widget cannot analyze one, and says so in words
+   rather than offering the drop zone and refusing afterwards. The board
+   switcher in the widget's own bar is the way to change board here. */
+.hb-embed-root [data-testid='header-another-board'],
+.hb-embed-root [data-testid='try-another-file'],
+.hb-embed-root [data-testid='drop-zone'],
+.hb-embed-root [data-testid='restored-redrop'] { display: none !important; }
+
+/* Datasheet extraction and hand-written part models write to the local model
+   library through the engine. Nothing here can receive them. */
+.hb-embed-root [data-testid='datasheet-extract'],
+.hb-embed-root [data-testid='extract-unavailable'],
+.hb-embed-root [data-testid='extract-blocked'],
+.hb-embed-root [data-testid='write-part'],
+.hb-embed-root [data-testid='write-part-open'] { display: none !important; }
+
+/* The compact state is one gesture wide: pan, zoom, click a net. The viewer's
+   fullscreen control belongs to the expanded surface, where there is room to
+   come back from it. */
+.hb-embed-root[data-state='compact'] .hb-embed-compact-map [data-testid='viewer-fullscreen'] {
+  display: none !important;
+}
+
+/* 3D is retired here, and it is the one hide that is not about a missing
+   recording: the model is generated from the board already in memory, so it
+   costs nothing extra to serve, but nobody has measured its frame rate on a
+   visitor's machine. The verification harness renders WebGL in software and gets
+   single digits, and a widget whose job is to feel alive cannot gamble on that.
+   Re-enable by deleting this rule once it has been measured on real hardware
+   (demo/EMBED.md, "About 3D"); the e2e pass asserts the control is absent, so
+   this rule cannot silently stop matching.
+
+   The selector is the map toolbar's 2D/3D segmented control: the row is the
+   viewer's own `z-20` toolbar, the control is its first group, and 3D is the
+   second button in it. There is no test id to aim at. */
+.hb-embed-root .z-20 > div:first-child > div:first-child > button:nth-child(2) {
+  display: none !important;
+}

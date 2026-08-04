@@ -1,0 +1,11 @@
+/* The widget's stylesheet: the app's own, plus the widget's chrome. Imported
+   with ?inline by widget.tsx and injected at mount, so one JS bundle carries
+   everything and there is no stylesheet for a host to forget to link. */
+
+@import "../../frontend/src/index.css";
+@import "./embed.css";
+
+/* Tailwind v4 scans for class names from the CSS file's own tree; the app's
+   components live in the other one. */
+@source "../../frontend/src";
+@source "./";

@@ -1,0 +1,22 @@
+{
+  "// note": "Type-checks the widget together with the app source it imports. Same options as frontend/tsconfig.app.json; the frontend's own build never sees these files, so they need their own project. Run: bunx tsc -p demo/embed --noEmit (from demo/embed, where node_modules is linked by build.sh).",
+  "compilerOptions": {
+    "target": "ES2023",
+    "useDefineForClassFields": true,
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "types": ["vite/client", "bun-types"],
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "moduleDetection": "force",
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUncheckedSideEffectImports": true
+  },
+  "include": ["**/*.ts", "**/*.tsx", "../shared/**/*.ts", "../capture/**/*.ts"]
+}

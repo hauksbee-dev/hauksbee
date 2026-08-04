@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hauksbee embed harness</title>
+    <style>
+      :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; }
+      body { margin: 0; background: #07080b; color: #dfe6ee; }
+      main { max-width: 1180px; margin: 0 auto; padding: 40px 24px 120px; }
+      h1 { font-size: 20px; margin: 0 0 6px; font-weight: 600; }
+      p.lede { margin: 0 0 26px; color: #8b98a8; font-size: 14px; max-width: 46rem; line-height: 1.6; }
+      /* The host owns the box and animates it: exactly what a landing page does. */
+      #demo {
+        height: 340px;
+        transition: height 420ms cubic-bezier(0.2, 0, 0, 1);
+        border-radius: 14px;
+      }
+      .controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 18px 0 10px; }
+      button {
+        font: inherit; font-size: 12px; cursor: pointer; border-radius: 999px;
+        padding: 6px 13px; background: #14171d; border: 1px solid #232936; color: #b7c2d0;
+      }
+      button:hover { border-color: #a65f34; color: #fff; }
+      #log {
+        margin-top: 8px; font-family: ui-monospace, 'SF Mono', monospace; font-size: 11.5px;
+        color: #93a1b3; background: #0b0e13; border: 1px solid #1b2029; border-radius: 10px;
+        padding: 10px 12px; max-height: 220px; overflow: auto; white-space: pre-wrap;
+      }
+      /* Space below, so the lazy mount has something to scroll past. */
+      .spacer { height: 30vh; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Hauksbee embed harness</h1>
+      <p class="lede">
+        The widget below is the same bundle a landing page would drop in. The host
+        (this page) owns the height and animates it; the widget asks. Every event
+        it emits is logged verbatim.
+      </p>
+
+      <div id="demo"></div>
+
+      <div class="controls">
+        <button id="expand">expand()</button>
+        <button id="collapse">collapse()</button>
+        <button id="reset">reset()</button>
+        <button id="board-watchy">loadBoard('watchy')</button>
+        <button id="board-boot_gate">loadBoard('boot_gate')</button>
+        <button id="board-blinky">loadBoard('blinky')</button>
+        <button id="board-button_pullup">loadBoard('button_pullup')</button>
+      </div>
+      <div id="log" data-testid="event-log"></div>
+      <div class="spacer"></div>
+    </main>
+
+    <script type="module">
+      import { createHauksbeeDemo } from './hauksbee-embed.js'
+
+      const box = document.getElementById('demo')
+      const log = document.getElementById('log')
+      const seen = []
+      const write = (type, payload) => {
+        seen.push({ type, payload })
+        log.textContent += `${type} ${payload ? JSON.stringify(payload) : ''}\n`
+        log.scrollTop = log.scrollHeight
+      }
+      // The harness exposes what it saw, so the Playwright pass asserts on the
+      // host's view of the contract rather than on the widget's internals.
+      window.__hbEvents = seen
+
+      const demo = createHauksbeeDemo({
+        container: box,
+        board: new URLSearchParams(location.search).get('board') ?? undefined,
+        // The harness drives the states itself; no waiting for a scroll.
+        lazy: new URLSearchParams(location.search).get('lazy') === '1',
+        // ?inline=1 mounts into this document instead of an iframe, which is the
+        // other shape the contract offers (and the one that shares the page's
+        // styling; see demo/EMBED.md).
+        inline: new URLSearchParams(location.search).get('inline') === '1',
+      })
+      window.__hbDemo = demo
+
+      for (const type of ['ready', 'engaged', 'idle', 'requestExpand', 'requestCollapse', 'error', 'frameReady']) {
+        demo.on(type, payload => write(type, payload))
+      }
+      demo.on('requestExpand', () => { box.style.height = `${demo.suggestedHeight.expanded}px` })
+      demo.on('requestCollapse', () => { box.style.height = `${demo.suggestedHeight.compact}px` })
+
+      document.getElementById('expand').onclick = () => {
+        box.style.height = `${demo.suggestedHeight.expanded}px`
+        demo.expand()
+      }
+      document.getElementById('collapse').onclick = () => {
+        box.style.height = `${demo.suggestedHeight.compact}px`
+        demo.collapse()
+      }
+      document.getElementById('reset').onclick = () => demo.reset()
+      for (const id of ['watchy', 'boot_gate', 'blinky', 'button_pullup']) {
+        const btn = document.getElementById(`board-${id}`)
+        if (btn) btn.onclick = () => demo.loadBoard(id)
+      }
+    </script>
+  </body>
+</html>
