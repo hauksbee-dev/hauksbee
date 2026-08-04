@@ -88,7 +88,16 @@ fn cosim_json_from(sched: &Scheduler) -> CosimJson {
         failed_windows: sched
             .failed_windows()
             .iter()
-            .map(|&(start_s, end_s)| CosimFailedWindow { start_s, end_s })
+            .enumerate()
+            .map(|(i, &(start_s, end_s))| CosimFailedWindow {
+                start_s,
+                end_s,
+                reason: sched
+                    .failed_window_reasons()
+                    .get(i)
+                    .cloned()
+                    .unwrap_or_default(),
+            })
             .collect(),
         spi_framing: sched
             .spi_framing_modes()

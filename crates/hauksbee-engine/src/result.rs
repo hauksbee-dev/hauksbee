@@ -756,6 +756,12 @@ pub struct CosimSpiFraming {
 pub struct CosimFailedWindow {
     pub start_s: f64,
     pub end_s: f64,
+    /// The solver's own refusal message for this window: the blame clause
+    /// naming the net that refused to settle, the devices on it, and any
+    /// near-zero-ohm link poisoning the matrix (E29). Defaulted (and omitted
+    /// from JSON) when empty, so an older consumer keeps parsing.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub reason: String,
 }
 
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]

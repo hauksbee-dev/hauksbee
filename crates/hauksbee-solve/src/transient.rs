@@ -539,8 +539,17 @@ impl Transient {
                         .behavioral_fault()
                         .map(|f| format!("; {f}"))
                         .unwrap_or_default();
+                    // Name the smallest identifiable thing: the unknown that
+                    // refused to settle, the devices on it, and any
+                    // near-zero-ohm link poisoning the matrix (E29). A bare
+                    // "Newton failed" leaves the user bisecting a 259-part
+                    // board by model class.
+                    let blame = ws
+                        .stall_blame(circuit)
+                        .map(|b| format!(" [{b}]"))
+                        .unwrap_or_default();
                     return Err(format!(
-                        "Newton failed at t={t} even at dt_min={dt_min}{fault}"
+                        "Newton failed at t={t} even at dt_min={dt_min}{fault}{blame}"
                     ));
                 }
                 dt = (h * 0.25).max(dt_min);

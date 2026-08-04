@@ -140,7 +140,72 @@ impl BoundBoard {
     pub fn node(&self, net: &str) -> Option<NodeId> {
         self.net_nodes.get(net).copied()
     }
+
+    /// Remove the auto-rail feeding `net` so the net floats except for whatever
+    /// the board itself pushes onto it. Returns `true` when a rail was actually
+    /// removed.
+    ///
+    /// This has to live here, next to the code that stamps a rail, because the
+    /// topology is not what a caller would guess. A [`SupplyLeg`] does NOT put
+    /// its source on the rail node: it interns a private `__supply_<net>` node,
+    /// puts the `Vsource` there, and joins it to the rail through a milliohm
+    /// series resistor so the scheduler can measure rail current. A suppression
+    /// that looks for a `Vsource` on the RAIL node therefore matches nothing,
+    /// drops the leg from `supplies` (so the scheduler stops re-commanding it),
+    /// and leaves the source stamped at its nominal voltage. The rail keeps
+    /// reading 5.000 V and a brownout test silently tests nothing.
+    ///
+    /// Both shapes are handled: a `SupplyLeg`'s internal source, and a bare
+    /// `Vrail_*` / `Vsupply_*` ideal source sitting directly on the rail node.
+    /// Each is replaced by a 1 TΩ open rather than deleted, so no `DeviceId`
+    /// shifts and every index held elsewhere stays valid.
+    pub fn suppress_rail(&mut self, net: &str) -> bool {
+        let Some(node) = self.node(net) else {
+            return false;
+        };
+        let mut opened = false;
+        // The leg's internal source, reached through the leg itself rather than
+        // guessed at from the rail node.
+        for leg in self.supplies.iter().filter(|s| s.net == node) {
+            if let Some(dev) = self.circuit.devices.get_mut(leg.vsource.0 as usize) {
+                if let Device::Vsource { name, p, .. } = dev {
+                    let (nm, a) = (name.clone(), *p);
+                    *dev = Device::Resistor {
+                        name: nm,
+                        a,
+                        b: NodeId::GROUND,
+                        ohms: SUPPRESSED_RAIL_OHMS,
+                        tc1: None,
+                    };
+                    opened = true;
+                }
+            }
+        }
+        self.supplies.retain(|s| s.net != node);
+        // A bare ideal rail source stamped straight onto the net.
+        let leg_name = format!("Vsupply_{net}");
+        for dev in self.circuit.devices.iter_mut() {
+            if let Device::Vsource { name, p, .. } = dev {
+                if *p == node && (*name == leg_name || name.starts_with("Vrail")) {
+                    let (nm, a) = (name.clone(), *p);
+                    *dev = Device::Resistor {
+                        name: nm,
+                        a,
+                        b: NodeId::GROUND,
+                        ohms: SUPPRESSED_RAIL_OHMS,
+                        tc1: None,
+                    };
+                    opened = true;
+                }
+            }
+        }
+        opened
+    }
 }
+
+/// Resistance a suppressed rail's source is replaced by: an open, not a delete,
+/// so no `DeviceId` shifts under a caller holding one.
+const SUPPRESSED_RAIL_OHMS: f64 = 1e12;
 
 /// Which override syntax to suggest when a DNP processor blocked a run.
 #[derive(Clone, Copy)]
@@ -1895,11 +1960,23 @@ fn bind_passive(
             )),
         );
     };
-    let (device, warning) = passive_device(comp, comp.reference.clone(), a, b, &p);
+    let (device, note) = passive_device(comp, comp.reference.clone(), a, b, &p);
     let label = device_label(&device);
     circuit.add(device);
-    (BindOutcome::Analog { device: label }, warning)
+    (BindOutcome::Analog { device: label }, note)
 }
+
+/// Resistance a literal 0 Ω resistor is bound at.
+///
+/// A `0` in a resistor's value field is a JUMPER: a zero-ohm link placed to
+/// route a trace, strap an option, or leave a cut point. It is not a
+/// mathematical short. Binding it at the solver's 1 µΩ floor stamps 1e6 S into
+/// a matrix whose real entries are milli-siemens, and the resulting condition
+/// number is what made a 259-part board (anyshake/explorer, ten `0` resistors)
+/// unsolvable with no element named. A milliohm is the physical truth of an
+/// 0402 jumper's end-to-end resistance, is three decades better conditioned,
+/// and is far below anything a board's behaviour can distinguish from a short.
+const ZERO_OHM_JUMPER_OHMS: f64 = 1e-3;
 
 /// Build the concrete R / C / L device for the passive `comp` between `a` and
 /// `b`, deciding the kind from the reference-designator prefix and the parsed
@@ -1942,31 +2019,39 @@ fn passive_device(
             },
             None,
         )
-    } else {
-        // A literal 0-ohm resistor (a fitted jumper link) must not stamp at
-        // the raw 1e-6 floor: ten of those on one board leave near-short
-        // conductances that wreck the analog solve's conditioning. Stamp the
-        // same STIFF_R_OHMS the supply legs use for "electrically negligible
-        // but solver-safe", and say so on the bind row.
-        let (ohms, warning) = if p.si <= 0.0 {
-            (
-                crate::power_supply::STIFF_R_OHMS,
-                Some(format!(
-                    "{name} is 0 ohms; stamped as a 1 milliohm link so the solve stays finite"
-                )),
-            )
-        } else {
-            (p.si.max(1e-6), None)
-        };
+    } else if p.si <= 0.0 {
+        // A literal 0 (or negative) resistance is a fitted jumper link, not a
+        // mathematical short. Binding it at the raw 1e-6 floor leaves ten
+        // near-short conductances that wreck the analog solve's conditioning
+        // (anyshake/explorer). Bind it at the same milliohm the supply legs use
+        // for "electrically negligible but solver-safe", and SAY SO: the value
+        // on the board is then not the value in the matrix, and a silent
+        // substitution is exactly the class of thing this project refuses.
+        let note = format!(
+            "{name}: value '{}' is a 0 ohm jumper, bound as a {:.0} mohm link so the solve stays finite (an infinite conductance would poison the matrix)",
+            comp.value,
+            ZERO_OHM_JUMPER_OHMS * 1e3,
+        );
         (
             Device::Resistor {
                 name,
                 a,
                 b,
-                ohms,
+                ohms: ZERO_OHM_JUMPER_OHMS,
                 tc1: None,
             },
-            warning,
+            Some(note),
+        )
+    } else {
+        (
+            Device::Resistor {
+                name,
+                a,
+                b,
+                ohms: p.si.max(1e-6),
+                tc1: None,
+            },
+            None,
         )
     }
 }
