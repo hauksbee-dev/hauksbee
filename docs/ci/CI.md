@@ -647,6 +647,11 @@ is nothing to excuse them from.
   an untrustworthy run outranks a spec error, which outranks a red). One
   desynced spec does not stop the others from running. With `--json`, one
   JSON object is printed per spec, one per line.
+- **`--json`**: one object per spec on stdout, NDJSON. The shape is published
+  as a JSON Schema (`crates/hauksbee-ci/schemas/hauksbee-ci-report.schema.json`,
+  generated from the types and drift-tested against them) and the field-by-field
+  contract, including which keys are absent rather than null and what counts as
+  an additive change, is [JSON_OUTPUT.md](JSON_OUTPUT.md).
 
 For a machine-readable single-board result outside the assertion runner,
 `hauksbee run <board> --json` emits a documented object with a top-level
