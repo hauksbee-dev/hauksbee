@@ -1,0 +1,424 @@
+//! `hauksbee-ci check`: load-only spec validation, no simulation.
+//!
+//! The VS Code extension (and any editor tooling) needs "is this spec valid?"
+//! answered in milliseconds; running a real co-simulation to find out times
+//! out. This module parses and validates the spec, and, unless asked not to,
+//! resolves and loads the referenced board file and validates every net /
+//! component reference against it, all WITHOUT booting an emulator or solving
+//! a single frame.
+//!
+//! Output is a list of [`Diagnostic`]s: an empty list is a valid spec. Each
+//! diagnostic carries a stable machine `code`, a human `message`, a best-effort
+//! `line`/`col` into the spec file (exact for TOML parse errors, which carry
+//! spans; resolved by searching the spec text for the offending identifier for
+//! validation errors; absent when not derivable), and a short suggested `fix`
+//! where one is derivable (typically a did-you-mean).
+//!
+//! What `check` does NOT verify (these need a run, a model bind, or an
+//! artifact that legitimately may not exist yet at edit time): firmware
+//! existence or loadability, sensor-TOML contents, scenario `part`/`profile`
+//! resolution against the model DB, tolerance patterns actually matching a
+//! component, MCU/emulator resolution, and every behavioral assertion.
+
+use std::path::Path;
+
+use serde::Serialize;
+
+use crate::error::SpecError;
+use crate::spec::Spec;
+
+/// One `check` finding. Serialized as-is for `--json` (absent fields omitted).
+#[derive(Debug, Clone, Serialize)]
+pub struct Diagnostic {
+    /// 1-based line in the spec file, when derivable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line: Option<u32>,
+    /// 1-based column (byte offset within the line), when derivable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub col: Option<u32>,
+    /// Stable machine code for the error kind. The taxonomy:
+    /// `io` (spec file unreadable), `toml-parse` (TOML syntax / type errors),
+    /// `unknown-field` (a key the spec vocabulary does not have),
+    /// `missing-field` (a required key absent), `unknown-kind` (a closed-
+    /// vocabulary token nothing matches: assertion kind, peripheral type,
+    /// supply kind, waveform, ...), `unknown-id` (a reference to an undeclared
+    /// scenario/peripheral/sensor id), `unknown-net` (a net not on the board),
+    /// `unknown-ref` (a component reference not on the board), `bad-bound`
+    /// (a numeric value outside its documented bounds), `conflicting-fields`
+    /// (mutually exclusive keys set together), `board-load` (the board file
+    /// failed to resolve/load), `invalid-spec` (anything else).
+    pub code: &'static str,
+    /// Human-readable description of the problem.
+    pub message: String,
+    /// Short suggested fix, when one is derivable (usually a did-you-mean).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix: Option<String>,
+}
+
+impl Diagnostic {
+    /// Render for the terminal: `file:line:col: [code] message (fix)`.
+    pub fn render_human(&self, file: &Path) -> String {
+        let mut loc = file.display().to_string();
+        if let Some(l) = self.line {
+            loc.push_str(&format!(":{l}"));
+            if let Some(c) = self.col {
+                loc.push_str(&format!(":{c}"));
+            }
+        }
+        let fix = self
+            .fix
+            .as_ref()
+            .map(|f| format!(" ({f})"))
+            .unwrap_or_default();
+        format!("{loc}: [{}] {}{fix}", self.code, self.message)
+    }
+}
+
+/// Options for [`check_spec`].
+#[derive(Debug, Clone, Default)]
+pub struct CheckOptions {
+    /// Skip resolving/loading the board file: parse + structural validation
+    /// only. For editor loops where the board is large or not checked out.
+    pub no_board: bool,
+}
+
+/// Validate the spec at `path` without running anything. Empty vec = valid.
+///
+/// Phases, each contributing diagnostics:
+/// 1. read the file (`io`),
+/// 2. TOML parse + deserialize into [`Spec`] (`toml-parse` / `unknown-field`
+///    / `missing-field`, with exact line/col from the parser's span),
+/// 3. board-independent structural validation, ALL independent errors
+///    collected ([`Spec::validate_all`]),
+/// 4. unless `no_board`: resolve + load the board file (`board-load`) and
+///    validate every referenced net (`unknown-net`) and component reference
+///    (`unknown-ref`) against it.
+pub fn check_spec(path: &Path, opts: &CheckOptions) -> Vec<Diagnostic> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(e) => {
+            return vec![Diagnostic {
+                line: None,
+                col: None,
+                code: "io",
+                message: format!("cannot read spec '{}': {e}", path.display()),
+                fix: None,
+            }];
+        }
+    };
+
+    // Parse ourselves (rather than through Spec::load) so the toml error's
+    // SPAN survives; Spec::load flattens it into a display string.
+    let mut spec: Spec = match toml::from_str(&text) {
+        Ok(s) => s,
+        Err(e) => return vec![toml_diagnostic(&text, &e)],
+    };
+    spec.base_dir = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    spec.normalize();
+
+    let mut diags: Vec<Diagnostic> = Vec::new();
+    for err in spec.validate_all() {
+        push_spec_error(&mut diags, &text, &err);
+    }
+
+    if !opts.no_board {
+        // The board phase only makes sense on a spec whose structure parsed;
+        // structural errors above do not block it (they are independent), but
+        // a failed board load ends the phase (net/ref checks need the board).
+        let board_path = spec.board_path();
+        match crate::runner::load_board(&board_path) {
+            Err(e) => {
+                let (line, col) = locate(&text, &spec.board.display().to_string())
+                    .map(|(l, c)| (Some(l), Some(c)))
+                    .unwrap_or((None, None));
+                diags.push(Diagnostic {
+                    line,
+                    col,
+                    code: "board-load",
+                    message: e.to_string(),
+                    fix: None,
+                });
+            }
+            Ok(board) => {
+                let known: Vec<String> = board.nets.iter().map(|n| n.name.clone()).collect();
+                if let Err(e) = spec.check_nets(&known) {
+                    push_spec_error(&mut diags, &text, &e);
+                }
+                let known_refs: Vec<String> = board
+                    .components
+                    .iter()
+                    .map(|c| c.reference.clone())
+                    .collect();
+                for e in crate::runner::component_ref_errors(&spec, &known_refs) {
+                    push_spec_error(&mut diags, &text, &e);
+                }
+            }
+        }
+    }
+    diags
+}
+
+/// Turn a toml deserialization error into a diagnostic with exact line/col
+/// (the toml crate reports a byte span into the source text).
+fn toml_diagnostic(text: &str, e: &toml::de::Error) -> Diagnostic {
+    let (line, col) = match e.span() {
+        Some(span) => {
+            let (l, c) = line_col(text, span.start);
+            (Some(l), Some(c))
+        }
+        None => (None, None),
+    };
+    let message = e.message().to_string();
+    // serde's deny_unknown_fields errors arrive through the TOML parser;
+    // give them their own code (and a did-you-mean against the expected
+    // list the message itself carries).
+    let (code, fix) = if message.starts_with("unknown field") {
+        ("unknown-field", unknown_field_fix(&message))
+    } else if message.starts_with("missing field") {
+        ("missing-field", None)
+    } else {
+        ("toml-parse", None)
+    };
+    Diagnostic {
+        line,
+        col,
+        code,
+        message,
+        fix,
+    }
+}
+
+/// Flatten a [`SpecError`] into diagnostics (an `UnknownNets` carries several
+/// findings; a `Many` carries several errors).
+fn push_spec_error(diags: &mut Vec<Diagnostic>, text: &str, err: &SpecError) {
+    match err {
+        SpecError::Many(errors) => {
+            for e in errors {
+                push_spec_error(diags, text, e);
+            }
+        }
+        SpecError::UnknownNets(items) => {
+            for (net, ctx, suggestions) in items {
+                let (line, col) = locate(text, net)
+                    .map(|(l, c)| (Some(l), Some(c)))
+                    .unwrap_or((None, None));
+                let fix = if suggestions.is_empty() {
+                    None
+                } else {
+                    Some(format!("did you mean: {}?", suggestions.join(", ")))
+                };
+                diags.push(Diagnostic {
+                    line,
+                    col,
+                    code: "unknown-net",
+                    message: format!(
+                        "'{net}' (referenced in {ctx}) is not a net on the board"
+                    ),
+                    fix,
+                });
+            }
+        }
+        SpecError::Io(m) => diags.push(Diagnostic {
+            line: None,
+            col: None,
+            code: "io",
+            message: m.clone(),
+            fix: None,
+        }),
+        SpecError::Toml { message, .. } => diags.push(Diagnostic {
+            line: None,
+            col: None,
+            code: "toml-parse",
+            message: message.clone(),
+            fix: None,
+        }),
+        SpecError::Invalid(m) => {
+            let (line, col) = locate_from_message(text, m);
+            diags.push(Diagnostic {
+                line,
+                col,
+                code: classify_invalid(m),
+                message: m.clone(),
+                fix: did_you_mean_fix(m),
+            });
+        }
+    }
+}
+
+/// Best-effort machine code for a validation message. The messages are the
+/// crate's real error surface (tested word by word), so classifying on their
+/// stable phrasing is deliberate: the taxonomy lives HERE, in one place,
+/// rather than threaded through every error construction site.
+fn classify_invalid(msg: &str) -> &'static str {
+    if msg.contains("references unknown component") {
+        "unknown-ref"
+    } else if msg.contains("unknown assertion kind")
+        || msg.contains("unknown type")
+        || msg.contains("unknown kind")
+        || msg.contains("unknown waveform")
+        || msg.contains("unknown usb profile")
+        || msg.contains("unknown chemistry")
+        || msg.contains("unknown distribution")
+        || msg.contains("unknown ensemble mode")
+        || msg.contains("sweep must be")
+    {
+        "unknown-kind"
+    } else if msg.contains("is scoped to scenario")
+        || msg.contains("reads id")
+        || msg.contains("is outside this spec's ensemble")
+    {
+        "unknown-id"
+    } else if msg.contains("sets both")
+        || msg.contains("mutually exclusive")
+        || msg.contains("does not compose")
+        || msg.contains("only meaningful with")
+        || msg.contains("does not support")
+    {
+        "conflicting-fields"
+    } else if msg.contains("needs") || msg.contains("has no [[assert]]") {
+        "missing-field"
+    } else if msg.contains("must be")
+        || msg.contains("greater than max")
+        || msg.contains("is a fraction")
+        || msg.contains("tolerance is a fraction")
+        || msg.contains("in (0, 100)")
+        || msg.contains("0..1")
+        || msg.contains("between 0.0 and 1.0")
+    {
+        "bad-bound"
+    } else {
+        "invalid-spec"
+    }
+}
+
+/// Extract a fix suggestion from a message's did-you-mean clause, when present.
+fn did_you_mean_fix(msg: &str) -> Option<String> {
+    let start = msg.find("did you mean")?;
+    let rest = &msg[start..];
+    let end = rest.find('?').map(|i| i + 1).unwrap_or(rest.len());
+    Some(rest[..end].trim_end_matches(')').to_string())
+}
+
+/// For an `unknown field \`x\`, expected ...` message: suggest the nearest
+/// expected field name, when one is within typo distance.
+fn unknown_field_fix(msg: &str) -> Option<String> {
+    // Message shape: unknown field `typo`, expected one of `a`, `b`, ...
+    let mut ticks = msg.split('`');
+    let _ = ticks.next()?; // "unknown field "
+    let field = ticks.next()?;
+    let expected: Vec<&str> = msg
+        .split(", expected")
+        .nth(1)?
+        .split('`')
+        .skip(1)
+        .step_by(2)
+        .collect();
+    crate::error::did_you_mean(field, &expected).map(|s| format!("did you mean '{s}'?"))
+}
+
+/// Find the identifiers a validation message quotes ('...') and resolve the
+/// first one that appears in the spec text to a line/col. Best effort: a name
+/// that appears several times resolves to its first occurrence.
+fn locate_from_message(text: &str, msg: &str) -> (Option<u32>, Option<u32>) {
+    let mut parts = msg.split('\'');
+    // Quoted identifiers are the odd-numbered fragments.
+    let _ = parts.next();
+    while let Some(ident) = parts.next() {
+        let _ = parts.next(); // skip the fragment between quotes
+        if ident.is_empty() {
+            continue;
+        }
+        if let Some((l, c)) = locate(text, ident) {
+            return (Some(l), Some(c));
+        }
+    }
+    (None, None)
+}
+
+/// 1-based (line, col) of `ident`'s first occurrence in `text`, preferring a
+/// TOML-string occurrence (`"ident"`) over a bare substring so an identifier
+/// that also happens to appear in a comment or key resolves to its value.
+fn locate(text: &str, ident: &str) -> Option<(u32, u32)> {
+    if ident.is_empty() {
+        return None;
+    }
+    let quoted = format!("\"{ident}\"");
+    let byte = match text.find(&quoted) {
+        Some(i) => i + 1, // point at the identifier, not its opening quote
+        None => text.find(ident)?,
+    };
+    Some(line_col(text, byte))
+}
+
+/// 1-based (line, col) of a byte offset in `text`.
+fn line_col(text: &str, byte: usize) -> (u32, u32) {
+    let byte = byte.min(text.len());
+    let before = &text[..byte];
+    let line = before.bytes().filter(|&b| b == b'\n').count() as u32 + 1;
+    let col = (byte - before.rfind('\n').map(|i| i + 1).unwrap_or(0)) as u32 + 1;
+    (line, col)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn line_col_is_one_based_and_line_aware() {
+        let text = "abc\ndef\nghi";
+        assert_eq!(line_col(text, 0), (1, 1));
+        assert_eq!(line_col(text, 4), (2, 1));
+        assert_eq!(line_col(text, 6), (2, 3));
+        assert_eq!(line_col(text, 8), (3, 1));
+    }
+
+    #[test]
+    fn locate_prefers_the_quoted_occurrence() {
+        // "LED" appears in a comment on line 1 and as a value on line 2; the
+        // quoted (value) occurrence must win.
+        let text = "# the LED net\nnet = \"LED\"\n";
+        let (l, c) = locate(text, "LED").unwrap();
+        assert_eq!((l, c), (2, 8));
+    }
+
+    #[test]
+    fn did_you_mean_fix_extracts_the_clause() {
+        let msg = "unknown assertion kind 'voltag' (did you mean 'voltage'?) (expected ...)";
+        assert_eq!(
+            did_you_mean_fix(msg).as_deref(),
+            Some("did you mean 'voltage'?")
+        );
+        assert_eq!(did_you_mean_fix("no clause here"), None);
+    }
+
+    #[test]
+    fn classify_covers_the_real_message_shapes() {
+        for (msg, code) in [
+            ("unknown assertion kind 'voltag' (expected ...)", "unknown-kind"),
+            ("peripheral 'X': unknown waveform 'square' (expected ...)", "unknown-kind"),
+            ("voltage assertion needs a `net`", "missing-field"),
+            (
+                "toggle assertion on 'D13' sets both `freq_hz` and `min_toggles`; use one",
+                "conflicting-fields",
+            ),
+            (
+                "voltage assertion 'x': min (5) is greater than max (3), a window nothing can satisfy",
+                "bad-bound",
+            ),
+            ("duration_ms must be a positive, finite number", "bad-bound"),
+            (
+                "max_current assert references unknown component 'R99'",
+                "unknown-ref",
+            ),
+            (
+                "rail_window assertion 'x' is scoped to scenario 'boot', but no [[scenario]] declares that id",
+                "unknown-id",
+            ),
+        ] {
+            assert_eq!(classify_invalid(msg), code, "message: {msg}");
+        }
+    }
+}

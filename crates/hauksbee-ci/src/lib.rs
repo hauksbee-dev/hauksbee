@@ -24,6 +24,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 pub mod assertions;
+pub mod check;
 pub mod error;
 pub mod examples;
 pub mod hwtrace;

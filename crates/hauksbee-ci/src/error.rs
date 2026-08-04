@@ -18,6 +18,10 @@ pub enum SpecError {
     /// One or more referenced nets do not exist on the board. Each entry is
     /// (net, context, near-matches).
     UnknownNets(Vec<(String, &'static str, Vec<String>)>),
+    /// Several independent errors found in ONE pass. Validation collects every
+    /// error it can rather than stopping at the first, so a spec author fixes
+    /// one invocation's worth of findings, not one finding per invocation.
+    Many(Vec<SpecError>),
 }
 
 impl fmt::Display for SpecError {
@@ -37,6 +41,15 @@ impl fmt::Display for SpecError {
                     } else {
                         writeln!(f, "; did you mean: {}?", suggestions.join(", "))?;
                     }
+                }
+                Ok(())
+            }
+            SpecError::Many(errors) => {
+                for (i, e) in errors.iter().enumerate() {
+                    if i > 0 {
+                        writeln!(f)?;
+                    }
+                    write!(f, "{e}")?;
                 }
                 Ok(())
             }
