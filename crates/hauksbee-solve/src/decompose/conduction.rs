@@ -361,6 +361,7 @@ mod tests {
                         switch_freeze: None,
                         switch_latch: None,
                         spdt_sibling: &empty_siblings,
+                        junction_eval: None,
                     };
                     stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
 
@@ -560,6 +561,7 @@ mod tests {
                     switch_freeze: if freeze_on { Some(&sw_frozen) } else { None },
                     switch_latch: None,
                     spdt_sibling: &siblings,
+                    junction_eval: None,
                 };
                 stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
 

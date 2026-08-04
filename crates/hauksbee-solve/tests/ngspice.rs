@@ -388,7 +388,11 @@ fn headroom_verdict(pe: &ProbeExpect, worst: f64) -> Option<String> {
         "tolerance {:.1e} is {:.0}x the measured error {:.3e}, which cannot catch a \
          regression; tighten it to <= {:.1e} or state `loose_reason = \"...\"`",
         pe.reltol,
-        if worst > 0.0 { pe.reltol / worst } else { f64::INFINITY },
+        if worst > 0.0 {
+            pe.reltol / worst
+        } else {
+            f64::INFINITY
+        },
         worst,
         bar,
     ))
@@ -598,7 +602,13 @@ fn check_analytic(
         let ours = if xs.len() <= 1 {
             vs[0]
         } else {
-            interp(&NgSeries { t: xs.to_vec(), v: vs.to_vec() }, a.at)
+            interp(
+                &NgSeries {
+                    t: xs.to_vec(),
+                    v: vs.to_vec(),
+                },
+                a.at,
+            )
         };
         let floor = a.abstol.unwrap_or(1e-12);
         let err = (ours - a.value).abs() / a.value.abs().max(floor);

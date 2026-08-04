@@ -141,6 +141,22 @@ pub struct Workspace {
     /// `effects.spdt_bbm` is on (the device-model default; the typed compat
     /// field restores the bridging model).
     spdt_sibling: std::collections::HashMap<DeviceId, DeviceId>,
+    /// Set by [`newton_solve`] when the solve it just finished COMMITTED a
+    /// hysteretic switch-latch state different from the one it entered with
+    /// (i.e. a relay made or broke during this step). The transient driver
+    /// reads it to suppress the extrapolation seed for the following trial,
+    /// exactly as it already does after an event-resolved accept: the last two
+    /// accepted points straddle the flip, so a line through them launches every
+    /// fast node far past the new branch (measured on the mirror deck: the
+    /// diode-connected base extrapolated from its 5 mV open-state to 4.8 V,
+    /// a 238 A junction imbalance no retry could walk back from). Cleared at
+    /// the top of every `newton_solve`.
+    latch_flipped: bool,
+    /// Per-junction pnjlim EVALUATION-voltage state (see
+    /// [`crate::stamp::JunctionEval`] and `StampCtx::junction_eval`). Reset at
+    /// every `newton_solve_core` entry; threaded into the main iteration's
+    /// stamp only, so residual probes and trial evaluations stay stateless.
+    junction_eval: crate::stamp::JunctionEval,
     /// TEST-ONLY probe of the stall/census norm plumbing: when armed
     /// (`Some`), every `newton_solve` iteration appends
     /// `(stall_norm, post_globalizer_norm)`; the norm actually handed to the
@@ -184,6 +200,12 @@ impl Workspace {
     /// for tests and gates (the census carries the per-march view).
     pub fn bypass_counters(&self) -> (u64, u64) {
         self.bypass.as_ref().map_or((0, 0), |b| b.counters())
+    }
+
+    /// Whether the most recent [`newton_solve`] committed a hysteretic
+    /// switch-latch flip (see the `latch_flipped` field).
+    pub fn latch_flipped(&self) -> bool {
+        self.latch_flipped
     }
 
     /// Arm/disarm the per-step transient Armijo line-search globalization. Set by
@@ -283,6 +305,7 @@ impl Workspace {
             // guard and `.op`'s post-hoc refusal both apply to a hysteretic deck.
             switch_latch: hyst_latch(opts, &self.switch_latch),
             spdt_sibling: &self.spdt_sibling,
+            junction_eval: None,
         };
         stamp_all(&ctx, &mut self.matrix, &mut self.rhs);
         // A faulting behavioral expression stamped nothing: the residual of an
@@ -341,6 +364,7 @@ impl Workspace {
             // guard and `.op`'s post-hoc refusal both apply to a hysteretic deck.
             switch_latch: hyst_latch(opts, &self.switch_latch),
             spdt_sibling: &self.spdt_sibling,
+            junction_eval: None,
         };
         stamp_all(&ctx, &mut self.matrix, &mut self.rhs);
         // Same poisoned-point rule as `dc_residual_inf_norm`.
@@ -399,6 +423,8 @@ impl Workspace {
             bypass: None,
             bypass_hold: false,
             spdt_sibling,
+            latch_flipped: false,
+            junction_eval: crate::stamp::JunctionEval::build(circuit),
             #[cfg(test)]
             stall_norm_probe: None,
         }
@@ -482,6 +508,7 @@ pub fn newton_solve(
     gmin: f64,
     src_scale: f64,
 ) -> NewtonResult {
+    ws.latch_flipped = false;
     let hysteretic = opts.effects.switch_model == crate::options::SwitchModel::Hysteretic
         && ws.switch_freeze.is_none()
         && circuit
@@ -506,6 +533,16 @@ pub fn newton_solve(
             latch.entry(id).or_insert(false);
         }
     }
+    // The latch this solve ENTERED with. A converged solve commits its resolved
+    // latch (including from a trial the LTE controller later rejects; that is
+    // deliberate and matches ngspice, see the fn docs). A FAILED solve must not:
+    // its flipped states were derived on the way to a non-root, and committing
+    // them hands every smaller-dt retry a switch already flipped against an
+    // entry iterate from before the flip, which is exactly the step the retry
+    // exists to avoid re-attempting whole. Measured on the mirror deck: the
+    // failed 50 ns flip step leaked latch=ON into every retry down to dt_min,
+    // so no step size could re-approach the flip from the open side.
+    let latch_entry = latch.clone();
     let x_entry = ws.x.clone();
 
     // Bounded Gauss-Seidel over the discrete states. Two passes suffice whenever
@@ -566,6 +603,11 @@ pub fn newton_solve(
         let (r0, res0) = solve(ws, gmin);
         last = r0;
         if last.converged && !(res0.is_finite() && res0 <= bar) {
+            if std::env::var("HAUKSBEE_SWITCH_DBG").is_ok() {
+                eprintln!(
+                    "[switch] t={time:.6e} pass={pass} FALSE-ROOT gate: rel residual {res0:.3e} > bar {bar:.3e}"
+                );
+            }
             last.converged = false;
         }
         if !last.converged {
@@ -603,11 +645,25 @@ pub fn newton_solve(
             ws.tran_line_search = true;
             ws.set_staged_branch_reg(1e-2);
             ws.x.copy_from_slice(&x_entry);
+            // Walk the rungs carrying only SOLVED iterates. A rung that fails
+            // leaves ws.x wherever its Newton gave up, and handing that to the
+            // next rung poisons the whole ladder (measured on the mirror deck:
+            // one diverged rung and every rung after it, plus the final
+            // unregularized attempt, started from an iterate with a 244 A
+            // imbalance). Restore the last converged rung's solution instead, so
+            // each rung starts from the best point the ladder has actually
+            // earned.
+            let mut rung_x: Option<Vec<f64>> = None;
             for g in [1e-2, 1e-4, 1e-6, 1e-8, 1e-10] {
                 if g <= gmin {
                     continue;
                 }
-                let _ = solve(ws, g);
+                let (rg, _) = solve(ws, g);
+                if rg.converged {
+                    rung_x = Some(ws.x.clone());
+                } else if let Some(bx) = rung_x.as_ref() {
+                    ws.x.copy_from_slice(bx);
+                }
             }
             // The regularized rungs above have carried the iterate to a point the
             // real network can be solved from; drop the regularizer for the final
@@ -653,7 +709,10 @@ pub fn newton_solve(
         }
         latch = next;
     }
-    ws.switch_latch = Some(latch);
+    if last.converged && latch != latch_entry {
+        ws.latch_flipped = true;
+    }
+    ws.switch_latch = Some(if last.converged { latch } else { latch_entry });
     last
 }
 
@@ -740,6 +799,10 @@ fn newton_solve_core(
     // iteration's anchor equals its own linearization point (pnjlim then sees
     // zero delta and does not limit), exactly as a cold SPICE iteration.
     ws.x_prev_iter.copy_from_slice(&ws.x);
+    // Fresh junction-limiting evaluation state: the first iteration anchors on
+    // this solve's own entry point (the previous accepted step), from then on
+    // each junction anchors on the evaluation voltage its last stamp used.
+    ws.junction_eval.reset();
     // A fresh attempt: any behavioral fault recorded here describes THIS solve.
     ws.behavioral_fault = None;
     for s in ws.prev_step.iter_mut() {
@@ -799,6 +862,7 @@ fn newton_solve_core(
                 switch_freeze: ws.switch_freeze.as_ref(),
                 switch_latch: hyst_latch(opts, &ws.switch_latch),
                 spdt_sibling: &ws.spdt_sibling,
+                junction_eval: Some(&ws.junction_eval),
             };
             // Census hooks (HAUKSBEE_STEP_CENSUS): the march-cost attribution
             // needs the stamp/factor/backsolve split and these three calls are
@@ -960,8 +1024,20 @@ fn newton_solve_core(
         // either damper rewrites ws.x. On the undamped paths (no line search,
         // branch_reg==0) nothing touches ws.x in between, so this is
         // bit-identical to testing after.
-        let undamped_converged = converged(&ws.x, &ws.lin_point, &ws.layout, opts);
-        let undamped_node_converged = node_block_converged(&ws.x, &ws.lin_point, &ws.layout, opts);
+        // SPICE's `icheck`: an iteration whose stamp LIMITED any junction has
+        // not evaluated the real circuit, so its step norm is not evidence of
+        // a root. While pnjlim's evaluation anchor is still climbing toward a
+        // suddenly-connected junction, the iterate can sit motionless at the
+        // linear-network voltage (the mirror deck's make step: two zero-step
+        // iterations at ref0 = 4.95 V, 235 A of raw imbalance). Denying
+        // convergence keeps the loop walking until an unlimited iteration
+        // settles, which is how ngspice converges the same step. A solve that
+        // never stops limiting runs to max_newton and fails honestly.
+        let junction_limited = ws.junction_eval.take_limited();
+        let undamped_converged =
+            !junction_limited && converged(&ws.x, &ws.lin_point, &ws.layout, opts);
+        let undamped_node_converged =
+            !junction_limited && node_block_converged(&ws.x, &ws.lin_point, &ws.layout, opts);
         // The TRUE undamped node-block step norm, captured HERE for the same
         // reason as the predicates above: the Armijo line search below rewrites
         // ws.x to lin_point + use_alpha*dx, so a measurement taken after it
@@ -1056,7 +1132,14 @@ fn newton_solve_core(
             }
             // If even the floor step did not satisfy Armijo, take the best alpha
             // tried (the largest residual decrease seen) rather than a step that
-            // increases the residual.
+            // increases the residual. When NO trial decreased the residual this
+            // still steps to the least-bad trial: a stand-still (alpha = 0) was
+            // tried and it converts recoverable excursions into dt_min refusals
+            // (measured: bsource_opamp_subckt failed at t = 1.5e-7 with the
+            // stand-still, because its residual momentarily rises through a
+            // B-source knee that the next full iteration resolves). A walk to a
+            // worse point is bounded instead by the rescue ladder's rung
+            // restoration, which discards any rung that ends unconverged.
             let use_alpha = if best_norm.is_finite() && best_norm < f_norm_lin && f_norm_lin > 0.0 {
                 best_alpha
             } else {
@@ -1413,7 +1496,22 @@ fn residual_inf_norm_at(
             layout: &ws.layout,
             opts,
             x: &ws.x,
-            x_prev: &ws.x_prev_iter,
+            // The trial point is its OWN limiting anchor, deliberately. Every
+            // per-iteration limiter (pnjlim on junctions, the switch control
+            // limiter) anchors on `x_prev`, and anchoring a trial on the live
+            // iteration's `x_prev_iter` measures the residual of the system
+            // LINEARIZED near that anchor, which the Newton step already zeroes
+            // by construction. Measured on the mirror deck's rescue: a trial
+            // that moved the diode-connected base +2.44 V read a residual of
+            // 4.7e-11 while the true imbalance at that point was hundreds of
+            // amps, so the Armijo search accepted the very excursion it exists
+            // to refuse. With `x_prev == x` the limiters are inert (`v_lim(v,
+            // v) == v`) and the stamp evaluates each device AT the trial point:
+            // the honest nonlinear residual. An exponential that overflows
+            // there returns a non-finite row, which the +inf below already
+            // treats as "never accept", exactly right for a junction driven
+            // volts past conduction.
+            x_prev: &ws.x,
             time,
             coeffs,
             state,
@@ -1426,6 +1524,9 @@ fn residual_inf_norm_at(
             switch_freeze: ws.switch_freeze.as_ref(),
             switch_latch: hyst_latch(opts, &ws.switch_latch),
             spdt_sibling: &ws.spdt_sibling,
+            // Stateless on purpose: a trial/probe stamp must neither consult
+            // nor advance the live iteration's junction evaluation schedule.
+            junction_eval: None,
         };
         stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
     }
@@ -1471,9 +1572,9 @@ fn residual_inf_norm_at(
 /// driver then cut the step all the way to `dt_min`, where a 2e6 S companion
 /// against a 1e-9 S gmin is ill-conditioned enough to fail for real.
 ///
-/// The scale per node is `max(|sum of g*x|, |rhs|)`, i.e. the larger of the
-/// currents leaving and entering, floored at `abstol` so an isolated node with no
-/// current at all is judged absolutely.
+/// The scale per node is `max(largest |g*x| term in the row, |rhs|)`, i.e. the
+/// biggest single current contribution at the node, floored at `abstol` so an
+/// isolated node with no current at all is judged absolutely.
 fn residual_rel_inf_norm_at(
     ws: &mut Workspace,
     circuit: &Circuit,
@@ -1486,22 +1587,57 @@ fn residual_rel_inf_norm_at(
     gmin: f64,
     src_scale: f64,
 ) -> f64 {
+    // Measure the residual of the SAME system the solve solved, regularizer
+    // included. Under Strategy::TransientDyn the driver arms a nonzero
+    // staged_branch_reg for the whole march, and that swaps the comparator
+    // stamp from the bang-bang rail to the smooth high-gain logistic; a servo
+    // root of the smooth system (the fixture oscillator's fire step rests its
+    // membrane exactly where the comparator output half-opens the discharge
+    // gate) has a mid-rail comparator output. Re-stamping that root with
+    // branch_reg = 0 judges it against the bang-bang transfer and reads a
+    // rail-sized "imbalance" (relative residual exactly 1.0) at a true root of
+    // the system actually being integrated, which rejected every fire step.
+    let branch_reg = ws.staged_branch_reg;
     let abs = residual_inf_norm_at(
-        ws, circuit, opts, time, coeffs, state, dc, use_ic, gmin, src_scale, 0.0,
+        ws, circuit, opts, time, coeffs, state, dc, use_ic, gmin, src_scale, branch_reg,
     );
     if !abs.is_finite() {
         return f64::INFINITY;
     }
     // `residual_inf_norm_at` leaves the assembled system in ws.matrix/ws.rhs, so
     // the scale is read back from the same stamp the residual was measured on.
+    //
+    // The scale per node is the LARGEST INDIVIDUAL TERM in the node's KCL sum,
+    // never the net. The net `sum of g*x` IS the residual (plus rhs), so scaling
+    // by it judges every source-free node against `abstol` and reads relative
+    // residual ~1 at a perfectly good root wherever the balancing currents
+    // cancel, which is everywhere. Measured: the net-scaled gate rejected every
+    // fire-step servo root of the linesearch fixture's relaxation oscillator,
+    // handed the step to the rescue, and the rescue marched through the servo to
+    // the fully-discharged root, quadrupling the oscillator's period. The
+    // largest single term is the SPICE convention's "biggest current through the
+    // node" up to the row-compression of MNA, and it is conservative in the safe
+    // direction: a bigger scale can only make the gate MISS a marginal false
+    // root, never reject a true one.
+    //
+    // KNOWN BLIND SPOT, on purpose left to a different guard: at a junction
+    // whose clamped exponential has exploded, F is the junction current I and
+    // the largest row term is g*v = I*v/vt, so this ratio reads ~vt/v (0.5% at
+    // 5 V) HOWEVER wrong the point is. That false root is refused upstream by
+    // the junction-limiting convergence denial (`JunctionEval::take_limited`,
+    // SPICE's icheck), which is the mechanism that actually owns it; this gate
+    // owns the milder settled-but-unbalanced iterates.
     let mut worst = 0.0f64;
     for i in 0..ws.layout.n_nodes {
         let mut acc = 0.0;
+        let mut mag = 0.0f64;
         for &(col, val) in ws.matrix.row(i) {
-            acc += val * ws.x[col];
+            let term = val * ws.x[col];
+            acc += term;
+            mag = mag.max(term.abs());
         }
         let f = acc - ws.rhs[i];
-        let scale = acc.abs().max(ws.rhs[i].abs()).max(opts.abstol);
+        let scale = mag.max(ws.rhs[i].abs()).max(opts.abstol);
         let rel = f.abs() / scale;
         if rel > worst {
             worst = rel;
@@ -3559,8 +3695,14 @@ mod switch_freeze_tests {
 
         // The returned vector is a consistent fixed point: re-deriving the switch
         // states from it produces no flip.
-        let states =
-            eval_switch_states(&c, &ws.layout, &root, &HashMap::new(), &SpdtPairs::empty(), 0.0);
+        let states = eval_switch_states(
+            &c,
+            &ws.layout,
+            &root,
+            &HashMap::new(),
+            &SpdtPairs::empty(),
+            0.0,
+        );
         let states2 = eval_switch_states(&c, &ws.layout, &root, &states, &SpdtPairs::empty(), 0.0);
         assert_eq!(
             states, states2,
