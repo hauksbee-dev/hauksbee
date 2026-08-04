@@ -413,16 +413,25 @@ fn cmd_github_action(args: GithubActionArgs) -> ExitCode {
             print!("{}", hauksbee_ci::integrate::github_workflow_yaml());
             ExitCode::from(0)
         }
-        Some(path) => match hauksbee_ci::integrate::github_action_write(&path) {
-            Ok(msg) => {
-                println!("{msg}");
-                ExitCode::from(0)
+        Some(path) => {
+            let cwd = match std::env::current_dir() {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("hauksbee-ci: cannot determine the current directory: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+            match hauksbee_ci::integrate::github_action_write(&cwd, &path) {
+                Ok(msg) => {
+                    println!("{msg}");
+                    ExitCode::from(0)
+                }
+                Err(e) => {
+                    eprintln!("hauksbee-ci: {e}");
+                    ExitCode::from(2)
+                }
             }
-            Err(e) => {
-                eprintln!("hauksbee-ci: {e}");
-                ExitCode::from(2)
-            }
-        },
+        }
     }
 }
 
