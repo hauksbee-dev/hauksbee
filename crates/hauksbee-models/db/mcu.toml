@@ -551,16 +551,24 @@ description = "Raspberry Pi RP2040 (Cortex-M0+ dual). QSPI_SS is the BOOTSEL str
 value_re = "(?i)^RP2040$"
 
 [models.params]
-# No emulator in this tool models the RP2040: the renode:rp2040 descriptor in
-# hauksbee-mcu is caveated as unproven (the shipped Renode carries no rp2040
-# platform, its smoke test is skip-gated on that absence), so pointing here at
-# it would fail at bring-up with a missing-platform error instead of the truth.
-# The explicit "none:" token is the honest declaration: the binder recognizes
-# the part, and the scheduler refuses firmware loudly ("no co-sim platform")
-# instead of letting the entry fall to the historical simavr:atmega328p default,
-# which would run ARM firmware on an AVR core. Firmware-less analyses (strap
-# lint, report, DRC) work as usual.
-backend = "none:rp2040"
+# RP2040 co-sim runs on the renode:rp2040 descriptor in hauksbee-mcu. Renode
+# ships no rp2040 platform, so the descriptor carries its own: the peripheral
+# models are vendored C# compiled by Renode at run time through the support-bundle
+# mechanism (db/mcu/rp2040/, src/renode/support.rs). Stock pico-sdk firmware boots
+# through the real boot ROM into main().
+#
+# Proven end-to-end on a live machine: GPIO out/direction through the SIO
+# (two-sided), UART0 TX, timers/clocks/resets as far as the SDK booting and
+# sleep_ms costing the right virtual time, ADC injection on inputs 0..3, and the
+# I2C bus-slave bridge on i2c0/i2c1 in both directions.
+#
+# Not available, and refused loudly rather than faked: SPI bus-slave (the
+# vendored PL022 never invokes a registered slave), PIO (upstream models it on an
+# x86-64-only native library), ADC input 4 (the on-die temperature sensor is not
+# an external node, so it takes the merged policy's once-per-channel drop). The
+# second core is declared and un-halted with the SIO genuinely shared, but no
+# two-core firmware has been run. Full tier list: db/mcu/rp2040.soc.toml.
+backend = "renode:rp2040"
 
 [models.pins]
 # RP2040 QFN-56 (KiCad MCU_RaspberryPi_and_Boards:RP2040). The boot strap is
@@ -599,17 +607,17 @@ description = "Raspberry Pi Pico module (RP2040 carrier, 40-pin 2.54mm header; P
 value_re = "(?i)^((r(aspberry)?[-_ ]?pi[-_ ]?)?pico([-_ ]?(wh?|h))?|sc091[5-9])$"
 
 [models.params]
-# The Pico wraps an RP2040 plus its QSPI flash. This entry exists for
-# identification and bind coverage: no emulator in this tool models the RP2040
-# (see the rp2040 entry above for the full story), so co-sim is declared
-# unavailable with the same explicit "none:" token the scheduler refuses
-# loudly, rather than leaving the module UNRESOLVED or letting it fall to the
-# wrong-ISA simavr default. Firmware-less analyses (lint, report, DRC) work.
+# The Pico wraps an RP2040 plus its QSPI flash, so it gets the same co-sim
+# backend as the bare chip: the renode:rp2040 descriptor, whose per-feature
+# proof and refusals are spelled out on the rp2040 entry above. Nothing about
+# the module changes what the emulated die can do, and the header pinout below
+# maps straight onto the chip's GPIO space, so a Pico board and an RP2040 board
+# run the same machine.
 #
 # Deliberately NOT `module = true`: that flag switches the binder's role parser
 # to Arduino-Nano header names (d0..d13 -> AVR ports), which is wrong here. The
 # flat "gpio<n>" roles below parse in the standard (non-module) convention.
-backend = "none:rp2040"
+backend = "renode:rp2040"
 
 [models.pins]
 # Raspberry Pi Pico 40-pin header (Pico datasheet, ch. 2 "Pin information";
