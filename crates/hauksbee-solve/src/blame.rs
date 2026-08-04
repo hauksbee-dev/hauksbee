@@ -315,10 +315,7 @@ pub fn blame_clause(
     let stiff = stiff_links(circuit);
     if !stiff.is_empty() {
         let names: Vec<String> = stiff.iter().map(|s| s.name.clone()).collect();
-        let worst = stiff
-            .iter()
-            .map(|s| s.ohms)
-            .fold(f64::INFINITY, f64::min);
+        let worst = stiff.iter().map(|s| s.ohms).fold(f64::INFINITY, f64::min);
         parts.push(format!(
             "suspect near-zero-ohm link(s) {} (down to {worst:.3e} ohm, stamping {:.3e} S into the matrix)",
             elide(&names),

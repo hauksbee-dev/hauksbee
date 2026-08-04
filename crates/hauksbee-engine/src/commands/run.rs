@@ -659,11 +659,9 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 // see the windows" was the whole defect: the one surface a
                 // person actually reads named nothing (E29).
                 for d in engine.scheduler().failed_window_diagnoses() {
-                    report
-                        .heads_up
-                        .push(crate::plain::HeadsUp::note(format!(
-                            "analog non-convergence at {d}"
-                        )));
+                    report.heads_up.push(crate::plain::HeadsUp::note(format!(
+                        "analog non-convergence at {d}"
+                    )));
                 }
             }
             for msg in engine.scheduler().drive_conflicts() {

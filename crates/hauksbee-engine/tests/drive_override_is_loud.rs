@@ -95,11 +95,7 @@ fn a_drive_that_loses_to_a_co_located_source_is_named_on_both_sides() {
     sched.step(1e-4);
 
     let notes = sched.drive_conflicts();
-    assert_eq!(
-        notes.len(),
-        1,
-        "exactly one contested net, got: {notes:?}"
-    );
+    assert_eq!(notes.len(), 1, "exactly one contested net, got: {notes:?}");
     let n = &notes[0];
     assert!(n.contains("RES"), "must name the net: {n}");
     assert!(
@@ -138,8 +134,8 @@ fn a_post_solve_override_on_a_stamped_rail_is_named() {
     // The engine's own override path: `force_net_voltage` rewrites the node
     // voltage AFTER the solve, so it wins over the stamped rail invisibly. That
     // is the same honesty defect wearing different clothes.
-    let mut sched = Scheduler::new(quiet_board(), None, SolverOptions::default())
-        .expect("build scheduler");
+    let mut sched =
+        Scheduler::new(quiet_board(), None, SolverOptions::default()).expect("build scheduler");
     sched.chunk_s = 1e-4;
     assert!(sched.force_net_voltage("RES", 20.0), "RES must exist");
     sched.step(1e-4);
@@ -164,8 +160,8 @@ fn a_failed_chunk_names_the_net_and_the_interval() {
     // E29a on the scheduler surface: the contested board is also structurally
     // singular, so every chunk fails. The per-window diagnosis must carry the
     // time interval AND the net, not just a count.
-    let mut sched = Scheduler::new(contested_board(), None, SolverOptions::default())
-        .expect("build scheduler");
+    let mut sched =
+        Scheduler::new(contested_board(), None, SolverOptions::default()).expect("build scheduler");
     sched.chunk_s = 1e-4;
     sched.step(1e-4);
     sched.step(1e-4);

@@ -852,10 +852,7 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
     let diagnosis = if seen.is_empty() {
         String::new()
     } else {
-        format!(
-            " The solver's diagnosis: {}.",
-            seen.join(" | ")
-        )
+        format!(" The solver's diagnosis: {}.", seen.join(" | "))
     };
     let chunk_word = if failed_chunks == 1 {
         "chunk"
