@@ -55,14 +55,29 @@ non-ignored parts resolve, with the MCU bound, so a few warnings about
 unresolved actives are expected, and the report's bottom line explains
 exactly what they mean for the results.
 
-No board of your own yet? Two routes, neither needing a file. In the terminal,
-`hauksbee run --example blinky --report` works from a bare installed binary with
-no checkout on disk: the board is compiled into the binary and unpacked to a temp
-directory, so there is no path to get wrong. `hauksbee sim --example rlc_ringdown
---tran` is the SPICE-side equivalent, and either flag names what it does have if
-you ask it for something it lacks. In the browser, the `hauksbee serve` page has
-one-click samples: a real smartwatch, a board-plus-firmware pair that runs a live
-co-sim, and a minimal board to compare against.
+No board of your own yet? Three routes, none needing a file. In the terminal,
+these two work from a bare installed binary with no checkout on disk: the board
+is compiled into the binary and unpacked to a temp directory, so there is no path
+to get wrong.
+
+```bash
+hauksbee run --example blinky --check --plain   # every static check, one plain-language verdict per check
+hauksbee-ci run --example blinky                # the same board as a CI spec: 4 assertions, GREEN or RED
+```
+
+Both answer "is this board OK?" in a few lines. The second is the shape a
+pipeline gates on, so it is the better first run if CI is why you are here. Ask
+either binary for an example it does not carry and it names the one it does.
+
+In the browser, the `hauksbee serve` page has one-click samples: a real
+smartwatch, a board-plus-firmware pair that runs a live co-sim, and a minimal
+board to compare against.
+
+Curious about the solver rather than the board checks? `hauksbee sim --example
+rlc_ringdown --tran` runs a bundled SPICE deck. It is not a first run: it writes
+about 1,100 rows of raw CSV to stdout, one per timestep, with no verdict. Send it
+somewhere you can plot it (`--out ring.csv`, and `--print V(out)` to keep one
+column), or use `--op` for the single-row operating point instead.
 
 Full walkthrough, more example boards, and captured sessions: [`docs/ci/EXAMPLES.md`](ci/EXAMPLES.md).
 
