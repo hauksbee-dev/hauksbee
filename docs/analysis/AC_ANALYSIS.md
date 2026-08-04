@@ -90,7 +90,7 @@ The RHS `b` is decided by three rules, checked in order (`solve_at` in
    source (power rails included), so this Bode is a superposition, not a
    single-input transfer function. To measure a real transfer function, name
    the drive source VINJ/VLOOP/IINJ/ILOOP (insert one at the input/loop with
-   board-as-code: docs/ingest/BOARD_AS_CODE.md), then re-run --ac.
+   board-as-code: https://docs.hauksbee.dev/docs/ingest/board_as_code), then re-run --ac.
    ```
 
 ### Complex solver
