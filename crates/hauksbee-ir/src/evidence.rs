@@ -266,6 +266,51 @@ fn fragment(s: &str) -> String {
         .to_string()
 }
 
+/// Promote a caller-supplied fragment to a sentence: capitalized, one full
+/// stop, no matter how the producer happened to phrase its datum. The whole
+/// point of composing sentences in one crate is that a producer cannot half-do
+/// it somewhere else.
+fn sentence(s: &str) -> String {
+    let f = fragment(s);
+    let mut chars = f.chars();
+    match chars.next() {
+        None => String::new(),
+        Some(first) => format!("{}{}.", first.to_uppercase(), chars.as_str()),
+    }
+}
+
+/// What an assumption is about, in the two forms an assumption needs it: the
+/// `key` that goes into the id (short, stable, slug-shaped, because ids are
+/// named in acknowledgment files and compared across runs) and the `text` that
+/// goes into the sentences (prose, because a reader is reading English).
+///
+/// They are separate parameters because collapsing them produces either an
+/// unreadable sentence ("Odbpp carries no BOM") or an unusable id
+/// (`fitted-by-default:the_ODB++_archive`). [`Subject::same`] is for the cases
+/// where one string honestly serves both, such as a bus name.
+#[derive(Debug, Clone, Copy)]
+pub struct Subject<'a> {
+    /// The id subject: short and stable, e.g. "odbpp", "i2c0/U4", "drc/short".
+    pub key: &'a str,
+    /// The prose form, e.g. "the ODB++ archive", "the i2c0 bus".
+    pub text: &'a str,
+}
+
+impl<'a> Subject<'a> {
+    /// Distinct id key and prose.
+    pub fn new(key: &'a str, text: &'a str) -> Self {
+        Self { key, text }
+    }
+
+    /// One string serving as both, for subjects that already read as prose.
+    pub fn same(both: &'a str) -> Self {
+        Self {
+            key: both,
+            text: both,
+        }
+    }
+}
+
 impl Assumption {
     /// Raw constructor, private on purpose: every public constructor below goes
     /// through it, so there is exactly one place a sentence set is assembled.
@@ -285,10 +330,14 @@ impl Assumption {
             kind,
             source,
             scope,
-            statement,
-            because,
-            consequence,
-            replacement,
+            // Every sentence passes through `sentence` here, so capitalization
+            // and the single full stop are guaranteed once rather than at ten
+            // call sites, even where a composed sentence opens with a
+            // caller-supplied fragment.
+            statement: sentence(&statement),
+            because: sentence(&because),
+            consequence: sentence(&consequence),
+            replacement: sentence(&replacement),
             expires: None,
         }
     }
@@ -309,11 +358,14 @@ impl Assumption {
         } else {
             format!("{reference} ({value})")
         };
-        let reason = fragment(reason);
-        let because = if reason.is_empty() {
+        // The producer's own reason IS the "why" here (for Altium boards it is
+        // the extractor's `value_unresolved` property, carried through the
+        // binder), so it becomes the sentence rather than being wrapped in a
+        // frame that would repeat it.
+        let because = if fragment(reason).is_empty() {
             "No model in the library matched this part.".to_string()
         } else {
-            format!("No model in the library matched this part: {reason}.")
+            sentence(reason)
         };
         Self::build(
             AssumptionKind::OpenPart,
@@ -422,13 +474,15 @@ impl Assumption {
     }
 
     /// Every placed part was treated as fitted, because the input carries no
-    /// BOM or populate flag. `input` names the artifact that could not say.
-    pub fn fitted_by_default(source: AssumptionSource, input: &str) -> Self {
-        let input = fragment(input);
+    /// BOM or populate flag. `input` names the artifact that could not say: its
+    /// key is the artifact kind or path, its text the prose name.
+    pub fn fitted_by_default(source: AssumptionSource, input: Subject<'_>) -> Self {
+        let input_key = input.key;
+        let input = fragment(input.text);
         Self::build(
             AssumptionKind::FittedByDefault,
             source,
-            &input,
+            input_key,
             Scope::Board,
             "Every placed part is treated as fitted.".to_string(),
             format!(
@@ -463,37 +517,40 @@ impl Assumption {
                 kind: None,
             },
             format!("The {check} check did not run."),
-            format!("{}.", fragment(because)),
+            sentence(because),
             format!(
                 "This run says nothing about {check}: no {check} findings here is not evidence \
                  that there are none."
             ),
-            format!("{}.", fragment(replacement)),
+            sentence(replacement),
         )
     }
 
     /// The run happened but never exercised `subject` (a bus, an ADC channel,
     /// firmware, a programmed current limit), so nothing here tests it.
+    /// `because` and `replacement` are data fragments; this constructor owns
+    /// the statement and the consequence.
     pub fn not_exercised(
         source: AssumptionSource,
-        subject: &str,
+        subject: Subject<'_>,
         scope: Scope,
         because: &str,
         replacement: &str,
     ) -> Self {
-        let subject_text = fragment(subject);
+        let subject_key = subject.key;
+        let subject_text = fragment(subject.text);
         Self::build(
             AssumptionKind::NotExercised,
             source,
-            subject,
+            subject_key,
             scope,
             format!("This run does not cover {subject_text}."),
-            format!("{}.", fragment(because)),
+            sentence(because),
             format!(
                 "Any conclusion that assumes {subject_text} was exercised is unsupported by \
                  this run: what it reports there is a default, not a measurement."
             ),
-            format!("{}.", fragment(replacement)),
+            sentence(replacement),
         )
     }
 
@@ -501,17 +558,18 @@ impl Assumption {
     /// mechanism. `mechanism` names the degraded path.
     pub fn reduced_fidelity(
         source: AssumptionSource,
-        subject: &str,
+        subject: Subject<'_>,
         scope: Scope,
         mechanism: &str,
         replacement: &str,
     ) -> Self {
-        let subject_text = fragment(subject);
+        let subject_key = subject.key;
+        let subject_text = fragment(subject.text);
         let mechanism = fragment(mechanism);
         Self::build(
             AssumptionKind::ReducedFidelity,
             source,
-            subject,
+            subject_key,
             scope,
             format!("{subject_text} was produced at reduced fidelity."),
             format!("It came from {mechanism}, not from the primary path."),
@@ -519,7 +577,7 @@ impl Assumption {
                 "Numbers for {subject_text} are indicative: the mechanism that produced them \
                  is documented as less accurate than the primary path."
             ),
-            format!("{}.", fragment(replacement)),
+            sentence(replacement),
         )
     }
 
@@ -552,24 +610,25 @@ impl Assumption {
     /// findings about `subject`.
     pub fn parser_limitation(
         source: AssumptionSource,
-        subject: &str,
+        subject: Subject<'_>,
         scope: Scope,
         limitation: &str,
         replacement: &str,
     ) -> Self {
-        let subject_text = fragment(subject);
+        let subject_key = subject.key;
+        let subject_text = fragment(subject.text);
         Self::build(
             AssumptionKind::ParserLimitation,
             source,
-            subject,
+            subject_key,
             scope,
             format!("Findings about {subject_text} may be wrong."),
-            format!("{}.", fragment(limitation)),
+            sentence(limitation),
             format!(
                 "Findings on {subject_text} can be fabricated or missed here, so treat them as \
                  unconfirmed rather than as results."
             ),
-            format!("{}.", fragment(replacement)),
+            sentence(replacement),
         )
     }
 
@@ -592,7 +651,7 @@ impl Assumption {
                 kind: Some(kind.clone()),
             },
             format!("The {check} {kind} finding on {subject_text} is waived by hand."),
-            format!("{}.", fragment(reason)),
+            sentence(reason),
             format!(
                 "It does not gate this run until {until}, so this result is clean by \
                  authorization rather than by measurement."
@@ -1239,7 +1298,11 @@ mod tests {
 
     fn all_kinds() -> Vec<Assumption> {
         vec![
-            Assumption::open_part("R7", "10k", "no model matched"),
+            Assumption::open_part(
+                "R7",
+                "10k",
+                "no model matched it, and its pins sit on connected nets",
+            ),
             Assumption::substitute_model(
                 AssumptionSource::Scheduler,
                 "U1",
@@ -1248,7 +1311,10 @@ mod tests {
             ),
             Assumption::inferred_pin_role("U2", "3", "output"),
             Assumption::default_parameter("U2", "vout", "3.3 V"),
-            Assumption::fitted_by_default(AssumptionSource::Reader, "the ODB++ archive"),
+            Assumption::fitted_by_default(
+                AssumptionSource::Reader,
+                Subject::new("odbpp", "the ODB++ archive"),
+            ),
             Assumption::not_checked(
                 AssumptionSource::Reader,
                 "drc",
@@ -1257,7 +1323,7 @@ mod tests {
             ),
             Assumption::not_exercised(
                 AssumptionSource::Scheduler,
-                "the i2c0 bus",
+                Subject::new("i2c0", "the i2c0 bus"),
                 Scope::Nets {
                     nets: vec!["SDA".into(), "SCL".into()],
                 },
@@ -1266,7 +1332,7 @@ mod tests {
             ),
             Assumption::reduced_fidelity(
                 AssumptionSource::Scheduler,
-                "SPI transaction framing on spi0",
+                Subject::new("spi0/framing", "SPI transaction framing on spi0"),
                 Scope::Nets {
                     nets: vec!["SCK".into()],
                 },
@@ -1275,7 +1341,7 @@ mod tests {
             ),
             Assumption::parser_limitation(
                 AssumptionSource::Reader,
-                "shorts on this board",
+                Subject::new("drc/short", "shorts on this board"),
                 Scope::Check {
                     check: "drc".into(),
                     kind: Some("short".into()),
@@ -1310,7 +1376,7 @@ mod tests {
         assert_eq!(
             Assumption::not_exercised(
                 AssumptionSource::Scheduler,
-                "i2c0/U4",
+                Subject::same("i2c0/U4"),
                 Scope::Board,
                 "never addressed",
                 "exercise it"
@@ -1342,6 +1408,10 @@ mod tests {
     #[test]
     fn every_constructor_composes_four_sentences_and_validates() {
         for a in all_kinds() {
+            println!(
+                "[{}] {}\n  because: {}\n  consequence: {}\n  fix: {}\n",
+                a.id, a.statement, a.because, a.consequence, a.replacement
+            );
             a.validate().unwrap_or_else(|e| panic!("{e}"));
             for (name, text) in [
                 ("statement", &a.statement),
@@ -1357,6 +1427,11 @@ mod tests {
                 assert!(
                     !text.contains(".."),
                     "{}: {name} double stop: {text:?}",
+                    a.id
+                );
+                assert!(
+                    text.starts_with(|c: char| c.is_uppercase() || c.is_ascii_digit()),
+                    "{}: {name} does not open a sentence: {text:?}",
                     a.id
                 );
                 assert!(
