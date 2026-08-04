@@ -228,9 +228,12 @@ impl AcAnalysis {
         // SPDT leg pairing for the switch quiescent conductance (the DC
         // stamp's break-before-make coupling), built once per sweep.
         let siblings = spdt_siblings(circuit);
+        // The relay states the operating-point solve settled on: `.ac` must stamp
+        // the same device the bias was found with.
+        let latch = ws.switch_latch().cloned();
         for &f in &freqs {
             let w = std::f64::consts::TAU * f;
-            let x = self.solve_at(circuit, &ws.layout, &op, w, &siblings)?;
+            let x = self.solve_at(circuit, &ws.layout, &op, w, &siblings, latch.as_ref())?;
             // Map unknowns back to node phasors (ground = 0).
             let mut node_phasor = vec![Complex64::new(0.0, 0.0); n_nodes];
             for node in 1..n_nodes {
@@ -254,6 +257,7 @@ impl AcAnalysis {
         op: &OperatingPoint,
         w: f64,
         siblings: &std::collections::HashMap<DeviceId, DeviceId>,
+        latch: Option<&std::collections::HashMap<DeviceId, bool>>,
     ) -> Result<Vec<Complex64>, String> {
         let mut sys = ComplexSystem::new(layout.size);
         let dedicated_ac_source = has_dedicated_ac_source(circuit);
@@ -290,7 +294,7 @@ impl AcAnalysis {
                 _ => Complex64::new(0.0, 0.0),
             };
             stamp_ac(
-                &mut sys, layout, op, dev, id, w, &self.opts, drive, circuit, siblings,
+                &mut sys, layout, op, dev, id, w, &self.opts, drive, circuit, siblings, latch,
             );
         }
         // A behavioral expression that faults AT THE OPERATING POINT (should
@@ -364,6 +368,7 @@ fn stamp_ac(
     // SPDT leg sibling map for the switch break-before-make quiescent
     // conductance (see the VSwitch arm); empty for SPDT-free decks.
     siblings: &std::collections::HashMap<DeviceId, DeviceId>,
+    latch: Option<&std::collections::HashMap<DeviceId, bool>>,
 ) {
     let n = |node: NodeId| layout.node(node);
     match dev {
@@ -495,7 +500,20 @@ fn stamp_ac(
             // was never solved at, shorting the common node in `.ac` only.
             // Sibling-free legs (and spdt_bbm off) keep the bare tanh value.
             let vctrl = op.v(*ctrl_p) - op.v(*ctrl_n);
-            let mut s = vswitch_s(vctrl, *von, *voff);
+            // The SAME ramp the DC/transient stamp used, including which of a
+            // relay's thresholds the operating-point solve left live. `.ac` used
+            // to keep its own unclamped-tanh copy, so a relay latched hard open by
+            // the DC solve was reported here as a mid-band modulator with a gain
+            // of 6.27 while the DC sensitivity at that bias was exactly 0.
+            let latched = crate::stamp::vswitch_latched(opts, latch, id);
+            let (s0, ds_dvctrl, _, _) = crate::stamp::vswitch_ramp(
+                vctrl,
+                *von,
+                *voff,
+                latched,
+                opts.effects.switch_transition_frac,
+            );
+            let mut s = s0;
             if opts.effects.spdt_bbm {
                 if let Some(sib) = siblings.get(&id) {
                     if let Some(Device::VSwitch {
@@ -518,7 +536,7 @@ fn stamp_ac(
                     }
                 }
             }
-            let g = vswitch_g_from_s(s, *ron, *roff);
+            let g = crate::stamp::vswitch_g_from_s(s, *ron, *roff);
             sys.stamp_admittance(n(*a), n(*b), Complex64::new(g, 0.0));
 
             // CONTROL TRANSCONDUCTANCE; the small-signal image of the
@@ -533,12 +551,9 @@ fn stamp_ac(
             // conductance the transient stamps (bbm win factor included). No
             // ieq RHS correction here: AC is a pure phasor solve about the OP.
             if opts.effects.switch_ctrl_gm {
-                let vmid = 0.5 * (von + voff);
-                let span = (von - voff).abs().max(1e-9);
-                let th = (3.0 * (vctrl - vmid) / span).tanh();
                 let gon = 1.0 / ron.max(1e-12);
                 let goff = 1.0 / roff.max(1e-12);
-                let dgsw_dvctrl = g * (gon.ln() - goff.ln()) * 0.5 * (1.0 - th * th) * (3.0 / span);
+                let dgsw_dvctrl = g * (gon.ln() - goff.ln()) * ds_dvctrl;
                 let gm_ctrl = (op.v(*a) - op.v(*b)) * dgsw_dvctrl;
                 if gm_ctrl != 0.0 {
                     stamp_transconductance(sys, n(*a), n(*b), n(*ctrl_p), n(*ctrl_n), gm_ctrl);
@@ -1130,24 +1145,6 @@ fn opamp_ac_gain(gain: f64, pole_hz: Option<f64>, w: f64) -> Complex64 {
     }
     let wp = std::f64::consts::TAU * pole_hz;
     a0 / Complex64::new(1.0, w / wp)
-}
-
-/// The switch's smooth tanh selection fraction `s` in [0, 1] at control
-/// voltage `vctrl`; the transient stamp's formula (stamp.rs), split out so
-/// the AC arm can apply the break-before-make win factor between `s` and the
-/// log-interpolated conductance exactly where the DC stamp applies it.
-fn vswitch_s(vctrl: f64, von: f64, voff: f64) -> f64 {
-    let vmid = 0.5 * (von + voff);
-    let span = ((von - voff).abs()).max(1e-9);
-    0.5 * (1.0 + (3.0 * (vctrl - vmid) / span).tanh())
-}
-
-/// Log-interpolated switch conductance at selection fraction `s` (the
-/// transient stamp's `gsw = exp(ln goff + s·(ln gon − ln goff))`).
-fn vswitch_g_from_s(s: f64, ron: f64, roff: f64) -> f64 {
-    let gon = 1.0 / ron.max(1e-12);
-    let goff = 1.0 / roff.max(1e-12);
-    (goff.ln() + s * (gon.ln() - goff.ln())).exp()
 }
 
 /// SPDT leg sibling map: two `VSwitch` devices sharing the same common node

@@ -92,6 +92,13 @@ pub struct Workspace {
     /// staged-DC outer loop sets it so each inner Newton solve holds switch state
     /// fixed (smooth resistor network) and re-evaluates between solves.
     switch_freeze: Option<std::collections::HashMap<DeviceId, bool>>,
+    /// LATCHED analog-switch states carried between solves under
+    /// [`crate::options::SwitchModel::Hysteretic`] -- the memory that makes the
+    /// SPICE3 `SW` device a relay rather than a threshold. `None` until the first
+    /// solve on a circuit that actually has a `VSwitch`; a switch missing from the
+    /// map is OPEN, ngspice's own power-on convention. Maintained entirely by
+    /// [`newton_solve`]; the smooth switch model never touches it.
+    switch_latch: Option<std::collections::HashMap<DeviceId, bool>>,
     /// Armed by the transient driver on a stiff comparator/switch board: when a
     /// bare per-step Newton fails, retry the step through the event-freeze loop
     /// (`newton_solve_event`) before cutting the timestep. Off by default, so an
@@ -269,6 +276,12 @@ impl Workspace {
             branch_reg: 0.0,
             cmp_freeze: None,
             switch_freeze: None,
+            // Under SwitchModel::Hysteretic the LATCHED relay IS the device, so a
+            // residual measured with the switches self-deciding across their whole
+            // band would be the residual of a circuit the caller never asked for.
+            // Honouring the latch here is what lets the in-loop false-convergence
+            // guard and `.op`'s post-hoc refusal both apply to a hysteretic deck.
+            switch_latch: hyst_latch(opts, &self.switch_latch),
             spdt_sibling: &self.spdt_sibling,
         };
         stamp_all(&ctx, &mut self.matrix, &mut self.rhs);
@@ -321,6 +334,12 @@ impl Workspace {
             branch_reg: 0.0,
             cmp_freeze: None,
             switch_freeze: None,
+            // Under SwitchModel::Hysteretic the LATCHED relay IS the device, so a
+            // residual measured with the switches self-deciding across their whole
+            // band would be the residual of a circuit the caller never asked for.
+            // Honouring the latch here is what lets the in-loop false-convergence
+            // guard and `.op`'s post-hoc refusal both apply to a hysteretic deck.
+            switch_latch: hyst_latch(opts, &self.switch_latch),
             spdt_sibling: &self.spdt_sibling,
         };
         stamp_all(&ctx, &mut self.matrix, &mut self.rhs);
@@ -373,6 +392,7 @@ impl Workspace {
             used_staged_dc: false,
             cmp_freeze: None,
             switch_freeze: None,
+            switch_latch: None,
             tran_event: false,
             tran_line_search: false,
             behavioral_fault: None,
@@ -382,6 +402,14 @@ impl Workspace {
             #[cfg(test)]
             stall_norm_probe: None,
         }
+    }
+
+    /// The analog-switch relay states the last solve settled on, for a caller that
+    /// must stamp the SAME device the operating point was solved with. `.ac`
+    /// linearizes about that point and so needs it; without it the AC arm modelled
+    /// a switch the DC solve never had.
+    pub fn switch_latch(&self) -> Option<&std::collections::HashMap<DeviceId, bool>> {
+        self.switch_latch.as_ref()
     }
 
     /// The behavioral-expression fault of the last failed Newton attempt, if
@@ -401,7 +429,199 @@ const STALL_WINDOW: usize = 12;
 /// Run Newton iterations to convergence (or `max_newton`) for one assembled
 /// operating point. Mutates `ws.x` in place toward the solution.
 #[allow(clippy::too_many_arguments)]
+/// The latched relay states to stamp a RESIDUAL against: `Some` only when the
+/// hysteretic switch model is in force and a latch has been established, so a
+/// smooth-switch or switch-free circuit keeps the classic self-deciding stamp.
+fn hyst_latch<'a>(
+    opts: &SolverOptions,
+    latch: &'a Option<std::collections::HashMap<DeviceId, bool>>,
+) -> Option<&'a std::collections::HashMap<DeviceId, bool>> {
+    if opts.effects.switch_model == crate::options::SwitchModel::Hysteretic {
+        latch.as_ref()
+    } else {
+        None
+    }
+}
+
+/// Newton solve with the HYSTERETIC analog-switch outer loop wrapped around it.
+///
+/// A [`SwitchModel::Hysteretic`] `VSwitch` is a latching relay, so its state is
+/// not a function of the present iterate alone: it depends on which threshold the
+/// control last crossed. That makes it a DISCRETE state, exactly like a
+/// comparator output, and it is resolved the same way the staged path already
+/// resolves comparators: freeze every switch's state, solve the resulting smooth
+/// resistor network, re-derive each state from the converged control voltages
+/// (`eval_switch_states`, whose rule -- close above `von`, open below `voff`,
+/// hold in between -- is the SPICE3 `SW` rule verbatim), and repeat until nothing
+/// flips. The fixed point is then a true root with every switch state consistent
+/// with its own control voltage.
+///
+/// The resolved states persist in `ws.switch_latch`, which is the anchor for the
+/// next solve's hold decision. It is committed by every solve, including a
+/// timestep trial that the LTE controller later rejects. That is deliberate and
+/// matches ngspice, whose `SW` likewise carries its state forward from whatever
+/// iterate it last evaluated rather than rewinding it with a rejected step; the
+/// alternative (snapshot/restore around every trial) would need an accept hook in
+/// each of the four drivers and is unobservable at deck tolerance, because a
+/// rejected trial and its retry sit at nearly the same control voltage.
+///
+/// Costs nothing on a circuit with no `VSwitch`, on [`SwitchModel::Smooth`], or
+/// when an outer path already owns `ws.switch_freeze`: those all fall straight
+/// through to [`newton_solve_core`] and stay bit-identical.
+#[allow(clippy::too_many_arguments)]
 pub fn newton_solve(
+    ws: &mut Workspace,
+    circuit: &Circuit,
+    opts: &SolverOptions,
+    time: f64,
+    dt: f64,
+    coeffs: IntegCoeffs,
+    state: &ReactiveState,
+    dc: bool,
+    use_ic: bool,
+    gmin: f64,
+    src_scale: f64,
+) -> NewtonResult {
+    let hysteretic = opts.effects.switch_model == crate::options::SwitchModel::Hysteretic
+        && ws.switch_freeze.is_none()
+        && circuit
+            .devices
+            .iter()
+            .any(|d| matches!(d, Device::VSwitch { .. }));
+    if !hysteretic {
+        return newton_solve_core(
+            ws, circuit, opts, time, dt, coeffs, state, dc, use_ic, gmin, src_scale,
+        );
+    }
+
+    let pairs = SpdtPairs::analyze(circuit);
+    // ngspice's DC-init convention, measured on ngspice-45.2 with a `.op` sweep of
+    // the control across the whole band: every switch starts OPEN and only closes
+    // once the control passes `von`. It is NOT a midpoint decision -- at
+    // vctrl = VT = 1.5 V (dead centre of a VH=1.0 band) ngspice reports the full
+    // ROFF = 1e9. An absent latch therefore means "open", not "nearest rail".
+    let mut latch = ws.switch_latch.take().unwrap_or_default();
+    for (id, dev) in circuit.iter() {
+        if matches!(dev, Device::VSwitch { .. }) {
+            latch.entry(id).or_insert(false);
+        }
+    }
+    let x_entry = ws.x.clone();
+
+    // Bounded Gauss-Seidel over the discrete states. Two passes suffice whenever
+    // no switch flips (the common case: one solve plus one confirming
+    // re-evaluation); the cap catches a control node that a switch's own current
+    // drags back across its threshold, which cannot settle and must not spin.
+    const MAX_PASSES: usize = 16;
+    let mut last = NewtonResult {
+        converged: false,
+        iters: 0,
+    };
+    for pass in 0..MAX_PASSES {
+        ws.switch_latch = Some(latch.clone());
+        if pass > 0 {
+            // Re-run the whole solve from the same starting iterate, so the result
+            // depends on the resolved state set and not on the path through the
+            // discarded ones.
+            ws.x.copy_from_slice(&x_entry);
+        }
+        // A settled step is not a solved circuit, on a relay flip least of all.
+        //
+        // The step-norm half of SPICE's criterion can be met at a point that is
+        // not a root, and the way it happens here is specific and reproducible:
+        // when the relay closes, the first iterate overshoots the newly-connected
+        // diode-connected base to the LINEAR-network voltage (4.9505 V, the
+        // 10 kΩ / 1 MΩ divider with the junction contributing nothing), where the
+        // junction tangent has collapsed, the Jacobian row is effectively empty,
+        // and every subsequent step is tiny however wrong the point is. Newton
+        // reports converged with 238 A of KCL imbalance.
+        //
+        // `.op` already guards against exactly this and it is why the operating
+        // point of the same circuit is right to seven digits. The per-step
+        // transient Newton had no such guard, so it accepted the false root, and
+        // then no amount of timestep cutting could recover: the point is wrong at
+        // every dt, including 1e-15.
+        //
+        // Judged only for hysteretic switch circuits, and only as a trigger for
+        // the rescue below rather than a refusal, so no deck that converges today
+        // can start failing. `solve` runs the solve and reports both whether the
+        // step settled and how badly the currents miss.
+        let solve = |ws: &mut Workspace, g: f64| -> (NewtonResult, f64) {
+            let r = newton_solve_core(
+                ws, circuit, opts, time, dt, coeffs, state, dc, use_ic, g, src_scale,
+            );
+            let res = residual_inf_norm_at(
+                ws, circuit, opts, time, coeffs, state, dc, use_ic, g, src_scale, 0.0,
+            );
+            (r, res)
+        };
+        let (r0, res0) = solve(ws, gmin);
+        last = r0;
+        if last.converged && !(res0.is_finite() && res0 <= crate::sim::OP_KCL_TOL) {
+            last.converged = false;
+        }
+        if !last.converged {
+            // GMIN STEPPING on the failed step. `.op` has this rung and the
+            // per-step transient Newton did not, and a relay flip is exactly the
+            // step that needs it: a node that was floating at millivolts has to
+            // move a full junction drop at once (the synapse mirror's cold
+            // diode-connected base, 5 mV -> 692 mV). A large gmin puts a real
+            // conductance across every junction, which conditions that jump;
+            // walking it back down carries the solution with it, so each rung
+            // starts from a point already nearly right. The Armijo line search
+            // rides along to refuse any iterate that does not decrease the true
+            // residual, which is the globalization for the pnjlim orbit the bare
+            // step otherwise falls into. Both are reached ONLY after the plain
+            // solve has already failed, so a step that converges normally is
+            // untouched.
+            let had = ws.tran_line_search;
+            ws.tran_line_search = true;
+            ws.x.copy_from_slice(&x_entry);
+            for g in [1e-2, 1e-4, 1e-6, 1e-8, 1e-10] {
+                if g <= gmin {
+                    continue;
+                }
+                let _ = solve(ws, g);
+            }
+            let (r1, res1) = solve(ws, gmin);
+            let ok1 = r1.converged && res1.is_finite() && res1 <= crate::sim::OP_KCL_TOL;
+            if ok1 {
+                last = r1;
+            } else if res1 < res0 {
+                // Neither attempt reached the bar. Keep the better-balanced of the
+                // two and report it as it is: `converged` stays false, so the
+                // driver cuts the step and ultimately refuses, rather than
+                // emitting a waveform built on a 238 A imbalance.
+                last = r1;
+                last.converged = false;
+            } else {
+                ws.x.copy_from_slice(&x_entry);
+                let _ = solve(ws, gmin);
+                last.converged = false;
+            }
+            ws.tran_line_search = had;
+        }
+        if !last.converged {
+            break;
+        }
+        let next = eval_switch_states(circuit, &ws.layout, &ws.x, &latch, &pairs);
+        if std::env::var("HAUKSBEE_SWITCH_DBG").is_ok() {
+            eprintln!(
+                "[switch] t={time:.6e} dc={dc} pass={pass} conv={} latch={latch:?} next={next:?}",
+                last.converged
+            );
+        }
+        if next == latch {
+            break;
+        }
+        latch = next;
+    }
+    ws.switch_latch = Some(latch);
+    last
+}
+
+#[allow(clippy::too_many_arguments)]
+fn newton_solve_core(
     ws: &mut Workspace,
     circuit: &Circuit,
     opts: &SolverOptions,
@@ -540,6 +760,7 @@ pub fn newton_solve(
                 branch_reg,
                 cmp_freeze: ws.cmp_freeze.as_ref(),
                 switch_freeze: ws.switch_freeze.as_ref(),
+                switch_latch: hyst_latch(opts, &ws.switch_latch),
                 spdt_sibling: &ws.spdt_sibling,
             };
             // Census hooks (HAUKSBEE_STEP_CENSUS): the march-cost attribution
@@ -1166,6 +1387,7 @@ fn residual_inf_norm_at(
             branch_reg,
             cmp_freeze: ws.cmp_freeze.as_ref(),
             switch_freeze: ws.switch_freeze.as_ref(),
+            switch_latch: hyst_latch(opts, &ws.switch_latch),
             spdt_sibling: &ws.spdt_sibling,
         };
         stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
@@ -2777,10 +2999,22 @@ mod vswitch_jacobian_tests {
         (c, out)
     }
 
+    /// Options selecting the SMOOTH analog pass element. Both tests in this
+    /// module are about the smooth device's control-node Jacobian, and the
+    /// operating point they look for (an interior point part-way up the
+    /// transition, where the conductance's control dependence is strongest) only
+    /// exists for a device whose conductance is a continuous function of its
+    /// control. A relay has no such point: it is at `ron` or at `roff`.
+    fn smooth_opts() -> SolverOptions {
+        let mut opts = SolverOptions::default();
+        opts.effects.switch_model = crate::options::SwitchModel::Smooth;
+        opts
+    }
+
     #[test]
     fn control_jacobian_converges_to_the_true_root() {
         let (c, out) = feedback_switch_circuit();
-        let opts = SolverOptions::default();
+        let opts = smooth_opts();
         let mut ws = Workspace::new(&c);
         dc_operating_point(&mut ws, &c, &opts).expect("switch DC solve converges");
 
@@ -2849,7 +3083,7 @@ mod vswitch_jacobian_tests {
     #[test]
     fn control_jacobian_converges_in_few_iterations() {
         let (c, out) = gentle_feedback_switch_circuit();
-        let opts = SolverOptions::default();
+        let opts = smooth_opts();
         let mut ws = Workspace::new(&c);
         let coeffs = IntegCoeffs::for_step(opts.integration, 1.0, 1.0, true);
         let empty = ReactiveState::new(c.devices.len());
@@ -2879,6 +3113,117 @@ mod vswitch_jacobian_tests {
         assert!(
             res < 1e-7,
             "residual at the gentle-switch root should be ~0, got {res:e}"
+        );
+    }
+
+    /// The SAME negative-feedback loop under the DEFAULT (relay) switch model has
+    /// no operating point at all, and the solver must say so rather than invent
+    /// one.
+    ///
+    /// Trace the relay round the loop: closed, the 1 Ω switch and 1 Ω load divide
+    /// 5 V to `out` = 2.5 V, so vctrl = 3.5 - 2.5 = 1.0 V, at or below the
+    /// `voff` = 1.0 V break threshold, and it opens. Open, the 1 kΩ `roff` leaves
+    /// `out` at 5/1001 ≈ 5 mV, so vctrl = 3.495 V, well past the `von` = 2.0 V
+    /// make threshold, and it closes. Neither state is self-consistent: the
+    /// circuit is a relaxation oscillator, and a DC operating point does not
+    /// exist. Refusing is the correct answer, and it is the whole product claim --
+    /// the alternative is a plausible-looking number for a question with no
+    /// answer. (The smooth pass element DOES have a root here, the interior point
+    /// the test above pins; that is a real difference between two real devices,
+    /// not a tolerance.)
+    #[test]
+    fn hysteretic_relay_in_positive_feedback_has_no_operating_point() {
+        let (c, _out) = feedback_switch_circuit();
+        let opts = SolverOptions::default();
+        assert_eq!(
+            opts.effects.switch_model,
+            crate::options::SwitchModel::Hysteretic,
+            "the relay is the default switch model"
+        );
+        let mut ws = Workspace::new(&c);
+        let r = dc_operating_point(&mut ws, &c, &opts);
+        assert!(
+            r.is_err(),
+            "a chattering relay loop has no DC point; the solver must refuse, \
+             not report one"
+        );
+    }
+
+    /// The relay's thresholds are the ones the model card names, and its rails are
+    /// exactly `ron` and `roff`. Both were wrong before: the conductance ramped
+    /// across the whole `[voff, von]` hysteresis band centred on `VT`, and being
+    /// an unsaturated tanh it never reached either rail (measured 12.2 Ω against a
+    /// stated 10 Ω, and 819 MΩ against a stated 1 GΩ).
+    ///
+    /// Swept open-circuit-upward, so the latch starts open (ngspice's power-on
+    /// convention, measured) and must hold open right up to `von`.
+    #[test]
+    fn hysteretic_relay_holds_off_through_the_band_then_presents_exact_ron() {
+        let opts = SolverOptions::default();
+        // 1 V through the switch into a 1 kΩ load: v(out)/(1 - v(out)) * 1k = ron.
+        let build = |vctrl: f64| {
+            let mut c = Circuit::new();
+            let inn = c.node("in");
+            let out = c.node("out");
+            let ctrl = c.node("ctrl");
+            c.add(Device::Vsource {
+                name: "V1".into(),
+                p: inn,
+                n: NodeId::GROUND,
+                kind: SourceKind::Dc(1.0),
+            });
+            c.add(Device::Vsource {
+                name: "VC".into(),
+                p: ctrl,
+                n: NodeId::GROUND,
+                kind: SourceKind::Dc(vctrl),
+            });
+            c.add(Device::VSwitch {
+                name: "S1".into(),
+                a: inn,
+                b: out,
+                ctrl_p: ctrl,
+                ctrl_n: NodeId::GROUND,
+                von: 2.5,
+                voff: 0.5,
+                ron: 10.0,
+                roff: 1e9,
+            });
+            c.add(Device::Resistor {
+                name: "RL".into(),
+                a: out,
+                b: NodeId::GROUND,
+                ohms: 1e3,
+                tc1: None,
+            });
+            (c, out)
+        };
+        let rsw = |vctrl: f64| {
+            let (c, out) = build(vctrl);
+            let mut ws = Workspace::new(&c);
+            dc_operating_point(&mut ws, &c, &opts).expect("switch divider solves");
+            let v = ws.layout.node(out).map(|i| ws.x[i]).unwrap();
+            (1.0 / v - 1.0) * 1e3
+        };
+        // Dead centre of the hysteresis band: an open relay stays open. ngspice
+        // reports the full ROFF here; the old band-wide ramp reported 100 kΩ, four
+        // decades out.
+        assert!(
+            rsw(1.5) > 9e8,
+            "mid-band with the latch open must still be roff, got {} Ω",
+            rsw(1.5)
+        );
+        // Just below the make threshold: still open.
+        assert!(
+            rsw(2.45) > 9e8,
+            "below von must be roff, got {} Ω",
+            rsw(2.45)
+        );
+        // Fully driven on: EXACTLY ron, not merely close to it.
+        let on = rsw(3.0);
+        assert!(
+            (on - 10.0).abs() < 1e-6,
+            "a fully driven relay presents its stated ron exactly, got {on} Ω"
         );
     }
 }

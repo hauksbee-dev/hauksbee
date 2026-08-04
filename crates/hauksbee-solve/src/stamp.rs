@@ -171,6 +171,24 @@ pub struct StampCtx<'a> {
     /// converged control voltages and re-solves until none flip. `None` (every
     /// normal solve) keeps the smooth tanh + control tangent bit-identical.
     pub switch_freeze: Option<&'a std::collections::HashMap<DeviceId, bool>>,
+    /// LATCHED analog-switch states under [`crate::options::SwitchModel::Hysteretic`]
+    /// (keyed by device id), supplied by [`crate::newton::newton_solve`]'s
+    /// hysteretic outer loop.
+    ///
+    /// Distinct from `switch_freeze` in what it MEANS, which is why it is a
+    /// separate channel rather than a reuse. `switch_freeze` is a regularization:
+    /// the staged rescue pins a switch flat to hide a discontinuity Newton cannot
+    /// cross, and the pinned value carries no control dependence at all. This is
+    /// the DEVICE: the latch says which of the relay's two thresholds is currently
+    /// the live one (`von` while open, `voff` while closed), and the stamp still
+    /// resolves the conductance from the control voltage across a narrow ramp
+    /// about that threshold. So the switching INSTANT is the relay's, exact to
+    /// within the ramp width, while the device stays differentiable and Newton
+    /// keeps a continuous path through the transition.
+    ///
+    /// `switch_freeze` wins where both are present (the rescue path is mid-flight
+    /// and owns the decision).
+    pub switch_latch: Option<&'a std::collections::HashMap<DeviceId, bool>>,
     /// SPDT leg sibling map (device id -> complementary throw's device id) for
     /// the smooth break-before-make coupling. Consulted only when
     /// `effects.spdt_bbm` (the device-model default); empty/ignored otherwise.
@@ -2336,6 +2354,75 @@ fn stamp_mosfet<S: StampSink>(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The `VSwitch` conductance ramp, shared verbatim by the transient/DC stamp and
+/// by the AC small-signal stamp.
+///
+/// Returns `(s, ds_dvctrl, ramp_off, ramp_on)`, where `s` is the selection
+/// fraction that log-interpolates the conductance
+/// `gsw = exp(ln goff + s*(ln gon - ln goff))`, and `ds_dvctrl` is its exact
+/// derivative (the control tangent both stamps need).
+///
+/// One function because the two paths drifted before: `.ac` kept its own copy of
+/// an unclamped tanh, so a relay whose DC solve had it latched hard open was
+/// reported by `.ac` as a mid-band modulator with a gain of 6.27 while the DC
+/// sensitivity at the same bias was exactly 0. A duplicated device model is a
+/// divergence waiting to be measured.
+///
+/// `latched` is `Some(on)` for a [`crate::options::SwitchModel::Hysteretic`]
+/// relay, naming which of its two thresholds is live; `None` is the smooth pass
+/// element, whose ramp spans the whole `[voff, von]` band.
+pub(crate) fn vswitch_ramp(
+    vctrl: f64,
+    von: f64,
+    voff: f64,
+    latched: Option<bool>,
+    transition_frac: f64,
+) -> (f64, f64, f64, f64) {
+    let (ramp_off, ramp_on) = match latched {
+        None => (voff, von),
+        Some(on) => {
+            let thr = if on { voff } else { von };
+            let half = 0.5
+                * (transition_frac * (von - voff).abs()).max(1e-12)
+                * if von >= voff { 1.0 } else { -1.0 };
+            (thr - half, thr + half)
+        }
+    };
+    let width = ramp_on - ramp_off;
+    let width = if width == 0.0 { 1e-12 } else { width };
+    // q = 0 at `ramp_off`, 1 at `ramp_on`; the division carries the orientation.
+    let q = ((vctrl - ramp_off) / width).clamp(0.0, 1.0);
+    // Smoothstep: monotone, C1, and it REACHES both rails at finite control
+    // voltage, which the previous unclamped tanh never did (measured on
+    // `von=2.5 voff=0.5 ron=10 roff=1e9`: 12.2 Ohm at vctrl=3 V against a stated
+    // 10, and 819 MOhm at vctrl=0 against a stated 1e9). Zero slope at both ends
+    // means a switch outside its band contributes no spurious control tangent and
+    // Newton sees no kink where the clamp engages.
+    let s = q * q * (3.0 - 2.0 * q);
+    let ds_dvctrl = 6.0 * q * (1.0 - q) / width;
+    (s, ds_dvctrl, ramp_off, ramp_on)
+}
+
+/// Log-interpolated switch conductance at selection fraction `s`.
+pub(crate) fn vswitch_g_from_s(s: f64, ron: f64, roff: f64) -> f64 {
+    let gon = 1.0 / ron.max(1e-12);
+    let goff = 1.0 / roff.max(1e-12);
+    (goff.ln() + s * (gon.ln() - goff.ln())).exp()
+}
+
+/// Which threshold of a hysteretic relay is live, or `None` for the smooth model
+/// (and for any switch the latch has no entry for yet).
+pub(crate) fn vswitch_latched(
+    opts: &SolverOptions,
+    latch: Option<&std::collections::HashMap<DeviceId, bool>>,
+    id: DeviceId,
+) -> Option<bool> {
+    if opts.effects.switch_model != crate::options::SwitchModel::Hysteretic {
+        return None;
+    }
+    latch?.get(&id).copied()
+}
+
 fn stamp_vswitch<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
@@ -2373,20 +2460,35 @@ fn stamp_vswitch<S: StampSink>(
     }
 
     let vctrl_raw = ctx.v(cp) - ctx.v(cn);
-    let vmid = 0.5 * (von + voff);
-    let span = ((von - voff).abs()).max(1e-9);
+
+    // HYSTERETIC (SPICE3 `SW`) threshold selection. The latch says which
+    // threshold is live: an OPEN relay closes when the control rises past `von`, a
+    // CLOSED one opens when it falls below `voff`, and neither responds to
+    // anything in between.
+    //
+    // The full band is emphatically NOT the transition width, which is the bug
+    // this replaces: `VH` is a hysteresis HALF-WIDTH, so ramping across
+    // `[VT-VH, VT+VH]` put the 50%-conductance point at `VT` and started
+    // conducting a whole `VH` early. Measured on the synapse deck's
+    // `SW(VT=1.5 VH=1.0)` with a 10 us 0->3 V edge: ngspice closes at
+    // vctrl = 2.5 V and opens at 0.5 V, while the band-wide ramp was effectively
+    // closed by ~1.6 V and open again by ~1.4 V, landing both edges ~3 us early.
+    // On a membrane slewing at 0.43 V/us that was the 7.1-relative divergence.
+    let latched = crate::stamp::vswitch_latched(ctx.opts, ctx.switch_latch, id);
+    let frac = ctx.opts.effects.switch_transition_frac;
+    let (_, _, ramp_off, ramp_on) = vswitch_ramp(vctrl_raw, von, voff, latched, frac);
+    let vmid = 0.5 * (ramp_on + ramp_off);
+    let span = (ramp_on - ramp_off).abs().max(1e-12);
     // CONTROL LIMITING (staged / dynamic path only, branch_reg > 0). The
-    // log-interpolated conductance gsw = exp(lgoff + s*(lgon-lgoff)) spans many
-    // decades (ron ~ ohms, roff ~ 1e9), so a single Newton iteration that moves
-    // the control voltage across the transition makes gsw jump multiple decades
-    // at once. On a switch carrying real current (e.g. a synapse spike-gate
-    // whose control is a climbing neuron V_out) that snap destabilizes the
-    // coupled solve and the per-step Newton fails right at the flip. Mirroring
-    // pn-junction limiting (pnjlim) for diodes, bound the per-iteration change
-    // in the tanh argument `u` to ~1 (about one transition-width / a few
-    // decades of conductance) anchored on the previous iterate, so Newton tracks
-    // the switch through its transition smoothly. branch_reg==0 (every normal
-    // solve) keeps vctrl unlimited and the path bit-identical.
+    // log-interpolated conductance spans many decades (ron ~ ohms, roff ~ 1e9), so
+    // a single Newton iteration that moves the control voltage across the
+    // transition makes gsw jump multiple decades at once. On a switch carrying
+    // real current (a synapse spike-gate whose control is a climbing neuron
+    // V_out) that snap destabilizes the coupled solve and the per-step Newton
+    // fails right at the flip. Mirroring pn-junction limiting for diodes, bound
+    // the per-iteration movement to about one transition width, anchored on the
+    // previous iterate. branch_reg == 0 (every normal solve) keeps vctrl unlimited
+    // and the path bit-identical.
     let vctrl = if ctx.branch_reg > 0.0 {
         let vctrl_old = ctx.v_prev(cp) - ctx.v_prev(cn);
         let u_new = 3.0 * (vctrl_raw - vmid) / span;
@@ -2397,15 +2499,9 @@ fn stamp_vswitch<S: StampSink>(
     } else {
         vctrl_raw
     };
-    // Smooth tanh transition between log-conductances. With u the tanh argument,
-    //   s   = 0.5 * (1 + tanh(u)),      u = 3*(vctrl - vmid)/span
-    //   gln = ln(goff) + s*(ln(gon) - ln(goff))
-    //   gsw = exp(gln)
     let lgon = gon.ln();
     let lgoff = goff.ln();
-    let u = 3.0 * (vctrl - vmid) / span;
-    let th = u.tanh();
-    let mut s = 0.5 * (1.0 + th);
+    let (mut s, ds_dvctrl, _, _) = vswitch_ramp(vctrl, von, voff, latched, frac);
 
     // BREAK-BEFORE-MAKE for SPDT legs (effects.spdt_bbm, the device-model
     // default; clearing that field restores the plain bridging model). A real
@@ -2470,7 +2566,8 @@ fn stamp_vswitch<S: StampSink>(
     // current rows to the (cp,cn) control columns, with
     //   gm_ctrl = d i / d vctrl = (v_a - v_b) * d gsw / d vctrl
     //   d gsw / d vctrl = gsw * (ln(gon) - ln(goff)) * ds/dvctrl
-    //   ds/dvctrl       = 0.5 * (1 - tanh^2(u)) * (3/span)
+    // with ds/dvctrl from `vswitch_ramp` (zero outside the band, where the
+    // smoothstep is clamped, so a fully-driven switch stamps no control tangent).
     // and a matching equivalent-current correction so the linearization is
     // exact at the operating point (same root, faster convergence). Stamping
     // this makes each switch Newton-linearized instead of a Picard fixed point.
@@ -2488,7 +2585,7 @@ fn stamp_vswitch<S: StampSink>(
     // stamp + the switch's own a/b dynamics still track the flip. The default
     // (true) keeps the tangent, the classic behavior.
     let skip_ctrl_gm = !ctx.opts.effects.switch_ctrl_gm;
-    let dgsw_dvctrl = gsw * (lgon - lgoff) * 0.5 * (1.0 - th * th) * (3.0 / span);
+    let dgsw_dvctrl = gsw * (lgon - lgoff) * ds_dvctrl;
     let vab = ctx.v(a) - ctx.v(b);
     let gm_ctrl = vab * dgsw_dvctrl;
     if gm_ctrl != 0.0 && !skip_ctrl_gm {
@@ -2986,6 +3083,7 @@ mod diode_physics_tests {
                 branch_reg: 0.0,
                 cmp_freeze: None,
                 switch_freeze: None,
+                switch_latch: None,
                 spdt_sibling: &spdt,
             };
             let mut rhs = vec![0.0; layout.size];
@@ -3062,6 +3160,7 @@ mod diode_physics_tests {
             branch_reg: 0.0,
             cmp_freeze: None,
             switch_freeze: None,
+            switch_latch: None,
             spdt_sibling: &spdt,
         };
         let mut rhs = vec![0.0; layout.size];
@@ -3167,6 +3266,7 @@ mod bjt_physics_tests {
             branch_reg: 0.0,
             cmp_freeze: None,
             switch_freeze: None,
+            switch_latch: None,
             spdt_sibling: &spdt,
         };
         let mut rhs = vec![0.0; layout.size];
@@ -3351,6 +3451,7 @@ mod bjt_physics_tests {
             branch_reg: 0.0,
             cmp_freeze: None,
             switch_freeze: None,
+            switch_latch: None,
             spdt_sibling: &spdt,
         };
         let mut f = vec![0.0; layout.size];
@@ -3715,6 +3816,7 @@ mod bench {
             branch_reg: 1e-2,
             cmp_freeze: None,
             switch_freeze: None,
+            switch_latch: None,
             spdt_sibling: &spdt,
         };
         let mut rhs = vec![0.0f64; n];
@@ -3798,6 +3900,7 @@ mod bench {
             branch_reg: 1e-2,
             cmp_freeze: None,
             switch_freeze: None,
+            switch_latch: None,
             spdt_sibling: &spdt,
         };
         let mut rhs = vec![0.0f64; n];

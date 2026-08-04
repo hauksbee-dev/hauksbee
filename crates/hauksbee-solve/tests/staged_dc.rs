@@ -239,12 +239,23 @@ fn build_switched(n_decoy: usize) -> (Circuit, NodeId, NodeId) {
 fn multi_switch_core_converges_via_event_freeze() {
     // Enable the staged-DC dynamic-pivot LU and the event-freeze outer loop
     // (the load-bearing path for the switch-fused core): typed grants, no env.
-    let opts = SolverOptions {
+    let mut opts = SolverOptions {
         ladder: RobustnessLadder::none()
             .with(Strategy::DynamicPivot)
             .with(Strategy::EventFreeze),
         ..Default::default()
     };
+    // The SMOOTH analog pass element, which is the device whose control-node
+    // Jacobian this test exercises. Every switch here sits in a negative-feedback
+    // loop (vctrl = 3 - v(node)) chosen to park it part-way up its transition, and
+    // an interior operating point like that is something only a continuous
+    // conductance has. The default SPICE3 relay in this same loop is a relaxation
+    // oscillator with no DC point at all -- closed it divides `out` to 2.5 V, which
+    // is below the 1.5 V break threshold... in fact vctrl = 0.5 V, so it opens;
+    // open, `out` falls to ~0 and vctrl = 3 V reopens the make threshold, so it
+    // closes -- and the solver correctly refuses to report one. That refusal is
+    // covered by `hysteretic_relay_in_positive_feedback_has_no_operating_point`.
+    opts.effects.switch_model = hauksbee_solve::SwitchModel::Smooth;
     let (c, rail_n, out_n) = build_switched(8);
 
     let mut ws = Workspace::new(&c);
