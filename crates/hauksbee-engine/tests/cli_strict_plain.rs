@@ -495,6 +495,21 @@ fn crossing_short_board(version: u32, tag: &str) -> PathBuf {
              \x20 (net 0 \"\")\n\
              \x20 (net 1 \"GND\")\n\
              \x20 (net 2 \"VCC\")\n\
+             \x20 (net 3 \"MID\")\n\
+             \x20 (footprint \"Resistor_SMD:R_0603\" (layer \"F.Cu\")\n\
+             \x20   (at 20 20)\n\
+             \x20   (property \"Reference\" \"R1\")\n\
+             \x20   (property \"Value\" \"10k\")\n\
+             \x20   (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net 2 \"VCC\"))\n\
+             \x20   (pad \"2\" smd rect (at 2 0) (size 1 1) (layers \"F.Cu\") (net 3 \"MID\"))\n\
+             \x20 )\n\
+             \x20 (footprint \"Resistor_SMD:R_0603\" (layer \"F.Cu\")\n\
+             \x20   (at 20 25)\n\
+             \x20   (property \"Reference\" \"R2\")\n\
+             \x20   (property \"Value\" \"10k\")\n\
+             \x20   (pad \"1\" smd rect (at 0 0) (size 1 1) (layers \"F.Cu\") (net 3 \"MID\"))\n\
+             \x20   (pad \"2\" smd rect (at 2 0) (size 1 1) (layers \"F.Cu\") (net 1 \"GND\"))\n\
+             \x20 )\n\
              \x20 (segment (start 0 5) (end 10 5) (width 1.0) (layer \"F.Cu\") (net 1))\n\
              \x20 (segment (start 5 0) (end 5 10) (width 1.0) (layer \"F.Cu\") (net 2))\n)"
         ),
