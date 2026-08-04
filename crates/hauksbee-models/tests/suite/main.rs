@@ -10,12 +10,14 @@
 //! file that is not listed does not run, so the list is the source of truth.
 
 mod analog_active_resolve;
+mod api_backend;
 mod bjt_regex_polarity;
 mod codex_behavioral_fixture;
 mod codex_prompt_delivery;
 mod digital_pin_maps;
 mod exact_override_tiebreak;
 mod extract_model_choice;
+mod layer_docs;
 mod negative_rail_validation;
 mod pack_format;
 mod pack_layering;

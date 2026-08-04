@@ -389,13 +389,14 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
     // only; this is the general case.
     if st.primitive_count == 0 {
         out.push_note(HeadsUp::glossed(
-            "No copper was checked: this file carries connectivity but no traces or pours."
+            "No copper was checked: this input carries connectivity but no traces or pours."
                 .to_string(),
-            "Clearance DRC compares copper shapes against each other, and a netlist \
-             describes which pins connect without saying where any copper runs. \
-             Everything else in this report still applies.",
-            "Run hauksbee against the layout file (.kicad_pcb, .brd, .PcbDoc) or a \
-             gerber archive to check spacing.",
+            "Clearance DRC compares copper shapes against each other. A netlist has no \
+             copper at all, and a layout file can simply not be routed yet. Everything \
+             else in this report still applies.",
+            "If this was a layout file (.kicad_pcb, .brd, .PcbDoc), it has no routed \
+             copper yet: route it, or point hauksbee at the fab gerbers. If it was a \
+             netlist, run hauksbee against the layout file or a gerber archive instead.",
         ));
         return out;
     }
@@ -491,7 +492,13 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
     }
 
     // At-the-limit groups (gap == rule, no margin). NOT "below" the rule.
-    for g in &st.at_limit {
+    push_at_limit_findings(&mut out, &st.at_limit);
+
+    out
+}
+
+fn push_at_limit_findings(out: &mut PlainReport, at_limit: &[crate::result::DrcGroup]) {
+    for g in at_limit {
         let a = if g.net_a.is_empty() {
             "an unnamed net"
         } else {
@@ -518,8 +525,128 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
             g.min_gap_loc_mm,
         );
     }
+}
 
-    out
+/// Render the plain DRC for a terminal, condensing repeated near-identical
+/// clearance findings so fifty warnings do not bury the three worth reading.
+///
+/// The full findings (shorts always, plus the first few clearance groups) keep
+/// the complete what/why/what-to-do gloss; the remaining clearance groups
+/// collapse to one aggregated line per (rule, layer). The `--json` surface is
+/// untouched (always complete), and `verbose` restores every instance here.
+pub fn render_drc_condensed(st: &crate::result::DrcStructured, verbose: bool) -> String {
+    use std::fmt::Write as _;
+    /// How many clearance findings keep the full three-line gloss.
+    const FULL: usize = 3;
+
+    let pr = plain_drc_structured(st);
+    let summary = format!(
+        "Summary: {} short(s), {} net pair(s) below the clearance rule, {} at minimum \
+         clearance (no margin).",
+        st.shorts.len(),
+        st.violations.len(),
+        st.at_limit.len()
+    );
+
+    let warning_groups = st.violations.len() + st.at_limit.len();
+    if verbose || warning_groups <= FULL + 1 {
+        // Nothing worth condensing (or the user asked for everything): the full
+        // report, with the trailing summary count appended.
+        let mut s = pr.render();
+        if warning_groups + st.shorts.len() > 0 {
+            let _ = writeln!(s, "{summary}");
+        }
+        return s;
+    }
+
+    // Condensed: verdict, full shorts + first FULL clearance findings, then one
+    // aggregate line per (rule, layer) for the rest.
+    let mut s = String::new();
+    let _ = writeln!(s, "{}", pr.verdict());
+    let _ = writeln!(s);
+    let mut shown = 0usize;
+    let mut idx = 0usize;
+    for f in pr.sorted() {
+        // Shorts always print in full (Serious, or Note when downgraded on an
+        // unvalidated format); only the Warning-level clearance groups condense.
+        let full = match f.level {
+            PlainLevel::Warning => {
+                shown += 1;
+                shown <= FULL
+            }
+            _ => true,
+        };
+        if !full {
+            continue;
+        }
+        idx += 1;
+        let _ = writeln!(s, "{}. [{}] {}", idx, f.level.tag(), f.what);
+        let _ = writeln!(s, "     Why it matters: {}", f.why);
+        let _ = writeln!(s, "     What to do:     {}", f.fix);
+        let _ = writeln!(s);
+    }
+    // The clearance findings enter `pr` in order: violations, then at_limit.
+    // Everything past the first FULL of that combined list aggregates by
+    // (layer, rule); below-rule and at-limit groups aggregate separately since
+    // they mean different things.
+    let shown_v = FULL.min(st.violations.len());
+    let shown_l = FULL.saturating_sub(st.violations.len());
+    use std::collections::BTreeMap;
+    // (layer, rule in um) -> (group count, location count, tightest gap)
+    let mut rest_below: BTreeMap<(String, u64), (usize, usize, f64)> = BTreeMap::new();
+    for g in &st.violations[shown_v..] {
+        let e = rest_below
+            .entry((g.layer.clone(), (g.rule_mm * 1000.0).round() as u64))
+            .or_insert((0, 0, f64::INFINITY));
+        e.0 += 1;
+        e.1 += g.count;
+        e.2 = e.2.min(g.min_gap_mm);
+    }
+    for ((layer, rule_um), (groups, locs, tightest)) in &rest_below {
+        let rule = *rule_um as f64 / 1000.0;
+        let _ = writeln!(
+            s,
+            "  ...and {groups} more net pair{} like this on {} ({locs} location{}, tightest \
+             {tightest:.3} mm vs your {rule:.3} mm rule); pass --verbose for every instance.",
+            if *groups == 1 { "" } else { "s" },
+            friendly_layer(layer),
+            if *locs == 1 { "" } else { "s" },
+        );
+    }
+    let mut rest_limit: BTreeMap<(String, u64), (usize, usize)> = BTreeMap::new();
+    for g in &st.at_limit[shown_l.min(st.at_limit.len())..] {
+        let e = rest_limit
+            .entry((g.layer.clone(), (g.rule_mm * 1000.0).round() as u64))
+            .or_insert((0, 0));
+        e.0 += 1;
+        e.1 += g.count;
+    }
+    for ((layer, rule_um), (groups, locs)) in &rest_limit {
+        let _ = writeln!(
+            s,
+            "  ...and {groups} more net pair{} at exactly the {:.3} mm limit on {} \
+             ({locs} location{}); pass --verbose for every instance.",
+            if *groups == 1 { "" } else { "s" },
+            *rule_um as f64 / 1000.0,
+            friendly_layer(layer),
+            if *locs == 1 { "" } else { "s" },
+        );
+    }
+    // Heads-up notes are never dropped, condensed or not.
+    if !pr.heads_up.is_empty() {
+        let _ = writeln!(s, "\nHeads up (worth knowing, not a failure):");
+        for note in &pr.heads_up {
+            let _ = writeln!(s, "  - {}", note.what);
+            if !note.why.is_empty() {
+                let _ = writeln!(s, "       Why it matters: {}", note.why);
+            }
+            if !note.fix.is_empty() {
+                let _ = writeln!(s, "       What to do:     {}", note.fix);
+            }
+        }
+    }
+    let _ = writeln!(s, "{summary}");
+    s
 }
 
 // ── Net lint + straps + MCU resource conflicts ────────────────────────────────
@@ -1017,6 +1144,85 @@ mod tests {
                 .contains("below"),
             "below-rule finding should say 'below': {}",
             below_plain.findings[0].what
+        );
+    }
+
+    #[test]
+    fn condensed_plain_drc_keeps_three_full_findings_and_aggregates_the_rest() {
+        use crate::result::DrcStructured;
+        // Fifty distinct below-rule net pairs (the Watchy --drc --plain cry-wolf
+        // case): the condensed renderer keeps the first three full what/why/fix
+        // blocks, collapses the other 47 into one aggregate line per (rule,
+        // layer), and ends with a one-line summary. --verbose restores all 50.
+        let findings: Vec<_> = (0..50)
+            .map(|i| {
+                let mut f = drc_short();
+                f.kind = ViolationKind::Clearance;
+                f.net_a_name = format!("NET_{i}");
+                f.net_b_name = format!("NET_{}", i + 100);
+                f.layer = "F.Cu".to_string();
+                f.required_clearance_mm = 0.2;
+                f.gap_mm = 0.15;
+                f
+            })
+            .collect();
+        let report = DrcReport {
+            clearance_mm: 0.2,
+            findings,
+            primitive_count: 100,
+            version_warning: None,
+        };
+        let st = DrcStructured::from_report(&report);
+
+        let condensed = render_drc_condensed(&st, false);
+        assert_eq!(
+            condensed.matches("Why it matters:").count(),
+            3,
+            "exactly three findings keep the full gloss:\n{condensed}"
+        );
+        assert!(
+            condensed.contains("47 more net pairs like this")
+                && condensed.contains("--verbose"),
+            "the rest aggregate into one line pointing at --verbose:\n{condensed}"
+        );
+        assert!(
+            condensed.contains("tightest 0.150 mm") && condensed.contains("0.200 mm rule"),
+            "the aggregate names the tightest gap and the rule:\n{condensed}"
+        );
+        assert!(
+            condensed
+                .trim_end()
+                .lines()
+                .last()
+                .is_some_and(|l| l.starts_with("Summary:") && l.contains("50 net pair(s)")),
+            "a trailing one-line summary closes the report:\n{condensed}"
+        );
+        // The verdict still tells the truth about the total.
+        assert!(
+            condensed.contains("50 issues found"),
+            "the verdict keeps the real count:\n{condensed}"
+        );
+
+        // --verbose restores every instance, still with the trailing summary.
+        let verbose = render_drc_condensed(&st, true);
+        assert_eq!(
+            verbose.matches("Why it matters:").count(),
+            50,
+            "verbose prints all findings in full"
+        );
+        assert!(verbose.trim_end().ends_with(
+            "Summary: 0 short(s), 50 net pair(s) below the clearance rule, 0 at minimum \
+             clearance (no margin)."
+        ));
+
+        // A short is never condensed away.
+        let mut with_short = report;
+        with_short.findings.push(drc_short());
+        let st2 = DrcStructured::from_report(&with_short);
+        let s2 = render_drc_condensed(&st2, false);
+        assert!(
+            s2.contains("are touching"),
+            "the short keeps its full block:\n{s2}"
         );
     }
 

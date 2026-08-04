@@ -1,0 +1,11 @@
+# The loader guards finiteness field by field and does NOT guard a peripheral's
+# `temp_c`, so neither may the extension. Flagging this would be a false error.
+board = "nope.kicad_pcb"
+
+[[peripheral]]
+id = "S"
+type = "i2c_lm75"
+temp_c = inf
+
+[[assert]]
+kind = "no_faults"

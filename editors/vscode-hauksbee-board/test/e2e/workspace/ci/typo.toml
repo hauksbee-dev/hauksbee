@@ -1,0 +1,14 @@
+# A spec with two fixable mistakes, for the quick-fix test. Kept separate from
+# broken.toml so the tests do not depend on each other's unsaved edits.
+name = "fixable"
+board = "../hardware/blinky.kicad_pcb"
+duration_ms = 20
+
+[[supply]]
+net = "+5V"
+kind = "bench"
+
+[[assert]]
+kind = "voltag"
+net = "+5V"
+min = 4.9

@@ -606,6 +606,26 @@ async fn bind_with_fallback(addr: &str) -> anyhow::Result<tokio::net::TcpListene
             }
             Err(e.into())
         }
+        // A privileged port (< 1024) fails with PermissionDenied, which is not
+        // the busy-port case the automatic fallback exists for; falling back
+        // would silently serve somewhere the user did not ask for. Name the
+        // port and the reason instead.
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            let port = addr
+                .parse::<std::net::SocketAddr>()
+                .map(|sa| sa.port())
+                .unwrap_or(0);
+            if port != 0 && port < 1024 {
+                Err(anyhow::anyhow!(
+                    "cannot bind port {port}: ports below 1024 need root/administrator \
+                     privileges. Pick a port of 1024 or above (e.g. --port 3001). The \
+                     automatic next-free-port fallback only applies to BUSY ports, not \
+                     privileged ones."
+                ))
+            } else {
+                Err(e.into())
+            }
+        }
         Err(e) => Err(e.into()),
     }
 }

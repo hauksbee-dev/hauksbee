@@ -70,15 +70,22 @@ fn main() {
     println!("cargo:rustc-link-search=native={lib_dir}");
     println!("cargo:rustc-link-lib=static=simavr");
 
-    // Also need libelf and zlib (simavr dependencies)
-    pkg_config::probe_library("libelf").expect(
+    // Also need libelf and zlib (simavr dependencies). libsimavr itself is
+    // linked STATIC above; if these two link dynamically, the installed
+    // binary exits 127 with "libelf.so.1: cannot open shared object file" on
+    // any distro without libelf1 (debian:bookworm-slim, ubuntu:24.04). Prefer
+    // the static archives; fall back to dynamic with a printed note when the
+    // build host carries no .a (the release builders must).
+    probe_static_preferred(
+        "libelf",
         "hauksbee-mcu: the `avr` feature needs libelf, but pkg-config can't find it. \
          Install it with `scripts/install-sims.sh --avr` (installs libelf too), or by hand: \
          `brew install libelf` (macOS) / `apt-get install libelf-dev` (Debian/Ubuntu) / \
          `dnf install elfutils-libelf-devel` (Fedora). To build without AVR: \
          `cargo build -p hauksbee-engine --no-default-features --features renode,qemu`.",
     );
-    pkg_config::probe_library("zlib").expect(
+    probe_static_preferred(
+        "zlib",
         "hauksbee-mcu: the `avr` feature needs zlib, but pkg-config can't find it. \
          Install it: `brew install zlib` (macOS) / `apt-get install zlib1g-dev` (Debian/Ubuntu) / \
          `dnf install zlib-devel` (Fedora). To build without AVR: \
@@ -120,4 +127,34 @@ fn main() {
     bindings
         .write_to_file(out_path.join("simavr_bindings.rs"))
         .expect("Couldn't write bindings");
+}
+
+/// Probe a pkg-config library preferring the STATIC archive; when no static
+/// archive exists on the build host, fall back to the dynamic probe and say
+/// so, rather than fail a dev build over a packaging concern.
+fn probe_static_preferred(name: &str, missing_msg: &str) {
+    // pkg-config's static mode does not verify a .a actually exists; it just
+    // emits `static=` link directives, which would fail at final link. Probe
+    // WITHOUT emitting first, check the archive is really there, and only
+    // then emit the static (or fallback dynamic) directives.
+    let probe = pkg_config::Config::new()
+        .cargo_metadata(false)
+        .probe(name)
+        .expect(missing_msg);
+    let has_static = probe.link_paths.iter().any(|dir| {
+        probe
+            .libs
+            .iter()
+            .any(|l| dir.join(format!("lib{l}.a")).exists())
+    });
+    if has_static {
+        let _ = pkg_config::Config::new().statik(true).probe(name);
+    } else {
+        let _ = pkg_config::probe_library(name);
+        println!(
+            "cargo:warning=hauksbee-mcu: no static {name} archive found on this build host; \
+             linking {name} dynamically. The installed binary will need the {name} shared \
+             library on the target machine; release builders should install the static package."
+        );
+    }
 }

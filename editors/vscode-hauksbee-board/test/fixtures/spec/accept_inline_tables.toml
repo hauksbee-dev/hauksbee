@@ -1,0 +1,4 @@
+# Arrays of inline tables instead of [[table]] headers, also valid TOML.
+board = "nope.kicad_pcb"
+supply = [{ net = "+5V", kind = "bench", volts = 5.0 }]
+assert = [{ kind = "voltage", net = "+5V", min = 4.9 }]

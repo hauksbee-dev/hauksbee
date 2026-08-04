@@ -1,6 +1,6 @@
 //! Corpus-gated calibration guard for the four signal-integrity checks
-//! (`--si`). The binding discipline (docs/record/FAMOUS_SWEEP.md,
-//! docs/record/KNOWN_FAULTS_VALIDATION.md): **zero true findings on the known-good
+//! (`--si`). The binding discipline (docs/evidence/FAMOUS_SWEEP.md,
+//! docs/evidence/KNOWN_FAULTS_VALIDATION.md): **zero true findings on the known-good
 //! corpus, or the check does not fire.** These boards are shipped, working,
 //! reviewed designs, so any high/medium/low SI finding on them is a hauksbee
 //! false positive that must be chased to the file and killed before the check is
@@ -18,18 +18,41 @@ use std::path::PathBuf;
 
 use hauksbee_extract::{ExtractedBoard, SiCheck, SiSeverity};
 
-fn corpus_famous() -> Option<PathBuf> {
-    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join("famous");
-    if p.exists() {
-        Some(p)
-    } else if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-        panic!("HAUKSBEE_REQUIRE_CORPUS set but board-corpus/famous is absent");
-    } else {
-        None
+/// The directory the corpus boards sit directly under, via the shared resolver:
+/// `famous/` in the hand-built layout, the corpus root in the `<id>` layout
+/// scripts/fetch-corpus.sh produces. Joining `famous` directly is what made this
+/// sweep walk an empty tree for anyone who used the documented fetch.
+fn corpus_root() -> Option<PathBuf> {
+    match hauksbee_testkit::corpus_boards_root(env!("CARGO_MANIFEST_DIR")) {
+        Some(p) => Some(p),
+        None if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() => {
+            panic!("HAUKSBEE_REQUIRE_CORPUS set but no board corpus is present")
+        }
+        None => None,
     }
 }
+
+/// One board, by the paths the corpus pins it at, through the shared resolver so
+/// both directory layouts are accepted.
+fn corpus_board(rels: &[&str]) -> Option<PathBuf> {
+    hauksbee_testkit::corpus_board_any(env!("CARGO_MANIFEST_DIR"), rels)
+}
+
+/// The RP2040 minimal reference board, revision 2 only, at both the paths the
+/// corpus pins it at.
+///
+/// The values the three RP2040 tests below pin (Y1 = ABM8-272-T3 driven by 15 pF
+/// caps, a routed USB D+/D- pair, no `(stackup)` block) were measured on r2. The
+/// `rp2040_minimal_kicad` entry in `corpus.toml` now serves r3, which dropped the
+/// crystal and carries no `Y1`, so those numbers are not facts about it. r2 is a
+/// second entry under its own id for that reason, which is why the two paths
+/// differ in their first element and neither can be dropped: the hand-built
+/// corpus filed r2 under `rp2040_minimal_kicad`, and the fetch writes each board
+/// to `<corpus>/<id>` so it lands under `rp2040_minimal_r2`.
+const RP2040_MINIMAL_R2: &[&str] = &[
+    "famous/rp2040_minimal_kicad/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_pcb",
+    "famous/rp2040_minimal_r2/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_pcb",
+];
 
 /// Every KiCad `.kicad_pcb` and Eagle `.brd` under a directory.
 fn board_files(root: &PathBuf) -> Vec<PathBuf> {
@@ -75,7 +98,7 @@ fn run_si(path: &PathBuf) -> Option<hauksbee_extract::SiReport> {
 #[test]
 #[ignore = "unsettled: 11 antenna_keepout findings on Olimex, see task #59"]
 fn si_checks_are_silent_on_the_entire_known_good_corpus() {
-    let Some(famous) = corpus_famous() else {
+    let Some(famous) = corpus_root() else {
         eprintln!("corpus absent; skipping SI corpus sweep");
         return;
     };
@@ -114,17 +137,13 @@ fn si_checks_are_silent_on_the_entire_known_good_corpus() {
 /// fire. Pins both the known-CL lookup and the series-resistor cap trace.
 #[test]
 fn rp2040_abm8_272_load_is_info_within_tolerance() {
-    let Some(famous) = corpus_famous() else {
-        return;
-    };
-    let path =
-        famous.join("rp2040_minimal_kicad/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_pcb");
-    let Some(report) = run_si(&path) else {
+    let Some(path) = corpus_board(RP2040_MINIMAL_R2) else {
         if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
             panic!("RP2040 minimal missing under required corpus");
         }
         return;
     };
+    let report = run_si(&path).expect("RP2040 minimal must extract");
     let xtal: Vec<_> = report.of_check(SiCheck::CrystalLoadCap).collect();
     assert!(!xtal.is_empty(), "RP2040 should produce a crystal note");
     let y1 = xtal
@@ -151,16 +170,14 @@ fn rp2040_abm8_272_load_is_info_within_tolerance() {
 /// device, would push it over and this would go red as a finding).
 #[test]
 fn zswatch_busy_i2c_bus_rise_time_is_clean() {
-    let Some(famous) = corpus_famous() else {
-        return;
-    };
-    let path = famous.join("zswatch_mainboard/watch/ZSWatch-Watch.kicad_pcb");
-    let Some(report) = run_si(&path) else {
+    let Some(path) = corpus_board(&["famous/zswatch_mainboard/watch/ZSWatch-Watch.kicad_pcb"])
+    else {
         if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
             panic!("ZSWatch mainboard missing under required corpus");
         }
         return;
     };
+    let report = run_si(&path).expect("ZSWatch mainboard must extract");
     // No I2C rise-time finding anywhere on the board.
     assert_eq!(
         report
@@ -191,7 +208,7 @@ fn zswatch_busy_i2c_bus_rise_time_is_clean() {
 /// Measured: U3's antenna edge sits at y 74.58 and the board outline starts at
 /// y 67.06, so roughly 7.5 mm of Espressif's 15 mm band hangs off the board and
 /// the other 7.5 mm lies over copper Olimex floods with ground. The check
-/// reports 17 to 21 ground intrusions on every revision.
+/// reports 17 to 22 ground intrusions on every revision.
 ///
 /// This test asserted Info, meaning "clear". That is one answer to a hardware
 /// question nobody has settled: a shipping, widely used board either has a real
@@ -201,16 +218,15 @@ fn zswatch_busy_i2c_bus_rise_time_is_clean() {
 #[test]
 #[ignore = "unsettled: see the doc comment and task #59"]
 fn olimex_wroom_antenna_keepout_is_clear() {
-    let Some(famous) = corpus_famous() else {
-        return;
-    };
-    let path = famous.join("olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_pcb");
-    let Some(report) = run_si(&path) else {
+    let Some(path) =
+        corpus_board(&["famous/olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_pcb"])
+    else {
         if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
             panic!("Olimex ESP32-EVB REV-L missing under required corpus");
         }
         return;
     };
+    let report = run_si(&path).expect("Olimex ESP32-EVB REV-L must extract");
     let ant: Vec<_> = report.of_check(SiCheck::AntennaKeepout).collect();
     assert_eq!(
         ant.len(),
@@ -229,14 +245,11 @@ fn olimex_wroom_antenna_keepout_is_clear() {
 /// budget: INFO, never a fire. Pins the routed-length geometry walk.
 #[test]
 fn rp2040_usb_pair_skew_is_info() {
-    let Some(famous) = corpus_famous() else {
+    let Some(path) = corpus_board(RP2040_MINIMAL_R2) else {
+        eprintln!("NOT RUN  RP2040 minimal r2 absent; see RP2040_MINIMAL_R2");
         return;
     };
-    let path =
-        famous.join("rp2040_minimal_kicad/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_pcb");
-    let Some(report) = run_si(&path) else {
-        return;
-    };
+    let report = run_si(&path).expect("RP2040 minimal must extract");
     let usb: Vec<_> = report.of_check(SiCheck::UsbDiffPair).collect();
     assert!(!usb.is_empty(), "RP2040 has a routed USB D+/D- pair");
     assert!(
@@ -252,14 +265,11 @@ fn rp2040_usb_pair_skew_is_info() {
 /// board (the headline zero-false-positive guard for the new check).
 #[test]
 fn rp2040_no_stackup_impedance_is_info_only() {
-    let Some(famous) = corpus_famous() else {
+    let Some(path) = corpus_board(RP2040_MINIMAL_R2) else {
+        eprintln!("NOT RUN  RP2040 minimal r2 absent; see RP2040_MINIMAL_R2");
         return;
     };
-    let path =
-        famous.join("rp2040_minimal_kicad/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_pcb");
-    let Some(report) = run_si(&path) else {
-        return;
-    };
+    let report = run_si(&path).expect("RP2040 minimal must extract");
     let zi: Vec<_> = report.of_check(SiCheck::ControlledImpedance).collect();
     assert!(
         !zi.is_empty(),
@@ -282,16 +292,13 @@ fn rp2040_no_stackup_impedance_is_info_only() {
 /// info, NOT a finding: the intent gate in action on a real board.
 #[test]
 fn watchy_usb_impedance_computed_but_info_uncontrolled() {
-    let Some(famous) = corpus_famous() else {
-        return;
-    };
-    let path = famous.join("watchy/Watchy.kicad_pcb");
-    let Some(report) = run_si(&path) else {
+    let Some(path) = corpus_board(&["famous/watchy/Watchy.kicad_pcb"]) else {
         if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
             panic!("Watchy missing under required corpus");
         }
         return;
     };
+    let report = run_si(&path).expect("Watchy must extract");
     let zi: Vec<_> = report.of_check(SiCheck::ControlledImpedance).collect();
     let usb = zi
         .iter()

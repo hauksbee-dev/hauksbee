@@ -355,20 +355,48 @@ impl<'a> Parser<'a> {
     }
 }
 
+/// The closed set of pad kinds the DSL accepts (KiCad pad attributes).
+const PAD_KINDS: [&str; 4] = ["smd", "thru_hole", "np_thru_hole", "connect"];
+
+/// The closed set of pad shapes the DSL accepts (KiCad pad shapes; `custom`
+/// is excluded because the DSL carries no shape primitives).
+const PAD_SHAPES: [&str; 5] = ["rect", "roundrect", "circle", "oval", "trapezoid"];
+
 /// `pad <num> <kind> <shape> at X Y size W H [drill D] layers [..] (net "N" | nonet)`
 fn parse_pad(toks: &[String], ln: usize) -> Result<Pad, ParseError> {
     let number = toks
         .get(1)
         .map(|s| unq(s))
         .ok_or_else(|| err(ln, "pad: missing number"))?;
+    // `kind` and `shape` are positional, so both are validated against their
+    // closed sets here: an omitted shape must fail loudly instead of silently
+    // consuming the next token (`at`) as the shape.
     let kind = toks
         .get(2)
         .map(|s| unq(s))
         .ok_or_else(|| err(ln, "pad: missing kind"))?;
+    if !PAD_KINDS.contains(&kind.as_str()) {
+        return Err(err(
+            ln,
+            &format!(
+                "pad kind: expected {}, got `{kind}`",
+                PAD_KINDS.join("|")
+            ),
+        ));
+    }
     let shape = toks
         .get(3)
         .map(|s| unq(s))
         .ok_or_else(|| err(ln, "pad: missing shape"))?;
+    if !PAD_SHAPES.contains(&shape.as_str()) {
+        return Err(err(
+            ln,
+            &format!(
+                "pad shape: expected {}, got `{shape}`",
+                PAD_SHAPES.join("|")
+            ),
+        ));
+    }
     let (ax, ay) = kv_xy(toks, "at", ln)?;
     let (sw, sh) = kv_xy(toks, "size", ln)?;
     let drill = kv(toks, "drill", ln).ok().and_then(|s| s.parse().ok());
@@ -533,5 +561,82 @@ fn err(line: usize, msg: &str) -> ParseError {
     ParseError {
         line,
         msg: msg.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A one-comp program with the given pad line spliced in.
+    fn program_with_pad(pad_line: &str) -> String {
+        format!(
+            r#"board version 20241229
+
+fn main {{
+    net "A"
+    comp R1 lib "Lib:R_TEST" val "10k" layer "F.Cu" at 100 50 rot 0 {{
+        {pad_line}
+    }}
+}}
+"#
+        )
+    }
+
+    #[test]
+    fn invalid_pad_kind_is_rejected_with_valid_values() {
+        let code = program_with_pad(
+            r#"pad "2" banana lozenge at 0 0 size 1 1 layers [F.Cu] net "A""#,
+        );
+        let e = Program::parse(&code).unwrap_err();
+        assert_eq!(e.line, 6);
+        assert_eq!(
+            e.msg,
+            "pad kind: expected smd|thru_hole|np_thru_hole|connect, got `banana`"
+        );
+    }
+
+    #[test]
+    fn invalid_pad_shape_is_rejected_with_valid_values() {
+        let code = program_with_pad(
+            r#"pad "2" smd lozenge at 0 0 size 1 1 layers [F.Cu] net "A""#,
+        );
+        let e = Program::parse(&code).unwrap_err();
+        assert_eq!(e.line, 6);
+        assert_eq!(
+            e.msg,
+            "pad shape: expected rect|roundrect|circle|oval|trapezoid, got `lozenge`"
+        );
+    }
+
+    #[test]
+    fn omitted_pad_shape_is_an_error_not_a_slurped_token() {
+        // Without validation the shape slot would silently consume `at`.
+        let code = program_with_pad(
+            r#"pad "1" smd at -0.9375 0 size 0.975 1.4 layers [F.Cu] net "A""#,
+        );
+        let e = Program::parse(&code).unwrap_err();
+        assert_eq!(e.line, 6);
+        assert_eq!(
+            e.msg,
+            "pad shape: expected rect|roundrect|circle|oval|trapezoid, got `at`"
+        );
+    }
+
+    #[test]
+    fn all_valid_pad_kind_and_shape_tokens_parse() {
+        for kind in PAD_KINDS {
+            for shape in PAD_SHAPES {
+                let drill = if kind.ends_with("thru_hole") { "drill 1.0 " } else { "" };
+                let code = program_with_pad(&format!(
+                    r#"pad "1" {kind} {shape} at 0 0 size 1.7 1.7 {drill}layers [F.Cu] net "A""#
+                ));
+                let prog = Program::parse(&code)
+                    .unwrap_or_else(|e| panic!("`{kind} {shape}` failed: {e}"));
+                let pad = &prog.comps().next().unwrap().pads[0];
+                assert_eq!(pad.kind, kind);
+                assert_eq!(pad.shape, shape);
+            }
+        }
     }
 }

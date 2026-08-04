@@ -66,6 +66,19 @@ pub fn run(
         }
     };
 
+    // A deck with no circuit elements has nothing to simulate; the help
+    // promises a loud refusal, and an exit-0 run with empty output is the
+    // opposite. Comment/blank-only decks and stray directive-only files land
+    // here.
+    if circuit.devices.is_empty() {
+        eprintln!(
+            "error: deck has no circuit elements: '{}' parses but contains no devices \
+             (R/C/L/V/I/D/Q/M...), so there is nothing to simulate.",
+            file.display()
+        );
+        std::process::exit(EXIT_MALFORMED_DECK);
+    }
+
     // `--format both` writes two files side by side, so it needs a base name to
     // derive them from. Refuse early (rather than dump a rawfile to a terminal)
     // if there is nowhere to put them.
@@ -172,6 +185,32 @@ pub fn run(
         }
     };
 
+    // Validate every probe against the circuit BEFORE solving: a mistyped
+    // probe is user misuse (exit 2), and the old path reported it through the
+    // solver as "did not converge", blaming the circuit for a typo.
+    for p in &probes {
+        let bad: Option<String> = match p {
+            Probe::NodeVoltage(a) => circuit
+                .find_node(a)
+                .is_none()
+                .then(|| format!("V({a}): the deck has no node named '{a}'")),
+            Probe::NodeDiff(a, b) => [a, b]
+                .into_iter()
+                .find(|n| circuit.find_node(n).is_none())
+                .map(|n| format!("V({a},{b}): the deck has no node named '{n}'")),
+            Probe::BranchCurrent(d) => circuit
+                .devices
+                .iter()
+                .all(|dev| !dev.name().eq_ignore_ascii_case(d))
+                .then(|| format!("I({d}): the deck has no element named '{d}'")),
+        };
+        if let Some(why) = bad {
+            let known: Vec<&str> = circuit.node_names().collect();
+            eprintln!("error: invalid probe: {why} (known nodes: {})", known.join(", "));
+            std::process::exit(EXIT_MALFORMED_DECK);
+        }
+    }
+
     // Build solver options from the deck's tolerances and `.temp`.
     let mut opts = solver_opts_from_deck(&circuit, &directives);
 
@@ -179,9 +218,9 @@ pub fn run(
         Analysis::Op => match run_op(&circuit, &opts, &probes) {
             Ok(o) => o,
             Err(msg) => {
-                eprintln!(
-                    "error: DC operating point did not converge (or a probe was invalid): {msg}"
-                );
+                // Probes were validated above, so this is a genuine solver
+                // failure, not a mistyped probe.
+                eprintln!("error: DC operating point did not converge: {msg}");
                 std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
             }
         },
@@ -225,7 +264,7 @@ pub fn run(
             match run_dc(&circuit, &opts, dc_card, &probes) {
                 Ok(o) => o,
                 Err(msg) => {
-                    eprintln!("error: DC sweep failed (a point did not converge or a probe was invalid): {msg}");
+                    eprintln!("error: DC sweep failed (a sweep point did not converge): {msg}");
                     std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
                 }
             }

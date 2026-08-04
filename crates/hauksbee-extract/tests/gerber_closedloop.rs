@@ -37,12 +37,14 @@ use std::process::Command;
 use hauksbee_extract::gerber::from_gerber_dir;
 use hauksbee_extract::ExtractedBoard;
 
-fn corpus(rel: &str) -> Option<PathBuf> {
-    // Through the shared resolver, which accepts both the hand-built
-    // `famous/<id>` layout and the `<id>` layout scripts/fetch-corpus.sh
-    // produces. Joining the path directly is what made this sweep skip
-    // silently for anyone who used the documented fetch.
-    hauksbee_testkit::corpus_board(env!("CARGO_MANIFEST_DIR"), rel)
+/// The first candidate path that resolves.
+///
+/// Through the shared resolver, which accepts both the hand-built `famous/<id>`
+/// layout and the `<id>` layout scripts/fetch-corpus.sh produces. Joining the
+/// path directly is what made this sweep skip silently for anyone who used the
+/// documented fetch.
+fn corpus(rels: &[&str]) -> Option<PathBuf> {
+    hauksbee_testkit::corpus_board_any(env!("CARGO_MANIFEST_DIR"), rels)
 }
 
 fn require_corpus() -> bool {
@@ -246,7 +248,14 @@ fn agreement(native: &ExtractedBoard, recon: &ExtractedBoard) -> Agreement {
 /// Run the closed loop on one board. Returns Some(agreement) or None when the
 /// environment can't run it (skipped).
 fn run_board(rel: &str, tag: &str) -> Option<Agreement> {
-    let pcb = corpus(rel)?;
+    run_board_any(&[rel], tag)
+}
+
+/// The same, for a board the two corpora pin at different upstream revisions and
+/// so at different paths. The first path that resolves is the one this machine
+/// has; naming only one skips silently on the other.
+fn run_board_any(rels: &[&str], tag: &str) -> Option<Agreement> {
+    let pcb = corpus(rels)?;
     let cli = kicad_cli()?;
     let dir = export_fab(&cli, &pcb, tag)?;
     let native = ExtractedBoard::from_kicad_pcb(&std::fs::read_to_string(&pcb).ok()?).ok()?;
@@ -424,10 +433,19 @@ fn pct(a: &Agreement) -> f64 {
 /// The smallest reference board must reconstruct an electrically *identical*
 /// net graph (~100% partition agreement over located pads). This is the tight
 /// gate: a regression here means a real connectivity bug.
+///
+/// The r2 paths come first because the floors below were measured on r2. r3 is
+/// last and is a fallback: it is KiCad-10 format, which a 9.x `kicad-cli` cannot
+/// load to make ground-truth gerbers, so on such a machine it skips like the
+/// KiCad-10 demos in the sweep below.
 #[test]
 fn rp2040_minimal_exact_nets() {
-    let Some(a) = run_board(
-        "famous/rp2040_minimal_kicad/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_pcb",
+    let Some(a) = run_board_any(
+        &[
+            "famous/rp2040_minimal_kicad/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_pcb",
+            "famous/rp2040_minimal_r2/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_pcb",
+            "famous/rp2040_minimal_kicad/RPI-RP2040-MINIMAL_R3-S1_public/RPI-RP2040-MINIMAL_R3-S1.kicad_pcb",
+        ],
         "rp2040_minimal",
     ) else {
         if require_corpus() {

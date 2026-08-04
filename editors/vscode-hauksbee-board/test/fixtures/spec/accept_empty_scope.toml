@@ -1,0 +1,8 @@
+# An explicit empty `scenario` means the run-wide window, same as omitting it.
+board = "nope.kicad_pcb"
+
+[[assert]]
+kind = "voltage"
+net = "VCC"
+min = 3.0
+scenario = ""

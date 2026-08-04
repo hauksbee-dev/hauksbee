@@ -260,23 +260,40 @@ fn default_ambient_c() -> f64 {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SupplySpec {
+    /// The supply net this leg feeds, e.g. `"+5V"`. Must name a net that
+    /// exists on the board (checked once the board is bound).
     pub net: String,
-    /// One of `ideal | bench | wall | usb | battery`.
+    /// One of `ideal | bench | wall | usb | battery`. `ideal`/`bench`/`wall`
+    /// need an explicit `volts`; `usb` needs a `usb` profile; `battery` needs
+    /// a `chemistry`. Nothing is assumed, a wrong guess would fabricate
+    /// faults on a healthy board.
     // The token enums on kind/usb/chemistry are string fields (not Rust enums)
     // because SupplySpec::validate owns the real acceptance and its error
     // messages; the extend() lists mirror exactly what validate accepts so the
     // editor flags a typo the same way the loader would.
     #[schemars(extend("enum" = ["ideal", "bench", "wall", "usb", "battery"]))]
     pub kind: String,
+    /// Nominal output voltage (V). Required for `ideal` / `bench` / `wall`; a
+    /// rail may be negative (e.g. -12 V), only a non-finite value is illegal.
     #[serde(default)]
     pub volts: Option<f64>,
+    /// Current limit (A). Above it a bench/wall supply drops out of regulation
+    /// into constant-current, which is how a brownout gets reproduced.
     #[serde(default)]
+    #[schemars(extend("exclusiveMinimum" = 0))]
     pub current_limit_a: Option<f64>,
+    /// Output impedance (ohms): the series resistance the leg presents, so a
+    /// load step sags the rail instead of holding it stiff.
     #[serde(default)]
+    #[schemars(range(min = 0.0))]
     pub r_out_ohms: Option<f64>,
+    /// Peak-to-peak output ripple (V), superimposed on `volts` at `ripple_hz`.
     #[serde(default)]
+    #[schemars(range(min = 0.0))]
     pub ripple_vpp: Option<f64>,
+    /// Ripple frequency (Hz); pair it with `ripple_vpp`.
     #[serde(default)]
+    #[schemars(extend("exclusiveMinimum" = 0))]
     pub ripple_hz: Option<f64>,
     /// USB profile: `5v0.5a | 5v1.5a | 5v3a` (underscore spellings accepted).
     #[serde(default)]
@@ -286,26 +303,37 @@ pub struct SupplySpec {
     #[serde(default)]
     #[schemars(extend("enum" = ["liion", "lipo", "alkaline", "nimh", "lifepo4", "lfp"]))]
     pub chemistry: Option<String>,
+    /// Cells in series. The pack voltage is the chemistry's per-cell curve
+    /// times this, so a wrong count is a wrong rail.
     #[serde(default)]
     #[schemars(range(min = 1))]
     pub cells: Option<u32>,
+    /// Pack capacity (mAh), which sets how fast the state of charge (and so
+    /// the terminal voltage) walks down under load.
     #[serde(default)]
+    #[schemars(extend("exclusiveMinimum" = 0))]
     pub capacity_mah: Option<f64>,
     /// State of charge as a fraction in 0..1.
     #[serde(default)]
     #[schemars(range(min = 0.0, max = 1.0))]
     pub soc: Option<f64>,
+    /// Pack internal resistance (ohms): the sag-per-amp of a real cell, and
+    /// usually the reason a battery-powered board browns out at boot.
     #[serde(default)]
+    #[schemars(range(min = 0.0))]
     pub r_internal_ohms: Option<f64>,
     /// BMS over-current protection trip threshold (A). Present = protected pack.
     #[serde(default)]
+    #[schemars(extend("exclusiveMinimum" = 0))]
     pub protection_trip_a: Option<f64>,
     /// Sustained time above the trip threshold before the cutoff latches (ms).
     /// Default 0 (instant) when `protection_trip_a` is set.
     #[serde(default)]
+    #[schemars(range(min = 0.0))]
     pub protection_delay_ms: Option<f64>,
     /// Current the load must fall below to re-arm the cutoff (A). Default: trip.
     #[serde(default)]
+    #[schemars(extend("exclusiveMinimum" = 0))]
     pub protection_reset_a: Option<f64>,
 }
 
@@ -330,6 +358,7 @@ pub struct AcConfig {
     #[schemars(extend("exclusiveMinimum" = 0))]
     pub fstart: f64,
     /// Sweep stop (Hz); must exceed `fstart`.
+    #[schemars(extend("exclusiveMinimum" = 0))]
     pub fstop: f64,
     /// Points per decade (`dec`) or total (`lin`).
     #[schemars(range(min = 1))]
@@ -367,7 +396,8 @@ impl AcConfig {
         match self.sweep.as_str() {
             "dec" | "lin" => Ok(()),
             other => Err(SpecError::Invalid(format!(
-                "[ac] sweep must be 'dec' or 'lin', got '{other}'"
+                "[ac] sweep must be 'dec' or 'lin', got '{other}'{}",
+                crate::error::did_you_mean_hint(other, &["dec", "lin"])
             ))),
         }
     }
@@ -377,7 +407,10 @@ impl AcConfig {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct NetDrive {
+    /// The net to hold at a fixed voltage (external stimulus, a strapping
+    /// resistor, a register bit the firmware cannot set in a headless run).
     pub net: String,
+    /// The voltage to force (V), stamped as an ideal source for the whole run.
     pub volts: f64,
 }
 
@@ -413,6 +446,8 @@ pub struct PeripheralSpec {
     pub kind: String,
 
     // Attachment: by net name, or by connector ref + pin (resolved to a net).
+    /// The net this peripheral attaches to. Alternative to `ref` + `pin`. Note
+    /// a `vcd_sink` reads only `nets = [...]`, never this singular field.
     #[serde(default)]
     pub net: Option<String>,
     /// Connector reference designator (e.g. "J1") for ref+pin attachment.
@@ -454,8 +489,9 @@ pub struct PeripheralSpec {
     #[serde(default)]
     #[schemars(range(max = 127))]
     pub address: Option<u8>,
-    /// EEPROM size in bytes.
+    /// EEPROM size in bytes (i2c_eeprom / spi_eeprom).
     #[serde(default)]
+    #[schemars(range(min = 1))]
     pub size: Option<usize>,
     /// Sensor temperature in Celsius (i2c_lm75).
     #[serde(default)]
@@ -473,10 +509,13 @@ pub struct PeripheralSpec {
     #[serde(default)]
     #[schemars(extend("enum" = ["dc", "sine", "pwl", "noise"]))]
     pub waveform: Option<String>,
+    /// stimulus: DC offset (V) the waveform swings about.
     #[serde(default)]
     pub offset: Option<f64>,
+    /// stimulus: waveform amplitude (V), peak about `offset`.
     #[serde(default)]
     pub amplitude: Option<f64>,
+    /// stimulus: waveform frequency (Hz) for `sine` / `noise`.
     #[serde(default)]
     pub freq_hz: Option<f64>,
     /// PWL points as `[[t_ms, value], ...]`.
@@ -498,7 +537,10 @@ pub struct PeripheralSpec {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct TimelineEventSpec {
+    /// When the event fires (ms into the run).
     pub t_ms: f64,
+    /// The value to set: 1/0 for a button press/release or toggle, a position
+    /// in 0..1 for a potentiometer, a level for a stimulus.
     pub value: f64,
 }
 
@@ -518,9 +560,10 @@ impl PeripheralSpec {
         ];
         if !KINDS.contains(&self.kind.as_str()) {
             return Err(SpecError::Invalid(format!(
-                "peripheral '{}': unknown type '{}' (expected one of {})",
+                "peripheral '{}': unknown type '{}'{} (expected one of {})",
                 self.id,
                 self.kind,
+                crate::error::did_you_mean_hint(&self.kind, KINDS),
                 KINDS.join("|")
             )));
         }
@@ -608,6 +651,8 @@ pub struct Override {
     /// Reference designator, e.g. "R_Shunt15301".
     #[serde(rename = "ref")]
     pub reference: String,
+    /// The replacement value string, spelled the way the board file would spell
+    /// it (e.g. `"0.05"`, `"4k7"`, `"100n"`). Applied before binding.
     pub value: String,
     /// Optional tolerance, as a percentage of `value` (10.0 = ±10%). Present =
     /// this component joins the tolerance ensemble with `value` as nominal.
@@ -727,15 +772,20 @@ pub struct Assertion {
     /// `max_temp`: Tj(ref) <= celsius (or device max). `peripheral`: peripheral
     /// state check. `rail_window`: rail dip/recovery bounds over a scenario
     /// window. `protection_trip`: battery protection trips (or must not).
-    /// `boot-coverage`: a control net is driven to `min` volts within
-    /// `deadline_ms` of reset. `phase_margin` / `ac_gain`: small-signal loop
-    /// checks (need an `[ac]` block). `hwtrace`: the run reproduces a captured
-    /// hardware trace. `model_coverage`: enough of the board bound to a real
-    /// device model.
+    /// `boot_coverage`: a control net is driven to `min` volts within
+    /// `deadline_ms` of reset (the kebab-case `boot-coverage` is the accepted
+    /// legacy spelling of the same kind). `phase_margin` / `ac_gain`:
+    /// small-signal loop checks (need an `[ac]` block). `hwtrace`: the run
+    /// reproduces a captured hardware trace. `model_coverage`: enough of the
+    /// board bound to a real device model.
+    // Both `boot_coverage` spellings are listed: the canonical snake_case one
+    // and the `boot-coverage` alias Spec::normalize folds onto it. The editor
+    // must accept a spec that was correct when it was written, so dropping the
+    // alias from this list would flag valid files.
     #[schemars(extend("enum" = [
         "voltage", "uart", "toggle", "no_faults", "max_current", "max_temp",
-        "peripheral", "rail_window", "protection_trip", "boot-coverage",
-        "phase_margin", "ac_gain", "hwtrace", "model_coverage"
+        "peripheral", "rail_window", "protection_trip", "boot_coverage",
+        "boot-coverage", "phase_margin", "ac_gain", "hwtrace", "model_coverage"
     ]))]
     pub kind: String,
     /// Optional label (defaults to a generated description).
@@ -770,8 +820,11 @@ pub struct Assertion {
     /// toggle: expected toggle frequency (Hz); ac_gain: measurement frequency.
     #[serde(default)]
     pub freq_hz: Option<f64>,
-    /// toggle: relative tolerance on `freq_hz`.
+    /// toggle: relative tolerance on `freq_hz`, as a FRACTION in (0, 1]
+    /// (0.25 = ±25%). A value like `10`, thinking in percent, would accept
+    /// ±1000% and green a net that never toggles, so it is rejected.
     #[serde(default)]
+    #[schemars(extend("exclusiveMinimum" = 0, "maximum" = 1))]
     pub tolerance: Option<f64>,
     /// Minimum toggle count over the run (alternative to freq_hz).
     #[serde(default)]
@@ -864,11 +917,13 @@ pub struct Assertion {
     /// unbound regulator changes the answer, an unbound 0402 resistor
     /// usually does not.
     #[serde(default)]
+    #[schemars(range(min = 0.0, max = 1.0))]
     pub min_critical: Option<f64>,
     /// model_coverage: the minimum fraction (0.0 to 1.0) of all non-ignored
     /// parts that must bind. Coarser than `min_critical`, and useful as a
     /// board-wide trend line.
     #[serde(default)]
+    #[schemars(range(min = 0.0, max = 1.0))]
     pub min_resolved: Option<f64>,
     /// model_coverage: how many unresolved parts may sit on a connected net.
     /// These are the ones whose open default actually changes the solve, so 0
@@ -902,8 +957,23 @@ impl Spec {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
+        spec.normalize();
         spec.validate()?;
         Ok(spec)
+    }
+
+    /// Fold accepted aliases onto their canonical spelling, so everything
+    /// downstream (evaluation, reports, waiver matching) sees ONE name.
+    /// `boot-coverage` was the lone kebab-case kind among fourteen snake_case
+    /// ones; the canonical spelling is now `boot_coverage` and the old one is
+    /// accepted here as a silent alias, forever, because a rename must never
+    /// break a spec that was correct when it was written.
+    pub fn normalize(&mut self) {
+        for a in &mut self.asserts {
+            if a.kind == "boot-coverage" {
+                a.kind = "boot_coverage".to_string();
+            }
+        }
     }
 
     /// The board file path, resolved against the spec's directory.
@@ -1231,8 +1301,13 @@ impl SupplySpec {
             "ideal" | "bench" | "wall" | "usb" | "battery" => {}
             other => {
                 return Err(SpecError::Invalid(format!(
-                    "supply on net '{}': unknown kind '{}' (expected ideal|bench|wall|usb|battery)",
-                    self.net, other
+                    "supply on net '{}': unknown kind '{}'{} (expected ideal|bench|wall|usb|battery)",
+                    self.net,
+                    other,
+                    crate::error::did_you_mean_hint(
+                        other,
+                        &["ideal", "bench", "wall", "usb", "battery"]
+                    )
                 )))
             }
         }
@@ -1295,6 +1370,43 @@ impl SupplySpec {
             }
         }
 
+        // No silent electrical assumptions: a supply's defining parameter must
+        // be written down. A missing `volts` used to default to 5.0, which on a
+        // 3.3 V board manufactures phantom overcurrent faults the author then
+        // debugs on a healthy design. Same class for a usb leg's profile and a
+        // battery's chemistry: both set the source's voltage/limit behaviour.
+        match self.kind.as_str() {
+            "ideal" | "bench" | "wall" => {
+                if self.volts.is_none() {
+                    return Err(SpecError::Invalid(format!(
+                        "supply on '{net}': `{}` needs an explicit `volts`; add the rail's \
+                         real voltage (e.g. `volts = 3.3`). Nothing is assumed: a wrong \
+                         guess here would fabricate faults on a healthy board",
+                        self.kind
+                    )));
+                }
+            }
+            "usb" => {
+                if self.usb.is_none() {
+                    return Err(SpecError::Invalid(format!(
+                        "supply on '{net}': `usb` needs an explicit profile; add \
+                         `usb = \"5v0.5a\"` (or 5v1.5a | 5v3a) to say what the port can \
+                         actually deliver"
+                    )));
+                }
+            }
+            "battery" => {
+                if self.chemistry.is_none() {
+                    return Err(SpecError::Invalid(format!(
+                        "supply on '{net}': `battery` needs an explicit `chemistry`; add \
+                         `chemistry = \"liion\"` (or alkaline | nimh | lifepo4), it sets \
+                         the pack's voltage curve"
+                    )));
+                }
+            }
+            _ => {}
+        }
+
         // The `usb` / `chemistry` enum tokens are mapped (and rejected) in
         // build_supply at run time; validate them here too so a typo fails at
         // load like every other spec error, not only once a run starts.
@@ -1303,7 +1415,11 @@ impl SupplySpec {
                 "5v0.5a" | "5v_0.5a" | "5v1.5a" | "5v_1.5a" | "5v3a" | "5v_3a" => {}
                 other => {
                     return Err(SpecError::Invalid(format!(
-                        "supply on '{net}': unknown usb profile '{other}' (expected 5v0.5a|5v1.5a|5v3a)"
+                        "supply on '{net}': unknown usb profile '{other}'{} (expected 5v0.5a|5v1.5a|5v3a)",
+                        crate::error::did_you_mean_hint(
+                            other,
+                            &["5v0.5a", "5v1.5a", "5v3a"]
+                        )
                     )))
                 }
             }
@@ -1313,7 +1429,11 @@ impl SupplySpec {
                 "liion" | "lipo" | "alkaline" | "nimh" | "lifepo4" | "lfp" => {}
                 other => {
                     return Err(SpecError::Invalid(format!(
-                        "supply on '{net}': unknown chemistry '{other}' (expected liion|alkaline|nimh|lifepo4)"
+                        "supply on '{net}': unknown chemistry '{other}'{} (expected liion|alkaline|nimh|lifepo4)",
+                        crate::error::did_you_mean_hint(
+                            other,
+                            &["liion", "lipo", "alkaline", "nimh", "lifepo4", "lfp"]
+                        )
                     )))
                 }
             }
@@ -1322,6 +1442,26 @@ impl SupplySpec {
         Ok(())
     }
 }
+
+/// The closed vocabulary of assertion kinds (canonical spellings only; the
+/// `boot-coverage` alias is folded onto `boot_coverage` before matching), used
+/// for the unknown-kind error's did-you-mean hint.
+const ASSERTION_KINDS: &[&str] = &[
+    "voltage",
+    "uart",
+    "toggle",
+    "no_faults",
+    "max_current",
+    "max_temp",
+    "peripheral",
+    "rail_window",
+    "protection_trip",
+    "boot_coverage",
+    "phase_margin",
+    "ac_gain",
+    "hwtrace",
+    "model_coverage",
+];
 
 impl Assertion {
     fn validate(&self) -> Result<(), SpecError> {
@@ -1395,6 +1535,25 @@ impl Assertion {
                         "toggle assertion on '{}' does not support `after_ms` (toggles are counted over the whole run)",
                         self.net.as_deref().unwrap_or("?")
                     )));
+                }
+                // `tolerance` is a FRACTION of freq_hz (0.25 = +-25%), and the
+                // check widens the accepted band by it. A value like 10 (someone
+                // thinking in percent) accepts 5 Hz +-1000%, greening a net that
+                // never toggles at all; a zero/negative value accepts nothing or
+                // inverts the band. Only (0, 1] is meaningful.
+                if let Some(tol) = self.tolerance {
+                    if !tol.is_finite() || tol <= 0.0 || tol > 1.0 {
+                        return Err(SpecError::Invalid(format!(
+                            "toggle assertion on '{}': tolerance is a fraction \
+                             (0.25 = +-25%), got {tol}; did you mean {}?",
+                            self.net.as_deref().unwrap_or("?"),
+                            if tol > 1.0 {
+                                format!("{}", tol / 100.0)
+                            } else {
+                                "a value in (0, 1]".to_string()
+                            }
+                        )));
+                    }
                 }
             }
             "no_faults" => {}
@@ -1538,21 +1697,24 @@ impl Assertion {
                     ));
                 }
             }
-            "boot-coverage" => {
+            // `boot-coverage` is the accepted legacy alias; Spec::load folds it
+            // onto `boot_coverage`, and this arm keeps a directly-constructed
+            // Assertion (tests, library callers) working on either spelling.
+            "boot_coverage" | "boot-coverage" => {
                 if self.net.is_none() {
                     return Err(SpecError::Invalid(
-                        "boot-coverage assertion needs a `net` (the control net to watch)".into(),
+                        "boot_coverage assertion needs a `net` (the control net to watch)".into(),
                     ));
                 }
                 if self.min.is_none() {
                     return Err(SpecError::Invalid(format!(
-                        "boot-coverage assertion on '{}' needs a `min` (the driven level in volts the firmware must reach)",
+                        "boot_coverage assertion on '{}' needs a `min` (the driven level in volts the firmware must reach)",
                         self.net.as_deref().unwrap_or("?")
                     )));
                 }
                 if self.deadline_ms.is_none() {
                     return Err(SpecError::Invalid(format!(
-                        "boot-coverage assertion on '{}' needs a `deadline_ms` (the boot deadline)",
+                        "boot_coverage assertion on '{}' needs a `deadline_ms` (the boot deadline)",
                         self.net.as_deref().unwrap_or("?")
                     )));
                 }
@@ -1589,8 +1751,28 @@ impl Assertion {
             }
             other => {
                 return Err(SpecError::Invalid(format!(
-                    "unknown assertion kind '{other}' (expected voltage|uart|toggle|no_faults|max_current|max_temp|peripheral|rail_window|protection_trip|boot-coverage|phase_margin|ac_gain|hwtrace|model_coverage)"
+                    "unknown assertion kind '{other}'{} (expected voltage|uart|toggle|no_faults|max_current|max_temp|peripheral|rail_window|protection_trip|boot_coverage|phase_margin|ac_gain|hwtrace|model_coverage)",
+                    crate::error::did_you_mean_hint(other, ASSERTION_KINDS)
                 )));
+            }
+        }
+        // An inverted window (min > max) can never hold, so it always reads as
+        // a hardware RED (exit 1) blaming the board for a bound no measurement
+        // could satisfy. It is a spec error (exit 2): name both values here at
+        // load, for every kind that takes a [min, max] window.
+        if matches!(
+            self.kind.as_str(),
+            "voltage" | "rail_window" | "phase_margin" | "ac_gain" | "peripheral"
+        ) {
+            if let (Some(lo), Some(hi)) = (self.min, self.max) {
+                if lo > hi {
+                    return Err(SpecError::Invalid(format!(
+                        "{} assertion '{}': min ({lo}) is greater than max ({hi}), a window \
+                         nothing can satisfy; swap the bounds or fix the typo",
+                        self.kind,
+                        self.label()
+                    )));
+                }
             }
         }
         Ok(())
@@ -1698,7 +1880,7 @@ impl Assertion {
             "hwtrace" => {
                 format!("hardware trace {}", self.trace.clone().unwrap_or_default())
             }
-            "boot-coverage" => {
+            "boot_coverage" | "boot-coverage" => {
                 let net = self.net.clone().unwrap_or_default();
                 format!(
                     "{net} driven to >= {} V within {} ms of reset",
@@ -1846,6 +2028,130 @@ min = 3.0
             supply("kind = \"ideal\"\nvolts = -12.0").validate().is_ok(),
             "a negative ideal rail must pass"
         );
+    }
+
+    #[test]
+    fn a_supply_without_its_defining_parameter_is_rejected_at_load() {
+        // The old `volts.unwrap_or(5.0)` silently powered a 3.3 V board at 5 V,
+        // manufacturing phantom overcurrent REDs the author then debugged on a
+        // healthy design. volts (ideal/bench/wall), the usb profile, and the
+        // battery chemistry are the parameters that define what the source IS;
+        // each must be written down, spec-error (exit 2) otherwise.
+        let supply = |body: &str| {
+            spec_from(&format!(
+                "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
+                 [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n\
+                 [[supply]]\nnet = \"3V3\"\n{body}\n"
+            ))
+        };
+        for (body, needle) in [
+            ("kind = \"ideal\"", "volts"),
+            ("kind = \"bench\"", "volts"),
+            ("kind = \"wall\"", "volts"),
+            ("kind = \"usb\"", "usb"),
+            ("kind = \"battery\"", "chemistry"),
+        ] {
+            let err = supply(body).validate().unwrap_err().to_string();
+            assert!(
+                err.contains(needle) && err.contains("3V3"),
+                "supply `{body}` must be rejected naming `{needle}` and the net, got: {err}"
+            );
+        }
+        // With the parameter present, each kind validates.
+        for body in [
+            "kind = \"ideal\"\nvolts = 3.3",
+            "kind = \"bench\"\nvolts = 5.0",
+            "kind = \"wall\"\nvolts = 12.0",
+            "kind = \"usb\"\nusb = \"5v0.5a\"",
+            "kind = \"battery\"\nchemistry = \"liion\"",
+        ] {
+            assert!(
+                supply(body).validate().is_ok(),
+                "explicit supply `{body}` must pass"
+            );
+        }
+    }
+
+    #[test]
+    fn toggle_tolerance_outside_zero_one_is_rejected() {
+        // tolerance is a FRACTION (0.25 = +-25%). `tolerance = 10` (thinking in
+        // percent) accepted 5 Hz +-1000%, greening a net that never toggles; a
+        // negative tolerance inverted the band. Only (0, 1] loads.
+        let toggle = |tol: &str| {
+            spec_from(&format!(
+                "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
+                 [[assert]]\nkind = \"toggle\"\nnet = \"LED\"\nfreq_hz = 5.0\ntolerance = {tol}\n"
+            ))
+        };
+        for bad in ["10", "-0.5", "0", "1.5"] {
+            let err = toggle(bad).validate().unwrap_err().to_string();
+            assert!(
+                err.contains("fraction"),
+                "tolerance {bad} must be rejected naming the scale, got: {err}"
+            );
+        }
+        // The percent-style mistake gets the concrete suggestion.
+        let err = toggle("10").validate().unwrap_err().to_string();
+        assert!(
+            err.contains("did you mean 0.1"),
+            "a percent-style tolerance suggests the fraction, got: {err}"
+        );
+        for ok in ["0.1", "0.25", "1.0"] {
+            assert!(toggle(ok).validate().is_ok(), "tolerance {ok} must pass");
+        }
+    }
+
+    #[test]
+    fn min_greater_than_max_is_a_spec_error_not_a_hardware_red() {
+        // An inverted window can never hold: left to run time it reports RED
+        // (exit 1) blaming the hardware for failing an unsatisfiable bound.
+        // It must instead fail at load as a spec error, naming both values.
+        let cases = [
+            (
+                "kind = \"voltage\"\nnet = \"VCC\"\nmin = 5.0\nmax = 3.0",
+                "voltage",
+            ),
+            (
+                "kind = \"rail_window\"\nnet = \"VCC\"\nmin = 3.3\nmax = 3.0",
+                "rail_window",
+            ),
+            (
+                "kind = \"phase_margin\"\nnet = \"OUT\"\nmin = 60\nmax = 45",
+                "phase_margin",
+            ),
+            (
+                "kind = \"ac_gain\"\nnet = \"OUT\"\nmin = 20\nmax = 10",
+                "ac_gain",
+            ),
+        ];
+        for (assert_block, kind) in cases {
+            let ac = if kind == "phase_margin" || kind == "ac_gain" {
+                "[ac]\nfstart = 10.0\nfstop = 1e6\npoints = 10\n"
+            } else {
+                ""
+            };
+            let src = format!(
+                "board = \"b.kicad_pcb\"\nduration_ms = 10\n{ac}[[assert]]\n{assert_block}\n"
+            );
+            let err = spec_from(&src).validate().unwrap_err().to_string();
+            assert!(
+                err.contains("min") && err.contains("greater than max"),
+                "{kind} with min > max must fail at load, got: {err}"
+            );
+        }
+        // peripheral field windows too.
+        let src = "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
+                   [[peripheral]]\nid = \"EE1\"\ntype = \"i2c_eeprom\"\n\
+                   [[assert]]\nkind = \"peripheral\"\nid = \"EE1\"\nfield = \"writes\"\nmin = 9\nmax = 2\n";
+        let err = spec_from(src).validate().unwrap_err().to_string();
+        assert!(
+            err.contains("greater than max"),
+            "peripheral field window with min > max must fail at load, got: {err}"
+        );
+        // A well-ordered window still validates.
+        let ok = "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
+                  [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\nmax = 3.6\n";
+        assert!(spec_from(ok).validate().is_ok(), "min < max must pass");
     }
 
     #[test]

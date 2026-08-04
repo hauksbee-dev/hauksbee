@@ -6,7 +6,7 @@
 //! primitives: a drawn track is a finite-width capsule whose width is exact from
 //! the manufacturing files, and a pour is reported `Poured` (out of the
 //! discrete-width check's reach, exactly as on native CAD). This is the
-//! re-runnable evidence behind the gerber trace-current sweep (docs/record/FAMOUS_SWEEP.md
+//! re-runnable evidence behind the gerber trace-current sweep (docs/evidence/FAMOUS_SWEEP.md
 //! Round 5): the narrowest drawn track on each net and its current rating, with
 //! the poured planes honestly skipped.
 

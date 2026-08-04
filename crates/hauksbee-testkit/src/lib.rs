@@ -81,6 +81,30 @@ pub fn corpus_board(manifest_dir: &str, rel: &str) -> Option<PathBuf> {
     p.exists().then_some(p)
 }
 
+/// The directory the boards sit *directly* under, for a sweep that walks the
+/// whole corpus rather than naming one board.
+///
+/// `<corpus>/famous` in the hand-built layout, `<corpus>` itself in the fetch
+/// layout. A sweep that joined `famous` unconditionally walked nothing under
+/// the fetch layout and reported the empty walk as a pass.
+pub fn corpus_boards_root(manifest_dir: &str) -> Option<PathBuf> {
+    let root = corpus_dir(manifest_dir)?;
+    let famous = root.join("famous");
+    Some(if famous.is_dir() { famous } else { root })
+}
+
+/// The first of several candidate relative paths that resolves.
+///
+/// Layout tolerance is not enough when the two corpora hold different upstream
+/// revisions of the same board: the hand-built corpus pinned
+/// `rp2040_minimal_kicad/minimal/RP2040_minimal_r2`, the fetch pins
+/// `rp2040_minimal_kicad/RPI-RP2040-MINIMAL_R3-S1_public`, and neither name
+/// resolves in the other tree. Listing both keeps the gate live on either,
+/// where naming only one silently skips for half the world.
+pub fn corpus_board_any(manifest_dir: &str, rels: &[&str]) -> Option<PathBuf> {
+    rels.iter().find_map(|rel| corpus_board(manifest_dir, rel))
+}
+
 /// A corpus path, or `None` with a visible note saying the test did not run.
 ///
 /// Under `HAUKSBEE_REQUIRE_CORPUS=1` this panics instead, so a CI run cannot
@@ -117,4 +141,62 @@ fn missing(what: &str, rel: &str, source: &str, remedy: &str) -> Option<PathBuf>
     assert!(!require_assets(), "HAUKSBEE_REQUIRE_CORPUS=1 and {msg}");
     eprintln!("NOT RUN  {msg}");
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// One test, not several: it mutates `HAUKSBEE_CORPUS_DIR`, which is
+    /// process-wide, and cargo runs tests in one binary concurrently.
+    #[test]
+    fn resolves_a_board_under_either_corpus_layout() {
+        let base = std::env::temp_dir().join("hauksbee_testkit_layouts");
+        let _ = std::fs::remove_dir_all(&base);
+        let handbuilt = base.join("handbuilt");
+        let fetched = base.join("fetched");
+        std::fs::create_dir_all(handbuilt.join("famous/acme/rev_a")).unwrap();
+        std::fs::create_dir_all(fetched.join("acme/rev_b")).unwrap();
+
+        let rels = ["famous/acme/rev_a", "famous/acme/rev_b"];
+        // `manifest_dir` is unused while the env var is set, so any path does.
+        let md = env!("CARGO_MANIFEST_DIR");
+
+        std::env::set_var("HAUKSBEE_CORPUS_DIR", &handbuilt);
+        assert_eq!(
+            corpus_boards_root(md).unwrap(),
+            handbuilt.join("famous"),
+            "the hand-built layout keeps the famous/ level"
+        );
+        assert_eq!(
+            corpus_board(md, "famous/acme/rev_a").unwrap(),
+            handbuilt.join("famous/acme/rev_a")
+        );
+        assert_eq!(
+            corpus_board_any(md, &rels).unwrap(),
+            handbuilt.join("famous/acme/rev_a"),
+            "the revision this tree pins"
+        );
+
+        std::env::set_var("HAUKSBEE_CORPUS_DIR", &fetched);
+        assert_eq!(
+            corpus_boards_root(md).unwrap(),
+            fetched,
+            "the fetch layout has no famous/ level"
+        );
+        assert_eq!(
+            corpus_board(md, "famous/acme/rev_b").unwrap(),
+            fetched.join("acme/rev_b"),
+            "the famous/ prefix must be strippable"
+        );
+        assert_eq!(
+            corpus_board_any(md, &rels).unwrap(),
+            fetched.join("acme/rev_b"),
+            "the revision this tree pins"
+        );
+
+        assert!(corpus_board_any(md, &["famous/acme/rev_z"]).is_none());
+        std::env::remove_var("HAUKSBEE_CORPUS_DIR");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

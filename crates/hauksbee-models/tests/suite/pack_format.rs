@@ -170,6 +170,29 @@ value_re = "BROKEN1"
 }
 
 #[test]
+fn model_validation_error_names_the_id_once() {
+    // The validation errors already carry "model '<id>': ...", and Pack::load
+    // used to add the same prefix again, rendering
+    // "model 's8050': model 's8050': ...".
+    let bad = r#"
+[[models]]
+id = "s8050"
+kind = "diode"
+[models.match]
+value_re = "S8050"
+"#;
+    let tmp = tempfile::tempdir().unwrap();
+    write_pack(tmp.path(), GOOD_MANIFEST, Some(bad));
+    let e = Pack::load(tmp.path()).unwrap_err();
+    let rendered = e.to_string();
+    assert_eq!(
+        rendered.matches("model 's8050'").count(),
+        1,
+        "the id must appear exactly once: {rendered}"
+    );
+}
+
+#[test]
 fn model_file_bad_toml_is_named() {
     let tmp = tempfile::tempdir().unwrap();
     write_pack(tmp.path(), GOOD_MANIFEST, Some("[[models]\nnot toml"));

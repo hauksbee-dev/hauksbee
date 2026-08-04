@@ -7,7 +7,7 @@
 # chunks. Pin maps are the manufacturer pinout; cited inline.
 #
 # Calibrated against the MNT Reform and ZSWatch DevKit revision faults in
-# docs/record/KNOWN_FAULTS_VALIDATION.md. Where a value is programmed by an on-board
+# docs/evidence/KNOWN_FAULTS_VALIDATION.md. Where a value is programmed by an on-board
 # resistor (the LTC4020 ILIMIT / RSENSE), the model reads the board reference
 # designator at bind time, so changing the board resistor changes the behaviour
 # with no model edit, exactly the way the real revision fixes landed.

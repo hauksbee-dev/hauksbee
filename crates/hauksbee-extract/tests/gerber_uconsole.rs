@@ -17,18 +17,20 @@ use std::path::PathBuf;
 
 use hauksbee_extract::gerber::from_gerber_dir;
 
+/// Through the shared resolver, which accepts both the hand-built `famous/<id>`
+/// layout and the `<id>` layout scripts/fetch-corpus.sh produces. Joining the
+/// path directly is what made these tests skip silently for anyone who used the
+/// documented fetch.
+fn corpus(rel: &str) -> Option<PathBuf> {
+    hauksbee_testkit::corpus_board(env!("CARGO_MANIFEST_DIR"), rel)
+}
+
 fn uconsole_dir() -> Option<PathBuf> {
-    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join("famous/uconsole_gerber");
-    p.exists().then_some(p)
+    corpus("famous/uconsole_gerber")
 }
 
 fn cm4_dir() -> Option<PathBuf> {
-    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join("famous/uconsole_cm4_adapter_gerber");
-    p.exists().then_some(p)
+    corpus("famous/uconsole_cm4_adapter_gerber")
 }
 
 #[test]
@@ -162,16 +164,13 @@ fn uconsole_per_net_copper_is_reconstructed_and_planes_are_poured() {
 fn cm4_adapter_reconstructs_and_planes_are_poured() {
     use hauksbee_extract::gerber::connect::GerberCopperKind;
 
-    let dir = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join("famous/uconsole_cm4_adapter_gerber");
-    if !dir.exists() {
+    let Some(dir) = cm4_dir() else {
         if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
             panic!("corpus required but uconsole_cm4_adapter_gerber missing");
         }
         eprintln!("skipping CM4 adapter (corpus absent)");
         return;
-    }
+    };
 
     let g = from_gerber_dir(&dir).expect("CM4 adapter gerbers must reverse-extract");
     let s = &g.stats;

@@ -100,9 +100,9 @@ fn exit_when_parent_dies() {
     });
 }
 
-/// `hauksbee serve [--port N] [--open]`: the local web front door
+/// `hauksbee serve [--port N] [--open|--no-open]`: the local web front door
 /// (drop-a-board report).
-pub fn run(port: u16, open: bool) -> anyhow::Result<()> {
+pub fn run(port: u16, open: bool, no_open: bool) -> anyhow::Result<()> {
     use std::sync::Arc;
     sweep_stale_temp_files();
     exit_when_parent_dies();
@@ -143,17 +143,17 @@ pub fn run(port: u16, open: bool) -> anyhow::Result<()> {
         let (listener, bound) = hauksbee_server::bind_frontdoor(&addr).await?;
 
         // Browser auto-open. Two triggers: the explicit --open flag, and a
-        // non-TTY stdout, which means we were launched by something that is not
-        // a terminal (double-click, launchd, Finder, the .app launcher). In
-        // that situation nobody can read the printed URL, so opening the
-        // browser IS the user interface. Only when the UI exists, though:
+        // launch by the desktop .app launcher (it sets HAUKSBEE_EXIT_WITH_PARENT),
+        // where nobody can read the printed URL so opening the browser IS the
+        // user interface. A bare non-TTY stdout is NOT a trigger any more: that
+        // is every CI job and piped script, and popping a browser there was a
+        // misfire. --no-open vetoes both. Only when the UI exists, though:
         // opening a browser onto the "build the frontend first" API-only
         // fallback would be worse than nothing. The listener is already bound
         // at this point (fallback port included), so the URL is live.
         {
-            use std::io::IsTerminal;
-            let launched_headless = !std::io::stdout().is_terminal();
-            if (open || launched_headless) && dir.is_some() {
+            let launched_by_app = std::env::var_os("HAUKSBEE_EXIT_WITH_PARENT").is_some();
+            if !no_open && (open || launched_by_app) && dir.is_some() {
                 open_browser(&format!("http://{bound}"));
             }
         }

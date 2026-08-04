@@ -14,6 +14,7 @@ pub mod ac;
 pub mod ampacity;
 pub mod bind;
 pub mod check;
+pub mod ci_artifacts;
 pub mod cosim;
 pub mod drc;
 pub mod lint;
@@ -81,6 +82,81 @@ pub fn lint_fails(report: &hauksbee_extract::NetLintReport) -> bool {
 /// but not the informational computed-value notes) fails the gate.
 pub fn si_fails(report: &hauksbee_extract::SiReport) -> bool {
     report.finding_count() > 0
+}
+
+/// How many gate-grade subjects the `--strict` failure line names before it
+/// truncates to ", ...". The line is a summary, not the report; the findings
+/// themselves were already printed above it.
+const STRICT_LINE_SUBJECTS: usize = 8;
+
+/// One `<check> <net/ref>` label per gating lint finding (high/medium, the
+/// same predicate as [`lint_fails`]), for the `--strict` failure line.
+pub fn lint_gate_items(report: &hauksbee_extract::NetLintReport) -> Vec<String> {
+    use hauksbee_extract::Severity;
+    report
+        .findings
+        .iter()
+        .filter(|f| matches!(f.severity, Severity::High | Severity::Medium))
+        .map(|f| gate_item(f.check.as_str(), &f.nets, &f.refs))
+        .collect()
+}
+
+/// One label per gating SI finding (every real finding gates, matching
+/// [`si_fails`]).
+pub fn si_gate_items(report: &hauksbee_extract::SiReport) -> Vec<String> {
+    report
+        .findings
+        .iter()
+        .map(|f| gate_item(f.check.as_str(), &f.nets, &f.refs))
+        .collect()
+}
+
+/// One label per true copper short (clearance-only findings do not gate).
+pub fn drc_gate_items(report: &hauksbee_extract::DrcReport) -> Vec<String> {
+    report
+        .findings
+        .iter()
+        .filter(|f| matches!(f.kind, hauksbee_extract::ViolationKind::Short))
+        .map(|f| format!("drc-short {}/{}", f.net_a_name, f.net_b_name))
+        .collect()
+}
+
+/// `<check> <first net, else first ref>`; bare check id when neither exists.
+fn gate_item(check: &str, nets: &[String], refs: &[String]) -> String {
+    match nets.first().or_else(|| refs.first()) {
+        Some(subject) => format!("{check} {subject}"),
+        None => check.to_string(),
+    }
+}
+
+/// The mandatory last word of every `--strict` gate: name WHY the process is
+/// about to exit 2, then exit. Exit 2 with no line saying why reads as a tool
+/// crash, and `--plain --strict` used to print a "not a failure" verdict while
+/// failing. Stream per house style: the line is part of the report on the
+/// text/plain surfaces (stdout); under `--json` stdout must stay one JSON
+/// document, so it goes to stderr.
+pub fn strict_gate_exit(mode: OutputMode, items: &[String]) -> ! {
+    let mut shown: Vec<&str> = items
+        .iter()
+        .take(STRICT_LINE_SUBJECTS)
+        .map(String::as_str)
+        .collect();
+    if items.len() > STRICT_LINE_SUBJECTS {
+        shown.push("...");
+    }
+    let line = format!(
+        "FAILED under --strict: {} gate-grade finding(s): {}",
+        items.len(),
+        shown.join(", ")
+    );
+    match mode {
+        OutputMode::Json => eprintln!("{line}"),
+        OutputMode::Text | OutputMode::Plain => println!("{line}"),
+    }
+    // Under GitHub Actions the same gate-grade findings become workflow
+    // annotations, so the failing job names them in the PR UI.
+    ci_artifacts::github_annotations(items);
+    std::process::exit(2);
 }
 
 /// Discoverability for the exit-code contract: a report command without

@@ -59,7 +59,7 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
         }
     }
 
-    let mut components = Vec::new();
+    let mut components: Vec<Component> = Vec::new();
     // KiCad 5 wrote `(module ...)`, 6+ writes `(footprint ...)`.
     for fp in root.find_all("footprint").chain(root.find_all("module")) {
         // A footprint with no pads at all is board artwork, not a component:
@@ -70,7 +70,22 @@ pub fn extract_from_doc(doc: &Document) -> Result<ExtractedBoard, ExtractError> 
         if fp.find_all("pad").next().is_none() {
             continue;
         }
-        components.push(extract_footprint(fp, &mut table));
+        let c = extract_footprint(fp, &mut table);
+        // Two footprints sharing one reference designator are one electrical
+        // part with several physical instances (a testpoint placed on both
+        // board sides is the common case: Watchy's TP4/TP5). Merge the later
+        // instance's pads into the first so every downstream count (bind rows,
+        // num_components, resolve-rate denominators) sees one part per refdes.
+        // A part is DNP only when every one of its instances is.
+        let prev = (!c.reference.is_empty())
+            .then(|| components.iter_mut().find(|p| p.reference == c.reference))
+            .flatten();
+        if let Some(prev) = prev {
+            prev.pins.extend(c.pins);
+            prev.dnp = prev.dnp && c.dnp;
+            continue;
+        }
+        components.push(c);
     }
 
     let mut nets = table.into_nets();
@@ -95,18 +110,22 @@ struct NetTable {
 
 impl NetTable {
     fn declare(&mut self, id: i64, name: String) {
+        // File-syntax escapes ({slash}, subscript braces) end here: the table
+        // keys and the emitted Net names are the real KiCad display names.
+        let name = crate::netname::unescape_net_name(&name);
         self.by_name.insert(name.clone(), id);
         self.by_id.insert(id, name);
         self.next_synthetic = self.next_synthetic.max(id + 1);
     }
 
     fn id_of(&mut self, name: &str) -> i64 {
-        if let Some(&id) = self.by_name.get(name) {
+        let name = crate::netname::unescape_net_name(name);
+        if let Some(&id) = self.by_name.get(&name) {
             return id;
         }
         let id = self.next_synthetic.max(1);
         self.next_synthetic = id + 1;
-        self.declare(id, name.to_string());
+        self.declare(id, name);
         id
     }
 

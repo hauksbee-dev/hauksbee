@@ -6,7 +6,41 @@
 
 use std::io::{BufRead, Write};
 
+const HELP: &str = concat!(
+    "hauksbee-mcp ",
+    env!("CARGO_PKG_VERSION"),
+    "\n",
+    env!("CARGO_PKG_DESCRIPTION"),
+    "\n\nUSAGE:\n",
+    "    hauksbee-mcp\n\n",
+    "Runs as an MCP stdio server: it reads newline-delimited JSON-RPC 2.0 \
+     requests\non stdin and writes responses on stdout, so it is launched by \
+     an MCP host\n(Claude Code, Cursor, ...) rather than used interactively.\n\n\
+     OPTIONS:\n\
+    \x20   -h, --help       Print this help and exit\n\
+    \x20   -V, --version    Print the version and exit\n"
+);
+
 fn main() {
+    // A flag answer must be a real answer: exiting 0 with nothing on stdout
+    // (the old behaviour) told a packaging smoke test precisely nothing.
+    if let Some(arg) = std::env::args().nth(1) {
+        match arg.as_str() {
+            "--version" | "-V" => {
+                println!("hauksbee-mcp {}", env!("CARGO_PKG_VERSION"));
+                return;
+            }
+            "--help" | "-h" => {
+                println!("{HELP}");
+                return;
+            }
+            other => {
+                eprintln!("hauksbee-mcp: unknown argument '{other}' (try --help)");
+                std::process::exit(2);
+            }
+        }
+    }
+
     // An MCP host that kills this server mid-tool-call must not orphan any
     // co-sim emulator the tool spawned: reap every live Renode/QEMU child on
     // SIGTERM/SIGINT. See hauksbee_mcu::children.

@@ -58,10 +58,10 @@ temperature_c = 40.0
 # ── Assertion: firmware must drive FLAG HIGH within 400 ms ────────────────────
 #
 # At 40 C the firmware reads >= 30 C from the LM75 over real I2C through the
-# Renode bridge and drives PA8 (FLAG) HIGH.  boot-coverage checks that the net
+# Renode bridge and drives PA8 (FLAG) HIGH.  boot_coverage checks that the net
 # reaches >= 2.5 V within the deadline; on a 3.3 V rail that is a solid HIGH.
 [[assert]]
-kind        = "boot-coverage"
+kind = "boot_coverage"
 net         = "FLAG"
 min         = 2.5
 deadline_ms = 400.0

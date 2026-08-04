@@ -55,6 +55,62 @@ pub struct RunConfig {
     pub models_dir: Option<PathBuf>,
 }
 
+/// Apply the board's waiver file to the evaluated assertion results: a real
+/// failure (never a pass, never an INVALID refusal) that an active `check =
+/// "ci"` waiver matches is marked visible-but-not-gating. INVALID stays
+/// unwaivable on purpose: a waiver overrules a *finding*, and an INVALID is
+/// the absence of one; letting a waiver green an untrustworthy run would fail
+/// open. Matching mirrors the engine's `--check` semantics exactly (same
+/// [`hauksbee_engine::waiver::WaiverSet`], same expiry, same nets/refs rules),
+/// so a board+waiver behaves the same under `hauksbee-ci run` as under the
+/// static gates.
+pub fn apply_waivers(
+    results: &mut [assertions::AssertResult],
+    waivers: &mut hauksbee_engine::waiver::WaiverSet,
+) {
+    for r in results.iter_mut() {
+        if r.passed || r.invalid {
+            continue;
+        }
+        if let Some(w) =
+            waivers.take_waiver("ci", &r.kind, &r.subject_nets, &r.subject_refs, &r.label)
+        {
+            r.waived = Some(format!("{} (until {})", w.reason, w.until));
+        }
+    }
+}
+
+/// The housekeeping notes for this run's waiver set, filtered to the `ci`
+/// check: a lapsed `ci` waiver whose finding gates again, and an active `ci`
+/// waiver that matched nothing. Waivers for the static checks (`drc` / `lint`
+/// / `si`) live in the same file but belong to `hauksbee run`'s surfaces;
+/// reporting them stale HERE would tell the user to delete waivers this run
+/// simply never consults.
+pub fn waiver_notes(waivers: &hauksbee_engine::waiver::WaiverSet) -> Vec<String> {
+    let mut notes = Vec::new();
+    for w in waivers.expired() {
+        if w.check.eq_ignore_ascii_case("ci") {
+            notes.push(format!(
+                "the waiver on '{}' (reason: {}) lapsed {}; its finding gates again",
+                w.kind, w.reason, w.until
+            ));
+        }
+    }
+    for w in waivers.stale() {
+        if w.check.eq_ignore_ascii_case("ci") {
+            notes.push(format!(
+                "the waiver on '{}' (reason: {}) matched nothing this run; either the \
+                 finding is fixed and the waiver can go, or it no longer describes what \
+                 fires. Note a waiver's `nets` must ALL appear in one finding's net set \
+                 (AND, not OR); to cover several findings, write one [[waive]] block per \
+                 finding",
+                w.kind, w.reason
+            ));
+        }
+    }
+    notes
+}
+
 /// Load the spec, run the co-sim across its seeds, and evaluate its assertions.
 pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     let started = Instant::now();
@@ -62,7 +118,27 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     let extra: Vec<&std::path::Path> = cfg.models_dir.as_deref().into_iter().collect();
     let lib = hauksbee_models::ModelLibrary::builtin_with_user_dirs(&extra);
     let outcomes = runner::run_spec_with_lib(&spec, cfg.seed, &lib)?;
-    let results = assertions::evaluate(&spec, &outcomes);
+    let mut results = assertions::evaluate(&spec, &outcomes);
+
+    // Waivers: hauksbee-waivers.toml beside the BOARD (the same file and the
+    // same discovery `hauksbee run --check` uses), so one staged-rollout
+    // mechanism covers the whole pipeline. A malformed file is a warning and
+    // every finding it would have covered gates: failing closed, identical to
+    // the engine's behavior.
+    let mut notes = Vec::new();
+    let mut waivers = match hauksbee_engine::waiver::WaiverSet::discover(&spec.board_path()) {
+        Ok(set) => set,
+        Err(e) => {
+            let msg = format!(
+                "ignoring the waiver file ({e}); every finding it would have covered gates this run"
+            );
+            eprintln!("WARNING: {msg}");
+            notes.push(msg);
+            hauksbee_engine::waiver::WaiverSet::default()
+        }
+    };
+    apply_waivers(&mut results, &mut waivers);
+    notes.extend(waiver_notes(&waivers));
     // A strict analog abort on ANY seed forces the invalid-for-analysis exit even
     // if no assertion's window happened to overlap the failed span (05 §3b).
     let analog_abort = outcomes.iter().any(|o| o.analog_abort);
@@ -150,5 +226,6 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
                 .collect()
         },
         coverage_warnings,
+        waiver_notes: notes,
     })
 }

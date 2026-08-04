@@ -5,6 +5,8 @@
 //! under `--strict` exits non-zero on a high/medium finding. CLI glue over the
 //! engine's lint checks.
 
+use std::path::Path;
+
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 
@@ -16,6 +18,7 @@ use super::{lint_fails, OutputMode};
 /// Print the full `--lint` bundle in `mode`, surface any pin-role guesses, then
 /// (under `strict`) exit non-zero on a high/medium finding.
 pub fn emit(
+    board_path: &Path,
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     mode: OutputMode,
@@ -24,7 +27,21 @@ pub fn emit(
     // device_decode lives inside engine_lint (so --check/--json/TUI/frontdoor
     // get it too), so it must not be spliced in here as well: that
     // double-counts every decode finding.
-    let report = crate::checks::engine_lint(board, lib);
+    let mut report = crate::checks::engine_lint(board, lib);
+    // Waivers, same semantics as `--check`: without this, a lint finding the
+    // board's owner overruled turns `--lint --strict` red on a board that
+    // `--check --strict` passes, and the narrower command looks like it lost
+    // the waiver. Same key as check.rs, so the same waiver file covers both.
+    let mut waivers = super::check::load_waivers(board_path);
+    let (kept, waived) = waivers.partition("lint", std::mem::take(&mut report.findings), |f| {
+        (
+            f.check.as_str().to_string(),
+            f.nets.clone(),
+            f.refs.clone(),
+            f.message.clone(),
+        )
+    });
+    report.findings = kept;
     // Bind once: both the JSON header and the pin-role guess surfacing read it.
     let bound = bind_board(board, lib);
     // Pin-role GUESS warnings: roles the binder inferred from the configurable
@@ -40,7 +57,7 @@ pub fn emit(
         .collect();
     match mode {
         OutputMode::Json => {
-            println!("{}", lint_json(&bound, &report, &guesses));
+            println!("{}", lint_json(&bound, &report, &guesses, &waived));
         }
         OutputMode::Plain | OutputMode::Text => {
             match mode {
@@ -50,11 +67,15 @@ pub fn emit(
             if !guesses.is_empty() {
                 print!("{}", render_pin_role_guesses(&guesses));
             }
+            print!(
+                "{}",
+                super::check::render_waivers_scoped(&waived, &waivers, Some("lint"), true)
+            );
         }
     }
     super::note_ungated_findings(strict, lint_fails(&report));
     if strict && lint_fails(&report) {
-        std::process::exit(2);
+        super::strict_gate_exit(mode, &super::lint_gate_items(&report));
     }
     Ok(())
 }
@@ -110,6 +131,7 @@ fn lint_json(
     bound: &crate::binder::BoundBoard,
     report: &hauksbee_extract::NetLintReport,
     guesses: &[(String, String)],
+    waived: &[crate::waiver::WaivedFinding],
 ) -> String {
     let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
     jr.findings = Some(lint_findings_json(report));
@@ -117,6 +139,10 @@ fn lint_json(
         kind: JsonNoteKind::BindRole,
         message: format!("pin-role guess {r}: {g}"),
     }));
+    // A green verdict that quietly dropped findings would be worse than no
+    // waivers at all, so the machine surface carries them too (same shape as
+    // `--check --json`'s `waived` array).
+    jr.waived = waived.iter().cloned().map(Into::into).collect();
     jr.to_json()
 }
 
@@ -124,22 +150,40 @@ fn lint_json(
 /// unchecked-MCU coverage note, so a clean result is not mistaken for "checked
 /// and conflict-free").
 pub fn emit_resources(
+    board_path: &Path,
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     mode: OutputMode,
     strict: bool,
 ) -> anyhow::Result<()> {
-    let report = crate::checks::resources_lint(board, lib);
+    let mut report = crate::checks::resources_lint(board, lib);
+    // Resource conflicts are lint-class findings and ride the "lint" check in a
+    // waiver file, exactly as they do inside `--check` (where they arrive via
+    // engine_lint). Waiving them under a different check name here would mean
+    // one waiver file cannot cover both commands.
+    let mut waivers = super::check::load_waivers(board_path);
+    let (kept, waived) = waivers.partition("lint", std::mem::take(&mut report.findings), |f| {
+        (
+            f.check.as_str().to_string(),
+            f.nets.clone(),
+            f.refs.clone(),
+            f.message.clone(),
+        )
+    });
+    report.findings = kept;
     match mode {
         OutputMode::Json => {
             let bound = bind_board(board, lib);
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
             jr.findings = Some(lint_findings_json(&report));
+            // Same honesty rule as every other machine surface: the verdict may
+            // not quietly drop findings, so the waived list travels with it.
+            jr.waived = waived.iter().cloned().map(Into::into).collect();
             println!("{}", jr.to_json());
         }
         OutputMode::Plain => print!("{}", crate::plain_netlint(&report).render()),
         OutputMode::Text => {
-            print!("{}", hauksbee_extract::render_netlint(&report));
+            print!("{}", render_resources_text(&report));
             // Route a novice from the expert text (bare severity + jargon) to the
             // already-built plain-language what/why/fix. Only when there is
             // something to explain, and only to stderr so pipes stay clean.
@@ -151,16 +195,70 @@ pub fn emit_resources(
             }
         }
     }
+    if !matches!(mode, OutputMode::Json) {
+        // No stale reporting here: --resources runs only part of the lint
+        // family, so a lint waiver with no hit may simply belong to a check
+        // this command never ran.
+        print!(
+            "{}",
+            super::check::render_waivers_scoped(&waived, &waivers, Some("lint"), false)
+        );
+    }
     super::note_ungated_findings(strict, lint_fails(&report));
     if strict && lint_fails(&report) {
-        std::process::exit(2);
+        super::strict_gate_exit(mode, &super::lint_gate_items(&report));
     }
     Ok(())
+}
+
+/// The `--resources` text surface. It shares the netlint finding type with
+/// `--lint` but is a different report, so it must not be byte-identical to it:
+/// its header names the check, and a clean run says what WAS checked instead of
+/// a bare "no findings" indistinguishable from the lint report's.
+fn render_resources_text(report: &hauksbee_extract::NetLintReport) -> String {
+    use std::fmt::Write;
+    let mut out = String::new();
+    if report.findings.is_empty() {
+        out.push_str(
+            "resource-conflicts: no findings.\n\
+             checked: MCU internal resource conflicts (shared timers, ADC channels, \
+             UART/SPI/I2C pin muxing) for every bound MCU.\n",
+        );
+        return out;
+    }
+    let _ = writeln!(
+        out,
+        "resource-conflicts: {} finding(s)",
+        report.findings.len()
+    );
+    for f in &report.findings {
+        let _ = writeln!(
+            out,
+            "  [{}] {} - {}",
+            f.severity.as_str(),
+            f.check.as_str(),
+            f.message
+        );
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The --resources surface must never be byte-identical to --lint: its
+    /// header names the check and its clean line says what WAS checked.
+    #[test]
+    fn resources_text_is_distinguishable_from_lint_text() {
+        let empty = hauksbee_extract::NetLintReport::default();
+        let res = render_resources_text(&empty);
+        let lint = hauksbee_extract::render_netlint(&empty);
+        assert_ne!(res, lint);
+        assert!(res.starts_with("resource-conflicts:"), "{res}");
+        assert!(res.contains("checked:"), "a clean run names the scope: {res}");
+        assert!(!res.contains("net-lint:"), "{res}");
+    }
     use crate::binder::BoundBoard;
     use crate::report::BindReport;
     use hauksbee_extract::NetLintReport;
@@ -198,7 +296,7 @@ mod tests {
             ("U1.PA0".to_string(), "adc0".to_string()),
             ("U1.PB3".to_string(), "spi_sck".to_string()),
         ];
-        let out = lint_json(&bound, &report, &guesses);
+        let out = lint_json(&bound, &report, &guesses, &[]);
         // The ENTIRE output must parse as a single JSON value, no trailing text.
         let v: serde_json::Value =
             serde_json::from_str(&out).expect("lint --json must emit ONE parseable JSON document");
@@ -216,7 +314,7 @@ mod tests {
             .any(|n| n.get("message").and_then(|m| m.as_str())
                 == Some("pin-role guess U1.PA0: adc0")));
         // With no guesses, notes is omitted (skip_serializing_if) and it still parses.
-        let clean = lint_json(&bound, &report, &[]);
+        let clean = lint_json(&bound, &report, &[], &[]);
         let cv: serde_json::Value = serde_json::from_str(&clean).expect("clean lint --json parses");
         assert!(cv.get("notes").is_none(), "no guesses => no notes key");
     }

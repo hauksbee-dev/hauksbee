@@ -1,13 +1,13 @@
 # Board-as-Code (hauksbee board DSL v1)
 #
-# A hand-authored starter board — written from scratch, NOT decompiled. Three
+# A hand-authored starter board, written from scratch, NOT decompiled. Three
 # parts: a 2-pin power header feeds an LED through a series resistor. Copy this
 # file, edit it, and run `hauksbee check-code starter.board` to simulate it.
 #
 # The shape of the language:
-#   board version <N>              — one header line; N is any integer tag
-#   fn main { ... }                — the top-level board; declares nets + parts
-#     net "<name>"                 — declare a net before you wire pads to it
+#   board version <N>              - one header line; N is any integer tag
+#   fn main { ... }                - the top-level board; declares nets + parts
+#     net "<name>"                 - declare a net before you wire pads to it
 #     comp <REF> lib "<lib_id>" val "<value>" layer "<layer>" at <X> <Y> rot <deg> {
 #       pad "<num>" <kind> <shape> at <x> <y> size <w> <h> layers [<layers>] net "<net>"
 #     }
@@ -18,7 +18,8 @@
 board version 1
 
 fn main {
-    # Declare every net first. Wiring a pad to an undeclared net is an error.
+    # Declare every net first. A net first seen on a pad is auto-declared, but
+    # declaring up front fixes the net id order and reads better.
     net "+5V"
     net "GND"
     net "LED_A"                    # anode side of the LED, after the resistor

@@ -171,6 +171,23 @@ impl BoardReader for Ipc356Reader {
     }
 }
 
+/// ASCII Protel board export: pipe-delimited `|RECORD=` text declaring
+/// `KIND=Protel_Advanced_PCB` (the `.pcbdoc` form EasyEDA produces). Detection
+/// requires that KIND, so ASCII exports of other Protel documents fall through
+/// to [`unrecognized_message`]'s explanation instead of a garbled parse.
+pub struct ProtelAsciiReader;
+impl BoardReader for ProtelAsciiReader {
+    fn name(&self) -> &str {
+        "protel-ascii"
+    }
+    fn detects(&self, bytes: &[u8], _path: Option<&Path>) -> bool {
+        crate::protel_ascii::looks_like_protel_ascii(bytes)
+    }
+    fn read(&self, bytes: &[u8], _path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
+        ExtractedBoard::from_protel_ascii(&String::from_utf8_lossy(bytes))
+    }
+}
+
 /// Altium Designer `.PcbDoc` (binary OLE2). Detection is the container +
 /// Altium-stream check ([`crate::altium::looks_like_pcbdoc`]); the OLE2 magic
 /// `D0 CF 11 E0` cannot appear in any text format, so this never contends with
@@ -211,11 +228,12 @@ pub struct Registry {
 }
 
 impl Registry {
-    /// The six formats hauksbee reads natively.
+    /// The seven formats hauksbee reads natively.
     pub fn builtin() -> Self {
         Registry {
             readers: vec![
                 Box::new(AltiumReader),
+                Box::new(ProtelAsciiReader),
                 Box::new(EagleReader),
                 Box::new(KicadNetlistReader),
                 Box::new(KicadSchematicReader),
@@ -250,14 +268,14 @@ impl Registry {
             .map(|b| b.as_ref())
     }
 
-    /// Detect and read in one step. When nothing matches, the error enumerates
-    /// every reader that was tried ([`ReadError::Unrecognized`]) instead of
-    /// reporting one generic fallback failure.
+    /// Detect and read in one step. When nothing matches, the error carries
+    /// [`unrecognized_message`]'s user-facing explanation of what the bytes
+    /// look like and what hauksbee accepts.
     pub fn read(&self, bytes: &[u8], path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
         match self.detect(bytes, path) {
             Some(r) => r.read(bytes, path),
             None => Err(ExtractError::Unrecognized {
-                tried: self.reader_names().join(", "),
+                message: unrecognized_message(bytes),
             }),
         }
     }
@@ -272,6 +290,37 @@ impl Default for Registry {
     fn default() -> Self {
         Self::builtin()
     }
+}
+
+/// The user-facing message for content no reader recognised. Special-cases
+/// the look-alikes users actually upload (an empty file, a Git LFS pointer
+/// that was never pulled, an ASCII Protel export that is not a board), and
+/// otherwise names the accepted formats in user words rather than internal
+/// reader ids.
+pub fn unrecognized_message(bytes: &[u8]) -> String {
+    if bytes.iter().all(|b| b.is_ascii_whitespace()) {
+        return "this file is empty".to_string();
+    }
+    let head = magic_head(bytes);
+    let head = head.trim_start_matches('\u{feff}').trim_start();
+    if head.starts_with("version https://git-lfs") {
+        return "this is a Git LFS pointer, not the board file itself: the repository \
+                stores the real file in Git LFS and it was never downloaded. Run \
+                `git lfs install && git lfs pull` in the repository, then retry \
+                with the real file"
+            .to_string();
+    }
+    if crate::protel_ascii::looks_like_pipe_records(bytes) {
+        return "this is an ASCII Protel export (what EasyEDA produces); hauksbee reads \
+                the Protel_Advanced_PCB board form of it directly, and this file is \
+                not one. Open it in Altium Designer and re-save as a binary .PcbDoc, \
+                or see docs/ingest/ALTIUM.md"
+            .to_string();
+    }
+    "unrecognized board format: hauksbee reads a KiCad board, schematic or netlist, \
+     an Eagle board, an Altium .PcbDoc (binary or ASCII), an IPC-D-356 netlist, or \
+     a folder or zip of gerbers"
+        .to_string()
 }
 
 #[cfg(test)]
@@ -297,5 +346,51 @@ mod tests {
         );
         // A file with no test record at all is still rejected.
         assert!(!Ipc356Reader.detects(b"C only comments\nP JOB test\n", None));
+    }
+
+    #[test]
+    fn unrecognized_message_special_cases() {
+        use super::unrecognized_message;
+        // Empty (and whitespace-only) files get the plain-truth message.
+        assert_eq!(unrecognized_message(b""), "this file is empty");
+        assert_eq!(unrecognized_message(b"  \n\t"), "this file is empty");
+        // A Git LFS pointer names itself and the fix.
+        let lfs = b"version https://git-lfs.github.com/spec/v1\noid sha256:abc\nsize 12345\n";
+        let msg = unrecognized_message(lfs);
+        assert!(msg.contains("Git LFS pointer"), "got: {msg}");
+        assert!(
+            msg.contains("git lfs install && git lfs pull"),
+            "got: {msg}"
+        );
+        // Pipe-record text that is NOT a Protel_Advanced_PCB board gets the
+        // ASCII Protel explanation.
+        let msg = unrecognized_message(b"|RECORD=Sheet|KIND=Protel_Schematic|X=1");
+        assert!(msg.contains("ASCII Protel export"), "got: {msg}");
+        assert!(msg.contains("EasyEDA"), "got: {msg}");
+        // Everything else lists the accepted formats in user words, with no
+        // internal reader ids.
+        let msg = unrecognized_message(b"hello world, definitely not a board");
+        assert!(
+            msg.contains("KiCad board, schematic or netlist"),
+            "got: {msg}"
+        );
+        assert!(msg.contains("Eagle"), "got: {msg}");
+        assert!(msg.contains("gerbers"), "got: {msg}");
+        assert!(!msg.contains("kicad-pcb"), "no reader ids: {msg}");
+    }
+
+    #[test]
+    fn protel_ascii_board_is_detected_and_read() {
+        use super::{BoardReader, ProtelAsciiReader, Registry};
+        let text = "|RECORD=Board|KIND=Protel_Advanced_PCB|VERSION=5.00\n\
+                    |RECORD=Net|ID=0|NAME=GND\n\
+                    |RECORD=Component|ID=0|LAYER=TOP|X=0mil|Y=0mil|ROTATION=0|PATTERN=R0603|SOURCEDESIGNATOR=R1\n\
+                    |RECORD=Pad|COMPONENT=0|NET=0|LAYER=TOP|NAME=1|X=0mil|Y=0mil\n";
+        assert!(ProtelAsciiReader.detects(text.as_bytes(), None));
+        let board = Registry::builtin()
+            .read(text.as_bytes(), None)
+            .expect("ASCII Protel board reads through the registry");
+        assert_eq!(board.components.len(), 1);
+        assert_eq!(board.components[0].reference, "R1");
     }
 }

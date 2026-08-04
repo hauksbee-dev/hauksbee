@@ -16,11 +16,13 @@
 /// `~/.hauksbee-qemu-esp` or a Renode under `~/renode-portable` is reported
 /// present with its resolved path.
 ///
-/// stdout: one line per backend, `NAME<TAB>STATUS<TAB>DETAIL`, STATUS a single
-/// lowercase token (`ok` / `absent` / `builtin` / `disabled`); DETAIL is the
-/// resolved path or a one-line install hint and may contain spaces (parsers
-/// should read field 3 to end-of-line). The human header goes to stderr so the
-/// data stream stays clean.
+/// Piped stdout: one line per backend, `NAME<TAB>STATUS<TAB>DETAIL`, STATUS a
+/// single lowercase token (`ok` / `absent` / `builtin` / `disabled`); DETAIL
+/// is the resolved path or a one-line install hint and may contain spaces
+/// (parsers should read field 3 to end-of-line). The human header goes to
+/// stderr so the data stream stays clean. On a TTY there is no parser to
+/// protect, so the view is one box-drawing table instead of TSV interleaved
+/// with stderr framing.
 pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
     // A probed backend. `status` is a single token by contract (see above).
     struct Backend {
@@ -144,11 +146,32 @@ pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Human framing on stderr; the data table on stdout stays parseable.
-    eprintln!("hauksbee co-sim backends (resolved by the engine's own discovery)");
-    for b in &backends {
-        eprintln!("    {:<13} {}", b.name, b.summary);
-        println!("{}\t{}\t{}", b.name, b.status, b.detail);
+    // A TTY gets one table a human can actually read. A pipe gets the TSV
+    // contract scripts/doctor.sh parses; the human framing goes to stderr
+    // there so the data stream stays clean.
+    if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
+        println!("hauksbee co-sim backends (resolved by the engine's own discovery)");
+        let rows: Vec<Vec<String>> = backends
+            .iter()
+            .map(|b| {
+                vec![
+                    b.name.to_string(),
+                    b.status.to_string(),
+                    b.summary.to_string(),
+                    b.detail.clone(),
+                ]
+            })
+            .collect();
+        print!(
+            "{}",
+            super::models::box_table(&["Backend", "Status", "Co-sim", "Detail"], &rows)
+        );
+    } else {
+        eprintln!("hauksbee co-sim backends (resolved by the engine's own discovery)");
+        for b in &backends {
+            eprintln!("    {:<13} {}", b.name, b.summary);
+            println!("{}\t{}\t{}", b.name, b.status, b.detail);
+        }
     }
     Ok(())
 }

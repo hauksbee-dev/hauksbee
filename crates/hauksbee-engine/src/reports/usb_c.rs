@@ -30,7 +30,7 @@ pub fn emit(board: &ExtractedBoard, mode: OutputMode, strict: bool) -> anyhow::R
             }
             super::note_ungated_findings(strict, report.is_serious());
             if strict && report.is_serious() {
-                std::process::exit(2);
+                super::strict_gate_exit(mode, &[format!("usb_c_cc {}", report.headline)]);
             }
         }
     }
