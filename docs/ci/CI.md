@@ -1010,8 +1010,14 @@ the CLI says so on stderr.
 | exit | meaning |
 |---|---|
 | 0 | clean, or a report-only run without `--strict` |
-| 2 | gate-grade findings, under `--strict` (or `--strict-boot` for the boot-safety advisory; co-sim stress faults also gate under `--strict`) |
+| 1 | the run never happened: the board could not be read (unrecognized format, a Git LFS pointer, a missing file, an ASCII-Protel `.PcbDoc`) or the analysis could not be set up |
+| 2 | gate-grade findings, under `--strict` (or `--strict-boot` for the boot-safety advisory; co-sim stress faults also gate under `--strict`). Also a usage error, such as two report flags at once |
 | 3 | invalid for analysis (aborted analog solve, zero-activity co-sim under `--strict`, thermal table with no usable coverage) |
+
+Exit 1 and exit 2 are worth keeping apart in a pipeline: 1 means your input was
+never analysed, 2 means it was analysed and the board is at fault. A CI step that
+treats both as "hardware failed" will report a broken file path as a broken
+board.
 
 What `--strict` gates on, per report: `--drc` true copper shorts (clearance
 notes never gate), `--lint` high/medium findings, `--si` any real finding,

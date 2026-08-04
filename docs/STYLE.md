@@ -24,12 +24,13 @@ between a message that closes the loop and one that sends someone to the source.
 Good:
 
 ```
-error: unrecognized board format; tried altium, eagle, kicad-netlist,
-kicad-schematic, kicad-pcb, ipc-d356
+error: 'mystery.brd': unrecognized board format: hauksbee reads a KiCad board, schematic or netlist, an Eagle board, an Altium .PcbDoc (binary or ASCII), an IPC-D-356 netlist, or a folder or zip of gerbers
 ```
 
-It names the failure, and every format it tried is a thing the user can check
-their file against.
+It names the file, names the failure, and every format it lists is a thing the
+user can check their file against. Note the direction: it enumerates what
+hauksbee *reads*, not the internal parsers it *tried*. A list of parser names is
+a fact about our code; a list of formats is a fact the reader can act on.
 
 ## 2. The verdict lexicon
 
