@@ -17,7 +17,13 @@
 //!    partition, not the labels, is compared). The routable boards must agree at
 //!    100%.
 //!
-//! Skipped (not failed) when the corpus is absent, unless `HAUKSBEE_REQUIRE_CORPUS=1`.
+//! Reported NOT RUN (not failed, and never a silent pass) when the family is
+//! absent. It is absent on any machine that ran the public
+//! `scripts/fetch-corpus.sh`, because these boards are not in corpus.toml. That
+//! is what `HAUKSBEE_REQUIRE_ALTIUM_CORPUS=1` is for: a maintainer with the
+//! private set turns absence into a failure, while the public nightly can still
+//! reach green. Keying this off `HAUKSBEE_REQUIRE_CORPUS` instead made the
+//! nightly permanently red.
 
 use hauksbee_extract::ExtractedBoard;
 use std::collections::HashMap;
@@ -28,8 +34,22 @@ fn corpus_root() -> Option<PathBuf> {
     p.exists().then_some(p)
 }
 
-fn require_corpus() -> bool {
-    std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok()
+/// Whether an absent Altium family should FAIL rather than report NOT RUN.
+///
+/// Deliberately NOT `HAUKSBEE_REQUIRE_CORPUS`. That flag means "the boards
+/// corpus.toml promises must be present", and the Altium family is not in
+/// corpus.toml: its sources live in the maintainers' private SOURCES.md (see
+/// docs/ingest/ALTIUM.md). Keyed off the public flag, these two tests failed on
+/// every runner that followed CONTRIBUTING and ran `scripts/fetch-corpus.sh`, so
+/// `corpus-gate.yml` had no green path at all and the whole nightly stopped being
+/// read. A gate that is always red is worth as little as one that is always
+/// green.
+///
+/// A maintainer with the private set exports `HAUKSBEE_REQUIRE_ALTIUM_CORPUS=1`
+/// and gets the hard failure back. Either way the absence is printed, never
+/// silently passed.
+fn require_altium_corpus() -> bool {
+    std::env::var("HAUKSBEE_REQUIRE_ALTIUM_CORPUS").is_ok()
 }
 
 /// (board file, min nets, min components) for each real binary board. The two
@@ -52,13 +72,17 @@ const FAMOUS_ALTIUM: &[(&str, usize, usize)] = &[
 fn famous_altium_boards_extract_and_are_short_clean() {
     let Some(root) = corpus_root() else {
         assert!(
-            !require_corpus(),
-            "HAUKSBEE_REQUIRE_CORPUS set but board-corpus is absent"
+            !require_altium_corpus(),
+            "HAUKSBEE_REQUIRE_ALTIUM_CORPUS set but board-corpus is absent"
         );
-        eprintln!("board-corpus not present; skipping famous Altium sweep");
+        eprintln!("NOT RUN  board-corpus not present; famous Altium sweep");
         return;
     };
-    let dir = root.join("famous/altium");
+    // The family sits at `altium/` in either layout: the hand-built corpus puts
+    // it under `famous/`, and `corpus_boards_root` resolves that level.
+    let dir = hauksbee_testkit::corpus_boards_root(env!("CARGO_MANIFEST_DIR"))
+        .unwrap_or(root)
+        .join("altium");
 
     let mut scanned = 0usize;
     let mut offenders: Vec<String> = Vec::new();
@@ -135,12 +159,17 @@ fn famous_altium_boards_extract_and_are_short_clean() {
         // at all" and must not report as a clean pass, nor read as
         // "hauksbee is broken" to a contributor running the public fetch.
         let msg = "none of the famous Altium boards is present under \
-                    board-corpus/famous/altium (this family is not yet in \
-                    corpus.toml's public fetch; see docs/ingest/ALTIUM.md).";
-        assert!(!require_corpus(), "HAUKSBEE_REQUIRE_CORPUS set and {msg}");
-        eprintln!("skipping famous Altium sweep: {msg}");
+                    <corpus>/altium (this family is not in corpus.toml's public \
+                    fetch; see docs/ingest/ALTIUM.md). Set \
+                    HAUKSBEE_REQUIRE_ALTIUM_CORPUS=1 to make this a failure.";
+        assert!(
+            !require_altium_corpus(),
+            "HAUKSBEE_REQUIRE_ALTIUM_CORPUS set and {msg}"
+        );
+        eprintln!("NOT RUN  famous Altium sweep: {msg}");
         return;
     }
+    hauksbee_testkit::scanned("famous Altium sweep", scanned);
     assert!(
         offenders.is_empty(),
         "real Altium boards must extract sanely and be short-clean; chase any \
@@ -204,13 +233,15 @@ const XVAL: &[(&str, usize)] = &[
 fn cross_validate_against_kicad_altium_importer() {
     let Some(root) = corpus_root() else {
         assert!(
-            !require_corpus(),
-            "HAUKSBEE_REQUIRE_CORPUS set but board-corpus is absent"
+            !require_altium_corpus(),
+            "HAUKSBEE_REQUIRE_ALTIUM_CORPUS set but board-corpus is absent"
         );
-        eprintln!("board-corpus not present; skipping Altium cross-validation");
+        eprintln!("NOT RUN  board-corpus not present; Altium cross-validation");
         return;
     };
-    let dir = root.join("famous/altium");
+    let dir = hauksbee_testkit::corpus_boards_root(env!("CARGO_MANIFEST_DIR"))
+        .unwrap_or_else(|| root.clone())
+        .join("altium");
 
     let mut compared = 0usize;
     let mut offenders: Vec<String> = Vec::new();
@@ -255,11 +286,16 @@ fn cross_validate_against_kicad_altium_importer() {
         // needs kicad-cli, so a machine with the boards and no KiCad lands
         // here too.
         let msg = "no famous Altium board could be cross-validated (the family is not in \
-                   corpus.toml's public fetch, or kicad-cli is absent).";
-        assert!(!require_corpus(), "HAUKSBEE_REQUIRE_CORPUS set and {msg}");
-        eprintln!("skipping the Altium cross-validation: {msg}");
+                   corpus.toml's public fetch, or kicad-cli is absent). Set \
+                   HAUKSBEE_REQUIRE_ALTIUM_CORPUS=1 to make this a failure.";
+        assert!(
+            !require_altium_corpus(),
+            "HAUKSBEE_REQUIRE_ALTIUM_CORPUS set and {msg}"
+        );
+        eprintln!("NOT RUN  the Altium cross-validation: {msg}");
         return;
     }
+    hauksbee_testkit::scanned("Altium cross-validation", compared);
     assert!(
         offenders.is_empty(),
         "hauksbee's Altium extraction must agree with KiCad's independent Altium \
