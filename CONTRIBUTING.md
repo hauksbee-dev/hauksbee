@@ -133,28 +133,43 @@ corpus into a failure rather than a silent skip.
 The corpus is mostly public open hardware, so you can fetch it:
 
 ```bash
-scripts/fetch-corpus.sh                   # fetches into ./board-corpus
+scripts/fetch-corpus.sh --dir "$PWD/board-corpus"
 export HAUKSBEE_CORPUS_DIR=$PWD/board-corpus
 cargo test --workspace
 ```
 
-The fetch script pulls each board from its upstream project at a pinned commit
-and checks it against a checksum, so the corpus you get is the corpus the gate
-was measured against. This repository does **not** vendor the boards. They
-carry CC BY-SA, GPL-3.0, and CERN-OHL licences, and fetching means you get
-each one from its author under that author's terms rather than through us.
+**Pass `--dir` explicitly.** A bare `scripts/fetch-corpus.sh` is supposed to read
+`default_dir` from the manifest and land everything in `./board-corpus`, and on
+macOS it does not: the manifest parser splits fields with `awk -F'\x1f'`, BSD awk
+does not interpret `\x` escapes, so the default is read as empty and boards are
+dropped at the repository root instead. You can see the symptom in `.gitignore`,
+which lists root-level `crkbd/`, `lily58/` and friends so an accidental `git add`
+cannot commit them. Boards that land there are invisible to every corpus test,
+which is worse than not fetching them, because the suite then measures less than
+it appears to.
 
-Expect a partial fetch. The manifest pins 28 boards, and around 23 or 24 land
-on a good day: two are skipped by default because their licence could not be
+Each board is pulled from its upstream at the revision `corpus.toml` pins. For
+git-hosted boards the resolved commit is checked against that pin, so you get the
+revision the gate was measured against. **Zip-hosted boards are not verified at
+all**: `fetch_zip` is a `curl` and an `unzip`, and the sha256 recorded beside one
+of those entries in `corpus.toml` is never checked. This repository does **not**
+vendor the boards. They carry CC BY-SA, GPL-3.0, and CERN-OHL licences, and
+fetching means you get each one from its author under that author's terms rather
+than through us.
+
+Expect a partial fetch. The manifest pins 29 boards, and around 23 or 24 land
+on a good day: three are skipped by default because their licence could not be
 confirmed, one upstream is prone to hanging, one has moved the revision the
 manifest pins, and the occasional extra upstream flakes. That is fine and it
 is not a broken checkout. A corpus test whose boards are absent skips and names
 what is missing, with the `--only <id>` line that fetches it, rather than
 failing in a way that reads as hauksbee being broken.
 
-Without the corpus at all, corpus-dependent tests report as ignored, never as
-passed. To make a missing or thin corpus a hard failure instead (recommended in
-CI):
+Without the corpus, corpus-dependent tests **report as passed**, not as ignored.
+Rust has no runtime ignored state, so they early-return with a note on stderr and
+`cargo test` counts them green. This is the trap the whole section is about: a
+green suite on a machine with no corpus has measured nothing. Never read one as
+evidence. Make it a hard failure instead, which is what CI should always do:
 
 ```bash
 HAUKSBEE_REQUIRE_CORPUS=1 cargo test --workspace
