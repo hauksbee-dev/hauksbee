@@ -33,17 +33,29 @@
 //! pass. If any code path could hand-set `Clean` over an undermined input set,
 //! the whole honesty argument would be decoration.
 //!
-//! Which is why both types keep every field private behind getters. A status is
-//! only as trustworthy as the kinds it was derived from, so a downstream
+//! Be precise about what that buys, because the precise version is the useful
+//! one: **a status cannot disagree with the set of assumptions it was handed, and
+//! neither the set, the status, nor the assertion they belong to can be edited
+//! afterwards.** Every field those three invariants touch is private behind a
+//! getter, and neither judgement type deserializes. A status is only as
+//! trustworthy as the kinds it came from, so a downstream
 //! `a.kind = ReducedFidelity` would demote an undermined conclusion to a
 //! gradeable one without touching [`EvidenceMap`] at all, and a mutable
 //! `assertion` would let a clean map be relabelled onto an undermined assertion.
-//! Renderers need to read these, never to write them.
+//!
+//! What no type can police is which assumptions a producer hands over: an
+//! `EvidenceMap::new(assertion, &[], today)` over an undermined board compiles
+//! from anywhere and is `Clean`. That is not a hole to be plugged here, it is the
+//! reason the discrimination fixture at the bottom of this file exists, and the
+//! reason it is the contract the traversal has to satisfy rather than a nicety.
+//! The fields that carry no judgement (the artifact indices, the models, the
+//! parameters, the budget, the coverage wording) stay public: they are records,
+//! and a renderer editing one is a bug rather than a laundered verdict.
 //!
 //! This module is types and rules only. It computes no causal path: building
 //! the net-part incidence that decides which assumptions are on-path belongs to
-//! the binder, and the discrimination test at the bottom of this file is the
-//! contract that work has to satisfy.
+//! the binder, and the discrimination test at the bottom of this file states, in
+//! executable form, what the test beside that traversal has to assert.
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-ir/evidence.md
 
@@ -284,10 +296,14 @@ pub struct Assumption {
 /// own sentence punctuation. Callers pass fragments ("no model matched"), never
 /// finished sentences.
 fn fragment(s: &str) -> String {
+    // Internal whitespace runs collapse too. A reason string lifted out of a
+    // real file arrives with whatever spacing the file had, and a double space
+    // is not a reason to refuse a sentence, only to tidy it.
     s.trim()
         .trim_end_matches(['.', ';', ','])
-        .trim()
-        .to_string()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 /// Promote a caller-supplied fragment to a sentence: one full stop, and a
@@ -313,6 +329,29 @@ fn sentence(s: &str) -> String {
         format!("{}{}.", first.to_uppercase(), chars.as_str())
     } else {
         format!("{f}.")
+    }
+}
+
+/// A sentence from a caller's fragment, falling back to a composed one when the
+/// producer had nothing to say.
+///
+/// Producers pass data through: a reason lifted from a file property, a bus name
+/// from a descriptor. Real data is sometimes absent, and the two bad answers to
+/// that are a sentence with a hole in it (release) and a panic inside a producer
+/// for a data reason (debug). The fallback is the third answer: say the general
+/// truth of the kind, which is always still true.
+fn sentence_or(s: &str, fallback: &str) -> String {
+    sentence(&or_else(s, fallback))
+}
+
+/// A tidied fragment, or the fallback when the producer had nothing. Same
+/// reasoning as [`sentence_or`], for a datum that sits mid-sentence.
+fn or_else(s: &str, fallback: &str) -> String {
+    let f = fragment(s);
+    if f.is_empty() {
+        fallback.to_string()
+    } else {
+        f
     }
 }
 
@@ -345,6 +384,12 @@ impl<'a> Subject<'a> {
             key: both,
             text: both,
         }
+    }
+
+    /// The prose form, falling back to the key. A producer that has an id but no
+    /// prose still has a real gap to report, and the key names it.
+    fn text_or_key(&self) -> String {
+        or_else(self.text, &fragment(self.key))
     }
 }
 
@@ -492,8 +537,10 @@ impl Assumption {
         requested: &str,
         stand_in: &str,
     ) -> Self {
-        let requested = fragment(requested);
-        let stand_in = fragment(stand_in);
+        // A producer with no name for one side still has a real gap to report,
+        // so the sentence names what it can rather than leaving a hole.
+        let requested = or_else(requested, "the part the board asks for");
+        let stand_in = or_else(stand_in, "a stand-in model");
         Self::build(
             AssumptionKind::SubstituteModel,
             source,
@@ -521,8 +568,8 @@ impl Assumption {
     /// A pin's role was inferred from the pin-rule table rather than read from
     /// the schematic.
     pub fn inferred_pin_role(reference: &str, pin: &str, role: &str) -> Self {
-        let pin = fragment(pin);
-        let role = fragment(role);
+        let pin = or_else(pin, "an unnamed pin");
+        let role = or_else(role, "inferred");
         Self::build(
             AssumptionKind::InferredPinRole,
             AssumptionSource::Binder,
@@ -548,8 +595,8 @@ impl Assumption {
 
     /// A parameter took a documented default because no input carried a value.
     pub fn default_parameter(reference: &str, parameter: &str, value: &str) -> Self {
-        let parameter = fragment(parameter);
-        let value = fragment(value);
+        let parameter = or_else(parameter, "a parameter");
+        let value = or_else(value, "the documented default");
         Self::build(
             AssumptionKind::DefaultParameter,
             AssumptionSource::Binder,
@@ -583,7 +630,7 @@ impl Assumption {
     /// "FittedByDefault (subject part)" row asks for.
     pub fn fitted_by_default(source: AssumptionSource, input: Subject<'_>, scope: Scope) -> Self {
         let input_key = input.key;
-        let input = fragment(input.text);
+        let input = or_else(input.text, "this input");
         Self::build(
             AssumptionKind::FittedByDefault,
             source,
@@ -633,12 +680,18 @@ impl Assumption {
                 kind: rule,
             },
             format!("The {named} check did not run."),
-            sentence(because),
+            sentence_or(
+                because,
+                "the inputs this run was given do not carry what the check reads",
+            ),
             format!(
                 "This run says nothing about {named}: no {named} findings here is not evidence \
                  that there are none."
             ),
-            sentence(replacement),
+            sentence_or(
+                replacement,
+                "supply an input this check can read, then re-run",
+            ),
             None,
         )
     }
@@ -655,19 +708,22 @@ impl Assumption {
         replacement: &str,
     ) -> Self {
         let subject_key = subject.key;
-        let subject_text = fragment(subject.text);
+        let subject_text = subject.text_or_key();
         Self::build(
             AssumptionKind::NotExercised,
             source,
             subject_key,
             scope,
             format!("This run does not cover {subject_text}."),
-            sentence(because),
+            sentence_or(because, "this run's stimulus never reached it"),
             format!(
                 "Any conclusion that assumes {subject_text} was exercised is unsupported by \
                  this run: what it reports there is a default, not a measurement."
             ),
-            sentence(replacement),
+            sentence_or(
+                replacement,
+                "exercise it, from firmware or from a spec stimulus, and re-run",
+            ),
             None,
         )
     }
@@ -682,8 +738,8 @@ impl Assumption {
         replacement: &str,
     ) -> Self {
         let subject_key = subject.key;
-        let subject_text = fragment(subject.text);
-        let mechanism = fragment(mechanism);
+        let subject_text = subject.text_or_key();
+        let mechanism = or_else(mechanism, "a documented degraded path");
         Self::build(
             AssumptionKind::ReducedFidelity,
             source,
@@ -695,7 +751,10 @@ impl Assumption {
                 "Numbers for {subject_text} are indicative: the mechanism that produced them \
                  is documented as less accurate than the primary path."
             ),
-            sentence(replacement),
+            sentence_or(
+                replacement,
+                "give the run what the primary path needs, so this stops being the fallback",
+            ),
             None,
         )
     }
@@ -736,19 +795,25 @@ impl Assumption {
         replacement: &str,
     ) -> Self {
         let subject_key = subject.key;
-        let subject_text = fragment(subject.text);
+        let subject_text = subject.text_or_key();
         Self::build(
             AssumptionKind::ParserLimitation,
             source,
             subject_key,
             scope,
             format!("Findings about {subject_text} may be wrong."),
-            sentence(limitation),
+            sentence_or(
+                limitation,
+                "the reader that produced them has a documented limitation here",
+            ),
             format!(
                 "Findings on {subject_text} can be fabricated or missed here, so treat them as \
                  unconfirmed rather than as results."
             ),
-            sentence(replacement),
+            sentence_or(
+                replacement,
+                "re-export the input from a version this reader models, then re-run",
+            ),
             None,
         )
     }
@@ -772,7 +837,13 @@ impl Assumption {
                 kind: Some(kind.clone()),
             },
             format!("The {check} {kind} finding on {subject_text} is waived by hand."),
-            sentence(reason),
+            // The waiver gate requires a reason, so an empty one means a
+            // producer dropped it on the way here. Saying that is more use to a
+            // reader than an empty line where the justification should be.
+            sentence_or(
+                reason,
+                "no reason reached this report, though the waiver file requires one",
+            ),
             format!(
                 "It does not gate this run until {until}, so this result is clean by \
                  authorization rather than by measurement."
@@ -1114,7 +1185,10 @@ pub struct ErrorBudget {
     pub methods: Vec<WindowMethod>,
     /// The accepted Newton residual, when the producing path measured one.
     /// Omitted, rather than written as JSON `null`, when the number is not
-    /// finite: see [`ErrorBudget`]'s note on non-finite values.
+    /// finite. JSON has no NaN and no infinity, `serde_json` writes them as
+    /// `null`, and a `null` then fails to read back against a schema that says
+    /// `number`. A quantity that is not a number is not a measurement, and this
+    /// field is already optional, so the honest encoding is absence.
     #[serde(default, skip_serializing_if = "residual_is_not_a_number")]
     pub residual: Option<Residual>,
     /// Windows with NO valid solution: the run held stale values there. Any
@@ -1198,18 +1272,72 @@ pub enum EvidenceStatus {
     Undermined,
 }
 
+/// The run's date, for deciding whether a waiver is still in force.
+///
+/// A newtype rather than a bare `i64` because the two ways of getting it wrong
+/// are not equally bad. A date read too late expires waivers early: noisy, and
+/// safe. A date read too early re-arms waivers somebody deliberately let lapse,
+/// silently, which is the one direction expiry must never fail in. And "too
+/// early" is not exotic: it is a zero-initialised field, a container with no RTC
+/// before NTP settles, a machine with a dead clock battery. A bare number makes
+/// all of those look like a valid Thursday in 1970.
+///
+/// So a reading before [`RunDate::EARLIEST_CREDIBLE_DAY`] is not believed, and
+/// [`RunDate::unknown`] is what a caller with no date passes. Either way every
+/// waiver reads as lapsed, which is the fail-closed direction. The floor here is
+/// deliberately loose, catching obvious nonsense rather than duplicating the
+/// waiver gate's own tighter build-date floor: two floors that could disagree
+/// about the same day would be worse than one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RunDate(Option<i64>);
+
+impl RunDate {
+    /// Days since the Unix epoch for 2020-01-01. A run of THIS build cannot
+    /// honestly be happening before it, so a reading below it is a broken clock,
+    /// not a date.
+    pub const EARLIEST_CREDIBLE_DAY: i64 = 18_262;
+
+    /// The run's date, as days since the Unix epoch. A reading below
+    /// [`Self::EARLIEST_CREDIBLE_DAY`] is treated as no date at all.
+    pub fn from_epoch_days(days: i64) -> Self {
+        Self((days >= Self::EARLIEST_CREDIBLE_DAY).then_some(days))
+    }
+
+    /// No trustworthy date. Every waiver reads as lapsed.
+    pub fn unknown() -> Self {
+        Self(None)
+    }
+
+    /// True when a waiver expiring on `expiry_epoch_days` still covers this run.
+    /// Expiry is end-of-day, the same reading the waiver gate uses: a waiver
+    /// dated today is still in force today, which is what someone writing "until
+    /// the fab confirms on Friday" means. Unknown dates cover nothing.
+    pub fn is_covered_by(self, expiry_epoch_days: i64) -> bool {
+        self.0.is_some_and(|today| expiry_epoch_days >= today)
+    }
+
+    /// The date as days since the Unix epoch, or `None` when there is none to
+    /// believe.
+    pub fn epoch_days(self) -> Option<i64> {
+        self.0
+    }
+}
+
 /// What one assertion rests on: the artifacts, models, parameters and
 /// assumptions on its causal path, its error budget, and the derived status.
 ///
 /// `status`, the assertion it is a status OF, and the id list it was derived
-/// from are all private, and there is one constructor. That is the whole honesty
-/// argument: no producer, no renderer and no other crate can declare a
-/// conclusion clean, because the only way to obtain an `EvidenceMap` is to hand
-/// [`EvidenceMap::new`] the on-path assumptions and let it decide, and none of
-/// the three can be prised apart afterwards. `Undermined` maps onto the run's
-/// existing invalid-for-analysis outcome, which waivers already refuse to flip
-/// green, so the only routes back to a clean verdict are closing the assumption
-/// or acknowledging it in the open.
+/// from are all private, and there is one constructor. What that guarantees,
+/// exactly: a status cannot disagree with the assumptions it was handed, and no
+/// producer, renderer or sibling crate can move the three apart afterwards.
+/// `Undermined` maps onto the run's existing invalid-for-analysis outcome, which
+/// waivers already refuse to flip green, so the only routes back to a clean
+/// verdict are closing the assumption or acknowledging it in the open.
+///
+/// What it does not guarantee, and cannot: that a producer hands over the right
+/// set. Passing `&[]` yields `Clean` from anywhere. Choosing the set is the
+/// traversal's job and the discrimination fixture's subject, not something a type
+/// can check.
 ///
 /// Like [`Assumption`], and for the same reason, the type does not implement
 /// `Deserialize`. A serialized map carries assumption *ids*, not kinds, so a
@@ -1222,15 +1350,16 @@ pub enum EvidenceStatus {
 /// way to get one.
 ///
 /// ```
-/// use hauksbee_ir::evidence::{Assumption, EvidenceMap, EvidenceStatus};
+/// use hauksbee_ir::evidence::{Assumption, EvidenceMap, EvidenceStatus, RunDate};
 ///
+/// let today = RunDate::from_epoch_days(20_454); // 2026-01-01
 /// let open = Assumption::open_part("U2", "XC6206", "no model matched");
-/// let map = EvidenceMap::new("3V3 stays above 3.1 V", &[open], 20_000)
+/// let map = EvidenceMap::new("3V3 stays above 3.1 V", &[open], today)
 ///     .with_artifacts(vec![0, 2]);
 /// assert_eq!(map.status(), EvidenceStatus::Undermined);
 /// assert_eq!(map.assumptions()[0].as_str(), "open-part:U2");
 ///
-/// let clean = EvidenceMap::new("VBUS stays below 5.5 V", &[], 20_000);
+/// let clean = EvidenceMap::new("VBUS stays below 5.5 V", &[], today);
 /// assert_eq!(clean.status(), EvidenceStatus::Clean);
 /// assert!(clean.assumptions().is_empty());
 /// ```
@@ -1273,20 +1402,12 @@ impl EvidenceMap {
     /// traversal found for this assertion, whole rather than by id, because the
     /// status rule reads their kinds and expiries.
     ///
-    /// `today_epoch_days` is the run's date as days since the Unix epoch, used
-    /// only to tell a live waiver from a lapsed one. It is taken verbatim, which
-    /// is deliberately the same contract as the waiver gate's own `load_at`: the
-    /// clock floor that refuses an implausibly early reading belongs at the one
-    /// place the clock is READ, not at every place a date is compared, and
-    /// duplicating that floor here would give the repo two of them to keep in
-    /// step. So callers pass a floored reading. A caller with no date at all
-    /// passes `i64::MAX`, which reads every waiver as lapsed, the fail-closed
-    /// direction.
-    pub fn new(
-        assertion: impl Into<String>,
-        on_path: &[Assumption],
-        today_epoch_days: i64,
-    ) -> Self {
+    /// `today` is the run's date, used only to tell a live waiver from a lapsed
+    /// one. It is a [`RunDate`] rather than a bare number because the failure
+    /// directions are not symmetric: a date read too LATE only expires waivers
+    /// early, while a date read too early re-arms every lapsed one, silently, in
+    /// the one direction this must never fail in.
+    pub fn new(assertion: impl Into<String>, on_path: &[Assumption], today: RunDate) -> Self {
         // Deduped, first occurrence winning. A traversal walking several nets
         // that share a part hands the same assumption over more than once, and
         // rendering it twice is noise; the status is a max, so duplicates never
@@ -1305,7 +1426,7 @@ impl EvidenceMap {
             assumptions,
             error_budget: None,
             coverage: None,
-            status: Self::derive_status(on_path, today_epoch_days),
+            status: Self::derive_status(on_path, today),
         }
     }
 
@@ -1328,7 +1449,7 @@ impl EvidenceMap {
     /// this assertion's causal path are passed in, which is why the table needs
     /// no per-kind "if it covers this assertion" clause. Severity is the max
     /// over the set, so one undermining assumption is enough.
-    pub fn derive_status(on_path: &[Assumption], today_epoch_days: i64) -> EvidenceStatus {
+    pub fn derive_status(on_path: &[Assumption], today: RunDate) -> EvidenceStatus {
         let mut status = EvidenceStatus::Clean;
         for a in on_path {
             let effect = match a.kind {
@@ -1348,7 +1469,7 @@ impl EvidenceMap {
                     // not parse counts as lapsed: an unreadable date cannot
                     // vouch for a finding.
                     match a.expires.as_deref().and_then(parse_ymd_epoch_days) {
-                        Some(day) if day >= today_epoch_days => EvidenceStatus::Qualified,
+                        Some(day) if today.is_covered_by(day) => EvidenceStatus::Qualified,
                         _ => EvidenceStatus::Undermined,
                     }
                 }
@@ -1463,7 +1584,10 @@ mod tests {
     use super::*;
 
     /// 2026-01-01, a fixed "today" so no test depends on the wall clock.
-    const TODAY: i64 = 20_454;
+    /// 2026-01-01, a fixed run date so no test depends on the wall clock.
+    fn today() -> RunDate {
+        RunDate::from_epoch_days(20_454)
+    }
 
     fn all_kinds() -> Vec<Assumption> {
         vec![
@@ -1681,19 +1805,72 @@ mod tests {
         assert!(b.because.starts_with("value_unresolved:"), "{}", b.because);
     }
 
-    /// An empty datum leaves a gap where a subject or a value belonged, and a
-    /// half-written sentence on a report is worse than a loud failure. `build`
-    /// asserts its own output, so a debug build is where a producer finds out.
+    /// An id with no subject names nothing: an acknowledgment file could not name
+    /// it and a diff could not track it. That is a producer bug rather than
+    /// missing data (kinds and check names are constants in the producers), so
+    /// `build` asserts its own output and a debug build says so.
     #[test]
-    #[should_panic(expected = "hole where a datum belongs")]
-    fn an_empty_subject_is_a_construction_error() {
+    #[should_panic(expected = "names no subject")]
+    fn an_id_with_no_subject_is_a_construction_error() {
         Assumption::not_checked(AssumptionSource::Reader, "", None, "no copper", "add one");
     }
 
+    /// Missing DATA is a different thing from a producer bug, and must not be
+    /// either a panic or a hole. Reasons, bus names and part numbers are lifted
+    /// out of real files; real files sometimes do not carry them. Every sentence
+    /// still has to be a sentence, in release as much as in debug, because in
+    /// release `build`'s assertion is compiled out and nothing else is looking.
     #[test]
-    #[should_panic(expected = "hole where a datum belongs")]
-    fn an_empty_datum_mid_sentence_is_a_construction_error() {
-        Assumption::substitute_model(AssumptionSource::Binder, "U1", "", "atmega328p");
+    fn a_missing_datum_falls_back_rather_than_leaving_a_hole() {
+        let thin = [
+            Assumption::open_part("R7", "", ""),
+            Assumption::substitute_model(AssumptionSource::Binder, "U1", "", ""),
+            Assumption::inferred_pin_role("U2", "", ""),
+            Assumption::default_parameter("U2", "", ""),
+            Assumption::fitted_by_default(
+                AssumptionSource::Reader,
+                Subject::new("odbpp", ""),
+                Scope::Board,
+            ),
+            Assumption::not_checked(AssumptionSource::Reader, "drc", None, "", ""),
+            Assumption::not_exercised(
+                AssumptionSource::Scheduler,
+                Subject::new("i2c0", ""),
+                Scope::Board,
+                "",
+                "",
+            ),
+            Assumption::reduced_fidelity(
+                AssumptionSource::Solver,
+                Subject::new("spi0", ""),
+                Scope::Board,
+                "",
+                "",
+            ),
+            Assumption::parser_limitation(
+                AssumptionSource::Reader,
+                Subject::new("drc/short", ""),
+                Scope::Board,
+                "",
+                "",
+            ),
+            Assumption::waived("si", "k", "DDR_CLK", "", "2026-06-01"),
+        ];
+        for a in thin {
+            a.validate().unwrap_or_else(|e| panic!("{e}"));
+            for (name, text) in [
+                ("statement", a.statement()),
+                ("because", a.because()),
+                ("consequence", a.consequence()),
+                ("replacement", a.replacement()),
+            ] {
+                assert!(text.len() > 10, "{}: {name} is a stub: {text:?}", a.id());
+            }
+        }
+        // And whitespace inside a datum is tidied rather than refused: a reason
+        // lifted from a file arrives with whatever spacing the file had.
+        let a = Assumption::open_part("R7", "10k", "no  model   matched");
+        assert_eq!(a.because(), "No model matched.");
     }
 
     #[test]
@@ -1745,7 +1922,7 @@ mod tests {
         // A traversal walking several nets that share a part hands the same
         // assumption over twice; rendering it twice is noise.
         let a = Assumption::open_part("R7", "10k", "no model matched");
-        let map = EvidenceMap::new("A", &[a.clone(), a], TODAY);
+        let map = EvidenceMap::new("A", &[a.clone(), a], today());
         assert_eq!(map.assumptions().len(), 1);
         assert_eq!(map.status(), EvidenceStatus::Undermined);
     }
@@ -1774,14 +1951,14 @@ mod tests {
         assert_eq!(built.len(), expected.len(), "a kind lost its constructor");
         for (a, (kind, want)) in built.iter().zip(expected) {
             assert_eq!(a.kind, kind, "constructor order drifted from the table");
-            let map = EvidenceMap::new("A", std::slice::from_ref(a), TODAY);
+            let map = EvidenceMap::new("A", std::slice::from_ref(a), today());
             assert_eq!(map.status(), want, "{} should be {want:?} on its own", a.id);
         }
     }
 
     #[test]
     fn no_assumptions_is_clean() {
-        let map = EvidenceMap::new("A", &[], TODAY);
+        let map = EvidenceMap::new("A", &[], today());
         assert_eq!(map.status(), EvidenceStatus::Clean);
         assert!(map.assumptions().is_empty());
         assert!(!map.is_undermined());
@@ -1792,17 +1969,17 @@ mod tests {
         let mut set: Vec<Assumption> = all_kinds()
             .into_iter()
             .filter(|a| {
-                EvidenceMap::derive_status(std::slice::from_ref(a), TODAY)
+                EvidenceMap::derive_status(std::slice::from_ref(a), today())
                     == EvidenceStatus::Qualified
             })
             .collect();
         assert_eq!(
-            EvidenceMap::derive_status(&set, TODAY),
+            EvidenceMap::derive_status(&set, today()),
             EvidenceStatus::Qualified
         );
         set.push(Assumption::open_part("R7", "10k", ""));
         assert_eq!(
-            EvidenceMap::derive_status(&set, TODAY),
+            EvidenceMap::derive_status(&set, today()),
             EvidenceStatus::Undermined,
             "a pile of caveats must not dilute one undermining assumption"
         );
@@ -1815,11 +1992,14 @@ mod tests {
         // In force up to and including the expiry date (end-of-day expiry, the
         // reading the waiver gate already uses).
         assert_eq!(
-            EvidenceMap::derive_status(std::slice::from_ref(&w), expiry),
+            EvidenceMap::derive_status(std::slice::from_ref(&w), RunDate::from_epoch_days(expiry)),
             EvidenceStatus::Qualified
         );
         assert_eq!(
-            EvidenceMap::derive_status(std::slice::from_ref(&w), expiry + 1),
+            EvidenceMap::derive_status(
+                std::slice::from_ref(&w),
+                RunDate::from_epoch_days(expiry + 1)
+            ),
             EvidenceStatus::Undermined
         );
         // An unreadable or absent expiry fails CLOSED: a date that cannot be
@@ -1827,18 +2007,53 @@ mod tests {
         let mut broken = w.clone();
         broken.expires = Some("next Friday".into());
         assert_eq!(
-            EvidenceMap::derive_status(std::slice::from_ref(&broken), TODAY),
+            EvidenceMap::derive_status(std::slice::from_ref(&broken), today()),
             EvidenceStatus::Undermined
         );
         broken.expires = None;
         assert_eq!(
-            EvidenceMap::derive_status(std::slice::from_ref(&broken), TODAY),
+            EvidenceMap::derive_status(std::slice::from_ref(&broken), today()),
             EvidenceStatus::Undermined
         );
-        // And a caller with no date at all gets the same fail-closed reading.
+        // A caller with no date at all gets the same fail-closed reading.
         assert_eq!(
-            EvidenceMap::derive_status(std::slice::from_ref(&w), i64::MAX),
+            EvidenceMap::derive_status(std::slice::from_ref(&w), RunDate::unknown()),
             EvidenceStatus::Undermined
+        );
+    }
+
+    #[test]
+    fn a_clock_reading_from_before_this_build_is_not_believed() {
+        // The asymmetry that makes RunDate a type: a date read LATE only expires
+        // waivers early, but a date read early re-arms every lapsed one, which is
+        // the direction expiry must never fail in. A zero-initialised field, a
+        // container with no RTC, a dead clock battery: a bare number makes all of
+        // them look like a valid Thursday in 1970.
+        let lapsed = Assumption::waived("si", "k", "DDR_CLK", "fab confirmed", "2001-01-01");
+        for broken in [0, 1, RunDate::EARLIEST_CREDIBLE_DAY - 1, i64::MIN] {
+            assert_eq!(
+                RunDate::from_epoch_days(broken).epoch_days(),
+                None,
+                "{broken} is not a credible run date"
+            );
+            assert_eq!(
+                EvidenceMap::derive_status(
+                    std::slice::from_ref(&lapsed),
+                    RunDate::from_epoch_days(broken)
+                ),
+                EvidenceStatus::Undermined,
+                "a broken clock must not resurrect a waiver that lapsed in 2001"
+            );
+        }
+        // A credible reading is believed, and the floor itself is credible.
+        assert_eq!(
+            RunDate::from_epoch_days(RunDate::EARLIEST_CREDIBLE_DAY).epoch_days(),
+            Some(RunDate::EARLIEST_CREDIBLE_DAY)
+        );
+        assert_eq!(
+            parse_ymd_epoch_days("2020-01-01"),
+            Some(RunDate::EARLIEST_CREDIBLE_DAY),
+            "the floor is the date its doc comment claims"
         );
     }
 
@@ -1889,9 +2104,28 @@ mod tests {
         let src = include_str!("evidence.rs");
         for judgement in ["pub struct Assumption {", "pub struct EvidenceMap {"] {
             let at = src.find(judgement).expect("the type is declared here");
-            let derives = &src[at.saturating_sub(400)..at];
+            // The whole attribute block, however long it grows: everything from
+            // the last blank line before the declaration. A fixed byte window
+            // would slide off the `#[derive(...)]` line the first time someone
+            // lengthens a doc comment, and the guard would go quiet in the same
+            // edit that made it necessary.
+            let block: String = src[..at]
+                .rsplit_once("\n\n")
+                .map(|(_, tail)| tail)
+                .unwrap_or(&src[..at])
+                .lines()
+                // Attribute lines only: the doc comment above these types
+                // discusses `Deserialize` in prose, and a guard that reads the
+                // prose is a guard that fires on its own explanation.
+                .filter(|l| l.trim_start().starts_with("#["))
+                .collect();
             assert!(
-                !derives.contains("Deserialize"),
+                block.contains("#[derive("),
+                "{judgement}: the attribute block was not found, so this guard is not \
+                 guarding anything"
+            );
+            assert!(
+                !block.contains("Deserialize"),
                 "{judgement} gained a Deserialize derive, which is a minting route"
             );
         }
@@ -1904,14 +2138,14 @@ mod tests {
         // map alone is holding the producer's word, which is why the map is not
         // parseable on its own.
         let registry = [Assumption::open_part("U2", "XC6206", "no model matched")];
-        let map = EvidenceMap::new("3V3 stays above 3.1 V", &registry, TODAY);
+        let map = EvidenceMap::new("3V3 stays above 3.1 V", &registry, today());
         let on_path: Vec<Assumption> = registry
             .iter()
             .filter(|a| map.assumptions().contains(a.id()))
             .cloned()
             .collect();
         assert_eq!(
-            EvidenceMap::derive_status(&on_path, TODAY),
+            EvidenceMap::derive_status(&on_path, today()),
             map.status(),
             "re-deriving from the registry must reproduce the recorded status"
         );
@@ -1942,7 +2176,7 @@ mod tests {
     #[test]
     fn evidence_map_json_shape_is_the_published_one() {
         let open = Assumption::open_part("U2", "XC6206", "no model matched");
-        let map = EvidenceMap::new("3V3 stays above 3.1 V", &[open], TODAY)
+        let map = EvidenceMap::new("3V3 stays above 3.1 V", &[open], today())
             .with_artifacts(vec![0, 2])
             .with_models(vec![ModelOnPath {
                 reference: "U2".into(),
@@ -2092,13 +2326,17 @@ mod tests {
     ///   renders `Clean`, and the new vocabulary certifies the very silence it
     ///   was built to end, now with more authority.
     ///
-    /// The incidence below is built BY HAND, because the real one comes from
-    /// the binder (which records net-part incidence it currently discards) and
-    /// that is a later phase. When that traversal lands, it replaces
-    /// `on_path_for` here and this test must pass unchanged: an unresolved part
-    /// on assertion A's net undermines A and names the part, and assertion B on
-    /// an unreachable net stays clean and empty. A vacuous traversal fails the
-    /// first half; a saturated one fails the second.
+    /// The incidence below is built BY HAND, and `on_path_for` is a stand-in for
+    /// a traversal that does not exist yet, because the real one needs the
+    /// binder's net-part incidence and the binder lives in another crate that
+    /// this one cannot depend on. So this test cannot itself fail when the real
+    /// traversal degenerates. What it is instead is the SPECIFICATION of the test
+    /// that must exist beside that traversal, in the engine, asserting the same
+    /// two halves against real incidence: an unresolved part on assertion A's net
+    /// undermines A and names the part, and assertion B on an unreachable net
+    /// stays clean and empty. A vacuous traversal fails the first half; a
+    /// saturated one fails the second. Whoever writes the traversal owes that
+    /// test, and this one says exactly what it has to assert.
     #[test]
     fn an_unresolved_part_undermines_its_own_net_and_only_its_own_net() {
         // The fixture board, as the binder will eventually report it: net ->
@@ -2148,12 +2386,12 @@ mod tests {
         let a = EvidenceMap::new(
             "3V3 stays above 3.1 V",
             &on_path_for(&["3V3"], incidence, &registry),
-            TODAY,
+            today(),
         );
         let b = EvidenceMap::new(
             "VBUS stays below 5.5 V",
             &on_path_for(&["VBUS"], incidence, &registry),
-            TODAY,
+            today(),
         );
 
         // Half one: the gap cannot hide behind a board-wide percentage. A is
@@ -2173,7 +2411,7 @@ mod tests {
     #[test]
     fn attaching_the_whole_registry_makes_an_unrelated_assertion_undermined() {
         let registry = vec![Assumption::open_part("X", "XC6206", "no model matched")];
-        let saturated = EvidenceMap::new("VBUS stays below 5.5 V", &registry, TODAY);
+        let saturated = EvidenceMap::new("VBUS stays below 5.5 V", &registry, today());
         assert_eq!(saturated.status(), EvidenceStatus::Undermined);
         assert!(!saturated.assumptions().is_empty());
     }

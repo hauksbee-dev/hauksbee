@@ -24,12 +24,14 @@
 use hauksbee_ir::evidence::{
     ArtifactProvenance, ArtifactRole, Assumption, AssumptionKind, AssumptionSource, Contribution,
     ErrorBudget, EvidenceMap, EvidenceStatus, IntegrationTolerance, ModelOnPath,
-    ParameterProvenance, Scope, Subject, ValueOrigin,
+    ParameterProvenance, RunDate, Scope, Subject, ValueOrigin,
 };
 
-/// 2026-01-01, as days since the Unix epoch. A run passes its own floored clock
-/// reading; a fixed value here keeps the test off the wall clock.
-const TODAY: i64 = 20_454;
+/// 2026-01-01. A run builds this from its own clock reading; a fixed value keeps
+/// the test off the wall clock.
+fn today() -> RunDate {
+    RunDate::from_epoch_days(20_454)
+}
 
 /// A renderer's whole job, done with public API only: pick the assumptions on an
 /// assertion's path and lay their sentences out. If this needs a field it cannot
@@ -146,7 +148,7 @@ fn a_consumer_can_build_every_kind_and_read_every_sentence() {
 #[test]
 fn a_consumer_can_render_the_rests_on_block_but_cannot_reword_it() {
     let registry = vec![Assumption::open_part("U2", "XC6206", "no model matched")];
-    let map = EvidenceMap::new("3V3 stays above 3.1 V", &registry, TODAY)
+    let map = EvidenceMap::new("3V3 stays above 3.1 V", &registry, today())
         .with_artifacts(vec![0])
         .with_models(vec![ModelOnPath {
             reference: "U2".into(),
@@ -184,7 +186,7 @@ fn a_consumer_cannot_obtain_a_clean_map_over_an_undermining_set() {
     // There is one constructor, and it decides. `with_*` cannot reach the
     // status, and there is no setter, no Default, and no public field to swap.
     let undermining = [Assumption::open_part("X", "XC6206", "no model matched")];
-    let map = EvidenceMap::new("A", &undermining, TODAY)
+    let map = EvidenceMap::new("A", &undermining, today())
         .with_artifacts(vec![0, 1, 2])
         .with_models(Vec::new())
         .with_coverage("whatever a caller likes");
@@ -196,7 +198,7 @@ fn a_consumer_cannot_obtain_a_clean_map_over_an_undermining_set() {
 
     // And an empty set is the only route to Clean.
     assert_eq!(
-        EvidenceMap::new("B", &[], TODAY).status(),
+        EvidenceMap::new("B", &[], today()).status(),
         EvidenceStatus::Clean
     );
 }
@@ -235,7 +237,7 @@ fn a_producer_can_populate_the_inventory_and_the_json_round_trips() {
     assert_eq!(doc["kind"], "fitted_by_default");
     assert_eq!(doc["scope"]["type"], "board");
 
-    let map = EvidenceMap::new("A", std::slice::from_ref(&assumption), TODAY);
+    let map = EvidenceMap::new("A", std::slice::from_ref(&assumption), today());
     let json = serde_json::to_string(&map).expect("serializes");
     let doc: serde_json::Value = serde_json::from_str(&json).expect("is a JSON document");
     assert_eq!(doc["status"], "undermined");
