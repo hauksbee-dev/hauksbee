@@ -249,14 +249,10 @@ impl CiResult {
             };
             out.push_str(&format!("  [{mark}] {}\n        {}\n", r.label, r.detail));
             // On a real red (not a pass, not an INVALID refusal), add one
-            // actionable "why" line: the observed shortfall the check computed
-            // ("settled 0.100 V below your floor") when it has one, else the
-            // generic per-kind pointer at the likely cause and doc section.
+            // actionable "why" line.
             if !r.passed && !r.invalid {
-                match (&r.why, failure_hint(&r.kind)) {
-                    (Some(why), _) => out.push_str(&format!("        why: {why}\n")),
-                    (None, Some(hint)) => out.push_str(&format!("        why: {hint}\n")),
-                    (None, None) => {}
+                if let Some(why) = why_line(r) {
+                    out.push_str(&format!("        why: {why}\n"));
                 }
                 if let Some(w) = &r.waived {
                     out.push_str(&format!(
@@ -387,10 +383,18 @@ impl CiResult {
                     xml_escape(w)
                 ));
             } else if !r.passed {
+                // The body carries the `why:` line as well as the measured one.
+                // Plenty of people only ever read the Tests tab of a CI run, and
+                // the why is the actionable half: without it the failure says
+                // what the number was and nothing about what to do next.
+                let body = match why_line(r) {
+                    Some(why) => format!("{}\nwhy: {why}", r.detail),
+                    None => r.detail.clone(),
+                };
                 out.push_str(&format!(
                     "      <failure message=\"{}\">{}</failure>\n",
                     xml_escape(&r.detail),
-                    xml_escape(&r.detail)
+                    xml_escape(&body)
                 ));
             } else {
                 out.push_str(&format!(
@@ -630,10 +634,107 @@ pub fn render_junit_error(message: &str) -> String {
     )))
 }
 
+/// The one `why:` line a failed assertion gets, from the best source available:
+///
+/// 1. the shortfall the check MEASURED (`why`), always preferred,
+/// 2. guidance specific to a degenerate outcome the detail describes
+///    ([`degenerate_hint`]),
+/// 3. the generic per-kind pointer at the likely physical cause
+///    ([`failure_hint`]).
+///
+/// Every surface that prints a `why:` goes through here, so the terminal and the
+/// JUnit body cannot end up saying different things about the same failure.
+pub fn why_line(r: &AssertResult) -> Option<String> {
+    r.why
+        .clone()
+        .or_else(|| degenerate_hint(&r.detail))
+        .or_else(|| failure_hint(&r.kind))
+}
+
+/// Guidance for a failure whose measured line says the check never got data.
+///
+/// The per-kind hint below assumes the check RAN and disagreed with the board,
+/// and on a degenerate outcome it contradicts the line above it: "net 'VCC' was
+/// never sampled (no window at 500ms)" followed by "the rail left its window;
+/// check the supply feeding this net" sends someone to the bench over a spec
+/// whose sample window starts after the run ends. These variants get their own
+/// line naming the knob that is wrong instead.
+fn degenerate_hint(detail: &str) -> Option<String> {
+    // boot_coverage: the whole boot window sat past the end of the run.
+    if let (Some(deadline), Some(sim)) = (
+        number_after(detail, "boot deadline "),
+        number_after(detail, "past the end of the "),
+    ) {
+        return Some(format!(
+            "the boot deadline ({deadline} ms) is past the end of the run ({sim} ms), so \
+             the window was never observed; raise duration_ms above {deadline} or lower \
+             deadline_ms below {sim}."
+        ));
+    }
+    // voltage: no sample window exists at the assertion's threshold at all.
+    if let Some(ms) = number_after(detail, "no window at ") {
+        if !is_zero(&ms) {
+            return Some(format!(
+                "the sample window starts at {ms} ms, at or after the end of the run, so \
+                 nothing was measured; raise duration_ms above {ms} or lower after_ms \
+                 below it."
+            ));
+        }
+    }
+    // voltage: the window exists but no frame landed inside it.
+    if let Some(ms) = number_after(detail, "had no samples after ") {
+        return Some(format!(
+            "no frame landed after {ms} ms, so the window is empty; raise duration_ms \
+             above {ms}, lower after_ms, or shorten frame_ms so a frame falls inside it."
+        ));
+    }
+    if detail.contains("was never sampled in scenario window") {
+        return Some(
+            "the scenario window produced no samples for this net; check the net name and \
+             that the [[scenario]]'s `start_ms` falls inside duration_ms."
+                .to_string(),
+        );
+    }
+    if detail.contains("was never sampled") || detail.contains("had no samples") {
+        return Some(
+            "nothing was measured, so there is no board finding here yet; this is the spec \
+             or the run's coverage, not the hardware."
+                .to_string(),
+        );
+    }
+    None
+}
+
+/// The number immediately following `prefix` in `text`, verbatim, so a hint can
+/// quote the value the spec actually carries. `None` when the prefix is absent
+/// or is not followed by a number.
+fn number_after(text: &str, prefix: &str) -> Option<String> {
+    let rest = text.split_once(prefix)?.1;
+    let n: String = rest
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.')
+        .collect();
+    if n.chars().any(|c| c.is_ascii_digit()) {
+        Some(n)
+    } else {
+        None
+    }
+}
+
+/// A threshold of zero means the window was never past the end of anything, so
+/// "raise duration_ms above 0" would be nonsense advice; those fall through to
+/// the generic no-data line.
+fn is_zero(n: &str) -> bool {
+    n.parse::<f64>().map(|v| v == 0.0).unwrap_or(false)
+}
+
 /// One actionable "why / where to look" line for a failed assertion of the
 /// given `kind`. Points at the likely physical cause and the assertion-catalog
 /// section to read, one line, per kind, not a full explanation engine. `None`
 /// for kinds that have no useful generic pointer.
+///
+/// Only reached once [`degenerate_hint`] has ruled out the outcomes where the
+/// check never measured anything: these lines all presume a real measurement.
 fn failure_hint(kind: &str) -> Option<String> {
     let url = hauksbee_ir::docs_url("docs/ci/CI.md");
     Some(match kind {
@@ -776,6 +877,125 @@ mod ensemble_coverage_tests {
             !d.contains("draw"),
             "a corner is deterministic, not a draw: {d}"
         );
+    }
+}
+
+#[cfg(test)]
+mod why_line_tests {
+    use super::*;
+    use crate::assertions::AssertResult;
+    use std::time::Duration;
+
+    fn failing(kind: &str, detail: &str) -> AssertResult {
+        AssertResult {
+            label: format!("{kind} check"),
+            kind: kind.to_string(),
+            passed: false,
+            invalid: false,
+            detail: detail.to_string(),
+            failing_seed: None,
+            failing_seeds: Vec::new(),
+            seeds_total: 1,
+            why: None,
+            waived: None,
+            subject_nets: Vec::new(),
+            subject_refs: Vec::new(),
+        }
+    }
+
+    fn result_of(results: Vec<AssertResult>) -> CiResult {
+        CiResult {
+            spec_name: "t".into(),
+            board: "b.kicad_pcb".into(),
+            results,
+            seeds: 1,
+            elapsed: Duration::from_secs(0),
+            analog_abort: false,
+            coverage: None,
+            substitutions: Vec::new(),
+            coverage_warnings: Vec::new(),
+            dead_rails: Vec::new(),
+            waiver_notes: Vec::new(),
+        }
+    }
+
+    // M1: the canned per-kind hint contradicted the measured line whenever the
+    // check never got data. "never sampled (no window at 500ms)" told the user
+    // to go look at the supply and the load; the spec's window simply starts
+    // after the run ends.
+    #[test]
+    fn a_never_sampled_voltage_names_the_window_not_the_supply() {
+        let r = failing("voltage", "net 'VCC' was never sampled (no window at 500ms)");
+        let why = why_line(&r).expect("a degenerate failure still gets a why");
+        assert!(why.contains("duration_ms"), "{why}");
+        assert!(why.contains("after_ms"), "{why}");
+        assert!(why.contains("500"), "it must quote the value: {why}");
+        assert!(
+            !why.contains("check the supply"),
+            "the misleading board-cause hint must be gone: {why}"
+        );
+        assert!(!why.contains("the load pulling it down"), "{why}");
+    }
+
+    #[test]
+    fn a_boot_deadline_past_the_run_names_the_two_knobs() {
+        let r = failing(
+            "boot_coverage",
+            "boot deadline 500 ms is past the end of the 200.00 ms simulation, so boot \
+             coverage for control net 'EN' cannot be confirmed; extend the run duration",
+        );
+        let why = why_line(&r).expect("a degenerate failure still gets a why");
+        assert!(why.contains("500") && why.contains("200.00"), "{why}");
+        assert!(why.contains("duration_ms") && why.contains("deadline_ms"), "{why}");
+        assert!(
+            !why.contains("the firmware never drove"),
+            "the firmware-cause hint is wrong here: {why}"
+        );
+    }
+
+    #[test]
+    fn a_real_measured_failure_still_gets_the_per_kind_hint() {
+        // The generic hint is right whenever the check DID measure something,
+        // so the fix must not have swallowed it.
+        let r = failing("voltage", "+5V: min=3.100V < required 4.75V <- FAILED HERE");
+        let why = why_line(&r).expect("a measured failure gets the per-kind hint");
+        assert!(why.contains("check the supply feeding this net"), "{why}");
+    }
+
+    #[test]
+    fn a_measured_why_outranks_every_hint() {
+        let mut r = failing("voltage", "+5V: min=3.100V < required 4.75V");
+        r.why = Some("+5V settled 1.650 V below your floor".to_string());
+        assert_eq!(
+            why_line(&r).as_deref(),
+            Some("+5V settled 1.650 V below your floor")
+        );
+    }
+
+    // M7: the JUnit `<failure>` body carried the measured line and dropped the
+    // why, which is the half that says what to do. Plenty of readers only ever
+    // open the Tests tab.
+    #[test]
+    fn the_junit_failure_body_carries_the_why_line() {
+        let mut r = failing("voltage", "+5V: min=3.100V < required 4.75V");
+        r.why = Some("+5V settled 1.650 V below your floor".to_string());
+        let junit = result_of(vec![r]).render_junit();
+        assert!(junit.contains("<failure"), "{junit}");
+        assert!(
+            junit.contains("why: +5V settled 1.650 V below your floor"),
+            "the failure body must carry the why: {junit}"
+        );
+        // The message attribute stays the one-line measured detail.
+        assert!(junit.contains("message=\"+5V: min=3.100V"), "{junit}");
+    }
+
+    #[test]
+    fn the_junit_failure_body_and_the_terminal_agree() {
+        let r = failing("voltage", "net 'VCC' was never sampled (no window at 500ms)");
+        let result = result_of(vec![r]);
+        let why = why_line(&result.results[0]).unwrap();
+        assert!(result.render_human().contains(&format!("why: {why}")));
+        assert!(result.render_junit().contains(&format!("why: {why}")));
     }
 }
 

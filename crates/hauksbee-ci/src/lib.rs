@@ -100,12 +100,24 @@ pub fn apply_waivers(
     }
 }
 
+/// Every check surface a waiver's `check` field can name. A waiver naming
+/// anything else can never match a finding, because nothing produces findings
+/// under that name.
+const WAIVER_SURFACES: &[&str] = &["ci", "drc", "lint", "si"];
+
 /// The housekeeping notes for this run's waiver set, filtered to the `ci`
 /// check: a lapsed `ci` waiver whose finding gates again, and an active `ci`
 /// waiver that matched nothing. Waivers for the static checks (`drc` / `lint`
 /// / `si`) live in the same file but belong to `hauksbee run`'s surfaces;
 /// reporting them stale HERE would tell the user to delete waivers this run
 /// simply never consults.
+///
+/// A waiver whose `check` names NO surface is the exception: it belongs to
+/// nobody, so if this filter skipped it too, a typo like `check = "cl"` would be
+/// the one waiver mistake that is completely silent, while every other one
+/// (missing `reason`, unparseable `until`, no `nets`/`refs`) refuses to load at
+/// all. It gets folded into the matched-nothing accounting here, with the
+/// surface it probably meant.
 pub fn waiver_notes(waivers: &hauksbee_engine::waiver::WaiverSet) -> Vec<String> {
     let mut notes = Vec::new();
     for w in waivers.expired() {
@@ -117,7 +129,21 @@ pub fn waiver_notes(waivers: &hauksbee_engine::waiver::WaiverSet) -> Vec<String>
         }
     }
     for w in waivers.stale() {
-        if w.check.eq_ignore_ascii_case("ci") {
+        let known = WAIVER_SURFACES
+            .iter()
+            .any(|s| w.check.eq_ignore_ascii_case(s));
+        if !known {
+            notes.push(format!(
+                "the waiver on '{}' (reason: {}) sets check = '{}', which is not a check \
+                 hauksbee produces findings under{}, so it can never match anything. \
+                 Valid: {}",
+                w.kind,
+                w.reason,
+                w.check,
+                error::did_you_mean_hint(&w.check, WAIVER_SURFACES),
+                WAIVER_SURFACES.join(", ")
+            ));
+        } else if w.check.eq_ignore_ascii_case("ci") {
             notes.push(format!(
                 "the waiver on '{}' (reason: {}) matched nothing this run; either the \
                  finding is fixed and the waiver can go, or it no longer describes what \
