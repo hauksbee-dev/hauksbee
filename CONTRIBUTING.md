@@ -188,6 +188,35 @@ stderr with what is missing. They never pass quietly.
 A handful of boards carry no redistribution rights at all, so they are absent
 from the manifest. Nothing in the public test suite depends on them.
 
+## Adding support for hardware we do not have
+
+Most of what hauksbee knows about the physical world is data, and adding to it is
+a welcomed contribution rather than a core-team activity. Each route has a
+walkthrough that starts from a real datasheet or file format and ends with the
+test that proves the extension works, and [docs/extending/README.md](docs/extending/README.md)
+indexes them all with the cost of each.
+
+The commonest ones:
+
+- a part model (LDO, op-amp, diode, BJT, MOSFET, comparator): one `[[models]]`
+  entry, no Rust;
+- an I2C or SPI sensor with a register map: one TOML file, no Rust;
+- an MCU variant of a family already supported: two TOML files, no recompile,
+  [docs/extending/add-an-mcu-variant.md](docs/extending/add-an-mcu-variant.md);
+- an MCU family we do not support at all: still TOML when the emulator models
+  the part, and [docs/extending/add-a-microcontroller.md](docs/extending/add-a-microcontroller.md)
+  is honest about the tier where it stops being. That page ends with a checklist
+  a pull request is graded against, and a plain statement of what the maintainer
+  will and will not maintain afterwards.
+
+Two rules apply to all of them, and they are the same rules the rest of this page
+states. A capability is claimed only at the tier a test proves, using the
+proven-end-to-end / boot-only / absent vocabulary
+[docs/cosim/MCU.md](docs/cosim/MCU.md) uses. And anything vendored from another
+project carries a `README.md` beside it recording origin, upstream commit,
+licence and refresh procedure, with the licence text checked in;
+`crates/hauksbee-mcu/db/mcu/rp2040/` is the worked pattern.
+
 ## What a change has to clear
 
 ```bash
