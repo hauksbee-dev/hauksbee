@@ -29,22 +29,33 @@ fn corpus() -> Option<PathBuf> {
 }
 
 /// Known-good schematic-bearing boards (schematic roots + pin-typed netlists).
-fn known_good() -> Vec<&'static str> {
+///
+/// Each entry is a list of alternate relative paths for ONE board, tried in
+/// order. Most boards need only one; the RP2040 reference design needs two
+/// because Raspberry Pi replaced revision 2 with revision 3 at the same URL, so
+/// the hand-built corpus holds r2 and the public fetch holds both under
+/// different ids. Naming a single path there meant the board silently dropped out
+/// of the calibration on whichever corpus you had.
+fn known_good() -> Vec<&'static [&'static str]> {
     vec![
-        "zswatch_mainboard/watch/ZSWatch-Watch.kicad_sch",
-        "zswatch_devkit/v1.2.1/ZSWatch-Watch-DevKit.kicad_sch",
-        "zswatch_devkit/v1.2.0/ZSWatch-Watch-DevKit.kicad_sch",
-        "zswatch_devkit/v1.1.0/Dev-Kit.kicad_sch",
-        "watchy/Watchy.kicad_sch",
-        "lumenpnp/mobo/mobo.kicad_sch",
-        "lumenpnp/ring-light/ringLight.kicad_sch",
-        "olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_sch",
-        "lily58/Pro_V2/Pro_V2.kicad_sch",
-        "rp2040_minimal_kicad/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_sch",
-        "mnt_reform/reform2-motherboard30-pcb/reform2-motherboard30.kicad_sch",
-        "mnt_reform/reform2-motherboard25-pcb/reform2-motherboard25.kicad_sch",
-        "olimex_rp2040_pico_pc/HARDWARE/RP2040-PICO-PC hardware revision D/RP2040-PICO-PC_rev_D.net",
-        "olimex_esp32/HARDWARE/REV-K1/ESP32-EVB_Rev_K1.net",
+        &["zswatch_mainboard/watch/ZSWatch-Watch.kicad_sch"],
+        &["zswatch_devkit/v1.2.1/ZSWatch-Watch-DevKit.kicad_sch"],
+        &["zswatch_devkit/v1.2.0/ZSWatch-Watch-DevKit.kicad_sch"],
+        &["zswatch_devkit/v1.1.0/Dev-Kit.kicad_sch"],
+        &["watchy/Watchy.kicad_sch"],
+        &["lumenpnp/mobo/mobo.kicad_sch"],
+        &["lumenpnp/ring-light/ringLight.kicad_sch"],
+        &["olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_sch"],
+        &["lily58/Pro_V2/Pro_V2.kicad_sch"],
+        &[
+            "rp2040_minimal_kicad/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_sch",
+            "rp2040_minimal_r2/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_sch",
+            "rp2040_minimal_kicad/RPI-RP2040-MINIMAL_R3-S1_public/RPI-RP2040-MINIMAL_R3-S1.kicad_sch",
+        ],
+        &["mnt_reform/reform2-motherboard30-pcb/reform2-motherboard30.kicad_sch"],
+        &["mnt_reform/reform2-motherboard25-pcb/reform2-motherboard25.kicad_sch"],
+        &["olimex_rp2040_pico_pc/HARDWARE/RP2040-PICO-PC hardware revision D/RP2040-PICO-PC_rev_D.net"],
+        &["olimex_esp32/HARDWARE/REV-K1/ESP32-EVB_Rev_K1.net"],
     ]
 }
 
@@ -67,8 +78,19 @@ fn output_contention_is_silent_on_known_good_corpus() {
 
     let mut scanned = 0usize;
     let mut offenders: Vec<String> = Vec::new();
-    for rel in known_good() {
-        let path = root.join(rel);
+    for alts in known_good() {
+        let Some(path) = alts.iter().map(|rel| root.join(rel)).find(|p| p.exists()) else {
+            // Present-but-unreadable and absent are different failures, and this
+            // one is absence. Recorded so the coverage gap is visible; the
+            // `scanned` floor below is what makes it matter.
+            offenders.push(format!("{}: NOT PRESENT in this corpus", alts[0]));
+            continue;
+        };
+        let rel = path
+            .strip_prefix(&root)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
         let Some(board) = load(&path) else {
             // A board that fails to load is recorded, not silently skipped.
             offenders.push(format!("{rel}: FAILED TO LOAD"));
