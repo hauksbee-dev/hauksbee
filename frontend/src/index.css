@@ -435,6 +435,59 @@ code.hb-inline {
   .sidebar .nav-item { justify-content: center; padding: 0; }
 }
 
+/* ── Session switcher ───────────────────────────────────────────────────── */
+
+/* The switcher opens BESIDE the rail, not inside it. The rail is 212px at its
+   widest and 60px collapsed, and neither can hold a list of boards with a name,
+   a file, three facts and four buttons per row. Fixed positioning takes it out
+   of the rail's box entirely, so it keeps its own readable width at every
+   window size the app supports.
+
+   Anchored to the bottom because that is where its trigger is: a panel that
+   opens at the top of the window from a button at the bottom of the rail makes
+   the reader look for what they just clicked. */
+.session-panel {
+  position: fixed;
+  left: 220px;
+  bottom: 12px;
+  z-index: 70;
+  width: 320px;
+  max-width: calc(100vw - 232px);
+  max-height: min(72vh, 560px);
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-pop);
+  overflow: hidden;
+}
+
+/* The list scrolls; the header and the honesty footer do not. Twelve sessions
+   past a short window would otherwise push the footer (which is the part that
+   says what a session cannot hold) off the bottom of the screen. */
+.session-panel-body {
+  overflow-y: auto;
+  min-height: 0;
+  flex: 1;
+}
+
+/* The collapsed rail: follow it in. */
+@media (max-width: 1180px) {
+  .session-panel {
+    left: 68px;
+    max-width: calc(100vw - 80px);
+  }
+}
+
+/* Narrower than the panel plus the rail: give it the window, inset from both
+   edges, rather than squeezing it to 180px of unreadable rows. */
+@media (max-width: 420px) {
+  .session-panel {
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-width: none;
+  }
+}
+
 /* ── View transitions ───────────────────────────────────────────────────── */
 
 /* One soft rise when a view becomes active. Data surfaces inside (canvas,

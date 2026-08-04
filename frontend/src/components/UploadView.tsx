@@ -1,6 +1,9 @@
 import React from 'react'
 import type { BoardSession } from '../hooks/useBoardSession'
-import { BoardTargetIcon } from './Icons'
+import type { SessionsState } from '../hooks/useSessions'
+import { BoardTargetIcon, HistoryIcon } from './Icons'
+import { relTime } from '../lib/rel-time'
+import { hasDefaultName } from '../lib/session-store'
 import { FirmwareJack } from './FirmwareJack'
 import { BOARD_FORMATS, acceptedVendors } from '../lib/board-formats'
 import { ArriveOnce, PressCard, SkeletonBar, useDropTarget, useSkeletonSwap } from '../motion'
@@ -78,10 +81,13 @@ function ReportSkeleton() {
   )
 }
 
-export function UploadView({ session, onOpenLive }: {
+export function UploadView({ session, onOpenLive, sessions, onResume }: {
   session: BoardSession
   /** Open the live session already running server-side (mounts the sim). */
   onOpenLive?: () => void
+  /** Saved sessions, for the resume offer. */
+  sessions?: SessionsState
+  onResume?: (id: string) => void
 }) {
   const {
     busy, uploadError, uploadNotice, dismissNotice, firmwareFile,
@@ -108,6 +114,14 @@ export function UploadView({ session, onOpenLive }: {
   return (
     <div className="landing h-full overflow-y-auto view-enter">
       <div className="max-w-xl mx-auto px-6 pb-24" style={{ paddingTop: 'clamp(2rem, 7vh, 4.5rem)' }}>
+        {/* Where you were last time, offered before the drop zone. It leads with
+            what resuming will actually do, because half of it (the report, the
+            checks) genuinely comes back and half of it (the file) cannot: a
+            "Resume" button that restored a report and then failed on the first
+            action needing the bytes would be worse than no offer at all. */}
+        {!busy && sessions?.resumable && onResume && (
+          <ResumeCard sessions={sessions} onResume={onResume} />
+        )}
         {/* A live session survives a page reload server-side. Landing on a
             bare drop zone while the server still runs a board reads as data
             loss; acknowledge the session and offer to open it. */}
@@ -442,5 +456,82 @@ export function UploadView({ session, onOpenLive }: {
         </div>
       </div>
     </div>
+  )
+}
+
+/** The "resume where you left off" offer. */
+function ResumeCard({ sessions, onResume }: {
+  sessions: SessionsState
+  onResume: (id: string) => void
+}) {
+  const row = sessions.resumable!
+  const now = Date.now()
+  const facts = [
+    `${row.board.numComponents} ${row.board.numComponents === 1 ? 'part' : 'parts'}`,
+    row.checkCount > 0 ? `${row.checkCount} ${row.checkCount === 1 ? 'check' : 'checks'} composed` : null,
+    row.firmwareName ? `firmware ${row.firmwareName}` : null,
+  ].filter(Boolean).join(' · ')
+  const others = sessions.rows.length - 1
+  const autoNamed = hasDefaultName(row)
+
+  return (
+    <ArriveOnce
+      className="mb-6 rounded-xl px-4 py-3.5"
+      style={{ background: 'var(--surface)', border: '1px solid var(--copper-deep)', boxShadow: 'var(--shadow-card)' }}
+    >
+      <div data-testid="session-resume">
+        <div className="flex items-center gap-2 text-[11px] font-bold tracking-widest uppercase" style={{ color: 'var(--copper)' }}>
+          <HistoryIcon size={13} /> Resume where you left off
+        </div>
+        <div
+          className="mt-2 text-[14px] font-semibold truncate"
+          title={row.name}
+          style={{ color: 'var(--silk)', fontFamily: autoNamed ? 'var(--font-mono)' : undefined }}
+        >
+          {row.name}
+        </div>
+        {/* The board file, unless the name is already it: the card led with the
+            same string twice, which reads as a rendering mistake. */}
+        {!autoNamed && (
+          <div className="text-[12px] truncate" title={row.board.fileName} style={{ color: 'var(--silk-dim)', fontFamily: 'var(--font-mono)' }}>
+            {row.board.fileName}
+          </div>
+        )}
+        <div className="mt-0.5 text-[11px] tnum" style={{ color: 'var(--silk-faint)' }}>
+          {facts} · saved {relTime(row.updatedAt, now)}
+        </div>
+        <div className="mt-2.5 flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            data-testid="session-resume-open"
+            onClick={() => onResume(row.id)}
+            className="hb-btn-primary hb-press px-3.5 text-[13px] inline-flex items-center"
+            style={{ height: 32 }}
+          >
+            Resume this session
+          </button>
+          <button
+            type="button"
+            data-testid="session-resume-dismiss"
+            onClick={sessions.dismissResume}
+            className="hb-btn hb-press px-3 text-[12px]"
+            style={{ height: 32 }}
+          >
+            Start fresh
+          </button>
+          {others > 0 && (
+            <span className="text-[11px]" style={{ color: 'var(--silk-faint)' }}>
+              {others} other saved {others === 1 ? 'session' : 'sessions'} in the rail
+            </span>
+          )}
+        </div>
+        <div className="mt-2.5 text-[11.5px] leading-relaxed" style={{ color: 'var(--silk-faint)' }}>
+          The report and the checks come back. The board file itself does not: browsers do not
+          keep one between visits, so re-running the checks or driving it live needs the same
+          file dropped again. If this server still has that board loaded, Resume re-runs it
+          for real instead.
+        </div>
+      </div>
+    </ArriveOnce>
   )
 }

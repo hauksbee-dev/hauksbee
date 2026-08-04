@@ -173,7 +173,12 @@ export function FirmwareJack({ firmware, placement, onFile, onClear, locked = fa
         <span style={{ color: 'var(--silk-faint)', display: 'inline-flex', flexShrink: 0 }}>
           <PlusIcon size={15} />
         </span>
-        <span style={{ color: 'var(--silk-dim)' }}>
+        {/* `.pio/build/<env>/firmware.elf` is one unbreakable token 226px wide,
+            and this jack is 212px on a 320px phone: it ran 56px off the row's
+            right edge, taking the sentence around it with it. `anywhere` (not
+            `break-word`) is the one that also lowers the min-content width, so
+            the flex item actually shrinks instead of pushing its own box out. */}
+        <span className="min-w-0" style={{ color: 'var(--silk-dim)', overflowWrap: 'anywhere' }}>
           <EmptyCopy placement={placement} />
         </span>
       </label>

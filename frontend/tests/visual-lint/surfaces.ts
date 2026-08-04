@@ -178,6 +178,50 @@ export const APP_SURFACES: Surface[] = [
       await settle(page, 600)
     },
   },
+  {
+    id: 'export-menu',
+    what: 'the Export menu open under the report verdict: four files, each named',
+    async reach(page) {
+      await page.click('[data-testid="nav-board"]')
+      await page.locator('[data-testid="export-open"]').scrollIntoViewIfNeeded()
+      await page.click('[data-testid="export-open"]')
+      await page.waitForSelector('[data-testid="export-menu"]')
+      await settle(page)
+    },
+  },
+  {
+    id: 'session-switcher',
+    what: 'the saved-session switcher: rows with rename/delete, and the caveat',
+    async reach(page) {
+      // Escape first: the export menu is still open, and its own dismissal is
+      // part of what this chain is checking.
+      await page.keyboard.press('Escape')
+      await page.click('[data-testid="session-indicator"]')
+      await page.waitForSelector('[data-testid="session-switcher"]')
+      await page.waitForSelector('[data-testid="session-row"]')
+      await settle(page)
+    },
+  },
+  {
+    id: 'session-switcher-renaming',
+    what: 'the same panel with a row in its rename state (input + two buttons)',
+    async reach(page) {
+      await page.locator('[data-testid="session-rename"]').first().click()
+      await page.waitForSelector('[data-testid="session-rename-input"]')
+      await settle(page)
+    },
+  },
+  {
+    id: 'session-resume',
+    what: 'the landing page on a revisit: the resume offer above the drop zone',
+    // LAST in the chain on purpose: it reloads, which throws away every state
+    // the surfaces above walked to.
+    async reach(page) {
+      await page.goto('/', { waitUntil: 'domcontentloaded' })
+      await page.waitForSelector('[data-testid="session-resume"]', { timeout: 20_000 })
+      await settle(page)
+    },
+  },
 ]
 
 /** The marketing site. Optional and tolerant on purpose: it is a separate
