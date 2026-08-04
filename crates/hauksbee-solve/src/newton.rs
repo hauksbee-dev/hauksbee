@@ -113,6 +113,14 @@ pub struct Workspace {
     /// a non-convergence caused by `ln(-2)` names the device instead of
     /// reading as generic Newton failure. Never set on a converged solve.
     behavioral_fault: Option<String>,
+    /// `(worst undamped node-block step in volts, that unknown's index)` from
+    /// the LAST Newton iteration of the most recent attempt. Recorded every
+    /// iteration so that when an attempt gives up, the driver can name the
+    /// unknown that refused to settle instead of reporting a bare iteration
+    /// count (E29). `None` before any iteration computed a step, e.g. a
+    /// factorization that was singular on the first iterate; the blame then
+    /// falls back to the board-wide suspects. Never read on a converged solve.
+    stall_site: Option<(f64, usize)>,
     /// Device-evaluation bypass caches (dev-plan 03 §6), built lazily on the
     /// first bypass-armed solve (`Workspace::new` does not see the options).
     /// `None` on every run with `NewtonBypass::Off`; the default path never
@@ -376,6 +384,7 @@ impl Workspace {
             tran_event: false,
             tran_line_search: false,
             behavioral_fault: None,
+            stall_site: None,
             bypass: None,
             bypass_hold: false,
             spdt_sibling,
@@ -389,6 +398,16 @@ impl Workspace {
     /// refusal messages.
     pub fn behavioral_fault(&self) -> Option<&str> {
         self.behavioral_fault.as_deref()
+    }
+
+    /// The blame clause for the most recent FAILED solve: the unknown that
+    /// refused to settle, the devices on it, and any near-zero-ohm links that
+    /// are the obvious matrix suspects. `None` when nothing can honestly be
+    /// named. Drivers append this to their refusal messages so a
+    /// non-convergence points at an element and a net rather than at a count
+    /// (E29). Meaningless after a converged solve; callers only ask on failure.
+    pub fn stall_blame(&self, circuit: &Circuit) -> Option<String> {
+        crate::blame::blame_clause(circuit, &self.layout, self.stall_site)
     }
 }
 
@@ -485,6 +504,9 @@ pub fn newton_solve(
     ws.x_prev_iter.copy_from_slice(&ws.x);
     // A fresh attempt: any behavioral fault recorded here describes THIS solve.
     ws.behavioral_fault = None;
+    // Same discipline for the stall site: a stale one from a previous attempt
+    // would blame the wrong net.
+    ws.stall_site = None;
     for s in ws.prev_step.iter_mut() {
         *s = 0.0;
     }
@@ -717,6 +739,10 @@ pub fn newton_solve(
         // here and the damping block, so this is bit-identical to the old
         // post-search measurement.
         let (undamped_step_norm, undamped_step_argmax) = node_step_norm(ws);
+        // Latch the worst-moving unknown of THIS iteration. If the attempt is
+        // about to give up, this is the last thing it knew about where the
+        // solve was stuck, and it is what `stall_blame` turns into a named net.
+        ws.stall_site = Some((undamped_step_norm, undamped_step_argmax));
 
         // GLOBAL Armijo line-search (opt-in). Backtrack the full Newton step dx =
         // (ws.x - lin_point) until the trial point's nonlinear residual decreases
@@ -1424,8 +1450,12 @@ fn dc_solve(
             .as_ref()
             .map(|f| format!("; {f}"))
             .unwrap_or_default();
+        let blame = ws
+            .stall_blame(circuit)
+            .map(|b| format!(" [{b}]"))
+            .unwrap_or_default();
         return Err(format!(
-            "DC Newton did not converge in {} iters{fault}",
+            "DC Newton did not converge in {} iters{fault}{blame}",
             r.iters
         ));
     }
@@ -1740,9 +1770,13 @@ fn dc_solve(
         .as_ref()
         .map(|f| format!("; {f}"))
         .unwrap_or_default();
+    let blame = ws
+        .stall_blame(circuit)
+        .map(|b| format!(" [{b}]"))
+        .unwrap_or_default();
     Err(format!(
         "DC homotopy failed (source scale {last_scale:.3}, {last_iters} iters; \
-         staged-DC relaxation did not recover){fault}"
+         staged-DC relaxation did not recover){fault}{blame}"
     ))
 }
 

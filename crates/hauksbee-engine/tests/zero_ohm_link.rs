@@ -91,7 +91,8 @@ fn zero_ohm_resistor_stamps_the_link_resistance_with_a_warning() {
         .expect("R12 has a bind row");
     let warning = row.warning.as_deref().expect("the 0-ohm stamp is loud");
     assert_eq!(
-        warning, "R12 is 0 ohms; stamped as a 1 milliohm link so the solve stays finite",
+        warning,
+        "R12: value '0' is a 0 ohm jumper, bound as a 1 mohm link so the solve stays finite (an infinite conductance would poison the matrix)",
         "the warning names the part and states what was done"
     );
 
