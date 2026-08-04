@@ -7,8 +7,8 @@ probe against the per-quantity tolerance declared in that deck's
 `expect.toml`.
 
 - Oracle: **ngspice ngspice-45.2**
-- Decks: **46**
-- Passing: **46/46**
+- Decks: **48**
+- Passing: **48/48**
 
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Headroom | Where | Result |
 |------|----------|----------|------------------|-----------|----------|-------|--------|
@@ -16,6 +16,9 @@ probe against the per-quantity tolerance declared in that deck's
 | bjt_bias | op | `V(coll)` | 9.512e-6 | 1.0e-4 | 11x | op | PASS |
 |  |  | `V(base)` | 1.633e-6 | 5.0e-5 | 31x | op | PASS |
 |  |  | `V(emit)` | 2.253e-6 | 1.0e-4 | 44x | op | PASS |
+| bjt_bias_temp_85 | op | `V(coll)` | 1.179e-5 | 1.0e-4 | 8x | op | PASS |
+|  |  | `V(base)` | 1.797e-6 | 5.0e-5 | 28x | op | PASS |
+|  |  | `V(emit)` | 2.691e-6 | 1.0e-4 | 37x | op | PASS |
 | bjt_ce_amp | tran | `V(c)` | 2.071e-4 | 2.0e-3 | 10x | t=6.213e-5s | PASS |
 | bjt_sgp_high_injection | op | `I(VC)` | 7.445e-6 | 2.0e-4 | 27x | op | PASS |
 |  |  | `I(VB)` | 7.212e-6 | 2.0e-4 | 28x | op | PASS |
@@ -83,6 +86,12 @@ probe against the per-quantity tolerance declared in that deck's
 |  |  | `V(out) vs closed form` | 9.990e-10 | 1.0e-5 | 10010x | sweep=2.450e0 | PASS |
 |  |  | `V(out) vs closed form` | 9.901e-12 | 1.0e-6 | 101000x | sweep=2.550e0 | PASS |
 |  |  | `V(out) vs closed form` | 9.901e-12 | 1.0e-6 | 101000x | sweep=3.050e0 | PASS |
+| temp_diode_tc_85 | op | `V(d1)` | 5.270e-7 | 2.0e-5 | 38x | op | PASS |
+|  |  | `V(d1) vs closed form` | 3.616e-12 | 1.0e-4 | 27655038x | op=0.000e0 | PASS |
+|  |  | `V(d2)` | 6.930e-7 | 3.0e-5 | 43x | op | PASS |
+|  |  | `V(d2) vs closed form` | 2.267e-11 | 1.0e-4 | 4410280x | op=0.000e0 | PASS |
+|  |  | `V(mid)` | 1.358e-7 | 5.0e-6 | 37x | op | PASS |
+|  |  | `V(mid) vs closed form` | 5.510e-10 | 1.0e-6 | 1815x | op=0.000e0 | PASS |
 | usblc6_forward | op | `V(a)` | 1.370e-6 | 5.0e-5 | 37x | op | PASS |
 | vccs_gm | tran | `V(out)` | 3.025e-3 | 1.0e-2 | 3x | t=1.010e-4s | PASS |
 | vcvs_gain | tran | `V(out)` | 8.650e-3 | 1.0e-2 | 1x | t=9.327e-6s | PASS |
@@ -97,6 +106,7 @@ probe against the per-quantity tolerance declared in that deck's
 
 - **ao3400a_rdson**: AO3400A NMOS on-resistance at VGS = 10 V
 - **bjt_bias**: NPN common-emitter bias point
+- **bjt_bias_temp_85**: NPN common-emitter bias point at 85 C: VBE(T) moves the whole bias chain
 - **bjt_ce_amp**: bypassed-emitter CE amplifier, 20 kHz sine gain
 - **bjt_sgp_high_injection**: 2N3904 vendor card at VBE = 0.75 V, where the high-injection knee bites
 - **bjt_switch_tail**: saturated switch turn-off: storage delay + charge-limited rise
@@ -134,6 +144,7 @@ probe against the per-quantity tolerance declared in that deck's
 - **switch_bjt_mirror_membrane**: Relay gating a BJT current mirror into a 1nF membrane: the reduced one-block synapse deck, held on both flat regions and cross-checked through both edges.
 - **switch_gate_drive_edge**: Relay gating an RC gate load: turn-on instant and gate rise against the closed form v(g) = 5*(1 - exp(-(t - 10.6us)/11us)).
 - **switch_sw_thresholds**: SPICE3 SW relay: holds ROFF across its whole hysteresis band from a cold start, then presents exactly RON past VT+VH.
+- **temp_diode_tc_85**: Diode drops and a TC1 divider at .temp 85: IS(T), Vt(T) and R(T) against exact closed forms.
 - **usblc6_forward**: USBLC6-2P6 forward drop at the datasheet's 10 mA test current
 - **vccs_gm**: VCCS gm-block (1 mS into 2k || 50n) pulse response
 - **vcvs_gain**: VCVS gain-4 block driving an RC low-pass (1 kHz sine)
