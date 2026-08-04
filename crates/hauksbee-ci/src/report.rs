@@ -310,6 +310,21 @@ impl CiResult {
             verdict,
             waived_note
         ));
+        // A RED report ends with where to read about the failing check: the
+        // assertion catalog's section for the first gating failure's kind.
+        if verdict == "RED" {
+            if let Some(r) = self
+                .results
+                .iter()
+                .find(|r| !r.passed && !r.invalid && r.waived.is_none())
+            {
+                out.push_str(&format!(
+                    "next: the \"{}\" section of {} explains this check and its knobs\n",
+                    r.kind,
+                    hauksbee_ir::docs_url("docs/ci/CI.md")
+                ));
+            }
+        }
         out
     }
 
