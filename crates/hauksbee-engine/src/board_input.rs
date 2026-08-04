@@ -22,10 +22,20 @@
 //!   board whose layout carries no title-block name.
 //!
 //! Both feed the same [`NormalizedBoard`], whose [`InputKind`] disambiguates
-//! the two `layout_text == None` cases: an Altium board gets its DRC from the
-//! raw bytes twin ([`ExtractedBoard::altium_drc`]), while a gerber archive has
-//! no layout file at all and its DRC/SI sections say "Not checked" instead of
-//! a vacuous green.
+//! the `layout_text == None` cases: an Altium board gets its DRC from the raw
+//! bytes twin ([`ExtractedBoard::altium_drc`]), while a gerber archive, an ODB++
+//! job and an IPC-2581 document have no layout file at all and their DRC/SI
+//! sections say "Not checked" instead of a vacuous green.
+//!
+//! Two of the accepted formats can only be recognised HERE, not by the extract
+//! crate's reader registry, because the registry claims a format from bytes:
+//!
+//! * an **unpacked ODB++ job** is a directory tree, so it is detected by the
+//!   presence of `matrix/matrix` under the path before the directory is assumed
+//!   to be a gerber folder;
+//! * an **ODB++ archive** is a `.zip` or a `.tgz`, containers the zip branch
+//!   would otherwise classify as gerbers or Board-as-Code, so its content sniff
+//!   runs first.
 //!
 //! This lives in `hauksbee-engine` (not `hauksbee-extract`) because
 //! Board-as-Code compilation ([`crate::boardcode::code_to_board_text`]) needs
@@ -43,8 +53,9 @@ use std::path::Path;
 use hauksbee_extract::ExtractedBoard;
 
 /// What kind of input the normalizer recognised. Call sites use this where
-/// they would otherwise keep `is_binary` / `is_gerber` flags; the two
-/// `layout_text == None` kinds (Altium, Gerber) need different DRC handling.
+/// they would otherwise keep `is_binary` / `is_gerber` flags; the
+/// `layout_text == None` kinds (Altium, Gerber, Odb, Ipc2581) need different DRC
+/// handling from the text ones and from each other.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputKind {
     /// A text layout/netlist format (KiCad `.kicad_pcb`, Eagle `.brd`,
@@ -58,6 +69,13 @@ pub enum InputKind {
     Altium,
     /// A gerber fab archive (directory or zip), reverse-extracted from copper.
     Gerber,
+    /// An ODB++ job (directory, `.tgz` or `.zip`). Like a gerber archive it has
+    /// no KiCad layout text, but unlike one its connectivity is READ from the
+    /// job's own EDA data rather than reconstructed from copper.
+    Odb,
+    /// An IPC-2581 (DPMX) design-exchange document. Text, but not KiCad-parseable
+    /// text, so it carries no `layout_text` either.
+    Ipc2581,
     /// A Board-as-Code `.board` source (bare or zipped), compiled to KiCad
     /// board text; `layout_text` carries the COMPILED text.
     BoardCode,
@@ -90,9 +108,24 @@ impl NormalizedBoard {
         self.kind == InputKind::Altium
     }
 
-    /// A gerber fab archive: no layout file exists, so clearance DRC and
-    /// trace-geometry SI must report "Not checked" rather than a vacuous pass.
+    /// A fab/exchange input with **no KiCad layout text**: a gerber archive, an
+    /// ODB++ job or an IPC-2581 document. Clearance DRC and trace-geometry SI
+    /// must report "Not checked" for these rather than a vacuous pass, which is
+    /// what call sites use this for.
+    ///
+    /// The three differ in how connectivity was obtained (reconstructed from
+    /// copper for gerbers, read from the file for the other two) but not in what
+    /// the geometry-bearing checks can do, which is nothing.
     pub fn is_gerber(&self) -> bool {
+        matches!(
+            self.kind,
+            InputKind::Gerber | InputKind::Odb | InputKind::Ipc2581
+        )
+    }
+
+    /// Specifically a gerber archive, as opposed to the other two geometry-less
+    /// inputs [`is_gerber`](Self::is_gerber) also covers.
+    pub fn is_gerber_archive(&self) -> bool {
         self.kind == InputKind::Gerber
     }
 }
@@ -148,8 +181,8 @@ pub enum BoardInputError {
 /// drift between messages (it already had: a "Supported:" clause that omitted
 /// Altium while the diagnostic said it tried the altium reader).
 const SUPPORTED_FORMATS: &str = "KiCad .kicad_pcb / .kicad_sch / netlist, Eagle .brd, \
-     Altium .PcbDoc, IPC-D-356 .d356, Board-as-Code .board, or a zip of gerbers / a \
-     .board export";
+     Altium .PcbDoc, IPC-2581 .xml, an ODB++ job (folder / .tgz / .zip), IPC-D-356 \
+     .d356, Board-as-Code .board, or a zip of gerbers / a .board export";
 
 impl BoardInputError {
     /// The web front door's wording for this failure: what `/api/analyze`
@@ -179,6 +212,22 @@ impl BoardInputError {
 /// titleless board keeps its empty name so the web report's `board_name` does
 /// not change under the normalizer.
 pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, BoardInputError> {
+    // An ODB++ archive, checked before anything else because its container is a
+    // zip or a gzipped tar and BOTH of those would otherwise be classified as
+    // something they are not (the zip branch below treats every zip as gerbers
+    // or Board-as-Code). Keyed on the `matrix/matrix` member, which no gerber
+    // archive has.
+    if hauksbee_extract::odbpp::looks_like_odbpp_archive(contents) {
+        let board = ExtractedBoard::from_odbpp_archive(contents)
+            .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
+        return Ok(NormalizedBoard {
+            board,
+            layout_text: None,
+            raw: contents.to_vec(),
+            kind: InputKind::Odb,
+        });
+    }
+
     // Binary-first: `from_auto_bytes` claims a recognised binary board (OLE2
     // magic + Altium streams) or returns None so text formats keep their exact
     // behaviour through `from_auto`.
@@ -232,14 +281,21 @@ pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, B
     };
     let board = ExtractedBoard::from_auto(&text)
         .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
+    // IPC-2581 is text but not KiCad-parseable text, so it must NOT be handed to
+    // the geometry-bearing checks as `layout_text`: `ExtractedBoard::drc` returns
+    // an empty report for content it does not recognise, and an empty report
+    // renders as "no copper spacing problems found" — a vacuous green over a
+    // board whose clearances were never examined.
+    let is_ipc2581 =
+        !is_board_code && hauksbee_extract::ipc2581::looks_like_ipc2581(text.as_bytes());
     Ok(NormalizedBoard {
         board,
-        layout_text: Some(text),
+        layout_text: (!is_ipc2581).then(|| text.clone()),
         raw: contents.to_vec(),
-        kind: if is_board_code {
-            InputKind::BoardCode
-        } else {
-            InputKind::Text
+        kind: match (is_board_code, is_ipc2581) {
+            (true, _) => InputKind::BoardCode,
+            (_, true) => InputKind::Ipc2581,
+            _ => InputKind::Text,
         },
     })
 }
@@ -271,6 +327,25 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
     // used to produce a baffling "no copper gerber layers" error right next
     // to a perfectly good .kicad_pcb.
     if path.is_dir() {
+        // An UNPACKED ODB++ job, checked first: it is a directory tree whose
+        // `matrix/matrix` identifies it, and it holds no board file, so without
+        // this check it would fall through to the gerber path and fail with "no
+        // copper gerber layers" while sitting on a complete netlist. This is the
+        // one format the reader registry cannot claim, because a directory has no
+        // bytes to sniff.
+        if hauksbee_extract::odbpp::looks_like_odbpp_dir(path) {
+            let board = ExtractedBoard::from_odbpp(path)
+                .map_err(|e| BoardInputError::Extract(format!("'{}': {e}", path.display())))?;
+            return Ok(with_name_fallback(
+                NormalizedBoard {
+                    board,
+                    layout_text: None,
+                    raw: Vec::new(),
+                    kind: InputKind::Odb,
+                },
+                path,
+            ));
+        }
         let boards = board_files_in(path);
         match boards.as_slice() {
             [] => {}
@@ -353,6 +428,23 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
         }
     })?;
 
+    // An ODB++ ARCHIVE (`.tgz`, `.tar.gz`, `.tar` or `.zip`), before the zip
+    // branch below claims every zip as gerbers. Content-sniffed, so a job saved
+    // under any extension still reads.
+    if hauksbee_extract::odbpp::looks_like_odbpp_archive(&raw) {
+        let board = ExtractedBoard::from_odbpp_archive(&raw)
+            .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
+        return Ok(with_name_fallback(
+            NormalizedBoard {
+                board,
+                layout_text: None,
+                raw,
+                kind: InputKind::Odb,
+            },
+            path,
+        ));
+    }
+
     // A `.zip` is a gerber fab archive or a zipped Board-as-Code export, the
     // same two forms the web drop zone accepts.
     let is_zip = path
@@ -433,6 +525,23 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
         ));
     }
 
+    // IPC-2581: text, but not layout text. Same reasoning as the web path — it
+    // must not reach `ExtractedBoard::drc`, whose empty report for unrecognised
+    // content would render as a clean clearance check that never ran.
+    if hauksbee_extract::ipc2581::looks_like_ipc2581(&raw) {
+        let board = ExtractedBoard::from_ipc2581(&text)
+            .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
+        return Ok(with_name_fallback(
+            NormalizedBoard {
+                board,
+                layout_text: None,
+                raw,
+                kind: InputKind::Ipc2581,
+            },
+            path,
+        ));
+    }
+
     // A `.kicad_sch` may reference sub-sheets that live in sibling files, so
     // it must be loaded by path to recurse the hierarchy; everything else is
     // self-contained and sniffed from its content.
@@ -497,13 +606,38 @@ fn board_files_in(dir: &Path) -> Vec<std::path::PathBuf> {
                 .and_then(|x| x.to_str())
                 .map(|x| x.to_ascii_lowercase())
                 .unwrap_or_default();
-            if p.is_file() && BOARD_EXTS.contains(&ext.as_str()) {
+            if !p.is_file() {
+                continue;
+            }
+            if BOARD_EXTS.contains(&ext.as_str()) {
+                found.push(p);
+                continue;
+            }
+            // An IPC-2581 document is a board file, but `.xml` is far too generic
+            // an extension to claim on its name alone (an Eagle library, a Maven
+            // POM and a KiCad worksheet are all `.xml`). Read the head and let the
+            // root element decide, the same way the reader registry does.
+            if ext == "xml" && ipc2581_head(&p) {
                 found.push(p);
             }
         }
     }
     found.sort();
     found
+}
+
+/// Does this file's leading 4 KiB declare an IPC-2581 document? Reads only the
+/// head, so scanning a directory of large XML never reads them whole.
+fn ipc2581_head(path: &Path) -> bool {
+    use std::io::Read;
+    let Ok(mut f) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = vec![0u8; 4096];
+    match f.read(&mut head) {
+        Ok(n) => hauksbee_extract::ipc2581::looks_like_ipc2581(&head[..n]),
+        Err(_) => false,
+    }
 }
 
 /// The CLI/CI wording for a failed gerber reverse-extraction from a path.
@@ -663,6 +797,13 @@ mod tests {
 
     const KICAD: &[u8] = include_bytes!("../../hauksbee-ci/examples/boards/boot_gate.kicad_pcb");
     const ALTIUM: &[u8] = include_bytes!("../../../testdata/boards/altium_two_resistor.PcbDoc");
+    /// boot_gate exported by kicad-cli 9.0.3; the same fixtures the extract
+    /// crate's cross-format agreement test uses (see its module docs for
+    /// provenance). boot_gate reads as 3 components / 4 nets natively.
+    const ODB_ZIP: &[u8] =
+        include_bytes!("../../hauksbee-extract/tests/fixtures/exchange/boot_gate.odb.zip");
+    const IPC2581: &[u8] =
+        include_bytes!("../../hauksbee-extract/tests/fixtures/exchange/boot_gate.ipc2581.xml");
 
     const DSL: &[u8] = br#"# Board-as-Code (hauksbee board DSL v1)
 board version 20241229
@@ -923,5 +1064,131 @@ fn main {
         assert!(norm.is_gerber());
         assert!(norm.layout_text.is_none());
         assert!(!norm.board.nets.is_empty(), "nets recovered from copper");
+    }
+
+    /// The counts boot_gate reads as through the native KiCad path, so the two
+    /// exchange normalizer paths are checked against a real number and not just
+    /// against "non-empty".
+    const BOOT_GATE: (usize, usize) = (3, 4);
+
+    #[test]
+    fn an_odbpp_zip_normalizes_as_odb_and_not_as_gerbers() {
+        // Both entry points, because the zip branch each one owns would
+        // otherwise claim the archive as a gerber job and fail on its absent
+        // copper films.
+        let norm = from_bytes("boot_gate.odb.zip", ODB_ZIP).expect("ODB++ zip normalizes");
+        assert_eq!(norm.kind, InputKind::Odb);
+        assert_eq!(norm.board.components.len(), BOOT_GATE.0);
+        assert_eq!(norm.board.nets.len(), BOOT_GATE.1);
+        assert!(
+            norm.layout_text.is_none(),
+            "an ODB++ job carries no KiCad layout text"
+        );
+        assert!(
+            norm.is_gerber() && !norm.is_gerber_archive(),
+            "geometry-less like a gerber archive, but not one"
+        );
+        assert!(!norm.is_binary());
+
+        let dir = std::env::temp_dir().join(format!("hauksbee-bi-odb-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("boot_gate.odb.zip");
+        std::fs::write(&file, ODB_ZIP).unwrap();
+        let norm = from_path(&file).expect("ODB++ zip normalizes from a path");
+        assert_eq!(norm.kind, InputKind::Odb);
+        assert_eq!(norm.board.components.len(), BOOT_GATE.0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_unpacked_odbpp_job_directory_normalizes_instead_of_failing_as_gerbers() {
+        let dir = std::env::temp_dir().join(format!("hauksbee-bi-odbdir-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        // Unpack the fixture the way a user who double-clicked the archive would.
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(ODB_ZIP)).unwrap();
+        for i in 0..zip.len() {
+            let mut f = zip.by_index(i).unwrap();
+            if f.is_dir() {
+                continue;
+            }
+            let out = dir.join("boot_gate").join(f.name());
+            std::fs::create_dir_all(out.parent().unwrap()).unwrap();
+            let mut buf = Vec::new();
+            std::io::Read::read_to_end(&mut f, &mut buf).unwrap();
+            std::fs::write(&out, buf).unwrap();
+        }
+        // The job root itself, and the directory holding it: both must work.
+        for target in [dir.join("boot_gate"), dir.clone()] {
+            let norm = from_path(&target).expect("ODB++ directory normalizes");
+            assert_eq!(norm.kind, InputKind::Odb, "for {}", target.display());
+            assert_eq!(norm.board.components.len(), BOOT_GATE.0);
+            assert_eq!(norm.board.nets.len(), BOOT_GATE.1);
+            assert!(norm.layout_text.is_none());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_ipc2581_document_normalizes_with_no_layout_text() {
+        // `layout_text: None` is the load-bearing part: handing the XML to
+        // `ExtractedBoard::drc` returns an EMPTY report (it recognises neither
+        // KiCad nor Eagle), and an empty report renders as "no copper spacing
+        // problems found" over a board nobody checked.
+        let norm = from_bytes("boot_gate.ipc2581.xml", IPC2581).expect("IPC-2581 normalizes");
+        assert_eq!(norm.kind, InputKind::Ipc2581);
+        assert_eq!(norm.board.components.len(), BOOT_GATE.0);
+        assert_eq!(norm.board.nets.len(), BOOT_GATE.1);
+        assert!(norm.layout_text.is_none());
+        assert!(norm.is_gerber() && !norm.is_gerber_archive());
+
+        let dir = std::env::temp_dir().join(format!("hauksbee-bi-ipc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("boot_gate.ipc2581.xml");
+        std::fs::write(&file, IPC2581).unwrap();
+        let norm = from_path(&file).expect("IPC-2581 normalizes from a path");
+        assert_eq!(norm.kind, InputKind::Ipc2581);
+        assert!(norm.layout_text.is_none());
+        // And a directory holding only it resolves to it, rather than being
+        // treated as a gerber folder: `.xml` is claimed on content, not name.
+        let norm = from_path(&dir).expect("the directory resolves to the document");
+        assert_eq!(norm.kind, InputKind::Ipc2581);
+        // An unrelated `.xml` in the same directory is NOT claimed.
+        std::fs::write(dir.join("pom.xml"), b"<project><groupId>x</groupId></project>").unwrap();
+        let norm = from_path(&dir).expect("still exactly one board file");
+        assert_eq!(norm.kind, InputKind::Ipc2581);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_three_exchange_readings_of_boot_gate_agree_through_the_normalizer() {
+        // The normalizer is the chokepoint every surface uses, so the agreement
+        // the extract crate proves must survive it.
+        let native = from_bytes("boot_gate.kicad_pcb", KICAD).expect("native");
+        let odb = from_bytes("boot_gate.odb.zip", ODB_ZIP).expect("odb");
+        let ipc = from_bytes("boot_gate.ipc2581.xml", IPC2581).expect("ipc");
+        for other in [&odb, &ipc] {
+            assert_eq!(
+                other.board.components.len(),
+                native.board.components.len(),
+                "components"
+            );
+            assert_eq!(other.board.nets.len(), native.board.nets.len(), "nets");
+            let pads = |b: &ExtractedBoard| -> usize { b.components.iter().map(|c| c.pins.len()).sum() };
+            assert_eq!(pads(&other.board), pads(&native.board), "pads");
+        }
+    }
+
+    #[test]
+    fn a_zip_that_is_neither_odbpp_nor_gerbers_still_gets_its_own_message() {
+        // Adding the ODB++ branch must not swallow the existing zip diagnostics.
+        let bytes = zip_of(&[("README.md", b"nothing to see" as &[u8])]);
+        let err = from_bytes("mystery.zip", &bytes).expect_err("an empty zip is not a board");
+        let msg = err.to_string();
+        assert!(
+            !msg.contains("matrix/matrix"),
+            "a non-ODB++ zip must not be described as a broken ODB++ job: {msg}"
+        );
     }
 }
