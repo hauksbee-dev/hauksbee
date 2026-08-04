@@ -337,11 +337,21 @@ fn escaped_net_names_are_displayed_as_real_names() {
     let p = tmp("slashnet.kicad_pcb");
     std::fs::write(
         &p,
+        // One real component: a components-free board is now refused as
+        // invalid for analysis (the M6 empty-board guard), and this test is
+        // about net-NAME display, not about empty boards.
         r#"(kicad_pcb (version 20221018) (generator pcbnew)
   (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
   (net 0 "")
   (net 1 "/GPIO0{slash}XTAL1")
   (net 2 "SCL_{2}")
+  (module Resistor_SMD:R_0402_1005Metric (layer F.Cu)
+    (at 100 100)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 1 "/GPIO0{slash}XTAL1"))
+    (pad 2 smd rect (at 1 0) (net 2 "SCL_{2}"))
+  )
   (segment (start 0 0) (end 5 0) (width 0.5) (layer "F.Cu") (net 1))
   (segment (start 0 2) (end 5 2) (width 0.5) (layer "F.Cu") (net 2))
 )
