@@ -657,9 +657,17 @@ fn check_design_file_qc(board: &ExtractedBoard, report: &mut NetLintReport) {
         };
         let value_trimmed = c.value.trim();
         let value_upper = value_trimmed.to_ascii_uppercase();
-        if value_trimmed.is_empty()
+        // A solder jumper / solder bridge / net tie has no electrical value BY
+        // DESIGN, and its reference can look passive (the Arduino Uno's
+        // RESET-EN solder jumper starts with 'R'). Demanding a value be "set"
+        // on such a part is a guaranteed false positive, so the link-part class
+        // the DNP policy already recognises is exempt from the placeholder
+        // check. (Verified fire before this guard: Arduino Uno R3 RESET-EN,
+        // library "jumper", package "SJ", value "".)
+        if (value_trimmed.is_empty()
             || value_upper == "?"
-            || (value_upper.len() == 1 && matches!(value_upper.as_str(), "R" | "C" | "L"))
+            || (value_upper.len() == 1 && matches!(value_upper.as_str(), "R" | "C" | "L")))
+            && !crate::dnp::is_jumper_or_net_tie(c)
         {
             report.findings.push(LintFinding {
                 check: LintCheck::PlaceholderValue,
@@ -1658,5 +1666,79 @@ mod rail_and_cap_tests {
         assert_eq!(parse_capacitance_uf("100nF16V"), Some(0.1));
         // Bare-prefix R-style decimals still fold the trailing digits in.
         assert_eq!(parse_capacitance_uf("4u7"), Some(4.7));
+    }
+}
+
+#[cfg(test)]
+mod placeholder_jumper_exemption_tests {
+    use crate::{Component, ExtractedBoard, LintCheck};
+
+    fn comp(reference: &str, value: &str, lib_id: &str, footprint: &str) -> Component {
+        Component {
+            reference: reference.into(),
+            value: value.into(),
+            lib_id: lib_id.into(),
+            footprint: footprint.into(),
+            position: None,
+            layer: String::new(),
+            properties: Vec::new(),
+            dnp: false,
+            pins: Vec::new(),
+        }
+    }
+
+    fn placeholder_count(components: Vec<Component>) -> usize {
+        let board = ExtractedBoard {
+            name: "test".into(),
+            nets: Vec::new(),
+            components,
+        };
+        board
+            .net_lint()
+            .of_check(LintCheck::PlaceholderValue)
+            .count()
+    }
+
+    #[test]
+    fn solder_jumpers_with_empty_value_are_not_placeholders() {
+        // The verified corpus false fire: Arduino Uno R3 RESET-EN, an Eagle
+        // solder jumper (library "jumper", package "SJ") whose value is ""
+        // BY DESIGN. Its 'R'-leading reference made passive_prefix read it as
+        // a resistor, so the placeholder-value lint demanded a value be set.
+        // The link-part class must be exempt.
+        assert_eq!(
+            placeholder_count(vec![comp("RESET-EN", "", "jumper:SJ", "SJ")]),
+            0,
+            "an Eagle SJ solder jumper is not a placeholder-valued resistor"
+        );
+        // KiCad conventions, with deliberately passive-looking references so
+        // the exemption (not the reference prefix) is what protects them.
+        assert_eq!(
+            placeholder_count(vec![
+                comp(
+                    "R100",
+                    "",
+                    "Jumper:SolderJumper_2_P1.3mm_Open",
+                    "Jumper:SolderJumper_2_P1.3mm_Open_RoundedPad1.0x1.5mm"
+                ),
+                comp("L7", "", "Device:Net-Tie_2", "NetTie:NetTie-2_SMD_Pad0.5mm"),
+            ]),
+            0,
+            "KiCad solder jumpers / net ties are not placeholder-valued passives"
+        );
+    }
+
+    #[test]
+    fn genuine_unset_passives_still_fire() {
+        // The exemption must not blunt the real check: a plain resistor /
+        // capacitor with an empty or bare-letter value is still a defect.
+        assert_eq!(
+            placeholder_count(vec![
+                comp("R1", "", "Device:R", "Resistor_SMD:R_0603_1608Metric"),
+                comp("C2", "?", "Device:C", "Capacitor_SMD:C_0402_1005Metric"),
+            ]),
+            2,
+            "real unset passives must keep firing"
+        );
     }
 }
