@@ -47,7 +47,7 @@
 
 use hauksbee_mcu::renode::is_available;
 use hauksbee_mcu::{Mcu, PinId, RenodeBackend, RenodeConfig};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 /// Poll interval. 100x finer than the firmware's silicon half-period; see the
@@ -80,7 +80,7 @@ fn firmware(name: &str) -> Option<PathBuf> {
 ///
 /// `None` means "could not measure", never "measured fine": a spawn or load
 /// failure is reported by the caller as a SKIP, not swallowed into a pass.
-fn measure(cfg: RenodeConfig, elf: &PathBuf, pin: PinId) -> Option<f64> {
+fn measure(cfg: RenodeConfig, elf: &Path, pin: PinId) -> Option<f64> {
     let mut mcu = RenodeBackend::new(cfg).ok()?;
     mcu.load_firmware(elf).ok()?;
     // Poll only the port the firmware drives. Every chunk costs one Monitor
