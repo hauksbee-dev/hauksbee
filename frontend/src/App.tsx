@@ -475,13 +475,18 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
           {/* Both header actions keep their glyph at every width and give up their
               words as the header narrows: the secondary one first (from `lg`), the
               primary CTA last (from `sm`). Icon-only, never a label the header cut
-              in half: the words ride along as the accessible name and the tooltip. */}
+              in half: the words ride along as the accessible name.
+
+              The name only, deliberately: a `title` carrying the same string is
+              read as the control's description as well as its name, so the
+              button announces itself twice ("Drive it live, Drive it live"). The
+              words are on screen at the widths that have a pointer to hover
+              with, so the tooltip was buying nothing for the duplication. */}
           {report && !session.busy && (
             <button
               type="button"
               data-testid="header-another-board"
               onClick={analyzeAnother}
-              title="Analyze another board"
               aria-label="Analyze another board"
               className="hb-btn hb-press inline-flex items-center justify-center gap-2 px-2.5 lg:px-3 text-[12px] whitespace-nowrap shrink-0"
               style={{ height: 32 }}
@@ -497,7 +502,6 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
               data-testid="run-it"
               onClick={driveLive}
               disabled={session.launch.phase === 'launching'}
-              title={liveLabel}
               aria-label={liveLabel}
               className="hb-btn-primary hb-press inline-flex items-center justify-center gap-2 px-2.5 sm:px-3.5 text-[12px] whitespace-nowrap shrink-0"
               style={{ height: 32 }}
