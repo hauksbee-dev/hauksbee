@@ -39,8 +39,8 @@ bit-bangs a clock and `digitalRead`s the resulting serial-out bit in the SAME
 tight loop, e.g. the Tarski `_ReadShiftRegisterWord`, which for 16 bits does
 `digitalRead(MISO)` then pulses SCLK with back-to-back, sub-µs
 `digitalWrite`s. By the time the chunk ends, the firmware has already
-finished reading. Injecting MISO once per chunk (the old behaviour) reads
-`0x0000`.
+finished reading. Injecting MISO once per chunk would read `0x0000`: the
+firmware is long past those cycles before the next injection arrives.
 
 `on_input_responder` fixes this: the AVR backend invokes it from the same
 per-port output hook that fires `on_pin_change`, and it raises the pins it
@@ -374,16 +374,16 @@ the firmware runs unmodified.
 
 ## Per-architecture support matrix
 
-A row is **Proven** only if it was actually run end-to-end on this branch (a
-real emulator booting real firmware against the solved circuit, with the
-output recorded). We label anything not run for real honestly. Every
+A row is **Proven** only if it has actually been run end-to-end (a real emulator
+booting real firmware against the solved circuit, with the output recorded).
+Anything short of that says what it is instead of borrowing the word. Every
 `renode:`/`qemu:` row's config is a `db/mcu/<part>.soc.toml` descriptor, named
 by the `backend:part` in the first column; the built-in constructors load these
 files. The AVR row has none by design (simavr's own part database does the
 work), and the bottom two rows have none because they have no backend to
 configure.
 
-| Architecture | Backend | Emulator / platform | Proof run on this branch |
+| Architecture | Backend | Emulator / platform | End-to-end proof |
 |--------------|---------|---------------------|--------------------------|
 | ATmega328P (AVR) | `simavr:atmega328p` | libsimavr (in-process) | **Proven** (pre-existing AVR demo) |
 | STM32F103 (Cortex-M3, blue pill) | `renode:stm32f103` | Renode `stm32f103.repl` | **Proven**: "hello from stm32", R1 current via solver, PC13 toggles |
@@ -391,7 +391,7 @@ configure.
 | ESP32-C3 (RISC-V RV32IMC) | `qemu:esp32c3` | Espressif QEMU `esp32c3` | **Proven**: "hello from esp32", R1 = 3.727 mA via solver, GPIO4 32 toggles |
 | nRF52840 (Cortex-M4) | `renode:nrf52840` | Renode `nrf52840.repl` | **Proven (UART boot)**: Zephyr shell `uart:~$` through the bridge. Bus controllers `twi0`/`twi1`/`spi2` live-verified (bridge registration, `renode_nrf52840_bus.rs`); an end-to-end nRF sensor round-trip awaits an nRF bus firmware fixture. Solved-LED-current proof would need a custom blinky ELF (the GPIO bridge is the STM32-proven ODR-poll). |
 | SiFive FE310 (RISC-V RV32, HiFive1) | `renode:sifive_fe310` | Renode `sifive-fe310.repl` | **Proven (UART boot)**: "BOOTING ZEPHYR OS ... shell>" through the bridge (needs `post_load_setup`: PRCI tags + `cpu PC vinit`). |
-| STM32F4 Discovery (Cortex-M4) | `renode:stm32f4_discovery` | Renode `stm32f4_discovery.repl` | Config shipped; platform present; not run on this branch |
+| STM32F4 Discovery (Cortex-M4) | `renode:stm32f4_discovery` | Renode `stm32f4_discovery.repl` | Config shipped; platform present; not yet run end-to-end |
 | ESP32-S3 (Xtensa LX7) | `qemu:esp32s3` | Espressif QEMU `esp32s3` | **Wiring proven (machine boots, channels connect); app proof pending an S3 image.** The builtin `esp32s3` model entry binds to `qemu:esp32s3` (regression: `mcu_family_router.rs`), and `esp32_qemu_cosim.rs` boots the fork's real `esp32s3` machine from a blank flash (the ROM idles), connects QMP + gdbstub + UART, and steps the lockstep. The full app-level proof (UART banner + solved LED current, like the ESP32/C3 rows) needs a merged S3 flash image, which requires esp-idf with the esp32s3 Xtensa toolchain (`idf.py set-target esp32s3`; recipe in `testdata/firmware/esp32_blinky/build.sh`). |
 | RP2040 (dual Cortex-M0+, Raspberry Pi Pico) | `renode:rp2040` | Renode `rp2040.repl` | Config shipped + unit-tested; **platform ABSENT in installed Renode 1.16.1**; smoke skip-gated (see note below) |
 | ESP32-C6, ESP32-H2 |, |, | Not in the Espressif QEMU fork's machine list; out of scope |
