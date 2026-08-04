@@ -161,6 +161,26 @@ fn cosim_json_from(sched: &Scheduler) -> CosimJson {
                 controller: b.controller.clone(),
             })
             .collect(),
+        watchdog_limitations: sched
+            .watchdog_limitations()
+            .into_iter()
+            .map(
+                |(mcu_ref, limitation)| hauksbee_engine::result::CosimWatchdogLimitation {
+                    mcu_ref,
+                    limitation,
+                },
+            )
+            .collect(),
+        watchdog_resets: sched
+            .watchdog_resets()
+            .into_iter()
+            .map(
+                |(mcu_ref, resets)| hauksbee_engine::result::CosimWatchdogResets {
+                    mcu_ref,
+                    resets,
+                },
+            )
+            .collect(),
     }
 }
 
