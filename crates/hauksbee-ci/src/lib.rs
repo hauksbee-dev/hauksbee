@@ -42,6 +42,23 @@ pub use init::init;
 pub use report::CiResult;
 pub use spec::Spec;
 
+/// The `--version` string: crate version plus the git hash this binary was
+/// built from (`build.rs` sets `GIT_HASH`; absent outside a git checkout, e.g.
+/// a source tarball, in which case the bare crate version is all we honestly
+/// have). Two consumers must agree on it byte for byte: clap's `version =` in
+/// main.rs, and the `# installed by ...` line [`integrate::hook_install`]
+/// writes into the pre-commit hook so the hook can warn when the binary on
+/// PATH is a different build. Returned as `&'static str` because that is what
+/// clap's `version` wants; the one-time `OnceLock` init is the cheapest way to
+/// a static composed string.
+pub fn version_string() -> &'static str {
+    static V: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    V.get_or_init(|| match option_env!("GIT_HASH") {
+        Some(hash) => format!("{} (git {hash})", env!("CARGO_PKG_VERSION")),
+        None => env!("CARGO_PKG_VERSION").to_string(),
+    })
+}
+
 /// How to run a spec.
 #[derive(Debug, Clone, Default)]
 pub struct RunConfig {
