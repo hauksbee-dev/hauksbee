@@ -175,6 +175,7 @@ Corpus-gated tests in
 `hauksbee run .../RP2040-PICO-PC_rev_D.net --resources`:
 
 ```
+resource-conflicts: 1 finding(s)
 [high] mcu_resource_conflict - RP2040_PLATFORM1 (2X(PN1X20(F-D-1X20-LF))): two
   functions demand RP2040 PWM slice/channel 6A, which can serve only one pin at
   a time [RP2040 datasheet 4.5.2, GPIO->slice = (n>>1)&7, ch A/B by parity]:
@@ -185,7 +186,13 @@ Corpus-gated tests in
     (3.5mm/PJ-W47S-05D2-LF)); and PicoDVI PWM pixel clock (GP12 pad 16, net
     '/PICO_CK-': net '/PICO_CK-' -> R10 -> net '/CK-' reaches HDMI1
     (HDMI-SWM-19))
+note: run the same command with --plain for a plain-language explanation of each finding and how to fix it.
+note: gate-grade finding(s) above, but this is a report command so the exit code is 0. Add --strict to exit 2 on them (exit contract: 0 = clean or report-only, 2 = findings under --strict, 3 = invalid for analysis), or gate CI with hauksbee-ci.
 ```
+
+(The finding is one long line in the real output; it is wrapped here to fit the
+page. The two `note:` lines are on stderr, and the second one is why this run
+still exits 0: `--resources` reports, `--strict` gates.)
 
 The full evidence chain to the s-expression level: GP12 (slice 6A) drives the
 DVI clock to the HDMI connector through the series-termination resistor R10.
@@ -209,6 +216,7 @@ the one where it does not - the strongest form of two-sided validation.
 `hauksbee run .../SAMD51_Thing_Plus.brd --resources`:
 
 ```
+resource-conflicts: 1 finding(s)
 [low] mcu_resource_conflict - U2 (ATSAMD51J20A-A): the fixed QSPI pin group
   'qspi_data' is committed to one non-QSPI function across 4 pads (SAM D5x QSPI
   is pin-locked to PA08..PA11/PB10/PB11, not PORT-routable) [SAM D5x/E5x Data
@@ -224,7 +232,13 @@ the one where it does not - the strongest form of two-sided validation.
   can never drive these pads, so quad-rate access to this device is off the
   table; the netlist cannot tell deliberate plain-SPI from an unintended loss of
   QSPI.
+note: run the same command with --plain for a plain-language explanation of each finding and how to fix it.
 ```
+
+Note what is *absent* next to the Olimex run above: there is no "gate-grade
+finding(s)" note here, because a `[low]` finding is not gate-grade. Even under
+`--strict` this board stays green, which is the intended answer for a wiring the
+vendor chose on purpose.
 
 Verified at file level both ways: the Eagle `.brd` puts the flash (U4) on U2 pads
 17..20 (= TQFP64 pins 17..20 = PA08..PA11), and the `.sch` independently names
