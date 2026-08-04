@@ -1,0 +1,6 @@
+a deck that asks for an analysis hauksbee does not implement (learn chapter 8)
+V1 in 0 DC 5
+R1 in out 1k
+C1 out 0 1u
+.four 1k v(out)
+.end

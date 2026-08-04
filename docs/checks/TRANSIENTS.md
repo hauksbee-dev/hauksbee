@@ -450,4 +450,5 @@ ESR and ESL stay at the package-class default from that section's table. Walking
 min-C and max-ESR together, the real worst corner for a decoupling network, needs
 the parasitics to carry their own band.
 
-Long-form how-and-why: `docs/how-and-why/hauksbee-ci/tolerance.md`.
+The tolerance model's own reference is `docs/ci/CI.md`, which specifies the
+ensemble and what each corner means.

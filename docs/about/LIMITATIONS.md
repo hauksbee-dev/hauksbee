@@ -89,6 +89,22 @@ What is honestly missing:
 These are the genuine open limitations the code carries today, each with the
 reason it is open and what would close it.
 
+### A co-sim chunk whose analog solve fails holds stale voltages
+
+The co-sim advances the circuit in chunks. If the analog solver fails to
+converge on a chunk, that chunk's node voltages are the previous chunk's, not a
+solved answer, so every voltage, current and fault reading inside that window is
+fiction. The run says so rather than hiding it: a warning names the failed chunk
+count and the time spans, `--strict` turns it into a failing exit, and the web
+report raises it as a finding on the co-sim card. What it cannot do is give you a
+number for those windows, and it will not invent one.
+
+The usual cause is structural rather than numerical: unresolved active parts
+leaving nodes floating (`hauksbee models --help` lists what is unresolved), a
+stiff or singular section, or conflicting rails. Resolve the parts or simplify
+the offending section and re-run. What would close this is per-chunk fallback
+integration, which is not built.
+
 ### nRF5340 has no co-sim backend
 
 The Renode 1.16.1 portable build ships no nRF5340 platform, so the

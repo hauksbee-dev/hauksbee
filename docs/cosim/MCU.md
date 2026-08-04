@@ -190,7 +190,8 @@ warnings). A CI `peripheral` assertion against an unexercised bus device
 | `renode:stm32f103` | **none**: stock `stm32f103.repl` models no ADC (verified live); injections drop + warn | `i2c1` | `spi1` (via `extra_repl`) |
 | `renode:stm32f4_discovery` | **none**: same reason | `i2c1` | `spi2`, `spi3` (see below) |
 | `renode:nrf52840` | **none**: the live repl models no ADC/SAADC | `twi0`, `twi1` (live-verified: bridge registers on both) | `spi2` (live-verified registration) |
-| `renode:sifive_fe310` / `renode:rp2040` | none | none (unverified peripherals, a bound slave warns + fails CI assertions) | none |
+| `renode:sifive_fe310` | none | none (unverified peripherals, a bound slave warns + fails CI assertions) | none |
+| `renode:rp2040` | inputs 0..3 (proven end-to-end against stock `adc_read()`); input 4 is the on-die temperature sensor, not an external node, so it drops + warns | `i2c0`, `i2c1` (proven end-to-end, both directions) | **none**: the vendored PL022 bit-bangs onto GPIO and never dispatches to a registered slave, so a bound slave warns + fails CI assertions (see below) |
 | `qemu:esp32/-s3/-c3` | RAM-mailbox contract | RAM-mailbox contract + machine tmp105 | RAM-mailbox contract |
 
 Why the F4 lists `spi2`/`spi3` and not `spi1`: the base `stm32f4.repl` that

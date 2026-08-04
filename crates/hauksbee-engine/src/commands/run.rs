@@ -1019,7 +1019,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 crate::scheduler::STRICT_CONSECUTIVE_FAILED_ABORT,
                 failed_chunk_count,
                 unresolved_active_count,
-                hauksbee_ir::docs_url("docs/learn/05-going-fast.md"),
+                hauksbee_ir::docs_url("docs/about/LIMITATIONS.md"),
             );
             if let Some(code) = strict_analog_exit_code(cfg.strict && analog_abort) {
                 std::process::exit(code);
