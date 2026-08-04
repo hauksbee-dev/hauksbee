@@ -232,30 +232,16 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // --junit/--sarif: the full static suite (same checks and waiver
     // discipline as --check) written as CI artifacts BEFORE the chosen report
     // renders, so any selector, or none, can produce them alongside its
-    // normal output.
+    // normal output. The findings are kept: a headless co-sim REWRITES the
+    // artifacts afterwards with its stress faults appended, so the CI file a
+    // pipeline archives carries the whole run, not just the static half.
+    let mut ci_findings: Option<Vec<crate::result::JsonFinding>> = None;
     if cfg.junit.is_some() || cfg.sarif.is_some() {
         let findings = crate::reports::check::gather_findings(
             &cfg.board, &board, &text, &raw, is_altium, &lib,
         )?;
-        if let Some(p) = &cfg.junit {
-            std::fs::write(
-                p,
-                crate::reports::ci_artifacts::junit_xml(
-                    &crate::commands::common::file_name(&cfg.board),
-                    &findings,
-                ),
-            )
-            .map_err(|e| anyhow::anyhow!("writing --junit '{}': {e}", p.display()))?;
-            eprintln!("wrote JUnit report to {}", p.display());
-        }
-        if let Some(p) = &cfg.sarif {
-            std::fs::write(
-                p,
-                crate::reports::ci_artifacts::sarif_json(&cfg.board, &findings),
-            )
-            .map_err(|e| anyhow::anyhow!("writing --sarif '{}': {e}", p.display()))?;
-            eprintln!("wrote SARIF report to {}", p.display());
-        }
+        write_ci_artifacts(&cfg, &findings)?;
+        ci_findings = Some(findings);
     }
 
     // --serial-attach bridges a host serial port to the firmware's UART, so
@@ -607,6 +593,18 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         let achieved_factor = headless.realtime_factor();
         let wall_s = headless.wall_s;
         let faults = headless.faults;
+
+        // Rewrite the CI artifacts with the co-sim's stress faults appended
+        // (as check "cosim" findings), BEFORE any strict gate can exit: the
+        // JUnit/SARIF a pipeline archives must carry the fault that failed
+        // the build, not only the static suite.
+        if !faults.is_empty() {
+            if let Some(base) = &ci_findings {
+                let mut all = base.clone();
+                all.extend(crate::result::fault_findings_json(&faults));
+                write_ci_artifacts(&cfg, &all)?;
+            }
+        }
 
         // Co-sim honesty summary (Track B): total net toggles, UART activity, and
         // any chip substitution detected at build time. Built from the SAME run
@@ -1166,6 +1164,36 @@ fn warn_sibling_boards(board: &std::path::Path, notes: Notes) {
         eprintln!("  ... and {} more", found.len() - 5);
     }
     eprintln!("  If they are part of the same product, check each one separately.");
+}
+
+/// Write the `--junit` / `--sarif` CI artifacts from one findings list.
+/// Called once with the static suite before the chosen report renders, and
+/// again with the co-sim's stress faults appended after a headless run, so
+/// the archived artifact carries the whole run.
+fn write_ci_artifacts(
+    cfg: &RunConfig,
+    findings: &[crate::result::JsonFinding],
+) -> anyhow::Result<()> {
+    if let Some(p) = &cfg.junit {
+        std::fs::write(
+            p,
+            crate::reports::ci_artifacts::junit_xml(
+                &crate::commands::common::file_name(&cfg.board),
+                findings,
+            ),
+        )
+        .map_err(|e| anyhow::anyhow!("writing --junit '{}': {e}", p.display()))?;
+        eprintln!("wrote JUnit report to {}", p.display());
+    }
+    if let Some(p) = &cfg.sarif {
+        std::fs::write(
+            p,
+            crate::reports::ci_artifacts::sarif_json(&cfg.board, findings),
+        )
+        .map_err(|e| anyhow::anyhow!("writing --sarif '{}': {e}", p.display()))?;
+        eprintln!("wrote SARIF report to {}", p.display());
+    }
+    Ok(())
 }
 
 #[cfg(test)]
