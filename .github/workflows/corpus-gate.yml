@@ -67,12 +67,16 @@ jobs:
             \( -iname '*.kicad_pcb' -o -iname '*.kicad_sch' -o -iname '*.brd' \
                -o -iname '*.net' -o -iname '*.sch' -o -iname '*.PcbDoc' \) \
             | wc -l | tr -d ' ')
-          dirs=$(find board-corpus -mindepth 1 -maxdepth 2 -name .hauksbee-rev | wc -l | tr -d ' ')
+          # One .hauksbee-rev per fetched board, written by fetch-corpus.sh, at
+          # whatever depth the board's `dest` puts it.
+          dirs=$(find board-corpus -name .hauksbee-rev | wc -l | tr -d ' ')
           echo "corpus: $dirs fetched board(s), $boards design file(s)"
-          # The manifest carries 28 licence-confirmed boards. A floor well under
-          # that catches a broken fetch without going red every time one upstream
-          # is briefly unreachable.
-          if [ "$dirs" -lt 20 ] || [ "$boards" -lt 200 ]; then
+          # A full local fetch on 2026-08-04 gave 28 boards and 393 design files
+          # (28 of the manifest's 30 entries; the two uConsole boards are licence-
+          # unconfirmed and skipped by default). The floors sit well under both, so
+          # a broken fetch is caught without going red every time one upstream is
+          # briefly unreachable.
+          if [ "$dirs" -lt 24 ] || [ "$boards" -lt 300 ]; then
             echo "the corpus is too small to gate on; refusing to report a pass" >&2
             find board-corpus -mindepth 1 -maxdepth 2 -type d >&2
             exit 1
