@@ -549,7 +549,7 @@ pub struct AppState {
 /// report surfaces they might not know exist. Shown until any keypress dismisses
 /// it. Kept as a const so the first-run text is testable without a PTY.
 pub const TUI_LAUNCH_BANNER: &str =
-    "Report modes: --check for everything static · --plain for prose · serve for the browser  (any key dismisses)";
+    "Report modes: --check for everything static · --check --plain for prose · serve for the browser  (any key dismisses)";
 
 impl AppState {
     /// Build the model from the structured-honest result. The caller passes the

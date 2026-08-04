@@ -96,10 +96,23 @@ pub fn emit(
         .chain(waived_shorts)
         .collect();
 
+    // Zero routed copper (D2): a pads-only board passes the spacing check
+    // vacuously (there is nothing to space). Say so prominently instead of
+    // letting "no copper spacing problems" read as "the routing is clean" on
+    // a board that has no routing yet.
+    let unrouted = !altium_present && super::unrouted_kicad_layout(text);
+    // Computed before the match: the JSON arm consumes `drc_structured`.
+    let (serious, worth_a_look) = verdict_counts(&drc_structured, &lint, &si, &usbc);
     match mode {
         OutputMode::Json => {
             let mut jr = JsonReport::new(&bound.name, summary);
             jr.drc = Some(drc_structured);
+            if unrouted {
+                jr.notes.push(crate::result::JsonNote {
+                    kind: crate::result::JsonNoteKind::Coverage,
+                    message: super::UNROUTED_COPPER_NOTE.to_string(),
+                });
+            }
             let mut findings = lint_findings_json(&lint);
             findings.extend(si_findings_json(&si));
             // Fold USB-C in as a finding so the aggregate stays one valid JSON doc.
@@ -131,8 +144,11 @@ pub fn emit(
                 );
             }
             println!("== Copper spacing (DRC) ==");
+            if unrouted {
+                println!("{}", super::UNROUTED_COPPER_NOTE);
+            }
             print!("{}", crate::render_drc_condensed(&drc_structured, verbose));
-            println!("\n== Connectivity / lint ==");
+            println!("\n== Connectivity / lint (incl. MCU resource conflicts, boot strap pins) ==");
             print!("{}", crate::plain_netlint(&lint).render());
             println!("\n== Signal integrity ==");
             print!("{}", crate::plain_si(&si).render());
@@ -140,14 +156,20 @@ pub fn emit(
                 println!("\n== USB-C CC compliance ==");
                 print!("{}", u.render_plain());
             }
-            print!("{}", what_this_pass_did_not_check(summary.mcu_bound));
+            print!(
+                "{}",
+                what_this_pass_did_not_check(summary.mcu_bound, usbc.is_some())
+            );
         }
         OutputMode::Text => {
             print!("{}", bound.report.render_table());
             print!("{}", summary.render_banner());
             println!("\n== Copper spacing (DRC) ==");
+            if unrouted {
+                println!("{}", super::UNROUTED_COPPER_NOTE);
+            }
             print!("{}", drc_structured.render());
-            println!("\n== Connectivity / lint ==");
+            println!("\n== Connectivity / lint (incl. MCU resource conflicts, boot strap pins) ==");
             print!("{}", hauksbee_extract::render_netlint(&lint));
             println!("\n== Signal integrity ==");
             print!("{}", hauksbee_extract::render_si(&si));
@@ -159,6 +181,11 @@ pub fn emit(
     }
     if !matches!(mode, OutputMode::Json) {
         print!("{}", render_waivers(&waived, &waivers));
+        // One verdict line to end on (U4), matching the web/TUI verdict shape:
+        // the last thing `--check` prints answers "is my board ok" without
+        // scrolling back through four sections. --json is unchanged (its
+        // consumers read the structured findings).
+        println!("\n{}", verdict_line(serious, worth_a_look));
     }
     let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
     // Unvalidated board format (KiCad 10+) → its shorts may be phantom; do not
@@ -170,6 +197,52 @@ pub fn emit(
         super::strict_gate_exit(mode, &gate_items(drc_gates, &drc, &lint, &si, &usbc));
     }
     Ok(())
+}
+
+/// Serious / worth-a-look counts across the whole `--check` suite, classified
+/// with the SAME plain-language templates the web and `--plain` surfaces use,
+/// so the closing verdict can never disagree with the section renderings.
+fn verdict_counts(
+    drc_structured: &DrcStructured,
+    lint: &hauksbee_extract::NetLintReport,
+    si: &hauksbee_extract::SiReport,
+    usbc: &Option<crate::checks::usb_c::UsbcReport>,
+) -> (usize, usize) {
+    use crate::plain::PlainLevel;
+    let drc_plain = crate::plain::plain_drc_structured(drc_structured);
+    let lint_plain = crate::plain_netlint(lint);
+    let si_plain = crate::plain_si(si);
+    let mut serious = 0usize;
+    let mut worth_a_look = 0usize;
+    for f in drc_plain
+        .findings
+        .iter()
+        .chain(&lint_plain.findings)
+        .chain(&si_plain.findings)
+    {
+        match f.level {
+            PlainLevel::Serious => serious += 1,
+            _ => worth_a_look += 1,
+        }
+    }
+    // Heads-up notes are actionable observations: they count as worth a look,
+    // exactly as the web headline refuses "Looks healthy" over one.
+    worth_a_look += drc_plain.heads_up.len() + lint_plain.heads_up.len() + si_plain.heads_up.len();
+    if let Some(u) = usbc {
+        if u.is_serious() {
+            serious += 1;
+        }
+    }
+    (serious, worth_a_look)
+}
+
+/// The single closing verdict line for `--check` (U4).
+fn verdict_line(serious: usize, worth_a_look: usize) -> String {
+    if serious == 0 {
+        format!("VERDICT: clean: 0 serious, {worth_a_look} worth a look")
+    } else {
+        format!("VERDICT: failing: {serious} serious, {worth_a_look} worth a look")
+    }
 }
 
 /// Every gating subject across the aggregate suite, in report order
@@ -299,7 +372,7 @@ pub fn gather_findings(
 /// even though nothing here is false. Tested against the real board: a bare
 /// upload gives a full bind and a clean report, and mentions the dynamic checks
 /// nowhere at all.
-fn what_this_pass_did_not_check(mcu_bound: bool) -> String {
+fn what_this_pass_did_not_check(mcu_bound: bool, usbc_ran: bool) -> String {
     let mut s = String::from("\n== What this pass did not check ==\n");
     s.push_str(
         "These checks read the board. They do not run it, so nothing above can \
@@ -307,6 +380,15 @@ fn what_this_pass_did_not_check(mcu_bound: bool) -> String {
          sags on inrush, a brownout at power-up, a part that overheats under \
          load.\n",
     );
+    // The USB-C section above appears only when there is a USB-C connector to
+    // classify. Its silent absence otherwise would read as "checked and clean"
+    // on a board whose USB-C hauksbee never found, so say which it was.
+    if !usbc_ran {
+        s.push_str(
+            "\nUSB-C CC compliance did not run: no USB-C receptacle was found on this \
+             board. It has its own section above when there is one.\n",
+        );
+    }
     if mcu_bound {
         s.push_str(
             "\nThis board has a processor hauksbee can emulate, so it can boot your \

@@ -91,6 +91,32 @@ pub struct RunConfig {
 }
 
 pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
+    // Bare `--plain` means "the prose report": imply --check rather than fall
+    // through to the TUI/non-TTY hint. Without this, a piped `run <board>
+    // --plain` printed a hint that itself listed --plain as the fix, a dead
+    // loop (U3). Only when no other mode was chosen, so `--drc --plain`,
+    // `--headless --plain`, `--tui`, `--serve`, `--ac`, `--list-nets` are all
+    // untouched.
+    let any_report_flag = cfg.report
+        || cfg.drc
+        || cfg.ampacity
+        || cfg.lint
+        || cfg.si
+        || cfg.resources
+        || cfg.usb_c
+        || cfg.thermal
+        || cfg.check;
+    if cfg.plain
+        && !any_report_flag
+        && !cfg.headless
+        && !cfg.serve
+        && !cfg.tui
+        && !cfg.list_nets
+        && !cfg.serial_attach
+        && cfg.ac.is_none()
+    {
+        cfg.check = true;
+    }
     // Validate `--firmware` up front, before any heavy work or the TUI takes over
     // the terminal. The native emulator loaders segfault (exit 139) on a missing
     // file instead of erroring; this turns a one-character typo into a clean,
@@ -137,6 +163,26 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         }
     }
     let board = board;
+    // A board with zero components can prove nothing: every check would pass
+    // vacuously and a "100% clean" verdict on an empty .board is exactly the
+    // false comfort this tool exists to prevent (M6). Refuse as invalid for
+    // analysis, on every path (reports, TUI, co-sim, serve).
+    if board.components.is_empty() {
+        let msg = format!(
+            "this board has no components ('{}' parsed, but is empty); \
+             nothing to check, so a pass would be meaningless",
+            cfg.board.display()
+        );
+        if cfg.json {
+            println!(
+                "{}",
+                serde_json::json!({ "ok": false, "error": msg })
+            );
+        } else {
+            eprintln!("error: {msg}");
+        }
+        std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+    }
     // Layered model library: builtin < ~/.hauksbee/models (datasheet-extracted)
     // < ~/.config/hauksbee/models (user) < --models-dir (highest). A custom
     // behavioural part dropped in any of these loads with no recompile.
@@ -155,7 +201,9 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // analysis was not requested is an ERROR, because honouring it silently
     // means a file that never appears or a selector that selects nothing. A
     // flag that merely loses a rendering/serving preference to a
-    // higher-precedence one WARNS on stderr and continues.
+    // higher-precedence one WARNS on stderr and continues. ONE policy, no
+    // third category: nothing the user asked for is ever dropped without a
+    // word (M1: --list-nets and --tui used to lose to a report flag silently).
     if cfg.probe_csv.is_some() && cfg.probe.is_empty() {
         anyhow::bail!(
             "--probe-csv names an output file, but no --probe net was given; \
@@ -179,6 +227,27 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             "--ampacity is a text-only report with no --json/--plain form yet; \
              refusing rather than silently ignoring the output flag"
         );
+    }
+    // --thermal has a --json form but no prose renderer yet; same refusal
+    // policy as --ampacity rather than silently ignoring --plain (M2).
+    if cfg.thermal && cfg.plain {
+        anyhow::bail!(
+            "--thermal has no --plain form yet (its table and --json only); \
+             refusing rather than silently ignoring the output flag"
+        );
+    }
+    // --list-nets prints its list and exits, so a report flag alongside it
+    // never renders. Warn (a lost rendering preference, not an error).
+    if cfg.list_nets && any_report_flag {
+        eprintln!(
+            "warning: --list-nets prints the net list and exits, so the report flag \
+             is ignored here"
+        );
+    }
+    // Same for --tui: an explicit report flag prints and exits, so the
+    // dashboard never launches.
+    if cfg.tui && any_report_flag {
+        eprintln!("warning: a report flag prints and exits, so --tui is ignored here");
     }
     if cfg.plain && cfg.json {
         eprintln!(
@@ -568,6 +637,15 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         // --probe preconditions, checked before the run so a typo fails fast with
         // the same near-match style the rest of the net-facing CLI uses.
         let probes = crate::reports::cosim::dedup_probes(&cfg.probe);
+        // `--probe ''` (an empty shell expansion, usually) would silently
+        // record nothing: the dedup drops empties, so catch the case where
+        // everything the user passed was empty (M8).
+        if !cfg.probe.is_empty() && probes.is_empty() {
+            anyhow::bail!(
+                "--probe was given only empty net name(s); pass a real net \
+                 (run --list-nets to see every net name)"
+            );
+        }
         crate::reports::cosim::validate_probes(
             &probes,
             cfg.probe_csv.as_deref(),
@@ -841,11 +919,13 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 report.heads_up.push(crate::plain::HeadsUp::note(format!(
                     "co-sim coverage: {} of {} critical parts modelled: {} active IC(s) are \
                      unresolved or open, so firmware/analog/thermal results on their nets are \
-                     INCOMPLETE (the copper/DRC checks are unaffected). Add models with --models-dir \
-                     (hauksbee models --help).",
+                     INCOMPLETE (the copper/DRC checks are unaffected). Scaffold a model for \
+                     one:  hauksbee models new --board {} {}",
                     summary.critical_parts_bound_n,
                     summary.critical_parts_total,
-                    open.len()
+                    open.len(),
+                    cfg.board.display(),
+                    open[0]
                 )));
             }
             println!();
@@ -876,11 +956,14 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             if !open.is_empty() {
                 println!(
                     "co-sim coverage: {} of {} critical parts modelled: {} active IC(s) \
-                     unresolved/open, so firmware/analog results on their nets are INCOMPLETE; \
-                     add models with --models-dir (hauksbee models --help; copper/DRC checks are unaffected).",
+                     unresolved/open, so firmware/analog results on their nets are INCOMPLETE \
+                     (copper/DRC checks are unaffected). Scaffold a model for one:  \
+                     hauksbee models new --board {} {}",
                     summary.critical_parts_bound_n,
                     summary.critical_parts_total,
-                    open.len()
+                    open.len(),
+                    cfg.board.display(),
+                    open[0]
                 );
             }
         }
@@ -962,7 +1045,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             "hauksbee run: stdout is not a terminal, so there is no interactive dashboard to show."
         );
         eprintln!(
-            "  For a report add a flag: --check (all static checks) · --plain (prose) · --json (machine); or --serve for the browser UI."
+            "  For a report add a flag: --check (all static checks) · --report (what was modelled) · --check --plain (prose) · --json (machine); or --serve for the browser UI."
         );
         return Ok(());
     }
@@ -1108,62 +1191,78 @@ fn warn_sibling_boards(board: &std::path::Path, notes: Notes) {
     let Some(dir) = abs.parent() else {
         return;
     };
-    let mut found: Vec<std::path::PathBuf> = Vec::new();
-    let is_hidden = |p: &std::path::Path| {
-        p.file_name()
-            .and_then(|n| n.to_str())
-            .map(|n| n.starts_with('.'))
-            .unwrap_or(false)
-    };
-    let mut scan = |d: &std::path::Path| {
-        if let Ok(rd) = std::fs::read_dir(d) {
-            for e in rd.flatten() {
-                let p = e.path();
-                if p.extension().and_then(|x| x.to_str()) == Some("kicad_pcb") && p != abs {
-                    found.push(p);
-                }
-            }
-        }
-    };
-    scan(dir);
-    // Immediate CHILD directories (e.g. a daughter board in `KiCad/ESC_Board/`)
-    // and SIBLING directories (children of the grandparent). One level only, and
-    // hidden dirs (`.history`, `.git`) are skipped so we don't surface backups.
+    let found = sibling_board_names(&abs, dir);
+    if found.is_empty() {
+        return;
+    }
+    notes.say(format!(
+        "{} other board file(s) in the same folder; this run only checks '{}':",
+        found.len(),
+        board.display()
+    ));
+    for name in found.iter().take(5) {
+        eprintln!("  - {name}");
+    }
+    if found.len() > 5 {
+        eprintln!("  ... and {} more", found.len() - 5);
+    }
+    eprintln!("  If they are part of the same product, check each one separately.");
+}
+
+/// The other `.kicad_pcb` FILE NAMES directly inside `dir` (the checked
+/// board's own directory), excluding the board itself.
+///
+/// PRIVACY scope (U12): the user asked about ONE file, so the note may look
+/// only at that file's OWN directory. No parent/child/sibling-directory walks
+/// (an earlier version surfaced boards from unrelated neighbouring projects),
+/// and only file NAMES are returned, never absolute paths of files the user
+/// did not name. Pure-ish (reads one directory) so it is unit-testable.
+fn sibling_board_names(board_abs: &std::path::Path, dir: &std::path::Path) -> Vec<String> {
+    let mut found: Vec<String> = Vec::new();
     if let Ok(rd) = std::fs::read_dir(dir) {
         for e in rd.flatten() {
             let p = e.path();
-            if p.is_dir() && !is_hidden(&p) {
-                scan(&p);
-            }
-        }
-    }
-    if let Some(gp) = dir.parent() {
-        if let Ok(rd) = std::fs::read_dir(gp) {
-            for e in rd.flatten() {
-                let p = e.path();
-                if p.is_dir() && p != dir && !is_hidden(&p) {
-                    scan(&p);
+            if p.extension().and_then(|x| x.to_str()) == Some("kicad_pcb") && p != board_abs {
+                if let Some(name) = p.file_name().and_then(|n| n.to_str()) {
+                    found.push(name.to_string());
                 }
             }
         }
     }
     found.sort();
     found.dedup();
-    if found.is_empty() {
-        return;
+    found
+}
+
+#[cfg(test)]
+mod sibling_scope_tests {
+    use super::sibling_board_names;
+
+    /// U12: the nearby-boards note must NOT surface boards from parent,
+    /// child, or sibling directories, and must return names, not paths.
+    #[test]
+    fn sibling_scan_stays_inside_the_boards_own_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("proj");
+        let sibling_dir = root.path().join("other-proj");
+        let child_dir = dir.join("esc");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&sibling_dir).unwrap();
+        std::fs::create_dir_all(&child_dir).unwrap();
+        let board = dir.join("main.kicad_pcb");
+        std::fs::write(&board, "(kicad_pcb)").unwrap();
+        std::fs::write(dir.join("rev_b.kicad_pcb"), "(kicad_pcb)").unwrap();
+        std::fs::write(sibling_dir.join("private.kicad_pcb"), "(kicad_pcb)").unwrap();
+        std::fs::write(child_dir.join("daughter.kicad_pcb"), "(kicad_pcb)").unwrap();
+        std::fs::write(root.path().join("parent.kicad_pcb"), "(kicad_pcb)").unwrap();
+
+        let names = sibling_board_names(&board, &dir);
+        assert_eq!(names, vec!["rev_b.kicad_pcb".to_string()]);
+        assert!(
+            names.iter().all(|n| !n.contains('/')),
+            "names only, no paths: {names:?}"
+        );
     }
-    notes.say(format!(
-        "{} other board file(s) found nearby; this run only checks '{}':",
-        found.len(),
-        board.display()
-    ));
-    for p in found.iter().take(5) {
-        eprintln!("  - {}", p.display());
-    }
-    if found.len() > 5 {
-        eprintln!("  ... and {} more", found.len() - 5);
-    }
-    eprintln!("  If they are part of the same product, check each one separately.");
 }
 
 /// Write the `--junit` / `--sarif` CI artifacts from one findings list.

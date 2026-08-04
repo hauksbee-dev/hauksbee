@@ -207,7 +207,10 @@ pub fn validate_probes(
             } else {
                 format!(" - did you mean: {}?", near.join(", "))
             };
-            anyhow::bail!("--probe: net '{net}' not found on the board{hint}");
+            anyhow::bail!(
+                "--probe: net '{net}' not found on the board{hint} \
+                 (run --list-nets to see every net name)"
+            );
         }
     }
     Ok(())

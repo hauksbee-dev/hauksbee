@@ -52,6 +52,23 @@ impl OutputMode {
     }
 }
 
+/// The one prominent note printed by `--check`/`--drc` when a KiCad layout
+/// carries no routed copper at all (D2): the spacing check then had only pads
+/// to compare, and a clean result must not read as "the routing is clean" on
+/// a board that has no routing yet.
+pub(crate) const UNROUTED_COPPER_NOTE: &str =
+    "note: this board has no routed copper (no track segments): the spacing check \
+     had only pads to compare, so a clean result here says nothing about routing \
+     that does not exist yet.";
+
+/// True when a KiCad layout text carries no routed copper: no track segments
+/// and no zones (a filled zone is copper too, so its presence disables the
+/// caveat rather than risk crying wolf). Only meaningful for `.kicad_pcb`
+/// text; other formats return false and print nothing.
+pub(crate) fn unrouted_kicad_layout(text: &str) -> bool {
+    text.contains("(kicad_pcb") && !text.contains("(segment") && !text.contains("(zone")
+}
+
 /// Read project-file netclass clearances and resolve them to this board's
 /// concrete net names. KiCad 10 stores this in the sibling `.kicad_pro` rather
 /// than the `.kicad_pcb`; missing/malformed project files simply leave DRC on
@@ -136,11 +153,25 @@ fn gate_item(check: &str, nets: &[String], refs: &[String]) -> String {
 /// text/plain surfaces (stdout); under `--json` stdout must stay one JSON
 /// document, so it goes to stderr.
 pub fn strict_gate_exit(mode: OutputMode, items: &[String]) -> ! {
-    let mut shown: Vec<&str> = items
-        .iter()
-        .take(STRICT_LINE_SUBJECTS)
-        .map(String::as_str)
-        .collect();
+    // --plain promised prose a non-engineer can read; a failure line full of
+    // rule ids ("drc-short", "crystal_load_cap") breaks that promise at the
+    // one moment it matters most (L4). Text/JSON keep the exact ids (they are
+    // the grep/waiver keys).
+    let humanized: Vec<String>;
+    let mut shown: Vec<&str> = if mode == OutputMode::Plain {
+        humanized = items.iter().map(|i| plain_gate_item(i)).collect();
+        humanized
+            .iter()
+            .take(STRICT_LINE_SUBJECTS)
+            .map(String::as_str)
+            .collect()
+    } else {
+        items
+            .iter()
+            .take(STRICT_LINE_SUBJECTS)
+            .map(String::as_str)
+            .collect()
+    };
     if items.len() > STRICT_LINE_SUBJECTS {
         shown.push("...");
     }
@@ -157,6 +188,29 @@ pub fn strict_gate_exit(mode: OutputMode, items: &[String]) -> ! {
     // annotations, so the failing job names them in the PR UI.
     ci_artifacts::github_annotations(items);
     std::process::exit(2);
+}
+
+/// A gate item ("drc-short GND/+5V", "crystal_load_cap XTAL1") in words a
+/// non-engineer can read, for the `--plain` strict failure line (L4). The id
+/// prefix maps to its check family; underscores become spaces.
+fn plain_gate_item(item: &str) -> String {
+    let (id, subject) = match item.split_once(' ') {
+        Some((id, s)) => (id, Some(s)),
+        None => (item, None),
+    };
+    let words = if id == "drc-short" {
+        "copper short between".to_string()
+    } else if let Some(rest) = id.strip_prefix("cosim-") {
+        format!("co-sim {} on", rest.replace('_', " "))
+    } else if id == "usb_c_cc" {
+        "USB-C compliance:".to_string()
+    } else {
+        format!("{} on", id.replace('_', " "))
+    };
+    match subject {
+        Some(s) => format!("{words} {s}"),
+        None => words,
+    }
 }
 
 /// Discoverability for the exit-code contract: a report command without
