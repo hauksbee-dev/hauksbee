@@ -44,7 +44,7 @@ pub fn run(
 
     // Read the deck. A missing file is an ordinary CLI error (exit 1) with an
     // actionable message, not a deck-malformed refusal.
-    let text = std::fs::read_to_string(file).map_err(|e| {
+    let bytes = std::fs::read(file).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             {
                 // Never suggest an unrunnable command: the checkout path only
@@ -67,6 +67,20 @@ pub fn run(
             anyhow::anyhow!("reading '{}': {e}", file.display())
         }
     })?;
+
+    // A binary file (invalid UTF-8, or NUL bytes, which ARE valid UTF-8) is
+    // user misuse of the deck argument, not a malformed-but-text deck; say
+    // what this command expected instead of a per-line parse error.
+    let text = match decode_deck_text(bytes) {
+        Ok(t) => t,
+        Err(why) => {
+            eprintln!(
+                "error: '{}' is not a text file ({why}); hauksbee sim expects a text SPICE deck (.cir)",
+                file.display()
+            );
+            std::process::exit(EXIT_MALFORMED_DECK);
+        }
+    };
 
     // Parse. A SpiceError already carries its line number; print it verbatim and
     // exit 2 (malformed deck), never fall through to a wrong parse.
@@ -152,6 +166,10 @@ pub fn run(
     //   1. `--print` on the command line wins outright.
     //   2. else the deck's `.print`/`.plot` cards for this analysis.
     //   3. else every node voltage (announced, so it is never a silent surprise).
+    // Informational notes are collected here and only printed once the probe
+    // set is fully parsed and validated: a run that is about to die with a
+    // fatal probe error must not chirp a note first.
+    let mut notes: Vec<String> = Vec::new();
     let probes: Vec<Probe> = if !print.is_empty() {
         let mut ps = Vec::with_capacity(print.len());
         for tok in print {
@@ -174,13 +192,16 @@ pub fn run(
             }
         }
         if directives.saw_plot {
-            eprintln!("note: `.plot` cards are treated as `.print` (CSV output; no ASCII plot).");
+            notes.push(
+                "note: `.plot` cards are treated as `.print` (CSV output; no ASCII plot)."
+                    .to_string(),
+            );
         }
         if deck_vars.is_empty() {
-            eprintln!(
+            notes.push(format!(
                 "note: no --print and no matching `.print {analysis_tag}` card; \
                  writing every node voltage."
-            );
+            ));
             default_probes(&circuit)
         } else {
             let mut ps = Vec::with_capacity(deck_vars.len());
@@ -221,6 +242,11 @@ pub fn run(
             eprintln!("error: invalid probe: {why} (known nodes: {})", known.join(", "));
             std::process::exit(EXIT_MALFORMED_DECK);
         }
+    }
+
+    // Every fatal pre-solve exit is behind us; the deferred notes can print.
+    for note in &notes {
+        eprintln!("{note}");
     }
 
     // Build solver options from the deck's tolerances and `.temp`.
@@ -377,6 +403,17 @@ pub fn run(
     Ok(())
 }
 
+/// Decode raw deck bytes as text, refusing binary input. Returns the reason a
+/// human can act on: invalid UTF-8, or embedded NUL bytes (which ARE valid
+/// UTF-8, so `String::from_utf8` alone would let binary content through).
+fn decode_deck_text(bytes: Vec<u8>) -> Result<String, &'static str> {
+    let text = String::from_utf8(bytes).map_err(|_| "invalid UTF-8 bytes")?;
+    if text.contains('\0') {
+        return Err("contains NUL bytes");
+    }
+    Ok(text)
+}
+
 /// RFC-4180 escape a single CSV field: wrap in double quotes (doubling any
 /// internal quote) when it contains a comma, quote, or newline. A differential
 /// probe label like `V(out,ref)` carries a comma, so an unescaped header field
@@ -446,8 +483,25 @@ fn solver_opts_from_deck(
 
 #[cfg(test)]
 mod tests {
-    use super::{csv_escape, sim_output_to_csv, solver_opts_from_deck};
+    use super::{csv_escape, decode_deck_text, sim_output_to_csv, solver_opts_from_deck};
     use hauksbee_ir::SpiceLoader;
+
+    #[test]
+    fn binary_deck_bytes_are_refused_with_a_reason() {
+        // NUL bytes are valid UTF-8, so they need their own check.
+        assert_eq!(
+            decode_deck_text(b"divider\nV1 in 0 5\0\0".to_vec()),
+            Err("contains NUL bytes")
+        );
+        // Not UTF-8 at all (e.g. an ELF header or random binary).
+        assert_eq!(
+            decode_deck_text(vec![0x7F, 0x45, 0x4C, 0x46, 0xFF, 0xFE]),
+            Err("invalid UTF-8 bytes")
+        );
+        // An ordinary text deck passes through untouched.
+        let deck = "divider\nV1 in 0 5\nR1 in out 1k\nR2 out 0 1k\n.end\n";
+        assert_eq!(decode_deck_text(deck.as_bytes().to_vec()).as_deref(), Ok(deck));
+    }
 
     #[test]
     fn csv_escape_quotes_fields_with_commas() {
