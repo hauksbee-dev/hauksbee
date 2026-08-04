@@ -140,7 +140,72 @@ impl BoundBoard {
     pub fn node(&self, net: &str) -> Option<NodeId> {
         self.net_nodes.get(net).copied()
     }
+
+    /// Remove the auto-rail feeding `net` so the net floats except for whatever
+    /// the board itself pushes onto it. Returns `true` when a rail was actually
+    /// removed.
+    ///
+    /// This has to live here, next to the code that stamps a rail, because the
+    /// topology is not what a caller would guess. A [`SupplyLeg`] does NOT put
+    /// its source on the rail node: it interns a private `__supply_<net>` node,
+    /// puts the `Vsource` there, and joins it to the rail through a milliohm
+    /// series resistor so the scheduler can measure rail current. A suppression
+    /// that looks for a `Vsource` on the RAIL node therefore matches nothing,
+    /// drops the leg from `supplies` (so the scheduler stops re-commanding it),
+    /// and leaves the source stamped at its nominal voltage. The rail keeps
+    /// reading 5.000 V and a brownout test silently tests nothing.
+    ///
+    /// Both shapes are handled: a `SupplyLeg`'s internal source, and a bare
+    /// `Vrail_*` / `Vsupply_*` ideal source sitting directly on the rail node.
+    /// Each is replaced by a 1 TΩ open rather than deleted, so no `DeviceId`
+    /// shifts and every index held elsewhere stays valid.
+    pub fn suppress_rail(&mut self, net: &str) -> bool {
+        let Some(node) = self.node(net) else {
+            return false;
+        };
+        let mut opened = false;
+        // The leg's internal source, reached through the leg itself rather than
+        // guessed at from the rail node.
+        for leg in self.supplies.iter().filter(|s| s.net == node) {
+            if let Some(dev) = self.circuit.devices.get_mut(leg.vsource.0 as usize) {
+                if let Device::Vsource { name, p, .. } = dev {
+                    let (nm, a) = (name.clone(), *p);
+                    *dev = Device::Resistor {
+                        name: nm,
+                        a,
+                        b: NodeId::GROUND,
+                        ohms: SUPPRESSED_RAIL_OHMS,
+                        tc1: None,
+                    };
+                    opened = true;
+                }
+            }
+        }
+        self.supplies.retain(|s| s.net != node);
+        // A bare ideal rail source stamped straight onto the net.
+        let leg_name = format!("Vsupply_{net}");
+        for dev in self.circuit.devices.iter_mut() {
+            if let Device::Vsource { name, p, .. } = dev {
+                if *p == node && (*name == leg_name || name.starts_with("Vrail")) {
+                    let (nm, a) = (name.clone(), *p);
+                    *dev = Device::Resistor {
+                        name: nm,
+                        a,
+                        b: NodeId::GROUND,
+                        ohms: SUPPRESSED_RAIL_OHMS,
+                        tc1: None,
+                    };
+                    opened = true;
+                }
+            }
+        }
+        opened
+    }
 }
+
+/// Resistance a suppressed rail's source is replaced by: an open, not a delete,
+/// so no `DeviceId` shifts under a caller holding one.
+const SUPPRESSED_RAIL_OHMS: f64 = 1e12;
 
 /// Which override syntax to suggest when a DNP processor blocked a run.
 #[derive(Clone, Copy)]
