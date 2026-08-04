@@ -307,6 +307,55 @@ pub fn run_spec(spec: &Spec) -> Result<Vec<RunOutcome>, SpecError> {
     run_spec_seeded(spec, None)
 }
 
+/// RAII guard for the spec's `[mcu] descriptor_dir`: sets `HAUKSBEE_MCU_DIR`
+/// (the env var `hauksbee_mcu::SocConfig::resolve` consumes) to the spec's
+/// resolved descriptor directory for the guard's lifetime, and restores the
+/// previous state on drop so a later spec in the same invocation does not
+/// inherit it.
+///
+/// Precedence: an explicitly set, non-empty `HAUKSBEE_MCU_DIR` WINS over the
+/// spec field; the guard then changes nothing. (The env var is the operator's
+/// override of last resort; a spec must not be able to silently defeat it.)
+///
+/// The env var is process-global, so concurrent `run_spec*` calls in one
+/// process must be serialized by the caller when any spec carries a
+/// `descriptor_dir` (the CLI runs specs sequentially; tests take a lock).
+pub(crate) struct DescriptorDirGuard {
+    /// `Some(previous)` when we set the var and must restore `previous` on
+    /// drop; `None` when the guard changed nothing.
+    restore: Option<Option<std::ffi::OsString>>,
+}
+
+impl DescriptorDirGuard {
+    pub(crate) fn apply(spec: &Spec) -> Self {
+        let none = DescriptorDirGuard { restore: None };
+        let Some(dir) = spec.mcu_descriptor_dir() else {
+            return none;
+        };
+        let prev = std::env::var_os("HAUKSBEE_MCU_DIR");
+        // A set-but-empty var is treated as unset, matching the consumer
+        // (SocConfig's override_dirs skips an empty value).
+        if prev.as_deref().is_some_and(|v| !v.is_empty()) {
+            return none;
+        }
+        std::env::set_var("HAUKSBEE_MCU_DIR", &dir);
+        DescriptorDirGuard {
+            restore: Some(prev),
+        }
+    }
+}
+
+impl Drop for DescriptorDirGuard {
+    fn drop(&mut self) {
+        if let Some(prev) = self.restore.take() {
+            match prev {
+                Some(v) => std::env::set_var("HAUKSBEE_MCU_DIR", v),
+                None => std::env::remove_var("HAUKSBEE_MCU_DIR"),
+            }
+        }
+    }
+}
+
 /// Run the spec, optionally restricted to one ensemble seed (`--seed N`, the
 /// failing-seed isolation path). Tolerance sampling and net fuzz are both
 /// keyed by the absolute seed number, so the isolated member reproduces the
@@ -329,6 +378,11 @@ pub fn run_spec_with_lib(
     only_seed: Option<u32>,
     lib: &ModelLibrary,
 ) -> Result<Vec<RunOutcome>, SpecError> {
+    // `[mcu] descriptor_dir`: publish the spec's SoC-descriptor override dir
+    // through the same channel the engine already consumes ($HAUKSBEE_MCU_DIR,
+    // read by hauksbee_mcu::SocConfig::resolve), scoped to this run by the
+    // guard's Drop. An explicitly set env var wins over the spec field.
+    let _descriptor_dir = DescriptorDirGuard::apply(spec);
     // Read + extract the board once; clone per seed (binding mutates nothing on
     // the ExtractedBoard, but overrides do, so we re-derive per run).
     let board_path = spec.board_path();
@@ -669,6 +723,19 @@ fn normalize_path(p: &Path) -> PathBuf {
 /// here means a typo'd `max_current` ref fails loudly instead of passing as an
 /// untracked component).
 fn check_component_refs(spec: &Spec, known_refs: &[String]) -> Result<(), SpecError> {
+    let mut errs = component_ref_errors(spec, known_refs);
+    match errs.len() {
+        0 => Ok(()),
+        1 => Err(errs.remove(0)),
+        _ => Err(SpecError::Many(errs)),
+    }
+}
+
+/// The collecting core of [`check_component_refs`]: EVERY unknown reference is
+/// reported (one error per bad ref), not just the first, so one invocation
+/// surfaces one invocation's worth of typos. Also feeds `hauksbee-ci check`'s
+/// per-diagnostic output.
+pub(crate) fn component_ref_errors(spec: &Spec, known_refs: &[String]) -> Vec<SpecError> {
     let set: std::collections::HashSet<&str> = known_refs.iter().map(String::as_str).collect();
     let mut named: Vec<(&str, &str)> = Vec::new();
     for ov in &spec.overrides {
@@ -696,6 +763,7 @@ fn check_component_refs(spec: &Spec, known_refs: &[String]) -> Result<(), SpecEr
             named.push((ov.reference.as_str(), "decoupling override"));
         }
     }
+    let mut errs = Vec::new();
     for (reference, ctx) in named {
         if !set.contains(reference) {
             let near = crate::error::near_matches(reference, known_refs, 5);
@@ -704,12 +772,12 @@ fn check_component_refs(spec: &Spec, known_refs: &[String]) -> Result<(), SpecEr
             } else {
                 format!("; did you mean: {}?", near.join(", "))
             };
-            return Err(SpecError::Invalid(format!(
+            errs.push(SpecError::Invalid(format!(
                 "{ctx} references unknown component '{reference}'{hint}"
             )));
         }
     }
-    Ok(())
+    errs
 }
 
 /// Fail loud when a `max_current` / `max_temp` assertion names a component the
