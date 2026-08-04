@@ -1728,17 +1728,15 @@ impl Spec {
 
 impl SupplySpec {
     fn validate(&self) -> Result<(), SpecError> {
-        match self.kind.as_str() {
-            "ideal" | "bench" | "wall" | "usb" | "battery" => {}
-            other => return Err(SpecError::Invalid(format!(
-                "supply on net '{}': unknown kind '{}'{} (expected ideal|bench|wall|usb|battery)",
+        const KINDS: [&str; 5] = ["ideal", "bench", "wall", "usb", "battery"];
+        let kind = self.kind.as_str();
+        if !KINDS.contains(&kind) {
+            let hint = crate::error::did_you_mean_hint(kind, &KINDS);
+            return Err(SpecError::Invalid(format!(
+                "supply on net '{}': unknown kind '{kind}'{hint} (expected {})",
                 self.net,
-                other,
-                crate::error::did_you_mean_hint(
-                    other,
-                    &["ideal", "bench", "wall", "usb", "battery"]
-                )
-            ))),
+                KINDS.join("|"),
+            )));
         }
 
         // Numeric fields flow straight into the behavioral PowerSupply, where a
