@@ -1252,6 +1252,31 @@ fn check_toggle(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String
         return (ok, format!("{net}: {toggles} toggles (need >= {min})"), why);
     }
     if let Some(freq) = a.freq_hz {
+        // A frequency needs a period, and a period needs at least one full
+        // cycle observed: two toggles. Below that there is nothing to divide.
+        // The arithmetic below happily produced "~0.50 Hz from 1 toggles" from a
+        // single edge, a number that reads as a measurement and is not one: it
+        // says only "something happened once", and whether the net is running at
+        // 0.5 Hz or 50 Hz with a stalled firmware cannot be told apart from it.
+        // Three toggles is the floor for a cycle plus the edge that confirms it
+        // repeats, which is what makes a rate a rate.
+        const MIN_TOGGLES_FOR_A_RATE: u64 = 3;
+        if toggles < MIN_TOGGLES_FOR_A_RATE {
+            let plural = if toggles == 1 { "" } else { "s" };
+            return (
+                false,
+                format!(
+                    "{net}: {toggles} toggle{plural} over the run, too few to measure a \
+                     frequency from (need at least {MIN_TOGGLES_FOR_A_RATE})"
+                ),
+                Some(format!(
+                    "a rate needs a repeated cycle, and {toggles} edge(s) is not one. \
+                     Either the net is barely switching (check the firmware drives it) \
+                     or the run is too short to contain a few periods of {freq} Hz: \
+                     duration_ms must cover at least two, ideally several"
+                )),
+            );
+        }
         // A full square-wave period is two toggles, so frequency = toggles /
         // (2 * duration_s). Compare against tolerance (fractional, default 25%).
         let dur_s = out.sim_ms / 1000.0;
