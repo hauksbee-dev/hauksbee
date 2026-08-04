@@ -72,10 +72,55 @@ pub fn extract_from_doc(
     builder.finish(root)
 }
 
-/// Extract from a top-level `.kicad_sch` on disk, recursing into its
-/// hierarchy. This is the path the cross-validation and the CLI use, because
-/// the hierarchy lives in sibling files.
+/// Extract from a `.kicad_sch` on disk, recursing into its hierarchy. This is
+/// the path the cross-validation and the CLI use, because the hierarchy lives in
+/// sibling files.
+///
+/// # Sub-sheets
+///
+/// A hierarchical sub-sheet is not a design. Its hierarchical labels are wired
+/// to sheet pins in the PARENT, so a net driven from a sibling sheet appears,
+/// inside the child file, as a stub touching exactly one pin. Extracting the
+/// child alone therefore produces a netlist that is not merely incomplete but
+/// *wrong* about connectivity: `net_lint`'s floating-control-pin check raised six
+/// [high] findings across four MNT Reform sub-sheets on exactly this, one of them
+/// `USB_PWR_EN`, which is driven from `reform2-lpc.kicad_sch` in the same
+/// project. The top-level `reform2-motherboard30.kicad_sch` is clean.
+///
+/// So when handed a sub-sheet, this resolves the hierarchy it belongs to and
+/// extracts from the root, which is the only file that can answer a connectivity
+/// question about it. If no parent can be found, it refuses rather than return a
+/// netlist that will be read as fact ([`ExtractError::OrphanSubSheet`]).
 pub fn extract_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| ExtractError::Xml(format!("read {}: {e}", path.display())))?;
+    let doc = forge_sexpr::parse(&text)?;
+
+    if !is_root_sheet(&doc) {
+        return match find_hierarchy_root(path) {
+            Some(root_path) => extract_root_from_path(&root_path),
+            None => Err(ExtractError::OrphanSubSheet {
+                sheet: path.display().to_string(),
+                needs: match path.parent() {
+                    Some(dir) => format!(
+                        "the root schematic of its project. No .kicad_sch in {} \
+                         carries a (sheet_instances) block and reaches this file \
+                         through its (sheet ... Sheetfile) references. Point \
+                         hauksbee at the root schematic, or supply the whole \
+                         project directory.",
+                        dir.display()
+                    ),
+                    None => "the root schematic of its project".to_string(),
+                },
+            }),
+        };
+    }
+
+    extract_root_from_path(path)
+}
+
+/// [`extract_from_path`] with the sub-sheet question already settled.
+fn extract_root_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
     let text = std::fs::read_to_string(path)
         .map_err(|e| ExtractError::Xml(format!("read {}: {e}", path.display())))?;
     let doc = forge_sexpr::parse(&text)?;
@@ -88,6 +133,91 @@ pub fn extract_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
     let mut builder = NetlistBuilder::new();
     let root = builder.add_sheet_doc(&doc, "/", base.as_deref(), Some(name))?;
     builder.finish(root)
+}
+
+/// Whether a parsed schematic is the ROOT of its hierarchy.
+///
+/// KiCad writes `(sheet_instances ...)`, the map of instance paths to page
+/// numbers, into the root schematic and into no other file. Every root in the
+/// board corpus carries it and no sub-sheet does, across KiCad 6 through 10.
+/// A flat single-sheet design is its own root and carries it too, so this does
+/// not mistake a one-file project for a fragment.
+pub fn is_root_sheet(doc: &Document) -> bool {
+    doc.root()
+        .is_some_and(|r| r.find_all("sheet_instances").next().is_some())
+}
+
+/// The root schematic whose hierarchy contains `sheet`, searched among its
+/// siblings.
+///
+/// A project keeps its sheets in one directory, so the search is that directory:
+/// take every sibling that is a root, walk its `(sheet ... Sheetfile)` tree, and
+/// return the first whose tree reaches `sheet`. Walking rather than trusting a
+/// filename match matters, because two projects can sit in one directory (the
+/// MNT Reform keyboard revisions do) and only one of them owns a given sheet.
+fn find_hierarchy_root(sheet: &Path) -> Option<PathBuf> {
+    let dir = sheet.parent()?;
+    let target = std::fs::canonicalize(sheet).ok()?;
+    let mut candidates: Vec<PathBuf> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("kicad_sch"))
+        .collect();
+    // Deterministic order: the same corpus must resolve the same root on every
+    // machine, and read_dir order is not defined.
+    candidates.sort();
+    for cand in candidates {
+        if cand == *sheet {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(&cand) else {
+            continue;
+        };
+        let Ok(doc) = forge_sexpr::parse(&text) else {
+            continue;
+        };
+        if !is_root_sheet(&doc) {
+            continue;
+        }
+        if hierarchy_reaches(&cand, &target) {
+            return Some(cand);
+        }
+    }
+    None
+}
+
+/// Whether the sheet tree rooted at `root` reaches `target` (canonicalised).
+///
+/// Depth-first over `(sheet ... Sheetfile)`, with a visited set: a KiCad
+/// hierarchy is a tree, but a hand-edited or malformed one can name the same
+/// file twice, and a cycle here would hang the extractor.
+fn hierarchy_reaches(root: &Path, target: &Path) -> bool {
+    let mut seen: BTreeSet<PathBuf> = BTreeSet::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(p) = stack.pop() {
+        let canon = std::fs::canonicalize(&p).unwrap_or_else(|_| p.clone());
+        if !seen.insert(canon.clone()) {
+            continue;
+        }
+        if canon == *target {
+            return true;
+        }
+        let Ok(text) = std::fs::read_to_string(&p) else {
+            continue;
+        };
+        let Ok(doc) = forge_sexpr::parse(&text) else {
+            continue;
+        };
+        let Some(node) = doc.root() else { continue };
+        let Some(dir) = p.parent() else { continue };
+        for sub in node.find_all("sheet") {
+            if let Some(file) = sheet_property(sub, "Sheetfile") {
+                stack.push(dir.join(file));
+            }
+        }
+    }
+    false
 }
 
 // ---------------------------------------------------------------------------
