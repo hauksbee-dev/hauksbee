@@ -19,10 +19,46 @@ use hauksbee_models::{ModelLibrary, Pack, PackStore};
 /// lowering, and the exhaustive comb-cycle convergence check, so "lint said
 /// ok" and "the board binds it" can never disagree.
 pub fn lint(file: &Path) -> anyhow::Result<()> {
+    // A board file handed to `models lint` used to fall into the TOML parser,
+    // which dumped the whole one-line board file as error context. Detect it
+    // (extension first: a binary .PcbDoc fails read_to_string with a UTF-8
+    // error that hides the actual mistake) and name the command they meant.
+    let ext = file
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    let board_ext = matches!(
+        ext.as_str(),
+        "kicad_pcb" | "kicad_sch" | "brd" | "pcbdoc" | "d356" | "net" | "board" | "zip"
+    );
+    if board_ext {
+        anyhow::bail!(
+            "'{}' is a board, not a model spec: to see which model entry each \
+             board part resolves to, run  hauksbee models resolve {}",
+            file.display(),
+            file.display()
+        );
+    }
     let text = std::fs::read_to_string(file)
         .map_err(|e| anyhow::anyhow!("reading '{}': {e}", file.display()))?;
-    let root: toml::Value = toml::from_str(&text)
-        .map_err(|e| anyhow::anyhow!("'{}' is not TOML: {e}", file.display()))?;
+    let head = text.trim_start();
+    if head.starts_with("(kicad_pcb") || head.starts_with("(kicad_sch") || head.starts_with("(export")
+    {
+        anyhow::bail!(
+            "'{}' is a board, not a model spec: to see which model entry each \
+             board part resolves to, run  hauksbee models resolve {}",
+            file.display(),
+            file.display()
+        );
+    }
+    let root: toml::Value = toml::from_str(&text).map_err(|e| {
+        anyhow::anyhow!(
+            "'{}' is not TOML: {e}",
+            file.display(),
+            e = crate::commands::common::cap_context_width(&e.to_string())
+        )
+    })?;
 
     let mut findings = 0usize;
     let mut checked = 0usize;

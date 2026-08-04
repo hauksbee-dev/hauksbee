@@ -52,6 +52,25 @@ pub fn is_board_code_header(text: &str) -> bool {
     head.contains("Board-as-Code") || head.contains("board version ")
 }
 
+/// Width-cap every line of an error message that quotes file content (a TOML
+/// parser's caret-annotated snippet). A machine-written input can be one
+/// enormous line, and quoting it whole buries the actual error; anything past
+/// the cap is elided with a marker. Lines within the cap pass through intact.
+pub fn cap_context_width(msg: &str) -> String {
+    const MAX: usize = 200;
+    msg.lines()
+        .map(|line| {
+            if line.chars().count() <= MAX {
+                line.to_string()
+            } else {
+                let head: String = line.chars().take(MAX).collect();
+                format!("{head} ...(line truncated)")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 pub fn file_name(p: &Path) -> String {
     p.file_name()
         .and_then(|s| s.to_str())
