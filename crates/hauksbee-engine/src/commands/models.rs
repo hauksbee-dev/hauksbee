@@ -17,7 +17,10 @@ use hauksbee_models::{ModelLibrary, Pack, PackStore};
 /// `[models.logic]` block is present, COMPILES it through the same
 /// `LogicComponent::compile` path binding uses, schema validation, expression
 /// lowering, and the exhaustive comb-cycle convergence check, so "lint said
-/// ok" and "the board binds it" can never disagree.
+/// ok" and "the board binds it" can never disagree; a `[soc]` table lints as an
+/// MCU descriptor through the same loader a co-simulation uses, plus the checks
+/// the loader leaves to author intent, plus an inspection of what the descriptor
+/// will actually do (see [`lint_soc`]).
 pub fn lint(file: &Path) -> anyhow::Result<()> {
     // A board file handed to `models lint` used to fall into the TOML parser,
     // which dumped the whole one-line board file as error context. Detect it
@@ -123,9 +126,13 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
             }
             findings += entry_findings;
         }
+    } else if root.get("soc").is_some() {
+        checked += 1;
+        findings += lint_soc(file, &text, &root);
     } else {
         anyhow::bail!(
-            "'{}' has neither a [sensor] table nor [[models]] entries; nothing to lint",
+            "'{}' has no [sensor] table, no [[models]] entries and no [soc] table; \
+             nothing to lint",
             file.display()
         );
     }
@@ -138,6 +145,293 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
         std::process::exit(2);
     }
     Ok(())
+}
+
+/// Validate and inspect a `[soc]` MCU descriptor, returning the finding count.
+///
+/// Two layers. First the REAL loader ([`hauksbee_mcu::SocConfig::from_soc_toml`]),
+/// so a descriptor that lints clean is a descriptor a co-sim will accept: the
+/// same discipline that makes `models lint` and board binding agree about a
+/// `[models.logic]` block. The loader refuses everything that has no correct
+/// execution (a zero clock, an unsubstitutable `{support}` token, a direction
+/// encoding narrower than its port, a shadowed ADC channel, a scale factor that
+/// cannot scale), so those arrive here as layer-one errors and are not re-checked.
+///
+/// Layer two is what the loader deliberately leaves alone: a descriptor that
+/// executes, where whether it is right depends on what the author meant. Those
+/// print as `ERROR` and count towards the exit code.
+///
+/// Then the inspection: one line per capability the resolved descriptor
+/// configures, so an author reads their intent back instead of inferring it from
+/// a co-sim result, and a set of `note:` advisories for the capabilities the
+/// descriptor leaves absent. Advisories do NOT affect the exit code. A descriptor
+/// with no ADC map or no bus controllers is usually exactly right, and warning
+/// about it would train people to ignore the output.
+///
+/// A wrong `odr_offset` cannot be caught from a file at all. That is why the
+/// walkthrough reads every offset off a running machine.
+fn lint_soc(file: &Path, text: &str, root: &toml::Value) -> usize {
+    let (lines, findings) = soc_lint_report(file, text, root);
+    for line in lines {
+        println!("{line}");
+    }
+    findings
+}
+
+/// The pure core of [`lint_soc`]: the lines it would print, and the finding
+/// count. Separated from the I/O so the tests below can lint every embedded
+/// descriptor and assert on the exact output instead of on a process exit code.
+fn soc_lint_report(file: &Path, text: &str, root: &toml::Value) -> (Vec<String>, usize) {
+    let mut out = Vec::new();
+    // Layer 1: the loader, verbatim. Its errors already name the field.
+    let config = match hauksbee_mcu::SocConfig::from_soc_toml(text) {
+        Ok(c) => c,
+        Err(e) => {
+            out.push(format!("soc descriptor '{}': ERROR: {e}", file.display()));
+            return (out, 1);
+        }
+    };
+    let Some(soc) = root.get("soc").and_then(|v| v.as_table()) else {
+        // `from_soc_toml` succeeded, so `[soc]` is a table; reported rather than
+        // unwrapped so a future schema change cannot panic the linter.
+        out.push(format!(
+            "soc descriptor '{}': ERROR: [soc] is not a table",
+            file.display()
+        ));
+        return (out, 1);
+    };
+
+    let mut findings = 0usize;
+
+    // Layer 2, check one: a blank `mcu_label`. It reaches reports and
+    // arch-mismatch errors rather than the emulator, so the loader runs it
+    // correctly and the cost is a report that names nothing.
+    let label_blank = soc
+        .get("mcu_label")
+        .and_then(|v| v.as_str())
+        .is_some_and(|s| s.trim().is_empty());
+    if label_blank {
+        out.push(
+            "soc descriptor: ERROR: `mcu_label` is empty; it is the part name every \
+             report and arch-mismatch error prints"
+                .to_string(),
+        );
+        findings += 1;
+    }
+
+    // Layer 2, check two: an ADC `monitor_command` with no substitution token.
+    // It runs, and feeds the same constant every chunk, so injection appears to
+    // work and never changes. The loader accepts it because a self-contained
+    // trigger command is a thing an author can mean.
+    if let Some(adc) = soc.get("adc").and_then(|v| v.as_array()) {
+        for entry in adc {
+            let Some(entry) = entry.as_table() else {
+                continue;
+            };
+            let channel = entry
+                .get("channel")
+                .and_then(|v| v.as_integer())
+                .unwrap_or(-1);
+            let Some(cmd) = entry.get("monitor_command").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if !["{count}", "{millivolts}", "{volts}"]
+                .iter()
+                .any(|t| cmd.contains(t))
+            {
+                out.push(format!(
+                    "soc descriptor: ERROR: ADC channel {channel} monitor_command contains \
+                     none of {{count}}, {{millivolts}} or {{volts}}, so it would feed the \
+                     same value every chunk: {cmd:?}"
+                ));
+                findings += 1;
+            }
+        }
+    }
+
+    if findings == 0 {
+        let part = file
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .trim_end_matches(".soc.toml");
+        out.push(format!(
+            "soc descriptor '{}': ok ({}:{part})",
+            file.display(),
+            config.backend().name()
+        ));
+        out.extend(
+            soc_inspection(&config)
+                .into_iter()
+                .map(|l| format!("  {l}")),
+        );
+        out.extend(
+            soc_advisories(&config)
+                .into_iter()
+                .map(|l| format!("  note: {l}")),
+        );
+    }
+    (out, findings)
+}
+
+/// One line per capability a resolved descriptor configures: the read-back an
+/// author uses to check the file says what they meant.
+fn soc_inspection(config: &hauksbee_mcu::SocConfig) -> Vec<String> {
+    let mut out = Vec::new();
+    match config {
+        #[cfg(feature = "renode")]
+        hauksbee_mcu::SocConfig::Renode(c) => {
+            out.push(format!("part: {} on machine {:?}", c.mcu_label, c.machine));
+            out.push(if c.platform.contains('\n') {
+                format!(
+                    "platform: {} line(s) of inline .repl source",
+                    c.platform.lines().count()
+                )
+            } else {
+                format!("platform: {}", c.platform)
+            });
+            if let Some(b) = &c.support_bundle {
+                out.push(format!(
+                    "support bundle: {b} (unpacked before the platform loads)"
+                ));
+            }
+            out.push(format!("cpu: {}   clock: {} Hz", c.cpu, c.frequency_hz));
+            out.push(match &c.uart {
+                Some(u) => format!("uart bridge: {u}"),
+                None => "uart bridge: none".to_string(),
+            });
+            for p in &c.ports {
+                out.push(format!(
+                    "gpio port {}: {} pins on sysbus.{}, output state at +{:#x}, direction {}",
+                    p.letter,
+                    p.width,
+                    p.peripheral,
+                    p.odr_offset,
+                    match &p.dir {
+                        Some(d) => format!("at +{:#x} ({:?})", d.offset, d.encoding),
+                        None => "not observable".to_string(),
+                    }
+                ));
+            }
+            out.push(format!(
+                "i2c controllers: {}",
+                name_list(&c.i2c_controllers)
+            ));
+            out.push(format!(
+                "spi controllers: {}",
+                name_list(&c.spi_controllers)
+            ));
+            for a in &c.adc_channels {
+                out.push(format!(
+                    "adc channel {}: 0..{} counts over 0..{} V via {}",
+                    a.channel,
+                    a.max_count,
+                    a.full_scale_volts,
+                    match &a.inject {
+                        hauksbee_mcu::AdcInject::MonitorCommand(cmd) => format!("monitor {cmd:?}"),
+                        hauksbee_mcu::AdcInject::MemoryWord(addr) =>
+                            format!("a write to {addr:#010x}"),
+                    }
+                ));
+            }
+            out.push(format!(
+                "setup commands: {} before the firmware loads, {} after",
+                c.extra_setup.len(),
+                c.post_load_setup.len()
+            ));
+        }
+        #[cfg(feature = "qemu")]
+        hauksbee_mcu::SocConfig::Qemu(c) => {
+            out.push(format!("part: {} on machine {:?}", c.mcu_label, c.machine));
+            out.push(format!(
+                "arch: {:?}   clock: {} Hz   icount_shift: {}",
+                c.arch, c.frequency_hz, c.icount_shift
+            ));
+            for b in &c.banks {
+                out.push(format!(
+                    "gpio bank {}: {} pins, out mailbox {:#010x}, in mailbox {:#010x}",
+                    b.letter, b.width, b.out_reg, b.in_reg
+                ));
+            }
+            out.push(format!("i2c buses: {}", name_list(&c.i2c_buses)));
+        }
+        #[cfg(not(any(feature = "renode", feature = "qemu")))]
+        _ => out.push("this build carries no emulator backend".to_string()),
+    }
+    out
+}
+
+/// A comma-separated controller list, or the word `none`, so an empty list reads
+/// as a deliberate answer rather than a truncated line.
+fn name_list(names: &[String]) -> String {
+    if names.is_empty() {
+        "none".to_string()
+    } else {
+        names.join(", ")
+    }
+}
+
+/// What a valid descriptor will NOT do. Each of these is a legitimate choice and
+/// a common accident, so they are notes and not findings: the point is that the
+/// author sees the consequence before a co-sim run reports it as a coverage hole.
+fn soc_advisories(config: &hauksbee_mcu::SocConfig) -> Vec<String> {
+    let mut out = Vec::new();
+    match config {
+        #[cfg(feature = "renode")]
+        hauksbee_mcu::SocConfig::Renode(c) => {
+            if c.ports.is_empty() {
+                out.push(
+                    "no [[soc.ports]]: no GPIO is observable, so every net this MCU \
+                     drives reports as never driven"
+                        .to_string(),
+                );
+            }
+            if c.uart.is_none() {
+                out.push(
+                    "no `uart`: firmware output and --serial-attach have nowhere to go".to_string(),
+                );
+            }
+            if c.ports.iter().any(|p| p.dir.is_none()) {
+                out.push(
+                    "at least one port has no `dir` map, so drive direction is not \
+                     observable there and every output-state change reports as a drive. \
+                     That is the conservative answer and the right default; a WRONG dir \
+                     map is worse than none"
+                        .to_string(),
+                );
+            }
+            if c.adc_channels.is_empty() {
+                out.push(
+                    "no [[soc.adc]]: analog injections into this MCU are DROPPED and \
+                     reported as a coverage hole on every surface, never silently"
+                        .to_string(),
+                );
+            }
+            if c.i2c_controllers.is_empty() && c.spi_controllers.is_empty() {
+                out.push(
+                    "no i2c or spi controllers: a bound sensor is recorded UNEXERCISED \
+                     and a CI peripheral assertion against it fails"
+                        .to_string(),
+                );
+            }
+        }
+        #[cfg(feature = "qemu")]
+        hauksbee_mcu::SocConfig::Qemu(c) => {
+            if c.banks.is_empty() {
+                out.push("no [[soc.banks]]: no GPIO is observable".to_string());
+            }
+            if c.i2c_buses.is_empty() {
+                out.push(
+                    "no [soc.i2c].buses: a bound sensor is recorded UNEXERCISED and a CI \
+                     peripheral assertion against it fails"
+                        .to_string(),
+                );
+            }
+        }
+        #[cfg(not(any(feature = "renode", feature = "qemu")))]
+        _ => {}
+    }
+    out
 }
 
 // ── Model packs (06-extensibility-sdk §3) ─────────────────────────────────────
@@ -861,6 +1155,163 @@ mod tests {
         // Natural reference order: R2 before R10, groups by prefix.
         assert!(natural_ref_key("R2") < natural_ref_key("R10"));
         assert!(natural_ref_key("C1") < natural_ref_key("R1"));
+    }
+
+    /// Lint a descriptor source the way `models lint` does, from the parse
+    /// onwards, and hand back the printed lines plus the finding count.
+    fn lint_descriptor(name: &str, src: &str) -> (Vec<String>, usize) {
+        let root: toml::Value = toml::from_str(src).expect("the fixture must be TOML");
+        super::soc_lint_report(std::path::Path::new(name), src, &root)
+    }
+
+    /// Every descriptor hauksbee ships must lint clean, so a future one cannot
+    /// arrive broken: the sweep is the gate, not a spot check of the newest file.
+    /// The `examples/` descriptor the add-a-microcontroller walkthrough builds is
+    /// swept too, because a reader copies it.
+    #[test]
+    fn every_shipped_soc_descriptor_lints_clean() {
+        let mut swept = 0usize;
+        for spec in hauksbee_mcu::SocConfig::builtin_specs() {
+            let src = hauksbee_mcu::SocConfig::builtin_source(spec)
+                .unwrap_or_else(|| panic!("{spec} is advertised but carries no source"));
+            let part = spec.split_once(':').map(|(_, p)| p).unwrap_or(spec);
+            let (lines, findings) = lint_descriptor(&format!("{part}.soc.toml"), src);
+            assert_eq!(findings, 0, "{spec} must lint clean:\n{}", lines.join("\n"));
+            // A clean descriptor prints its inspection, not just a verdict: an
+            // "ok" with nothing under it would mean the read-back went silent.
+            assert!(
+                lines.len() > 2,
+                "{spec} must print an inspection:\n{}",
+                lines.join("\n")
+            );
+            swept += 1;
+        }
+        let example = include_str!("../../../hauksbee-mcu/db/mcu/examples/stm32f072.soc.toml");
+        let (lines, findings) = lint_descriptor("stm32f072.soc.toml", example);
+        assert_eq!(
+            findings,
+            0,
+            "the walkthrough's example descriptor must lint clean:\n{}",
+            lines.join("\n")
+        );
+        swept += 1;
+        assert!(
+            swept >= 9,
+            "the sweep must cover every descriptor, saw {swept}"
+        );
+    }
+
+    /// A minimal Renode descriptor with `{extra}` splicing in the case under test.
+    fn soc_fixture(extra: &str) -> String {
+        format!(
+            r#"
+[soc]
+backend = "renode"
+machine = "m"
+platform_repl = "@platforms/cpus/stm32f072.repl"
+cpu_path = "sysbus.cpu"
+frequency_hz = 8_000_000
+expected_e_machine = "EM_ARM"
+mcu_label = "test part"
+{extra}
+"#
+        )
+    }
+
+    /// The two-sided pair the linter exists for. A 32-bit port with `moder`
+    /// decodes only its low 16 pins, so pins 16 and up read as inputs and their
+    /// edges vanish: strictly worse than no direction map at all, which at least
+    /// reports every output-state change. It must be a finding.
+    #[test]
+    fn a_too_narrow_dir_encoding_is_a_finding_and_a_valid_descriptor_is_not() {
+        let (lines, findings) = lint_descriptor(
+            "wide.soc.toml",
+            &soc_fixture(
+                "[[soc.ports]]\nletter = \"0\"\nperipheral = \"sio\"\nodr_offset = 0x10\n\
+                 width = 32\ndir = { offset = 0x20, encoding = \"moder\" }",
+            ),
+        );
+        assert_eq!(findings, 1, "output was:\n{}", lines.join("\n"));
+        let text = lines.join("\n");
+        assert!(text.contains("ERROR"), "{text}");
+        assert!(
+            text.contains("decodes only 16 pins") && text.contains("dropped silently"),
+            "the finding must say what goes wrong, not just that something did: {text}"
+        );
+
+        // The same port with an encoding that reaches 32 pins is valid, prints
+        // its inspection, and produces nothing.
+        let (lines, findings) = lint_descriptor(
+            "wide.soc.toml",
+            &soc_fixture(
+                "[[soc.ports]]\nletter = \"0\"\nperipheral = \"sio\"\nodr_offset = 0x10\n\
+                 width = 32\ndir = { offset = 0x20, encoding = \"dir_bits\" }",
+            ),
+        );
+        assert_eq!(findings, 0, "output was:\n{}", lines.join("\n"));
+        let text = lines.join("\n");
+        assert!(text.contains("wide.soc.toml': ok (renode:wide)"), "{text}");
+        assert!(
+            text.contains("gpio port 0: 32 pins on sysbus.sio, output state at +0x10"),
+            "the inspection must read the port back: {text}"
+        );
+        assert!(!text.contains("ERROR"), "{text}");
+    }
+
+    /// The linter's own two checks, the ones the loader leaves to author intent.
+    /// Both are findings, because both mean the descriptor runs and reports the
+    /// wrong thing.
+    #[test]
+    fn intent_findings_are_errors_and_absent_capabilities_are_only_notes() {
+        let blank_label = soc_fixture("").replace("mcu_label = \"test part\"", "mcu_label = \"\"");
+        let (lines, findings) = lint_descriptor("m.soc.toml", &blank_label);
+        assert_eq!(findings, 1, "{}", lines.join("\n"));
+        assert!(
+            lines.join("\n").contains("`mcu_label` is empty"),
+            "{lines:?}"
+        );
+
+        let (lines, findings) = lint_descriptor(
+            "m.soc.toml",
+            &soc_fixture(
+                "[[soc.adc]]\nchannel = 2\n\
+                 monitor_command = \"sysbus.adc SetDefaultValue 1650\"\n\
+                 full_scale_volts = 3.3\nmax_count = 4095",
+            ),
+        );
+        assert_eq!(findings, 1, "{}", lines.join("\n"));
+        assert!(
+            lines.join("\n").contains("ADC channel 2 monitor_command"),
+            "{lines:?}"
+        );
+
+        // And the distinction that keeps the output worth reading: a descriptor
+        // with no ADC map, no buses and no ports is USUALLY right, so it is all
+        // notes and no findings.
+        let (lines, findings) = lint_descriptor("m.soc.toml", &soc_fixture(""));
+        assert_eq!(findings, 0, "{}", lines.join("\n"));
+        let notes = lines.iter().filter(|l| l.contains("note:")).count();
+        assert!(notes >= 3, "absent capabilities must be noted: {lines:?}");
+        assert!(!lines.join("\n").contains("ERROR"), "{lines:?}");
+    }
+
+    /// A descriptor the loader refuses lints as exactly one finding carrying the
+    /// loader's own named error, so `models lint` and a co-sim cannot disagree
+    /// about whether a file is valid.
+    #[test]
+    fn a_loader_refusal_becomes_one_finding_naming_the_loaders_error() {
+        let zero_clock = soc_fixture("").replace("frequency_hz = 8_000_000", "frequency_hz = 0");
+        let (lines, findings) = lint_descriptor("m.soc.toml", &zero_clock);
+        assert_eq!(findings, 1, "{}", lines.join("\n"));
+        assert_eq!(
+            lines.len(),
+            1,
+            "a refusal prints the error and nothing else"
+        );
+        assert!(
+            lines[0].contains("ERROR") && lines[0].contains("soc.frequency_hz must not be 0"),
+            "{lines:?}"
+        );
     }
 
     #[test]

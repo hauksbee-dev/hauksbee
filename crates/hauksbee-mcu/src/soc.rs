@@ -458,10 +458,13 @@ mod renode_schema {
             if self.platform_repl.trim().is_empty() {
                 return Err(SocError::EmptyPlatform);
             }
-            super::validate_non_empty(&[
-                ("machine", &self.machine),
-                ("cpu_path", &self.cpu_path),
-            ])?;
+            super::validate_non_empty(&[("machine", &self.machine), ("cpu_path", &self.cpu_path)])?;
+            // A present-but-blank `uart` asks the backend for
+            // `connector Connect "" hauksbee_uart`. Omitting the field is how a
+            // descriptor says "no UART bridge"; a blank one says nothing.
+            if let Some(uart) = &self.uart {
+                super::validate_non_empty(&[("uart", uart)])?;
+            }
             super::validate_frequency(self.frequency_hz)?;
             if self.support_bundle.is_none() {
                 let mut token_fields: Vec<(&'static str, bool)> = vec![
@@ -908,6 +911,22 @@ impl SocConfig {
         EMBEDDED.iter().map(|(k, _)| *k).collect()
     }
 
+    /// The embedded TOML SOURCE for a `backend:part` spec.
+    ///
+    /// [`builtin_specs`](Self::builtin_specs) says which parts exist and
+    /// [`resolve`](Self::resolve) hands back a parsed config; neither gives a
+    /// caller the file. Anything that reads a descriptor AS A FILE needs this:
+    /// `hauksbee models lint`'s sweep over every shipped descriptor (so a broken
+    /// one cannot ship), and any command that shows or copies a built-in as the
+    /// starting point for a new part.
+    ///
+    /// Note the layering: this is the EMBEDDED source, deliberately not the
+    /// override-directory file that `resolve` would prefer. A caller asking for
+    /// the shipped descriptor is asking about the binary, not the machine.
+    pub fn builtin_source(spec: &str) -> Option<&'static str> {
+        EMBEDDED.iter().find(|(k, _)| *k == spec).map(|(_, v)| *v)
+    }
+
     /// The backend this resolved descriptor targets.
     pub fn backend(&self) -> Backend {
         match self {
@@ -1222,6 +1241,23 @@ mcu_label = "test part"
         SocConfig::from_soc_toml(&descriptor("")).expect("the baseline must load");
     }
 
+    /// Every spec the resolver advertises has embedded source behind it, and
+    /// that source is the descriptor the resolver loads.
+    #[test]
+    fn every_builtin_spec_has_source_and_an_unknown_one_has_none() {
+        for spec in SocConfig::builtin_specs() {
+            let src = SocConfig::builtin_source(spec)
+                .unwrap_or_else(|| panic!("{spec} is advertised but carries no source"));
+            assert!(
+                src.contains("[soc]"),
+                "{spec}'s source must be a descriptor"
+            );
+            SocConfig::from_soc_toml(src)
+                .unwrap_or_else(|e| panic!("shipped descriptor {spec} must load: {e}"));
+        }
+        assert_eq!(SocConfig::builtin_source("renode:no_such_part"), None);
+    }
+
     #[test]
     fn zero_frequency_is_refused() {
         let src = descriptor("").replace("frequency_hz = 8_000_000", "frequency_hz = 0");
@@ -1248,6 +1284,16 @@ mcu_label = "test part"
             ),
             "a blank cpu path must be refused"
         );
+        assert!(
+            matches!(
+                SocConfig::from_soc_toml(&descriptor("uart = \"\"")),
+                Err(SocError::EmptyField { field: "uart" })
+            ),
+            "a blank UART path must be refused; omitting the field is how a \
+             descriptor asks for no bridge"
+        );
+        // Omitting it is the legitimate way to say that.
+        SocConfig::from_soc_toml(&descriptor("")).expect("no `uart` field means no UART bridge");
         // `mcu_label` reaches reports and error messages, never the emulator, so
         // it LOADS: `models lint` is where a blank one is reported.
         let blank_label = descriptor("").replace("mcu_label = \"test part\"", "mcu_label = \"\"");

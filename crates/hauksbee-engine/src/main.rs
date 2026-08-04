@@ -210,10 +210,13 @@ enum Command {
     ///
     /// `models lint <file>` checks a `[[models]]` db file (params per kind,
     /// plus each entry's `[models.logic]` block: schema validation, expression
-    /// compilation, and the exhaustive combinational-cycle convergence check)
-    /// or a `[sensor]` register-map spec. Every failure is a NAMED error tied
-    /// to its entry. It is the same validation binding runs, available
-    /// standalone so a spec author (or an LLM extraction pipeline) fails fast.
+    /// compilation, and the exhaustive combinational-cycle convergence check),
+    /// a `[sensor]` register-map spec, or a `[soc]` MCU descriptor (the loader's
+    /// own validation plus the checks that catch a descriptor which would run
+    /// and observe the wrong register, plus an inspection of what it configures).
+    /// Every failure is a NAMED error tied to its entry. It is the same
+    /// validation binding runs, available standalone so a spec author (or an LLM
+    /// extraction pipeline) fails fast.
     ///
     /// `models add <path|url>` installs a model pack (a directory with a
     /// pack.toml manifest and models/*.toml) into ~/.hauksbee/packs;
