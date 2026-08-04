@@ -22,7 +22,7 @@
 | CI artifacts (`--junit`, `--sarif`) | The static suite as JUnit XML or SARIF 2.1.0, so a pipeline renders findings without a spec | Commodity formats, zero-config path | No |
 | AC analysis (`--ac`) | Small-signal Bode, gain crossover, phase margin | Differentiated | No |
 | Firmware co-sim (`--firmware --headless`) | Firmware-driven GPIO/peripheral faults, actual rail voltages under real firmware load | **The differentiator** | AVR: no. STM32/nRF52/RISC-V: Renode. ESP32 family: Espressif QEMU |
-| Behavioral goal assertions (`hauksbee-ci run`) | Whether the firmware makes the hardware do its job: rails, UART output, blink rate, boot timing, temperature, loop stability | **The differentiator** | Same as co-sim above |
+| Behavioral goal assertions (`hauksbee-ci run`) | Whether the firmware makes the hardware do its job: rails, UART output, blink rate, boot timing, temperature, loop stability. The two time-based kinds are only clock-verified on RP2040 and AVR (see below) | **The differentiator** | Same as co-sim above |
 | Board-as-Code (`to-code` / `from-code` / `check-code`) | Edit-simulate loop: catch miswire, stress faults, and thermal issues in a pre-commit hook | Differentiated | Optional (co-sim in `check-code` uses whichever backend the board's MCU needs) |
 | MCP server (`hauksbee-mcp`) | The same engine exposed to coding agents as a stdio MCP server | Differentiated | Same as the analysis it runs |
 
@@ -166,7 +166,17 @@ No other tool does this from the layout. hauksbee boots real firmware on an
 emulated MCU. Its GPIO and peripheral edges drive currents and voltages
 through the analog circuit solver in lockstep. Every static check becomes a
 dynamic check. hauksbee measures rails under actual firmware-driven load. GPIO
-transitions fire in the correct order. Boot timing shows in simulated time.
+transitions fire in the correct order.
+
+Boot timing shows in simulated time on the backends whose clock rate is
+verified against the part: `renode:rp2040` and `simavr:atmega328p`, where
+firmware sleeping 20 ms costs 20 ms of simulated time. It is NOT verified on
+`renode:stm32f103`, `renode:stm32f4_discovery`, `renode:nrf52840` or
+`renode:sifive_fe310`, whose platform files declare their own core and SysTick
+clocks rather than the part's, and it is not reproducible on the `qemu:esp32`
+family, whose virtual time is paced against wall clock. On those parts a
+frequency or deadline assertion measures the emulator's clock, not the board's.
+See `docs/about/LIMITATIONS.md`.
 
 Coverage in one sentence: **co-sim covers AVR (via libsimavr, in-process),
 STM32 / nRF52 / RISC-V (via Renode), and the full ESP32 family (via Espressif

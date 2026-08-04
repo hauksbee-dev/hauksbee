@@ -374,7 +374,11 @@ This `mcu` (which MCU's UART to read, by reference) is load-bearing, unlike
 the top-level `mcu` key, which is an informational note nothing reads.
 
 **`toggle`**: a net toggles at an expected frequency (a blink check) or a
-minimum number of times.
+minimum number of times. A COUNT is trustworthy on every backend. A FREQUENCY
+rests on the backend's clock rate matching the part, which is verified on
+`renode:rp2040` and `simavr:atmega328p` and not on the other Renode platforms or
+the ESP32 family; on those, prefer a minimum count. `docs/about/LIMITATIONS.md`
+gives the measured ratios.
 
 ```toml
 [[assert]]
