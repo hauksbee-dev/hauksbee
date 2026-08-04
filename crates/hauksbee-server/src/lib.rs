@@ -262,6 +262,14 @@ impl Server {
                 }),
             );
         }
+        // The resume probe, answered here too. The frontend asks
+        // `/boards/{name}` on every session resume whether the server still
+        // holds the uploaded bytes; this router had no such route, so the answer
+        // came from the static fallback as a 404, which is the browser console
+        // error on every resume that the contract exists to avoid. An exact
+        // `board_file` route registered above still wins for the board that is
+        // actually loaded. See `live_board_handler` for the contract.
+        router = router.route("/boards/{name}", get(no_board_handler));
         if let Some(dir) = static_dir {
             router = router.fallback_service(tower_http::services::ServeDir::new(dir));
         }
@@ -440,6 +448,14 @@ fn unified_router(
                 .route("/boards/{name}", get(live_board_handler))
                 .with_state(hub.clone()),
         );
+    } else {
+        // No live hub, and the probe still has to be answered. The frontend asks
+        // this route on every session resume whether the server still holds the
+        // uploaded bytes, and with no hub there was no route at all, so the
+        // static fallback answered 404: the exact browser console error the
+        // contract above exists to avoid, on the most ordinary configuration
+        // there is. "No board here" is an answer, not an error.
+        router = router.merge(Router::new().route("/boards/{name}", get(no_board_handler)));
     }
     if let (Some(hub), Some(launch)) = (&hub, launch) {
         router = router.merge(frontdoor::live_routes(hub.clone(), launch));
@@ -724,6 +740,17 @@ async fn live_board_handler(
         )
             .into_response(),
     }
+}
+
+/// GET `/boards/{name}` with no live session: the same `200 application/json`
+/// `{"available":false}` miss answer [`live_board_handler`] gives, so the resume
+/// probe gets the same shape whether or not a session exists.
+async fn no_board_handler() -> axum::response::Response {
+    (
+        [(header::CONTENT_TYPE, "application/json")],
+        "{\"available\":false}",
+    )
+        .into_response()
 }
 
 async fn handle_socket(mut socket: WebSocket, shared: Arc<Shared>) {

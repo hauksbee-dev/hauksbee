@@ -8,4 +8,4 @@ skip_initial = 1.0e-3
 
 [[probe]]
 expr = "V(out)"
-reltol = 0.02
+reltol = 2.0e-3

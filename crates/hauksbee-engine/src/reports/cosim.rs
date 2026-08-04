@@ -7,7 +7,7 @@
 use std::path::Path;
 
 use crate::engine::HauksbeeEngine;
-use crate::result::{CosimFailedWindow, CosimJson, NetActivity};
+use crate::result::{CosimFailedWindow, CosimFallbackWindow, CosimJson, NetActivity};
 
 /// Truncate to at most `max` chars (byte-for-byte the binary's helper).
 fn truncate(s: &str, max: usize) -> String {
@@ -93,6 +93,20 @@ pub fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<Cosi
                 .unwrap_or_default(),
         })
         .collect();
+    // Fallback-solved windows: real converged answers, but produced by a
+    // second-class rung after the primary solve failed there; the method and
+    // its accuracy cost travel with each window so the consumer knows which
+    // spans to read with that caveat.
+    let fallback_windows: Vec<CosimFallbackWindow> = sched
+        .fallback_windows()
+        .iter()
+        .map(|&(start_s, end_s, method)| CosimFallbackWindow {
+            start_s,
+            end_s,
+            method: method.as_str().to_string(),
+            accuracy: method.accuracy_note().to_string(),
+        })
+        .collect();
 
     Some(CosimJson {
         mcu_ref,
@@ -108,6 +122,7 @@ pub fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<Cosi
         activity_summary,
         analog_valid,
         failed_windows,
+        fallback_windows,
         spi_framing: sched
             .spi_framing_modes()
             .into_iter()
@@ -491,6 +506,27 @@ pub fn run_headless(
             );
             for &(start_s, end_s) in sched.failed_windows() {
                 println!("  [{:.6}s .. {:.6}s)", start_s, end_s);
+            }
+        }
+
+        // Fallback-solved windows: converged answers whose method is not the
+        // primary integration. Disclosed in the default text mode with the
+        // rung name and its accuracy cost, so a second-class span never reads
+        // as a first-class one.
+        let fallback = sched.fallback_chunk_count();
+        if fallback > 0 {
+            println!(
+                "\nfallback integration solved {fallback} chunk(s) after the primary \
+                 solve failed; those windows are converged but second-class:"
+            );
+            for &(start_s, end_s, method) in sched.fallback_windows() {
+                println!(
+                    "  [{:.6}s .. {:.6}s) via {} ({})",
+                    start_s,
+                    end_s,
+                    method.as_str(),
+                    method.accuracy_note()
+                );
             }
         }
 

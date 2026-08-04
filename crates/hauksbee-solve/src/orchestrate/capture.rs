@@ -3349,9 +3349,33 @@ mod tests {
             // If it converged, it must at least have converged to the TRUTH;
             // a certified-but-wrong latch state is the failure this test
             // exists to forbid. Compare against the fused monolith.
+            //
+            // A bistable's DC has MULTIPLE true roots, and the two paths pick
+            // theirs differently by construction: the fused Newton (with
+            // SPICE-canonical junction limiting) settles on the symmetric
+            // metastable point, exactly as ngspice's `.op` does on a
+            // cross-coupled latch, while the torn group's sequential boundary
+            // relaxation breaks the symmetry and latches a side. Equality
+            // against the monolith's own cold start would therefore fail on
+            // root CHOICE, not on wrongness. So the monolith is seeded with
+            // `.nodeset`s at the torn answer: a nodeset is a start-vector
+            // guess, not a pin, so the released Newton keeps the full
+            // circuit's authority. A torn answer that is a true root selects
+            // its own basin and the trajectories must then agree; a torn
+            // answer that is NOT a root gets walked away from by the released
+            // solve, the trajectories split, and the assert below catches the
+            // certified-but-wrong state exactly as before.
             let mut mono_opts = opts;
             mono_opts.partitioning = Partitioning::Off;
-            let mono = Transient::new(mono_opts).run(&c, 2e-6).expect("monolith");
+            let mut mono_c = c.clone();
+            for node in 1..c.node_count() {
+                mono_c
+                    .nodesets
+                    .push((NodeId(node as u32), exec.waveforms.node_voltages[node][0]));
+            }
+            let mono = Transient::new(mono_opts)
+                .run(&mono_c, 2e-6)
+                .expect("monolith");
             let max_sag = exec.outcomes.iter().map(|o| o.sag_v).fold(0.0f64, f64::max);
             let tol = (3.0 * max_sag).max(1e-4);
             for node in 1..c.node_count() {

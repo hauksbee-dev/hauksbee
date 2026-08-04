@@ -5,13 +5,13 @@ description = "resistive divider DC operating point"
 
 [[probe]]
 expr = "V(out)"
-reltol = 1.0e-4
+reltol = 1.0e-06
 
 [[probe]]
 expr = "V(in)"
-reltol = 1.0e-4
+reltol = 1.0e-06
 
 [[probe]]
 expr = "I(V1)"
-reltol = 1.0e-4
+reltol = 1.0e-06
 abstol = 1.0e-9

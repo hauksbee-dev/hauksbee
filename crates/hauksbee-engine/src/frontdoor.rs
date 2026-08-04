@@ -888,10 +888,11 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
         level: "note".to_string(),
         what: "Analog co-sim did not converge: electrical results are not trustworthy".to_string(),
         why: format!(
-            "The analog solver failed on {failed_chunks} {chunk_word} covering {spans}. \
-             Over those windows the co-sim held stale node voltages instead of a real \
-             solve, so any voltage, current or fault reading there is fiction (see \
-             {}: refuse rather than fake).{diagnosis}",
+            "The analog solver failed on {failed_chunks} {chunk_word} covering {spans}, \
+             and no fallback integration rung (reduced step, backward Euler, cold-start \
+             continuation, subdivision) could carry them. Over those windows the co-sim \
+             held stale node voltages instead of a real solve, so any voltage, current or \
+             fault reading there is fiction (see {}: refuse rather than fake).{diagnosis}",
             hauksbee_ir::docs_url("docs/about/LIMITATIONS.md"),
         ),
         fix: "Treat electrical results inside those windows as unknown. A stiff or \
