@@ -141,12 +141,31 @@ HAUKSBEE_REQUIRE_CORPUS=1 cargo test --workspace
 ```
 
 Each board is pulled from its upstream at the revision `corpus.toml` pins. For
-git-hosted boards the resolved commit is checked against that pin; for zip-hosted
-boards the archive's sha256 is checked against the manifest, and the fetch refuses
-to download one that has no hash recorded. Either way you get the revision the
-gate was measured against. This repository does **not** vendor the boards. They
-carry CC BY-SA, GPL-3.0, and CERN-OHL licences, and fetching means you get each
-one from its author under that author's terms rather than through us.
+git-hosted boards that pin is a full 40-character commit sha and the resolved
+commit is checked against it; for zip-hosted boards the archive's sha256 is
+checked against the manifest, and the fetch refuses to download one that has no
+hash recorded. Either way you get the revision the gate was measured against.
+This repository does **not** vendor the boards. They carry CC BY-SA, GPL-3.0,
+CERN-OHL-S, CERN-OHL-W, CERN-OHL-P, TAPR-OHL, Apache-2.0 and MIT terms, and
+fetching means you get each one from its author under that author's terms rather
+than through us.
+
+The fetch ends by running `scripts/check-corpus.py`, which reads the manifest
+back against the tree that landed and fails if they disagree. That is not
+belt-and-braces: `subdir = "demos"` sat on the KiCad entry from the day it was
+added and nothing acted on it, so the fetch pulled KiCad's `qa/` tree and the
+zero-shorts gate spent that whole time grading itself on boards whose purpose is
+to reproduce KiCad bugs. The check fails on a field nothing honours, an
+abbreviated pin, an entry with no declared axes or `expect` paths, and an entry
+whose landed files do not match its declaration. Run it on its own with
+`python3 scripts/check-corpus.py --manifest-only` before you have a corpus.
+
+Adding a board means adding all of it: the upstream, a full commit sha, the
+licence **as you read it in the upstream's own bytes at that revision**, the
+`axes` it covers, and at least one `expect` path. A licence you inferred from the
+vendor's other repositories is not established; set `license_confirmed = false`
+and it stays out of the default fetch until somebody establishes it. Two entries
+are in that state today for exactly that reason.
 
 Expect 28 of the manifest's 30 entries. The two that are skipped by default are
 the ClockworkPi uConsole boards, whose licence could not be confirmed;
