@@ -148,15 +148,15 @@ pub struct Spec {
     /// overlay performs post-bind structural surgery.
     #[serde(default)]
     pub asbuilt: Option<PathBuf>,
-    /// Optional MCU-kind note. Purely informational, nothing reads it: the
-    /// binder detects the MCU from the BOARD's part value via the model
-    /// library's `[[models]] kind = "mcu"` routing entries (builtin, user
-    /// model dirs, or `--models-dir`), and the resulting `backend:part`
-    /// string selects the emulator + SoC descriptor. To run a spec against a
-    /// different MCU, change the board or add a routing entry; this field
-    /// cannot force a backend.
+    /// Either an informational MCU-kind note (`mcu = "atmega328p"`, the legacy
+    /// string form; nothing reads it, the binder detects the MCU from the
+    /// board), or an `[mcu]` table carrying co-sim MCU configuration such as
+    /// `descriptor_dir` (a directory of `<part>.soc.toml` SoC descriptor
+    /// overrides, resolved relative to the spec file's directory). Note the
+    /// binder still detects WHICH MCU from the board's part value; neither
+    /// form can force a backend.
     #[serde(default)]
-    pub mcu: Option<String>,
+    pub mcu: Option<McuField>,
     /// Simulated duration in milliseconds.
     #[serde(default = "default_duration_ms")]
     #[schemars(extend("exclusiveMinimum" = 0))]
@@ -240,6 +240,44 @@ pub struct Spec {
     /// part of the TOML; filled in by [`Spec::load`].
     #[serde(skip)]
     pub base_dir: PathBuf,
+}
+
+/// The spec's `mcu` key: a bare string (`mcu = "atmega328p"`) is the legacy
+/// informational note; an `[mcu]` table carries real configuration.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(untagged)]
+pub enum McuField {
+    /// Informational MCU-kind note. Nothing reads it: the binder detects the
+    /// MCU from the BOARD's part value via the model library's `[[models]]
+    /// kind = "mcu"` routing entries.
+    Note(String),
+    /// The `[mcu]` table form, carrying co-sim MCU configuration.
+    Config(McuConfig),
+}
+
+/// The `[mcu]` table.
+///
+/// ```toml
+/// [mcu]
+/// name           = "stm32f103"   # informational note (optional)
+/// descriptor_dir = "mcu"         # SoC descriptor overrides, relative to the spec
+/// ```
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct McuConfig {
+    /// Informational MCU-kind note, same meaning as the string form
+    /// `mcu = "..."`; nothing reads it.
+    #[serde(default)]
+    pub name: Option<String>,
+    /// Directory of `<part>.soc.toml` SoC descriptor overrides for this run,
+    /// resolved relative to the spec file's directory. The same layer the
+    /// `HAUKSBEE_MCU_DIR` environment variable provides, made declarative so a
+    /// hardware repo can check its descriptor overrides in beside the spec.
+    /// Precedence: an explicitly set `HAUKSBEE_MCU_DIR` environment variable
+    /// WINS over this field (the env var is the operator's override of last
+    /// resort; a spec must not be able to silently defeat it).
+    #[serde(default)]
+    pub descriptor_dir: Option<PathBuf>,
 }
 
 fn default_name() -> String {
@@ -592,6 +630,36 @@ impl PeripheralSpec {
                 "peripheral '{}' (vcd_sink) needs `nets = [...]` (the signals to log); a singular `net` is not read by the sink",
                 self.id
             )));
+        }
+        // Schema-vs-validate parity: the published editor schema documents
+        // these bounds, so the runtime validate path must enforce the same
+        // ones (an editor-green spec must not fail differently at run time,
+        // and a CLI-only author gets the same protection the editor gives).
+        if let Some(a) = self.address {
+            if a > 127 {
+                return Err(SpecError::Invalid(format!(
+                    "peripheral '{}': `address` must be a 7-bit I2C address (0..=127), got {a}",
+                    self.id
+                )));
+            }
+        }
+        if self.size == Some(0) {
+            return Err(SpecError::Invalid(format!(
+                "peripheral '{}': `size` must be at least 1 byte",
+                self.id
+            )));
+        }
+        if let Some(w) = &self.waveform {
+            const WAVEFORMS: &[&str] = &["dc", "sine", "pwl", "noise"];
+            if !WAVEFORMS.contains(&w.as_str()) {
+                return Err(SpecError::Invalid(format!(
+                    "peripheral '{}': unknown waveform '{}'{} (expected one of {})",
+                    self.id,
+                    w,
+                    crate::error::did_you_mean_hint(w, WAVEFORMS),
+                    WAVEFORMS.join("|")
+                )));
+            }
         }
         Ok(())
     }
@@ -1011,6 +1079,28 @@ impl Spec {
         self.asbuilt.as_ref().map(|f| self.resolve(f))
     }
 
+    /// The informational MCU-kind note, whichever spelling carried it
+    /// (`mcu = "..."` or `[mcu] name = "..."`).
+    pub fn mcu_note(&self) -> Option<&str> {
+        match &self.mcu {
+            Some(McuField::Note(s)) => Some(s),
+            Some(McuField::Config(c)) => c.name.as_deref(),
+            None => None,
+        }
+    }
+
+    /// The `[mcu] descriptor_dir` SoC-descriptor override directory, resolved
+    /// against the spec's directory. `None` when unset (or when `mcu` is the
+    /// legacy string form). Precedence against the `HAUKSBEE_MCU_DIR`
+    /// environment variable is applied by the runner, not here: an explicitly
+    /// set env var wins over this field.
+    pub fn mcu_descriptor_dir(&self) -> Option<PathBuf> {
+        match &self.mcu {
+            Some(McuField::Config(c)) => c.descriptor_dir.as_ref().map(|d| self.resolve(d)),
+            _ => None,
+        }
+    }
+
     fn resolve(&self, p: &Path) -> PathBuf {
         if p.is_absolute() {
             p.to_path_buf()
@@ -1021,9 +1111,27 @@ impl Spec {
 
     /// Structural validation independent of the board (fast, no extraction).
     /// Net-name validation happens later in the runner once the board is bound.
+    ///
+    /// Wraps [`Spec::validate_all`]: one error comes back as itself, several
+    /// come back as one [`SpecError::Many`], so callers holding a `Result` see
+    /// every independent finding in one invocation.
     fn validate(&self) -> Result<(), SpecError> {
+        let mut errs = self.validate_all();
+        match errs.len() {
+            0 => Ok(()),
+            1 => Err(errs.remove(0)),
+            _ => Err(SpecError::Many(errs)),
+        }
+    }
+
+    /// Every board-independent validation error in the spec, collected in one
+    /// pass. Sections are validated independently (each supply, peripheral,
+    /// assertion, scenario, ...) so a spec with several mistakes reports them
+    /// all at once instead of one per invocation. An empty vec = a valid spec.
+    pub fn validate_all(&self) -> Vec<SpecError> {
+        let mut errs: Vec<SpecError> = Vec::new();
         if self.asserts.is_empty() {
-            return Err(SpecError::Invalid(
+            errs.push(SpecError::Invalid(
                 "spec has no [[assert]] blocks: a check with no assertions always passes vacuously"
                     .into(),
             ));
@@ -1034,7 +1142,7 @@ impl Spec {
         // runs zero frames so every assertion fails "never sampled" (confusing
         // all-RED). Check finiteness before the sign.
         if !self.duration_ms.is_finite() || self.duration_ms <= 0.0 {
-            return Err(SpecError::Invalid(
+            errs.push(SpecError::Invalid(
                 "duration_ms must be a positive, finite number".into(),
             ));
         }
@@ -1042,18 +1150,53 @@ impl Spec {
         // clamped to 1 µs downstream, running ~1000x more frames than any real
         // cadence and hanging a fast CI check with no explanation. Name it.
         if !self.frame_ms.is_finite() || self.frame_ms <= 0.0 {
-            return Err(SpecError::Invalid(
+            errs.push(SpecError::Invalid(
                 "frame_ms must be a positive, finite number".into(),
             ));
         }
         for s in &self.supplies {
-            s.validate()?;
+            if let Err(e) = s.validate() {
+                errs.push(e);
+            }
         }
         for p in &self.peripherals {
-            p.validate()?;
+            if let Err(e) = p.validate() {
+                errs.push(e);
+            }
         }
         for a in &self.asserts {
-            a.validate()?;
+            if let Err(e) = a.validate() {
+                errs.push(e);
+            }
+        }
+        // Transient scenarios: the schema documents start_ms >= 0, so the
+        // runtime validate path must hold the same line (schema-vs-validate
+        // parity); a negative or non-finite start would otherwise slide the
+        // window silently.
+        for s in &self.scenarios {
+            if !s.start_ms.is_finite() || s.start_ms < 0.0 {
+                errs.push(SpecError::Invalid(format!(
+                    "[[scenario]] on part '{}': `start_ms` must be zero or positive, got {}",
+                    s.part, s.start_ms
+                )));
+            }
+        }
+        // Decoupling ESR/ESL overrides: same parity rule, the schema documents
+        // both as >= 0 (a negative parasitic is not physical and would be
+        // stamped into the solve as-is).
+        if let Some(dec) = &self.decoupling {
+            for ov in &dec.overrides {
+                for (field, v) in [("esr_ohms", ov.esr_ohms), ("esl_henries", ov.esl_henries)] {
+                    if let Some(x) = v {
+                        if !x.is_finite() || x < 0.0 {
+                            errs.push(SpecError::Invalid(format!(
+                                "decoupling override on '{}': `{field}` must be zero or positive, got {x}",
+                                ov.reference
+                            )));
+                        }
+                    }
+                }
+            }
         }
         // boot_coverage without firmware is a hollow gate. The assertion exists
         // to adjudicate "does the FIRMWARE drive this control net in time"; with
@@ -1110,7 +1253,7 @@ impl Spec {
                 } else {
                     format!("declared scenario ids: {}", ids.join(", "))
                 };
-                return Err(SpecError::Invalid(format!(
+                errs.push(SpecError::Invalid(format!(
                     "{} assertion '{}' is scoped to scenario '{scope}', but no [[scenario]] \
                      declares that id ({hint}); an unknown scope would silently be measured \
                      over the whole run instead of the scenario window",
@@ -1127,11 +1270,9 @@ impl Spec {
                 continue;
             }
             let Some(id) = a.id.as_deref() else {
-                return Err(SpecError::Invalid(format!(
-                    "{} assertion '{}' needs an `id` naming the [[peripheral]] / [[sensor]] to read",
-                    a.kind,
-                    a.label()
-                )));
+                // Assertion::validate already rejected the missing id; nothing
+                // more to resolve for this assertion.
+                continue;
             };
             let known: Vec<&str> = self
                 .peripherals
@@ -1145,7 +1286,7 @@ impl Spec {
                 } else {
                     format!("declared ids: {}", known.join(", "))
                 };
-                return Err(SpecError::Invalid(format!(
+                errs.push(SpecError::Invalid(format!(
                     "{} assertion '{}' reads id '{id}', but no [[peripheral]] or [[sensor]] \
                      declares it ({hint})",
                     a.kind,
@@ -1154,10 +1295,14 @@ impl Spec {
             }
         }
         for s in &self.sensors {
-            s.validate()?;
+            if let Err(e) = s.validate() {
+                errs.push(e);
+            }
         }
         if let Some(ac) = &self.ac {
-            ac.validate()?;
+            if let Err(e) = ac.validate() {
+                errs.push(e);
+            }
         }
         // AC assertions need the [ac] sweep block to drive them.
         let needs_ac = self
@@ -1165,13 +1310,13 @@ impl Spec {
             .iter()
             .any(|a| matches!(a.kind.as_str(), "phase_margin" | "ac_gain"));
         if needs_ac && self.ac.is_none() {
-            return Err(SpecError::Invalid(
+            errs.push(SpecError::Invalid(
                 "a phase_margin / ac_gain assertion needs an [ac] sweep block (fstart, fstop, points)".into(),
             ));
         }
         if let Some(f) = &self.fuzz {
             if f.seeds == 0 {
-                return Err(SpecError::Invalid("[fuzz] seeds must be >= 1".into()));
+                errs.push(SpecError::Invalid("[fuzz] seeds must be >= 1".into()));
             }
         }
         // Tolerance-ensemble structural checks (board-independent; pattern
@@ -1182,56 +1327,67 @@ impl Spec {
             // percent > 100 a NEGATIVE component value, both solved as an ordinary
             // pass/fail over a physically-impossible circuit rather than rejected.
             if !(t.percent > 0.0 && t.percent < 100.0 && t.percent.is_finite()) {
-                return Err(SpecError::Invalid(format!(
+                errs.push(SpecError::Invalid(format!(
                     "[[tolerance]] on '{}': percent must be in (0, 100), got {}",
                     t.reference, t.percent
                 )));
             }
             if let Some(d) = &t.distribution {
-                crate::tolerance::Distribution::parse(d)?;
+                if let Err(e) = crate::tolerance::Distribution::parse(d) {
+                    errs.push(e);
+                }
             }
         }
         for ov in &self.overrides {
             if let Some(p) = ov.tolerance {
                 if !(p > 0.0 && p < 100.0 && p.is_finite()) {
-                    return Err(SpecError::Invalid(format!(
+                    errs.push(SpecError::Invalid(format!(
                         "override on '{}': tolerance must be a percentage in (0, 100), got {p}",
                         ov.reference
                     )));
                 }
             }
             if ov.distribution.is_some() && ov.tolerance.is_none() {
-                return Err(SpecError::Invalid(format!(
+                errs.push(SpecError::Invalid(format!(
                     "override on '{}': `distribution` is only meaningful with `tolerance`",
                     ov.reference
                 )));
             }
             if let Some(d) = &ov.distribution {
-                crate::tolerance::Distribution::parse(d)?;
+                if let Err(e) = crate::tolerance::Distribution::parse(d) {
+                    errs.push(e);
+                }
             }
         }
         if let Some(e) = &self.ensemble {
-            let mode = crate::tolerance::Mode::parse(&e.mode)?;
             if e.seeds == 0 {
-                return Err(SpecError::Invalid("[ensemble] seeds must be >= 1".into()));
+                errs.push(SpecError::Invalid("[ensemble] seeds must be >= 1".into()));
             }
             if !self.has_tolerances() {
-                return Err(SpecError::Invalid(
+                errs.push(SpecError::Invalid(
                     "[ensemble] without any [[tolerance]] rules (or an override with a \
                      `tolerance`) has nothing to sample"
                         .into(),
                 ));
             }
-            if mode == crate::tolerance::Mode::Corners && self.fuzz.is_some() {
-                return Err(SpecError::Invalid(
-                    "[ensemble] mode = \"corners\" does not compose with [fuzz] (the corner \
-                     index enumerates min/max combinations, not fuzz seeds); use \
-                     mode = \"monte-carlo\" to run tolerances and net fuzz together"
-                        .into(),
-                ));
+            // The corners/fuzz composition check depends on the mode parsing;
+            // an unparseable mode IS the error, the composition question does
+            // not arise until it is fixed (a genuine cascade, not independence).
+            match crate::tolerance::Mode::parse(&e.mode) {
+                Err(err) => errs.push(err),
+                Ok(mode) => {
+                    if mode == crate::tolerance::Mode::Corners && self.fuzz.is_some() {
+                        errs.push(SpecError::Invalid(
+                            "[ensemble] mode = \"corners\" does not compose with [fuzz] (the corner \
+                             index enumerates min/max combinations, not fuzz seeds); use \
+                             mode = \"monte-carlo\" to run tolerances and net fuzz together"
+                                .into(),
+                        ));
+                    }
+                }
             }
         }
-        Ok(())
+        errs
     }
 
     /// Does this spec declare any component tolerance (a `[[tolerance]]` rule
@@ -2636,5 +2792,157 @@ min = 3.0
             matches!(&err, SpecError::Invalid(m) if m.contains("finite")),
             "expected a finiteness error, got {err:?}"
         );
+    }
+
+    #[test]
+    fn validate_reports_every_independent_error_in_one_pass() {
+        // E54: a spec with several independent mistakes must surface them ALL
+        // in one invocation, not one per fix-and-retry cycle. Three unrelated
+        // errors: a typo'd supply kind, a toggle with both forms set, and an
+        // out-of-bounds tolerance percent.
+        let spec = spec_from(
+            r#"
+board = "b.kicad_pcb"
+duration_ms = 10
+
+[[supply]]
+net = "VCC"
+kind = "benchh"
+volts = 5.0
+
+[[tolerance]]
+ref = "R1"
+percent = 150
+
+[[assert]]
+kind = "toggle"
+net = "D13"
+freq_hz = 5
+min_toggles = 1
+"#,
+        );
+        let errs = spec.validate_all();
+        assert_eq!(errs.len(), 3, "three independent errors: {errs:?}");
+        let all = errs
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(all.contains("benchh"), "supply typo reported: {all}");
+        assert!(
+            all.contains("min_toggles"),
+            "toggle both-forms reported: {all}"
+        );
+        assert!(all.contains("percent"), "tolerance bound reported: {all}");
+
+        // The Result path folds them into one Many whose Display carries all.
+        let err = spec.validate().unwrap_err();
+        let msg = err.to_string();
+        assert!(matches!(&err, SpecError::Many(v) if v.len() == 3));
+        assert!(
+            msg.contains("benchh") && msg.contains("min_toggles") && msg.contains("percent"),
+            "Many must display every finding: {msg}"
+        );
+    }
+
+    #[test]
+    fn schema_documented_bounds_are_enforced_at_load() {
+        // E55 schema-vs-validate parity: the published editor schema documents
+        // these bounds (peripheral address/size, scenario start_ms, decoupling
+        // ESR/ESL, the waveform vocabulary); the runtime validate path must
+        // reject the same values so `check` catches what the editor flags.
+        let base = "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
+                    [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n";
+        let cases: &[(&str, &str)] = &[
+            // peripheral.address: 7-bit I2C, 0..=127.
+            (
+                "[[peripheral]]\nid = \"EE\"\ntype = \"i2c_eeprom\"\naddress = 200\n",
+                "address",
+            ),
+            // peripheral.size: at least 1 byte.
+            (
+                "[[peripheral]]\nid = \"EE\"\ntype = \"i2c_eeprom\"\nsize = 0\n",
+                "size",
+            ),
+            // stimulus waveform: closed vocabulary dc|sine|pwl|noise.
+            (
+                "[[peripheral]]\nid = \"S1\"\ntype = \"stimulus\"\nnet = \"IN\"\nwaveform = \"square\"\n",
+                "waveform",
+            ),
+            // scenario.start_ms: zero or positive.
+            (
+                "[[scenario]]\npart = \"U5\"\nprofile = \"esp32_boot_wifi\"\nstart_ms = -5.0\n",
+                "start_ms",
+            ),
+            // CapOverride ESR/ESL: zero or positive.
+            (
+                "[decoupling]\nparasitics = true\n[[decoupling.override]]\nref = \"C1\"\nesr_ohms = -0.1\n",
+                "esr_ohms",
+            ),
+            (
+                "[decoupling]\nparasitics = true\n[[decoupling.override]]\nref = \"C1\"\nesl_henries = -1e-9\n",
+                "esl_henries",
+            ),
+        ];
+        for (block, needle) in cases {
+            let err = spec_from(&format!("{base}{block}"))
+                .validate()
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains(needle),
+                "`{block}` must be rejected naming `{needle}`, got: {err}"
+            );
+        }
+        // The in-bounds counterparts still validate.
+        for block in [
+            "[[peripheral]]\nid = \"EE\"\ntype = \"i2c_eeprom\"\naddress = 0x50\nsize = 256\n",
+            "[[peripheral]]\nid = \"S1\"\ntype = \"stimulus\"\nnet = \"IN\"\nwaveform = \"sine\"\nfreq_hz = 50.0\n",
+            "[[scenario]]\npart = \"U5\"\nprofile = \"esp32_boot_wifi\"\nstart_ms = 5.0\n",
+            "[decoupling]\nparasitics = true\n[[decoupling.override]]\nref = \"C1\"\nesr_ohms = 0.02\nesl_henries = 1e-9\n",
+        ] {
+            let spec = spec_from(&format!("{base}{block}"));
+            assert!(
+                spec.validate().is_ok(),
+                "in-bounds `{block}` must pass: {:?}",
+                spec.validate()
+            );
+        }
+    }
+
+    #[test]
+    fn mcu_accepts_both_the_note_string_and_the_config_table() {
+        // E31: `mcu = "atmega328p"` (legacy informational note) and the
+        // `[mcu]` table form must both parse; descriptor_dir resolves against
+        // the spec's directory.
+        let note = spec_from(
+            "board = \"b.kicad_pcb\"\nduration_ms = 10\nmcu = \"atmega328p\"\n\
+             [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n",
+        );
+        assert_eq!(note.mcu_note(), Some("atmega328p"));
+        assert_eq!(note.mcu_descriptor_dir(), None);
+
+        let mut table = spec_from(
+            "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
+             [mcu]\nname = \"stm32f103\"\ndescriptor_dir = \"mcu-overrides\"\n\
+             [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n",
+        );
+        table.base_dir = PathBuf::from("/repo/ci");
+        assert_eq!(table.mcu_note(), Some("stm32f103"));
+        assert_eq!(
+            table.mcu_descriptor_dir(),
+            Some(PathBuf::from("/repo/ci/mcu-overrides")),
+            "descriptor_dir resolves relative to the spec's directory"
+        );
+        assert!(table.validate().is_ok());
+
+        // An absolute descriptor_dir passes through untouched.
+        let mut abs = spec_from(
+            "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
+             [mcu]\ndescriptor_dir = \"/opt/socs\"\n\
+             [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n",
+        );
+        abs.base_dir = PathBuf::from("/repo/ci");
+        assert_eq!(abs.mcu_descriptor_dir(), Some(PathBuf::from("/opt/socs")));
     }
 }

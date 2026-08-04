@@ -114,12 +114,15 @@
       ]
     },
     "mcu": {
-      "description": "Optional MCU-kind note. Purely informational, nothing reads it: the\nbinder detects the MCU from the BOARD's part value via the model\nlibrary's `[[models]] kind = \"mcu\"` routing entries (builtin, user\nmodel dirs, or `--models-dir`), and the resulting `backend:part`\nstring selects the emulator + SoC descriptor. To run a spec against a\ndifferent MCU, change the board or add a routing entry; this field\ncannot force a backend.",
-      "type": [
-        "string",
-        "null"
-      ],
-      "default": null
+      "description": "Either an informational MCU-kind note (`mcu = \"atmega328p\"`, the legacy\nstring form; nothing reads it, the binder detects the MCU from the\nboard), or an `[mcu]` table carrying co-sim MCU configuration such as\n`descriptor_dir` (a directory of `<part>.soc.toml` SoC descriptor\noverrides, resolved relative to the spec file's directory). Note the\nbinder still detects WHICH MCU from the board's part value; neither\nform can force a backend.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/McuField"
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "name": {
       "description": "Human-readable name for the check (appears in reports).",
@@ -746,6 +749,46 @@
       "additionalProperties": false,
       "required": [
         "level_a"
+      ]
+    },
+    "McuConfig": {
+      "description": "The `[mcu]` table.\n\n```toml\n[mcu]\nname           = \"stm32f103\"   # informational note (optional)\ndescriptor_dir = \"mcu\"         # SoC descriptor overrides, relative to the spec\n```",
+      "type": "object",
+      "properties": {
+        "descriptor_dir": {
+          "description": "Directory of `<part>.soc.toml` SoC descriptor overrides for this run,\nresolved relative to the spec file's directory. The same layer the\n`HAUKSBEE_MCU_DIR` environment variable provides, made declarative so a\nhardware repo can check its descriptor overrides in beside the spec.\nPrecedence: an explicitly set `HAUKSBEE_MCU_DIR` environment variable\nWINS over this field (the env var is the operator's override of last\nresort; a spec must not be able to silently defeat it).",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "name": {
+          "description": "Informational MCU-kind note, same meaning as the string form\n`mcu = \"...\"`; nothing reads it.",
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        }
+      },
+      "additionalProperties": false
+    },
+    "McuField": {
+      "description": "The spec's `mcu` key: a bare string (`mcu = \"atmega328p\"`) is the legacy\ninformational note; an `[mcu]` table carries real configuration.",
+      "anyOf": [
+        {
+          "description": "Informational MCU-kind note. Nothing reads it: the binder detects the\nMCU from the BOARD's part value via the model library's `[[models]]\nkind = \"mcu\"` routing entries.",
+          "type": "string"
+        },
+        {
+          "description": "The `[mcu]` table form, carrying co-sim MCU configuration.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/McuConfig"
+            }
+          ]
+        }
       ]
     },
     "NetDrive": {

@@ -56,6 +56,29 @@ enum Command {
     /// pretend).
     Run(RunArgs),
 
+    /// Validate one or more specs WITHOUT running any simulation.
+    ///
+    /// Parses the spec, runs every structural validation, and (unless
+    /// --no-board) resolves and loads the referenced board file to validate
+    /// every net and component reference against it. No emulator boots, no
+    /// circuit is solved; this is the fast load-only mode editor tooling
+    /// polls on every keystroke.
+    ///
+    /// What it checks: TOML syntax and vocabulary (unknown/missing fields),
+    /// every field's documented bounds, assertion/peripheral/supply/scenario
+    /// structure, cross-references inside the spec (scenario ids, peripheral
+    /// ids), and, with the board loaded, every referenced net and component.
+    ///
+    /// What it does NOT check (these need a run, a model bind, or an artifact
+    /// that may legitimately not exist yet at edit time): firmware existence
+    /// or loadability, sensor-TOML contents, scenario part/profile resolution
+    /// against the model DB, tolerance patterns matching real components,
+    /// MCU/emulator resolution, and of course every behavioral assertion.
+    ///
+    /// All independent errors are reported in one invocation, not one per
+    /// run. Exit code: 0 when every spec is valid, 2 otherwise.
+    Check(CheckArgs),
+
     /// Scaffold a starter spec from a board, so your first spec is an edit.
     ///
     /// Loads and binds the board, then writes `<board-stem>.toml` into the
@@ -151,6 +174,26 @@ struct RunArgs {
 }
 
 #[derive(Parser)]
+struct CheckArgs {
+    /// The hauksbee-ci TOML spec(s) to validate.
+    #[arg(value_name = "SPEC", num_args = 1.., required = true)]
+    specs: Vec<PathBuf>,
+
+    /// Skip resolving/loading the board file: parse + structural validation
+    /// only. Net and component references are then NOT validated (they need
+    /// the board), so a clean exit means "structurally valid", not "will run".
+    #[arg(long)]
+    no_board: bool,
+
+    /// Print diagnostics as JSON on stdout: one array per spec, one per line
+    /// (a single spec prints a single array). Each element is
+    /// {"line", "col", "code", "message", "fix"}; line/col/fix are omitted
+    /// when not derivable. A valid spec prints an empty array.
+    #[arg(long)]
+    json: bool,
+}
+
+#[derive(Parser)]
 struct InitArgs {
     /// Board file to scaffold a spec from (.kicad_pcb, .kicad_sch, .net, .brd, .d356).
     /// With no argument, looks for exactly one board file in the current
@@ -172,6 +215,7 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
     let mut args = match cli.command {
         Command::Run(args) => args,
+        Command::Check(args) => return cmd_check(args),
         Command::Init(args) => return cmd_init(args),
         Command::Hook(HookCommand::Install) => return cmd_hook_install(),
         Command::GithubAction(args) => return cmd_github_action(args),
@@ -365,6 +409,35 @@ fn cmd_github_action(args: GithubActionArgs) -> ExitCode {
             }
         },
     }
+}
+
+/// `hauksbee-ci check <spec>...`: load-only validation, no simulation. Exit 0
+/// when every spec is valid, 2 when any produced diagnostics (matching `run`'s
+/// spec-error exit code).
+fn cmd_check(args: CheckArgs) -> ExitCode {
+    let opts = hauksbee_ci::check::CheckOptions {
+        no_board: args.no_board,
+    };
+    let mut worst = 0u8;
+    for spec in &args.specs {
+        let diags = hauksbee_ci::check::check_spec(spec, &opts);
+        if args.json {
+            println!(
+                "{}",
+                serde_json::to_string(&diags).expect("diagnostics serialize")
+            );
+        } else if diags.is_empty() {
+            println!("{}: OK", spec.display());
+        } else {
+            for d in &diags {
+                eprintln!("{}", d.render_human(spec));
+            }
+        }
+        if !diags.is_empty() {
+            worst = 2;
+        }
+    }
+    ExitCode::from(worst)
 }
 
 /// `hauksbee-ci init <board>`: scaffold a starter spec and print where it landed.

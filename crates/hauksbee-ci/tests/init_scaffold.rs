@@ -79,7 +79,7 @@ fn init_generates_a_spec_the_loader_accepts() {
     // The scaffold reflects what the board actually is: the detected MCU and the
     // detected +5V supply leg.
     assert_eq!(
-        spec.mcu.as_deref(),
+        spec.mcu_note(),
         Some("atmega328p"),
         "detected MCU is filled in"
     );
