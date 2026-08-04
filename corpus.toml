@@ -204,8 +204,9 @@ rev = "419f9807fba00844d928c920a6be062b85855e37"
 license = "CC-BY-SA-4.0"
 license_note = "license.md states CC BY-SA 4.0 for hardware"
 axes = ["eagle", "dev-board", "stm32", "tiny"]
+# This one keeps its panel at the top level rather than under `Hardware`, so
+# `subdir` already removes it and no `drop` is needed.
 subdir = "Hardware"
-drop = ["Hardware/Production"]
 expect = ["Hardware/MicroMod_STM32_Processor.brd"]
 
 [[board]]

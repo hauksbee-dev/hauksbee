@@ -479,43 +479,54 @@ fn rp2040_minimal_exact_nets() {
 /// `loc_floor` is the fraction of native pads the reconstruction must locate.
 #[test]
 fn corpus_sweep_partition_floor() {
-    // (path, tag, partition-floor %, located-pad floor)
-    let boards = [
+    // (candidate paths, tag, partition-floor %, located-pad floor)
+    //
+    // Several paths per board, because the hand-built corpus and the fetch do not
+    // agree on every layout. The first that resolves is the one this machine has.
+    let boards: [(&[&str], &str, f64, f64); 7] = [
         (
-            "famous/mnt_reform/reform2-oled-pcb/reform2-oled.kicad_pcb",
+            &["famous/mnt_reform/reform2-oled-pcb/reform2-oled.kicad_pcb"],
             "reform_oled",
             99.0,
             0.85,
         ),
         (
-            "famous/lumenpnp/ring-light/ringLight.kicad_pcb",
+            &["famous/lumenpnp/ring-light/ringLight.kicad_pcb"],
             "ringlight",
             99.0,
             0.80,
         ),
-        ("famous/watchy/Watchy.kicad_pcb", "watchy", 99.0, 0.80),
+        (&["famous/watchy/Watchy.kicad_pcb"], "watchy", 99.0, 0.80),
         (
-            "famous/mnt_reform/reform2-trackball2-pcb/reform2-trackball2.kicad_pcb",
+            &["famous/mnt_reform/reform2-trackball2-pcb/reform2-trackball2.kicad_pcb"],
             "reform_trackball2",
             99.0,
             0.75,
         ),
         (
-            "famous/crkbd/pcbs/corne-cherry.kicad_pcb",
+            // The hand-built corpus flattened this by hand; upstream nests each
+            // switch variant one level deeper. Only the flat path was named, so on
+            // any fetched corpus this row matched nothing and the sweep reported
+            // the shortfall as a skip. It was the only manifest entry contributing
+            // to no gate at all.
+            &[
+                "famous/crkbd/pcbs/corne-cherry.kicad_pcb",
+                "famous/crkbd/pcbs/corne-cherry/hotswap/corne-cherry.kicad_pcb",
+            ],
             "corne",
             99.0,
             // Measured 74.4% (482/648) with kicad-cli 9.0.3.
             0.70,
         ),
         (
-            "famous/lily58/Pro_V2/Pro_V2.kicad_pcb",
+            &["famous/lily58/Pro_V2/Pro_V2.kicad_pcb"],
             "lily58prov2",
             98.5,
             // Measured 81.0% (687/848) with kicad-cli 9.0.3.
             0.78,
         ),
         (
-            "famous/mnt_reform/reform2-motherboard30-pcb/reform2-motherboard30.kicad_pcb",
+            &["famous/mnt_reform/reform2-motherboard30-pcb/reform2-motherboard30.kicad_pcb"],
             "reform_mobo",
             99.0,
             // Measured 81.7% (1785/2184) with kicad-cli 9.0.3.
@@ -532,8 +543,8 @@ fn corpus_sweep_partition_floor() {
     );
 
     let mut ran = 0;
-    for (rel, tag, part_floor, loc_floor) in boards {
-        match run_board(rel, tag) {
+    for (rels, tag, part_floor, loc_floor) in boards {
+        match run_board_any(rels, tag) {
             Some(a) => {
                 ran += 1;
                 assert!(
