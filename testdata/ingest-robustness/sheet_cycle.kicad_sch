@@ -3,4 +3,7 @@
     (property "Sheetname" "itself")
     (property "Sheetfile" "sheet_cycle.kicad_sch")
   )
+  (sheet_instances
+    (path "/" (page "1"))
+  )
 )
