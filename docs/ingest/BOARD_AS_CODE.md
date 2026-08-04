@@ -84,13 +84,22 @@ layout at all (`netlist_to_board_preserves_components_and_nets`). Second, you ca
 run the round-trip yourself on the bundled Watchy board and check the net
 partition:
 
+Each `to-code` reminds you on stderr that it is carrying components and nets
+only, and that the routed copper of the input is not in the output. That is the
+point of the exercise: the *connectivity* has to survive a trip through a
+representation that never held the geometry.
+
 ```bash
 hauksbee to-code crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --out w.board
 hauksbee from-code w.board --out w_rebuilt.kicad_pcb
 hauksbee to-code w_rebuilt.kicad_pcb --out w2.board
-# w.board and w2.board carry the same 274 `(ref, pad)` keys and partition them
+# w.board and w2.board carry the same 267 `(ref, pad)` keys and partition them
 # into the same 84 nets.
 ```
+
+(267, not 276 pad entries: a few switches and test points expose two physical
+pads under one pad number, and those collapse to one key. One key carries no net
+at all, an unconnected pad, leaving 266 that the partition actually covers.)
 
 `forge-codegen` also exposes `compare_connectivity` (in `rebuild.rs`) for
 programmatic use, though nothing in the test suite calls it today: the shipped
@@ -129,7 +138,7 @@ one up the same way:
 
 ```bash
 hauksbee check-code examples/board-as-code/starter.board --seconds 0.01
-# Board-as-Code check:
+# Board-as-Code check: starter
 #   3 components, 3 nets, 100% resolved, 0 active nets (nothing toggles without
 #   firmware; `hauksbee run <board> --firmware <f> --headless` exercises it)
 #   simulated 0.010s
@@ -190,9 +199,9 @@ hauksbee check-code w.board --seconds 0.05
 `check-code` prints:
 
 ```text
-Board-as-Code check:
-  84 components, 84 nets, 88% resolved, 0 active nets (nothing toggles without firmware; `hauksbee run <board> --firmware <f> --headless` exercises it)
-  8 unresolved (simulated as OPEN; add models with --models-dir):
+Board-as-Code check: w
+  82 components, 84 nets, 88% resolved, 0 active nets (nothing toggles without firmware; `hauksbee run <board> --firmware <f> --headless` exercises it)
+  8 unresolved (simulated as OPEN; add models with --models-dir, see hauksbee models --help):
     - C7 (TBD)
     - C9 (TBD)
     - R12 (TBD)
