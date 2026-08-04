@@ -205,9 +205,10 @@ async function main() {
   const afterDrag = await waitForQuiet(page)
   ok('the loop settles again after the drag', afterDrag.quiet,
     `${afterDrag.secs.toFixed(1)}s to quiet`)
-  note(`the post-drag glide ran ${afterDrag.frames - dragBefore! - dragDrawn + dragDrawn} frames total from the drag; `
-    + 'OrbitControls damping at dampingFactor 0.06 decays over roughly 190 frames, which is the '
-    + 'pre-existing feel of a released drag and not something this loop adds')
+  note(`the drag and its glide ran ${afterDrag.frames - dragBefore!} frames in total; OrbitControls `
+    + 'damping at dampingFactor 0.06 decays over roughly 190 frames, so a released drag is still '
+    + 'visibly moving for most of that. That is the pre-existing feel of the control, not something '
+    + 'render-on-demand adds; what changed is that the frames stop when the movement does.')
 
   const wheelBefore = await frames(page)
   await page.mouse.move(cx, cy)
