@@ -64,6 +64,61 @@ const WEAK_DIGITAL_DRIVE_OHMS: f64 = 1e8;
 /// (05 §3b, master doctrine §5).
 pub const STRICT_CONSECUTIVE_FAILED_ABORT: u32 = 3;
 
+/// Which fallback rung produced a chunk's converged answer after the primary
+/// integration failed (see `Scheduler::solve_chunk`'s ladder, tried in this
+/// order). A number obtained by a more dissipative method is not the same
+/// number, so the rung is RECORDED per window and surfaced with its accuracy
+/// cost rather than the chunk passing as a first-class solve.
+///
+/// Deliberately minimal: a name and a fixed accuracy note per rung, shaped so a
+/// typed error-budget/provenance spine can absorb it later as one provenance
+/// tag per window without changing the semantics recorded here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChunkFallbackMethod {
+    /// The primary integration re-run with the maximum step bounded to a small
+    /// fraction of the chunk (the LTE controller was striding a stiff feature).
+    ReducedStep,
+    /// Backward Euler at the bounded step: L-stable, damps the trapezoidal
+    /// ringing that kills a stiff chunk, at first-order accuracy.
+    BackwardEuler,
+    /// Backward Euler from a cold start: the warm seed is dropped so the DC
+    /// operating point re-runs the full gmin/source-stepping continuation
+    /// before the march.
+    ColdStartBackwardEuler,
+    /// The chunk subdivided into quarters, each quarter marched with backward
+    /// Euler at the bounded step and seeded from the previous quarter's end.
+    SubdividedBackwardEuler,
+}
+
+impl ChunkFallbackMethod {
+    /// Stable machine-readable name (serialized into the co-sim JSON).
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ChunkFallbackMethod::ReducedStep => "reduced-step",
+            ChunkFallbackMethod::BackwardEuler => "backward-euler",
+            ChunkFallbackMethod::ColdStartBackwardEuler => "cold-start-backward-euler",
+            ChunkFallbackMethod::SubdividedBackwardEuler => "subdivided-backward-euler",
+        }
+    }
+
+    /// The accuracy this rung costs, stated for the consumer of the window.
+    pub fn accuracy_note(&self) -> &'static str {
+        match self {
+            ChunkFallbackMethod::ReducedStep => {
+                "same integration order at a bounded step; accuracy comparable to \
+                 the primary solve, timing resolution unchanged"
+            }
+            ChunkFallbackMethod::BackwardEuler
+            | ChunkFallbackMethod::ColdStartBackwardEuler
+            | ChunkFallbackMethod::SubdividedBackwardEuler => {
+                "first-order backward Euler: numerically dissipative, so fast \
+                 transients and ringing inside this window are damped relative \
+                 to the second-order primary solve"
+            }
+        }
+    }
+}
+
 /// Live chip-select framing hook installed by [`Scheduler::attach_spi_bus`] when
 /// the binder resolved a slave's CS net to an MCU pin (05 §2.1). When `pin`
 /// toggles, the `on_pin_change` closure frames `bus` from the REAL chip-select
@@ -262,6 +317,19 @@ pub struct Scheduler {
     /// consecutive so a diverged stretch reads as its true extent. Surfaced in the
     /// co-sim JSON so a consumer knows exactly which span cannot be trusted.
     failed_windows: Vec<(f64, f64)>,
+    /// Per-run count of chunks whose PRIMARY analog solve failed but a fallback
+    /// integration rung produced a real converged answer (see `solve_chunk`'s
+    /// ladder). A fallback-solved chunk is a solved chunk, so it counts toward
+    /// neither `failed_chunks` nor the strict abort streak, but its number is a
+    /// second-class number (a more dissipative method, a smaller step, or a
+    /// subdivided march), and a consumer reading a waveform is entitled to know
+    /// which windows those are: the count and windows are surfaced in the
+    /// co-sim JSON as `fallback_windows`, each with the method that produced it
+    /// and that method's accuracy cost. An answer carries its provenance.
+    fallback_chunks: u64,
+    /// Sim-time windows `[start_s, end_s)` solved by a fallback rung, with the
+    /// rung that produced each, merged where consecutive with the same rung.
+    fallback_windows: Vec<(f64, f64, ChunkFallbackMethod)>,
     /// Current run of back-to-back failed chunks (reset to 0 by any converged
     /// chunk). Feeds the strict/CI abort threshold.
     consecutive_failed_chunks: u32,
@@ -779,6 +847,8 @@ impl Scheduler {
             forced_node_volts: HashMap::new(),
             failed_chunks: 0,
             failed_windows: Vec::new(),
+            fallback_chunks: 0,
+            fallback_windows: Vec::new(),
             consecutive_failed_chunks: 0,
             max_consecutive_failed_chunks: 0,
             replay_chips,
@@ -2315,16 +2385,133 @@ impl Scheduler {
         self.faults_pending.extend(new);
     }
 
+    /// One transient march over `[0, tstop)` of this chunk's circuit with the
+    /// given options and DC seed. `Ok` carries the last accepted step's
+    /// unknowns; `Err` carries whatever the streaming sink captured before the
+    /// march failed (the t=0 DC point when the DC solve itself succeeded),
+    /// which the refusal path uses as a recovery state.
+    fn march_chunk(
+        &self,
+        tstop: f64,
+        opts: SolverOptions,
+        seed: Option<&[f64]>,
+    ) -> Result<Vec<f64>, Vec<f64>> {
+        let t = Transient::new(opts);
+        let mut final_x: Vec<f64> = Vec::new();
+        let res = t.run_streaming_seeded(&self.circuit, tstop, seed, |s| {
+            final_x.clear();
+            final_x.extend_from_slice(s.x);
+        });
+        match res {
+            Ok(()) => Ok(final_x),
+            Err(_) => Err(final_x),
+        }
+    }
+
+    /// `self.opts` with the maximum step bounded to a small fraction of the
+    /// chunk (and the initial step below it), the first fallback lever: a
+    /// stiff feature the LTE controller strides at a large step is resolved
+    /// instead of fought.
+    fn reduced_step_opts(&self, chunk: f64) -> SolverOptions {
+        let mut opts = self.opts;
+        opts.step = match opts.step {
+            hauksbee_solve::StepControl::Adaptive {
+                dt_initial,
+                dt_min,
+                dt_max,
+            } => hauksbee_solve::StepControl::Adaptive {
+                dt_initial: dt_initial.min(chunk / 4096.0).max(dt_min),
+                dt_min,
+                dt_max: dt_max.min(chunk / 1024.0),
+            },
+            hauksbee_solve::StepControl::Fixed { dt } => hauksbee_solve::StepControl::Fixed {
+                dt: (dt / 16.0).min(chunk / 1024.0),
+            },
+        };
+        opts
+    }
+
+    /// The per-chunk FALLBACK LADDER, tried only after the primary march
+    /// failed, in order of increasing desperation and decreasing accuracy.
+    /// Returns the rung that produced a converged end state, with that state,
+    /// or `None` when no rung could rescue the chunk (the caller then refuses
+    /// exactly as before: stale-voltage holding stays the last resort and
+    /// stays loud). This exists to SHRINK the set of windows the run cannot
+    /// vouch for, never to manufacture a plausible number for one: every rung
+    /// is a real converged solve of the chunk, just by a second-class method,
+    /// and the rung is recorded per window so the consumer knows which method
+    /// produced which answer.
+    fn fallback_ladder(&self, chunk: f64) -> Option<(ChunkFallbackMethod, Vec<f64>)> {
+        let seed = self.last_dc_seed.as_deref();
+        let reduced = self.reduced_step_opts(chunk);
+
+        // Rung 1: the primary integration at a bounded step.
+        if let Ok(x) = self.march_chunk(chunk, reduced, seed) {
+            return Some((ChunkFallbackMethod::ReducedStep, x));
+        }
+
+        // Rung 2: backward Euler at the bounded step. L-stable, so the
+        // trapezoidal ringing that kills a stiff chunk is damped; costs the
+        // integration order, which the record discloses.
+        let mut be = reduced;
+        be.integration = hauksbee_solve::Integration::BackwardEuler;
+        if let Ok(x) = self.march_chunk(chunk, be, seed) {
+            return Some((ChunkFallbackMethod::BackwardEuler, x));
+        }
+
+        // Rung 3: backward Euler from a COLD start. Dropping the warm seed
+        // forces the solver's own DC continuation ladder (gmin stepping,
+        // source stepping, the staged rescue) to re-derive this chunk's
+        // operating point from scratch: a warm seed that has drifted onto a
+        // bad basin is exactly the state a continuation restart escapes.
+        if let Ok(x) = self.march_chunk(chunk, be, None) {
+            return Some((ChunkFallbackMethod::ColdStartBackwardEuler, x));
+        }
+
+        // Rung 4: subdivide the chunk into quarters and march each with
+        // backward Euler at the bounded step, seeding each quarter from the
+        // previous quarter's end. Every quarter must converge; a partial
+        // chunk is not an answer. (Chunk-local source time restarts per
+        // sub-march, which is exact under the co-sim's convention that
+        // sources are constant within a chunk: MCU pins and forced nets only
+        // change at chunk boundaries.)
+        let quarter = chunk / 4.0;
+        let mut carry: Option<Vec<f64>> = self.last_dc_seed.clone();
+        for _ in 0..4 {
+            match self.march_chunk(quarter, be, carry.as_deref()) {
+                Ok(x) => carry = Some(x),
+                Err(_) => return None,
+            }
+        }
+        carry.map(|x| (ChunkFallbackMethod::SubdividedBackwardEuler, x))
+    }
+
+    /// Adopt a converged end state: publish node voltages and branch currents,
+    /// and seed the next chunk's DC solve from it.
+    fn adopt_chunk_state(&mut self, final_x: Vec<f64>) {
+        let n_nodes = self.circuit.node_count();
+        self.node_volts.resize(n_nodes, 0.0);
+        self.node_volts[0] = 0.0;
+        for node in 1..n_nodes {
+            self.node_volts[node] = final_x.get(node - 1).copied().unwrap_or(0.0);
+        }
+        // Branch currents follow the node block in layout order.
+        let n_branch = self.layout.size.saturating_sub(self.layout.n_nodes);
+        self.branch_x.resize(n_branch, 0.0);
+        for b in 0..n_branch {
+            self.branch_x[b] = final_x.get(self.layout.n_nodes + b).copied().unwrap_or(0.0);
+        }
+        self.last_dc_seed = Some(final_x);
+    }
+
     /// Solve one chunk's transient. Returns `true` when the analog march
-    /// converged, `false` when it failed and this chunk is holding recovered/
-    /// stale voltages (the caller then excludes it from stats and stress, and the
+    /// converged (on the primary path or on a RECORDED fallback rung), `false`
+    /// when every rung failed and this chunk is holding recovered/stale
+    /// voltages (the caller then excludes it from stats and stress, and the
     /// run reports `analog_valid: false` over the failed window; 05 §3b).
     fn solve_chunk(&mut self, chunk: f64) -> bool {
         // Keep temperature in sync with the circuit's global temp.
         self.circuit.temp_c = self.opts.temperature_c;
-        let t = Transient::new(self.opts);
-        let n_nodes = self.circuit.node_count();
-        let mut final_x: Vec<f64> = Vec::new();
         // Run a short transient; capture the last accepted step's unknowns.
         // Warm-start this chunk's DC operating point from the previous chunk's
         // final unknowns: the operating point barely moves between 100 us chunks,
@@ -2332,56 +2519,44 @@ impl Scheduler {
         // cold-start gmin/source-stepping homotopy on the full nonlinear board
         // every chunk. Exact (same root, fewer iters); a size-mismatched or
         // failing seed falls back to the cold solve inside the solver.
-        let res = t.run_streaming_seeded(&self.circuit, chunk, self.last_dc_seed.as_deref(), |s| {
-            final_x.clear();
-            final_x.extend_from_slice(s.x);
-        });
-        let converged = match res {
-            Ok(()) => {
-                self.node_volts.resize(n_nodes, 0.0);
-                self.node_volts[0] = 0.0;
-                for node in 1..n_nodes {
-                    self.node_volts[node] = final_x.get(node - 1).copied().unwrap_or(0.0);
-                }
-                // Branch currents follow the node block in layout order.
-                let n_branch = self.layout.size.saturating_sub(self.layout.n_nodes);
-                self.branch_x.resize(n_branch, 0.0);
-                for b in 0..n_branch {
-                    self.branch_x[b] = final_x.get(self.layout.n_nodes + b).copied().unwrap_or(0.0);
-                }
-                // Seed the next chunk's DC solve with this chunk's end state.
-                self.last_dc_seed = Some(final_x);
+        let primary = self.march_chunk(chunk, self.opts, self.last_dc_seed.as_deref());
+        let converged = match primary {
+            Ok(x) => {
+                self.adopt_chunk_state(x);
                 true
             }
-            Err(_) => {
-                // The transient march failed to advance. If the DC operating
-                // point at t=0 was still captured (the streaming sink fires once
-                // before the march loop), use it: a converged DC bias is a far
-                // better state to report and to seed the next chunk from than a
-                // hard zero, which would brown out the modelled MCU. This is what
-                // lets a board whose stiff nonlinear march cannot progress (e.g.
-                // the diode-laden Tarski synapse core) still hold its DC rails and
-                // DAC/peripheral voltages instead of collapsing the whole co-sim.
-                if !final_x.is_empty() {
-                    self.node_volts.resize(n_nodes, 0.0);
-                    self.node_volts[0] = 0.0;
-                    for node in 1..n_nodes {
-                        self.node_volts[node] = final_x.get(node - 1).copied().unwrap_or(0.0);
-                    }
-                    let n_branch = self.layout.size.saturating_sub(self.layout.n_nodes);
-                    self.branch_x.resize(n_branch, 0.0);
-                    for b in 0..n_branch {
-                        self.branch_x[b] =
-                            final_x.get(self.layout.n_nodes + b).copied().unwrap_or(0.0);
-                    }
-                    self.last_dc_seed = Some(final_x);
+            Err(recovered) => {
+                // PRIMARY FAILED. Before giving up on the window, walk the
+                // fallback ladder: a chunk rescued by a more robust path is a
+                // real solved chunk whose method is recorded, not a stale
+                // window. Only when every rung also fails does the refusal
+                // path below run, unchanged: this feature shrinks the set of
+                // windows the run cannot vouch for, it never papers over one.
+                if let Some((method, x)) = self.fallback_ladder(chunk) {
+                    self.adopt_chunk_state(x);
+                    self.record_fallback_chunk(chunk, method);
+                    true
+                } else if !recovered.is_empty() {
+                    // Every rung failed. If the DC operating point at t=0 was
+                    // still captured (the streaming sink fires once before the
+                    // march loop), use it: a converged DC bias is a far better
+                    // state to report and to seed the next chunk from than a
+                    // hard zero, which would brown out the modelled MCU. This
+                    // is what lets a board whose stiff nonlinear march cannot
+                    // progress (e.g. the diode-laden Tarski synapse core)
+                    // still hold its DC rails and DAC/peripheral voltages
+                    // instead of collapsing the whole co-sim. Still recorded
+                    // as a failed chunk below: a recovered bias is not a
+                    // solved window.
+                    self.adopt_chunk_state(recovered);
+                    false
                 } else {
                     // Nothing usable captured: hold previous voltages, cold-start
                     // the next chunk.
-                    self.node_volts.resize(n_nodes, 0.0);
+                    self.node_volts.resize(self.circuit.node_count(), 0.0);
                     self.last_dc_seed = None;
+                    false
                 }
-                false
             }
         };
         // A failed transient (either DC-recovered or held) is not a real solve of
@@ -2411,6 +2586,23 @@ impl Scheduler {
             }
         }
         converged
+    }
+
+    /// Record one FALLBACK-solved chunk: bump the count and extend/append the
+    /// fallback window, merging contiguous windows solved by the SAME rung so
+    /// a stretch reads as its true extent (a method change starts a new window,
+    /// since the two spans carry different accuracy). Called from `solve_chunk`
+    /// before `sim_time` advances, mirroring `record_failed_chunk`.
+    fn record_fallback_chunk(&mut self, chunk: f64, method: ChunkFallbackMethod) {
+        self.fallback_chunks += 1;
+        let start = self.sim_time;
+        let end = self.sim_time + chunk;
+        match self.fallback_windows.last_mut() {
+            Some(prev) if prev.2 == method && (start - prev.1).abs() <= chunk * 1e-6 => {
+                prev.1 = end;
+            }
+            _ => self.fallback_windows.push((start, end, method)),
+        }
     }
 
     /// Record one non-convergent chunk: bump the failed-chunk count and the
@@ -2489,6 +2681,23 @@ impl Scheduler {
     /// merged where consecutive. Empty on a clean run.
     pub fn failed_windows(&self) -> &[(f64, f64)] {
         &self.failed_windows
+    }
+
+    /// Number of chunks this run whose PRIMARY analog solve failed but a
+    /// fallback integration rung produced a converged answer. Zero on a run
+    /// the primary path carried whole. These chunks are solved (they count
+    /// toward neither `failed_chunk_count` nor the strict abort), but their
+    /// numbers were produced by a second-class method whose accuracy cost is
+    /// recorded per window (`fallback_windows`).
+    pub fn fallback_chunk_count(&self) -> u64 {
+        self.fallback_chunks
+    }
+
+    /// The sim-time windows `[start_s, end_s)` solved by a fallback rung, with
+    /// the rung that produced each, merged where consecutive with the same
+    /// rung. Empty on a run the primary path carried whole.
+    pub fn fallback_windows(&self) -> &[(f64, f64, ChunkFallbackMethod)] {
+        &self.fallback_windows
     }
 
     /// False once any chunk this run failed to solve faithfully: either the
