@@ -2,7 +2,7 @@
 # The observable is charge storage itself: with TF=300n at IC~5 mA the stored
 # base charge (~1.5 nC) bleeds through the 10k base pulldown for tens of us,
 # so the collector recovers at ~0.35 V/us instead of snapping up in ~100 ns.
-# Measured worst vs ngspice-46: 3.333e-5 (at t=2.06 us, the drive edge). The
+# Measured worst: 3.362e-5 (at t=2.05 us, the drive edge). The
 # bar is ~30x the measured worst, not a blind bound.
 analysis = "tran"
 description = "saturated switch turn-off: storage delay + charge-limited rise"
@@ -11,4 +11,4 @@ skip_initial = 0.2e-6
 
 [[probe]]
 expr = "V(c)"
-reltol = 0.001
+reltol = 1.0e-03

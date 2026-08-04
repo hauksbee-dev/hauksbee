@@ -6,12 +6,12 @@ description = "NPN common-emitter bias point"
 
 [[probe]]
 expr = "V(coll)"
-reltol = 0.005
+reltol = 5.0e-04
 
 [[probe]]
 expr = "V(base)"
-reltol = 0.005
+reltol = 5.0e-05
 
 [[probe]]
 expr = "V(emit)"
-reltol = 0.005
+reltol = 1.0e-04

@@ -7,4 +7,4 @@ description = "zener-style breakdown clamp voltage past BV"
 
 [[probe]]
 expr = "V(out)"
-reltol = 0.005
+reltol = 5.0e-04
