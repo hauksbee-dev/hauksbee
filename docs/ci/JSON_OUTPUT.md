@@ -52,7 +52,7 @@ Every key below is ALWAYS present on an `ok: true` line.
 | `passed` | boolean | yes | the OVERALL verdict: `exit_code == 0` |
 | `assertions_passed` | boolean | yes | did every assertion pass or carry an active waiver |
 | `run_valid` | boolean | yes | was the run trustworthy at all |
-| `exit_code` | integer | yes | this spec's contribution: 0, 1, or 3 |
+| `exit_code` | integer | yes | this spec's contribution: 0, 1, or 3 (never 2, which produces an error line instead) |
 | `analog_abort` | boolean | yes | did the analog co-sim trip the consecutive-failed-chunk abort |
 | `seeds` | integer | yes | ensemble members run (fuzz seeds, or tolerance members) |
 | `elapsed_s` | number | yes | wall-clock seconds |
@@ -62,6 +62,14 @@ Every key below is ALWAYS present on an `ok: true` line.
 | `dead_rails` | array of string | yes, may be empty | nets that name a supply and that nothing powered |
 | `waiver_notes` | array of string | yes, may be empty | lapsed waivers, active waivers that matched nothing, a malformed waiver file |
 | `results` | array of object | yes | one entry per assertion, in spec order |
+
+`exit_code` is this line's own verdict, not the process's. The process exits with
+the worst code of the whole invocation, and a requested `--junit` or `--sarif`
+file that could not be written escalates it to 2 after every line has already
+been emitted. So a single-spec run can print `exit_code: 1` and exit 2, and that
+is not a disagreement: one is the board's verdict, the other is whether the tool
+delivered everything asked of it. Branch on the process code for the gate; read
+this field to attribute a verdict to a spec.
 
 `coverage` is the one nullable key: present with the value `null`, not absent.
 The distinction matters, because the two per-assertion optional keys below are
