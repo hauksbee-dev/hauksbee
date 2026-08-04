@@ -222,22 +222,19 @@ export function EmbedWidget({
     const el = rootRef.current
     if (!el) return
     let timer: ReturnType<typeof setTimeout> | null = null
-    let idle = false
     const arm = () => {
       if (timer) clearTimeout(timer)
-      timer = setTimeout(() => {
-        idle = true
-        emit('idle', { for_ms: IDLE_AFTER_MS, board: boardId, state })
-      }, IDLE_AFTER_MS)
+      timer = setTimeout(
+        () => emit('idle', { for_ms: IDLE_AFTER_MS, board: boardId, state }),
+        IDLE_AFTER_MS,
+      )
     }
-    const onAny = () => { idle = false; arm() }
     const events = ['pointerdown', 'pointermove', 'wheel', 'keydown'] as const
-    for (const e of events) el.addEventListener(e, onAny, { passive: true })
+    for (const e of events) el.addEventListener(e, arm, { passive: true })
     arm()
     return () => {
-      for (const e of events) el.removeEventListener(e, onAny)
+      for (const e of events) el.removeEventListener(e, arm)
       if (timer) clearTimeout(timer)
-      void idle
     }
   }, [emit, boardId, state])
 

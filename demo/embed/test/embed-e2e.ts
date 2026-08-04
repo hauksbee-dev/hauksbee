@@ -273,11 +273,14 @@ async function main() {
     await frame.waitForSelector('[data-testid="raw-toml"]', { timeout: 10_000 })
     const raw = (await frame.inputValue('[data-testid="raw-toml"]')) ?? ''
     ok('the panel round-trips the recorded spec into raw TOML', /\[\[assert\]\]/.test(raw))
-    const stale = (await frame.textContent('[data-testid="check-results"]')) ?? ''
     await frame.fill('[data-testid="raw-toml"]', raw.replace('min = 3.0', 'min = 2.71828'))
+    // Read the panel AFTER the edit: editing the spec already changes this text
+    // (the previous run's results gain a "from a previous run" note), so a
+    // baseline taken before the edit would make the wait below resolve on the
+    // edit rather than on the run.
+    await frame.waitForTimeout(200)
+    const stale = (await frame.textContent('[data-testid="check-results"]')) ?? ''
     await frame.click('[data-testid="run-checks"]')
-    // The previous run's results are still on screen (flagged stale) until this
-    // one lands: wait for the text to actually change.
     await frame.waitForFunction(
       prev => (document.querySelector('[data-testid="check-results"]')?.textContent ?? '') !== prev,
       stale, { timeout: 20_000 },

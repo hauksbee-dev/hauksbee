@@ -78,8 +78,6 @@ export interface CachedTransport {
   setBoard: (cache: BoardCache | null) => void
   /** Remove the shim and put the page's own fetch back. */
   uninstall: () => void
-  /** Whether the last check answer was assembled from per-rule recordings. */
-  lastRunAssembled: () => boolean
 }
 
 export function installCachedTransport(opts: {
@@ -87,7 +85,6 @@ export function installCachedTransport(opts: {
   onEvent?: (e: TransportEvent) => void
 }): CachedTransport {
   const state: TransportState = { board: null, liveBoard: null }
-  let assembled = false
   const emit = (e: TransportEvent) => opts.onEvent?.(e)
 
   const patched = (async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -165,7 +162,6 @@ export function installCachedTransport(opts: {
       const firmwareName = firmware instanceof File ? firmware.name : null
       const toml = specBlob instanceof Blob ? await specBlob.text() : ''
       const answer = answerCheck(board, toml, firmwareName)
-      assembled = answer.assembled
       emit({
         kind: answer.assembled ? 'assembled' : answer.response.ok ? 'hit' : 'miss',
         path,
@@ -207,7 +203,6 @@ export function installCachedTransport(opts: {
       state.liveBoard = null
     },
     uninstall: () => { globalThis.fetch = before },
-    lastRunAssembled: () => assembled,
   }
 }
 
