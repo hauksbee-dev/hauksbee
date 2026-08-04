@@ -170,7 +170,27 @@ exactly which state it is in ("no corpus at all" versus "corpus present but the
 Altium family is not in it"), and `HAUKSBEE_REQUIRE_CORPUS=1` turns either skip
 into a failure for a run that is supposed to have them.
 
-What a clone *can* run is the synthetic layer, and that is where the format
+What a clone *can* run, besides the synthetic layer below, is a sweep over the
+Altium boards the public fetch does deliver. `corpus.toml` pins the ODrive v2 and v3
+motor-driver designs (MIT, stated in the upstream's own LICENSE at the pinned
+revision), which are OLE2 `.PcbDoc` layouts with `.SchDoc` schematics and a
+`.PrjPcb` project beside them. `altium_corpus::fetched_altium_boards_extract_and_are_short_clean`
+walks the corpus for `.PcbDoc` rather than naming files, so a board added to the
+manifest is covered the moment it is fetched. Measured on a clean fetch:
+
+| Board | Nets | Components | True shorts |
+|---|---|---|---|
+| `odrive/v2/v2/Inverter.PcbDoc` | 198 | 301 | 0 |
+| `odrive/v2/v2/Inverter45attempt.PcbDoc` | 191 | 275 | 0 |
+| `odrive/v3/v3/PCB.PcbDoc` | 154 | 217 | 0 |
+
+That sweep is reproducible from a clone, and it is the reason the Altium tier is no
+longer entirely maintainer-only. It does not replace the cross-validation above: it
+has no independent ground truth, so it asserts that each board extracts to a
+non-empty design and reports zero true shorts, not that the partition matches
+KiCad's importer.
+
+What a clone *can* also run is the synthetic layer, and that is where the format
 contract is pinned:
 
 - `crates/hauksbee-extract/tests/altium.rs` exercises synthetic in-memory

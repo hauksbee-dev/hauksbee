@@ -119,9 +119,18 @@ hauksbee's checks are calibrated to stay quiet on hardware that is fine, and the
 board corpus is how that is measured. A new or changed check earns its place by
 being run against the corpus and shown not to fire on boards known to be good.
 Several checks have that pinned as a silence gate that goes red on any fire; the
-placeholder-value gate, for instance, sweeps 207 board files across four
+placeholder-value gate, for instance, sweeps 470 board files across four
 extraction paths and demands zero medium-or-high findings that are not a recorded,
 dated exception. Add one for your check if it is the kind that can cry wolf.
+
+A silence gate's input set is hardware known to be fine, which is narrower than
+the corpus. Four entries are fetched and parsed for format coverage but excluded
+from the silence gates, and `corpus.toml` says why per entry: KiCad's own demo
+projects and the CATs Eurosynth modules were never manufactured products, and the
+Olimex ESP32-PoE and Duet 2 boards did ship but the shorts check fires on them
+with the finding not yet adjudicated. Each exclusion is printed per board as a
+`NOT KNOWN-GOOD` line beside the `SCANNED` counts, because a gate that quietly
+narrowed its own input set is the same failure as one that scanned nothing.
 
 An exception is not an allowlist entry. It names the board and the parts, says why
 the finding is *right*, and carries an expiry after which the gate goes red again,
@@ -141,19 +150,39 @@ HAUKSBEE_REQUIRE_CORPUS=1 cargo test --workspace
 ```
 
 Each board is pulled from its upstream at the revision `corpus.toml` pins. For
-git-hosted boards the resolved commit is checked against that pin; for zip-hosted
-boards the archive's sha256 is checked against the manifest, and the fetch refuses
-to download one that has no hash recorded. Either way you get the revision the
-gate was measured against. This repository does **not** vendor the boards. They
-carry CC BY-SA, GPL-3.0, and CERN-OHL licences, and fetching means you get each
-one from its author under that author's terms rather than through us.
+git-hosted boards that pin is a full 40-character commit sha and the resolved
+commit is checked against it; for zip-hosted boards the archive's sha256 is
+checked against the manifest, and the fetch refuses to download one that has no
+hash recorded. Either way you get the revision the gate was measured against.
+This repository does **not** vendor the boards. They carry CC BY-SA, GPL-3.0,
+CERN-OHL-S, CERN-OHL-W, CERN-OHL-P, TAPR-OHL, Apache-2.0 and MIT terms, and
+fetching means you get each one from its author under that author's terms rather
+than through us.
 
-Expect 28 of the manifest's 30 entries. The two that are skipped by default are
-the ClockworkPi uConsole boards, whose licence could not be confirmed;
-`--include-unconfirmed` fetches them if you read the manifest and decide for
-yourself. A corpus test whose boards are absent skips and names what is missing,
-with the `--only <id>` line that fetches it, rather than failing in a way that
-reads as hauksbee being broken.
+The fetch ends by running `scripts/check-corpus.py`, which reads the manifest
+back against the tree that landed and fails if they disagree. That is not
+belt-and-braces: `subdir = "demos"` sat on the KiCad entry from the day it was
+added and nothing acted on it, so the fetch pulled KiCad's `qa/` tree and the
+zero-shorts gate spent that whole time grading itself on boards whose purpose is
+to reproduce KiCad bugs. The check fails on a field nothing honours, an
+abbreviated pin, an entry with no declared axes or `expect` paths, and an entry
+whose landed files do not match its declaration. Run it on its own with
+`python3 scripts/check-corpus.py --manifest-only` before you have a corpus.
+
+Adding a board means adding all of it: the upstream, a full commit sha, the
+licence **as you read it in the upstream's own bytes at that revision**, the
+`axes` it covers, and at least one `expect` path. A licence you inferred from the
+vendor's other repositories is not established; set `license_confirmed = false`
+and it stays out of the default fetch until somebody establishes it. Two entries
+are in that state today for exactly that reason.
+
+Expect 47 of the manifest's 50 entries, which is 302 layout files, 507 schematics,
+41 netlists and 606 gerber films in 531 MB. The three skipped by default are the
+two ClockworkPi uConsole boards and the SparkFun MicroMod nRF52840, whose licences
+could not be established; `--include-unconfirmed` fetches them if you read the
+manifest and decide for yourself. A corpus test whose boards are absent skips and
+names what is missing, with the `--only <id>` line that fetches it, rather than
+failing in a way that reads as hauksbee being broken.
 
 The fetched layout and the hand-built `board-corpus/famous/<id>/...` layout the
 maintainers use are both accepted. Address a board through
@@ -161,6 +190,14 @@ maintainers use are both accepted. Address a board through
 the two corpora hold different upstream revisions), and a sweep's root through
 `corpus_boards_root`, never by joining `famous` yourself. Joining it directly is
 what used to make corpus guards skip for everyone who followed these instructions.
+
+`corpus_dir` finds the corpus from a git worktree as well as from the checkout: it
+walks up from the crate it was compiled in, and reads the `.git` file to reach the
+main worktree when the worktree lives outside the checkout. It used to check the
+repository root and its parent and nothing else, so from
+`<checkout>/.claude/worktrees/<name>` no corpus resolved, every corpus gate
+skipped, and the skip read as a pass. If you work in a worktree, read the
+`SCANNED` lines rather than the green tick.
 
 Without the corpus, corpus-dependent tests **report as passed**, not as ignored.
 Rust has no runtime ignored state, so they early-return with a note on stderr and

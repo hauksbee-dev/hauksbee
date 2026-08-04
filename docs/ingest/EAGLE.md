@@ -75,6 +75,18 @@ $ hauksbee run mystery.brd --report
 error: 'mystery.brd': unrecognized board format: hauksbee reads a KiCad board, schematic or netlist, an Eagle board, an Altium .PcbDoc (binary or ASCII), an IPC-D-356 netlist, or a folder or zip of gerbers
 ```
 
+That refusal is held to its word on real files rather than on a fixture.
+`corpus.toml` fetches the 35 Mutable Instruments Eurorack modules
+(`eurorack_binary_eagle`) purely for this: they are Eagle 5 and earlier, so their
+`.brd` and `.sch` are both binary, and the message above is the only correct output
+for every one of them. The entry carries the axis `unreadable-by-design` and is
+counted as a refusal, never as board coverage. A corpus sweep that reported 35 more
+boards because these landed would be reporting files it could not open.
+
+The Eagle XML side of the corpus spans 6.4 to 9.6.2 across 20 layouts and 16
+schematics: the Adafruit and SparkFun boards, the official Arduino Uno Rev3 release,
+and the SparkFun MicroMod processor boards.
+
 That is what a binary pre-Eagle-6 `.brd` looks like. A Git-LFS pointer does
 *not*: it is detected as itself, because the fix is specific and worth naming:
 
