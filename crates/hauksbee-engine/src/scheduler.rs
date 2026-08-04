@@ -509,6 +509,29 @@ impl AdcDrop {
     }
 }
 
+/// The one-line warning every surface emits for an entry of
+/// [`Scheduler::watchdog_limitations`], so text, `--plain`, `--json` notes and
+/// the CI report all name the same gap in the same words.
+///
+/// `limitation` is the backend's own whole sentence and is passed through
+/// UNCHANGED. Two surfaces wording the same coverage hole differently is the
+/// failure this shared formatter exists to prevent, so nothing here may
+/// paraphrase it; the only thing added is which MCU it is about.
+pub fn watchdog_limitation_message(mcu_ref: &str, limitation: &str) -> String {
+    format!("MCU {mcu_ref}: {limitation}")
+}
+
+/// The one-line finding every surface emits for an entry of
+/// [`Scheduler::watchdog_resets`]. Same shared-wording discipline as
+/// [`watchdog_limitation_message`] and [`AdcDrop::message`].
+pub fn watchdog_reset_message(mcu_ref: &str, resets: u64) -> String {
+    let plural = if resets == 1 { "" } else { "s" };
+    format!(
+        "MCU {mcu_ref}: the watchdog rebooted the core {resets} time{plural} during this \
+         run; behaviour observed after the first reboot belongs to a rebooted core"
+    )
+}
+
 /// A firmware GPIO pulse that rose AND fell inside a single solver chunk, on a
 /// net that clocks a TICK-evaluated sequential part (cold-drive friction 1.16,
 /// defect report 7). Chain-responder parts (74HC595/165 chains, bit-banged
@@ -1288,6 +1311,49 @@ impl Scheduler {
             .mcus
             .iter()
             .map(|m| (m.binding.reference.clone(), m.core.uart_rx_overflow()))
+            .filter(|(_, n)| *n > 0)
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Per-MCU statements of how the backend's watchdog fidelity falls short of
+    /// the part, keyed by MCU reference. Exactly the same class of finding as
+    /// `adc_dropped`: the run happened, but something the board would have done
+    /// did not, so a green result on the recovery path means less than it looks.
+    /// A firmware that HANGS runs forever here, so every assertion about
+    /// behaviour after a hang is fiction.
+    ///
+    /// The value is the backend's whole sentence, rendered verbatim through
+    /// [`watchdog_limitation_message`] on every surface. Backends whose armed,
+    /// never-fed watchdog reboots the core the way silicon does (simavr) report
+    /// nothing and are absent from this list: the silence is what makes the
+    /// warning mean something. Ordered by MCU reference.
+    pub fn watchdog_limitations(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = self
+            .mcus
+            .iter()
+            .filter_map(|m| {
+                m.core
+                    .watchdog_limitation()
+                    .map(|l| (m.binding.reference.clone(), l))
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Times an unserviced watchdog rebooted each MCU's core during this run,
+    /// filtered to the nonzero. Not an error, a FINDING: an assertion that
+    /// passed across a reboot was not measuring the run it claimed, because the
+    /// behaviour it observed belongs to a rebooted core. Read together with
+    /// [`Scheduler::watchdog_limitations`], since a backend that cannot reboot
+    /// at all reports zero here and says so there. Ordered by MCU reference.
+    pub fn watchdog_resets(&self) -> Vec<(String, u64)> {
+        let mut out: Vec<(String, u64)> = self
+            .mcus
+            .iter()
+            .map(|m| (m.binding.reference.clone(), m.core.watchdog_resets()))
             .filter(|(_, n)| *n > 0)
             .collect();
         out.sort();

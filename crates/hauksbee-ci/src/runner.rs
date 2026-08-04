@@ -1606,6 +1606,25 @@ fn run_one(
                     .iter()
                     .map(|b| b.message()),
             )
+            // Watchdog coverage: a backend whose armed watchdog never fires
+            // (renode:nrf52840, the ESP32 timer groups) lets firmware that HANGS
+            // run forever, so a CI assertion about behaviour after a hang proves
+            // nothing; and a reboot that DID happen means an assertion which
+            // passed across it measured a rebooted core.
+            .chain(engine.scheduler().watchdog_limitations().into_iter().map(
+                |(mcu_ref, limitation)| {
+                    hauksbee_engine::scheduler::watchdog_limitation_message(&mcu_ref, &limitation)
+                },
+            ))
+            .chain(
+                engine
+                    .scheduler()
+                    .watchdog_resets()
+                    .into_iter()
+                    .map(|(mcu_ref, resets)| {
+                        hauksbee_engine::scheduler::watchdog_reset_message(&mcu_ref, resets)
+                    }),
+            )
             .chain(hollow_warnings.iter().cloned())
             .collect(),
         dead_rails,
