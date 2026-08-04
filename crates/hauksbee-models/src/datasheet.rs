@@ -176,7 +176,7 @@ fn prepare_workspace(pdf: &Path) -> Result<Workspace> {
 }
 
 /// Run one extraction end to end, as the CLI does.
-pub fn run(args: Args) -> Result<()> {
+pub fn run(args: Args) -> Result<PathBuf> {
     // 1. Extract text from PDF
     let pdf_text = extract_pdf_text(&args.pdf)?;
 
@@ -222,7 +222,7 @@ pub fn run(args: Args) -> Result<()> {
 
         println!("Written: {}", out_path.display());
         println!("{}", spec.sensor.name);
-        return Ok(());
+        return Ok(out_path);
     }
 
     // 2. Build the extraction prompt
@@ -245,7 +245,7 @@ pub fn run(args: Args) -> Result<()> {
 
     println!("Written: {}", out_path.display());
     println!("{}", entry.id);
-    Ok(())
+    Ok(out_path)
 }
 
 // ── Declarative register-map sensor extraction (i2c_sensor / spi_sensor) ──────

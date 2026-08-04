@@ -290,7 +290,7 @@ pub fn extract(job: DatasheetJob, progress: &mut dyn FnMut(&str)) -> Result<Stri
     // long blocking call with no callback of its own.
     let (tx, rx) = std::sync::mpsc::channel::<Result<(), String>>();
     std::thread::spawn(move || {
-        let outcome = datasheet::run(args).map_err(|e| format!("{e:#}"));
+        let outcome = datasheet::run(args).map(|_| ()).map_err(|e| format!("{e:#}"));
         let _ = tx.send(outcome);
     });
     let started = Instant::now();

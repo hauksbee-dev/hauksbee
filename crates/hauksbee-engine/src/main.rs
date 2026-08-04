@@ -201,7 +201,7 @@ enum Command {
     /// plus each entry's `[models.logic]` block: schema validation, expression
     /// compilation, and the exhaustive combinational-cycle convergence check)
     /// or a `[sensor]` register-map spec. Every failure is a NAMED error tied
-    /// to its entry; the same validation binding performs, runnable
+    /// to its entry. It is the same validation binding runs, available
     /// standalone so a spec author (or an LLM extraction pipeline) fails fast.
     ///
     /// `models add <path|url>` installs a model pack (a directory with a
@@ -300,6 +300,24 @@ enum ModelsCommand {
     /// Draft a device model from a PDF datasheet. Asks first: this sends the
     /// datasheet's text to an LLM backend.
     Extract(ModelsExtractArgs),
+    /// Scaffold a model entry for one board component, pre-seeded from the
+    /// board's own context (value, guessed kind), plus the lint/resolve
+    /// commands to finish the job. Nothing is sent anywhere.
+    New(ModelsNewArgs),
+}
+
+#[derive(Parser)]
+struct ModelsNewArgs {
+    /// The component's reference designator on the board (e.g. U3, R7).
+    #[arg(value_name = "REF")]
+    reference: String,
+    /// The board the component sits on (any format `run` accepts).
+    #[arg(long, value_name = "BOARD")]
+    board: PathBuf,
+    /// Where to write the scaffold. Default: ./<id>.toml in the current
+    /// directory. Refuses to overwrite.
+    #[arg(long, value_name = "FILE")]
+    out: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -315,7 +333,8 @@ struct ModelsExtractArgs {
     /// what you want: it is about to read the page that says so.
     #[arg(long, default_value = "")]
     kind: String,
-    /// Where to write the model card. Defaults to the user model directory.
+    /// Where to write the model card. Defaults to the user model directory
+    /// (~/.hauksbee/models), which every run already reads.
     #[arg(long)]
     out_dir: Option<PathBuf>,
     /// Skip the prompt. For scripts that have already got the user's consent.
@@ -1096,6 +1115,11 @@ fn main() -> anyhow::Result<()> {
                 &args.board,
                 args.models_dir.as_deref(),
                 args.json,
+            ),
+            ModelsCommand::New(args) => hauksbee_engine::commands::models::new(
+                &args.reference,
+                &args.board,
+                args.out.as_deref(),
             ),
             ModelsCommand::Extract(args) => hauksbee_engine::commands::models::extract(
                 &args.pdf,
