@@ -348,6 +348,13 @@ while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed dest_rel 
     fi
   fi
 
+  # KiCad's own auto-backup directories. The LumenPnP motherboard ships six
+  # historical copies of mobo.kicad_sch under `mobo-backups/`, and a corpus sweep
+  # that walks every design file would grade the tool on five stale revisions of
+  # one board and report the count as coverage. They are not boards; they are
+  # undo history.
+  find "$dest" -type d -name '*-backups' -exec rm -rf {} + 2>/dev/null || true
+
   # Keep only the design files and the paperwork. Upstream repos carry 3D
   # models, production archives and firmware that we never read, and that turn
   # a lean corpus into gigabytes.
