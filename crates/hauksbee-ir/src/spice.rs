@@ -660,16 +660,21 @@ fn classify_unhandled_directive(line: usize, trimmed: &str, raw: &str) -> Result
             line,
             card,
             text: raw.into(),
-            reason: format!("{reason}; see docs/spice-compat/compatibility.md"),
+            reason: format!(
+                "{reason}; see {}",
+                crate::docs_url("docs/spice-compat/compatibility.md")
+            ),
         });
     }
     Err(SpiceError::Unsupported {
         line,
         card,
         text: raw.into(),
-        reason: "unrecognized directive; hauksbee refuses unknown `.`-cards rather than \
-                 silently ignoring them (see docs/spice-compat/compatibility.md)"
-            .into(),
+        reason: format!(
+            "unrecognized directive; hauksbee refuses unknown `.`-cards rather than \
+             silently ignoring them (see {})",
+            crate::docs_url("docs/spice-compat/compatibility.md")
+        ),
     })
 }
 

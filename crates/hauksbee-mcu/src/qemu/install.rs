@@ -99,7 +99,8 @@ pub fn host_asset_triple() -> Result<&'static str> {
                 "no Espressif QEMU prebuilt is auto-installable for {os}/{arch}. \
                  Download the right asset from \
                  https://github.com/{ESP_QEMU_REPO}/releases yourself and unpack \
-                 it so {unpack_hint} exists (docs/cosim/SIMULATORS.md)."
+                 it so {unpack_hint} exists ({}).",
+                hauksbee_ir::docs_url("docs/cosim/SIMULATORS.md")
             )
         }
     }

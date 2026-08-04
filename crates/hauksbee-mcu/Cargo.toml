@@ -28,6 +28,7 @@ renode = []
 qemu = ["dep:espflash", "dep:tempfile"]
 
 [dependencies]
+hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }
 anyhow = { workspace = true }
 libc = "0.2"
 # Backend config structs (RenodeConfig/QemuConfig and their register-offset /

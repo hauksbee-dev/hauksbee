@@ -16,11 +16,13 @@
 
 mod bexpr;
 pub mod debug;
+pub mod docs_url;
 mod models;
 mod source;
 mod spice;
 
 pub use bexpr::CompiledExpr;
+pub use docs_url::docs_url;
 pub use models::{
     thermal_voltage as thermal_voltage_c, BjtModel, DiodeModel, MosLevel, MosfetModel, Polarity,
 };

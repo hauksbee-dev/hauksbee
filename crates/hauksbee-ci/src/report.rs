@@ -616,60 +616,61 @@ pub fn render_junit_error(message: &str) -> String {
 }
 
 /// One actionable "why / where to look" line for a failed assertion of the
-/// given `kind`. Points at the likely physical cause and the docs/ci/CI.md section
-/// to read, one line, per kind, not a full explanation engine. `None` for kinds
-/// that have no useful generic pointer.
-fn failure_hint(kind: &str) -> Option<&'static str> {
+/// given `kind`. Points at the likely physical cause and the assertion-catalog
+/// section to read, one line, per kind, not a full explanation engine. `None`
+/// for kinds that have no useful generic pointer.
+fn failure_hint(kind: &str) -> Option<String> {
+    let url = hauksbee_ir::docs_url("docs/ci/CI.md");
     Some(match kind {
-        "voltage" => {
+        "voltage" => format!(
             "the rail left its window; check the supply feeding this net \
-            and the load pulling it down (docs/ci/CI.md, \"voltage\")."
-        }
-        "rail_window" => {
+            and the load pulling it down ({url}, \"voltage\")."
+        ),
+        "rail_window" => format!(
             "the rail dipped/recovered outside the window; check the \
-            scenario's load step and the decoupling on this net (docs/ci/CI.md, \
+            scenario's load step and the decoupling on this net ({url}, \
             \"rail_window\")."
-        }
-        "boot_coverage" | "boot-coverage" => {
+        ),
+        "boot_coverage" | "boot-coverage" => format!(
             "the firmware never drove the control net in time; check \
             `firmware = ...` points at the right image and the net is a GPIO the \
-            firmware actually drives (docs/ci/CI.md, \"boot_coverage\" caveat)."
-        }
-        "no_faults" => {
+            firmware actually drives ({url}, \"boot_coverage\" caveat)."
+        ),
+        "no_faults" => format!(
             "the stress monitor tripped; the named component exceeded a \
             rating (over-current / -voltage / -power / -temp / reverse-bias); check \
-            its part value and supply (docs/ci/CI.md, \"no_faults\")."
-        }
-        "max_current" => {
+            its part value and supply ({url}, \"no_faults\")."
+        ),
+        "max_current" => format!(
             "the part drew more than its limit; check its load and the \
-            override value (docs/ci/CI.md, \"max_current\")."
-        }
-        "max_temp" => {
+            override value ({url}, \"max_current\")."
+        ),
+        "max_temp" => format!(
             "the junction ran hotter than the limit; check dissipation and \
-            the `ambient_c` assumption (docs/ci/CI.md, \"max_temp\")."
-        }
-        "uart" => {
+            the `ambient_c` assumption ({url}, \"max_temp\")."
+        ),
+        "uart" => format!(
             "the expected UART text never appeared; check the firmware image \
-            and baud, and that the MCU booted (docs/ci/CI.md, \"uart\")."
-        }
-        "toggle" => {
+            and baud, and that the MCU booted ({url}, \"uart\")."
+        ),
+        "toggle" => format!(
             "the net toggled the wrong number of times; check the firmware's \
-            drive rate and the deadline window (docs/ci/CI.md, \"toggle\")."
-        }
-        "protection_trip" => {
+            drive rate and the deadline window ({url}, \"toggle\")."
+        ),
+        "protection_trip" => format!(
             "the supply's protection did/did not latch as asserted; \
-            check the supply's limits and the load that triggers it (docs/ci/CI.md, \
+            check the supply's limits and the load that triggers it ({url}, \
             \"protection_trip\")."
-        }
-        "phase_margin" => {
+        ),
+        "phase_margin" => format!(
             "the loop's phase margin missed the bound; check the \
-            compensation network and the `[ac]` sweep range (docs/ci/CI.md, \
+            compensation network and the `[ac]` sweep range ({url}, \
             \"phase_margin\")."
-        }
-        "ac_gain" => {
+        ),
+        "ac_gain" => format!(
             "the small-signal gain missed the band; check the AC stimulus \
-            net and the sweep points (docs/ci/CI.md, \"ac_gain\")."
-        }
+            net and the sweep points ({url}, \"ac_gain\")."
+        ),
         _ => return None,
     })
 }

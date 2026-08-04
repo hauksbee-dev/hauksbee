@@ -16,6 +16,7 @@ name = "resource-extract"
 path = "src/bin/resource_extract.rs"
 
 [dependencies]
+hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }
 cfb = "0.14"
 forge-sexpr.workspace = true
 # For the single canonical value parser (`value::parse_value`): the SI-check and

@@ -384,11 +384,12 @@ impl UnexercisedBus {
              models no {} controller; the firmware's bus traffic can never \
              reach it, so it was NEVER exercised and its behaviour is \
              unverified (its state is the power-on default). Add [soc.{}] \
-             controllers to the SoC descriptor to enable it (docs/cosim/MCU.md).",
+             controllers to the SoC descriptor to enable it ({}).",
             self.bus,
             self.id,
             self.bus,
             self.bus.to_ascii_lowercase(),
+            hauksbee_ir::docs_url("docs/cosim/MCU.md"),
         )
     }
 }
@@ -423,8 +424,11 @@ impl AdcDrop {
              analog solve but this platform has no ADC injection map; the \
              firmware NEVER received it, so analog readings on that pin are \
              meaningless. Add an [[soc.adc]] injection recipe to the SoC \
-             descriptor to enable it (docs/cosim/MCU.md).",
-            self.channel, self.mcu_ref, self.net,
+             descriptor to enable it ({}).",
+            self.channel,
+            self.mcu_ref,
+            self.net,
+            hauksbee_ir::docs_url("docs/cosim/MCU.md"),
         )
     }
 }
@@ -578,8 +582,12 @@ impl McuSubstitution {
              firmware behaviour is emulated on the substitute and may differ on \
              the real part (e.g. peripheral set, flash/RAM size, clock tree). \
              To model {} exactly, add a SoC descriptor + a [[models]] routing entry \
-             (two TOML files, no recompile); see docs/extending/add-an-mcu-variant.md.",
-            self.reference, self.requested_part, self.modelled_core, self.requested_part
+             (two TOML files, no recompile); see {}.",
+            self.reference,
+            self.requested_part,
+            self.modelled_core,
+            self.requested_part,
+            hauksbee_ir::docs_url("docs/extending/add-an-mcu-variant.md")
         )
     }
 }
