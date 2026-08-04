@@ -1337,6 +1337,47 @@ impl Spec {
                 )));
             }
         }
+        // Time windows that cannot overlap the run. Each of these fields is
+        // individually in bounds, so per-field validation lets them through, and
+        // the RUNTIME then catches them as a degenerate failure ("never sampled
+        // (no window at 500ms)", "boot deadline past the end of the simulation").
+        // `check` exists so an editor can say that without a co-simulation:
+        // an impossible window is a spec mistake, and finding it after a
+        // minutes-long solve is finding it in the wrong place.
+        //
+        // Only meaningful against a usable duration; a bad `duration_ms` already
+        // has its own error above and would turn every window into noise.
+        if self.duration_ms.is_finite() && self.duration_ms > 0.0 {
+            let duration = self.duration_ms;
+            for a in &self.asserts {
+                if let Some(after) = a.after_ms.filter(|v| v.is_finite() && *v >= duration) {
+                    errs.push(SpecError::Invalid(format!(
+                        "assertion '{}': `after_ms` ({after}) must be less than `duration_ms` \
+                         ({duration}); the sample window would start at or after the end of \
+                         the run, so nothing would ever be measured",
+                        a.label()
+                    )));
+                }
+                if let Some(deadline) = a.deadline_ms.filter(|v| v.is_finite() && *v > duration) {
+                    errs.push(SpecError::Invalid(format!(
+                        "assertion '{}': `deadline_ms` ({deadline}) must be at or before \
+                         `duration_ms` ({duration}); the window would extend past the end of \
+                         the run, so it could never be confirmed",
+                        a.label()
+                    )));
+                }
+            }
+            for s in &self.scenarios {
+                if s.start_ms.is_finite() && s.start_ms >= duration {
+                    errs.push(SpecError::Invalid(format!(
+                        "[[scenario]] on part '{}': `start_ms` ({}) must be less than \
+                         `duration_ms` ({duration}); the scenario would never fire inside \
+                         the run",
+                        s.part, s.start_ms
+                    )));
+                }
+            }
+        }
         // Decoupling ESR/ESL overrides: same parity rule, the schema documents
         // both as >= 0 (a negative parasitic is not physical and would be
         // stamped into the solve as-is).
