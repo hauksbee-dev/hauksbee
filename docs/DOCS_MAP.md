@@ -99,8 +99,11 @@ own board, firmware, and spec, and the one local command that runs them, and
 | [`spice-compat/`](spice-compat/) | SPICE compatibility statement and ngspice cross-check results |
 | [`assets/`](assets/) | Images embedded by docs |
 
-`record/` and `teach/` are internal working notes rather than user-path
-docs, and this map does not index them.
+Four directories are internal working notes rather than user-path docs, and this
+map indexes none of them: `record/`, `teach/`, `dev-plans/` (implementation plans
+and their status) and `hunts/` (raw bug-hunt logs). Together they are well over a
+hundred files in the development tree, and a release does not carry them. So
+"every doc" here means every doc in the shipped set.
 
 ## Outside `docs/`
 

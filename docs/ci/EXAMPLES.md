@@ -242,13 +242,25 @@ are in the [board-as-code README](../../examples/board-as-code/README.md).
 
 † These three specs (the Watchy v1.5 pair and the pic_programmer schematic)
 run against boards in the developer board corpus: the historical-revision
-Watchy v1.5 and KiCad's `pic_programmer` demo. That corpus is not
-redistributed in this repo, and the Watchy pair also needs the Espressif QEMU
-ESP32 backend. All three come from the validation work that calibrated the
-checks against boards with known, documented faults. Their integration tests
-skip cleanly when the corpus or backend is absent. To run a real board here
-with no extra setup, use `hauksbee run boards/watchy.kicad_pcb --report`
-above.
+Watchy v1.5 and KiCad's `pic_programmer` demo. That corpus is not redistributed
+in this repo, and the Watchy pair also needs the Espressif QEMU ESP32 backend.
+Their integration tests skip cleanly when the corpus or backend is absent.
+
+**Running these yourself takes more than `fetch-corpus.sh`, and it is worth
+saying why rather than letting you find out.** The `board` paths in those three
+specs are `board-corpus/famous/watchy_history/v1.5/...` and
+`board-corpus/kicad-demos-src/demos/pic_programmer/...`, and
+`scripts/fetch-corpus.sh` **does not produce those paths**. The fetch writes one
+directory per `corpus.toml` id (`board-corpus/watchy_history_v1_5/`,
+`board-corpus/kicad_demos/`), with no `famous/` level and different directory
+names. The specs were written against the maintainers' hand-built corpus layout
+and the two have never agreed, so a fetched corpus leaves these specs pointing at
+nothing. Fetch and then re-point the `board` line, or symlink the layout, until
+the two are reconciled.
+
+To run a real board here with no extra setup at all, use
+`hauksbee run boards/watchy.kicad_pcb --report` above, or
+`hauksbee-ci run --example blinky`.
 
 More detail and the run-and-expected-verdict for each:
 [ci-specs README](../../examples/ci-specs/README.md).

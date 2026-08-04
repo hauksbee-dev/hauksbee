@@ -169,6 +169,25 @@ What remains open:
   `~/.hauksbee-qemu-esp` first, with the legacy `~/.galvani-qemu-esp` kept as a
   fallback so existing installs keep resolving.)
 
+### KiCad 10 boards: copper-short results are unreliable
+
+Copper extraction is validated against KiCad 9's board format (`20241229`) and
+older. KiCad 10 (`20260206`) changed the net encoding to name-only with no
+numeric ids, and moved the baked zone-fill geometry; neither is handled yet, so
+any format version at or above `20260000` is treated as unvalidated. The failure
+mode is not a subtle drift: **a ground pour can read as shorting every net it
+surrounds**, so such a board can report many shorts that are not there.
+
+This is bounded rather than hidden. The report carries a `version_warning`, every
+surface prints it with the version number and the word UNRELIABLE, and CI gates
+refuse to fail on shorts from such a board, so nobody's pipeline goes red on an
+artefact. The advice in the message is to cross-check with KiCad's own DRC,
+because our kicad-cli oracle cannot substitute here: versions up to 9 cannot
+load the file. Clearance results and the non-pour geometry are unaffected.
+Closing it means teaching the reader KiCad 10's net encoding and zone-fill
+layout, and re-validating against the corpus. Details in
+[`../checks/SHORTS.md`](../checks/SHORTS.md).
+
 ### Eagle copper-pour fidelity in DRC
 
 An Eagle `.brd` stores only a signal pour's *requested outline*, never the poured
