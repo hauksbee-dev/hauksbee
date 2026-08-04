@@ -1,7 +1,7 @@
 {
-  "generated_at": "2026-07-28T12:12:10.881Z",
-  "engine_commit": "41170e5ad7e6afd45a39a900440d5f1ebcf845a8",
-  "engine_version": "hauksbee 0.1.0 (git 41170e5ad7e6)",
+  "generated_at": "2026-08-03T23:44:53.364Z",
+  "engine_commit": "c9352751060f",
+  "engine_version": "hauksbee 0.1.0 (git c9352751060f)",
   "sessions": [
     {
       "id": "button_pullup-nominal",
@@ -12,16 +12,42 @@
       "board_name": "button_pullup",
       "firmware": null,
       "mcus": [],
-      "engine_commit": "41170e5ad7e6afd45a39a900440d5f1ebcf845a8",
-      "engine_version": "hauksbee 0.1.0 (git 41170e5ad7e6)",
-      "captured_at": "2026-07-28T11:39:34.477Z",
+      "engine_commit": "8ef1e4c9bbb1ff27725456a2b754cbe1f319cf1c",
+      "engine_version": "hauksbee 0.1.0 (git c9352751060f)",
+      "captured_at": "2026-08-03T23:34:52.348Z",
       "duration_s": 5,
       "frames": 150,
-      "bytes": 86533,
+      "bytes": 115753,
       "thinned_keep_every": 1,
       "session": "sessions/button_pullup/nominal.jsonl",
       "report": "sessions/button_pullup/report-nominal.json",
       "board_file": "sessions/button_pullup/button_pullup.kicad_pcb",
+      "actions": []
+    },
+    {
+      "id": "blinky-nominal",
+      "board": "blinky",
+      "scenario": "nominal",
+      "title": "Blinky + firmware, nominal",
+      "description": "An ATmega328P with an LED on D13 and a divider into ADC0, co-simulated with the demo firmware: it blinks the LED at 5 Hz and prints its banner over UART. Five seconds.",
+      "board_name": "blinky",
+      "firmware": "testdata/firmware/demo/demo.hex",
+      "mcus": [
+        [
+          "U1",
+          "simavr:atmega328p"
+        ]
+      ],
+      "engine_commit": "8ef1e4c9bbb1ff27725456a2b754cbe1f319cf1c",
+      "engine_version": "hauksbee 0.1.0 (git c9352751060f)",
+      "captured_at": "2026-08-03T23:34:59.167Z",
+      "duration_s": 5,
+      "frames": 163,
+      "bytes": 180843,
+      "thinned_keep_every": 1,
+      "session": "sessions/blinky/nominal.jsonl",
+      "report": "sessions/blinky/report-nominal.json",
+      "board_file": "sessions/blinky/blinky.kicad_pcb",
       "actions": []
     },
     {
@@ -38,12 +64,12 @@
           "simavr:atmega328p"
         ]
       ],
-      "engine_commit": "41170e5ad7e6afd45a39a900440d5f1ebcf845a8",
-      "engine_version": "hauksbee 0.1.0 (git 41170e5ad7e6)",
-      "captured_at": "2026-07-28T11:39:40.504Z",
+      "engine_commit": "8ef1e4c9bbb1ff27725456a2b754cbe1f319cf1c",
+      "engine_version": "hauksbee 0.1.0 (git c9352751060f)",
+      "captured_at": "2026-08-03T23:35:06.695Z",
       "duration_s": 5,
-      "frames": 151,
-      "bytes": 112912,
+      "frames": 173,
+      "bytes": 175569,
       "thinned_keep_every": 1,
       "session": "sessions/boot_gate/nominal.jsonl",
       "report": "sessions/boot_gate/report-nominal.json",
@@ -64,12 +90,12 @@
           "simavr:atmega328p"
         ]
       ],
-      "engine_commit": "41170e5ad7e6afd45a39a900440d5f1ebcf845a8",
-      "engine_version": "hauksbee 0.1.0 (git 41170e5ad7e6)",
-      "captured_at": "2026-07-28T11:39:46.506Z",
+      "engine_commit": "8ef1e4c9bbb1ff27725456a2b754cbe1f319cf1c",
+      "engine_version": "hauksbee 0.1.0 (git c9352751060f)",
+      "captured_at": "2026-08-03T23:35:14.829Z",
       "duration_s": 5,
-      "frames": 150,
-      "bytes": 110059,
+      "frames": 190,
+      "bytes": 190780,
       "thinned_keep_every": 1,
       "session": "sessions/boot_gate/overvolt.jsonl",
       "report": "sessions/boot_gate/report-overvolt.json",
@@ -95,13 +121,13 @@
           "qemu:esp32s3"
         ]
       ],
-      "engine_commit": "41170e5ad7e6afd45a39a900440d5f1ebcf845a8",
-      "engine_version": "hauksbee 0.1.0 (git 41170e5ad7e6)",
-      "captured_at": "2026-07-28T12:12:10.578Z",
+      "engine_commit": "c9352751060f",
+      "engine_version": "hauksbee 0.1.0 (git c9352751060f)",
+      "captured_at": "2026-08-03T23:44:53.046Z",
       "duration_s": 8,
-      "frames": 240,
-      "bytes": 1058811,
-      "thinned_keep_every": 1,
+      "frames": 201,
+      "bytes": 1781419,
+      "thinned_keep_every": 8,
       "session": "sessions/watchy/display_init.jsonl",
       "report": "sessions/watchy/report-display_init.json",
       "board_file": "sessions/watchy/watchy.kicad_pcb",

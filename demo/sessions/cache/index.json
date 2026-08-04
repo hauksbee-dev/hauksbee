@@ -1,0 +1,71 @@
+{
+  "generated_at": "2026-08-04T00:18:35.819Z",
+  "engine_commit": "da29f8aab213",
+  "engine_version": "hauksbee 0.1.0 (git da29f8aab213)",
+  "boards": [
+    {
+      "id": "watchy",
+      "title": "Watchy v1.5",
+      "tagline": "An ESP32-S3 e-paper smartwatch someone actually fabricated: 86 footprints, two rails, a charger and a boost converter.",
+      "cache": "sessions/cache/watchy.json",
+      "session_id": "watchy-display_init",
+      "board_file": "sessions/watchy/watchy.kicad_pcb",
+      "firmware_file": null,
+      "recorded_runs": 10,
+      "verdicts": {
+        "passed": 8,
+        "failed": 2,
+        "invalid": 0,
+        "error": 0
+      }
+    },
+    {
+      "id": "boot_gate",
+      "title": "Boot gate + firmware",
+      "tagline": "An ATmega328P driving a MOSFET gate that has no pull resistor. Whether that is a bug depends on the firmware, so the firmware runs.",
+      "cache": "sessions/cache/boot_gate.json",
+      "session_id": "boot_gate-nominal",
+      "board_file": "sessions/boot_gate/boot_gate.kicad_pcb",
+      "firmware_file": "sessions/boot_gate/boot_gate.hex",
+      "recorded_runs": 12,
+      "verdicts": {
+        "passed": 10,
+        "failed": 2,
+        "invalid": 0,
+        "error": 0
+      }
+    },
+    {
+      "id": "blinky",
+      "title": "Blinky",
+      "tagline": "The simplest board here: an ATmega328P, an LED on D13, a divider into ADC0. The firmware blinks and prints.",
+      "cache": "sessions/cache/blinky.json",
+      "session_id": "blinky-nominal",
+      "board_file": "sessions/blinky/blinky.kicad_pcb",
+      "firmware_file": "sessions/blinky/demo.hex",
+      "recorded_runs": 14,
+      "verdicts": {
+        "passed": 9,
+        "failed": 5,
+        "invalid": 0,
+        "error": 0
+      }
+    },
+    {
+      "id": "button_pullup",
+      "title": "Button + pull-up",
+      "tagline": "Three nets and one resistor. The smallest thing the engine can be asked about.",
+      "cache": "sessions/cache/button_pullup.json",
+      "session_id": "button_pullup-nominal",
+      "board_file": "sessions/button_pullup/button_pullup.kicad_pcb",
+      "firmware_file": null,
+      "recorded_runs": 8,
+      "verdicts": {
+        "passed": 6,
+        "failed": 2,
+        "invalid": 0,
+        "error": 0
+      }
+    }
+  ]
+}
