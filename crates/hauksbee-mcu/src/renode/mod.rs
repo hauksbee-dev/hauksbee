@@ -211,8 +211,14 @@ pub struct AdcChannelMap {
 pub struct RenodeConfig {
     /// Human-readable machine name used in the Monitor prompt (e.g. `"f103"`).
     pub machine: String,
-    /// Platform description loaded with `machine LoadPlatformDescription`,
-    /// e.g. `"@platforms/cpus/stm32f103.repl"`.
+    /// Platform description loaded with `machine LoadPlatformDescription`.
+    /// Two forms, told apart by whether the string contains a newline:
+    ///   - a single-line Renode path, e.g. `"@platforms/cpus/stm32f103.repl"`;
+    ///   - multi-line inline `.repl` SOURCE (typically starting with a
+    ///     `using "platforms/..."` line to extend a stock platform), which the
+    ///     backend materializes to a temp file at machine bring-up. This is how
+    ///     a descriptor ships platform fixes (extra peripherals, clock-tree
+    ///     registers) without depending on files installed beside Renode.
     pub platform: String,
     /// CPU peripheral path for state queries, e.g. `"sysbus.cpu"`.
     pub cpu: String,
@@ -918,12 +924,13 @@ impl RenodeBackend {
                 config.machine
             );
         }
-        let plat = monitor.command(&format!(
-            "machine LoadPlatformDescription {}",
-            config.platform
-        ))?;
+        // Inline platform source (multi-line `platform_repl`) cannot travel over
+        // the single-line Monitor socket, so it is materialized to a temp file
+        // and loaded by path; a plain `@path` passes through untouched.
+        let (platform_arg, platform_file) = materialize_platform(&config.platform)?;
+        let plat = monitor.command(&format!("machine LoadPlatformDescription {platform_arg}"))?;
         if monitor_failed(&plat) {
-            bail!("Renode failed to load platform {}: {plat}", config.platform);
+            bail!("Renode failed to load platform {platform_arg}: {plat}");
         }
 
         // Run at host speed: the analog solver sets the pace, not wall time.
@@ -972,7 +979,9 @@ impl RenodeBackend {
             i2c_slave_addresses: Vec::new(),
             i2c_bridge: None,
             spi_bridges: Vec::new(),
-            bridge_source_files: Vec::new(),
+            // The materialized platform file (if any) rides the same cleanup
+            // list as the bridge sources: deleted on Drop, kept on failure.
+            bridge_source_files: platform_file.into_iter().collect(),
             spi_extra_repl_loaded: false,
             firmware_loaded: false,
             cycles: 0,
@@ -1272,6 +1281,39 @@ impl Drop for RenodeBackend {
 fn monitor_failed(resp: &str) -> bool {
     let lower = resp.to_lowercase();
     lower.contains("error") || lower.contains("exception") || lower.contains("failed")
+}
+
+/// The Monitor argument for `machine LoadPlatformDescription`, plus the temp
+/// file backing it when one was needed.
+///
+/// A single-line `platform` (an `@platforms/...` or `@/abs/path` reference)
+/// passes through verbatim. A multi-line `platform` is inline `.repl` SOURCE
+/// (a descriptor shipping platform fixes as data): the Monitor socket is
+/// line-oriented, so the source is written to a temp file and referenced by
+/// absolute `@`-path instead. The caller owns deleting the returned file
+/// (RenodeBackend rides it on the bridge-source cleanup list).
+///
+/// Note for the I2C prefetch gate: [`platform_needs_i2c_single_read_prefetch`]
+/// keys on the CONFIG string, not this argument, and an inline F1 platform
+/// still contains its `using "platforms/cpus/stm32f1..."` line, so the gate
+/// keeps firing for inline descriptors.
+fn materialize_platform(platform: &str) -> Result<(String, Option<PathBuf>)> {
+    if !platform.contains('\n') {
+        return Ok((platform.to_string(), None));
+    }
+    // Hash the content into the name so two configs in one process (or a
+    // leaked file from a crashed run) never collide or go stale.
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    platform.hash(&mut h);
+    let path = std::env::temp_dir().join(format!(
+        "hauksbee-renode-platform-{}-{:016x}.repl",
+        std::process::id(),
+        h.finish()
+    ));
+    std::fs::write(&path, platform)
+        .with_context(|| format!("writing inline platform to {}", path.display()))?;
+    Ok((format!("@{}", path.display()), Some(path)))
 }
 
 /// Does this platform's I2C controller model need the single-byte-read
@@ -2348,6 +2390,27 @@ mod tests {
         let source = render_i2c_bridge_source(4242, &[0x48]);
         assert!(source.contains("Request(2, new byte[0], count)"));
         assert!(!source.contains("count == 1 ? 2 : count"));
+    }
+
+    /// Inline platform source is materialized to a temp `.repl` file and
+    /// referenced by absolute `@`-path; a plain path reference passes through
+    /// untouched with no file created.
+    #[test]
+    fn materialize_platform_writes_inline_source_and_passes_paths_through() {
+        let (arg, file) = materialize_platform("@platforms/cpus/stm32f103.repl").unwrap();
+        assert_eq!(arg, "@platforms/cpus/stm32f103.repl");
+        assert!(file.is_none(), "a path reference needs no temp file");
+
+        let source = "using \"platforms/cpus/stm32f103.repl\"\n\nspi1: SPI.STM32SPI @ sysbus 0x40013000\n";
+        let (arg, file) = materialize_platform(source).unwrap();
+        let path = file.expect("inline source is backed by a temp file");
+        assert_eq!(arg, format!("@{}", path.display()));
+        assert_eq!(
+            std::fs::read_to_string(&path).unwrap(),
+            source,
+            "the file carries the source byte-for-byte"
+        );
+        std::fs::remove_file(&path).unwrap();
     }
 
     #[test]
