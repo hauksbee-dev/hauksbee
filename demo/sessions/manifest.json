@@ -12,7 +12,7 @@
       "board_name": "button_pullup",
       "firmware": null,
       "mcus": [],
-      "engine_commit": "8ef1e4c9bbb1ff27725456a2b754cbe1f319cf1c",
+      "engine_commit": "c9352751060f",
       "engine_version": "hauksbee 0.1.0 (git c9352751060f)",
       "captured_at": "2026-08-03T23:34:52.348Z",
       "duration_s": 5,
@@ -38,7 +38,7 @@
           "simavr:atmega328p"
         ]
       ],
-      "engine_commit": "8ef1e4c9bbb1ff27725456a2b754cbe1f319cf1c",
+      "engine_commit": "c9352751060f",
       "engine_version": "hauksbee 0.1.0 (git c9352751060f)",
       "captured_at": "2026-08-03T23:34:59.167Z",
       "duration_s": 5,
@@ -64,7 +64,7 @@
           "simavr:atmega328p"
         ]
       ],
-      "engine_commit": "8ef1e4c9bbb1ff27725456a2b754cbe1f319cf1c",
+      "engine_commit": "c9352751060f",
       "engine_version": "hauksbee 0.1.0 (git c9352751060f)",
       "captured_at": "2026-08-03T23:35:06.695Z",
       "duration_s": 5,
@@ -90,7 +90,7 @@
           "simavr:atmega328p"
         ]
       ],
-      "engine_commit": "8ef1e4c9bbb1ff27725456a2b754cbe1f319cf1c",
+      "engine_commit": "c9352751060f",
       "engine_version": "hauksbee 0.1.0 (git c9352751060f)",
       "captured_at": "2026-08-03T23:35:14.829Z",
       "duration_s": 5,
