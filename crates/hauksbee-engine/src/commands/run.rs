@@ -43,6 +43,12 @@ pub struct RunConfig {
     pub oracle: bool,
     pub apply_shorts: bool,
     pub serve: bool,
+    /// `--open` under `--serve`: open the browser once the server is bound
+    /// (same policy as the `serve` subcommand).
+    pub open: bool,
+    /// `--no-open` under `--serve`: never open a browser, even when launched
+    /// by the desktop app.
+    pub no_open: bool,
     pub tui: bool,
     pub port: u16,
     pub models_dir: Option<std::path::PathBuf>,
@@ -1032,7 +1038,14 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     })
     .to_string();
 
-    crate::commands::common::serve(engine, cfg.port, Some((board_url, text)), startup_json)
+    crate::commands::common::serve(
+        engine,
+        cfg.port,
+        Some((board_url, text)),
+        startup_json,
+        cfg.open,
+        cfg.no_open,
+    )
 }
 
 /// Warn (advisory, stderr) when the board sits among sibling `.kicad_pcb` files,

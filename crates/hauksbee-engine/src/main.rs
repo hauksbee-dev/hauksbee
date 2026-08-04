@@ -634,6 +634,17 @@ struct RunArgs {
     #[arg(long, help_heading = "Advanced / analyses")]
     serve: bool,
 
+    /// With --serve: open the browser on the served URL once the port is
+    /// bound (the same policy as the `serve` subcommand). A piped/CI launch
+    /// never auto-opens.
+    #[arg(long, help_heading = "Advanced / analyses")]
+    open: bool,
+
+    /// With --serve: never open a browser, even when launched by the desktop
+    /// app (mirrors `serve --no-open`).
+    #[arg(long, help_heading = "Advanced / analyses", conflicts_with = "open")]
+    no_open: bool,
+
     /// Force the interactive terminal UI even when stdout is not a TTY (mainly
     /// for testing under a PTY). Normally the TUI is the auto-default for bare
     /// `run` on a TTY; this never triggers when a report flag is given.
@@ -1229,6 +1240,8 @@ fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
         oracle: a.oracle,
         apply_shorts: a.apply_shorts,
         serve: a.serve,
+        open: a.open,
+        no_open: a.no_open,
         tui: a.tui,
         port: a.port,
         models_dir: a.models_dir,

@@ -10,7 +10,7 @@
 /// Used for `--open` and for the no-TTY launch path (double-click / launchd /
 /// Finder), where nobody can read a printed URL. Failure is silent by design: a
 /// headless box has no browser, and the server must keep serving regardless.
-fn open_browser(url: &str) {
+pub(crate) fn open_browser(url: &str) {
     use std::process::{Command, Stdio};
     #[cfg(target_os = "macos")]
     let mut cmd = Command::new("open");
