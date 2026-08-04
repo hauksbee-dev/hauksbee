@@ -18,4 +18,4 @@ description = "AO3400A NMOS on-resistance at VGS = 10 V"
 
 [[probe]]
 expr = "V(d)"
-reltol = 0.01
+reltol = 5.0e-06

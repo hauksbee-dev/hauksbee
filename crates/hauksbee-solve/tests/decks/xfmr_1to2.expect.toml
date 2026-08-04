@@ -1,5 +1,5 @@
 # Coupled-inductor transformer (plan 04 §2.3): the mutual term IS the physics
-# here — with M = 0, v(sec) would be zero. Both engines integrate the same
+# here: with M = 0, v(sec) would be zero. Both engines integrate the same
 # 2x2 inductance-matrix companion, so the budget is timestep/resample error.
 analysis = "tran"
 description = "1:2 transformer, k=0.999, 10 kHz sine, 1k load: ratio + loading"
@@ -8,8 +8,8 @@ skip_initial = 0.0
 
 [[probe]]
 expr = "V(sec)"
-reltol = 0.02
+reltol = 2.0e-02
 
 [[probe]]
 expr = "V(pri)"
-reltol = 0.02
+reltol = 2.0e-02

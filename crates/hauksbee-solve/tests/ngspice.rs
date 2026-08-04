@@ -305,6 +305,59 @@ struct ProbeExpect {
     /// AC phase tolerance in degrees (absolute). Required for `.ac` probes.
     #[serde(default)]
     phase_abstol: Option<f64>,
+    /// Why this probe's bound is allowed to sit further than [`MAX_HEADROOM`]
+    /// above the error actually measured. Absent means it is not: see
+    /// [`headroom_verdict`].
+    #[serde(default)]
+    loose_reason: Option<String>,
+}
+
+/// How far a declared tolerance may sit above the error actually measured before
+/// the harness calls it too loose to be a gate.
+///
+/// A bound far above the real error is not caution, it is an absence of coverage:
+/// accuracy can degrade by orders of magnitude underneath it and the suite stays
+/// green. This corpus was carrying bounds up to 250,000x the measured error
+/// (`schottky_1n5817_two_points` at 2.0e-3 against 8.0e-9), which is a gate that
+/// cannot fail for any reason short of total breakage.
+///
+/// 50x is deliberately generous. The legitimate reason for headroom is that the
+/// oracle is not bit-reproducible across platforms and versions: a different
+/// ngspice build can make different adaptive-timestep decisions, and a transient
+/// probe compared through interpolation moves with them. 50x covers that with
+/// room to spare while still failing a real regression. A probe that genuinely
+/// needs more states `loose_reason` and says why, which is a claim in the deck a
+/// reader can check rather than a silently wide number.
+const MAX_HEADROOM: f64 = 50.0;
+
+/// Floor under the headroom rule, below which a tolerance is left alone.
+///
+/// Some probes agree to floating-point noise (`resistor_divider V(in)` is exactly
+/// 0.0, `param_divider` is 7.5e-10). Scaling 50x off a number that small would
+/// demand a bound tighter than the difference between two correct answers computed
+/// in different orders, so the rule stops at 1e-6 relative: five orders of
+/// magnitude below any tolerance a physical claim would use, and far above
+/// double-precision assembly-order noise.
+const HEADROOM_FLOOR: f64 = 1e-6;
+
+/// Is this probe's tolerance tight enough to be a gate? `None` when it is (or is
+/// waived), `Some(message)` naming the problem when it is not.
+fn headroom_verdict(pe: &ProbeExpect, worst: f64) -> Option<String> {
+    if pe.loose_reason.is_some() {
+        return None;
+    }
+    let bar = (worst * MAX_HEADROOM).max(HEADROOM_FLOOR);
+    if pe.reltol <= bar {
+        return None;
+    }
+    Some(format!(
+        "tolerance {:.1e} is {:.0}x the measured error {:.3e}, which cannot catch a \
+         regression; tighten it to <= {:.1e} or state `loose_reason = \"...\"`",
+        pe.reltol,
+        if worst > 0.0 { pe.reltol / worst } else { f64::INFINITY },
+        worst,
+        bar,
+    ))
 }
 
 /// A per-quantity comparison result for the table.
@@ -314,6 +367,8 @@ struct QtyResult {
     at: String,
     reltol: f64,
     pass: bool,
+    /// Set when the bound is too loose to gate anything (see [`headroom_verdict`]).
+    too_loose: Option<String>,
 }
 
 struct DeckResult {
@@ -556,6 +611,7 @@ fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
                     at: "op".to_string(),
                     reltol: pe.reltol,
                     pass: err < pe.reltol,
+                    too_loose: headroom_verdict(pe, err),
                 });
             }
         }
@@ -586,6 +642,7 @@ fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
                     at: format!("t={at:.3e}s"),
                     reltol: pe.reltol,
                     pass: worst < pe.reltol,
+                    too_loose: headroom_verdict(pe, worst),
                 });
             }
         }
@@ -620,6 +677,7 @@ fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
                     at: format!("sweep={at:.3e}"),
                     reltol: pe.reltol,
                     pass: worst < pe.reltol,
+                    too_loose: headroom_verdict(pe, worst),
                 });
             }
         }
@@ -667,6 +725,7 @@ fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
                     at: format!("f={atm:.3e}Hz"),
                     reltol: pe.reltol,
                     pass: wm < pe.reltol,
+                    too_loose: headroom_verdict(pe, wm),
                 });
 
                 // Phase: absolute tolerance in degrees.
@@ -681,6 +740,18 @@ fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
                     at: format!("f={atp:.3e}Hz"),
                     reltol: ph_tol,
                     pass: wp < ph_tol,
+                    // Phase is an ABSOLUTE bound in degrees, so the relative
+                    // headroom floor does not apply; the bar is a tenth of a
+                    // degree, below which a phase claim is not meaningful anyway.
+                    too_loose: if pe.loose_reason.is_none() && ph_tol > (wp * MAX_HEADROOM).max(0.1)
+                    {
+                        Some(format!(
+                            "phase tolerance {ph_tol:.1e} deg is far above the measured \
+                             {wp:.3e} deg; tighten it or state `loose_reason`"
+                        ))
+                    } else {
+                        None
+                    },
                 });
             }
         }
@@ -724,19 +795,35 @@ fn write_results_md(results: &[DeckResult], ng_version: &str) {
     let passed = results.iter().filter(|d| d.passed()).count();
     s.push_str(&format!("- Passing: **{passed}/{}**\n\n", results.len()));
 
-    s.push_str("| Deck | Analysis | Quantity | Worst-case error | Tolerance | Where | Result |\n");
-    s.push_str("|------|----------|----------|------------------|-----------|-------|--------|\n");
+    s.push_str(
+        "| Deck | Analysis | Quantity | Worst-case error | Tolerance | Headroom | Where | \
+         Result |\n",
+    );
+    s.push_str(
+        "|------|----------|----------|------------------|-----------|----------|-------|\
+         --------|\n",
+    );
     for d in results {
         for (i, q) in d.quantities.iter().enumerate() {
             let deck_cell = if i == 0 { d.name.as_str() } else { "" };
             let analysis_cell = if i == 0 { d.analysis.as_str() } else { "" };
+            // Headroom is how much slack the bound has over the error actually
+            // measured. It is published because it is the number that says whether
+            // a green row means anything: a bound 1000x above the measurement
+            // cannot fail, and a reader deserves to see that.
+            let headroom = if q.worst_err > 0.0 {
+                format!("{:.0}x", q.reltol / q.worst_err)
+            } else {
+                "exact".to_string()
+            };
             s.push_str(&format!(
-                "| {} | {} | `{}` | {:.3e} | {:.1e} | {} | {} |\n",
+                "| {} | {} | `{}` | {:.3e} | {:.1e} | {} | {} | {} |\n",
                 deck_cell,
                 analysis_cell,
                 q.probe,
                 q.worst_err,
                 q.reltol,
+                headroom,
                 q.at,
                 if q.pass { "PASS" } else { "**FAIL**" },
             ));
@@ -810,6 +897,68 @@ fn ngspice_corpus() {
         "decks over tolerance: {:?}",
         failed.iter().map(|d| &d.name).collect::<Vec<_>>()
     );
+
+    // A bound far above the real error is a hole in the gate, so it fails the gate.
+    let mut loose = Vec::new();
+    for d in &results {
+        for q in &d.quantities {
+            if let Some(msg) = &q.too_loose {
+                loose.push(format!("{} {}: {msg}", d.name, q.probe));
+            }
+        }
+    }
+    assert!(
+        loose.is_empty(),
+        "tolerances too loose to gate anything ({} probes):\n  {}",
+        loose.len(),
+        loose.join("\n  ")
+    );
+
+    // An expectation must not carry a hardcoded oracle version in its prose. The
+    // corpus was claiming "vs ngspice-46" in seven decks while the oracle on the
+    // machine was 45.2, so the accuracy suite's own documentation was stating a
+    // measurement that had not been made. The version belongs in the generated
+    // table, which records the binary that actually ran, and nowhere else.
+    let mut stale = Vec::new();
+    let ver_pat = regex_lite_ngspice_version();
+    for cir in &cirs {
+        let ep = cir.with_extension("expect.toml");
+        let text = std::fs::read_to_string(&ep).expect("read expect");
+        for (i, line) in text.lines().enumerate() {
+            if ver_pat(line) {
+                stale.push(format!(
+                    "{}:{}: {}",
+                    ep.file_name().unwrap().to_string_lossy(),
+                    i + 1,
+                    line.trim()
+                ));
+            }
+        }
+    }
+    assert!(
+        stale.is_empty(),
+        "expectation prose names a specific ngspice version; the generated table \
+         (docs/spice-compat/results.md) is the only place that may, because it \
+         records the binary that actually ran:\n  {}",
+        stale.join("\n  ")
+    );
+}
+
+/// True when a line names a specific ngspice version (`ngspice-46`, `ngspice 45.2`).
+/// Hand-rolled rather than pulling in a regex crate for one predicate.
+fn regex_lite_ngspice_version() -> impl Fn(&str) -> bool {
+    |line: &str| {
+        let lower = line.to_ascii_lowercase();
+        let mut rest = lower.as_str();
+        while let Some(pos) = rest.find("ngspice") {
+            rest = &rest[pos + "ngspice".len()..];
+            let tail = rest.trim_start_matches(['-', ' ', '_']);
+            if tail.starts_with(|c: char| c.is_ascii_digit()) {
+                return true;
+            }
+        }
+        false
+    }
 }
 
 // A tiny unit check that the ngspice lookup honors $NGSPICE without needing the

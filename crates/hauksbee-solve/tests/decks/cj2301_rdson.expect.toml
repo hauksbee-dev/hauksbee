@@ -23,4 +23,4 @@ description = "CJ2301 PMOS on-resistance at VGS = -5 V"
 
 [[probe]]
 expr = "V(d)"
-reltol = 0.01
+reltol = 2.0e-06
