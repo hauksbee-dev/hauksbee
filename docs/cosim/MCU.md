@@ -203,14 +203,20 @@ registration that follows then panics. So the F4 descriptor omits `extra_repl`
 and binds bridges to the already-existing `spi2`/`spi3`
 (`crates/hauksbee-mcu/db/mcu/stm32f4_discovery.soc.toml`).
 
-Why no Renode ADC maps: Renode 1.16.1's shipped STM32F1/F4/nRF52840
-platform descriptions register no ADC peripheral at all, and Renode's
+Why no ADC map on the stock Renode platforms: Renode 1.16.1's shipped
+STM32F1/F4/nRF52840 platform descriptions register no ADC peripheral at all,
+and Renode's
 `Analog.STM32_ADC` speaks the F0/L0 register layout. Registering it at an
 F1/F4 address would let firmware read a wrongly-laid-out peripheral (fake
 fidelity), and inventing a RAM result word is a firmware contract, not the
 real converter. So the honest state is: no map, loud drop, warning on every
 surface. A board that knows where its counts must land supplies
 `[[soc.adc]]` in its own descriptor (`$HAUKSBEE_MCU_DIR`, no recompile).
+
+RP2040 is the exception because its platform is not Renode's. Its ADC model is
+vendored alongside the rest of the SoC (see the support-bundle section below)
+and takes a real voltage through `SetDefaultVoltageOnChannel`, so there is a
+converter to feed rather than a wrong-layout model to abuse.
 
 We verified the nRF52840 controller names against the live Renode 1.16.1
 (`peripherals` lists `twi0`/`twi1`/`spi2`, and the Hauksbee bridge
@@ -394,65 +400,167 @@ configure.
 | SiFive FE310 (RISC-V RV32, HiFive1) | `renode:sifive_fe310` | Renode `sifive-fe310.repl` | **Proven (UART boot)**: "BOOTING ZEPHYR OS ... shell>" through the bridge (needs `post_load_setup`: PRCI tags + `cpu PC vinit`). |
 | STM32F4 Discovery (Cortex-M4) | `renode:stm32f4_discovery` | Renode `stm32f4_discovery.repl` | Config shipped; platform present; not yet run end-to-end |
 | ESP32-S3 (Xtensa LX7) | `qemu:esp32s3` | Espressif QEMU `esp32s3` | **Wiring proven (machine boots, channels connect); app proof pending an S3 image.** The builtin `esp32s3` model entry binds to `qemu:esp32s3` (regression: `mcu_family_router.rs`), and `esp32_qemu_cosim.rs` boots the fork's real `esp32s3` machine from a blank flash (the ROM idles), connects QMP + gdbstub + UART, and steps the lockstep. The full app-level proof (UART banner + solved LED current, like the ESP32/C3 rows) needs a merged S3 flash image, which requires esp-idf with the esp32s3 Xtensa toolchain (`idf.py set-target esp32s3`; recipe in `testdata/firmware/esp32_blinky/build.sh`). |
-| RP2040 (dual Cortex-M0+, Raspberry Pi Pico) | `renode:rp2040` | Renode `rp2040.repl` | Config shipped + unit-tested; **platform ABSENT in installed Renode 1.16.1**; smoke skip-gated (see note below) |
+| RP2040 (dual Cortex-M0+, Raspberry Pi Pico) | `renode:rp2040` | hauksbee's own `rp2040.repl` + vendored peripheral models, compiled by Renode at run time (support bundle) | **Proven**: stock pico-sdk firmware boots through the real boot ROM into `main`, UART0 banner + GP25 toggling at 3.300 V through the solver on a corpus board. GPIO out/dir via SIO, UART0 TX, ADC inputs 0..3 and the I2C bridge on `i2c0`/`i2c1` are each proven end-to-end. SPI bridge unavailable, PIO absent, core 1 unproven (see note below) |
 | ESP32-C6, ESP32-H2 |, |, | Not in the Espressif QEMU fork's machine list; out of scope |
 | nRF5340 (ZSWatch-class) |, |, | See note below |
 
 ### nRF5340 / ZSWatch, honestly
 
-ZSWatch is an **nRF5340**, not the nRF52840 proven above. The Renode 1.16.1
-portable distribution ships `platforms/cpus/nrf52840.repl` but **no**
-nRF5340 platform of any kind (verified: zero `*nrf5340*` files in the
-build). So nRF5340 is NOT proven, and hauksbee claims no config for it. The
-nRF52840 proof is the closest Nordic part proven; a ZSWatch-class nRF5340
-board would need an nRF5340 Renode platform (upstream Renode carries some
-nRF5340 work, but it is not in this portable build and was not run).
+ZSWatch is an **nRF5340**, not the nRF52840 proven above, and hauksbee claims
+no config for it. The gap is precise rather than vague, and it is a different
+gap from the one RP2040 had.
+
+No nRF5340 platform exists in the installed Renode 1.16.1 portable build
+(`platforms/cpus/` carries `nrf52840.repl` and zero `*nrf5340*` files), and
+none exists on Renode `master` either. What matters is why that cannot be
+patched the way RP2040's was: with RP2040 the peripheral **models** existed
+in a third-party repo and only needed vendoring, whereas here the models do
+not exist anywhere to vendor. The pieces line up like this:
+
+- **Cortex-M33 is supported.** The core the nRF5340 application processor uses
+  is a Renode-supported CPU, so the ISA is not the obstacle.
+- **The nRF52-series peripheral models exist** (`renode-infrastructure` carries
+  the UARTE/GPIO/TWI/SPI family), and some carry over.
+- **There is no SPU model.** The TrustZone-capable `cpuapp` image configures the
+  System Protection Unit as part of its own start-up, and `renode-infrastructure`
+  has nothing that answers those registers.
+- **There is no nRF53 IPC model.** `NRF_Bellboard` is the nRF54 mailbox, a
+  different peripheral; the nRF5340's inter-processor communication block is
+  unmodelled.
+- **There is nothing for the network core** at all.
+
+So the honest estimate is that a boot-only nRF5340 is days of work (writing SPU
+and IPC models from the product specification, then debugging a Zephyr boot
+against them), not an afternoon of vendoring. Consequence, stated plainly: the
+ZSWatch nRF5340 known-fault miss stands. Any check on that board that needs
+firmware to run is still out of reach, and the nRF52840 proof is the closest
+Nordic part hauksbee can actually co-simulate.
 
 ### RP2040 / Raspberry Pi Pico, honestly
 
-`db/mcu/rp2040.soc.toml` (loaded by `RenodeConfig::rp2040()`) ships as a
-data-driven descriptor, and it is unit-tested (`rp2040_config_shape`, the
-serde round-trip, and the descriptor equivalence suite). What is **proven**
-is the config shape and the datasheet-grounded register offsets. What is
-**not** proven is a real boot, for one honest reason: the Renode build
-installed here (portable **v1.16.1.16858**) ships **no rp2040 platform**:
-`platforms/cpus/` carries only `picosoc` and `litex_picorv32` (unrelated
-RISC-V soft cores), no `rp2040.repl` and no Raspberry Pi Pico board. The
-integration smoke `tests/renode_rp2040.rs` therefore checks for the
-platform `.repl` first and **skips loudly** with that reason rather than
-pretending.
+RP2040 co-sim runs, and the platform it runs on is hauksbee's, not Renode's.
+Renode 1.16.1 ships no rp2040 platform (`platforms/cpus/` carries only
+`picosoc` and `litex_picorv32`, unrelated RISC-V soft cores) and neither does
+Renode `master`, so unlike the STM32F1 case there was nothing to extend: the
+peripheral **models** were missing, not just their wiring. They are vendored
+into `crates/hauksbee-mcu/db/mcu/rp2040/` and compiled by Renode at run time
+through the support-bundle mechanism described in the next section.
 
-Two things could not be verified offline and stay best-effort in the
-config, called out in `db/mcu/rp2040.soc.toml`'s header comment:
+The proof is a real boot. Stock pico-sdk 2.1.1 firmware
+(`testdata/firmware/rp2040_blink_uart/`) loads, runs through the real boot ROM's
+function table during `runtime_init`, reaches `main`, prints on UART0 and drives
+GP25. Running it against the corpus RP2040-minimal board for 2.00 s of simulated
+time gives the UART banner `hauksbee rp2040: main reached` followed by 50 `led
+on`/`led off` lines, and net `GPIO25` swinging 0.000 V to 3.300 V with 99 toggles
+through the solver across the board's 52 nets. Three live integration suites
+re-prove it on every run: `tests/renode_rp2040.rs` (boot, GPIO, UART),
+`tests/renode_rp2040_adc.rs`, `tests/renode_rp2040_bus.rs`.
 
-- **SIO, not a port bank.** RP2040 GPIO output does not live in a per-port
-  ODR; it lives in the SIO (single-cycle IO) block. The output-state
-  register is SIO `GPIO_OUT` at `0xD000_0010` (offset `0x10` from
-  `SIO_BASE`), with `GPIO_OE` at `0xD000_0020` and `GPIO_IN` at
-  `0xD000_0004` (datasheet §2.3.1.7). The ODR-poll points at SIO
-  `GPIO_OUT`, the faithful adaptation of the F1-vs-F4 ODR-offset discipline
-  to a part that has no port ODR.
-- **Unverified Renode modeling.** The SIO peripheral's *name* in Renode's
-  `rp2040.repl` (assumed `sio`) and whether Renode's SIO model reads
-  `GPIO_OUT` back as the driven value stay unconfirmed until the smoke
-  runs on a Renode that carries the platform. That run will confirm or
-  correct both.
+Per-feature tiers, which is where the honesty lives:
 
-Deliberately **not** wired, to refuse rather than fake: **ADC** (RP2040 has
-a SAR ADC, but no Renode ADC model is verified, so `adc_channels` is empty,
-so an unmapped channel gets the merged policy's loud once-per-channel drop,
-never a fake count); **I2C/SPI** (`i2c_controllers`/`spi_controllers` empty;
-the RP2040 Renode peripheral set is unverified, so no bridge is installed
-rather than claiming an unproven bus).
+- **GPIO out and direction, via SIO. Proven end-to-end, two-sided.** RP2040 has
+  no per-port ODR: the output value lives in the SIO (single-cycle IO) block,
+  `GPIO_OUT` at `0xD000_0010` (offset `0x10` from `SIO_BASE`), `GPIO_OE` at
+  `0xD000_0020`, `GPIO_IN` at `0xD000_0004` (datasheet 2.3.1.7). The ODR-diff
+  poll is pointed at SIO `GPIO_OUT` and the direction decode at `GPIO_OE`, which
+  is the F1-vs-F4 offset discipline adapted to a part with no port bank. Both
+  read back the driven value on the live machine (measured `GPIO_OUT` =
+  `GPIO_OE` = `0x02000000` after `main`, bit 25 = the Pico LED). Two-sided
+  because a firmware that never touches a pin produces no edges.
+- **UART0 TX. Proven end-to-end.** The SDK's `stdio_init_all` plus `printf`
+  arrives on the host socket in order. UART1 is defined by the platform but is
+  not exercised by anything, so it is declared and unproven.
+- **Timers, clocks, resets. Proven as far as the SDK booting and `sleep_ms`
+  costing the right virtual time** (20 ms of virtual time per `sleep_ms(20)`,
+  measured). That is not a fidelity claim about alarm edge cases.
+- **ADC injection, inputs 0..3. Proven end-to-end**, two voltages on one running
+  machine: an engine-pushed node voltage reaches the converter and stock
+  `adc_read()` returns the matching 12-bit code. Input 4 is the on-die
+  temperature sensor, not an external node, so mapping it to a circuit voltage
+  would be a lie about what the pin is. It stays unmapped and takes the merged
+  policy's loud once-per-channel drop instead of a fake count.
+- **I2C bus-slave bridge on `i2c0` and `i2c1`. Proven end-to-end, both
+  directions.** Real pico-sdk firmware writes a register index to a
+  host-modelled slave, reads two bytes back, and prints what the host sent.
+  Registration alone would not have earned the word.
+- **SPI bus-slave bridge. NOT available.** `SPI.PL022` in the vendored model
+  names `NullRegistrationPointPeripheralContainer<ISPIPeripheral>` as its base
+  class but never calls `RegisteredPeripheral`: the word `Transmit` does not
+  occur in the file. It bit-bangs the transfer onto GPIO pins and samples MISO
+  from a GPIO pin, which is how it interworks with PIO. A slave registered at
+  the null registration point, which is exactly what hauksbee's SPI bridge is,
+  is never invoked. So `spi_controllers` is empty on purpose: listing a
+  controller would install a bridge that silently sees nothing and make a bound
+  SPI sensor read as "answered zeroes". The reproduction is kept as an ignored
+  test, `rp2040_spi_bridge_probe` in `tests/renode_rp2040_bus.rs`, with the
+  reason as its ignore message. Fixing it needs either the upstream model
+  dispatching to its registered peripheral or a pin-level SPI bridge on the
+  hauksbee side.
+- **PIO. Absent.** Upstream models PIO as an extra CPU backed by a native C++
+  library shipped prebuilt for x86-64 only, which will not load into an arm64
+  Renode. `rp2040_pio.cs` is vendored because the SIO, GPIO, SPI and ADC models
+  reference its types and will not compile without it; it is never instantiated.
+  Any firmware whose observable behaviour goes through PIO (the usual WS2812
+  driver, PIO-driven I2C/SPI, `pico_stdio_pio`) produces nothing observable.
+- **Second core. Declared and un-halted, but unproven.** The platform declares
+  both Cortex-M0+ cores, `cpu1` starts un-halted, and the SIO is genuinely
+  shared (its GPIO registers are one set of state behind a single model), so
+  observation is core-agnostic by construction and a pin driven from core 1
+  would be seen. What is not claimed is that a real multicore launch works: the
+  SDK's `multicore_launch_core1` hands off through the SIO FIFO and the boot
+  ROM's core-1 wait loop, and no two-core firmware has been run against this.
+  State queries (`cpu_path`) use core 0. Treat single-core firmware as the
+  supported case.
 
-The scheduler dispatches `backend = "renode:rp2040"` (alias `renode:pico`)
-to this config. The built-in `db/mcu.toml` rp2040 entry deliberately
-carries **no** `backend` param yet: it exists for the BOOTSEL strap lint,
-and auto-routing every bound RP2040 board into a Renode platform the
-installed build does not ship would turn working binds into boot failures.
-A board that wants RP2040 co-sim opts in with a user model layer setting
-`backend = "renode:rp2040"`, and gets a loud platform-load error until its
-Renode carries `rp2040.repl`.
+The scheduler dispatches `backend = "renode:rp2040"` (alias `renode:pico`) to
+`crates/hauksbee-mcu/db/mcu/rp2040.soc.toml`, and the built-in
+`crates/hauksbee-models/db/mcu.toml` entries for both the bare `rp2040` and the
+`rpi_pico` module name that backend, so a bound RP2040 board is routed into
+co-sim with no user model layer needed.
+
+### Support bundles: shipping peripheral models Renode does not have
+
+RP2040 is the first descriptor to use a mechanism other parts can reuse, so it
+is worth stating separately from RP2040 itself. Renode compiles C# at run time:
+`include <file.cs>` on the Monitor drives its bundled compiler and registers the
+resulting peripheral types, which is already how the I2C/SPI bridge peripherals
+get into a machine. A **support bundle** is that mechanism scaled up to a whole
+SoC: a set of `.cs` peripheral models plus the data files the platform reads (an
+SVD, a boot ROM image), embedded in the hauksbee binary, unpacked to a temp
+directory, and `include`d before the platform description parses.
+
+A descriptor opts in with `[soc] support_bundle = "<name>"`. At machine
+bring-up, before `machine LoadPlatformDescription`, the backend unpacks the
+bundle into a fresh temp directory, runs `path add <dir>` so bare `@name`
+references inside the bundle's own `.repl` resolve without path rewriting, and
+`include`s each C# source **in the declared order**, because Renode's C#
+include is order sensitive: a later file referencing an earlier file's type
+fails to compile if the order is wrong. The literal `{support}` token in the
+descriptor's `platform_repl`, `extra_setup` and `post_load_setup` is then
+substituted with the unpacked directory, so the descriptor stays readable
+(`@{support}/rp2040.repl`) while the paths Renode sees are absolute. The
+directory is removed when the backend drops, and it is per-process and
+content-addressed so parallel test binaries never share or race one. The
+mechanism is `crates/hauksbee-mcu/src/renode/support.rs`; provenance and
+licences for the RP2040 bundle's contents are in
+`crates/hauksbee-mcu/db/mcu/rp2040/README.md`.
+
+Files are unpacked rather than referenced from the source tree because an
+installed `hauksbee` is one binary with no repository beside it. It is the same
+decision the `include_str!`-ed `db/mcu/*.soc.toml` descriptors already make,
+applied to files that must exist on disk because Renode, not hauksbee, is the
+one reading them.
+
+**The cost is real and worth knowing before you wonder why a suite is slow.**
+Every machine creation compiles the whole bundle: for RP2040 that is 23 C#
+sources, about 377 kB, and Renode's compiler runs on each new machine rather
+than once per process. Measured on the 2.00 s corpus run above: 15.5 s of
+wall clock in total, of which the simulation itself accounted for 7.3 s, so
+bring-up costs roughly eight seconds before any firmware instruction executes.
+The three RP2040 integration suites therefore take tens of seconds each
+(measured: 22 s, 28 s, 18 s) where the whole five-test STM32 suite takes 11 s.
+Nothing is wrong when that happens; the trade is paying compile time for a
+platform that does not otherwise exist.
 
 ### ESP32 in Renode, honestly
 
