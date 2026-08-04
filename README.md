@@ -6,7 +6,7 @@ Software runs its tests on every commit. Hardware never got that loop. You chang
 
 No other tool does this from the layout. Schematic simulators never see the board, MCU simulators use breadboards, and Proteus VSM co-simulates only from its own schematic. Hauksbee starts from the copper. See [`docs/about/COMPARISON.md`](docs/about/COMPARISON.md) for the full matrix.
 
-**New here? Start with [`docs/START_HERE.md`](docs/START_HERE.md):** the user path, install, and your next four reads. [`docs/about/CAPABILITIES.md`](docs/about/CAPABILITIES.md) is the authoritative scope document. It states what every layer does, which checks are commodity versus differentiated, and which MCU architectures the firmware co-sim covers: AVR via libsimavr, STM32/nRF52/RISC-V via Renode, ESP32 family via Espressif QEMU.
+**New here? Start with [`docs/START_HERE.md`](docs/START_HERE.md):** the user path, install, and your next four reads. [`docs/about/CAPABILITIES.md`](docs/about/CAPABILITIES.md) is the authoritative scope document. It states what every layer does, which checks are commodity versus differentiated, and which MCU architectures the firmware co-sim covers: AVR via libsimavr, STM32/nRF52/RISC-V/RP2040 via Renode, ESP32 family via Espressif QEMU.
 
 ![A board, live in 2D with net activity](frontend/screenshots/beauty/2d-live.png)
 
@@ -29,7 +29,7 @@ The browser is the quick look and the on-ramp. The checked-in spec is the repeat
 Point it at any PCB design and it will:
 
 - **Ingest** it: KiCad, Eagle `.brd` ([`docs/ingest/EAGLE.md`](docs/ingest/EAGLE.md)), Altium `.PcbDoc` ([`docs/ingest/ALTIUM.md`](docs/ingest/ALTIUM.md)), IPC-D-356, and gerber-only boards that ship no CAD at all. Hauksbee reverse-extracts these from copper geometry alone ([`docs/ingest/GERBER.md`](docs/ingest/GERBER.md), [`docs/about/ARCHITECTURE.md`](docs/about/ARCHITECTURE.md)). Every EDA tool can produce fab output, so the gerber path is the on-ramp that works whatever you drew the board in.
-- **Simulate** the analogue circuit with real device physics, co-simulating the firmware in lockstep on an emulated MCU. AVR, STM32, ESP32, and ESP32-C3 are proven end-to-end; nRF52840 and SiFive RISC-V are proven to UART boot; ESP32-S3 wiring is proven, with the full app proof pending a flash image. GPIO and UART co-sim run on every backend. I2C/SPI peripheral-slave models run on AVR (exact), on Renode platforms whose descriptors name the controllers, and on ESP32 QEMU through a firmware mailbox. ADC injection is exact on AVR only; stock Renode platforms drop it loudly. [`docs/cosim/MCU.md`](docs/cosim/MCU.md) states the per-backend coverage matrix and the reason plainly.
+- **Simulate** the analogue circuit with real device physics, co-simulating the firmware in lockstep on an emulated MCU. AVR, STM32, ESP32, ESP32-C3, and RP2040 are proven end-to-end; nRF52840 and SiFive RISC-V are proven to UART boot; ESP32-S3 wiring is proven, with the full app proof pending a flash image. GPIO and UART co-sim run on every backend. I2C/SPI peripheral-slave models run on AVR (exact), on Renode platforms whose descriptors name the controllers, and on ESP32 QEMU through a firmware mailbox. ADC injection is exact on AVR, real on RP2040 inputs 0..3, and dropped loudly on the stock Renode platforms, which model no converter to inject into. [`docs/cosim/MCU.md`](docs/cosim/MCU.md) states the per-backend coverage matrix and the reason plainly.
 - **Check** it: copper shorts, USB-C CC compliance, boot strap-pins, MCU resource conflicts, trace ampacity, behavioural power-IC models, and transient brownouts. Signal integrity checks now include a controlled-impedance estimate for USB and Ethernet from trace geometry and stackup (quasi-static closed-form, not a field solve). Each check is tuned against a known-good corpus, so it does not cry wolf ([`docs/checks/SHORTS.md`](docs/checks/SHORTS.md), [`docs/checks/RESOURCE_CONFLICTS.md`](docs/checks/RESOURCE_CONFLICTS.md), [`docs/checks/SI_CHECKS.md`](docs/checks/SI_CHECKS.md), [`docs/checks/TRANSIENTS.md`](docs/checks/TRANSIENTS.md)).
 - **Analyse** it past the static checks: a small-signal AC sweep for Bode plots, phase margin, and gain crossover. This is averaged about the DC operating point, not cycle-by-cycle switching ([`docs/analysis/AC_ANALYSIS.md`](docs/analysis/AC_ANALYSIS.md)). Also a steady-state thermal pass. It turns each part's dissipation into a junction temperature and flags the ones that run too hot (per-device `Tj = Tambient + P * theta_JA`, not a board thermal field solve) ([`docs/checks/THERMAL.md`](docs/checks/THERMAL.md)).
 - **Catch** the bug before you fab, in a headless pipeline with a GitHub Action, a KiCad plugin, and a pre-commit hook. Assertions cover rails, faults, temperature, and loop stability ([`docs/ci/CI.md`](docs/ci/CI.md)). Runnable examples are in [`docs/ci/EXAMPLES.md`](docs/ci/EXAMPLES.md).
@@ -256,7 +256,8 @@ scripts/install-sims.sh          # install Renode + Espressif QEMU
 scripts/install-sims.sh --check  # verify hauksbee will find them
 ```
 
-Renode covers STM32 / nRF52 / RISC-V. The Espressif QEMU fork covers the full
+Renode covers STM32 / nRF52 / RISC-V / RP2040, the last on a platform hauksbee
+supplies itself because Renode ships none. The Espressif QEMU fork covers the full
 ESP32 family. hauksbee detects both from an external install (GPL/size, not
 bundled), using the same detect-do-not-bundle pattern as the KiCad and ngspice
 oracles. [`docs/cosim/SIMULATORS.md`](docs/cosim/SIMULATORS.md) has the full
@@ -341,7 +342,8 @@ Hauksbee stands on a lot of open-source work. The substantial ones:
 
 **MCU co-simulation backends**
 - [simavr](https://github.com/buserror/simavr) (GPL-3.0), cycle-accurate AVR / ATmega328P emulation, linked in-process via FFI, behind the `avr` backend.
-- [Renode](https://renode.io) by Antmicro (MIT), STM32, nRF52 and SiFive RISC-V emulation, driven headless over its Monitor protocol.
+- [Renode](https://renode.io) by Antmicro (MIT), STM32, nRF52, SiFive RISC-V and RP2040 emulation, driven headless over its Monitor protocol.
+- [Renode_RP2040](https://github.com/matgla/Renode_RP2040) by Mateusz Stadnik (MIT), the RP2040 peripheral models Renode itself does not ship, vendored and compiled at run time; plus the [pico-sdk](https://github.com/raspberrypi/pico-sdk) RP2040 SVD and the [RP2040 boot ROM](https://github.com/raspberrypi/pico-bootrom-rp2040) (both BSD-3-Clause, Raspberry Pi).
 - [QEMU](https://www.qemu.org) and [Espressif's QEMU fork](https://github.com/espressif/qemu) (GPL-2.0), ESP32 / ESP32-S3 / ESP32-C3 emulation with the SoC peripherals modelled.
 
 **PCB tooling**

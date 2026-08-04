@@ -9,7 +9,7 @@ range:
 | Backend | Chips | Emulator | Install needed? |
 |---------|-------|----------|-----------------|
 | `simavr` | ATmega328P (AVR / Arduino) | libsimavr, linked in-process | **Yes** (source build), `scripts/install-sims.sh --avr` |
-| `renode` | STM32 / nRF52840 / SiFive FE310 (RISC-V) / RP2040 (opt-in) | External headless Renode process | **Yes** |
+| `renode` | STM32 / nRF52840 / SiFive FE310 (RISC-V) / RP2040 | External headless Renode process | **Yes** |
 | `qemu` | ESP32 / ESP32-S3 (Xtensa) / ESP32-C3 (RISC-V) | External Espressif QEMU process | **Yes** |
 
 AVR links libsimavr from the system (GPL-3.0, deliberately not vendored in
@@ -28,12 +28,14 @@ Two entries in that table need reading carefully:
   for ports A through D, so a part with ports beyond those needs
   `register_port_hooks` called for them, and the shipped board recipes are
   ATmega328P.
-- **RP2040 on Renode is opt-in and unproven.** The built-in MCU database entry
-  carries no `backend` param, so a bound RP2040 board is not auto-routed into
-  Renode; a board asks for it explicitly with a user model layer setting
-  `backend = "renode:rp2040"` (alias `renode:pico`). Renode 1.16.1 portable
-  ships no `rp2040.repl`, so until your Renode carries the platform, that
-  opt-in gets a loud platform-load error rather than a silent skip.
+- **RP2040 brings its own platform.** Renode ships no rp2040 platform, on 1.16.1
+  or on `master`, so hauksbee carries one: the peripheral models are vendored C#
+  that Renode compiles at run time, unpacked from the binary when the machine is
+  created. Nothing extra to install, but each machine creation compiles about
+  377 kB of C#, so an RP2040 run spends roughly eight seconds on bring-up before
+  firmware executes. A bound RP2040 or Pico board is routed automatically; the
+  proven and unproven features are itemized in
+  [`docs/cosim/MCU.md`](MCU.md).
 
 ---
 
