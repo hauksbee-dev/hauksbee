@@ -90,6 +90,34 @@ def test_by_hand_detection():
                 os.environ[k] = v
 
 
+def test_a_missing_binary_blocks_unless_the_opt_out_is_set():
+    # The same contract the plain `.git/hooks/pre-commit` this tool installs
+    # carries: a gate that passes because the tool is absent is green forever on
+    # a fresh clone. Needs a spec to be found and a staged board, so it runs in a
+    # git repo with both, and HAUKSBEE_CI_BIN pointed at nothing.
+    with tempfile.TemporaryDirectory() as d:
+        subprocess.run(["git", "init", "-q", d], check=True)
+        board = os.path.join(d, "board.kicad_sch")
+        open(board, "w", encoding="utf-8").close()
+        os.makedirs(os.path.join(d, "ci"))
+        with open(os.path.join(d, "ci/power-up.toml"), "w", encoding="utf-8") as fh:
+            fh.write('board = "../board.kicad_sch"\n')
+        subprocess.run(["git", "-C", d, "add", "-A"], check=True)
+
+        missing = os.path.join(d, "no-such-binary")
+        env = {"HAUKSBEE_CI_BIN": missing, "PATH": os.path.join(d, "empty-path")}
+
+        blocked = run_hook(env=env, cwd=d)
+        assert blocked.returncode == 1, (blocked.stdout, blocked.stderr)
+        assert "commit blocked" in blocked.stderr
+        assert "HAUKSBEE_CI_HOOK_OPTIONAL" in blocked.stderr
+
+        env["HAUKSBEE_CI_HOOK_OPTIONAL"] = "1"
+        skipped = run_hook(env=env, cwd=d)
+        assert skipped.returncode == 0, (skipped.stdout, skipped.stderr)
+        assert "skipping" in skipped.stderr
+
+
 def test_no_em_dashes_in_anything_a_user_reads():
     # A house rule, and the kind that only holds if something checks it.
     for name in ("hauksbee_ci_precommit.py",):
