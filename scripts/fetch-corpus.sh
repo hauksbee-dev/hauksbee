@@ -364,7 +364,9 @@ while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed dest_rel 
       else
         drop_missing="$drop_missing $d"
       fi
-    done <<< "$(printf '%s' "$drop" | tr '\x1e' '\n')"
+    # `tr '\x1e' '\n'` would be wrong: tr takes no \xNN escape and would read that
+    # as the three characters x, 1, e. Bash's own $'\x1e' is the byte.
+    done <<< "$(printf '%s' "$drop" | tr $'\x1e' '\n')"
     if [ -n "$drop_missing" ]; then
       err "$id: drop declares$drop_missing and none of those exist in the fetched tree"
       failed=$((failed+1)); FAILED_IDS+=("$id"); continue
