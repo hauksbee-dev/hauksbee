@@ -207,6 +207,18 @@ pub(crate) struct EdaData {
     pub(crate) layers: Vec<String>,
 }
 
+/// A coordinate: a finite number, or `None`.
+///
+/// `parse::<f64>()` accepts `inf`, `NaN` and an overflowing exponent (`1e400`),
+/// and the crate refuses a non-finite coordinate rather than let it into the IR
+/// (see `pcb::reject_non_finite_geometry` and `eagle::non_finite_coord` for the
+/// same rule on the native formats): a distance compared against NaN is silently
+/// false, which turns a clearance check into a meaningless pass. ODB++ producers
+/// cannot write such a file, so nothing real is lost.
+fn coord(raw: &str) -> Option<f64> {
+    raw.parse::<f64>().ok().filter(|v| v.is_finite())
+}
+
 /// The multiplier from a `UNITS=` value to millimetres.
 pub(crate) fn unit_scale(value: &str) -> f64 {
     if value.trim().eq_ignore_ascii_case("INCH") {
@@ -404,8 +416,8 @@ fn parse_cmp(
     let mut it = body.split_whitespace();
     it.next()?; // CMP
     let pkg_index = it.next()?.parse::<usize>().ok();
-    let x = it.next()?.parse::<f64>().ok()? * scale;
-    let y = it.next()?.parse::<f64>().ok()? * scale;
+    let x = coord(it.next()?)? * scale;
+    let y = coord(it.next()?)? * scale;
     let rotation = it.next()?.parse::<f64>().unwrap_or(0.0);
     let mirrored = it.next()?.eq_ignore_ascii_case("M");
     let refdes = it.next()?.to_string();
@@ -445,8 +457,8 @@ fn parse_top(body: &str, scale: f64) -> Option<Toeprint> {
     }
     Some(Toeprint {
         pin_index: t[1].parse::<usize>().ok()?,
-        x_mm: t[2].parse::<f64>().ok()? * scale,
-        y_mm: t[3].parse::<f64>().ok()? * scale,
+        x_mm: coord(t[2])? * scale,
+        y_mm: coord(t[3])? * scale,
         net: match t[6].parse::<usize>() {
             Ok(0) => NetRef::None,
             Ok(n) => NetRef::Num(n),
@@ -513,13 +525,21 @@ pub(crate) struct FeatureCounts {
     pub(crate) pads: usize,
     pub(crate) arcs: usize,
     pub(crate) surfaces: usize,
+    /// Text and barcode features: counted so the `F` header adds up, but not
+    /// broken out, because the IR has nowhere to put either.
+    pub(crate) other: usize,
+    /// Record types this reader does not recognise at all. Their presence means a
+    /// total that falls short of the `F` header is this reader's gap rather than
+    /// the file's error, so the mismatch is not reported as one — a disagreement
+    /// list that cries wolf is a disagreement list nobody reads.
+    pub(crate) unknown_records: usize,
     /// The `F <n>` header's claimed feature count, when present.
     pub(crate) declared: Option<usize>,
 }
 
 impl FeatureCounts {
     pub(crate) fn total(&self) -> usize {
-        self.lines + self.pads + self.arcs + self.surfaces
+        self.lines + self.pads + self.arcs + self.surfaces + self.other
     }
 }
 
@@ -543,11 +563,26 @@ pub(crate) fn parse_features(text: &str) -> FeatureCounts {
             Some("A") => c.arcs += 1,
             // A surface is `S ... OB/OS/OE ... SE`; count the opening record.
             Some("S") => c.surfaces += 1,
+            // `T` (text) and `B` (barcode) are features too, and counted, but
+            // not broken out: the IR has nowhere to put either.
+            Some("T") | Some("B") => c.other += 1,
+            // A surface body, a symbol/attribute-table line, or a record type
+            // this reader does not model. Tracked so the `F` header check can
+            // tell "the header is wrong" from "there is a record kind here I do
+            // not count", and cry wolf only in the first case.
+            Some(tok) if !SURFACE_BODY.contains(&tok) => {
+                if tok.len() <= 3 && tok.chars().all(|ch| ch.is_ascii_uppercase()) {
+                    c.unknown_records += 1;
+                }
+            }
             _ => {}
         }
     }
     c
 }
+
+/// The continuation records inside a surface (`S`) or an outline: not features.
+const SURFACE_BODY: &[&str] = &["OB", "OS", "OC", "OE", "SE", "CT", "CE"];
 
 #[cfg(test)]
 mod tests {
@@ -694,5 +729,25 @@ mod tests {
             "the surface's OB/OE/SE body must not be counted as features"
         );
         assert_eq!(c.total(), 4);
+        assert_eq!(c.unknown_records, 0, "every record here is recognised");
+    }
+
+    #[test]
+    fn text_features_count_and_an_unrecognised_record_suppresses_the_header_check() {
+        // A copper layer carrying a `T` (text) feature adds up against its `F`
+        // header only if text is counted; and a record type this reader does not
+        // model must mark the count as incomplete rather than let the caller
+        // report the header as wrong.
+        let c = parse_features("UNITS=MM\nF 2\n#\nP 0 0 1 P 0 8 0.0 \nT 0 0 0 1 1 0 P 0 hi\n");
+        assert_eq!(c.total(), 2, "text is a feature");
+        assert_eq!(c.unknown_records, 0);
+        assert_eq!(c.declared, Some(2));
+
+        let c = parse_features("UNITS=MM\nF 3\n#\nP 0 0 1 P 0 8 0.0 \nXYZ 1 2 3\n");
+        assert_eq!(c.total(), 1);
+        assert!(
+            c.unknown_records > 0,
+            "an unmodelled record must be tracked so the F check stays quiet"
+        );
     }
 }
