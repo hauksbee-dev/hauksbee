@@ -714,3 +714,143 @@ mod tests {
         );
     }
 }
+
+// ── Kind vocabulary help ──────────────────────────────────────────────────────
+
+/// Every TOML spelling [`ComponentKind`] accepts, in declaration order. Kept
+/// in lockstep with the enum by `kind_names_cover_the_enum` below.
+pub const KIND_NAMES: &[&str] = &[
+    "passive",
+    "diode",
+    "bjt_npn",
+    "bjt_pnp",
+    "nmos",
+    "pmos",
+    "vreg",
+    "opamp",
+    "comparator",
+    "analog_switch",
+    "digital",
+    "dac",
+    "adc",
+    "shift_register",
+    "mcu",
+    "connector",
+    "ignore",
+];
+
+/// A did-you-mean for a kind name the schema rejected. Common industry
+/// synonyms map directly (an author typing `ldo` should be told `vreg`, not
+/// left to guess which of seventeen names we meant); anything else falls back
+/// to nearest-edit-distance over [`KIND_NAMES`].
+pub fn kind_suggestion(unknown: &str) -> Option<&'static str> {
+    let lower = unknown.trim().to_ascii_lowercase();
+    let alias = match lower.as_str() {
+        // Regulators and power ICs of every flavour model as `vreg` (the
+        // behavioural block carries what the base kind cannot).
+        "ldo" | "regulator" | "buck" | "boost" | "buck_boost" | "smps" | "dcdc" | "dc_dc"
+        | "pmic" | "charger" => "vreg",
+        "npn" | "bjt" | "transistor" => "bjt_npn",
+        "pnp" => "bjt_pnp",
+        "mosfet" | "fet" | "nfet" | "n_mosfet" | "nmosfet" => "nmos",
+        "pfet" | "p_mosfet" | "pmosfet" => "pmos",
+        "op_amp" | "operational_amplifier" | "amplifier" => "opamp",
+        "resistor" | "capacitor" | "inductor" | "res" | "cap" | "ferrite" | "crystal" => {
+            "passive"
+        }
+        "led" | "zener" | "schottky" | "rectifier" | "tvs" => "diode",
+        "switch" | "mux" | "multiplexer" => "analog_switch",
+        "microcontroller" | "micro" | "soc" => "mcu",
+        "header" | "jack" | "socket" | "plug" => "connector",
+        "logic" | "gate" | "flip_flop" | "latch" => "digital",
+        _ => "",
+    };
+    if !alias.is_empty() {
+        return Some(alias);
+    }
+    KIND_NAMES
+        .iter()
+        .map(|k| (levenshtein(&lower, k), *k))
+        .filter(|(d, _)| *d <= 2)
+        .min_by_key(|(d, _)| *d)
+        .map(|(_, k)| k)
+}
+
+/// If a TOML deserialization error is an unknown [`ComponentKind`] variant,
+/// the note to append: the did-you-mean, or the full vocabulary. Detected
+/// from the error text (serde owns the wording); the `bjt_npn` probe keeps it
+/// from firing on some other enum's unknown-variant error.
+pub fn kind_error_note(err_text: &str) -> Option<String> {
+    if !err_text.contains("unknown variant") || !err_text.contains("bjt_npn") {
+        return None;
+    }
+    let unknown = err_text.split('`').nth(1)?;
+    match kind_suggestion(unknown) {
+        Some(s) => Some(format!("unknown kind '{unknown}': did you mean '{s}'?")),
+        None => Some(format!(
+            "unknown kind '{unknown}'; valid kinds: {}",
+            KIND_NAMES.join(", ")
+        )),
+    }
+}
+
+/// Iterative Levenshtein edit distance (short vocabulary strings).
+fn levenshtein(a: &str, b: &str) -> usize {
+    let a: Vec<char> = a.chars().collect();
+    let b: Vec<char> = b.chars().collect();
+    let mut prev: Vec<usize> = (0..=b.len()).collect();
+    let mut cur = vec![0usize; b.len() + 1];
+    for (i, ca) in a.iter().enumerate() {
+        cur[0] = i + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let sub = prev[j] + usize::from(ca != cb);
+            cur[j + 1] = sub.min(prev[j + 1] + 1).min(cur[j] + 1);
+        }
+        std::mem::swap(&mut prev, &mut cur);
+    }
+    prev[b.len()]
+}
+
+#[cfg(test)]
+mod kind_vocabulary_tests {
+    use super::*;
+
+    /// KIND_NAMES must cover exactly the enum's serde spellings: every name
+    /// deserializes, and every variant we can list round-trips into the list.
+    #[test]
+    fn kind_names_cover_the_enum() {
+        for name in KIND_NAMES {
+            let toml = format!("kind = \"{name}\"");
+            #[derive(serde::Deserialize)]
+            struct Probe {
+                #[allow(dead_code)]
+                kind: ComponentKind,
+            }
+            let parsed: Result<Probe, _> = toml::from_str(&toml);
+            assert!(parsed.is_ok(), "KIND_NAMES lists '{name}' but it does not parse");
+        }
+    }
+
+    #[test]
+    fn aliases_map_to_their_kind() {
+        assert_eq!(kind_suggestion("ldo"), Some("vreg"));
+        assert_eq!(kind_suggestion("LDO"), Some("vreg"));
+        assert_eq!(kind_suggestion("npn"), Some("bjt_npn"));
+        assert_eq!(kind_suggestion("led"), Some("diode"));
+    }
+
+    #[test]
+    fn near_misses_resolve_by_edit_distance() {
+        assert_eq!(kind_suggestion("pasive"), Some("passive"));
+        assert_eq!(kind_suggestion("opamps"), Some("opamp"));
+        assert_eq!(kind_suggestion("zzzzzz"), None);
+    }
+
+    #[test]
+    fn kind_error_note_reads_the_serde_wording() {
+        let err = "unknown variant `ldo`, expected one of `passive`, `diode`, `bjt_npn`";
+        let note = kind_error_note(err).unwrap();
+        assert!(note.contains("did you mean 'vreg'"), "{note}");
+        assert_eq!(kind_error_note("some other error"), None);
+    }
+}

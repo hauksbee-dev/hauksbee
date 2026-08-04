@@ -39,5 +39,5 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    hauksbee_models::datasheet::run(args)
+    hauksbee_models::datasheet::run(args).map(|_| ())
 }

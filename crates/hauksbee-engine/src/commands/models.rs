@@ -37,8 +37,18 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
             }
         }
     } else if root.get("models").is_some() {
-        let db: hauksbee_models::schema::DbFile = toml::from_str(&text)
-            .map_err(|e| anyhow::anyhow!("'{}': [[models]] parse error: {e}", file.display()))?;
+        let db: hauksbee_models::schema::DbFile = toml::from_str(&text).map_err(|e| {
+            // An unknown `kind` is the classic first-model mistake; serde's
+            // unknown-variant wording lists the vocabulary but a synonym
+            // deserves its direct answer (ldo -> vreg).
+            match hauksbee_models::validation::kind_error_note(&e.to_string()) {
+                Some(note) => anyhow::anyhow!(
+                    "'{}': [[models]] parse error: {e}\n  {note}",
+                    file.display()
+                ),
+                None => anyhow::anyhow!("'{}': [[models]] parse error: {e}", file.display()),
+            }
+        })?;
         for entry in &db.models {
             checked += 1;
             let mut entry_findings = 0usize;
@@ -294,8 +304,46 @@ struct ResolveRow {
     resolved: bool,
 }
 
+/// Group rank for the resolve report's reading order: what needs attention
+/// first. UNRESOLVED leads, the engine's last-ditch fallback next, then the
+/// real layers from most-user-supplied (spice, --models-dir) down to builtin.
+fn layer_rank(layer: &str, resolved: bool) -> u8 {
+    if !resolved {
+        return 0;
+    }
+    match layer {
+        "engine-fallback" => 1,
+        "spice" => 2,
+        "models-dir" => 3,
+        "user-config-dir" => 4,
+        "user-dir" => 5,
+        "pack" => 6,
+        "builtin" => 7,
+        _ => 8,
+    }
+}
+
+/// Natural sort key for a reference designator: alpha prefix, then the
+/// trailing integer numerically (R2 before R10), then the raw string.
+fn natural_ref_key(reference: &str) -> (String, u64, String) {
+    let split = reference
+        .find(|c: char| c.is_ascii_digit())
+        .unwrap_or(reference.len());
+    let (prefix, digits) = reference.split_at(split);
+    (
+        prefix.to_ascii_uppercase(),
+        digits
+            .chars()
+            .take_while(|c| c.is_ascii_digit())
+            .collect::<String>()
+            .parse()
+            .unwrap_or(u64::MAX),
+        reference.to_string(),
+    )
+}
+
 fn resolve_rows(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoard) -> Vec<ResolveRow> {
-    board
+    let mut rows: Vec<ResolveRow> = board
         .components
         .iter()
         .map(|comp| {
@@ -329,7 +377,16 @@ fn resolve_rows(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoard) ->
                 resolved,
             }
         })
-        .collect()
+        .collect();
+    // Reading order, not board order: UNRESOLVED rows first (they are why
+    // someone runs this command), then by layer group, natural reference
+    // order within each group.
+    rows.sort_by(|a, b| {
+        layer_rank(&a.layer, a.resolved)
+            .cmp(&layer_rank(&b.layer, b.resolved))
+            .then_with(|| natural_ref_key(&a.reference).cmp(&natural_ref_key(&b.reference)))
+    });
+    rows
 }
 
 /// Render a Unicode box-drawing table from a header row and data rows, the
@@ -487,10 +544,37 @@ pub fn extract(
         datasheet::validate_api_key_env_name(name)?;
     }
     if !pdf.is_file() {
-        anyhow::bail!("no datasheet at '{}'", pdf.display());
+        // Dead end -> next move: where to find the datasheet, and the flow
+        // that fetches it for you.
+        let query: String = part
+            .chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                    c.to_string()
+                } else {
+                    format!("%{:02X}", c as u32)
+                }
+            })
+            .collect();
+        anyhow::bail!(
+            "no datasheet at '{}'. Search for one:\n  \
+             https://duckduckgo.com/?q={query}+datasheet+pdf\n\
+             or use the guided flow: `hauksbee serve` fetches the datasheet and \
+             extracts the model for you (Extract a part).",
+            pdf.display()
+        );
     }
 
-    println!("Extract a model for {part} ({kind}) from {}", pdf.display());
+    // An empty --kind means the extractor identifies the part from the
+    // datasheet itself; never print it as bare empty parens.
+    if kind.trim().is_empty() {
+        println!(
+            "Extract a model for {part} (kind read from the datasheet) from {}",
+            pdf.display()
+        );
+    } else {
+        println!("Extract a model for {part} ({kind}) from {}", pdf.display());
+    }
     println!();
     println!("{}", datasheet::CONSENT_NOTICE);
     println!();
@@ -521,7 +605,7 @@ pub fn extract(
         .backend(backend)
         .api_base(api_base)
         .api_key_env(api_key_env);
-    datasheet::run(args)?;
+    let written = datasheet::run(args)?;
 
     println!();
     println!(
@@ -529,12 +613,178 @@ pub fn extract(
          trust a result that depends on it, and check any value the datasheet did not state \
          outright."
     );
+    // End with the consuming command: the model exists to be used in a run.
+    println!();
+    match out_dir {
+        Some(dir) => println!(
+            "use it:  hauksbee run <your-board> --models-dir {}\n\
+             check the binding:  hauksbee models resolve <your-board> --models-dir {}",
+            dir.display(),
+            dir.display()
+        ),
+        None => println!(
+            "It landed in the standing user model directory ({}), which every run \
+             already reads: re-run your board and it binds.\n\
+             check the binding:  hauksbee models resolve <your-board>",
+            written
+                .parent()
+                .map(|p| p.display().to_string())
+                .unwrap_or_else(|| "~/.hauksbee/models".to_string())
+        ),
+    }
     Ok(())
+}
+
+/// `hauksbee models new <REF> --board <board>`: scaffold a model entry for
+/// one board component, pre-seeded from the board's own context (value as
+/// the match regex, kind guessed from the reference prefix), so writing a
+/// part starts from an edit rather than a blank schema. The web "Write a
+/// part" editor is the same idea with a live validator; this is its CLI
+/// sibling.
+pub fn new(reference: &str, board_path: &Path, out: Option<&Path>) -> anyhow::Result<()> {
+    let board = crate::board_input::from_path(board_path)?.board;
+    let Some(comp) = board
+        .components
+        .iter()
+        .find(|c| c.reference.eq_ignore_ascii_case(reference))
+    else {
+        let known: Vec<String> = board
+            .components
+            .iter()
+            .map(|c| c.reference.clone())
+            .collect();
+        let near = crate::reports::cosim::nearest_nets(reference, &known, 3);
+        let hint = if near.is_empty() {
+            String::new()
+        } else {
+            format!(" Did you mean {}?", near.join(", "))
+        };
+        anyhow::bail!(
+            "no component '{reference}' on {}.{hint} (`hauksbee models resolve {}` \
+             lists every reference.)",
+            board_path.display(),
+            board_path.display()
+        );
+    };
+
+    let kind = guess_kind(&comp.reference);
+    let value = comp.value.trim();
+    let id = sanitise_id(&format!("{}_{}", comp.reference, value));
+    let value_re = format!("^{}$", escape_regex(value));
+    let template = format!(
+        "# Model scaffold for {ref_} (\"{value}\") on {board}, generated by:\n\
+         #   hauksbee models new {ref_} --board {board}\n\
+         # Provenance: hand-written scaffold from board context. Every value below is\n\
+         # a starting point; verify each against the part's datasheet before trusting\n\
+         # a result that depends on it.\n\
+         \n\
+         [[models]]\n\
+         id = \"{id}\"\n\
+         # Guessed from the reference prefix; valid kinds: {kinds}.\n\
+         kind = \"{kind}\"\n\
+         description = \"{value} ({ref_} on {board}): describe the part\"\n\
+         \n\
+         # Which board parts this entry claims: regexes (case-insensitive), ANDed.\n\
+         # value_re matches the Value field; add mpn_re when the board carries a\n\
+         # manufacturer part-number property, or footprint_re / lib_id for tighter\n\
+         # aim.\n\
+         [models.match]\n\
+         value_re = \"{value_re}\"\n\
+         # mpn_re = \"{value_re}\"\n\
+         \n\
+         # Kind-specific parameters (what the solver simulates). `hauksbee models\n\
+         # lint` names anything missing for the kind you picked.\n\
+         # [models.params]\n\
+         \n\
+         # Absolute maximum ratings for the stress monitor (add what you know).\n\
+         # [models.ratings]\n",
+        ref_ = comp.reference,
+        value = value,
+        board = board_path.display(),
+        id = id,
+        kind = kind,
+        kinds = hauksbee_models::validation::KIND_NAMES.join(", "),
+        value_re = value_re,
+    );
+
+    let out_path: PathBuf = out
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from(format!("{id}.toml")));
+    if out_path.exists() {
+        anyhow::bail!(
+            "'{}' already exists; refusing to overwrite (pass --out for another path)",
+            out_path.display()
+        );
+    }
+    std::fs::write(&out_path, template)
+        .map_err(|e| anyhow::anyhow!("writing '{}': {e}", out_path.display()))?;
+    let dir = out_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| ".".to_string());
+    println!("wrote {}", out_path.display());
+    println!();
+    println!(
+        "edit it, then:\n  \
+         hauksbee models lint {out}\n  \
+         hauksbee models resolve {board} --models-dir {dir}   # {ref_} should bind to '{id}'",
+        out = out_path.display(),
+        board = board_path.display(),
+        dir = dir,
+        ref_ = comp.reference,
+        id = id,
+    );
+    Ok(())
+}
+
+/// Kind guess from a reference designator's alpha prefix. A guess, labelled
+/// as one in the template; `digital` is the honest default for an unknown IC.
+fn guess_kind(reference: &str) -> &'static str {
+    let prefix: String = reference
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    match prefix.as_str() {
+        "R" | "C" | "L" | "FB" | "Y" | "XTAL" | "RN" | "RV" => "passive",
+        "D" | "CR" | "ZD" | "VD" | "VR" | "LED" => "diode",
+        "Q" | "T" => "bjt_npn",
+        "J" | "P" | "X" | "JP" | "TP" | "CN" | "H" | "MP" => "connector",
+        "SW" | "S" => "analog_switch",
+        _ => "digital",
+    }
+}
+
+/// A model id from free text: lowercase alphanumerics and underscores.
+fn sanitise_id(text: &str) -> String {
+    let mut id: String = text
+        .to_ascii_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect();
+    while id.contains("__") {
+        id = id.replace("__", "_");
+    }
+    id.trim_matches('_').to_string()
+}
+
+/// Escape regex metacharacters so a literal part value matches itself.
+fn escape_regex(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if "\\.^$|?*+()[]{}".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
 }
 
 #[cfg(test)]
 mod tests {
     use super::box_table;
+    use super::{escape_regex, guess_kind, sanitise_id};
 
     /// The shared table renderer: box-drawing frame, padded columns, one line
     /// per row. Both `models resolve` and the doctor's TTY view sit on this.
@@ -558,5 +808,31 @@ mod tests {
         // Every line is equally wide, so the frame is actually a box.
         let width = lines[0].chars().count();
         assert!(lines.iter().all(|l| l.chars().count() == width), "{out}");
+    }
+
+    #[test]
+    fn resolve_report_reading_order() {
+        use super::{layer_rank, natural_ref_key};
+        // UNRESOLVED leads, engine-fallback next, then most-user-supplied
+        // layer first, builtin last.
+        assert!(layer_rank("-", false) < layer_rank("engine-fallback", true));
+        assert!(layer_rank("engine-fallback", true) < layer_rank("models-dir", true));
+        assert!(layer_rank("models-dir", true) < layer_rank("user-dir", true));
+        assert!(layer_rank("user-dir", true) < layer_rank("pack", true));
+        assert!(layer_rank("pack", true) < layer_rank("builtin", true));
+        // Natural reference order: R2 before R10, groups by prefix.
+        assert!(natural_ref_key("R2") < natural_ref_key("R10"));
+        assert!(natural_ref_key("C1") < natural_ref_key("R1"));
+    }
+
+    #[test]
+    fn scaffold_helpers_guess_sanely() {
+        assert_eq!(guess_kind("R7"), "passive");
+        assert_eq!(guess_kind("D3"), "diode");
+        assert_eq!(guess_kind("Q1"), "bjt_npn");
+        assert_eq!(guess_kind("U5"), "digital");
+        assert_eq!(guess_kind("J2"), "connector");
+        assert_eq!(sanitise_id("R7_SR2HARU (rev.b)"), "r7_sr2haru_rev_b");
+        assert_eq!(escape_regex("LM358(A)+"), "LM358\\(A\\)\\+");
     }
 }
