@@ -209,7 +209,13 @@ mod tests {
     fn sarif_pins_the_exact_schema_url_and_version() {
         let doc = sarif_json(
             Path::new("b.kicad_pcb"),
-            &[finding("drc", "short", "serious", "GND", "GND shorted to +5V")],
+            &[finding(
+                "drc",
+                "short",
+                "serious",
+                "GND",
+                "GND shorted to +5V",
+            )],
         );
         let v: serde_json::Value = serde_json::from_str(&doc).expect("sarif parses");
         // The pinned URL, byte for byte: consumers validate against it.
@@ -228,7 +234,13 @@ mod tests {
             "b",
             &[
                 finding("drc", "short", "serious", "GND", "GND shorted to +5V"),
-                finding("si", "usb_diff_pair", "warning", "USB_DP", "pair mismatched"),
+                finding(
+                    "si",
+                    "usb_diff_pair",
+                    "warning",
+                    "USB_DP",
+                    "pair mismatched",
+                ),
             ],
         );
         assert!(out.contains("<failure message=\"GND shorted to +5V\"/>"));
@@ -239,6 +251,8 @@ mod tests {
         assert!(out.contains("<testcase name=\"no findings\" classname=\"lint\"/>"));
         // Escaping holds.
         let esc = junit_xml("b", &[finding("lint", "x<y", "serious", "A&B", "m\"q\"")]);
-        assert!(esc.contains("x&lt;y") && esc.contains("A&amp;B") && esc.contains("m&quot;q&quot;"));
+        assert!(
+            esc.contains("x&lt;y") && esc.contains("A&amp;B") && esc.contains("m&quot;q&quot;")
+        );
     }
 }

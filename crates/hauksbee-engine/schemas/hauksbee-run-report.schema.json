@@ -274,6 +274,10 @@
           "format": "double",
           "type": "number"
         },
+        "reason": {
+          "description": "The solver's own refusal message for this window: the blame clause\nnaming the net that refused to settle, the devices on it, and any\nnear-zero-ohm link poisoning the matrix (E29). Defaulted (and omitted\nfrom JSON) when empty, so an older consumer keeps parsing.",
+          "type": "string"
+        },
         "start_s": {
           "format": "double",
           "type": "number"

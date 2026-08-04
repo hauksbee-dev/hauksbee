@@ -133,7 +133,11 @@ fn no_example_asserts_a_rail_its_own_ideal_source_holds() {
             .iter()
             .filter(|s| str_field(s, "kind").as_deref() == Some("ideal"))
             .filter_map(|s| str_field(s, "net"))
-            .chain(array("net_drive").iter().filter_map(|d| str_field(d, "net")))
+            .chain(
+                array("net_drive")
+                    .iter()
+                    .filter_map(|d| str_field(d, "net")),
+            )
             .collect();
         for a in array("assert") {
             let kind = str_field(&a, "kind").unwrap_or_default();

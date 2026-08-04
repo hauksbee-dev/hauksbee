@@ -488,3 +488,590 @@ max_power_w         = 31.0    # Pd at Tc=25C (W), datasheet
 max_voltage_v       = 100.0   # Vds abs max (V), datasheet
 theta_ja_c_per_w    = 40.0    # theta_JA PCB mounted (C/W), datasheet
 max_junction_temp_c = 150.0   # Tj max (C), datasheet
+
+# ═════════════════════════════════════════════════════════════════════════════
+# The corpus batch. Nine SOT-23-class switches that between them account for the
+# unresolved MOSFETs on the MNT Reform, Olimex, KiCad-demo and Hunt boards.
+#
+# EVERY ENTRY BELOW USES THE SAME FIT RECIPE AS ao3400a ABOVE, so read that
+# derivation first; it is written out in full there and only the arithmetic is
+# repeated here. In short:
+#   vto  = VGS(th) typ (negative for P-channel)
+#   kp   route (a), from transconductance: gm = sqrt(2*kp*ID) => kp = gFS^2/(2*ID)
+#   kp   route (b), from two RDS(on) rows, modelling R = 1/(kp*(VGS-vto)) + (rd+rs):
+#          kp = (1/(VGS_lo-vto) - 1/(VGS_hi-vto)) / (R_lo - R_hi)
+#   rd+rs = the residue at the highest-VGS row, split evenly
+#   cgd  = Crss,  cgs = Ciss - Crss
+#
+# WHERE THE VENDOR PUBLISHES A SPICE CARD, IT WAS FETCHED AND COMPARED, and the
+# comparison is recorded per entry. Four of these nine have one:
+#   IRLML6402   irlml6402.spi   genuinely LEVEL=1  -> we use the VENDOR's card
+#   PMV50ENEA   PMV50ENEA.lib   LEVEL=3            -> compared, not copied
+#   PMV50EPEA   PMV50EPEA.lib   LEVEL=3            -> compared, not copied
+#   PMZ550UNE   PMZ550UNE.lib   LEVEL=3            -> compared, not copied
+# A LEVEL=3 card's Kp is a different quantity from a level-1 Kp (level 3 carries
+# Nfs, Eta, Vmax and a nonlinear CGD table that absorb part of the fit), so its
+# value is NOT transcribable into a level-1 entry. What it IS good for is a
+# sanity check on order of magnitude, and one exact confirmation: Nexperia's
+# PMV50ENEA card contains `CGS 2.34e-10`, which is Ciss - Crss = 276 - 42 pF to
+# three digits, independently confirming the cgs rule this file uses.
+#
+# HONESTY ABOUT VALIDATION, because it varies a lot across these nine. A fit to
+# two RDS(on) rows can only be checked out-of-sample if the datasheet publishes
+# a THIRD row at 25 C. Three of these do (DMG1012T-7, PMZ550UNE, CJ3134K) and
+# each entry states its out-of-sample error. The other six publish exactly two
+# rows, both consumed by the fit, and for those the only independent check is
+# the gFS cross-check, which is stated instead. Where the two routes disagree
+# badly the entry says so and says which was chosen and why. This is the same
+# trade the cj2301 entry above already documents: a level-1 square law cannot
+# always satisfy an on-resistance pair and a saturation transconductance at
+# once, and for a part used as a switch, conduction is the right thing to keep.
+
+# ── FDV301N ───────────────────────────────────────────────────────────────────
+# onsemi digital FET, N-channel, SOT-23. 32 instances on the KiCad demo boards.
+# Source: onsemi FDV301N datasheet FDV301N/D Rev. 10, May 2025.
+# Datasheet figures used (ON Characteristics, TJ=25 C):
+#   VGS(th) = 0.70 / 0.85 / 1.06 V   @ VDS=VGS, ID=250 uA          -> vto
+#   RDS(on) typ 3.8 Ohm (max 5)      @ VGS=2.7 V, ID=0.2 A
+#   RDS(on) typ 3.1 Ohm (max 4)      @ VGS=4.5 V, ID=0.4 A
+#   gFS     typ 0.2 S                @ VDS=5 V, ID=0.4 A
+#   Ciss 9.5 / Coss 6 / Crss 1.3 pF  @ VDS=10 V, VGS=0, f=1 MHz
+#   VSD typ 0.8 V (max 1.2) @ VGS=0, IS=0.29 A
+# No vendor SPICE model: onsemi's model finder returns nothing for this part.
+#
+# kp: the two routes disagree by 7.6x and route (a) is REJECTED as unphysical.
+#   (a) kp = 0.2^2/(2*0.4) = 0.05, which forces rd+rs = 3.1 - 1/(0.05*3.65)
+#       = -2.38 Ohm. A negative ohmic resistance is not a model, it is a
+#       contradiction, and it back-predicts 8.43 Ohm at the 2.7 V row against a
+#       datasheet 3.8 (+122%). The quoted gFS = 0.2 S cannot coexist with a
+#       3.1 Ohm on-resistance under a square law on a die this small.
+#   (b) kp = (1/1.85 - 1/3.65)/(3.8 - 3.1) = (0.54054 - 0.27397)/0.7 = 0.38081.
+#   Route (b) it is.
+# rd+rs = 3.1 - 1/(0.38081*3.65) = 2.3806 Ohm, split evenly.
+# NOT VALIDATED OUT OF SAMPLE: only two 25 C RDS(on) rows exist and both are in
+#   the fit. The gFS cross-check is a MISS: kp=0.38081 implies gm =
+#   sqrt(2*0.38081*0.4) = 0.552 S against a datasheet 0.2 S, +176%. This entry
+#   is on-resistance-accurate and transconductance-optimistic. Do not use it to
+#   predict small-signal gain.
+[[models]]
+id = "fdv301n"
+kind = "nmos"
+description = "FDV301N N-channel digital FET SOT-23, 25V, 220mA, Rds(on) 3.1 Ohm typ @ Vgs=4.5V"
+
+[models.match]
+value_re = "(?i)^FDV301N[A-Z0-9-]*$"
+
+[models.params]
+vto    = 0.85     # VGS(th) typ
+kp     = 0.38081  # from the two RDS(on) rows, see the derivation above
+rd     = 1.1903   # half the fitted ohmic residue
+rs     = 1.1903
+cgd    = 1.3e-12  # Crss
+cgs    = 8.2e-12  # Ciss - Crss = 9.5 - 1.3 pF
+# lambda deliberately absent: the datasheet publishes no output-conductance data.
+
+[models.pins]
+"G" = "gate"
+"S" = "source"
+"D" = "drain"
+
+[models.ratings]
+max_current_a = 0.22        # ID continuous, TA=25 C
+max_surge_current_a = 0.5   # ID pulsed
+max_power_w = 0.35
+max_voltage_v = 25.0        # VDS (VGS is -0.3 to +8 V)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 357.0
+
+# ── DMG1012T-7 ────────────────────────────────────────────────────────────────
+# Diodes Incorporated, N-channel, SOT-523. 25 instances on the KiCad demos.
+# Source: Diodes Inc DMG1012T datasheet DS31783 Rev. 8-2, February 2022.
+# Datasheet figures used (ON Characteristics, TJ=25 C):
+#   VGS(th) = 0.5 / (no typ published) / 1.0 V  @ VDS=VGS, ID=250 uA
+#   RDS(on) typ 0.3 Ohm (max 0.4)   @ VGS=4.5 V, ID=600 mA
+#   RDS(on) typ 0.4 Ohm (max 0.5)   @ VGS=2.5 V, ID=500 mA
+#   RDS(on) typ 0.5 Ohm (max 0.7)   @ VGS=1.8 V, ID=350 mA
+#   |Yfs|   typ 1.4 S               @ VDS=10 V, ID=400 mA
+#   Ciss 60.67 / Coss 9.68 / Crss 5.37 pF @ VDS=16 V, VGS=0 (Note 8: by design)
+#   VSD typ 0.7 V (max 1.2) @ VGS=0, IS=150 mA
+# No vendor SPICE card: nothing in the Diodes Inc SPICE portal, no SPICE mention
+# in the datasheet.
+#
+# vto = 0.75 IS AN ASSUMPTION, NOT A DATASHEET FIGURE. This sheet's VGS(th) typ
+#   column is empty; 0.75 is the midpoint of the published 0.5 / 1.0 min-max.
+#   It is the only invented number in this entry and it is invented in the least
+#   arbitrary way available.
+# kp: (a) 1.4^2/(2*0.4) = 2.45.  (b) widest pair, 1.8 V and 4.5 V:
+#   (1/1.05 - 1/3.75)/(0.5 - 0.3) = (0.95238 - 0.26667)/0.2 = 3.4286.
+#   +39.9% apart, outside the agreement band. Route (b) chosen: this part is a
+#   load switch and conduction is the fidelity target.
+# rd+rs = 0.3 - 1/(3.4286*3.75) = 0.22222 Ohm, split evenly.
+# VALIDATED OUT OF SAMPLE on the VGS=2.5 V row, which the fit did not use:
+#   predicted 1/(3.4286*1.75) + 0.22222 = 0.38889 Ohm against a datasheet typ of
+#   0.4 Ohm, -2.8%. gFS cross-check: implied gm = 1.656 S against 1.4 S, +18%.
+[[models]]
+id = "dmg1012t"
+kind = "nmos"
+description = "DMG1012T N-channel MOSFET SOT-523, 20V, 630mA, Rds(on) 0.3 Ohm typ @ Vgs=4.5V"
+
+[models.match]
+value_re = "(?i)^DMG1012T([A-Z0-9-]*)?$"
+
+[models.params]
+vto    = 0.75     # ASSUMED: midpoint of the 0.5/1.0 V min-max, no typ published
+kp     = 3.4286
+rd     = 0.11111
+rs     = 0.11111
+cgd    = 5.37e-12
+cgs    = 5.53e-11  # 60.67 - 5.37 pF
+
+[models.pins]
+"G" = "gate"
+"S" = "source"
+"D" = "drain"
+
+[models.ratings]
+max_current_a = 0.63        # ID continuous, TA=25 C (0.45 A at TA=85 C)
+max_surge_current_a = 3.0   # IDM
+max_power_w = 0.28          # FR-4, minimum recommended pad layout (Note 6)
+max_voltage_v = 20.0        # VDS (VGS is +-6 V)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 452.0
+
+# ── PMV50ENEAR ────────────────────────────────────────────────────────────────
+# Nexperia, N-channel trench, SOT-23, AEC-Q101. 14 instances on MNT Reform.
+# The R suffix is the tape-and-reel ordering code; the die datasheet is PMV50ENEA.
+# Source: Nexperia PMV50ENEA product data sheet v.1, released 10 March 2016.
+# Datasheet figures used (Characteristics, Tj=25 C):
+#   VGS(th) = 1 / 1.5 / 2.5 V        @ VDS=VGS, ID=250 uA
+#   RDS(on) typ 30 mOhm (max 43)     @ VGS=10 V,  ID=3.9 A
+#   RDS(on) typ 39 mOhm (max 60)     @ VGS=4.5 V, ID=3.3 A
+#   gFS     typ 12.5 S               @ VDS=10 V, ID=3.9 A
+#   Ciss 276 / Coss 55 / Crss 42 pF  @ VDS=15 V, VGS=0, f=1 MHz
+#   VSD typ 0.7 V (max 1.2) @ IS=1 A
+# VENDOR SPICE CARD COMPARED, NOT COPIED: PMV50ENEA.lib is a LEVEL=3 card
+#   (Vto=2.0213, Kp=29.945, Nfs=5.3e11, Eta=3000, Vmax=1000, plus RD=0.0203,
+#   RS=0.0001, RG=7, a nonlinear CGD table and a body-diode model). Its Vto and
+#   Kp are level-3 fitting parameters and are NOT level-1 equivalents, so
+#   transcribing them would be wrong. Two things it does confirm: its
+#   `CGS 2.34e-10` is exactly Ciss - Crss, and its Kp is the same order as ours.
+#
+# kp: (a) 12.5^2/(2*3.9) = 20.032.  (b) (1/3.0 - 1/8.5)/(0.039 - 0.030)
+#   = (0.33333 - 0.11765)/0.009 = 23.965. 19.6% apart, both physical (both give
+#   a positive ohmic residue), so kp = 22.0 is taken between them rather than
+#   picking a winner.
+# rd+rs = 0.030 - 1/(22.0*8.5) = 0.024652 Ohm, split evenly.
+# NOT VALIDATED OUT OF SAMPLE (two 25 C rows, both in the fit). With kp = 22.0
+#   the fit rows land at 30.0 mOhm (exact) and 39.8 mOhm against a typ of 39
+#   (+2.1%), and the gFS cross-check agrees: implied gm 13.1 S against 12.5 S,
+#   +5%. This is the best-behaved entry of the batch alongside PMV50EPEAR.
+[[models]]
+id = "pmv50enea"
+kind = "nmos"
+description = "PMV50ENEA(R) N-channel MOSFET SOT-23, 30V, 3.9A, Rds(on) 30 mOhm typ @ Vgs=10V"
+
+[models.match]
+value_re = "(?i)^PMV50ENEA[A-Z0-9,]*$"
+
+[models.params]
+vto    = 1.5
+kp     = 22.0
+rd     = 0.012326
+rs     = 0.012326
+cgd    = 4.2e-11
+cgs    = 2.34e-10  # 276 - 42 pF; matches the vendor card's CGS to three digits
+
+[models.pins]
+"G" = "gate"
+"S" = "source"
+"D" = "drain"
+
+[models.ratings]
+max_current_a = 3.9         # ID at VGS=10 V, Tamb=25 C (2.5 A at Tamb=100 C)
+max_surge_current_a = 15.5  # IDM, single pulse tp <= 10 us
+max_power_w = 0.51          # Ptot, FR4 standard footprint (1.04 W on a 6 cm^2
+                            # drain pad; the standard-footprint figure is the
+                            # one a stress check should judge against)
+max_voltage_v = 30.0        # VDS (VGS is +-20 V)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 245.0    # Rth(j-a) max, standard footprint (211 typ;
+                            # 120 max with a 6 cm^2 drain pad)
+
+# ── PMV50EPEAR ────────────────────────────────────────────────────────────────
+# Nexperia, P-channel trench, SOT-23, AEC-Q101. 24 instances on MNT Reform, the
+# complement of the PMV50ENEA above.
+# Source: Nexperia PMV50EPEA product data sheet v.1, released 30 June 2016.
+# Datasheet figures used (Characteristics, Tj=25 C):
+#   VGS(th) = -1 / -2 / -3 V         @ VDS=VGS, ID=-250 uA
+#   RDS(on) typ 35 mOhm (max 45)     @ VGS=-10 V,  ID=-4.2 A
+#   RDS(on) typ 49 mOhm (max 72)     @ VGS=-4.5 V, ID=-3.3 A
+#   gFS     typ 13.5 S               @ VDS=-10 V, ID=-4.2 A
+#   Ciss 793 / Coss 134 / Crss 84 pF @ VDS=-15 V, VGS=0, f=1 MHz
+#   VSD typ -0.75 V (max -1.2) @ IS=-4 A
+# VENDOR SPICE CARD COMPARED, NOT COPIED: PMV50EPEA.lib, LEVEL=3
+#   (Vto=-2.3525, Kp=14.1, Nfs=5.6e11, Eta=4200, Vmax=4000). Same reasoning as
+#   the N-channel sibling: level-3 Kp is not a level-1 Kp.
+#
+# kp: (a) 13.5^2/(2*4.2) = 21.696.  (b) magnitudes, (1/2.5 - 1/8.0)/(0.049 -
+#   0.035) = (0.40000 - 0.12500)/0.014 = 19.643. The two agree within 9.5%,
+#   inside the band, so kp = 20.67 is taken between them.
+# rd+rs = 0.035 - 1/(20.67*8.0) = 0.028953 Ohm, split evenly.
+# NOT VALIDATED OUT OF SAMPLE (two 25 C rows, both in the fit). Fit rows land at
+#   35.0 mOhm (exact) and 48.3 mOhm against a typ of 49 (-1.4%); the gFS
+#   cross-check gives implied gm 13.18 S against 13.5 S, -2%. Both routes and
+#   both checks agree, which makes this the most trustworthy fit in the batch.
+[[models]]
+id = "pmv50epea"
+kind = "pmos"
+description = "PMV50EPEA(R) P-channel MOSFET SOT-23, -30V, -4.2A, Rds(on) 35 mOhm typ @ Vgs=-10V"
+
+[models.match]
+value_re = "(?i)^PMV50EPEA[A-Z0-9,]*$"
+
+[models.params]
+vto    = -2.0     # VGS(th) typ, negative for P-channel
+kp     = 20.67
+rd     = 0.014476
+rs     = 0.014476
+cgd    = 8.4e-11
+cgs    = 7.09e-10  # 793 - 84 pF
+
+[models.pins]
+"G" = "gate"
+"S" = "source"
+"D" = "drain"
+
+[models.ratings]
+max_current_a = 4.2         # |ID| at VGS=-10 V, Tamb=25 C, 6 cm^2 drain pad
+max_surge_current_a = 16.9  # |IDM|, tp <= 10 us
+max_power_w = 0.48          # Ptot, standard footprint (1.2 W on a 6 cm^2 pad)
+max_voltage_v = 30.0        # |VDS| (VGS is +-20 V)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 261.0    # Rth(j-a) max, standard footprint (227 typ)
+
+# ── WPM2015-3 ─────────────────────────────────────────────────────────────────
+# Will Semiconductor (WillSemi), P-channel, SOT-23. 28 instances across all
+# twelve Olimex ESP32-EVB revisions and the RP2040-PICO-PC, where it is the
+# USB / battery-path load switch (FET1..FET3).
+# Source: Will Semiconductor WPM2015 datasheet Rev. 1.2, Mar 2018.
+# Datasheet figures used (Electronics Characteristics, TJ=25 C):
+#   VGS(th) = -0.40 / -0.62 / -0.81 V  @ VGS=VDS, ID=-250 uA
+#   RDS(on) typ 81 mOhm (max 110)      @ VGS=-4.5 V, ID=-2.7 A
+#   RDS(on) typ 103 mOhm (max 150)     @ VGS=-2.5 V, ID=-2.2 A
+#   Ciss 534 / Coss 62 / Crss 54 pF    @ VDS=-10 V, VGS=0, f=1 MHz (typ only)
+#   VSD typ -0.74 V (max -1.5) @ VGS=0, IS=-0.9 A
+# No vendor SPICE card.
+#
+# THIS IS THE LEAST-VALIDATED ENTRY IN THE FILE, and it should be read that way.
+#   The datasheet publishes NO gFS row at all, so route (a) does not exist: there
+#   is no second, independent route to kp and no cross-check of any kind. It also
+#   publishes only two 25 C RDS(on) rows, both consumed by the fit, so there is
+#   no out-of-sample row either. The fit reproduces the two rows it was given and
+#   nothing else has been tested.
+# kp = (1/1.88 - 1/3.88)/(0.103 - 0.081) = (0.53191 - 0.25773)/0.022 = 12.463.
+# rd+rs = 0.081 - 1/(12.463*3.88) = 0.060320 Ohm, split evenly.
+# The only defence available is a plausibility one: vto = -0.62 with kp = 12.46
+#   sits in the same family as the cj2301 entry above (vto = -0.7, kp = 14.6),
+#   which is a comparable -20 V/-2 A SOT-23 P-FET. That is weaker evidence than
+#   every other entry here rests on.
+[[models]]
+id = "wpm2015"
+kind = "pmos"
+description = "WPM2015-3 P-channel MOSFET SOT-23, -20V, -2.2A, Rds(on) 81 mOhm typ @ Vgs=-4.5V"
+
+[models.match]
+# WPM2015, WPM2015-3, WPM2015-3/TR (the Olimex value string carries the reel
+# suffix). The digit after the dash is a package/bin code on the same die.
+value_re = "(?i)^WPM2015([-/][A-Z0-9/]*)?$"
+
+[models.params]
+vto    = -0.62
+kp     = 12.463
+rd     = 0.030160
+rs     = 0.030160
+cgd    = 5.4e-11
+cgs    = 4.8e-10  # 534 - 54 pF
+
+[models.pins]
+"G" = "gate"
+"S" = "source"
+"D" = "drain"
+
+[models.ratings]
+max_current_a = 2.0         # |ID| steady state, minimum pad, TA=25 C
+                            # (2.2 A on a 1 in^2 pad; the min-pad figure is the
+                            # conservative one and the one a hobby board gets)
+max_surge_current_a = 10.0  # |IDM|, PW < 380 us, duty < 2%
+max_power_w = 0.6           # PD steady state, minimum pad, 1 oz copper
+max_voltage_v = 20.0        # |VDS| (VGS is +-8 V)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 190.0    # max, minimum pad, steady state (145 typ)
+theta_jc_c_per_w = 75.0     # max, steady state (60 typ)
+
+# ── IRLML6402 ─────────────────────────────────────────────────────────────────
+# Infineon (International Rectifier) HEXFET, P-channel, SOT-23 / Micro3.
+# Instances on the Hunt boards and Olimex ESP32-EVB.
+#
+# THIS ENTRY IS INFINEON'S OWN LEVEL-1 SPICE CARD, NOT OUR FIT, and that is the
+# whole reason it looks different from its neighbours. Infineon publishes
+# irlml6402.spi (MODPEX / Symmetry extraction, dated 25 Sep 2006), and unlike
+# the Nexperia cards it is genuinely `LEVEL=1`, which makes it directly
+# transcribable into the same level-1 shape this file uses:
+#
+#     M1 9 7 8 8 MM L=100u W=100u
+#     .MODEL MM PMOS LEVEL=1 IS=1e-32
+#     +VTO=-1 LAMBDA=0.0111358 KP=12.788
+#     +CGSO=5.36099e-06 CGDO=5.54234e-08
+#     RS 8 3 0.0246704
+#     RG 2 7 29.2227
+#     RD 9 1 0.0001
+#
+# Where a vendor ships a model for the exact device at the exact level, that
+# model wins over anything derived here: it was extracted from measured silicon
+# and it is the number the vendor will defend. It is also the ONLY part in this
+# batch with a published `lambda`, which is why this is the only entry that has
+# one.
+#
+# CROSS-CHECKED AGAINST THE DATASHEET, and the two agree well enough to trust
+# both. Source: Infineon IRLML6402 datasheet, Infineon-IRLML6402-DataSheet-
+# v01_01-EN.pdf, revision 28 April 2014. Datasheet figures:
+#   VGS(th) = -0.40 / -0.55 / -1.2 V   @ VDS=VGS, ID=-250 uA
+#   RDS(on) typ 0.050 Ohm (max 0.065)  @ VGS=-4.5 V, ID=-3.7 A
+#   RDS(on) typ 0.080 Ohm (max 0.135)  @ VGS=-2.5 V, ID=-3.1 A
+#   gFS     min 6.0 S (no typ)         @ VDS=-10 V, ID=-3.7 A
+#   Ciss 633 / Coss 145 / Crss 110 pF  @ VGS=0, VDS=-10 V, f=1 MHz
+# Fitting the datasheet with this file's own recipe gives kp = (1/1.95 -
+#   1/3.95)/(0.080 - 0.050) = 8.6552 and rd+rs = 0.02075 Ohm, against the
+#   vendor's KP = 12.788 and RS = 0.0246704. The card's higher KP is paired with
+#   its VTO = -1 rather than the datasheet's typ -0.55, which is a legitimate
+#   different point in the same fit space; the series resistances land within
+#   16% of each other. Both satisfy the datasheet's gFS >= 6.0 S floor (our fit
+#   implies 8.00 S at the test point).
+# DIVERGENCE FROM THE CARD, deliberately: the card's CGSO/CGDO are per-metre
+#   overlap densities scaled by its L=100u W=100u geometry, not the lumped
+#   capacitances this file's `cgs`/`cgd` mean, so those two come from the
+#   datasheet's Ciss/Crss the same way every other entry here does. The card's
+#   RG = 29.2 Ohm gate resistance has no field in this schema. IS=1e-32 in the
+#   card is a placeholder below any physical value and is not carried over.
+[[models]]
+id = "irlml6402"
+kind = "pmos"
+description = "IRLML6402 P-channel HEXFET SOT-23, -20V, -3.7A, Infineon LEVEL=1 SPICE card"
+
+[models.match]
+value_re = "(?i)^IRLML6402[A-Z0-9-]*$"
+
+[models.params]
+# Source: Infineon irlml6402.spi, `.MODEL MM PMOS LEVEL=1`, verbatim.
+vto    = -1.0        # VTO (the datasheet typ is -0.55; see the note above)
+kp     = 12.788      # KP
+lambda = 0.0111358   # LAMBDA, the only vendor-published lambda in this file
+rs     = 0.0246704   # RS
+rd     = 0.0001      # RD
+# Source: Infineon IRLML6402 datasheet, not the card; see the note above.
+cgd    = 1.1e-10     # Crss
+cgs    = 5.23e-10    # Ciss - Crss = 633 - 110 pF
+
+[models.pins]
+"G" = "gate"
+"S" = "source"
+"D" = "drain"
+
+[models.ratings]
+max_current_a = 3.7         # |ID| at TA=25 C, VGS=-4.5 V (2.2 A at TA=70 C)
+max_surge_current_a = 22.0  # |IDM|
+max_power_w = 1.3           # PD at TA=25 C, 1 in^2 single-layer 1 oz Cu FR4,
+                            # steady state (0.8 W at 70 C, derate 0.01 W/C)
+max_voltage_v = 20.0        # |VDS| (VGS is +-12 V)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 100.0    # max (75 typ). RthJC is not on this datasheet.
+
+# ── AO3422 ────────────────────────────────────────────────────────────────────
+# Alpha & Omega Semiconductor, N-channel, SOT-23. Hunt boards.
+# Source: AOS AO3422 datasheet Rev 2.1 March 2024 (the electrical table itself
+# is footnoted Rev2: Sep 2010).
+# Datasheet figures used (Electrical Characteristics, TJ=25 C):
+#   VGS(th) = 0.6 / 1.3 / 2 V          @ VDS=VGS, ID=250 uA
+#   RDS(on) typ 125 mOhm (max 160)     @ VGS=4.5 V, ID=2.1 A
+#   RDS(on) typ 157 mOhm (max 200)     @ VGS=2.5 V, ID=1.5 A
+#   gFS     typ 11 S                   @ VDS=5 V, ID=2.1 A
+#   Ciss 214 typ / Coss 31 / Crss 12.6 pF @ VGS=0, VDS=25 V, f=1 MHz
+#   VSD typ 0.78 V (max 1) @ IS=1 A
+# No vendor SPICE card: the AOS resource library returns nothing for AO3422.
+#
+# kp: the two routes disagree by 1.77x, the same pathology cj2301 documents.
+#   (a) 11^2/(2*2.1) = 28.81.  (b) (1/1.2 - 1/3.2)/(0.157 - 0.125)
+#   = (0.83333 - 0.31250)/0.032 = 16.276.
+#   Route (b) chosen because this part is used as a switch and on-resistance is
+#   what a switch's simulation rests on.
+# rd+rs = 0.125 - 1/(16.276*3.2) = 0.10580 Ohm, split evenly.
+# NOT VALIDATED OUT OF SAMPLE (two 25 C rows, both in the fit), AND THE gFS
+#   CROSS-CHECK IS A REAL MISS: kp = 16.276 implies gm = 8.27 S at the gFS test
+#   point where the datasheet says 11 S, -25%. If this part is ever needed as a
+#   linear amplifier rather than a switch, kp = 28.81 is the number to use, and
+#   it costs -8.9% on the VGS=2.5 V on-resistance row.
+[[models]]
+id = "ao3422"
+kind = "nmos"
+description = "AO3422 N-channel MOSFET SOT-23, 55V, 2.1A, Rds(on) 125 mOhm typ @ Vgs=4.5V"
+
+[models.match]
+# Same N-channel die across suffixes. The P-channel AO3423 starts "AO3423" and
+# is correctly rejected by the leading anchor.
+value_re = "(?i)^AO3422[A-Z0-9-]*$"
+
+[models.params]
+vto    = 1.3
+kp     = 16.276
+rd     = 0.052900
+rs     = 0.052900
+cgd    = 1.26e-11
+cgs    = 2.014e-10  # 214 - 12.6 pF
+
+[models.pins]
+"G" = "gate"
+"S" = "source"
+"D" = "drain"
+
+[models.ratings]
+max_current_a = 2.1         # ID at TA=25 C (1.7 A at 70 C)
+max_surge_current_a = 10.0  # IDM
+max_power_w = 1.25          # PD at TA=25 C, 1 in^2 FR-4, 2 oz Cu, still air
+max_voltage_v = 55.0        # VDS (VGS is +-12 V)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 150.0    # max, steady state (115 typ; 100 max at t <= 10 s).
+                            # AOS publishes RthJL 48 typ / 60 max rather than
+                            # RthJC, so theta_jc is deliberately absent.
+
+# ── PMZ550UNE ─────────────────────────────────────────────────────────────────
+# Nexperia, N-channel trench, SOT-883 / DFN1006-3. MNT Reform. The board value
+# is PMZ550UNEYL; YL is a packing suffix on the same datasheet.
+# Source: Nexperia PMZ550UNE product data sheet v.1, released 25 March 2015.
+# Datasheet figures used (Characteristics, Tj=25 C):
+#   VGS(th) = 0.45 / 0.7 / 0.95 V      @ VDS=VGS, ID=250 uA
+#   RDS(on) typ 550 mOhm (max 670)     @ VGS=4.5 V, ID=590 mA
+#   RDS(on) typ 660 mOhm (max 900)     @ VGS=2.5 V, ID=590 mA
+#   RDS(on) typ 770 mOhm (max 1120)    @ VGS=1.8 V, ID=80 mA
+#   RDS(on) typ 890 mOhm (max 1500)    @ VGS=1.5 V, ID=10 mA
+#   gFS     typ 600 mS                 @ VDS=10 V, ID=590 mA
+#   Ciss 30.3 / Coss 5.8 / Crss 4.2 pF @ VDS=15 V, VGS=0, f=1 MHz
+#   VSD typ 0.86 V (max 1.2) @ IS=380 mA
+# VENDOR SPICE CARD COMPARED, NOT COPIED: PMZ550UNE.lib, LEVEL=3
+#   (Vto=0.74984, Kp=4.5323, Nfs=2.125e11, Eta=2000, Vmax=600). Its Vto = 0.7498
+#   corroborates the datasheet typ of 0.7, and its Kp = 4.53 supports the
+#   conduction route below over the transconductance one.
+#
+# kp: the routes disagree 9.5x, the worst split in the batch, and route (a) is
+#   REJECTED as unphysical.
+#   (a) 0.6^2/(2*0.59) = 0.30508, which forces rd+rs = 0.550 - 1/(0.30508*3.8)
+#       = -0.3126 Ohm and back-predicts 3.78 Ohm at VGS=1.5 V against a
+#       datasheet 0.89 (+325%). A quoted gFS of 600 mS is implausibly low for a
+#       die that carries 590 mA through 550 mOhm.
+#   (b) widest pair, 1.5 V and 4.5 V: (1/0.8 - 1/3.8)/(0.890 - 0.550)
+#       = (1.25000 - 0.26316)/0.34 = 2.9025. The vendor card's level-3
+#       Kp = 4.53 is the same order; 0.305 is nowhere near it.
+# rd+rs = 0.550 - 1/(2.9025*3.8) = 0.45933 Ohm, split evenly.
+# VALIDATED OUT OF SAMPLE ON TWO INDEPENDENT ROWS, the best-tested entry here.
+#   Fitted on 1.5 V and 4.5 V only:
+#     VGS=1.8 V: predicted 1/(2.9025*1.1) + 0.45933 = 0.77255 Ohm vs typ 0.770,
+#                +0.3%
+#     VGS=2.5 V: predicted 1/(2.9025*1.8) + 0.45933 = 0.65074 Ohm vs typ 0.660,
+#                -1.4%
+#   The gFS cross-check is a deliberate, documented miss in the other direction:
+#   implied gm 1.85 S against a quoted 0.6 S.
+[[models]]
+id = "pmz550une"
+kind = "nmos"
+description = "PMZ550UNE N-channel MOSFET DFN1006-3, 30V, 590mA, Rds(on) 550 mOhm typ @ Vgs=4.5V"
+
+[models.match]
+value_re = "(?i)^PMZ550UNE[A-Z0-9,]*$"
+
+[models.params]
+vto    = 0.7
+kp     = 2.9025
+rd     = 0.22967
+rs     = 0.22967
+cgd    = 4.2e-12
+cgs    = 2.61e-11  # 30.3 - 4.2 pF
+
+[models.pins]
+"G" = "gate"
+"S" = "source"
+"D" = "drain"
+
+[models.ratings]
+max_current_a = 0.59        # ID at VGS=4.5 V, Tamb=25 C, 1 cm^2 drain pad
+max_surge_current_a = 2.3   # IDM, tp <= 10 us
+max_power_w = 0.31          # Ptot, standard footprint (0.4 W on a 1 cm^2 pad)
+max_voltage_v = 30.0        # VDS. NOTE VGS is only +-8 V on this part, much
+                            # tighter than its SOT-23 siblings' +-20 V.
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 405.0    # Rth(j-a) max, standard footprint (350 typ;
+                            # 310 max with a 1 cm^2 drain pad)
+
+# ── CJ3134K ───────────────────────────────────────────────────────────────────
+# Jiangsu Changjing Electronics (JSCJ), N-channel, SOT-23. 20 instances on the
+# Hunt boards. Same house as the cj2301 entry above.
+# Sources, two documents read and numerically identical: JSCJ "CJ3134K SOT-23"
+#   Rev.-1.1 (jscj-elec.com), and the LCSC-hosted copy headed "B Dec,2013" /
+#   footed "F, Aug,2015". They differ only in the company-name transliteration
+#   and the revision label, which is a document-tracking artefact rather than a
+#   spec conflict. No vendor SPICE card exists.
+# Datasheet figures used (MOSFET Electrical Characteristics, TJ=25 C):
+#   VGS(th) = 0.35 / 0.54 / 1.1 V     @ VDS=VGS, ID=250 uA
+#   RDS(on) max 380 mOhm              @ VGS=4.5 V, ID=0.65 A
+#   RDS(on) max 450 mOhm              @ VGS=2.5 V, ID=0.55 A
+#   RDS(on) max 800 mOhm              @ VGS=1.8 V, ID=0.45 A
+#   gFS     typ 1.6 S                 @ VDS=10 V, ID=0.8 A
+#   Ciss 79 typ / Coss 13 / Crss 9 pF @ VDS=16 V, VGS=0 (Note 4: by design)
+#   VSD max 1.2 V @ IS=0.15 A (no typ published)
+#
+# THE ON-RESISTANCE COLUMN IS MAX-ONLY. This sheet's RDS(on) typ column is empty
+#   at every VGS point, so any conduction fit here is a fit to MAXIMUM
+#   on-resistance and the resulting model is pessimistic by construction. That
+#   is a material difference from every other entry in this file and it is the
+#   first thing to know about this one.
+# kp: (a) 1.6^2/(2*0.8) = 1.600.  (b) on the max rows, 1.8 V and 4.5 V:
+#   (1/1.26 - 1/3.96)/(0.800 - 0.380) = (0.79365 - 0.25253)/0.42 = 1.2884.
+#   19.5% apart. Route (a) chosen here, against this file's usual preference,
+#   for one specific reason: gFS is a genuine TYPICAL figure while the whole
+#   conduction column is maxima, so route (a) is the only route resting on a
+#   typical-part number. kp = 1.600 also sits between the two conduction fits
+#   available (1.288 on the 1.8/4.5 pair, 3.681 on the 2.5/4.5 pair).
+# rd+rs = 0.380 - 1/(1.600*3.96) = 0.22217 Ohm, split evenly.
+# THE DATASHEET'S THREE ROWS CANNOT BE FITTED BY ANY SINGLE SQUARE LAW, and that
+#   is a defect in the sheet rather than in the model. The 380 -> 450 -> 800
+#   mOhm progression is disproportionate: fitting the 2.5/4.5 pair gives
+#   kp = 3.681 and then misses VGS=1.8 V by -34.1%; fitting 1.8/4.5 gives
+#   kp = 1.288 and misses VGS=2.5 V by +28.9%. With the chosen kp = 1.600 the
+#   out-of-sample errors are +20.2% at VGS=2.5 V and -10.2% at VGS=1.8 V. Those
+#   are the honest residuals and they are large.
+[[models]]
+id = "cj3134k"
+kind = "nmos"
+description = "CJ3134K N-channel MOSFET SOT-23, 20V, 750mA, Rds(on) 380 mOhm max @ Vgs=4.5V"
+
+[models.match]
+value_re = "(?i)^CJ3134K?[A-Z0-9-]*$"
+
+[models.params]
+vto    = 0.54
+kp     = 1.600     # from gFS; the conduction column is max-only, see above
+rd     = 0.11109
+rs     = 0.11109
+cgd    = 9.0e-12
+cgs    = 7.0e-11   # 79 - 9 pF
+
+[models.pins]
+"G" = "gate"
+"S" = "source"
+"D" = "drain"
+
+[models.ratings]
+max_current_a = 0.75        # ID continuous, TA=25 C
+max_surge_current_a = 1.8   # IDM at tp=10 us
+max_power_w = 0.35          # FR4, minimum recommended pad size (Note 1)
+max_voltage_v = 20.0        # VDS (VGS is +-12 V)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 357.0    # same min-pad FR4 condition

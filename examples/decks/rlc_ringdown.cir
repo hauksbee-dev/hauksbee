@@ -1,0 +1,11 @@
+underdamped series RLC ring-down (learn chapter 4)
+* f0 = 1/(2*pi*sqrt(LC)) ~= 5.03 kHz, alpha = R/2L = 5000 /s,
+* damped period Td = 2*pi/sqrt(1/LC - alpha^2) ~= 201.2 us
+V1 in 0 PULSE(0 1 0 1n 1n 1 1)
+R1 in a 10
+L1 a out 1m
+C1 out 0 1u
+.tran 1u 800u uic
+.print tran v(out)
+.options reltol=1e-4
+.end

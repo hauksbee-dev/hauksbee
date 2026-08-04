@@ -103,7 +103,8 @@ fn spi_extra_repl_is_absent_where_the_platform_defines_the_controller() {
     let f103 = RenodeConfig::from_soc_toml(STM32F103).unwrap();
     assert_eq!(f103.spi_extra_repl, None);
     assert!(
-        f103.platform.contains("spi1: SPI.STM32SPI @ sysbus 0x40013000"),
+        f103.platform
+            .contains("spi1: SPI.STM32SPI @ sysbus 0x40013000"),
         "spi1 lives in the inline platform now"
     );
     let f4 = RenodeConfig::from_soc_toml(STM32F4).unwrap();
@@ -122,7 +123,8 @@ fn stm32f103_descriptor_ships_the_hal_boot_platform_inline() {
         "platform_repl is inline source, not a stock path"
     );
     assert!(
-        c.platform.contains("using \"platforms/cpus/stm32f103.repl\""),
+        c.platform
+            .contains("using \"platforms/cpus/stm32f103.repl\""),
         "the inline platform extends the stock one"
     );
     for needle in [

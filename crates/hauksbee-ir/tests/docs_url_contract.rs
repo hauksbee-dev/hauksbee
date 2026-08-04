@@ -39,7 +39,10 @@ fn contract_routes(json: &serde_json::Value) -> BTreeMap<String, String> {
             .as_object()
             .unwrap_or_else(|| panic!("url-contract.json has no `{key}` object"));
         for (path, route) in obj {
-            map.insert(path.clone(), route.as_str().expect("route string").to_string());
+            map.insert(
+                path.clone(),
+                route.as_str().expect("route string").to_string(),
+            );
         }
     }
     map

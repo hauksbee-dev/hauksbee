@@ -168,9 +168,7 @@ fn olimex_rp2040_pico_pc_rev_b_netlist_is_clean_dvi_clock_on_slice_7() {
 #[test]
 fn sparkfun_samd51_thing_plus_qspi_flash_conflict_flagged() {
     let Some(_c) = corpus() else { return };
-    let msgs = conflicts(
-        "sparkfun_thingplus_samd51/Hardware/SAMD51_Thing_Plus.brd",
-    );
+    let msgs = conflicts("sparkfun_thingplus_samd51/Hardware/SAMD51_Thing_Plus.brd");
     assert_eq!(
         msgs.len(),
         1,
@@ -192,18 +190,27 @@ fn clean_corpus_boards_raise_no_resource_conflict() {
     // Known-good boards: RP2040 (minimal + SparkFun Thing Plus), ESP32 (fully
     // routable), and a spread of unrelated designs. None has a genuine internal
     // resource conflict of this class; the check must be silent on every one.
-    let clean: &[&str] = &[
-        "rp2040_minimal_kicad/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_sch",
-        "sparkfun_thingplus_rp2040/Hardware/RP2040_Thing_Plus.brd",
-        "olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_sch",
-        "olimex_esp32/HARDWARE/REV-K1/ESP32-EVB_Rev_K1.net",
-        "zswatch_mainboard/watch/ZSWatch-Watch.kicad_sch",
-        "watchy/Watchy.kicad_sch",
-        "lumenpnp/mobo/mobo.kicad_sch",
-        "lily58/Pro_V2/Pro_V2.kicad_sch",
-        "mnt_reform/reform2-motherboard30-pcb/reform2-motherboard30.kicad_sch",
-        "adafruit_feather_m0/Adafruit Feather M0 Basic rev C.brd",
-        "sparkfun_redboard/Hardware/RedBoard.brd",
+    // Each entry is a list of alternate paths for ONE board, tried in order. Only
+    // the RP2040 reference design needs more than one: Raspberry Pi replaced
+    // revision 2 with revision 3 at the same URL, so the hand-built corpus holds
+    // r2 and the fetch holds both under different ids. Naming a single path made
+    // this a hard failure on a corpus that had the board all along.
+    let clean: &[&[&str]] = &[
+        &[
+            "rp2040_minimal_kicad/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_sch",
+            "rp2040_minimal_r2/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_sch",
+            "rp2040_minimal_kicad/RPI-RP2040-MINIMAL_R3-S1_public/RPI-RP2040-MINIMAL_R3-S1.kicad_sch",
+        ],
+        &["sparkfun_thingplus_rp2040/Hardware/RP2040_Thing_Plus.brd"],
+        &["olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_sch"],
+        &["olimex_esp32/HARDWARE/REV-K1/ESP32-EVB_Rev_K1.net"],
+        &["zswatch_mainboard/watch/ZSWatch-Watch.kicad_sch"],
+        &["watchy/Watchy.kicad_sch"],
+        &["lumenpnp/mobo/mobo.kicad_sch"],
+        &["lily58/Pro_V2/Pro_V2.kicad_sch"],
+        &["mnt_reform/reform2-motherboard30-pcb/reform2-motherboard30.kicad_sch"],
+        &["adafruit_feather_m0/Adafruit Feather M0 Basic rev C.brd"],
+        &["sparkfun_redboard/Hardware/RedBoard.brd"],
     ];
     // SAMD51 boards that wire the flash to the SAME QSPI pads as the SparkFun
     // bug, but CORRECTLY (driven over the QSPI controller, quad-IO net naming).
@@ -217,17 +224,17 @@ fn clean_corpus_boards_raise_no_resource_conflict() {
     let require = std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok();
     let mut fires = Vec::new();
     let mut exercised = 0usize;
-    for rel in clean {
-        let Some(path) = board(rel) else {
+    for alts in clean {
+        let Some(path) = alts.iter().find_map(|rel| board(rel)) else {
             if require {
-                panic!("HAUKSBEE_REQUIRE_CORPUS=1 but known-good board missing: {rel}");
+                panic!("HAUKSBEE_REQUIRE_CORPUS=1 but known-good board missing (tried {alts:?})");
             }
             continue;
         };
         exercised += 1;
         let msgs = conflicts_at(&path);
         if !msgs.is_empty() {
-            fires.push(format!("{rel}: {msgs:#?}"));
+            fires.push(format!("{}: {msgs:#?}", path.display()));
         }
     }
     // The correct-QSPI-flash boards: find the .brd by glob (filename carries the

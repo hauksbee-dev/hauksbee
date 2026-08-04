@@ -28,6 +28,7 @@
 
 mod monitor;
 mod process;
+pub mod support;
 mod uart;
 
 // RenodeProcess is exported (not just used internally) for the child-reaping
@@ -219,7 +220,17 @@ pub struct RenodeConfig {
     ///     backend materializes to a temp file at machine bring-up. This is how
     ///     a descriptor ships platform fixes (extra peripherals, clock-tree
     ///     registers) without depending on files installed beside Renode.
+    ///
+    /// The literal `{support}` token is substituted with the unpacked
+    /// [`support_bundle`](Self::support_bundle) directory, which is how a part
+    /// whose platform lives in a bundle names it (`"@{support}/rp2040.repl"`).
     pub platform: String,
+    /// Name of a [`support::SupportBundle`] to unpack and `include` BEFORE the
+    /// platform description is parsed, for a part whose peripheral models Renode
+    /// does not ship at all (RP2040). `None` for every part whose peripherals
+    /// Renode already carries. See `renode::support` for the whole mechanism.
+    #[serde(default)]
+    pub support_bundle: Option<String>,
     /// CPU peripheral path for state queries, e.g. `"sysbus.cpu"`.
     pub cpu: String,
     /// UART peripheral to bridge to a host socket, e.g. `"sysbus.usart1"`.
@@ -342,13 +353,21 @@ fn adc_count(volts: f64, full_scale_volts: f64, max_count: u32) -> u32 {
 
 /// Render the Monitor command that delivers `count` for one channel's recipe.
 /// `millivolts` is the already-clamped voltage (the caller applies the
-/// channel's `[0, full_scale_volts]` clamp so BOTH placeholders stay inside
+/// channel's `[0, full_scale_volts]` clamp so ALL placeholders stay inside
 /// the converter's contract, not just `{count}`).
+///
+/// Three placeholders, because Renode's ADC models disagree about units:
+/// `{count}` for a model fed raw codes, `{millivolts}` for an integer-mV feed,
+/// and `{volts}` for a model whose feed method takes a real voltage (the RP2040
+/// `Analog.RP2040ADC` takes a `double` of volts). `{volts}` is rendered with
+/// three decimals: sub-millivolt precision would be a lie about what the
+/// caller's clamped millivolt value carries.
 fn render_adc_inject(inject: &AdcInject, count: u32, millivolts: u64) -> String {
     match inject {
         AdcInject::MonitorCommand(template) => template
             .replace("{count}", &count.to_string())
-            .replace("{millivolts}", &millivolts.to_string()),
+            .replace("{millivolts}", &millivolts.to_string())
+            .replace("{volts}", &format!("{:.3}", millivolts as f64 / 1000.0)),
         AdcInject::MemoryWord(addr) => {
             format!("sysbus WriteDoubleWord 0x{addr:X} 0x{count:X}")
         }
@@ -887,6 +906,9 @@ pub struct RenodeBackend {
     /// Temp `.cs` files generated for bridge peripherals, removed on drop so we
     /// do not litter `std::env::temp_dir()` across many test runs.
     bridge_source_files: Vec<PathBuf>,
+    /// Directory the [`support::SupportBundle`] was unpacked into, when the part
+    /// uses one. Removed on drop, like `bridge_source_files`.
+    support_dir: Option<PathBuf>,
     /// True once the `spi_extra_repl` fragment has been loaded into Renode.
     /// The fragment defines ALL the SPI controller peripherals at once, so it
     /// only needs to be loaded on the first bridge installation.
@@ -924,6 +946,37 @@ impl RenodeBackend {
                 config.machine
             );
         }
+
+        // Support bundle, if this part needs peripheral models Renode does not
+        // ship. This MUST run before the platform description is parsed: the
+        // description names types (`Miscellaneous.RP2040SIO`, ...) that only
+        // exist once Renode has compiled the bundle's C#. Compiling ~380 KB of
+        // C# takes a few seconds, hence the generous Monitor timeout above.
+        let mut support_dir = None;
+        if let Some(name) = &config.support_bundle {
+            let bundle = support::lookup(name).with_context(|| {
+                format!(
+                    "unknown Renode support bundle \"{name}\"; this build carries {:?}",
+                    support::known_names()
+                )
+            })?;
+            let dir = bundle.unpack()?;
+            for cmd in bundle.prelude_commands(&dir) {
+                let resp = monitor.command(&cmd)?;
+                if monitor_failed(&resp) {
+                    // Keep the unpacked directory: the Renode error names a file
+                    // in it, and deleting it makes the message unfollowable.
+                    bail!(
+                        "Renode failed to load the \"{name}\" support bundle ({cmd}): {resp}\n\
+                         The unpacked bundle was left at {} for inspection.",
+                        dir.display()
+                    );
+                }
+            }
+            support_dir = Some(dir);
+        }
+        let config = substitute_support_dir(config, support_dir.as_deref());
+
         // Inline platform source (multi-line `platform_repl`) cannot travel over
         // the single-line Monitor socket, so it is materialized to a temp file
         // and loaded by path; a plain `@path` passes through untouched.
@@ -982,6 +1035,7 @@ impl RenodeBackend {
             // The materialized platform file (if any) rides the same cleanup
             // list as the bridge sources: deleted on Drop, kept on failure.
             bridge_source_files: platform_file.into_iter().collect(),
+            support_dir,
             spi_extra_repl_loaded: false,
             firmware_loaded: false,
             cycles: 0,
@@ -1275,7 +1329,32 @@ impl Drop for RenodeBackend {
         for path in self.bridge_source_files.drain(..) {
             let _ = std::fs::remove_file(path);
         }
+        if let Some(dir) = self.support_dir.take() {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
+}
+
+/// Replace the literal `{support}` token in every path-bearing config field with
+/// the unpacked support-bundle directory.
+///
+/// Done as one pass over the config (rather than at each use site) so a
+/// descriptor can put `{support}` in the platform reference, the extra setup and
+/// the post-load setup without three separate substitution rules. A config with
+/// no bundle is returned untouched, and a `{support}` token with no bundle is
+/// left alone deliberately: it then reaches Renode verbatim and fails with a
+/// path error naming the token, which is a far better diagnostic than silently
+/// substituting an empty string and reporting a missing file at `/rp2040.repl`.
+fn substitute_support_dir(mut config: RenodeConfig, dir: Option<&Path>) -> RenodeConfig {
+    let Some(dir) = dir else {
+        return config;
+    };
+    let dir = dir.display().to_string();
+    let sub = |s: &str| s.replace("{support}", &dir);
+    config.platform = sub(&config.platform);
+    config.extra_setup = config.extra_setup.iter().map(|c| sub(c)).collect();
+    config.post_load_setup = config.post_load_setup.iter().map(|c| sub(c)).collect();
+    config
 }
 
 fn monitor_failed(resp: &str) -> bool {
@@ -2113,13 +2192,27 @@ mod tests {
             );
         }
 
-        // Unverified platforms carry NO dir map: a wrong one would mask every
-        // edge to zero, so absence (conservative, direction unobservable) is
-        // the required state until a live Renode verifies the register.
-        for c in [RenodeConfig::rp2040(), RenodeConfig::sifive_fe310()] {
-            for p in &c.ports {
-                assert_eq!(p.dir, None, "unverified platform must not claim a dir map");
-            }
+        // RP2040 carries the SIO GPIO_OE map, and only because it is verified:
+        // real pico-sdk firmware calling gpio_set_dir() was run and GPIO_OE read
+        // back 1<<25 (tests/renode_rp2040.rs re-proves it live).
+        let rp = RenodeConfig::rp2040();
+        for p in &rp.ports {
+            assert_eq!(
+                p.dir,
+                Some(DirMap {
+                    offset: 0x20,
+                    encoding: DirEncoding::DirBits
+                }),
+                "RP2040 SIO bank must carry the GPIO_OE dir map"
+            );
+        }
+
+        // A platform whose direction register read-back is NOT verified carries
+        // NO dir map: a wrong one would mask every edge to zero, so absence
+        // (conservative, direction unobservable) is the required state until a
+        // live Renode verifies the register.
+        for p in &RenodeConfig::sifive_fe310().ports {
+            assert_eq!(p.dir, None, "unverified platform must not claim a dir map");
         }
     }
 
@@ -2132,9 +2225,14 @@ mod tests {
         let f103 = RenodeConfig::stm32f103();
         assert!(dir_covers_ports(&f103, None));
         assert!(dir_covers_ports(&f103, Some(&['A', 'C'])));
+        // RP2040's single SIO bank now carries a verified GPIO_OE map, so its
+        // one port is covered whether or not the engine narrows the hint.
         let rp = RenodeConfig::rp2040();
-        assert!(!dir_covers_ports(&rp, None));
-        assert!(!dir_covers_ports(&rp, Some(&['0'])));
+        assert!(dir_covers_ports(&rp, None));
+        assert!(dir_covers_ports(&rp, Some(&['0'])));
+        // The FE310 stands in for "no verified dir register": still uncovered.
+        let fe = RenodeConfig::sifive_fe310();
+        assert!(!dir_covers_ports(&fe, None));
         // A mixed config: coverage decided per polled port.
         let mut mixed = RenodeConfig::stm32f4_discovery();
         mixed.ports[1].dir = None; // strip port B's map
@@ -2176,6 +2274,19 @@ mod tests {
             2000,
         );
         assert_eq!(cmd, "sysbus.adc FeedMillivolts 2000");
+        // Volts path: the RP2040 model's feed method takes a double of volts, so
+        // the same millivolt value must render as 2.000, not 2000.
+        let cmd = render_adc_inject(
+            &AdcInject::MonitorCommand(
+                "sysbus.adc SetDefaultVoltageOnChannel 0 {volts}".to_string(),
+            ),
+            2482,
+            2000,
+        );
+        assert_eq!(cmd, "sysbus.adc SetDefaultVoltageOnChannel 0 2.000");
+        // Sub-volt values keep their millivolt resolution and nothing more.
+        let cmd = render_adc_inject(&AdcInject::MonitorCommand("f {volts}".to_string()), 0, 500);
+        assert_eq!(cmd, "f 0.500");
         // RAM/result-word path.
         let cmd = render_adc_inject(&AdcInject::MemoryWord(0x2000_4000), 0x9B2, 2000);
         assert_eq!(cmd, "sysbus WriteDoubleWord 0x20004000 0x9B2");
@@ -2208,19 +2319,38 @@ mod tests {
     fn rp2040_config_shape() {
         let c = RenodeConfig::rp2040();
         assert_eq!(c.machine, "rp2040");
-        assert_eq!(c.platform, "@platforms/cpus/rp2040.repl");
+        // The platform lives in the support bundle, not beside Renode: no
+        // Renode release carries an rp2040 platform, so `{support}` resolving
+        // into the unpacked bundle is the whole point.
+        assert_eq!(c.platform, "@{support}/rp2040.repl");
+        assert_eq!(c.support_bundle.as_deref(), Some("rp2040"));
         assert_eq!(c.expected_e_machine, crate::elf::EM_ARM);
         assert_eq!(c.frequency_hz, 125_000_000);
         // One 30-pin bank read at SIO GPIO_OUT (offset 0x10 from SIO_BASE), NOT
         // a port ODR; the honest SIO adaptation of the ODR-offset discipline.
+        // GPIO_OE at 0x20 supplies direction, verified live (see the descriptor).
         assert_eq!(c.ports.len(), 1);
         assert_eq!(c.ports[0].letter, '0');
         assert_eq!(c.ports[0].peripheral, "sio");
         assert_eq!(c.ports[0].odr_offset, 0x10);
         assert_eq!(c.ports[0].width, 30);
-        // Nothing unverified is claimed: no ADC map, no bus controllers.
-        assert!(c.adc_channels.is_empty());
-        assert!(c.i2c_controllers.is_empty());
+        assert_eq!(
+            c.ports[0].dir,
+            Some(DirMap {
+                offset: 0x20,
+                encoding: DirEncoding::DirBits
+            })
+        );
+        // Every claim here is one a live test re-proves (tests/renode_rp2040*.rs):
+        // ADC0..ADC3 injected in volts, both I2C controllers bridged. SPI stays
+        // empty because the vendored PL022 never dispatches to a registered
+        // slave, so a controller listed there would bridge to nothing.
+        assert_eq!(c.adc_channels.len(), 4);
+        assert!(c
+            .adc_channels
+            .iter()
+            .all(|m| matches!(&m.inject, AdcInject::MonitorCommand(t) if t.contains("{volts}"))));
+        assert_eq!(c.i2c_controllers, vec!["i2c0", "i2c1"]);
         assert!(c.spi_controllers.is_empty());
     }
 
@@ -2401,7 +2531,8 @@ mod tests {
         assert_eq!(arg, "@platforms/cpus/stm32f103.repl");
         assert!(file.is_none(), "a path reference needs no temp file");
 
-        let source = "using \"platforms/cpus/stm32f103.repl\"\n\nspi1: SPI.STM32SPI @ sysbus 0x40013000\n";
+        let source =
+            "using \"platforms/cpus/stm32f103.repl\"\n\nspi1: SPI.STM32SPI @ sysbus 0x40013000\n";
         let (arg, file) = materialize_platform(source).unwrap();
         let path = file.expect("inline source is backed by a temp file");
         assert_eq!(arg, format!("@{}", path.display()));

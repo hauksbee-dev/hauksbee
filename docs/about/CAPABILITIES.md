@@ -296,12 +296,26 @@ and [`docs/cosim/MCU.md`](../cosim/MCU.md)):
 | `RenodeConfig::nrf52840()` | nRF52840 (Cortex-M4, two 32-bit GPIO ports), gpio0/gpio1, uart0, 64 MHz | **Proven (UART boot)**: Zephyr shell `uart:~$` |
 | `RenodeConfig::sifive_fe310()` | SiFive FE310 / HiFive1 (RISC-V RV32), gpio0, uart0, 16 MHz | **Proven (UART boot)**: Zephyr shell boot with PRCI clock fix |
 
-RP2040 (Cortex-M0+) is in the device model DB, so strap-pin lint works, but no
-`RenodeConfig::rp2040()` constructor is shipped. RP2040 firmware co-sim is not
-a named, tested configuration.
+| `RenodeConfig::rp2040()` | RP2040 (dual Cortex-M0+, Raspberry Pi Pico), 30-pin GPIO bank through the SIO, uart0, 125 MHz | **Proven**: stock pico-sdk firmware boots through the real boot ROM into `main`; UART0 banner, GP25 at 3.300 V through the solver, ADC inputs 0..3, I2C on `i2c0`/`i2c1` |
 
-nRF5340 (ZSWatch-class) is not in the Renode 1.16.1 portable distribution. No
-config is claimed for it.
+RP2040 is the one platform Renode does not supply: no rp2040 platform exists on
+1.16.1 or on `master`, so hauksbee ships its own, with the peripheral models
+vendored as C# that Renode compiles at run time from a support bundle unpacked
+out of the binary. Nothing extra to install, but each machine creation compiles
+about 377 kB of C#, which costs roughly eight seconds of bring-up. Not
+available on it: the SPI bus-slave bridge (the vendored PL022 never dispatches
+to a registered slave), PIO (upstream needs an x86-64-only native library), and
+ADC input 4 (the on-die temperature sensor is not an external node). The second
+core is declared and un-halted but no two-core firmware has been run.
+
+nRF5340 (ZSWatch-class) has no platform in Renode 1.16.1 or on `master`, and
+unlike RP2040 there is nothing to vendor: `renode-infrastructure` has no SPU
+model (which the TrustZone-capable `cpuapp` image configures during start-up),
+no nRF53 IPC model (`NRF_Bellboard` is the nRF54 mailbox), and nothing for the
+network core. Cortex-M33 itself is supported and the nRF52-series peripheral
+models exist, so the missing pieces are specific rather than total, but a
+boot-only nRF5340 is days of model-writing rather than an afternoon of
+vendoring. No config is claimed for it.
 
 GPIO exchange mechanism: after each `RunFor` chunk the backend reads each
 port's output-data register (ODR) over the Monitor, diffs the snapshot, and
@@ -311,19 +325,21 @@ nRF52 `0x4` (peripheral-relative, see `crates/hauksbee-mcu/db/mcu/nrf52840.soc.t
 
 GPIO drive **direction** is also observable on the dir-mapped platforms. The
 backend reads each port's direction/mode register alongside the ODR
-(STM32F103 CRL/CRH, STM32F4 MODER, nRF52840 DIR), each verified against the
-live Renode model's read-back. It decodes a per-pin output mask and reports it
-through the same `pins_configured_output` surface the AVR DDR hooks feed. On
-those parts, the boot-state panel and `boot-coverage` can therefore tell a
-**held-LOW output from a floating input**, just as on AVR. Platforms without a
-verified direction map (RP2040, FE310) stay honestly direction-blind: their
+(STM32F103 CRL/CRH, STM32F4 MODER, nRF52840 DIR, RP2040 SIO `GPIO_OE`), each
+verified against the live model's read-back. It decodes a per-pin output mask
+and reports it through the same `pins_configured_output` surface the AVR DDR
+hooks feed. On those parts, the boot-state panel and `boot-coverage` can
+therefore tell a **held-LOW output from a floating input**, just as on AVR.
+FE310, which has no verified direction map, stays honestly direction-blind: its
 diagnoses hedge ("undriven or driven LOW") instead of asserting Hi-Z.
 
 ADC injection is wired per platform through an `AdcChannelMap` (a Monitor feed
-command or result-word write). **No shipped Renode platform carries a map.**
-The stock STM32F103/F4/nRF52840 Renode 1.16.1 platform descriptions model no
-ADC peripheral at all (verified live), and shipping a wrong-layout model or an
-invented RAM word would be fake fidelity. hauksbee therefore DROPS an unmapped
+command or result-word write). **No platform Renode itself ships carries a
+map.** The stock STM32F103/F4/nRF52840 Renode 1.16.1 platform descriptions model
+no ADC peripheral at all (verified live), and shipping a wrong-layout model or an
+invented RAM word would be fake fidelity. RP2040 is mapped on inputs 0..3
+because its converter is one of the models hauksbee vendors, so there is a real
+peripheral to feed a voltage into. hauksbee DROPS an unmapped
 channel's injections, and it surfaces that drop on **every** report surface
 (`hauksbee run` text, `--plain`, `--json` `CosimJson.adc_dropped` and coverage
 notes, and all hauksbee-ci report formats), naming the channel, MCU, and net.
@@ -337,7 +353,10 @@ See the `i2c_sensor_cosim_renode` / `spi_sensor_cosim_renode` integration
 tests. Controllers by platform: STM32F103 (`i2c1`, `spi1`), STM32F4 Discovery
 (`i2c1`, `spi2`/`spi3`), nRF52840 (`twi0`/`twi1`, `spi2`, names live-verified with
 bridge registration, an end-to-end nRF sensor round-trip still awaits an nRF
-bus firmware fixture). FE310 and RP2040 model no bus controllers. hauksbee
+bus firmware fixture), RP2040 (`i2c0`/`i2c1`, proven end-to-end in both
+directions with real pico-sdk firmware; no SPI, because the vendored PL022
+never dispatches to a registered slave). FE310 models no bus controllers.
+hauksbee
 records a sensor bound on such a platform as **unexercised** and surfaces that
 on every report surface, and a hauksbee-ci `peripheral` assertion against it
 **fails** rather than green-passing on the slave's power-on defaults. The

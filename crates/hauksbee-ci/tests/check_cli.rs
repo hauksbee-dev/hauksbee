@@ -143,7 +143,10 @@ fn a_firmware_path_that_does_not_exist_fails_check_as_it_fails_run() {
     let diags = json_diags(&out);
     assert_eq!(diags.len(), 1, "one firmware diagnostic: {diags:?}");
     assert_eq!(diags[0]["code"], "firmware-missing");
-    assert_eq!(diags[0]["line"], 3, "points at the firmware line: {diags:?}");
+    assert_eq!(
+        diags[0]["line"], 3,
+        "points at the firmware line: {diags:?}"
+    );
 
     // --no-board is the documented opt-out for an editor loop where the firmware
     // is not built yet, and it covers the firmware as well as the board.
@@ -316,13 +319,19 @@ fn check_reports_all_unknown_component_refs_at_once() {
     assert_eq!(out.status.code(), Some(2));
     let diags = json_diags(&out);
     assert_eq!(diags.len(), 2, "both bad refs in one pass: {diags:?}");
-    assert!(diags.iter().all(|d| d["code"] == "unknown-ref"), "{diags:?}");
+    assert!(
+        diags.iter().all(|d| d["code"] == "unknown-ref"),
+        "{diags:?}"
+    );
     let msgs = diags
         .iter()
         .filter_map(|d| d["message"].as_str())
         .collect::<Vec<_>>()
         .join("\n");
-    assert!(msgs.contains("R_NOPE1") && msgs.contains("R_NOPE2"), "{msgs}");
+    assert!(
+        msgs.contains("R_NOPE1") && msgs.contains("R_NOPE2"),
+        "{msgs}"
+    );
 }
 
 // M2: a window that cannot overlap the run is a spec mistake `check` used to
@@ -340,7 +349,10 @@ fn check_rejects_a_sample_window_that_starts_after_the_run_ends() {
     assert_eq!(diags.len(), 1, "{diags:?}");
     assert_eq!(diags[0]["code"], "bad-bound", "{diags:?}");
     let msg = diags[0]["message"].as_str().unwrap();
-    assert!(msg.contains("after_ms") && msg.contains("duration_ms"), "{msg}");
+    assert!(
+        msg.contains("after_ms") && msg.contains("duration_ms"),
+        "{msg}"
+    );
     assert!(msg.contains("nothing would ever be measured"), "{msg}");
 
     // One millisecond inside the run is legitimate and must stay accepted.

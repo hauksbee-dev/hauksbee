@@ -166,3 +166,16 @@ These bounds are the single source of truth in `crates/hauksbee-models/src/valid
 | hysteresis  | 0.0    | 5.0    | comparator hysteresis (V)             |
 | ron         | 0.01   | 10000.0| switch on-resistance (Ω, ron < roff)  |
 | roff        | 1e3    | 1e12   | switch off-resistance (Ω)             |
+
+## `mpn_re` narrows, it does not widen
+
+Worth knowing before adding a rule, because the shape of it is a trap. All
+populated match rules are **ANDed**, and a component with no MPN property is
+compared against `mpn_re` as the empty string. So adding `mpn_re` to an entry
+that already has a `value_re` cannot make it match more parts; it makes the
+entry match **nothing at all** on any board that carries no MPN, which is every
+layout-only board (`.kicad_pcb`, `.brd`, gerbers).
+
+Use `mpn_re` only when it is the *only* rule, or when every board that should
+bind genuinely carries the MPN. Otherwise the portable rule is `value_re`, and a
+part number that appears in the value field is already covered by it.

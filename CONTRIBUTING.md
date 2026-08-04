@@ -119,51 +119,48 @@ hauksbee's checks are calibrated to stay quiet on hardware that is fine, and the
 board corpus is how that is measured. A new or changed check earns its place by
 being run against the corpus and shown not to fire on boards known to be good.
 Several checks have that pinned as a silence gate that goes red on any fire; the
-placeholder-value gate, for instance, sweeps every board file in the corpus (129
-on the fetched layout) across four extraction paths and demands zero
-medium-or-high findings. Add one for your check if it is the kind that can cry
-wolf.
+placeholder-value gate, for instance, sweeps 207 board files across four
+extraction paths and demands zero medium-or-high findings that are not a recorded,
+dated exception. Add one for your check if it is the kind that can cry wolf.
 
-One caveat to know before you trust a green run: several of the older corpus
-guards address boards by a hand-built `board-corpus/famous/<id>/...` layout that
-`fetch-corpus.sh` does not produce, so they do not find their boards on a freshly
-fetched corpus. Always run with `HAUKSBEE_REQUIRE_CORPUS=1`, which turns a missing
-corpus into a failure rather than a silent skip.
+An exception is not an allowlist entry. It names the board and the parts, says why
+the finding is *right*, and carries an expiry after which the gate goes red again,
+the same discipline `hauksbee-waivers.toml` imposes on a user. If a gate is red
+because a check found something real on a corpus board, that is the answer: record
+it with its evidence. Never widen a threshold until it disappears.
+
+Always run with `HAUKSBEE_REQUIRE_CORPUS=1`, which turns a missing corpus into a
+failure rather than a silent skip.
 
 The corpus is mostly public open hardware, so you can fetch it:
 
 ```bash
-scripts/fetch-corpus.sh --dir "$PWD/board-corpus"
+scripts/fetch-corpus.sh
 export HAUKSBEE_CORPUS_DIR=$PWD/board-corpus
-cargo test --workspace
+HAUKSBEE_REQUIRE_CORPUS=1 cargo test --workspace
 ```
 
-**Pass `--dir` explicitly.** A bare `scripts/fetch-corpus.sh` is supposed to read
-`default_dir` from the manifest and land everything in `./board-corpus`, and on
-macOS it does not: the manifest parser splits fields with `awk -F'\x1f'`, BSD awk
-does not interpret `\x` escapes, so the default is read as empty and boards are
-dropped at the repository root instead. You can see the symptom in `.gitignore`,
-which lists root-level `crkbd/`, `lily58/` and friends so an accidental `git add`
-cannot commit them. Boards that land there are invisible to every corpus test,
-which is worse than not fetching them, because the suite then measures less than
-it appears to.
-
 Each board is pulled from its upstream at the revision `corpus.toml` pins. For
-git-hosted boards the resolved commit is checked against that pin, so you get the
-revision the gate was measured against. **Zip-hosted boards are not verified at
-all**: `fetch_zip` is a `curl` and an `unzip`, and the sha256 recorded beside one
-of those entries in `corpus.toml` is never checked. This repository does **not**
-vendor the boards. They carry CC BY-SA, GPL-3.0, and CERN-OHL licences, and
-fetching means you get each one from its author under that author's terms rather
-than through us.
+git-hosted boards the resolved commit is checked against that pin; for zip-hosted
+boards the archive's sha256 is checked against the manifest, and the fetch refuses
+to download one that has no hash recorded. Either way you get the revision the
+gate was measured against. This repository does **not** vendor the boards. They
+carry CC BY-SA, GPL-3.0, and CERN-OHL licences, and fetching means you get each
+one from its author under that author's terms rather than through us.
 
-Expect a partial fetch. The manifest pins 29 boards, and around 23 or 24 land
-on a good day: three are skipped by default because their licence could not be
-confirmed, one upstream is prone to hanging, one has moved the revision the
-manifest pins, and the occasional extra upstream flakes. That is fine and it
-is not a broken checkout. A corpus test whose boards are absent skips and names
-what is missing, with the `--only <id>` line that fetches it, rather than
-failing in a way that reads as hauksbee being broken.
+Expect 28 of the manifest's 30 entries. The two that are skipped by default are
+the ClockworkPi uConsole boards, whose licence could not be confirmed;
+`--include-unconfirmed` fetches them if you read the manifest and decide for
+yourself. A corpus test whose boards are absent skips and names what is missing,
+with the `--only <id>` line that fetches it, rather than failing in a way that
+reads as hauksbee being broken.
+
+The fetched layout and the hand-built `board-corpus/famous/<id>/...` layout the
+maintainers use are both accepted. Address a board through
+`hauksbee_testkit::corpus_board` (one path) or `corpus_board_any` (alternates when
+the two corpora hold different upstream revisions), and a sweep's root through
+`corpus_boards_root`, never by joining `famous` yourself. Joining it directly is
+what used to make corpus guards skip for everyone who followed these instructions.
 
 Without the corpus, corpus-dependent tests **report as passed**, not as ignored.
 Rust has no runtime ignored state, so they early-return with a note on stderr and
@@ -175,20 +172,18 @@ evidence. Make it a hard failure instead:
 HAUKSBEE_REQUIRE_CORPUS=1 cargo test --workspace
 ```
 
-**That command does not currently pass on a freshly fetched corpus, and the reason
-is our bug, not your checkout.** Several corpus suites address boards by the
-maintainers' `board-corpus/famous/<id>/...` layout described above, so with the
-variable set they hard-fail on board *location* rather than on any check firing:
-`known_faults` (3 failed), `strap_lint_corpus` (5 failed), `erc_contention_corpus`
-(1 failed, and its message says "board-corpus is absent" when what is absent is
-`board-corpus/famous`), plus one subtest each in `resource_conflict_corpus`,
-`si_corpus` and `drc_corpus`. `.github/workflows/corpus-gate.yml` runs this command,
-which is why that workflow has no green path today.
+Every corpus gate prints what it covered, so add `--nocapture` and read the
+`SCANNED  <gate>: N board(s)` lines. A gate that scanned zero fails outright:
+`hauksbee_testkit::scanned` refuses the pass, because a gate that opened no board
+has proved nothing and a green tick next to it is a lie about coverage.
+`.github/workflows/corpus-gate.yml` runs the whole thing this way nightly and
+lifts those counts into the run summary.
 
-So: run it to see which suites are genuinely covered, and read a failure naming a
-missing path as this known gap rather than as a regression you introduced. Reconciling
-the two layouts behind `hauksbee_testkit::board_path` is the fix, and it is a good
-first contribution.
+Three board families are outside the public manifest and have their own opt-in
+flags, so requiring the public corpus does not make the nightly red by
+construction: `HAUKSBEE_REQUIRE_ALTIUM_CORPUS`, `HAUKSBEE_REQUIRE_HUNT_CORPUS` and
+`HAUKSBEE_REQUIRE_UCONSOLE_CORPUS`. Absent them, those suites report `NOT RUN` on
+stderr with what is missing. They never pass quietly.
 
 A handful of boards carry no redistribution rights at all, so they are absent
 from the manifest. Nothing in the public test suite depends on them.
