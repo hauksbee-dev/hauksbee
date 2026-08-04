@@ -278,7 +278,7 @@ fn f072_adc_injection_reaches_the_firmware() {
 
     // Ask for one conversion per fed voltage. 'a' reads channel 0, 'b' reads
     // channel 3, and the firmware answers "adc<ch>=<8 hex digits>".
-    let mut ask = |mcu: &mut RenodeBackend, cmd: u8| -> String {
+    let ask = |mcu: &mut RenodeBackend, cmd: u8| -> String {
         uart.lock().unwrap().clear();
         mcu.uart_write(&[cmd]);
         for _ in 0..4 {

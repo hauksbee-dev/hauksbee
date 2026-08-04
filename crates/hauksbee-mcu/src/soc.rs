@@ -98,6 +98,64 @@ pub enum SocError {
     #[error("soc.platform_repl must not be empty")]
     EmptyPlatform,
 
+    /// `soc.frequency_hz` was 0. [`crate::traits::Mcu::run_cycles`] divides a
+    /// cycle count by this value on both external backends, so a zero clock
+    /// turns a bounded run window into an infinite one rather than erroring.
+    #[error(
+        "soc.frequency_hz must not be 0: a cycle count is divided by it to get a \
+         run window, so a zero clock makes that window infinite"
+    )]
+    ZeroFrequency,
+
+    /// An identifier field was present but blank. `platform_repl` has its own
+    /// [`SocError::EmptyPlatform`]; these are the fields that reach the
+    /// emulator as an empty Monitor or command-line argument, where the failure
+    /// arrives seconds later and names the emulator rather than the descriptor.
+    #[error("soc.{field} must not be empty: it reaches the emulator as an empty argument")]
+    EmptyField { field: &'static str },
+
+    /// A `{support}` token with no `support_bundle` to substitute it with. The
+    /// token is left verbatim at bring-up on purpose (a path error naming the
+    /// token beats a missing file at `/rp2040.repl`), but a descriptor that
+    /// declares no bundle can never have it substituted at all, so the whole
+    /// field is unusable and the honest place to say so is here.
+    #[error(
+        "soc.{field} uses the `{{support}}` token but no `support_bundle` is declared, \
+         so the token can never be substituted"
+    )]
+    SupportTokenWithoutBundle { field: &'static str },
+
+    /// A 16-pin direction encoding on a port wider than 16 bits. `moder` and
+    /// `stm32f1_crl_crh` decode 16 pins by construction, so the top pins read
+    /// as inputs and every edge on them is suppressed: strictly worse than no
+    /// `dir` map, which at least reports every output-state change.
+    #[error(
+        "port {letter:?} is {width} bits wide but its dir encoding {encoding:?} decodes \
+         only 16 pins; pins 16 and above would read as inputs and their edges would be \
+         dropped silently. Use \"dir_bits\", or narrow the port"
+    )]
+    DirEncodingTooNarrow {
+        letter: char,
+        width: u8,
+        encoding: &'static str,
+    },
+
+    /// Two `[[soc.adc]]` entries claim the same channel. The backend keys
+    /// injection on the channel index, so the second recipe shadows the first.
+    #[error("duplicate ADC channel {channel}: the second recipe would shadow the first")]
+    DuplicateAdcChannel { channel: u8 },
+
+    /// An `[[soc.adc]]` scaling factor that cannot scale. `max_count` and
+    /// `full_scale_volts` are both divisors in the volts-to-count conversion; a
+    /// zero or non-finite one converts every injected voltage to count 0, which
+    /// reads as a stuck converter rather than a bad descriptor.
+    #[error("ADC channel {channel}: {field} is {value}, which cannot scale a count")]
+    AdcScaleInvalid {
+        channel: u8,
+        field: &'static str,
+        value: String,
+    },
+
     /// `soc.expected_e_machine` was not a recognised `EM_*` name.
     #[error("unknown e_machine {0:?}: expected one of EM_ARM, EM_RISCV, EM_XTENSA, EM_AVR")]
     UnknownEMachine(String),
@@ -229,7 +287,7 @@ pub fn peek_backend(src: &str) -> Result<Backend, SocError> {
 #[cfg(feature = "renode")]
 mod renode_schema {
     use super::SocError;
-    use crate::renode::{AdcChannelMap, AdcInject, PortMap, RenodeConfig};
+    use crate::renode::{AdcChannelMap, AdcInject, DirEncoding, PortMap, RenodeConfig};
 
     /// TOML root: `[soc]`.
     #[derive(Debug, serde::Deserialize)]
@@ -305,7 +363,29 @@ mod renode_schema {
     }
 
     impl AdcChannelSpec {
+        /// The scaling checks, run before the injection form is resolved so a
+        /// descriptor with both problems reports the arithmetic one first (it is
+        /// the one that silently reads as a stuck converter).
+        fn validate_scaling(&self) -> Result<(), SocError> {
+            if self.max_count == 0 {
+                return Err(SocError::AdcScaleInvalid {
+                    channel: self.channel,
+                    field: "max_count",
+                    value: "0".to_string(),
+                });
+            }
+            if !self.full_scale_volts.is_finite() || self.full_scale_volts <= 0.0 {
+                return Err(SocError::AdcScaleInvalid {
+                    channel: self.channel,
+                    field: "full_scale_volts",
+                    value: self.full_scale_volts.to_string(),
+                });
+            }
+            Ok(())
+        }
+
         fn into_map(self) -> Result<AdcChannelMap, SocError> {
+            self.validate_scaling()?;
             let inject = match (self.monitor_command, self.memory_word) {
                 (Some(cmd), None) => AdcInject::MonitorCommand(cmd),
                 (None, Some(word)) => AdcInject::MemoryWord(word),
@@ -331,6 +411,39 @@ mod renode_schema {
         }
     }
 
+    /// The descriptor token for a direction encoding, and how many pins that
+    /// encoding can decode. The pin counts are structural: `moder` reads 2 bits
+    /// per pin and `stm32f1_crl_crh` 4 bits per pin out of one 32-bit word (plus
+    /// a second word for CRH), so both top out at 16 pins whatever the port is.
+    fn dir_encoding_reach(encoding: DirEncoding) -> (&'static str, u8) {
+        match encoding {
+            DirEncoding::Moder => ("moder", 16),
+            DirEncoding::Stm32f1CrlCrh => ("stm32f1_crl_crh", 16),
+            DirEncoding::DirBits => ("dir_bits", 32),
+        }
+    }
+
+    /// Refuse a direction encoding that cannot cover the port it is on.
+    ///
+    /// A too-narrow encoding does not fail: it decodes the pins it reaches and
+    /// leaves the rest reading as inputs, which suppresses every edge above the
+    /// encoding's reach. That is silently worse than omitting `dir` entirely, so
+    /// it is refused at load for the same reason a duplicate port letter is.
+    fn validate_port_dir_widths(ports: &[PortMap]) -> Result<(), SocError> {
+        for port in ports {
+            let Some(dir) = port.dir else { continue };
+            let (encoding, reach) = dir_encoding_reach(dir.encoding);
+            if port.width > reach {
+                return Err(SocError::DirEncodingTooNarrow {
+                    letter: port.letter,
+                    width: port.width,
+                    encoding,
+                });
+            }
+        }
+        Ok(())
+    }
+
     impl RenodeSoc {
         pub(super) fn into_config(self) -> Result<RenodeConfig, SocError> {
             // Backend must be renode (this is the renode loader). A "qemu" file
@@ -344,6 +457,28 @@ mod renode_schema {
             }
             if self.platform_repl.trim().is_empty() {
                 return Err(SocError::EmptyPlatform);
+            }
+            super::validate_non_empty(&[
+                ("machine", &self.machine),
+                ("cpu_path", &self.cpu_path),
+            ])?;
+            super::validate_frequency(self.frequency_hz)?;
+            if self.support_bundle.is_none() {
+                let mut token_fields: Vec<(&'static str, bool)> = vec![
+                    ("platform_repl", self.platform_repl.contains("{support}")),
+                    (
+                        "extra_setup",
+                        self.extra_setup.iter().any(|c| c.contains("{support}")),
+                    ),
+                    (
+                        "post_load_setup",
+                        self.post_load_setup.iter().any(|c| c.contains("{support}")),
+                    ),
+                ];
+                token_fields.retain(|(_, uses)| *uses);
+                if let Some((field, _)) = token_fields.first() {
+                    return Err(SocError::SupportTokenWithoutBundle { field });
+                }
             }
             if let Some(name) = &self.support_bundle {
                 if crate::renode::support::lookup(name).is_none() {
@@ -360,9 +495,19 @@ mod renode_schema {
                 .ok_or_else(|| SocError::UnknownEMachine(self.expected_e_machine.clone()))?;
 
             super::validate_ports(self.ports.iter().map(|p| (p.letter, p.width)))?;
+            validate_port_dir_widths(&self.ports)?;
             super::validate_controllers("i2c", &self.i2c.controllers)?;
             super::validate_controllers("spi", &self.spi.controllers)?;
 
+            let mut seen_channels: Vec<u8> = Vec::new();
+            for entry in &self.adc {
+                if seen_channels.contains(&entry.channel) {
+                    return Err(SocError::DuplicateAdcChannel {
+                        channel: entry.channel,
+                    });
+                }
+                seen_channels.push(entry.channel);
+            }
             let adc_channels = self
                 .adc
                 .into_iter()
@@ -474,6 +619,8 @@ mod qemu_schema {
                 });
             }
             let arch = arch_from_name(&self.arch)?;
+            super::validate_non_empty(&[("machine", &self.machine)])?;
+            super::validate_frequency(self.frequency_hz)?;
             let expected_e_machine = crate::elf::e_machine_from_name(&self.expected_e_machine)
                 .ok_or_else(|| SocError::UnknownEMachine(self.expected_e_machine.clone()))?;
 
@@ -514,6 +661,36 @@ impl crate::qemu::QemuConfig {
 }
 
 // ── Shared validation helpers ────────────────────────────────────────────────
+
+/// Refuse a zero advisory clock.
+///
+/// `frequency_hz` is documented as advisory (the emulator clocks its own
+/// platform), but it is not inert: `Mcu::run_cycles` on both external backends
+/// divides a cycle count by it to get the run window, so a zero clock asks for
+/// an infinite window instead of erroring.
+fn validate_frequency(frequency_hz: u64) -> Result<(), SocError> {
+    if frequency_hz == 0 {
+        return Err(SocError::ZeroFrequency);
+    }
+    Ok(())
+}
+
+/// Refuse an identifier field that is present but blank.
+///
+/// `platform_repl` has its own [`SocError::EmptyPlatform`] because Renode has
+/// nothing to load without it. These are the fields that instead reach the
+/// emulator as an empty argument, where the failure arrives seconds later and
+/// names the emulator rather than the descriptor. `mcu_label` is deliberately
+/// NOT here: it appears only in reports and error messages, so a blank one runs
+/// correctly and is a `models lint` finding rather than a load failure.
+fn validate_non_empty(fields: &[(&'static str, &str)]) -> Result<(), SocError> {
+    for (field, value) in fields {
+        if value.trim().is_empty() {
+            return Err(SocError::EmptyField { field });
+        }
+    }
+    Ok(())
+}
 
 /// Validate GPIO port/bank `(letter, width)` pairs: no zero-width port, no two
 /// ports sharing a letter (which the engine keys on).
@@ -1004,6 +1181,204 @@ mod not_found_honesty_tests {
         // A missing dir produces no hint either.
         assert!(builtin_fallback_hints("stm32f103", &[tmp.join("no-such-subdir")]).is_empty());
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+}
+
+/// The loader's refusals for descriptors that would run and observe the wrong
+/// thing, or run without bound.
+///
+/// Each case here is a value the schema accepted until it was checked, and each
+/// one is refused rather than merely warned about because none of them has a
+/// correct execution: the checks that depend on what an author *meant* live in
+/// `hauksbee models lint` instead.
+#[cfg(all(test, feature = "renode"))]
+mod loader_refusal_tests {
+    use super::{SocConfig, SocError};
+
+    /// A minimal valid Renode descriptor, with `{extra}` splicing in whatever
+    /// the case under test is changing.
+    fn descriptor(extra: &str) -> String {
+        format!(
+            r#"
+[soc]
+backend = "renode"
+machine = "m"
+platform_repl = "@platforms/cpus/stm32f072.repl"
+cpu_path = "sysbus.cpu"
+frequency_hz = 8_000_000
+expected_e_machine = "EM_ARM"
+mcu_label = "test part"
+{extra}
+"#
+        )
+    }
+
+    fn err(extra: &str) -> SocError {
+        SocConfig::from_soc_toml(&descriptor(extra)).expect_err("this descriptor must be refused")
+    }
+
+    #[test]
+    fn the_baseline_descriptor_is_valid() {
+        SocConfig::from_soc_toml(&descriptor("")).expect("the baseline must load");
+    }
+
+    #[test]
+    fn zero_frequency_is_refused() {
+        let src = descriptor("").replace("frequency_hz = 8_000_000", "frequency_hz = 0");
+        let e = SocConfig::from_soc_toml(&src).expect_err("a zero clock must be refused");
+        assert!(matches!(e, SocError::ZeroFrequency), "{e}");
+        assert!(e.to_string().contains("run window"), "{e}");
+    }
+
+    #[test]
+    fn blank_machine_and_cpu_path_are_refused_but_a_blank_label_is_not() {
+        let blank_machine = descriptor("").replace("machine = \"m\"", "machine = \"  \"");
+        assert!(
+            matches!(
+                SocConfig::from_soc_toml(&blank_machine),
+                Err(SocError::EmptyField { field: "machine" })
+            ),
+            "a blank machine name must be refused"
+        );
+        let blank_cpu = descriptor("").replace("cpu_path = \"sysbus.cpu\"", "cpu_path = \"\"");
+        assert!(
+            matches!(
+                SocConfig::from_soc_toml(&blank_cpu),
+                Err(SocError::EmptyField { field: "cpu_path" })
+            ),
+            "a blank cpu path must be refused"
+        );
+        // `mcu_label` reaches reports and error messages, never the emulator, so
+        // it LOADS: `models lint` is where a blank one is reported.
+        let blank_label = descriptor("").replace("mcu_label = \"test part\"", "mcu_label = \"\"");
+        SocConfig::from_soc_toml(&blank_label)
+            .expect("a blank label runs correctly and is a lint finding, not a load failure");
+    }
+
+    #[test]
+    fn a_support_token_with_no_bundle_is_refused_per_field() {
+        let platform = descriptor("").replace(
+            "platform_repl = \"@platforms/cpus/stm32f072.repl\"",
+            "platform_repl = \"@{support}/mine.repl\"",
+        );
+        assert!(
+            matches!(
+                SocConfig::from_soc_toml(&platform),
+                Err(SocError::SupportTokenWithoutBundle {
+                    field: "platform_repl"
+                })
+            ),
+            "an unsubstitutable platform token must be refused"
+        );
+        assert!(
+            matches!(
+                err(r#"extra_setup = ["sysbus LoadELF @{support}/bootrom.elf"]"#),
+                SocError::SupportTokenWithoutBundle {
+                    field: "extra_setup"
+                }
+            ),
+            "an unsubstitutable extra_setup token must be refused"
+        );
+        assert!(
+            matches!(
+                err(r#"post_load_setup = ["include @{support}/late.cs"]"#),
+                SocError::SupportTokenWithoutBundle {
+                    field: "post_load_setup"
+                }
+            ),
+            "an unsubstitutable post_load_setup token must be refused"
+        );
+    }
+
+    #[test]
+    fn a_16_pin_dir_encoding_on_a_wider_port_is_refused() {
+        let e = err(
+            "[[soc.ports]]\nletter = \"0\"\nperipheral = \"sio\"\nodr_offset = 0x10\n\
+             width = 32\ndir = { offset = 0x20, encoding = \"moder\" }",
+        );
+        match e {
+            SocError::DirEncodingTooNarrow {
+                letter: '0',
+                width: 32,
+                encoding: "moder",
+            } => {}
+            other => panic!("expected DirEncodingTooNarrow, got {other}"),
+        }
+        // `dir_bits` reaches all 32, so the same port with that encoding loads.
+        SocConfig::from_soc_toml(&descriptor(
+            "[[soc.ports]]\nletter = \"0\"\nperipheral = \"sio\"\nodr_offset = 0x10\n\
+             width = 32\ndir = { offset = 0x20, encoding = \"dir_bits\" }",
+        ))
+        .expect("dir_bits covers 32 pins");
+        // And a 16-bit port with `moder` is the ordinary STM32 case.
+        SocConfig::from_soc_toml(&descriptor(
+            "[[soc.ports]]\nletter = \"C\"\nperipheral = \"gpioPortC\"\nodr_offset = 0x14\n\
+             width = 16\ndir = { offset = 0x00, encoding = \"moder\" }",
+        ))
+        .expect("moder covers 16 pins");
+    }
+
+    #[test]
+    fn a_duplicated_adc_channel_is_refused() {
+        let e = err(
+            "[[soc.adc]]\nchannel = 3\nmonitor_command = \"a {count}\"\n\
+             full_scale_volts = 3.3\nmax_count = 4095\n\
+             [[soc.adc]]\nchannel = 3\nmonitor_command = \"b {count}\"\n\
+             full_scale_volts = 3.3\nmax_count = 4095",
+        );
+        assert!(
+            matches!(e, SocError::DuplicateAdcChannel { channel: 3 }),
+            "{e}"
+        );
+    }
+
+    #[test]
+    fn an_adc_scale_that_cannot_scale_is_refused() {
+        let zero_count = err(
+            "[[soc.adc]]\nchannel = 0\nmonitor_command = \"a {count}\"\n\
+             full_scale_volts = 3.3\nmax_count = 0",
+        );
+        assert!(
+            matches!(
+                zero_count,
+                SocError::AdcScaleInvalid {
+                    channel: 0,
+                    field: "max_count",
+                    ..
+                }
+            ),
+            "{zero_count}"
+        );
+        for full_scale in ["0.0", "-3.3", "nan", "inf"] {
+            let e = err(&format!(
+                "[[soc.adc]]\nchannel = 0\nmonitor_command = \"a {{count}}\"\n\
+                 full_scale_volts = {full_scale}\nmax_count = 4095"
+            ));
+            assert!(
+                matches!(
+                    e,
+                    SocError::AdcScaleInvalid {
+                        channel: 0,
+                        field: "full_scale_volts",
+                        ..
+                    }
+                ),
+                "full_scale_volts = {full_scale} must be refused, got {e}"
+            );
+        }
+    }
+
+    /// A `monitor_command` with no substitution token LOADS. It executes, and
+    /// feeds one constant every chunk, which is a thing an author can mean (a
+    /// self-contained trigger) and `models lint` reports as a finding. The
+    /// loader draws its line at descriptors with no correct execution.
+    #[test]
+    fn a_tokenless_monitor_command_loads_and_is_left_to_the_linter() {
+        SocConfig::from_soc_toml(&descriptor(
+            "[[soc.adc]]\nchannel = 0\nmonitor_command = \"sysbus.adc SetDefaultValue 1650\"\n\
+             full_scale_volts = 3.3\nmax_count = 4095",
+        ))
+        .expect("a tokenless feed executes, so the loader accepts it");
     }
 }
 
