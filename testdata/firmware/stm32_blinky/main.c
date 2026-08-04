@@ -12,9 +12,16 @@
  *
  * No vendor SDK: direct register access only, so it builds with a bare
  * arm-none-eabi-gcc and a tiny linker script + vector table. Clocks run from
- * the default 8 MHz HSI (no PLL bring-up needed for the emulated target);
+ * the reset-default 8 MHz HSI (no PLL bring-up needed), which is what
+ * db/mcu/stm32f103.soc.toml declares and what the platform is now held to;
  * Renode models USART baud generation faithfully against the configured
  * peripheral clock, so the bytes come out regardless of exact wall timing.
+ *
+ * The 100 ms comes from SysTick, not from a counted busy-wait. See the comment
+ * on delay_ms: the old busy-wait constant had been tuned against Renode's
+ * default 100 MIPS rather than this part's ~8, so it made the emulator's wrong
+ * clock look like a tidy 5 Hz blink. A SysTick delay is 100 ms on the bench and
+ * 100 ms of virtual time here, with nobody guessing an instruction throughput.
  */
 
 #include <stdint.h>
@@ -54,6 +61,13 @@
 #define CNF_OUTPUT_PP_50MHZ 0x3   /* general purpose push-pull, 50 MHz */
 #define CNF_AF_PP_50MHZ     0xB   /* alternate function push-pull, 50 MHz */
 #define CNF_INPUT_FLOATING  0x4   /* floating input */
+
+/* The core clock this firmware runs on: the F103's reset default, HSI at 8 MHz
+ * (RM0008 §7.2). No PLL is enabled below, so this is the truth on hardware, and
+ * it is what db/mcu/stm32f103.soc.toml declares. SysTick and the USART baud
+ * divisor are both derived from it, so there is one number to change if this
+ * firmware ever brings up the PLL. */
+#define SYSCLK_HZ 8000000UL
 
 static void clock_init(void) {
     RCC_APB2ENR |= RCC_APB2ENR_IOPAEN | RCC_APB2ENR_IOPCEN
@@ -124,19 +138,41 @@ static void print_u32(uint32_t v) {
         uart_tx((uint8_t)buf[--i]);
 }
 
-/* Crude busy-wait. Virtual time is what the lockstep scheduler advances, so
- * the loop period in virtual seconds is what matters. Renode models the Cortex
- * M3 at roughly 100 MIPS of virtual time on this platform; the delay loop is a
- * few instructions per iteration, so ~3.3M iterations is ~100 ms of virtual
- * time, giving a ~5 Hz LED toggle that the engine's ~50-100 us analog chunks
- * sample cleanly (matching the AVR demo's blink rate). */
-static void delay_loop(volatile uint32_t n) {
-    while (n--)
-        __asm__ volatile("nop");
+/* SysTick delay, in milliseconds of REAL time.
+ *
+ * This used to be a busy-wait of 3,300,000 nops, with a comment explaining that
+ * "Renode models the Cortex-M3 at roughly 100 MIPS on this platform" so that
+ * many iterations came to about 100 ms. Both halves of that were the problem.
+ * 100 MIPS was the EMULATOR's default rather than this part's ~8 MIPS at the
+ * reset-default HSI, so the loop cost an eighth of the virtual time it costs on
+ * a blue pill, and the constant had been tuned to make the wrong clock produce
+ * a nice-looking blink rate. Once the platform declares the part's real 8 MHz
+ * (db/mcu/stm32f103.soc.toml), the same loop takes about 1.65 s.
+ *
+ * SysTick counts the core clock, so 8000 counts is a millisecond on hardware
+ * and a millisecond of virtual time here, and the blink rate no longer depends
+ * on anyone guessing an instruction throughput. The demo keeps its ~5 Hz LED,
+ * which the engine's 50-100 us analog chunks oversample comfortably, and now
+ * keeps it for a reason that is true on the bench as well. */
+#define STK_CTRL REG(0xE000E010UL)
+#define STK_LOAD REG(0xE000E014UL)
+#define STK_VAL REG(0xE000E018UL)
+
+static void systick_init(void) {
+    STK_LOAD = (SYSCLK_HZ / 1000UL) - 1UL; /* one millisecond */
+    STK_VAL = 0;
+    STK_CTRL = (1U << 2) | (1U << 0); /* CLKSOURCE = core clock, ENABLE */
+}
+
+static void delay_ms(uint32_t ms) {
+    while (ms--)
+        while (!(STK_CTRL & (1U << 16))) /* COUNTFLAG */
+            ;
 }
 
 int main(void) {
     clock_init();
+    systick_init();
     gpio_init();
     uart_init();
 
@@ -144,8 +180,8 @@ int main(void) {
 
     uint32_t ticks = 0;
     for (;;) {
-        /* Toggle PC13 each loop pass; tune delay so the period is ~100 ms of
-         * virtual time on the f103 platform. */
+        /* Toggle PC13 each loop pass, 100 ms apart: a ~5 Hz LED on hardware and
+         * the same 5 Hz of virtual time in co-simulation. */
         GPIO_ODR(GPIOC_BASE) ^= (1U << 13);
         ticks++;
 
@@ -161,6 +197,6 @@ int main(void) {
             }
         }
 
-        delay_loop(3300000);
+        delay_ms(100);
     }
 }
