@@ -20,7 +20,8 @@ checks read the layout and do not care whether an IC is modelled.
 Then one section per check, each with a verdict line he can read as a
 sentence:
 
-- Copper spacing: a count, and whether any of it is serious.
+- Copper spacing: "Looks healthy". The board ships with its own KiCad project
+  file, so the check runs under the designer's clearance rule, not a default.
 - Connectivity: "Looks healthy" when it is.
 - Signal integrity: no failures, but three things worth a look.
 

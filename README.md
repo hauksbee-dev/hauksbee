@@ -48,7 +48,7 @@ Point it at any PCB design and it will:
 
 ## Quickstart
 
-**Download the app (macOS): double-click, drop a board.** Grab `Hauksbee.app` (the `hauksbee-<version>-darwin-<arch>-app.zip` asset) from the [releases page](https://github.com/hauksbee-dev/hauksbee/releases), unzip, and double-click it. It opens your browser on the drop-zone. Drop a board file and read the report. No terminal at any point. Released apps are signed and notarised, so Gatekeeper accepts a plain double-click. The full signing story is under the installer below.
+**Download the app (macOS): double-click, drop a board.** Grab `Hauksbee.app` (the `hauksbee-<version>-darwin-<arch>-app.zip` asset) from the [releases page](https://github.com/hauksbee-dev/hauksbee/releases), unzip, and double-click it. It opens your browser on the drop-zone. Drop a board file and read the report. No terminal at any point. No board of your own yet? The same page carries three one-click samples under "No board handy? Try a sample", so the app's first run needs no file either. Released apps are signed and notarised, so Gatekeeper accepts a plain double-click. The full signing story is under the installer below.
 
 This is macOS-only today. We are evaluating Windows but do not promise it yet. The GPL-free build cross-compiles clean, and a full run of the CLI and web surface passes under Wine, but no native Windows runner keeps it green. Status and what remains: [`docs/about/release-and-licensing.md`](docs/about/release-and-licensing.md) section 5. Linux users, take the installer line below.
 
@@ -81,16 +81,28 @@ docker run --rm -v "$PWD:/work" ghcr.io/hauksbee-dev/hauksbee:slim \
 
 The slim and full images and more `docker run` examples are in [`docs/ci/DOCKER.md`](docs/ci/DOCKER.md).
 
-**Then use it, first run, against a real board that ships in this repo.** That
-board is the [SQFMI Watchy](https://github.com/sqfmi/watchy-hardware), an
-ESP32-S3 e-paper smartwatch, vendored unmodified under its MIT licence: 86
-footprints making 82 distinct parts, 685 copper segments, a charger and a
-boost converter. Every command
-below finishes in about a second. The `crates/...` paths are from a checkout;
-if you took the curl installer, the same files sit at
-`examples/ci-specs/boards/watchy.kicad_pcb` inside the extracted bundle. Or skip
-files entirely: `hauksbee run --example blinky --report` carries its board inside
-the binary, and `hauksbee serve` has one-click samples.
+**Then use it, first run.** If you took the installer or the app, you have
+binaries and nothing else on disk: the installer extracts the release tarball to
+a temp directory and deletes it, keeping only the binaries. So your first run
+needs no file at all. The `blinky` board below is compiled into both binaries and
+unpacked to a temp directory, so there is no path to get wrong, and each command
+prints a verdict rather than a data dump:
+
+```bash
+hauksbee run --example blinky --check --plain   # every static check on a bundled board, plain-language verdict
+hauksbee-ci run --example blinky                # the same board as a CI spec: 4 assertions, GREEN or RED
+```
+
+Ask either binary for an example it does not carry and it names the ones it does.
+`hauksbee serve` is the third route: its landing page offers three one-click
+samples (the Watchy below, a board-plus-firmware pair that runs a live co-sim,
+and this same minimal board).
+
+**From a checkout**, first run against a real, shipped board instead. That board
+is the [SQFMI Watchy](https://github.com/sqfmi/watchy-hardware), an ESP32-S3
+e-paper smartwatch, vendored unmodified under its MIT licence: 86 footprints
+making 82 distinct parts, 685 copper segments, a charger and a boost converter.
+Every command below finishes in about a second.
 
 ```bash
 hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --report --plain  # which parts were modelled, plain bottom line
@@ -111,7 +123,7 @@ hauksbee run my_board.kicad_pcb                      # no flags on a terminal: a
 hauksbee run my_board.kicad_pcb --si --plain         # signal integrity (USB/Ethernet impedance, rise times)
 hauksbee run my_board.kicad_pcb --list-nets          # list net names (for --ac-node / --ac-loop)
 hauksbee run my_board.kicad_pcb --lint --strict      # exit non-zero on a real defect, to gate a pipeline
-hauksbee-ci init my_board.kicad_pcb                  # scaffold a CI spec beside the board (prints the path; edit, then run)
+hauksbee-ci init my_board.kicad_pcb                  # scaffold a CI spec into the current directory (prints the path; edit, then run)
 hauksbee serve                                       # web front door (long-running): open the page, drop a board, read the report
 ```
 
@@ -176,13 +188,15 @@ hauksbee-ci run ci/boot.toml --junit out.xml    # emit JUnit XML for CI
 ```
 
 A spec reads as board-as-code. This one boots real firmware and asserts that a
-MOSFET gate is actively driven within 20 ms of reset (the full example is
-[`crates/hauksbee-ci/examples/boot_gate_pass.toml`](crates/hauksbee-ci/examples/boot_gate_pass.toml)):
+MOSFET gate is actively driven within 20 ms of reset. It is quoted verbatim from
+[`crates/hauksbee-ci/examples/boot_gate_pass.toml`](crates/hauksbee-ci/examples/boot_gate_pass.toml),
+the runnable file, with only its header comment trimmed and the field comments
+added here:
 
 ```toml
-name = "boot_coverage: MOSFET gate driven promptly"
+name = "boot_coverage: MOSFET gate driven promptly (PASS)"
 board = "boards/boot_gate.kicad_pcb"      # .kicad_pcb / .kicad_sch / .brd / .d356
-firmware = "firmware/boot_gate.hex"       # optional; ELF or hex, relative to the spec
+firmware = "../../../testdata/firmware/boot_gate_a/boot_gate.hex"  # optional; ELF or hex, relative to the spec
 mcu = "atmega328p"                        # usually auto-detected from the board
 duration_ms = 50
 
