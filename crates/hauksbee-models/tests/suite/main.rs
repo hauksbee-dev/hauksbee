@@ -18,6 +18,7 @@ mod digital_pin_maps;
 mod exact_override_tiebreak;
 mod extract_model_choice;
 mod layer_docs;
+mod module_carrier_resolve;
 mod negative_rail_validation;
 mod pack_format;
 mod pack_layering;

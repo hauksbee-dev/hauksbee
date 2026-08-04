@@ -550,6 +550,18 @@ description = "Raspberry Pi RP2040 (Cortex-M0+ dual). QSPI_SS is the BOOTSEL str
 [models.match]
 value_re = "(?i)^RP2040$"
 
+[models.params]
+# No emulator in this tool models the RP2040: the renode:rp2040 descriptor in
+# hauksbee-mcu is caveated as unproven (the shipped Renode carries no rp2040
+# platform, its smoke test is skip-gated on that absence), so pointing here at
+# it would fail at bring-up with a missing-platform error instead of the truth.
+# The explicit "none:" token is the honest declaration: the binder recognizes
+# the part, and the scheduler refuses firmware loudly ("no co-sim platform")
+# instead of letting the entry fall to the historical simavr:atmega328p default,
+# which would run ARM firmware on an AVR core. Firmware-less analyses (strap
+# lint, report, DRC) work as usual.
+backend = "none:rp2040"
+
 [models.pins]
 # RP2040 QFN-56 (KiCad MCU_RaspberryPi_and_Boards:RP2040). The boot strap is
 # QSPI_SS (pad 56): at reset the boot ROM samples it; pulled high (the flash
@@ -566,6 +578,165 @@ role = "qspi_ss"
 level = "high"
 boot_select = true   # held low at reset selects the USB bootloader (BOOTSEL)
 note = "QSPI_SS (flash CS) high = boot from flash (normal); held low = USB BOOTSEL"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "rpi_pico"
+kind = "mcu"
+description = "Raspberry Pi Pico module (RP2040 carrier, 40-pin 2.54mm header; Pico/H/W/WH)"
+
+[models.match]
+# KiCad libraries and vendor symbols spell the board "Pico", "RPi_Pico",
+# "RPi_Pico_WH", "Raspberry Pi Pico"; BOMs often carry the Raspberry Pi product
+# code instead (SC0915 = Pico, SC0916 = Pico made-in-Japan, SC0917 = Pico H,
+# SC0918 = Pico W, SC0919 = Pico WH). All carry the same RP2040 and the same
+# header pinout, so one entry covers them. Anchored full-string so a bare
+# "Pico" value binds but "ESP32-PICO-D4" (its own entry above) and the RP2350
+# "Pico 2" (different chip, not modelled) do not. Match rules are ANDed, so no
+# footprint_re: a board carrying only the value or only the product code must
+# still bind.
+value_re = "(?i)^((r(aspberry)?[-_ ]?pi[-_ ]?)?pico([-_ ]?(wh?|h))?|sc091[5-9])$"
+
+[models.params]
+# The Pico wraps an RP2040 plus its QSPI flash. This entry exists for
+# identification and bind coverage: no emulator in this tool models the RP2040
+# (see the rp2040 entry above for the full story), so co-sim is declared
+# unavailable with the same explicit "none:" token the scheduler refuses
+# loudly, rather than leaving the module UNRESOLVED or letting it fall to the
+# wrong-ISA simavr default. Firmware-less analyses (lint, report, DRC) work.
+#
+# Deliberately NOT `module = true`: that flag switches the binder's role parser
+# to Arduino-Nano header names (d0..d13 -> AVR ports), which is wrong here. The
+# flat "gpio<n>" roles below parse in the standard (non-module) convention.
+backend = "none:rp2040"
+
+[models.pins]
+# Raspberry Pi Pico 40-pin header (Pico datasheet, ch. 2 "Pin information";
+# same map on Pico H/W/WH). GP numbers are RP2040 GPIO numbers, so the flat
+# "gpio<n>" roles line up with the chip's GPIO space directly. GP23/24/25/29
+# are used on-module (SMPS mode, VBUS sense, LED / wireless on the W) and are
+# not on the header, hence the gaps. The QSPI_SS/BOOTSEL strap never reaches
+# the header either (the BOOTSEL button lives on the module), so this entry
+# carries no [models.straps]: at the module level there is nothing for the
+# strap lint to check, and that absence is deliberate.
+"1"  = "gpio0"       # GP0: UART0 TX default
+"2"  = "gpio1"       # GP1: UART0 RX default
+"3"  = "gnd"
+"4"  = "gpio2"
+"5"  = "gpio3"
+"6"  = "gpio4"       # I2C0 SDA default
+"7"  = "gpio5"       # I2C0 SCL default
+"8"  = "gnd2"
+"9"  = "gpio6"
+"10" = "gpio7"
+"11" = "gpio8"
+"12" = "gpio9"
+"13" = "gnd3"
+"14" = "gpio10"
+"15" = "gpio11"
+"16" = "gpio12"
+"17" = "gpio13"
+"18" = "gnd4"
+"19" = "gpio14"
+"20" = "gpio15"
+"21" = "gpio16"      # SPI0 RX default
+"22" = "gpio17"      # SPI0 CSn default
+"23" = "gnd5"
+"24" = "gpio18"      # SPI0 SCK default
+"25" = "gpio19"      # SPI0 TX default
+"26" = "gpio20"
+"27" = "gpio21"
+"28" = "gnd6"
+"29" = "gpio22"
+"30" = "run"         # RUN: reset input, active low
+"31" = "gpio26_adc0"
+"32" = "gpio27_adc1"
+"33" = "gnd7"        # AGND
+"34" = "gpio28_adc2"
+"35" = "adc_vref"
+"36" = "3v3"         # 3V3(OUT), from the on-module SMPS
+"37" = "3v3_en"      # pull low to disable the on-module SMPS
+"38" = "gnd8"
+"39" = "vsys"        # 1.8-5.5 V system input
+"40" = "vbus"        # micro-USB 5 V
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "daisy_seed"
+kind = "mcu"
+description = "Electrosmith Daisy Seed module (STM32H750IBK6 carrier, 2x20-pin header)"
+
+[models.match]
+# "Daisy_Seed", "DaisySeed", "Daisy Seed", optionally with a rev suffix and/or
+# the vendor name in front. Anchored so the Seed2 DFM (a different module with
+# a different pinout) does not bind here.
+value_re = "(?i)^(electro[-_ ]?smith[-_ ]?)?daisy[-_ ]?seed([-_ ]?rev[-_ ]?[0-9a-z.]+)?$"
+
+[models.params]
+# The Daisy Seed wraps an STM32H750IBK6 (Cortex-M7) plus SDRAM, QSPI flash and
+# an audio codec. This entry exists for identification and bind coverage: no
+# hauksbee-mcu descriptor exists for any STM32H7 (the embedded descriptor list
+# stops at stm32f4_discovery) and the engine's family router does not route
+# STM32H7 either, so co-sim is declared unavailable with the explicit "none:"
+# token the scheduler refuses loudly, rather than leaving the module UNRESOLVED
+# or letting it fall to the wrong-ISA simavr default. Firmware-less analyses
+# (lint, report, DRC) work. If an stm32h7 descriptor lands later, switch this
+# to its renode:<part> string.
+#
+# Deliberately NOT `module = true`: that flag switches the binder's role parser
+# to Arduino-Nano header names. The roles below use the standard STM32
+# "p<port><bit>" convention, which the parser handles without the flag.
+backend = "none:stm32h7"
+
+[models.pins]
+# Daisy Seed 2x20 header (Daisy Seed datasheet v1.0.5, Table 2 "Pin
+# Functions"): physical pin -> STM32H750 port pin, with the datasheet's Daisy
+# pin name (D<n> digital / A<n> analog) in the comment. Pins 16-21 have no MCU
+# pin: they are the codec's analog audio path and its supplies. The H750's
+# BOOT pin stays on-module (the BOOT button drives the DFU flow), so this
+# entry carries no [models.straps]; that absence is deliberate.
+"1"  = "pb12"          # D0 (also USB_HS_ID)
+"2"  = "pc11"          # D1, SDMMC1_D3
+"3"  = "pc10"          # D2, SDMMC1_D2
+"4"  = "pc9"           # D3, SDMMC1_D1
+"5"  = "pc8"           # D4, SDMMC1_D0
+"6"  = "pd2"           # D5, SDMMC1_CMD
+"7"  = "pc12"          # D6, SDMMC1_CK
+"8"  = "pg10"          # D7, SPI1_NSS
+"9"  = "pg11"          # D8, SPI1_SCK
+"10" = "pb4"           # D9, SPI1_MISO
+"11" = "pb5"           # D10, SPI1_MOSI
+"12" = "pb8_i2c1_scl"  # D11
+"13" = "pb9_i2c1_sda"  # D12
+"14" = "pb6_usart1_tx" # D13
+"15" = "pb7_usart1_rx" # D14
+"16" = "audio_in_l"    # codec analog in, no MCU pin
+"17" = "audio_in_r"
+"18" = "audio_out_l"
+"19" = "audio_out_r"
+"20" = "agnd"
+"21" = "3v3a"          # analog 3V3 out
+"22" = "pc0_adc0"      # A0 / D15
+"23" = "pa3_adc1"      # A1 / D16
+"24" = "pb1_adc2"      # A2 / D17 (3.3 V-only pin; most GPIO are 5 V tolerant)
+"25" = "pa7_adc3"      # A3 / D18 (3.3 V-only)
+"26" = "pa6_adc4"      # A4 / D19
+"27" = "pc1_adc5"      # A5 / D20
+"28" = "pc4_adc6"      # A6 / D21 (3.3 V-only)
+"29" = "pa5_adc7"      # A7 / D22, DAC1_OUT2 (3.3 V-only)
+"30" = "pa4_adc8"      # A8 / D23, DAC1_OUT1 (3.3 V-only)
+"31" = "pa1_adc9"      # A9 / D24, SAI2_MCLK_B
+"32" = "pa0_adc10"     # A10 / D25, SAI2_SD_B
+"33" = "pd11"          # D26, SAI2_SD_A
+"34" = "pg9"           # D27, SAI2_FS_B
+"35" = "pa2_adc11"     # A11 / D28, SAI2_SCK_B
+"36" = "pb14"          # D29, USB_HS_D-
+"37" = "pb15"          # D30, USB_HS_D+
+"38" = "3v3d"          # digital 3V3 out
+"39" = "vin"           # +4 to +17 V in (datasheet Table 1)
+"40" = "gnd"           # DGND
 
 # ─────────────────────────────────────────────────────────────────────────────
 # AVR: documented NONE. The ATmega328P (and the classic 8-bit AVR line) has no
