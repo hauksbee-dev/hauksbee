@@ -5,8 +5,8 @@
 //! real co-sim would actually accept.
 
 /// `hauksbee doctor --backends`: report co-sim backend availability using the
-/// engine's OWN discovery, so `scripts/doctor.sh` can never drift from what a
-/// real co-sim would accept.
+/// engine's OWN discovery, so no other availability surface can drift from
+/// what a real co-sim would accept.
 ///
 /// For each backend this calls the exact resolver the scheduler uses
 /// (`hauksbee_mcu::qemu::find_qemu`, `hauksbee_mcu::renode::find_renode`), no
@@ -146,11 +146,20 @@ pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // A TTY gets one table a human can actually read. A pipe gets the TSV
-    // contract scripts/doctor.sh parses; the human framing goes to stderr
-    // there so the data stream stays clean.
+    // A TTY gets ONE table a human can actually read, closed by one summary
+    // line; nothing else (U10: an earlier shape interleaved two formats). A
+    // pipe gets the TSV contract external tooling parses; its human framing
+    // goes to stderr as one contiguous block BEFORE the data lines, never
+    // alternating with them, so a `2>&1` merge stays two clean blocks.
+    let available = backends
+        .iter()
+        .filter(|b| b.status == "ok" || b.status == "builtin")
+        .count();
+    let summary_line = format!(
+        "{available} of {} backends available; `hauksbee install --help` fetches the missing ones.",
+        backends.len()
+    );
     if std::io::IsTerminal::is_terminal(&std::io::stdout()) {
-        println!("hauksbee co-sim backends (resolved by the engine's own discovery)");
         let rows: Vec<Vec<String>> = backends
             .iter()
             .map(|b| {
@@ -166,10 +175,13 @@ pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
             "{}",
             super::models::box_table(&["Backend", "Status", "Co-sim", "Detail"], &rows)
         );
+        println!("{summary_line}");
     } else {
         eprintln!("hauksbee co-sim backends (resolved by the engine's own discovery)");
         for b in &backends {
             eprintln!("    {:<13} {}", b.name, b.summary);
+        }
+        for b in &backends {
             println!("{}\t{}\t{}", b.name, b.status, b.detail);
         }
     }

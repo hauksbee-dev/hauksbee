@@ -149,6 +149,50 @@ async fn read_ws_text(stream: &mut tokio::net::TcpStream, residue: &mut Vec<u8>)
     }
 }
 
+/// The `/boards/{name}` resume-probe contract: a MISS answers `200
+/// application/json` `{"available":false}` (NOT a 404, which the browser logs
+/// as a console error on every legitimate session-resume probe). A hit stays
+/// `200 text/plain` board text; the two are told apart by Content-Type.
+#[tokio::test]
+async fn board_probe_miss_is_200_json_not_404() {
+    let Some(hex) = demo_hex() else {
+        eprintln!("SKIP: demo.hex missing");
+        return;
+    };
+    let engine = McuDemoEngine::new(&hex, "demo", "/boards/demo.kicad_pcb").unwrap();
+    let server = Server::new(Box::new(engine));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = server.router(None);
+    tokio::spawn(async move {
+        axum::serve(listener, router).await.unwrap();
+    });
+
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+    stream
+        .write_all(
+            format!(
+                "GET /boards/gone.kicad_pcb HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n"
+            )
+            .as_bytes(),
+        )
+        .await
+        .unwrap();
+    let mut buf = Vec::new();
+    let _ = stream.read_to_end(&mut buf).await;
+    let resp = String::from_utf8_lossy(&buf);
+    assert!(resp.contains("200 OK"), "miss must be 200: {resp}");
+    assert!(
+        resp.contains("application/json"),
+        "miss is JSON so a hit (text/plain board text) stays distinguishable: {resp}"
+    );
+    assert!(
+        resp.contains("\"available\":false"),
+        "miss body carries the availability answer: {resp}"
+    );
+}
+
 async fn write_ws_text(stream: &mut tokio::net::TcpStream, text: &str) {
     use tokio::io::AsyncWriteExt;
     let payload = text.as_bytes();

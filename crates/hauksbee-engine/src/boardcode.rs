@@ -185,9 +185,18 @@ pub fn load_code(path: &Path) -> anyhow::Result<String> {
     } else {
         std::fs::read_to_string(path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
+                // Suggestion adapts to what is actually runnable: the bundled
+                // example only exists inside a source checkout; a bare binary
+                // gets told how to MAKE a .board from any board file instead.
+                let checkout = std::path::Path::new("examples/board-as-code/blinky.board");
+                let suggestion = if checkout.exists() {
+                    "hauksbee check-code examples/board-as-code/blinky.board".to_string()
+                } else {
+                    "hauksbee to-code <your .kicad_pcb> --out my.board   # create one from any board"
+                        .to_string()
+                };
                 anyhow::anyhow!(
-                    "no board-as-code file at '{}'. Check the path, or try a bundled example:\n  \
-                     hauksbee check-code examples/board-as-code/blinky.board",
+                    "no board-as-code file at '{}'. Check the path, or:\n  {suggestion}",
                     path.display()
                 )
             } else {
@@ -258,6 +267,15 @@ pub fn check_code(code: &str, opts: &CheckOptions) -> anyhow::Result<CheckReport
 /// the original-vs-edited comparison and tests).
 pub fn check_board_text(board_text: &str, opts: &CheckOptions) -> anyhow::Result<CheckReport> {
     let board = ExtractedBoard::from_auto(board_text)?;
+    // A zero-component board can prove nothing: every stress check passes
+    // vacuously, and "100% resolved, no faults" on an empty .board is false
+    // comfort (M6). Refuse loudly instead.
+    if board.components.is_empty() {
+        anyhow::bail!(
+            "this board has no components; nothing to check, so a pass would be \
+             meaningless"
+        );
+    }
     let lib = ModelLibrary::builtin();
     let bound = bind_board(&board, &lib);
 

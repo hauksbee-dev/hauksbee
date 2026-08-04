@@ -58,6 +58,9 @@ pub fn emit(
         )
     });
     report.findings = kept;
+    // Zero routed copper (D2): a pads-only board passes the spacing check
+    // vacuously; say so prominently on every surface.
+    let unrouted = !altium_present && super::unrouted_kicad_layout(text);
     match mode {
         OutputMode::Json => {
             // Grouped DRC (Fix #8): shorts kept verbatim, clearance findings
@@ -65,12 +68,21 @@ pub fn emit(
             let bound = bind_board(board, lib);
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
             jr.drc = Some(DrcStructured::from_report(&report));
+            if unrouted {
+                jr.notes.push(crate::result::JsonNote {
+                    kind: crate::result::JsonNoteKind::Coverage,
+                    message: super::UNROUTED_COPPER_NOTE.to_string(),
+                });
+            }
             // A green verdict that quietly dropped findings would be worse than
             // no waivers at all, so the machine surface carries them too.
             jr.waived = waived.iter().cloned().map(Into::into).collect();
             println!("{}", jr.to_json());
         }
         OutputMode::Plain => {
+            if unrouted {
+                println!("{}", super::UNROUTED_COPPER_NOTE);
+            }
             // Plain mode renders from the SAME grouped structure as text/json so
             // all surfaces agree: duplicates collapsed, and gap==rule labelled
             // "at minimum clearance (no margin)" rather than the wrong "below".
@@ -82,6 +94,9 @@ pub fn emit(
             );
         }
         OutputMode::Text => {
+            if unrouted {
+                println!("{}", super::UNROUTED_COPPER_NOTE);
+            }
             // Grouped, honest DRC: one line per (net pair + cause) with a count,
             // and gap==rule labelled "at minimum clearance (no margin)" rather
             // than the wrong "below the spacing the board asks for" (Fix #8).

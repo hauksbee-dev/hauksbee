@@ -699,7 +699,15 @@ fn origin_is_ours(headers: &axum::http::HeaderMap) -> Result<(), &'static str> {
 }
 
 /// GET `/boards/{name}`: the CURRENT live session's own board file, for the
-/// geometry viewer. 404 for anything but the launched board's exact name.
+/// geometry viewer.
+///
+/// Contract: a hit is `200 text/plain` carrying the board text. A miss is
+/// `200 application/json` carrying `{"available":false}`, NOT a 404: the
+/// frontend speculatively probes this route on every session resume to ask
+/// whether the server still holds the uploaded bytes, and a 404 answer to
+/// that legitimate question shows up as a browser console error on every
+/// resume. The two cases are distinguished by Content-Type (board text is
+/// never JSON).
 async fn live_board_handler(
     State(hub): State<Arc<LiveHub>>,
     UrlPath(name): UrlPath<String>,
@@ -710,7 +718,11 @@ async fn live_board_handler(
             contents,
         )
             .into_response(),
-        None => (StatusCode::NOT_FOUND, "no such live board").into_response(),
+        None => (
+            [(header::CONTENT_TYPE, "application/json")],
+            "{\"available\":false}",
+        )
+            .into_response(),
     }
 }
 
