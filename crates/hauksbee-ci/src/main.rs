@@ -30,11 +30,12 @@ use hauksbee_ci::{run, RunConfig};
 #[derive(Parser)]
 #[command(
     name = "hauksbee-ci",
-    version,
+    version = hauksbee_ci::version_string(),
     about = "CI for hardware: boot firmware on the emulated PCB and assert rails, UART, and blink.",
     long_about = None,
     propagate_version = true,
-    arg_required_else_help = true
+    arg_required_else_help = true,
+    after_help = "try it now: hauksbee-ci run --example blinky"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -54,6 +55,11 @@ enum Command {
     /// missing board, unknown net); 3 invalid for analysis (the analog solve
     /// aborted, so the result is not trustworthy and the run refuses to
     /// pretend).
+    ///
+    /// Sibling contract: `hauksbee run` numbers 1 and 2 differently there
+    /// (1 = input error: the board could not be read; 2 = usage error, or
+    /// findings under --strict); each binary's --help states its own contract.
+    #[command(verbatim_doc_comment)]
     Run(RunArgs),
 
     /// Validate one or more specs WITHOUT running any simulation.
@@ -113,6 +119,10 @@ enum HookCommand {
     /// Wire the pre-commit gate into the repository containing the current
     /// directory.
     Install,
+    /// Remove the pre-commit gate hauksbee-ci installed (the plain hook block
+    /// or the .pre-commit-config.yaml entry). Refuses to touch a hook it did
+    /// not write.
+    Uninstall,
 }
 
 #[derive(Parser)]
@@ -179,9 +189,11 @@ struct CheckArgs {
     #[arg(value_name = "SPEC", num_args = 1.., required = true)]
     specs: Vec<PathBuf>,
 
-    /// Skip resolving/loading the board file: parse + structural validation
-    /// only. Net and component references are then NOT validated (they need
-    /// the board), so a clean exit means "structurally valid", not "will run".
+    /// Skip resolving the on-disk artifacts (the board file AND the firmware
+    /// image): parse + structural validation only. Net and component references
+    /// are then NOT validated (they need the board) and the firmware path is not
+    /// checked to exist, so a clean exit means "structurally valid", not "will
+    /// run". Use it in an editor loop where neither artifact is built yet.
     #[arg(long)]
     no_board: bool,
 
@@ -218,6 +230,9 @@ fn main() -> ExitCode {
         Command::Check(args) => return cmd_check(args),
         Command::Init(args) => return cmd_init(args),
         Command::Hook(HookCommand::Install) => return cmd_hook_install(),
+        Command::Hook(HookCommand::Uninstall) => {
+            return hauksbee_ci::integrate::run_hook_uninstall()
+        }
         Command::GithubAction(args) => return cmd_github_action(args),
     };
 
