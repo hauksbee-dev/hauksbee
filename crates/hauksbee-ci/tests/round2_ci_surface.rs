@@ -385,6 +385,66 @@ until = "2030-01-01"
     );
 }
 
+// M6: every other way to get a waiver wrong refuses to load (no `reason`, an
+// unparseable `until`, no `nets`/`refs`). A typo in `check` was the one that
+// went through silently: it names no surface, so nothing ever matches it and
+// no surface's stale accounting claimed it either. The user believes a finding
+// is waived and it is not.
+#[test]
+fn a_waiver_naming_no_check_surface_is_reported_not_silently_inert() {
+    let dir = tempfile::tempdir().unwrap();
+    let p = waiver_file(
+        dir.path(),
+        r#"
+[[waive]]
+check = "cl"
+kind = "voltage"
+nets = ["+5V"]
+reason = "meant ci, typed cl"
+until = "2030-01-01"
+"#,
+    );
+    let mut waivers = hauksbee_engine::waiver::WaiverSet::load(&p).unwrap();
+    // It really is inert: the failure it was meant to cover still gates.
+    let mut results = vec![result_named("+5V holds", false)];
+    apply_waivers(&mut results, &mut waivers);
+    assert!(results[0].waived.is_none());
+
+    let notes = waiver_notes(&waivers);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    assert!(notes[0].contains("check = 'cl'"), "{notes:?}");
+    assert!(notes[0].contains("can never match"), "{notes:?}");
+    assert!(
+        notes[0].contains("did you mean 'ci'?"),
+        "the near miss is the whole diagnosis: {notes:?}"
+    );
+    assert!(notes[0].contains("ci, drc, lint, si"), "{notes:?}");
+}
+
+#[test]
+fn a_real_static_check_surface_is_still_not_reported_here() {
+    // The unknown-surface note must not swallow the deliberate filter: si /
+    // drc / lint waivers belong to `hauksbee run`'s surfaces, and telling a CI
+    // reader they matched nothing would be telling them to delete waivers this
+    // run never consults.
+    let dir = tempfile::tempdir().unwrap();
+    for surface in ["si", "drc", "lint"] {
+        let p = waiver_file(
+            dir.path(),
+            &format!(
+                "\n[[waive]]\ncheck = \"{surface}\"\nkind = \"short\"\n\
+                 nets = [\"USB_DP\"]\nreason = \"not this run's business\"\n\
+                 until = \"2030-01-01\"\n"
+            ),
+        );
+        let waivers = hauksbee_engine::waiver::WaiverSet::load(&p).unwrap();
+        assert!(
+            waiver_notes(&waivers).is_empty(),
+            "a {surface} waiver must stay quiet here"
+        );
+    }
+}
+
 #[test]
 fn the_boot_coverage_alias_matches_a_canonical_waiver() {
     // A spec still written with the old spelling normalizes at load, so its
