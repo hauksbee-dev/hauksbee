@@ -926,12 +926,44 @@ rest.
 
 ## Wiring it into your repo
 
-- **Pre-commit (schematic or layout)**: copy the `repos:` entry from
-  `integrations/pre-commit/.pre-commit-config.yaml` into your repo and run
-  `pre-commit install`. Hardware checks then run before a commit lands. See
+The two wirings most repos want, hauksbee-ci installs itself. Neither needs you
+to copy a file out of this repository, and both are idempotent, so running them
+twice is not a mistake:
+
+```bash
+hauksbee-ci hook install          # the pre-commit gate
+hauksbee-ci github-action --write  # .github/workflows/hauksbee.yml
+```
+
+`hook install` detects which mechanism the repo already uses: a repo with a
+`.pre-commit-config.yaml` gets the hauksbee-ci entry added to that file (then run
+`pre-commit install` as usual), and any other git repo gets a plain,
+self-contained `.git/hooks/pre-commit`. An existing hook is preserved rather than
+replaced. `github-action` prints the workflow to stdout so you can read it before
+committing to it; `--write` lands it at `.github/workflows/hauksbee.yml`, or at a
+path you pass, and refuses to overwrite a file that has diverged from what it
+would write. `hauksbee-ci init` ends by offering both.
+
+A run tells you which of the two is still missing. A GREEN run closes with
+`next: gate commits locally too: hauksbee-ci hook install` until the hook is
+there, and goes quiet once the hook and the workflow both exist. A RED run closes
+with a link to the section of this document covering the assertion kind that
+failed, so the report points at its own documentation rather than making you
+search for it.
+
+What `github-action` writes is deliberately minimal: it runs on every push and
+pull request and takes the auto-detect path, which is the right default for a repo
+that has one spec or one board. The copy-it-yourself workflow below is the fuller
+one, with `paths:` filters so an unrelated commit does not spend a runner, and
+with the options spelled out. Start with the generated file, move to the example
+when you want the filters.
+
+- **Pre-commit (schematic or layout)**: the `repos:` entry lives in
+  `integrations/pre-commit/.pre-commit-config.yaml` if you would rather paste it
+  yourself. Hardware checks then run before a commit lands. See
   `integrations/pre-commit/README.md`.
-- **GitHub Actions**: copy `integrations/github-action/example-workflow.yml`
-  into `.github/workflows/`. The action runs in two modes: `mode: spec` (a
+- **GitHub Actions**: `integrations/github-action/example-workflow.yml`
+  is the annotated, path-filtered version. The action runs in two modes: `mode: spec` (a
   `spec:` or `specs:` input naming one or more hauksbee-ci TOML files, globs
   included, merged into one JUnit report) and `mode: check` (a `board:`
   input, gated with `hauksbee run <board> --check --strict`, no spec needed).
