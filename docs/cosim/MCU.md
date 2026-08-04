@@ -277,11 +277,21 @@ count, so a missed edge can only make the part look slow and never fast.
 A firmware whose recovery path depends on the watchdog biting is a firmware
 whose watchdog is untested if the co-simulator's watchdog does not bite. That is
 a coverage hole in exactly the sense a dropped ADC injection is, so it is
-surfaced the same way: `Mcu::watchdog_limitation` returns a sentence, and a run
-on an affected part carries it on every report surface rather than leaving the
-user to infer it from a passing result. `Mcu::watchdog_resets` reports reboots
-that did happen, because firmware behaviour observed after a reboot belongs to a
-rebooted core.
+surfaced the same way, on **all** report surfaces: `hauksbee run` default text,
+`--plain` heads-ups, `--json` (`CosimJson.watchdog_limitations` /
+`CosimJson.watchdog_resets` plus `notes[]` coverage entries), and every
+hauksbee-ci format as a `COVERAGE HOLE` warning. `hauksbee models lint` states
+it per descriptor before a run happens.
+
+`Mcu::watchdog_limitation` returns the whole sentence, which every surface
+renders verbatim so two of them cannot word the same gap differently.
+`Mcu::watchdog_resets` reports reboots that DID happen, because firmware
+behaviour observed after a reboot belongs to a rebooted core and an assertion
+that passed across one was not measuring the run it claimed. The two mean
+nothing apart: a backend that cannot reboot at all reports zero resets, so a
+quiet counter is only good news next to a quiet limitation. A part that claims
+full fidelity (only `simavr` does) produces NOTHING on any surface, and that
+silence is what makes the warning worth reading.
 
 | Backend | armed and never fed | how it is known |
 |---------|---------------------|-----------------|

@@ -509,6 +509,29 @@ impl AdcDrop {
     }
 }
 
+/// The one-line warning every surface emits for an entry of
+/// [`Scheduler::watchdog_limitations`], so text, `--plain`, `--json` notes and
+/// the CI report all name the same gap in the same words.
+///
+/// `limitation` is the backend's own whole sentence and is passed through
+/// UNCHANGED. Two surfaces wording the same coverage hole differently is the
+/// failure this shared formatter exists to prevent, so nothing here may
+/// paraphrase it; the only thing added is which MCU it is about.
+pub fn watchdog_limitation_message(mcu_ref: &str, limitation: &str) -> String {
+    format!("MCU {mcu_ref}: {limitation}")
+}
+
+/// The one-line finding every surface emits for an entry of
+/// [`Scheduler::watchdog_resets`]. Same shared-wording discipline as
+/// [`watchdog_limitation_message`] and [`AdcDrop::message`].
+pub fn watchdog_reset_message(mcu_ref: &str, resets: u64) -> String {
+    let plural = if resets == 1 { "" } else { "s" };
+    format!(
+        "MCU {mcu_ref}: the watchdog rebooted the core {resets} time{plural} during this \
+         run; behaviour observed after the first reboot belongs to a rebooted core"
+    )
+}
+
 /// A firmware GPIO pulse that rose AND fell inside a single solver chunk, on a
 /// net that clocks a TICK-evaluated sequential part (cold-drive friction 1.16,
 /// defect report 7). Chain-responder parts (74HC595/165 chains, bit-banged
@@ -1288,6 +1311,49 @@ impl Scheduler {
             .mcus
             .iter()
             .map(|m| (m.binding.reference.clone(), m.core.uart_rx_overflow()))
+            .filter(|(_, n)| *n > 0)
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Per-MCU statements of how the backend's watchdog fidelity falls short of
+    /// the part, keyed by MCU reference. Exactly the same class of finding as
+    /// `adc_dropped`: the run happened, but something the board would have done
+    /// did not, so a green result on the recovery path means less than it looks.
+    /// A firmware that HANGS runs forever here, so every assertion about
+    /// behaviour after a hang is fiction.
+    ///
+    /// The value is the backend's whole sentence, rendered verbatim through
+    /// [`watchdog_limitation_message`] on every surface. Backends whose armed,
+    /// never-fed watchdog reboots the core the way silicon does (simavr) report
+    /// nothing and are absent from this list: the silence is what makes the
+    /// warning mean something. Ordered by MCU reference.
+    pub fn watchdog_limitations(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = self
+            .mcus
+            .iter()
+            .filter_map(|m| {
+                m.core
+                    .watchdog_limitation()
+                    .map(|l| (m.binding.reference.clone(), l))
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Times an unserviced watchdog rebooted each MCU's core during this run,
+    /// filtered to the nonzero. Not an error, a FINDING: an assertion that
+    /// passed across a reboot was not measuring the run it claimed, because the
+    /// behaviour it observed belongs to a rebooted core. Read together with
+    /// [`Scheduler::watchdog_limitations`], since a backend that cannot reboot
+    /// at all reports zero here and says so there. Ordered by MCU reference.
+    pub fn watchdog_resets(&self) -> Vec<(String, u64)> {
+        let mut out: Vec<(String, u64)> = self
+            .mcus
+            .iter()
+            .map(|m| (m.binding.reference.clone(), m.core.watchdog_resets()))
             .filter(|(_, n)| *n > 0)
             .collect();
         out.sort();
@@ -5606,6 +5672,131 @@ mod tests {
         fn adc_dropped_channels(&self) -> Vec<u8> {
             vec![0]
         }
+        /// The measured `renode:nrf52840` shape: the watchdog arms, reads back
+        /// as running, and never fires. A whole sentence, because every surface
+        /// renders it verbatim.
+        fn watchdog_limitation(&self) -> Option<String> {
+            Some(
+                "The nRF52840 watchdog arms in this co-simulator (it reads back as running, \
+                 with a correct 32768 Hz reload) but never fires: an unserviced watchdog will \
+                 NOT reset the core, so watchdog recovery is untested on this run."
+                    .to_string(),
+            )
+        }
+        /// Consistent with the limitation above: a backend that cannot reboot
+        /// counts no reboots.
+        fn watchdog_resets(&self) -> u64 {
+            0
+        }
+    }
+
+    /// A mock core with the opposite watchdog shape: it DOES reboot (the simavr
+    /// case), so it claims no limitation and reports the reboots it performed.
+    struct RebootingCore(u64);
+
+    impl Mcu for RebootingCore {
+        fn load_firmware(&mut self, _path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn run_cycles(&mut self, n: u64) -> anyhow::Result<u64> {
+            Ok(n)
+        }
+        fn run_micros(&mut self, _us: u64) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn frequency(&self) -> u64 {
+            16_000_000
+        }
+        fn set_digital_in(&mut self, _pin: PinId, _high: bool) {}
+        fn set_analog_in(&mut self, _channel: u8, _volts: f64) {}
+        fn on_pin_change(&mut self, _cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {}
+        fn uart_write(&mut self, _bytes: &[u8]) {}
+        fn on_uart(&mut self, _cb: Box<dyn FnMut(u8) + Send>) {}
+        fn on_i2c(&mut self, _cb: Box<dyn FnMut(hauksbee_mcu::I2cEvent) -> Option<u8> + Send>) {}
+        fn on_spi(&mut self, _cb: Box<dyn FnMut(hauksbee_mcu::SpiEvent) -> u8 + Send>) {}
+        fn state(&self) -> hauksbee_mcu::McuState {
+            hauksbee_mcu::McuState {
+                pc: 0,
+                cycles: 0,
+                sleeping: false,
+                done: false,
+                crashed: false,
+            }
+        }
+        fn watchdog_resets(&self) -> u64 {
+            self.0
+        }
+    }
+
+    /// A scheduler whose single live MCU is the given core, bound as `U1` with
+    /// no ADC or bus wiring: the minimum needed to read the watchdog accessors.
+    fn sched_with_core(core: Box<dyn Mcu + Send>) -> Scheduler {
+        let board = hauksbee_extract::ExtractedBoard::from_auto(PLAIN_INPUT_BOARD).expect("board");
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let bound = crate::binder::bind_board(&board, &lib);
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+        let binding = McuBinding {
+            reference: "U1".into(),
+            backend: "renode:nrf52840".into(),
+            requested_part: String::new(),
+            pad_roles: HashMap::new(),
+            role_nets: HashMap::new(),
+            gpio_drivers: HashMap::new(),
+            adc_nets: HashMap::new(),
+            adc_pin: HashMap::new(),
+            module: false,
+            max_supply_v: None,
+        };
+        sched.mcus.push(core_with_hooks(core, binding));
+        sched.responder_registries.push(None);
+        sched
+    }
+
+    // F6c: a backend whose armed watchdog never fires must expose the gap keyed
+    // to its MCU, and the shared formatter must pass the backend's own sentence
+    // through UNCHANGED. Re-wording it at a render site is the failure this
+    // whole mirroring exists to prevent.
+    #[test]
+    fn a_backend_that_cannot_reboot_reports_its_watchdog_limitation_verbatim() {
+        let sched = sched_with_bus_blind_core("TEMP_SENSE");
+        let limits = sched.watchdog_limitations();
+        assert_eq!(limits.len(), 1, "{limits:?}");
+        assert_eq!(limits[0].0, "U1");
+        let sentence = BusBlindCore.watchdog_limitation().expect("mock has one");
+        assert_eq!(limits[0].1, sentence, "the sentence must not be rewritten");
+        let msg = watchdog_limitation_message(&limits[0].0, &limits[0].1);
+        assert_eq!(msg, format!("MCU U1: {sentence}"));
+        // A backend that cannot reboot counts no reboots, so the counter list is
+        // silent and the two accessors only mean something read together.
+        assert!(sched.watchdog_resets().is_empty());
+    }
+
+    // The counter side: reboots that DID happen are a finding, because an
+    // assertion that passed across one was not measuring the run it claimed.
+    #[test]
+    fn watchdog_reboots_are_counted_per_mcu_and_worded_once() {
+        let sched = sched_with_core(Box::new(RebootingCore(12)));
+        assert_eq!(sched.watchdog_resets(), vec![("U1".to_string(), 12)]);
+        assert_eq!(
+            watchdog_reset_message("U1", 12),
+            "MCU U1: the watchdog rebooted the core 12 times during this run; behaviour \
+             observed after the first reboot belongs to a rebooted core"
+        );
+        // Grammar, not prose freedom: one reboot is one reboot.
+        assert!(watchdog_reset_message("U1", 1).contains("1 time during this run"));
+        // A core that reboots claims no limitation, so the limitation surface
+        // stays silent for it.
+        assert!(sched.watchdog_limitations().is_empty());
+    }
+
+    // The negative that makes the warnings mean something: a backend that
+    // claims full fidelity and rebooted nothing produces NOTHING on either
+    // accessor (the simavr shape; the capturing core keeps the trait defaults).
+    #[test]
+    fn a_faithful_backend_with_no_reboots_reports_nothing_at_all() {
+        let (sched, _h) = sched_with_capturing_core(&[]);
+        assert!(sched.watchdog_limitations().is_empty());
+        assert!(sched.watchdog_resets().is_empty());
     }
 
     /// A scheduler whose single live MCU is a [`BusBlindCore`], with ADC
