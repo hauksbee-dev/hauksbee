@@ -4,7 +4,7 @@
 # VCVS branch unknown and a `gain` parameter threaded through the X-line. The
 # subckt has an internal node (`mid`) that must mangle to `X1.mid` and a 1-ohm
 # series resistor the ideal VCVS draws no current through, so the amplified
-# waveform is unchanged from a hand-flattened deck — which is the whole point of
+# waveform is unchanged from a hand-flattened deck, which is the whole point of
 # flatten-at-load. Percent tolerance on the filtered output.
 analysis = "tran"
 description = "opamp subckt (VCVS macro, gain param) into an RC low-pass"
@@ -13,4 +13,4 @@ skip_initial = 0.0
 
 [[probe]]
 expr = "V(out)"
-reltol = 0.01
+reltol = 1.0e-02

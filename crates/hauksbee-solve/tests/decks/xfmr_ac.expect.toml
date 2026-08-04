@@ -5,6 +5,6 @@ description = "1:2 transformer Bode: V(sec) magnitude+phase, 100 Hz .. 1 MHz"
 
 [[probe]]
 expr = "V(sec)"
-reltol = 0.01
+reltol = 1.0e-05
 abstol = 1e-6
-phase_abstol = 1.0
+phase_abstol = 1.0e-03

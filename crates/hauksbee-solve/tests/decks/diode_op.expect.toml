@@ -5,10 +5,10 @@ description = "diode forward-drop DC operating point"
 
 [[probe]]
 expr = "V(d)"
-reltol = 1.0e-3
+reltol = 1.0e-04
 abstol = 1.0e-3
 
 [[probe]]
 expr = "I(V1)"
-reltol = 5.0e-3
+reltol = 2.0e-05
 abstol = 1.0e-9

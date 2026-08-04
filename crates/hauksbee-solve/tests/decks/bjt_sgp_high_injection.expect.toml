@@ -14,8 +14,8 @@ description = "2N3904 vendor card at VBE = 0.75 V, where the high-injection knee
 
 [[probe]]
 expr = "I(VC)"
-reltol = 0.02
+reltol = 2.0e-04
 
 [[probe]]
 expr = "I(VB)"
-reltol = 0.02
+reltol = 2.0e-04
