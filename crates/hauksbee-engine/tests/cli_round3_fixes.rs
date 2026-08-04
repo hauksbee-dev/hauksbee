@@ -28,6 +28,14 @@ fn blinky_board() -> PathBuf {
         .join("../hauksbee-ci/examples/boards/blinky.kicad_pcb")
 }
 
+fn board(rel: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(rel)
+}
+
+fn clean_board() -> PathBuf {
+    board("../../testdata/boards/button_pullup.kicad_pcb")
+}
+
 // ── B1: --example resolution goes through the normal error handler ──────────
 
 #[test]
