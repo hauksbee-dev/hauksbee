@@ -21,6 +21,7 @@ own board, firmware, and spec, and the one local command that runs them, and
 | [`ingest/EAGLE.md`](ingest/EAGLE.md) | Eagle `.brd` (and Fusion 360 Electronics): what is read, what is not |
 | [`ingest/GERBER.md`](ingest/GERBER.md) | Gerber + pick-and-place reverse extraction |
 | [`ingest/SCHEMATICS.md`](ingest/SCHEMATICS.md) | Schematic (`.kicad_sch`) extraction |
+| [`ingest/BOM.md`](ingest/BOM.md) | BOM and pick-and-place: the dialects, the column mapping, and what a part number changes about binding |
 | [`ingest/DNP.md`](ingest/DNP.md) | Do-not-populate parts: what gets simulated, and how to change it |
 | [`ingest/BOARD_AS_CODE.md`](ingest/BOARD_AS_CODE.md) | Decompile / edit / recompile a board as editable code |
 

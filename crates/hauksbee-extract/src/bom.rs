@@ -562,6 +562,30 @@ pub struct BomProvenance {
     pub ignored: Vec<IgnoredInput>,
 }
 
+impl BomProvenance {
+    /// The block a report prints so that what was read, how it was mapped, and
+    /// what was dropped are all visible without opening the file.
+    ///
+    /// Half the contract of proceeding on a detected mapping is saying which
+    /// mapping was used, so this is not optional output.
+    pub fn lines(&self) -> Vec<String> {
+        let sha = if self.sha256.is_empty() {
+            String::new()
+        } else {
+            format!(", sha256 {}", &self.sha256[..8])
+        };
+        let mut out = vec![format!("{} ({}{sha})", self.path, self.kind)];
+        out.extend(self.column_map.lines());
+        for c in &self.contributed {
+            out.push(format!("  contributed: {}: {}", c.what, c.detail));
+        }
+        for i in &self.ignored {
+            out.push(format!("  ignored:     {}: {}", i.what, i.why));
+        }
+        out
+    }
+}
+
 // ── The BOM ─────────────────────────────────────────────────────────────────
 
 /// One BOM row, after mapping. A grouped row covering twelve capacitors is one
@@ -778,17 +802,20 @@ impl Bom {
         let mut contributed = vec![Contribution {
             what: "part identity".to_string(),
             detail: format!(
-                "{parts} reference designators over {} rows, {with_mpn} rows carrying a \
+                "{parts} reference designators over {} {}, {with_mpn} of {} carrying a \
                  manufacturer part number",
-                rows.len()
+                rows.len(),
+                plural(rows.len(), "row", "rows"),
+                plural(rows.len(), "it", "them"),
             ),
         }];
-        if rows.iter().any(|r| r.populate.is_some()) {
+        let stated = rows.iter().filter(|r| r.populate.is_some()).count();
+        if stated > 0 {
             contributed.push(Contribution {
                 what: "populate flags".to_string(),
                 detail: format!(
-                    "{} rows state whether the part is fitted",
-                    rows.iter().filter(|r| r.populate.is_some()).count()
+                    "{stated} {} whether the part is fitted",
+                    plural(stated, "row states", "rows state")
                 ),
             });
         }
@@ -1544,8 +1571,7 @@ fn map_columns(
         // `bottomDesignator`, which are one reference column in two halves.
         let unused_for_identity =
             matches!(role, ColumnRole::DistributorPart | ColumnRole::Manufacturer);
-        let one_column_in_halves =
-            role == ColumnRole::Reference && side_split_designators(&tied);
+        let one_column_in_halves = role == ColumnRole::Reference && side_split_designators(&tied);
         let tie_matters = !unused_for_identity && !one_column_in_halves;
         if tied.len() > 1 && tie_matters {
             return Err(BomError::AmbiguousColumn {
@@ -1698,6 +1724,15 @@ pub(crate) fn split_references(cell: &str) -> (Vec<String>, Vec<String>) {
         }
     }
     (refs, placeholders)
+}
+
+/// Singular or plural form, so a report never says "1 rows".
+fn plural<'a>(n: usize, one: &'a str, many: &'a str) -> &'a str {
+    if n == 1 {
+        one
+    } else {
+        many
+    }
 }
 
 /// A quantity cell, which is sometimes `1`, sometimes `1 pc`, sometimes blank.
