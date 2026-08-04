@@ -178,10 +178,18 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // questions into an invalid input, and worse, turned a REAL SHORT on a
     // copper-only board into exit 3 instead of the gating exit 2: a build that
     // should have gone red went "cannot analyse" instead.
-    let geometry_only_request =
-        (cfg.drc || cfg.ampacity) && !(cfg.check || cfg.report || cfg.lint || cfg.si
-            || cfg.resources || cfg.usb_c || cfg.thermal || cfg.headless || cfg.serve
-            || cfg.tui || cfg.ac.is_some());
+    let geometry_only_request = (cfg.drc || cfg.ampacity)
+        && !(cfg.check
+            || cfg.report
+            || cfg.lint
+            || cfg.si
+            || cfg.resources
+            || cfg.usb_c
+            || cfg.thermal
+            || cfg.headless
+            || cfg.serve
+            || cfg.tui
+            || cfg.ac.is_some());
     if board.components.is_empty() && !geometry_only_request {
         let msg = format!(
             "this board has no components ('{}' parsed, but is empty); \
