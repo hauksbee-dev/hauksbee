@@ -52,7 +52,8 @@ PATH), or grab the prebuilt release bundle and skip the build entirely.
 - [Worked example: the Tarski power-up brownout](#worked-example-the-tarski-power-up-brownout)
 - [Boot coverage](#boot-coverage-watching-the-firmware-define-a-hi-z-control-net)
 - [Schematic-stage CI](#schematic-stage-ci)
-- [Wiring it into your repo](#wiring-it-into-your-repo)
+- [Wiring it into your repo](#wiring-it-into-your-repo):
+  [the zero-config gate](#the-zero-config-gate-artifacts-without-a-spec)
 - [Exit codes (the pipeline contract)](#exit-codes-the-pipeline-contract)
 - [Limitations](#limitations)
 - [For contributors: the static-check corpus gates](#for-contributors-the-static-check-corpus-gates)
@@ -945,6 +946,40 @@ rest.
   `ci/*.toml` for the whole set) and consume the exit code and the JUnit
   file. Ready-made GitLab CI, Jenkins, Azure DevOps, and Buildkite blocks are
   in [RECIPES.md](RECIPES.md).
+
+### The zero-config gate: artifacts without a spec
+
+The spec path above is the one that asserts behaviour, and it is worth writing.
+But a board with no spec yet can still gate, and still publish artifacts your CI
+knows how to render, from the static suite alone:
+
+```bash
+hauksbee run my_board.kicad_pcb --check --strict \
+  --junit hauksbee.xml --sarif hauksbee.sarif
+```
+
+`--junit <file>` and `--sarif <file>` are flags on `hauksbee run`, not just on
+`hauksbee-ci`. They write the whole static suite (bind, DRC, lint, SI, USB-C,
+with waivers already applied) regardless of which report flag you asked for, so
+the file lands even on a `--drc`-only run. Waivers are applied before the file is
+written, so a waived finding is absent rather than present-and-ignored.
+
+- **JUnit** gives one `<testsuite>` per check and one `<testcase>` per finding,
+  with serious findings as `<failure>` elements. A check that found nothing
+  carries a single passing `no findings` testcase, so a green suite is visible in
+  the report rather than missing from it.
+- **SARIF** is 2.1.0, so GitHub code scanning and anything else that speaks SARIF
+  will annotate the pull request. Serious findings come through as `error` and
+  everything else as `warning`, each rule id being `check/kind` (`drc/short`,
+  `si/crystal_load_cap`). The location is the board file; SARIF has no notion of
+  a millimetre, so the coordinates stay in the message text.
+
+Each file is written before the chosen report renders, and the run says so on
+stderr (`wrote JUnit report to hauksbee.xml`). That ordering means the artifact
+survives a red build, which is the case you actually want it in. Pair them with
+`--strict`: without it the run exits 0 and the pipeline goes green next to a
+JUnit file full of failures. The GitHub Action's `mode: check` is this path
+pre-wired.
 
 ## Exit codes (the pipeline contract)
 
