@@ -14,11 +14,17 @@
 //! validation errors; absent when not derivable), and a short suggested `fix`
 //! where one is derivable (typically a did-you-mean).
 //!
+//! The `firmware` path is resolved and checked to exist, on the same code path
+//! `run` uses, so `check` cannot pass a spec `run` will refuse at startup. That
+//! is the one artifact check beyond the board, and `--no-board` turns both off
+//! together for an editor loop where neither is built yet.
+//!
 //! What `check` does NOT verify (these need a run, a model bind, or an
-//! artifact that legitimately may not exist yet at edit time): firmware
-//! existence or loadability, sensor-TOML contents, scenario `part`/`profile`
-//! resolution against the model DB, tolerance patterns actually matching a
-//! component, MCU/emulator resolution, and every behavioral assertion.
+//! artifact that legitimately may not exist yet at edit time): whether the
+//! firmware image actually LOADS on the target core, sensor-TOML contents,
+//! scenario `part`/`profile` resolution against the model DB, tolerance patterns
+//! actually matching a component, MCU/emulator resolution, and every behavioral
+//! assertion.
 
 use std::path::Path;
 
@@ -46,7 +52,8 @@ pub struct Diagnostic {
     /// `unknown-ref` (a component reference not on the board), `bad-bound`
     /// (a numeric value outside its documented bounds), `conflicting-fields`
     /// (mutually exclusive keys set together), `board-load` (the board file
-    /// failed to resolve/load), `invalid-spec` (anything else).
+    /// failed to resolve/load), `firmware-missing` (the `firmware` path does not
+    /// resolve to a readable image), `invalid-spec` (anything else).
     pub code: &'static str,
     /// Human-readable description of the problem.
     pub message: String,
@@ -77,8 +84,9 @@ impl Diagnostic {
 /// Options for [`check_spec`].
 #[derive(Debug, Clone, Default)]
 pub struct CheckOptions {
-    /// Skip resolving/loading the board file: parse + structural validation
-    /// only. For editor loops where the board is large or not checked out.
+    /// Skip resolving the on-disk artifacts (the board file AND the firmware
+    /// image): parse + structural validation only. For editor loops where the
+    /// board is large or not checked out, or the firmware is not built yet.
     pub no_board: bool,
 }
 
@@ -92,7 +100,9 @@ pub struct CheckOptions {
 ///    collected ([`Spec::validate_all`]),
 /// 4. unless `no_board`: resolve + load the board file (`board-load`) and
 ///    validate every referenced net (`unknown-net`) and component reference
-///    (`unknown-ref`) against it.
+///    (`unknown-ref`) against it,
+/// 5. unless `no_board`: resolve the `firmware` path and check it exists and is
+///    readable (`firmware-missing`), on the same code path `run` uses.
 pub fn check_spec(path: &Path, opts: &CheckOptions) -> Vec<Diagnostic> {
     let text = match std::fs::read_to_string(path) {
         Ok(t) => t,
@@ -157,8 +167,52 @@ pub fn check_spec(path: &Path, opts: &CheckOptions) -> Vec<Diagnostic> {
                 }
             }
         }
+        if let Some(d) = firmware_diagnostic(&spec, &text) {
+            diags.push(d);
+        }
     }
     diags
+}
+
+/// Resolve the spec's `firmware` and confirm an image is actually there.
+///
+/// Same two steps `run` takes, in the same order, so the two verdicts cannot
+/// disagree: resolve a PlatformIO project / build tree / zip down to the compiled
+/// image (a bare `.elf`/`.hex` passes through), then check that image exists and
+/// opens. Without this, `check` printed "OK" on a spec whose `firmware` pointed
+/// nowhere, and `run` then exited 2 on the very same file: the editor-facing
+/// validator disagreeing with the runner about whether a spec is valid.
+fn firmware_diagnostic(spec: &Spec, text: &str) -> Option<Diagnostic> {
+    let declared = spec.firmware.as_ref()?.display().to_string();
+    let path = spec.firmware_path()?;
+    let resolved = match hauksbee_engine::firmware_input::resolve_firmware_cli(&path) {
+        Ok(Some(r)) => r.path,
+        Ok(None) => path,
+        Err(e) => return Some(firmware_diag(text, &declared, &e.to_string())),
+    };
+    match hauksbee_engine::validate_firmware_path(&resolved) {
+        Ok(_) => None,
+        Err(e) => Some(firmware_diag(text, &declared, &e.to_string())),
+    }
+}
+
+/// A `firmware-missing` diagnostic pointed at the spec's `firmware` value, with
+/// the same "(from the spec's `firmware = ...`)" trailer `run` prints.
+fn firmware_diag(text: &str, declared: &str, message: &str) -> Diagnostic {
+    let (line, col) = locate(text, declared)
+        .map(|(l, c)| (Some(l), Some(c)))
+        .unwrap_or((None, None));
+    Diagnostic {
+        line,
+        col,
+        code: "firmware-missing",
+        message: format!("{message} (from the spec's `firmware = \"{declared}\"`)"),
+        fix: Some(
+            "build the firmware first, fix the path, or pass --no-board to validate \
+             structure only"
+                .to_string(),
+        ),
+    }
 }
 
 /// Turn a toml deserialization error into a diagnostic with exact line/col

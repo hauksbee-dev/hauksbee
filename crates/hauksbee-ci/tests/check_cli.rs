@@ -106,6 +106,71 @@ fn no_board_skips_board_resolution_but_not_structure() {
     );
 }
 
+/// `check` must not pass a spec `run` refuses at startup. A `firmware` path that
+/// resolves to nothing is exactly that: `check` printed "OK" (exit 0) while
+/// `run` on the same file exited 2 with "no firmware file at ...", so the
+/// editor-facing validator and the runner disagreed about spec validity.
+#[test]
+fn a_firmware_path_that_does_not_exist_fails_check_as_it_fails_run() {
+    let body = "name = \"check-firmware\"\nboard = \"blinky.kicad_pcb\"\n\
+                firmware = \"firmware/nope.hex\"\nduration_ms = 20\n\n\
+                [[supply]]\nnet = \"+5V\"\nkind = \"ideal\"\nvolts = 5.0\n\n\
+                [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = 1.0\n";
+    let (_dir, spec) = spec_dir("firmware-missing", body);
+
+    let out = check(&spec, &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(2),
+        "a missing firmware must exit 2; stdout: {}",
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    // The same sentence `run` prints, so a user who sees one recognises the other.
+    assert!(
+        stderr.contains("no firmware file at"),
+        "check must name the missing image the way run does: {stderr}"
+    );
+    assert!(
+        stderr.contains("firmware/nope.hex"),
+        "and quote the spec's own `firmware` value: {stderr}"
+    );
+
+    // The machine surface carries its own code, and points at the firmware line
+    // (line 3 of the body above).
+    let out = check(&spec, &["--json"]);
+    assert_eq!(out.status.code(), Some(2));
+    let diags = json_diags(&out);
+    assert_eq!(diags.len(), 1, "one firmware diagnostic: {diags:?}");
+    assert_eq!(diags[0]["code"], "firmware-missing");
+    assert_eq!(diags[0]["line"], 3, "points at the firmware line: {diags:?}");
+
+    // --no-board is the documented opt-out for an editor loop where the firmware
+    // is not built yet, and it covers the firmware as well as the board.
+    let out = check(&spec, &["--no-board"]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "--no-board skips the firmware artifact too; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    // A spec whose firmware IS on disk still passes, so this is not a blanket
+    // "any firmware key fails" regression.
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::copy(blinky_board(), dir.path().join("blinky.kicad_pcb")).unwrap();
+    std::fs::write(dir.path().join("real.hex"), ":00000001FF\n").unwrap();
+    let ok_spec = dir.path().join("firmware-present.toml");
+    std::fs::write(&ok_spec, body.replace("firmware/nope.hex", "real.hex")).unwrap();
+    let out = check(&ok_spec, &[]);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "a firmware that exists must still check clean; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
 #[test]
 fn a_toml_parse_error_carries_the_exact_line_and_col() {
     // Line 3 redefines `name`: the parser's span points at the duplicate key,
