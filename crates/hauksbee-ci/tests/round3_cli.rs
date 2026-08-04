@@ -13,7 +13,10 @@ fn blinky_board() -> PathBuf {
 }
 
 fn run(args: &[&str]) -> std::process::Output {
-    Command::new(bin()).args(args).output().expect("binary runs")
+    Command::new(bin())
+        .args(args)
+        .output()
+        .expect("binary runs")
 }
 
 fn stderr(o: &std::process::Output) -> String {

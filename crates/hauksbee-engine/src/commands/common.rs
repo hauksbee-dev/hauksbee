@@ -31,8 +31,7 @@ pub fn read_board_text(path: &Path) -> anyhow::Result<String> {
                 "try:  hauksbee to-code crates/hauksbee-ci/examples/boards/blinky.kicad_pcb"
                     .to_string()
             } else {
-                "to-code decompiles an existing board file; any .kicad_pcb / .brd works"
-                    .to_string()
+                "to-code decompiles an existing board file; any .kicad_pcb / .brd works".to_string()
             };
             anyhow::anyhow!(
                 "no board file at '{}'. Check the path ({suggestion}).",

@@ -38,7 +38,13 @@ fn pico_product_code_sc0918_binds_with_honest_no_cosim_backend() {
 /// The common schematic value spellings all land on the same entry.
 #[test]
 fn pico_value_spellings_bind() {
-    for value in ["Pico", "RPi_Pico", "RPi_Pico_WH", "Raspberry Pi Pico", "SC0915"] {
+    for value in [
+        "Pico",
+        "RPi_Pico",
+        "RPi_Pico_WH",
+        "Raspberry Pi Pico",
+        "SC0915",
+    ] {
         let model = resolve_value(value)
             .unwrap_or_else(|| panic!("{value:?} should resolve, not UNRESOLVED"));
         assert_eq!(model.id, "rpi_pico", "{value:?} bound the wrong entry");

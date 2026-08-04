@@ -174,10 +174,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             cfg.board.display()
         );
         if cfg.json {
-            println!(
-                "{}",
-                serde_json::json!({ "ok": false, "error": msg })
-            );
+            println!("{}", serde_json::json!({ "ok": false, "error": msg }));
         } else {
             eprintln!("error: {msg}");
         }
@@ -510,10 +507,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         }
         // Forcing the TUI without a terminal on the other end fails deep inside
         // the terminal setup with a bare OS error; say what is actually wrong.
-        if cfg.tui
-            && !stdout_is_tty
-            && !std::io::IsTerminal::is_terminal(&std::io::stdin())
-        {
+        if cfg.tui && !stdout_is_tty && !std::io::IsTerminal::is_terminal(&std::io::stdin()) {
             anyhow::bail!(
                 "the interactive dashboard needs a terminal, and neither stdin nor stdout \
                  is one (output is piped or redirected). Drop --tui and use --check/--report \

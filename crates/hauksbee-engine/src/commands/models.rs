@@ -43,7 +43,9 @@ pub fn lint(file: &Path) -> anyhow::Result<()> {
     let text = std::fs::read_to_string(file)
         .map_err(|e| anyhow::anyhow!("reading '{}': {e}", file.display()))?;
     let head = text.trim_start();
-    if head.starts_with("(kicad_pcb") || head.starts_with("(kicad_sch") || head.starts_with("(export")
+    if head.starts_with("(kicad_pcb")
+        || head.starts_with("(kicad_sch")
+        || head.starts_with("(export")
     {
         anyhow::bail!(
             "'{}' is a board, not a model spec: to see which model entry each \

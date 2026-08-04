@@ -240,14 +240,7 @@ fn write_malformed_waiver(dir: &Path, check: &str, kind: &str, nets: &str) {
 /// The whole life-cycle for one single-check command: red bare, green under an
 /// active waiver (with the reason on the report), red again expired (named as
 /// lapsed), and red with a warning when the file is malformed.
-fn assert_waiver_parity(
-    dir: &Path,
-    board: &Path,
-    flag: &str,
-    check: &str,
-    kind: &str,
-    nets: &str,
-) {
+fn assert_waiver_parity(dir: &Path, board: &Path, flag: &str, check: &str, kind: &str, nets: &str) {
     // (a) The premise: without a waiver the finding gates, otherwise the rest
     // of this proves nothing.
     let (code, out) = single_check_strict(board, flag);
@@ -362,7 +355,10 @@ fn single_check_json_carries_the_waived_findings() {
         .and_then(|w| w.as_array())
         .expect("waived array present");
     assert!(
-        !waived.is_empty() && waived.iter().any(|w| w.get("kind").and_then(|k| k.as_str()) == Some("short")),
+        !waived.is_empty()
+            && waived
+                .iter()
+                .any(|w| w.get("kind").and_then(|k| k.as_str()) == Some("short")),
         "the overruled shorts ride the JSON report: {stdout}"
     );
 }
@@ -374,7 +370,13 @@ fn a_foreign_checks_waiver_is_not_reported_stale_by_a_narrower_command() {
     let dir = tempfile::tempdir().unwrap();
     let board = stage_board(dir.path());
     // An SI waiver beside a board being run under --drc: out of scope there.
-    write_waiver(dir.path(), "si", "trace_ampacity", r#"["+3V3"]"#, "2099-01-01");
+    write_waiver(
+        dir.path(),
+        "si",
+        "trace_ampacity",
+        r#"["+3V3"]"#,
+        "2099-01-01",
+    );
 
     let (code, out) = single_check_strict(&board, "--drc");
     assert_eq!(code, 2, "the real shorts still gate");

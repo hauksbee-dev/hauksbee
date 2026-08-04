@@ -239,7 +239,10 @@ pub fn run(
         };
         if let Some(why) = bad {
             let known: Vec<&str> = circuit.node_names().collect();
-            eprintln!("error: invalid probe: {why} (known nodes: {})", known.join(", "));
+            eprintln!(
+                "error: invalid probe: {why} (known nodes: {})",
+                known.join(", ")
+            );
             std::process::exit(EXIT_MALFORMED_DECK);
         }
     }
@@ -500,7 +503,10 @@ mod tests {
         );
         // An ordinary text deck passes through untouched.
         let deck = "divider\nV1 in 0 5\nR1 in out 1k\nR2 out 0 1k\n.end\n";
-        assert_eq!(decode_deck_text(deck.as_bytes().to_vec()).as_deref(), Ok(deck));
+        assert_eq!(
+            decode_deck_text(deck.as_bytes().to_vec()).as_deref(),
+            Ok(deck)
+        );
     }
 
     #[test]

@@ -15,7 +15,10 @@ fn run(args: &[&str]) -> std::process::Output {
         .args(args)
         // add/remove/list resolve ~/.hauksbee from HOME; point it somewhere
         // disposable so no test can touch the real store.
-        .env("HOME", std::env::temp_dir().join("hauksbee_cli_models_home"))
+        .env(
+            "HOME",
+            std::env::temp_dir().join("hauksbee_cli_models_home"),
+        )
         .output()
         .expect("hauksbee binary runs")
 }

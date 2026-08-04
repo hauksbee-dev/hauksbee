@@ -567,7 +567,13 @@ fn pio_build(project: &Path) -> Result<(PathBuf, String), String> {
             .take(15)
             .collect();
         let shown: Vec<&str> = if error_lines.is_empty() {
-            text.lines().rev().take(25).collect::<Vec<_>>().into_iter().rev().collect()
+            text.lines()
+                .rev()
+                .take(25)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect()
         } else {
             error_lines
         };

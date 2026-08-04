@@ -225,9 +225,7 @@ impl PlainReport {
             if !self.heads_up.is_empty() {
                 let hn = self.heads_up.len();
                 let things = if hn == 1 { "thing" } else { "things" };
-                return format!(
-                    "No {failure_noun}, but {hn} {things} worth a look (see below)."
-                );
+                return format!("No {failure_noun}, but {hn} {things} worth a look (see below).");
             }
             return format!("Looks healthy: no {healthy_noun} found.");
         }
@@ -1199,8 +1197,7 @@ mod tests {
             "exactly three findings keep the full gloss:\n{condensed}"
         );
         assert!(
-            condensed.contains("47 more net pairs like this")
-                && condensed.contains("--verbose"),
+            condensed.contains("47 more net pairs like this") && condensed.contains("--verbose"),
             "the rest aggregate into one line pointing at --verbose:\n{condensed}"
         );
         assert!(
