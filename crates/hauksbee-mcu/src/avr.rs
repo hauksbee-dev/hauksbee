@@ -248,6 +248,11 @@ struct SharedState {
     /// genuinely unavoidable overflow (host floods a firmware that never
     /// drains). Counted and surfaced instead of swallowed.
     uart_rx_overflow: u64,
+    /// Times the core rebooted mid-chunk because the cycle counter went
+    /// backwards, i.e. the watchdog timed out unserviced. Counted rather than
+    /// swallowed: a reboot invalidates every firmware-behaviour assertion after
+    /// it, so `Mcu::watchdog_resets` surfaces it as a coverage finding.
+    watchdog_resets: u64,
 
     /// User-installed callbacks.
     callbacks: Callbacks,
@@ -801,6 +806,7 @@ impl AvrMcu {
             uart_pending: std::collections::VecDeque::new(),
             uart_clear_to_send: false,
             uart_rx_overflow: 0,
+            watchdog_resets: 0,
             callbacks: Callbacks {
                 on_pin_change: None,
                 on_uart: None,
@@ -1017,6 +1023,25 @@ impl AvrMcu {
     fn raw_cycle(&self) -> u64 {
         unsafe { (*self.avr).cycle }
     }
+
+    /// Record an unserviced-watchdog reboot, loudly the first time.
+    ///
+    /// Loud on the first one and counted thereafter, the discipline
+    /// `uart_rx_overflow` already uses: a firmware that reboots every 15 ms
+    /// would otherwise print thousands of identical lines, but a co-sim run
+    /// whose firmware is silently rebooting is not a healthy run and must not
+    /// read as one.
+    fn note_watchdog_reset(&mut self) {
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if s.watchdog_resets == 0 {
+            eprintln!(
+                "hauksbee: AVR watchdog timed out unserviced; the core rebooted \
+                 mid-run. Firmware behaviour observed after this point belongs \
+                 to a rebooted core, not to the run that started."
+            );
+        }
+        s.watchdog_resets += 1;
+    }
 }
 
 impl Mcu for AvrMcu {
@@ -1063,6 +1088,9 @@ impl Mcu for AvrMcu {
         s.uart_pending.clear();
         s.uart_clear_to_send = false;
         s.uart_rx_overflow = 0;
+        // A deliberate reset restarts the run, so the watchdog story restarts
+        // with it: reboots counted here belonged to the run being abandoned.
+        s.watchdog_resets = 0;
         // IO registers were zeroed, so the edge-detection shadows must match
         // or the firmware's first PORT/DDR writes would mis-diff.
         for ps in s.port_state.values_mut() {
@@ -1090,6 +1118,13 @@ impl Mcu for AvrMcu {
         // loop below runs correspondingly fewer cycles (possibly zero).
         self.run_target = self.run_target.saturating_add(n);
 
+        // Cycles actually stepped, accumulated across any mid-chunk reset. The
+        // old `end - start` could not survive a rewind: a reset leaves
+        // `avr->cycle` BELOW `start`, so the subtraction saturated to zero and
+        // a chunk that really ran 15 ms of firmware reported nothing.
+        let mut stepped = 0u64;
+        let mut prev = start;
+
         while self.raw_cycle() < self.run_target {
             let status = unsafe { ffi::avr_run(self.avr) };
             if status == ffi::cpu_Done as i32 || status == ffi::cpu_Crashed as i32 {
@@ -1098,9 +1133,34 @@ impl Mcu for AvrMcu {
                 // state stays readable via `state().done` / `state().crashed`.
                 break;
             }
+            let now = self.raw_cycle();
+            if now < prev {
+                // THE CYCLE COUNTER WENT BACKWARDS, so the core rebooted
+                // underneath us. The only in-simulation cause is a watchdog
+                // timeout: simavr's `avr_reset` zeroes `avr->cycle`, and
+                // `run_target` is an ABSOLUTE cumulative target the rewound
+                // counter can never reach again, so the loop above spun
+                // forever. `wdt_enable(WDTO_15MS)` with no `wdt_reset()` used
+                // to hang the whole co-sim in the chunk where the watchdog
+                // first fired: the third 5 ms chunk never returned.
+                //
+                // Re-anchor the target the way `Mcu::reset` already does, but
+                // keeping the UNSPENT part of this chunk's budget so the
+                // rebooted core still runs out the simulated time the engine
+                // paid for. `cycle_carry` is deliberately untouched: it is a
+                // sub-cycle fraction of simulated time, not a position in the
+                // guest's counter, and the reboot did not consume it.
+                let unspent = self.run_target.saturating_sub(prev);
+                self.run_target = now.saturating_add(unspent);
+                self.note_watchdog_reset();
+                prev = now;
+                continue;
+            }
+            stepped += now - prev;
+            prev = now;
         }
 
-        Ok(self.raw_cycle().saturating_sub(start))
+        Ok(stepped)
     }
 
     fn run_micros(&mut self, us: u64) -> Result<()> {
@@ -1215,6 +1275,20 @@ impl Mcu for AvrMcu {
     fn uart_rx_overflow(&self) -> u64 {
         let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         s.uart_rx_overflow
+    }
+
+    fn watchdog_resets(&self) -> u64 {
+        let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        s.watchdog_resets
+    }
+
+    /// simavr's watchdog is the one that behaves: it times out at the right
+    /// virtual time and reboots the core, and `run_cycles` now follows the
+    /// rewound cycle counter instead of livelocking against it. No limitation
+    /// to report; the reboots themselves come through
+    /// [`Mcu::watchdog_resets`].
+    fn watchdog_limitation(&self) -> Option<String> {
+        None
     }
 
     fn on_uart(&mut self, cb: Box<dyn FnMut(u8) + Send>) {

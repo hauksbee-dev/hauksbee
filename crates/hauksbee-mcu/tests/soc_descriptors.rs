@@ -150,7 +150,15 @@ fn adc_channel_recipe_loads_from_descriptor() {
 [soc]
 backend = "renode"
 machine = "adc_demo"
-platform_repl = "@platforms/cpus/stm32f103.repl"
+platform_repl = """
+using "platforms/cpus/stm32f103.repl"
+
+nvic:
+    systickFrequency: 8000000
+
+cpu:
+    PerformanceInMips: 8
+"""
 cpu_path = "sysbus.cpu"
 frequency_hz = 8_000_000
 expected_e_machine = "EM_ARM"
@@ -195,7 +203,15 @@ fn renode_descriptor(
 [soc]
 backend = "{backend}"
 machine = "t"
-platform_repl = "@platforms/cpus/stm32f103.repl"
+platform_repl = """
+using "platforms/cpus/stm32f103.repl"
+
+nvic:
+    systickFrequency: 8000000
+
+cpu:
+    PerformanceInMips: 8
+"""
 cpu_path = "sysbus.cpu"
 frequency_hz = 8_000_000
 expected_e_machine = "{e_machine}"
@@ -440,7 +456,15 @@ fn resolve_from_override_dir_adds_a_part_as_data() {
 [soc]
 backend = "renode"
 machine = "f072"
-platform_repl = "@platforms/cpus/stm32f072.repl"
+platform_repl = """
+using "platforms/cpus/stm32f072.repl"
+
+nvic:
+    systickFrequency: 8000000
+
+cpu:
+    PerformanceInMips: 8
+"""
 cpu_path = "sysbus.cpu"
 uart = "sysbus.usart1"
 frequency_hz = 8_000_000

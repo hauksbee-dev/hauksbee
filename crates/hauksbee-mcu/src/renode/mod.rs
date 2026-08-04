@@ -238,8 +238,18 @@ pub struct RenodeConfig {
     pub uart: Option<String>,
     /// GPIO ports to bridge, in engine-facing order.
     pub ports: Vec<PortMap>,
-    /// Clock frequency in Hz reported by [`Mcu::frequency`]. Renode models the
-    /// platform's own clocking; this is advisory for the engine's bookkeeping.
+    /// The part's core clock in Hz, reported by [`Mcu::frequency`].
+    ///
+    /// NOT advisory, though it used to be described that way. Renode does clock
+    /// the machine from the platform description rather than from this field, so
+    /// this number cannot set the emulated rate on its own, and that is exactly
+    /// why the descriptor loader cross-checks it against the platform's own
+    /// `cpu PerformanceInMips` / `nvic systickFrequency` and refuses a mismatch
+    /// (`soc::check_clock_declarations`). Treating it as advisory is what let
+    /// four platforms ship running 4.5x to 9x fast: it cancels out of both
+    /// `cycles = seconds * frequency_hz` and [`Mcu::frequency`], so a 9x
+    /// disagreement with the platform produced no wrong answer anywhere the
+    /// engine looked.
     pub frequency_hz: u64,
     /// Extra Monitor commands run verbatim after platform load and before the
     /// firmware is started (e.g. attaching a button so a GPIO input has a
@@ -267,6 +277,16 @@ pub struct RenodeConfig {
     pub expected_e_machine: u16,
     /// Human-readable MCU/board name for arch-mismatch error messages.
     pub mcu_label: String,
+    /// How this part's watchdog fidelity falls short of the real part, surfaced
+    /// through [`Mcu::watchdog_limitation`]. Per-part data rather than a
+    /// backend-wide constant, because it genuinely differs between platforms:
+    /// the F103's IWDG does time out and reset, while the nRF52840's WDT arms
+    /// cleanly and then never fires at all.
+    ///
+    /// `None` claims the part's watchdog behaves. That is a measurement, so a
+    /// descriptor that leaves it out is asserting one.
+    #[serde(default)]
+    pub watchdog_limitation: Option<String>,
     /// Per-channel ADC injection recipes (05 §5.1). Empty means ADC injection
     /// is a LOUD drop (a once-per-channel stderr warning), never a silent one.
     ///
@@ -1964,6 +1984,13 @@ impl Mcu for RenodeBackend {
         let mut chans: Vec<u8> = self.adc_unmapped_warned.iter().copied().collect();
         chans.sort_unstable();
         chans
+    }
+
+    fn watchdog_limitation(&self) -> Option<String> {
+        // Per-part descriptor data, not a backend constant: the shipped
+        // platforms genuinely differ, and the descriptor is where a measured
+        // per-part fact belongs.
+        self.config.watchdog_limitation.clone()
     }
 
     fn i2c_bus_modeled(&self) -> bool {
