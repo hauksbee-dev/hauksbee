@@ -114,8 +114,15 @@ The DRC report on this board is clean: `Looks healthy: no copper spacing (drc)
 problems found.` It reads the 0.150 mm clearance rule out of the board's own
 project file and finds nothing under it, which is the verdict a shipped,
 working design should get. A tool that manufactured warnings here would be
-teaching you to ignore it. To see what a real copper short looks like, run the
-`boot_gate` example in [`docs/ci/EXAMPLES.md`](docs/ci/EXAMPLES.md).
+teaching you to ignore it.
+
+To see the other outcomes: the `boot_gate` example in
+[`docs/ci/EXAMPLES.md`](docs/ci/EXAMPLES.md) carries a deliberate copper short and
+names both layers and coordinates. For a real sub-rule *clearance* finding, the
+Adafruit Circuit Playground Express in the board corpus has one, a 0.113 mm gap
+between `3.3V` and `N$3` against the board's own 0.178 mm rule; every corpus
+board's result is tabulated in
+[`docs/evidence/FAMOUS_SWEEP.md`](docs/evidence/FAMOUS_SWEEP.md).
 
 **Then swap in your own board** (`my_board.kicad_pcb` is a placeholder for your file):
 
