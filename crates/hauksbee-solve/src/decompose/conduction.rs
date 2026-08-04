@@ -359,6 +359,7 @@ mod tests {
                         branch_reg: 0.0,
                         cmp_freeze: None,
                         switch_freeze: None,
+                        switch_latch: None,
                         spdt_sibling: &empty_siblings,
                     };
                     stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);
@@ -557,6 +558,7 @@ mod tests {
                     branch_reg,
                     cmp_freeze: if freeze_on { Some(&cmp_frozen) } else { None },
                     switch_freeze: if freeze_on { Some(&sw_frozen) } else { None },
+                    switch_latch: None,
                     spdt_sibling: &siblings,
                 };
                 stamp_all(&ctx, &mut ws.matrix, &mut ws.rhs);

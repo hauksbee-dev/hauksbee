@@ -74,6 +74,7 @@ pub use newton::{dc_operating_point, dc_operating_point_seeded, Workspace};
 pub use options::{
     AssemblyMode, DcInit, DeviceEffects, EventRetryTuning, Integration, NewtonBypass,
     ParallelPolicy, Partitioning, RobustnessLadder, SolverOptions, StepControl, Strategy,
+    SwitchModel,
 };
 pub use partition::{Island, Partition};
 pub use plan::StampPlan;
