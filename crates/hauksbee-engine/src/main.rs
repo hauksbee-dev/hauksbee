@@ -77,10 +77,10 @@ enum Command {
     /// `--plain` for a verdict a non-engineer can read. For the full assertion /
     /// fault flow, gate on `hauksbee-ci` or `hauksbee check-code`.
     ///
-    /// Exit contract: 0 = clean or report-only, 1 = input error (missing or
-    /// unreadable file, bad flags), 2 = findings under --strict, 3 = invalid
-    /// for analysis (the result cannot be trusted, so the run refuses to
-    /// pretend).
+    /// Exit contract: 0 = clean or report-only, 1 = input error (a missing or
+    /// unreadable file), 2 = findings under --strict, or a usage error such as
+    /// an unknown flag, 3 = invalid for analysis (the result cannot be trusted,
+    /// so the run refuses to pretend).
     ///
     /// Example:
     ///   hauksbee run board.kicad_pcb --report --plain
@@ -610,8 +610,11 @@ struct RunArgs {
     #[arg(long)]
     list_nets: bool,
 
-    /// Run ALL the static checks at once (bind + DRC + lint + signal integrity) in
-    /// one report, instead of one flag at a time. Honours --plain / --json / --strict.
+    /// Run ALL the static checks at once in one report, instead of one flag at a
+    /// time: bind coverage, DRC (shorts + clearance), the connectivity lint,
+    /// signal integrity, USB-C CC compliance, and the MCU resource-conflict,
+    /// boot strap-pin, config-pin decode and output-contention checks that ride
+    /// with the lint. Honours --plain / --json / --strict.
     #[arg(long, visible_alias = "all")]
     check: bool,
 
@@ -1052,12 +1055,17 @@ fn main() -> anyhow::Result<()> {
     };
     let quiet = cli.quiet;
     let result = match cli.command {
-        Command::Run(mut args) => {
+        // NOTE: `--example` resolution must NOT use `?` here: that returns the
+        // error from `main` itself, printing anyhow's "Error:" + backtrace and
+        // bypassing the `--json` envelope below. Fold it into `result` so an
+        // unknown example name flows through the one error handler like every
+        // other input error.
+        Command::Run(mut args) => (|| {
             if let Some(name) = &args.example {
                 args.board = Some(hauksbee_engine::commands::examples::board(name)?);
             }
             hauksbee_engine::commands::run::run(run_config(args), quiet)
-        }
+        })(),
         Command::ToCode(args) => {
             hauksbee_engine::commands::boardcode::to_code(&args.board, args.out.as_deref())
         }
@@ -1107,7 +1115,9 @@ fn main() -> anyhow::Result<()> {
             hauksbee_engine::commands::serve::run(args.port, args.open, args.no_open)
         }
         Command::Doctor(args) => hauksbee_engine::commands::doctor::run(args.backends, args.json),
-        Command::Sim(mut args) => {
+        // Same no-`?` rule as Run above: an unknown `--example` name must
+        // reach the shared error handler, not escape through `main`'s return.
+        Command::Sim(mut args) => (|| {
             if let Some(name) = &args.example {
                 args.file = Some(hauksbee_engine::commands::examples::deck(name)?);
             }
@@ -1121,7 +1131,7 @@ fn main() -> anyhow::Result<()> {
                 args.dc,
                 &args.print,
             )
-        }
+        })(),
         Command::Models(args) => match args.command {
             ModelsCommand::Lint(args) => hauksbee_engine::commands::models::lint(&args.file),
             ModelsCommand::Add(args) => hauksbee_engine::commands::models::add(&args.source),
