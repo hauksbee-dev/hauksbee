@@ -177,6 +177,26 @@ fn prepare_workspace(pdf: &Path) -> Result<Workspace> {
 
 /// Run one extraction end to end, as the CLI does.
 pub fn run(args: Args) -> Result<PathBuf> {
+    // 0. PDF precheck, BEFORE any backend is chosen or anything is sent: a
+    // non-PDF file (a saved HTML page, a .docx) would otherwise be text-dumped
+    // and shipped to the LLM, producing a confidently wrong model. Magic
+    // bytes rather than extension, so a downloaded datasheet with no
+    // extension still passes and a renamed HTML file still fails.
+    {
+        let mut head = [0u8; 5];
+        use std::io::Read;
+        let is_pdf = std::fs::File::open(&args.pdf)
+            .and_then(|mut f| f.read_exact(&mut head))
+            .map(|_| &head == b"%PDF-")
+            .unwrap_or(false);
+        if !is_pdf {
+            anyhow::bail!(
+                "'{}' is not a PDF (no %PDF header); the extractor reads PDF \
+                 datasheets only. Nothing was sent.",
+                args.pdf.display()
+            );
+        }
+    }
     // 1. Extract text from PDF
     let pdf_text = extract_pdf_text(&args.pdf)?;
 
@@ -220,7 +240,7 @@ pub fn run(args: Args) -> Result<PathBuf> {
         std::fs::write(&out_path, &raw)
             .with_context(|| format!("writing output to {}", out_path.display()))?;
 
-        println!("Written: {}", out_path.display());
+        println!("[model-extract] written: {}", out_path.display());
         println!("{}", spec.sensor.name);
         return Ok(out_path);
     }
@@ -243,7 +263,7 @@ pub fn run(args: Args) -> Result<PathBuf> {
     std::fs::write(&out_path, &raw)
         .with_context(|| format!("writing output to {}", out_path.display()))?;
 
-    println!("Written: {}", out_path.display());
+    println!("[model-extract] written: {}", out_path.display());
     println!("{}", entry.id);
     Ok(out_path)
 }

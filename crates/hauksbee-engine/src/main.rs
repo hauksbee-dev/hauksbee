@@ -46,7 +46,8 @@ fn version_string() -> &'static str {
     // silently resolve to check-code (a nonsense DSL parse error on a board
     // file) and `hauksbee se` start a blocking server. Clap's did-you-mean
     // suggestion on the full names covers the convenience without the traps.
-    arg_required_else_help = true
+    arg_required_else_help = true,
+    after_help = "try it now: hauksbee run --example blinky --check --plain"
 )]
 struct Cli {
     #[command(subcommand)]
@@ -81,6 +82,10 @@ enum Command {
     /// unreadable file), 2 = findings under --strict, or a usage error such as
     /// an unknown flag, 3 = invalid for analysis (the result cannot be trusted,
     /// so the run refuses to pretend).
+    ///
+    /// Sibling contract: `hauksbee-ci run` numbers 1 and 2 differently there
+    /// (1 = a RED assertion, 2 = spec/board error); each binary's --help states
+    /// its own contract.
     ///
     /// Example:
     ///   hauksbee run board.kicad_pcb --report --plain
@@ -156,14 +161,14 @@ enum Command {
     /// source, exits 3 explaining why. A malformed deck prints the loader's
     /// line-numbered error and exits 2. Only the ngspice *ASCII* rawfile is
     /// emitted (the binary rawfile variant is not written). The exact
-    /// supported/refused card list is the drift-tested compatibility statement,
-    /// `docs/spice-compat/compatibility.md`.
+    /// supported/refused card list is the drift-tested compatibility
+    /// statement (URL below).
     ///
     /// Example (self-contained decks bundled under examples/learn/):
     ///   hauksbee sim examples/learn/02-mna-by-hand/divider.cir --op --print V(out)
     ///   hauksbee sim examples/learn/04-time-integration/rlc_ringdown.cir --tran --print V(out)
     ///   hauksbee sim examples/learn/02-mna-by-hand/rc_lowpass_ac.cir --ac --print V(out)
-    #[command(verbatim_doc_comment)]
+    #[command(verbatim_doc_comment, after_help = sim_after_help())]
     Sim(SimArgs),
 
     /// Start the local web front door: a "drop your board, get a report" page.
@@ -184,8 +189,9 @@ enum Command {
     /// Runs the ENGINE's own backend discovery; the same `find_qemu` /
     /// `find_renode` a co-sim would use, and prints, for each backend, the
     /// resolved binary path or that it is absent. This is the authoritative
-    /// probe `scripts/doctor.sh` calls, so the shell tool can never disagree
-    /// with the engine: a Homebrew mainline `qemu-system-xtensa` that has no
+    /// probe: any other surface that reports backend availability calls this
+    /// same discovery, so nothing can disagree with the engine: a Homebrew
+    /// mainline `qemu-system-xtensa` that has no
     /// `esp32` machine is reported absent here exactly as the co-sim rejects it,
     /// and a `~/renode-portable` install the co-sim finds is reported present.
     ///
@@ -463,6 +469,95 @@ fn run_after_help() -> String {
     )
 }
 
+/// `sim`'s after-help line; a function because the compatibility-statement
+/// pointer renders through [`hauksbee_ir::docs_url`] at runtime.
+fn sim_after_help() -> String {
+    format!(
+        "The drift-tested SPICE compatibility statement (every supported and refused card): {}",
+        hauksbee_ir::docs_url("docs/spice-compat/compatibility.md")
+    )
+}
+
+/// `--json`'s long help; a function because the schema docs pointer renders
+/// through [`hauksbee_ir::docs_url`] at runtime.
+fn json_flag_long_help() -> String {
+    format!(
+        "Emit machine-readable JSON instead of the box-drawing tables, for any of \
+         --report/--drc/--lint/--si/--resources/--usb-c/--thermal/--ac. Implies \
+         non-interactive, stable output; every field is documented at {}. \
+         `valid:false` + `reason` is set on AC/thermal results that are \
+         meaningless; the bind section reports critical_parts_bound + \
+         active_path_unresolved by role.",
+        hauksbee_ir::docs_url("docs/analysis/JSON_OUTPUT.md")
+    )
+}
+
+/// `--oracle`'s long help; runtime docs URL, same reason as above.
+fn oracle_flag_long_help() -> String {
+    format!(
+        "Cross-check the geometric DRC against KiCad's own `kicad-cli pcb drc` (the \
+         oracle) and print whether they agree, so a copper finding is self-confirming \
+         without running a second tool by hand. Uses a `kicad-cli` found on PATH or \
+         in a standard install location (newest version preferred); KiCad is NOT \
+         bundled (see {}). No-op unless paired with `--drc`.",
+        hauksbee_ir::docs_url("docs/cosim/ORACLES.md")
+    )
+}
+
+/// `--ac-loop`'s long help; runtime docs URL, same reason as above.
+fn ac_loop_flag_long_help() -> String {
+    format!(
+        "Measure loop stability at this break/output net: report gain crossover \
+         and phase margin. Use with `--ac`. The net is the far side of a loop \
+         broken by an injection `Vsource` (see {}).",
+        hauksbee_ir::docs_url("docs/analysis/AC_ANALYSIS.md")
+    )
+}
+
+/// Echo a user-typed numeric argument back in an error message without letting
+/// it explode the line: `1e308` parses to a float whose `Display` form is 309
+/// digits. The RAW input string is what the user typed, capped defensively.
+fn echo_arg(s: &str) -> String {
+    const MAX: usize = 32;
+    if s.chars().count() <= MAX {
+        s.to_string()
+    } else {
+        let head: String = s.chars().take(MAX).collect();
+        format!("{head}...")
+    }
+}
+
+/// `--ambient` bound check: a physical temperature. Out of range is a clap
+/// usage error (exit 2) naming the bound, instead of a garbage simulation.
+fn parse_ambient(s: &str) -> Result<f64, String> {
+    let v: f64 = s
+        .parse()
+        .map_err(|_| format!("'{}' is not a number", echo_arg(s)))?;
+    if !v.is_finite() || !(-273.15..=1000.0).contains(&v) {
+        return Err(format!(
+            "ambient temperature must be within [-273.15, 1000] C, got {}",
+            echo_arg(s)
+        ));
+    }
+    Ok(v)
+}
+
+/// `--seconds` bound check: simulated time must be positive and sane. Zero
+/// seconds simulates nothing (every assertion would vacuously hold) and
+/// beyond 1e6 s (~11.6 days of simulated time) is a typo, not a run.
+fn parse_seconds(s: &str) -> Result<f64, String> {
+    let v: f64 = s
+        .parse()
+        .map_err(|_| format!("'{}' is not a number", echo_arg(s)))?;
+    if !v.is_finite() || v <= 0.0 || v > 1e6 {
+        return Err(format!(
+            "seconds must be within (0, 1e6], got {}",
+            echo_arg(s)
+        ));
+    }
+    Ok(v)
+}
+
 #[derive(Parser)]
 // The five "print one report and exit" flags pick the report to show, so they
 // are mutually exclusive: pass at most one (clap errors clearly if you pass two,
@@ -484,19 +579,24 @@ struct RunArgs {
     /// Run an embedded example board instead of a file (try `blinky`). The
     /// board is compiled into the binary and materialized under the temp
     /// directory, so this works with no checkout on disk.
-    #[arg(long, value_name = "NAME", conflicts_with = "board")]
+    #[arg(
+        long,
+        value_name = "NAME",
+        conflicts_with = "board",
+        help_heading = "Start here"
+    )]
     example: Option<String>,
 
     /// Firmware to co-simulate on the board's MCU: a compiled .elf/.hex, a
     /// PlatformIO project directory (built with your own `pio run`), or a zip
     /// of either (the built image inside is found automatically).
-    #[arg(long, value_name = "FIRMWARE")]
+    #[arg(long, value_name = "FIRMWARE", help_heading = "Co-simulation")]
     firmware: Option<PathBuf>,
 
     /// As-built overlay (.asbuilt.toml): the declarative physical delta between
     /// the design files and the real reworked board (cut traces, jumper wires,
     /// lifted pins, fitted component values), applied before simulating.
-    #[arg(long, value_name = "FILE")]
+    #[arg(long, value_name = "FILE", help_heading = "Co-simulation")]
     asbuilt: Option<PathBuf>,
 
     /// Write the full static suite (bind + DRC + lint + SI + USB-C findings) as
@@ -511,47 +611,54 @@ struct RunArgs {
     sarif: Option<PathBuf>,
 
     /// Seconds of simulated time to run under --headless.
-    #[arg(long, default_value_t = 1.0, value_name = "N")]
+    #[arg(
+        long,
+        default_value_t = 1.0,
+        value_name = "N",
+        value_parser = parse_seconds,
+        allow_negative_numbers = true,
+        help_heading = "Co-simulation"
+    )]
     seconds: f64,
 
     /// Run the co-sim headless for --seconds and print summary stats (no server).
-    #[arg(long)]
+    #[arg(long, help_heading = "Co-simulation")]
     headless: bool,
 
     /// Print the bind report table (every component -> device model) and exit.
-    #[arg(long, group = "report_mode")]
+    #[arg(long, group = "report_mode", help_heading = "Reports")]
     report: bool,
 
     /// Print the geometric copper short / clearance (DRC) report and exit.
-    #[arg(long, group = "report_mode")]
+    #[arg(long, group = "report_mode", help_heading = "Reports")]
     drc: bool,
 
     /// Print IPC-2221 trace-current capacity for power-like routed nets and exit.
     /// This is capacity-only unless a future spec supplies per-net current.
-    #[arg(long, group = "report_mode")]
+    #[arg(long, group = "report_mode", help_heading = "Reports")]
     ampacity: bool,
 
     /// Print the connectivity lint + strap-pin + resource-conflict report and exit.
-    #[arg(long, group = "report_mode")]
+    #[arg(long, group = "report_mode", help_heading = "Reports")]
     lint: bool,
 
     /// Print the signal-integrity / physics static-check report and exit.
-    #[arg(long, group = "report_mode")]
+    #[arg(long, group = "report_mode", help_heading = "Reports")]
     si: bool,
 
     /// Print only the MCU internal resource-conflict report and exit.
-    #[arg(long, group = "report_mode")]
+    #[arg(long, group = "report_mode", help_heading = "Reports")]
     resources: bool,
 
     /// Print the USB-C CC compliance report (the attach a compliant source sees
     /// from the receptacle's CC termination, and whether it applies VBUS) and
     /// exit. Flags the Raspberry-Pi-4-class shared-CC-pulldown fault.
-    #[arg(long = "usb-c", group = "report_mode")]
+    #[arg(long = "usb-c", group = "report_mode", help_heading = "Reports")]
     usb_c: bool,
 
     /// Run a short headless co-sim and print the steady-state junction-temperature
     /// estimate per dissipating device (Tj = Tambient + P * theta_JA), then exit.
-    #[arg(long, group = "report_mode")]
+    #[arg(long, group = "report_mode", help_heading = "Reports")]
     thermal: bool,
 
     /// Ambient temperature (C) for the --thermal estimate. Default 25 C.
@@ -559,6 +666,8 @@ struct RunArgs {
         long,
         default_value_t = 25.0,
         value_name = "C",
+        value_parser = parse_ambient,
+        allow_negative_numbers = true,
         help_heading = "Advanced / analyses"
     )]
     ambient: f64,
@@ -566,21 +675,21 @@ struct RunArgs {
     /// Translate the report into plain language for a non-engineer: a one-line
     /// verdict, then each finding as what it is, why it matters, and what to do.
     /// Applies to --drc/--lint/--si/--resources/--usb-c and to --headless faults.
-    #[arg(long, visible_alias = "explain")]
+    #[arg(long, visible_alias = "explain", help_heading = "Start here")]
     plain: bool,
 
     /// With --plain --drc (or --check): print every clearance finding in full.
     /// By default, repeated near-identical clearance warnings condense to one
     /// aggregated line per rule and layer after the first few.
-    #[arg(long)]
+    #[arg(long, help_heading = "Reports")]
     verbose: bool,
 
     /// Emit machine-readable JSON instead of the box-drawing tables, for any of
     /// --report/--drc/--lint/--si/--resources/--usb-c/--thermal/--ac. Implies
-    /// non-interactive, stable output (see docs schema §4.1). `valid:false` +
+    /// non-interactive, stable output. `valid:false` +
     /// `reason` is set on AC/thermal results that are meaningless; the bind
     /// section reports critical_parts_bound + active_path_unresolved by role.
-    #[arg(long)]
+    #[arg(long, help_heading = "Start here", long_help = json_flag_long_help())]
     json: bool,
 
     /// Exit non-zero if a report (--check/--drc/--lint/--si/--resources/--usb-c) finds problems,
@@ -607,7 +716,7 @@ struct RunArgs {
 
     /// List the board's net names (sorted) and exit. Use it to find the exact net
     /// to pass to `--ac-node` / `--ac-loop` without grepping the layout file.
-    #[arg(long)]
+    #[arg(long, help_heading = "Reports")]
     list_nets: bool,
 
     /// Run ALL the static checks at once in one report, instead of one flag at a
@@ -615,15 +724,19 @@ struct RunArgs {
     /// signal integrity, USB-C CC compliance, and the MCU resource-conflict,
     /// boot strap-pin, config-pin decode and output-contention checks that ride
     /// with the lint. Honours --plain / --json / --strict.
-    #[arg(long, visible_alias = "all")]
+    #[arg(long, visible_alias = "all", help_heading = "Start here")]
     check: bool,
 
     /// Cross-check the geometric DRC against KiCad's own `kicad-cli pcb drc` (the
     /// oracle) and print whether they agree, so a copper finding is self-confirming
     /// without running a second tool by hand. Uses a `kicad-cli` found on PATH or
     /// in a standard install location (newest version preferred); KiCad is NOT
-    /// bundled (see `docs/cosim/ORACLES.md`). No-op unless paired with `--drc`.
-    #[arg(long, help_heading = "Advanced / analyses")]
+    /// bundled. No-op unless paired with `--drc`.
+    #[arg(
+        long,
+        help_heading = "Advanced / analyses",
+        long_help = oracle_flag_long_help()
+    )]
     oracle: bool,
 
     /// Bridge every detected copper short before simulating (show the consequences).
@@ -694,11 +807,12 @@ struct RunArgs {
 
     /// Measure loop stability at this break/output net: report gain crossover
     /// and phase margin. Use with `--ac`. The net is the far side of a loop
-    /// broken by an injection `Vsource` (see docs/analysis/AC_ANALYSIS.md).
+    /// broken by an injection `Vsource`.
     #[arg(
         long = "ac-loop",
         value_name = "NET",
-        help_heading = "Advanced / analyses"
+        help_heading = "Advanced / analyses",
+        long_help = ac_loop_flag_long_help()
     )]
     ac_loop: Option<String>,
 
@@ -997,7 +1111,13 @@ struct CheckCodeArgs {
     code: PathBuf,
 
     /// Seconds of simulated time to run the stress monitor for.
-    #[arg(long, default_value_t = 0.2, value_name = "N")]
+    #[arg(
+        long,
+        default_value_t = 0.2,
+        value_name = "N",
+        value_parser = parse_seconds,
+        allow_negative_numbers = true
+    )]
     seconds: f64,
 
     /// Run the stress monitor in destructive mode (parts can be destroyed).
@@ -1010,6 +1130,8 @@ struct CheckCodeArgs {
         long,
         default_value_t = 25.0,
         value_name = "C",
+        value_parser = parse_ambient,
+        allow_negative_numbers = true,
         help_heading = "Advanced / analyses"
     )]
     ambient: f64,

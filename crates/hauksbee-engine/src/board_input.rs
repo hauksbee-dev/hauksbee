@@ -265,9 +265,39 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
         .unwrap_or("board")
         .to_string();
 
-    // Gerber job input, directory form: reverse-extracted from copper
-    // geometry. Detected purely by the path shape.
+    // A directory: usually a gerber job folder, but a directory HOLDING a
+    // board file is a common mistake (pointing at the project folder instead
+    // of the layout inside it). Look for board files first: assuming gerbers
+    // used to produce a baffling "no copper gerber layers" error right next
+    // to a perfectly good .kicad_pcb.
     if path.is_dir() {
+        let boards = board_files_in(path);
+        match boards.as_slice() {
+            [] => {}
+            [one] => {
+                // Exactly one board file: use it, saying so (stderr, so report
+                // and --json stdout stay clean).
+                eprintln!(
+                    "note: '{}' is a directory; using the board file inside it: {}",
+                    path.display(),
+                    one.display()
+                );
+                return from_path(one);
+            }
+            many => {
+                return Err(BoardInputError::Gerber(format!(
+                    "'{}' is a directory holding {} board files ({}); pass the one you mean",
+                    path.display(),
+                    many.len(),
+                    many.iter()
+                        .filter_map(|p| p.file_name().and_then(|s| s.to_str()))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
+        }
+        // Gerber job input, directory form: reverse-extracted from copper
+        // geometry.
         let board = ExtractedBoard::from_gerber(path)
             .map_err(|e| BoardInputError::Gerber(gerber_path_message(path, &e.to_string())))?;
         return Ok(with_name_fallback(
@@ -279,6 +309,32 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
             },
             path,
         ));
+    }
+
+    // A KiCad PROJECT file (.kicad_pro settings / .kicad_prl local state) is
+    // the file the OS file picker often surfaces first, but it carries no
+    // layout. Name the sibling board by stem when it exists.
+    let ext_lower = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if ext_lower == "kicad_pro" || ext_lower == "kicad_prl" {
+        let sibling = path.with_extension("kicad_pcb");
+        let msg = if sibling.exists() {
+            format!(
+                "'{}' is a KiCad project file, not the board. The layout is next to it; try: {}",
+                path.display(),
+                sibling.display()
+            )
+        } else {
+            format!(
+                "'{}' is a KiCad project file, not the board; pass the matching \
+                 .kicad_pcb (the layout) instead",
+                path.display()
+            )
+        };
+        return Err(BoardInputError::Extract(msg));
     }
 
     // Read raw bytes first: an Altium `.PcbDoc` is a binary OLE2 container and
@@ -398,8 +454,25 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
         ));
     }
 
-    let board = ExtractedBoard::from_auto(&text)
-        .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
+    let board = ExtractedBoard::from_auto(&text).map_err(|e| {
+        // When the EXTENSION already names a format we support, the problem is
+        // the content, not the format: say that, instead of reciting the
+        // generic supported-formats list at someone holding a corrupt board.
+        let known = match ext_lower.as_str() {
+            "kicad_pcb" => Some("a KiCad board"),
+            "brd" => Some("an Eagle board"),
+            "d356" => Some("an IPC-D-356 netlist"),
+            "net" => Some("a KiCad netlist"),
+            _ => None,
+        };
+        match known {
+            Some(desc) => BoardInputError::Extract(format!(
+                "'{file_name}' looks like {desc} by extension, but its content \
+                 did not parse: {e}"
+            )),
+            None => BoardInputError::Extract(format!("'{file_name}': {e}")),
+        }
+    })?;
     Ok(with_name_fallback(
         NormalizedBoard {
             board,
@@ -411,12 +484,51 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
     ))
 }
 
+/// Board-format files directly inside `dir` (no recursion), sorted. The
+/// directory head of [`from_path`] consults this before assuming gerbers.
+fn board_files_in(dir: &Path) -> Vec<std::path::PathBuf> {
+    const BOARD_EXTS: &[&str] = &["kicad_pcb", "kicad_sch", "brd", "pcbdoc", "d356", "board"];
+    let mut found: Vec<std::path::PathBuf> = Vec::new();
+    if let Ok(rd) = std::fs::read_dir(dir) {
+        for e in rd.flatten() {
+            let p = e.path();
+            let ext = p
+                .extension()
+                .and_then(|x| x.to_str())
+                .map(|x| x.to_ascii_lowercase())
+                .unwrap_or_default();
+            if p.is_file() && BOARD_EXTS.contains(&ext.as_str()) {
+                found.push(p);
+            }
+        }
+    }
+    found.sort();
+    found
+}
+
 /// The CLI/CI wording for a failed gerber reverse-extraction from a path.
+/// The extractor's own message may already say where to point (its "no copper
+/// gerber layers" refusal does); repeating a near-identical sentence after it
+/// reads as a stutter, so the guidance is added only when the inner error
+/// does not already carry it.
 fn gerber_path_message(path: &Path, e: &str) -> String {
+    let guidance = if e.contains("point hauksbee at") {
+        String::new()
+    } else {
+        " Point at the gerber job folder (or a .zip of it) containing the \
+         copper/drill files."
+            .to_string()
+    };
+    // Some extractor errors already name the path ("read zip <path>: ...");
+    // naming it a second time in the wrapper reads as a stutter (L6).
+    let shown = path.display().to_string();
+    let from = if e.contains(&shown) {
+        String::new()
+    } else {
+        format!(" from '{shown}'")
+    };
     format!(
-        "gerber extraction from '{}' failed: {e}. Point at the gerber job \
-         folder (or a .zip of it) containing the copper/drill files (see {}).",
-        path.display(),
+        "gerber extraction{from} failed: {e}.{guidance} See {}.",
         hauksbee_ir::docs_url("docs/ingest/GERBER.md")
     )
 }

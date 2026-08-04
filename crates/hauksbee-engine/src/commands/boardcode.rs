@@ -528,7 +528,10 @@ fn check_json(r: &crate::boardcode::CheckReport) -> String {
             .iter()
             .map(|(reference, value)| serde_json::json!({ "ref": reference, "value": value }))
             .collect::<Vec<_>>(),
-        "simulated_seconds": r.simulated_seconds,
+        // Rounded to microseconds: the accumulator's floating-point residue
+        // (0.9999999999999062) is solver noise, not information, and it made
+        // the JSON diff-noisy run to run (L9).
+        "simulated_seconds": (r.simulated_seconds * 1e6).round() / 1e6,
         "active_nets": r.active_nets,
         "faults": r
             .faults
