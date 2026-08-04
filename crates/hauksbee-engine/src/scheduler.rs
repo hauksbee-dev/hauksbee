@@ -262,6 +262,14 @@ pub struct Scheduler {
     /// consecutive so a diverged stretch reads as its true extent. Surfaced in the
     /// co-sim JSON so a consumer knows exactly which span cannot be trusted.
     failed_windows: Vec<(f64, f64)>,
+    /// The solver's own refusal message for each entry in `failed_windows`,
+    /// parallel and always the same length. Holds the FIRST failure's message
+    /// in a merged window, which is the one that started the divergence and so
+    /// the one worth naming. Carries the solver's blame clause (the net that
+    /// refused to settle, the devices on it, any near-zero-ohm link poisoning
+    /// the matrix), so a non-convergence names the smallest identifiable thing
+    /// instead of only a chunk count (E29).
+    failed_window_reasons: Vec<String>,
     /// Current run of back-to-back failed chunks (reset to 0 by any converged
     /// chunk). Feeds the strict/CI abort threshold.
     consecutive_failed_chunks: u32,
@@ -793,6 +801,7 @@ impl Scheduler {
             forced_node_volts: HashMap::new(),
             failed_chunks: 0,
             failed_windows: Vec::new(),
+            failed_window_reasons: Vec::new(),
             consecutive_failed_chunks: 0,
             max_consecutive_failed_chunks: 0,
             last_solve_error: None,
@@ -1056,6 +1065,60 @@ impl Scheduler {
     /// every instantiated MCU was modelled by its exact requested part.
     pub fn substitutions(&self) -> &[McuSubstitution] {
         &self.substitutions
+    }
+
+    /// Loud notes for every net whose voltage is decided by something other
+    /// than the thing the user asked for (E30).
+    ///
+    /// Two shapes, both of which used to pass in silence:
+    ///
+    ///   - Two ideal sources pinning one net. Forcing a net to 20 V beside a
+    ///     3.3 V rail leaves it reading 3.300 V; the note names both sources
+    ///     and, by reading the settled node voltage rather than guessing at
+    ///     pivot order, says which one won.
+    ///   - A post-solve `force_net_voltage` override on a net that a stamped
+    ///     ideal source already pins. The override wins in the reported
+    ///     voltage, so the stamped source's contribution is invisible.
+    ///
+    /// Empty on any board where nothing contests a net, which is every ordinary
+    /// board, so this costs one allocation and no notes in the common case.
+    pub fn drive_conflicts(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        for c in hauksbee_solve::blame::source_conflicts(&self.circuit) {
+            let settled = self.node_volts.get(c.node.0 as usize).copied();
+            out.push(c.describe(settled));
+        }
+        for (&node, &(hi, lo, t0, t1)) in &self.forced_node_volts {
+            let stamped = hauksbee_solve::blame::sources_on_node(
+                &self.circuit,
+                hauksbee_ir::NodeId(node as u32),
+            );
+            if stamped.is_empty() {
+                continue;
+            }
+            let names = stamped
+                .iter()
+                .map(|s| format!("{} ({:.3} V)", s.name, s.volts))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let net = self
+                .net_nodes
+                .iter()
+                .find(|(_, id)| id.0 as usize == node)
+                .map(|(n, _)| n.clone())
+                .unwrap_or_else(|| format!("node #{node}"));
+            let window = if t0.is_finite() || t1.is_finite() {
+                format!(" over [{t0:.6}, {t1:.6}) s")
+            } else {
+                String::new()
+            };
+            out.push(format!(
+                "net '{net}' is overridden to {hi:.3} V (else {lo:.3} V){window} AFTER each \
+                 solve, on top of stamped ideal source(s) {names}: the override wins and the \
+                 stamped source has no effect on the reported voltage"
+            ));
+        }
+        out
     }
 
     /// Bus peripherals attached on a platform that models no matching bus
@@ -2084,7 +2147,12 @@ impl Scheduler {
         // would double-count it. `sim_time` has not advanced yet, so the window
         // start matches `solve_chunk`'s.
         if mcu_run_failed && chunk_converged {
-            self.record_failed_chunk(chunk);
+            self.record_failed_chunk(
+                chunk,
+                Some(
+                    "MCU refused to advance; the digital side of this chunk never ran".to_string(),
+                ),
+            );
         }
         // The consecutive-failure streak resets ONLY on a fully-successful chunk
         // (analog converged AND the MCU advanced). Doing this reset inside
@@ -2351,6 +2419,13 @@ impl Scheduler {
             final_x.clear();
             final_x.extend_from_slice(s.x);
         });
+        // Keep the solver's refusal message: it carries the blame clause naming
+        // the net that refused to settle and the offending element(s). Throwing
+        // it away is what left a 259-part board diagnosable only by bisection.
+        let failure_reason = match &res {
+            Ok(()) => None,
+            Err(msg) => Some(msg.clone()),
+        };
         let converged = match res {
             Ok(()) => {
                 self.node_volts.resize(n_nodes, 0.0);
@@ -2418,7 +2493,7 @@ impl Scheduler {
         // reach this point analog-converged, and only `run_chunk`, which also
         // knows the MCU status, may reset the streak on a fully-successful chunk.
         if !converged {
-            self.record_failed_chunk(chunk);
+            self.record_failed_chunk(chunk, failure_reason);
         }
 
         // Apply any forced node-voltage overrides (the firmware-driven Tarski
@@ -2444,7 +2519,7 @@ impl Scheduler {
     /// from `solve_chunk` before `sim_time` advances, so `[sim_time, sim_time +
     /// chunk)` is the window this failed chunk covers. Consecutive failed chunks
     /// are merged into one window so a diverged stretch reads as its true extent.
-    fn record_failed_chunk(&mut self, chunk: f64) {
+    fn record_failed_chunk(&mut self, chunk: f64, reason: Option<String>) {
         self.failed_chunks += 1;
         self.consecutive_failed_chunks += 1;
         self.max_consecutive_failed_chunks = self
@@ -2457,8 +2532,13 @@ impl Scheduler {
         // ordinary float drift in `sim_time` accumulation does not split a run.
         match self.failed_windows.last_mut() {
             Some(prev) if (start - prev.1).abs() <= chunk * 1e-6 => prev.1 = end,
-            _ => self.failed_windows.push((start, end)),
+            _ => {
+                self.failed_windows.push((start, end));
+                self.failed_window_reasons
+                    .push(reason.unwrap_or_else(|| "analog march did not advance".to_string()));
+            }
         }
+        debug_assert_eq!(self.failed_windows.len(), self.failed_window_reasons.len());
     }
 
     /// Force a net's voltage to `volts` AFTER each analog solve (until cleared),
@@ -2524,6 +2604,25 @@ impl Scheduler {
         self.last_solve_error.as_deref()
     }
 
+    /// The solver's refusal message for each failed window, parallel to
+    /// [`Self::failed_windows`]. Each carries the blame clause naming the net
+    /// that refused to settle, the devices on it, and any element whose
+    /// conductance is outside the board's own distribution (E29). Empty on a
+    /// clean run.
+    pub fn failed_window_reasons(&self) -> &[String] {
+        &self.failed_window_reasons
+    }
+
+    /// The failed windows with their diagnoses, formatted one per line, ready
+    /// to print. Empty on a clean run.
+    pub fn failed_window_diagnoses(&self) -> Vec<String> {
+        self.failed_windows
+            .iter()
+            .zip(self.failed_window_reasons.iter())
+            .map(|((a, b), why)| format!("{:.3}-{:.3} ms: {}", a * 1e3, b * 1e3, why))
+            .collect()
+    }
+
     /// False once any chunk this run failed to solve faithfully: either the
     /// analog march diverged (held stale voltages over a window) or an MCU
     /// refused to advance (`run_micros` errored), so the digital side of that
@@ -2563,6 +2662,7 @@ impl Scheduler {
         self.micros_carry = 0.0;
         self.failed_chunks = 0;
         self.failed_windows.clear();
+        self.failed_window_reasons.clear();
         self.consecutive_failed_chunks = 0;
         self.max_consecutive_failed_chunks = 0;
         self.last_solve_error = None;
@@ -3066,6 +3166,56 @@ impl Scheduler {
         out.sort();
         out.dedup();
         out
+    }
+
+    /// How a net arrived at the level it is sitting at.
+    ///
+    /// The distinction boot coverage lives or dies on (E51). A control net that
+    /// reaches its level because a pull-up holds it there has NOT been shown to
+    /// boot: `boot_coverage` passed on a watchy RES net at 1 ms with no firmware
+    /// staged at all, which is a green verdict vouching for firmware behaviour
+    /// that never ran.
+    pub fn level_provenance(&self, net: &str) -> LevelProvenance {
+        if self.firmware_driven_nets().iter().any(|n| n == net) {
+            return LevelProvenance::FirmwareDriven;
+        }
+        if self.mcus.is_empty() {
+            // No MCU is modelled at all, so nothing digital could have driven
+            // anything. The level is the passive network's, with certainty; pin
+            // direction observability does not enter into it.
+            return LevelProvenance::Passive;
+        }
+        if !self.drive_direction_observable() {
+            // A levels-only backend cannot tell a held-low output from a
+            // floating input, so neither "firmware drove it" nor "the network
+            // did" is a claim this run can support.
+            return LevelProvenance::Unobservable;
+        }
+        LevelProvenance::Passive
+    }
+
+    /// One clause stating how `net` arrived at `volts` at `t_ms`, for any caller
+    /// about to report that a control net reached a level.
+    ///
+    /// The wording is the point. "Driven to 3.3 V at 1.00 ms" is a claim about
+    /// firmware; when no firmware drove the net, the honest sentence names the
+    /// passive network instead, and when the backend cannot tell, it says that.
+    pub fn level_reached_clause(&self, net: &str, volts: f64, t_ms: f64) -> String {
+        match self.level_provenance(net) {
+            LevelProvenance::FirmwareDriven => format!(
+                "control net '{net}' was driven to {volts:.3} V by firmware at {t_ms:.2} ms"
+            ),
+            LevelProvenance::Passive => format!(
+                "control net '{net}' reached {volts:.3} V at {t_ms:.2} ms PASSIVELY: no \
+                 firmware drove it, so this is the passive network's level (a pull resistor \
+                 or a rail), not a firmware action"
+            ),
+            LevelProvenance::Unobservable => format!(
+                "control net '{net}' reached {volts:.3} V at {t_ms:.2} ms, but this MCU \
+                 backend cannot report pin direction, so whether firmware drove it or the \
+                 passive network held it there is UNKNOWN"
+            ),
+        }
     }
 
     /// MCU GPIO nets the firmware drove to a *defined* level during the run,
@@ -3909,6 +4059,24 @@ fn resolve_renode_config(part: &str) -> anyhow::Result<hauksbee_mcu::RenodeConfi
 ///     GPIO port carries a direction-register map (`dir = {...}`, verified
 ///     per-part; see `db/mcu/*.soc.toml`);
 ///   - anything else (QEMU, unknown futures), false, fail-safe.
+/// How a net arrived at the level it is sitting at.
+///
+/// Reported by [`Scheduler::level_provenance`]. A caller about to claim a
+/// control net "was driven" to a level must consult this first: a level reached
+/// passively is a fact about the passive network, not about firmware, and
+/// presenting it as the latter is the E51 defect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LevelProvenance {
+    /// An MCU drove the net to a defined level this run.
+    FirmwareDriven,
+    /// Nothing drove it: the level is the passive network's, a pull resistor or
+    /// a rail. Reported only when the run can actually support the claim, i.e.
+    /// there is no MCU at all, or every MCU's backend reports pin direction.
+    Passive,
+    /// The MCU backend cannot report pin direction, so neither claim is honest.
+    Unobservable,
+}
+
 pub fn backend_reports_drive_direction(backend: &str) -> bool {
     if !backend_is_external(backend) {
         return true;
@@ -6107,6 +6275,122 @@ mod tests {
             sh.pin_edges.is_empty() && sh.pin_edge_log.is_empty() && sh.uart_out.is_empty(),
             "stale capture buffers must be dropped"
         );
+    }
+
+    /// A control net that reaches its level with NOTHING driving it must be
+    /// reported as having got there passively (E51).
+    ///
+    /// `boot_coverage` passed on a watchy RES net with no firmware staged at
+    /// all: the net reached its level at 1 ms because a pull-up held it there,
+    /// and the verdict read "driven to >= 3.0 V at 1.00 ms". That sentence
+    /// vouches for firmware that never ran.
+    ///
+    /// Two-sided: with no MCU the provenance is passive with certainty, with a
+    /// direction-blind backend it is honestly unknown, and with a core that
+    /// actually drove the pin it is firmware-driven.
+    #[test]
+    fn a_passively_reached_level_is_not_reported_as_firmware_driven() {
+        let mut circuit = Circuit::new();
+        let res = circuit.node("RES");
+        // A pull-up holding RES at the rail: the passive network, no firmware.
+        circuit.add(Device::Vsource {
+            name: "Vsupply_VCC".into(),
+            p: res,
+            n: NodeId::GROUND,
+            kind: hauksbee_ir::SourceKind::Dc(3.3),
+        });
+        let mut net_nodes = HashMap::new();
+        net_nodes.insert("RES".to_string(), res);
+        let bound = crate::binder::BoundBoard {
+            name: "passive_res".into(),
+            circuit,
+            net_nodes,
+            net_names: vec!["RES".into()],
+            digital: Vec::new(),
+            mcus: Vec::new(),
+            dnp_mcus: Vec::new(),
+            component_kinds: HashMap::new(),
+            input_sources: HashMap::new(),
+            supplies: Vec::new(),
+            behavioral: Vec::new(),
+            device_meta: Vec::new(),
+            dacs: Vec::new(),
+            report: crate::report::BindReport::default(),
+        };
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+
+        // No MCU at all: nothing digital could have driven it, so the passive
+        // verdict is certain, not hedged.
+        assert_eq!(sched.level_provenance("RES"), LevelProvenance::Passive);
+        let clause = sched.level_reached_clause("RES", 3.3, 1.0);
+        assert!(
+            clause.contains("PASSIVELY") && clause.contains("no firmware drove it"),
+            "must say the level was reached passively: {clause}"
+        );
+        assert!(
+            !clause.contains("was driven to"),
+            "must NOT imply firmware drove it: {clause}"
+        );
+
+        // A direction-blind backend cannot support either claim.
+        let binding = |reference: &str, role_net: Option<NodeId>| {
+            let mut role_nets = HashMap::new();
+            if let Some(n) = role_net {
+                role_nets.insert("pb5".to_string(), n);
+            }
+            McuBinding {
+                reference: reference.into(),
+                backend: "qemu:test".into(),
+                requested_part: String::new(),
+                pad_roles: HashMap::new(),
+                role_nets,
+                gpio_drivers: HashMap::new(),
+                adc_nets: HashMap::new(),
+                adc_pin: HashMap::new(),
+                module: false,
+                max_supply_v: None,
+            }
+        };
+        sched.mcus.push(core_with_hooks(
+            Box::new(DirCore { observable: false }),
+            binding("U1", Some(res)),
+        ));
+        sched.responder_registries.push(None);
+        assert_eq!(
+            sched.level_provenance("RES"),
+            LevelProvenance::Unobservable,
+            "a backend that cannot report pin direction must not claim either way"
+        );
+        let clause = sched.level_reached_clause("RES", 3.3, 1.0);
+        assert!(clause.contains("UNKNOWN"), "{clause}");
+
+        // Now a core that reports direction AND actually wrote the pin: this is
+        // the only case where "driven by firmware" is true.
+        sched.mcus.clear();
+        sched.responder_registries.clear();
+        sched.mcus.push(core_with_hooks(
+            Box::new(DirCore { observable: true }),
+            binding("U1", Some(res)),
+        ));
+        sched.responder_registries.push(None);
+        assert_eq!(
+            sched.level_provenance("RES"),
+            LevelProvenance::Passive,
+            "a core that never touched the pin has not driven it"
+        );
+        // `gpio_of_role` normalises the port letter to uppercase.
+        sched.mcus[0].last_levels.insert(('B', 5), true);
+        assert_eq!(
+            sched.level_provenance("RES"),
+            LevelProvenance::FirmwareDriven,
+            "a written pin is firmware-driven"
+        );
+        let clause = sched.level_reached_clause("RES", 3.3, 1.0);
+        assert!(
+            clause.contains("was driven to") && clause.contains("by firmware"),
+            "{clause}"
+        );
+        assert!(!clause.contains("PASSIVELY"), "{clause}");
     }
 }
 
