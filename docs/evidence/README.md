@@ -8,8 +8,10 @@ The discipline behind all three: a check earns its place by being shown not to
 fire on known-good shipped boards before it lands, and misses are reported with
 the reason rather than hidden.
 
-Where that discipline currently stops is written down too, in `FAMOUS_SWEEP.md`:
-one live false positive on the Arduino Uno's `RESET-EN` solder jumper, no single
-corpus-wide silence gate over the whole lint, and several corpus guards that
-address boards by a layout `scripts/fetch-corpus.sh` does not produce. Evidence
-documents that only recorded their wins would not be evidence.
+Where that discipline stops is written down too. `FAMOUS_SWEEP.md` records the
+false positive this calibration had to kill (the Arduino Uno's `RESET-EN` solder
+jumper, read as an unfinished BOM entry) and the corpus gate that now holds it at
+zero, and it notes that several older corpus guards address boards by a layout
+`scripts/fetch-corpus.sh` does not produce, so they do not yet run outside the
+maintainers' tree. Evidence documents that only recorded their wins would not be
+evidence.

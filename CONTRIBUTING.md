@@ -116,17 +116,21 @@ that has stopped checking, and it fails silently forever after.
 ### The board corpus
 
 hauksbee's checks are calibrated to stay quiet on hardware that is fine, and the
-board corpus is how that is measured. Stated precisely, because the strong form
-of the claim is not what we can prove: individual checks have silence guards that
-go red if the check ever fires on a known-good board, and the lint's own suite
-pairs every true positive with the false-positive shape that once fooled it.
-There is no single gate asserting the whole lint stays quiet corpus-wide, and one
-live false positive is on record in
-[`docs/evidence/FAMOUS_SWEEP.md`](docs/evidence/FAMOUS_SWEEP.md).
+board corpus is how that is measured. A new or changed check earns its place by
+being run against the corpus and shown not to fire on boards known to be good.
+Several checks have that pinned as a silence gate that goes red on any fire; the
+placeholder-value gate, for instance, sweeps every board file in the corpus (129
+on the fetched layout) across four extraction paths and demands zero
+medium-or-high findings. Add one for your check if it is the kind that can cry
+wolf.
 
-A new or changed check earns its place by being run against this corpus and
-shown not to fire on boards known to be good. The corpus is mostly public open
-hardware, so you can fetch it:
+One caveat to know before you trust a green run: several of the older corpus
+guards address boards by a hand-built `board-corpus/famous/<id>/...` layout that
+`fetch-corpus.sh` does not produce, so they do not find their boards on a freshly
+fetched corpus. Always run with `HAUKSBEE_REQUIRE_CORPUS=1`, which turns a missing
+corpus into a failure rather than a silent skip.
+
+The corpus is mostly public open hardware, so you can fetch it:
 
 ```bash
 scripts/fetch-corpus.sh                   # fetches into ./board-corpus
