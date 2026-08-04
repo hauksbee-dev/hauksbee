@@ -61,10 +61,7 @@ fn generated_schema() -> String {
         "$schema".into(),
         json!("http://json-schema.org/draft-07/schema#"),
     );
-    obj.insert(
-        "title".into(),
-        json!("hauksbee-ci run --json output line"),
-    );
+    obj.insert("title".into(), json!("hauksbee-ci run --json output line"));
     obj.insert(
         "description".into(),
         json!(format!(
@@ -293,10 +290,7 @@ fn emitted_bytes_validate_against_the_schema() {
         ("fail", vec![ex.join("power_resistor_hot.toml")]),
         // A tolerance ensemble: `coverage` is a string, `failing_seeds` has
         // more than one member, `seeds` > 1.
-        (
-            "ensemble",
-            vec![ex.join("tolerance_divider_corners.toml")],
-        ),
+        ("ensemble", vec![ex.join("tolerance_divider_corners.toml")]),
         // A spec that never ran: the error variant.
         ("spec error", vec![ex.join("no-such-spec.toml")]),
         // Multi-spec: one line per spec, report and error lines mixed in the
@@ -381,9 +375,7 @@ fn refusal_and_abort_documents_validate() {
             components: 2,
         }),
         substitutions: vec!["U1: ESP32-S3 requested, ran on ESP32".to_string()],
-        coverage_warnings: vec![
-            "co-sim: ADC channel 0 on U1 never received a sample".to_string()
-        ],
+        coverage_warnings: vec!["co-sim: ADC channel 0 on U1 never received a sample".to_string()],
         dead_rails: vec!["ANALOG_VDD".to_string()],
         waiver_notes: vec!["waiver for max_temp on R1 lapsed on 2026-01-01".to_string()],
     };
