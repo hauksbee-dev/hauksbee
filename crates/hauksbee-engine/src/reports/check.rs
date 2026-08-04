@@ -119,12 +119,15 @@ pub fn emit(
             // resolved-but-open active ICs, so all four personas agree.
             let open = crate::result::coverage_open_active_refs(&summary).len();
             if open > 0 {
-                let m = summary.critical_parts_total;
+                // No part count in the pointer: `critical_parts_total` counts
+                // critical actives, not bind-table rows, and a wrong count
+                // sends a first-time reader hunting for a table that does not
+                // exist (qc scenario 01 pins this).
                 println!(
                     "Heads-up: {open} active IC(s) are unresolved/open, so firmware/analog/AC/thermal \
                      results on their nets would be INCOMPLETE, but the copper checks below are \
-                     unaffected. Add models with --models-dir (hauksbee models --help) to cover them (run --report for the {m}-part \
-                     bind table).\n"
+                     unaffected. Add models with --models-dir (hauksbee models --help) to cover \
+                     them (run --report for the bind table).\n"
                 );
             }
             println!("== Copper spacing (DRC) ==");
