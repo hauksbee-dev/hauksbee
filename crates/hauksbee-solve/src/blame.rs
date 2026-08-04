@@ -116,6 +116,154 @@ pub fn stiff_links(circuit: &Circuit) -> Vec<StiffLink> {
         .collect()
 }
 
+/// An ideal voltage source that pins a node's voltage against ground.
+#[derive(Debug, Clone)]
+pub struct NodeSource {
+    /// Device reference, e.g. `Vsupply_VDD` or `Vci_drive_RES`.
+    pub name: String,
+    /// The voltage it commands at `t = 0`. Every `SourceKind` can be evaluated,
+    /// so this is always known; a time-varying source's later value differs, but
+    /// the bias-point conflict is what makes the matrix singular.
+    pub volts: f64,
+    /// True when the commanded value varies with time, so the reported voltage
+    /// is the `t = 0` value rather than the whole story.
+    pub time_varying: bool,
+}
+
+/// Two or more ideal sources fixing the same node: a genuinely singular
+/// topology, and the mechanism by which a requested drive silently loses.
+#[derive(Debug, Clone)]
+pub struct SourceConflict {
+    /// The contested node.
+    pub node: NodeId,
+    /// Its net name.
+    pub net: String,
+    /// Every ideal source pinning it, in circuit order.
+    pub sources: Vec<NodeSource>,
+}
+
+impl SourceConflict {
+    /// The source whose commanded voltage the settled node voltage matches, if
+    /// exactly one does. This is the honest way to say "which won": not by
+    /// guessing at pivot order, but by reading the answer the solve produced.
+    pub fn winner(&self, settled_volts: f64) -> Option<&NodeSource> {
+        // A generous window: the point is to identify WHICH source the node
+        // followed, not to grade the solve's accuracy.
+        let tol = 1e-3 + 1e-3 * settled_volts.abs();
+        let mut hits = self
+            .sources
+            .iter()
+            .filter(|s| (s.volts - settled_volts).abs() <= tol);
+        let first = hits.next()?;
+        if hits.next().is_some() {
+            // Two sources commanding the same voltage: nothing was overridden
+            // in any meaningful sense, so name no winner.
+            None
+        } else {
+            Some(first)
+        }
+    }
+
+    /// One loud line naming every contender and, when the settled voltage is
+    /// known, which one the net actually followed.
+    pub fn describe(&self, settled_volts: Option<f64>) -> String {
+        let contenders = self
+            .sources
+            .iter()
+            .map(|s| {
+                if s.time_varying {
+                    format!("{} ({:.3} V at t=0, time-varying)", s.name, s.volts)
+                } else {
+                    format!("{} ({:.3} V)", s.name, s.volts)
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(" vs ");
+        let mut line = format!(
+            "net '{}' is pinned by {} ideal sources at once: {}",
+            self.net,
+            self.sources.len(),
+            contenders
+        );
+        match settled_volts {
+            Some(v) => match self.winner(v) {
+                Some(w) => {
+                    let lost = self
+                        .sources
+                        .iter()
+                        .filter(|s| s.name != w.name)
+                        .map(|s| s.name.clone())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    line.push_str(&format!(
+                        "; the net settled at {v:.3} V, so {} won and {lost} had no effect",
+                        w.name
+                    ));
+                }
+                None => line.push_str(&format!(
+                    "; the net settled at {v:.3} V, which matches no single source,                      so the result is not any of the requested voltages"
+                )),
+            },
+            None => line.push_str(
+                "; the matrix is singular there and the solve cannot honour both",
+            ),
+        }
+        line
+    }
+}
+
+/// Every ideal ground-referenced voltage source pinning `node`.
+pub fn sources_on_node(circuit: &Circuit, node: NodeId) -> Vec<NodeSource> {
+    if node.is_ground() {
+        return Vec::new();
+    }
+    circuit
+        .devices
+        .iter()
+        .filter_map(|d| match d {
+            Device::Vsource { name, p, n, kind } => {
+                // A source is only PINNING this node if its other terminal is
+                // ground. Two sources in series up a divider chain are not in
+                // conflict, and must not be reported as one.
+                let pins = (*p == node && n.is_ground()) || (*n == node && p.is_ground());
+                pins.then(|| {
+                    let v0 = kind.eval(0.0);
+                    let volts = if *n == node { -v0 } else { v0 };
+                    NodeSource {
+                        name: name.clone(),
+                        volts,
+                        time_varying: !matches!(kind, hauksbee_ir::SourceKind::Dc(_)),
+                    }
+                })
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Nodes pinned by more than one ideal source.
+///
+/// This is one defect wearing two hats. As a topology fault it is the textbook
+/// singular MNA system: two identical constraint rows, no solution, and a
+/// refusal that until now named nothing. As an honesty fault it is how a
+/// requested override loses: forcing a net to 20 V next to a 3.3 V rail leaves
+/// the net reading 3.300 V, and without this nobody says so.
+pub fn source_conflicts(circuit: &Circuit) -> Vec<SourceConflict> {
+    let mut out: Vec<SourceConflict> = Vec::new();
+    for k in 1..circuit.node_count() {
+        let node = NodeId(k as u32);
+        let sources = sources_on_node(circuit, node);
+        if sources.len() > 1 {
+            out.push(SourceConflict {
+                node,
+                net: circuit.node_name(node).to_string(),
+                sources,
+            });
+        }
+    }
+    out
+}
+
 /// Render a suspect list as `R1, R2, R3 and 7 more`.
 fn elide(names: &[String]) -> String {
     if names.len() <= MAX_NAMED {
@@ -157,6 +305,12 @@ pub fn blame_clause(
             }
             parts.push(clause);
         }
+    }
+    // A node pinned by two ideal sources is singular by construction. Name it
+    // FIRST: it is the most specific and most actionable thing a failed solve
+    // can say, and it is a topology fault no amount of solver work can fix.
+    for c in source_conflicts(circuit) {
+        parts.push(c.describe(None));
     }
     let stiff = stiff_links(circuit);
     if !stiff.is_empty() {
@@ -256,6 +410,93 @@ mod tests {
         assert!(clause.contains("net 'MID'"), "names the net: {clause}");
         assert!(clause.contains("R1"), "names devices on it: {clause}");
         assert!(clause.contains("R3"), "names devices on it: {clause}");
+    }
+
+    #[test]
+    fn two_sources_on_one_net_are_named_with_the_winner() {
+        let mut c = Circuit::new();
+        let res = c.node("RES");
+        c.add(Device::Vsource {
+            name: "Vsupply_RES".into(),
+            p: res,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(3.3),
+        });
+        c.add(Device::Vsource {
+            name: "Vci_drive_RES".into(),
+            p: res,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(20.0),
+        });
+        let conflicts = source_conflicts(&c);
+        assert_eq!(conflicts.len(), 1);
+        let c0 = &conflicts[0];
+        assert_eq!(c0.net, "RES");
+
+        // The reported symptom: the net reads 3.300 V, so the supply won and the
+        // 20 V drive had no effect. Both must be named, and the loser must be
+        // named as the loser.
+        let msg = c0.describe(Some(3.3));
+        assert!(msg.contains("Vsupply_RES"), "{msg}");
+        assert!(msg.contains("Vci_drive_RES"), "{msg}");
+        assert!(msg.contains("3.300 V"), "{msg}");
+        assert!(msg.contains("20.000 V"), "{msg}");
+        assert!(
+            msg.contains("Vsupply_RES won") && msg.contains("Vci_drive_RES had no effect"),
+            "must say which won and which lost: {msg}"
+        );
+        assert_eq!(c0.winner(3.3).map(|w| w.name.as_str()), Some("Vsupply_RES"));
+        assert_eq!(
+            c0.winner(20.0).map(|w| w.name.as_str()),
+            Some("Vci_drive_RES"),
+            "the same conflict read at 20 V names the drive as the winner"
+        );
+    }
+
+    #[test]
+    fn sources_in_series_are_not_a_conflict() {
+        // Two sources stacked into a divider chain share no node against ground
+        // and must never be reported: a false accusation on every stacked-supply
+        // board would train the user to ignore the note.
+        let mut c = Circuit::new();
+        let mid = c.node("MID");
+        let top = c.node("TOP");
+        c.add(Device::Vsource {
+            name: "V1".into(),
+            p: mid,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(5.0),
+        });
+        c.add(Device::Vsource {
+            name: "V2".into(),
+            p: top,
+            n: mid,
+            kind: SourceKind::Dc(5.0),
+        });
+        assert!(source_conflicts(&c).is_empty());
+    }
+
+    #[test]
+    fn a_conflicted_net_is_named_in_the_blame_clause() {
+        let mut c = Circuit::new();
+        let res = c.node("RES");
+        c.add(Device::Vsource {
+            name: "Vsupply_RES".into(),
+            p: res,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(3.3),
+        });
+        c.add(Device::Vsource {
+            name: "Vdrive_RES".into(),
+            p: res,
+            n: NodeId::GROUND,
+            kind: SourceKind::Dc(20.0),
+        });
+        let layout = Layout::new(&c);
+        let clause = blame_clause(&c, &layout, None)
+            .expect("a singular topology must always name something");
+        assert!(clause.contains("net 'RES'"), "{clause}");
+        assert!(clause.contains("singular"), "{clause}");
     }
 
     #[test]

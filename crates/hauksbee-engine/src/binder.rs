@@ -1866,11 +1866,23 @@ fn bind_passive(
             )),
         );
     };
-    let device = passive_device(comp, comp.reference.clone(), a, b, &p);
+    let (device, note) = passive_device(comp, comp.reference.clone(), a, b, &p);
     let label = device_label(&device);
     circuit.add(device);
-    (BindOutcome::Analog { device: label }, None)
+    (BindOutcome::Analog { device: label }, note)
 }
+
+/// Resistance a literal 0 Ω resistor is bound at.
+///
+/// A `0` in a resistor's value field is a JUMPER: a zero-ohm link placed to
+/// route a trace, strap an option, or leave a cut point. It is not a
+/// mathematical short. Binding it at the solver's 1 µΩ floor stamps 1e6 S into
+/// a matrix whose real entries are milli-siemens, and the resulting condition
+/// number is what made a 259-part board (anyshake/explorer, ten `0` resistors)
+/// unsolvable with no element named. A milliohm is the physical truth of an
+/// 0402 jumper's end-to-end resistance, is three decades better conditioned,
+/// and is far below anything a board's behaviour can distinguish from a short.
+const ZERO_OHM_JUMPER_OHMS: f64 = 1e-3;
 
 /// Build the concrete R / C / L device for the passive `comp` between `a` and
 /// `b`, deciding the kind from the reference-designator prefix and the parsed
@@ -1882,7 +1894,7 @@ fn passive_device(
     a: NodeId,
     b: NodeId,
     p: &hauksbee_models::value::ParsedValue,
-) -> Device {
+) -> (Device, Option<String>) {
     let unit = p.unit.as_deref().unwrap_or("");
     let prefix = comp
         .reference
@@ -1891,29 +1903,58 @@ fn passive_device(
         .collect::<String>()
         .to_ascii_uppercase();
     if prefix.starts_with('C') || unit.eq_ignore_ascii_case("F") {
-        Device::Capacitor {
-            name,
-            a,
-            b,
-            farads: p.si,
-            ic: None,
-        }
+        (
+            Device::Capacitor {
+                name,
+                a,
+                b,
+                farads: p.si,
+                ic: None,
+            },
+            None,
+        )
     } else if prefix.starts_with('L') || unit.eq_ignore_ascii_case("H") {
-        Device::Inductor {
-            name,
-            a,
-            b,
-            henries: p.si,
-            ic: None,
-        }
+        (
+            Device::Inductor {
+                name,
+                a,
+                b,
+                henries: p.si,
+                ic: None,
+            },
+            None,
+        )
+    } else if p.si <= 0.0 {
+        // A literal 0 (or negative) resistance is a jumper. Bind it as a
+        // milliohm link and SAY SO: the value on the board is not the value in
+        // the matrix, and a silent substitution is exactly the class of thing
+        // this project refuses to do.
+        let note = format!(
+            "{name}: value '{}' is a 0 ohm jumper, bound as a {:.0} mohm link              (an infinite conductance would poison the matrix)",
+            comp.value,
+            ZERO_OHM_JUMPER_OHMS * 1e3,
+        );
+        (
+            Device::Resistor {
+                name,
+                a,
+                b,
+                ohms: ZERO_OHM_JUMPER_OHMS,
+                tc1: None,
+            },
+            Some(note),
+        )
     } else {
-        Device::Resistor {
-            name,
-            a,
-            b,
-            ohms: p.si.max(1e-6),
-            tc1: None,
-        }
+        (
+            Device::Resistor {
+                name,
+                a,
+                b,
+                ohms: p.si.max(1e-6),
+                tc1: None,
+            },
+            None,
+        )
     }
 }
 
@@ -2011,7 +2052,10 @@ fn bind_passive_array(
             ));
             continue;
         };
-        let device = passive_device(comp, name, a, b, p);
+        let (device, note) = passive_device(comp, name, a, b, p);
+        if let Some(note) = note {
+            notes.push(note);
+        }
         if stamped == 0 {
             label = device_label(&device);
         }
