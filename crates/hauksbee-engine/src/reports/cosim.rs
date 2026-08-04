@@ -79,7 +79,19 @@ pub fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<Cosi
     let failed_windows: Vec<CosimFailedWindow> = sched
         .failed_windows()
         .iter()
-        .map(|&(start_s, end_s)| CosimFailedWindow { start_s, end_s })
+        .enumerate()
+        .map(|(i, &(start_s, end_s))| CosimFailedWindow {
+            start_s,
+            end_s,
+            // Carry the solver's diagnosis into the JSON, not just the span: a
+            // CI consumer reading `analog_valid:false` must be able to see WHAT
+            // failed without re-running the board by hand (E29).
+            reason: sched
+                .failed_window_reasons()
+                .get(i)
+                .cloned()
+                .unwrap_or_default(),
+        })
         .collect();
 
     Some(CosimJson {
