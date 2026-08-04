@@ -1,0 +1,993 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:schemaLocation="http://webstds.ipc.org/2581 http://webstds.ipc.org/2581/IPC-2581C.xsd">
+  <Content roleRef="Owner">
+    <FunctionMode mode="ASSEMBLY"/>
+    <StepRef name="BOARD:boot_gate"/>
+    <LayerRef name="LAYER:F.Silkscreen"/>
+    <LayerRef name="LAYER:F.Paste"/>
+    <LayerRef name="LAYER:F.Mask"/>
+    <LayerRef name="LAYER:F.Cu"/>
+    <LayerRef name="LAYER:DIELECTRIC_1"/>
+    <LayerRef name="LAYER:B.Cu"/>
+    <LayerRef name="LAYER:B.Mask"/>
+    <LayerRef name="LAYER:B.Paste"/>
+    <LayerRef name="LAYER:B.Silkscreen"/>
+    <DictionaryColor/>
+    <DictionaryLineDesc units="MILLIMETER">
+      <EntryLineDesc id="LINE_1">
+        <LineDesc lineWidth="0.0" lineEnd="ROUND"/>
+      </EntryLineDesc>
+      <EntryLineDesc id="LINE_2">
+        <LineDesc lineWidth="0.150" lineEnd="ROUND"/>
+      </EntryLineDesc>
+    </DictionaryLineDesc>
+    <DictionaryFillDesc units="MILLIMETER"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="RECT_1">
+        <RectCenter width="1.5240" height="1.5240"/>
+      </EntryStandard>
+      <EntryStandard id="CIRCLE_2">
+        <Circle diameter="1.5240"/>
+      </EntryStandard>
+    </DictionaryStandard>
+    <DictionaryUser units="MILLIMETER">
+      <EntryUser id="UCIRCLE_1">
+        <UserSpecial>
+          <Circle diameter="0.000002">
+            <LineDesc lineWidth="0.10" lineEnd="ROUND"/>
+            <FillDesc fillProperty="HOLLOW"/>
+          </Circle>
+        </UserSpecial>
+      </EntryUser>
+    </DictionaryUser>
+  </Content>
+  <LogisticHeader>
+    <Role id="Owner" roleFunction="SENDER"/>
+    <Enterprise id="UNKNOWN" code="NONE"/>
+    <Person name="UNKNOWN" enterpriseRef="UNKNOWN" roleRef="Owner"/>
+  </LogisticHeader>
+  <HistoryRecord number="1" origination="2026-08-04T13:28:28" software="KiCad EDA" lastChange="2026-08-04T13:28:28">
+    <FileRevision fileRevisionId="1" comment="NO COMMENT" label="NO LABEL">
+      <SoftwarePackage name="KiCad" revision="9.0.3" vendor="KiCad EDA">
+        <Certification certificationStatus="SELFTEST"/>
+      </SoftwarePackage>
+    </FileRevision>
+  </HistoryRecord>
+  <Bom name="BOM:boot_gate">
+    <BomHeader revision="1.0" assembly="KI:boot_gate">
+      <StepRef name="BOARD:boot_gate"/>
+    </BomHeader>
+    <BomItem OEMDesignNumberRef="REF:Package_QFP_TQFP-32_7x7mm_P0.8mm_ATmega328P" quantity="1" pinCount="5" category="ELECTRICAL">
+      <RefDes name="CMP:U1" packageRef="PKG:TQFP-32_7x7mm_P0.8mm" populate="true" layerRef="LAYER:F.Cu"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="KICAD" textualCharacteristicName="Value" textualCharacteristicValue="ATmega328P"/>
+      </Characteristics>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="REF:Package_TO_SOT_SMD_SOT-23_2N7002" quantity="1" pinCount="3" category="ELECTRICAL">
+      <RefDes name="CMP:Q1" packageRef="PKG:SOT-23" populate="true" layerRef="LAYER:F.Cu"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="KICAD" textualCharacteristicName="Value" textualCharacteristicValue="2N7002"/>
+      </Characteristics>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="REF:Resistor_THT_R_Axial_DIN0207_L6.3mm_D2.5mm_1k" quantity="1" pinCount="2" category="ELECTRICAL">
+      <RefDes name="CMP:R1" packageRef="PKG:R_Axial_DIN0207_L6.3mm_D2.5mm" populate="true" layerRef="LAYER:F.Cu"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="KICAD" textualCharacteristicName="Value" textualCharacteristicValue="1k"/>
+      </Characteristics>
+    </BomItem>
+  </Bom>
+  <Ecad name="Design">
+    <CadHeader units="MILLIMETER">
+      <Spec name="SPEC_LAYER:F.Silkscreen">
+        <General type="MATERIAL">
+          <Property text="Top Silk Screen"/>
+          <Property text="Color : Not specified"/>
+          <Property text="Type : Top Silk Screen"/>
+        </General>
+      </Spec>
+      <Spec name="SPEC_LAYER:F.Paste">
+        <General type="MATERIAL">
+          <Property/>
+        </General>
+      </Spec>
+      <Spec name="SPEC_LAYER:F.Mask">
+        <General type="MATERIAL">
+          <Property text="SOLDERMASK"/>
+          <Property text="Color : Not specified"/>
+          <Property text="Type : Top Solder Mask"/>
+        </General>
+      </Spec>
+      <Spec name="SPEC_LAYER:F.Cu">
+        <General type="MATERIAL">
+          <Property text="COPPER"/>
+        </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property unit="SIEMENS/M" value="5.959E7"/>
+        </Conductor>
+      </Spec>
+      <Spec name="SPEC_LAYER:DIELECTRIC_1">
+        <General type="MATERIAL">
+          <Property text="FR4"/>
+          <Property text="Type : core"/>
+        </General>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="4.50"/>
+        </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.020"/>
+        </Dielectric>
+      </Spec>
+      <Spec name="SPEC_LAYER:B.Cu">
+        <General type="MATERIAL">
+          <Property text="COPPER"/>
+        </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property unit="SIEMENS/M" value="5.959E7"/>
+        </Conductor>
+      </Spec>
+      <Spec name="SPEC_LAYER:B.Mask">
+        <General type="MATERIAL">
+          <Property text="SOLDERMASK"/>
+          <Property text="Color : Not specified"/>
+          <Property text="Type : Bottom Solder Mask"/>
+        </General>
+      </Spec>
+      <Spec name="SPEC_LAYER:B.Paste">
+        <General type="MATERIAL">
+          <Property/>
+        </General>
+      </Spec>
+      <Spec name="SPEC_LAYER:B.Silkscreen">
+        <General type="MATERIAL">
+          <Property text="Bottom Silk Screen"/>
+          <Property text="Color : Not specified"/>
+          <Property text="Type : Bottom Silk Screen"/>
+        </General>
+      </Spec>
+    </CadHeader>
+    <CadData>
+      <Layer name="LAYER:F.Silkscreen" layerFunction="SILKSCREEN" polarity="POSITIVE" side="TOP"/>
+      <Layer name="LAYER:F.Paste" layerFunction="SOLDERPASTE" polarity="POSITIVE" side="TOP"/>
+      <Layer name="LAYER:F.Mask" layerFunction="SOLDERMASK" polarity="POSITIVE" side="TOP"/>
+      <Layer name="LAYER:F.Cu" layerFunction="CONDUCTOR" polarity="POSITIVE" side="TOP"/>
+      <Layer name="LAYER:DIELECTRIC_1" layerFunction="DIELCORE" polarity="POSITIVE" side="INTERNAL"/>
+      <Layer name="LAYER:B.Cu" layerFunction="CONDUCTOR" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="LAYER:B.Mask" layerFunction="SOLDERMASK" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="LAYER:B.Paste" layerFunction="SOLDERPASTE" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="LAYER:B.Silkscreen" layerFunction="SILKSCREEN" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="LAYER:F.Adhesive" layerFunction="GLUE" polarity="POSITIVE" side="TOP"/>
+      <Layer name="LAYER:B.Adhesive" layerFunction="GLUE" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="LAYER:User.Drawings" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
+      <Layer name="LAYER:User.Comments" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
+      <Layer name="LAYER:User.Eco1" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
+      <Layer name="LAYER:User.Eco2" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
+      <Layer name="LAYER:Edge.Cuts" layerFunction="BOARD_OUTLINE" polarity="POSITIVE" side="ALL"/>
+      <Layer name="LAYER:Margin" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
+      <Layer name="LAYER:B.Courtyard" layerFunction="COURTYARD" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="LAYER:F.Courtyard" layerFunction="COURTYARD" polarity="POSITIVE" side="TOP"/>
+      <Layer name="LAYER:B.Fab" layerFunction="ASSEMBLY" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="LAYER:F.Fab" layerFunction="ASSEMBLY" polarity="POSITIVE" side="TOP"/>
+      <Layer name="LAYER:Rescue"/>
+      <Layer name="LAYER:User.1" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
+      <Layer name="LAYER:User.2" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
+      <Layer name="LAYER:User.3" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
+      <Layer name="LAYER:User.4" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
+      <Layer name="DRILL:F.Cu_B.Cu" layerFunction="DRILL" polarity="POSITIVE" side="ALL">
+        <Span fromLayer="LAYER:F.Cu" toLayer="LAYER:B.Cu"/>
+      </Layer>
+      <Stackup name="Primary_Stackup" overallThickness="1.60" tolPlus="0.0" tolMinus="0.0" whereMeasured="MASK" stackupStatus="PROPOSED">
+        <StackupGroup name="Primary_Stackup_Group" thickness="1.60" tolPlus="0.0" tolMinus="0.0">
+          <StackupLayer layerOrGroupRef="LAYER:F.Silkscreen" thickness="0.0" tolPlus="0.0" tolMinus="0.0" sequence="0">
+            <SpecRef id="SPEC_LAYER:F.Silkscreen"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:F.Paste" thickness="0.0" tolPlus="0.0" tolMinus="0.0" sequence="1">
+            <SpecRef id="SPEC_LAYER:F.Paste"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:F.Mask" thickness="0.010" tolPlus="0.0" tolMinus="0.0" sequence="2">
+            <SpecRef id="SPEC_LAYER:F.Mask"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:F.Cu" thickness="0.0350" tolPlus="0.0" tolMinus="0.0" sequence="3">
+            <SpecRef id="SPEC_LAYER:F.Cu"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:DIELECTRIC_1" thickness="1.510" tolPlus="0.0" tolMinus="0.0" sequence="4">
+            <SpecRef id="SPEC_LAYER:DIELECTRIC_1"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:B.Cu" thickness="0.0350" tolPlus="0.0" tolMinus="0.0" sequence="5">
+            <SpecRef id="SPEC_LAYER:B.Cu"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:B.Mask" thickness="0.010" tolPlus="0.0" tolMinus="0.0" sequence="6">
+            <SpecRef id="SPEC_LAYER:B.Mask"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:B.Paste" thickness="0.0" tolPlus="0.0" tolMinus="0.0" sequence="7">
+            <SpecRef id="SPEC_LAYER:B.Paste"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:B.Silkscreen" thickness="0.0" tolPlus="0.0" tolMinus="0.0" sequence="8">
+            <SpecRef id="SPEC_LAYER:B.Silkscreen"/>
+          </StackupLayer>
+        </StackupGroup>
+      </Stackup>
+      <Step name="BOARD:boot_gate" type="BOARD">
+        <NonstandardAttribute name="FOOTPRINT_COUNT" type="INTEGER" value="3"/>
+        <PadStackDef name="PADSTACK_2">
+          <PadstackHoleDef name="PTH1_1" diameter="0.000001" platingStatus="PLATED" plusTol="0.0" minusTol="0.0" x="0.0" y="0.0"/>
+          <PadstackPadDef layerRef="LAYER:F.Cu" padUse="REGULAR">
+            <Location x="0.0" y="0.0"/>
+            <UserPrimitiveRef id="UCIRCLE_1"/>
+          </PadstackPadDef>
+          <PadstackPadDef layerRef="LAYER:F.Mask" padUse="REGULAR">
+            <Location x="0.0" y="0.0"/>
+            <UserPrimitiveRef id="UCIRCLE_1"/>
+          </PadstackPadDef>
+          <PadstackPadDef layerRef="LAYER:B.Cu" padUse="REGULAR">
+            <Location x="0.0" y="0.0"/>
+            <UserPrimitiveRef id="UCIRCLE_1"/>
+          </PadstackPadDef>
+          <PadstackPadDef layerRef="LAYER:B.Mask" padUse="REGULAR">
+            <Location x="0.0" y="0.0"/>
+            <UserPrimitiveRef id="UCIRCLE_1"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <PadStackDef name="PADSTACK_1">
+          <PadstackPadDef layerRef="LAYER:F.Mask" padUse="REGULAR">
+            <Location x="0.0" y="0.0"/>
+            <StandardPrimitiveRef id="RECT_1"/>
+          </PadstackPadDef>
+          <PadstackPadDef layerRef="LAYER:B.Cu" padUse="REGULAR">
+            <Location x="0.0" y="0.0"/>
+            <StandardPrimitiveRef id="RECT_1"/>
+          </PadstackPadDef>
+          <PadstackPadDef layerRef="LAYER:B.Mask" padUse="REGULAR">
+            <Location x="0.0" y="0.0"/>
+            <StandardPrimitiveRef id="RECT_1"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <Datum x="0.0" y="0.0"/>
+        <Package name="KI:TQFP-32_7x7mm_P0.8mm_1" type="OTHER" pinOne="UNKNOWN" pinOneOrientation="OTHER">
+          <Outline>
+            <Polygon>
+              <PolyBegin x="-3.7620" y="0.7620"/>
+              <PolyStepSegment x="3.7620" y="0.7620"/>
+              <PolyStepSegment x="3.7620" y="-2.7620"/>
+              <PolyStepSegment x="2.2380" y="-2.7620"/>
+              <PolyStepSegment x="-3.7620" y="-1.7620"/>
+              <PolyStepSegment x="-3.7620" y="0.7620"/>
+            </Polygon>
+            <LineDescRef id="LINE_1"/>
+          </Outline>
+          <PickupPoint x="0.0" y="0.0"/>
+          <Pin number="PIN:7" electricalType="ELECTRICAL" type="SURFACE">
+            <Location x="-3.0" y="0.0"/>
+            <StandardPrimitiveRef id="RECT_1"/>
+          </Pin>
+          <Pin number="PIN:8" electricalType="ELECTRICAL" type="SURFACE">
+            <Location x="-3.0" y="-1.0"/>
+            <StandardPrimitiveRef id="RECT_1"/>
+          </Pin>
+          <Pin number="PIN:14" electricalType="ELECTRICAL" type="SURFACE">
+            <Location x="3.0" y="0.0"/>
+            <StandardPrimitiveRef id="RECT_1"/>
+          </Pin>
+          <Pin number="PIN:20" electricalType="ELECTRICAL" type="SURFACE">
+            <Location x="3.0" y="-1.0"/>
+            <StandardPrimitiveRef id="RECT_1"/>
+          </Pin>
+          <Pin number="PIN:22" electricalType="ELECTRICAL" type="SURFACE">
+            <Location x="3.0" y="-2.0"/>
+            <StandardPrimitiveRef id="RECT_1"/>
+          </Pin>
+        </Package>
+        <Package name="KI:SOT-23_2" type="OTHER" pinOne="UNKNOWN" pinOneOrientation="OTHER">
+          <Outline>
+            <Polygon>
+              <PolyBegin x="-0.7620" y="0.7620"/>
+              <PolyStepSegment x="2.7620" y="0.7620"/>
+              <PolyStepSegment x="2.7620" y="-0.7620"/>
+              <PolyStepSegment x="-0.7620" y="-0.7620"/>
+              <PolyStepSegment x="-0.7620" y="0.7620"/>
+            </Polygon>
+            <LineDescRef id="LINE_1"/>
+          </Outline>
+          <PickupPoint x="0.0" y="0.0"/>
+          <Pin number="PIN:G" electricalType="ELECTRICAL" type="SURFACE">
+            <Location x="0.0" y="0.0"/>
+            <StandardPrimitiveRef id="RECT_1"/>
+          </Pin>
+          <Pin number="PIN:D" electricalType="ELECTRICAL" type="SURFACE">
+            <Location x="1.0" y="0.0"/>
+            <StandardPrimitiveRef id="RECT_1"/>
+          </Pin>
+          <Pin number="PIN:S" electricalType="ELECTRICAL" type="SURFACE">
+            <Location x="2.0" y="0.0"/>
+            <StandardPrimitiveRef id="RECT_1"/>
+          </Pin>
+        </Package>
+        <Package name="KI:R_Axial_DIN0207_L6.3mm_D2.5mm_3" type="OTHER" pinOne="1" pinOneOrientation="OTHER">
+          <Outline>
+            <Polygon>
+              <PolyBegin x="-0.7620" y="0.151571"/>
+              <PolyStepSegment x="-0.645992" y="0.431638"/>
+              <PolyStepSegment x="-0.431638" y="0.645992"/>
+              <PolyStepSegment x="-0.151571" y="0.7620"/>
+              <PolyStepSegment x="2.151571" y="0.7620"/>
+              <PolyStepSegment x="2.431638" y="0.645992"/>
+              <PolyStepSegment x="2.645992" y="0.431638"/>
+              <PolyStepSegment x="2.7620" y="0.151571"/>
+              <PolyStepSegment x="2.7620" y="-0.151571"/>
+              <PolyStepSegment x="2.645992" y="-0.431638"/>
+              <PolyStepSegment x="2.431638" y="-0.645992"/>
+              <PolyStepSegment x="2.151571" y="-0.7620"/>
+              <PolyStepSegment x="-0.151571" y="-0.7620"/>
+              <PolyStepSegment x="-0.431638" y="-0.645992"/>
+              <PolyStepSegment x="-0.645992" y="-0.431638"/>
+              <PolyStepSegment x="-0.7620" y="-0.151571"/>
+              <PolyStepSegment x="-0.7620" y="0.151571"/>
+            </Polygon>
+            <LineDescRef id="LINE_1"/>
+          </Outline>
+          <PickupPoint x="0.0" y="0.0"/>
+          <Pin number="PIN:1" electricalType="ELECTRICAL" type="THRU">
+            <Location x="0.0" y="0.0"/>
+            <StandardPrimitiveRef id="CIRCLE_2"/>
+          </Pin>
+          <Pin number="PIN:2" electricalType="ELECTRICAL" type="THRU">
+            <Location x="2.0" y="0.0"/>
+            <StandardPrimitiveRef id="CIRCLE_2"/>
+          </Pin>
+        </Package>
+        <Component refDes="CMP:U1" packageRef="KI:TQFP-32_7x7mm_P0.8mm_1" part="REF:Package_QFP_TQFP-32_7x7mm_P0.8mm_ATmega328P" layerRef="LAYER:F.Cu" mountType="THMT">
+          <Location x="100.0" y="-100.0"/>
+        </Component>
+        <Component refDes="CMP:Q1" packageRef="KI:SOT-23_2" part="REF:Package_TO_SOT_SMD_SOT-23_2N7002" layerRef="LAYER:F.Cu" mountType="THMT">
+          <Location x="110.0" y="-100.0"/>
+        </Component>
+        <Component refDes="CMP:R1" packageRef="KI:R_Axial_DIN0207_L6.3mm_D2.5mm_3" part="REF:Resistor_THT_R_Axial_DIN0207_L6.3mm_D2.5mm_1k" layerRef="LAYER:F.Cu" mountType="THMT">
+          <Location x="112.0" y="-100.0"/>
+        </Component>
+        <LayerFeature layerRef="LAYER:F.Cu">
+          <Set net="NET:+5V">
+            <Pad padstackDefRef="PADSTACK_2">
+              <Location x="112.0" y="-100.0"/>
+              <StandardPrimitiveRef id="CIRCLE_2"/>
+              <PinRef componentRef="CMP:R1" pin="PIN:1"/>
+            </Pad>
+          </Set>
+          <Set net="NET:LOAD_DRAIN">
+            <Pad padstackDefRef="PADSTACK_2">
+              <Location x="114.0" y="-100.0"/>
+              <StandardPrimitiveRef id="CIRCLE_2"/>
+              <PinRef componentRef="CMP:R1" pin="PIN:2"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="LAYER:F.Mask">
+          <Set>
+            <Pad padstackDefRef="PADSTACK_2">
+              <Location x="112.0" y="-100.0"/>
+              <StandardPrimitiveRef id="CIRCLE_2"/>
+              <PinRef componentRef="CMP:R1" pin="PIN:1"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="97.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:7"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="103.0" y="-101.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:20"/>
+            </Pad>
+          </Set>
+          <Set>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="103.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:14"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="110.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:Q1" pin="PIN:G"/>
+            </Pad>
+          </Set>
+          <Set>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="97.0" y="-101.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:8"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="103.0" y="-102.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:22"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="112.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:Q1" pin="PIN:S"/>
+            </Pad>
+          </Set>
+          <Set>
+            <Pad padstackDefRef="PADSTACK_2">
+              <Location x="114.0" y="-100.0"/>
+              <StandardPrimitiveRef id="CIRCLE_2"/>
+              <PinRef componentRef="CMP:R1" pin="PIN:2"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="111.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:Q1" pin="PIN:D"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="LAYER:B.Cu">
+          <Set net="NET:+5V">
+            <Pad padstackDefRef="PADSTACK_2">
+              <Location x="112.0" y="-100.0"/>
+              <StandardPrimitiveRef id="CIRCLE_2"/>
+              <PinRef componentRef="CMP:R1" pin="PIN:1"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="97.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:7"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="103.0" y="-101.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:20"/>
+            </Pad>
+          </Set>
+          <Set net="NET:GATE_CTRL">
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="103.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:14"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="110.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:Q1" pin="PIN:G"/>
+            </Pad>
+          </Set>
+          <Set net="NET:GND">
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="97.0" y="-101.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:8"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="103.0" y="-102.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:22"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="112.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:Q1" pin="PIN:S"/>
+            </Pad>
+          </Set>
+          <Set net="NET:LOAD_DRAIN">
+            <Pad padstackDefRef="PADSTACK_2">
+              <Location x="114.0" y="-100.0"/>
+              <StandardPrimitiveRef id="CIRCLE_2"/>
+              <PinRef componentRef="CMP:R1" pin="PIN:2"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="111.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:Q1" pin="PIN:D"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="LAYER:B.Mask">
+          <Set>
+            <Pad padstackDefRef="PADSTACK_2">
+              <Location x="112.0" y="-100.0"/>
+              <StandardPrimitiveRef id="CIRCLE_2"/>
+              <PinRef componentRef="CMP:R1" pin="PIN:1"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="97.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:7"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="103.0" y="-101.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:20"/>
+            </Pad>
+          </Set>
+          <Set>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="103.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:14"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="110.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:Q1" pin="PIN:G"/>
+            </Pad>
+          </Set>
+          <Set>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="97.0" y="-101.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:8"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="103.0" y="-102.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:22"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="112.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:Q1" pin="PIN:S"/>
+            </Pad>
+          </Set>
+          <Set>
+            <Pad padstackDefRef="PADSTACK_2">
+              <Location x="114.0" y="-100.0"/>
+              <StandardPrimitiveRef id="CIRCLE_2"/>
+              <PinRef componentRef="CMP:R1" pin="PIN:2"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="111.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:Q1" pin="PIN:D"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="LAYER:F.Silkscreen">
+          <Set geometryUsage="TEXT" componentRef="CMP:R1">
+            <NonstandardAttribute name="TEXT" value="R1" type="STRING"/>
+            <Features>
+              <Location x="0.0" y="0.0"/>
+              <UserSpecial>
+                <Line startX="111.788333" startY="-100.579726" endX="111.364999" endY="-99.974964">
+                  <LineDescRef id="LINE_2"/>
+                </Line>
+                <Polyline>
+                  <PolyBegin x="111.062618" y="-100.579726"/>
+                  <PolyStepSegment x="111.062618" y="-99.309726"/>
+                  <PolyStepSegment x="111.546428" y="-99.309726"/>
+                  <PolyStepSegment x="111.667380" y="-99.370202"/>
+                  <PolyStepSegment x="111.727857" y="-99.430678"/>
+                  <PolyStepSegment x="111.788333" y="-99.551630"/>
+                  <PolyStepSegment x="111.788333" y="-99.733059"/>
+                  <PolyStepSegment x="111.727857" y="-99.854011"/>
+                  <PolyStepSegment x="111.667380" y="-99.914488"/>
+                  <PolyStepSegment x="111.546428" y="-99.974964"/>
+                  <PolyStepSegment x="111.062618" y="-99.974964"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Line startX="112.997857" startY="-100.579726" endX="112.272142" endY="-100.579726">
+                  <LineDescRef id="LINE_2"/>
+                </Line>
+                <Polyline>
+                  <PolyBegin x="112.634999" y="-100.579726"/>
+                  <PolyStepSegment x="112.634999" y="-99.309726"/>
+                  <PolyStepSegment x="112.514047" y="-99.491154"/>
+                  <PolyStepSegment x="112.393095" y="-99.612107"/>
+                  <PolyStepSegment x="112.272142" y="-99.672583"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+              </UserSpecial>
+            </Features>
+          </Set>
+          <Set geometryUsage="TEXT" componentRef="CMP:U1">
+            <NonstandardAttribute name="TEXT" value="U1" type="STRING"/>
+            <Features>
+              <Location x="0.0" y="0.0"/>
+              <UserSpecial>
+                <Polyline>
+                  <PolyBegin x="99.032380" y="-99.309726"/>
+                  <PolyStepSegment x="99.032380" y="-100.337821"/>
+                  <PolyStepSegment x="99.092857" y="-100.458773"/>
+                  <PolyStepSegment x="99.153333" y="-100.519250"/>
+                  <PolyStepSegment x="99.274285" y="-100.579726"/>
+                  <PolyStepSegment x="99.516190" y="-100.579726"/>
+                  <PolyStepSegment x="99.637142" y="-100.519250"/>
+                  <PolyStepSegment x="99.697619" y="-100.458773"/>
+                  <PolyStepSegment x="99.758095" y="-100.337821"/>
+                  <PolyStepSegment x="99.758095" y="-99.309726"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Line startX="101.028095" startY="-100.579726" endX="100.302380" endY="-100.579726">
+                  <LineDescRef id="LINE_2"/>
+                </Line>
+                <Polyline>
+                  <PolyBegin x="100.665237" y="-100.579726"/>
+                  <PolyStepSegment x="100.665237" y="-99.309726"/>
+                  <PolyStepSegment x="100.544285" y="-99.491154"/>
+                  <PolyStepSegment x="100.423333" y="-99.612107"/>
+                  <PolyStepSegment x="100.302380" y="-99.672583"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+              </UserSpecial>
+            </Features>
+          </Set>
+          <Set geometryUsage="TEXT" componentRef="CMP:Q1">
+            <NonstandardAttribute name="TEXT" value="Q1" type="STRING"/>
+            <Features>
+              <Location x="0.0" y="0.0"/>
+              <UserSpecial>
+                <Polyline>
+                  <PolyBegin x="109.879047" y="-100.700678"/>
+                  <PolyStepSegment x="109.758095" y="-100.640202"/>
+                  <PolyStepSegment x="109.637142" y="-100.519250"/>
+                  <PolyStepSegment x="109.455714" y="-100.337821"/>
+                  <PolyStepSegment x="109.334761" y="-100.277345"/>
+                  <PolyStepSegment x="109.213809" y="-100.277345"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Polyline>
+                  <PolyBegin x="109.274285" y="-100.579726"/>
+                  <PolyStepSegment x="109.153333" y="-100.519250"/>
+                  <PolyStepSegment x="109.032380" y="-100.398297"/>
+                  <PolyStepSegment x="108.971904" y="-100.156392"/>
+                  <PolyStepSegment x="108.971904" y="-99.733059"/>
+                  <PolyStepSegment x="109.032380" y="-99.491154"/>
+                  <PolyStepSegment x="109.153333" y="-99.370202"/>
+                  <PolyStepSegment x="109.274285" y="-99.309726"/>
+                  <PolyStepSegment x="109.516190" y="-99.309726"/>
+                  <PolyStepSegment x="109.637142" y="-99.370202"/>
+                  <PolyStepSegment x="109.758095" y="-99.491154"/>
+                  <PolyStepSegment x="109.818571" y="-99.733059"/>
+                  <PolyStepSegment x="109.818571" y="-100.156392"/>
+                  <PolyStepSegment x="109.758095" y="-100.398297"/>
+                  <PolyStepSegment x="109.637142" y="-100.519250"/>
+                  <PolyStepSegment x="109.516190" y="-100.579726"/>
+                  <PolyStepSegment x="109.274285" y="-100.579726"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Line startX="111.028095" startY="-100.579726" endX="110.302380" endY="-100.579726">
+                  <LineDescRef id="LINE_2"/>
+                </Line>
+                <Polyline>
+                  <PolyBegin x="110.665237" y="-100.579726"/>
+                  <PolyStepSegment x="110.665237" y="-99.309726"/>
+                  <PolyStepSegment x="110.544285" y="-99.491154"/>
+                  <PolyStepSegment x="110.423333" y="-99.612107"/>
+                  <PolyStepSegment x="110.302380" y="-99.672583"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+              </UserSpecial>
+            </Features>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="LAYER:F.Fab">
+          <Set geometryUsage="TEXT" componentRef="CMP:R1">
+            <NonstandardAttribute name="TEXT" value="1k" type="STRING"/>
+            <Features>
+              <Location x="0.0" y="0.0"/>
+              <UserSpecial>
+                <Line startX="111.848810" startY="-102.579726" endX="111.123095" endY="-102.579726">
+                  <LineDescRef id="LINE_2"/>
+                </Line>
+                <Polyline>
+                  <PolyBegin x="111.485952" y="-102.579726"/>
+                  <PolyStepSegment x="111.485952" y="-101.309726"/>
+                  <PolyStepSegment x="111.3650" y="-101.491154"/>
+                  <PolyStepSegment x="111.244048" y="-101.612107"/>
+                  <PolyStepSegment x="111.123095" y="-101.672583"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Line startX="112.393095" startY="-102.579726" endX="112.393095" endY="-101.309726">
+                  <LineDescRef id="LINE_2"/>
+                </Line>
+                <Line startX="112.514048" startY="-102.095916" endX="112.876905" endY="-102.579726">
+                  <LineDescRef id="LINE_2"/>
+                </Line>
+                <Line startX="112.876905" startY="-101.733059" endX="112.393095" endY="-102.216869">
+                  <LineDescRef id="LINE_2"/>
+                </Line>
+              </UserSpecial>
+            </Features>
+          </Set>
+          <Set geometryUsage="TEXT" componentRef="CMP:U1">
+            <NonstandardAttribute name="TEXT" value="ATmega328P" type="STRING"/>
+            <Features>
+              <Location x="0.0" y="0.0"/>
+              <UserSpecial>
+                <Line startX="94.224523" startY="-102.216869" endX="94.829285" endY="-102.216869">
+                  <LineDescRef id="LINE_2"/>
+                </Line>
+                <Polyline>
+                  <PolyBegin x="94.103571" y="-102.579726"/>
+                  <PolyStepSegment x="94.526904" y="-101.309726"/>
+                  <PolyStepSegment x="94.950238" y="-102.579726"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Line startX="95.192142" startY="-101.309726" endX="95.917856" endY="-101.309726">
+                  <LineDescRef id="LINE_2"/>
+                </Line>
+                <Line startX="95.554999" startY="-102.579726" endX="95.554999" endY="-101.309726">
+                  <LineDescRef id="LINE_2"/>
+                </Line>
+                <Line startX="96.341189" startY="-102.579726" endX="96.341189" endY="-101.733059">
+                  <LineDescRef id="LINE_2"/>
+                </Line>
+                <Polyline>
+                  <PolyBegin x="96.341189" y="-101.854011"/>
+                  <PolyStepSegment x="96.401666" y="-101.793535"/>
+                  <PolyStepSegment x="96.522618" y="-101.733059"/>
+                  <PolyStepSegment x="96.704047" y="-101.733059"/>
+                  <PolyStepSegment x="96.824999" y="-101.793535"/>
+                  <PolyStepSegment x="96.885475" y="-101.914488"/>
+                  <PolyStepSegment x="96.885475" y="-102.579726"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Polyline>
+                  <PolyBegin x="96.885475" y="-101.914488"/>
+                  <PolyStepSegment x="96.945951" y="-101.793535"/>
+                  <PolyStepSegment x="97.066904" y="-101.733059"/>
+                  <PolyStepSegment x="97.248332" y="-101.733059"/>
+                  <PolyStepSegment x="97.369285" y="-101.793535"/>
+                  <PolyStepSegment x="97.429761" y="-101.914488"/>
+                  <PolyStepSegment x="97.429761" y="-102.579726"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Polyline>
+                  <PolyBegin x="98.518332" y="-102.519250"/>
+                  <PolyStepSegment x="98.397380" y="-102.579726"/>
+                  <PolyStepSegment x="98.155475" y="-102.579726"/>
+                  <PolyStepSegment x="98.034522" y="-102.519250"/>
+                  <PolyStepSegment x="97.974046" y="-102.398297"/>
+                  <PolyStepSegment x="97.974046" y="-101.914488"/>
+                  <PolyStepSegment x="98.034522" y="-101.793535"/>
+                  <PolyStepSegment x="98.155475" y="-101.733059"/>
+                  <PolyStepSegment x="98.397380" y="-101.733059"/>
+                  <PolyStepSegment x="98.518332" y="-101.793535"/>
+                  <PolyStepSegment x="98.578808" y="-101.914488"/>
+                  <PolyStepSegment x="98.578808" y="-102.035440"/>
+                  <PolyStepSegment x="97.974046" y="-102.156392"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Polyline>
+                  <PolyBegin x="99.667379" y="-101.733059"/>
+                  <PolyStepSegment x="99.667379" y="-102.761154"/>
+                  <PolyStepSegment x="99.606903" y="-102.882107"/>
+                  <PolyStepSegment x="99.546427" y="-102.942583"/>
+                  <PolyStepSegment x="99.425474" y="-103.003059"/>
+                  <PolyStepSegment x="99.244046" y="-103.003059"/>
+                  <PolyStepSegment x="99.123093" y="-102.942583"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Polyline>
+                  <PolyBegin x="99.667379" y="-102.519250"/>
+                  <PolyStepSegment x="99.546427" y="-102.579726"/>
+                  <PolyStepSegment x="99.304522" y="-102.579726"/>
+                  <PolyStepSegment x="99.183570" y="-102.519250"/>
+                  <PolyStepSegment x="99.123093" y="-102.458773"/>
+                  <PolyStepSegment x="99.062617" y="-102.337821"/>
+                  <PolyStepSegment x="99.062617" y="-101.974964"/>
+                  <PolyStepSegment x="99.123093" y="-101.854011"/>
+                  <PolyStepSegment x="99.183570" y="-101.793535"/>
+                  <PolyStepSegment x="99.304522" y="-101.733059"/>
+                  <PolyStepSegment x="99.546427" y="-101.733059"/>
+                  <PolyStepSegment x="99.667379" y="-101.793535"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Polyline>
+                  <PolyBegin x="100.816427" y="-102.579726"/>
+                  <PolyStepSegment x="100.816427" y="-101.914488"/>
+                  <PolyStepSegment x="100.755951" y="-101.793535"/>
+                  <PolyStepSegment x="100.634999" y="-101.733059"/>
+                  <PolyStepSegment x="100.393094" y="-101.733059"/>
+                  <PolyStepSegment x="100.272141" y="-101.793535"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Polyline>
+                  <PolyBegin x="100.816427" y="-102.519250"/>
+                  <PolyStepSegment x="100.695475" y="-102.579726"/>
+                  <PolyStepSegment x="100.393094" y="-102.579726"/>
+                  <PolyStepSegment x="100.272141" y="-102.519250"/>
+                  <PolyStepSegment x="100.211665" y="-102.398297"/>
+                  <PolyStepSegment x="100.211665" y="-102.277345"/>
+                  <PolyStepSegment x="100.272141" y="-102.156392"/>
+                  <PolyStepSegment x="100.393094" y="-102.095916"/>
+                  <PolyStepSegment x="100.695475" y="-102.095916"/>
+                  <PolyStepSegment x="100.816427" y="-102.035440"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Polyline>
+                  <PolyBegin x="101.300237" y="-101.309726"/>
+                  <PolyStepSegment x="102.086428" y="-101.309726"/>
+                  <PolyStepSegment x="101.663094" y="-101.793535"/>
+                  <PolyStepSegment x="101.844523" y="-101.793535"/>
+                  <PolyStepSegment x="101.965475" y="-101.854011"/>
+                  <PolyStepSegment x="102.025951" y="-101.914488"/>
+                  <PolyStepSegment x="102.086428" y="-102.035440"/>
+                  <PolyStepSegment x="102.086428" y="-102.337821"/>
+                  <PolyStepSegment x="102.025951" y="-102.458773"/>
+                  <PolyStepSegment x="101.965475" y="-102.519250"/>
+                  <PolyStepSegment x="101.844523" y="-102.579726"/>
+                  <PolyStepSegment x="101.481666" y="-102.579726"/>
+                  <PolyStepSegment x="101.360713" y="-102.519250"/>
+                  <PolyStepSegment x="101.300237" y="-102.458773"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Polyline>
+                  <PolyBegin x="102.570237" y="-101.430678"/>
+                  <PolyStepSegment x="102.630713" y="-101.370202"/>
+                  <PolyStepSegment x="102.751666" y="-101.309726"/>
+                  <PolyStepSegment x="103.054047" y="-101.309726"/>
+                  <PolyStepSegment x="103.174999" y="-101.370202"/>
+                  <PolyStepSegment x="103.235475" y="-101.430678"/>
+                  <PolyStepSegment x="103.295952" y="-101.551630"/>
+                  <PolyStepSegment x="103.295952" y="-101.672583"/>
+                  <PolyStepSegment x="103.235475" y="-101.854011"/>
+                  <PolyStepSegment x="102.509761" y="-102.579726"/>
+                  <PolyStepSegment x="103.295952" y="-102.579726"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Polyline>
+                  <PolyBegin x="104.021666" y="-101.854011"/>
+                  <PolyStepSegment x="103.900714" y="-101.793535"/>
+                  <PolyStepSegment x="103.840237" y="-101.733059"/>
+                  <PolyStepSegment x="103.779761" y="-101.612107"/>
+                  <PolyStepSegment x="103.779761" y="-101.551630"/>
+                  <PolyStepSegment x="103.840237" y="-101.430678"/>
+                  <PolyStepSegment x="103.900714" y="-101.370202"/>
+                  <PolyStepSegment x="104.021666" y="-101.309726"/>
+                  <PolyStepSegment x="104.263571" y="-101.309726"/>
+                  <PolyStepSegment x="104.384523" y="-101.370202"/>
+                  <PolyStepSegment x="104.444999" y="-101.430678"/>
+                  <PolyStepSegment x="104.505476" y="-101.551630"/>
+                  <PolyStepSegment x="104.505476" y="-101.612107"/>
+                  <PolyStepSegment x="104.444999" y="-101.733059"/>
+                  <PolyStepSegment x="104.384523" y="-101.793535"/>
+                  <PolyStepSegment x="104.263571" y="-101.854011"/>
+                  <PolyStepSegment x="104.021666" y="-101.854011"/>
+                  <PolyStepSegment x="103.900714" y="-101.914488"/>
+                  <PolyStepSegment x="103.840237" y="-101.974964"/>
+                  <PolyStepSegment x="103.779761" y="-102.095916"/>
+                  <PolyStepSegment x="103.779761" y="-102.337821"/>
+                  <PolyStepSegment x="103.840237" y="-102.458773"/>
+                  <PolyStepSegment x="103.900714" y="-102.519250"/>
+                  <PolyStepSegment x="104.021666" y="-102.579726"/>
+                  <PolyStepSegment x="104.263571" y="-102.579726"/>
+                  <PolyStepSegment x="104.384523" y="-102.519250"/>
+                  <PolyStepSegment x="104.444999" y="-102.458773"/>
+                  <PolyStepSegment x="104.505476" y="-102.337821"/>
+                  <PolyStepSegment x="104.505476" y="-102.095916"/>
+                  <PolyStepSegment x="104.444999" y="-101.974964"/>
+                  <PolyStepSegment x="104.384523" y="-101.914488"/>
+                  <PolyStepSegment x="104.263571" y="-101.854011"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Polyline>
+                  <PolyBegin x="105.049761" y="-102.579726"/>
+                  <PolyStepSegment x="105.049761" y="-101.309726"/>
+                  <PolyStepSegment x="105.533571" y="-101.309726"/>
+                  <PolyStepSegment x="105.654523" y="-101.370202"/>
+                  <PolyStepSegment x="105.7150" y="-101.430678"/>
+                  <PolyStepSegment x="105.775476" y="-101.551630"/>
+                  <PolyStepSegment x="105.775476" y="-101.733059"/>
+                  <PolyStepSegment x="105.7150" y="-101.854011"/>
+                  <PolyStepSegment x="105.654523" y="-101.914488"/>
+                  <PolyStepSegment x="105.533571" y="-101.974964"/>
+                  <PolyStepSegment x="105.049761" y="-101.974964"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+              </UserSpecial>
+            </Features>
+          </Set>
+          <Set geometryUsage="TEXT" componentRef="CMP:Q1">
+            <NonstandardAttribute name="TEXT" value="2N7002" type="STRING"/>
+            <Features>
+              <Location x="0.0" y="0.0"/>
+              <UserSpecial>
+                <Polyline>
+                  <PolyBegin x="106.552856" y="-101.430678"/>
+                  <PolyStepSegment x="106.613332" y="-101.370202"/>
+                  <PolyStepSegment x="106.734285" y="-101.309726"/>
+                  <PolyStepSegment x="107.036666" y="-101.309726"/>
+                  <PolyStepSegment x="107.157618" y="-101.370202"/>
+                  <PolyStepSegment x="107.218094" y="-101.430678"/>
+                  <PolyStepSegment x="107.278571" y="-101.551630"/>
+                  <PolyStepSegment x="107.278571" y="-101.672583"/>
+                  <PolyStepSegment x="107.218094" y="-101.854011"/>
+                  <PolyStepSegment x="106.492380" y="-102.579726"/>
+                  <PolyStepSegment x="107.278571" y="-102.579726"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Polyline>
+                  <PolyBegin x="107.822856" y="-102.579726"/>
+                  <PolyStepSegment x="107.822856" y="-101.309726"/>
+                  <PolyStepSegment x="108.548571" y="-102.579726"/>
+                  <PolyStepSegment x="108.548571" y="-101.309726"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Polyline>
+                  <PolyBegin x="109.032380" y="-101.309726"/>
+                  <PolyStepSegment x="109.879047" y="-101.309726"/>
+                  <PolyStepSegment x="109.334761" y="-102.579726"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Polyline>
+                  <PolyBegin x="110.604761" y="-101.309726"/>
+                  <PolyStepSegment x="110.725714" y="-101.309726"/>
+                  <PolyStepSegment x="110.846666" y="-101.370202"/>
+                  <PolyStepSegment x="110.907142" y="-101.430678"/>
+                  <PolyStepSegment x="110.967618" y="-101.551630"/>
+                  <PolyStepSegment x="111.028095" y="-101.793535"/>
+                  <PolyStepSegment x="111.028095" y="-102.095916"/>
+                  <PolyStepSegment x="110.967618" y="-102.337821"/>
+                  <PolyStepSegment x="110.907142" y="-102.458773"/>
+                  <PolyStepSegment x="110.846666" y="-102.519250"/>
+                  <PolyStepSegment x="110.725714" y="-102.579726"/>
+                  <PolyStepSegment x="110.604761" y="-102.579726"/>
+                  <PolyStepSegment x="110.483809" y="-102.519250"/>
+                  <PolyStepSegment x="110.423333" y="-102.458773"/>
+                  <PolyStepSegment x="110.362856" y="-102.337821"/>
+                  <PolyStepSegment x="110.302380" y="-102.095916"/>
+                  <PolyStepSegment x="110.302380" y="-101.793535"/>
+                  <PolyStepSegment x="110.362856" y="-101.551630"/>
+                  <PolyStepSegment x="110.423333" y="-101.430678"/>
+                  <PolyStepSegment x="110.483809" y="-101.370202"/>
+                  <PolyStepSegment x="110.604761" y="-101.309726"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Polyline>
+                  <PolyBegin x="111.814285" y="-101.309726"/>
+                  <PolyStepSegment x="111.935238" y="-101.309726"/>
+                  <PolyStepSegment x="112.056190" y="-101.370202"/>
+                  <PolyStepSegment x="112.116666" y="-101.430678"/>
+                  <PolyStepSegment x="112.177142" y="-101.551630"/>
+                  <PolyStepSegment x="112.237619" y="-101.793535"/>
+                  <PolyStepSegment x="112.237619" y="-102.095916"/>
+                  <PolyStepSegment x="112.177142" y="-102.337821"/>
+                  <PolyStepSegment x="112.116666" y="-102.458773"/>
+                  <PolyStepSegment x="112.056190" y="-102.519250"/>
+                  <PolyStepSegment x="111.935238" y="-102.579726"/>
+                  <PolyStepSegment x="111.814285" y="-102.579726"/>
+                  <PolyStepSegment x="111.693333" y="-102.519250"/>
+                  <PolyStepSegment x="111.632857" y="-102.458773"/>
+                  <PolyStepSegment x="111.572380" y="-102.337821"/>
+                  <PolyStepSegment x="111.511904" y="-102.095916"/>
+                  <PolyStepSegment x="111.511904" y="-101.793535"/>
+                  <PolyStepSegment x="111.572380" y="-101.551630"/>
+                  <PolyStepSegment x="111.632857" y="-101.430678"/>
+                  <PolyStepSegment x="111.693333" y="-101.370202"/>
+                  <PolyStepSegment x="111.814285" y="-101.309726"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Polyline>
+                  <PolyBegin x="112.721428" y="-101.430678"/>
+                  <PolyStepSegment x="112.781904" y="-101.370202"/>
+                  <PolyStepSegment x="112.902857" y="-101.309726"/>
+                  <PolyStepSegment x="113.205238" y="-101.309726"/>
+                  <PolyStepSegment x="113.326190" y="-101.370202"/>
+                  <PolyStepSegment x="113.386666" y="-101.430678"/>
+                  <PolyStepSegment x="113.447143" y="-101.551630"/>
+                  <PolyStepSegment x="113.447143" y="-101.672583"/>
+                  <PolyStepSegment x="113.386666" y="-101.854011"/>
+                  <PolyStepSegment x="112.660952" y="-102.579726"/>
+                  <PolyStepSegment x="113.447143" y="-102.579726"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+              </UserSpecial>
+            </Features>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="DRILL:F.Cu_B.Cu">
+          <Set geometry="PADSTACK_2" net="NET:+5V">
+            <Hole name="H1" diameter="0.000001" platingStatus="PLATED" plusTol="0.0" minusTol="0.0" x="112.0" y="-100.0"/>
+          </Set>
+          <Set geometry="PADSTACK_2" net="NET:LOAD_DRAIN">
+            <Hole name="H2" diameter="0.000001" platingStatus="PLATED" plusTol="0.0" minusTol="0.0" x="114.0" y="-100.0"/>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+  <Avl name="Primary_Vendor_List">
+    <AvlHeader title="BOM" source="KiCad" author="OWNER" datetime="2026-08-04T13:28:28" version="1"/>
+    <AvlItem OEMDesignNumber="REF:Resistor_THT_R_Axial_DIN0207_L6.3mm_D2.5mm_1k"/>
+    <AvlItem OEMDesignNumber="REF:Package_QFP_TQFP-32_7x7mm_P0.8mm_ATmega328P"/>
+    <AvlItem OEMDesignNumber="REF:Package_TO_SOT_SMD_SOT-23_2N7002"/>
+  </Avl>
+</IPC-2581>
