@@ -226,10 +226,11 @@ fn rp2040_descriptor_matches_its_documented_tiers() {
         cfg.spi_controllers.is_empty(),
         "SPI cannot be bridged through this platform's PL022 model"
     );
-    assert!(
-        cfg.adc_channels.is_empty(),
-        "ADC injection is documented as boot-only"
-    );
+    // ADC0..ADC3 are mapped; input 4 (the on-die temperature sensor) must not
+    // be, because it is not a circuit node.
+    assert_eq!(cfg.adc_channels.len(), 4);
+    let channels: Vec<u8> = cfg.adc_channels.iter().map(|m| m.channel).collect();
+    assert_eq!(channels, vec![0, 1, 2, 3]);
 
     let bank = cfg.ports.first().expect("one SIO bank");
     assert_eq!(bank.peripheral, "sio");

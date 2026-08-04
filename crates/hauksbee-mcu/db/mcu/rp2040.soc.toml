@@ -52,12 +52,12 @@
 #       sleep_ms takes the right amount of VIRTUAL time" (20 ms of virtual time
 #       per sleep_ms(20), measured). Not a fidelity claim about alarm edge
 #       cases.
-#   ADC                              BOOT-ONLY. rp2040_adc.cs is vendored and
-#       instantiated, so firmware reading the ADC gets a modelled peripheral
-#       rather than a bus error, but hauksbee's ADC INJECTION path is not wired
-#       ([[soc.adc]] is absent below), so an analog voltage on an ADC pin does
-#       not reach the firmware. Unmapped channels take the merged policy's LOUD
-#       once-per-channel drop, never a fake count.
+#   ADC injection, inputs 0..3       PROVEN END-TO-END. An engine-pushed voltage
+#       reaches the converter and stock pico-sdk adc_read() returns the matching
+#       12-bit code, checked at two voltages on one running machine
+#       (tests/renode_rp2040_adc.rs). Input 4 (on-die temperature) is NOT an
+#       external node and stays unmapped, so it takes the merged policy's LOUD
+#       once-per-channel drop rather than a fake count.
 #   I2C bus-slave bridge             PROVEN END-TO-END on i2c0 and i2c1. Real
 #       pico-sdk firmware writes a register index to a host-modelled slave and
 #       reads two bytes back, and prints what the host sent
@@ -107,6 +107,42 @@ post_load_setup = [
     "sysbus.cpu0 VectorTableOffset 0x00000000",
     "sysbus.cpu1 VectorTableOffset 0x00000000",
 ]
+
+# ADC injection. Analog.RP2040ADC is vendored and instantiated, and it exposes
+# SetDefaultVoltageOnChannel(int, double) which is Monitor-callable, so the
+# engine's modelled node voltage can be pushed straight into the converter's
+# per-channel default sample. The engine's chunk cadence suits this: the Monitor
+# is idle between RunFor windows, so the write lands before the next chunk runs
+# and every subsequent adc_read() returns it.
+#
+# Channels 0..3 only, and that is the whole story of RP2040's ADC pinout:
+# ADC0..ADC3 are GP26..GP29, and input 4 is the on-die temperature sensor, which
+# is not an external node and has its own SetOnboardTemperature. Mapping input 4
+# to a circuit voltage would be a lie about what the pin is, so it is left
+# unmapped and takes the loud once-per-channel drop.
+#
+# {volts} rather than {count} because this model takes a real voltage: feeding it
+# a raw code would be silently off by the full-scale factor.
+[[soc.adc]]
+channel = 0
+monitor_command = "sysbus.adc SetDefaultVoltageOnChannel 0 {volts}"
+full_scale_volts = 3.3
+max_count = 4095
+[[soc.adc]]
+channel = 1
+monitor_command = "sysbus.adc SetDefaultVoltageOnChannel 1 {volts}"
+full_scale_volts = 3.3
+max_count = 4095
+[[soc.adc]]
+channel = 2
+monitor_command = "sysbus.adc SetDefaultVoltageOnChannel 2 {volts}"
+full_scale_volts = 3.3
+max_count = 4095
+[[soc.adc]]
+channel = 3
+monitor_command = "sysbus.adc SetDefaultVoltageOnChannel 3 {volts}"
+full_scale_volts = 3.3
+max_count = 4095
 
 [[soc.ports]]
 # SIO GPIO_OUT is the output-state register: a single 30-pin bank (GPIO0..GPIO29),

@@ -353,13 +353,21 @@ fn adc_count(volts: f64, full_scale_volts: f64, max_count: u32) -> u32 {
 
 /// Render the Monitor command that delivers `count` for one channel's recipe.
 /// `millivolts` is the already-clamped voltage (the caller applies the
-/// channel's `[0, full_scale_volts]` clamp so BOTH placeholders stay inside
+/// channel's `[0, full_scale_volts]` clamp so ALL placeholders stay inside
 /// the converter's contract, not just `{count}`).
+///
+/// Three placeholders, because Renode's ADC models disagree about units:
+/// `{count}` for a model fed raw codes, `{millivolts}` for an integer-mV feed,
+/// and `{volts}` for a model whose feed method takes a real voltage (the RP2040
+/// `Analog.RP2040ADC` takes a `double` of volts). `{volts}` is rendered with
+/// three decimals: sub-millivolt precision would be a lie about what the
+/// caller's clamped millivolt value carries.
 fn render_adc_inject(inject: &AdcInject, count: u32, millivolts: u64) -> String {
     match inject {
         AdcInject::MonitorCommand(template) => template
             .replace("{count}", &count.to_string())
-            .replace("{millivolts}", &millivolts.to_string()),
+            .replace("{millivolts}", &millivolts.to_string())
+            .replace("{volts}", &format!("{:.3}", millivolts as f64 / 1000.0)),
         AdcInject::MemoryWord(addr) => {
             format!("sysbus WriteDoubleWord 0x{addr:X} 0x{count:X}")
         }
@@ -2266,6 +2274,19 @@ mod tests {
             2000,
         );
         assert_eq!(cmd, "sysbus.adc FeedMillivolts 2000");
+        // Volts path: the RP2040 model's feed method takes a double of volts, so
+        // the same millivolt value must render as 2.000, not 2000.
+        let cmd = render_adc_inject(
+            &AdcInject::MonitorCommand(
+                "sysbus.adc SetDefaultVoltageOnChannel 0 {volts}".to_string(),
+            ),
+            2482,
+            2000,
+        );
+        assert_eq!(cmd, "sysbus.adc SetDefaultVoltageOnChannel 0 2.000");
+        // Sub-volt values keep their millivolt resolution and nothing more.
+        let cmd = render_adc_inject(&AdcInject::MonitorCommand("f {volts}".to_string()), 0, 500);
+        assert_eq!(cmd, "f 0.500");
         // RAM/result-word path.
         let cmd = render_adc_inject(&AdcInject::MemoryWord(0x2000_4000), 0x9B2, 2000);
         assert_eq!(cmd, "sysbus WriteDoubleWord 0x20004000 0x9B2");
@@ -2320,9 +2341,16 @@ mod tests {
                 encoding: DirEncoding::DirBits
             })
         );
-        // Nothing unverified is claimed: no ADC map, no bus controllers.
-        assert!(c.adc_channels.is_empty());
-        assert!(c.i2c_controllers.is_empty());
+        // Every claim here is one a live test re-proves (tests/renode_rp2040*.rs):
+        // ADC0..ADC3 injected in volts, both I2C controllers bridged. SPI stays
+        // empty because the vendored PL022 never dispatches to a registered
+        // slave, so a controller listed there would bridge to nothing.
+        assert_eq!(c.adc_channels.len(), 4);
+        assert!(c
+            .adc_channels
+            .iter()
+            .all(|m| matches!(&m.inject, AdcInject::MonitorCommand(t) if t.contains("{volts}"))));
+        assert_eq!(c.i2c_controllers, vec!["i2c0", "i2c1"]);
         assert!(c.spi_controllers.is_empty());
     }
 
