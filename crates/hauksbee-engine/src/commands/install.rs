@@ -46,7 +46,8 @@ pub fn esp_qemu(yes: bool) -> anyhow::Result<()> {
     if !yes && !confirm("Proceed with download and install? [y/N] ")? {
         anyhow::bail!(
             "install declined. Re-run `hauksbee install esp-qemu` (add --yes to \
-             skip this prompt), or install manually: docs/cosim/SIMULATORS.md"
+             skip this prompt), or install manually: {}",
+            hauksbee_ir::docs_url("docs/cosim/SIMULATORS.md")
         );
     }
 
@@ -87,7 +88,8 @@ pub fn renode(yes: bool) -> anyhow::Result<()> {
     if !yes && !confirm("Proceed with download and install? [y/N] ")? {
         anyhow::bail!(
             "install declined. Re-run `hauksbee install renode` (add --yes to \
-             skip this prompt), or install manually: docs/cosim/SIMULATORS.md"
+             skip this prompt), or install manually: {}",
+            hauksbee_ir::docs_url("docs/cosim/SIMULATORS.md")
         );
     }
     let mut progress = |msg: &str| eprintln!("  {msg}");

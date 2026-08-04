@@ -905,10 +905,11 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                  ({} failed chunks total); the run held stale voltages and cannot vouch \
                  for the analog side. The usual cause is unresolved active parts leaving \
                  nodes floating: {} active IC(s) are unresolved/open here (hauksbee models \
-                 --help). See docs/learn/05-going-fast.md.",
+                 --help). See {}.",
                 crate::scheduler::STRICT_CONSECUTIVE_FAILED_ABORT,
                 failed_chunk_count,
                 unresolved_active_count,
+                hauksbee_ir::docs_url("docs/learn/05-going-fast.md"),
             );
             if let Some(code) = strict_analog_exit_code(cfg.strict && analog_abort) {
                 std::process::exit(code);

@@ -297,9 +297,10 @@ pub fn render_spec_at(board: &Path, spec_dir: &Path) -> Result<String, SpecError
     );
     let _ = writeln!(
         s,
-        "# Full assertion catalog (docs/ci/CI.md): voltage, uart, toggle, no_faults,\n\
+        "# Full assertion catalog ({}): voltage, uart, toggle, no_faults,\n\
          #   max_current, max_temp, rail_window, protection_trip, boot_coverage,\n\
-         #   phase_margin, ac_gain, peripheral, hwtrace, model_coverage."
+         #   phase_margin, ac_gain, peripheral, hwtrace, model_coverage.",
+        hauksbee_ir::docs_url("docs/ci/CI.md")
     );
     let _ = writeln!(s);
     let _ = writeln!(
@@ -510,7 +511,8 @@ pub fn render_spec_at(board: &Path, spec_dir: &Path) -> Result<String, SpecError
         );
         let _ = writeln!(
             s,
-            "#   GPIO and UART (docs/cosim/MCU.md), but its platform has no verified direction-"
+            "#   GPIO and UART ({}), but its platform has no verified direction-",
+            hauksbee_ir::docs_url("docs/cosim/MCU.md")
         );
         let _ = writeln!(
             s,
@@ -640,7 +642,8 @@ pub fn render_spec_at(board: &Path, spec_dir: &Path) -> Result<String, SpecError
         );
         let _ = writeln!(
             s,
-            "# rail_window assert bounds the rail while it runs. See docs/checks/TRANSIENTS.md."
+            "# rail_window assert bounds the rail while it runs. See {}.",
+            hauksbee_ir::docs_url("docs/checks/TRANSIENTS.md")
         );
         let _ = writeln!(s, "# [[profile]]");
         let _ = writeln!(s, "# id = \"load_step\"");

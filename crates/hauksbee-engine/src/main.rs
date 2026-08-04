@@ -426,6 +426,19 @@ impl From<SerialTransportArg> for hauksbee_mcu::hostserial::HostSerialTransport 
     }
 }
 
+/// `run`'s after-help paragraph; a function because the docs pointer renders
+/// through [`hauksbee_ir::docs_url`] at runtime.
+fn run_after_help() -> String {
+    format!(
+        "TRANSIENT / BROWNOUT analysis (a rail sagging under a load step, WiFi burst, or \
+         inrush) is not a `run` flag: it is a dynamic scenario judged by an assertion. \
+         Scaffold one with `hauksbee-ci init <board>` (it emits a [[scenario]] + \
+         rail_window stub when a supply is detected) and see {}. For \
+         scriptable waveforms from a headless run, use --probe/--probe-csv.",
+        hauksbee_ir::docs_url("docs/checks/TRANSIENTS.md")
+    )
+}
+
 #[derive(Parser)]
 // The five "print one report and exit" flags pick the report to show, so they
 // are mutually exclusive: pass at most one (clap errors clearly if you pass two,
@@ -435,12 +448,7 @@ impl From<SerialTransportArg> for hauksbee_mcu::hostserial::HostSerialTransport 
         .args(["report", "drc", "ampacity", "lint", "si", "resources", "thermal", "usb_c"])
         .multiple(false)
 ))]
-#[command(after_help = "\
-TRANSIENT / BROWNOUT analysis (a rail sagging under a load step, WiFi burst, or \
-inrush) is not a `run` flag: it is a dynamic scenario judged by an assertion. \
-Scaffold one with `hauksbee-ci init <board>` (it emits a [[scenario]] + \
-rail_window stub when a supply is detected) and see docs/checks/TRANSIENTS.md. For \
-scriptable waveforms from a headless run, use --probe/--probe-csv.")]
+#[command(after_help = run_after_help())]
 struct RunArgs {
     /// Board input: KiCad (.kicad_pcb / .kicad_sch / .net), Eagle (.brd),
     /// Altium (.PcbDoc), IPC-D-356 (.d356), a gerber folder or zip, or
