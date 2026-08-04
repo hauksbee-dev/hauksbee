@@ -155,7 +155,10 @@ pub struct Spec {
     /// overrides, resolved relative to the spec file's directory). Note the
     /// binder still detects WHICH MCU from the board's part value; neither
     /// form can force a backend.
-    #[serde(default)]
+    // `deserialize_with`: the enum's untagged derive reports every table-form
+    // mistake as "data did not match any variant", naming no key; the shape
+    // dispatch in `de_mcu_field` keeps McuConfig's real error instead.
+    #[serde(default, deserialize_with = "de_mcu_field")]
     pub mcu: Option<McuField>,
     /// Simulated duration in milliseconds.
     #[serde(default = "default_duration_ms")]
@@ -244,6 +247,12 @@ pub struct Spec {
 
 /// The spec's `mcu` key: a bare string (`mcu = "atmega328p"`) is the legacy
 /// informational note; an `[mcu]` table carries real configuration.
+// The `untagged` derive stays because the editor schema is generated from it
+// (string-or-table), but the spec loader never runs it: `Spec.mcu` routes
+// through `de_mcu_field`, because untagged deserialization swallows the
+// variant's own error and reports only "data did not match any variant".
+// (A `//` comment, not `///`: doc text here becomes the schema description
+// an editor shows users, and they don't need serde internals in a hover.)
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(untagged)]
 pub enum McuField {
@@ -278,6 +287,106 @@ pub struct McuConfig {
     /// resort; a spec must not be able to silently defeat it).
     #[serde(default)]
     pub descriptor_dir: Option<PathBuf>,
+}
+
+/// Deserialize the spec's `mcu` key by dispatching on the TOML value's shape
+/// instead of trying the untagged variants in turn. Untagged reports every
+/// table-form failure as "data did not match any variant of untagged enum
+/// McuField", which names no key and (because the whole table is the value)
+/// points nowhere useful. Dispatching on the shape keeps [`McuConfig`]'s own
+/// error ("unknown field `x`, expected `name` or `descriptor_dir`"), and lets
+/// the commonest real mistake get named as exactly what it is: TOML gives every
+/// `key = value` line after an `[mcu]` header to that table, so a top-level key
+/// written below it is swallowed silently and then rejected as an unknown MCU
+/// field on a line the user believes is top-level.
+fn de_mcu_field<'de, D>(deserializer: D) -> Result<Option<McuField>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error as _;
+    let value = toml::Value::deserialize(deserializer)?;
+    match value {
+        toml::Value::String(s) => Ok(Some(McuField::Note(s))),
+        toml::Value::Table(table) => {
+            // A key legal in BOTH places (`name`) must not trip the hint: in an
+            // [mcu] table it is simply the MCU note the user asked for.
+            let mcu_fields = struct_fields::<McuConfig>();
+            if let Some(key) = table.keys().find(|k| {
+                spec_top_level_keys().contains(&k.as_str()) && !mcu_fields.contains(&k.as_str())
+            }) {
+                return Err(D::Error::custom(format!(
+                    "`{key}` is a top-level key; move it above the [mcu] table \
+                     (everything below an [mcu] header belongs to that table)"
+                )));
+            }
+            McuConfig::deserialize(toml::Value::Table(table))
+                .map(|c| Some(McuField::Config(c)))
+                .map_err(D::Error::custom)
+        }
+        other => Err(D::Error::custom(format!(
+            "`mcu` must be a string like mcu = \"atmega328p\" (an informational \
+             note) or an [mcu] table, not {}",
+            other.type_str()
+        ))),
+    }
+}
+
+/// The [`Spec`] struct's own top-level TOML keys, so the swallowed-key hint
+/// above can never drift from the struct definition.
+fn spec_top_level_keys() -> &'static [&'static str] {
+    struct_fields::<Spec>()
+}
+
+/// A derived-Deserialize struct's field names, read off serde's own derived
+/// deserializer (the FIELDS list it hands to `deserialize_struct`) rather than
+/// a hand-maintained copy. Serde offers no direct reflection, so the list is
+/// captured by aborting a deserialization at the first callback. The names are
+/// the serialized ones: renames applied, `#[serde(skip)]` fields absent.
+fn struct_fields<'de, T: Deserialize<'de>>() -> &'static [&'static str] {
+    use serde::de::{self, Visitor};
+
+    /// The "error" that smuggles the field list out of the aborted run.
+    #[derive(Debug)]
+    struct Captured(Option<&'static [&'static str]>);
+    impl std::fmt::Display for Captured {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("field-name capture")
+        }
+    }
+    impl std::error::Error for Captured {}
+    impl de::Error for Captured {
+        fn custom<T: std::fmt::Display>(_msg: T) -> Self {
+            Captured(None)
+        }
+    }
+
+    struct Capture;
+    impl<'de> serde::Deserializer<'de> for Capture {
+        type Error = Captured;
+        fn deserialize_struct<V: Visitor<'de>>(
+            self,
+            _name: &'static str,
+            fields: &'static [&'static str],
+            _visitor: V,
+        ) -> Result<V::Value, Captured> {
+            Err(Captured(Some(fields)))
+        }
+        fn deserialize_any<V: Visitor<'de>>(self, _visitor: V) -> Result<V::Value, Captured> {
+            Err(Captured(None))
+        }
+        serde::forward_to_deserialize_any! {
+            bool i8 i16 i32 i64 i128 u8 u16 u32 u64 u128 f32 f64 char str string
+            bytes byte_buf option unit unit_struct newtype_struct seq tuple
+            tuple_struct map enum identifier ignored_any
+        }
+    }
+
+    match T::deserialize(Capture) {
+        Err(Captured(Some(fields))) => fields,
+        // Unreachable while T stays a derived struct; an empty list only
+        // costs the hint, never a parse.
+        _ => &[],
+    }
 }
 
 fn default_name() -> String {
@@ -2175,6 +2284,94 @@ impl Assertion {
             }
             other => other.to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod mcu_field_tests {
+    use super::*;
+
+    /// A minimal top-level prelude every `[mcu]` test builds on. The `[mcu]`
+    /// table goes LAST here on purpose: TOML gives it every following line.
+    const PRELUDE: &str = "name = \"t\"\nboard = \"board.kicad_pcb\"\nduration_ms = 10\n";
+
+    fn parse_err(src: &str) -> String {
+        toml::from_str::<Spec>(src)
+            .expect_err("the spec must be rejected")
+            .to_string()
+    }
+
+    #[test]
+    fn both_legal_mcu_shapes_still_parse() {
+        let spec: Spec =
+            toml::from_str(&format!("{PRELUDE}mcu = \"atmega328p\"\n")).expect("string form");
+        assert_eq!(spec.mcu_note(), Some("atmega328p"));
+
+        let spec: Spec = toml::from_str(&format!(
+            "{PRELUDE}[mcu]\nname = \"stm32f103\"\ndescriptor_dir = \"mcu\"\n"
+        ))
+        .expect("table form");
+        assert_eq!(spec.mcu_note(), Some("stm32f103"));
+    }
+
+    #[test]
+    fn an_unknown_mcu_field_is_named_in_the_error() {
+        // The regression: the untagged derive reported this as "data did not
+        // match any variant of untagged enum McuField", naming no key at all.
+        let err = parse_err(&format!("{PRELUDE}[mcu]\ndescriptor_dirr = \"mcu\"\n"));
+        assert!(
+            err.contains("unknown field `descriptor_dirr`"),
+            "the mistyped key is named: {err}"
+        );
+        assert!(
+            err.contains("descriptor_dir"),
+            "and the legal fields are offered: {err}"
+        );
+        assert!(
+            !err.contains("did not match any variant"),
+            "the untagged boilerplate must not leak: {err}"
+        );
+    }
+
+    #[test]
+    fn a_swallowed_top_level_key_gets_the_move_it_above_hint() {
+        // The real-world sting: `[mcu]` placed before a top-level scalar takes
+        // ownership of it, and the old error blamed the wrong line.
+        let err = parse_err(concat!(
+            "name = \"t\"\n",
+            "board = \"board.kicad_pcb\"\n",
+            "[mcu]\n",
+            "name = \"stm32f103\"\n",
+            "duration_ms = 10\n",
+        ));
+        assert!(
+            err.contains("`duration_ms` is a top-level key; move it above the [mcu] table"),
+            "the hint names the swallowed key and the fix: {err}"
+        );
+    }
+
+    #[test]
+    fn a_shapeless_mcu_value_says_what_shapes_are_legal() {
+        let err = parse_err(&format!("{PRELUDE}mcu = 5\n"));
+        assert!(
+            err.contains("string") && err.contains("[mcu] table"),
+            "both legal shapes are named: {err}"
+        );
+    }
+
+    #[test]
+    fn the_captured_top_level_keys_are_the_specs_renamed_fields() {
+        // The hint keys off serde's own FIELDS list; if capture ever broke the
+        // hint would silently vanish, so pin the properties that matter: renames
+        // are honoured ("supply", not "supplies") and skipped fields stay out.
+        let keys = spec_top_level_keys();
+        for expected in ["name", "board", "duration_ms", "firmware", "supply", "assert"] {
+            assert!(keys.contains(&expected), "{expected} missing from {keys:?}");
+        }
+        assert!(
+            !keys.contains(&"base_dir") && !keys.contains(&"supplies"),
+            "skipped/pre-rename names must not appear: {keys:?}"
+        );
     }
 }
 
