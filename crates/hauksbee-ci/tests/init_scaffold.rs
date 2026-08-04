@@ -205,7 +205,7 @@ fn uncomment_scaffold(text: &str) -> String {
         } else if is_kv {
             // The unpowered-rail block deliberately leaves `volts =` blank and
             // tells the user to fill it in; do what the user would.
-            let value_part = t.splitn(2, '=').nth(1).unwrap_or("");
+            let value_part = t.split_once('=').map_or("", |(_, v)| v);
             let value = value_part.split('#').next().unwrap_or("").trim();
             if value.is_empty() {
                 out.push_str(&format!("{key} = 3.3\n"));
