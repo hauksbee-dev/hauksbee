@@ -2735,4 +2735,156 @@ min = 3.0
             "expected a finiteness error, got {err:?}"
         );
     }
+
+    #[test]
+    fn validate_reports_every_independent_error_in_one_pass() {
+        // E54: a spec with several independent mistakes must surface them ALL
+        // in one invocation, not one per fix-and-retry cycle. Three unrelated
+        // errors: a typo'd supply kind, a toggle with both forms set, and an
+        // out-of-bounds tolerance percent.
+        let spec = spec_from(
+            r#"
+board = "b.kicad_pcb"
+duration_ms = 10
+
+[[supply]]
+net = "VCC"
+kind = "benchh"
+volts = 5.0
+
+[[tolerance]]
+ref = "R1"
+percent = 150
+
+[[assert]]
+kind = "toggle"
+net = "D13"
+freq_hz = 5
+min_toggles = 1
+"#,
+        );
+        let errs = spec.validate_all();
+        assert_eq!(errs.len(), 3, "three independent errors: {errs:?}");
+        let all = errs
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(all.contains("benchh"), "supply typo reported: {all}");
+        assert!(
+            all.contains("min_toggles"),
+            "toggle both-forms reported: {all}"
+        );
+        assert!(all.contains("percent"), "tolerance bound reported: {all}");
+
+        // The Result path folds them into one Many whose Display carries all.
+        let err = spec.validate().unwrap_err();
+        let msg = err.to_string();
+        assert!(matches!(&err, SpecError::Many(v) if v.len() == 3));
+        assert!(
+            msg.contains("benchh") && msg.contains("min_toggles") && msg.contains("percent"),
+            "Many must display every finding: {msg}"
+        );
+    }
+
+    #[test]
+    fn schema_documented_bounds_are_enforced_at_load() {
+        // E55 schema-vs-validate parity: the published editor schema documents
+        // these bounds (peripheral address/size, scenario start_ms, decoupling
+        // ESR/ESL, the waveform vocabulary); the runtime validate path must
+        // reject the same values so `check` catches what the editor flags.
+        let base = "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
+                    [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n";
+        let cases: &[(&str, &str)] = &[
+            // peripheral.address: 7-bit I2C, 0..=127.
+            (
+                "[[peripheral]]\nid = \"EE\"\ntype = \"i2c_eeprom\"\naddress = 200\n",
+                "address",
+            ),
+            // peripheral.size: at least 1 byte.
+            (
+                "[[peripheral]]\nid = \"EE\"\ntype = \"i2c_eeprom\"\nsize = 0\n",
+                "size",
+            ),
+            // stimulus waveform: closed vocabulary dc|sine|pwl|noise.
+            (
+                "[[peripheral]]\nid = \"S1\"\ntype = \"stimulus\"\nnet = \"IN\"\nwaveform = \"square\"\n",
+                "waveform",
+            ),
+            // scenario.start_ms: zero or positive.
+            (
+                "[[scenario]]\npart = \"U5\"\nprofile = \"esp32_boot_wifi\"\nstart_ms = -5.0\n",
+                "start_ms",
+            ),
+            // CapOverride ESR/ESL: zero or positive.
+            (
+                "[decoupling]\nparasitics = true\n[[decoupling.override]]\nref = \"C1\"\nesr_ohms = -0.1\n",
+                "esr_ohms",
+            ),
+            (
+                "[decoupling]\nparasitics = true\n[[decoupling.override]]\nref = \"C1\"\nesl_henries = -1e-9\n",
+                "esl_henries",
+            ),
+        ];
+        for (block, needle) in cases {
+            let err = spec_from(&format!("{base}{block}"))
+                .validate()
+                .unwrap_err()
+                .to_string();
+            assert!(
+                err.contains(needle),
+                "`{block}` must be rejected naming `{needle}`, got: {err}"
+            );
+        }
+        // The in-bounds counterparts still validate.
+        for block in [
+            "[[peripheral]]\nid = \"EE\"\ntype = \"i2c_eeprom\"\naddress = 0x50\nsize = 256\n",
+            "[[peripheral]]\nid = \"S1\"\ntype = \"stimulus\"\nnet = \"IN\"\nwaveform = \"sine\"\nfreq_hz = 50.0\n",
+            "[[scenario]]\npart = \"U5\"\nprofile = \"esp32_boot_wifi\"\nstart_ms = 5.0\n",
+            "[decoupling]\nparasitics = true\n[[decoupling.override]]\nref = \"C1\"\nesr_ohms = 0.02\nesl_henries = 1e-9\n",
+        ] {
+            let spec = spec_from(&format!("{base}{block}"));
+            assert!(
+                spec.validate().is_ok(),
+                "in-bounds `{block}` must pass: {:?}",
+                spec.validate()
+            );
+        }
+    }
+
+    #[test]
+    fn mcu_accepts_both_the_note_string_and_the_config_table() {
+        // E31: `mcu = "atmega328p"` (legacy informational note) and the
+        // `[mcu]` table form must both parse; descriptor_dir resolves against
+        // the spec's directory.
+        let note = spec_from(
+            "board = \"b.kicad_pcb\"\nduration_ms = 10\nmcu = \"atmega328p\"\n\
+             [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n",
+        );
+        assert_eq!(note.mcu_note(), Some("atmega328p"));
+        assert_eq!(note.mcu_descriptor_dir(), None);
+
+        let mut table = spec_from(
+            "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
+             [mcu]\nname = \"stm32f103\"\ndescriptor_dir = \"mcu-overrides\"\n\
+             [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n",
+        );
+        table.base_dir = PathBuf::from("/repo/ci");
+        assert_eq!(table.mcu_note(), Some("stm32f103"));
+        assert_eq!(
+            table.mcu_descriptor_dir(),
+            Some(PathBuf::from("/repo/ci/mcu-overrides")),
+            "descriptor_dir resolves relative to the spec's directory"
+        );
+        assert!(table.validate().is_ok());
+
+        // An absolute descriptor_dir passes through untouched.
+        let mut abs = spec_from(
+            "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
+             [mcu]\ndescriptor_dir = \"/opt/socs\"\n\
+             [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n",
+        );
+        abs.base_dir = PathBuf::from("/repo/ci");
+        assert_eq!(abs.mcu_descriptor_dir(), Some(PathBuf::from("/opt/socs")));
+    }
 }

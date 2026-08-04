@@ -2650,6 +2650,76 @@ fn hash2(seed: u64, s: &str) -> u64 {
 mod tests {
     use super::*;
 
+    /// Serializes the DescriptorDirGuard tests: they mutate the process-global
+    /// `HAUKSBEE_MCU_DIR` env var, so parallel test threads must not interleave.
+    static MCU_DIR_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn spec_with_descriptor_dir(dir: Option<&str>) -> Spec {
+        let mcu = dir
+            .map(|d| format!("[mcu]\ndescriptor_dir = \"{d}\"\n"))
+            .unwrap_or_default();
+        let src = format!(
+            "board = \"b.kicad_pcb\"\nduration_ms = 10\n{mcu}\
+             [[assert]]\nkind = \"voltage\"\nnet = \"VCC\"\nmin = 3.0\n"
+        );
+        let mut spec: Spec = toml::from_str(&src).expect("valid toml");
+        spec.base_dir = std::path::PathBuf::from("/repo/ci");
+        spec
+    }
+
+    #[test]
+    fn descriptor_dir_guard_sets_the_env_for_its_lifetime_and_restores() {
+        let _lock = MCU_DIR_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("HAUKSBEE_MCU_DIR");
+        let spec = spec_with_descriptor_dir(Some("socs"));
+        {
+            let _guard = DescriptorDirGuard::apply(&spec);
+            assert_eq!(
+                std::env::var("HAUKSBEE_MCU_DIR").as_deref(),
+                Ok("/repo/ci/socs"),
+                "the spec's descriptor_dir (resolved against the spec dir) is published"
+            );
+        }
+        assert!(
+            std::env::var_os("HAUKSBEE_MCU_DIR").is_none(),
+            "the guard restores the unset state on drop, so a later spec in the \
+             same invocation does not inherit it"
+        );
+    }
+
+    #[test]
+    fn an_explicit_env_var_wins_over_the_spec_descriptor_dir() {
+        let _lock = MCU_DIR_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::set_var("HAUKSBEE_MCU_DIR", "/operator/override");
+        let spec = spec_with_descriptor_dir(Some("socs"));
+        {
+            let _guard = DescriptorDirGuard::apply(&spec);
+            assert_eq!(
+                std::env::var("HAUKSBEE_MCU_DIR").as_deref(),
+                Ok("/operator/override"),
+                "the operator's env var must win over the spec field"
+            );
+        }
+        assert_eq!(
+            std::env::var("HAUKSBEE_MCU_DIR").as_deref(),
+            Ok("/operator/override"),
+            "the guard leaves the operator's value untouched"
+        );
+        std::env::remove_var("HAUKSBEE_MCU_DIR");
+    }
+
+    #[test]
+    fn a_spec_without_descriptor_dir_leaves_the_env_alone() {
+        let _lock = MCU_DIR_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("HAUKSBEE_MCU_DIR");
+        let spec = spec_with_descriptor_dir(None);
+        {
+            let _guard = DescriptorDirGuard::apply(&spec);
+            assert!(std::env::var_os("HAUKSBEE_MCU_DIR").is_none());
+        }
+        assert!(std::env::var_os("HAUKSBEE_MCU_DIR").is_none());
+    }
+
     const DSL: &[u8] = br#"# Board-as-Code (hauksbee board DSL v1)
 board version 20241229
 
