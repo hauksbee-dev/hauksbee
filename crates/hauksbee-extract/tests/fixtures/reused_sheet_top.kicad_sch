@@ -1,0 +1,25 @@
+(kicad_sch
+	(version 20250114)
+	(generator "test")
+	(uuid "00000000-0000-0000-0000-0000000000a0")
+	(paper "A4")
+	(sheet
+		(at 150 90)
+		(size 20 20)
+		(uuid "00000000-0000-0000-0000-0000000000a1")
+		(property "Sheetname" "chan1")
+		(property "Sheetfile" "reused_sheet_child.kicad_sch")
+		(pin "CHAN" input (at 150 95 180) (uuid "00000000-0000-0000-0000-0000000000a3"))
+	)
+	(sheet
+		(at 150 130)
+		(size 20 20)
+		(uuid "00000000-0000-0000-0000-0000000000a2")
+		(property "Sheetname" "chan2")
+		(property "Sheetfile" "reused_sheet_child.kicad_sch")
+		(pin "CHAN" input (at 150 135 180) (uuid "00000000-0000-0000-0000-0000000000a4"))
+	)
+	(sheet_instances
+		(path "/" (page "1"))
+	)
+)

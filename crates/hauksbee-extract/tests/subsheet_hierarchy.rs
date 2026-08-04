@@ -208,3 +208,49 @@ fn mnt_reform_sub_sheets_raise_no_floating_control_pin() {
         offenders.join("\n  ")
     );
 }
+
+/// A sub-sheet placed TWICE is two sets of parts, not one.
+///
+/// This is the ordinary way to draw a multi-channel board, and the reader used
+/// to skip every placement after the first: the cycle guard that stops a sheet
+/// referencing itself was keyed on the file rather than on the ancestor chain,
+/// so a reused sheet looked like a sheet already in the netlist. The cost was
+/// invisible and large. LumenPnP's motherboard places `mosfet.kicad_sch` four
+/// times and `motor_driver.kicad_sch` six, and extracted 188 of its 359 parts,
+/// with three of its six MOSFETs missing and every coverage ratio computed over
+/// what survived.
+///
+/// KiCad's own answer is in each symbol's `(instances)` block, which maps the
+/// sheet-instance UUID path to that placement's designator. The reader already
+/// read it; nothing ever reached it a second time.
+#[test]
+fn a_sub_sheet_placed_twice_yields_both_placements() {
+    let board = ExtractedBoard::from_kicad_schematic_path(&fixture("reused_sheet_top.kicad_sch"))
+        .expect("extract the reused-sheet hierarchy");
+    let mut refs: Vec<&str> = board
+        .components
+        .iter()
+        .filter(|c| !c.reference.starts_with('#'))
+        .map(|c| c.reference.as_str())
+        .collect();
+    refs.sort_unstable();
+    assert_eq!(
+        refs,
+        vec!["R1", "R2"],
+        "both placements of the child sheet must appear, each with its own \
+         per-instance designator"
+    );
+    // The two channels are separate nets: merging them would be the other half
+    // of the same bug, a reused sheet whose placements short together through
+    // their identical local names.
+    let chan_nets = board
+        .nets
+        .iter()
+        .filter(|n| n.name.contains("CHAN"))
+        .count();
+    assert!(
+        chan_nets >= 2,
+        "each placement's CHAN is its own net, got {chan_nets}: {:#?}",
+        board.nets.iter().map(|n| &n.name).collect::<Vec<_>>()
+    );
+}
