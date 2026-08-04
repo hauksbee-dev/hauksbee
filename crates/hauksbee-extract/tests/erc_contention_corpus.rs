@@ -5,18 +5,27 @@
 //! boards known to be correct. If a future change makes it fire on any of these,
 //! this test goes red before the false positive ships.
 //!
-//! Corpus-gated: skipped when the board-corpus symlink is absent, unless
-//! `HAUKSBEE_REQUIRE_CORPUS=1` is set (then a missing corpus is a failure).
+//! Corpus-gated: skipped when the board corpus is absent, unless
+//! `HAUKSBEE_REQUIRE_CORPUS=1` is set (then a missing corpus is a failure). The
+//! board count it scanned is printed on every run and a scan of zero is a
+//! failure, because a calibration gate that opened no board has calibrated
+//! nothing.
 
 use std::path::{Path, PathBuf};
 
 use hauksbee_extract::{ExtractedBoard, LintCheck};
 
+/// The directory the board ids sit under, whichever layout this machine has.
+///
+/// This used to be `corpus_dir(..).unwrap_or_default().join("famous")`, which
+/// only ever resolved on the hand-built corpus. On the corpus that
+/// `scripts/fetch-corpus.sh` produces there is no `famous/` level, so the path
+/// did not exist, the guard read it as "no corpus", and the gate skipped.
 fn corpus() -> Option<PathBuf> {
-    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join("famous");
-    p.exists().then_some(p)
+    hauksbee_testkit::corpus_boards_root_or_skip(
+        env!("CARGO_MANIFEST_DIR"),
+        "output_contention corpus calibration",
+    )
 }
 
 /// Known-good schematic-bearing boards (schematic roots + pin-typed netlists).
@@ -49,14 +58,12 @@ fn load(p: &Path) -> Option<ExtractedBoard> {
 
 #[test]
 fn output_contention_is_silent_on_known_good_corpus() {
-    let Some(root) = corpus() else {
-        assert!(
-            std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_err(),
-            "HAUKSBEE_REQUIRE_CORPUS set but board-corpus is absent"
-        );
-        eprintln!("board-corpus not present; skipping ERC contention calibration");
-        return;
-    };
+    // `corpus()` already prints the not-run note, and panics under
+    // HAUKSBEE_REQUIRE_CORPUS. It used to be reported here as "board-corpus is
+    // absent", which named the wrong thing: board-corpus was present, the
+    // `famous/` level under it was not, and the message sent readers looking for
+    // a directory that was already there.
+    let Some(root) = corpus() else { return };
 
     let mut scanned = 0usize;
     let mut offenders: Vec<String> = Vec::new();
@@ -74,6 +81,11 @@ fn output_contention_is_silent_on_known_good_corpus() {
         }
     }
 
+    // Say what was covered, and refuse a pass on zero. `scanned >= 10` alone
+    // was not enough: a corpus root that resolved to a directory holding none of
+    // these boards produced a load failure per entry rather than a scan, and the
+    // failure list was the only thing that went red - never the coverage.
+    hauksbee_testkit::scanned("output_contention corpus calibration", scanned);
     assert!(
         scanned >= 10,
         "expected to scan the known-good corpus, scanned {scanned}"
