@@ -968,7 +968,9 @@ mod tests {
     #[test]
     fn synthetic_dvi_clock_moved_off_slice_6_is_clean() {
         // Move the DVI clock from GP12 (pad 16, 6A) to GP14 (pad 19, 7A): now the
-        // audio on 6A has no PWM twin. Must be silent (the rev-B discriminator).
+        // audio on 6A has no PWM twin. Must be silent (the rev-B-NETLIST
+        // discriminator: that file, a rev-A schematic export, routes the clock
+        // on slice 7; the rev B layout and Gerbers carry the slice-6 conflict).
         // Pad 19 is otherwise a spare node here, so dropping it from the spare
         // net and giving it the clock keeps the pin count valid.
         let moved = conflict_net()

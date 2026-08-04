@@ -2,18 +2,24 @@
 //! check, against the famous-board corpus.
 //!
 //! Validation (the check MUST fire, with the documented evidence chain):
-//!   - Olimex RP2040-PICO-PC rev C/D: the PicoDVI PWM pixel clock (GP12) and the
-//!     PWM stereo audio left channel (GP28) both map to RP2040 PWM slice 6,
-//!     channel A. Open issue #1 on OLIMEX/RP2040-PICO-PC, unfixed across the
-//!     shipped revisions.
+//!   - Olimex RP2040-PICO-PC rev C/D (netlist AND layout), and rev B (layout):
+//!     the PicoDVI PWM pixel clock (GP12) and the PWM stereo audio left channel
+//!     (GP28) both map to RP2040 PWM slice 6, channel A. Open issue #1 on
+//!     OLIMEX/RP2040-PICO-PC, unfixed across the shipped revisions.
 //!   - SparkFun SAMD51 Thing Plus: the AT25SF041 SPI flash sits on PA08..PA11,
 //!     the SAM D5x QSPI DATA0..3 pins. sparkfun/Arduino_Boards issue #82.
 //!
-//! Ground-truth detail (the discriminator, not a miss): Olimex rev **B** is
-//! SILENT and that is CORRECT - in rev B the DVI clock is on GP14/GP15 (PWM
-//! slice 7), so it does not collide with the audio on slice 6A. The slice-6A
-//! conflict was introduced in rev C when the DVI clock moved to GP12/GP13. The
-//! check flags exactly the revisions where the fault exists.
+//! Ground-truth detail (per-input honesty, not a two-sidedness bug): the rev B
+//! folder's two CAD files describe DIFFERENT design snapshots. The rev B
+//! `.net` is an export from `RP2040-PICO-PC_rev_A.sch` (its own `(source ...)`
+//! header says so) with the DVI clock on GP14/GP15 (PWM slice 7), so on that
+//! input the check is correctly SILENT. The rev B `.kicad_pcb` - the file the
+//! board was fabricated from - has the clock on GP12/GP13 (slice 6), and the
+//! shipped Gerbers agree pad-for-pad (X2 attributes: U2 pad 16 = /PICO_CK-,
+//! pad 17 = /PICO_CK+ in `Gerbers/RP2040-PICO-PC_rev_B-F_Cu.gbr`). So the
+//! slice-6A fire on the rev B layout is a TRUE positive about the physical
+//! board, and the silence on the rev B netlist is the truth about that (stale)
+//! netlist. Each input is judged on what it actually says.
 //!
 //! Calibration (the check MUST be silent - zero false positives): every other
 //! corpus board carrying an RP2040 / SAMD51 / ESP32, plus a spread of unrelated
@@ -30,17 +36,25 @@ use std::path::{Path, PathBuf};
 use hauksbee_extract::{ExtractedBoard, LintCheck};
 
 fn corpus() -> Option<PathBuf> {
-    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join("famous");
-    if p.exists() {
-        Some(p)
-    } else {
-        if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-            panic!("HAUKSBEE_REQUIRE_CORPUS=1 but board-corpus/famous not found at {p:?}");
+    // The corpus root (per-board paths are resolved by `board` below, which
+    // handles both the hand-built `famous/<id>` and the fetch-script `<id>`
+    // layouts - and hybrids of the two). The old unconditional `.join("famous")`
+    // matched only the hand-built layout, so on a fetch-layout machine every
+    // test here skipped silently and the calibration passed vacuously.
+    match hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR")) {
+        Some(p) => Some(p),
+        None => {
+            if hauksbee_testkit::require_assets() {
+                panic!("HAUKSBEE_REQUIRE_CORPUS=1 but board-corpus not found");
+            }
+            None
         }
-        None
     }
+}
+
+/// One board by corpus-relative path, whichever layout holds it.
+fn board(rel: &str) -> Option<PathBuf> {
+    hauksbee_testkit::corpus_board(env!("CARGO_MANIFEST_DIR"), rel)
 }
 
 fn load(p: &Path) -> ExtractedBoard {
@@ -53,23 +67,29 @@ fn load(p: &Path) -> ExtractedBoard {
     }
 }
 
-fn conflicts(c: &Path, rel: &str) -> Vec<String> {
-    let board = load(&c.join(rel));
-    board
+fn conflicts_at(p: &Path) -> Vec<String> {
+    load(p)
         .resource_conflicts()
         .of_check(LintCheck::McuResourceConflict)
         .map(|f| f.message.clone())
         .collect()
 }
 
+/// The validation boards are load-bearing: with the corpus present, a missing
+/// one is a corpus problem to surface, not a silent skip.
+fn conflicts(rel: &str) -> Vec<String> {
+    let p = board(rel).unwrap_or_else(|| panic!("corpus present but board missing: {rel}"));
+    conflicts_at(&p)
+}
+
 #[test]
 fn olimex_rp2040_pico_pc_pwm_slice_6a_conflict_flagged_rev_c_and_d() {
-    let Some(c) = corpus() else { return };
+    let Some(_c) = corpus() else { return };
     for rev in ["C", "D"] {
         let rel = format!(
             "olimex_rp2040_pico_pc/HARDWARE/RP2040-PICO-PC hardware revision {rev}/RP2040-PICO-PC_rev_{rev}.net"
         );
-        let msgs = conflicts(&c, &rel);
+        let msgs = conflicts(&rel);
         assert_eq!(
             msgs.len(),
             1,
@@ -94,27 +114,61 @@ fn olimex_rp2040_pico_pc_pwm_slice_6a_conflict_flagged_rev_c_and_d() {
 }
 
 #[test]
-fn olimex_rp2040_pico_pc_rev_b_is_clean_dvi_clock_on_slice_7() {
-    // rev B is the discriminator: the DVI clock is on GP14/GP15 (slice 7), so it
-    // does NOT collide with the audio on slice 6A. The check must be silent -
-    // this proves the slice-6A finding on rev C/D is real, not an any-RP2040
-    // -with-DVI-and-audio false positive.
-    let Some(c) = corpus() else { return };
+fn olimex_rp2040_pico_pc_pwm_slice_6a_conflict_flagged_on_layouts_rev_b_c_d() {
+    // The LAYOUT path must catch the same conflict. This includes rev B: its
+    // `.kicad_pcb` routes the DVI clock on GP12/GP13 (slice 6), and the shipped
+    // Gerbers in the same folder agree pad-for-pad (U2 pad 16 = /PICO_CK-,
+    // pad 17 = /PICO_CK+), so the fire on the rev B layout is a true positive
+    // about the physical board - see the module header for the full evidence
+    // chain and why the rev B .net (a stale rev-A schematic export) differs.
+    let Some(_c) = corpus() else { return };
+    for rev in ["B", "C", "D"] {
+        let rel = format!(
+            "olimex_rp2040_pico_pc/HARDWARE/RP2040-PICO-PC hardware revision {rev}/RP2040-PICO-PC_rev_{rev}.kicad_pcb"
+        );
+        let msgs = conflicts(&rel);
+        assert_eq!(
+            msgs.len(),
+            1,
+            "rev {rev} layout: expected exactly the slice-6A conflict, got {msgs:#?}"
+        );
+        let m = &msgs[0];
+        assert!(m.contains("6A"), "rev {rev} layout: not slice 6A: {m}");
+        assert!(
+            m.contains("GP12") && m.contains("GP28"),
+            "rev {rev} layout: pins missing: {m}"
+        );
+        assert!(
+            m.contains("PWM audio") && m.contains("PicoDVI PWM pixel clock"),
+            "rev {rev} layout: both functions must be named: {m}"
+        );
+    }
+}
+
+#[test]
+fn olimex_rp2040_pico_pc_rev_b_netlist_is_clean_dvi_clock_on_slice_7() {
+    // The rev B `.net` is an export from the rev A schematic (its `(source ...)`
+    // header names RP2040-PICO-PC_rev_A.sch) in which the DVI clock sits on
+    // GP14/GP15 (slice 7), so it does NOT collide with the audio on slice 6A.
+    // The check must be silent on THIS INPUT: it reports what the file says,
+    // and this file genuinely has no conflict. It also proves the slice-6A
+    // finding elsewhere is real, not an any-RP2040-with-DVI-and-audio false
+    // positive. The fabricated rev B board is a different story - its layout
+    // and Gerbers carry the conflict, and the layout test above pins that.
+    let Some(_c) = corpus() else { return };
     let msgs = conflicts(
-        &c,
         "olimex_rp2040_pico_pc/HARDWARE/RP2040-PICO-PC hardware revision B/RP2040-PICO-PC_rev_B.net",
     );
     assert!(
         msgs.is_empty(),
-        "rev B must be clean (DVI clock on slice 7), got: {msgs:#?}"
+        "rev B netlist must be clean (DVI clock on slice 7), got: {msgs:#?}"
     );
 }
 
 #[test]
 fn sparkfun_samd51_thing_plus_qspi_flash_conflict_flagged() {
-    let Some(c) = corpus() else { return };
+    let Some(_c) = corpus() else { return };
     let msgs = conflicts(
-        &c,
         "sparkfun_thingplus_samd51/Hardware/SAMD51_Thing_Plus.brd",
     );
     assert_eq!(
@@ -134,7 +188,7 @@ fn sparkfun_samd51_thing_plus_qspi_flash_conflict_flagged() {
 
 #[test]
 fn clean_corpus_boards_raise_no_resource_conflict() {
-    let Some(c) = corpus() else { return };
+    let Some(_c) = corpus() else { return };
     // Known-good boards: RP2040 (minimal + SparkFun Thing Plus), ESP32 (fully
     // routable), and a spread of unrelated designs. None has a genuine internal
     // resource conflict of this class; the check must be silent on every one.
@@ -164,15 +218,14 @@ fn clean_corpus_boards_raise_no_resource_conflict() {
     let mut fires = Vec::new();
     let mut exercised = 0usize;
     for rel in clean {
-        let path = c.join(rel);
-        if !path.exists() {
+        let Some(path) = board(rel) else {
             if require {
                 panic!("HAUKSBEE_REQUIRE_CORPUS=1 but known-good board missing: {rel}");
             }
             continue;
-        }
+        };
         exercised += 1;
-        let msgs = conflicts(&c, rel);
+        let msgs = conflicts_at(&path);
         if !msgs.is_empty() {
             fires.push(format!("{rel}: {msgs:#?}"));
         }
@@ -184,13 +237,12 @@ fn clean_corpus_boards_raise_no_resource_conflict() {
     // actually run.
     let mut qspi_exercised = 0usize;
     for dir in clean_qspi_flash {
-        let d = c.join(dir);
-        if !d.exists() {
+        let Some(d) = board(dir) else {
             if require {
                 panic!("HAUKSBEE_REQUIRE_CORPUS=1 but correct-QSPI-flash board missing: {dir}");
             }
             continue;
-        }
+        };
         let brd = std::fs::read_dir(&d).ok().and_then(|rd| {
             rd.filter_map(|e| e.ok().map(|e| e.path()))
                 .find(|p| p.extension().and_then(|e| e.to_str()) == Some("brd"))

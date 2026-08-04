@@ -134,6 +134,44 @@ impl DnpDecision {
     }
 }
 
+/// The single token family that names a copper-link part: solder jumpers,
+/// solder bridges, net ties. `is_zero_ohm_link` applies it to the value string
+/// and `is_jumper_or_net_tie` to the library/footprint ids, so the two callers
+/// can never drift apart on what counts as a link.
+fn has_link_token(lower: &str) -> bool {
+    lower.contains("jumper")
+        || lower.contains("solderbridge")
+        || lower.contains("solder_bridge")
+        || lower.contains("net_tie")
+        || lower.contains("nettie")
+}
+
+/// A part that is a solder jumper / solder bridge / net tie by CLASS: its
+/// library, footprint, or value names it a link part. Such a part carries no
+/// electrical value BY DESIGN (the value field is empty or a bare mnemonic),
+/// so value-centric checks (the placeholder-value lint) must exempt it rather
+/// than demand a value be "set". Covers the KiCad conventions
+/// ("Jumper:SolderJumper_2_...", "NetTie-2_SMD_..."), vendor libraries that
+/// spell the word out ("OLIMEX_Jumpers-FP:SJ_1_SMALLER"), and the Eagle
+/// solder-jumper package family whose name is just "SJ" (the Arduino Uno's
+/// RESET-EN is library "jumper", package "SJ", value "").
+pub fn is_jumper_or_net_tie(comp: &Component) -> bool {
+    let value = comp.value.to_ascii_lowercase();
+    let lib = comp.lib_id.to_ascii_lowercase();
+    let fp = comp.footprint.to_ascii_lowercase();
+    if has_link_token(&value) || has_link_token(&lib) || has_link_token(&fp) {
+        return true;
+    }
+    // The Eagle/Olimex "SJ" package family carries no spelled-out "jumper"
+    // token in the footprint itself: "SJ" (the Arduino Uno's RESET-EN),
+    // "SJ_1_SMALLER". Accept only the bare "SJ" leaf or an "SJ_..." underscore
+    // form: looser prefix matching would sweep in real part families that
+    // merely start with those letters, e.g. CUI's SJ1-35xx / SJ-352x 3.5mm
+    // audio jack footprints.
+    let leaf = fp.rsplit([':', '/']).next().unwrap_or(fp.as_str());
+    leaf == "sj" || leaf.starts_with("sj_")
+}
+
 /// A two-terminal part whose value is a near-zero resistance, or a footprint
 /// that only exists to bridge copper. Fitting one merges the nets it sits
 /// between, so under the default policy it stays open.
@@ -144,12 +182,7 @@ pub fn is_zero_ohm_link(comp: &Component) -> bool {
     let value = comp.value.trim();
     let lower = value.to_ascii_lowercase();
     // Named links carry no numeric value: "JUMPER", "SOLDER_BRIDGE", "NET_TIE".
-    if lower.contains("jumper")
-        || lower.contains("solderbridge")
-        || lower.contains("solder_bridge")
-        || lower.contains("net_tie")
-        || lower.contains("nettie")
-    {
+    if has_link_token(&lower) {
         return true;
     }
     // Ferrite beads are a few milliohms at DC and are used as rail splits for
@@ -301,5 +334,72 @@ mod nearest_reference_tests {
         let near = nearest_references("R17", &known, 3);
         assert!(near.contains(&"R71".to_string()) || near.contains(&"R7".to_string()));
         assert!(nearest_references("XYZZY99", &known, 3).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod jumper_class_tests {
+    use super::is_jumper_or_net_tie;
+    use crate::Component;
+
+    fn comp(reference: &str, value: &str, lib_id: &str, footprint: &str) -> Component {
+        Component {
+            reference: reference.into(),
+            value: value.into(),
+            lib_id: lib_id.into(),
+            footprint: footprint.into(),
+            position: None,
+            layer: String::new(),
+            properties: Vec::new(),
+            dnp: false,
+            pins: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn link_class_parts_are_recognised_by_library_and_footprint() {
+        // The Arduino Uno R3 RESET-EN: Eagle library "jumper", package "SJ",
+        // value "" - the shape that false-fired the placeholder-value lint.
+        assert!(is_jumper_or_net_tie(&comp("RESET-EN", "", "jumper:SJ", "SJ")));
+        // KiCad solder-jumper and net-tie footprint conventions.
+        assert!(is_jumper_or_net_tie(&comp(
+            "JP1",
+            "",
+            "Jumper:SolderJumper_2_P1.3mm_Open",
+            "Jumper:SolderJumper_2_P1.3mm_Open_RoundedPad1.0x1.5mm"
+        )));
+        assert!(is_jumper_or_net_tie(&comp(
+            "NT1",
+            "",
+            "Device:Net-Tie_2",
+            "NetTie:NetTie-2_SMD_Pad0.5mm"
+        )));
+        // Olimex's own solder-jumper library (RP2040-PICO-PC, ESP32-EVB).
+        assert!(is_jumper_or_net_tie(&comp(
+            "SJ1",
+            "",
+            "OLIMEX_Jumpers:SJ_1",
+            "OLIMEX_Jumpers-FP:SJ_1_SMALLER"
+        )));
+        // Value-named links still count (the is_zero_ohm_link token family).
+        assert!(is_jumper_or_net_tie(&comp("J9", "SOLDER_BRIDGE", "", "")));
+    }
+
+    #[test]
+    fn ordinary_parts_are_not_link_class() {
+        // A genuine unset resistor must NOT be exempted.
+        assert!(!is_jumper_or_net_tie(&comp(
+            "R1",
+            "",
+            "Device:R",
+            "Resistor_SMD:R_0603_1608Metric"
+        )));
+        // "SJ" must be the bare package name or an "SJ_..." form, not a loose
+        // prefix: part families that merely start with those letters (CUI's
+        // SJ1-35xx 3.5mm audio jacks) are not solder jumpers.
+        assert!(!is_jumper_or_net_tie(&comp("U1", "SJW1240", "", "SJW1240-QFN")));
+        assert!(!is_jumper_or_net_tie(&comp("J2", "3.5mm jack", "", "SJ1-3533NG")));
+        assert!(!is_jumper_or_net_tie(&comp("J3", "3.5mm jack", "", "SJ-3523-SMT")));
+        assert!(!is_jumper_or_net_tie(&comp("C3", "100n", "Device:C", "C_0402")));
     }
 }
