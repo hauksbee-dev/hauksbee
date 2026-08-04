@@ -95,6 +95,22 @@
   backdrop-filter: blur(6px);
 }
 
+/* Dismissed: on the first interaction, or on a timeout if none comes. Hidden
+   rather than unmounted, so the fade is a fade; `visibility` is what takes it
+   out of the hit test and out of the accessibility tree with it, which opacity
+   alone would not do. */
+.hb-embed-prompt[data-gone] {
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+}
+.hb-embed-prompt {
+  transition: opacity 340ms ease, transform 340ms ease, visibility 340ms;
+}
+@media (prefers-reduced-motion: reduce) {
+  .hb-embed-prompt { transition: none; }
+}
+
 .hb-embed-prompt-strong {
   color: var(--silk);
   font-weight: 600;

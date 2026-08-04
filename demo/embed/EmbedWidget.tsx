@@ -58,10 +58,21 @@ function CompactMap({
 }) {
   const [selected, setSelected] = useState<string | null>(null)
   const [touched, setTouched] = useState(false)
+  const [promptStale, setPromptStale] = useState(false)
 
   // The hint: the flagged net highlighted once, dropped the moment the visitor
   // does anything. It is a pointer, not a state to be stuck in.
   const hinted = !touched && hintNet ? hintNet : selected
+
+  /* The prompt is an instruction, and an instruction outlives its moment badly:
+     left up, it is a label parked on the board, covering the copper it is
+     pointing at. It goes on the first interaction, and on its own if that
+     interaction never comes. */
+  useEffect(() => {
+    const timer = window.setTimeout(() => setPromptStale(true), 12_000)
+    return () => window.clearTimeout(timer)
+  }, [])
+  const promptGone = touched || promptStale
 
   const body = (frame: SimFrame | null) => (
     <>
@@ -79,7 +90,11 @@ function CompactMap({
         />
       </div>
       <div className="hb-embed-compact-overlay">
-        <div className="hb-embed-prompt" data-testid="embed-prompt">
+        <div
+          className="hb-embed-prompt"
+          data-testid="embed-prompt"
+          data-gone={promptGone ? 'true' : undefined}
+        >
           <span className="hb-embed-prompt-strong">{subject}</span> {prompt}
         </div>
         {hinted && <NetReadout frame={frame} net={hinted} pulse={!touched} />}
