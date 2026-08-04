@@ -1139,3 +1139,287 @@ max_voltage_v = 40.0            # VRRM
 max_junction_temp_c = 125.0     # TJ maximum
 theta_ja_c_per_w = 50.0         # RthJA typ, junction to ambient
 theta_jc_c_per_w = 15.0         # RthJL typ, junction to lead
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 1N5822 / SS34 class: 3 A, 40 V Schottky rectifier.
+#
+# The board value string this exists for is literally "1N5822/SS34/SMA", on all
+# twelve Olimex ESP32-EVB revisions (D4, D6), and it is worth being blunt about
+# what that string does and does not pin down. The designer means "a 3 A / 40 V
+# Schottky, either type, in an SMA-sized part". NEITHER NAMED PART IS SOLD IN
+# SMA. The 1N5822 is DO-201AD axial at Vishay (doc 88526), onsemi (1N5820/D) and
+# Diodes (DS23003); the SS34 is SMC / DO-214AB at Vishay (88751), onsemi
+# (SS39/D) and Taiwan Semi (Q2412). The tier-one part that IS a 3 A / 40 V
+# Schottky in SMA / DO-214AC is onsemi's MBRA340T3G, and Yangjie's SS34AQ is the
+# same thing from a second source. So the string names two parts and a third
+# package.
+#
+# THIS ENTRY CARRIES THE 1N5822 NUMBERS, for one reason: it is the only one of
+# the candidates whose datasheet publishes TWO forward-voltage points at 25 C,
+# which is what a Shockley-plus-series-resistance fit needs. The SS34's sheet
+# publishes exactly one (0.50 V max at 3.0 A) across all four vendors, which
+# leaves is and rs under-determined by one equation, and guessing the missing
+# constraint is precisely what this file does not do.
+#
+# WHAT THAT COSTS, stated so it can be judged. If the fitted part is actually an
+# SS34 or an MBRA340T3G:
+#   - conduction is close. SS34 VF max is 0.50 V at 3 A against the 1N5822's
+#     0.525 V, a 5% difference at the rated current, so the DC operating point
+#     is nearly the same.
+#   - the SURGE and THERMAL ratings below are the WRONG ones. IFSM is 80 A on
+#     the 1N5822 and 100 A on the SS34; TJ max is 125 C against 150 C; RthJA is
+#     40 C/W for the axial part against 55 C/W for the SMC one. A thermal or
+#     surge check on an SMD build judged against these numbers is judging the
+#     wrong package, and it errs OPTIMISTIC on temperature rise.
+#
+# Source for the fitted numbers: Vishay "1N5820, 1N5821, 1N5822" datasheet,
+# document 88526, Rev. 05-Apr-2019. Cross-read: onsemi 1N5820/D Rev. 11 (Nov
+# 2023), which adds a third forward point, and Diodes DS23003.
+# Datasheet figures used:
+#   VF max 0.525 V @ IF = 3.0 A, 25 C   (Electrical Characteristics, 300 us pulse)
+#   VF max 0.950 V @ IF = 9.4 A, 25 C   (same row set)
+#   VF max 0.390 V @ IF = 1.0 A, 25 C   (onsemi 1N5820/D only)
+#   IR 2.0 mA @ VR = 40 V, 25 C (20 mA at 100 C) — Vishay, onsemi and Diodes agree
+#   VRRM 40 V, IF(AV) 3.0 A at TL = 95 C, IFSM 80 A 8.3 ms half sine
+#   TJ -65 to +125 C, RthJA 40 C/W typ, RthJL 10 C/W typ
+#
+# THE FIT, with n = 1.05 assumed (an ordinary Schottky ideality factor, the same
+# assumption the 1N581x entries above make and the only free choice here):
+#   n*Vt = 1.05 * 0.025852 = 0.0271446 V
+#   0.950 - 0.525 = 0.0271446*ln(9.4/3.0) + (9.4-3.0)*rs
+#   0.425 = 0.0271446*1.1420974 + 6.4*rs = 0.03100178 + 6.4*rs
+#   rs = 0.39399822/6.4 = 0.0615622
+#   0.525 - 3.0*0.0615622 = 0.34031333 = 0.0271446*ln(3.0/is)
+#   ln(3.0/is) = 12.537055  =>  is = 1.0773e-5
+# VALIDATED OUT OF SAMPLE against onsemi's third point, which the fit did not
+#   use: at IF = 1.0 A the model gives 0.0271446*ln(1.0/1.0773e-5) + 0.0616
+#   = 0.3082 + 0.0616 = 0.370 V against a published max of 0.390 V, i.e. 5%
+#   under the maximum, which is the correct side for a fit to a max envelope.
+# CJO CAVEAT, and it is a real one: neither Vishay nor onsemi nor Diodes
+#   tabulates junction capacitance for this part at all, only a curve. The
+#   200 pF below is Taiwan Semiconductor's tabulated figure for the same 1N5820
+#   series (doc I2105) and it is specified AT VR = 4.0 V, not at zero bias.
+#   `cjo` is by definition the zero-bias value, so this number is low: with
+#   m = 0.4 and vj = 0.4 it back-extrapolates to roughly 480 pF at 0 V. It is
+#   carried at the datasheet's own 4 V figure anyway, exactly as the 1N581x
+#   entries above do, so the whole file is consistently conservative on
+#   capacitance rather than inconsistently corrected.
+[[models]]
+id = "1n5822"
+kind = "diode"
+description = "1N5822 / SS34 class Schottky rectifier, 40 V, 3 A"
+
+[models.match]
+# The bare part numbers, and the Olimex composite string. The composite is
+# matched deliberately: leaving it unresolved on twelve boards to avoid naming
+# an ambiguous package would report a missing model where a 40 V Schottky
+# plainly is, and the ambiguity is recorded in the note above instead.
+value_re = "(?i)^(1N5822|SS34|1N5822/SS34(/SMA)?|MBRA340T3G?)$"
+
+[models.params]
+is  = 1.0773e-5   # fitted with n and rs to the 3.0 A and 9.4 A points
+n   = 1.05        # assumed, an ordinary Schottky ideality factor
+rs  = 0.0616      # fitted; carries the 3.0 A to 9.4 A rise
+cjo = 2.0e-10     # CJ typ at VR = 4.0 V, 1 MHz (Taiwan Semi I2105); see caveat
+vj  = 0.4         # assumed, a Schottky barrier height; no vendor states one
+m   = 0.4         # assumed grading coefficient, ditto
+tt  = 1.0e-11     # majority-carrier device: negligible stored charge, assumed
+bv  = 40.0        # VRRM
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+# 1N5822 (DO-201AD) ratings. See the package caveat above before trusting these
+# on an SMD build.
+max_current_a = 3.0            # IF(AV) at TL = 95 C, 9.5 mm leads
+max_surge_current_a = 80.0     # IFSM, 8.3 ms single half sine-wave
+max_voltage_v = 40.0           # VRRM
+max_junction_temp_c = 125.0    # TJ max. Vishay, onsemi and Taiwan Semi all say
+                               # 125; the 150 in Diodes DS23003 is an outlier on
+                               # a sheet Diodes has marked obsolete.
+theta_ja_c_per_w = 40.0        # RthJA typ, vertical PCB, 2.5in x 2.5in copper
+theta_jc_c_per_w = 10.0        # RthJL typ, junction to lead
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 1N5819HW: the SOD-123 surface-mount 40 V / 1 A Schottky.
+#
+# This exists for the Olimex value "1N5819(S4 SOD-123)", and the marking in that
+# string does not mean what it appears to. `S4` in SOD-123 is the marking of the
+# SD103AW, a 40 V / 350 mA small-signal Schottky (Diodes DS11013 Rev 28-2,
+# Marking Information). `S4` in SMA / DO-214AC is the SS14 (Vishay 88746, device
+# marking code table). The real 1 A / 40 V Schottky in SOD-123 is the 1N5819HW,
+# and its marking is `SL`, not S4 (Diodes DS30217 Rev 22-2). So the board's
+# string is internally inconsistent: either the marking was read correctly and
+# the fitted part is a 350 mA device labelled 1N5819, or the intent was "an SMD
+# 1N5819" and the marking is folklore.
+#
+# THIS ENTRY TAKES THE INTENT, NOT THE MARKING, because that is the reading the
+# rest of the value string supports (it says 1N5819, and SOD-123 is a 1 A-class
+# footprint). If the fitted part really is an SD103AW then this model is wrong
+# in the dangerous direction: that part is rated 350 mA and drops 0.60 V at only
+# 200 mA, and it will cook in any 1 A path. A board where that node carries
+# close to an amp is worth checking by eye.
+#
+# WHY NOT JUST REUSE THE DO-41 1N5819 ENTRY ABOVE: because the SMD part is a
+# genuinely different device on the two axes that matter.
+#   VF at 1 A:  0.60 V (DO-41) against 0.450 V (1N5819HW), a 25% difference,
+#               which is a 33% error in diode conduction loss.
+#   CT at 4 V:  110 pF (DO-41) against 50 pF typ (1N5819HW), a 2.2x difference,
+#               which doubles a modelled 0.5*C*V^2*f switching loss and shifts
+#               any LC ring against layout inductance by about 1.5x.
+#   RthJA:      50 C/W (DO-41) against 225 C/W (SOD-123). This is the sharpest
+#               difference of the three and the easiest to get wrong: at 1 A and
+#               0.45 W the axial part rises about 22 C over ambient and the
+#               SOD-123 rises about 101 C, which puts TJ near 126 C at a 25 C
+#               ambient with almost no margin on the 150 C limit. A SOD-123
+#               substitution for a DO-41 1N5819 is a 4.5x thermal derating.
+#
+# Source: Diodes Incorporated 1N5819HW datasheet DS30217 Rev 22-2, April 2026.
+# Datasheet figures used (Electrical Characteristics, TA = 25 C):
+#   VF max 0.320 V @ IF = 0.1 A
+#   VF max 0.450 V @ IF = 1.0 A
+#   VF max 0.750 V @ IF = 3.0 A
+#   IR max 1.0 mA @ VR = 40 V, 25 C (10 mA at 100 C)
+#   CT typ 50 pF / max 60 pF @ VR = 4 V, f = 1 MHz
+#   VRRM 40 V, IF(AV) 1.0 A, IFSM 25 A 8.3 ms half sine
+#   TJ -65 to +150 C, RthJA 225 C/W
+#
+# THE FIT, n = 1.05 assumed as above, on the two EXTREME points (0.1 A and
+# 3.0 A) so that the middle row is left free for an out-of-sample check:
+#   n*Vt = 0.0271446
+#   0.750 - 0.320 = 0.0271446*ln(3.0/0.1) + 2.9*rs
+#   0.430 = 0.0271446*3.4012 + 2.9*rs = 0.0923161 + 2.9*rs
+#   rs = 0.3376839/2.9 = 0.1164427
+#   0.320 - 0.1*0.1164427 = 0.3083557 = 0.0271446*ln(0.1/is)
+#   ln(0.1/is) = 11.35944  =>  is = 1.16662e-6
+# VALIDATED OUT OF SAMPLE at IF = 1.0 A, the row the fit did not use:
+#   0.0271446*ln(1.0/1.16662e-6) + 0.1164427 = 0.370763 + 0.116443 = 0.487 V
+#   against a published max of 0.450 V, +8.3%. That is the honest residual and
+#   it errs high, i.e. this model over-states forward drop by up to about 8% in
+#   the middle of its range. The alternative fit on the 0.1 A / 1.0 A pair lands
+#   that row exactly and then falls 16% short at 3 A, which is a bigger error in
+#   the more punishing direction, so the extremes fit is the one kept.
+[[models]]
+id = "1n5819hw"
+kind = "diode"
+description = "1N5819HW Schottky rectifier, 40 V, 1 A, SOD-123 surface mount"
+
+[models.match]
+# 1N5819HW / 1N5819W / SS14 / SKM14, and the Olimex composite that names the
+# SOD-123 package explicitly. The bare "1N5819" is NOT matched here: it belongs
+# to the DO-41 entry above, whose thermal ratings are 4.5x apart from these.
+value_re = "(?i)^(1N5819[HW]W?|SS14|SKM14|1N5819\\(S4 ?SOD-?123\\))$"
+
+[models.params]
+is  = 1.16662e-6  # fitted with n and rs to the 0.1 A and 3.0 A points
+n   = 1.05        # assumed, an ordinary Schottky ideality factor
+rs  = 0.1164427   # fitted; carries the 0.1 A to 3.0 A rise
+cjo = 5.0e-11     # CT typ at VR = 4 V, 1 MHz (60 pF max). As with the 1N58xx
+                  # entries this is the datasheet's biased figure carried
+                  # unadjusted rather than back-extrapolated to zero bias.
+vj  = 0.4         # assumed, a Schottky barrier height
+m   = 0.4         # assumed grading coefficient
+tt  = 1.0e-11     # majority-carrier device, assumed
+bv  = 40.0        # VRRM
+
+[models.pins]
+"A" = "anode"
+"K" = "cathode"
+
+[models.ratings]
+max_current_a = 1.0
+max_surge_current_a = 25.0     # IFSM, 8.3 ms single half sine-wave
+max_voltage_v = 40.0
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 225.0       # SOD-123. This is the number that makes the part
+                               # different from its axial namesake; see above.
+
+# ═════════════════════════════════════════════════════════════════════════════
+# BAV70: Nexperia dual common-cathode small-signal switching diode, SOT23.
+# 28 instances on the Lily58 keyboards, where it is the matrix isolation diode.
+#
+# Source: Nexperia BAV70 product data sheet, BAV70 v.9, released 2022-07-01.
+# CONFIGURATION, and it decides the pin map: COMMON CATHODE. Table 2 Pinning
+# gives pin 1 = A1 (anode of D1), pin 2 = A2 (anode of D2), pin 3 = CC (the
+# shared cathode). Getting this backwards would reverse both diodes.
+#
+# Datasheet figures used (Table 7 Characteristics, pulsed tp <= 300 us,
+# delta <= 0.02, Tamb = 25 C; all VF figures are MAXIMA, this sheet publishes no
+# typicals):
+#   VF max 715 mV  @ IF = 1 mA
+#   VF max 855 mV  @ IF = 10 mA
+#   VF max 1.00 V  @ IF = 50 mA
+#   VF max 1.25 V  @ IF = 150 mA
+#   IR max 30 nA @ VR = 25 V, 25 C; 0.5 uA @ VR = 80 V, 25 C
+#   Cd max 1.5 pF @ VR = 0 V, f = 1 MHz     <- genuinely ZERO BIAS, so it is
+#                                              directly usable as cjo, unlike
+#                                              the Schottky entries above
+#   trr max 4 ns @ IF = IR = 10 mA, RL = 100 Ohm
+#   VR = VRRM = 100 V, IF 215 mA per diode / 125 mA per device, IFRM 450 mA
+#   Ptot 250 mW, Tj max 150 C, Rth(j-a) max 500 K/W (free air, FR4 standard
+#   footprint)
+#
+# THE FIT, and the assumption here is n = 1.0, NOT the free-n fit.
+#   Letting n float and anchoring on the 1 mA and 10 mA rows gives n = 2.35,
+#   because the max-limit envelope rises 140 mV per decade between those two
+#   rows where a real silicon junction rises 60 to 100 mV. An ideality factor of
+#   2.35 for a silicon switching diode is not physics, it is an artefact of
+#   fitting a guaranteed-maximum line, and it would then over-state forward drop
+#   everywhere in between. So n is pinned at 1.0 (an ordinary silicon junction)
+#   and is and rs are fitted to the two EXTREME rows, leaving the two middle
+#   rows free for out-of-sample checks:
+#     Vt = 0.025852
+#     1.250 - 0.715 = 0.025852*ln(150) + (0.150-0.001)*rs
+#     0.535 = 0.025852*5.0106 + 0.149*rs = 0.129534 + 0.149*rs
+#     rs = 0.405466/0.149 = 2.72125
+#     0.715 - 0.001*2.72125 = 0.71228 = 0.025852*ln(0.001/is)
+#     ln(0.001/is) = 27.5522  =>  is = 1.0812e-15
+# VALIDATED OUT OF SAMPLE ON BOTH MIDDLE ROWS, neither used in the fit:
+#     IF = 10 mA:  0.025852*ln(0.01/1.0812e-15) + 0.01*2.72125
+#                  = 0.771893 + 0.027213 = 0.799 V vs 0.855 V max, -6.5%
+#     IF = 50 mA:  0.025852*ln(0.05/1.0812e-15) + 0.05*2.72125
+#                  = 0.813430 + 0.136063 = 0.949 V vs 1.00 V max, -5.1%
+#   Both residuals sit UNDER the published maximum, which is the correct side: a
+#   typical part drops less than the guaranteed limit, and a model fitted to the
+#   limit that then predicted MORE than the limit would be wrong twice over.
+# rs = 2.72 Ohm is high for a diode and that is expected on a 215 mA die in
+#   SOT23; it is where the 50 mA and 150 mA rows' curvature actually lives.
+# NOT MODELLED: the two diodes are stamped as one two-terminal device per pin
+#   pair by whichever role the binder assigns. A board that uses both diodes
+#   independently gets both, but nothing couples them, so shared-cathode thermal
+#   interaction and the 125 mA per-DEVICE limit (against 215 mA per DIODE) are
+#   not enforced across the pair.
+[[models]]
+id = "bav70"
+kind = "diode"
+description = "BAV70 dual common-cathode switching diode, 100 V, 215 mA/diode, SOT23"
+
+[models.match]
+value_re = "(?i)^BAV70[A-Z0-9,]*$"
+
+[models.params]
+is  = 1.0812e-15  # fitted with rs to the 1 mA and 150 mA VF maxima
+n   = 1.0         # pinned: an ordinary silicon junction, see the note above
+rs  = 2.72125     # fitted; carries the 1 mA to 150 mA rise
+cjo = 1.5e-12     # Cd max at VR = 0 V, 1 MHz. Genuinely zero-bias.
+vj  = 0.7         # assumed, a silicon junction potential; the sheet gives none
+m   = 0.5         # assumed abrupt-junction grading coefficient, ditto
+tt  = 4.0e-9      # from trr max 4 ns; a minority-carrier device, unlike the
+                  # Schottkys above, so stored charge is real here
+bv  = 100.0       # VRRM
+
+[models.pins]
+# Table 2 Pinning, SOT23 (TO-236AB). COMMON CATHODE on pin 3.
+"1" = "anode"
+"2" = "anode"
+"3" = "cathode"
+
+[models.ratings]
+max_current_a = 0.215          # IF per diode, Tamb <= 25 C (125 mA per device)
+max_surge_current_a = 1.0      # IFSM at tp = 1 ms (4 A at 1 us, 0.5 A at 1 s)
+max_power_w = 0.25             # Ptot
+max_voltage_v = 100.0          # VR = VRRM
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 500.0       # Rth(j-a) max, free air, FR4 standard footprint

@@ -122,10 +122,35 @@ lib_id = "Device:L_Small"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+# A ferrite bead is an inductor above a few MHz and a small resistor at DC, and
+# a DC/transient solver can only honestly carry the resistor. What follows is
+# that resistor, and the match rule below is wider than the original lib_id
+# because of how the corpus actually labels these parts: the value string is the
+# IMPEDANCE RATING, not a part number. `100@100MHz 3A` (42 instances on MNT
+# Reform), `220@100MHz 1.4A` (21), `FB0805/600R/2A` (30 across the Olimex
+# boards), `L_Ferrite` (24 on LumenPnP), `FerriteBead`. None of those names a
+# manufacturer or an ordering code, so none of them can be resolved to its own
+# DCR, and every one of them was falling through as an unresolved part.
+#
+# THE DCR BELOW IS A REPRESENTATIVE PART'S, NOT THE BOARD'S. It is the figure
+# this entry has always carried (Murata BLM18AG601SN1D, Rdc 0.35 Ohm typical for
+# a 0603 600 Ohm-at-100 MHz bead) and it is now being applied to beads whose
+# rating differs from that one. Across the mainstream 0402-to-0805 signal-bead
+# range DCR runs from roughly 0.1 to 0.6 Ohm, so 0.35 Ohm is inside a factor of
+# ~3 of any of them; for a bead in series with a supply rail carrying under an
+# amp that is tens of millivolts of error, which is why this is judged worth
+# doing rather than leaving the parts open. It is NOT good enough for a bead
+# carrying several amps, where DCR and the rail drop through it are the point:
+# a 3 A-rated bead is a lower-DCR part than this and the model will over-state
+# its drop.
+#
+# NOT MODELLED, and it is the entire reason these parts are fitted: the
+# impedance above a few MHz, which is what actually attenuates the noise the
+# designer put the bead there to stop. This entry is a DC stand-in.
 [[models]]
 id = "ferrite_bead"
 kind = "passive"
-description = "Ferrite bead, modelled as series RL"
+description = "Ferrite bead, DC resistance only (representative 0.35 Ohm; see note)"
 
 [models.match]
 lib_id = "Device:Ferrite_Bead"
@@ -155,10 +180,156 @@ lib_id = "Device:Crystal"
 
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Each of the three rating strings below was traced to the mainstream part that
+# matches its rating EXACTLY, and carries that part's own published DC
+# resistance. This is a step up from the representative 0.35 Ohm above: the
+# board still names no part number, but a bead is specified by impedance,
+# package and rated current, and those three together pin the DCR to within the
+# spread of one product line.
+#
+# EVERY DCR HERE IS A MAXIMUM, NOT A TYPICAL, and that is not a choice. Murata
+# publishes no typical DCR for these series at all: the spec sheets carry two max
+# columns, an initial one and a higher one measured after reliability testing and
+# reflow. The initial max is used below. A real part therefore has SOMEWHAT LESS
+# resistance than modelled, so any rail drop through one of these is an upper
+# bound, which is the right direction for a check to err.
+
+[[models]]
+id = "ferrite_bead_220r_1a4"
+kind = "passive"
+description = "Ferrite bead 220 Ohm @ 100 MHz, 1.4 A, 0603 (Murata BLM18PG221SH1D)"
+
+[models.match]
+# 21 instances on the MNT Reform boards as "220@100MHz 1.4A", plus the explicit
+# part number "BLM18PG221SH1D" (3 instances on the same boards). The rating
+# string matches that part exactly on all three axes (220 Ohm, 1.4 A, 0603), so
+# this is very likely the literal part rather than a stand-in.
+# Source: Murata reference spec JENF243A_9101X-01, BLM18 series, and Murata's
+#   live parametric entry for BLM18PG221SH1D. Impedance 220 Ohm +-25% at 100 MHz,
+#   rated current 1400 mA, DCR 0.10 Ohm max initial (0.14 Ohm max after test).
+value_re = "(?ix) ^( 220 \\s*@\\s* 100 \\s*MHZ .* | BLM18PG221SH1D )$"
+
+[models.params]
+ohms = 0.10   # DCR max, initial. Murata publishes no typical; see the note above.
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ferrite_bead_100r_3a"
+kind = "passive"
+description = "Ferrite bead 100 Ohm @ 100 MHz, 3 A, 0603 (Murata BLM18SP101SH1D)"
+
+[models.match]
+# 42 instances on the MNT Reform boards as "100@100MHz 3A", on an
+# Inductor_SMD:L_0603_1608Metric footprint.
+# Source: Murata reference spec JENF243A_9101X-01, BLM18_H series. Impedance
+#   100 Ohm +-25% at 100 MHz, rated current 3700 mA at 85 C ambient (2500 mA at
+#   125 C), DCR 0.022 Ohm max initial (0.026 max after test). Note this series
+#   tabulates derated current at 85 C and 125 C rather than a flat 25 C figure.
+value_re = "(?ix) ^( 100 \\s*@\\s* 100 \\s*MHZ .* | BLM18SP101SH1D )$"
+
+[models.params]
+ohms = 0.022  # DCR max, initial
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ferrite_bead_600r_2a"
+kind = "passive"
+description = "Ferrite bead 600 Ohm @ 100 MHz, 2 A, 0805 (Murata BLM21SP601SH1D)"
+
+[models.match]
+# 30 instances across the Olimex ESP32-EVB revisions as "FB0805/600R/2A"
+# (L1, L3, L4), Olimex's own spelling of size / impedance / current.
+# Source: Murata reference spec JENF243A_9102S-01, BLM21_H series. Impedance
+#   600 Ohm +-25% at 100 MHz, rated current 2300 mA at 85 C ambient, DCR
+#   0.060 Ohm max initial (0.074 max after test).
+# WHY THE "SP" CURRENT CLASS: the ordinary BLM21PG601SH1D is rated 1400 mA and
+#   does not meet the board's stated 2 A, so it would be the wrong part to take
+#   a DCR from. The SP class is the 2 A-capable one.
+value_re = "(?ix) ^( FB0805 / 600R / 2A | BLM21SP601SH1D )$"
+
+[models.params]
+ohms = 0.060  # DCR max, initial
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ferrite_bead_generic_rated"
+kind = "passive"
+description = "Ferrite bead named only by a rating this file has not traced (representative DCR)"
+
+[models.match]
+# The leftovers: `L_Ferrite` (24 instances on LumenPnP), `FerriteBead`, and any
+# other <Z>@<f> rating not covered by the three traced entries above. These fall
+# back on the representative 0.35 Ohm and the caveats on `ferrite_bead` apply in
+# full.
+value_re = '''(?ix) ^(
+    [0-9]+ \\s* @ \\s* [0-9]+ \\s* MHZ .*
+  | FB [0-9]{4} / .*
+  | L?_?FERRITE ([_ ]?BEAD)?
+  | FERRITE[_ ]?BEAD
+)$'''
+
+[models.params]
+ohms = 0.35   # representative only; see the note on `ferrite_bead` above
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ferrite_bead_footprint"
+kind = "passive"
+description = "Ferrite bead / small inductor on an Inductor_SMD footprint, DC resistance only"
+
+[models.match]
+# Murata's own part numbers appear on the corpus boards too (BLM18PG221SH1D,
+# BLM18PG121SN1D), and so do house codes. Matching the BLM/MPZ/742-and-744
+# (Wurth) prefixes catches the named ones without claiming a per-part DCR.
+value_re = "(?ix) ^( BLM[0-9]{2}[A-Z0-9]+ | MPZ[0-9]{4}[A-Z0-9]+ | IND[0-9]{4}_MURATA_[A-Z0-9]+ )$"
+
+[models.params]
+ohms = 0.35   # representative only; see the note on `ferrite_bead` above
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A fuse before it blows is a piece of wire, and that is all this models. The
+# 0.01 Ohm has always been here; what is new is the match rule, because the
+# corpus labels fuses by their RATING rather than by a part number: `6V 0.5A`
+# (18 instances on Lily58 and the SparkFun Pro Micro), `6V/0.5A` (17 on the
+# RedBoard), `500mA`, `0.1A`, `0.2A`, `25A`, and Littelfuse's `0157004.DR`.
+#
+# WHAT THIS DOES NOT DO, and it matters: a fuse's whole job is to open, and this
+# entry cannot. There is no I2t, no melting integral, no trip. A simulated board
+# with a dead short through this part conducts happily. Nor is the 0.01 Ohm a
+# datasheet figure for any specific part: real cold resistances range from about
+# 2 mOhm on a 25 A blade to several ohms on a 100 mA polyfuse, and 0.01 Ohm is
+# the low-resistance end of that range, chosen so the fuse does not silently
+# become the dominant series element in a rail it is only supposed to protect.
+# A board whose fuse is genuinely a multi-ohm PTC will show a rail drop this
+# model does not.
 [[models]]
 id = "fuse"
 kind = "passive"
-description = "Fuse, zero-ohm wire (pre-fault)"
+description = "Fuse, low-ohm wire (pre-fault; cannot open, see note)"
 
 [models.match]
 lib_id = "Device:Fuse"
@@ -208,6 +379,229 @@ description = "Through-hole inductor (footprint-matched)"
 
 [models.match]
 footprint_re = "^Inductor_THT:"
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# The fuses below carry their own part's published cold resistance instead of
+# the 0.01 Ohm stand-in, because for two of them the rating string traced to an
+# exact part and the real figure is an order of magnitude larger. A 0.5 A / 6 V
+# polyfuse is 0.15 Ohm, not 0.01: at its own hold current that is 75 mV of rail
+# drop, which is the difference between a 5 V USB rail arriving at 4.93 V and
+# arriving at 4.995 V. Getting that wrong the optimistic way is exactly the kind
+# of quiet error a board check exists to catch.
+#
+# ALL OF THESE STILL CANNOT OPEN. See the note on `fuse` above: there is no I2t
+# and no trip, so a simulated short through any of them conducts happily.
+
+[[models]]
+id = "polyfuse_0805l050"
+kind = "passive"
+description = "0.5 A / 6 V resettable PTC, 0805 (Littelfuse 0805L050), 0.15 Ohm"
+
+[models.match]
+# 18 instances on the Lily58 and SparkFun Pro Micro as "6V 0.5A", 17 more on the
+# SparkFun RedBoard as "6V/0.5A", plus "6V/500mA". The 0.5 A hold / 6 V rating
+# is an exact match for the Littelfuse 0805L050, and 6 V is a giveaway: it is a
+# polyfuse voltage rating, not a fuse one.
+# Source: Littelfuse "POLY-FUSE Resettable PTCs, Surface Mount 0805L Series"
+#   datasheet Rev 03/22/17. IH 0.50 A, IT 1.00 A, Vmax 6 Vdc, Rmin 0.150 Ohm
+#   (initial, unsoldered, 20 C), R1max 0.850 Ohm after trip or reflow, max time
+#   to trip 0.10 s at 8.00 A.
+value_re = "(?ix) ^( 6 \\s*V \\s* /? \\s* (0\\.5\\s*A|500\\s*mA) | 0805L050[A-Z]* )$"
+
+[models.params]
+# Rmin 0.150 Ohm is the INITIAL resistance and the only initial figure the
+# datasheet publishes; a part that has been through reflow (i.e. every part on a
+# real board) sits somewhere between it and the 0.850 Ohm R1max. The initial
+# figure is carried as the optimistic bound, so a rail drop through this is a
+# LOWER bound rather than an upper one, which is the opposite direction from the
+# ferrite beads above and worth knowing.
+ohms = 0.150
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "fuse_nano2_157"
+kind = "passive"
+description = "Littelfuse 157 series Nano2 fuse, 4 A / 125 V, 0.0163 Ohm"
+
+[models.match]
+# LumenPnP F1..F3, value "0157004.DR".
+# Source: Littelfuse "157 Series Standard Nano2 Fuse and Clip Assembly"
+#   datasheet Rev BA, 24 September 2021. 4.0 A, 125 V, nominal cold resistance
+#   0.0163 Ohm (defined as measured below 10% of rated current at 23 C, which is
+#   the cold figure this wants), melting I2t 3.152 A^2s at 8 ms, interrupting
+#   rating 50 A at 125 VAC/VDC and 300 A at 32 VDC.
+value_re = "(?i)^0157[0-9]{3}\\.[A-Z]{2}$"
+
+[models.params]
+ohms = 0.0163   # nominal cold resistance; the datasheet gives no min/max
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "ptc_0zcj0075"
+kind = "passive"
+description = "Bel Fuse 0ZCJ 0.75 A resettable PTC, 1206, 0.09 Ohm"
+
+[models.match]
+# MNT Reform F1, value "0ZCJ0075AF2E", 6 instances.
+# Source: Bel Fuse 0ZCJ Series datasheet Rev. 0ZCJ Sep2025. IH 0.75 A, IT 1.50 A,
+#   Vmax 16 Vdc, Rmin 0.090 Ohm initial, R1max 0.290 Ohm one hour after trip or
+#   after reflow, max time to trip 0.20 s at 8.00 A.
+value_re = "(?i)^0ZCJ[0-9]{4}[A-Z0-9]*$"
+
+[models.params]
+# As with the 0805L050 above, Rmin is the only initial figure published and a
+# reflowed part sits between it and R1max.
+ohms = 0.090
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "fuse_rated"
+kind = "passive"
+description = "Fuse named only by a rating this file has not traced (low-ohm wire, cannot open)"
+
+[models.match]
+# The leftovers: a bare current rating with no voltage and no part number
+# ("500mA", "25A", "0.2A"), and the generic symbol names. ANDed with a fuse
+# footprint so a bare "500mA" on something that is not a fuse cannot bind here.
+# These keep the 0.01 Ohm stand-in and the caveats on `fuse` above apply.
+value_re = '''(?ix) ^(
+    [0-9]+(\\.[0-9]+)? \\s* V \\s* /? \\s* [0-9]+(\\.[0-9]+)? \\s* (M?A)
+  | [0-9]+(\\.[0-9]+)? \\s* (MA|A)
+  | FUSE(_[0-9]?TERMINAL)?
+)$'''
+footprint_re = "(?i)fuse"
+
+[models.params]
+ohms = 0.01
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "inductor_imc1210"
+kind = "passive"
+description = "Vishay Dale IMC-1210 wirewound molded inductor, 10 uH, DCR 2.1 Ohm"
+
+[models.match]
+# MNT Reform L2, value "IMC1210ER100K", on an Inductor_SMD:L_1210_3225Metric
+# footprint. ER100K decodes as 10 uH +-10%.
+# Source: Vishay document 34043, "IMC-1210". L 10 uH +-10%, DCR 2.1 Ohm max
+#   (no typical published), rated DC current 189 mA, SRF 33 MHz min.
+# NOTE the DCR here is 2.1 Ohm, two orders of magnitude above the ferrite beads
+# above. This is a real wirewound inductor on a 189 mA rail, not a bead, and its
+# series resistance is a genuine circuit element rather than a rounding error.
+value_re = "(?i)^IMC1210[A-Z]{2}[0-9R]+[A-Z]$"
+
+[models.params]
+ohms = 2.1    # DCR max; Vishay publishes no typical
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Crystals and crystal oscillators.
+#
+# The engine already treats a crystal as a part it skips rather than solves (the
+# bind report shows `crystal_fallback` resolving to "skipped (ignored)"), so what
+# these entries buy is not physics: it is the difference between a board report
+# that says "unresolved part, defaulting to OPEN" and one that says "crystal,
+# skipped". The corpus was full of the former, because the existing `crystal`
+# entry matches only `Device:Crystal` by lib_id and a layout-only board has no
+# lib_id at all: `Q50MHz/25ppm/3V/4P/5x3.2mm` (11 boards),
+# `Q12MHz/20pF/30ppm/2P/HC-49SM(SMD)` (9), `32.768`, `32.768KHz`, `40MHz`.
+#
+# DELIBERATELY NOT MODELLED: everything a crystal does. There is no motional
+# arm, no ESR, no load-capacitance sensitivity and no startup behaviour, so
+# nothing here can tell you whether an oscillator will actually start, which is
+# the question a crystal on a board usually raises. Naming the part is all this
+# claims to do.
+
+[[models]]
+id = "crystal_footprint"
+kind = "passive"
+description = "Quartz crystal or crystal oscillator, matched by footprint (skipped in simulation)"
+
+[models.match]
+footprint_re = "(?ix) (^Crystal:) | (^Oscillator[_A-Za-z]*:) | Crystal[_-]?SMD | HC-?49 | \bXTAL\b | [0-9]{4}-[24]P_HC"
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "crystal_value"
+kind = "passive"
+description = "Quartz crystal named by its frequency spec (skipped in simulation)"
+
+[models.match]
+# Olimex spells the whole spec into the value ("Q50MHz/25ppm/3V/4P/5x3.2mm"),
+# other boards use a bare frequency. The leading Q and the frequency unit are
+# the discriminators; a bare number with no unit is NOT matched.
+value_re = '''(?ix) ^(
+    Q [0-9]+(\.[0-9]+)? \s* (K|M)?HZ .*
+  | [0-9]+(\.[0-9]+)? \s* (K|M)?HZ
+  | 32\.768 (\s*KHZ)?
+  | ASEK-32\.768KHZ[A-Z0-9-]*
+  | Oscillator_[0-9.]+k?Hz_.*
+)$'''
+
+[models.pins]
+"1" = "a"
+"2" = "b"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# A net tie is a deliberate short between two nets the designer wants the DRC to
+# treat as separate (an analog and a digital ground, usually) and the copper to
+# treat as one. 52 instances across the Hunt boards and the KiCad demos.
+#
+# THIS IS NOT AN `ignore`, AND THE DISTINCTION IS THE WHOLE POINT. An ignored
+# part is an open circuit, and ignoring a net tie would split a ground plane in
+# two in simulation and then report every consequence of that split as a fault on
+# a board that is electrically fine. A net tie is a resistor, and its value is
+# the resistance of a few square millimetres of copper.
+#
+# `ohms = 0.001` is not a datasheet figure, because a net tie has no datasheet.
+# It is a millohm, which is below the resistance of any real trace on either side
+# of it, chosen deliberately non-zero: a true 0 Ohm branch is a singular element
+# for a nodal solver, and 1 mOhm is small enough to be invisible against
+# everything around it.
+
+[[models]]
+id = "net_tie"
+kind = "passive"
+description = "Net tie: a deliberate copper short between two nets (1 mOhm)"
+
+[models.match]
+footprint_re = "(?i)^NetTie:|NetTie-[0-9]|Net_?Tie"
+
+[models.params]
+ohms = 0.001
 
 [models.pins]
 "1" = "a"
