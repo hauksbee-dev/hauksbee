@@ -45,6 +45,7 @@ mod alloc_audit;
 #[global_allocator]
 static AUDIT_ALLOC: alloc_audit::CountingAlloc = alloc_audit::CountingAlloc;
 
+pub mod blame;
 mod bypass;
 mod census;
 mod cmatrix;
@@ -66,6 +67,7 @@ mod system;
 mod transient;
 
 pub use ac::{has_dedicated_ac_source, AcAnalysis, AcPoint, AcResponse, AcSpec, Sweep};
+pub use blame::{blame_clause, stiff_links, StiffLink};
 pub use cmatrix::ComplexSystem;
 pub use diagnostics::{peek_strategy_activations, take_strategy_activations};
 pub use linear::LinearIsland;
