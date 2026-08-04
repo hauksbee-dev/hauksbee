@@ -82,13 +82,31 @@ for b in doc.get("board", []):
         b.get("subdir", ""),
         b.get("license", "unknown"),
         "1" if b.get("license_confirmed", True) else "0",
+        # Where the board lands under the corpus root. Defaults to the id; a
+        # revision pair overrides it so both halves group under one directory.
+        b.get("dest", b["id"]),
+        b.get("sha256", ""),
         b.get("name", b["id"]),
     ]))
 PY
 }
 
 MANIFEST_LINES="$(read_manifest)"
-DEFAULT_DIR="$(printf '%s\n' "$MANIFEST_LINES" | awk -F'\x1f' '$1=="DEFAULT_DIR"{print $2}')"
+
+# Read DEFAULT_DIR with the same `IFS=$'\x1f' read` the board loop below uses,
+# and for the same reason: portability. This was `awk -F'\x1f'`, and the one-true
+# awk that ships with macOS takes that pattern literally rather than as the
+# separator byte, so the field split never happened, DEFAULT_DIR came back
+# EMPTY, and DIR collapsed to "${HAUKSBEE_ROOT}/" - the repository root. Every
+# board landed loose in the checkout, `board-corpus/` was never created, and so
+# every corpus-gated test skipped while the fetch reported success. Bash's own
+# $'\x1f' is unambiguous on every platform, and it drops the awk dependency.
+DEFAULT_DIR=""
+while IFS=$'\x1f' read -r tag value _rest; do
+  [ "$tag" = "DEFAULT_DIR" ] || continue
+  DEFAULT_DIR="$value"
+done <<< "$MANIFEST_LINES"
+[ -n "$DEFAULT_DIR" ] || die "manifest has no meta.default_dir and none was parsed"
 
 if [ -z "$DIR" ]; then
   DIR="${HAUKSBEE_CORPUS_DIR:-${HAUKSBEE_ROOT}/${DEFAULT_DIR}}"
@@ -181,20 +199,55 @@ fetch_git() {
   # back to its origin without re-reading the manifest.
   printf '%s\n' "$got" > "$dest.partial/.hauksbee-rev"
   rm -rf "$dest.partial/.git"
+  mkdir -p "$(dirname "$dest")"
   mv "$dest.partial" "$dest"
 }
 
+# sha256 of a file, on either a GNU or a macOS box. `sha256sum` is coreutils and
+# absent from a stock macOS; `shasum -a 256` ships with it. Prints the bare hex.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | cut -d' ' -f1
+  else
+    return 1
+  fi
+}
+
+# A zip has no commit to pin, so its sha256 is the pin. This used to be a bare
+# curl-and-unzip with nothing checked, which meant two of the corpus boards were
+# whatever the URL served today while every git-hosted board was pinned to a
+# revision and verified against it. An archive re-published upstream could change
+# our measured results with no trace. Refuse an unpinned zip outright rather than
+# fetch it and hope: a corpus entry that cannot be reproduced is not a pin.
 fetch_zip() {
-  local id="$1" url="$2" dest="$3"
+  local id="$1" url="$2" want_sha="$3" dest="$4"
   command -v curl >/dev/null 2>&1 || die "curl is required for $id"
   command -v unzip >/dev/null 2>&1 || die "unzip is required for $id"
+  if [ -z "$want_sha" ]; then
+    err "$id: zip-hosted boards need a sha256 in corpus.toml; refusing an unverified download"
+    return 1
+  fi
   rm -rf "$dest.partial"
   mkdir -p "$dest.partial"
   local zip="$dest.partial/download.zip"
   curl -fsSL --retry 3 -o "$zip" "$url" || return 1
+  local got_sha
+  got_sha="$(sha256_of "$zip")" || { err "$id: no sha256sum or shasum available to verify the download"; return 1; }
+  if [ "$got_sha" != "$want_sha" ]; then
+    err "$id: sha256 mismatch"
+    err "  expected $want_sha"
+    err "  got      $got_sha"
+    err "  the upstream archive changed, or the download was corrupted. Do not"
+    err "  update the hash without establishing which."
+    return 1
+  fi
   unzip -q -o "$zip" -d "$dest.partial" || return 1
   rm -f "$zip"
-  printf '%s\n' "$url" > "$dest.partial/.hauksbee-rev"
+  # Record the pin, not just the URL: a URL alone cannot be checked later.
+  printf '%s\nsha256:%s\n' "$url" "$want_sha" > "$dest.partial/.hauksbee-rev"
+  mkdir -p "$(dirname "$dest")"
   mv "$dest.partial" "$dest"
 }
 
@@ -209,7 +262,7 @@ else
   mkdir -p "$DIR"
 fi
 
-while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed name; do
+while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed dest_rel sha256 name; do
   [ "$tag" = "BOARD" ] || continue
   wanted "$id" || continue
   total=$((total + 1))
@@ -229,18 +282,19 @@ while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed name; do
     continue
   fi
 
-  dest="$DIR/$id"
+  dest="$DIR/${dest_rel:-$id}"
   if [ -d "$dest" ] && [ "$FORCE" = 0 ]; then
     ok "$id already present"
     skipped=$((skipped + 1))
     continue
   fi
   if [ "$FORCE" = 1 ]; then rm -rf "$dest"; fi
+  mkdir -p "$(dirname "$dest")"
 
   info "$id  <- $url${rev:+ @ $rev}"
   case "$kind" in
-    git) fetch_git "$id" "$url" "$rev" "$dest" || { failed=$((failed+1)); FAILED_IDS+=("$id"); rm -rf "$dest.partial"; warn "$id FAILED"; continue; } ;;
-    zip) fetch_zip "$id" "$url" "$dest"       || { failed=$((failed+1)); FAILED_IDS+=("$id"); rm -rf "$dest.partial"; warn "$id FAILED"; continue; } ;;
+    git) fetch_git "$id" "$url" "$rev" "$dest"          || { failed=$((failed+1)); FAILED_IDS+=("$id"); rm -rf "$dest.partial"; warn "$id FAILED"; continue; } ;;
+    zip) fetch_zip "$id" "$url" "$sha256" "$dest"       || { failed=$((failed+1)); FAILED_IDS+=("$id"); rm -rf "$dest.partial"; warn "$id FAILED"; continue; } ;;
     *) warn "$id: unknown kind '$kind'"; failed=$((failed+1)); FAILED_IDS+=("$id"); continue ;;
   esac
 
