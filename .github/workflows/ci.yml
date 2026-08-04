@@ -130,3 +130,44 @@ jobs:
             echo "See docs/about/release-and-licensing.md." >&2
             exit 1
           fi
+
+  speed-gate:
+    name: speed gate (faster-than-ngspice claim)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      # The oracle. Without it the gate SKIPS, and a skipped gate defends
+      # nothing, so HAUKSBEE_REQUIRE_NGSPICE below turns a missing or broken
+      # install into a red build rather than a quiet green.
+      - name: install ngspice (the oracle the speed claim is measured against)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ngspice
+          ngspice --version | head -2
+      # README and docs/about/COMPARISON.md market a speed advantage over
+      # ngspice. This job is what makes that claim defended on every push
+      # instead of resting on #[ignore]d benches that print and assert nothing.
+      # Release build: a debug-profile ratio is not a claim anyone ships.
+      #
+      # A red here means either the solver regressed or the marketed number no
+      # longer holds. In the second case the DOCS change, never the floors.
+      - name: cargo test --release --test speed_gate
+        env:
+          HAUKSBEE_REQUIRE_NGSPICE: "1"
+        run: |
+          if ! cargo test --release -p hauksbee-solve --test speed_gate -- --nocapture; then
+            echo "::error title=Speed claim not defended::The faster-than-ngspice gate failed."
+            echo "Either the solver regressed, or the marketed speed/accuracy numbers no" >&2
+            echo "longer hold. If the latter, change the docs, not the recorded floors." >&2
+            exit 1
+          fi
+      # The measured table the docs cite. Kept as an artifact so a reviewer can
+      # read the actual numbers from the run that gated the commit.
+      - name: upload the measured results table
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: speed-gate-results
+          path: docs/about/speed-gate-results.md
+          if-no-files-found: warn
