@@ -68,6 +68,13 @@ pub enum ExtractError {
     Parse(#[from] forge_sexpr::ParseError),
     #[error("xml: {0}")]
     Xml(String),
+    /// The file parsed as its format but carries content that cannot be
+    /// analysed truthfully, so continuing would produce a confident wrong
+    /// answer rather than an error (a coordinate that is not a finite number is
+    /// the case this exists for). Already phrased as a whole human sentence,
+    /// including what to do next.
+    #[error("{0}")]
+    Corrupt(String),
     #[error("altium: {0}")]
     Altium(String),
     #[error("not a {expected} file (root is {found:?})")]
@@ -87,6 +94,38 @@ pub enum ExtractError {
     /// A caller-supplied reference designator does not exist on the board.
     #[error("{0}")]
     UnknownReference(String),
+}
+
+/// Refuse a file still carrying Git merge-conflict markers.
+///
+/// The s-expression formats swallow these without complaint: `<<<<<<<` and
+/// `>>>>>>>` are legal bare atoms, so a conflicted board parses, both sides of
+/// the conflict land in the netlist at once, and every number in the report is
+/// computed over a board that never existed. The file is not a board yet, and
+/// the fix is to finish the merge, so say exactly that.
+///
+/// The markers are matched at the start of a line with the exact seven-character
+/// run Git writes, so a board with a `<<<` silkscreen label or a `=======`
+/// divider in a comment is unaffected.
+pub(crate) fn reject_merge_conflict(text: &str) -> Result<(), ExtractError> {
+    for (i, line) in text.lines().enumerate() {
+        let is_marker = line.starts_with("<<<<<<< ")
+            || line.starts_with(">>>>>>> ")
+            || line == "======="
+            || line.starts_with("||||||| ");
+        if is_marker {
+            return Err(ExtractError::Corrupt(format!(
+                "this file still has an unresolved Git merge conflict (marker \
+                 '{}' on line {}). Both sides of the conflict are in the file, so \
+                 anything read out of it would describe a board that does not exist. \
+                 Resolve the conflict (`git checkout --theirs`/`--ours`, or open it \
+                 in KiCad and re-save), then retry",
+                line.chars().take(7).collect::<String>(),
+                i + 1
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// One electrical net. `id` is the KiCad net number (0 = the unconnected

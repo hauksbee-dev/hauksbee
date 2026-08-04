@@ -1,0 +1,19 @@
+(kicad_pcb (version 20221018) (generator pcbnew)
+  (general (thickness 1.6))
+  (paper "A4")
+  (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+  (net 0 "")
+<<<<<<< HEAD
+  (net 1 "GND")
+=======
+  (net 1 "GROUND")
+>>>>>>> rename-nets
+  (net 2 "VCC")
+  (footprint "R_0603" (layer "F.Cu") (at 10 10)
+    (property "Reference" "R1")
+    (property "Value" "10k")
+    (pad "1" smd rect (at -0.8 0) (size 0.9 0.95) (layers "F.Cu") (net 1 "GND"))
+    (pad "2" smd rect (at 0.8 0) (size 0.9 0.95) (layers "F.Cu") (net 2 "VCC"))
+  )
+  (segment (start 10 10) (end 20 10) (width 0.25) (layer "F.Cu") (net 1))
+)
