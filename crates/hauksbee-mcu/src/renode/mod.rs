@@ -2184,13 +2184,27 @@ mod tests {
             );
         }
 
-        // Unverified platforms carry NO dir map: a wrong one would mask every
-        // edge to zero, so absence (conservative, direction unobservable) is
-        // the required state until a live Renode verifies the register.
-        for c in [RenodeConfig::rp2040(), RenodeConfig::sifive_fe310()] {
-            for p in &c.ports {
-                assert_eq!(p.dir, None, "unverified platform must not claim a dir map");
-            }
+        // RP2040 carries the SIO GPIO_OE map, and only because it is verified:
+        // real pico-sdk firmware calling gpio_set_dir() was run and GPIO_OE read
+        // back 1<<25 (tests/renode_rp2040.rs re-proves it live).
+        let rp = RenodeConfig::rp2040();
+        for p in &rp.ports {
+            assert_eq!(
+                p.dir,
+                Some(DirMap {
+                    offset: 0x20,
+                    encoding: DirEncoding::DirBits
+                }),
+                "RP2040 SIO bank must carry the GPIO_OE dir map"
+            );
+        }
+
+        // A platform whose direction register read-back is NOT verified carries
+        // NO dir map: a wrong one would mask every edge to zero, so absence
+        // (conservative, direction unobservable) is the required state until a
+        // live Renode verifies the register.
+        for p in &RenodeConfig::sifive_fe310().ports {
+            assert_eq!(p.dir, None, "unverified platform must not claim a dir map");
         }
     }
 
@@ -2203,9 +2217,14 @@ mod tests {
         let f103 = RenodeConfig::stm32f103();
         assert!(dir_covers_ports(&f103, None));
         assert!(dir_covers_ports(&f103, Some(&['A', 'C'])));
+        // RP2040's single SIO bank now carries a verified GPIO_OE map, so its
+        // one port is covered whether or not the engine narrows the hint.
         let rp = RenodeConfig::rp2040();
-        assert!(!dir_covers_ports(&rp, None));
-        assert!(!dir_covers_ports(&rp, Some(&['0'])));
+        assert!(dir_covers_ports(&rp, None));
+        assert!(dir_covers_ports(&rp, Some(&['0'])));
+        // The FE310 stands in for "no verified dir register": still uncovered.
+        let fe = RenodeConfig::sifive_fe310();
+        assert!(!dir_covers_ports(&fe, None));
         // A mixed config: coverage decided per polled port.
         let mut mixed = RenodeConfig::stm32f4_discovery();
         mixed.ports[1].dir = None; // strip port B's map
@@ -2279,16 +2298,28 @@ mod tests {
     fn rp2040_config_shape() {
         let c = RenodeConfig::rp2040();
         assert_eq!(c.machine, "rp2040");
-        assert_eq!(c.platform, "@platforms/cpus/rp2040.repl");
+        // The platform lives in the support bundle, not beside Renode: no
+        // Renode release carries an rp2040 platform, so `{support}` resolving
+        // into the unpacked bundle is the whole point.
+        assert_eq!(c.platform, "@{support}/rp2040.repl");
+        assert_eq!(c.support_bundle.as_deref(), Some("rp2040"));
         assert_eq!(c.expected_e_machine, crate::elf::EM_ARM);
         assert_eq!(c.frequency_hz, 125_000_000);
         // One 30-pin bank read at SIO GPIO_OUT (offset 0x10 from SIO_BASE), NOT
         // a port ODR; the honest SIO adaptation of the ODR-offset discipline.
+        // GPIO_OE at 0x20 supplies direction, verified live (see the descriptor).
         assert_eq!(c.ports.len(), 1);
         assert_eq!(c.ports[0].letter, '0');
         assert_eq!(c.ports[0].peripheral, "sio");
         assert_eq!(c.ports[0].odr_offset, 0x10);
         assert_eq!(c.ports[0].width, 30);
+        assert_eq!(
+            c.ports[0].dir,
+            Some(DirMap {
+                offset: 0x20,
+                encoding: DirEncoding::DirBits
+            })
+        );
         // Nothing unverified is claimed: no ADC map, no bus controllers.
         assert!(c.adc_channels.is_empty());
         assert!(c.i2c_controllers.is_empty());

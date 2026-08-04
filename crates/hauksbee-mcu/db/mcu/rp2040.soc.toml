@@ -58,7 +58,13 @@
 #       ([[soc.adc]] is absent below), so an analog voltage on an ADC pin does
 #       not reach the firmware. Unmapped channels take the merged policy's LOUD
 #       once-per-channel drop, never a fake count.
-#   I2C / SPI bus-slave bridges      NOT WIRED. See [soc.i2c] / [soc.spi].
+#   I2C bus-slave bridge             PROVEN END-TO-END on i2c0 and i2c1. Real
+#       pico-sdk firmware writes a register index to a host-modelled slave and
+#       reads two bytes back, and prints what the host sent
+#       (tests/renode_rp2040_bus.rs). Both directions, not just registration.
+#   SPI bus-slave bridge             NOT POSSIBLE with this model. See
+#       [soc.spi] below for the root cause; it is a property of the vendored
+#       PL022, not a missing descriptor entry.
 #   Second core (cpu1)               PRESENT, NOT EXERCISED. See below.
 #   PIO                              ABSENT. The upstream PIO model needs a
 #       native library shipped x86-64-only; db/mcu/rp2040/README.md explains.
@@ -112,18 +118,23 @@ width = 30
 dir = { offset = 0x20, encoding = "dir_bits" }
 
 [soc.i2c]
-# EMPTY DELIBERATELY. i2c0/i2c1 exist in the platform (I2C.RP2040I2C is
-# vendored and instantiated), so firmware talking to them gets a modelled
-# controller. What is not established is that hauksbee's bus-slave bridge
-# (a generated C# II2CPeripheral registered onto the controller, as the F103
-# thermostat and nRF52840 use) attaches to THIS controller model and routes
-# byte-for-byte. Listing a controller here installs that bridge, and a bridge
-# that attaches but silently drops traffic reads as "the sensor answered
-# nothing", which is worse than refusing. Prove it with a two-sided bus test
-# first, then list the controllers.
-controllers = []
+# I2C.RP2040I2C is a SimpleContainer<II2CPeripheral> that dispatches to the child
+# registered at the addressed slave, which is exactly what hauksbee's generated
+# bridge peripheral needs. Proven live, both directions, with real pico-sdk
+# firmware: tests/renode_rp2040_bus.rs.
+controllers = ["i2c0", "i2c1"]
 
 [soc.spi]
-# Same reasoning as [soc.i2c]. spi0/spi1 are SPI.PL022 from the bundle, present
-# in the platform but not proven to host hauksbee's SPI bridge.
+# EMPTY, AND IT CANNOT BE FILLED with this model. SPI.PL022 in
+# db/mcu/rp2040/peripherals/rp2040_spi.cs names
+# NullRegistrationPointPeripheralContainer<ISPIPeripheral> as its base class but
+# never calls RegisteredPeripheral: the word `Transmit` does not occur in the
+# file. Its Step() bit-bangs the transfer onto GPIO pins and samples MISO from a
+# GPIO pin, which is how it interworks with PIO. A slave registered at the null
+# registration point, which is what hauksbee's SPI bridge is, is never invoked,
+# so listing a controller here would install a bridge that silently sees nothing
+# and make a bound SPI sensor read as "answered zeroes". Observed exactly that:
+# tests/renode_rp2040_bus.rs::rp2040_spi_bridge_probe is the (ignored)
+# reproduction. Fixing this means either the upstream model dispatching to its
+# registered peripheral, or a pin-level SPI bridge on the hauksbee side.
 controllers = []
