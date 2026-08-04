@@ -198,6 +198,73 @@ fn the_scaffold_asks_about_the_rail_it_cannot_resolve() {
     );
 }
 
+/// The AeroFC shape: a rail the binder can price by name (`+3V3`) next to a
+/// battery rail it cannot (`VBAT`, in the engine's supply-token list but with
+/// no readable magnitude). Enough parts on VBAT for it to read as a rail.
+fn board_with_a_battery_rail(dir: &Path) -> PathBuf {
+    let mut nodes_3v3 = String::new();
+    let mut nodes_vbat = String::new();
+    let mut comps = String::new();
+    for i in 1..=8 {
+        comps.push_str(&format!(
+            "    (comp (ref \"R{i}\") (value \"10k\") \
+             (footprint \"Resistor_SMD:R_0603_1608Metric\") \
+             (libsource (lib \"Device\") (part \"R\")))\n"
+        ));
+        nodes_vbat.push_str(&format!("      (node (ref \"R{i}\") (pin \"1\"))\n"));
+        nodes_3v3.push_str(&format!("      (node (ref \"R{i}\") (pin \"2\"))\n"));
+    }
+    let net = format!(
+        "(export (version \"E\")\n  (components\n{comps}  )\n  (nets\n\
+         \x20   (net (code \"1\") (name \"+3V3\")\n{nodes_3v3})\n\
+         \x20   (net (code \"2\") (name \"VBAT\")\n{nodes_vbat})\n  ))\n"
+    );
+    let path = dir.join("battery_rail.net");
+    std::fs::write(&path, net).expect("write board");
+    path
+}
+
+#[test]
+fn the_scaffolds_questions_cover_every_rail_the_first_run_warns_about() {
+    // The AeroFC regression: init once recognised supply nets with its own
+    // narrower pattern, scaffolded only the +3V3 it could price, and the very
+    // first run of that untouched scaffold warned "UNPOWERED RAIL: VBAT" about
+    // a net init never mentioned. init and the runner now share ONE detector
+    // (runner::unpowered_supply_nets), so this pins the invariant end to end:
+    // every rail the first run warns about was already a [[supply]] question
+    // in the scaffold the user is holding.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let board = board_with_a_battery_rail(dir.path());
+    let spec_path =
+        hauksbee_ci::init::init_to(&board, Some(dir.path())).expect("scaffold the board");
+    let toml = std::fs::read_to_string(&spec_path).expect("read the scaffold");
+
+    assert!(
+        toml.contains("# net = \"VBAT\""),
+        "the scaffold offers a supply for the battery rail it cannot price:\n{toml}"
+    );
+    assert!(
+        toml.contains("[[supply]]\nnet = \"+3V3\""),
+        "while powering the rail it CAN price, live and unprompted:\n{toml}"
+    );
+
+    // Run the scaffold exactly as written, no edits. Whatever the report
+    // warns about must be a net the scaffold already asked about.
+    let result = run(&spec_path);
+    assert!(
+        result.dead_rails.contains(&"VBAT".to_string()),
+        "the first run does warn about VBAT (the warning half of the loop): {:?}",
+        result.dead_rails
+    );
+    for net in &result.dead_rails {
+        assert!(
+            toml.contains(&format!("# net = \"{net}\"")),
+            "the run warns about {net} but the scaffold never asked about it; \
+             init and the runner have drifted apart:\n{toml}"
+        );
+    }
+}
+
 #[test]
 fn the_flagship_board_is_the_case_this_came_from() {
     // Regression anchor. If ANALOG_VDD ever stops being reported on the real
