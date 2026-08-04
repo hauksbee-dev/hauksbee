@@ -2152,6 +2152,7 @@ fn main {
         let windows = vec![WebFailedWindow {
             start_s: 0.0012,
             end_s: 0.0034,
+            reason: "DC Newton did not converge in 100 iters".to_string(),
         }];
         let f = analog_invalid_finding(2, &windows);
         assert_eq!(
@@ -2356,6 +2357,7 @@ fn main {
         diverged.failed_windows = vec![WebFailedWindow {
             start_s: 0.0012,
             end_s: 0.0034,
+            reason: "DC Newton did not converge in 100 iters".to_string(),
         }];
         diverged.findings.insert(
             0,
@@ -2390,6 +2392,7 @@ fn main {
                 &[WebFailedWindow {
                     start_s: 0.0,
                     end_s: 0.0001,
+                    reason: "DC Newton did not converge in 100 iters".to_string(),
                 }],
             )],
             gpio_nets: Vec::new(),
@@ -2397,6 +2400,7 @@ fn main {
             failed_windows: vec![WebFailedWindow {
                 start_s: 0.0,
                 end_s: 0.0001,
+                reason: "DC Newton did not converge in 100 iters".to_string(),
             }],
             spi_framing: Vec::new(),
             boot_gates: Vec::new(),
