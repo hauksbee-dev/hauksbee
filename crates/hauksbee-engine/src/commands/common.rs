@@ -169,6 +169,8 @@ pub fn serve(
     port: u16,
     board_file: Option<(String, String)>,
     startup_json: String,
+    open: bool,
+    no_open: bool,
 ) -> anyhow::Result<()> {
     use std::sync::Arc;
     let rt = tokio::runtime::Runtime::new()?;
@@ -210,6 +212,16 @@ pub fn serve(
         // the bind falls back to another port; printing `addr` before binding
         // advertised a URL the server was not actually listening on.
         let (listener, bound) = hauksbee_server::bind_frontdoor(&addr).await?;
+        // Browser auto-open: the SAME policy as the `serve` subcommand (one
+        // rule, two front doors): the explicit --open flag or a desktop .app
+        // launch triggers it, --no-open vetoes both, and it only fires when
+        // the web UI actually resolved.
+        {
+            let launched_by_app = std::env::var_os("HAUKSBEE_EXIT_WITH_PARENT").is_some();
+            if !no_open && (open || launched_by_app) && dir.is_some() {
+                crate::commands::serve::open_browser(&format!("http://{bound}"));
+            }
+        }
         if let Some(static_dir) = dir.as_ref() {
             warn_if_dist_stale(static_dir);
             println!("\n  hauksbee is live. Open this in your browser:\n");
