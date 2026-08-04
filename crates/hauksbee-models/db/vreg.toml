@@ -685,3 +685,263 @@ max_voltage_v = 35.0
 max_junction_temp_c = 125.0
 theta_jc_c_per_w = 3.0
 theta_ja_c_per_w = 60.0
+
+# ═════════════════════════════════════════════════════════════════════════════
+# The corpus LDO batch. Five fixed-output linear regulators that between them
+# were the unresolved regulator on the Adafruit, SparkFun, MNT Reform and
+# Arduino-official boards. Every number below is from the vendor datasheet named
+# in the entry; none is transferred from a sibling part.
+#
+# WHAT EVERY ENTRY HERE DELIBERATELY DOES NOT MODEL, stated once rather than
+# five times: `bind_vreg` stamps an ideal DC source on the output net, so line
+# regulation, load regulation, PSRR, output noise and the internal current limit
+# are exactly ABSENT rather than wrong. Most of these datasheets publish all
+# five, and the numbers are simply not representable in this kind. Where a part
+# has a soft-start or a foldback current limit, that is likewise unmodelled.
+# `max_current_a` carries the continuous output rating for the stress monitor to
+# judge against; that is a rating, not a simulated limit.
+#
+# ── AP2112K-3.3 ──────────────────────────────────────────────────────────────
+# Diodes Inc 600 mA LDO, SOT25. The single highest-leverage regulator in the
+# corpus: unresolved on FOUR independent board families (Adafruit Circuit
+# Playground Express, Metro M4, QT Py, Trinket M0).
+# Source: Diodes Incorporated AP2112 datasheet, document DS39724 Rev. 2-2,
+#   June 2017. Figures from the "AP2112-3.3 Electrical Characteristics" table.
+[[models]]
+id = "ap2112k_3v3"
+kind = "vreg"
+description = "AP2112K-3.3 LDO, 600mA, 3.3V fixed, SOT25 (Diodes Inc)"
+
+[models.match]
+# AP2112K-3.3, AP2112K-3.3TRG1, and the AP2112 (non-K) variants of the same
+# 3.3 V die. The voltage code is REQUIRED: the AP2112 family also ships 1.2 V
+# through 5.0 V options on the same pinout, and binding a 1.8 V part to a 3.3 V
+# source would put 1.5 V of fiction on a rail.
+value_re = "(?i)^AP2112[KM]?[- ]?3[._]3([A-Z0-9-]*)?$"
+
+[models.params]
+vout      = 3.3      # +-1.5% @ VIN=4.3 V, 1 mA <= IOUT <= 30 mA
+dropout_v = 0.25     # VDROP typ @ IOUT = 600 mA (400 mV max; 125 mV at 300 mA)
+iq_a      = 55.0e-6  # IQ typ @ VIN=4.3 V, IOUT=0 (80 uA max; ISTD 0.01 uA typ
+                     # in shutdown)
+
+[models.pins]
+# Pin Descriptions table, SOT25.
+"1" = "in"
+"2" = "gnd"
+"3" = "en"
+"4" = "nc"
+"5" = "out"
+
+[models.ratings]
+max_current_a = 0.6          # IOUT(MAX) min
+max_voltage_v = 6.5          # VCC abs max (2.5 to 6.0 V recommended)
+max_junction_temp_c = 150.0  # TJ abs max
+theta_ja_c_per_w = 184.0     # SOT25, no heatsink
+theta_jc_c_per_w = 96.0      # SOT25
+# max_power_w absent: the datasheet publishes no package power rating, only
+# theta_JA/theta_JC and TJ(max), which is what the thermal monitor uses.
+
+# ── MIC5205-3.3 ──────────────────────────────────────────────────────────────
+# Microchip (Micrel) 150 mA low-noise LDO, SOT-23-5. 17 instances on the
+# SparkFun RedBoard.
+# Source: Microchip MIC5205 datasheet DS20005785B Rev. B, February 2022.
+#
+# THE BARE PART NUMBER IS THE ADJUSTABLE VERSION, which is why the voltage code
+# is required in the match rule below. Per the datasheet's Product
+# Identification System, "MIC5205" with no voltage suffix is the adjustable
+# part (pin 4 becomes ADJ instead of BYP) and "MIC5205-3.3" is the fixed 3.3 V
+# one. A board whose value string is just "MIC5205" does not say what its output
+# is and is left unresolved on purpose.
+[[models]]
+id = "mic5205_3v3"
+kind = "vreg"
+description = "MIC5205-3.3 low-noise LDO, 150mA, 3.3V fixed, SOT-23-5"
+
+[models.match]
+value_re = "(?i)^MIC5205[- ]?3[._]3([A-Z0-9-]*)?$"
+
+[models.params]
+vout      = 3.3      # +-1% at TJ=25 C, +-2% over -40 to +125 C
+dropout_v = 0.165    # typ @ IL = 150 mA (275-350 mV max; 110 mV at 50 mA)
+iq_a      = 80.0e-6  # Ground Pin Current typ @ IL = 100 uA (125 uA max). The
+                     # datasheet's ground current rises with load (600 uA typ at
+                     # 50 mA, 1300 uA at 150 mA); the no-load figure is the one
+                     # `iq_a` means. Shutdown IGND is 0.01 uA typ.
+
+[models.pins]
+# Table 3-1, SOT-23-5, FIXED version. On the adjustable part pin 4 is ADJ.
+"1" = "in"
+"2" = "gnd"
+"3" = "en"
+"4" = "byp"    # noise-bypass capacitor to the internal reference
+"5" = "out"
+
+[models.ratings]
+max_current_a = 0.15         # guaranteed output current
+max_voltage_v = 16.0         # operating ceiling (abs max is +-20 V); a check
+                             # should fire on the operating limit
+max_junction_temp_c = 125.0
+theta_ja_c_per_w = 220.0     # SOT-23-5, minimum footprint (170 on square clad)
+theta_jc_c_per_w = 130.0
+
+# ── MCP1700-3302E ────────────────────────────────────────────────────────────
+# Microchip 250 mA, 1.6 uA-IQ CMOS LDO. The low-quiescent part a coin-cell
+# design reaches for.
+# Source: Microchip MCP1700 datasheet DS20001826F.
+# The "3302" in the order code is the output-voltage code: 3.3 V. Per the
+# datasheet's marking/ordering tables the family also ships 1.2, 1.5, 1.8, 2.5,
+# 2.8, 2.9, 3.0, 4.0 and 5.0 V, so the code is required in the match rule.
+#
+# NOTE: this part HAS NO ENABLE PIN. It is a three-terminal always-on regulator,
+# which is why the pin map below has no `en` role. A board that expects to gate
+# this rail is gating it somewhere else.
+[[models]]
+id = "mcp1700_3v3"
+kind = "vreg"
+description = "MCP1700-3302 CMOS LDO, 250mA, 3.3V fixed, 1.6uA IQ, SOT-23"
+
+[models.match]
+value_re = "(?i)^MCP1700[T]?[- ]?3302[A-Z0-9/_-]*$"
+
+[models.params]
+vout      = 3.3      # VR +-0.4% typ at 25 C (+-2.0/3.0% max over temperature)
+dropout_v = 0.178    # typ @ IOUT = 250 mA, VR >= 2.5 V (350 mV max)
+iq_a      = 1.6e-6   # Iq typ @ IL = 0, VIN = VR + 1 V (4 uA max)
+
+[models.pins]
+# Table 3-1, SOT-23 (3-pin).
+"1" = "gnd"
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 0.25         # 250 mA for VR >= 2.5 V (200 mA below that)
+max_voltage_v = 6.5          # VDD abs max (2.3 to 6.0 V operating)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 212.0     # SOT-23, JEDEC JESD51-7 FR-4 4-layer board
+theta_jc_c_per_w = 139.0     # RthJC(top), SOT-23
+# NOT MODELLED: the 408 mA typ short-circuit peak (IOUT_SC, measured 10 ms after
+# a short). `bind_vreg`'s ideal source has no current limit.
+
+# ── NCP1117ST50T3G ───────────────────────────────────────────────────────────
+# onsemi 1 A LDO, SOT-223, 5.0 V fixed. The 5 V regulator on the Arduino Uno R3
+# official board and the Adafruit Metro M4.
+# Source: onsemi NCP1117/NCP1117I/NCV1117 datasheet, publication NCP1117/D
+#   Rev. 31, August 2021. Figures from the 5.0 V rows.
+#
+# Like the MCP1700 above this is a three-terminal part with NO ENABLE PIN. On
+# the fixed-output devices pin 1 is the ground/reference-programming pin, and the
+# SOT-223 tab is internally connected to pin 2 (OUTPUT), not to ground: a layout
+# that treats the tab as a ground pour is shorting the output.
+[[models]]
+id = "ncp1117_5v"
+kind = "vreg"
+description = "NCP1117ST50T3G LDO, 1A, 5.0V fixed, SOT-223 (onsemi)"
+
+[models.match]
+# The ST suffix is the SOT-223 package and 50 is the 5.0 V code; both are
+# required. The DPAK (D2T) variant has a different theta_JA (67 vs 160 C/W) and
+# the family's other voltage codes are 1.5 V through 5.0 V.
+value_re = "(?i)^NC[PV]1117I?ST50[A-Z0-9]*$"
+
+[models.params]
+vout      = 5.0      # 4.950 to 5.050 V @ VIN=7.0 V, IOUT=10 mA, TA=25 C
+dropout_v = 1.01     # typ @ IOUT = 500 mA (1.15 V max; 1.07 V typ at 800 mA),
+                     # measured at VOUT - 100 mV
+iq_a      = 6.0e-3   # Quiescent Current typ @ VIN = 15 V (10 mA max)
+
+[models.pins]
+# SOT-223, ST suffix, Case 318H. Tab is internally tied to pin 2.
+"1" = "gnd"    # Adjust/Ground; tied internally on the fixed devices
+"2" = "out"
+"3" = "in"
+
+[models.ratings]
+max_current_a = 1.0          # >1 A capable; Note 3 caps regulator current at
+                             # 1.0 A when VIN > 12 V
+max_voltage_v = 20.0         # VIN abs max
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 160.0     # SOT-223, minimum-size pad (67 C/W for DPAK)
+theta_jc_c_per_w = 15.0      # SOT-223
+# NOT MODELLED: the 1000 mA min / 1500 typ / 2200 max output current limit.
+# `max_power_w` absent: the datasheet says dissipation is "internally limited"
+# and gives only TJ(max) and theta_JA.
+
+# ── TLV75533P ────────────────────────────────────────────────────────────────
+# TI 500 mA LDO, SOT-23-5, 3.3 V. Instances on the ZSWatch boards.
+# Source: Texas Instruments TLV755P datasheet SBVS320D, November 2017, revised
+#   September 2024.
+[[models]]
+id = "tlv75533p"
+kind = "vreg"
+description = "TLV75533P LDO, 500mA, 3.3V fixed, SOT-23-5 (TI DBV)"
+
+[models.match]
+# The 33 in the part number is the voltage code; the family spans 0.6 V to
+# 5.0 V on the same pinout, so it is required.
+value_re = "(?i)^TLV755?33P?[A-Z]{0,4}[0-9]?R?$"
+
+[models.params]
+vout      = 3.3      # +-1% max accuracy, -40 to +85 C, DBV package
+dropout_v = 0.150    # VDO typ @ IOUT = 500 mA (238 mV max, -40 to +85 C)
+iq_a      = 25.0e-6  # IGND typ @ IOUT = 0, TJ = 25 C (33 uA max over -40 to
+                     # +85 C). Shutdown ISHDN is 0.1 uA typ.
+
+[models.pins]
+# DBV (SOT-23-5) package.
+"1" = "out"
+"2" = "gnd"
+"3" = "en"
+"4" = "nc"
+"5" = "in"
+
+[models.ratings]
+max_current_a = 0.5
+max_voltage_v = 6.0          # VIN abs max (1.45 to 5.5 V operating)
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 231.1     # DBV / SOT-23-5, JEDEC standard board
+theta_jc_c_per_w = 118.4     # RthJC(top), DBV
+# NOT MODELLED: ICL 720 mA typ current limit and the 355 mA typ short-circuit
+# current.
+
+# ═════════════════════════════════════════════════════════════════════════════
+# SWITCHING REGULATORS DELIBERATELY LEFT UNRESOLVED, and the reason is the same
+# for all of them, so it is recorded once here rather than as four empty entries.
+#
+# The corpus carries TLV62568 (MNT Reform), SY8089AAAC and SY8009AAAC (Olimex
+# ESP32-EVB) and LMR16006YQ3 (MNT Reform) as unresolved buck converters. Their
+# datasheets were read in full and they are NOT modelled, because the `vreg`
+# kind requires `vout` and NONE OF THESE PARTS HAS ONE. Every one of them is an
+# adjustable converter whose output is set by an external feedback divider on
+# the board:
+#
+#   TLV62568   VFB = 0.6 V typ (0.588 to 0.612), VOUT = 0.6 * (1 + R1/R2)
+#   SY8089AAAC VREF = 0.6 V typ, VOUT = 0.6 * (1 + R1/R2)
+#   SY8009AAAC VREF = 0.6 V typ, same relation
+#   LMR16006Y  VFB = 0.765 V typ (0.747 to 0.782), VOUT = VFB * (1 + R1/R2)
+#
+# Writing any specific `vout` for these would be inventing a divider the board
+# already has and the model cannot see. Filling in a plausible 3.3 V would be
+# wrong on every board that set them to something else, and silently right on
+# the ones that did not, which is the worst possible failure mode: a rail
+# reported confidently at a voltage nobody chose.
+#
+# What these need is a vreg variant that reads its output from a feedback-node
+# divider on the netlist, which is an engine change and not a database entry.
+# Until then they stay unresolved and the bind report says so, which is the
+# honest outcome. For the record, so the work is not lost when that variant
+# exists, the rest of each part's data was gathered:
+#   TLV62568   1 A, VIN 2.5-5.5 V, RDS(on) 150 mOhm HS / 100 mOhm LS, IQ 35 uA,
+#              ILIM 1.5 A min, theta_JA 191.6 C/W (DBV). TI SLVSD89B.
+#   SY8089AAAC 2 A cont / 3 A peak, VIN 2.7-5.5 V, RDS(on) 110 mOhm PFET /
+#              80 mOhm NFET, IQ 55 uA, ILIM 3.5 A min, PD 0.6 W at TA=25 C,
+#              theta_JA 170 C/W. Silergy AN_SY8089/SY8089A Rev. 0.9A.
+#   SY8009AAAC 1.5 A (NOT 2 A: the 2 A rating is the SY8009B in SOT23-6),
+#              VIN 3-5.5 V, RDS(on) 180 mOhm PFET / 120 mOhm NFET, IQ 80 uA,
+#              ILIM 1.8 A min, theta_JA 170 C/W. Silergy SY8009A/B Rev1.0.
+#   LMR16006Y  600 mA, VIN 4-60 V, high-side RDS(on) 900 mOhm (non-synchronous,
+#              external Schottky for the low side), IQ 28 uA, ILIM 1.2 A typ,
+#              theta_JA 102 C/W. The Y is the 2.1 MHz frequency grade and the Q
+#              suffix is AEC-Q100 qualification, NOT an output-voltage code.
+#              TI SNVSA24.

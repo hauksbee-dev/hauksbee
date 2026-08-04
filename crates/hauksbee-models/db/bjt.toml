@@ -373,3 +373,163 @@ pair_count = 2
 max_current_a = 0.1
 max_power_w = 0.25
 max_voltage_v = 45.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BC817 / BC807: Nexperia 45 V, 500 mA general-purpose complementary pair,
+# SOT23. The BC817-40 is the single most-used unresolved active part in the
+# board corpus: 57 instances across all twelve ESP32-EVB revisions, where it
+# drives the relays, the LEDs and the UEXT level shifting.
+#
+# Sources, both read:
+#   Datasheet: Nexperia "BC817 series, 45 V, 500 mA NPN general-purpose
+#     transistors", BC817_SER Rev. 8, 1 July 2022
+#     (assets.nexperia.com/documents/data-sheet/BC817_SER.pdf), and the PNP
+#     complement BC807_SER Rev. 8, same date.
+#   SPICE:     Nexperia's own published model cards,
+#     assets.nexperia.com/documents/spice-model/BC817-40.txt (extraction week
+#     42/2018) and .../BC807-40.txt (week 49/2018).
+#
+# THE PARAMS BELOW ARE NEXPERIA'S OWN SPICE CARD, NOT A FIT. Every value is
+# transcribed from those two files. That is the whole point of preferring a
+# vendor card: there is no fitting freedom left to get wrong, and the numbers
+# can be checked against the source by string comparison.
+#
+# WHAT THE TRANSCRIPTION LOSES, and it is one specific thing. Nexperia does not
+# ship a bare `.MODEL`; each card is a `.SUBCKT` holding TWO instances of one
+# `.MODEL Transistor` with different SPICE area factors, tied together by a
+# base resistor:
+#
+#     Q1 1 2 3 Transistor 0.918        Q1 1 2 3 Transistor 0.8544   (PNP)
+#     Q2 11 2 3 Transistor 0.08204     Q2 11 2 3 Transistor 0.1456
+#     RQ 1 11 76.66                    RQ 11 1 19.24
+#     D1 2 1 Diode                     (no D1 on the PNP)
+#
+# The areas sum to 1.0 and RQ is a short at low current, so at low and mid
+# current the pair IS one transistor of unit area carrying exactly the card's
+# parameters, which is what these entries stamp. RQ only bites at high current,
+# where it starves Q2's base and bends the saturation characteristic: that is
+# the quasi-saturation region, and it is what a single-transistor entry cannot
+# reproduce. Nexperia's own note says the split "does not reflect physical
+# devices", i.e. it is a curve-fitting device rather than a second junction, so
+# collapsing it is a loss of accuracy in one region rather than a loss of
+# structure. The NPN's extra base-emitter diode D1 (IS=2.029e-15, RS=829.9) is
+# a reverse-conduction fit and is likewise not stamped.
+#
+# NOT TRANSFERRED because the engine's Gummel-Poon does not read them: RBM,
+# IRB, XTB, VJE, MJE, VJC, MJC, XCJC, XTF, VTF, ITF, PTF, FC, and the CJS/VJS/
+# MJS substrate group (which Nexperia leaves at CJS=0 placeholders anyway).
+# KF and AF are absent from both cards: Nexperia publishes no flicker-noise fit.
+#
+# THE hFE BIN IS THE MATCH RULE'S WHOLE JOB. The suffix selects a gain bin at
+# VCE = 1 V, IC = 100 mA (Table 2/Table 8): -16 is 100..250, -25 is 160..400,
+# -40 is 250..600, unsuffixed is 100..600. The bins OVERLAP, so -40 is not "the
+# top bin", it is the wide 250..600 one. Nexperia ships one card per bin and
+# these entries are the -40 cards, so the value_re demands the -40 suffix: a
+# bare "BC817" or a "BC817-25" is a different bin with a different BF and does
+# not bind here. BF = 440 against a 250..600 bin is a nominal unit, neither the
+# min nor the max.
+
+[[models]]
+id = "bc817_40"
+kind = "bjt_npn"
+description = "BC817-40 NPN 45V 500mA SOT23, hFE 250-600, Nexperia SPICE card"
+
+[models.match]
+# BC817-40, BC817-40W (SOT323), BC817-40,215 / -40,235 (packing codes). The
+# other bins and the bare part are excluded: they have their own cards.
+value_re = "(?i)^BC817-40[A-Z0-9,]*(\\(SOT-?23\\))?$"
+
+[models.params]
+# Source: Nexperia BC817-40.txt SPICE card, `.MODEL Transistor NPN`, verbatim.
+is  = 5.244e-14    # IS
+bf  = 440.0        # BF   (datasheet bin 250..600 @ VCE=1V, IC=100mA)
+nf  = 0.9753       # NF
+vaf = 48.46        # VAF
+br  = 50.35        # BR
+nr  = 0.9751       # NR
+var = 25.0         # VAR
+ikf = 0.5843       # IKF  forward high-injection knee
+ikr = 3.385        # IKR  reverse knee
+ise = 1.62e-15     # ISE  B-E leakage saturation current
+ne  = 1.301        # NE   B-E leakage emission coefficient
+isc = 1.068e-14    # ISC  B-C leakage saturation current
+nc  = 1.357        # NC   B-C leakage emission coefficient
+rb  = 43.0         # RB   zero-bias base resistance
+rc  = 0.2327       # RC
+re  = 0.1312       # RE
+cje = 4.377e-11    # CJE
+cjc = 8.628e-12    # CJC
+tf  = 6.08e-10     # TF
+tr  = 3.5e-07      # TR
+eg  = 1.11         # EG
+xti = 6.013        # XTI
+
+[models.pins]
+# Table 3 Pinning, SOT23 (TO-236AB). Note the SUBCKT node order in the SPICE
+# file is 1=Base 2=Emitter 3=Collector and the card warns "Package pinning does
+# not match Spice model pinning"; here it happens to coincide.
+"1" = "base"
+"2" = "emitter"
+"3" = "collector"
+
+[models.ratings]
+# Source: BC817_SER Rev. 8, Table 6 Limiting values and Table 7 Thermal.
+max_current_a = 0.5            # IC continuous, Tamb = 25 C
+max_surge_current_a = 1.0      # ICM, single pulse tp <= 1 ms
+max_power_w = 0.25             # Ptot, standard footprint (0.345 W on a 1 cm^2
+                               # collector pad; the smaller figure is the one a
+                               # stress check should judge against)
+max_voltage_v = 45.0           # VCEO (VCBO is 50 V, VEBO 5 V)
+max_junction_temp_c = 150.0    # Tj
+theta_ja_c_per_w = 500.0       # Rth(j-a), standard footprint, free air
+                               # (362 K/W with a 1 cm^2 collector pad)
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+[[models]]
+id = "bc807_40"
+kind = "bjt_pnp"
+description = "BC807-40 PNP 45V 500mA SOT23, hFE 250-600, Nexperia SPICE card"
+
+[models.match]
+value_re = "(?i)^BC807-40[A-Z0-9,]*(\\(SOT-?23\\))?$"
+
+[models.params]
+# Source: Nexperia BC807-40.txt SPICE card, `.MODEL Transistor PNP`, verbatim.
+# Params are magnitudes; the kind carries the polarity.
+is  = 1.132e-13    # IS
+bf  = 535.0        # BF   (datasheet bin 250..600 @ VCE=-1V, IC=-100mA)
+nf  = 0.9578       # NF
+vaf = 20.46        # VAF
+br  = 32.0         # BR
+nr  = 0.9562       # NR
+var = 12.16        # VAR
+ikf = 0.2819       # IKF
+ikr = 0.1546       # IKR
+ise = 3.045e-14    # ISE
+ne  = 1.511        # NE
+isc = 3.16e-15     # ISC
+nc  = 1.183        # NC
+rb  = 30.0         # RB
+rc  = 0.1259       # RC
+re  = 0.2017       # RE
+cje = 4.948e-11    # CJE
+cjc = 1.786e-11    # CJC
+tf  = 8.604e-10    # TF
+tr  = 4.5e-08      # TR
+eg  = 1.11         # EG
+xti = 10.69        # XTI
+
+[models.pins]
+"1" = "base"
+"2" = "emitter"
+"3" = "collector"
+
+[models.ratings]
+# Source: BC807_SER Rev. 8, Table 6 Limiting values and Table 7 Thermal.
+max_current_a = 0.5
+max_surge_current_a = 1.0
+max_power_w = 0.25             # standard footprint (0.345 W on a 1 cm^2 pad)
+max_voltage_v = 45.0           # |VCEO|
+max_junction_temp_c = 150.0
+theta_ja_c_per_w = 500.0       # standard footprint (362 K/W with a 1 cm^2 pad)
