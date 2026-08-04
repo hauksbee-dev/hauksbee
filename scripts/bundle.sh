@@ -323,6 +323,17 @@ find "$ROOTDIR" -name '*.pyc' -delete 2>/dev/null || true
 # to look.
 rm -f "$ROOTDIR/examples/ci-specs/tarski_brownout.toml" \
       "$ROOTDIR/examples/ci-specs/tarski_brownout_repaired.toml"
+
+# ── corpus-dependent example specs ───────────────────────────────────────────
+# These three specs point their `board =` at ../../../../board-corpus/, which
+# only exists in a repo checkout (a large symlinked corpus that is not bundled).
+# Staged into a tarball they are broken on arrival: the relative path escapes
+# the bundle and resolves to nothing. Drop them at staging, same as the
+# flagship specs above; they remain runnable from a checkout, which is the only
+# place they ever worked.
+rm -f "$ROOTDIR/examples/ci-specs/watchy_v15_display_res.toml" \
+      "$ROOTDIR/examples/ci-specs/watchy_v15_display_res_undriven.toml" \
+      "$ROOTDIR/examples/ci-specs/pic_programmer_schematic.toml"
 BOARD_LEAK="$(find "$ROOTDIR" -iname '*tarski*' -print 2>/dev/null || true)"
 [ -z "$BOARD_LEAK" ] || die "flagship board data staged into the bundle; refusing to package:
 $BOARD_LEAK
@@ -481,9 +492,9 @@ backends (qemu, renode) are detected at runtime; run scripts/doctor.sh to see
 what is present.
 
 NOTE: the firmware-bearing hauksbee-ci specs in examples/ci-specs (blinky.toml,
-the boot-coverage and brownout specs) reference firmware and netlists that live
-in the hauksbee repo's testdata/ (too large to bundle). Run those from a repo
-checkout. The bundled specs are the canonical, documented examples to copy.
+the boot_gate and lm75_thermostat specs) reference firmware and boards that
+live in the hauksbee repo's testdata/ (too large to bundle). Run those from a
+repo checkout. The bundled specs are the canonical, documented examples to copy.
 EOF
 
 log "Writing tarball"
