@@ -335,7 +335,12 @@ fn is_base_pad_name(s: &str) -> bool {
 /// is found first by an explicit `G`/`GATE` pad name (then `B`/`BASE`), else by
 /// footprint convention. DNP transistors and unidentifiable parts are skipped
 /// (the panel omits a device rather than mislabel it).
-fn transistor_gate_nets(board: &ExtractedBoard) -> Vec<(String, String)> {
+///
+/// Public because a boot-state test has to ask the same question, and asking it
+/// a second way is how a corpus test ends up hardcoding the reference
+/// designators of one board revision: the LumenPnP fuzz spec named Q1..Q4, and
+/// the revision the corpus fetches has three gates at Q2, Q5 and Q6.
+pub fn transistor_gate_nets(board: &ExtractedBoard) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for c in &board.components {
         if c.dnp || c.reference.chars().next().map(|ch| ch.to_ascii_uppercase()) != Some('Q') {

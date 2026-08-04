@@ -1516,11 +1516,15 @@ mod tests {
             );
             let notes: Vec<&str> = report.notes.iter().map(|n| n.message.as_str()).collect();
             assert!(
-                notes.iter().any(|n| n.contains("not reverse-engineered from copper")),
+                notes
+                    .iter()
+                    .any(|n| n.contains("not reverse-engineered from copper")),
                 "{label}: the reader's coverage note must reach the report: {notes:?}"
             );
             assert!(
-                !notes.iter().any(|n| n.contains("reverse-extracted from the fab")),
+                !notes
+                    .iter()
+                    .any(|n| n.contains("reverse-extracted from the fab")),
                 "{label}: and must not claim the circuit came from copper: {notes:?}"
             );
         }
