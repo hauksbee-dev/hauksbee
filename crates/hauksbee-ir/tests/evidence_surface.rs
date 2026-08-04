@@ -38,17 +38,20 @@ const TODAY: i64 = 20_454;
 fn rests_on_block(map: &EvidenceMap, registry: &[Assumption]) -> String {
     let mut out = format!("{} [{:?}]\n", map.assertion(), map.status());
     for id in map.assumptions() {
-        let a = registry
-            .iter()
-            .find(|a| a.id() == id)
-            .expect("every on-path id is in the run's registry");
-        out.push_str(&format!(
-            "  - [{}] {} {} Fix: {}\n",
-            a.id(),
-            a.statement(),
-            a.consequence(),
-            a.replacement()
-        ));
+        // Degrades to the bare id rather than panicking. A renderer that dies
+        // because a registry lookup missed takes the whole report with it, and
+        // the id alone still names the gap, which is the point of the id being
+        // deterministic.
+        match registry.iter().find(|a| a.id() == id) {
+            Some(a) => out.push_str(&format!(
+                "  - [{}] {} {} Fix: {}\n",
+                a.id(),
+                a.statement(),
+                a.consequence(),
+                a.replacement()
+            )),
+            None => out.push_str(&format!("  - [{id}]\n")),
+        }
     }
     out
 }
@@ -73,6 +76,7 @@ fn a_consumer_can_build_every_kind_and_read_every_sentence() {
         Assumption::not_checked(
             AssumptionSource::Reader,
             "drc",
+            None,
             "this input class carries no copper geometry",
             "supply a layout so the check has copper to read",
         ),
@@ -221,13 +225,19 @@ fn a_producer_can_populate_the_inventory_and_the_json_round_trips() {
     let back: ArtifactProvenance = serde_json::from_str(&json).expect("round-trips");
     assert_eq!(back, artifact);
 
+    // The judgements serialize but do NOT deserialize: an assumption or an
+    // evidence status is produced, and parsing one back would mint it outside
+    // the constructors that compose its sentences and derive its status. A
+    // consumer reads the fields it needs from the JSON, or holds the registry and
+    // re-derives.
     let json = serde_json::to_string(&assumption).expect("serializes");
-    let back: Assumption = serde_json::from_str(&json).expect("round-trips");
-    assert_eq!(back, assumption);
+    let doc: serde_json::Value = serde_json::from_str(&json).expect("is a JSON document");
+    assert_eq!(doc["kind"], "fitted_by_default");
+    assert_eq!(doc["scope"]["type"], "board");
 
     let map = EvidenceMap::new("A", std::slice::from_ref(&assumption), TODAY);
     let json = serde_json::to_string(&map).expect("serializes");
-    let back: EvidenceMap = serde_json::from_str(&json).expect("round-trips");
-    assert_eq!(back.status(), EvidenceStatus::Undermined);
-    assert_eq!(back, map);
+    let doc: serde_json::Value = serde_json::from_str(&json).expect("is a JSON document");
+    assert_eq!(doc["status"], "undermined");
+    assert_eq!(doc["assumptions"][0], "fitted-by-default:odbpp");
 }

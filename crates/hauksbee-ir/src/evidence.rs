@@ -105,18 +105,10 @@ impl std::fmt::Display for AssumptionId {
 /// What kind of gap an [`Assumption`] records. The kind, not the wording, is
 /// what [`EvidenceMap::derive_status`] reads, so adding a variant is a policy
 /// decision about what undermines a conclusion.
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Hash,
-    Serialize,
-    Deserialize,
-    schemars::JsonSchema,
-    strum::EnumIter,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+// Iterated only by the test that proves every kind has a constructor and a row
+// in the status table, so it stays out of the published API.
+#[cfg_attr(test, derive(strum::EnumIter))]
 #[serde(rename_all = "snake_case")]
 pub enum AssumptionKind {
     /// An unresolved part defaulted to an open circuit.
@@ -236,13 +228,17 @@ pub enum Scope {
 /// constructors on this type so that two surfaces cannot describe the same gap
 /// differently.
 ///
-/// Every field is private with a getter, which is what makes that structural
-/// rather than conventional. Public fields would have left the wording
-/// rewritable in one line from any crate, and `kind` is worse than the wording:
-/// it is the input to [`EvidenceMap::derive_status`], so a downstream
+/// Every field is private with a getter, and the type does NOT implement
+/// `Deserialize`. Both halves are needed. Public fields would have left the
+/// wording rewritable in one line from any crate, and `kind` is worse than the
+/// wording: it is the input to [`EvidenceMap::derive_status`], so a downstream
 /// `a.kind = ReducedFidelity` would demote an undermined conclusion to a
-/// gradeable one without ever touching [`EvidenceMap`]. Read access is all a
-/// renderer needs.
+/// gradeable one without ever touching [`EvidenceMap`]. A derived `Deserialize`
+/// would then hand the same power back through eight lines of JSON, minting an
+/// assumption with any kind and any wording outside the constructors. An
+/// assumption is produced, not parsed, which is also how the run report's own
+/// types are shaped (they are serialize-only), so this costs nothing real.
+/// Read access is all a renderer needs.
 ///
 /// ```
 /// use hauksbee_ir::evidence::{Assumption, AssumptionKind};
@@ -282,47 +278,6 @@ pub struct Assumption {
     /// malformed ([`Assumption::validate`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     expires: Option<String>,
-}
-
-/// The deserialization shape of [`Assumption`], which exists so that reading one
-/// back runs the same well-formedness rules a constructor's output satisfies.
-/// A document is still its producer's word (nothing here can re-derive the
-/// sentences from the id), but a malformed one is refused at the boundary rather
-/// than rendered.
-#[derive(Deserialize)]
-struct AssumptionWire {
-    id: AssumptionId,
-    kind: AssumptionKind,
-    source: AssumptionSource,
-    scope: Scope,
-    statement: String,
-    because: String,
-    consequence: String,
-    replacement: String,
-    #[serde(default)]
-    expires: Option<String>,
-}
-
-impl<'de> Deserialize<'de> for Assumption {
-    fn deserialize<D>(d: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        let w = AssumptionWire::deserialize(d)?;
-        let a = Self {
-            id: w.id,
-            kind: w.kind,
-            source: w.source,
-            scope: w.scope,
-            statement: w.statement,
-            because: w.because,
-            consequence: w.consequence,
-            replacement: w.replacement,
-            expires: w.expires,
-        };
-        a.validate().map_err(serde::de::Error::custom)?;
-        Ok(a)
-    }
 }
 
 /// Trim a caller-supplied data fragment so the constructors, not the caller,
@@ -451,8 +406,9 @@ impl Assumption {
         because: String,
         consequence: String,
         replacement: String,
+        expires: Option<String>,
     ) -> Self {
-        Self {
+        let built = Self {
             id: AssumptionId::new(kind, subject),
             kind,
             source,
@@ -465,8 +421,19 @@ impl Assumption {
             because: sentence(&because),
             consequence: sentence(&consequence),
             replacement: sentence(&replacement),
-            expires: None,
-        }
+            expires,
+        };
+        // Every constructor's output must satisfy the rules `validate` states,
+        // and a debug build is where a producer that hands over an empty datum
+        // finds out. Left as a debug assert rather than a `Result` because
+        // ninety call sites returning `Result` for a bug in their own arguments
+        // buys nothing a test does not.
+        debug_assert!(
+            built.validate().is_ok(),
+            "{}",
+            built.validate().unwrap_err()
+        );
+        built
     }
 
     /// An unresolved part defaulted to an open circuit. `reason` is the
@@ -511,6 +478,7 @@ impl Assumption {
                 "Add a model for {reference} to your models directory, or mark it DNP if the \
                  board does not fit it."
             ),
+            None,
         )
     }
 
@@ -546,6 +514,7 @@ impl Assumption {
                 "Add a model for {requested} (a models directory entry or a model pack) so the \
                  run binds the part the board actually carries."
             ),
+            None,
         )
     }
 
@@ -573,6 +542,7 @@ impl Assumption {
                 "Name the pin roles for {reference} in its model (or give the run a schematic \
                  that names them) so nothing has to be inferred."
             ),
+            None,
         )
     }
 
@@ -597,6 +567,7 @@ impl Assumption {
                 "Set {parameter} in {reference}'s model, or supply it in your spec, so the run \
                  reads a real value."
             ),
+            None,
         )
     }
 
@@ -628,6 +599,7 @@ impl Assumption {
                 .to_string(),
             "Supply a BOM (or an as-built overlay) marking the parts that are not fitted."
                 .to_string(),
+            None,
         )
     }
 
@@ -638,25 +610,36 @@ impl Assumption {
     pub fn not_checked(
         source: AssumptionSource,
         check: &str,
+        rule: Option<&str>,
         because: &str,
         replacement: &str,
     ) -> Self {
         let check = fragment(check);
+        let rule = rule.map(fragment).filter(|r| !r.is_empty());
+        // A check that could not run one of its rules says nothing about that
+        // rule, not about the whole check, and the scope has to say which or the
+        // traversal will put it on the path of every assertion that touches the
+        // check.
+        let (subject, named) = match &rule {
+            Some(r) => (format!("{check}/{r}"), format!("{check} {r}")),
+            None => (check.clone(), check.clone()),
+        };
         Self::build(
             AssumptionKind::NotChecked,
             source,
-            &check,
+            &subject,
             Scope::Check {
                 check: check.clone(),
-                kind: None,
+                kind: rule,
             },
-            format!("The {check} check did not run."),
+            format!("The {named} check did not run."),
             sentence(because),
             format!(
-                "This run says nothing about {check}: no {check} findings here is not evidence \
+                "This run says nothing about {named}: no {named} findings here is not evidence \
                  that there are none."
             ),
             sentence(replacement),
+            None,
         )
     }
 
@@ -685,6 +668,7 @@ impl Assumption {
                  this run: what it reports there is a default, not a measurement."
             ),
             sentence(replacement),
+            None,
         )
     }
 
@@ -712,6 +696,7 @@ impl Assumption {
                  is documented as less accurate than the primary path."
             ),
             sentence(replacement),
+            None,
         )
     }
 
@@ -737,6 +722,7 @@ impl Assumption {
                 "Model the part that actually drives {net} (the regulator or the supply path) \
                  and re-run, so the check reads the board instead of the stimulus."
             ),
+            None,
         )
     }
 
@@ -763,6 +749,7 @@ impl Assumption {
                  unconfirmed rather than as results."
             ),
             sentence(replacement),
+            None,
         )
     }
 
@@ -776,7 +763,7 @@ impl Assumption {
         let kind = fragment(kind);
         let subject_text = fragment(subject);
         let until = fragment(until);
-        let mut a = Self::build(
+        Self::build(
             AssumptionKind::Waived,
             AssumptionSource::User,
             &format!("{check}/{kind}/{subject_text}"),
@@ -794,9 +781,8 @@ impl Assumption {
                 "Fix the finding, or let the waiver lapse on {until}, after which it gates \
                  again."
             ),
-        );
-        a.expires = Some(until);
-        a
+            Some(until),
+        )
     }
 
     /// Structural well-formedness, for a registry to assert as it collects.
@@ -834,7 +820,13 @@ impl Assumption {
         if subject.trim().is_empty() {
             return Err(format!("{}: the id names no subject", self.id));
         }
-        if !self.id.as_str().starts_with(self.kind.slug()) {
+        let id_slug = self
+            .id
+            .as_str()
+            .split_once(':')
+            .map(|(k, _)| k)
+            .unwrap_or_default();
+        if id_slug != self.kind.slug() {
             return Err(format!(
                 "{}: the id's kind slug is not `{}`",
                 self.id,
@@ -1121,7 +1113,9 @@ pub struct ErrorBudget {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub methods: Vec<WindowMethod>,
     /// The accepted Newton residual, when the producing path measured one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Omitted, rather than written as JSON `null`, when the number is not
+    /// finite: see [`ErrorBudget`]'s note on non-finite values.
+    #[serde(default, skip_serializing_if = "residual_is_not_a_number")]
     pub residual: Option<Residual>,
     /// Windows with NO valid solution: the run held stale values there. Any
     /// quantity read inside one of these is not a measurement.
@@ -1129,11 +1123,30 @@ pub struct ErrorBudget {
     pub failed_windows: Vec<TimeWindow>,
     /// Worst-case timestamp error for events, seconds. Today this is the
     /// co-sim chunk quantization: an edge is observed at a chunk boundary.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// Omitted when not finite.
+    #[serde(default, skip_serializing_if = "opt_f64_is_not_a_number")]
     pub event_time_error_s: Option<f64>,
     /// Interval bounds models place on parameters behind these numbers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub model_uncertainty: Vec<ModelUncertainty>,
+}
+
+/// True when an optional measurement is absent or not a real number.
+///
+/// JSON has no NaN and no infinity: `serde_json` writes them as `null`, which
+/// then fails to read back as an `f64` against a schema that says `number`. And
+/// a diverged march is exactly where a residual goes non-finite, so this is the
+/// normal case rather than a pathological one. A quantity that is not a number
+/// is not a measurement, so it is omitted, which the field's `Option` shape
+/// already means.
+fn opt_f64_is_not_a_number(v: &Option<f64>) -> bool {
+    !v.is_some_and(|x| x.is_finite())
+}
+
+/// True when the residual is absent or carries a non-finite magnitude. Same
+/// reasoning as [`opt_f64_is_not_a_number`].
+fn residual_is_not_a_number(v: &Option<Residual>) -> bool {
+    !v.as_ref().is_some_and(|r| r.max_abs.is_finite())
 }
 
 impl ErrorBudget {
@@ -1198,6 +1211,16 @@ pub enum EvidenceStatus {
 /// green, so the only routes back to a clean verdict are closing the assumption
 /// or acknowledging it in the open.
 ///
+/// Like [`Assumption`], and for the same reason, the type does not implement
+/// `Deserialize`. A serialized map carries assumption *ids*, not kinds, so a
+/// status could not be re-derived on the way back in even in principle: the kinds
+/// live in the run's registry, a different part of the document. A permissive
+/// `Deserialize` would therefore be a laundering route with no compensating
+/// check, and deleting the `assumptions` key from a hand-edited report would read
+/// back `Clean` over a real gap. A consumer that has the registry and wants the
+/// answer calls [`EvidenceMap::derive_status`] on it, which is the only honest
+/// way to get one.
+///
 /// ```
 /// use hauksbee_ir::evidence::{Assumption, EvidenceMap, EvidenceStatus};
 ///
@@ -1243,71 +1266,6 @@ pub struct EvidenceMap {
     pub coverage: Option<String>,
     /// DERIVED, never set. See [`EvidenceMap::derive_status`].
     status: EvidenceStatus,
-}
-
-/// The deserialization shape of [`EvidenceMap`].
-///
-/// A serialized map carries assumption *ids*, not kinds, so the status cannot be
-/// recomputed on the way back in: the kinds it derives from live in the run's
-/// registry, a different part of the document. Two things are enforced anyway,
-/// because they need no kinds: an empty id list is forced to `Clean`, and a
-/// non-empty one can never read back `Clean`. Above that floor a status read from
-/// a document is its producer's word, which is the honest limit of what a reader
-/// can check. Nothing in the tree produces a map by deserializing one; the
-/// produced-side guarantee is the private field plus the single constructor.
-#[derive(Deserialize)]
-struct EvidenceMapWire {
-    assertion: String,
-    #[serde(default)]
-    artifacts: Vec<usize>,
-    #[serde(default)]
-    models: Vec<ModelOnPath>,
-    #[serde(default)]
-    parameters: Vec<ParameterProvenance>,
-    #[serde(default)]
-    assumptions: Vec<AssumptionId>,
-    #[serde(default)]
-    error_budget: Option<ErrorBudget>,
-    #[serde(default)]
-    coverage: Option<String>,
-    #[serde(default = "wire_default_status")]
-    status: EvidenceStatus,
-}
-
-fn wire_default_status() -> EvidenceStatus {
-    EvidenceStatus::Undermined
-}
-
-/// Hand-written so the schema stays the schema of [`EvidenceMap`] itself (a
-/// `#[serde(from = ...)]` container attribute would publish the permissive wire
-/// shape instead, and the report schema has a drift test).
-impl<'de> Deserialize<'de> for EvidenceMap {
-    fn deserialize<D>(d: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        Ok(EvidenceMapWire::deserialize(d)?.into())
-    }
-}
-
-impl From<EvidenceMapWire> for EvidenceMap {
-    fn from(w: EvidenceMapWire) -> Self {
-        let status = if w.assumptions.is_empty() {
-            EvidenceStatus::Clean
-        } else {
-            w.status.max(EvidenceStatus::Qualified)
-        };
-        Self {
-            assertion: w.assertion,
-            artifacts: w.artifacts,
-            models: w.models,
-            parameters: w.parameters,
-            assumptions: w.assumptions,
-            error_budget: w.error_budget,
-            coverage: w.coverage,
-            status,
-        }
-    }
 }
 
 impl EvidenceMap {
@@ -1532,6 +1490,7 @@ mod tests {
             Assumption::not_checked(
                 AssumptionSource::Reader,
                 "drc",
+                None,
                 "this input class carries no copper geometry",
                 "supply a layout so the check has copper to read",
             ),
@@ -1582,10 +1541,30 @@ mod tests {
             "open-part:R7"
         );
         assert_eq!(
-            Assumption::not_checked(AssumptionSource::Reader, "drc", "no copper", "add a layout")
-                .id
-                .as_str(),
+            Assumption::not_checked(
+                AssumptionSource::Reader,
+                "drc",
+                None,
+                "no copper",
+                "add a layout"
+            )
+            .id
+            .as_str(),
             "not-checked:drc"
+        );
+        // A check that could not run ONE of its rules names the rule, so the
+        // traversal can scope it to the assertions that rely on that rule.
+        assert_eq!(
+            Assumption::not_checked(
+                AssumptionSource::Reader,
+                "drc",
+                Some("short"),
+                "the reader models a different file version",
+                "re-export the board"
+            )
+            .id
+            .as_str(),
+            "not-checked:drc/short"
         );
         assert_eq!(
             Assumption::not_exercised(
@@ -1702,44 +1681,34 @@ mod tests {
         assert!(b.because.starts_with("value_unresolved:"), "{}", b.because);
     }
 
+    /// An empty datum leaves a gap where a subject or a value belonged, and a
+    /// half-written sentence on a report is worse than a loud failure. `build`
+    /// asserts its own output, so a debug build is where a producer finds out.
     #[test]
-    fn a_sentence_with_a_hole_in_it_is_a_construction_error() {
-        // An empty datum leaves a gap where a subject or a value belonged, and a
-        // half-written sentence on a report is worse than a loud failure.
-        let holed = Assumption::not_checked(AssumptionSource::Reader, "", "no copper", "add one");
-        assert!(holed.validate().is_err(), "{:?}", holed.statement);
-        let holed = Assumption::substitute_model(AssumptionSource::Binder, "U1", "", "atmega328p");
-        assert!(holed.validate().is_err(), "{:?}", holed.statement);
+    #[should_panic(expected = "hole where a datum belongs")]
+    fn an_empty_subject_is_a_construction_error() {
+        Assumption::not_checked(AssumptionSource::Reader, "", None, "no copper", "add one");
     }
 
     #[test]
-    fn a_deserialized_assumption_runs_the_same_well_formedness_rules() {
-        // Reading a report back cannot re-derive the sentences, but a malformed
-        // assumption is refused at the boundary rather than rendered.
-        let bad = serde_json::json!({
-            "id": "open-part:R7",
-            "kind": "open_part",
-            "source": "binder",
-            "scope": { "type": "parts", "refs": ["R7"] },
-            "statement": "R7 is treated as an open circuit.",
-            "because": "No model matched.",
-            "consequence": "Nets through R7 are isolated.",
-            "replacement": "",
-        });
-        assert!(serde_json::from_value::<Assumption>(bad).is_err());
-        // And an id whose slug disagrees with the kind, which would make the
-        // status rule and the rendered id describe different things.
-        let mismatched = serde_json::json!({
-            "id": "reduced-fidelity:R7",
-            "kind": "open_part",
-            "source": "binder",
-            "scope": { "type": "parts", "refs": ["R7"] },
-            "statement": "R7 is treated as an open circuit.",
-            "because": "No model matched.",
-            "consequence": "Nets through R7 are isolated.",
-            "replacement": "Add a model.",
-        });
-        assert!(serde_json::from_value::<Assumption>(mismatched).is_err());
+    #[should_panic(expected = "hole where a datum belongs")]
+    fn an_empty_datum_mid_sentence_is_a_construction_error() {
+        Assumption::substitute_model(AssumptionSource::Binder, "U1", "", "atmega328p");
+    }
+
+    #[test]
+    fn validate_catches_a_mismatched_id_slug() {
+        // The id and the kind must name the same thing, or the status rule and
+        // the rendered id describe different gaps. Reachable only by hand here,
+        // since the constructors compose the id from the kind.
+        let mut a = Assumption::open_part("R7", "10k", "no model matched");
+        a.id = AssumptionId(format!("{}:R7", AssumptionKind::ReducedFidelity.slug()));
+        assert!(a.validate().is_err());
+        // And an id naming no subject: an acknowledgment file could not name it
+        // and a diff could not track it.
+        let mut a = Assumption::open_part("R7", "10k", "no model matched");
+        a.id = AssumptionId(format!("{}:", AssumptionKind::OpenPart.slug()));
+        assert!(a.validate().is_err());
     }
 
     #[test]
@@ -1875,58 +1844,76 @@ mod tests {
 
     // ── forgery ─────────────────────────────────────────────────────────
 
+    /// A judgement is produced, never parsed. `Assumption` and `EvidenceMap` are
+    /// serialize-only for exactly this reason: a `Deserialize` on either is a
+    /// minting route that needs no constructor. Eight lines of JSON would
+    /// otherwise buy an assumption with any kind and any wording, and a map with
+    /// its `assumptions` key deleted would read back `Clean` over a real gap,
+    /// which is the hiding the whole spine exists to prevent.
+    ///
+    /// This test is the guard on that decision. `serde_json::from_value` for
+    /// either type does not compile today, and if someone adds the derive to make
+    /// a consumer's life easier, this stops passing.
     #[test]
-    fn a_hand_edited_report_cannot_launder_a_status() {
-        // The only in-tree route to an EvidenceMap that did not go through
-        // `new` is deserialization, so that is where the laundering attempt
-        // has to be blocked.
-        let forged = serde_json::json!({
-            "assertion": "3V3 stays above 3.1 V",
-            "artifacts": [0],
-            "models": [],
-            "assumptions": ["open-part:U2"],
-            "status": "clean"
+    fn the_judgement_types_are_serialize_only() {
+        // The record types read back: they are facts about what happened, and
+        // parsing one cannot launder a verdict.
+        fn round_trips<T>(value: T)
+        where
+            T: Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
+        {
+            let text = serde_json::to_string(&value).expect("serializes");
+            let back: T = serde_json::from_str(&text).expect("deserializes");
+            assert_eq!(back, value);
+        }
+        round_trips(Scope::Parts {
+            refs: vec!["R7".into()],
         });
-        let map: EvidenceMap = serde_json::from_value(forged).unwrap();
-        assert_ne!(
-            map.status(),
-            EvidenceStatus::Clean,
-            "an assertion with on-path assumptions must never read back clean"
-        );
-        // Nor the mirror trick: scaring a reader with a status the id list does
-        // not support.
-        let empty = serde_json::json!({
-            "assertion": "VBUS stays below 5.5 V",
-            "artifacts": [],
-            "models": [],
-            "status": "undermined"
+        round_trips(ParameterProvenance {
+            parameter: "R7.resistance".into(),
+            value: "10k".into(),
+            origin: ValueOrigin::Artifact {
+                index: 0,
+                field: "value".into(),
+            },
         });
-        let map: EvidenceMap = serde_json::from_value(empty).unwrap();
-        assert_eq!(map.status(), EvidenceStatus::Clean);
+        round_trips(ErrorBudget::new(IntegrationTolerance {
+            reltol: 1e-3,
+            abstol: 1e-12,
+            chgtol: 1e-14,
+        }));
+
+        // The judgements do not. Written as a source-text assertion because a
+        // negative trait bound is not expressible: the derives are in this file,
+        // so the file can check itself.
+        let src = include_str!("evidence.rs");
+        for judgement in ["pub struct Assumption {", "pub struct EvidenceMap {"] {
+            let at = src.find(judgement).expect("the type is declared here");
+            let derives = &src[at.saturating_sub(400)..at];
+            assert!(
+                !derives.contains("Deserialize"),
+                "{judgement} gained a Deserialize derive, which is a minting route"
+            );
+        }
     }
 
     #[test]
-    fn a_status_read_back_above_the_floor_is_the_producers_word() {
-        // The honest limit of what a reader can check: the kinds a status derives
-        // from live in the run's assumption registry, not in the map, so a
-        // document claiming `qualified` over an undermining id list reads back as
-        // it was written. What cannot be forged is a clean verdict, and nothing
-        // in the tree builds a map by deserializing one. A consumer that wants
-        // certainty re-derives from the registry with `derive_status`.
-        let wire = serde_json::json!({
-            "assertion": "3V3 stays above 3.1 V",
-            "artifacts": [0],
-            "models": [],
-            "assumptions": ["open-part:U2"],
-            "status": "qualified"
-        });
-        let map: EvidenceMap = serde_json::from_value(wire).unwrap();
-        assert_eq!(map.status(), EvidenceStatus::Qualified);
+    fn a_consumer_settles_a_status_by_re_deriving_it_from_the_registry() {
+        // The only honest way to check a status: hand the kinds back to the rule.
+        // A reader with the run's registry can always do this; a reader with a
+        // map alone is holding the producer's word, which is why the map is not
+        // parseable on its own.
         let registry = [Assumption::open_part("U2", "XC6206", "no model matched")];
+        let map = EvidenceMap::new("3V3 stays above 3.1 V", &registry, TODAY);
+        let on_path: Vec<Assumption> = registry
+            .iter()
+            .filter(|a| map.assumptions().contains(a.id()))
+            .cloned()
+            .collect();
         assert_eq!(
-            EvidenceMap::derive_status(&registry, TODAY),
-            EvidenceStatus::Undermined,
-            "re-deriving from the registry is what settles it"
+            EvidenceMap::derive_status(&on_path, TODAY),
+            map.status(),
+            "re-deriving from the registry must reproduce the recorded status"
         );
     }
 
@@ -1950,8 +1937,6 @@ mod tests {
             "the assumption shape gained or lost a field; the report schema \
              bumps exactly once, in the rendering phase"
         );
-        let back: Assumption = serde_json::from_value(v).unwrap();
-        assert_eq!(back, a);
     }
 
     #[test]
@@ -1990,10 +1975,42 @@ mod tests {
         assert!(v["error_budget"].get("residual").is_none());
         assert!(v.get("parameters").is_none());
         assert!(v.get("coverage").is_none());
-        // Round-trip keeps the status: a consumer reads what the producer said.
-        let back: EvidenceMap = serde_json::from_value(v).unwrap();
-        assert_eq!(back.status(), EvidenceStatus::Undermined);
-        assert_eq!(back, map);
+    }
+
+    #[test]
+    fn a_number_that_is_not_a_number_is_omitted_rather_than_written_as_null() {
+        // JSON has no NaN and no infinity, and a diverged march is exactly where
+        // a residual goes non-finite. `serde_json` would write `null` against a
+        // schema that says `number`, which no consumer can read back.
+        let budget = ErrorBudget {
+            residual: Some(Residual {
+                max_abs: f64::NAN,
+                at: "n1".into(),
+            }),
+            event_time_error_s: Some(f64::INFINITY),
+            ..ErrorBudget::new(IntegrationTolerance {
+                reltol: 1e-3,
+                abstol: 1e-12,
+                chgtol: 1e-14,
+            })
+        };
+        let v = serde_json::to_value(&budget).unwrap();
+        assert!(v.get("residual").is_none(), "{v}");
+        assert!(v.get("event_time_error_s").is_none(), "{v}");
+        // A real measurement still rides.
+        let budget = ErrorBudget {
+            residual: Some(Residual {
+                max_abs: 4.2e-9,
+                at: "n1".into(),
+            }),
+            event_time_error_s: Some(1e-6),
+            ..budget
+        };
+        let v = serde_json::to_value(&budget).unwrap();
+        assert_eq!(v["residual"]["max_abs"], 4.2e-9);
+        assert_eq!(v["event_time_error_s"], 1e-6);
+        let back: ErrorBudget = serde_json::from_value(v).unwrap();
+        assert_eq!(back, budget);
     }
 
     #[test]
