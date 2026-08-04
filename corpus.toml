@@ -11,11 +11,36 @@
 # `scripts/fetch-corpus.sh` reads this file and does that.
 #
 # The pin is the point. An upstream board that changes must not silently change
-# our results, so `rev` is a commit or tag, never a branch.
+# our results, so `rev` is a commit or tag, never a branch. A zip-hosted board
+# has no revision to pin, so `sha256` is its pin and the fetch refuses to
+# download one without it.
 #
 # Adding a board: record the upstream, the exact revision, and the licence. If
 # you cannot establish the licence, mark it `license_confirmed = false` and it
 # stays out of the default fetch.
+#
+# Fields, all optional except `id`, `url` and `license`:
+#
+#   rev                a commit or tag. Required for `kind = "git"` (the default).
+#   kind               "git" or "zip".
+#   sha256             the archive's hash. Required for `kind = "zip"`.
+#   dest               where the board lands under the corpus root, if not `id`.
+#                      Used to group the two halves of a revision pair.
+#   subdir             the only part of a large upstream the corpus wants;
+#                      everything else is dropped, and this level is kept.
+#   hoist              a directory inside the fetched tree whose CONTENTS are
+#                      lifted into the board directory, for an upstream that
+#                      keeps its design one level down.
+#   unpack             an archive inside the fetched tree that IS the board. Its
+#                      contents replace everything else the upstream shipped.
+#   license_confirmed  false keeps the board out of the default fetch.
+#   name               the human name for logs and --list.
+#
+# `dest`, `subdir`, `hoist` and `unpack` exist for one reason: the paths the
+# corpus tests ask for. A fetched corpus that puts a board somewhere no test
+# looks is worse than no corpus, because the tests skip and the skip reads as a
+# pass. Every one of these fields was added to close such a gap, and the note on
+# each entry says which.
 
 [meta]
 # Where fetch-corpus.sh puts things when HAUKSBEE_CORPUS_DIR is unset.
@@ -119,11 +144,19 @@ license = "MIT"
 # Revision PAIRS where a documented electrical fault was fixed between two
 # public releases. The revision history is ground truth for whether hauksbee
 # flags the right thing, so both halves are needed.
+#
+# These carry `dest`, which the other boards do not need. A revision pair is two
+# checkouts of ONE upstream, so it cannot land at `<id>/` without the two halves
+# reading as two unrelated boards, and the tests were written against a corpus
+# that groups them: `zswatch_devkit/v1.2.0/`, not `zswatch_devkit_1_2_0/`. `dest`
+# is what the fetch writes; `id` stays the handle for `--only`. Without it the
+# fetch produced a corpus no corpus test could find a pair board in.
 [[board]]
 id = "watchy_history_v1_5"
 name = "Watchy v1.5 (pre-fix: display RES# pull-up, issue #14)"
 url = "https://github.com/sqfmi/Watchy-Hardware"
 rev = "64f4925"
+dest = "watchy_history/v1.5"
 license = "MIT"
 
 [[board]]
@@ -131,6 +164,7 @@ id = "watchy_history_v2_0"
 name = "Watchy v2.0 (fixed)"
 url = "https://github.com/sqfmi/Watchy-Hardware"
 rev = "9b40304"
+dest = "watchy_history/v2.0"
 license = "MIT"
 
 [[board]]
@@ -140,11 +174,27 @@ url = "https://github.com/ZSWatch/Watch-HW"
 rev = "891a3d52"
 license = "GPL-3.0"
 
+# The oldest DevKit the tests reference. It was absent from the manifest, so the
+# DISPLAY-EN gold row in the known-faults record could not be reproduced from a
+# fetch: the board it is measured on simply was not there. Tag 1.1.0 resolves to
+# commit a9f27fe8a87b9cfee1b861e4e8459c8587e3d7d4, and the repository is
+# GPL-3.0 at that tag on the same terms as 1.2.0 and 1.2.1 below.
+[[board]]
+id = "zswatch_devkit_1_1_0"
+name = "ZSWatch DevKit 1.1.0"
+url = "https://github.com/ZSWatch/Watch-DevKit-HW"
+rev = "a9f27fe8a87b9cfee1b861e4e8459c8587e3d7d4"
+dest = "zswatch_devkit/v1.1.0"
+hoist = "dev-kit"
+license = "GPL-3.0"
+
 [[board]]
 id = "zswatch_devkit_1_2_0"
 name = "ZSWatch DevKit 1.2.0 (pre-fix: I2C pull-ups, PR #158)"
 url = "https://github.com/ZSWatch/Watch-DevKit-HW"
 rev = "5eeee19"
+dest = "zswatch_devkit/v1.2.0"
+hoist = "devkit"
 license = "GPL-3.0"
 
 [[board]]
@@ -152,13 +202,24 @@ id = "zswatch_devkit_1_2_1"
 name = "ZSWatch DevKit 1.2.1 (fixed)"
 url = "https://github.com/ZSWatch/Watch-DevKit-HW"
 rev = "77abae3"
+dest = "zswatch_devkit/v1.2.1"
+hoist = "devkit"
 license = "GPL-3.0"
 
+# `rev` is the full 40-character sha, not the abbreviated `3eab4d1` that used to
+# stand here. The short form happened to also be the tip of `main`, so a fetch
+# that silently landed on the branch head instead of the pin would have looked
+# identical; the full sha makes the pin checkable. Verified present upstream on
+# 2026-08-04: refs/heads/main == 3eab4d12cda4b97031d52c1119461cba226d1a33.
 [[board]]
 id = "lumenpnp"
 name = "Opulo LumenPnP motherboard and ring light"
 url = "https://github.com/opulo-inc/lumenpnp"
-rev = "3eab4d1"
+rev = "3eab4d12cda4b97031d52c1119461cba226d1a33"
+# Upstream keeps the boards at pnp/pcb/{mobo,ring-light}; every test asks for
+# lumenpnp/mobo/... . Without this the fetched corpus had the motherboard on disk
+# and the ERC calibration recorded it as unloadable.
+hoist = "pnp/pcb"
 license = "CERN-OHL-W-2.0"
 
 [[board]]
@@ -192,6 +253,11 @@ license = "CC0-1.0 / MIT / Apache-2.0 / ISC (mixed, see LICENSE files)"
 
 # ---------------------------------------------------------------------------
 # Native CAD, released as a zip rather than a repository
+#
+# A zip URL has no commit to pin, so `sha256` is the pin: it is what stops a
+# re-published archive from silently changing our results, the same job `rev`
+# does for the git-hosted boards. Each hash below was computed from two
+# independent downloads of the URL.
 # ---------------------------------------------------------------------------
 
 [[board]]
@@ -199,6 +265,7 @@ id = "arduino_uno_r3_official"
 name = "Arduino Uno Rev3 (official CAD release)"
 url = "https://docs.arduino.cc/static/6bb7a3ca51ebee82a252f60c0b418787/A000066-cad-files.zip"
 kind = "zip"
+sha256 = "532b306cb153846eafc0ca9fe991d7a4dfa0c52dcefafa2efeaebf4b845ec820"
 license = "CC-BY-SA-4.0"
 
 [[board]]
@@ -206,6 +273,7 @@ id = "rp2040_minimal_kicad"
 name = "Raspberry Pi RP2040 minimal design (official)"
 url = "https://pip.raspberrypi.com/documents/RP-008296-DS-Minimal-KiCAD.zip"
 kind = "zip"
+sha256 = "8fdae5c1d3d8e58f43a45cd604ce9836b1ad4649f11eca4a9bea97eec6c2093a"
 license = "MIT (stated in the bundled LICENSE.txt)"
 
 # Revision 2 of the same design, which is a different board from the r3 the
@@ -248,6 +316,7 @@ id = "rp2040_minimal_r2"
 name = "Raspberry Pi RP2040 minimal design, revision 2 (official, superseded upstream)"
 url = "https://web.archive.org/web/20240521000034id_/https://datasheets.raspberrypi.com/rp2040/Minimal-KiCAD.zip"
 kind = "zip"
+sha256 = "5af8f5acd52a521a93ae6ba4986a4e0cbfaefca5454223cfddf91b37e975b21f"
 license = "MIT (the archived r2 zip carries no licence file; the same design's current upstream package states MIT in its bundled LICENSE.txt)"
 
 # ---------------------------------------------------------------------------
@@ -269,6 +338,11 @@ url = "https://github.com/SolderedElectronics/Inkplate-6-hardware"
 # resolved to nothing and took this board out of every fetch. Pinned to the
 # commit rather than the branch, per the note at the top of this file.
 rev = "e14476d3bbddfb0e76815f4b1ffa6f7e26e54bad"
+# The films exist upstream only inside this archive. Unpacked flat into the board
+# directory, which is where gerber_inkplate.rs reads them from and where the
+# hand-built corpus has always had them. Without this the fetch left a zip and
+# the reverse-extraction gate had no films to reconstruct from.
+unpack = "Schematics, Gerber, BOM/v1.0/Inkplate 6 gerber files v1.0.zip"
 license = "MIT"
 
 [[board]]

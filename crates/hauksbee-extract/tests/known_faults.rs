@@ -3,9 +3,12 @@
 //! The revision history is ground truth: "hauksbee flags rev N for exactly the
 //! thing rev N+1 fixed" is the strongest calibration the tool can have.
 //!
-//! These tests are corpus-gated (skipped, not failed, when board-corpus is
-//! absent) like `drc_corpus.rs`, because they read the historical revision
-//! pairs added under `board-corpus/famous/{zswatch_devkit,watchy_history}`.
+//! These tests are corpus-gated (skipped, not failed, when the board corpus is
+//! absent) like `drc_corpus.rs`, because they read the historical revision pairs
+//! grouped as `{zswatch_devkit,watchy_history}/<version>/` under the corpus root.
+//! Every board goes through the layout-tolerant resolver, so the hand-built and
+//! fetched corpora both work; and every gate here prints the number of boards it
+//! opened, because a gold row that opened none has validated nothing.
 //!
 //! Each gold pair below has a prior-art citation in
 //! `docs/evidence/KNOWN_FAULTS_VALIDATION.md`. The point of encoding them as tests is
@@ -17,21 +20,39 @@ use std::path::PathBuf;
 
 use hauksbee_extract::{ExtractedBoard, LintCheck};
 
-/// Locate board-corpus/famous relative to this crate, if present.
+/// The directory the board ids sit under, whichever corpus layout is on disk.
 ///
 /// Corpus-gated skip; `HAUKSBEE_REQUIRE_CORPUS=1` turns absence into a hard
 /// fail, so the gold-row calibration cannot vacuously green-out on a runner
-/// that is supposed to have the corpus. (Matches the convention in
-/// `hauksbee-engine/tests/boardcode_miswire.rs`.)
-fn famous_root() -> Option<PathBuf> {
-    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join("famous");
-    if p.exists() {
-        return Some(p);
+/// that is supposed to have the corpus.
+///
+/// This hardcoded `<corpus>/famous`, which exists only in the hand-built layout.
+/// A corpus produced by `scripts/fetch-corpus.sh` has the board ids at its root,
+/// so the join named a directory that was not there and every gold row here
+/// failed on board LOCATION rather than on a finding.
+fn boards_root() -> Option<PathBuf> {
+    match hauksbee_testkit::corpus_boards_root(env!("CARGO_MANIFEST_DIR")) {
+        Some(p) => Some(p),
+        None => {
+            require_corpus("the board corpus (neither <corpus>/famous/ nor <corpus>/ resolved)");
+            None
+        }
     }
-    require_corpus(&p.display().to_string());
-    None
+}
+
+/// One gold-row board, by corpus-relative path, in whichever layout holds it.
+///
+/// The revision pairs are the awkward case: the hand-built corpus groups them as
+/// `zswatch_devkit/v1.2.0/`, and the fetch writes the same grouping via the
+/// manifest's `dest`. Going through the resolver keeps both live.
+fn board(rel: &str) -> Option<PathBuf> {
+    match hauksbee_testkit::corpus_board(env!("CARGO_MANIFEST_DIR"), rel) {
+        Some(p) => Some(p),
+        None => {
+            require_corpus(rel);
+            None
+        }
+    }
 }
 
 /// A required corpus file is missing: skip, unless HAUKSBEE_REQUIRE_CORPUS is set,
@@ -78,16 +99,13 @@ fn i2c_medium_plus(r: &hauksbee_extract::NetLintReport) -> usize {
 
 #[test]
 fn zswatch_devkit_i2c_pullup_flagged_in_faulty_clean_in_fixed() {
-    let Some(root) = famous_root() else {
-        eprintln!("board-corpus/famous absent; skipping ZSWatch DevKit I2C gold row");
+    let Some(faulty) = board("zswatch_devkit/v1.2.0/ZSWatch-Watch-DevKit.kicad_pcb") else {
         return;
     };
-    let faulty = root.join("zswatch_devkit/v1.2.0/ZSWatch-Watch-DevKit.kicad_pcb");
-    let fixed = root.join("zswatch_devkit/v1.2.1/ZSWatch-Watch-DevKit.kicad_pcb");
-    if !faulty.exists() || !fixed.exists() {
-        require_corpus("zswatch_devkit v1.2.0/v1.2.1");
+    let Some(fixed) = board("zswatch_devkit/v1.2.1/ZSWatch-Watch-DevKit.kicad_pcb") else {
         return;
-    }
+    };
+    hauksbee_testkit::scanned("ZSWatch DevKit I2C gold row", 2);
 
     // Faulty 1.2.0: at least the two on-board RTC bus lines flag at medium+.
     let rf = lint_pcb(&faulty);
@@ -120,16 +138,11 @@ fn zswatch_devkit_i2c_pullup_flagged_in_faulty_clean_in_fixed() {
 
 #[test]
 fn zswatch_mainboard_rtc_i2c_is_clean() {
-    let Some(root) = famous_root() else {
-        eprintln!("board-corpus/famous absent; skipping ZSWatch mainboard cross-check");
+    let Some(mainboard) = board("zswatch_mainboard/watch/ZSWatch-Watch.kicad_pcb") else {
         return;
     };
-    let board = root.join("zswatch_mainboard/watch/ZSWatch-Watch.kicad_pcb");
-    if !board.exists() {
-        require_corpus("zswatch_mainboard");
-        return;
-    }
-    let r = lint_pcb(&board);
+    hauksbee_testkit::scanned("ZSWatch mainboard RTC I2C cross-check", 1);
+    let r = lint_pcb(&mainboard);
     assert_eq!(
         i2c_medium_plus(&r),
         0,
@@ -161,20 +174,20 @@ fn zswatch_mainboard_rtc_i2c_is_clean() {
 
 #[test]
 fn fixed_control_pull_revisions_are_lint_clean() {
-    let Some(root) = famous_root() else {
-        eprintln!("board-corpus/famous absent; skipping fixed-control-pull guard");
+    if boards_root().is_none() {
         return;
-    };
+    }
     // Watchy v2.0 (R20 RES# pull-up present) and ZSWatch DevKit 1.2.0
     // (R613/R614 DISPLAY-EN pull present) must be clean of floating-control-pin
     // findings.
-    let watchy_fixed = root.join("watchy_history/v2.0/Watchy.kicad_pcb");
-    let devkit_fixed = root.join("zswatch_devkit/v1.2.0/ZSWatch-Watch-DevKit.kicad_pcb");
-    for b in [watchy_fixed, devkit_fixed] {
-        if !b.exists() {
-            require_corpus(&b.display().to_string());
-            continue;
-        }
+    let wanted = [
+        "watchy_history/v2.0/Watchy.kicad_pcb",
+        "zswatch_devkit/v1.2.0/ZSWatch-Watch-DevKit.kicad_pcb",
+    ];
+    let mut checked = 0usize;
+    for rel in wanted {
+        let Some(b) = board(rel) else { continue };
+        checked += 1;
         let r = lint_pcb(&b);
         let floating = r.of_check(LintCheck::FloatingControlPin).count();
         assert_eq!(
@@ -184,4 +197,5 @@ fn fixed_control_pull_revisions_are_lint_clean() {
             b.display()
         );
     }
+    hauksbee_testkit::scanned("fixed-control-pull guard", checked);
 }
