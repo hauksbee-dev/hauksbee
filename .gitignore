@@ -60,9 +60,13 @@ frontend/test-results/
 # repo that has no right to redistribute it.
 board-corpus/
 
-# Boards that a fetch dropped at the repository root rather than under
-# board-corpus/. Ignored so they cannot be committed by accident; delete them
-# when you find them.
+# Boards a pre-2026-08 fetch dropped at the repository root rather than under
+# board-corpus/. The cause is fixed (fetch-corpus.sh read its target directory
+# through `awk -F'\x1f'`, which BSD awk takes literally, so the directory came
+# back empty and every board landed here), but a checkout that fetched before the
+# fix still has them, and a `git add -A` there would commit a few hundred MB of
+# third-party hardware. Safe to delete along with these lines once no working
+# checkout predates the fix.
 /crkbd/
 /lily58/
 /mppt_1210_hus/
