@@ -27,10 +27,10 @@ use hauksbee_ir::evidence::{
     ParameterProvenance, RunDate, Scope, Subject, ValueOrigin,
 };
 
-/// 2026-01-01. A run builds this from its own clock reading; a fixed value keeps
+/// 2026-08-01. A run builds this from its own clock reading; a fixed value keeps
 /// the test off the wall clock.
 fn today() -> RunDate {
-    RunDate::from_epoch_days(20_454)
+    RunDate::from_epoch_days(20_666)
 }
 
 /// A renderer's whole job, done with public API only: pick the assumptions on an
@@ -116,7 +116,7 @@ fn a_consumer_can_build_every_kind_and_read_every_sentence() {
             "controlled_impedance",
             "DDR_CLK",
             "the fab confirmed the stackup",
-            "2026-06-01",
+            "2027-06-01",
         ),
     ];
     for a in &registry {
