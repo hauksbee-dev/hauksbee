@@ -181,7 +181,15 @@ pub fn emit_resources(
             jr.waived = waived.iter().cloned().map(Into::into).collect();
             println!("{}", jr.to_json());
         }
-        OutputMode::Plain => print!("{}", crate::plain_netlint(&report).render()),
+        OutputMode::Plain => {
+            let mut plain = crate::plain_netlint(&report);
+            // `plain_netlint` is shared with `--lint`, whose subject is the whole
+            // connectivity family. `--resources` ran one member of it, so it must
+            // say so: "no connectivity problems found" claimed a clean bill for
+            // checks this command never ran.
+            plain.verdict_noun = Some("MCU resource conflicts".to_string());
+            print!("{}", plain.render());
+        }
         OutputMode::Text => {
             print!("{}", render_resources_text(&report));
             // Route a novice from the expert text (bare severity + jargon) to the

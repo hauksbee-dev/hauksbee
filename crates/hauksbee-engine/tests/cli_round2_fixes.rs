@@ -172,6 +172,56 @@ fn resources_output_is_distinguishable_from_lint() {
     );
 }
 
+/// `--plain` must not borrow `--lint`'s subject. Both reports share
+/// `plain_netlint`, whose subject is the whole connectivity family, so a clean
+/// `--resources --plain` printed "no connectivity problems found": a clean bill
+/// of health for the I2C-pullup, floating-pin, LED-sanity and contention checks
+/// that this command never ran.
+#[test]
+fn plain_resources_names_resource_conflicts_not_connectivity() {
+    let b = clean_board();
+    let res = run(&["run", b.to_str().unwrap(), "--resources", "--plain"]);
+    assert!(res.status.success());
+    let out = stdout(&res);
+    assert!(
+        out.contains("no MCU resource conflicts found"),
+        "clean --resources --plain must name MCU resource conflicts:\n{out}"
+    );
+    assert!(
+        !out.contains("connectivity"),
+        "and must not claim anything about connectivity:\n{out}"
+    );
+    // --lint, which really does run the connectivity family, keeps its subject.
+    let lint = run(&["run", b.to_str().unwrap(), "--lint", "--plain"]);
+    assert!(lint.status.success());
+    assert!(
+        stdout(&lint).contains("no connectivity problems found"),
+        "--lint --plain keeps the connectivity subject:\n{}",
+        stdout(&lint)
+    );
+}
+
+/// `--check --plain` must not let the USB-C section's absence read as a pass.
+/// The section renders only when a USB-C receptacle was found, so on every other
+/// board the suite has to say which of the two it was.
+#[test]
+fn plain_check_states_whether_usb_c_compliance_ran() {
+    let b = clean_board();
+    let out = run(&["run", b.to_str().unwrap(), "--check", "--plain"]);
+    assert!(out.status.success());
+    let s = stdout(&out);
+    assert!(
+        s.contains("USB-C CC compliance did not run"),
+        "a board with no USB-C must say the check did not run:\n{s}"
+    );
+    // And the lint section names the checks that ride with it, so a reader knows
+    // resource conflicts and strap pins were covered by that verdict.
+    assert!(
+        s.contains("MCU resource conflicts") && s.contains("boot strap pins"),
+        "the lint section must name what rides with it:\n{s}"
+    );
+}
+
 // ── sim empty-deck refusal (major 4) and probe validation (minor 17) ────────
 
 #[test]
