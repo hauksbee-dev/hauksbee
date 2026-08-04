@@ -17,12 +17,56 @@
 [soc]
 backend = "renode"
 machine = "fe310"
-platform_repl = "@platforms/cpus/sifive-fe310.repl"
+platform_repl = """
+// SiFive FE310 platform: the stock Renode file plus this part's real core clock.
+//
+// CLOCK TRUTH (tests/clock_truth.rs). The stock sifive-fe310.repl leaves
+// `cpu PerformanceInMips` at Renode's default 100, against a part whose core
+// runs at 16 MHz, so an instruction-timed delay costs about a sixth of the
+// virtual time it costs on the board. This is the same defect the STM32 and
+// nRF52 platforms carried, and the sibling parts measured 9.09x, 4.51x and
+// 6.58x fast before it was fixed.
+//
+// 16 MHz is the FE310-G002's RESET DEFAULT: the core comes up on the internal
+// HFROSC, which the factory trim targets at 16 MHz (FE310-G002 manual §6.2),
+// and this platform's PRCI is a pair of always-ready tags rather than a clock
+// tree that firmware could retune. `frequency_hz` below declares the same
+// 16 MHz and is cross-checked against this declaration at descriptor load
+// (soc::check_clock_declarations).
+//
+// NOT FIXED HERE, and measured rather than assumed: the stock file also
+// declares `clint frequency: 62000000` for the machine timer, while the real
+// FE310 drives `mtime` from the 32.768 kHz always-on RTC. That is a separate
+// clock domain from the core, so the cross-check above deliberately does not
+// police it, and it is NOT changed here because the in-tree Zephyr shell image
+// is the only FE310 firmware available to prove either value and it does not
+// exercise `mtime` on a path this repo can observe. Recorded as an open gap in
+// docs/cosim/MCU.md rather than changed on a guess: a 1892x edit to a timer
+// nobody can measure is how the original defect was introduced.
+//
+// A RISC-V part has no NVIC, so there is no `systickFrequency` to declare; the
+// cross-check requires `PerformanceInMips`, which every Renode CPU has.
+
+using "platforms/cpus/sifive-fe310.repl"
+
+cpu:
+    PerformanceInMips: 16
+"""
 cpu_path = "sysbus.cpu"
 uart = "sysbus.uart0"
 frequency_hz = 16_000_000
 expected_e_machine = "EM_RISCV"
 mcu_label = "SiFive FE310 (RISC-V)"
+
+# WATCHDOG: not measured on this part. The two watchdogs that were measured (the
+# F103's, which bites once, and the nRF52840's, which never bites) disagree, so
+# nothing here can be inferred from them. Omitting this field would claim the
+# watchdog behaves.
+watchdog_limitation = """\
+Watchdog behaviour is UNVERIFIED on this part in this co-simulator: nobody has \
+measured whether an unserviced watchdog resets the core here, so a firmware \
+recovery path that depends on it is untested on this run.\
+"""
 post_load_setup = [
     'sysbus Tag <0x10008000 4> "PRCI_HFROSCCFG" 0xFFFFFFFF',
     'sysbus Tag <0x10008008 4> "PRCI_PLLCFG" 0xFFFFFFFF',
