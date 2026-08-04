@@ -7,6 +7,7 @@
 pub mod boardcode;
 pub mod common;
 pub mod doctor;
+pub mod examples;
 pub mod hostserial;
 pub mod install;
 pub mod models;

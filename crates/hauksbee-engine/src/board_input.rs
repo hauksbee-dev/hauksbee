@@ -97,6 +97,19 @@ impl NormalizedBoard {
     }
 }
 
+/// The missing-board message. Never suggests an unrunnable command: the
+/// checkout-relative example path only exists inside a hauksbee source tree;
+/// from a bare binary, the embedded example is the one that always works.
+fn board_not_found_message(path: &str) -> String {
+    let checkout = Path::new("crates/hauksbee-ci/examples/boards/blinky.kicad_pcb");
+    let suggestion = if checkout.exists() {
+        "hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report"
+    } else {
+        "hauksbee run --example blinky --report"
+    };
+    format!("no board file at '{path}'. Check the path, or try a bundled example:\n  {suggestion}")
+}
+
 /// Why a board input could not be normalized. Variants keep the semantic
 /// content; `Display` renders the CLI-facing message and [`web_message`]
 /// renders the web front door's wording, so one normalizer still speaks to
@@ -106,10 +119,7 @@ impl NormalizedBoard {
 #[derive(Debug, thiserror::Error)]
 pub enum BoardInputError {
     /// The path does not exist ([`from_path`] only).
-    #[error(
-        "no board file at '{path}'. Check the path, or try a bundled example:\n  \
-         hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report"
-    )]
+    #[error("{}", board_not_found_message(path))]
     NotFound { path: String },
     /// The file exists but could not be read ([`from_path`] only).
     #[error("reading '{path}': {message}")]
