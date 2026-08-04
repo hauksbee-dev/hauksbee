@@ -18,18 +18,29 @@ name = "pic_programmer schematic power-up sanity"
 board = "../../../../board-corpus/kicad-demos-src/demos/pic_programmer/pic_programmer.kicad_sch"
 duration_ms = 1
 
-# No PCB, no firmware: drive the VCC rail through an ideal 5 V supply and check
-# the design powers up cleanly.
+# No PCB, no firmware: feed VCC from a bench supply and check the design powers
+# up cleanly.
+#
+# `kind = "bench"` rather than `"ideal"` on purpose. An ideal leg holds its net
+# at exactly its programmed voltage no matter what the board does, so a voltage
+# assertion on the fed net could not fail for any board reason: its green would
+# be measuring the spec against itself. A bench leg has finite output impedance
+# and a current limit, so the rail can actually sag, which is the thing the
+# assertion below is for. `hauksbee-ci init` refuses to scaffold the hollow
+# shape, and a run that finds it says COVERAGE HOLE.
 [[supply]]
 net = "VCC"
-kind = "ideal"
+kind = "bench"
 volts = 5.0
+current_limit_a = 1.0
+r_out_ohms = 0.05
 
-# 1. The VCC rail must sit at 5 V.
+# 1. The VCC rail must hold up under whatever the design draws at power-up.
+# The window is the bench supply's set point plus the sag it is allowed.
 [[assert]]
 kind = "voltage"
 net = "VCC"
-min = 4.99
+min = 4.9
 max = 5.01
 
 # 2. Nothing in the design exceeds its rating at power-up.
