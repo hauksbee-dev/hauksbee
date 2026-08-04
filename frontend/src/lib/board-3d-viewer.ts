@@ -35,6 +35,15 @@ import { isLightTheme } from './theme-tokens'
 // KiCad PCB standard 1.6 mm → top surface in Three.js
 const PCB_TOP_Y = 0.0016
 
+/**
+ * Frames the render-on-demand loop keeps drawing after the orbit controls stop
+ * reporting movement, so the last sub-threshold steps of a damped glide are not
+ * cut off mid-motion. Twelve frames is a fifth of a second at 60 Hz: long
+ * enough that a flick lands smoothly, short enough that a still board goes
+ * quiet immediately afterwards.
+ */
+const TAIL_FRAMES = 12
+
 // ── Outline helpers for the generated-from-layout model ─────────────────────
 // Shape space is (x_mm * 0.001, -y_mm * 0.001); the extrusion transform in
 // buildFromParsedBoard turns that into the GLB world convention.
@@ -200,6 +209,13 @@ export class Board3DViewer {
   private disposed = false
   private composer: EffectComposer
   private groundMat: THREE.ShadowMaterial
+  /** Something changed and the next frame has to be drawn. Cleared by drawing it. */
+  private dirty = true
+  /** Frames drawn since the scene last reported a real change (the damping tail). */
+  private tailFrames = 0
+  /** Frames actually composed. Published as `window.__hb3dFrames` so a browser
+   *  test can prove the loop suspends when nothing moves. */
+  private renderCount = 0
 
   constructor(canvas: HTMLCanvasElement) {
     // Renderer, alpha:true so the CSS gradient underneath is visible through the canvas
@@ -342,6 +358,7 @@ export class Board3DViewer {
     if (fog) fog.color.setHex(light ? 0xddd5c6 : 0x020617)
     this.renderer.toneMappingExposure = light ? 1.35 : 1.6
     this.groundMat.opacity = light ? 0.25 : 0.35
+    this.requestRender()
   }
 
   /**
@@ -445,6 +462,8 @@ export class Board3DViewer {
       keyLightObj.shadow.camera.updateProjectionMatrix()
       this.scene.add(keyLightObj.target)
     }
+
+    this.requestRender()
   }
 
   /** Load a GLB file. Returns a promise resolving when loaded. */
@@ -572,6 +591,7 @@ export class Board3DViewer {
 
     model.name = '__board_model__'
     this.scene.add(model)
+    this.requestRender()
   }
 
   /**
@@ -727,6 +747,7 @@ export class Board3DViewer {
     if (existing) this.scene.remove(existing)
     group.name = '__board_model__'
     this.scene.add(group)
+    this.requestRender()
   }
 
   /**
@@ -798,6 +819,8 @@ export class Board3DViewer {
     for (const [ref, mesh] of this.markerMeshes) {
       if (!activeRefs.has(ref)) mesh.visible = false
     }
+
+    this.requestRender()
   }
 
   /** Programmatic highlight API for external callers. */
@@ -814,6 +837,7 @@ export class Board3DViewer {
     mat.color.setHex(color)
     mat.opacity = 0.5 + intensity * 0.5
     mesh.visible = true
+    this.requestRender()
   }
 
   setSize(w: number, h: number) {
@@ -821,22 +845,89 @@ export class Board3DViewer {
     this.camera.aspect = w / h
     this.camera.updateProjectionMatrix()
     this.composer.setSize(w, h)
+    this.requestRender()
+  }
+
+  /**
+   * Mark the scene as needing a frame, and wake the loop if it went to sleep.
+   *
+   * Every mutation of anything visible routes through here: the orbit
+   * controls' own `change` event, a resize, a rebuilt model, a moved marker, a
+   * theme retune. Callers outside this file can use it too, which is the point
+   * of it being public: a caller that pokes the scene by other means still has
+   * a way to say so.
+   */
+  requestRender() {
+    if (this.disposed) return
+    this.dirty = true
+    this.tailFrames = 0
+    if (this.animHandle === null) this.animHandle = requestAnimationFrame(this.tick)
+  }
+
+  /**
+   * One frame of the render-on-demand loop.
+   *
+   * The old loop scheduled a frame unconditionally and ran the whole composer,
+   * SSAO included, whether or not anything had moved: a still board cost the
+   * same as a spinning one, which on a laptop is a fan and on software GL is a
+   * frozen main thread. Now a frame is drawn only when the scene is dirty, and
+   * when it stops being dirty the loop suspends itself entirely (`animHandle`
+   * back to null) until `requestRender` or an orbit-control event wakes it.
+   *
+   * `controls.update()` is the authority on whether the view is still moving:
+   * both damping and autoRotate advance the camera from inside it, and it
+   * returns true on any frame it moved something. A released drag keeps
+   * returning true until the momentum has decayed, which is exactly the window
+   * where frames are needed.
+   *
+   * The tail covers the seam. A frame where nothing has moved YET can still be
+   * followed by one where the camera eases further, so suspending on the first
+   * quiet frame risks freezing a flick mid-glide; a short run of frames is drawn
+   * past the last movement, and movement inside that window resets it.
+   */
+  private tick = () => {
+    if (this.disposed) return
+    if (this.controls.update() || this.controls.autoRotate) {
+      this.dirty = true
+      this.tailFrames = 0
+    }
+
+    if (this.dirty) {
+      this.dirty = false
+    } else if (this.tailFrames < TAIL_FRAMES) {
+      this.tailFrames++
+    } else {
+      // Nothing is moving and the tail is spent: stop scheduling.
+      this.animHandle = null
+      return
+    }
+
+    // Render via composer so the SSAO pass fires on the frames we do draw.
+    this.composer.render()
+    this.renderCount++
+    ;(window as unknown as { __hb3dFrames?: number }).__hb3dFrames = this.renderCount
+
+    this.animHandle = requestAnimationFrame(this.tick)
   }
 
   private startLoop() {
-    const tick = () => {
-      if (this.disposed) return
-      this.animHandle = requestAnimationFrame(tick)
-      this.controls.update()
-      // Render via composer so SSAO pass fires each frame
-      this.composer.render()
-    }
-    this.animHandle = requestAnimationFrame(tick)
+    // The controls fire `change` for every drag, wheel and pan step, which is
+    // the wake-up signal that makes suspension safe: input can never arrive
+    // while the loop is asleep without also asking for a frame.
+    this.controls.addEventListener('change', this.onControlsChange)
+    // Through requestRender, not a bare requestAnimationFrame: the constructor's
+    // setTheme may already have woken the loop, and two live tick chains would
+    // each schedule their own successor forever.
+    this.requestRender()
   }
+
+  private onControlsChange = () => this.requestRender()
 
   dispose() {
     this.disposed = true
+    this.controls.removeEventListener('change', this.onControlsChange)
     if (this.animHandle !== null) cancelAnimationFrame(this.animHandle)
+    this.animHandle = null
     this.controls.dispose()
     this.composer.dispose()
     this.renderer.dispose()
