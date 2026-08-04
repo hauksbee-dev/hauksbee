@@ -454,8 +454,14 @@ struct RunArgs {
     /// Altium (.PcbDoc), IPC-D-356 (.d356), a gerber folder or zip, or
     /// Board-as-Code (.board). The one format list; every other surface
     /// accepts the same set.
-    #[arg(value_name = "BOARD")]
-    board: PathBuf,
+    #[arg(value_name = "BOARD", required_unless_present = "example")]
+    board: Option<PathBuf>,
+
+    /// Run an embedded example board instead of a file (try `blinky`). The
+    /// board is compiled into the binary and materialized under the temp
+    /// directory, so this works with no checkout on disk.
+    #[arg(long, value_name = "NAME", conflicts_with = "board")]
+    example: Option<String>,
 
     /// Firmware to co-simulate on the board's MCU: a compiled .elf/.hex, a
     /// PlatformIO project directory (built with your own `pio run`), or a zip
@@ -890,8 +896,14 @@ struct ServeArgs {
 ))]
 struct SimArgs {
     /// SPICE deck to simulate (`.cir`).
-    #[arg(value_name = "DECK")]
-    file: PathBuf,
+    #[arg(value_name = "DECK", required_unless_present = "example")]
+    file: Option<PathBuf>,
+
+    /// Simulate an embedded example deck instead of a file (try
+    /// `rlc_ringdown`). Materialized under the temp directory, so this works
+    /// with no checkout on disk.
+    #[arg(long, value_name = "NAME", conflicts_with = "file")]
+    example: Option<String>,
 
     /// Write the CSV here (default: print to stdout).
     #[arg(long, value_name = "FILE")]
@@ -1005,7 +1017,12 @@ fn main() -> anyhow::Result<()> {
     };
     let quiet = cli.quiet;
     let result = match cli.command {
-        Command::Run(args) => hauksbee_engine::commands::run::run(run_config(args), quiet),
+        Command::Run(mut args) => {
+            if let Some(name) = &args.example {
+                args.board = Some(hauksbee_engine::commands::examples::board(name)?);
+            }
+            hauksbee_engine::commands::run::run(run_config(args), quiet)
+        }
         Command::ToCode(args) => {
             hauksbee_engine::commands::boardcode::to_code(&args.board, args.out.as_deref())
         }
@@ -1055,16 +1072,21 @@ fn main() -> anyhow::Result<()> {
             hauksbee_engine::commands::serve::run(args.port, args.open, args.no_open)
         }
         Command::Doctor(args) => hauksbee_engine::commands::doctor::run(args.backends, args.json),
-        Command::Sim(args) => hauksbee_engine::commands::sim::run(
-            &args.file,
-            args.out.as_deref(),
-            args.format,
-            args.op,
-            args.tran,
-            args.ac,
-            args.dc,
-            &args.print,
-        ),
+        Command::Sim(mut args) => {
+            if let Some(name) = &args.example {
+                args.file = Some(hauksbee_engine::commands::examples::deck(name)?);
+            }
+            hauksbee_engine::commands::sim::run(
+                &args.file.expect("DECK or --example (enforced by clap)"),
+                args.out.as_deref(),
+                args.format,
+                args.op,
+                args.tran,
+                args.ac,
+                args.dc,
+                &args.print,
+            )
+        }
         Command::Models(args) => match args.command {
             ModelsCommand::Lint(args) => hauksbee_engine::commands::models::lint(&args.file),
             ModelsCommand::Add(args) => hauksbee_engine::commands::models::add(&args.source),
@@ -1149,7 +1171,9 @@ fn looks_like_board_input(p: &std::path::Path) -> bool {
 /// argument parsing stays here.
 fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
     hauksbee_engine::commands::run::RunConfig {
-        board: a.board,
+        // Present by construction: clap requires BOARD unless --example, and
+        // the dispatch materializes the example board before calling here.
+        board: a.board.expect("BOARD or --example (enforced by clap)"),
         firmware: a.firmware,
         asbuilt: a.asbuilt,
         junit: a.junit,

@@ -22,11 +22,22 @@ pub fn read_board_text(path: &Path) -> anyhow::Result<String> {
     }
     std::fs::read_to_string(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            anyhow::anyhow!(
-                "no board file at '{}'. Check the path, or try a bundled example:\n  \
-                 hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report",
-                path.display()
-            )
+            {
+                // Never suggest an unrunnable command: the checkout path only
+                // exists inside a hauksbee source tree; elsewhere, point at
+                // the embedded example.
+                let checkout = Path::new("crates/hauksbee-ci/examples/boards/blinky.kicad_pcb");
+                let suggestion = if checkout.exists() {
+                    "hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report"
+                } else {
+                    "hauksbee run --example blinky --report"
+                };
+                anyhow::anyhow!(
+                    "no board file at '{}'. Check the path, or try a bundled example:\n  \
+                     {suggestion}",
+                    path.display()
+                )
+            }
         } else {
             anyhow::anyhow!("reading '{}': {e}", path.display())
         }
