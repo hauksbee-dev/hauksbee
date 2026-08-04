@@ -219,15 +219,20 @@ Measured on the built bundle (gzip, as a CDN serves it):
 
 Per-board recorded assets:
 
-| board | cache | board file | session | total gzip |
-| --- | --- | --- | --- | --- |
-| watchy | 14 kB gz | 132 kB gz | 132 kB gz | ~278 kB |
-| boot_gate | 4 kB gz | 1 kB gz | 14 kB gz | ~19 kB |
-| blinky | 4 kB gz | 2 kB gz | 11 kB gz | ~17 kB |
-| button_pullup | 3 kB gz | 1 kB gz | 9 kB gz | ~13 kB |
+| board | cache | board file | session | firmware | loaded, gzip |
+| --- | --- | --- | --- | --- | --- |
+| watchy | 14 kB | 129 kB | 129 kB | none | **272 kB** |
+| boot_gate | 4 kB | 0.4 kB | 13 kB | 0.7 kB | **17 kB** |
+| blinky | 3 kB | 1 kB | 10 kB | 0.8 kB | **15 kB** |
+| button_pullup | 2 kB | 0.3 kB | 4 kB | none | **7 kB** |
 
-So the embed payload before any board is **~200 kB gz**, against a ~600 kB
-budget, and the default board adds ~278 kB gz of recording. Nothing loads until
+The directory ships 3.2 MB of `sessions/` uncompressed, which is more than the
+sum above: the demo ladder's other scenario (`boot_gate-overvolt`) and the
+per-scenario report payloads ride along for the site demo that shares this
+directory. A visitor only fetches the four files their board needs.
+
+So the embed payload before any board is **~195 kB gz**, against a ~600 kB
+budget, and the default board adds 272 kB gz of recording. Nothing loads until
 the container nears the viewport (`lazy` defaults on); the 3D chunk loads only if
 someone asks for 3D.
 
@@ -244,8 +249,9 @@ stays absent, so the rule cannot go stale unnoticed). Until then the chunk ships
 but is never fetched: 175 kB gz of the deploy that no visitor downloads, kept so
 re-enabling is a one-line change rather than a rebuild of the contract.
 
-Measured cold in the verification pass: **compact interactive in 230-530 ms** from
-navigation, on localhost, including bundle parse.
+Measured cold in the verification pass: **compact interactive in 230-610 ms** from
+navigation, on localhost, including bundle parse and the watchy board and session
+downloads.
 
 ---
 
