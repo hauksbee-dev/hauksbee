@@ -700,6 +700,37 @@ pub struct CosimJson {
     /// omitted) on a healthy run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub driver_contention: Vec<CosimDriverContention>,
+    /// Per-MCU statements of how this backend's watchdog fidelity falls short of
+    /// the part. Non-empty means an armed, never-fed watchdog does NOT reboot
+    /// the core here the way silicon does, so firmware that HANGS runs forever
+    /// in simulation and every assertion about behaviour after a hang is
+    /// fiction: the run reads healthy while proving nothing about the recovery
+    /// path. Empty (and omitted) on a backend whose watchdog behaves.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub watchdog_limitations: Vec<CosimWatchdogLimitation>,
+    /// Per-MCU counts of reboots an unserviced watchdog actually performed
+    /// during this run. Not an error, a FINDING: an assertion that passed across
+    /// a reboot was measuring a rebooted core, not the run it claimed. Empty
+    /// (and omitted) when nothing rebooted.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub watchdog_resets: Vec<CosimWatchdogResets>,
+}
+
+/// One backend watchdog-fidelity gap (see [`CosimJson::watchdog_limitations`]).
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct CosimWatchdogLimitation {
+    pub mcu_ref: String,
+    /// The backend's whole sentence, for verbatim display. Prose for a human:
+    /// do not parse it or match on it exactly.
+    pub limitation: String,
+}
+
+/// One MCU's watchdog reboot count (see [`CosimJson::watchdog_resets`]).
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct CosimWatchdogResets {
+    pub mcu_ref: String,
+    /// Reboots observed during the run. Always >= 1: a zero is omitted.
+    pub resets: u64,
 }
 
 /// One sub-chunk GPIO pulse warning (see [`CosimJson::short_pulses`]).

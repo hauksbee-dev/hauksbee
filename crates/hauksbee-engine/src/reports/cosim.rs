@@ -173,6 +173,21 @@ pub fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<Cosi
                 t_s: c.t_s,
             })
             .collect(),
+        watchdog_limitations: sched
+            .watchdog_limitations()
+            .into_iter()
+            .map(
+                |(mcu_ref, limitation)| crate::result::CosimWatchdogLimitation {
+                    mcu_ref,
+                    limitation,
+                },
+            )
+            .collect(),
+        watchdog_resets: sched
+            .watchdog_resets()
+            .into_iter()
+            .map(|(mcu_ref, resets)| crate::result::CosimWatchdogResets { mcu_ref, resets })
+            .collect(),
     })
 }
 
@@ -550,6 +565,23 @@ pub fn run_headless(
         }
         for c in sched.driver_contentions() {
             println!("\nWARNING: {}", c.message());
+        }
+        // Watchdog coverage: a backend whose armed watchdog never bites lets
+        // firmware that HANGS run forever, so an assertion about behaviour
+        // after a hang proves nothing; a reboot that DID happen means an
+        // assertion which passed across it measured a rebooted core. Both are
+        // the same silent-garbage class as the two warnings above.
+        for (mcu_ref, limitation) in sched.watchdog_limitations() {
+            println!(
+                "\nWARNING: {}",
+                crate::scheduler::watchdog_limitation_message(&mcu_ref, &limitation)
+            );
+        }
+        for (mcu_ref, resets) in sched.watchdog_resets() {
+            println!(
+                "\nWARNING: {}",
+                crate::scheduler::watchdog_reset_message(&mcu_ref, resets)
+            );
         }
         // Per-bus SPI transaction-framing tier (05 §2). `heuristic` is the
         // documented actively-wrong tier (merges two transactions in a chunk;
