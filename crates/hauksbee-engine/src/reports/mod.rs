@@ -169,8 +169,9 @@ pub fn note_ungated_findings(strict: bool, would_gate: bool) {
     if !strict && would_gate {
         eprintln!(
             "note: gate-grade finding(s) above, but this is a report command so the exit code is 0. \
-             Add --strict to exit 2 on them (exit contract: 0 = clean or report-only, 2 = findings \
-             under --strict, 3 = invalid for analysis), or gate CI with hauksbee-ci."
+             Add --strict to exit 2 on them (exit contract: 0 = clean or report-only, 1 = input \
+             error such as a missing or unreadable file, 2 = findings under --strict, 3 = invalid \
+             for analysis), or gate CI with hauksbee-ci."
         );
     }
 }

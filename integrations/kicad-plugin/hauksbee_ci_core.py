@@ -10,9 +10,11 @@ show.
 
 from __future__ import annotations
 
+import filecmp
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
@@ -136,20 +138,53 @@ def _prebuilt_candidates() -> List[str]:
     return rel
 
 
+def _checkout_build() -> Optional[str]:
+    """The enclosing checkout's ``target/release/hauksbee-ci``, when this file
+    lives inside a hauksbee source tree and that build exists."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    repo_root = os.path.normpath(os.path.join(here, "..", ".."))
+    if not os.path.isfile(os.path.join(repo_root, "Cargo.toml")):
+        return None
+    build = os.path.join(repo_root, "target", "release", "hauksbee-ci")
+    if os.path.isfile(build) and os.access(build, os.X_OK):
+        return build
+    return None
+
+
+def _binaries_differ(a: str, b: str) -> bool:
+    """True when two candidate binaries are different files by content."""
+    try:
+        return not filecmp.cmp(a, b, shallow=False)
+    except OSError:
+        return True
+
+
 def find_binary(explicit: Optional[str] = None) -> Optional[str]:
     """Locate the hauksbee-ci binary, preferring a ready-to-run one.
 
-    Order: an explicit path, the HAUKSBEE_CI_BIN env var, then PATH, then a
-    prebuilt release bundle or a local ``target/release`` build. This means a
-    user who downloaded a release tarball (or built once) is found without any
-    PATH setup; compiling is only needed when none of these exist (see
-    :func:`ensure_binary`).
+    Order: an explicit path, the HAUKSBEE_CI_BIN env var, then, when this
+    plugin lives inside a hauksbee checkout, that checkout's
+    ``target/release`` build, then PATH, then a prebuilt release bundle.
+    The checkout build outranks PATH because it is the binary this working
+    tree just produced; an installed copy on PATH can lag it by weeks. When
+    both exist and differ, a warning says which one runs and where the other
+    lives (the same contract scripts/ci.sh has).
     """
     candidates = [explicit, os.environ.get("HAUKSBEE_CI_BIN")]
     for c in candidates:
         if c and os.path.isfile(c) and os.access(c, os.X_OK):
             return c
     on_path = shutil.which("hauksbee-ci")
+    checkout_build = _checkout_build()
+    if checkout_build:
+        if on_path and _binaries_differ(checkout_build, on_path):
+            print(
+                "hauksbee-ci: using the checkout build %s; the installed %s "
+                "differs (re-run scripts/install.sh to refresh it)."
+                % (checkout_build, on_path),
+                file=sys.stderr,
+            )
+        return checkout_build
     if on_path:
         return on_path
     for c in _prebuilt_candidates():

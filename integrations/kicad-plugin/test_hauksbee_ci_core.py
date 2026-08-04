@@ -173,13 +173,58 @@ def test_find_binary_finds_prebuilt_bundle():
         orig_which = core.shutil.which
         orig_env = os.environ.pop("HAUKSBEE_CI_BIN", None)
         orig_cands = core._prebuilt_candidates
+        orig_checkout = core._checkout_build
         try:
             core.shutil.which = lambda _name: None  # nothing on PATH
+            core._checkout_build = lambda: None  # not inside a checkout
             core._prebuilt_candidates = lambda: [fake]
             assert core.find_binary() == fake
         finally:
             core.shutil.which = orig_which
             core._prebuilt_candidates = orig_cands
+            core._checkout_build = orig_checkout
+            if orig_env is not None:
+                os.environ["HAUKSBEE_CI_BIN"] = orig_env
+
+
+def test_find_binary_prefers_checkout_build_over_path_and_warns():
+    # Inside a checkout, target/release wins over an installed copy on PATH;
+    # when the two differ by content, a warning names both (the scripts/ci.sh
+    # contract).
+    import io
+    from contextlib import redirect_stderr
+
+    with tempfile.TemporaryDirectory() as d:
+        build = os.path.join(d, "hauksbee-ci-build")
+        installed = os.path.join(d, "hauksbee-ci-installed")
+        for path, body in ((build, "#!/bin/sh\necho build\n"), (installed, "#!/bin/sh\necho installed\n")):
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(body)
+            os.chmod(path, 0o755)
+
+        orig_which = core.shutil.which
+        orig_env = os.environ.pop("HAUKSBEE_CI_BIN", None)
+        orig_checkout = core._checkout_build
+        try:
+            core.shutil.which = lambda _name: installed
+            core._checkout_build = lambda: build
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                assert core.find_binary() == build
+            err = buf.getvalue()
+            assert "differs" in err and build in err and installed in err, err
+            # Identical content: no warning.
+            with open(installed, "w", encoding="utf-8") as fh:
+                fh.write("#!/bin/sh\necho build\n")
+            with open(build, "w", encoding="utf-8") as fh:
+                fh.write("#!/bin/sh\necho build\n")
+            buf = io.StringIO()
+            with redirect_stderr(buf):
+                assert core.find_binary() == build
+            assert buf.getvalue() == "", buf.getvalue()
+        finally:
+            core.shutil.which = orig_which
+            core._checkout_build = orig_checkout
             if orig_env is not None:
                 os.environ["HAUKSBEE_CI_BIN"] = orig_env
 
