@@ -4268,6 +4268,12 @@ impl IdentityReport {
     }
 }
 
+/// A component kind in the lower-case form a report prints, so a refusal reads
+/// as a sentence rather than as a Rust variant name.
+fn kind_word(kind: ComponentKind) -> String {
+    format!("{kind:?}").to_ascii_lowercase()
+}
+
 fn confidence_word(c: Confidence) -> &'static str {
     match c {
         Confidence::Exact => "exact",
@@ -4698,9 +4704,13 @@ fn contradiction_between(
             if let Some(a) = &artifact.model {
                 if l.id != a.id && decisive {
                     return Some(format!(
-                        "{reference} is {:?} ({}, {:?}) on the layout and {:?} ({}, {:?}) in the \
-                         BOM",
-                        comp.value, l.id, l.kind, mpn, a.id, a.kind
+                        "{reference} is {:?} ({}, {}) on the layout and {:?} ({}, {}) in the BOM",
+                        comp.value,
+                        l.id,
+                        kind_word(l.kind),
+                        mpn,
+                        a.id,
+                        kind_word(a.kind)
                     ));
                 }
             }
@@ -4769,10 +4779,10 @@ fn contradiction_between(
         );
         if semiconductor {
             return Some(format!(
-                "{reference} is {:?} ({:?}) on the layout and {artifact_value:?}, a passive \
-                 value, in the BOM",
+                "{reference} is {:?} ({}) on the layout and {artifact_value:?}, a passive value, \
+                 in the BOM",
                 comp.value,
-                layout_kind.expect("matched above")
+                kind_word(layout_kind.expect("matched above"))
             ));
         }
     }

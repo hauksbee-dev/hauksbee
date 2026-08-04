@@ -22,6 +22,12 @@
 //! [`PlacementCrossCheck::is_different_board`] answers the question a caller
 //! actually has.
 //!
+//! A second, deliberately more permissive reader for the same files lives in
+//! [`crate::gerber::placement`]. It serves the gerber-only path, where the fab
+//! package is the whole design and there is no layout to reconcile against, so
+//! guessing is the best answer available. This one refuses instead, because here
+//! a layout exists and a wrong reading of it is worse than no reading.
+//!
 //! Long-form: `docs/ingest/BOM.md`.
 
 use std::path::Path;
