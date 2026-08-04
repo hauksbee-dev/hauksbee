@@ -1,0 +1,36 @@
+Inductive kickback caught by a zener clamp: the flyback event that kills FETs
+* The board shape: a 12 V rail drives 1 A through a solenoid (1 mH behind
+* 12 ohm of winding resistance); a low-side switch opens and the inductor
+* current must go SOMEWHERE. Here a 24 V zener from the switch node to ground
+* takes it, so the node flies to BV + Vt*ln(I/IBV) ~ 24.18 V and the current
+* ramps down against that constant back-voltage until the clamp lets go
+* ~57 us later. The two numbers an engineer reads off this waveform are the
+* clamp PLATEAU (does it exceed the switch's absolute-max?) and the clamp
+* DURATION (energy dumped in the zener). The corpus's flyback deck exercises
+* a forward catch diode; this is the breakdown-side clamp, which no other
+* deck drives with stored magnetic energy.
+*
+* Exactly computable pieces:
+*   on-state:  I0 = 12/(12 + 0.1) = 0.99174 A, V(sw) = I0*RON = 0.09917 V
+*   the switch opens when the control ramp (5 -> 0 over 0.5 us from 100 us)
+*   crosses voff = VT - VH = 2.0 V: exactly t_off = 100.3 us
+*   clamp:     dI/dt = (12 - 12*I - V(sw))/L with V(sw) = BV + Vt*ln(I/IBV),
+*   whose one-iteration closed form (V(sw) held at its I0 value, then
+*   corrected once through the log) matches a 1 ns RK4 integration to
+*   microvolts; the plateau decays 24.175 -> 24.140 V as I falls
+*   settle:    once I reaches the knee, the 100 nF snubber (there so the open
+*   edge slews at I0/CS ~ 10 V/us instead of one integration step) rings
+*   against L at ~15.9 kHz, decaying at alpha = RS/2L = 6000/s; by 1.3 ms
+*   past the edge the envelope is millivolts and the node sits at 12 V
+VDD vdd 0 DC 12
+RS vdd n1 12
+L1 n1 sw 1m
+S1 sw 0 ctrl 0 SMOD
+.model SMOD SW(VT=2.5 VH=0.5 RON=0.1 ROFF=1e9)
+DZ 0 sw DZC
+CS sw 0 100n
+.model DZC D(IS=1e-14 N=1 BV=24 IBV=1e-3)
+VC ctrl 0 PWL(0 5 100u 5 100.5u 0)
+.tran 0.2u 1.56m 0 0.02u
+.print tran v(sw)
+.end

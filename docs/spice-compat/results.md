@@ -7,8 +7,8 @@ probe against the per-quantity tolerance declared in that deck's
 `expect.toml`.
 
 - Oracle: **ngspice ngspice-45.2**
-- Decks: **48**
-- Passing: **48/48**
+- Decks: **49**
+- Passing: **49/49**
 
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Headroom | Where | Result |
 |------|----------|----------|------------------|-----------|----------|-------|--------|
@@ -46,6 +46,11 @@ probe against the per-quantity tolerance declared in that deck's
 | flyback_diode | tran | `V(out)` | 1.583e-2 | 5.0e-2 | 3x | t=2.556e-5s | PASS |
 | forced_base_current | op | `V(base)` | 7.556e-6 | 2.0e-4 | 26x | op | PASS |
 |  |  | `V(coll)` | 3.510e-9 | 1.0e-6 | 285x | op | PASS |
+| inductive_kickback_zener | tran | `V(sw)` | 2.728e-1 | 3.0e-1 | 1x | t=1.003e-4s | PASS |
+|  |  | `V(sw) vs closed form` | 2.113e-13 | 1.0e-3 | 4732587863x | t=5.000e-5 | PASS |
+|  |  | `V(sw) vs closed form` | 5.152e-7 | 2.0e-3 | 3882x | t=1.203e-4 | PASS |
+|  |  | `V(sw) vs closed form` | 1.034e-6 | 2.0e-3 | 1935x | t=1.403e-4 | PASS |
+|  |  | `V(sw) vs closed form` | 1.938e-4 | 1.0e-3 | 5x | t=1.550e-3 | PASS |
 | mos_body_bias | dc | `V(d)` | 6.591e-3 | 3.0e-2 | 5x | sweep=1.800e0 | PASS |
 | mos_body_diode | tran | `V(d)` | 1.216e-1 | 2.5e-1 | 2x | t=2.049e-6s | PASS |
 | mos_load_switch | tran | `V(d)` | 3.287e-1 | 5.0e-1 | 2x | t=1.141e-6s | PASS |
@@ -126,6 +131,7 @@ probe against the per-quantity tolerance declared in that deck's
 - **diode_zener_breakdown**: zener-style breakdown clamp voltage past BV
 - **flyback_diode**: flyback-shaped: pulsed primary, inverted secondary, catch diode into C||R
 - **forced_base_current**: forced base current, the shape a datasheet test condition takes
+- **inductive_kickback_zener**: 12 V solenoid loop broken by a low-side switch: 1 A of stored current clamped by a 24 V zener, plateau + duration + settle against closed forms
 - **mos_body_bias**: reverse body bias shifts the threshold via GAMMA/PHI
 - **mos_body_diode**: body-diode reverse conduction, then synchronous channel takeover
 - **mos_load_switch**: NMOS low-side switch: gate-charge-shaped turn-on/turn-off timing

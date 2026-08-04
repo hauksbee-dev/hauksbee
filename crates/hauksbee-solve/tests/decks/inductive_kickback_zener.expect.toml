@@ -1,0 +1,48 @@
+# Inductive kickback into a breakdown clamp: plateau, duration, settle.
+#
+# What the bounds mean physically: the plateau bars hold the peak node voltage
+# (the number checked against a switch's absolute-max rating) to a few tens of
+# millivolts on 24 V, far inside the 5% tolerance band of any real zener; the
+# settle bar says the clamp actually let go and the node came home to the rail.
+# The oracle probe carries the whole waveform including the microsecond-scale
+# open edge, where pointwise relative error is dominated by the two engines'
+# switch-event timing, not by either clamp model; the closed-form points on the
+# flat regions are the hard bars.
+analysis = "tran"
+description = "12 V solenoid loop broken by a low-side switch: 1 A of stored current clamped by a 24 V zener, plateau + duration + settle against closed forms"
+full_scale = 24.0
+
+[[probe]]
+expr = "v(sw)"
+reltol = 3.0e-1
+loose_reason = "the open edge is a one-step event in both engines: a single sample of switch-event timing skew at a node slewing from 0.1 V to 24 V reads as O(1) pointwise relative error however accurate both clamps are; the closed-form points below hold the plateau to 2e-3 and the settle to 1e-3"
+
+# On-state, long before the edge: pure algebra.
+[[probe.analytic]]
+at = 50.0e-6
+value = 0.09917355371900827
+reltol = 1.0e-3
+note = "switch closed: I0 = 12/(RS + RON) = 12/12.1 A through RON = 0.1 ohm, V(sw) = 1.2/12.1 V"
+
+# Clamp plateau, 20 us into the ramp-down.
+[[probe.analytic]]
+at = 120.3e-6
+value = 24.1648937778
+reltol = 2.0e-3
+note = "t_off = 100.3 us (control crosses voff = 2.0 V). Constant-clamp first pass: V0 = BV + Vt*ln(I0/IBV) = 24.1785 V, tau = L/RS = 83.333 us, Iinf = (12 - V0)/12; I(20us) = Iinf + (I0 - Iinf)*exp(-20/83.333) = 0.56361 A; corrected once: V = BV + Vt*ln(I/IBV) = 24.16384. A 1 ns RK4 of the exact two-state ODE (with the 100 nF snubber, which softens the entry edge and lifts the point by ~1 mV) gives 24.1648937778 (I = 0.58701 A)"
+
+# Clamp plateau, 40 us in: the plateau droops as ln(I).
+[[probe.analytic]]
+at = 140.3e-6
+value = 24.1423756993
+reltol = 2.0e-3
+note = "same construction at t_off + 40 us: I = 0.24566 A, V = BV + Vt*ln(I/IBV); RK4 value quoted. The 22.5 mV droop from the 20 us point is the Vt*ln(I) signature, so these two points together pin the clamp's dynamic shape, not just its level"
+
+# After the clamp lets go (~t_off + 57 us) the loop de-energizes and the
+# snubber rings against the inductor; by 1.3 ms past the edge the ring is
+# millivolts and the node is home.
+[[probe.analytic]]
+at = 1.55e-3
+value = 12.0
+reltol = 1.0e-3
+note = "post-clamp the L-CS pair rings at ~15.9 kHz around VDD, envelope 12*exp(-RS/(2L)*t') = 12*exp(-6000*t'); at t' = 1.45 ms past t_off that is 2 mV, and the RK4 reference reads 12.0023 V. With no current there is no drop across RS or L1: V(sw) = VDD"
