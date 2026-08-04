@@ -63,8 +63,7 @@ pub fn materialize(name: &str) -> anyhow::Result<PathBuf> {
     for (rel, bytes) in example.files {
         let path = dir.join(rel);
         if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .with_context(|| format!("creating {}", parent.display()))?;
+            fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
         }
         fs::write(&path, bytes).with_context(|| format!("writing {}", path.display()))?;
     }

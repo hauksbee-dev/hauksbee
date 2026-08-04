@@ -607,7 +607,10 @@ fn check_model_coverage(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, 
 
 /// rail_window: judge a rail's behaviour over a scenario window: min/max bounds,
 /// dip duration below a threshold, and recovery time.
-fn check_rail_window(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
+fn check_rail_window(
+    a: &crate::spec::Assertion,
+    out: &RunOutcome,
+) -> (bool, String, Option<String>) {
     let net = a.net.clone().unwrap_or_default();
     let scope = a.scenario.clone().unwrap_or_default();
     let Some(win) = out.rail_windows.get(&(scope.clone(), net.clone())) else {
@@ -1313,7 +1316,11 @@ fn check_toggle(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String
 fn check_phase_margin(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
     let net = a.net.clone().unwrap_or_default();
     let Some(ac) = &out.ac else {
-        return (false, "no AC analysis ran (missing [ac] block)".into(), None);
+        return (
+            false,
+            "no AC analysis ran (missing [ac] block)".into(),
+            None,
+        );
     };
     let Some(m) = ac.margins.get(&net) else {
         return (
@@ -1380,7 +1387,11 @@ fn check_phase_margin(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<
 fn check_ac_gain(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
     let net = a.net.clone().unwrap_or_default();
     let Some(ac) = &out.ac else {
-        return (false, "no AC analysis ran (missing [ac] block)".into(), None);
+        return (
+            false,
+            "no AC analysis ran (missing [ac] block)".into(),
+            None,
+        );
     };
     let Some(bode) = ac.bode.get(&net) else {
         return (
@@ -2281,7 +2292,10 @@ mod tests {
         toggling.boot_drop_after_cross_ms.insert(key.clone(), 7.0);
 
         let (ok, msg) = check_boot_coverage(&assertion("hold_ms = 0.0"), &toggling);
-        assert!(ok, "hold_ms = 0 must pass a toggling net that reached: {msg}");
+        assert!(
+            ok,
+            "hold_ms = 0 must pass a toggling net that reached: {msg}"
+        );
         assert!(msg.contains("reach only"), "the pass names its form: {msg}");
 
         let (ok, msg) = check_boot_coverage(&assertion("hold_ms = 8.0"), &toggling);
@@ -2297,7 +2311,10 @@ mod tests {
         // The strict default (absent hold_ms) also fails it: dropped at 7 ms,
         // before the 10 ms deadline.
         let (ok, _msg) = check_boot_coverage(&assertion(""), &toggling);
-        assert!(!ok, "the hold-to-deadline default still fails a mid-window drop");
+        assert!(
+            !ok,
+            "the hold-to-deadline default still fails a mid-window drop"
+        );
 
         // A solid net: reached at 2 ms, never dropped, sim covers everything.
         let mut solid = RunOutcome {

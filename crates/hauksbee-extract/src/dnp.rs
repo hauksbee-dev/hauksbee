@@ -360,7 +360,12 @@ mod jumper_class_tests {
     fn link_class_parts_are_recognised_by_library_and_footprint() {
         // The Arduino Uno R3 RESET-EN: Eagle library "jumper", package "SJ",
         // value "" - the shape that false-fired the placeholder-value lint.
-        assert!(is_jumper_or_net_tie(&comp("RESET-EN", "", "jumper:SJ", "SJ")));
+        assert!(is_jumper_or_net_tie(&comp(
+            "RESET-EN",
+            "",
+            "jumper:SJ",
+            "SJ"
+        )));
         // KiCad solder-jumper and net-tie footprint conventions.
         assert!(is_jumper_or_net_tie(&comp(
             "JP1",
@@ -397,9 +402,26 @@ mod jumper_class_tests {
         // "SJ" must be the bare package name or an "SJ_..." form, not a loose
         // prefix: part families that merely start with those letters (CUI's
         // SJ1-35xx 3.5mm audio jacks) are not solder jumpers.
-        assert!(!is_jumper_or_net_tie(&comp("U1", "SJW1240", "", "SJW1240-QFN")));
-        assert!(!is_jumper_or_net_tie(&comp("J2", "3.5mm jack", "", "SJ1-3533NG")));
-        assert!(!is_jumper_or_net_tie(&comp("J3", "3.5mm jack", "", "SJ-3523-SMT")));
-        assert!(!is_jumper_or_net_tie(&comp("C3", "100n", "Device:C", "C_0402")));
+        assert!(!is_jumper_or_net_tie(&comp(
+            "U1",
+            "SJW1240",
+            "",
+            "SJW1240-QFN"
+        )));
+        assert!(!is_jumper_or_net_tie(&comp(
+            "J2",
+            "3.5mm jack",
+            "",
+            "SJ1-3533NG"
+        )));
+        assert!(!is_jumper_or_net_tie(&comp(
+            "J3",
+            "3.5mm jack",
+            "",
+            "SJ-3523-SMT"
+        )));
+        assert!(!is_jumper_or_net_tie(&comp(
+            "C3", "100n", "Device:C", "C_0402"
+        )));
     }
 }

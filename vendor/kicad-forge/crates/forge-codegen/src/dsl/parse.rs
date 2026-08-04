@@ -378,10 +378,7 @@ fn parse_pad(toks: &[String], ln: usize) -> Result<Pad, ParseError> {
     if !PAD_KINDS.contains(&kind.as_str()) {
         return Err(err(
             ln,
-            &format!(
-                "pad kind: expected {}, got `{kind}`",
-                PAD_KINDS.join("|")
-            ),
+            &format!("pad kind: expected {}, got `{kind}`", PAD_KINDS.join("|")),
         ));
     }
     let shape = toks
@@ -585,9 +582,8 @@ fn main {{
 
     #[test]
     fn invalid_pad_kind_is_rejected_with_valid_values() {
-        let code = program_with_pad(
-            r#"pad "2" banana lozenge at 0 0 size 1 1 layers [F.Cu] net "A""#,
-        );
+        let code =
+            program_with_pad(r#"pad "2" banana lozenge at 0 0 size 1 1 layers [F.Cu] net "A""#);
         let e = Program::parse(&code).unwrap_err();
         assert_eq!(e.line, 6);
         assert_eq!(
@@ -598,9 +594,7 @@ fn main {{
 
     #[test]
     fn invalid_pad_shape_is_rejected_with_valid_values() {
-        let code = program_with_pad(
-            r#"pad "2" smd lozenge at 0 0 size 1 1 layers [F.Cu] net "A""#,
-        );
+        let code = program_with_pad(r#"pad "2" smd lozenge at 0 0 size 1 1 layers [F.Cu] net "A""#);
         let e = Program::parse(&code).unwrap_err();
         assert_eq!(e.line, 6);
         assert_eq!(
@@ -612,9 +606,8 @@ fn main {{
     #[test]
     fn omitted_pad_shape_is_an_error_not_a_slurped_token() {
         // Without validation the shape slot would silently consume `at`.
-        let code = program_with_pad(
-            r#"pad "1" smd at -0.9375 0 size 0.975 1.4 layers [F.Cu] net "A""#,
-        );
+        let code =
+            program_with_pad(r#"pad "1" smd at -0.9375 0 size 0.975 1.4 layers [F.Cu] net "A""#);
         let e = Program::parse(&code).unwrap_err();
         assert_eq!(e.line, 6);
         assert_eq!(
@@ -627,7 +620,11 @@ fn main {{
     fn all_valid_pad_kind_and_shape_tokens_parse() {
         for kind in PAD_KINDS {
             for shape in PAD_SHAPES {
-                let drill = if kind.ends_with("thru_hole") { "drill 1.0 " } else { "" };
+                let drill = if kind.ends_with("thru_hole") {
+                    "drill 1.0 "
+                } else {
+                    ""
+                };
                 let code = program_with_pad(&format!(
                     r#"pad "1" {kind} {shape} at 0 0 size 1.7 1.7 {drill}layers [F.Cu] net "A""#
                 ));

@@ -755,9 +755,7 @@ pub fn kind_suggestion(unknown: &str) -> Option<&'static str> {
         "mosfet" | "fet" | "nfet" | "n_mosfet" | "nmosfet" => "nmos",
         "pfet" | "p_mosfet" | "pmosfet" => "pmos",
         "op_amp" | "operational_amplifier" | "amplifier" => "opamp",
-        "resistor" | "capacitor" | "inductor" | "res" | "cap" | "ferrite" | "crystal" => {
-            "passive"
-        }
+        "resistor" | "capacitor" | "inductor" | "res" | "cap" | "ferrite" | "crystal" => "passive",
         "led" | "zener" | "schottky" | "rectifier" | "tvs" => "diode",
         "switch" | "mux" | "multiplexer" => "analog_switch",
         "microcontroller" | "micro" | "soc" => "mcu",
@@ -827,7 +825,10 @@ mod kind_vocabulary_tests {
                 kind: ComponentKind,
             }
             let parsed: Result<Probe, _> = toml::from_str(&toml);
-            assert!(parsed.is_ok(), "KIND_NAMES lists '{name}' but it does not parse");
+            assert!(
+                parsed.is_ok(),
+                "KIND_NAMES lists '{name}' but it does not parse"
+            );
         }
     }
 

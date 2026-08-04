@@ -925,7 +925,10 @@ mod why_line_tests {
     // after the run ends.
     #[test]
     fn a_never_sampled_voltage_names_the_window_not_the_supply() {
-        let r = failing("voltage", "net 'VCC' was never sampled (no window at 500ms)");
+        let r = failing(
+            "voltage",
+            "net 'VCC' was never sampled (no window at 500ms)",
+        );
         let why = why_line(&r).expect("a degenerate failure still gets a why");
         assert!(why.contains("duration_ms"), "{why}");
         assert!(why.contains("after_ms"), "{why}");
@@ -946,7 +949,10 @@ mod why_line_tests {
         );
         let why = why_line(&r).expect("a degenerate failure still gets a why");
         assert!(why.contains("500") && why.contains("200.00"), "{why}");
-        assert!(why.contains("duration_ms") && why.contains("deadline_ms"), "{why}");
+        assert!(
+            why.contains("duration_ms") && why.contains("deadline_ms"),
+            "{why}"
+        );
         assert!(
             !why.contains("the firmware never drove"),
             "the firmware-cause hint is wrong here: {why}"
@@ -991,7 +997,10 @@ mod why_line_tests {
 
     #[test]
     fn the_junit_failure_body_and_the_terminal_agree() {
-        let r = failing("voltage", "net 'VCC' was never sampled (no window at 500ms)");
+        let r = failing(
+            "voltage",
+            "net 'VCC' was never sampled (no window at 500ms)",
+        );
         let result = result_of(vec![r]);
         let why = why_line(&result.results[0]).unwrap();
         assert!(result.render_human().contains(&format!("why: {why}")));

@@ -85,8 +85,7 @@ fn refdes_shaped_names_never_become_magnitudes() {
     // says WHY there is nothing to resolve, not a bare "no model".
     if let BindOutcome::Unresolved { reason } = &r74.outcome {
         assert!(
-            reason.contains("no value in the PcbDoc")
-                && reason.contains(".SchDoc"),
+            reason.contains("no value in the PcbDoc") && reason.contains(".SchDoc"),
             "the unresolved reason must surface the value_unresolved property: {reason}"
         );
     }
