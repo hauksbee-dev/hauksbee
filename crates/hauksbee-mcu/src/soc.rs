@@ -102,6 +102,13 @@ pub enum SocError {
     #[error("unknown e_machine {0:?}: expected one of EM_ARM, EM_RISCV, EM_XTENSA, EM_AVR")]
     UnknownEMachine(String),
 
+    /// `soc.support_bundle` named a bundle this build does not carry. Caught at
+    /// descriptor load rather than at machine bring-up: the bundle is embedded in
+    /// the binary, so a name that is wrong now is wrong forever, and finding out
+    /// only after Renode has been spawned wastes seconds and buries the reason.
+    #[error("unknown support_bundle {name:?}: this build carries {known:?}")]
+    UnknownSupportBundle { name: String, known: Vec<String> },
+
     /// `soc.arch` (QEMU) was not a recognised architecture.
     #[error("unknown QEMU arch {0:?}: expected \"xtensa\" or \"riscv32\"")]
     UnknownArch(String),
@@ -239,6 +246,10 @@ mod renode_schema {
         pub backend: String,
         pub machine: String,
         pub platform_repl: String,
+        /// Optional named support bundle (peripheral models Renode does not
+        /// ship) to load before the platform. See `renode::support`.
+        #[serde(default)]
+        pub support_bundle: Option<String>,
         pub cpu_path: String,
         #[serde(default)]
         pub uart: Option<String>,
@@ -334,6 +345,17 @@ mod renode_schema {
             if self.platform_repl.trim().is_empty() {
                 return Err(SocError::EmptyPlatform);
             }
+            if let Some(name) = &self.support_bundle {
+                if crate::renode::support::lookup(name).is_none() {
+                    return Err(SocError::UnknownSupportBundle {
+                        name: name.clone(),
+                        known: crate::renode::support::known_names()
+                            .into_iter()
+                            .map(String::from)
+                            .collect(),
+                    });
+                }
+            }
             let expected_e_machine = crate::elf::e_machine_from_name(&self.expected_e_machine)
                 .ok_or_else(|| SocError::UnknownEMachine(self.expected_e_machine.clone()))?;
 
@@ -350,6 +372,7 @@ mod renode_schema {
             Ok(RenodeConfig {
                 machine: self.machine,
                 platform: self.platform_repl,
+                support_bundle: self.support_bundle,
                 cpu: self.cpu_path,
                 uart: self.uart,
                 ports: self.ports,
