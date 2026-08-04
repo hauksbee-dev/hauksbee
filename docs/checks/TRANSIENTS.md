@@ -436,8 +436,8 @@ hauksbee-ci: divider tolerance corners
   [PASS] VOUT within the designed [2.2, 2.8] V envelope on every corner
         VOUT: min=2.500V (>= 2.2V), max=2.500V (<= 2.8V) [settled 2.500V] (held on all 4 min/max tolerance corners: bounds the worst case only where the response is monotonic in each value)
   [FAIL] VOUT within the tight [2.4, 2.6] V window on every corner
-        corner 1: VOUT: min=2.250V (>= 2.4V), max=2.250V (<= 2.6V) [settled 2.250V] [R1=11k(max), R2=9k(min)]; passed 2/4 corners (failing: 1, 2)
-        why: the rail left its window; check the supply feeding this net and the load pulling it down (docs/ci/CI.md, "voltage").
+        corner 1: VOUT: min=2.250V < required 2.4V <- FAILED HERE, max=2.250V (<= 2.6V) [settled 2.250V] [R1=11k(max), R2=9k(min)]; passed 2/4 corners (failing: 1, 2)
+        why: VOUT settled 0.150 V below your floor (2.250 V vs min 2.4 V)
 
 1/2 assertions passed in 0.03s - RED
 ```
