@@ -308,7 +308,23 @@ fn famous_corpus_has_no_ampacity_or_ripple_findings() {
     let Some(root) = corpus_root() else { return };
     let lib = ModelLibrary::builtin();
     let mut boards_checked = 0usize;
+    let mut not_known_good = 0usize;
     for entry in walk_kicad_pcbs(&root) {
+        // This gate's claim is "the checks stay quiet on hardware that is fine",
+        // so a board the corpus does not vouch for cannot carry it. The manifest
+        // records which entries were never manufactured, or whose findings are
+        // unadjudicated, with a reason per entry; excluding them is announced per
+        // board rather than silently narrowing the input set. Without this the
+        // sweep graded itself on a KiCad demo board that no one ever built.
+        if let Some(why) = hauksbee_testkit::not_known_good(&entry, &root) {
+            hauksbee_testkit::excluded(
+                "SI ampacity/ripple corpus sweep",
+                &entry.file_name().unwrap_or_default().to_string_lossy(),
+                &why,
+            );
+            not_known_good += 1;
+            continue;
+        }
         let Ok(text) = std::fs::read_to_string(&entry) else {
             continue;
         };
@@ -337,6 +353,10 @@ fn famous_corpus_has_no_ampacity_or_ripple_findings() {
             report.findings.iter().filter(|f| f.severity.is_finding()).collect::<Vec<_>>(),
         );
     }
+    eprintln!(
+        "SCANNED  SI ampacity/ripple corpus sweep: {boards_checked} board(s), \
+         {not_known_good} excluded as not known-good"
+    );
     if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
         assert!(
             boards_checked > 0,
