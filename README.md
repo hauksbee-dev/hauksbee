@@ -274,7 +274,7 @@ A later **firmware co-sim** hunt added a fourth finding of a different character
 
 ## A note on speed
 
-Hauksbee's matrix-exponential fast path wins in the PCB regime: many small RC islands hang off shared rails, and exact large steps replace thousands of small ones there. Benchmarks put it at ~23x ngspice wall-clock on a half-wave rectifier and ~6x on a 90-block synapse array (`#[ignore]` benches, observations rather than guarantees). What the tests *do* assert is the accuracy: agreement with ngspice and analytic theory to fractions of a percent typically, and within a few percent at worst (the per-deck bounds are in the comparison table). An accuracy cross-check gates every speed claim. The method and the full table are in [`docs/about/COMPARISON.md`](docs/about/COMPARISON.md).
+Hauksbee's matrix-exponential fast path wins in the PCB regime: many small RC islands hang off shared rails, and exact large steps replace thousands of small ones there. Benchmarks put it at roughly 19x ngspice wall-clock on a half-wave rectifier and roughly 15x on a 90-block synapse array (`#[ignore]` benches, single-run observations rather than guarantees, and both include ngspice's process startup, which is a large share of the total at these durations). What the tests *do* assert is the accuracy: agreement with ngspice and analytic theory to fractions of a percent typically, and within a few percent at worst (the per-deck bounds are in the comparison table). An accuracy cross-check gates every speed claim. The method and the full table are in [`docs/about/COMPARISON.md`](docs/about/COMPARISON.md).
 
 ---
 
