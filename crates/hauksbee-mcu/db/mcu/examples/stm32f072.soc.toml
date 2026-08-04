@@ -1,0 +1,218 @@
+# STM32F072 (ARM Cortex-M0): the worked example of
+# docs/extending/add-a-microcontroller.md, tier B.
+#
+# Tier B is "a part hauksbee does not ship, on an emulator platform that already
+# exists". Renode 1.16.1 carries platforms/cpus/stm32f072.repl (which includes
+# stm32f0.repl), so no peripheral model has to be written or vendored: the whole
+# part is this one file.
+#
+# This descriptor lives under db/mcu/examples/ rather than db/mcu/, and is NOT in
+# the embedded built-in list. It is the example a reader copies, and the fixture
+# tests/renode_stm32f072.rs loads. Promoting it to a shipped part means adding it
+# to `EMBEDDED` in src/soc.rs and a [[models]] kind = "mcu" routing entry in
+# crates/hauksbee-models/db/mcu.toml.
+#
+# WHY THE F0 IS A DIFFERENT PART, NOT AN F103 WITH A NEW NAME
+# ---------------------------------------------------------------------------
+# The F0 family is a different GPIO and USART generation from the F1:
+#
+#   Register           STM32F103 (F1)              STM32F072 (F0)
+#   GPIO block base    0x40010800 (APB2)           0x48000000 (AHB2)
+#   output data reg    ODR at 0x0C                 ODR at 0x14
+#   direction reg      CRL 0x00 / CRH 0x04         MODER at 0x00, 2 bits per pin
+#   USART status       SR at 0x00                  ISR at 0x1C
+#   USART data         DR at 0x04                  RDR 0x24 / TDR 0x28
+#
+# Copying the F103 descriptor and renaming it therefore produces a machine that
+# boots, prints nothing, and reports every pin as never driven, with no error
+# anywhere. The F0's ODR offset is the same 0x14 as the F4's, which is the
+# coincidence that makes the F1 file the wrong one to copy from.
+#
+# EVERY VALUE BELOW WAS READ OFF A LIVE MACHINE
+# ---------------------------------------------------------------------------
+# Renode 1.16.1 (d66b0c2a-202602160921), stock stm32f072.repl, running
+# testdata/firmware/stm32f072_blinky/blinky.elf. Peripheral names came from
+# `peripherals` on the booted machine; the offsets came from reading the
+# registers back after main() had run:
+#
+#   sysbus.gpioPortC ReadDoubleWord 0x00  ->  0x00001000   MODER: PC6 = 0b01, output
+#   sysbus.gpioPortC ReadDoubleWord 0x14  ->  0x00000040   ODR:   PC6 driven HIGH
+#   sysbus.gpioPortA ReadDoubleWord 0x00  ->  0x28280400   MODER: PA5 output,
+#                                                          PA9/PA10 alternate function
+#   sysbus.gpioPortA ReadDoubleWord 0x14  ->  0x00000020   ODR:   PA5 held HIGH
+#
+# Six consecutive 50 ms windows read ODR as 0x40, 0x00, 0x40, 0x00, 0x40, 0x00:
+# the blink is observable at this offset, not a single lucky sample. Running
+# quiet.elf (same source, built with -DQUIET, drives nothing) on the same
+# platform gave MODER 0x00000000 and ODR 0x00000000 on port C and 0x28000000
+# (the SWD pins' reset value) with ODR 0x00000000 on port A, so the readings
+# above are the firmware's, not the platform's defaults.
+#
+# CAPABILITY TIERS (the docs/cosim/MCU.md convention)
+# ---------------------------------------------------------------------------
+#   GPIO out (MODER/ODR)   PROVEN END-TO-END. Bare-metal firmware drives PC6 and
+#       PA5; both read back at the mapped offsets, and the quiet build shows
+#       neither. Ports A and C are the live-verified pair; B, D, E and F are the
+#       same STM32_GPIOPort model registered at 0x400-spaced windows.
+#   USART1 TX              PROVEN END-TO-END. "hello from stm32f072" arrives on
+#       the host side of sysbus.usart1 (22 bytes), and the quiet build sends none.
+#   USART1 RX              PROVEN END-TO-END. Bytes written into the UART reach
+#       the firmware's poll loop; it answers them.
+#   ADC inputs 0..7        PROVEN END-TO-END on channel 0 and channel 3. See the
+#       [[soc.adc]] block below for the transcript.
+#   Timers / clocks        BOOT-ONLY. The platform's rcc is a Python stub that
+#       returns alternating values on every read, which is enough for firmware
+#       that pokes enable bits and never waits on a ready flag. Firmware that
+#       spins on an RCC ready bit (CubeMX HAL clock bring-up does) will hang.
+#       The F103 descriptor solves that with an inline platform; this one does
+#       not, because the walkthrough's firmware does not need it.
+#   I2C bus-slave bridge   ABSENT, see [soc.i2c].
+#   SPI bus-slave bridge   ABSENT, see [soc.spi].
+[soc]
+backend = "renode"
+machine = "f072"
+platform_repl = "@platforms/cpus/stm32f072.repl"
+cpu_path = "sysbus.cpu"
+uart = "sysbus.usart1"
+# The HSI, which is what the walkthrough firmware runs from and never leaves.
+# This field is advisory for the engine's bookkeeping: Renode clocks the
+# platform from the .repl's own frequencies regardless of what is written here.
+frequency_hz = 8_000_000
+expected_e_machine = "EM_ARM"
+mcu_label = "STM32F072 (ARM Cortex-M0)"
+
+# One entry per GPIO port the platform registers. ODR at 0x14 and MODER at 0x00
+# are the STM32_GPIOPort layout, shared with the F4 family and NOT with the F1.
+# `moder` counts only 0b01 (general-purpose output) as a drive: an alternate
+# function pin may be an input function, so PA9/PA10 (USART1) are excluded from
+# the configured-output set even though the firmware configured them.
+[[soc.ports]]
+letter = "A"
+peripheral = "gpioPortA"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+[[soc.ports]]
+letter = "B"
+peripheral = "gpioPortB"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+[[soc.ports]]
+letter = "C"
+peripheral = "gpioPortC"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+[[soc.ports]]
+letter = "D"
+peripheral = "gpioPortD"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+[[soc.ports]]
+letter = "E"
+peripheral = "gpioPortE"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+[[soc.ports]]
+letter = "F"
+peripheral = "gpioPortF"
+odr_offset = 0x14
+width = 16
+dir = { offset = 0x00, encoding = "moder" }
+
+# ADC INJECTION, PROVEN
+# ---------------------------------------------------------------------------
+# The stock stm32f0.repl instantiates `adc: Analog.STM32F0_ADC @ sysbus
+# 0x40012400` with `referenceVoltage: 3.3`, and that model exposes exactly two
+# Monitor-callable feeds (read off the live machine by typing `sysbus.adc`):
+#
+#   SetDefaultValue (Decimal valueInmV, Int32? channel = null)
+#   FeedVoltageSampleToChannel (Int32 channel, Decimal valueInmV, UInt32 repeat)
+#
+# `SetDefaultValue` is the one that suits the engine's cadence: the Monitor is
+# idle between RunFor windows, so a per-chunk write lands before the next
+# instruction runs and every later conversion returns it. It takes MILLIVOLTS,
+# hence {millivolts} rather than {count}: feeding it a raw 12-bit code would be
+# silently wrong by the full-scale factor.
+#
+# Transcript, one machine, firmware doing a real ADEN / ADSTART / read-ADC_DR
+# sequence on ADC_IN0 and ADC_IN3:
+#
+#   sysbus.adc SetDefaultValue 1650 0   ->  firmware printed adc0=00000800  (2048)
+#   sysbus.adc SetDefaultValue  825 0   ->  firmware printed adc0=00000400  (1024)
+#   sysbus.adc SetDefaultValue 3300 3   ->  firmware printed adc3=00000fff  (4095)
+#   channel 0 re-read afterwards        ->  firmware printed adc0=00000400  (1024)
+#
+# 1650/3300 * 4095 = 2047.5 and 825/3300 * 4095 = 1023.75, so the counts are the
+# converter's own arithmetic on the fed voltage, and the last line shows the
+# channels hold independent state rather than sharing one sample.
+#
+# Channels 0..7 are ADC_IN0..ADC_IN7 on PA0..PA7 (RM0091 table 13). Channel 0
+# and channel 3 are the pair proven above; the rest are the same Monitor call
+# with the channel index substituted. Channels 16, 17 and 18 (on-die
+# temperature, VREFINT, VBAT) are NOT external nodes, so they are left unmapped
+# and take the loud once-per-channel drop rather than a fabricated count, the
+# same policy the RP2040 applies to its input 4.
+[[soc.adc]]
+channel = 0
+monitor_command = "sysbus.adc SetDefaultValue {millivolts} 0"
+full_scale_volts = 3.3
+max_count = 4095
+[[soc.adc]]
+channel = 1
+monitor_command = "sysbus.adc SetDefaultValue {millivolts} 1"
+full_scale_volts = 3.3
+max_count = 4095
+[[soc.adc]]
+channel = 2
+monitor_command = "sysbus.adc SetDefaultValue {millivolts} 2"
+full_scale_volts = 3.3
+max_count = 4095
+[[soc.adc]]
+channel = 3
+monitor_command = "sysbus.adc SetDefaultValue {millivolts} 3"
+full_scale_volts = 3.3
+max_count = 4095
+[[soc.adc]]
+channel = 4
+monitor_command = "sysbus.adc SetDefaultValue {millivolts} 4"
+full_scale_volts = 3.3
+max_count = 4095
+[[soc.adc]]
+channel = 5
+monitor_command = "sysbus.adc SetDefaultValue {millivolts} 5"
+full_scale_volts = 3.3
+max_count = 4095
+[[soc.adc]]
+channel = 6
+monitor_command = "sysbus.adc SetDefaultValue {millivolts} 6"
+full_scale_volts = 3.3
+max_count = 4095
+[[soc.adc]]
+channel = 7
+monitor_command = "sysbus.adc SetDefaultValue {millivolts} 7"
+full_scale_volts = 3.3
+max_count = 4095
+
+[soc.i2c]
+# EMPTY BECAUSE IT IS UNVERIFIED, not because the platform lacks the peripheral.
+# stm32f0.repl registers `i2c1`/`i2c2` as `I2C.STM32F7_I2C`, which is a
+# DIFFERENT model class from the `I2C.STM32F4_I2C` behind the proven F103 and F4
+# bridges, so the F103 proof does not carry across. Naming a controller here
+# installs a bridge peripheral; if that model never dispatches to a registered
+# slave, a bound I2C sensor answers zeroes and reads as working, which is the
+# exact failure the RP2040's SPI entry documents. Left empty, a bound sensor
+# instead gets the loud UNEXERCISED-bus coverage warning and fails a CI
+# peripheral assertion. Filling this in needs one live test that the bridge
+# registers on STM32F7_I2C and a byte round-trips.
+controllers = []
+
+[soc.spi]
+# EMPTY for the same reason, though the odds are better: stm32f0.repl registers
+# `spi1`/`spi2` as `SPI.STM32SPI`, which IS the class behind the F4's proven
+# spi2/spi3 bridges. That makes this the cheapest capability to add next, and it
+# still needs the live test before it is claimed.
+controllers = []
