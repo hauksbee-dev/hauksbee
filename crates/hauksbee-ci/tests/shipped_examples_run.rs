@@ -94,6 +94,70 @@ fn every_shipped_example_spec_is_one_hauksbee_understands() {
     );
 }
 
+// M4: no shipped example may demonstrate the hollow gate. An `ideal` supply
+// holds its net at its programmed voltage, so a voltage / rail_window assertion
+// on that same net cannot fail for a board reason, and the run says COVERAGE
+// HOLE about it. `hauksbee-ci init` refuses to scaffold that shape; the examples
+// are what people copy, so they must not ship it either.
+//
+// Checked by reading the specs, not by running them, so it holds for the
+// examples whose boards come from the fetched corpus too.
+#[test]
+fn no_example_asserts_a_rail_its_own_ideal_source_holds() {
+    let mut offenders: Vec<String> = Vec::new();
+    for spec in std::fs::read_dir(examples_dir())
+        .expect("read examples/")
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|e| e == "toml"))
+    {
+        let text = std::fs::read_to_string(&spec).expect("read spec");
+        let value: toml::Value = match text.parse() {
+            Ok(v) => v,
+            Err(e) => panic!("{} is not valid TOML: {e}", spec.display()),
+        };
+        let array = |key: &str| -> Vec<toml::Value> {
+            value
+                .get(key)
+                .and_then(toml::Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        };
+        let str_field = |v: &toml::Value, key: &str| -> Option<String> {
+            v.get(key).and_then(toml::Value::as_str).map(str::to_string)
+        };
+        // Nets an ideal source drives directly: a declared `ideal` supply leg or
+        // a `[[net_drive]]`. Behavioural legs (bench / wall / usb / battery) are
+        // exactly what a rail assertion is for, so they are fine.
+        let ideal_fed: Vec<String> = array("supply")
+            .iter()
+            .filter(|s| str_field(s, "kind").as_deref() == Some("ideal"))
+            .filter_map(|s| str_field(s, "net"))
+            .chain(array("net_drive").iter().filter_map(|d| str_field(d, "net")))
+            .collect();
+        for a in array("assert") {
+            let kind = str_field(&a, "kind").unwrap_or_default();
+            if kind != "voltage" && kind != "rail_window" {
+                continue;
+            }
+            if let Some(net) = str_field(&a, "net") {
+                if ideal_fed.contains(&net) {
+                    offenders.push(format!(
+                        "{}: {kind} assertion on '{net}', which the spec's own ideal \
+                         source holds at its programmed voltage",
+                        spec.file_name().unwrap().to_string_lossy()
+                    ));
+                }
+            }
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "shipped examples must not demonstrate a hollow gate:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
 #[test]
 fn the_first_run_example_is_a_board_someone_fabricated() {
     // The README, START_HERE, install.sh and the bundle all point a newcomer at
