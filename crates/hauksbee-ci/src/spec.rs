@@ -1210,7 +1210,7 @@ impl Spec {
                 .iter()
                 .find(|a| a.kind == "boot_coverage" || a.kind == "boot-coverage")
             {
-                return Err(SpecError::Invalid(format!(
+                errs.push(SpecError::Invalid(format!(
                     "boot_coverage assertion '{}' needs `firmware = ...`: with no firmware \
                      loaded, nothing in the run can drive the net, so it could only reach \
                      its level passively (a board pull / bias), and the check would pass \
