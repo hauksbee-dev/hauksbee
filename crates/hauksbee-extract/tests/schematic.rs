@@ -12,8 +12,18 @@ use hauksbee_extract::{Component, ExtractedBoard};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::PathBuf;
 
-fn corpus_dir() -> PathBuf {
-    hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR")).unwrap_or_default()
+/// One of KiCad's own demo projects, resolved under both names the corpus is
+/// delivered with: `kicad-demos-src` in the hand-built tree, the `kicad_demos`
+/// board id scripts/fetch-corpus.sh writes. Joining one name directly is what
+/// made every cross-validation below skip silently for anyone who used the
+/// documented fetch.
+fn demo_project(project: &str) -> Option<PathBuf> {
+    [
+        format!("kicad-demos-src/demos/{project}"),
+        format!("kicad_demos/demos/{project}"),
+    ]
+    .iter()
+    .find_map(|rel| hauksbee_testkit::corpus_board(env!("CARGO_MANIFEST_DIR"), rel))
 }
 
 fn fixtures_dir() -> PathBuf {
@@ -123,8 +133,8 @@ fn diff_partitions(sch: &ExtractedBoard, pcb: &ExtractedBoard) -> Vec<String> {
 
 /// Load the schematic (recursing the hierarchy) and the matching PCB for a
 /// project given by its top-file path stem.
-fn load_pair(project_dir: &str, stem: &str) -> Option<(ExtractedBoard, ExtractedBoard)> {
-    let dir = corpus_dir().join(project_dir);
+fn load_pair(project: &str, stem: &str) -> Option<(ExtractedBoard, ExtractedBoard)> {
+    let dir = demo_project(project)?;
     let sch_path = dir.join(format!("{stem}.kicad_sch"));
     let pcb_path = dir.join(format!("{stem}.kicad_pcb"));
     let sch = ExtractedBoard::from_kicad_schematic_path(&sch_path).ok()?;
@@ -135,9 +145,9 @@ fn load_pair(project_dir: &str, stem: &str) -> Option<(ExtractedBoard, Extracted
 
 /// Assert exact partition equivalence (over shared pins) for a project, and
 /// report a few sanity facts.
-fn assert_cross_validates(project_dir: &str, stem: &str, min_nets: usize) {
-    let Some((sch, pcb)) = load_pair(project_dir, stem) else {
-        eprintln!("corpus pair {project_dir}/{stem} missing; skipping");
+fn assert_cross_validates(project: &str, stem: &str, min_nets: usize) {
+    let Some((sch, pcb)) = load_pair(project, stem) else {
+        eprintln!("corpus pair {project}/{stem} missing; skipping");
         return;
     };
 
@@ -191,13 +201,13 @@ fn assert_cross_validates(project_dir: &str, stem: &str, min_nets: usize) {
 #[test]
 fn pic_programmer_cross_validates() {
     // KiCad 10 (20260101), 2-sheet hierarchy. Exact partition match.
-    assert_cross_validates("kicad-demos-src/demos/pic_programmer", "pic_programmer", 33);
+    assert_cross_validates("pic_programmer", "pic_programmer", 33);
 }
 
 #[test]
 fn ecc83_cross_validates() {
     // KiCad 9 (20250114), 2 sheets, tube preamp. Exact partition match.
-    assert_cross_validates("kicad-demos-src/demos/ecc83", "ecc83-pp", 8);
+    assert_cross_validates("ecc83", "ecc83-pp", 8);
 }
 
 #[test]
@@ -206,11 +216,7 @@ fn complex_hierarchy_cross_validates() {
     // Exercises per-instance reference resolution: the two instances must
     // expand to distinct designators (RV201 vs RV301) yet identical topology.
     // Exact partition match including the full component set.
-    assert_cross_validates(
-        "kicad-demos-src/demos/complex_hierarchy",
-        "complex_hierarchy",
-        20,
-    );
+    assert_cross_validates("complex_hierarchy", "complex_hierarchy", 20);
 }
 
 // ---------------------------------------------------------------------------
@@ -228,7 +234,7 @@ fn complex_hierarchy_cross_validates() {
 fn interf_u_cross_validates() {
     // KiCad single sheet, two vector buses (PC-DB[0..7], PC-A[0..11]) with bus
     // entries, plus hidden GND/VCC power pins on the PGA and RAM. Exact match.
-    assert_cross_validates("kicad-demos-src/demos/interf_u", "interf_u", 100);
+    assert_cross_validates("interf_u", "interf_u", 100);
 }
 
 #[test]
@@ -237,7 +243,7 @@ fn video_cross_validates() {
     // that cross a sheet boundary under a different name (DQ[0..31] feeding a
     // DPC[0..31] sheet pin; TVRAM[..] feeding VRAM[..]) which map member-wise by
     // index. Exact partition match over 189 components.
-    assert_cross_validates("kicad-demos-src/demos/video", "video", 300);
+    assert_cross_validates("video", "video", 300);
 }
 
 #[test]
@@ -248,7 +254,7 @@ fn kit_dev_coldfire_cross_validates() {
     // Exercises rotate-then-mirror placement (R104/R115/LEDABRT101 at rot 90 +
     // mirror x). Exact partition match over 160 components.
     assert_cross_validates(
-        "kicad-demos-src/demos/kit-dev-coldfire-xilinx_5213",
+        "kit-dev-coldfire-xilinx_5213",
         "kit-dev-coldfire-xilinx_5213",
         150,
     );

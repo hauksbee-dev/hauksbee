@@ -440,11 +440,157 @@ pub(crate) fn parse_pads(buf: &[u8]) -> Vec<PadRecord> {
     out
 }
 
+/// Property key carrying the reason a component's value is absent, for the
+/// engine's bind report to surface next to the UNRESOLVED verdict.
+pub const VALUE_UNRESOLVED_KEY: &str = "value_unresolved";
+
+/// The reason string for a `.PcbDoc` part with no comment text and no
+/// parseable SOURCEDESCRIPTION. A layout-only Altium file genuinely does not
+/// carry the value; fabricating one from the refdes is what produced the
+/// phantom "R74 = 0.74 ohm" faults.
+pub const VALUE_UNRESOLVED_REASON: &str =
+    "no value in the PcbDoc; Altium keeps values in the .SchDoc";
+
+/// What [`value_from_description`] recovered from a SOURCEDESCRIPTION string.
+#[derive(Default)]
+pub(crate) struct DescValue {
+    /// Canonical value string the engine's value parser reads ("1uF", "10kOhm").
+    pub value: Option<String>,
+    /// Voltage rating token, verbatim ("16V").
+    pub voltage: Option<String>,
+    /// Power rating token, verbatim ("250mW", "1/4W").
+    pub power: Option<String>,
+}
+
+/// Recover a passive's value (and voltage/power rating) from the component
+/// record's SOURCEDESCRIPTION, e.g. "Cap Ceramic 1uF 16V X7R 10% SMD 0603" or
+/// "Resistor SMD chip 1 Ohm 250mW 1% 1206". Only descriptions that declare
+/// themselves a capacitor / resistor / inductor are read, so "DIODE SCHOTTKY
+/// 20V 1A SOD323" can never yield 20 as a value. Package codes ("0603"),
+/// tolerances ("10%") and dielectric codes ("X7R") never match the unit
+/// grammar, so they cannot be mistaken for a magnitude.
+pub(crate) fn value_from_description(desc: &str) -> DescValue {
+    let mut out = DescValue::default();
+    let desc = desc.trim();
+    let Some(first) = desc.split_whitespace().next() else {
+        return out;
+    };
+    let first = first.to_ascii_uppercase();
+    let kind = if first.starts_with("CAP") {
+        'C'
+    } else if first.starts_with("RES") {
+        'R'
+    } else if first.starts_with("IND") {
+        'L'
+    } else {
+        return out;
+    };
+    let tokens: Vec<String> = desc
+        .split_whitespace()
+        .map(|t| t.replace(['\u{00b5}', '\u{03bc}'], "u"))
+        .collect();
+    for (i, tok) in tokens.iter().enumerate() {
+        let Some((num, rest)) = split_leading_number(tok) else {
+            continue;
+        };
+        let rest_up = rest.to_ascii_uppercase();
+        if out.voltage.is_none() && rest_up == "V" {
+            out.voltage = Some(format!("{num}V"));
+            continue;
+        }
+        // Power: "250mW", "2W", and the fraction form "1/4W".
+        if out.power.is_none()
+            && (rest_up == "W"
+                || rest_up == "MW"
+                || (rest_up.starts_with('/') && rest_up.ends_with('W')))
+        {
+            out.power = Some(tok.clone());
+            continue;
+        }
+        if out.value.is_some() {
+            continue;
+        }
+        match kind {
+            'C' | 'L' => {
+                let unit = if kind == 'C' { 'F' } else { 'H' };
+                if let Some(mult) = rest_up.strip_suffix(unit) {
+                    // Sub-unit prefixes are case-insensitive here: no
+                    // capacitor or inductor is ever marked in mega.
+                    let mult = match mult {
+                        "" => "",
+                        "P" => "p",
+                        "N" => "n",
+                        "U" => "u",
+                        "M" => "m",
+                        _ => continue,
+                    };
+                    out.value = Some(format!("{num}{mult}{unit}"));
+                }
+            }
+            'R' => {
+                // "1 Ohm": a bare number whose NEXT token is the unit word.
+                if rest.is_empty() {
+                    if let Some(next) = tokens.get(i + 1) {
+                        let n = next.to_ascii_uppercase();
+                        if n == "OHM" || n == "OHMS" {
+                            out.value = Some(format!("{num}Ohm"));
+                        }
+                    }
+                    continue;
+                }
+                // Attached forms: "0.1Ohm", "10k", "4.7kOhm", "100R", "10mOhm".
+                // The multiplier keeps its case: 'm' is milli, 'M' is mega.
+                let mult = if rest_up.ends_with("OHMS") {
+                    &rest[..rest.len() - 4]
+                } else if rest_up.ends_with("OHM") {
+                    &rest[..rest.len() - 3]
+                } else if rest_up == "R" {
+                    ""
+                } else {
+                    rest
+                };
+                let mult = match mult {
+                    "" => "",
+                    "k" | "K" => "k",
+                    "M" => "M",
+                    "m" => "m",
+                    _ => continue,
+                };
+                out.value = Some(format!("{num}{mult}Ohm"));
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Split a token into its leading decimal number and the rest: "250mW" ->
+/// ("250", "mW"). `None` when the token does not start with a digit.
+fn split_leading_number(t: &str) -> Option<(&str, &str)> {
+    let mut end = 0;
+    let mut dot = false;
+    for (i, c) in t.char_indices() {
+        if c.is_ascii_digit() {
+            end = i + c.len_utf8();
+        } else if c == '.' && !dot && end > 0 {
+            dot = true;
+            end = i + c.len_utf8();
+        } else {
+            break;
+        }
+    }
+    if end == 0 {
+        return None;
+    }
+    Some((&t[..end], &t[end..]))
+}
+
 /// One component, from a COMPONENT(S)6 properties record.
 struct CompRecord {
     refdes: String,
     pattern: String,
     library: String,
+    description: String,
     layer_name: String,
     /// Last segment of `SOURCEHIERARCHICALPATH` (the channel name on a
     /// channel-replicated design, e.g. "FLASH2"); used to disambiguate repeated
@@ -482,6 +628,7 @@ fn parse_components(buf: &[u8]) -> Vec<CompRecord> {
             refdes,
             pattern: prop_str(&m, "PATTERN"),
             library: prop_str(&m, "SOURCEFOOTPRINTLIBRARY"),
+            description: prop_str(&m, "SOURCEDESCRIPTION"),
             layer_name: prop_str(&m, "LAYER"),
             channel,
             x_mm,
@@ -558,11 +705,16 @@ fn parse_comment_texts(buf: &[u8]) -> HashMap<u16, String> {
             break;
         };
         let component = r.u16_at(s1 + 7);
-        // is_comment / is_designator only exist when the block is long enough.
-        let is_comment = if e1 - s1 >= 123 {
-            r.u8_at(s1 + 41) != 0
+        // The comment / designator flags only exist when the block is long
+        // enough. Byte 40 is `isComment`, byte 41 is `isDesignator`; reading 41
+        // as the comment flag captured the DESIGNATOR text instead, which
+        // substituted every part's refdes for its value ("R74" then bound as a
+        // fabricated 0.74 ohm resistor downstream). Verified against real
+        // boards: designator texts carry byte41=1, comment texts byte40=1.
+        let (is_comment, is_designator) = if e1 - s1 >= 123 {
+            (r.u8_at(s1 + 40) != 0, r.u8_at(s1 + 41) != 0)
         } else {
-            false
+            (false, false)
         };
         r.pos = e1;
         // Sub-record 2: the text string (a Pascal string). We ignore WideStrings
@@ -570,7 +722,7 @@ fn parse_comment_texts(buf: &[u8]) -> HashMap<u16, String> {
         let Some((s2, e2)) = r.enter_subrecord() else {
             break;
         };
-        if is_comment && component != NONE_U16 && e2 > s2 {
+        if is_comment && !is_designator && component != NONE_U16 && e2 > s2 {
             let tlen = r.u8_at(s2) as usize;
             let from = s2 + 1;
             let to = (from + tlen).min(e2);
@@ -668,10 +820,15 @@ pub fn extract(bytes: &[u8]) -> Result<ExtractedBoard, ExtractError> {
             }
         }
         used.insert(reference.clone());
+        // Only copper pads become pins. A footprint may also carry pad records
+        // on paste/mask/mechanical layers; counting one of those made every
+        // 2-pad passive look like a 3-pad part, which the engine then bound as
+        // an ambiguous bussed array.
         let pins: Vec<Pin> = pads_by_comp
             .get(&idx16)
             .map(|ps| {
                 ps.iter()
+                    .filter(|p| is_copper_layer(p.layer))
                     .map(|p| Pin {
                         number: p.name.clone(),
                         net: net_id(p.net),
@@ -682,7 +839,30 @@ pub fn extract(bytes: &[u8]) -> Result<ExtractedBoard, ExtractError> {
                     .collect()
             })
             .unwrap_or_default();
-        let value = comments.get(&idx16).cloned().unwrap_or_default();
+        // Value: the comment text when the board carries one; else recovered
+        // from SOURCEDESCRIPTION; else honestly absent, with the reason exposed
+        // as a property so the bind report can say why instead of the binder
+        // fabricating a magnitude from the refdes.
+        let mut properties: Vec<(String, String)> = Vec::new();
+        let mut value = comments.get(&idx16).cloned().unwrap_or_default();
+        if value.is_empty() && !c.description.is_empty() {
+            let d = value_from_description(&c.description);
+            if let Some(v) = d.value {
+                value = v;
+            }
+            if let Some(v) = d.voltage {
+                properties.push(("voltage_rating".to_string(), v));
+            }
+            if let Some(p) = d.power {
+                properties.push(("power_rating".to_string(), p));
+            }
+        }
+        if value.is_empty() {
+            properties.push((
+                VALUE_UNRESOLVED_KEY.to_string(),
+                VALUE_UNRESOLVED_REASON.to_string(),
+            ));
+        }
         let lib_id = if c.library.is_empty() {
             c.pattern.clone()
         } else {
@@ -695,7 +875,7 @@ pub fn extract(bytes: &[u8]) -> Result<ExtractedBoard, ExtractError> {
             footprint: c.pattern.clone(),
             position: Some((c.x_mm, c.y_mm, c.rotation)),
             layer: side_from_layer_name(&c.layer_name).to_string(),
-            properties: Vec::new(),
+            properties,
             dnp: false,
             pins,
         });
@@ -765,6 +945,40 @@ mod tests {
         let pads = parse_pads(&buf);
         assert_eq!(pads.len(), 1, "a full-length pad record must parse");
         assert_eq!(pads[0].name, "P1");
+    }
+
+    #[test]
+    fn description_value_recovery() {
+        // The real elk-audio / pidp11 shapes: value + rating out, junk ignored.
+        let d = value_from_description("Cap Ceramic 1uF 16V X7R 10% SMD 0603");
+        assert_eq!(d.value.as_deref(), Some("1uF"));
+        assert_eq!(d.voltage.as_deref(), Some("16V"));
+        assert_eq!(d.power, None);
+
+        let d = value_from_description("Resistor SMD chip 1 Ohm 250mW 1% 1206");
+        assert_eq!(d.value.as_deref(), Some("1Ohm"));
+        assert_eq!(d.power.as_deref(), Some("250mW"));
+
+        let d = value_from_description("RES 4.7kOhm 1/4W 5% 0805");
+        assert_eq!(d.value.as_deref(), Some("4.7kOhm"));
+        assert_eq!(d.power.as_deref(), Some("1/4W"));
+
+        let d = value_from_description("IND 22uH 20% SMD");
+        assert_eq!(d.value.as_deref(), Some("22uH"));
+
+        // A non-passive description must never yield a value: "20V 1A" is a
+        // diode rating, not a magnitude.
+        let d = value_from_description("DIODE SCHOTTKY 20V 1A SOD323");
+        assert_eq!(d.value, None);
+        assert_eq!(d.voltage, None);
+
+        // Package / tolerance / dielectric tokens cannot win.
+        let d = value_from_description("Cap Ceramic X7R 10% 0603");
+        assert_eq!(d.value, None, "no farad token, no value");
+
+        // Connector descriptions carry numbers but are not passives.
+        let d = value_from_description("CONN HEADER VERT 16POS 2.54MM");
+        assert_eq!(d.value, None);
     }
 
     #[test]

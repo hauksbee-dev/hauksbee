@@ -39,19 +39,21 @@ fn version_string() -> &'static str {
     version = version_string(),
     about = "CI for hardware: hand it a PCB; it tells you what blows up before you order boards.",
     long_about = None,
-    propagate_version = true,
-    infer_subcommands = true,
+    // No propagate_version: with it, `hauksbee run --version` reported itself
+    // as "hauksbee-run", a binary that does not exist. `hauksbee --version` is
+    // the one version surface.
+    // No infer_subcommands: inference made `hauksbee check board.kicad_pcb`
+    // silently resolve to check-code (a nonsense DSL parse error on a board
+    // file) and `hauksbee se` start a blocking server. Clap's did-you-mean
+    // suggestion on the full names covers the convenience without the traps.
     arg_required_else_help = true
 )]
 struct Cli {
     #[command(subcommand)]
     command: Command,
 
-    /// Suppress informational notes (the chatty `note:` lines on stderr, e.g.
-    /// "other board file(s) found nearby"). Errors, warnings, and report output
-    /// are unaffected. These notes are also silenced automatically under `--json`
-    /// and when stdout is piped/redirected, so they never pollute machine or
-    /// report output; `--quiet` also hides them for an interactive terminal.
+    /// Suppress informational `note:` lines on stderr (global; errors, warnings
+    /// and report output are unaffected; `--json`/piped output already implies it).
     #[arg(long, global = true)]
     quiet: bool,
 }
@@ -60,9 +62,8 @@ struct Cli {
 enum Command {
     /// Extract + bind a board, then check it or bring it to life.
     ///
-    /// Accepts a KiCad `.kicad_pcb`/`.kicad_sch`, Eagle `.brd`, IPC-D-356,
-    /// gerbers, Altium `.PcbDoc`, a KiCad `.net`, or Board-as-Code (`.board`,
-    /// detected by extension or its DSL header), all analysed identically.
+    /// Accepts any supported board input (see the BOARD argument below), all
+    /// analysed identically.
     ///
     /// With no flag on a terminal, bare `run` opens the interactive full-screen
     /// dashboard (TUI); piped/redirected (CI) it prints a hint. Pass `--serve` (or
@@ -73,19 +74,21 @@ enum Command {
     ///
     /// These reports are informational and exit 0 by default, even when they
     /// list findings. Add `--strict` to FAIL (exit 2) on a real defect, or
-    /// `--plain` for a non-engineer-readable verdict. For the full assertion /
-    /// fault flow gate on `hauksbee-ci` or `hauksbee check-code`.
+    /// `--plain` for a verdict a non-engineer can read. For the full assertion /
+    /// fault flow, gate on `hauksbee-ci` or `hauksbee check-code`.
     ///
     /// Example:
     ///   hauksbee run board.kicad_pcb --report --plain
     ///   hauksbee run board.kicad_pcb --drc --plain --strict
     ///   hauksbee run board.kicad_pcb --firmware blink.hex --headless --seconds 2   # firmware co-sim
+    #[command(verbatim_doc_comment)]
     Run(RunArgs),
 
     /// Decompile a board into editable Board-as-Code text.
     ///
     /// Example:
     ///   hauksbee to-code my_board.kicad_pcb --out my_board.board
+    #[command(verbatim_doc_comment)]
     ToCode(ToCodeArgs),
 
     /// Recompile Board-as-Code back into a `.kicad_pcb`.
@@ -95,6 +98,7 @@ enum Command {
     ///
     /// Example:
     ///   hauksbee from-code my_board.board --out my_board.kicad_pcb --route
+    #[command(verbatim_doc_comment)]
     FromCode(FromCodeArgs),
 
     /// Merge an externally routed Specctra SES file back onto a board.
@@ -114,6 +118,7 @@ enum Command {
     ///   hauksbee from-code my.board --out my.kicad_pcb --route-dsn my.dsn
     ///   java -jar freerouting.jar -de my.dsn -do my.ses   # any router, any time
     ///   hauksbee merge-ses my.board my.ses --out my.kicad_pcb --route-strict
+    #[command(verbatim_doc_comment)]
     MergeSes(MergeSesArgs),
 
     /// Recompile, bind, co-sim with the stress monitor, print a fault report.
@@ -123,6 +128,7 @@ enum Command {
     ///
     /// Example:
     ///   hauksbee check-code my_board.board --seconds 0.2
+    #[command(verbatim_doc_comment)]
     CheckCode(CheckCodeArgs),
 
     /// Simulate a SPICE deck (`.cir`) and write the results as CSV.
@@ -152,6 +158,7 @@ enum Command {
     ///   hauksbee sim examples/learn/02-mna-by-hand/divider.cir --op --print V(out)
     ///   hauksbee sim examples/learn/04-time-integration/rlc_ringdown.cir --tran --print V(out)
     ///   hauksbee sim examples/learn/02-mna-by-hand/rc_lowpass_ac.cir --ac --print V(out)
+    #[command(verbatim_doc_comment)]
     Sim(SimArgs),
 
     /// Start the local web front door: a "drop your board, get a report" page.
@@ -164,6 +171,7 @@ enum Command {
     ///
     /// Example:
     ///   hauksbee serve --port 3001
+    #[command(verbatim_doc_comment)]
     Serve(ServeArgs),
 
     /// Report which co-simulation backends this build can actually locate.
@@ -176,12 +184,14 @@ enum Command {
     /// `esp32` machine is reported absent here exactly as the co-sim rejects it,
     /// and a `~/renode-portable` install the co-sim finds is reported present.
     ///
-    /// stdout is one machine-parseable line per backend
-    /// (`NAME<TAB>STATUS<TAB>PATH-OR-HINT`, STATUS a single lowercase token); the
-    /// human header goes to stderr. `--json` emits a JSON object instead.
+    /// On a TTY the report is one table. When stdout is piped it is one
+    /// machine-parseable line per backend
+    /// (`NAME<TAB>STATUS<TAB>PATH-OR-HINT`, STATUS a single lowercase token);
+    /// the human header goes to stderr. `--json` emits a JSON object instead.
     ///
     /// Example:
     ///   hauksbee doctor --backends
+    #[command(verbatim_doc_comment)]
     Doctor(DoctorArgs),
 
     /// Model-library tooling: validate model TOML, manage installed model
@@ -198,13 +208,15 @@ enum Command {
     /// pack.toml manifest and models/*.toml) into ~/.hauksbee/packs;
     /// `models remove <name>` uninstalls it; `models list` shows what is
     /// installed. `models resolve <board>` prints, per component, which model
-    /// entry won and from which priority layer (builtin=0 < pack=10 <
-    /// user-dir=20 < --models-dir=30 < spice=40).
+    /// entry won and from which of the six priority layers (builtin=0 <
+    /// pack=10 < user-dir=20 < user-config-dir=25 < --models-dir=30 <
+    /// spice=40).
     ///
     /// Examples:
     ///   hauksbee models lint my_part.toml
     ///   hauksbee models add ./acme-sensors
     ///   hauksbee models resolve my_board.kicad_pcb
+    #[command(verbatim_doc_comment)]
     Models(ModelsArgs),
 
     /// Watch a target and re-run the right check on every file change: a board
@@ -213,6 +225,7 @@ enum Command {
     ///
     /// Example:
     ///   hauksbee watch my_board.kicad_pcb --plain
+    #[command(verbatim_doc_comment)]
     Watch(WatchArgs),
 
     /// Install an external co-sim dependency.
@@ -227,6 +240,7 @@ enum Command {
     ///
     /// Example:
     ///   hauksbee install esp-qemu --yes
+    #[command(verbatim_doc_comment)]
     Install(InstallArgs),
 }
 
@@ -305,8 +319,49 @@ struct ModelsExtractArgs {
     #[arg(long)]
     out_dir: Option<PathBuf>,
     /// Skip the prompt. For scripts that have already got the user's consent.
-    #[arg(long)]
+    #[arg(long, short = 'y')]
     yes: bool,
+    /// Which LLM backend drafts the model. Default: codex (or api when
+    /// HAUKSBEE_LLM_API_KEY is set, matching the pre-flag behaviour).
+    #[arg(long, value_enum)]
+    backend: Option<ExtractBackendArg>,
+    /// Model the extraction runs on (a codex/claude model name, or the api
+    /// backend's model id). Default: gpt-5.6-sol for codex, the CLI's own
+    /// default for claude-code.
+    #[arg(long)]
+    model: Option<String>,
+    /// Base URL for --backend api (an OpenAI-compatible endpoint).
+    /// Default: HAUKSBEE_LLM_BASE_URL, then https://api.openai.com/v1.
+    #[arg(long, value_name = "URL")]
+    api_base: Option<String>,
+    /// NAME of the environment variable holding the api key (default:
+    /// OPENAI_API_KEY). The name, never the key itself: the key is read from
+    /// the environment at call time and is never stored.
+    #[arg(long, value_name = "NAME")]
+    api_key_env: Option<String>,
+}
+
+/// CLI spelling of the extraction backend. Separate from
+/// `hauksbee_models::datasheet::Backend` because the models crate carries no
+/// clap dependency; the `From` impl below is the whole binding.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+enum ExtractBackendArg {
+    /// `codex exec` (needs `codex` in PATH).
+    Codex,
+    /// Headless `claude -p` (needs `claude` in PATH).
+    ClaudeCode,
+    /// An OpenAI-compatible chat-completions endpoint.
+    Api,
+}
+
+impl From<ExtractBackendArg> for hauksbee_models::datasheet::Backend {
+    fn from(b: ExtractBackendArg) -> Self {
+        match b {
+            ExtractBackendArg::Codex => Self::Codex,
+            ExtractBackendArg::ClaudeCode => Self::ClaudeCode,
+            ExtractBackendArg::Api => Self::Api,
+        }
+    }
 }
 
 #[derive(Parser)]
@@ -387,7 +442,10 @@ Scaffold one with `hauksbee-ci init <board>` (it emits a [[scenario]] + \
 rail_window stub when a supply is detected) and see docs/checks/TRANSIENTS.md. For \
 scriptable waveforms from a headless run, use --probe/--probe-csv.")]
 struct RunArgs {
-    /// Board file to load (.kicad_pcb, .kicad_sch, .brd, .d356, or gerbers).
+    /// Board input: KiCad (.kicad_pcb / .kicad_sch / .net), Eagle (.brd),
+    /// Altium (.PcbDoc), IPC-D-356 (.d356), a gerber folder or zip, or
+    /// Board-as-Code (.board). The one format list; every other surface
+    /// accepts the same set.
     #[arg(value_name = "BOARD")]
     board: PathBuf,
 
@@ -402,6 +460,17 @@ struct RunArgs {
     /// lifted pins, fitted component values), applied before simulating.
     #[arg(long, value_name = "FILE")]
     asbuilt: Option<PathBuf>,
+
+    /// Write the full static suite (bind + DRC + lint + SI + USB-C findings) as
+    /// a JUnit XML report to this path, alongside whatever report was asked
+    /// for. Serious findings become test failures.
+    #[arg(long, value_name = "FILE", help_heading = "CI output")]
+    junit: Option<PathBuf>,
+
+    /// Write the full static suite as a SARIF 2.1.0 report to this path
+    /// (GitHub code scanning et al). Serious findings become `error` results.
+    #[arg(long, value_name = "FILE", help_heading = "CI output")]
+    sarif: Option<PathBuf>,
 
     /// Seconds of simulated time to run under --headless.
     #[arg(long, default_value_t = 1.0, value_name = "N")]
@@ -462,6 +531,12 @@ struct RunArgs {
     #[arg(long, visible_alias = "explain")]
     plain: bool,
 
+    /// With --plain --drc (or --check): print every clearance finding in full.
+    /// By default, repeated near-identical clearance warnings condense to one
+    /// aggregated line per rule and layer after the first few.
+    #[arg(long)]
+    verbose: bool,
+
     /// Emit machine-readable JSON instead of the box-drawing tables, for any of
     /// --report/--drc/--lint/--si/--resources/--usb-c/--thermal/--ac. Implies
     /// non-interactive, stable output (see docs schema §4.1). `valid:false` +
@@ -470,7 +545,7 @@ struct RunArgs {
     #[arg(long)]
     json: bool,
 
-    /// Exit non-zero if a report (--drc/--lint/--si/--resources/--usb-c) finds problems,
+    /// Exit non-zero if a report (--check/--drc/--lint/--si/--resources/--usb-c) finds problems,
     /// so it can gate a CI pipeline directly. Default stays exit 0 (scripts that
     /// only read the text are unaffected). Counts shorts + serious/medium lint &
     /// SI findings; clearance-only and low-severity notes do not fail the gate.
@@ -540,8 +615,8 @@ struct RunArgs {
     #[arg(long, value_name = "DIR", help_heading = "Advanced / analyses")]
     models_dir: Option<PathBuf>,
 
-    /// Small-signal AC sweep: `<fstart>:<fstop>:<points>[:lin]` (Hz; points per
-    /// decade unless `:lin`). Linearises about the DC operating point and prints
+    /// Small-signal AC sweep: `<fstart>:<fstop>:<points>[:dec|:oct|:lin]` (Hz;
+    /// points per decade by default, per octave with `:oct`, total with `:lin`). Linearises about the DC operating point and prints
     /// a Bode (magnitude dB + phase) table for `--ac-node`, then exits. Drive is
     /// a unit AC source on every independent source in the circuit.
     ///
@@ -786,12 +861,16 @@ struct ServeArgs {
 
     /// Open the system browser at the served URL once the listener is up.
     ///
-    /// Also happens automatically (without this flag) when stdout is not a
-    /// terminal, i.e. when serve was launched by a double-click / Finder /
-    /// launchd and nobody can read the printed URL. Opening is best-effort:
-    /// on a headless machine with no browser it silently does nothing.
+    /// Also happens automatically (without this flag) when serve was launched
+    /// by the desktop app, where nobody can read the printed URL. Opening is
+    /// best-effort: on a headless machine with no browser it silently does
+    /// nothing. A piped/CI launch never auto-opens.
     #[arg(long)]
     open: bool,
+
+    /// Never open a browser, even when launched by the desktop app.
+    #[arg(long, conflicts_with = "open")]
+    no_open: bool,
 }
 
 #[derive(Parser)]
@@ -891,6 +970,16 @@ fn main() -> anyhow::Result<()> {
     // live Renode/QEMU child instead of orphaning it. See
     // hauksbee_mcu::children for the leak this closes.
     hauksbee_mcu::children::install_signal_reaper();
+    // `hauksbee <board.kicad_pcb>` (no subcommand) is the most natural first
+    // thing to type; clap would answer "unrecognized subcommand". Catch a
+    // first argument that is a board file and say the actual fix.
+    if let Some(first) = std::env::args().nth(1) {
+        if !first.starts_with('-') && looks_like_board_input(std::path::Path::new(&first)) {
+            eprintln!("error: '{first}' looks like a board file, and hauksbee needs a subcommand.");
+            eprintln!("  Try: hauksbee run {first} --check");
+            std::process::exit(2);
+        }
+    }
     let cli = Cli::parse();
     // Fix #3 (LOW): under `--json`, an AI/CI consumer expects parseable output on
     // EVERY path, including a hard error. Emit `{"ok": false, "error": "..."}`
@@ -935,14 +1024,28 @@ fn main() -> anyhow::Result<()> {
             args.route_strict,
             args.json,
         ),
-        Command::CheckCode(args) => hauksbee_engine::commands::boardcode::check(
-            &args.code,
-            args.seconds,
-            args.destructive,
-            args.ambient,
-            args.json,
-        ),
-        Command::Serve(args) => hauksbee_engine::commands::serve::run(args.port, args.open),
+        Command::CheckCode(args) => {
+            // A board file handed to check-code used to fall into the DSL
+            // parser and emit a nonsense parse error; name the actual fix.
+            if board_extension(&args.code) {
+                eprintln!(
+                    "error: check-code reads Board-as-Code (.board) files; for board checks run: \
+                     hauksbee run {} --check",
+                    args.code.display()
+                );
+                std::process::exit(2);
+            }
+            hauksbee_engine::commands::boardcode::check(
+                &args.code,
+                args.seconds,
+                args.destructive,
+                args.ambient,
+                args.json,
+            )
+        }
+        Command::Serve(args) => {
+            hauksbee_engine::commands::serve::run(args.port, args.open, args.no_open)
+        }
         Command::Doctor(args) => hauksbee_engine::commands::doctor::run(args.backends, args.json),
         Command::Sim(args) => hauksbee_engine::commands::sim::run(
             &args.file,
@@ -970,6 +1073,10 @@ fn main() -> anyhow::Result<()> {
                 &args.kind,
                 args.out_dir.as_deref(),
                 args.yes,
+                args.backend.map(Into::into),
+                args.model,
+                args.api_base,
+                args.api_key_env,
             ),
         },
         Command::Watch(args) => {
@@ -993,6 +1100,41 @@ fn main() -> anyhow::Result<()> {
     result
 }
 
+/// Whether a path carries an extension of a BOARD design format (the inputs
+/// `run` reads). Deliberately does NOT include `.board`: Board-as-Code is the
+/// one format `check-code` legitimately reads.
+fn board_extension(p: &std::path::Path) -> bool {
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    matches!(
+        ext.as_str(),
+        "kicad_pcb" | "kicad_sch" | "brd" | "pcbdoc" | "d356" | "net"
+    )
+}
+
+/// Whether a bare first argument looks like a board input rather than a
+/// subcommand: a board-format extension, a `.board` file, or an existing
+/// gerber directory/zip. Used only for the no-subcommand hint, so it must
+/// never match a real subcommand name (none contain a dot or a path
+/// separator that resolves to a file).
+fn looks_like_board_input(p: &std::path::Path) -> bool {
+    if board_extension(p) {
+        return true;
+    }
+    let ext = p
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| e.to_ascii_lowercase())
+        .unwrap_or_default();
+    if ext == "board" || ext == "zip" {
+        return true;
+    }
+    p.is_dir() && p.exists() && p.to_str().is_some_and(|s| s.contains('/'))
+}
+
 /// Deconstruct the parsed `RunArgs` (clap) into the library's plain
 /// [`hauksbee_engine::commands::run::RunConfig`],
 /// so the run orchestrator lives in `hauksbee_engine::commands::run` while
@@ -1002,6 +1144,8 @@ fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
         board: a.board,
         firmware: a.firmware,
         asbuilt: a.asbuilt,
+        junit: a.junit,
+        sarif: a.sarif,
         seconds: a.seconds,
         headless: a.headless,
         report: a.report,
@@ -1014,6 +1158,7 @@ fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
         thermal: a.thermal,
         ambient: a.ambient,
         plain: a.plain,
+        verbose: a.verbose,
         json: a.json,
         strict: a.strict,
         strict_thermal: a.strict_thermal,

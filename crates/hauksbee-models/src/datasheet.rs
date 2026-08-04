@@ -21,13 +21,21 @@
 //!               [--out-dir ~/.hauksbee/models/]
 //! ```
 //!
-//! # Backends (in priority order)
+//! # Backends
 //!
-//! 1. **codex** (default): shells out to `codex exec --full-auto` with a
-//!    carefully constructed prompt. Requires `codex` in PATH.
-//! 2. **API** (optional): if `HAUKSBEE_LLM_API_KEY` and `HAUKSBEE_LLM_MODEL`
-//!    are set, calls an OpenAI-compatible chat completions endpoint via
-//!    `HAUKSBEE_LLM_BASE_URL` (defaults to `https://api.openai.com/v1`).
+//! Selected with `--backend codex|claude-code|api`:
+//!
+//! 1. **codex** (default): shells out to `codex exec` with a carefully
+//!    constructed prompt. Requires `codex` in PATH.
+//! 2. **claude-code**: shells out to headless `claude -p` with the same
+//!    prompt contract. Requires `claude` in PATH.
+//! 3. **api**: calls an OpenAI-compatible chat-completions endpoint,
+//!    configured by `--api-base` (default `https://api.openai.com/v1`),
+//!    `--model`, and `--api-key-env NAME` (the key is read from that
+//!    environment variable at call time and never stored).
+//!
+//! With no `--backend`, setting `HAUKSBEE_LLM_API_KEY` selects the api
+//! backend, matching the behaviour before `--backend` existed.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -36,8 +44,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{bail, Context, Result};
 
-/// How long to let a single codex run go before we kill it and (maybe) retry.
-const CODEX_TIMEOUT: Duration = Duration::from_secs(600);
+/// How long to let a single agent-CLI run (codex or claude) go before we kill
+/// it and (maybe) retry.
+const CLI_BACKEND_TIMEOUT: Duration = Duration::from_secs(600);
 
 /// Pages rendered and attached as images.
 ///
@@ -389,6 +398,40 @@ fn validate_sensor_reply(
 
 // ── Argument parsing ──────────────────────────────────────────────────────────
 
+/// Which LLM backend an extraction talks to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Backend {
+    /// `codex exec`, the agent CLI (the default).
+    Codex,
+    /// Headless `claude -p`, the same prompt contract as codex.
+    ClaudeCode,
+    /// An OpenAI-compatible chat-completions endpoint.
+    Api,
+}
+
+impl Backend {
+    pub fn name(self) -> &'static str {
+        match self {
+            Backend::Codex => "codex",
+            Backend::ClaudeCode => "claude-code",
+            Backend::Api => "api",
+        }
+    }
+}
+
+impl std::str::FromStr for Backend {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "codex" => Ok(Backend::Codex),
+            "claude-code" => Ok(Backend::ClaudeCode),
+            "api" => Ok(Backend::Api),
+            other => bail!("unknown backend '{other}': expected codex, claude-code, or api"),
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct Args {
     pub pdf: PathBuf,
     pub part: String,
@@ -397,8 +440,20 @@ pub struct Args {
     /// Retry count for LLM calls (default 1)
     pub retries: usize,
     /// Model the extraction agent runs on. `None` takes
-    /// `HAUKSBEE_CODEX_MODEL`, then [`DEFAULT_CODEX_MODEL`].
+    /// `HAUKSBEE_CODEX_MODEL` (codex) / `HAUKSBEE_LLM_MODEL` (api), then
+    /// [`DEFAULT_CODEX_MODEL`].
     pub model: Option<String>,
+    /// Which backend to call. `None` keeps the pre-flag behaviour: the api
+    /// backend when `HAUKSBEE_LLM_API_KEY` is set, codex otherwise.
+    pub backend: Option<Backend>,
+    /// Base URL for the api backend. `None` takes `HAUKSBEE_LLM_BASE_URL`,
+    /// then `https://api.openai.com/v1`.
+    pub api_base: Option<String>,
+    /// NAME of the environment variable holding the api key. The key itself
+    /// is never accepted as a flag value and never stored: it is read from
+    /// the named variable at call time. `None` takes `HAUKSBEE_LLM_API_KEY`
+    /// when set, else `OPENAI_API_KEY`.
+    pub api_key_env: Option<String>,
 }
 
 impl Args {
@@ -412,6 +467,9 @@ impl Args {
             out_dir: None,
             retries: 1,
             model: None,
+            backend: None,
+            api_base: None,
+            api_key_env: None,
         }
     }
 
@@ -427,6 +485,41 @@ impl Args {
         self.model = model.filter(|m| !m.trim().is_empty());
         self
     }
+
+    /// Pick the backend. `None` keeps the environment-driven default.
+    pub fn backend(mut self, backend: Option<Backend>) -> Self {
+        self.backend = backend;
+        self
+    }
+
+    pub fn api_base(mut self, base: Option<String>) -> Self {
+        self.api_base = base.filter(|b| !b.trim().is_empty());
+        self
+    }
+
+    pub fn api_key_env(mut self, name: Option<String>) -> Self {
+        self.api_key_env = name.filter(|n| !n.trim().is_empty());
+        self
+    }
+}
+
+/// Reject anything that is not a plausible environment-variable NAME. The
+/// flag takes the variable's name, never the key itself: a value with `-`,
+/// `.`, or other non-identifier characters is almost certainly a pasted key,
+/// and accepting it would put a secret on a world-readable argv.
+pub fn validate_api_key_env_name(name: &str) -> Result<()> {
+    let mut chars = name.chars();
+    let ok_first = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_');
+    if !ok_first || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        bail!(
+            "--api-key-env takes the NAME of an environment variable (e.g. \
+             OPENAI_API_KEY), not the key itself. Export the key first, then \
+             pass the variable's name."
+        );
+    }
+    Ok(())
 }
 
 /// What a caller must show the user before running an extraction, and what it
@@ -436,13 +529,19 @@ impl Args {
 /// A surface that offers extraction without showing `CONSENT_NOTICE` first is
 /// a bug, not a shortcut.
 pub const CONSENT_NOTICE: &str =
-    "This sends the datasheet's text to an LLM backend (codex, or the API \
-     backend when HAUKSBEE_LLM_API_KEY is set). Nothing is sent until you ask \
-     for it. The result is a draft for you to check, not a measurement: a \
-     model it writes carries provenance \"datasheet-extracted\".";
+    "This sends the datasheet's text to an LLM backend (codex by default; \
+     claude-code or an OpenAI-compatible API with --backend). Nothing is sent \
+     until you ask for it. The result is a draft for you to check, not a \
+     measurement: a model it writes carries provenance \"datasheet-extracted\".";
 
 pub fn parse_args() -> Result<Args> {
-    let mut args = std::env::args().skip(1);
+    parse_args_from(std::env::args().skip(1))
+}
+
+/// The flag parser, over any argument source so tests can drive it without a
+/// process spawn. `--help` still exits: it is a terminal answer, not a value.
+pub fn parse_args_from(args: impl IntoIterator<Item = String>) -> Result<Args> {
+    let mut args = args.into_iter();
     let mut pdf: Option<PathBuf> = None;
     let mut part: Option<String> = None;
     // Empty means "the model works it out from the datasheet". Defaulting to
@@ -450,6 +549,9 @@ pub fn parse_args() -> Result<Args> {
     let mut kind_str = String::new();
     let mut out_dir: Option<PathBuf> = None;
     let mut model: Option<String> = None;
+    let mut backend: Option<Backend> = None;
+    let mut api_base: Option<String> = None;
+    let mut api_key_env: Option<String> = None;
 
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -468,6 +570,23 @@ pub fn parse_args() -> Result<Args> {
             "--model" => {
                 model = Some(args.next().context("--model requires a value")?);
             }
+            "--backend" => {
+                backend = Some(
+                    args.next()
+                        .context("--backend requires a value (codex, claude-code, or api)")?
+                        .parse()?,
+                );
+            }
+            "--api-base" => {
+                api_base = Some(args.next().context("--api-base requires a value")?);
+            }
+            "--api-key-env" => {
+                let name = args
+                    .next()
+                    .context("--api-key-env requires an environment variable NAME")?;
+                validate_api_key_env_name(&name)?;
+                api_key_env = Some(name);
+            }
             "--help" | "-h" => {
                 print_help();
                 std::process::exit(0);
@@ -483,6 +602,9 @@ pub fn parse_args() -> Result<Args> {
         out_dir,
         retries: 1,
         model,
+        backend,
+        api_base,
+        api_key_env,
     })
 }
 
@@ -496,7 +618,8 @@ USAGE:
 OPTIONS:
     --pdf <path>          Path to (or URL of) the datasheet PDF
     --part <name>         Manufacturer part number (e.g. BCM847BS)
-    --kind <kind>         Component kind hint (default: bjt_npn)
+    --kind <kind>         Component kind hint (omit it and the model works it
+                          out from the datasheet)
                           passive|diode|bjt_npn|bjt_pnp|nmos|pmos|
                           vreg|opamp|comparator|analog_switch|digital|
                           dac|adc|shift_register|mcu|connector|ignore|
@@ -506,9 +629,16 @@ OPTIONS:
     --out-dir <dir>       Output directory (default: ~/.hauksbee/models/)
     --model <id>          Model for the extraction agent
                           (default: gpt-5.6-sol at high reasoning effort)
+    --backend <name>      LLM backend: codex (default), claude-code, or api
+    --api-base <url>      Base URL for the api backend
+                          (default: https://api.openai.com/v1)
+    --api-key-env <NAME>  Environment variable holding the api key
+                          (default: OPENAI_API_KEY). The NAME, never the key:
+                          the key is read from the environment at call time.
 
 ENVIRONMENT:
-    HAUKSBEE_LLM_API_KEY   API key for OpenAI-compatible backend
+    HAUKSBEE_LLM_API_KEY   API key for OpenAI-compatible backend (setting it
+                           selects the api backend when --backend is absent)
     HAUKSBEE_CODEX_MODEL   Model for the codex backend (default: gpt-5.6-sol)
     HAUKSBEE_CODEX_EFFORT  Reasoning effort for it (default: high)
     HAUKSBEE_LLM_MODEL     Model ID for API backend (e.g. gpt-5.6-sol)
@@ -884,20 +1014,40 @@ fn call_backend(prompt: &str, args: &Args) -> Result<String> {
         return Ok(raw);
     }
 
-    // Check for API key first
-    if std::env::var("HAUKSBEE_LLM_API_KEY").is_ok() {
-        return call_api_backend(prompt, args);
-    }
+    // No explicit --backend keeps the pre-flag behaviour: an exported
+    // HAUKSBEE_LLM_API_KEY selects the api backend, codex otherwise.
+    let chosen = args.backend.unwrap_or_else(|| {
+        if std::env::var("HAUKSBEE_LLM_API_KEY").is_ok() {
+            Backend::Api
+        } else {
+            Backend::Codex
+        }
+    });
 
-    // Default: codex
-    if which("codex") {
-        call_codex_backend(prompt, args)
-    } else {
-        bail!(
-            "No LLM backend available. Install codex in PATH, or set \
-             HAUKSBEE_LLM_API_KEY + HAUKSBEE_LLM_MODEL environment variables, or \
-             HAUKSBEE_EXTRACT_MOCK_REPLY=<file> for an offline canned reply."
-        )
+    match chosen {
+        Backend::Api => call_api_backend(prompt, args),
+        Backend::Codex => {
+            if !which("codex") {
+                bail!(
+                    "the codex backend needs the `codex` CLI, which is not in PATH. \
+                     Install it (`npm install -g @openai/codex` or `brew install codex`) \
+                     and sign in, or pick another backend: --backend claude-code \
+                     (needs `claude` in PATH) or --backend api (set OPENAI_API_KEY)."
+                );
+            }
+            call_agent_backend(prompt, args, "codex", run_codex_once)
+        }
+        Backend::ClaudeCode => {
+            if !which("claude") {
+                bail!(
+                    "the claude-code backend needs the `claude` CLI, which is not in \
+                     PATH. Install Claude Code (`npm install -g @anthropic-ai/claude-code`) \
+                     and sign in, or pick another backend: --backend codex (needs \
+                     `codex` in PATH) or --backend api (set OPENAI_API_KEY)."
+                );
+            }
+            call_agent_backend(prompt, args, "claude", run_claude_once)
+        }
     }
 }
 
@@ -917,7 +1067,16 @@ fn call_backend(prompt: &str, args: &Args) -> Result<String> {
 ///     the very text the user consented to send to OpenAI where any local user
 ///     can read it would undo the consent. It also kept a large datasheet
 ///     clear of ARG_MAX, which would otherwise fail as a generic spawn error.
-fn call_codex_backend(prompt: &str, args: &Args) -> Result<String> {
+///
+/// The claude-code backend shares this loop with the same contract: one
+/// sandboxed run per attempt, the answer preferred from `model.toml`, and a
+/// validation failure fed back verbatim for the retry.
+fn call_agent_backend(
+    prompt: &str,
+    args: &Args,
+    tool: &str,
+    run_once: fn(&str, &Workspace, Option<&str>) -> Result<String>,
+) -> Result<String> {
     // The sandbox is a scratch copy, never the user's own directory. See
     // `Workspace`: the agent runs full-auto, so what it can reach is the whole
     // of the security story.
@@ -931,7 +1090,7 @@ fn call_codex_backend(prompt: &str, args: &Args) -> Result<String> {
     let mut prompt = format!("{prompt}\n\n{}", verification_clause(&ws));
     for attempt in 0..=args.retries {
         let started = Instant::now();
-        let raw_stdout = run_codex_once(&prompt, &ws, args.model.as_deref())?;
+        let raw_stdout = run_once(&prompt, &ws, args.model.as_deref())?;
         // Prefer the file we asked for. Falling back to stdout keeps a model
         // that answered in prose from failing outright, but the file is the
         // reliable path: stdout also carries the agent's narration, and one
@@ -941,7 +1100,7 @@ fn call_codex_backend(prompt: &str, args: &Args) -> Result<String> {
             _ => extract_toml_block(&raw_stdout),
         };
         eprintln!(
-            "[model-extract] codex attempt {} returned {} chars in {:.0}s",
+            "[model-extract] {tool} attempt {} returned {} chars in {:.0}s",
             attempt + 1,
             raw.len(),
             started.elapsed().as_secs_f64()
@@ -963,7 +1122,7 @@ fn call_codex_backend(prompt: &str, args: &Args) -> Result<String> {
                 continue;
             }
             Err(e) => bail!(
-                "codex produced a model that failed validation after {} attempt(s): {e}\n\
+                "{tool} produced a model that failed validation after {} attempt(s): {e}\n\
                  Raw reply was:\n{raw}",
                 attempt + 1
             ),
@@ -1222,8 +1381,8 @@ fn run_codex_once(prompt: &str, ws: &Workspace, model: Option<&str>) -> Result<S
         // dropping `stdin` here sends EOF
     }
 
-    // Poll for completion up to CODEX_TIMEOUT, then kill.
-    let deadline = Instant::now() + CODEX_TIMEOUT;
+    // Poll for completion up to CLI_BACKEND_TIMEOUT, then kill.
+    let deadline = Instant::now() + CLI_BACKEND_TIMEOUT;
     loop {
         match child.try_wait().context("polling codex")? {
             Some(_status) => break,
@@ -1234,7 +1393,7 @@ fn run_codex_once(prompt: &str, ws: &Workspace, model: Option<&str>) -> Result<S
                     bail!(
                         "codex timed out after {}s with no answer; \
                          retry with a tighter prompt or set HAUKSBEE_LLM_API_KEY",
-                        CODEX_TIMEOUT.as_secs()
+                        CLI_BACKEND_TIMEOUT.as_secs()
                     );
                 }
                 std::thread::sleep(Duration::from_millis(500));
@@ -1287,13 +1446,173 @@ fn run_codex_once(prompt: &str, ws: &Workspace, model: Option<&str>) -> Result<S
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// Call an OpenAI-compatible API endpoint via `curl`.
+/// One headless `claude -p` invocation, holding the same contract as the codex
+/// run: the sandbox is the working directory, the full prompt goes in a FILE
+/// inside it (argv is world-readable, and stdin carries only the pointer),
+/// the rendered pages and the PDF are readable beside it, and the answer is
+/// expected in `model.toml` with stdout as the fallback.
+///
+/// `--permission-mode acceptEdits` lets the agent write `model.toml` without
+/// an interactive prompt; the sandbox directory bounds what those edits can
+/// touch, exactly as it does for codex.
+fn run_claude_once(prompt: &str, ws: &Workspace, model: Option<&str>) -> Result<String> {
+    let mut cmd = Command::new("claude");
+    cmd.args([
+        "-p",
+        "--output-format",
+        "text",
+        "--permission-mode",
+        "acceptEdits",
+    ])
+    .current_dir(ws.path());
+    // An explicit --model only: claude's model names are its own, so the codex
+    // env defaults must not leak into it.
+    if let Some(m) = model {
+        cmd.arg("--model").arg(m);
+    }
+
+    let prompt_path = ws.dir.path().join("prompt.md");
+    std::fs::write(&prompt_path, prompt).context("writing the prompt into the sandbox")?;
+    let log_path = ws.dir.path().join("claude-stderr.log");
+    let log = std::fs::File::create(&log_path)
+        .map(Stdio::from)
+        .unwrap_or_else(|_| Stdio::null());
+    let mut child = cmd
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        // A file, not a pipe, for the same reason as codex: nothing reads the
+        // pipe until the child exits, and a filled pipe buffer deadlocks the
+        // run into the timeout. The tail goes into the error below.
+        .stderr(log)
+        .spawn()
+        .context(
+            "spawning claude (is Claude Code installed and on PATH? \
+             `npm install -g @anthropic-ai/claude-code`)",
+        )?;
+
+    // The instruction on stdin, then EOF. The pages are on disk rather than
+    // attached: claude reads files itself, so the pointer names them.
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(
+            b"Read prompt.md in your working directory and follow it exactly. \
+              The rendered datasheet pages (page-*.png) and datasheet.pdf are \
+              in the same directory; read values off the page images for \
+              anything that lives in a table or a pinout. Write your answer \
+              to model.toml.",
+        );
+        // dropping `stdin` here sends EOF
+    }
+
+    let deadline = Instant::now() + CLI_BACKEND_TIMEOUT;
+    loop {
+        match child.try_wait().context("polling claude")? {
+            Some(_status) => break,
+            None => {
+                if Instant::now() >= deadline {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    bail!(
+                        "claude timed out after {}s with no answer; retry with a \
+                         tighter prompt or another --backend",
+                        CLI_BACKEND_TIMEOUT.as_secs()
+                    );
+                }
+                std::thread::sleep(Duration::from_millis(500));
+            }
+        }
+    }
+
+    let output = child
+        .wait_with_output()
+        .context("collecting claude output")?;
+    if !output.status.success() {
+        let tail = String::from_utf8_lossy(&output.stdout);
+        let err_tail = std::fs::read_to_string(&log_path)
+            .map(|t| {
+                t.lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .rev()
+                    .take(5)
+                    .collect::<Vec<_>>()
+                    .into_iter()
+                    .rev()
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            })
+            .unwrap_or_default();
+        let detail = [
+            tail.lines().rev().take(5).collect::<Vec<_>>().join(" | "),
+            err_tail,
+        ]
+        .into_iter()
+        .filter(|s| !s.trim().is_empty())
+        .collect::<Vec<_>>()
+        .join(" || ");
+        bail!(
+            "claude exited with status {}{}",
+            output.status,
+            if detail.is_empty() {
+                " and said nothing on stdout or stderr".to_string()
+            } else {
+                format!(": {detail}")
+            }
+        );
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+/// The default base URL for the api backend.
+pub const DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
+
+/// The environment variable the api backend reads its key from: an explicit
+/// `--api-key-env` wins; otherwise the legacy `HAUKSBEE_LLM_API_KEY` when it
+/// is set (that variable selected the backend before `--backend` existed),
+/// else `OPENAI_API_KEY`.
+fn api_key_env_name(args: &Args) -> String {
+    if let Some(name) = &args.api_key_env {
+        return name.clone();
+    }
+    if std::env::var("HAUKSBEE_LLM_API_KEY").is_ok() {
+        return "HAUKSBEE_LLM_API_KEY".to_string();
+    }
+    "OPENAI_API_KEY".to_string()
+}
+
+/// Call an OpenAI-compatible chat-completions endpoint via `curl`.
+///
+/// The key is read from the environment at call time and appears nowhere the
+/// system can echo it: not in argv (world-readable via `ps` / /proc), not in
+/// a log line, not in an error. curl gets it through `--config -` on stdin,
+/// and the request body travels as a private temp file rather than an
+/// argument.
 fn call_api_backend(prompt: &str, args: &Args) -> Result<String> {
-    let api_key = std::env::var("HAUKSBEE_LLM_API_KEY").unwrap();
-    let model =
-        std::env::var("HAUKSBEE_LLM_MODEL").unwrap_or_else(|_| DEFAULT_CODEX_MODEL.to_string());
-    let base_url = std::env::var("HAUKSBEE_LLM_BASE_URL")
-        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+    let key_env = api_key_env_name(args);
+    let api_key = std::env::var(&key_env)
+        .ok()
+        .filter(|k| !k.trim().is_empty())
+        .with_context(|| {
+            format!(
+                "the api backend reads its key from ${key_env}, which is unset or \
+                 empty. Fix: set {key_env} (export {key_env}=<your key>), or name \
+                 the variable that holds your key with --api-key-env NAME. The key \
+                 is never accepted as a flag value and never stored."
+            )
+        })?;
+    if !which("curl") {
+        bail!("the api backend needs `curl`, which is not in PATH; install curl");
+    }
+    let model = args
+        .model
+        .clone()
+        .or_else(|| std::env::var("HAUKSBEE_LLM_MODEL").ok())
+        .filter(|m| !m.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_CODEX_MODEL.to_string());
+    let base_url = args
+        .api_base
+        .clone()
+        .or_else(|| std::env::var("HAUKSBEE_LLM_BASE_URL").ok())
+        .filter(|b| !b.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_API_BASE.to_string());
     let url = format!("{}/chat/completions", base_url.trim_end_matches('/'));
 
     let body = serde_json::json!({
@@ -1305,29 +1624,63 @@ fn call_api_backend(prompt: &str, args: &Args) -> Result<String> {
         "max_tokens": 2048,
         "temperature": 0.0
     });
-
     let body_str = serde_json::to_string(&body)?;
 
+    // The body in a private temp file: it embeds the datasheet text, which is
+    // exactly what must stay off a world-readable argv, and it can outgrow
+    // ARG_MAX anyway.
+    let staging = tempfile::Builder::new()
+        .prefix("hauksbee-api-")
+        .tempdir()
+        .context("creating the api request staging directory")?;
+    let body_path = staging.path().join("request.json");
+    std::fs::write(&body_path, &body_str).context("writing the api request body")?;
+
+    // curl reads its config (with the Authorization header) from stdin.
+    let curl_config = format!(
+        "url = \"{url}\"\n\
+         request = \"POST\"\n\
+         header = \"Content-Type: application/json\"\n\
+         header = \"Authorization: Bearer {api_key}\"\n\
+         data = \"@{body}\"\n\
+         silent\n\
+         show-error\n",
+        body = body_path.display()
+    );
+
     for attempt in 0..=args.retries {
-        let output = Command::new("curl")
-            .args([
-                "-s",
-                "-X",
-                "POST",
-                &url,
-                "-H",
-                "Content-Type: application/json",
-                "-H",
-                &format!("Authorization: Bearer {}", api_key),
-                "-d",
-                &body_str,
-            ])
-            .output()
-            .context("running curl for API call")?;
+        let mut child = Command::new("curl")
+            .args(["--config", "-"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .context("running curl for the api backend")?;
+        if let Some(mut stdin) = child.stdin.take() {
+            stdin
+                .write_all(curl_config.as_bytes())
+                .context("passing the request config to curl")?;
+            // dropping `stdin` here sends EOF
+        }
+        let output = child
+            .wait_with_output()
+            .context("collecting the api response")?;
+        if !output.status.success() {
+            bail!(
+                "curl failed against {url}: {}",
+                String::from_utf8_lossy(&output.stderr).trim()
+            );
+        }
 
         let resp_str = String::from_utf8_lossy(&output.stdout);
-        let resp: serde_json::Value =
-            serde_json::from_str(&resp_str).context("parsing API response as JSON")?;
+        let resp: serde_json::Value = serde_json::from_str(&resp_str)
+            .with_context(|| format!("parsing the reply from {url} as JSON"))?;
+
+        // An error object instead of choices is the endpoint explaining
+        // itself (bad model name, exhausted quota); surface that message.
+        if let Some(err_msg) = resp["error"]["message"].as_str() {
+            bail!("{url} answered with an error: {err_msg}");
+        }
 
         let content = resp["choices"][0]["message"]["content"]
             .as_str()
@@ -1522,6 +1875,109 @@ fn dirs_next() -> PathBuf {
 mod tests {
     use super::*;
 
+    fn argv(args: &[&str]) -> Vec<String> {
+        args.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn parse_args_defaults_leave_backend_unset() {
+        let a = parse_args_from(argv(&["--pdf", "x.pdf", "--part", "BC847"])).unwrap();
+        assert_eq!(a.backend, None, "no --backend keeps the env-driven default");
+        assert_eq!(a.api_base, None);
+        assert_eq!(a.api_key_env, None);
+        assert!(a.kind_str.is_empty());
+    }
+
+    #[test]
+    fn parse_args_accepts_each_backend() {
+        for (flag, want) in [
+            ("codex", Backend::Codex),
+            ("claude-code", Backend::ClaudeCode),
+            ("api", Backend::Api),
+        ] {
+            let a = parse_args_from(argv(&[
+                "--pdf", "x.pdf", "--part", "P", "--backend", flag,
+            ]))
+            .unwrap();
+            assert_eq!(a.backend, Some(want), "--backend {flag}");
+        }
+    }
+
+    #[test]
+    fn parse_args_rejects_unknown_backend() {
+        let err = parse_args_from(argv(&[
+            "--pdf", "x.pdf", "--part", "P", "--backend", "gemini",
+        ]))
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("unknown backend 'gemini'"), "got: {msg}");
+        assert!(msg.contains("codex, claude-code, or api"), "got: {msg}");
+    }
+
+    #[test]
+    fn parse_args_takes_api_base_and_key_env() {
+        let a = parse_args_from(argv(&[
+            "--pdf",
+            "x.pdf",
+            "--part",
+            "P",
+            "--backend",
+            "api",
+            "--api-base",
+            "https://llm.example/v1",
+            "--api-key-env",
+            "MY_LLM_KEY",
+        ]))
+        .unwrap();
+        assert_eq!(a.api_base.as_deref(), Some("https://llm.example/v1"));
+        assert_eq!(a.api_key_env.as_deref(), Some("MY_LLM_KEY"));
+    }
+
+    /// A value that cannot be an env-var NAME is almost certainly a pasted
+    /// key, and must be refused before it reaches a world-readable argv.
+    #[test]
+    fn parse_args_rejects_a_key_pasted_as_the_env_name() {
+        for pasted in ["sk-abc123XYZ", "1KEY", "MY KEY", ""] {
+            let err = parse_args_from(argv(&[
+                "--pdf",
+                "x.pdf",
+                "--part",
+                "P",
+                "--api-key-env",
+                pasted,
+            ]))
+            .unwrap_err();
+            assert!(
+                err.to_string().contains("not the key itself"),
+                "{pasted:?} must be refused as an env NAME, got: {err}"
+            );
+        }
+        assert!(validate_api_key_env_name("OPENAI_API_KEY").is_ok());
+        assert!(validate_api_key_env_name("_KEY2").is_ok());
+    }
+
+    /// An explicit --api-key-env wins over every default.
+    #[test]
+    fn api_key_env_name_prefers_the_explicit_flag() {
+        let args = Args::new(PathBuf::from("x.pdf"), "P".into(), "diode".into())
+            .api_key_env(Some("MY_LLM_KEY".into()));
+        assert_eq!(api_key_env_name(&args), "MY_LLM_KEY");
+    }
+
+    /// The missing-key error names the exact variable to set.
+    #[test]
+    fn api_backend_without_key_says_which_var_to_set() {
+        let args = Args::new(PathBuf::from("x.pdf"), "P".into(), "diode".into())
+            .backend(Some(Backend::Api))
+            .api_key_env(Some("HAUKSBEE_TEST_KEY_VAR_THAT_IS_UNSET".into()));
+        let err = call_api_backend("prompt", &args).unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("set HAUKSBEE_TEST_KEY_VAR_THAT_IS_UNSET"),
+            "the fix must be exact, got: {msg}"
+        );
+    }
+
     #[test]
     fn extract_toml_block_from_fence() {
         let s = "Sure, here you go:\n```toml\n[[models]]\nid = \"test\"\n```\nDone.";
@@ -1708,6 +2164,9 @@ max_current_a = 0.1\n\
             out_dir: Some(dir.clone()),
             retries: 1,
             model: None,
+            backend: None,
+            api_base: None,
+            api_key_env: None,
         };
         let prompt = build_prompt(&args.part, &args.kind_str, "irrelevant");
         let raw = call_backend(&prompt, &args).expect("mock backend should succeed");
@@ -1749,6 +2208,9 @@ max_current_a = 0.1\n\
             out_dir: Some(std::env::temp_dir()),
             retries: 1,
             model: None,
+            backend: None,
+            api_base: None,
+            api_key_env: None,
         };
 
         let raw = call_backend(&prompt, &args).expect("codex backend call");
@@ -1795,6 +2257,9 @@ max_current_a = 0.1\n\
             out_dir: Some(std::env::temp_dir()),
             retries: 1,
             model: None,
+            backend: None,
+            api_base: None,
+            api_key_env: None,
         };
         let raw = call_backend(&prompt, &args).expect("codex backend call");
         let entry = parse_and_validate_reply(&raw, "LTC4020", "charger").expect("parse + validate");

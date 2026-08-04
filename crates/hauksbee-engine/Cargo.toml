@@ -49,6 +49,9 @@ thiserror = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# The run --json report schema is GENERATED from the result types (same
+# pattern as hauksbee-ci's spec schema).
+schemars = "1.2"
 hauksbee-extract = { version = "0.1.0", path = "../hauksbee-extract" }
 hauksbee-models = { version = "0.1.0", path = "../hauksbee-models" }
 hauksbee-ir = { version = "0.1.0", path = "../hauksbee-ir" }

@@ -161,8 +161,11 @@ impl BindReport {
         let mut w_conf = confs.len();
         let mut w_out = outs.len();
 
-        let cells: Vec<(String, String, String, String, String)> = self
-            .rows
+        // Deterministic, human-scannable order: natural sort on the reference
+        // (R2 before R10), whatever order the board file listed the parts in.
+        let mut sorted_rows: Vec<&BindRow> = self.rows.iter().collect();
+        sorted_rows.sort_by_key(|r| natural_ref_key(&r.reference));
+        let cells: Vec<(String, String, String, String, String)> = sorted_rows
             .iter()
             .map(|r| {
                 let model = r.model_id.clone().unwrap_or_else(|| "-".to_string());
@@ -233,15 +236,22 @@ impl BindReport {
 
         // Summary line.
         let guess_count = self.guess_warnings().count();
+        let plural = |n: usize, one: &str, many: &str| {
+            if n == 1 {
+                format!("{n} {one}")
+            } else {
+                format!("{n} {many}")
+            }
+        };
         out.push_str(&format!(
-            "\n{} of {} non-ignored components resolved ({:.0}%); {} mcu(s), {} digital, {} warnings, {} pin-role guesses\n",
+            "\n{} of {} non-ignored components resolved ({:.0}%); {}, {} digital, {}, {}\n",
             self.resolved_count(),
             self.non_ignored_count(),
             self.resolved_fraction() * 100.0,
-            self.mcu_count(),
+            plural(self.mcu_count(), "MCU", "MCUs"),
             self.count_where(|o| matches!(o, BindOutcome::Digital { .. })),
-            self.warnings().count(),
-            guess_count,
+            plural(self.warnings().count(), "warning", "warnings"),
+            plural(guess_count, "pin-role guess", "pin-role guesses"),
         ));
         for (r, w) in self.warnings() {
             out.push_str(&format!("  ⚠ {r}: {w}\n"));
@@ -331,5 +341,35 @@ mod resolved_count_tests {
             1,
             "only the genuinely-stamped D1 counts; the open D2 does not despite its Exact match"
         );
+    }
+}
+
+/// Natural sort key for a reference designator: alpha prefix (case-folded),
+/// then the numeric part as a NUMBER (so R2 sorts before R10), then any
+/// remaining suffix. Shared by every user-facing table that lists parts.
+pub fn natural_ref_key(reference: &str) -> (String, u64, String) {
+    let prefix: String = reference
+        .chars()
+        .take_while(|c| !c.is_ascii_digit())
+        .collect();
+    let rest = &reference[prefix.len()..];
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    let suffix = rest[digits.len()..].to_string();
+    (
+        prefix.to_ascii_uppercase(),
+        digits.parse().unwrap_or(0),
+        suffix,
+    )
+}
+
+#[cfg(test)]
+mod natural_sort_tests {
+    use super::natural_ref_key;
+
+    #[test]
+    fn numeric_parts_sort_numerically() {
+        let mut refs = vec!["R10", "R2", "C1", "U1", "R2B", "R2A"];
+        refs.sort_by_key(|r| natural_ref_key(r));
+        assert_eq!(refs, vec!["C1", "R2", "R2A", "R2B", "R10", "U1"]);
     }
 }

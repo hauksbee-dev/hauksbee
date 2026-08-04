@@ -1722,7 +1722,10 @@ pub fn render_si(report: &SiReport) -> String {
     let mut out = String::new();
     let n = report.finding_count();
     if n == 0 {
-        out.push_str("si-checks: no findings.\n");
+        // "no gating findings", not "no findings": informational notes may
+        // follow directly below, and "no findings." above a list of notes
+        // read as a contradiction.
+        out.push_str("si-checks: no gating findings.\n");
     } else {
         out.push_str(&format!("si-checks: {n} finding(s)\n"));
         for f in report.findings_only() {

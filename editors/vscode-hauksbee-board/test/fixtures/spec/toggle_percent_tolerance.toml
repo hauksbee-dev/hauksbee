@@ -1,0 +1,7 @@
+board = "nope.kicad_pcb"
+
+[[assert]]
+kind = "toggle"
+net = "LED"
+freq_hz = 1.0
+tolerance = 25.0

@@ -1,7 +1,10 @@
-// Hauksbee VS Code extension: a THIN shell-out client (no LSP — deferred by
+// Hauksbee VS Code extension: a THIN shell-out client (no LSP, deferred by
 // design, docs/dev-plans/07-ux-and-integrations.md §4). Two commands shell out
 // to the `hauksbee` / `hauksbee-ci` binaries; their machine output is mapped
 // to VS Code diagnostics by the pure functions in ./mapping.
+//
+// Spec TOML editing (lint, completions, hovers) is a separate concern and lives
+// in ./specLanguage; it needs no binary for the always-on layer.
 
 import * as vscode from "vscode";
 import { execFile } from "child_process";
@@ -9,6 +12,8 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import { mapCiJUnit, mapEngineCheck, singleError, MappedRun, Sev } from "./mapping";
+import { findBinary, type BinaryName } from "./binaries";
+import { activateSpecSupport } from "./specLanguage";
 
 const BOARD_EXTS = [".board", ".kicad_pcb", ".kicad_sch", ".net", ".brd", ".d356"];
 const INSTALL_HINT =
@@ -40,6 +45,8 @@ export function activate(context: vscode.ExtensionContext): void {
       return undefined;
     })
   );
+
+  activateSpecSupport(context);
 }
 
 export function deactivate(): void {
@@ -48,10 +55,33 @@ export function deactivate(): void {
 
 // ── binary location ──────────────────────────────────────────────────────────
 
-/** Resolve a binary: explicit setting first, else the bare name (PATH). */
-function resolveBinary(settingKey: "path" | "ciPath", fallback: string): string {
+/**
+ * Resolve a binary through the shared discovery order (setting, env, PATH, a
+ * local `target/release` then `target/debug` build). Falls back to the bare
+ * name so a miss still reaches `run`'s ENOENT path and its install pointer.
+ */
+function resolveBinary(settingKey: "path" | "ciPath", name: BinaryName): string {
   const configured = vscode.workspace.getConfiguration("hauksbee").get<string>(settingKey);
-  return configured && configured.trim() !== "" ? configured : fallback;
+  return (
+    findBinary(name, {
+      configured: configured?.trim() || undefined,
+      roots: (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath),
+    }) ?? name
+  );
+}
+
+/**
+ * Both commands execute a binary whose path a workspace setting can influence,
+ * so neither runs until the user has trusted the workspace. Declared in
+ * package.json's `capabilities.untrustedWorkspaces`; enforced here.
+ */
+function requireTrust(): boolean {
+  if (vscode.workspace.isTrusted) return true;
+  vscode.window.showWarningMessage(
+    "hauksbee: running the hauksbee binaries needs a trusted workspace. Spec completion, " +
+      "hovers and schema linting keep working without trust."
+  );
+  return false;
 }
 
 interface ExecResult {
@@ -88,6 +118,7 @@ function run(bin: string, args: string[], cwd: string): Promise<ExecResult> {
 // ── commands ─────────────────────────────────────────────────────────────────
 
 async function runCiSpec(): Promise<void> {
+  if (!requireTrust()) return;
   const uri = await pickTarget(
     (p) => p.endsWith(".toml"),
     "**/*.toml",
@@ -104,7 +135,8 @@ async function runCiSpec(): Promise<void> {
     setBusy(`running spec ${path.basename(uri.fsPath)}…`);
     let result: ExecResult;
     try {
-      // hauksbee-ci has no --json; its machine format is JUnit XML (--junit).
+      // JUnit XML is the format that reports PER-ASSERTION outcomes, which is
+      // what this command maps; --json reports one object for the whole run.
       result = await run(
         ci,
         ["run", uri.fsPath, "--junit", junitPath, "--quiet"],
@@ -123,10 +155,18 @@ async function runCiSpec(): Promise<void> {
         result.stderr.trim() || `hauksbee-ci exited ${result.code} with no report`
       );
     } else {
-      const xml = fs.readFileSync(junitPath, "utf8");
-      const specText = fs.readFileSync(uri.fsPath, "utf8");
-      mapped = mapCiJUnit(xml, specText);
-      fs.unlinkSync(junitPath);
+      try {
+        const xml = fs.readFileSync(junitPath, "utf8");
+        const specText = fs.readFileSync(uri.fsPath, "utf8");
+        mapped = mapCiJUnit(xml, specText);
+      } finally {
+        // Always: a throw above must not leave the temp report behind.
+        try {
+          fs.unlinkSync(junitPath);
+        } catch {
+          // Already gone, or not ours to remove. Nothing useful to say.
+        }
+      }
     }
     publish(uri, mapped, "hauksbee-ci");
   };
@@ -135,6 +175,7 @@ async function runCiSpec(): Promise<void> {
 }
 
 async function checkBoard(): Promise<void> {
+  if (!requireTrust()) return;
   const uri = await pickTarget(
     (p) => BOARD_EXTS.some((e) => p.endsWith(e)),
     `**/*{${BOARD_EXTS.join(",")}}`,
@@ -225,7 +266,7 @@ function publish(uri: vscode.Uri, mapped: MappedRun, source: string): void {
   const s = mapped.summary;
   const icon = s.passed ? "$(pass)" : "$(error)";
   statusBar.text = `${icon} hauksbee: ${s.label}`;
-  statusBar.tooltip = `${source} on ${path.basename(uri.fsPath)} — click to re-run`;
+  statusBar.tooltip = `${source} on ${path.basename(uri.fsPath)}. Click to re-run.`;
   statusBar.backgroundColor = s.passed
     ? undefined
     : new vscode.ThemeColor("statusBarItem.errorBackground");
@@ -233,7 +274,7 @@ function publish(uri: vscode.Uri, mapped: MappedRun, source: string): void {
   if (s.passed) {
     vscode.window.setStatusBarMessage(`hauksbee: ${s.label}`, 5000);
   } else {
-    vscode.window.showWarningMessage(`hauksbee: ${s.label} — see Problems panel.`);
+    vscode.window.showWarningMessage(`hauksbee: ${s.label}. See the Problems panel.`);
   }
 }
 

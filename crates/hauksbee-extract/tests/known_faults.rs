@@ -8,7 +8,7 @@
 //! pairs added under `board-corpus/famous/{zswatch_devkit,watchy_history}`.
 //!
 //! Each gold pair below has a prior-art citation in
-//! `docs/record/KNOWN_FAULTS_VALIDATION.md`. The point of encoding them as tests is
+//! `docs/evidence/KNOWN_FAULTS_VALIDATION.md`. The point of encoding them as tests is
 //! that the calibration is now CI-enforced: if a future change to the I2C
 //! pull-up check stops flagging the faulty ZSWatch DevKit 1.2.0, or starts
 //! flagging the fixed 1.2.1, the regression fails here immediately.

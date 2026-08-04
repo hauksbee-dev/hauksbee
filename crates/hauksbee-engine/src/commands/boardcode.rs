@@ -20,6 +20,28 @@ use crate::commands::common::read_board_text;
 pub fn to_code(board: &Path, out: Option<&Path>) -> anyhow::Result<()> {
     let text = read_board_text(board)?;
     let code = decompile_any_to_code(&text)?;
+    // Board-as-Code carries components + nets, NOT routed copper: a 54 MB
+    // layout decompiles to a few hundred KB with every track/via/zone gone.
+    // That is by design (the DSL is a netlist-level editing surface), but it
+    // must be DISCLOSED, in the file itself and on stderr, or the size drop
+    // reads as silent data loss.
+    let disclosure = "# NOTE: decompiled components + nets only; routed copper (tracks, vias,\n\
+                      # zones) is NOT carried by Board-as-Code. Recompiling with from-code\n\
+                      # re-places and (optionally) re-routes from scratch.\n";
+    let code = if code.starts_with('#') {
+        // Keep an existing generated header first, then the disclosure.
+        match code.find("\n\n") {
+            Some(i) => format!("{}\n{}{}", &code[..i], disclosure, &code[i + 1..]),
+            None => format!("{disclosure}{code}"),
+        }
+    } else {
+        format!("{disclosure}{code}")
+    };
+    eprintln!(
+        "note: Board-as-Code carries components and nets only; the routed copper \
+         (tracks, vias, zones) of '{}' is not in the output.",
+        board.display()
+    );
     match out {
         Some(p) => {
             std::fs::write(&p, &code)?;
@@ -468,7 +490,17 @@ pub fn check(
         ambient_c: ambient,
     };
     let code = load_code(code_path)?;
-    let report = check_code(&code, &opts)?;
+    let mut report = check_code(&code, &opts)?;
+    // A .board without a name line used to print a dangling "Board-as-Code
+    // check:" label; fall back to the file name so the header always says
+    // WHAT was checked.
+    if report.board_name.trim().is_empty() {
+        report.board_name = code_path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("unnamed board")
+            .to_string();
+    }
     if json {
         println!("{}", check_json(&report));
     } else {

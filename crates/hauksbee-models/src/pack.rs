@@ -378,7 +378,11 @@ impl Pack {
             }
             for entry in &db.models {
                 if let Err(errors) = crate::validation::validate(entry) {
-                    let msgs: Vec<String> = errors.iter().map(|e| e.to_string()).collect();
+                    // Every error here belongs to this one entry, so the id
+                    // prefixes the joined bare messages exactly once. Joining
+                    // the errors' own Display (which carries the prefix too)
+                    // rendered "model 's8050': model 's8050': ...".
+                    let msgs: Vec<&str> = errors.iter().map(|e| e.message.as_str()).collect();
                     return Err(PackError::ModelFileInvalid {
                         file: fname,
                         message: format!("model '{}': {}", entry.id, msgs.join("; ")),
@@ -411,12 +415,6 @@ impl Pack {
                         });
                     }
                 }
-                // The behavioural block carries its own finiteness/positivity gates
-                // (converter setpoints & limits, pull/od/drive voltages & ohms,
-                // programmed sense params, FSM dwell). Without this call those gates
-                // never ran on a real installed pack, a `vout_setpoint = nan`
-                // panics the solver at `v_cmd.clamp(0.0, nan)` on a model that
-                // "validated clean". Gate it here like params and logic.
             }
         }
 

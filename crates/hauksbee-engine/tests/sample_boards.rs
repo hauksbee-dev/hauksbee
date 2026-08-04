@@ -59,6 +59,52 @@ fn every_sample_board_has_real_copper_and_an_outline() {
     }
 }
 
+/// One bind row per electrical part: a refdes must never appear twice.
+///
+/// Watchy's board file carries 86 footprints: two are pad-less silkscreen
+/// artwork (`G***`, `REF**`, dropped as decoration), and TP4/TP5 are each
+/// placed as two footprint instances of one testpoint (front and back). The
+/// extractor merges same-refdes instances, so the board is 82 distinct
+/// electrical parts. Before the merge, the `--report` table listed TP4 and
+/// TP5 twice while the web path counted each once, and the two surfaces
+/// disagreed about how many parts the board has.
+#[test]
+fn watchy_bind_table_has_no_duplicate_refdes_rows() {
+    let path = repo_root().join("crates/hauksbee-ci/examples/boards/watchy.kicad_pcb");
+    let text = std::fs::read_to_string(&path).expect("watchy fixture readable");
+    let board = hauksbee_extract::ExtractedBoard::from_kicad_pcb(&text).expect("extracts");
+    assert_eq!(
+        board.components.len(),
+        82,
+        "num_components (the web/json count): 86 footprints, minus 2 pad-less \
+         artwork, minus the TP4/TP5 duplicate instances"
+    );
+    let lib = hauksbee_models::ModelLibrary::builtin_with_user_dirs(&[]);
+    let bound = hauksbee_engine::bind_board(&board, &lib);
+    let mut refs: Vec<&str> = bound
+        .report
+        .rows
+        .iter()
+        .map(|r| r.reference.as_str())
+        .collect();
+    let total = refs.len();
+    refs.sort_unstable();
+    refs.dedup();
+    assert_eq!(
+        total,
+        refs.len(),
+        "the bind table must list each refdes once (duplicates found)"
+    );
+    // 82 parts plus the binder's synthetic supply-rail row (RAIL:VBUS).
+    let part_rows = bound
+        .report
+        .rows
+        .iter()
+        .filter(|r| !r.reference.starts_with("RAIL:"))
+        .count();
+    assert_eq!(part_rows, 82, "one table row per distinct electrical part");
+}
+
 /// The samples must stay in step with the fixtures they were copied from.
 ///
 /// One deliberate exception, recorded in frontend/public/samples/README.md:

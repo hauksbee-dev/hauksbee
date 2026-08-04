@@ -10,8 +10,9 @@
 //    `findings` array (lint + SI + USB-C) and a `drc` section (shorts +
 //    clearance groups). Findings carry nets/refs/severity but NO source line
 //    numbers.
-//  * `hauksbee-ci run <spec> --junit <out.xml>` -> JUnit XML. hauksbee-ci has
-//    no `--json` flag; the JUnit XML is its stable machine format. One
+//  * `hauksbee-ci run <spec> --junit <out.xml>` -> JUnit XML. `--json` exists
+//    too, but reports one object per SPEC; the JUnit XML is the only format
+//    with PER-ASSERTION outcomes, which is what this mapping needs. One
 //    `<testcase>` per assertion, in SPEC ORDER (the runner evaluates
 //    `spec.asserts` in order), which is what lets us map result N back to the
 //    Nth `[[assert]]` block in the TOML.

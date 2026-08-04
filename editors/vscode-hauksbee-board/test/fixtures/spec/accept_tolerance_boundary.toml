@@ -1,0 +1,8 @@
+# tolerance = 1.0 is the inclusive upper bound of (0, 1].
+board = "nope.kicad_pcb"
+
+[[assert]]
+kind = "toggle"
+net = "LED"
+freq_hz = 1.0
+tolerance = 1.0

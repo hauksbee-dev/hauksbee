@@ -555,11 +555,28 @@ fn pio_build(project: &Path) -> Result<(PathBuf, String), String> {
     if !status.success() {
         let mut text = String::from_utf8_lossy(&stdout).into_owned();
         text.push_str(&String::from_utf8_lossy(&stderr));
-        let tail: Vec<&str> = text.lines().rev().take(25).collect();
-        let tail: Vec<&str> = tail.into_iter().rev().collect();
+        // Prefer the lines that carry the actual failure over a raw tail: a
+        // pio build tail is often 25 lines of dependency graph that bury the
+        // one "error:" line.
+        let error_lines: Vec<&str> = text
+            .lines()
+            .filter(|l| {
+                let l = l.to_ascii_lowercase();
+                l.contains("error") || l.contains("failed") || l.contains("fatal")
+            })
+            .take(15)
+            .collect();
+        let shown: Vec<&str> = if error_lines.is_empty() {
+            text.lines().rev().take(25).collect::<Vec<_>>().into_iter().rev().collect()
+        } else {
+            error_lines
+        };
+        // This resolver serves both the CLI --firmware path and the web
+        // upload; "the uploaded project" was a lie on the CLI.
         return Err(format!(
-            "`pio run` failed for the uploaded project. Last lines of the build output:\n{}",
-            tail.join("\n")
+            "`pio run` failed for the PlatformIO project '{}'. The failing lines:\n{}",
+            project.display(),
+            shown.join("\n")
         ));
     }
     let (artifact, env) = newest_pio_artifact(project).ok_or_else(|| {

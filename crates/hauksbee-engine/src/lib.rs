@@ -88,8 +88,8 @@ pub use peripherals::{
     Peripheral, PeripheralSet, RegisterMapSensor, TickCtx, TimelineEvent,
 };
 pub use plain::{
-    plain_drc, plain_drc_structured, plain_faults, plain_netlint, plain_si, PlainFinding,
-    PlainLevel, PlainReport,
+    plain_drc, plain_drc_structured, plain_faults, plain_netlint, plain_si, render_drc_condensed,
+    PlainFinding, PlainLevel, PlainReport,
 };
 pub use power_supply::{BatteryProtection, Chemistry, PowerSupply, SupplyLeg, UsbSpec};
 pub use report::{BindOutcome, BindReport, BindRow};

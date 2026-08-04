@@ -153,6 +153,7 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
     let mut by_name: HashMap<String, i64> = HashMap::new();
     for n in root.find_all("net") {
         if let (Some(id), Some(name)) = (n.arg_i64(0), n.arg_value(1)) {
+            let name = crate::netname::unescape_net_name(&name);
             names.entry(id).or_insert(name.clone());
             by_name.entry(name).or_insert(id);
         }
@@ -270,7 +271,11 @@ fn net_id_of(list: &List, by_name: &HashMap<String, i64>) -> Option<i64> {
     if let Some(id) = net.arg_i64(0) {
         return Some(id);
     }
-    by_name.get(&net.arg_value(0)?).copied()
+    // The table keys are unescaped display names, so a name-only reference
+    // must be normalized the same way before lookup.
+    by_name
+        .get(&crate::netname::unescape_net_name(&net.arg_value(0)?))
+        .copied()
 }
 
 /// A trace-current finding: a discrete-trace net whose narrowest segment cannot
@@ -450,59 +455,122 @@ pub fn render_trace_capacity_report(rows: &[TraceCapacityRow]) -> String {
         out.push_str("no power-like routed nets found.\n");
         return out;
     }
-    out.push_str(
-        "┌──────────────────────────┬────────┬──────────┬──────────┬───────────────┐\n\
-         │ Net                      │ Copper │ Min width│ Cap @10C │ Note          │\n\
-         ├──────────────────────────┼────────┼──────────┼──────────┼───────────────┤\n",
-    );
-    for r in rows {
-        let (width, cap, note) = match r.kind {
-            CopperKind::Traces => (
-                r.min_width_mm
-                    .map(|w| format!("{w:.3} mm"))
-                    .unwrap_or_else(|| "-".to_string()),
-                if r.capacity_10c_a.is_finite() {
-                    format!("{:.2} A", r.capacity_10c_a)
-                } else {
-                    "-".to_string()
-                },
-                if r.capacity_20c_a.is_finite() {
-                    format!("20C {:.2} A", r.capacity_20c_a)
-                } else {
-                    "-".to_string()
-                },
-            ),
-            CopperKind::Poured => (
-                r.min_width_mm
-                    .map(|w| format!("{w:.3} mm"))
-                    .unwrap_or_else(|| "-".to_string()),
-                "-".to_string(),
-                format!("poured ({} zone)", r.zone_count),
-            ),
-            CopperKind::None => ("-".to_string(), "-".to_string(), "no copper".to_string()),
-        };
-        out.push_str(&format!(
-            "│ {:<24} │ {:<6} │ {:>8} │ {:>8} │ {:<13} │\n",
-            truncate(&r.net, 24),
-            match r.kind {
+    // Column widths follow the content (with sane caps), so headers stay
+    // aligned and cells are never chopped mid-word to fit a fixed grid.
+    let cells: Vec<(String, String, String, String, String)> = rows
+        .iter()
+        .map(|r| {
+            let (width, cap, note) = match r.kind {
+                CopperKind::Traces => (
+                    r.min_width_mm
+                        .map(|w| format!("{w:.3} mm"))
+                        .unwrap_or_else(|| "-".to_string()),
+                    if r.capacity_10c_a.is_finite() {
+                        format!("{:.2} A", r.capacity_10c_a)
+                    } else {
+                        "-".to_string()
+                    },
+                    if r.capacity_20c_a.is_finite() {
+                        format!("20C {:.2} A", r.capacity_20c_a)
+                    } else {
+                        "-".to_string()
+                    },
+                ),
+                CopperKind::Poured => (
+                    r.min_width_mm
+                        .map(|w| format!("{w:.3} mm"))
+                        .unwrap_or_else(|| "-".to_string()),
+                    "-".to_string(),
+                    format!("poured ({} zone)", r.zone_count),
+                ),
+                CopperKind::None => ("-".to_string(), "-".to_string(), "no copper".to_string()),
+            };
+            let kind = match r.kind {
                 CopperKind::Traces => "traces",
                 CopperKind::Poured => "poured",
                 CopperKind::None => "none",
-            },
-            width,
-            cap,
-            truncate(&note, 13),
+            };
+            (truncate(&r.net, 40), kind.to_string(), width, cap, note)
+        })
+        .collect();
+    let headers = ("Net", "Copper", "Min width", "Cap @10C", "Note");
+    let w0 = cells
+        .iter()
+        .map(|c| c.0.chars().count())
+        .chain([headers.0.len()])
+        .max()
+        .unwrap();
+    let w1 = cells
+        .iter()
+        .map(|c| c.1.chars().count())
+        .chain([headers.1.len()])
+        .max()
+        .unwrap();
+    let w2 = cells
+        .iter()
+        .map(|c| c.2.chars().count())
+        .chain([headers.2.len()])
+        .max()
+        .unwrap();
+    let w3 = cells
+        .iter()
+        .map(|c| c.3.chars().count())
+        .chain([headers.3.len()])
+        .max()
+        .unwrap();
+    let w4 = cells
+        .iter()
+        .map(|c| c.4.chars().count())
+        .chain([headers.4.len()])
+        .max()
+        .unwrap();
+    let pad = |s: &str, w: usize| {
+        let len = s.chars().count();
+        format!("{}{}", s, " ".repeat(w - len))
+    };
+    let rule = |l: &str, m: &str, r: &str| {
+        format!(
+            "{l}\u{2500}{}\u{2500}{m}\u{2500}{}\u{2500}{m}\u{2500}{}\u{2500}{m}\u{2500}{}\u{2500}{m}\u{2500}{}\u{2500}{r}\n",
+            "\u{2500}".repeat(w0),
+            "\u{2500}".repeat(w1),
+            "\u{2500}".repeat(w2),
+            "\u{2500}".repeat(w3),
+            "\u{2500}".repeat(w4),
+        )
+    };
+    out.push_str(&rule("\u{250c}", "\u{252c}", "\u{2510}"));
+    out.push_str(&format!(
+        "\u{2502} {} \u{2502} {} \u{2502} {} \u{2502} {} \u{2502} {} \u{2502}\n",
+        pad(headers.0, w0),
+        pad(headers.1, w1),
+        pad(headers.2, w2),
+        pad(headers.3, w3),
+        pad(headers.4, w4),
+    ));
+    out.push_str(&rule("\u{251c}", "\u{253c}", "\u{2524}"));
+    for c in &cells {
+        out.push_str(&format!(
+            "\u{2502} {} \u{2502} {} \u{2502} {} \u{2502} {} \u{2502} {} \u{2502}\n",
+            pad(&c.0, w0),
+            pad(&c.1, w1),
+            pad(&c.2, w2),
+            pad(&c.3, w3),
+            pad(&c.4, w4),
         ));
     }
-    out.push_str("└──────────────────────────┴────────┴──────────┴──────────┴───────────────┘\n");
+    out.push_str(&rule("\u{2514}", "\u{2534}", "\u{2518}"));
     out
 }
 
+/// Cap a cell at `max` characters, marking the cut with an ellipsis instead of
+/// a silent mid-word chop.
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
     } else {
-        s.chars().take(max).collect()
+        let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
+        t.push('\u{2026}');
+        t
     }
 }
 

@@ -1,0 +1,6 @@
+board = "nope.kicad_pcb"
+
+[[assert]]
+kind = "phase_margin"
+net = "FB"
+min = 45

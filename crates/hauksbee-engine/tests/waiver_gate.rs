@@ -134,6 +134,256 @@ fn a_waiver_matching_nothing_is_called_out() {
     );
 }
 
+// ===========================================================================
+// Single-check parity: `--drc --strict`, `--lint --strict`, `--si --strict`.
+//
+// The aggregate `--check --strict` consults the waiver file, so if the
+// narrower commands did not, the SAME board would be green under one and red
+// under the other, and the waiver would look like it silently stopped
+// applying. Each family gets the full life-cycle: gates without a waiver,
+// green with an active one, red again once it expires, and red (with a
+// warning) when the file is malformed.
+// ===========================================================================
+
+/// Run `hauksbee run <board> <flag> --strict`, returning (exit code, stdout+stderr).
+fn single_check_strict(board: &Path, flag: &str) -> (i32, String) {
+    let out = Command::new(hauksbee_bin())
+        .arg("run")
+        .args([board.to_str().unwrap(), flag, "--strict"])
+        .output()
+        .expect("run hauksbee");
+    let mut s = String::from_utf8_lossy(&out.stdout).to_string();
+    s.push_str(&String::from_utf8_lossy(&out.stderr));
+    (out.status.code().unwrap_or(-1), s)
+}
+
+/// A tiny board whose only lint finding is a Medium `missing_i2c_pullup`: an
+/// entirely on-board SDA bus (two ICs, no resistor, no connector), which is the
+/// high-confidence regime the lint gates on.
+fn stage_lint_board(dir: &Path) -> PathBuf {
+    let p = dir.join("board.kicad_pcb");
+    std::fs::write(
+        &p,
+        r#"(kicad_pcb (version 20240101) (generator pcbnew)
+  (net 0 "")
+  (net 1 "SDA")
+  (net 2 "GND")
+  (footprint "Package_SO:SOIC-8" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U1")
+    (property "Value" "BUSDEV-A")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "SDA"))
+    (pad "2" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 2 "GND")))
+  (footprint "Package_SO:SOIC-8" (layer "F.Cu") (at 10 0)
+    (property "Reference" "U2")
+    (property "Value" "BUSDEV-B")
+    (pad "1" smd rect (at 10 0) (size 1 1) (layers "F.Cu") (net 1 "SDA"))
+    (pad "2" smd rect (at 10 2) (size 1 1) (layers "F.Cu") (net 2 "GND")))
+)"#,
+    )
+    .expect("write lint board");
+    p
+}
+
+/// A board whose only SI finding is the IPC-2221 trace-ampacity one: an
+/// AMS1117-3.3 (DB-modelled, cites 1.0 A) whose +3V3 rail is a single 0.15 mm
+/// hair of a trace. Same recipe as tests/si_ampacity_ripple.rs.
+fn stage_si_board(dir: &Path) -> PathBuf {
+    let p = dir.join("board.kicad_pcb");
+    std::fs::write(
+        &p,
+        r#"(kicad_pcb (version 20240101) (generator pcbnew)
+  (net 0 "")
+  (net 1 "+3V3")
+  (net 2 "VIN")
+  (net 3 "GND")
+  (footprint "Package_TO_SOT_SMD:SOT-223-3_TabPin2" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U1")
+    (property "Value" "AMS1117-3.3")
+    (pad "1" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 3 "GND"))
+    (pad "2" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "+3V3"))
+    (pad "3" smd rect (at 0 -2) (size 1 1) (layers "F.Cu") (net 2 "VIN")))
+  (segment (start 0 0) (end 10 0) (width 0.15) (layer "F.Cu") (net 1))
+)"#,
+    )
+    .expect("write si board");
+    p
+}
+
+/// Write a one-entry waiver file beside the board.
+fn write_waiver(dir: &Path, check: &str, kind: &str, nets: &str, until: &str) {
+    std::fs::write(
+        dir.join(hauksbee_engine::waiver::DEFAULT_WAIVER_FILE),
+        format!(
+            r#"
+[[waive]]
+check = "{check}"
+kind = "{kind}"
+nets = {nets}
+reason = "fixture: judged wrong on this board on purpose"
+until = "{until}"
+"#
+        ),
+    )
+    .expect("write waivers");
+}
+
+/// A waiver file with no `reason`, which the loader refuses. Every single-check
+/// command must warn and gate, exactly like `--check` does.
+fn write_malformed_waiver(dir: &Path, check: &str, kind: &str, nets: &str) {
+    std::fs::write(
+        dir.join(hauksbee_engine::waiver::DEFAULT_WAIVER_FILE),
+        format!("[[waive]]\ncheck = \"{check}\"\nkind = \"{kind}\"\nnets = {nets}\nuntil = \"2099-01-01\"\n"),
+    )
+    .expect("write malformed waivers");
+}
+
+/// The whole life-cycle for one single-check command: red bare, green under an
+/// active waiver (with the reason on the report), red again expired (named as
+/// lapsed), and red with a warning when the file is malformed.
+fn assert_waiver_parity(
+    dir: &Path,
+    board: &Path,
+    flag: &str,
+    check: &str,
+    kind: &str,
+    nets: &str,
+) {
+    // (a) The premise: without a waiver the finding gates, otherwise the rest
+    // of this proves nothing.
+    let (code, out) = single_check_strict(board, flag);
+    assert_eq!(code, 2, "{flag} --strict must gate bare:\n{out}");
+
+    // (b) An active waiver takes the finding out of the gate, out loud.
+    write_waiver(dir, check, kind, nets, "2099-01-01");
+    let (code, out) = single_check_strict(board, flag);
+    assert_eq!(
+        code, 0,
+        "{flag} --strict must honour the same waiver --check does:\n{out}"
+    );
+    assert!(
+        out.contains("Waived"),
+        "the waived section must appear on {flag}:\n{out}"
+    );
+    assert!(
+        out.contains("judged wrong on this board on purpose"),
+        "the reason travels with the {flag} report too:\n{out}"
+    );
+
+    // (c) Expiry puts it back.
+    write_waiver(dir, check, kind, nets, "2020-01-01");
+    let (code, out) = single_check_strict(board, flag);
+    assert_eq!(
+        code, 2,
+        "a lapsed waiver must stop covering {flag} findings:\n{out}"
+    );
+    assert!(
+        out.contains("lapsed"),
+        "{flag} explains the red rather than leaving it mysterious:\n{out}"
+    );
+
+    // (d) A malformed file warns and fails closed.
+    write_malformed_waiver(dir, check, kind, nets);
+    let (code, out) = single_check_strict(board, flag);
+    assert_eq!(
+        code, 2,
+        "a typo must not silently disable a check on {flag}:\n{out}"
+    );
+    assert!(
+        out.contains("ignoring the waiver file"),
+        "and {flag} says so instead of pretending the file was fine:\n{out}"
+    );
+}
+
+#[test]
+fn drc_single_check_honours_the_same_waivers_as_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = stage_board(dir.path());
+    assert_waiver_parity(
+        dir.path(),
+        &board,
+        "--drc",
+        "drc",
+        "short",
+        r#"["GND", "+5V"]"#,
+    );
+}
+
+#[test]
+fn lint_single_check_honours_the_same_waivers_as_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = stage_lint_board(dir.path());
+    assert_waiver_parity(
+        dir.path(),
+        &board,
+        "--lint",
+        "lint",
+        "missing_i2c_pullup",
+        r#"["SDA"]"#,
+    );
+}
+
+#[test]
+fn si_single_check_honours_the_same_waivers_as_check() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = stage_si_board(dir.path());
+    assert_waiver_parity(
+        dir.path(),
+        &board,
+        "--si",
+        "si",
+        "trace_ampacity",
+        r#"["+3V3"]"#,
+    );
+}
+
+/// The machine surface must carry the waived list too: a `--drc --json` whose
+/// verdict quietly dropped a short would be worse than no waivers at all.
+#[test]
+fn single_check_json_carries_the_waived_findings() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = stage_board(dir.path());
+    write_waivers(dir.path(), "2099-01-01", r#"["GND", "+5V"]"#);
+
+    let out = Command::new(hauksbee_bin())
+        .arg("run")
+        .args([board.to_str().unwrap(), "--drc", "--json", "--strict"])
+        .output()
+        .expect("run hauksbee");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "the waiver gates --drc --json --strict green too"
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let v: serde_json::Value =
+        serde_json::from_str(stdout.trim()).expect("one valid JSON document");
+    let waived = v
+        .get("waived")
+        .and_then(|w| w.as_array())
+        .expect("waived array present");
+    assert!(
+        !waived.is_empty() && waived.iter().any(|w| w.get("kind").and_then(|k| k.as_str()) == Some("short")),
+        "the overruled shorts ride the JSON report: {stdout}"
+    );
+}
+
+/// A waiver for a check a narrower command never ran must not be called stale
+/// there: `--drc` cannot know whether an SI waiver still earns its place.
+#[test]
+fn a_foreign_checks_waiver_is_not_reported_stale_by_a_narrower_command() {
+    let dir = tempfile::tempdir().unwrap();
+    let board = stage_board(dir.path());
+    // An SI waiver beside a board being run under --drc: out of scope there.
+    write_waiver(dir.path(), "si", "trace_ampacity", r#"["+3V3"]"#, "2099-01-01");
+
+    let (code, out) = single_check_strict(&board, "--drc");
+    assert_eq!(code, 2, "the real shorts still gate");
+    assert!(
+        !out.contains("matched nothing"),
+        "--drc never ran the SI checks, so it cannot judge an SI waiver stale:\n{out}"
+    );
+}
+
 #[test]
 fn a_malformed_waiver_file_fails_closed() {
     // A typo must not silently disable a check. The findings gate, and the

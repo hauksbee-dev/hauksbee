@@ -10,8 +10,8 @@
 //! fresh clone with no KiCad) the test reports why and passes vacuously. The
 //! hermetic equivalents live in `src/fplib.rs` against a fixture library.
 
-use forge_codegen::dsl::{Comp, Pad, Program, Stmt};
-use forge_codegen::FootprintLib;
+use hauksbee_forge_codegen::dsl::{Comp, Pad, Program, Stmt};
+use hauksbee_forge_codegen::FootprintLib;
 use std::path::PathBuf;
 use std::process::Command;
 

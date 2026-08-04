@@ -1,0 +1,9 @@
+# Structurally perfect, but the board is not there. Nothing but the real
+# hauksbee-ci loader can notice that, so this file is the proof that the
+# loader shell-out layer works end to end.
+name = "board went missing"
+board = "../hardware/not_here.kicad_pcb"
+duration_ms = 20
+
+[[assert]]
+kind = "no_faults"

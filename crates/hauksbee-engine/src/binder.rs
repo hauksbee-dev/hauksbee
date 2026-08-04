@@ -369,7 +369,16 @@ pub fn bind_board_with(
         d.address = 0x60 + i as u8;
     }
 
-    // ── Pass 3: attach configurable power supplies ──────────────────────────
+    // ── Pass 3a: stamp behavioural devices (power ICs) ──────────────────────
+    // Any resolved model carrying a non-empty `[models.behavioral]` block (a
+    // charger / PMIC / balancer the SPICE kinds cannot express) is stamped as a
+    // behavioural device: controllable Thevenin legs + sense resistors the
+    // scheduler iterates each chunk. Programmable limits read board resistor
+    // values through `board_resistor`. Runs BEFORE the supply pass so a
+    // converter-driven supply net is known before the ideal auto-rails attach.
+    let behavioral = bind_behavioral(board, lib, &mut circuit, &node_of, custom);
+
+    // ── Pass 3b: attach configurable power supplies ──────────────────────────
     // Every detected supply net gets a behavioral supply (default Ideal at the
     // rail's nominal voltage, electrically an ideal Vsource), unless a
     // vreg already sources that exact net (we keep the regulator chain). The
@@ -389,6 +398,16 @@ pub fn bind_board_with(
             matches!(d, Device::Vsource { p, name: dn, .. }
                 if *p == node && dn.starts_with("Vreg_"))
         }) {
+            continue;
+        }
+        // Skip a net a behavioural converter drives: the converter IS this
+        // net's supply. An ideal auto-rail on top would out-stiffen the
+        // converter leg, so the rail reads ideal-stiff and the converter's
+        // reflected input current reads zero.
+        if behavioral
+            .iter()
+            .any(|d| d.converter_out_node() == Some(node))
+        {
             continue;
         }
         let leg = SupplyLeg::stamp(
@@ -432,14 +451,6 @@ pub fn bind_board_with(
             }
         }
     }
-
-    // ── Pass 3b: stamp behavioural devices (power ICs) ──────────────────────
-    // Any resolved model carrying a non-empty `[models.behavioral]` block (a
-    // charger / PMIC / balancer the SPICE kinds cannot express) is stamped as a
-    // behavioural device: controllable Thevenin legs + sense resistors the
-    // scheduler iterates each chunk. Programmable limits read board resistor
-    // values through `board_resistor`.
-    let behavioral = bind_behavioral(board, lib, &mut circuit, &node_of, custom);
 
     // ── Pass 4: gather fault-monitor metadata ───────────────────────────────
     // Match each monitorable IR device back to its component (device name ==
@@ -671,18 +682,28 @@ fn gather_device_meta(
         }
     }
 
-    // Vreg output sources: name is "Vreg_<ref>".
+    // Vreg output sources: name is "Vreg_<ref>". A vreg whose model carries a
+    // behavioural converter stamps "Vbeh_<ref>_conv" instead of the ideal
+    // source; that Vsource is the same monitoring seam (its branch current is
+    // the delivered output current), so it takes the same meta, otherwise a
+    // converter-modelled regulator silently loses its stress/max_temp watch.
     for (id, dev) in circuit.iter() {
         if let Device::Vsource { name, .. } = dev {
-            if let Some(reference) = name.strip_prefix("Vreg_") {
+            let reference = name.strip_prefix("Vreg_").or_else(|| {
+                name.strip_prefix("Vbeh_")
+                    .and_then(|s| s.strip_suffix("_conv"))
+            });
+            if let Some(reference) = reference {
                 if let Some(info) = by_ref.get(reference) {
-                    metas.push(DeviceMeta {
-                        reference: reference.to_string(),
-                        device: id,
-                        kind: ComponentKind::Vreg,
-                        footprint: info.footprint.clone(),
-                        ratings: info.ratings.clone(),
-                    });
+                    if info.kind == ComponentKind::Vreg {
+                        metas.push(DeviceMeta {
+                            reference: reference.to_string(),
+                            device: id,
+                            kind: ComponentKind::Vreg,
+                            footprint: info.footprint.clone(),
+                            ratings: info.ratings.clone(),
+                        });
+                    }
                 }
             }
         }
@@ -1469,10 +1490,18 @@ fn unresolved_outcome(
     } else {
         None
     };
-    let reason = if two_terminal {
-        "no model; left open".to_string()
-    } else {
-        "no model".to_string()
+    // A valueless Altium part carries the extractor's explanation as a
+    // component property; surface it as the row's reason so the table says
+    // WHY there is nothing to resolve, not a bare "no model".
+    let value_unresolved = comp
+        .properties
+        .iter()
+        .find(|(k, _)| k == hauksbee_extract::altium::VALUE_UNRESOLVED_KEY)
+        .map(|(_, v)| v.clone());
+    let reason = match value_unresolved {
+        Some(why) => why,
+        None if two_terminal => "no model; left open".to_string(),
+        None => "no model".to_string(),
     };
     (None, BindOutcome::Unresolved { reason }, warning)
 }
@@ -1866,23 +1895,24 @@ fn bind_passive(
             )),
         );
     };
-    let device = passive_device(comp, comp.reference.clone(), a, b, &p);
+    let (device, warning) = passive_device(comp, comp.reference.clone(), a, b, &p);
     let label = device_label(&device);
     circuit.add(device);
-    (BindOutcome::Analog { device: label }, None)
+    (BindOutcome::Analog { device: label }, warning)
 }
 
 /// Build the concrete R / C / L device for the passive `comp` between `a` and
 /// `b`, deciding the kind from the reference-designator prefix and the parsed
 /// unit. Shared by the single-element path and the array path so both stay in
-/// lockstep on the R/C/L decision.
+/// lockstep on the R/C/L decision. The optional string is a bind warning to
+/// surface on the component's report row (currently only the 0-ohm case).
 fn passive_device(
     comp: &Component,
     name: String,
     a: NodeId,
     b: NodeId,
     p: &hauksbee_models::value::ParsedValue,
-) -> Device {
+) -> (Device, Option<String>) {
     let unit = p.unit.as_deref().unwrap_or("");
     let prefix = comp
         .reference
@@ -1891,29 +1921,53 @@ fn passive_device(
         .collect::<String>()
         .to_ascii_uppercase();
     if prefix.starts_with('C') || unit.eq_ignore_ascii_case("F") {
-        Device::Capacitor {
-            name,
-            a,
-            b,
-            farads: p.si,
-            ic: None,
-        }
+        (
+            Device::Capacitor {
+                name,
+                a,
+                b,
+                farads: p.si,
+                ic: None,
+            },
+            None,
+        )
     } else if prefix.starts_with('L') || unit.eq_ignore_ascii_case("H") {
-        Device::Inductor {
-            name,
-            a,
-            b,
-            henries: p.si,
-            ic: None,
-        }
+        (
+            Device::Inductor {
+                name,
+                a,
+                b,
+                henries: p.si,
+                ic: None,
+            },
+            None,
+        )
     } else {
-        Device::Resistor {
-            name,
-            a,
-            b,
-            ohms: p.si.max(1e-6),
-            tc1: None,
-        }
+        // A literal 0-ohm resistor (a fitted jumper link) must not stamp at
+        // the raw 1e-6 floor: ten of those on one board leave near-short
+        // conductances that wreck the analog solve's conditioning. Stamp the
+        // same STIFF_R_OHMS the supply legs use for "electrically negligible
+        // but solver-safe", and say so on the bind row.
+        let (ohms, warning) = if p.si <= 0.0 {
+            (
+                crate::power_supply::STIFF_R_OHMS,
+                Some(format!(
+                    "{name} is 0 ohms; stamped as a 1 milliohm link so the solve stays finite"
+                )),
+            )
+        } else {
+            (p.si.max(1e-6), None)
+        };
+        (
+            Device::Resistor {
+                name,
+                a,
+                b,
+                ohms,
+                tc1: None,
+            },
+            warning,
+        )
     }
 }
 
@@ -2011,7 +2065,10 @@ fn bind_passive_array(
             ));
             continue;
         };
-        let device = passive_device(comp, name, a, b, p);
+        let (device, note) = passive_device(comp, name, a, b, p);
+        if let Some(note) = note {
+            notes.push(note);
+        }
         if stamped == 0 {
             label = device_label(&device);
         }
@@ -2311,6 +2368,30 @@ fn bind_vreg(
     roles: &HashMap<String, NodeId>,
     _has_vreg: bool,
 ) -> (BindOutcome, Option<String>) {
+    // A vreg whose model carries a behavioural converter is realised by the
+    // behavioural layer, which owns the output net and reflects real input
+    // current. Stamping the ideal source here too would put two stiff sources
+    // on one net, and the ideal one wins: input current reads zero and the
+    // converter model does nothing. The part still counts as bound here, and
+    // the supply pass suppresses the ideal auto-rail on the converter's
+    // output net for the same reason.
+    if let Some(conv) = model.behavioral.converter.as_ref() {
+        let Some(out) = roles.get(&conv.out_pin).copied() else {
+            return open_warning(comp, "vreg output not connected");
+        };
+        if out.is_ground() {
+            return open_warning(comp, "vreg output tied to ground");
+        }
+        if roles.get(&conv.in_pin).is_none_or(|n| n.is_ground()) {
+            return open_warning(comp, "vreg input not connected");
+        }
+        return (
+            BindOutcome::Behavioral {
+                device: format!("vreg {:.1}V behavioral converter", conv.vout_setpoint),
+            },
+            None,
+        );
+    }
     let out = roles.get("out").copied();
     // A missing `vout` must not silently fabricate a 5 V rail on a board whose
     // regulator is actually 3.3 V (or anything else). Distinguish a present vout

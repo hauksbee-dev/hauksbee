@@ -25,6 +25,7 @@ pub fn emit(
     lib: &ModelLibrary,
     mode: OutputMode,
     strict: bool,
+    verbose: bool,
 ) -> anyhow::Result<()> {
     let bound = bind_board(board, lib);
     let summary = BindSummary::from_report(&bound.report);
@@ -122,12 +123,12 @@ pub fn emit(
                 println!(
                     "Heads-up: {open} active IC(s) are unresolved/open, so firmware/analog/AC/thermal \
                      results on their nets would be INCOMPLETE, but the copper checks below are \
-                     unaffected. Add models with --models-dir to cover them (run --report for the {m}-part \
+                     unaffected. Add models with --models-dir (hauksbee models --help) to cover them (run --report for the {m}-part \
                      bind table).\n"
                 );
             }
             println!("== Copper spacing (DRC) ==");
-            print!("{}", crate::plain_drc_structured(&drc_structured).render());
+            print!("{}", crate::render_drc_condensed(&drc_structured, verbose));
             println!("\n== Connectivity / lint ==");
             print!("{}", crate::plain_netlint(&lint).render());
             println!("\n== Signal integrity ==");
@@ -163,9 +164,123 @@ pub fn emit(
     let would_gate = drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious;
     super::note_ungated_findings(strict, would_gate);
     if strict && would_gate {
-        std::process::exit(2);
+        super::strict_gate_exit(mode, &gate_items(drc_gates, &drc, &lint, &si, &usbc));
     }
     Ok(())
+}
+
+/// Every gating subject across the aggregate suite, in report order
+/// (DRC shorts, lint, SI, USB-C), for the `--strict` failure line.
+fn gate_items(
+    drc_gates: bool,
+    drc: &hauksbee_extract::DrcReport,
+    lint: &hauksbee_extract::NetLintReport,
+    si: &hauksbee_extract::SiReport,
+    usbc: &Option<crate::checks::usb_c::UsbcReport>,
+) -> Vec<String> {
+    let mut items = if drc_gates {
+        super::drc_gate_items(drc)
+    } else {
+        Vec::new()
+    };
+    items.extend(super::lint_gate_items(lint));
+    items.extend(super::si_gate_items(si));
+    if let Some(u) = usbc {
+        if u.is_serious() {
+            items.push(format!("usb_c_cc {}", u.headline));
+        }
+    }
+    items
+}
+
+/// The full static suite (DRC shorts + lint + SI + USB-C) as DATA, for the
+/// `--junit`/`--sarif` artifact writers: the same checks and the same waiver
+/// discipline as [`emit`], without rendering a report. Waived findings are
+/// excluded here exactly as they are excluded from the gate, so a SARIF error
+/// can never fail a pipeline the report command would pass.
+pub fn gather_findings(
+    board_path: &Path,
+    board: &ExtractedBoard,
+    text: &str,
+    raw: &[u8],
+    altium_present: bool,
+    lib: &ModelLibrary,
+) -> anyhow::Result<Vec<crate::result::JsonFinding>> {
+    let mut drc = if altium_present {
+        ExtractedBoard::altium_drc(raw)?
+    } else {
+        ExtractedBoard::drc_with_clearance_rules(text, kicad_pro_clearance_rules(board_path, board))?
+    };
+    let mut lint = crate::checks::engine_lint(board, lib);
+    let geo_text = if altium_present { None } else { Some(text) };
+    let mut si = crate::checks::engine_si(board, lib, geo_text);
+    let usbc = crate::usb_c_report(board);
+
+    let mut waivers = load_waivers(board_path);
+    let (kept_lint, _) = waivers.partition("lint", std::mem::take(&mut lint.findings), |f| {
+        (
+            f.check.as_str().to_string(),
+            f.nets.clone(),
+            f.refs.clone(),
+            f.message.clone(),
+        )
+    });
+    lint.findings = kept_lint;
+    let (kept_si, _) = waivers.partition("si", std::mem::take(&mut si.findings), |f| {
+        (
+            f.check.as_str().to_string(),
+            f.nets.clone(),
+            f.refs.clone(),
+            f.message.clone(),
+        )
+    });
+    si.findings = kept_si;
+    let (kept_drc, _) = waivers.partition("drc", std::mem::take(&mut drc.findings), |f| {
+        let kind = match f.kind {
+            hauksbee_extract::ViolationKind::Short => "short",
+            _ => "clearance-not-waivable",
+        };
+        (
+            kind.to_string(),
+            vec![f.net_a_name.clone(), f.net_b_name.clone()],
+            Vec::new(),
+            format!("{} to {} on {}", f.net_a_name, f.net_b_name, f.layer),
+        )
+    });
+    drc.findings = kept_drc;
+
+    let mut findings: Vec<crate::result::JsonFinding> = Vec::new();
+    // DRC shorts as findings (serious; an unvalidated board format's shorts
+    // may be phantom, mirroring the gate they demote to warnings).
+    let phantom = drc.version_warning.is_some();
+    for f in &drc.findings {
+        if !matches!(f.kind, hauksbee_extract::ViolationKind::Short) {
+            continue;
+        }
+        findings.push(crate::result::JsonFinding {
+            check: "drc".to_string(),
+            kind: "short".to_string(),
+            severity: if phantom { "warning" } else { "serious" }.to_string(),
+            nets: vec![f.net_a_name.clone(), f.net_b_name.clone()],
+            location_mm: None,
+            layer: Some(f.layer.clone()),
+            refs: Vec::new(),
+            actionable: true,
+            message: format!(
+                "copper short: {} touches {} on {}",
+                f.net_a_name, f.net_b_name, f.layer
+            ),
+            plain: format!(
+                "two different nets ({} and {}) are touching on layer {}",
+                f.net_a_name, f.net_b_name, f.layer
+            ),
+            fix: None,
+        });
+    }
+    findings.extend(lint_findings_json(&lint));
+    findings.extend(si_findings_json(&si));
+    findings.extend(usbc.as_ref().and_then(usbc_finding_json));
+    Ok(findings)
 }
 
 /// What a static pass cannot see, said at the end of one.
@@ -193,14 +308,14 @@ fn what_this_pass_did_not_check(mcu_bound: bool) -> String {
         s.push_str(
             "\nThis board has a processor hauksbee can emulate, so it can boot your \
              firmware against the solved circuit and assert on what happens.\n\n  \
-             hauksbee-ci init <board>     scaffold a spec beside the board\n  \
+             hauksbee-ci init <board>     scaffold a spec into the current dir\n  \
              hauksbee-ci run <spec>       run it, here or in a pipeline\n",
         );
     } else {
         s.push_str(
             "\nNo processor bound on this board, so there is no firmware to boot. \
              You can still assert on rails and stress under a power-up scenario:\n\n  \
-             hauksbee-ci init <board>     scaffold a spec beside the board\n",
+             hauksbee-ci init <board>     scaffold a spec into the current dir\n",
         );
     }
     s
@@ -211,7 +326,11 @@ fn what_this_pass_did_not_check(mcu_bound: bool) -> String {
 /// A malformed waiver file is a warning, not a failed run. The findings it
 /// would have covered simply gate, which fails closed: a typo cannot quietly
 /// turn into a silenced check.
-fn load_waivers(board_path: &Path) -> crate::waiver::WaiverSet {
+///
+/// Shared with the single-check reports (`--drc`, `--lint`, `--si`): a board
+/// that is green under `--check --strict` must not turn red under the narrower
+/// command, or the waiver looks like it silently stopped applying.
+pub(crate) fn load_waivers(board_path: &Path) -> crate::waiver::WaiverSet {
     match crate::waiver::WaiverSet::discover(board_path) {
         Ok(set) => set,
         Err(e) => {
@@ -224,14 +343,39 @@ fn load_waivers(board_path: &Path) -> crate::waiver::WaiverSet {
     }
 }
 
-/// The waived section, plus the two ways a waiver file goes wrong.
-fn render_waivers(
+/// The waived section, plus the two ways a waiver file goes wrong. Shared with
+/// the single-check reports so every text surface explains an overruled or
+/// lapsed waiver in the same words.
+pub(crate) fn render_waivers(
     waived: &[crate::waiver::WaivedFinding],
     waivers: &crate::waiver::WaiverSet,
 ) -> String {
+    render_waivers_scoped(waived, waivers, None, true)
+}
+
+/// [`render_waivers`], restricted to the checks a narrower command actually ran.
+///
+/// `--drc` never runs the SI checks, so an SI waiver necessarily matches
+/// nothing there; reporting it "stale" would tell the user to delete a waiver
+/// that is doing its job. `scope` keeps the expired/stale sections to the named
+/// check. `report_stale` is off for subset commands (`--resources` runs only
+/// part of the lint family, so a no-hit proves nothing about the waiver).
+pub(crate) fn render_waivers_scoped(
+    waived: &[crate::waiver::WaivedFinding],
+    waivers: &crate::waiver::WaiverSet,
+    scope: Option<&str>,
+    report_stale: bool,
+) -> String {
     use std::fmt::Write;
-    let expired = waivers.expired();
-    let stale = waivers.stale();
+    let in_scope = |w: &&crate::waiver::Waiver| {
+        scope.is_none_or(|s| w.check.eq_ignore_ascii_case(s))
+    };
+    let expired: Vec<_> = waivers.expired().into_iter().filter(in_scope).collect();
+    let stale: Vec<_> = if report_stale {
+        waivers.stale().into_iter().filter(in_scope).collect()
+    } else {
+        Vec::new()
+    };
     if waived.is_empty() && expired.is_empty() && stale.is_empty() {
         return String::new();
     }
@@ -277,7 +421,9 @@ fn render_waivers(
         let _ = writeln!(
             s,
             "Either the finding is fixed and the waiver can go, or it no longer \
-             describes what fires."
+             describes what fires. Note a waiver's `nets` must ALL appear in one \
+             finding's net set (AND, not OR); to cover several findings, write one \
+             [[waive]] block per finding."
         );
     }
     s
@@ -331,7 +477,10 @@ pub fn emit_combined_json(
     let would_gate = drc_gates || lint_fails(&lint) || si_fails(&si) || usbc_serious;
     super::note_ungated_findings(strict, would_gate);
     if strict && would_gate {
-        std::process::exit(2);
+        super::strict_gate_exit(
+            OutputMode::Json,
+            &gate_items(drc_gates, &drc, &lint, &si, &usbc),
+        );
     }
     Ok(())
 }

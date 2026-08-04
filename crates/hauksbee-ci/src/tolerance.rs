@@ -57,7 +57,8 @@ impl Distribution {
             "uniform" => Ok(Distribution::Uniform),
             "gaussian" => Ok(Distribution::Gaussian),
             other => Err(SpecError::Invalid(format!(
-                "unknown tolerance distribution '{other}' (expected uniform|gaussian)"
+                "unknown tolerance distribution '{other}'{} (expected uniform|gaussian)",
+                crate::error::did_you_mean_hint(other, &["uniform", "gaussian"])
             ))),
         }
     }
@@ -130,7 +131,8 @@ impl Mode {
             "monte-carlo" => Ok(Mode::MonteCarlo),
             "corners" => Ok(Mode::Corners),
             other => Err(SpecError::Invalid(format!(
-                "unknown [ensemble] mode '{other}' (expected monte-carlo|corners)"
+                "unknown [ensemble] mode '{other}'{} (expected monte-carlo|corners)",
+                crate::error::did_you_mean_hint(other, &["monte-carlo", "corners"])
             ))),
         }
     }

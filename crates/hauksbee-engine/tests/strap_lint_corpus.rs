@@ -4,7 +4,7 @@
 //! 50 MHz REF_CLK on GPIO0, which is an ESP32 boot strapping pin that must be a
 //! stable HIGH at the reset latch. ESP-IDF documents this exact failure (the
 //! ESP32 randomly enters download mode), and Olimex fixed it in rev E by gating
-//! PHY power until the oscillator stabilises. `docs/record/KNOWN_FAULTS_VALIDATION.md`
+//! PHY power until the oscillator stabilises. `docs/evidence/KNOWN_FAULTS_VALIDATION.md`
 //! previously listed this as "MISSED, out of reach (needs boot-strapping +
 //! clock-at-reset model)"; the strap lint is that model for the netlist-visible
 //! half of the fault, and these tests pin the calibration:

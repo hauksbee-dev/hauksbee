@@ -61,21 +61,34 @@ rs = 0.6
     let out = resolve_report(&lib, &board());
     println!("{out}");
 
-    // The legend states the whole priority order.
+    // The legend states the whole priority order, all six layers.
     assert!(
-        out.contains("builtin(0) < pack(10) < user-dir(20) < models-dir(30) < spice(40)"),
+        out.contains(
+            "builtin(0) < pack(10) < user-dir(20) < user-config-dir(25) < models-dir(30) \
+             < spice(40)"
+        ),
         "legend missing:\n{out}"
     );
+    // The table is the same box-drawing style as the bind report.
+    assert!(
+        out.contains('┌') && out.contains('│') && out.contains('└'),
+        "expected a box-drawing table:\n{out}"
+    );
+    let row = |reference: &str| {
+        out.lines()
+            .find(|l| l.starts_with(&format!("│ {reference} ")))
+            .unwrap_or_else(|| panic!("{reference} row missing:\n{out}"))
+    };
     // D1 resolves from the builtin db, with its layer and db-file origin.
-    let d1 = out.lines().find(|l| l.starts_with("D1")).expect("D1 row");
+    let d1 = row("D1");
     assert!(d1.contains("builtin(0)"), "D1 row: {d1}");
     assert!(d1.contains("diodes"), "D1 origin is the db file: {d1}");
     // D2 resolves from the --models-dir layer, naming the file it came from.
-    let d2 = out.lines().find(|l| l.starts_with("D2")).expect("D2 row");
+    let d2 = row("D2");
     assert!(d2.contains("my_resolve_diode"), "D2 row: {d2}");
     assert!(d2.contains("models-dir(30)"), "D2 row: {d2}");
     assert!(d2.contains("mine"), "D2 origin is the user file: {d2}");
     // The unknown part is loudly unresolved, not silently dropped.
-    let u99 = out.lines().find(|l| l.starts_with("U99")).expect("U99 row");
+    let u99 = row("U99");
     assert!(u99.contains("UNRESOLVED"), "U99 row: {u99}");
 }

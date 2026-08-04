@@ -627,6 +627,14 @@ impl BehavioralDevice {
             .unwrap_or("")
     }
 
+    /// The node the converter's output source drives, or None (no converter).
+    /// The binder consults this to suppress the ideal auto-rail on a
+    /// converter-driven supply net: two stiff sources on one net, and the
+    /// ideal one wins.
+    pub fn converter_out_node(&self) -> Option<NodeId> {
+        self.converter.as_ref().map(|c| c.out_node)
+    }
+
     /// The effective input-current limit of the converter (A), or None.
     pub fn converter_iin_limit(&self) -> Option<f64> {
         self.converter.as_ref().map(|c| c.iin_limit_a)

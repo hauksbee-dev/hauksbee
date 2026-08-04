@@ -567,6 +567,133 @@ fn mask_only_pad_carries_no_copper() {
     );
 }
 
+/// The PolyKybd Kailh-socket proof geometry: pad `2` of SW_K_2 (2.55 x 1.54,
+/// chamfer_ratio 0.5 on bottom_left + bottom_right: 0.77 mm sliced off both
+/// bottom corners) exactly as the board places it, world centre
+/// (64.744, 49.3715) on B.Cu.
+const KAILH_CHAMFERED_PAD: &str = r#"
+  (footprint "Kailh:socket" (layer "B.Cu") (at 72.304 50.6615)
+    (property "Reference" "SW1")
+    (pad "2" smd roundrect (at -7.56 -1.29) (size 2.55 1.54) (layers "B.Cu")
+      (roundrect_rratio 0) (chamfer_ratio 0.5) (chamfer bottom_left bottom_right)
+      (net 2))
+  )
+"#;
+
+#[test]
+fn chamfered_pad_notch_is_not_a_short() {
+    // PolyKybd false-short proof case: the 45-degree /K_4/CS track threads the
+    // notch the chamfer opens under the pad. As a full rectangle the pad reads
+    // a -0.127 mm overlap (the false [SERIOUS] short that gated --strict);
+    // the true chamfered outline clears the track by ~0.225 mm, matching
+    // KiCad 9.0.3 DRC (zero shorting items).
+    let track = r#"
+  (segment (start 61.4 47.8) (end 66.9936 53.3936) (width 0.254) (layer "B.Cu") (net 1))
+"#;
+    let items = format!("{track}{KAILH_CHAMFERED_PAD}");
+    let report = drc(&items);
+    assert_eq!(
+        report.short_count(),
+        0,
+        "the notch track must not short the chamfered pad: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.gap_mm))
+            .collect::<Vec<_>>()
+    );
+    // Sharpness guard: under a deliberately wide 0.6 mm rule the pair IS
+    // reported, with the true small-positive gap. A lazy outline (e.g. the
+    // pad shrunk to nothing) would clear by far more than 0.6 mm.
+    let doc = forge_sexpr::parse(&board(&items)).unwrap();
+    let wide = hauksbee_extract::run_drc(&doc, Some(0.6));
+    assert_eq!(wide.short_count(), 0);
+    let f = wide
+        .clearance_violations()
+        .next()
+        .expect("the notch gap is under 0.6 mm, so a wide rule must flag it");
+    assert!(
+        f.gap_mm > 0.0 && f.gap_mm < 0.6,
+        "true gap is small-positive, got {}",
+        f.gap_mm
+    );
+    assert!(
+        (f.gap_mm - 0.2248).abs() < 0.005,
+        "gap matches the forensic reference (+0.2248 mm), got {}",
+        f.gap_mm
+    );
+}
+
+#[test]
+fn track_through_chamfered_pad_body_is_still_a_short() {
+    // Control: the same pad, but the track runs through the un-chamfered body
+    // (horizontally through the pad centre). This must stay a short, so the
+    // chamfer fix cannot pass by under-sizing the pad.
+    let track = r#"
+  (segment (start 60 49.3715) (end 70 49.3715) (width 0.254) (layer "B.Cu") (net 1))
+"#;
+    let items = format!("{track}{KAILH_CHAMFERED_PAD}");
+    assert_short(&drc(&items), "A", "B");
+}
+
+#[test]
+fn chamfered_pad_still_shorts_at_its_unchamfered_corner() {
+    // Copper clipping the pad's top-left corner, which is NOT chamfered
+    // (only the two bottom corners are). The 45-degree track's centerline
+    // passes 0.07 mm inside that corner; if the fix wrongly chamfered every
+    // corner this would clear by ~0.47 mm and go silent.
+    let track = r#"
+  (segment (start 62.869 49.3015) (end 64.169 48.0015) (width 0.254) (layer "B.Cu") (net 1))
+"#;
+    let items = format!("{track}{KAILH_CHAMFERED_PAD}");
+    assert_short(&drc(&items), "A", "B");
+}
+
+#[test]
+fn short_location_is_the_closest_approach_point_not_the_segment_midpoint() {
+    // A vertical stub ending 0.3 mm short of a long horizontal track, both
+    // 0.5 mm wide: the copper overlaps (gap -0.2 mm) at (8, -0.15), the
+    // midpoint of the centerline closest-approach span. The old code reported
+    // the arithmetic midpoint of the four segment endpoints, (6.5, -0.575),
+    // 1.6 mm away from the contact.
+    let items = r#"
+  (segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1))
+  (segment (start 8 -2) (end 8 -0.3) (width 0.5) (layer "F.Cu") (net 2))
+"#;
+    let report = drc(items);
+    assert_eq!(report.short_count(), 1);
+    let f = report.shorts().next().unwrap();
+    assert!(
+        (f.x - 8.0).abs() < 1e-6 && (f.y + 0.15).abs() < 1e-6,
+        "short located at the contact point (8, -0.15), got ({}, {})",
+        f.x,
+        f.y
+    );
+}
+
+#[test]
+fn track_pad_short_location_is_at_the_pad_not_the_track_midpoint() {
+    // A 20 mm track driven through a pad near its start: the reported point
+    // must sit at the pad (where the copper actually meets), not at the track
+    // segment's midpoint (10, 0) as the old code had it.
+    let items = r#"
+  (segment (start 0 0) (end 20 0) (width 0.4) (layer "F.Cu") (net 1))
+  (footprint "lib:fp" (layer "F.Cu") (at 2 0)
+    (property "Reference" "U1" (at 0 0))
+    (pad "1" smd rect (at 0 0) (size 1.5 1.5) (layers "F.Cu") (net 2))
+  )
+"#;
+    let report = drc(items);
+    assert_short(&report, "A", "B");
+    let f = report.shorts().next().unwrap();
+    assert!(
+        (1.0..=3.0).contains(&f.x) && f.y.abs() <= 1.0,
+        "short located at the pad (x in [1, 3]), got ({}, {})",
+        f.x,
+        f.y
+    );
+}
+
 #[test]
 fn pad_without_layers_list_still_gets_all_copper() {
     // No (layers ...) list at all: keep the through-hole-style fallback that

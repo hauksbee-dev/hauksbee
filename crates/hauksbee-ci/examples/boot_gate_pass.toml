@@ -1,4 +1,4 @@
-# hauksbee-ci boot-coverage demo, PASS variant.
+# hauksbee-ci boot_coverage demo, PASS variant.
 #
 #   hauksbee-ci run crates/hauksbee-ci/examples/boot_gate_pass.toml
 #
@@ -6,12 +6,12 @@
 # NO pull resistor on the gate net (GATE_CTRL), so at reset the GPIO is Hi-Z and
 # the gate floats: its power-up default is genuinely undefined - the exact "Hi-Z
 # control input" class the netlist cannot adjudicate (see
-# docs/record/KNOWN_FAULTS_VALIDATION.md). The boot-coverage assertion makes it
+# docs/evidence/KNOWN_FAULTS_VALIDATION.md). The boot_coverage assertion makes it
 # decidable by running the firmware: variant A configures PB0 as an output and
 # drives it HIGH promptly, so the gate is actively driven to a defined level well
 # within the deadline. This spec PASSES.
 
-name = "boot-coverage: MOSFET gate driven promptly (PASS)"
+name = "boot_coverage: MOSFET gate driven promptly (PASS)"
 board = "boards/boot_gate.kicad_pcb"
 firmware = "../../../testdata/firmware/boot_gate_a/boot_gate.hex"
 mcu = "atmega328p"
@@ -25,7 +25,7 @@ volts = 5.0
 # The gate control net must be actively driven to a logic high (>= 3.0 V) within
 # 20 ms of reset, and no stress fault may fire during the boot window before it.
 [[assert]]
-kind = "boot-coverage"
+kind = "boot_coverage"
 net = "GATE_CTRL"
 min = 3.0
 deadline_ms = 20.0

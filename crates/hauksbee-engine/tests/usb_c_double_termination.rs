@@ -11,7 +11,7 @@
 //! board ships with the nPM1300 internal Rd alone, the datasheet-correct design.
 //! hauksbee was blind to DNP and counted the unplaced footprints as live, which
 //! manufactured the phantom 2.55 kOhm. The fix teaches the extractor to read DNP
-//! and the audit to skip DNP parts. Full write-up in docs/record/FAMOUS_SWEEP.md (R2).
+//! and the audit to skip DNP parts. Full write-up in docs/evidence/FAMOUS_SWEEP.md (R2).
 //!
 //! These tests pin the corrected behaviour: the DevKit, the mainboard and the
 //! repaired RPi 4 all present a single, correct 5.1 kOhm Rd and the audit reports

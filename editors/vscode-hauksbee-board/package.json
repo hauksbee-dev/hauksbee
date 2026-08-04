@@ -1,8 +1,8 @@
 {
   "name": "hauksbee-board",
   "displayName": "Hauksbee",
-  "description": "Hauksbee hardware checks in VS Code: syntax highlighting for .board files, run CI specs and board checks, findings as diagnostics, spec TOML schema.",
-  "version": "0.2.0",
+  "description": "Hauksbee hardware checks in VS Code: lint, completion and hovers for hauksbee-ci spec TOML, syntax highlighting for .board files, run CI specs and board checks, findings as diagnostics.",
+  "version": "0.3.0",
   "publisher": "hauksbee-dev",
   "license": "Apache-2.0",
   "engines": {
@@ -18,22 +18,38 @@
     "pcb",
     "kicad",
     "ci",
+    "toml",
     "hauksbee"
+  ],
+  "activationEvents": [
+    "onLanguage:toml",
+    "workspaceContains:**/*.toml"
   ],
   "repository": {
     "type": "git",
     "url": "https://github.com/hauksbee-dev/hauksbee"
   },
   "main": "./out/extension.js",
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "Spec completion, hovers and schema linting are pure text analysis and work in an untrusted workspace. Anything that RUNS the hauksbee binaries (the loader lint layer, board-net listing, and the Run CI Spec / Check Board File commands) stays off until the workspace is trusted, because binary discovery falls back to `<workspace>/target/release/hauksbee-ci`: in a trusted workspace the executable can come from the repository tree itself.",
+      "restrictedConfigurations": ["hauksbee.path", "hauksbee.ciPath"]
+    }
+  },
   "scripts": {
     "build": "tsc -p .",
     "watch": "tsc -p . --watch",
     "test": "bun test src/",
+    "test:e2e": "tsc -p . && tsc -p tsconfig.e2e.json && node out-e2e/runTest.js",
     "package": "bunx @vscode/vsce package"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/node": "^20.11.0",
     "@types/vscode": "~1.75.0",
+    "@vscode/test-electron": "^3.1.0",
+    "mocha": "^11.8.0",
     "typescript": "^5.4.0"
   },
   "contributes": {
@@ -64,6 +80,10 @@
       {
         "command": "hauksbee.rerunLast",
         "title": "Hauksbee: Re-run Last Check"
+      },
+      {
+        "command": "hauksbee.validateSpec",
+        "title": "Hauksbee: Validate CI Spec (loader)"
       }
     ],
     "configuration": {
@@ -72,12 +92,25 @@
         "hauksbee.path": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Path to the `hauksbee` engine binary. When empty, `hauksbee` is looked up on PATH."
+          "scope": "machine",
+          "markdownDescription": "Path to the `hauksbee` engine binary. Machine-scoped: a path that gets executed must come from you, not from a checked-in workspace setting. When empty: `HAUKSBEE_BIN`, then PATH, then `target/release/hauksbee` (and `target/debug`) under a workspace folder."
         },
         "hauksbee.ciPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Path to the `hauksbee-ci` spec-runner binary. When empty, `hauksbee-ci` is looked up on PATH."
+          "scope": "machine",
+          "markdownDescription": "Path to the `hauksbee-ci` spec-runner binary. Machine-scoped: a path that gets executed must come from you, not from a checked-in workspace setting. When empty: `HAUKSBEE_CI_BIN`, then PATH, then `target/release/hauksbee-ci` (and `target/debug`) under a workspace folder."
+        },
+        "hauksbee.spec.loaderCheck": {
+          "type": "string",
+          "enum": ["onSave", "onCommand", "off"],
+          "default": "onSave",
+          "markdownDescription": "When to validate a spec with the real `hauksbee-ci` loader (the always-on schema lint needs no binary, and is unaffected). `onSave` runs it on save, but only in a trusted workspace, only when the schema lint is already clean, and never for a spec that declares an output file. `onCommand` restricts it to **Hauksbee: Validate CI Spec**.\n\nNote: `hauksbee-ci run` has no load-only mode, so a spec that loads cleanly goes on into a co-simulation, and one that finishes inside the timeout has genuinely run."
+        },
+        "hauksbee.spec.loaderTimeoutMs": {
+          "type": "number",
+          "default": 6000,
+          "markdownDescription": "How long to give `hauksbee-ci` to reject a spec before assuming it loaded. `hauksbee-ci run` has no load-only mode, so a clean spec goes straight into a co-simulation; reaching the timeout is read as \"the spec loaded\" and the child is stopped (SIGTERM, then SIGKILL). Lower it to shorten the window in which a fast co-simulation could run to completion."
         }
       }
     },

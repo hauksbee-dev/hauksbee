@@ -1653,11 +1653,7 @@ fn expand_bus_aliased_depth(
 /// sheet-path separator), so the same net can appear written both ways in one
 /// file; they must compare equal or the net splits in two.
 fn normalize_label(name: &str) -> String {
-    if name.contains("{slash}") {
-        name.replace("{slash}", "/")
-    } else {
-        name.to_string()
-    }
+    crate::netname::unescape_net_name(name)
 }
 
 /// The reference designator for this symbol *in the sheet instance we are

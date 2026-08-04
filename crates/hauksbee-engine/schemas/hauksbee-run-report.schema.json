@@ -1,0 +1,1026 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "AcJson": {
+      "description": "AC sweep in JSON: validity first, then the bode rows only when valid.",
+      "properties": {
+        "coverage": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CheckCoverage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Honest \"N of M\" coverage annotation, distinct from `validity`. Non-gating."
+        },
+        "nets": {
+          "description": "Per-net bode rows, present only when valid AND the net has a signal path.",
+          "items": {
+            "$ref": "#/definitions/AcNetJson"
+          },
+          "type": "array"
+        },
+        "no_signal_path_nets": {
+          "description": "Nets that were requested but had no signal path (all points at the floor)\nand so were omitted from `nets`. Empty when the whole sweep is invalid\n(the `valid:false` + `reason` carries that case). Listed so a partially\nvalid sweep never silently drops a net.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "not_found_nets": {
+          "description": "Requested `--ac-node` names that don't exist in the circuit at all (their\nbode is empty, distinct from \"exists but no signal path\"). Surfaced so the\nJSON matches the text path's \"net not found\" warning instead of silently\ndropping the net.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "description": "Set only when `valid` is false: the named reason, listing offending refs.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "valid": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "valid",
+        "nets",
+        "no_signal_path_nets"
+      ],
+      "type": "object"
+    },
+    "AcNetJson": {
+      "properties": {
+        "net": {
+          "type": "string"
+        },
+        "points": {
+          "description": "`[freq_hz, mag_db, phase_deg]` triples.",
+          "items": {
+            "items": {
+              "format": "double",
+              "type": "number"
+            },
+            "maxItems": 3,
+            "minItems": 3,
+            "type": "array"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "net",
+        "points"
+      ],
+      "type": "object"
+    },
+    "BindSummary": {
+      "description": "The bind report, summarised by role rather than a single flat percentage.\n\n\"How many parts resolved\" is the wrong unit when the 17% that did not are the\nentire active circuit. The honest metrics are: did the MCU and the active\npower ICs bind, and which active-path parts are open?",
+      "properties": {
+        "active_path_unresolved": {
+          "description": "Unresolved parts on connected nets (the active path), each annotated.",
+          "items": {
+            "$ref": "#/definitions/UnresolvedActive"
+          },
+          "type": "array"
+        },
+        "critical_parts_bound": {
+          "description": "`\"M/N\"`, active ICs (MCU + U/IC-prefixed parts) that bound, over the\ntotal active ICs on the board. The metric, not a bare percentage.",
+          "type": "string"
+        },
+        "critical_parts_bound_n": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "critical_parts_total": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mcu_bound": {
+          "description": "True when at least one MCU bound.",
+          "type": "boolean"
+        },
+        "non_ignored": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "resolved": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "resolved_but_open_active": {
+          "description": "RESOLVED parts (incl. MCUs bound as `BindOutcome::Mcu`) that nonetheless\ncarry an open-pin warning while sitting on a live circuit. These are not\nin `active_path_unresolved` (their outcome is not `Unresolved`), but an\nactive IC here still fails to drive its nets, so it must be surfaced as a\ncoverage caveat. Never empty implies untrustworthy thermal/AC results.",
+          "items": {
+            "$ref": "#/definitions/UnresolvedActive"
+          },
+          "type": "array"
+        },
+        "unresolved": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "resolved",
+        "unresolved",
+        "non_ignored",
+        "critical_parts_bound",
+        "critical_parts_bound_n",
+        "critical_parts_total",
+        "mcu_bound",
+        "active_path_unresolved"
+      ],
+      "type": "object"
+    },
+    "BootGateJson": {
+      "description": "One row of the boot-state panel: a transistor gate and what the firmware does\nto it at power-up (`driven_high` / `driven_low` / `floating`). Informational\n(reported, not judged), so a consumer can read it without it being a verdict.",
+      "properties": {
+        "net": {
+          "type": "string"
+        },
+        "reference": {
+          "type": "string"
+        },
+        "state": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference",
+        "net",
+        "state"
+      ],
+      "type": "object"
+    },
+    "CheckCoverage": {
+      "description": "Coverage is distinct from [`Validity`]. `Validity` stays BINARY and drives\nexit 3. `CheckCoverage` is the honest \"N of M active parts actually entered\nthis check\" metric: it is ALWAYS emittable and NEVER changes the exit code on\nits own (the partial-coverage thermal escalation is opt-in behind\n`--strict-thermal`). `partial == true` means a renderer should print a\ncoverage caveat even though the check itself produced rows.",
+      "properties": {
+        "dissipating_count": {
+          "description": "Devices that actually produced a row in the check's table.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "open_active_on_live_circuit": {
+          "description": "Active ICs left open on the live circuit (unresolved + resolved-but-open).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "partial": {
+          "description": "True => the renderer should surface a coverage caveat. Set when at least\none row exists but an active IC on the live circuit is open/unresolved.",
+          "type": "boolean"
+        },
+        "resolved_fraction": {
+          "description": "Covered active ICs / total active ICs, clamped to `[0, 1]`: how much of the\nactive circuit the check actually modelled. `1.0` when every active IC is\ncovered (or there are none, vacuously complete); low when power ICs are\nopen/unresolved.",
+          "format": "double",
+          "type": "number"
+        },
+        "total_active_count": {
+          "description": "Active ICs on the live circuit that the check should have covered.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "resolved_fraction",
+        "dissipating_count",
+        "total_active_count",
+        "open_active_on_live_circuit",
+        "partial"
+      ],
+      "type": "object"
+    },
+    "CosimAdcDrop": {
+      "description": "One dropped ADC injection channel (see [`CosimJson::adc_dropped`]).",
+      "properties": {
+        "channel": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "mcu_ref": {
+          "type": "string"
+        },
+        "net": {
+          "type": "string"
+        },
+        "parts": {
+          "description": "Nearby part names on the net (best-effort, may be empty).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "mcu_ref",
+        "channel",
+        "net"
+      ],
+      "type": "object"
+    },
+    "CosimDriverContention": {
+      "description": "One runtime driver-contention finding (see [`CosimJson::driver_contention`]).",
+      "properties": {
+        "mcu_ref": {
+          "type": "string"
+        },
+        "net": {
+          "type": "string"
+        },
+        "parts": {
+          "description": "`\"REF.role\"` of every enabled modelled push-pull output on the net.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pin": {
+          "description": "The firmware-driven pin, e.g. `\"PB1\"`.",
+          "type": "string"
+        },
+        "t_s": {
+          "description": "Sim time (s) at which both sides were first seen driving together.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "net",
+        "mcu_ref",
+        "pin",
+        "parts",
+        "t_s"
+      ],
+      "type": "object"
+    },
+    "CosimFailedWindow": {
+      "description": "One sim-time window `[start_s, end_s)` where the analog solve failed to\nconverge and the co-sim held stale voltages. Reported so a consumer knows the\nexact span that cannot be trusted rather than inferring a quiet run.",
+      "properties": {
+        "end_s": {
+          "format": "double",
+          "type": "number"
+        },
+        "start_s": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "start_s",
+        "end_s"
+      ],
+      "type": "object"
+    },
+    "CosimJson": {
+      "description": "Machine-readable co-sim summary (today only emitted as CLI text). Populated\nfrom the headless run + the MCU binding. `substituted` is true when the part\nthe user asked for was modelled by a less-specific core (Track B).",
+      "properties": {
+        "activity_summary": {
+          "description": "Top-N nets by activity: name, toggle count, observed min/max voltage.",
+          "items": {
+            "$ref": "#/definitions/NetActivity"
+          },
+          "type": "array"
+        },
+        "adc_dropped": {
+          "description": "ADC channels whose per-chunk injections the MCU backend DROPPED because\nthe platform carries no injection map (U3 finding 1). Non-empty means\nthe analog solve drove these nets but the firmware NEVER received a\nsample, analog readings on those pins are meaningless, and this run\ncannot vouch for them. Empty (and omitted) on full coverage.",
+          "items": {
+            "$ref": "#/definitions/CosimAdcDrop"
+          },
+          "type": "array"
+        },
+        "analog_valid": {
+          "description": "False once any chunk's analog solve failed to converge: the run held stale\nnode voltages over `failed_windows` and cannot vouch for analog-derived\nfindings there (05 §3b, refuse rather than fake). A fully valid run reports\n`true` with an empty `failed_windows`, so the common shape is unchanged and\nexisting consumers keep parsing.",
+          "type": "boolean"
+        },
+        "backend": {
+          "description": "The actual backend string from `BindOutcome::Mcu { backend }`.",
+          "type": "string"
+        },
+        "driver_contention": {
+          "description": "Runtime driver contention: nets where the firmware configured an MCU\npin as a push-pull OUTPUT while an enabled modelled push-pull output\nwas already driving (the model-vs-MCU case the static output-contention\nlint documents as out of its reach). Waveforms touching these nets are\nuntrustworthy from `t_s` on. One entry per offending net. Empty (and\nomitted) on a healthy run.",
+          "items": {
+            "$ref": "#/definitions/CosimDriverContention"
+          },
+          "type": "array"
+        },
+        "failed_windows": {
+          "description": "Sim-time windows `[start_s, end_s)` where the analog solve failed. Empty\n(and omitted from JSON) on a valid run.",
+          "items": {
+            "$ref": "#/definitions/CosimFailedWindow"
+          },
+          "type": "array"
+        },
+        "mcu_ref": {
+          "type": "string"
+        },
+        "realtime_factor": {
+          "default": 0.0,
+          "description": "ACHIEVED realtime factor: sim seconds delivered per wall second,\nmeasured, never the requested window over an assumed wall. 0 when\nunmeasured.",
+          "format": "double",
+          "type": "number"
+        },
+        "requested_part": {
+          "description": "The part the board asked for (threaded through `McuBinding`, Track B).",
+          "type": "string"
+        },
+        "short_pulses": {
+          "description": "Firmware GPIO pulses that rose and fell inside one solver chunk on a\nnet clocking a TICK-evaluated sequential part (friction 1.16): those\nparts sample once per chunk against the previous solve, so the pulse\nwas NEVER observed by them and their state in this run lags or misses\nevents, while chain-responder parts on the same board saw every edge\nexactly. One entry per offending net. Empty (and omitted) on a run with\nno such pulses.",
+          "items": {
+            "$ref": "#/definitions/CosimShortPulse"
+          },
+          "type": "array"
+        },
+        "spi_framing": {
+          "description": "Per-SPI-bus transaction-framing tier: \"exact\" (framed on real CS GPIO\nedges), \"backend\" (the emulator frames CS itself), or \"heuristic\" (the\nchunk-boundary fallback, honest about its two documented failure\nmodes). Empty (and omitted) when the board has no SPI buses; mirrors\nthe web co-sim section so the CLI JSON carries the same coverage.",
+          "items": {
+            "$ref": "#/definitions/CosimSpiFraming"
+          },
+          "type": "array"
+        },
+        "substituted": {
+          "description": "True when the requested part != the modelled core.",
+          "type": "boolean"
+        },
+        "total_toggles": {
+          "description": "Total net toggles seen during the run. `0` => stalled/quiet.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "uart_seen": {
+          "type": "boolean"
+        },
+        "unexercised_buses": {
+          "description": "Bus peripherals (I2C/SPI slave models) bound on a platform whose MCU\nbackend models no matching bus controller (U3 finding 2): the firmware\nnever exercised them, so their state is the power-on default. Empty\n(and omitted) when every bound bus device sits on a modeled controller.",
+          "items": {
+            "$ref": "#/definitions/CosimUnexercisedBus"
+          },
+          "type": "array"
+        },
+        "wall_s": {
+          "default": 0.0,
+          "description": "Wall-clock seconds the headless co-sim loop consumed. 0 when the\nproducing path did not measure (older producers; the web mirror).",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "mcu_ref",
+        "backend",
+        "requested_part",
+        "substituted",
+        "total_toggles",
+        "uart_seen",
+        "analog_valid"
+      ],
+      "type": "object"
+    },
+    "CosimShortPulse": {
+      "description": "One sub-chunk GPIO pulse warning (see [`CosimJson::short_pulses`]).",
+      "properties": {
+        "chunk_s": {
+          "description": "The solver chunk it fell inside (seconds).",
+          "format": "double",
+          "type": "number"
+        },
+        "mcu_ref": {
+          "type": "string"
+        },
+        "net": {
+          "type": "string"
+        },
+        "parts": {
+          "description": "Tick-evaluated sequential parts clocked by the net.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "pin": {
+          "description": "The driving pin, e.g. `\"PB1\"`.",
+          "type": "string"
+        },
+        "pulse_s": {
+          "description": "Narrowest completed pulse observed on the net (seconds).",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "net",
+        "mcu_ref",
+        "pin",
+        "pulse_s",
+        "chunk_s",
+        "parts"
+      ],
+      "type": "object"
+    },
+    "CosimSpiFraming": {
+      "description": "One SPI bus's framing tier (see [`CosimJson::spi_framing`]).",
+      "properties": {
+        "bus": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "bus",
+        "mode"
+      ],
+      "type": "object"
+    },
+    "CosimUnexercisedBus": {
+      "description": "One never-exercised bus peripheral (see [`CosimJson::unexercised_buses`]).",
+      "properties": {
+        "bus": {
+          "description": "`\"I2C\"` or `\"SPI\"`.",
+          "type": "string"
+        },
+        "controller": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "bus"
+      ],
+      "type": "object"
+    },
+    "DrcGroup": {
+      "description": "A group of clearance findings that share (net_a, net_b, layer, root cause),\ncollapsed to one line with a count. `at_limit` separates `gap == rule` (no\nmargin, but not below) from genuine sub-clearance violations.",
+      "properties": {
+        "at_limit": {
+          "description": "True when every member sits exactly at the rule (gap == rule, no margin),\nfalse when at least one is genuinely *below* the rule.",
+          "type": "boolean"
+        },
+        "below_count": {
+          "description": "How many of `count` are genuinely below the rule (gap < rule). The rest\nare exactly at the rule (no margin, not below).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "count": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "fix": {
+          "description": "Suggested remediation, mirroring `JsonFinding.fix`.",
+          "type": "string"
+        },
+        "layer": {
+          "type": "string"
+        },
+        "min_gap_loc_mm": {
+          "description": "Board location (mm) of the tightest gap, so a UI can pan to the worst\nspot of the group.",
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "min_gap_mm": {
+          "description": "The tightest gap in the group (mm).",
+          "format": "double",
+          "type": "number"
+        },
+        "net_a": {
+          "type": "string"
+        },
+        "net_b": {
+          "type": "string"
+        },
+        "plain": {
+          "description": "Human one-line description (`self.label()`), serialized so `--json`\nconsumers get the same text the human/`--plain` renderers show.",
+          "type": "string"
+        },
+        "rule_mm": {
+          "description": "The clearance rule for this pair (mm).",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "net_a",
+        "net_b",
+        "layer",
+        "count",
+        "below_count",
+        "at_limit",
+        "min_gap_mm",
+        "min_gap_loc_mm",
+        "rule_mm",
+        "plain",
+        "fix"
+      ],
+      "type": "object"
+    },
+    "DrcShort": {
+      "description": "A real short between two nets (gap <= 0: touching copper).",
+      "properties": {
+        "fix": {
+          "description": "Suggested remediation, mirroring `JsonFinding.fix`.",
+          "type": "string"
+        },
+        "gap_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "layer": {
+          "type": "string"
+        },
+        "loc_mm": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "net_a": {
+          "type": "string"
+        },
+        "net_b": {
+          "type": "string"
+        },
+        "plain": {
+          "description": "Human one-line description, mirroring `JsonFinding.plain` so every\n`--json` finding category reads uniformly (SI/lint already carry it).",
+          "type": "string"
+        },
+        "severity": {
+          "description": "Always \"serious\" for a short; carried for the uniform finding shape.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "net_a",
+        "net_b",
+        "layer",
+        "gap_mm",
+        "loc_mm",
+        "severity",
+        "plain",
+        "fix"
+      ],
+      "type": "object"
+    },
+    "DrcStructured": {
+      "description": "The DRC report, restructured into honest buckets: real shorts kept verbatim,\nclearance findings grouped, and `gap == rule` separated from `gap < rule`.",
+      "properties": {
+        "at_limit": {
+          "description": "Grouped findings that sit exactly AT the rule (no margin, not below).",
+          "items": {
+            "$ref": "#/definitions/DrcGroup"
+          },
+          "type": "array"
+        },
+        "clearance_rule_mm": {
+          "format": "double",
+          "type": "number"
+        },
+        "primitive_count": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "shorts": {
+          "items": {
+            "$ref": "#/definitions/DrcShort"
+          },
+          "type": "array"
+        },
+        "version_warning": {
+          "description": "Set when the board's format is newer than hauksbee's validated copper\nextraction (KiCad 10+), making the shorts above unreliable. Surfaced by\nevery renderer; CI gates ignore the shorts when it is set.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "violations": {
+          "description": "Grouped clearance violations that are genuinely BELOW the rule.",
+          "items": {
+            "$ref": "#/definitions/DrcGroup"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "clearance_rule_mm",
+        "primitive_count",
+        "shorts",
+        "violations",
+        "at_limit"
+      ],
+      "type": "object"
+    },
+    "JsonFinding": {
+      "description": "One finding in the uniform machine-readable shape (§4.1): every check's\nfindings serialize the same way, so a CI pipeline or AI never parses prose.",
+      "properties": {
+        "actionable": {
+          "description": "Whether a user should act on this (true for real findings and for\noff-target info notes; false for within-tolerance observations).",
+          "type": "boolean"
+        },
+        "check": {
+          "description": "Which check produced it (\"si\" / \"lint\" / \"drc\").",
+          "type": "string"
+        },
+        "fix": {
+          "description": "A concise suggested fix, when a dedicated template applies. Closes the\nTUI \"no fix text\" gap: once `JsonFinding` carries it, `Finding::from_json`\ncan read it instead of hard-coding `None`. Omitted (None) when no fix\ntemplate applies to this finding kind.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "description": "The specific rule (e.g. \"controlled_impedance\", \"strap_pin\").",
+          "type": "string"
+        },
+        "layer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "location_mm": {
+          "items": {
+            "format": "double",
+            "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "message": {
+          "description": "The expert one-line message.",
+          "type": "string"
+        },
+        "nets": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "plain": {
+          "description": "The same finding in plain language (best-effort; equals `message` when no\ndedicated plain template applies).",
+          "type": "string"
+        },
+        "refs": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "severity": {
+          "description": "\"serious\" | \"warning\" | \"note\" | \"info\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "check",
+        "kind",
+        "severity",
+        "nets",
+        "refs",
+        "actionable",
+        "message",
+        "plain"
+      ],
+      "type": "object"
+    },
+    "JsonNote": {
+      "description": "An info-level, never-`--strict`, always-emitted note. Distinct from\n[`JsonFinding`]: a note never gates a CI pipeline and never changes an exit\ncode; it is the structured home for honesty annotations that must never be\nsilently absent (bind roles, co-sim substitution, coverage caveats, SI info).",
+      "properties": {
+        "kind": {
+          "$ref": "#/definitions/JsonNoteKind"
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "message"
+      ],
+      "type": "object"
+    },
+    "JsonNoteKind": {
+      "oneOf": [
+        {
+          "enum": [
+            "bind_role",
+            "cosim_substitution",
+            "coverage",
+            "si_info"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "boot_control_net",
+          "description": "A boot-sequence hazard about a specific MCU control net: driven HIGH and\nheld from reset, or left floating the whole run, with no bias resistor.\nA distinct kind (not `Coverage`) so CI can filter boot hazards on their\nown. Serializes as `\"boot_control_net\"`.",
+          "type": "string"
+        }
+      ]
+    },
+    "JsonWaived": {
+      "description": "One overruled finding on the machine surface.",
+      "properties": {
+        "check": {
+          "description": "Which check produced it (\"si\" / \"lint\" / \"drc\").",
+          "type": "string"
+        },
+        "kind": {
+          "description": "The specific rule it was matched on.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why the board's owner judged it wrong or acceptable.",
+          "type": "string"
+        },
+        "subject": {
+          "description": "The finding's own message, so a reader can tell which one was overruled.",
+          "type": "string"
+        },
+        "until": {
+          "description": "The date the waiver stops applying, after which this gates again.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "check",
+        "kind",
+        "subject",
+        "reason",
+        "until"
+      ],
+      "type": "object"
+    },
+    "NetActivity": {
+      "properties": {
+        "net": {
+          "type": "string"
+        },
+        "toggles": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "v_max": {
+          "format": "double",
+          "type": "number"
+        },
+        "v_min": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "net",
+        "toggles",
+        "v_min",
+        "v_max"
+      ],
+      "type": "object"
+    },
+    "ThermalDeviceJson": {
+      "properties": {
+        "over_limit": {
+          "type": "boolean"
+        },
+        "reference": {
+          "type": "string"
+        },
+        "tj_c": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "reference",
+        "tj_c",
+        "over_limit"
+      ],
+      "type": "object"
+    },
+    "ThermalJson": {
+      "description": "Thermal in JSON: validity first, then the per-device peak temps when valid.",
+      "properties": {
+        "ambient_c": {
+          "format": "double",
+          "type": "number"
+        },
+        "coverage": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CheckCoverage"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Honest \"N of M\" coverage annotation, distinct from `validity`. Non-gating\nby default (`partial:true` => the table is real but some power IC is open)."
+        },
+        "devices": {
+          "items": {
+            "$ref": "#/definitions/ThermalDeviceJson"
+          },
+          "type": "array"
+        },
+        "reason": {
+          "description": "Set only when `valid` is false: the named reason, listing offending refs.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "valid": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "valid",
+        "ambient_c",
+        "devices"
+      ],
+      "type": "object"
+    },
+    "UnresolvedActive": {
+      "description": "One unresolved part that sits on a connected (active) net, with the\nelectrical consequence of defaulting it to open.",
+      "properties": {
+        "active_ic": {
+          "description": "True when this part is an active IC (reference prefix U/IC/MCU): the kind\nof part whose absence makes analog/AC/thermal results untrustworthy.",
+          "type": "boolean"
+        },
+        "consequence": {
+          "description": "What leaving it open does to the analysis, in one plain line.",
+          "type": "string"
+        },
+        "reason": {
+          "description": "Why it could not be bound (e.g. \"no model; left open\").",
+          "type": "string"
+        },
+        "reference": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "reference",
+        "value",
+        "reason",
+        "consequence",
+        "active_ic"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "The document `hauksbee run <board> --json` (and the per-report --json surfaces) emits. schema_version 1. GENERATED from `JsonReport` in crates/hauksbee-engine/src/result.rs plus the ok/verdict/serious_count/actionable_count rollup `to_json` prepends. Do not hand-edit; regenerate with: UPDATE_RUN_SCHEMA=1 cargo test -p hauksbee-engine --test run_report_schema_drift",
+  "properties": {
+    "ac": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/AcJson"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "actionable_count": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "bind": {
+      "$ref": "#/definitions/BindSummary"
+    },
+    "board": {
+      "type": "string"
+    },
+    "boot_gates": {
+      "description": "Boot-state panel: per-transistor-gate power-up state (informational).",
+      "items": {
+        "$ref": "#/definitions/BootGateJson"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "cosim": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/CosimJson"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Machine-readable co-sim summary, present only on a co-sim run."
+    },
+    "drc": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/DrcStructured"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "findings": {
+      "items": {
+        "$ref": "#/definitions/JsonFinding"
+      },
+      "type": [
+        "array",
+        "null"
+      ]
+    },
+    "notes": {
+      "description": "Info-level notes (bind roles, co-sim substitution, coverage caveats, SI\ninfo) that must never be silently absent but never gate a CI pipeline.\nAdditive + `skip_serializing_if` so the schema stays backward-compatible.",
+      "items": {
+        "$ref": "#/definitions/JsonNote"
+      },
+      "type": "array"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "schema_version": {
+      "description": "Version of the `run --json` document contract. Bumped when a field\nchanges meaning or is removed; purely additive fields do not bump it.\nThe generated schema lives in `crates/hauksbee-engine/schemas/`.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+    },
+    "serious_count": {
+      "minimum": 0,
+      "type": "integer"
+    },
+    "thermal": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ThermalJson"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "verdict": {
+      "enum": [
+        "pass",
+        "fail",
+        "invalid"
+      ],
+      "type": "string"
+    },
+    "waived": {
+      "description": "Findings that fired and were overruled by an active waiver, with the\nreason and the expiry date.\n\nA green verdict that quietly dropped findings would be the worst of both\nworlds, so the machine surface carries them exactly as the text report\nprints them. A pipeline can watch this array grow.",
+      "items": {
+        "$ref": "#/definitions/JsonWaived"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "board",
+    "bind",
+    "ok",
+    "verdict",
+    "serious_count",
+    "actionable_count"
+  ],
+  "title": "hauksbee run --json report",
+  "type": "object"
+}

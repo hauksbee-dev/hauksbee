@@ -45,6 +45,11 @@ pub struct CiResult {
     /// reader who meets it after a named component fault has already believed
     /// the fault.
     pub dead_rails: Vec<String>,
+    /// Waiver-file housekeeping notes (a lapsed waiver whose finding gates
+    /// again, an active waiver that matched nothing, a malformed file that was
+    /// ignored). Surfaced on every format like `coverage_warnings`: a board
+    /// carrying waivers has to look like one.
+    pub waiver_notes: Vec<String>,
 }
 
 /// What a tolerance-ensemble run covered, for the report headline.
@@ -108,10 +113,25 @@ impl EnsembleCoverage {
 }
 
 impl CiResult {
-    /// True if every assertion passed. An INVALID assertion has `passed == false`,
-    /// so it is not counted as passed here.
+    /// True if every assertion passed or was waived. An INVALID assertion has
+    /// `passed == false` and can never be waived, so it is not counted here.
+    /// A waived failure is visible-but-not-gating (the whole point of a
+    /// waiver): it stays a FAIL on every surface but does not turn the build
+    /// red.
     pub fn passed(&self) -> bool {
-        self.results.iter().all(|r| r.passed)
+        self.results.iter().all(|r| r.passed || r.waived.is_some())
+    }
+
+    /// Results that gate the build red: real failures no active waiver covers.
+    fn gating_failures(&self) -> impl Iterator<Item = &AssertResult> {
+        self.results
+            .iter()
+            .filter(|r| !r.passed && !r.invalid && r.waived.is_none())
+    }
+
+    /// Count of failures an active waiver covers (visible, not gating).
+    pub fn waived_count(&self) -> usize {
+        self.results.iter().filter(|r| r.waived.is_some()).count()
     }
 
     /// Machine-readable run result (the `--json` surface, and what the web
@@ -142,6 +162,7 @@ impl CiResult {
             "substitutions": self.substitutions,
             "coverage_warnings": self.coverage_warnings,
             "dead_rails": self.dead_rails,
+            "waiver_notes": self.waiver_notes,
             "results": self.results,
         });
         serde_json::to_string(&value).unwrap_or_else(|e| {
@@ -221,17 +242,26 @@ impl CiResult {
                 "INVALID"
             } else if r.passed {
                 "PASS"
+            } else if r.waived.is_some() {
+                "WAIVED"
             } else {
                 "FAIL"
             };
             out.push_str(&format!("  [{mark}] {}\n        {}\n", r.label, r.detail));
             // On a real red (not a pass, not an INVALID refusal), add one
-            // actionable "why / where to look" line keyed off the assertion kind.
-            // Deliberately one line, a pointer at the likely cause and the doc
-            // section, not a plain-language engine.
+            // actionable "why" line: the observed shortfall the check computed
+            // ("settled 0.100 V below your floor") when it has one, else the
+            // generic per-kind pointer at the likely cause and doc section.
             if !r.passed && !r.invalid {
-                if let Some(hint) = failure_hint(&r.kind) {
-                    out.push_str(&format!("        why: {hint}\n"));
+                match (&r.why, failure_hint(&r.kind)) {
+                    (Some(why), _) => out.push_str(&format!("        why: {why}\n")),
+                    (None, Some(hint)) => out.push_str(&format!("        why: {hint}\n")),
+                    (None, None) => {}
+                }
+                if let Some(w) = &r.waived {
+                    out.push_str(&format!(
+                        "        waived: {w}; visible here, not gating the build\n"
+                    ));
                 }
             }
         }
@@ -255,6 +285,10 @@ impl CiResult {
         for msg in &self.coverage_warnings {
             out.push_str(&format!("  co-sim COVERAGE HOLE: {msg}\n"));
         }
+        // Waiver housekeeping: lapsed / stale / malformed waiver-file notes.
+        for msg in &self.waiver_notes {
+            out.push_str(&format!("  waivers: {msg}\n"));
+        }
         let verdict = if self.analog_invalid() {
             "INVALID (analog co-sim did not converge)"
         } else if self.passed() {
@@ -262,12 +296,19 @@ impl CiResult {
         } else {
             "RED"
         };
+        let waived = self.waived_count();
+        let waived_note = if waived > 0 {
+            format!(" ({waived} failure(s) waived, visible above)")
+        } else {
+            String::new()
+        };
         out.push_str(&format!(
-            "\n{}/{} assertions passed in {:.2}s - {}\n",
+            "\n{}/{} assertions passed in {:.2}s - {}{}\n",
             passed,
             total,
             self.elapsed.as_secs_f64(),
-            verdict
+            verdict,
+            waived_note
         ));
         out
     }
@@ -276,6 +317,13 @@ impl CiResult {
     /// `<failure>` with the detail. Any CI (GitLab, Jenkins, GitHub, Buildkite)
     /// ingests this.
     pub fn render_junit(&self) -> String {
+        render_junit_document(std::slice::from_ref(&self.junit_suite()))
+    }
+
+    /// This run as ONE `<testsuite>` fragment plus its counters, so a
+    /// multi-spec invocation can merge several runs (and spec errors) into a
+    /// single `<testsuites>` document with honest aggregate counts.
+    pub fn junit_suite(&self) -> JunitSuite {
         // INVALID assertions map to JUnit `<error>` (the test could not run to a
         // verdict), ordinary reds to `<failure>`. Keep the two counts distinct so
         // a CI dashboard shows "errored" apart from "failed".
@@ -290,26 +338,19 @@ impl CiResult {
         let synthetic_abort = self.analog_abort && self.invalid_count() == 0;
         let errors = self.invalid_count() + usize::from(synthetic_abort);
         let tests = self.results.len() + usize::from(synthetic_abort);
-        let failures = self
-            .results
-            .iter()
-            .filter(|r| !r.passed && !r.invalid)
-            .count();
+        // Waived failures are JUnit `<skipped>`: visible in every dashboard's
+        // test list (with the waiver reason as the message) without counting
+        // as a failure, which is exactly the visible-but-not-gating contract.
+        let failures = self.gating_failures().count();
+        let skipped = self.waived_count();
         let mut out = String::new();
-        out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
         out.push_str(&format!(
-            "<testsuites name=\"hauksbee-ci\" tests=\"{}\" failures=\"{}\" errors=\"{}\" time=\"{:.3}\">\n",
-            tests,
-            failures,
-            errors,
-            self.elapsed.as_secs_f64()
-        ));
-        out.push_str(&format!(
-            "  <testsuite name=\"{}\" tests=\"{}\" failures=\"{}\" errors=\"{}\" time=\"{:.3}\">\n",
+            "  <testsuite name=\"{}\" tests=\"{}\" failures=\"{}\" errors=\"{}\" skipped=\"{}\" time=\"{:.3}\">\n",
             xml_escape(&self.spec_name),
             tests,
             failures,
             errors,
+            skipped,
             self.elapsed.as_secs_f64()
         ));
         for r in &self.results {
@@ -323,6 +364,12 @@ impl CiResult {
                     "      <error message=\"{}\">{}</error>\n",
                     xml_escape(&r.detail),
                     xml_escape(&r.detail)
+                ));
+            } else if let (false, Some(w)) = (r.passed, &r.waived) {
+                out.push_str(&format!(
+                    "      <skipped message=\"waived FAIL: {} ({})\"/>\n",
+                    xml_escape(&r.detail),
+                    xml_escape(w)
                 ));
             } else if !r.passed {
                 out.push_str(&format!(
@@ -375,61 +422,98 @@ impl CiResult {
                 xml_escape(msg)
             ));
         }
+        // Waiver housekeeping notes ride along so a dashboard-only reader sees
+        // a lapsed or stale waiver too.
+        for msg in &self.waiver_notes {
+            out.push_str(&format!(
+                "    <system-out>waivers: {}</system-out>\n",
+                xml_escape(msg)
+            ));
+        }
         out.push_str("  </testsuite>\n");
-        out.push_str("</testsuites>\n");
-        out
+        JunitSuite {
+            xml: out,
+            tests,
+            failures,
+            errors,
+            time_s: self.elapsed.as_secs_f64(),
+        }
     }
 
-    /// GitHub Actions annotations: `::error` / `::notice` workflow commands so
-    /// failures surface inline in the Checks UI. Emitted to stdout when
-    /// `GITHUB_ACTIONS` is set.
+    /// GitHub Actions annotations: `::error` / `::warning` / `::notice`
+    /// workflow commands so failures surface inline in the Checks UI. Emitted
+    /// to stdout when `GITHUB_ACTIONS` is set.
+    ///
+    /// The budget matters: GitHub shows at most 10 annotations per type per
+    /// step and silently drops the rest, so this surface spends them on
+    /// verdicts only. Passing assertions get NO per-assertion `::notice` (the
+    /// log and JUnit carry them; a 12-assertion green spec must not burn the
+    /// whole notice budget), failures/INVALIDs get at most
+    /// [`Self::MAX_ERROR_ANNOTATIONS`] `::error`s plus one overflow line and
+    /// the rollup, and warnings are capped at
+    /// [`Self::MAX_WARNING_ANNOTATIONS`] plus one overflow line.
     pub fn render_github_annotations(&self) -> String {
         let mut out = String::new();
-        for r in &self.results {
-            if r.invalid {
-                out.push_str(&format!(
-                    "::error title=hauksbee-ci INVALID::{} - {}\n",
-                    gh_escape(&r.label),
-                    gh_escape(&r.detail)
-                ));
-            } else if r.passed {
-                out.push_str(&format!(
-                    "::notice title=hauksbee-ci PASS::{} - {}\n",
-                    gh_escape(&r.label),
-                    gh_escape(&r.detail)
-                ));
-            } else {
-                out.push_str(&format!(
-                    "::error title=hauksbee-ci FAIL::{} - {}\n",
-                    gh_escape(&r.label),
-                    gh_escape(&r.detail)
-                ));
-            }
-        }
-        // A dead rail makes every analog number above questionable, so it is a
-        // warning in its own right rather than a footnote on the summary.
-        if !self.dead_rails.is_empty() {
+        // Per-assertion verdict errors, capped to leave room for the overflow
+        // line and the rollup inside GitHub's 10-per-type truncation.
+        let bad: Vec<&AssertResult> = self
+            .results
+            .iter()
+            .filter(|r| !r.passed && r.waived.is_none())
+            .collect();
+        for r in bad.iter().take(Self::MAX_ERROR_ANNOTATIONS) {
+            let title = if r.invalid { "INVALID" } else { "FAIL" };
             out.push_str(&format!(
-                "::warning title=hauksbee-ci UNPOWERED RAIL::{} sat at 0 V (no voltage could be read from the name and no [[supply]] fed it); any analog result above may be an artifact\n",
+                "::error title=hauksbee-ci {title}::{} - {}\n",
+                gh_escape(&r.label),
+                gh_escape(&r.detail)
+            ));
+        }
+        if bad.len() > Self::MAX_ERROR_ANNOTATIONS {
+            out.push_str(&format!(
+                "::error title=hauksbee-ci::...and {} more failing assertion(s); see the job log or the JUnit report for the full list\n",
+                bad.len() - Self::MAX_ERROR_ANNOTATIONS
+            ));
+        }
+
+        // Warnings: dead rails first (they change what every other line
+        // means), then waived failures, substitutions, coverage holes and
+        // waiver notes, all through one capped channel.
+        let mut warnings: Vec<String> = Vec::new();
+        if !self.dead_rails.is_empty() {
+            warnings.push(format!(
+                "UNPOWERED RAIL::{} sat at 0 V (no voltage could be read from the name and no [[supply]] fed it); any analog result above may be an artifact",
                 gh_escape(&self.dead_rails.join(", "))
             ));
         }
-        // Substitution honesty: a warning annotation (a pass over a substitute
-        // core cannot vouch for firmware on the real silicon).
+        for r in self.results.iter().filter(|r| r.waived.is_some()) {
+            warnings.push(format!(
+                "WAIVED FAIL::{} - {} (waived: {})",
+                gh_escape(&r.label),
+                gh_escape(&r.detail),
+                gh_escape(r.waived.as_deref().unwrap_or(""))
+            ));
+        }
         for msg in &self.substitutions {
-            out.push_str(&format!(
-                "::warning title=hauksbee-ci SUBSTITUTE MCU::{}\n",
-                gh_escape(msg)
-            ));
+            warnings.push(format!("SUBSTITUTE MCU::{}", gh_escape(msg)));
         }
-        // Coverage honesty: a warning annotation per co-sim coverage hole.
         for msg in &self.coverage_warnings {
+            warnings.push(format!("COSIM COVERAGE HOLE::{}", gh_escape(msg)));
+        }
+        for msg in &self.waiver_notes {
+            warnings.push(format!("WAIVERS::{}", gh_escape(msg)));
+        }
+        for w in warnings.iter().take(Self::MAX_WARNING_ANNOTATIONS) {
+            out.push_str(&format!("::warning title=hauksbee-ci {w}\n"));
+        }
+        if warnings.len() > Self::MAX_WARNING_ANNOTATIONS {
             out.push_str(&format!(
-                "::warning title=hauksbee-ci COSIM COVERAGE HOLE::{}\n",
-                gh_escape(msg)
+                "::warning title=hauksbee-ci::...and {} more warning(s); see the job log for the full list\n",
+                warnings.len() - Self::MAX_WARNING_ANNOTATIONS
             ));
         }
-        // A summary line.
+
+        // The rollup: exactly one summary annotation, always emitted.
         if self.analog_invalid() {
             out.push_str(&format!(
                 "::error title=hauksbee-ci::analog co-sim did not converge - {} assertion(s) INVALID, run is invalid for analysis\n",
@@ -450,23 +534,61 @@ impl CiResult {
         }
         out
     }
+
+    /// Per-assertion `::error` cap: 8 verdicts + 1 overflow + 1 rollup fits
+    /// exactly inside GitHub's 10-errors-per-step truncation.
+    pub const MAX_ERROR_ANNOTATIONS: usize = 8;
+    /// `::warning` cap: 9 + 1 overflow fits the 10-warnings-per-step budget.
+    pub const MAX_WARNING_ANNOTATIONS: usize = 9;
 }
 
-/// A synthetic JUnit document for a spec/board error (exit 2), so a CI that only
-/// reads the JUnit/Checks tab still sees *something*, a single errored testcase
-/// carrying the error message, instead of an empty report. Reuses the same
-/// `<error>` shape the per-assertion INVALID path emits, so downstream ingestors
-/// (GitLab, Jenkins, GitHub) render it as an errored test, distinct from a
-/// failure. `message` is the spec/board error text.
-pub fn render_junit_error(message: &str) -> String {
+/// One rendered `<testsuite>` fragment plus the counters the `<testsuites>`
+/// envelope aggregates. A multi-spec `hauksbee-ci run a.toml b.toml --junit`
+/// merges one of these per spec (a spec that failed to LOAD contributes the
+/// [`junit_error_suite`] shape) into a single document.
+#[derive(Debug, Clone)]
+pub struct JunitSuite {
+    /// The `  <testsuite ...>...</testsuite>\n` fragment, indented for the
+    /// envelope.
+    pub xml: String,
+    pub tests: usize,
+    pub failures: usize,
+    pub errors: usize,
+    pub time_s: f64,
+}
+
+/// Wrap one or more suites in the `<testsuites>` envelope with honest
+/// aggregate counts. Every JUnit document this crate emits goes through here,
+/// so the single-spec and merged multi-spec shapes cannot drift.
+pub fn render_junit_document(suites: &[JunitSuite]) -> String {
+    let tests: usize = suites.iter().map(|s| s.tests).sum();
+    let failures: usize = suites.iter().map(|s| s.failures).sum();
+    let errors: usize = suites.iter().map(|s| s.errors).sum();
+    let time: f64 = suites.iter().map(|s| s.time_s).sum();
     let mut out = String::new();
     out.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    out.push_str(
-        "<testsuites name=\"hauksbee-ci\" tests=\"1\" failures=\"0\" errors=\"1\" time=\"0.000\">\n",
-    );
-    out.push_str(
-        "  <testsuite name=\"spec error\" tests=\"1\" failures=\"0\" errors=\"1\" time=\"0.000\">\n",
-    );
+    out.push_str(&format!(
+        "<testsuites name=\"hauksbee-ci\" tests=\"{tests}\" failures=\"{failures}\" errors=\"{errors}\" time=\"{time:.3}\">\n"
+    ));
+    for s in suites {
+        out.push_str(&s.xml);
+    }
+    out.push_str("</testsuites>\n");
+    out
+}
+
+/// The suite for a spec/board error (exit 2): a single errored testcase
+/// carrying the message, so a CI that only reads the JUnit/Checks tab still
+/// sees *something*. Reuses the `<error>` shape the per-assertion INVALID path
+/// emits, so downstream ingestors (GitLab, Jenkins, GitHub) render it as an
+/// errored test, distinct from a failure. `name` labels the suite (the spec
+/// path in a multi-spec run, "spec error" for one).
+pub fn junit_error_suite(name: &str, message: &str) -> JunitSuite {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "  <testsuite name=\"{}\" tests=\"1\" failures=\"0\" errors=\"1\" time=\"0.000\">\n",
+        xml_escape(name)
+    ));
     out.push_str("    <testcase classname=\"spec\" name=\"spec/board loads\">\n");
     out.push_str(&format!(
         "      <error message=\"{}\">{}</error>\n",
@@ -475,8 +597,22 @@ pub fn render_junit_error(message: &str) -> String {
     ));
     out.push_str("    </testcase>\n");
     out.push_str("  </testsuite>\n");
-    out.push_str("</testsuites>\n");
-    out
+    JunitSuite {
+        xml: out,
+        tests: 1,
+        failures: 0,
+        errors: 1,
+        time_s: 0.0,
+    }
+}
+
+/// A synthetic JUnit document for a single spec/board error (exit 2); the
+/// one-spec convenience over [`junit_error_suite`] + [`render_junit_document`].
+pub fn render_junit_error(message: &str) -> String {
+    render_junit_document(std::slice::from_ref(&junit_error_suite(
+        "spec error",
+        message,
+    )))
 }
 
 /// One actionable "why / where to look" line for a failed assertion of the
@@ -494,10 +630,10 @@ fn failure_hint(kind: &str) -> Option<&'static str> {
             scenario's load step and the decoupling on this net (docs/ci/CI.md, \
             \"rail_window\")."
         }
-        "boot-coverage" => {
+        "boot_coverage" | "boot-coverage" => {
             "the firmware never drove the control net in time; check \
             `firmware = ...` points at the right image and the net is a GPIO the \
-            firmware actually drives (docs/ci/CI.md, \"boot-coverage\" caveat)."
+            firmware actually drives (docs/ci/CI.md, \"boot_coverage\" caveat)."
         }
         "no_faults" => {
             "the stress monitor tripped; the named component exceeded a \
@@ -651,6 +787,7 @@ mod substitution_tests {
             ],
             coverage_warnings: Vec::new(),
             dead_rails: Vec::new(),
+            waiver_notes: Vec::new(),
         };
         let human = result.render_human();
         assert!(
@@ -694,6 +831,7 @@ mod substitution_tests {
                     .to_string(),
             ],
             dead_rails: Vec::new(),
+            waiver_notes: Vec::new(),
         };
         let human = result.render_human();
         assert!(

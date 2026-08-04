@@ -134,6 +134,13 @@ pub enum BoardInputError {
     Extract(String),
 }
 
+/// The one supported-formats list every refusal quotes, so the set can never
+/// drift between messages (it already had: a "Supported:" clause that omitted
+/// Altium while the diagnostic said it tried the altium reader).
+const SUPPORTED_FORMATS: &str = "KiCad .kicad_pcb / .kicad_sch / netlist, Eagle .brd, \
+     Altium .PcbDoc, IPC-D-356 .d356, Board-as-Code .board, or a zip of gerbers / a \
+     .board export";
+
 impl BoardInputError {
     /// The web front door's wording for this failure: what `/api/analyze`
     /// returns, phrased for someone who just dropped a file in a browser
@@ -143,9 +150,9 @@ impl BoardInputError {
             BoardInputError::BoardCode(e) => {
                 format!("Could not compile this Board-as-Code file: {e}.")
             }
-            BoardInputError::Extract(e) => format!(
-                "Could not read this board file: {e}. Supported: KiCad .kicad_pcb / .kicad_sch, Eagle .brd, IPC-D-356 .d356, Board-as-Code .board, or a zip of gerbers / a .board export."
-            ),
+            BoardInputError::Extract(e) => {
+                format!("Could not read this board file: {e}. Supported: {SUPPORTED_FORMATS}.")
+            }
             other => format!("Could not read this board file: {other}"),
         }
     }
@@ -166,7 +173,7 @@ pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, B
     // magic + Altium streams) or returns None so text formats keep their exact
     // behaviour through `from_auto`.
     if let Some(binary) = ExtractedBoard::from_auto_bytes(contents) {
-        let board = binary.map_err(|e| BoardInputError::Extract(e.to_string()))?;
+        let board = binary.map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
         return Ok(NormalizedBoard {
             board,
             layout_text: None,
@@ -213,8 +220,8 @@ pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, B
     } else {
         text.into_owned()
     };
-    let board =
-        ExtractedBoard::from_auto(&text).map_err(|e| BoardInputError::Extract(e.to_string()))?;
+    let board = ExtractedBoard::from_auto(&text)
+        .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
     Ok(NormalizedBoard {
         board,
         layout_text: Some(text),
@@ -291,7 +298,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
             let compiled = crate::boardcode::code_to_board_text(&src)
                 .map_err(|e| BoardInputError::BoardCode(e.to_string()))?;
             let board = ExtractedBoard::from_auto(&compiled)
-                .map_err(|e| BoardInputError::Extract(e.to_string()))?;
+                .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
             return Ok(with_name_fallback(
                 NormalizedBoard {
                     board,
@@ -302,8 +309,16 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
                 path,
             ));
         }
-        let board = ExtractedBoard::from_gerber(path)
-            .map_err(|e| BoardInputError::Gerber(gerber_path_message(path, &e.to_string())))?;
+        let board = ExtractedBoard::from_gerber(path).map_err(|e| {
+            // A zip that is neither a gerber set nor a .board export is often
+            // a FIRMWARE project zipped by mistake; say where firmware goes
+            // instead of only rejecting.
+            if let Some(marker) = zip_firmware_marker(&raw) {
+                BoardInputError::Zip(firmware_zip_message(&file_name, marker))
+            } else {
+                BoardInputError::Gerber(gerber_path_message(path, &e.to_string()))
+            }
+        })?;
         return Ok(with_name_fallback(
             NormalizedBoard {
                 board,
@@ -318,7 +333,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
     // Binary board (Altium): auto-detected from the OLE2 magic + Altium
     // streams, exactly as the Eagle path is auto-detected from XML content.
     if let Some(binary) = ExtractedBoard::from_auto_bytes(&raw) {
-        let board = binary.map_err(|e| BoardInputError::Extract(e.to_string()))?;
+        let board = binary.map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
         return Ok(with_name_fallback(
             NormalizedBoard {
                 board,
@@ -340,7 +355,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
         let compiled = crate::boardcode::code_to_board_text(&text)
             .map_err(|e| BoardInputError::BoardCode(e.to_string()))?;
         let board = ExtractedBoard::from_auto(&compiled)
-            .map_err(|e| BoardInputError::Extract(e.to_string()))?;
+            .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
         return Ok(with_name_fallback(
             NormalizedBoard {
                 board,
@@ -373,8 +388,8 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
         ));
     }
 
-    let board =
-        ExtractedBoard::from_auto(&text).map_err(|e| BoardInputError::Extract(e.to_string()))?;
+    let board = ExtractedBoard::from_auto(&text)
+        .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
     Ok(with_name_fallback(
         NormalizedBoard {
             board,
@@ -471,11 +486,51 @@ fn gerber_from_zip_bytes(
     let result = ExtractedBoard::from_gerber(&tmp);
     let _ = std::fs::remove_file(&tmp);
     result.map_err(|e| {
+        // A zip that fails the gerber read is often a FIRMWARE project zipped
+        // by mistake; point at the firmware slot instead of only rejecting.
+        if let Some(marker) = zip_firmware_marker(contents) {
+            return BoardInputError::Zip(firmware_zip_message(file_name, marker));
+        }
         BoardInputError::Zip(format!(
             "could not read '{file_name}' as a gerber archive: {e}. A board zip should \
              contain the gerber fab files (copper + drill), or one .board export."
         ))
     })
+}
+
+/// What marks a zip as a firmware project rather than a gerber fab archive:
+/// a PlatformIO config, a `.pio` build tree, or a compiled `.hex` image.
+/// Returns a human name for the first marker found, `None` for anything else.
+fn zip_firmware_marker(contents: &[u8]) -> Option<&'static str> {
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(contents)).ok()?;
+    for i in 0..archive.len() {
+        let Ok(entry) = archive.by_index(i) else {
+            continue;
+        };
+        let name = entry.name().to_ascii_lowercase();
+        let base = name.rsplit('/').next().unwrap_or("");
+        if base == "platformio.ini" {
+            return Some("a platformio.ini");
+        }
+        if name.starts_with(".pio/") || name.contains("/.pio/") {
+            return Some("a .pio build tree");
+        }
+        if name.ends_with(".hex") {
+            return Some("compiled .hex firmware");
+        }
+    }
+    None
+}
+
+/// The rejection wording for a firmware project uploaded where a board was
+/// expected: names what was found and where firmware actually goes.
+fn firmware_zip_message(file_name: &str, marker: &str) -> String {
+    format!(
+        "'{file_name}' looks like a firmware project ({marker} inside), not a board. \
+         Drop it in the firmware slot next to the board file (CLI: pass it with \
+         --firmware); the board zip should contain the gerber fab files \
+         (copper + drill), or one .board export."
+    )
 }
 
 #[cfg(test)]
@@ -586,6 +641,54 @@ fn main {
             msg.contains("Supported:") && msg.contains(".board"),
             "the web message lists the supported formats: {msg}"
         );
+        assert!(
+            msg.contains(".PcbDoc"),
+            "the supported list must include Altium: {msg}"
+        );
+    }
+
+    #[test]
+    fn extract_error_names_the_file() {
+        let err = from_bytes("nope.txt", b"this is not a board file at all")
+            .expect_err("garbage must not normalize");
+        assert!(
+            err.to_string().contains("'nope.txt'"),
+            "the failing file is named: {err}"
+        );
+    }
+
+    #[test]
+    fn empty_upload_says_the_file_is_empty() {
+        let err = from_bytes("blank.kicad_pcb", b"").expect_err("empty must not normalize");
+        assert!(
+            err.to_string().contains("this file is empty"),
+            "got: {err}"
+        );
+    }
+
+    #[test]
+    fn firmware_zip_gets_pointed_at_the_firmware_slot() {
+        for (label, entry) in [
+            ("platformio", ("firmware/platformio.ini", b"[env:uno]".as_slice())),
+            (
+                "pio tree",
+                ("proj/.pio/build/uno/firmware.hex", b":00000001FF".as_slice()),
+            ),
+            ("hex image", ("blink.hex", b":00000001FF".as_slice())),
+        ] {
+            let bytes = zip_of(&[entry]);
+            let err = from_bytes("project.zip", &bytes)
+                .expect_err("a firmware zip must not normalize as a board");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("firmware project") && msg.contains("firmware slot"),
+                "{label}: the rejection points at the firmware path: {msg}"
+            );
+            assert!(
+                msg.contains("--firmware"),
+                "{label}: the CLI flag is named too: {msg}"
+            );
+        }
     }
 
     #[test]

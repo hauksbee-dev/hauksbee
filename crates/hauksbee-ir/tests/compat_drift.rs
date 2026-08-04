@@ -134,8 +134,8 @@ fn claims() -> Vec<Claim> {
         accept(Cat::Element, "`K` coupled inductors", "`Kxxx L1 L2 k`: lossless mutual coupling, `0 < k <= 1` (k=1 legal).", "t\nL1 a 0 1m\nL2 b 0 1m\nK1 L1 L2 0.99\nV1 a 0 1\n.end\n"),
         accept(Cat::Element, "`X` subcircuit call", "`Xxxx nodes... NAME [p=v]`: instantiates a `.subckt`, flattened at load with mangled internal names.", "t\n.subckt SUB a b\nR1 a b 1k\n.ends\nX1 in 0 SUB\nV1 in 0 1\n.end\n"),
         // --- .model types ---------------------------------------------------
-        accept(Cat::Model, "`.model ... D`", "Diode model: `is n rs cjo vj m tt bv xti eg` (aliases `cj0`, `pb`).", "t\nV1 a 0 1\nD1 a 0 DM\n.model DM D(IS=1e-14 N=1 RS=0.1 CJO=2p VJ=0.7 M=0.5 TT=5n BV=75)\n.end\n"),
-        accept(Cat::Model, "`.model ... NPN/PNP`", "BJT model: `is bf br vaf var nf nr rb re rc cje cjc tf tr xti eg`.", "t\nQ1 c b e QM\n.model QM PNP(BF=150 VAF=80 CJE=2p TF=1n)\nV1 c 0 -5\n.end\n"),
+        accept(Cat::Model, "`.model ... D`", "Diode model: `is n rs cjo vj m tt bv ibv xti eg` (aliases `cj0`, `pb`).", "t\nV1 a 0 1\nD1 a 0 DM\n.model DM D(IS=1e-14 N=1 RS=0.1 CJO=2p VJ=0.7 M=0.5 TT=5n BV=75 IBV=1e-4)\n.end\n"),
+        accept(Cat::Model, "`.model ... NPN/PNP`", "BJT model: `is bf br vaf var nf nr rb re rc cje cjc tf tr ikf ikr ise ne isc nc xti eg` (aliases `va`/`vb`, `jbf`/`jbr`, `c2`/`c4`).", "t\nQ1 c b e QM\n.model QM PNP(BF=150 VAF=80 CJE=2p TF=1n IKF=0.1 IKR=0.05 ISE=1e-13 NE=1.5 ISC=2e-13 NC=2)\nV1 c 0 -5\n.end\n"),
         accept(Cat::Model, "`.model ... NMOS/PMOS`", "MOSFET model, LEVEL=1 only: `vto kp lambda gamma phi tox cgso cgdo is cbd cbs pb mj rd rs`.", "t\nM1 d g 0 0 MM\n.model MM PMOS(VTO=-1.1 KP=2e-5 TOX=20n RD=0.05 RS=0.05)\nV1 d 0 -5\n.end\n"),
         accept(Cat::Model, "`.model ... SW/VSWITCH`", "Voltage-switch model: `vt vh ron roff`.", "t\nS1 a b cp cn SM\n.model SM VSWITCH(VT=2.5 VH=0.5 RON=0.5 ROFF=1e12)\nV1 a 0 5\n.end\n"),
         // --- analyses -------------------------------------------------------

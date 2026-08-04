@@ -218,7 +218,8 @@
         "fstop": {
           "description": "Sweep stop (Hz); must exceed `fstart`.",
           "type": "number",
-          "format": "double"
+          "format": "double",
+          "exclusiveMinimum": 0
         },
         "points": {
           "description": "Points per decade (`dec`) or total (`lin`).",
@@ -351,7 +352,7 @@
           "default": null
         },
         "kind": {
-          "description": "Assertion kind. `voltage`: net stays in [min, max]. `uart`: output\ncontains/matches. `toggle`: net toggles at `freq_hz` or >= `min_toggles`.\n`no_faults`: no stress faults raised. `max_current`: I(ref) <= amps.\n`max_temp`: Tj(ref) <= celsius (or device max). `peripheral`: peripheral\nstate check. `rail_window`: rail dip/recovery bounds over a scenario\nwindow. `protection_trip`: battery protection trips (or must not).\n`boot-coverage`: a control net is driven to `min` volts within\n`deadline_ms` of reset. `phase_margin` / `ac_gain`: small-signal loop\nchecks (need an `[ac]` block). `hwtrace`: the run reproduces a captured\nhardware trace. `model_coverage`: enough of the board bound to a real\ndevice model.",
+          "description": "Assertion kind. `voltage`: net stays in [min, max]. `uart`: output\ncontains/matches. `toggle`: net toggles at `freq_hz` or >= `min_toggles`.\n`no_faults`: no stress faults raised. `max_current`: I(ref) <= amps.\n`max_temp`: Tj(ref) <= celsius (or device max). `peripheral`: peripheral\nstate check. `rail_window`: rail dip/recovery bounds over a scenario\nwindow. `protection_trip`: battery protection trips (or must not).\n`boot_coverage`: a control net is driven to `min` volts within\n`deadline_ms` of reset (the kebab-case `boot-coverage` is the accepted\nlegacy spelling of the same kind). `phase_margin` / `ac_gain`:\nsmall-signal loop checks (need an `[ac]` block). `hwtrace`: the run\nreproduces a captured hardware trace. `model_coverage`: enough of the\nboard bound to a real device model.",
           "type": "string",
           "enum": [
             "voltage",
@@ -363,6 +364,7 @@
             "peripheral",
             "rail_window",
             "protection_trip",
+            "boot_coverage",
             "boot-coverage",
             "phase_margin",
             "ac_gain",
@@ -421,7 +423,9 @@
             "null"
           ],
           "format": "double",
-          "default": null
+          "default": null,
+          "maximum": 1.0,
+          "minimum": 0.0
         },
         "min_resolved": {
           "description": "model_coverage: the minimum fraction (0.0 to 1.0) of all non-ignored\nparts that must bind. Coarser than `min_critical`, and useful as a\nboard-wide trend line.",
@@ -430,7 +434,9 @@
             "null"
           ],
           "format": "double",
-          "default": null
+          "default": null,
+          "maximum": 1.0,
+          "minimum": 0.0
         },
         "min_toggles": {
           "description": "Minimum toggle count over the run (alternative to freq_hz).",
@@ -501,13 +507,15 @@
           "default": null
         },
         "tolerance": {
-          "description": "toggle: relative tolerance on `freq_hz`.",
+          "description": "toggle: relative tolerance on `freq_hz`, as a FRACTION in (0, 1]\n(0.25 = ±25%). A value like `10`, thinking in percent, would accept\n±1000% and green a net that never toggles, so it is rejected.",
           "type": [
             "number",
             "null"
           ],
           "format": "double",
-          "default": null
+          "default": null,
+          "exclusiveMinimum": 0,
+          "maximum": 1
         },
         "trace": {
           "description": "hwtrace: path to a `trace.toml` (relative to the spec file) describing a\ncaptured hardware trace whose per-channel features the simulated run must\nreproduce within the trace's stated tolerances (T6; see `hwtrace.rs`).",
@@ -528,22 +536,27 @@
       "type": "object",
       "properties": {
         "esl_henries": {
+          "description": "Equivalent series inductance (henries), overriding the inferred default.",
           "type": [
             "number",
             "null"
           ],
           "format": "double",
-          "default": null
+          "default": null,
+          "minimum": 0.0
         },
         "esr_ohms": {
+          "description": "Equivalent series resistance (ohms), overriding the package/dielectric\ndefault inferred from the footprint.",
           "type": [
             "number",
             "null"
           ],
           "format": "double",
-          "default": null
+          "default": null,
+          "minimum": 0.0
         },
         "ref": {
+          "description": "The capacitor's reference designator, e.g. \"C12\".",
           "type": "string"
         }
       },
@@ -657,13 +670,16 @@
       "type": "object",
       "properties": {
         "description": {
+          "description": "Free-text note on what this load profile represents.",
           "type": "string",
           "default": ""
         },
         "id": {
+          "description": "The profile id a `[[scenario]]`'s `profile` field references. Shadows a\nbuilt-in profile of the same name for this spec.",
           "type": "string"
         },
         "segment": {
+          "description": "The `[[profile.segment]]` blocks, applied in order, describing the\ncurrent the part draws over time.",
           "type": "array",
           "items": {
             "$ref": "#/definitions/InlineSegment"
@@ -680,11 +696,13 @@
       "type": "object",
       "properties": {
         "duration_s": {
+          "description": "How long the segment holds `level_a` (s).",
           "type": "number",
           "format": "double",
           "default": 0.0
         },
         "idle_a": {
+          "description": "Current drawn between bursts (A). Defaults to 0 (fully idle).",
           "type": [
             "number",
             "null"
@@ -693,20 +711,24 @@
           "default": null
         },
         "jitter_s": {
+          "description": "Deterministic jitter (s) applied to the burst start, seeded from the\nscenario's `seed`, so repeats are not perfectly aligned.",
           "type": "number",
           "format": "double",
           "default": 0.0
         },
         "level_a": {
+          "description": "Peak current drawn during this segment (A).",
           "type": "number",
           "format": "double"
         },
         "period_s": {
+          "description": "Repeat period (s). Non-zero makes the segment a burst that fires every\n`period_s` (e.g. a radio TX slot); 0 runs it once.",
           "type": "number",
           "format": "double",
           "default": 0.0
         },
         "rise_s": {
+          "description": "Ramp time from the previous level to `level_a` (s). 0 = a step edge,\nwhich is the worst case for inrush and the reason to model it.",
           "type": "number",
           "format": "double",
           "default": 0.0
@@ -722,9 +744,11 @@
       "type": "object",
       "properties": {
         "net": {
+          "description": "The net to hold at a fixed voltage (external stimulus, a strapping\nresistor, a register bit the firmware cannot set in a headless run).",
           "type": "string"
         },
         "volts": {
+          "description": "The voltage to force (V), stamped as an ideal source for the whole run.",
           "type": "number",
           "format": "double"
         }
@@ -767,6 +791,7 @@
           "exclusiveMinimum": 0
         },
         "value": {
+          "description": "The replacement value string, spelled the way the board file would spell\nit (e.g. `\"0.05\"`, `\"4k7\"`, `\"100n\"`). Applied before binding.",
           "type": "string"
         }
       },
@@ -800,6 +825,7 @@
           "minimum": 0
         },
         "amplitude": {
+          "description": "stimulus: waveform amplitude (V), peak about `offset`.",
           "type": [
             "number",
             "null"
@@ -839,6 +865,7 @@
           }
         },
         "freq_hz": {
+          "description": "stimulus: waveform frequency (Hz) for `sine` / `noise`.",
           "type": [
             "number",
             "null"
@@ -860,6 +887,7 @@
           "default": null
         },
         "net": {
+          "description": "The net this peripheral attaches to. Alternative to `ref` + `pin`. Note\na `vcd_sink` reads only `nets = [...]`, never this singular field.",
           "type": [
             "string",
             "null"
@@ -893,6 +921,7 @@
           }
         },
         "offset": {
+          "description": "stimulus: DC offset (V) the waveform swings about.",
           "type": [
             "number",
             "null"
@@ -943,14 +972,14 @@
           "default": null
         },
         "size": {
-          "description": "EEPROM size in bytes.",
+          "description": "EEPROM size in bytes (i2c_eeprom / spi_eeprom).",
           "type": [
             "integer",
             "null"
           ],
           "format": "uint",
           "default": null,
-          "minimum": 0
+          "minimum": 1
         },
         "temp_c": {
           "description": "Sensor temperature in Celsius (i2c_lm75).",
@@ -1070,7 +1099,8 @@
           "description": "When the profile's activity begins (ms into the run). Default 0.",
           "type": "number",
           "format": "double",
-          "default": 0.0
+          "default": 0.0,
+          "minimum": 0.0
         },
         "supply_net": {
           "description": "The supply net the load current is drawn from. If omitted, the runner\ninfers it from the part's power pins (VDD/VCC/VBAT/3V3/5V class).",
@@ -1139,14 +1169,17 @@
       "type": "object",
       "properties": {
         "capacity_mah": {
+          "description": "Pack capacity (mAh), which sets how fast the state of charge (and so\nthe terminal voltage) walks down under load.",
           "type": [
             "number",
             "null"
           ],
           "format": "double",
-          "default": null
+          "default": null,
+          "exclusiveMinimum": 0
         },
         "cells": {
+          "description": "Cells in series. The pack voltage is the chemistry's per-cell curve\ntimes this, so a wrong count is a wrong rail.",
           "type": [
             "integer",
             "null"
@@ -1172,15 +1205,17 @@
           ]
         },
         "current_limit_a": {
+          "description": "Current limit (A). Above it a bench/wall supply drops out of regulation\ninto constant-current, which is how a brownout gets reproduced.",
           "type": [
             "number",
             "null"
           ],
           "format": "double",
-          "default": null
+          "default": null,
+          "exclusiveMinimum": 0
         },
         "kind": {
-          "description": "One of `ideal | bench | wall | usb | battery`.",
+          "description": "One of `ideal | bench | wall | usb | battery`. `ideal`/`bench`/`wall`\nneed an explicit `volts`; `usb` needs a `usb` profile; `battery` needs\na `chemistry`. Nothing is assumed, a wrong guess would fabricate\nfaults on a healthy board.",
           "type": "string",
           "enum": [
             "ideal",
@@ -1191,6 +1226,7 @@
           ]
         },
         "net": {
+          "description": "The supply net this leg feeds, e.g. `\"+5V\"`. Must name a net that\nexists on the board (checked once the board is bound).",
           "type": "string"
         },
         "protection_delay_ms": {
@@ -1200,7 +1236,8 @@
             "null"
           ],
           "format": "double",
-          "default": null
+          "default": null,
+          "minimum": 0.0
         },
         "protection_reset_a": {
           "description": "Current the load must fall below to re-arm the cutoff (A). Default: trip.",
@@ -1209,7 +1246,8 @@
             "null"
           ],
           "format": "double",
-          "default": null
+          "default": null,
+          "exclusiveMinimum": 0
         },
         "protection_trip_a": {
           "description": "BMS over-current protection trip threshold (A). Present = protected pack.",
@@ -1218,39 +1256,48 @@
             "null"
           ],
           "format": "double",
-          "default": null
+          "default": null,
+          "exclusiveMinimum": 0
         },
         "r_internal_ohms": {
+          "description": "Pack internal resistance (ohms): the sag-per-amp of a real cell, and\nusually the reason a battery-powered board browns out at boot.",
           "type": [
             "number",
             "null"
           ],
           "format": "double",
-          "default": null
+          "default": null,
+          "minimum": 0.0
         },
         "r_out_ohms": {
+          "description": "Output impedance (ohms): the series resistance the leg presents, so a\nload step sags the rail instead of holding it stiff.",
           "type": [
             "number",
             "null"
           ],
           "format": "double",
-          "default": null
+          "default": null,
+          "minimum": 0.0
         },
         "ripple_hz": {
+          "description": "Ripple frequency (Hz); pair it with `ripple_vpp`.",
           "type": [
             "number",
             "null"
           ],
           "format": "double",
-          "default": null
+          "default": null,
+          "exclusiveMinimum": 0
         },
         "ripple_vpp": {
+          "description": "Peak-to-peak output ripple (V), superimposed on `volts` at `ripple_hz`.",
           "type": [
             "number",
             "null"
           ],
           "format": "double",
-          "default": null
+          "default": null,
+          "minimum": 0.0
         },
         "soc": {
           "description": "State of charge as a fraction in 0..1.",
@@ -1280,6 +1327,7 @@
           ]
         },
         "volts": {
+          "description": "Nominal output voltage (V). Required for `ideal` / `bench` / `wall`; a\nrail may be negative (e.g. -12 V), only a non-finite value is illegal.",
           "type": [
             "number",
             "null"
@@ -1299,10 +1347,12 @@
       "type": "object",
       "properties": {
         "t_ms": {
+          "description": "When the event fires (ms into the run).",
           "type": "number",
           "format": "double"
         },
         "value": {
+          "description": "The value to set: 1/0 for a button press/release or toggle, a position\nin 0..1 for a potentiometer, a level for a stimulus.",
           "type": "number",
           "format": "double"
         }

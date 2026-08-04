@@ -26,8 +26,9 @@ pub fn emit(
     mode: OutputMode,
     oracle: bool,
     strict: bool,
+    verbose: bool,
 ) -> anyhow::Result<()> {
-    let report = if altium_present {
+    let mut report = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
         // KiCad 10 keeps class clearances in the sibling .kicad_pro. Resolve
@@ -38,6 +39,25 @@ pub fn emit(
             kicad_pro_clearance_rules(board_path, board),
         )?
     };
+    // Waivers, same semantics as `--check`: a short the board's owner overruled
+    // for a stated reason must come out of THIS gate too, or the same board is
+    // green under `--check --strict` and red under `--drc --strict`. The key
+    // mirrors check.rs exactly: only a true short is waivable; a clearance
+    // violation does not gate on its own, so it has nothing to be excused from.
+    let mut waivers = super::check::load_waivers(board_path);
+    let (kept, waived) = waivers.partition("drc", std::mem::take(&mut report.findings), |f| {
+        let kind = match f.kind {
+            hauksbee_extract::ViolationKind::Short => "short",
+            _ => "clearance-not-waivable",
+        };
+        (
+            kind.to_string(),
+            vec![f.net_a_name.clone(), f.net_b_name.clone()],
+            Vec::new(),
+            format!("{} to {} on {}", f.net_a_name, f.net_b_name, f.layer),
+        )
+    });
+    report.findings = kept;
     match mode {
         OutputMode::Json => {
             // Grouped DRC (Fix #8): shorts kept verbatim, clearance findings
@@ -45,15 +65,20 @@ pub fn emit(
             let bound = bind_board(board, lib);
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
             jr.drc = Some(DrcStructured::from_report(&report));
+            // A green verdict that quietly dropped findings would be worse than
+            // no waivers at all, so the machine surface carries them too.
+            jr.waived = waived.iter().cloned().map(Into::into).collect();
             println!("{}", jr.to_json());
         }
         OutputMode::Plain => {
             // Plain mode renders from the SAME grouped structure as text/json so
             // all surfaces agree: duplicates collapsed, and gap==rule labelled
             // "at minimum clearance (no margin)" rather than the wrong "below".
+            // Repeated near-identical clearance findings condense to aggregate
+            // lines past the first few; --verbose restores every instance.
             print!(
                 "{}",
-                crate::plain_drc_structured(&DrcStructured::from_report(&report)).render()
+                crate::render_drc_condensed(&DrcStructured::from_report(&report), verbose)
             );
         }
         OutputMode::Text => {
@@ -66,13 +91,19 @@ pub fn emit(
     if oracle && mode != OutputMode::Json {
         print!("{}", oracle_cross_check(board_path, &report));
     }
+    if !matches!(mode, OutputMode::Json) {
+        print!(
+            "{}",
+            super::check::render_waivers_scoped(&waived, &waivers, Some("drc"), true)
+        );
+    }
     // Strict: any true short fails the gate (clearance-only does not). An
     // unvalidated board format (KiCad 10+) yields possibly-phantom shorts, so it
     // does not gate (the printed caveat tells the user to cross-check).
     let would_gate = report.version_warning.is_none() && report.short_count() > 0;
     super::note_ungated_findings(strict, would_gate);
     if strict && would_gate {
-        std::process::exit(2);
+        super::strict_gate_exit(mode, &super::drc_gate_items(&report));
     }
     Ok(())
 }
