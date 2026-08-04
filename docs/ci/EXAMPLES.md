@@ -71,6 +71,7 @@ hauksbee run crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb --drc --plai
 The expert output (default) for that board:
 
 ```
+note: this board has no routed copper (no track segments): the spacing check had only pads to compare, so a clean result here says nothing about routing that does not exist yet.
 DRC: 20 primitive(s), clearance rule 0.200 mm
 
 SHORTS (2):
@@ -78,17 +79,21 @@ SHORTS (2):
   [SERIOUS] GND touches +5V on F.Cu (gap 0.0000 mm) at x=112.0, y=100.0
 
 2 short(s), 0 below-rule group(s), 0 at-limit group(s).
-note: gate-grade finding(s) above, but this is a report command so the exit code is 0. Add --strict to exit 2 on them (exit contract: 0 = clean or report-only, 2 = findings under --strict, 3 = invalid for analysis), or gate CI with hauksbee-ci.
+note: gate-grade finding(s) above, but this is a report command so the exit code is 0. Add --strict to exit 2 on them (exit contract: 0 = clean or report-only, 1 = input error such as a missing or unreadable file, 2 = findings under --strict, 3 = invalid for analysis), or gate CI with hauksbee-ci.
 ```
 
-That last line is on stderr, and it is there because this run exited 0. A report
+The first note is there because this demo board carries pads and no tracks: the
+spacing check says so rather than letting a thin result read as a clean one. The
+last line is on stderr, and it is there because this run exited 0. A report
 command prints what it found and does not gate; `--strict` is what turns the
 same findings into exit 2. Without the note, a pipeline could read the green tick
 next to a serious short and conclude the board is clean.
 
-The same finding in `--plain`:
+The same finding in `--plain` (the per-finding text is elided here; the tool
+prints each paragraph in full):
 
 ```
+note: this board has no routed copper (no track segments): the spacing check had only pads to compare, so a clean result here says nothing about routing that does not exist yet.
 2 issues found, 2 serious.
 
 1. [SERIOUS] Two separate connections, "GND" and "+5V", are touching,
@@ -104,7 +109,7 @@ The same finding in `--plain`:
    same wording, same coordinates ...
 
 Summary: 2 short(s), 0 net pair(s) below the clearance rule, 0 at minimum clearance (no margin).
-note: gate-grade finding(s) above, but this is a report command so the exit code is 0. Add --strict to exit 2 on them (exit contract: 0 = clean or report-only, 2 = findings under --strict, 3 = invalid for analysis), or gate CI with hauksbee-ci.
+note: gate-grade finding(s) above, but this is a report command so the exit code is 0. Add --strict to exit 2 on them (exit contract: 0 = clean or report-only, 1 = input error such as a missing or unreadable file, 2 = findings under --strict, 3 = invalid for analysis), or gate CI with hauksbee-ci.
 ```
 
 On a board with many similar near-miss clearance findings, `--plain` prints
