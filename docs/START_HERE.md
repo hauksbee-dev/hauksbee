@@ -55,9 +55,14 @@ non-ignored parts resolve, with the MCU bound, so a few warnings about
 unresolved actives are expected, and the report's bottom line explains
 exactly what they mean for the results.
 
-No board of your own yet? The `hauksbee serve` page has one-click samples: a
-real smartwatch, a board-plus-firmware pair that runs a live co-sim, and a
-minimal board to compare against. The first report needs no file at all.
+No board of your own yet? Two routes, neither needing a file. In the terminal,
+`hauksbee run --example blinky --report` works from a bare installed binary with
+no checkout on disk: the board is compiled into the binary and unpacked to a temp
+directory, so there is no path to get wrong. `hauksbee sim --example rlc_ringdown
+--tran` is the SPICE-side equivalent, and either flag names what it does have if
+you ask it for something it lacks. In the browser, the `hauksbee serve` page has
+one-click samples: a real smartwatch, a board-plus-firmware pair that runs a live
+co-sim, and a minimal board to compare against.
 
 Full walkthrough, more example boards, and captured sessions: [`docs/ci/EXAMPLES.md`](ci/EXAMPLES.md).
 
