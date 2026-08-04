@@ -728,7 +728,15 @@ impl Transient {
                     None => x_accepted_prev = Some(x_accepted.clone()),
                 }
             }
-            pred_skip_once = used_event;
+            // Skip the extrapolation seed after any accepted step that crossed a
+            // discontinuity: an event-resolved step, or a bare step whose
+            // hysteretic switch latch flipped. The accepted pair straddles the
+            // flip either way, so a line through them launches the fast nodes
+            // far past the new branch (measured on the mirror deck: the
+            // diode-connected base extrapolated from 5 mV to 4.8 V, seeding a
+            // 238 A junction imbalance that no dt cut could recover, because
+            // every retry re-extrapolated the same line).
+            pred_skip_once = used_event || ws.latch_flipped();
             x_accepted.copy_from_slice(&ws.x);
             first_step = false;
             h_prev_accepted = h;

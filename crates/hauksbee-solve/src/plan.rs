@@ -763,6 +763,7 @@ mod tests {
             switch_freeze: None,
             switch_latch: None,
             spdt_sibling: &spdt,
+            junction_eval: None,
         };
 
         // Interpreted reference.
@@ -926,6 +927,7 @@ mod tests {
                 switch_freeze: None,
                 switch_latch: None,
                 spdt_sibling: &spdt,
+                junction_eval: None,
             };
             let mut rhs = vec![0.0f64; n];
             const REPS: usize = 300;
@@ -1020,6 +1022,7 @@ mod tests {
             switch_freeze: None,
             switch_latch: None,
             spdt_sibling: &spdt,
+            junction_eval: None,
         };
         let mut m_ref = m.clone();
         m_ref.clear_values();
