@@ -88,8 +88,9 @@ footprints making 82 distinct parts, 685 copper segments, a charger and a
 boost converter. Every command
 below finishes in about a second. The `crates/...` paths are from a checkout;
 if you took the curl installer, the same files sit at
-`examples/ci-specs/boards/watchy.kicad_pcb` inside the extracted bundle, or
-skip files entirely with `hauksbee serve` and its bundled samples.
+`examples/ci-specs/boards/watchy.kicad_pcb` inside the extracted bundle. Or skip
+files entirely: `hauksbee run --example blinky --report` carries its board inside
+the binary, and `hauksbee serve` has one-click samples.
 
 ```bash
 hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --report --plain  # which parts were modelled, plain bottom line
