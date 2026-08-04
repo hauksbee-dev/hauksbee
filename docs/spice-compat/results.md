@@ -14,8 +14,8 @@ requirement, and a different ngspice may move the worst-case columns.
 deck here at all.
 
 - Oracle: **ngspice-45.2**
-- Decks: **46**
-- Passing: **46/46**
+- Decks: **49**
+- Passing: **49/49**
 
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Headroom | Where | Result |
 |------|----------|----------|------------------|-----------|----------|-------|--------|
@@ -23,6 +23,9 @@ deck here at all.
 | bjt_bias | op | `V(coll)` | 9.512e-6 | 1.0e-4 | 11x | op | PASS |
 |  |  | `V(base)` | 1.633e-6 | 5.0e-5 | 31x | op | PASS |
 |  |  | `V(emit)` | 2.253e-6 | 1.0e-4 | 44x | op | PASS |
+| bjt_bias_temp_85 | op | `V(coll)` | 1.179e-5 | 1.0e-4 | 8x | op | PASS |
+|  |  | `V(base)` | 1.797e-6 | 5.0e-5 | 28x | op | PASS |
+|  |  | `V(emit)` | 2.691e-6 | 1.0e-4 | 37x | op | PASS |
 | bjt_ce_amp | tran | `V(c)` | 2.071e-4 | 2.0e-3 | 10x | t=6.213e-5s | PASS |
 | bjt_sgp_high_injection | op | `I(VC)` | 7.445e-6 | 2.0e-4 | 27x | op | PASS |
 |  |  | `I(VB)` | 7.212e-6 | 2.0e-4 | 28x | op | PASS |
@@ -50,6 +53,11 @@ deck here at all.
 | flyback_diode | tran | `V(out)` | 1.583e-2 | 5.0e-2 | 3x | t=2.556e-5s | PASS |
 | forced_base_current | op | `V(base)` | 7.556e-6 | 2.0e-4 | 26x | op | PASS |
 |  |  | `V(coll)` | 3.510e-9 | 1.0e-6 | 285x | op | PASS |
+| inductive_kickback_zener | tran | `V(sw)` | 2.728e-1 | 3.0e-1 | 1x | t=1.003e-4s | PASS |
+|  |  | `V(sw) vs closed form` | 2.113e-13 | 1.0e-3 | 4732587863x | t=5.000e-5 | PASS |
+|  |  | `V(sw) vs closed form` | 5.152e-7 | 2.0e-3 | 3882x | t=1.203e-4 | PASS |
+|  |  | `V(sw) vs closed form` | 1.034e-6 | 2.0e-3 | 1935x | t=1.403e-4 | PASS |
+|  |  | `V(sw) vs closed form` | 1.938e-4 | 1.0e-3 | 5x | t=1.550e-3 | PASS |
 | mos_body_bias | dc | `V(d)` | 6.591e-3 | 3.0e-2 | 5x | sweep=1.800e0 | PASS |
 | mos_body_diode | tran | `V(d)` | 1.216e-1 | 2.5e-1 | 2x | t=2.049e-6s | PASS |
 | mos_load_switch | tran | `V(d)` | 3.287e-1 | 5.0e-1 | 2x | t=1.141e-6s | PASS |
@@ -90,6 +98,12 @@ deck here at all.
 |  |  | `V(out) vs closed form` | 9.990e-10 | 1.0e-5 | 10010x | sweep=2.450e0 | PASS |
 |  |  | `V(out) vs closed form` | 9.901e-12 | 1.0e-6 | 101000x | sweep=2.550e0 | PASS |
 |  |  | `V(out) vs closed form` | 9.901e-12 | 1.0e-6 | 101000x | sweep=3.050e0 | PASS |
+| temp_diode_tc_85 | op | `V(d1)` | 5.270e-7 | 2.0e-5 | 38x | op | PASS |
+|  |  | `V(d1) vs closed form` | 3.616e-12 | 1.0e-4 | 27655038x | op=0.000e0 | PASS |
+|  |  | `V(d2)` | 6.930e-7 | 3.0e-5 | 43x | op | PASS |
+|  |  | `V(d2) vs closed form` | 2.267e-11 | 1.0e-4 | 4410280x | op=0.000e0 | PASS |
+|  |  | `V(mid)` | 1.358e-7 | 5.0e-6 | 37x | op | PASS |
+|  |  | `V(mid) vs closed form` | 5.510e-10 | 1.0e-6 | 1815x | op=0.000e0 | PASS |
 | usblc6_forward | op | `V(a)` | 1.370e-6 | 5.0e-5 | 37x | op | PASS |
 | vccs_gm | tran | `V(out)` | 3.025e-3 | 1.0e-2 | 3x | t=1.010e-4s | PASS |
 | vcvs_gain | tran | `V(out)` | 8.650e-3 | 1.0e-2 | 1x | t=9.327e-6s | PASS |
@@ -104,6 +118,7 @@ deck here at all.
 
 - **ao3400a_rdson**: AO3400A NMOS on-resistance at VGS = 10 V
 - **bjt_bias**: NPN common-emitter bias point
+- **bjt_bias_temp_85**: NPN common-emitter bias point at 85 C: VBE(T) moves the whole bias chain
 - **bjt_ce_amp**: bypassed-emitter CE amplifier, 20 kHz sine gain
 - **bjt_sgp_high_injection**: 2N3904 vendor card at VBE = 0.75 V, where the high-injection knee bites
 - **bjt_switch_tail**: saturated switch turn-off: storage delay + charge-limited rise
@@ -123,6 +138,7 @@ deck here at all.
 - **diode_zener_breakdown**: zener-style breakdown clamp voltage past BV
 - **flyback_diode**: flyback-shaped: pulsed primary, inverted secondary, catch diode into C||R
 - **forced_base_current**: forced base current, the shape a datasheet test condition takes
+- **inductive_kickback_zener**: 12 V solenoid loop broken by a low-side switch: 1 A of stored current clamped by a 24 V zener, plateau + duration + settle against closed forms
 - **mos_body_bias**: reverse body bias shifts the threshold via GAMMA/PHI
 - **mos_body_diode**: body-diode reverse conduction, then synchronous channel takeover
 - **mos_load_switch**: NMOS low-side switch: gate-charge-shaped turn-on/turn-off timing
@@ -141,6 +157,7 @@ deck here at all.
 - **switch_bjt_mirror_membrane**: Relay gating a BJT current mirror into a 1nF membrane: the reduced one-block synapse deck, held on both flat regions and cross-checked through both edges.
 - **switch_gate_drive_edge**: Relay gating an RC gate load: turn-on instant and gate rise against the closed form v(g) = 5*(1 - exp(-(t - 10.6us)/11us)).
 - **switch_sw_thresholds**: SPICE3 SW relay: holds ROFF across its whole hysteresis band from a cold start, then presents exactly RON past VT+VH.
+- **temp_diode_tc_85**: Diode drops and a TC1 divider at .temp 85: IS(T), Vt(T) and R(T) against exact closed forms.
 - **usblc6_forward**: USBLC6-2P6 forward drop at the datasheet's 10 mA test current
 - **vccs_gm**: VCCS gm-block (1 mS into 2k || 50n) pulse response
 - **vcvs_gain**: VCVS gain-4 block driving an RC low-pass (1 kHz sine)

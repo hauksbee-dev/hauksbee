@@ -1,0 +1,19 @@
+.temp must reach the device models: diode IS(T)/Vt(T) and resistor TC1
+* REGRESSION. `.temp` was parsed into Circuit::temp_c and then consumed by
+* NOTHING: the solver evaluated every model at 27 C while ngspice honored the
+* card. On this deck that silence was worth 93 mV on a silicon diode drop,
+* 70 mV on an N=2 junction, and 254 mV on a copper-TC divider, all reported
+* as a converged operating point labelled 85 C. Every junction here is
+* current-driven so every probe has an exact closed form (no Lambert W).
+.temp 85
+I1 0 d1 DC 10m
+D1 d1 0 DSI
+.model DSI D(IS=1e-14 N=1)
+I2 0 d2 DC 2m
+D2 d2 0 DN2
+.model DN2 D(IS=1e-12 N=2 XTI=2 EG=0.69)
+VIN in 0 DC 5
+R1 in mid 1k tc1=3.9e-3
+R2 mid 0 1k
+.op
+.end

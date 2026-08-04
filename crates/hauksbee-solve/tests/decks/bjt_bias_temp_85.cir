@@ -1,0 +1,17 @@
+The bjt_bias deck moved to the hot corner: .temp 85
+* Same topology and model card as bjt_bias, so any disagreement here is the
+* temperature path alone: IS(T) through XTI/EG and Vt(T) in the Gummel-Poon
+* core. The bias network was chosen upstream to be beta-stiff, which makes it
+* temperature-sensitive through VBE: at 85 C the base-emitter drop falls
+* ~100 mV, the emitter current rises, and the collector node drops by more
+* than half a volt. An engineer checking hot-corner headroom on this stage
+* would be misled by a 27 C answer wearing an 85 C label.
+VCC vcc 0 DC 12
+RC vcc coll 4.7k
+RB vcc base 470k
+RE emit 0 1k
+Q1 coll base emit QMOD
+.model QMOD NPN(IS=1e-15 BF=200 VAF=80 NF=1.0)
+.temp 85
+.op
+.end
