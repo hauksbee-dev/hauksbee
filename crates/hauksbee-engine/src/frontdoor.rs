@@ -509,7 +509,11 @@ fn analyze_normalized(
             // problems found", a vacuous green for input we never checked.
             WebSection {
                 title: "Copper spacing (DRC)".to_string(),
-                verdict: "Not checked: clearance DRC needs the layout file (KiCad/Eagle/Altium), which a gerber archive does not carry.".to_string(),
+                verdict: format!(
+                    "Not checked: clearance DRC needs the layout file \
+                     (KiCad/Eagle/Altium), which {} does not carry.",
+                    crate::board_input::input_kind_phrase(norm.kind)
+                ),
                 findings: Vec::new(),
                 heads_up: Vec::new(),
             }
@@ -550,7 +554,19 @@ fn analyze_normalized(
     // Notes: bind-role caveat (active IC open on the live circuit). These mirror
     // the CLI/JSON `notes` so the web never silently omits an honesty annotation.
     let mut notes: Vec<JsonNote> = Vec::new();
-    if is_gerber {
+    // The reader's own coverage notes (an ODB++ job and an IPC-2581 document each
+    // state where their connectivity came from and every cross-check inside the
+    // file that disagreed), then the gerber note for the one input that really IS
+    // reverse-extracted from copper. Saying "reverse-extracted from the fab
+    // files' copper geometry" over an ODB++ job was simply false: that job states
+    // its netlist, and the reader read it.
+    for message in &norm.notes {
+        notes.push(JsonNote {
+            kind: JsonNoteKind::Coverage,
+            message: message.clone(),
+        });
+    }
+    if norm.is_gerber_archive() {
         notes.push(JsonNote {
             kind: JsonNoteKind::Coverage,
             message: "Gerber input: the circuit was reverse-extracted from the fab \

@@ -135,8 +135,63 @@ pub struct Ipc2581Stats {
     pub connected_pins: usize,
     /// Placements dropped as board artwork because they carry no pad at all.
     pub artwork: Vec<String>,
+    /// True when the document has no `<Bom>` section, so no component has a
+    /// value and no populate flag could be read: `dnp == false` everywhere means
+    /// "the document did not say", not "the part is fitted".
+    pub bom_absent: bool,
+    /// Nets the document declares that touch no component pad at all.
+    ///
+    /// Not an error: a netlist may legitimately carry an unused net (Allegro's
+    /// testcase3 declares exactly one, `Unused_04712D00`). But a net nothing is
+    /// attached to is invisible in every downstream check, so it is counted and
+    /// said out loud rather than passed along as if it were wired.
+    pub nets_without_pads: Vec<String>,
     /// Cross-checks that did not agree, each a whole sentence.
     pub disagreements: Vec<String>,
+}
+
+impl Ipc2581Stats {
+    /// The whole-sentence notes a report must carry for this read: where the
+    /// connectivity came from, what was not checked, and every cross-check that
+    /// disagreed. The board-input normalizer copies these onto its own notes, so
+    /// a disagreement the reader found actually reaches the user.
+    pub fn notes(&self) -> Vec<String> {
+        let mut out = vec![format!(
+            "IPC-2581 input (revision {}, FunctionMode {}): the netlist was read \
+             from the document's {} section, not reverse-engineered from copper. \
+             Clearance DRC and trace-geometry SI need the original layout file and \
+             were not run.",
+            rev_or_unknown(&self.revision),
+            mode_or_unknown(&self.function_mode),
+            self.net_source.as_str()
+        )];
+        if !self.artwork.is_empty() {
+            out.push(format!(
+                "{} placement(s) have no pad and were read as board artwork \
+                 rather than parts: {}.",
+                self.artwork.len(),
+                sample_list(&self.artwork)
+            ));
+        }
+        if self.bom_absent {
+            out.push(
+                "This document carries no BOM, so no component has a value and \
+                 no populate/do-not-populate flag could be read: every placed \
+                 part has been treated as fitted."
+                    .to_string(),
+            );
+        }
+        if !self.nets_without_pads.is_empty() {
+            out.push(format!(
+                "{} net(s) are declared but touch no component pad, so nothing \
+                 downstream can see them: {}.",
+                self.nets_without_pads.len(),
+                sample_list(&self.nets_without_pads)
+            ));
+        }
+        out.extend(self.disagreements.clone());
+        out
+    }
 }
 
 /// An IPC-2581 read: the board plus its accounting.
@@ -166,6 +221,28 @@ pub fn looks_like_ipc2581(bytes: &[u8]) -> bool {
 const NAME_PREFIXES: &[&str] = &[
     "CMP", "NET", "PIN", "PKG", "LAYER", "BOARD", "REF", "DRILL", "BOM", "STEP", "PART", "PAD",
 ];
+
+/// Strip a producer's uniqueness prefix, where the prefix may also be the STEP
+/// NAME.
+///
+/// Zuken's CR5000 exporter prefixes every name with the step: `refDes=
+/// "bd-sample:IC18"`, `componentRef="bd-sample:IC11"`, `name="bd-sample:RESET"`.
+/// The connectivity is internally consistent either way, so the netlist still
+/// resolved — but the reference designator reaching the IR was `bd-sample:IC18`,
+/// which no model binder can recognise as an IC, and every net was called
+/// `bd-sample:RESET`. The step name is only stripped when it is followed by a
+/// colon and something else, so a step called `A` cannot eat a net named `A:B`
+/// belonging to nothing.
+fn strip_names(name: &str, step: &str) -> String {
+    let once = strip_prefix_tag(name);
+    if step.is_empty() {
+        return once.to_string();
+    }
+    match once.split_once(':') {
+        Some((head, rest)) if head == step && !rest.is_empty() => rest.to_string(),
+        _ => once.to_string(),
+    }
+}
 
 /// Strip a producer's `<TAG>:` uniqueness prefix from a name.
 fn strip_prefix_tag(name: &str) -> &str {
@@ -217,6 +294,9 @@ struct RawComponent {
     package_ref: String,
     part: String,
     layer_ref: String,
+    /// A `value` attribute on `<Component>`: outside the schema, but written by
+    /// real converters and the only value source in a document with no `<Bom>`.
+    value: String,
     x: f64,
     y: f64,
     rotation: f64,
@@ -313,7 +393,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     "Layer" => {
                         if let Some(n) = a.get("name") {
                             doc.layers.insert(
-                                strip_prefix_tag(n).to_string(),
+                                strip_names(n, &step).to_string(),
                                 (
                                     a.get("layerFunction").cloned().unwrap_or_default(),
                                     a.get("side").cloned().unwrap_or_default(),
@@ -327,7 +407,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     "Step" => {
                         step = a
                             .get("name")
-                            .map(|n| strip_prefix_tag(n).to_string())
+                            .map(|n| strip_names(n, &step).to_string())
                             .unwrap_or_default();
                         if !doc.steps.contains(&step) {
                             doc.steps.push(step.clone());
@@ -336,7 +416,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     "Package" => {
                         let n = a
                             .get("name")
-                            .map(|n| strip_prefix_tag(n).to_string())
+                            .map(|n| strip_names(n, &step).to_string())
                             .unwrap_or_default();
                         doc.packages
                             .entry(step.clone())
@@ -348,13 +428,33 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     "Pin" => {
                         // A `<Pin>` inside `<Package>` declares a pin; the
                         // element name is reused nowhere else we read.
-                        if let (Some(pkg), Some(num)) = (cur_package.as_ref(), a.get("number")) {
+                        //
+                        // `name` is preferred over `number` because producers
+                        // disagree about which one holds the pin's identity.
+                        // KiCad and Allegro write `<Pin number="7"/>`; Zuken
+                        // writes `<Pin name="1" type="THRU" number="0.0"/>`,
+                        // where `number` is the pin's ORDINAL in the package and
+                        // `name` is what the netlist references. Reading
+                        // `number` on a Zuken package gave every part pins
+                        // called "0.0", "1.0", "2.0" — names no `<PinRef>` could
+                        // ever match, so every package looked wrong.
+                        let pin = a
+                            .get("name")
+                            .or_else(|| a.get("number"))
+                            // A `<Pin>` with neither names nothing. Allegro's
+                            // rev-A exporter writes exactly that for some
+                            // packages, and keeping the empty string made every
+                            // such package "declare" a list of nameless pins that
+                            // no `<PinRef>` could match — which then reported 41
+                            // of 42 components as having the wrong package.
+                            .filter(|v| !v.trim().is_empty());
+                        if let (Some(pkg), Some(num)) = (cur_package.as_ref(), pin) {
                             if let Some(pins) = doc
                                 .packages
                                 .get_mut(&step)
                                 .and_then(|m| m.get_mut(pkg.as_str()))
                             {
-                                pins.push(strip_prefix_tag(num).to_string());
+                                pins.push(strip_names(num, &step).to_string());
                             }
                         }
                     }
@@ -362,20 +462,24 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                         let c = RawComponent {
                             refdes: a
                                 .get("refDes")
-                                .map(|v| strip_prefix_tag(v).to_string())
+                                .map(|v| strip_names(v, &step).to_string())
                                 .unwrap_or_default(),
                             package_ref: a
                                 .get("packageRef")
-                                .map(|v| strip_prefix_tag(v).to_string())
+                                .map(|v| strip_names(v, &step).to_string())
                                 .unwrap_or_default(),
                             part: a
                                 .get("part")
-                                .map(|v| strip_prefix_tag(v).to_string())
+                                .map(|v| strip_names(v, &step).to_string())
                                 .unwrap_or_default(),
                             layer_ref: a
                                 .get("layerRef")
-                                .map(|v| strip_prefix_tag(v).to_string())
+                                .map(|v| strip_names(v, &step).to_string())
                                 .unwrap_or_default(),
+                            // Not in the schema, but converters really do write
+                            // it, and a document with no `<Bom>` has no other
+                            // place a value could come from.
+                            value: a.get("value").cloned().unwrap_or_default(),
                             ..RawComponent::default()
                         };
                         if empty {
@@ -400,12 +504,19 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                             c.mirrored = a
                                 .get("mirror")
                                 .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+                            // Some producers put the placement on the `<Xform>`
+                            // rather than in a sibling `<Location>`; taking it
+                            // only from `<Location>` left every part at (0, 0).
+                            if a.contains_key("x") || a.contains_key("y") {
+                                c.x = num(&a, "x");
+                                c.y = num(&a, "y");
+                            }
                         }
                     }
                     "LogicalNet" => {
                         let n = a
                             .get("name")
-                            .map(|v| strip_prefix_tag(v).to_string())
+                            .map(|v| strip_names(v, &step).to_string())
                             .unwrap_or_default();
                         if empty {
                             doc.logical_nets
@@ -416,20 +527,34 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                             cur_logical_net = Some((n, Vec::new()));
                         }
                     }
+                    // Both of these are cleared on `Empty` as well as on `End`: a
+                    // self-closing `<Set/>` has no `End` event, so leaving the
+                    // cursor alive attributed the NEXT element's `<PinRef>`s to a
+                    // set that had already finished, and they were then discarded
+                    // when the stale set was flushed.
                     "LayerFeature" => {
-                        cur_layer_feature = a
-                            .get("layerRef")
-                            .map(|v| strip_prefix_tag(v).to_string())
-                            .or(Some(String::new()));
+                        cur_layer_feature = (!empty).then(|| {
+                            a.get("layerRef")
+                                .map(|v| strip_names(v, &step).to_string())
+                                .unwrap_or_default()
+                        });
                     }
-                    "Set" => {
-                        // A `<Set>` without a net is geometry with no
-                        // connectivity (silkscreen, mask); it is still walked
-                        // so nested `<Pad>`s are counted.
-                        let n = a.get("net").map(|v| strip_prefix_tag(v).to_string());
-                        cur_set = Some((n.unwrap_or_default(), Vec::new()));
+                    // `<Set net>` is the schema's net-bearing copper container.
+                    // `<PadStack net>` is Altium's: it writes
+                    // `<Step><PadStack net="+5V"><LayerPad><PinRef/></LayerPad>`
+                    // and no `<Set>` carries connectivity at all, so matching
+                    // only `<Set>` read a 27-component Altium board as having 15
+                    // nets and zero connections.
+                    "Set" | "PadStack" => {
+                        // A container without a net is geometry with no
+                        // connectivity (silkscreen, mask, an unnetted padstack);
+                        // it is still walked so nested pads are counted.
+                        let n = a.get("net").map(|v| strip_names(v, &step).to_string());
+                        cur_set = (!empty).then(|| (n.unwrap_or_default(), Vec::new()));
                     }
-                    "Pad" => {
+                    // `<LayerPad>` is the per-layer pad of an Altium `<PadStack>`,
+                    // the same role `<Pad>` plays inside a `<Set>`.
+                    "Pad" | "LayerPad" => {
                         cur_pad = Some((f64::NAN, f64::NAN));
                         if let Some(layer) = cur_layer_feature.as_ref() {
                             *doc.pads_per_layer
@@ -442,14 +567,21 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                             cur_pad = None;
                         }
                     }
-                    "PinRef" => {
+                    // `LogicalNetPin` is Zuken CR5000's element name for the same
+                    // thing `PinRef` is: `<LogicalNet name="RESET">
+                    // <LogicalNetPin pin="13" componentRef="IC11"/></LogicalNet>`.
+                    // Both are schema-valid, and matching only `PinRef` read
+                    // every Zuken document as a board with 1549 declared nets and
+                    // not one connection — placement and netlist both present,
+                    // and the reader silently joined nothing to anything.
+                    "PinRef" | "LogicalNetPin" => {
                         let comp = a
                             .get("componentRef")
-                            .map(|v| strip_prefix_tag(v).to_string())
+                            .map(|v| strip_names(v, &step).to_string())
                             .unwrap_or_default();
                         let pin = a
                             .get("pin")
-                            .map(|v| strip_prefix_tag(v).to_string())
+                            .map(|v| strip_names(v, &step).to_string())
                             .unwrap_or_default();
                         if comp.is_empty() {
                             continue;
@@ -473,7 +605,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                                 populate: true,
                                 oem_design_number: a
                                     .get("OEMDesignNumberRef")
-                                    .map(|v| strip_prefix_tag(v).to_string())
+                                    .map(|v| strip_names(v, &step).to_string())
                                     .unwrap_or_default(),
                                 ..BomRow::default()
                             },
@@ -481,18 +613,18 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     }
                     "RefDes" => {
                         if let (Some((refs, row)), Some(n)) = (in_bom_item.as_mut(), a.get("name")) {
-                            refs.push(strip_prefix_tag(n).to_string());
+                            refs.push(strip_names(n, &step).to_string());
                             // A BomItem groups identical parts, so package /
                             // layer / populate are per-RefDes; the last one
                             // wins only for the shared fields, and per-refdes
                             // values are recorded as they are seen.
                             row.package_ref = a
                                 .get("packageRef")
-                                .map(|v| strip_prefix_tag(v).to_string())
+                                .map(|v| strip_names(v, &step).to_string())
                                 .unwrap_or_else(|| row.package_ref.clone());
                             row.layer_ref = a
                                 .get("layerRef")
-                                .map(|v| strip_prefix_tag(v).to_string())
+                                .map(|v| strip_names(v, &step).to_string())
                                 .unwrap_or_else(|| row.layer_ref.clone());
                             row.populate = a
                                 .get("populate")
@@ -500,7 +632,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                                 .unwrap_or(true);
                             let mut per = row.clone();
                             per.characteristics = Vec::new();
-                            doc.bom.insert(strip_prefix_tag(n).to_string(), per);
+                            doc.bom.insert(strip_names(n, &step).to_string(), per);
                         }
                     }
                     "Textual" => {
@@ -528,7 +660,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                         doc.logical_nets.entry(step.clone()).or_default().push(n);
                     }
                 }
-                "Set" => {
+                "Set" | "PadStack" => {
                     if let Some((net, pins)) = cur_set.take() {
                         if !net.is_empty() {
                             doc.layer_nets.entry(step.clone()).or_default().push((
@@ -540,7 +672,7 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                     }
                 }
                 "LayerFeature" => cur_layer_feature = None,
-                "Pad" => cur_pad = None,
+                "Pad" | "LayerPad" => cur_pad = None,
                 "BomItem" => {
                     if let Some((refs, row)) = in_bom_item.take() {
                         for r in refs {
@@ -566,6 +698,24 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
             expected: "IPC-2581",
             found: None,
         });
+    }
+    // `<Bom>` precedes `<Ecad>`, so its reference designators were stripped
+    // before any step name was known. Re-key them now that the steps are, or a
+    // Zuken-style `bd-sample:R32` in the BOM would never match the `R32` the
+    // placement resolved to and every value would be lost.
+    if !doc.steps.is_empty() {
+        doc.bom = std::mem::take(&mut doc.bom)
+            .into_iter()
+            .map(|(k, v)| {
+                let stripped = doc
+                    .steps
+                    .iter()
+                    .map(|s| strip_names(&k, s))
+                    .find(|s| *s != k)
+                    .unwrap_or_else(|| k.clone());
+                (stripped, v)
+            })
+            .collect();
     }
     Ok(doc)
 }
@@ -627,8 +777,22 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
     }
 
     // ── Connectivity ─────────────────────────────────────────────────────────
-    let logical = doc.logical_nets.get(&step).cloned().unwrap_or_default();
-    let layer_sets = doc.layer_nets.get(&step).cloned().unwrap_or_default();
+    //
+    // Connectivity is looked up under the step it belongs to, and then under the
+    // UNKEYED bucket. The schema puts `<LogicalNet>` inside `<Step>`, but real
+    // documents put it at the root, outside `<Ecad>` altogether; those nets were
+    // filed under the empty step and, since the components were filed under a
+    // real one, the two never met — a fully-specified 10-part board read as
+    // having nets and no connections at all.
+    fn for_step<T: Clone>(m: &BTreeMap<String, Vec<T>>, step: &str) -> Vec<T> {
+        let mut v = m.get(step).cloned().unwrap_or_default();
+        if !step.is_empty() {
+            v.extend(m.get("").cloned().unwrap_or_default());
+        }
+        v
+    }
+    let logical = for_step(&doc.logical_nets, &step);
+    let layer_sets = for_step(&doc.layer_nets, &step);
     let net_source = if logical.iter().any(|(_, pins)| !pins.is_empty()) {
         NetSource::LogicalNet
     } else {
@@ -777,15 +941,37 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
     for (idx, c) in raw_components.iter().enumerate() {
         let declared: Vec<String> = packages.get(&c.package_ref).cloned().unwrap_or_default();
         let refd = referenced.get(c.refdes.as_str());
-        // A package whose declared pins are entirely disjoint from the pins the
-        // connectivity names is the wrong package for this part (see the module
-        // docs on KiCad's package de-duplication). Union it in and the part
-        // grows phantom pads, so drop it and say so.
-        let package_fits = declared.is_empty()
-            || refd.is_none_or(|r| r.is_empty())
-            || refd.is_some_and(|r| declared.iter().any(|d| r.contains(d.as_str())));
+        // The package a component names must ACCOUNT FOR every pin the netlist
+        // puts on that component: `<Package>` is the statement of what pins the
+        // part has, so a referenced pin the package does not declare means the
+        // package reference is for a different part.
+        //
+        // Requiring containment rather than mere overlap matters. KiCad
+        // de-duplicates packages by pad geometry, so a 2-pin LED gets the axial
+        // resistor's package: with an overlap test, a part whose pins are `1` and
+        // `K` against a package declaring `1`,`2`,`3` "fitted" on the strength of
+        // `1` alone and was emitted with FOUR pads — `2` and `3` fabricated and
+        // unconnected, which downstream reads as two phantom open-pin findings
+        // and a wrong pin count for binding. So: the package's pins are used only
+        // when they are a superset of the referenced ones, and otherwise the
+        // netlist's pins stand alone and the mismatch is named.
+        let unaccounted: Vec<&str> = match refd {
+            Some(r) => r
+                .iter()
+                .filter(|p| !declared.iter().any(|d| d == *p))
+                .copied()
+                .collect(),
+            None => Vec::new(),
+        };
+        let package_fits = declared.is_empty() || unaccounted.is_empty();
         if !package_fits {
-            wrong_packages.push(format!("{} (package {})", c.refdes, c.package_ref));
+            wrong_packages.push(format!(
+                "{} (package {} declares {}, netlist also uses {})",
+                c.refdes,
+                c.package_ref,
+                sample_list(&declared),
+                sample_list(&unaccounted.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
+            ));
         }
         let mut numbers: Vec<String> = if package_fits { declared.clone() } else { Vec::new() };
         if let Some(r) = refd {
@@ -821,13 +1007,16 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
 
         let bom = doc.bom.get(&c.refdes);
         let mut properties: Vec<(String, String)> = Vec::new();
-        let mut value = String::new();
+        // The `value` attribute on `<Component>` when the producer wrote one; the
+        // BOM's `Value` characteristic overrides it below, being the schema's own
+        // place for it.
+        let mut value = c.value.clone();
         if let Some(b) = bom {
             for (k, v) in &b.characteristics {
                 if v.is_empty() {
                     continue;
                 }
-                if k.eq_ignore_ascii_case("value") && value.is_empty() {
+                if k.eq_ignore_ascii_case("value") {
                     value = v.clone();
                 } else {
                     properties.push((k.clone(), v.clone()));
@@ -907,10 +1096,18 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
         )));
     }
 
+    // `PLANE` is copper as much as `CONDUCTOR` is (Allegro names its power and
+    // ground layers `PLANE`, Zuken names all of them `SIGNAL`), so counting only
+    // `CONDUCTOR` under-reported the stackup of every multi-layer board that has
+    // planes: testcase10 reads 44 layers, 8 of them copper, of which 4 are planes.
     let copper_layers: Vec<String> = doc
         .layers
         .iter()
-        .filter(|(_, (func, _))| func.eq_ignore_ascii_case("CONDUCTOR"))
+        .filter(|(_, (func, _))| {
+            ["CONDUCTOR", "PLANE", "SIGNAL", "MIXED"]
+                .iter()
+                .any(|k| func.eq_ignore_ascii_case(k))
+        })
         .map(|(n, _)| n.clone())
         .collect();
     let pads_per_layer: Vec<(String, usize)> = doc
@@ -918,6 +1115,20 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
         .get(&step)
         .map(|m| m.iter().map(|(k, v)| (k.clone(), *v)).collect())
         .unwrap_or_default();
+
+    // Nets nothing is attached to. Computed from the finished board rather than
+    // from the document, so it catches a net lost to any of the resolution steps
+    // above as well as one the document really declares unused.
+    let attached: HashSet<i64> = components
+        .iter()
+        .flat_map(|c| c.pins.iter())
+        .filter_map(|p| p.net)
+        .collect();
+    let nets_without_pads: Vec<String> = nets
+        .iter()
+        .filter(|n| !attached.contains(&n.id))
+        .map(|n| n.name.clone())
+        .collect();
 
     Ok(Ipc2581Extraction {
         board: ExtractedBoard {
@@ -939,6 +1150,8 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
             pads_per_layer,
             connected_pins,
             artwork,
+            bom_absent: doc.bom.is_empty(),
+            nets_without_pads,
             disagreements,
         },
     })

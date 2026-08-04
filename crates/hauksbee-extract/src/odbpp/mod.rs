@@ -169,6 +169,14 @@ pub struct OdbStats {
     /// Placements dropped as board artwork because they have no pad at all (a
     /// silkscreen logo, a mechanical keep-out). Named, not silently discarded.
     pub artwork: Vec<String>,
+    /// True when no placement in the job carried a `.no_pop` attribute, so
+    /// `dnp == false` on every part means "the format did not say" rather than
+    /// "the part is fitted".
+    pub no_pop_attribute_absent: bool,
+    /// Nets the job declares that touch no component pad. Legitimate for a net
+    /// carried only by vias or a plane, but invisible to every downstream check,
+    /// so it is counted and said rather than passed along as if it were wired.
+    pub nets_without_pads: Vec<String>,
     /// Cross-checks that did not agree, each phrased as a whole sentence.
     pub disagreements: Vec<String>,
 }
@@ -181,6 +189,55 @@ impl OdbStats {
             .filter(|l| l.layer_type != "DRILL")
             .map(OdbLayer::features)
             .sum()
+    }
+
+    /// The whole-sentence notes a report must carry for this read: how the
+    /// connectivity was obtained, what the format could not tell us, and every
+    /// cross-check that disagreed.
+    ///
+    /// Computing a disagreement and then leaving it inside the extractor is the
+    /// same failure as not computing it, so this is the accessor the
+    /// board-input normalizer copies onto its own notes.
+    pub fn notes(&self) -> Vec<String> {
+        let mut out = vec![format!(
+            "ODB++ input: the circuit was read from the job's own EDA data \
+             ({}){}, not reverse-engineered from copper. Clearance DRC and \
+             trace-geometry SI need the original layout file and were not run.",
+            self.placement_source.as_str(),
+            if self.netlist_nets.is_some() {
+                " and cross-checked against its CAD netlist"
+            } else {
+                ", which ships no CAD netlist to cross-check it against"
+            }
+        )];
+        // ODB++ has no populate flag unless a producer writes `.no_pop`, so
+        // "nothing is DNP" must not be read as a positive statement.
+        if self.no_pop_attribute_absent {
+            out.push(
+                "This ODB++ job carries no populate/`.no_pop` attribute, so \
+                 hauksbee cannot tell a do-not-populate part from a fitted one \
+                 and has treated every placed part as fitted."
+                    .to_string(),
+            );
+        }
+        if !self.artwork.is_empty() {
+            out.push(format!(
+                "{} placement(s) have no pad and were read as board artwork \
+                 rather than parts: {}.",
+                self.artwork.len(),
+                sample_list(&self.artwork)
+            ));
+        }
+        if !self.nets_without_pads.is_empty() {
+            out.push(format!(
+                "{} net(s) are declared but touch no component pad, so nothing \
+                 downstream can see them: {}.",
+                self.nets_without_pads.len(),
+                sample_list(&self.nets_without_pads)
+            ));
+        }
+        out.extend(self.disagreements.clone());
+        out
     }
 }
 
@@ -254,21 +311,54 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
         .filter(|s| on_disk.contains(*s))
         .cloned()
         .collect();
-    for s in &on_disk {
-        if !steps.contains(s) {
-            steps.push(s.clone());
+    // Steps present on disk but missing from the matrix, in a DETERMINISTIC
+    // order: iterating the `HashSet` directly made the step choice depend on
+    // hash order, so a job whose matrix omits its step rows read a different
+    // step run to run.
+    let mut unlisted: Vec<&String> = on_disk.iter().filter(|s| !steps.contains(s)).collect();
+    unlisted.sort();
+    steps.extend(unlisted.into_iter().cloned());
+
+    // The step to read: the first that carries a PLACEMENT, not simply the
+    // first. A fab deliverable routinely ships `steps/panel` (an array of board
+    // instances, with no components of its own) ahead of `steps/pcb`, and taking
+    // the first step read the panel and reported a one-component board.
+    // No step with a placement falls through to the first step, so the
+    // "carries no component placement" refusal below can name what that step DID
+    // contain instead of a vaguer message here.
+    let with_placement = steps.iter().any(|s| step_has_placement(&tree, s, &matrix));
+    let step = match steps
+        .iter()
+        .find(|s| step_has_placement(&tree, s, &matrix))
+        .or_else(|| steps.first())
+    {
+        Some(s) => s.clone(),
+        None => {
+            return Err(ExtractError::Odb(format!(
+                "this ODB++ job has no readable step: matrix/matrix declares {} and \
+                 steps/ holds {}. hauksbee needs one step directory with an eda/data \
+                 or a component layer in it",
+                list_or_none(&matrix.steps),
+                list_or_none(&tree.dirs_under("steps/")),
+            )));
         }
-    }
-    let Some(step) = steps.first().cloned() else {
-        return Err(ExtractError::Odb(format!(
-            "this ODB++ job has no readable step: matrix/matrix declares {} and \
-             steps/ holds {}. hauksbee needs one step directory with an eda/data \
-             or a component layer in it",
-            list_or_none(&matrix.steps),
-            list_or_none(&tree.dirs_under("steps/")),
-        )));
     };
     let mut disagreements: Vec<String> = Vec::new();
+    if with_placement && steps.len() > 1 {
+        let others: Vec<&str> = steps
+            .iter()
+            .filter(|s| **s != step)
+            .map(String::as_str)
+            .collect();
+        disagreements.push(format!(
+            "this job has {} steps ({}); step '{step}' is the first that carries a \
+             placement and was read, and the other {} ({}) were not",
+            steps.len(),
+            steps.join(", "),
+            others.len(),
+            others.join(", ")
+        ));
+    }
     for path in &tree.undecompressed {
         disagreements.push(format!(
             "{path} is stored compressed in a form this reader cannot inflate \
@@ -292,33 +382,25 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
         }
     };
 
+    // `misc/info`'s `UNITS` is the job-wide default for any file that declares
+    // none of its own; see [`records::declared_units`].
+    let job_units = info_field(&info, "UNITS")
+        .map(|u| records::unit_scale(&u))
+        .unwrap_or(1.0);
+
     let eda_path = format!("steps/{step}/eda/data");
     let eda_text = tree.text(&eda_path);
-    let eda = eda_text.as_deref().map(records::parse_eda_data);
+    let eda = eda_text
+        .as_deref()
+        .map(|t| records::parse_eda_data(t, job_units));
 
-    // Component layers: the matrix's COMPONENT rows, falling back to the
-    // conventional names when a job's matrix omits them.
-    let comp_layers: Vec<String> = {
-        let mut v: Vec<String> = matrix
-            .layers
-            .iter()
-            .filter(|l| l.is_component())
-            .map(|l| l.name.clone())
-            .collect();
-        if v.is_empty() {
-            v = ["comp_+_top", "comp_+_bot"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
-        }
-        v
-    };
+    let comp_layers = component_layers(&matrix);
     let mut layer_components: Vec<RawComponent> = Vec::new();
     for layer in &comp_layers {
         let path = format!("steps/{step}/layers/{layer}/components");
         let Some(text) = tree.text(&path) else { continue };
         let is_bottom = layer.contains("bot");
-        layer_components.extend(records::parse_components_file(&text, is_bottom));
+        layer_components.extend(records::parse_components_file(&text, is_bottom, job_units));
     }
 
     let eda_components = eda.as_ref().map(|e| e.components.len()).unwrap_or(0);
@@ -346,10 +428,15 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
 
     if raw_components.is_empty() {
         return Err(ExtractError::Odb(format!(
-            "this ODB++ job carries no component placement: step '{step}' has {} \
+            "this ODB++ job carries no component placement: {} '{step}' has {} \
              and no CMP records in either eda/data or a component layer \
              ({}). Without placement there is no connectivity to check: \
              re-export the job with EDA data included",
+            if steps.len() > 1 {
+                format!("none of its {} steps ({}) does, and step", steps.len(), steps.join(", "))
+            } else {
+                "step".to_string()
+            },
             if eda_text.is_some() {
                 format!("an eda/data with {} net records", net_names.len())
             } else {
@@ -360,8 +447,58 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
     }
 
     // ── Nets ─────────────────────────────────────────────────────────────────
+    //
+    // A placement's `TOP` records address nets by their ORDINAL in `eda/data`'s
+    // `NET` sequence, so without that table the ordinals mean nothing. A job
+    // whose `eda/data` is absent, or whose `eda/data` would not inflate, used to
+    // read as a board with zero nets and every pad unconnected — a complete
+    // circuit reported as a completely disconnected one. Refuse instead: the
+    // whole point of reading ODB++ rather than gerbers is that the connectivity
+    // is stated.
+    let netted_toeprints = raw_components
+        .iter()
+        .flat_map(|c| c.toeprints.iter())
+        .filter(|t| !matches!(t.net, records::NetRef::None))
+        .count();
+    if net_names.is_empty() {
+        return Err(ExtractError::Odb(format!(
+            "this ODB++ job places {} component(s) with {netted_toeprints} pad(s) \
+             on a net, but carries no net table: {} declares no NET records, so \
+             the net numbers on those pads cannot be resolved to net names. \
+             hauksbee will not report on a board whose nets it cannot name{}",
+            raw_components.len(),
+            if eda_text.is_some() {
+                format!("'{eda_path}'")
+            } else {
+                format!("there is no '{eda_path}' and it")
+            },
+            if tree.undecompressed.iter().any(|p| p == &eda_path) {
+                format!(
+                    ". '{eda_path}' IS present but stored in a compression this \
+                     reader cannot inflate (ODB++ permits gzip; this member is \
+                     not gzip)"
+                )
+            } else {
+                String::new()
+            }
+        )));
+    }
     // ODB++ net ordinal 0 is `$NONE$` (a pad on no net), which is exactly
     // hauksbee's "id 0 = no net" convention, so ordinals carry over unchanged.
+    // That equivalence is the whole basis of the mapping below, so it is checked
+    // rather than assumed: a producer that starts its table at a real net would
+    // otherwise have that net silently deleted and every later net shifted onto
+    // the wrong pads.
+    let none_first = net_names[0].eq_ignore_ascii_case("$NONE$");
+    if !none_first {
+        disagreements.push(format!(
+            "this job's net table does not begin with the `$NONE$` placeholder \
+             ODB++ reserves for net 0 (it begins with '{}'), so a pad recorded on \
+             net 0 cannot be told apart from one on the first real net; those pads \
+             are reported unconnected",
+            net_names[0]
+        ));
+    }
     let nets: Vec<Net> = net_names
         .iter()
         .enumerate()
@@ -377,6 +514,12 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
     let mut pads = 0usize;
     let mut pin_name_mismatches = 0usize;
     let mut pads_per_net: BTreeMap<i64, usize> = BTreeMap::new();
+    // Pads whose net number is outside the net table, and pads whose net field
+    // was not a number at all. Both used to become "no net" without a word, which
+    // reports a connected pad as floating.
+    let mut out_of_range: Vec<String> = Vec::new();
+    let mut unparseable: Vec<String> = Vec::new();
+    let mut synthesised_names = 0usize;
 
     for (idx, c) in raw_components.iter().enumerate() {
         let pkg = c.pkg_index.and_then(|i| packages.get(i));
@@ -394,10 +537,27 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
                 }
                 (false, None) => t.name.clone(),
                 (true, Some(p)) => p.to_string(),
-                (true, None) => (t.pin_index + 1).to_string(),
+                (true, None) => {
+                    // Neither the placement nor the package names this pad. A
+                    // 1-based positional name is the only thing left, and it is
+                    // a GUESS: counted, so the caller can say so.
+                    synthesised_names += 1;
+                    (t.pin_index + 1).to_string()
+                }
             };
             let number = unescape(&number);
-            let net = (t.net != 0 && t.net < net_names.len()).then_some(t.net as i64);
+            let net = match t.net {
+                records::NetRef::None => None,
+                records::NetRef::Unparseable(ref raw) => {
+                    unparseable.push(format!("{}.{number} ('{raw}')", c.refdes));
+                    None
+                }
+                records::NetRef::Num(n) if n < net_names.len() => Some(n as i64),
+                records::NetRef::Num(n) => {
+                    out_of_range.push(format!("{}.{number} (net {n})", c.refdes));
+                    None
+                }
+            };
             if let Some(id) = net {
                 *pads_per_net.entry(id).or_default() += 1;
             }
@@ -472,6 +632,18 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
     let components = crate::merge_duplicate_references(
         components.into_iter().filter(|c| !c.pins.is_empty()).collect(),
     );
+    // Nets nothing is attached to, computed from the FINISHED board so it catches
+    // a net lost anywhere above as well as one the job really declares unused.
+    let attached: HashSet<i64> = components
+        .iter()
+        .flat_map(|c| c.pins.iter())
+        .filter_map(|p| p.net)
+        .collect();
+    let nets_without_pads: Vec<String> = nets
+        .iter()
+        .filter(|n| !attached.contains(&n.id))
+        .map(|n| n.name.clone())
+        .collect();
 
     if pads == 0 {
         return Err(ExtractError::Odb(format!(
@@ -488,6 +660,30 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
             "{pin_name_mismatches} pad(s) are named differently by the placement \
              and by the package they are an instance of; the placement's name was \
              used"
+        ));
+    }
+    if !out_of_range.is_empty() {
+        disagreements.push(format!(
+            "{} pad(s) claim a net number the job's {}-entry net table does not \
+             have, so they are reported unconnected: {}",
+            out_of_range.len(),
+            net_names.len(),
+            sample_list(&out_of_range)
+        ));
+    }
+    if !unparseable.is_empty() {
+        disagreements.push(format!(
+            "{} pad(s) have a net field that is not a net number, so they are \
+             reported unconnected: {}",
+            unparseable.len(),
+            sample_list(&unparseable)
+        ));
+    }
+    if synthesised_names > 0 {
+        disagreements.push(format!(
+            "{synthesised_names} pad(s) are named by neither the placement nor the \
+             package they instance; they were numbered by position, which is a \
+             guess and may not match the part's datasheet pin numbering"
         ));
     }
 
@@ -613,9 +809,48 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
             pads,
             netlist_nets,
             artwork,
+            no_pop_attribute_absent: !raw_components.iter().any(|c| c.no_pop),
+            nets_without_pads,
             disagreements,
         },
     })
+}
+
+/// The component-layer names to look for: the matrix's `COMPONENT` rows, falling
+/// back to the conventional pair when a job's matrix omits them.
+fn component_layers(matrix: &records::Matrix) -> Vec<String> {
+    let declared: Vec<String> = matrix
+        .layers
+        .iter()
+        .filter(|l| l.is_component())
+        .map(|l| l.name.clone())
+        .collect();
+    if declared.is_empty() {
+        return ["comp_+_top", "comp_+_bot"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+    }
+    declared
+}
+
+/// Does this step carry a component placement? A cheap `CMP ` line-start scan
+/// over the step's `eda/data` and its component layers, so choosing the right
+/// step out of a panelized job costs one byte scan per step rather than a full
+/// parse of each.
+fn step_has_placement(tree: &OdbTree, step: &str, matrix: &records::Matrix) -> bool {
+    let has_cmp = |path: &str| -> bool {
+        tree.get(path).is_some_and(|b| {
+            b.split(|&c| c == b'\n')
+                .any(|line| line.starts_with(b"CMP ") || line.starts_with(b"CMP\t"))
+        })
+    };
+    if has_cmp(&format!("steps/{step}/eda/data")) {
+        return true;
+    }
+    component_layers(matrix)
+        .iter()
+        .any(|l| has_cmp(&format!("steps/{step}/layers/{l}/components")))
 }
 
 /// The step's CAD netlist. ODB++ puts it under `netlists/<name>/netlist`; some
@@ -741,13 +976,22 @@ mod tests {
 
     /// Zip the given members, so the archive path is exercised end to end.
     pub(crate) fn zip_members(members: &[(&str, String)]) -> Vec<u8> {
+        let raw: Vec<(&str, Vec<u8>)> = members
+            .iter()
+            .map(|(n, b)| (*n, b.as_bytes().to_vec()))
+            .collect();
+        zip_raw(&raw)
+    }
+
+    /// [`zip_members`] for members that are not valid UTF-8 (a gzip payload).
+    pub(crate) fn zip_raw(members: &[(&str, Vec<u8>)]) -> Vec<u8> {
         use std::io::Write;
         let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
         let opts: zip::write::FileOptions<'_, ()> =
             zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
         for (name, body) in members {
             w.start_file(*name, opts).expect("zip entry");
-            w.write_all(body.as_bytes()).expect("zip write");
+            w.write_all(body).expect("zip write");
         }
         w.finish().expect("zip finish").into_inner()
     }
@@ -896,6 +1140,161 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("not one of them has a pad"), "got: {msg}");
         assert!(msg.contains("no connectivity"), "got: {msg}");
+    }
+
+    #[test]
+    fn a_job_whose_net_table_is_missing_refuses_instead_of_reading_every_pad_open() {
+        // The placement addresses nets by ORDINAL into eda/data's NET sequence.
+        // Without that file the ordinals mean nothing, and the reader used to
+        // return a complete board with zero nets and every pad unconnected.
+        let members: Vec<(&str, String)> = tiny_job()
+            .into_iter()
+            .filter(|(n, _)| *n != "steps/pcb/eda/data")
+            .collect();
+        let err = from_odbpp_archive(&zip_members(&members))
+            .expect_err("a placement with no net table must refuse");
+        let msg = err.to_string();
+        assert!(msg.contains("carries no net table"), "got: {msg}");
+        assert!(msg.contains("2 component(s)"), "got: {msg}");
+        assert!(msg.contains("4 pad(s) on a net"), "got: {msg}");
+        assert!(msg.contains("cannot be resolved to net names"), "got: {msg}");
+    }
+
+    #[test]
+    fn an_eda_data_that_will_not_inflate_says_so_in_the_refusal() {
+        // The same refusal, but the file IS there and merely unreadable: the
+        // message must distinguish "absent" from "present but not inflatable",
+        // because the fixes differ.
+        let mut members: Vec<(&str, Vec<u8>)> = tiny_job()
+            .into_iter()
+            .filter(|(n, _)| *n != "steps/pcb/eda/data")
+            .map(|(n, b)| (n, b.into_bytes()))
+            .collect();
+        // A Unix-`compress` `.Z` (magic 1f 9d), which ODB++ permits producers to
+        // use but which is not gzip.
+        members.push((
+            "steps/pcb/eda/data.Z",
+            vec![0x1f, 0x9d, 0x90, 0x01, 0x02, 0x03],
+        ));
+        let refs: Vec<(&str, String)> = members
+            .iter()
+            .map(|(n, b)| (*n, String::from_utf8_lossy(b).into_owned()))
+            .collect();
+        let err =
+            from_odbpp_archive(&zip_members(&refs)).expect_err("an unreadable net table refuses");
+        let msg = err.to_string();
+        assert!(msg.contains("carries no net table"), "got: {msg}");
+        assert!(
+            msg.contains("IS present but stored in a compression"),
+            "the refusal must distinguish absent from unreadable: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_pad_on_a_net_the_job_never_declares_is_reported_not_silently_floated() {
+        let mut members = tiny_job();
+        for m in &mut members {
+            if m.0 == "steps/pcb/layers/comp_+_top/components" {
+                // Net 77 against a 4-entry table, and a net field that is not a
+                // number at all.
+                m.1 = m
+                    .1
+                    .replace("TOP 1 1.8 1.0 0.0 N 2 0 2", "TOP 1 1.8 1.0 0.0 N 77 0 2")
+                    .replace("TOP 0 3.2 1.0 0.0 N 2 1 1", "TOP 0 3.2 1.0 0.0 N MID 1 1");
+            }
+        }
+        let out = from_odbpp_archive(&zip_members(&members)).expect("the job still reads");
+        let joined = out.stats.disagreements.join(" | ");
+        assert!(
+            joined.contains("claim a net number the job's 4-entry net table does not have")
+                && joined.contains("R1.2 (net 77)"),
+            "got: {joined}"
+        );
+        assert!(
+            joined.contains("net field that is not a net number") && joined.contains("R2.1 ('MID')"),
+            "got: {joined}"
+        );
+        // And those pads really are reported unconnected, not guessed.
+        assert!(out.board.component("R1").expect("R1").pins[1].net.is_none());
+    }
+
+    #[test]
+    fn a_net_table_that_does_not_start_with_none_is_reported() {
+        let mut members = tiny_job();
+        for m in &mut members {
+            if m.0 == "steps/pcb/eda/data" {
+                m.1 = m.1.replace("#NET 0\nNET $NONE$ \n", "");
+            }
+        }
+        let out = from_odbpp_archive(&zip_members(&members)).expect("the job reads");
+        assert!(
+            out.stats
+                .disagreements
+                .iter()
+                .any(|d| d.contains("does not begin with the `$NONE$` placeholder")),
+            "got: {:?}",
+            out.stats.disagreements
+        );
+    }
+
+    #[test]
+    fn a_panelized_job_reads_the_board_step_not_the_panel() {
+        // Fab deliverables ship `steps/panel` (an array of board instances, no
+        // components of its own) alongside `steps/pcb`. Taking the first step
+        // read the panel and reported a one-component board.
+        let mut members: Vec<(&str, String)> = tiny_job();
+        for m in &mut members {
+            if m.0 == "matrix/matrix" {
+                m.1 = format!(
+                    "STEP {{\n    COL=1\n    NAME=PANEL\n}}\n\n{}",
+                    m.1.replace("COL=1", "COL=2")
+                );
+            }
+        }
+        members.push((
+            "steps/panel/stephdr",
+            "AFFECTING_BOM=\nUNITS=MM\n".to_string(),
+        ));
+        let out = from_odbpp_archive(&zip_members(&members)).expect("the job reads");
+        assert_eq!(out.stats.step, "pcb", "the board step, not the panel");
+        assert_eq!(out.stats.steps, vec!["panel", "pcb"]);
+        assert_eq!(out.board.components.len(), 2);
+        assert!(
+            out.stats
+                .disagreements
+                .iter()
+                .any(|d| d.contains("first that carries a placement") && d.contains("panel")),
+            "the skipped step must be named: {:?}",
+            out.stats.disagreements
+        );
+    }
+
+    #[test]
+    fn a_job_that_inflates_past_the_ceiling_refuses_and_names_the_limit() {
+        use std::io::Write;
+        // A gzip member of highly compressible zeros, larger than the ceiling.
+        let mut enc = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        let chunk = vec![0u8; 1 << 20];
+        for _ in 0..(tree::MAX_INFLATED_BYTES / (1 << 20) + 4) {
+            enc.write_all(&chunk).expect("gz write");
+        }
+        let bomb = enc.finish().expect("gz finish");
+        assert!(
+            (bomb.len() as u64) < tree::MAX_INFLATED_BYTES / 100,
+            "the bomb must be small compressed: {} bytes",
+            bomb.len()
+        );
+        // Built from raw bytes: a gzip payload is not valid UTF-8, so the
+        // string-based helper would corrupt it before it was ever inflated.
+        let mut raw: Vec<(&str, Vec<u8>)> = tiny_job()
+            .into_iter()
+            .map(|(n, b)| (n, b.into_bytes()))
+            .collect();
+        raw.push(("steps/pcb/layers/f.cu/features.Z", bomb));
+        let err = from_odbpp_archive(&zip_raw(&raw)).expect_err("a bomb must refuse");
+        let msg = err.to_string();
+        assert!(msg.contains("expands to more than"), "got: {msg}");
+        assert!(msg.contains("MiB"), "the limit is named: {msg}");
     }
 
     #[test]

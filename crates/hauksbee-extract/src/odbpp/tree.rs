@@ -37,6 +37,11 @@ pub(crate) struct OdbTree {
     /// Paths whose `.Z` / `.gz` payload would not inflate, so their content is
     /// the raw compressed bytes and will not parse. Reported, never hidden.
     pub(crate) undecompressed: Vec<String>,
+    /// How much more the job may inflate to before [`MAX_INFLATED_BYTES`] is
+    /// reached. Held on the tree rather than passed around so the ceiling covers
+    /// the WHOLE job: a bomb split across a thousand members must not slip past
+    /// a per-member limit.
+    budget: u64,
 }
 
 impl OdbTree {
@@ -44,29 +49,63 @@ impl OdbTree {
         OdbTree {
             files: BTreeMap::new(),
             undecompressed: Vec::new(),
+            budget: MAX_INFLATED_BYTES,
         }
     }
 
+    /// The error for a job that exceeds the inflation ceiling. Names the limit,
+    /// so a legitimately enormous job reads as a limit to raise rather than as a
+    /// corrupt file.
+    fn too_large(&self) -> ExtractError {
+        ExtractError::Odb(format!(
+            "this ODB++ job expands to more than {} MiB, which is past the limit \
+             hauksbee will hold in memory for one job. That is far larger than any \
+             real fab job, so the archive is most likely malformed or hostile; if \
+             it genuinely is that big, unpack it and point hauksbee at the \
+             directory instead",
+            MAX_INFLATED_BYTES / (1024 * 1024)
+        ))
+    }
+
     /// Insert one member, inflating and un-suffixing a `.Z`/`.gz` payload.
-    fn insert(&mut self, path: &str, bytes: Vec<u8>) {
+    fn insert(&mut self, path: &str, bytes: Vec<u8>) -> Result<(), ExtractError> {
         let key = path.replace('\\', "/").to_ascii_lowercase();
         let (key, compressed) = match key.strip_suffix(".z").or_else(|| key.strip_suffix(".gz")) {
             Some(stem) => (stem.to_string(), true),
             None => (key, false),
         };
         if !compressed {
+            // Plain members still count: an uncompressed 2 GiB `features` inside
+            // a tar is the same problem without the compression ratio.
+            let len = bytes.len() as u64;
+            if len > self.budget {
+                return Err(self.too_large());
+            }
+            self.budget -= len;
             self.files.insert(key, bytes);
-            return;
+            return Ok(());
         }
-        match gunzip(&bytes) {
+        match gunzip_within(&bytes, &mut self.budget) {
             Some(plain) => {
                 self.files.insert(key, plain);
             }
             None => {
+                // Either not gzip at all, or past the ceiling. The two are told
+                // apart by the magic, so a bomb is not mislabelled as an exotic
+                // compression the reader merely does not know.
+                if is_gzip(&bytes) {
+                    return Err(self.too_large());
+                }
+                let len = bytes.len() as u64;
+                if len > self.budget {
+                    return Err(self.too_large());
+                }
+                self.budget -= len;
                 self.undecompressed.push(key.clone());
                 self.files.insert(key, bytes);
             }
         }
+        Ok(())
     }
 
     /// Drop the leading job-directory component(s) so every key is relative to
@@ -152,7 +191,7 @@ impl OdbTree {
             // rather than fatal: the missing member then shows up as the
             // specific "no eda/data" style refusal, which names what is absent.
             if let Ok(bytes) = std::fs::read(&path) {
-                tree.insert(rel, bytes);
+                tree.insert(rel, bytes)?;
             }
         }
         tree.rebase_on_matrix();
@@ -175,7 +214,7 @@ impl OdbTree {
             let mut buf = Vec::new();
             f.read_to_end(&mut buf)
                 .map_err(|e| ExtractError::Odb(format!("read ODB++ zip member {name}: {e}")))?;
-            tree.insert(&name, buf);
+            tree.insert(&name, buf)?;
         }
         tree.rebase_on_matrix();
         Ok(tree)
@@ -184,8 +223,20 @@ impl OdbTree {
     /// Build from a gzipped tar (`.tgz` / `.tar.gz`), the form the ODB++ spec
     /// names and the one Altium and Cadence write by default.
     pub(crate) fn from_tgz(bytes: &[u8]) -> Result<Self, ExtractError> {
-        let plain = gunzip(bytes)
-            .ok_or_else(|| ExtractError::Odb("ODB++ .tgz: the gzip stream is corrupt".into()))?;
+        // The tar itself counts against the ceiling before a single member is
+        // read: a bomb in the OUTER gzip never reaches the per-member budget.
+        let mut budget = MAX_INFLATED_BYTES;
+        let plain = match gunzip_within(bytes, &mut budget) {
+            Some(p) => p,
+            None if is_gzip(bytes) && bytes.len() as u64 <= MAX_INFLATED_BYTES => {
+                return Err(OdbTree::new().too_large())
+            }
+            None => {
+                return Err(ExtractError::Odb(
+                    "ODB++ .tgz: the gzip stream is corrupt".into(),
+                ))
+            }
+        };
         Self::from_tar(&plain)
     }
 
@@ -209,7 +260,7 @@ impl OdbTree {
             entry
                 .read_to_end(&mut buf)
                 .map_err(|e| ExtractError::Odb(format!("read ODB++ tar member {name}: {e}")))?;
-            tree.insert(&name, buf);
+            tree.insert(&name, buf)?;
         }
         tree.rebase_on_matrix();
         Ok(tree)
@@ -260,16 +311,38 @@ pub(crate) fn looks_like_tar(bytes: &[u8]) -> bool {
     bytes.len() >= 265 && (&bytes[257..262] == b"ustar")
 }
 
-/// Inflate a gzip member, or `None` if it is not gzip / is corrupt.
-fn gunzip(bytes: &[u8]) -> Option<Vec<u8>> {
+/// The ceiling on what one job may inflate to, in total.
+///
+/// A `.tgz` is a compressed container of compressible text, so an ODB++ upload
+/// is a natural decompression bomb: 400 KiB of gzip inflates to 400 MiB at a
+/// ratio real fab jobs never come close to (the largest job tested, a 2 MB Valor
+/// archive, inflates to 24 MB). The web front door accepts uploads up to 256 MiB
+/// and this module reads members whole, so without a ceiling a single upload can
+/// ask for hundreds of gigabytes of memory.
+///
+/// 512 MiB is roughly 20× the largest real job seen and leaves the honest
+/// professional board — an 8-layer job with tens of megabytes of `features` — far
+/// inside it. Hitting the ceiling is an error naming the limit, not a truncated
+/// read: a job silently missing its last layers is exactly the half-board this
+/// crate refuses to produce.
+pub(crate) const MAX_INFLATED_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Inflate a gzip member, or `None` if it is not gzip / is corrupt / would
+/// exceed `budget` (which is decremented by what was produced).
+fn gunzip_within(bytes: &[u8], budget: &mut u64) -> Option<Vec<u8>> {
     if !is_gzip(bytes) {
         return None;
     }
     let mut out = Vec::new();
-    flate2::read::GzDecoder::new(bytes)
-        .read_to_end(&mut out)
-        .ok()
-        .map(|_| out)
+    // `take(budget + 1)` so an input that exactly fills the budget succeeds and
+    // one that exceeds it is detected rather than silently truncated.
+    let mut dec = flate2::read::GzDecoder::new(bytes).take(*budget + 1);
+    dec.read_to_end(&mut out).ok()?;
+    if out.len() as u64 > *budget {
+        return None;
+    }
+    *budget -= out.len() as u64;
+    Some(out)
 }
 
 /// Cheap content sniff for the archive forms: does this archive contain a
@@ -344,8 +417,8 @@ mod tests {
     #[test]
     fn keys_are_case_folded_and_rebased_on_the_matrix() {
         let mut tree = OdbTree::new();
-        tree.insert("MyJob/MATRIX/Matrix", b"STEP {\n}\n".to_vec());
-        tree.insert("MyJob/steps/PCB/eda/data", b"UNITS=MM\n".to_vec());
+        tree.insert("MyJob/MATRIX/Matrix", b"STEP {\n}\n".to_vec()).expect("insert");
+        tree.insert("MyJob/steps/PCB/eda/data", b"UNITS=MM\n".to_vec()).expect("insert");
         tree.rebase_on_matrix();
         assert!(tree.has_matrix(), "matrix found after case folding + rebase");
         assert!(tree.get("steps/pcb/eda/data").is_some());
@@ -359,7 +432,7 @@ mod tests {
         enc.write_all(b"UNITS=MM\nF 3\n").expect("gz write");
         let gz = enc.finish().expect("gz finish");
         let mut tree = OdbTree::new();
-        tree.insert("steps/pcb/layers/f.cu/features.Z", gz);
+        tree.insert("steps/pcb/layers/f.cu/features.Z", gz).expect("insert");
         assert_eq!(
             tree.text("steps/pcb/layers/f.cu/features").as_deref(),
             Some("UNITS=MM\nF 3\n"),
@@ -372,7 +445,7 @@ mod tests {
     fn an_uninflatable_member_is_recorded_not_hidden() {
         let mut tree = OdbTree::new();
         // A Unix-`compress` .Z (magic 1f 9d), which is NOT gzip.
-        tree.insert("steps/pcb/layers/f.cu/features.Z", vec![0x1f, 0x9d, 0x90, 0x01]);
+        tree.insert("steps/pcb/layers/f.cu/features.Z", vec![0x1f, 0x9d, 0x90, 0x01]).expect("insert");
         assert_eq!(
             tree.undecompressed,
             vec!["steps/pcb/layers/f.cu/features".to_string()],
