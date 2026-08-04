@@ -95,6 +95,63 @@ pub fn near_matches(target: &str, known: &[String], limit: usize) -> Vec<String>
         .collect()
 }
 
+/// Suggestions for a component reference that is not on the board, ranked by
+/// edit distance and capped.
+///
+/// [`near_matches`] is tuned for net names: long, wordy, and worth a generous
+/// cutoff. Reference designators are the opposite. They are two or three
+/// characters over a tiny alphabet, so half-the-target-length lets almost
+/// anything through: `R99` is within three edits of both `D1` and `U1`, and
+/// offering those as "did you mean" is noise wearing help's clothes.
+///
+/// So: within two edits, and the designator's first letter has to match. That
+/// first letter is the component CLASS, the one character of a reference nobody
+/// fat-fingers into a different one, and it is what makes `R99 -> D1` obviously
+/// not a typo while `R_Shnt15301 -> R_Shunt15301` obviously is.
+pub fn near_refs(target: &str, known: &[String], limit: usize) -> Vec<String> {
+    let class = designator_class(target);
+    let t = target.to_ascii_lowercase();
+    let mut scored: Vec<(usize, &String)> = known
+        .iter()
+        .filter(|name| !name.trim().is_empty())
+        .filter(|name| designator_class(name) == class)
+        .map(|name| (levenshtein(&t, &name.to_ascii_lowercase()), name))
+        // Distance 0 means the caller rejected a reference the board HAS; that
+        // is a caller bug, not a typo, and suggesting the same string back is
+        // worse than saying nothing.
+        .filter(|(d, _)| *d > 0 && *d <= 2)
+        .collect();
+    scored.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(b.1)));
+    scored.dedup_by(|a, b| a.1 == b.1);
+    scored
+        .into_iter()
+        .take(limit)
+        .map(|(_, name)| name.clone())
+        .collect()
+}
+
+/// The component-class letter of a reference designator, lowercased: `r` of
+/// `R99` and of `R_Shunt15301`, `u` of `U1`. `None` for anything that does not
+/// start with a letter.
+fn designator_class(r: &str) -> Option<char> {
+    r.trim()
+        .chars()
+        .next()
+        .filter(char::is_ascii_alphabetic)
+        .map(|c| c.to_ascii_lowercase())
+}
+
+/// The `; did you mean: a, b?` clause for a suggestion list, or empty when
+/// there is nothing worth suggesting. One formatter so every call site's
+/// wording (and the parser in `check` that splits it back out) agrees.
+pub fn suggestion_clause(suggestions: &[String]) -> String {
+    if suggestions.is_empty() {
+        String::new()
+    } else {
+        format!("; did you mean: {}?", suggestions.join(", "))
+    }
+}
+
 /// The closest option to `target` within edit distance 2, for a "did you
 /// mean ...?" hint on a closed vocabulary (assertion kinds, supply kinds,
 /// peripheral types). Distance 2 covers the real mistakes (a dropped letter, a
@@ -197,6 +254,30 @@ mod tests {
         let known = vec!["ANALOG_VDD".to_string(), "+5V".to_string()];
         let s = near_matches("zzzzzzzzzz", &known, 3);
         assert!(s.is_empty(), "garbage should not match: {s:?}");
+    }
+
+    #[test]
+    fn ref_suggestions_stay_inside_the_designator_family() {
+        // M5: `R99` used to "did you mean: D1, U1?" - both within the net-name
+        // suggester's half-length cutoff, neither a plausible typo of an R.
+        let known: Vec<String> = ["D1", "U1", "R1", "R9", "C7"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let s = near_refs("R99", &known, 3);
+        assert!(!s.iter().any(|r| r == "D1" || r == "U1"), "{s:?}");
+        assert_eq!(s.first().map(String::as_str), Some("R9"), "{s:?}");
+        // Ranked: the closer designator comes first.
+        assert!(s.iter().position(|r| r == "R9") < s.iter().position(|r| r == "R1"));
+        // And capped: nothing at all for a prefix the board does not have.
+        assert!(near_refs("Q3", &known, 3).is_empty());
+    }
+
+    #[test]
+    fn ref_suggestions_handle_worded_designators() {
+        let known: Vec<String> = vec!["R_Shunt15301".to_string(), "R1".to_string()];
+        let s = near_refs("R_Shunt15302", &known, 3);
+        assert_eq!(s, vec!["R_Shunt15301".to_string()], "{s:?}");
     }
 
     #[test]

@@ -766,12 +766,8 @@ pub(crate) fn component_ref_errors(spec: &Spec, known_refs: &[String]) -> Vec<Sp
     let mut errs = Vec::new();
     for (reference, ctx) in named {
         if !set.contains(reference) {
-            let near = crate::error::near_matches(reference, known_refs, 5);
-            let hint = if near.is_empty() {
-                String::new()
-            } else {
-                format!("; did you mean: {}?", near.join(", "))
-            };
+            let near = crate::error::near_refs(reference, known_refs, 3);
+            let hint = crate::error::suggestion_clause(&near);
             errs.push(SpecError::Invalid(format!(
                 "{ctx} references unknown component '{reference}'{hint}"
             )));
@@ -974,12 +970,8 @@ fn apply_overrides(spec: &Spec, base: &ExtractedBoard) -> Result<ExtractedBoard,
                     .iter()
                     .map(|c| c.reference.clone())
                     .collect();
-                let near = crate::error::near_matches(&ov.reference, &refs, 5);
-                let hint = if near.is_empty() {
-                    String::new()
-                } else {
-                    format!("; did you mean: {}?", near.join(", "))
-                };
+                let near = crate::error::near_refs(&ov.reference, &refs, 3);
+                let hint = crate::error::suggestion_clause(&near);
                 SpecError::Invalid(format!(
                     "override references unknown component '{}'{hint}",
                     ov.reference
