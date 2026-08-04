@@ -115,9 +115,18 @@ that has stopped checking, and it fails silently forever after.
 
 ### The board corpus
 
-hauksbee's central claim is that its checks produce zero false positives across
-a large corpus of real hardware. That corpus is mostly public open hardware.
-You can reproduce it:
+hauksbee's checks are calibrated to stay quiet on hardware that is fine, and the
+board corpus is how that is measured. Stated precisely, because the strong form
+of the claim is not what we can prove: individual checks have silence guards that
+go red if the check ever fires on a known-good board, and the lint's own suite
+pairs every true positive with the false-positive shape that once fooled it.
+There is no single gate asserting the whole lint stays quiet corpus-wide, and one
+live false positive is on record in
+[`docs/evidence/FAMOUS_SWEEP.md`](docs/evidence/FAMOUS_SWEEP.md).
+
+A new or changed check earns its place by being run against this corpus and
+shown not to fire on boards known to be good. The corpus is mostly public open
+hardware, so you can fetch it:
 
 ```bash
 scripts/fetch-corpus.sh                   # fetches into ./board-corpus
