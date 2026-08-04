@@ -177,7 +177,10 @@ struct RunArgs {
 
     /// Print the run result as one JSON object on stdout instead of the human
     /// report (the web checks panel and any tool consume this). Exit codes are
-    /// unchanged; a spec/board error prints `{"ok":false,"error":...}`.
+    /// unchanged; a spec/board error prints `{"ok":false,"error":...}`. The
+    /// shape is published as a JSON Schema in
+    /// crates/hauksbee-ci/schemas/hauksbee-ci-report.schema.json and documented
+    /// in docs/ci/JSON_OUTPUT.md.
     #[arg(long)]
     json: bool,
 
@@ -326,9 +329,12 @@ fn main() -> ExitCode {
                 // set: in a multi-spec invocation one desynced spec must not
                 // hide the others' verdicts.
                 if args.json {
+                    // The error variant of the published line shape (`ok:
+                    // false` plus the sentence); see
+                    // hauksbee_ci::report::CiJsonLine and docs/ci/JSON_OUTPUT.md.
                     println!(
                         "{}",
-                        serde_json::json!({ "ok": false, "error": e.to_string() })
+                        hauksbee_ci::report::CiJsonError::new(e.to_string()).render_json()
                     );
                 }
                 eprintln!("hauksbee-ci: {}: {e}", spec.display());

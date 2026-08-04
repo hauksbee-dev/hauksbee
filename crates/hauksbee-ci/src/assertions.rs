@@ -5,11 +5,21 @@
 use crate::runner::RunOutcome;
 use crate::spec::{Assertion, Spec};
 
-/// The result of one assertion across all seeds.
-#[derive(Debug, Clone, serde::Serialize)]
+/// The result of one assertion across all seeds. Serialized verbatim into the
+/// `results` array of the `hauksbee-ci run --json` document, so the published
+/// schema is generated from this type: see
+/// `crates/hauksbee-ci/tests/ci_report_schema_drift.rs`. `why` and `waived` are
+/// the only two fields a consumer may find ABSENT rather than null.
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct AssertResult {
+    /// The assertion's label: its `label` in the spec, or a generated one
+    /// naming the kind and subject.
     pub label: String,
+    /// The assertion kind, as the spec's `kind` token (`voltage`, `uart`,
+    /// `blink`, `no_faults`, `hwtrace`, ...).
     pub kind: String,
+    /// Did the assertion hold on every ensemble member. False on an ordinary
+    /// red, on a waived red, and on an INVALID result.
     pub passed: bool,
     /// A THIRD outcome distinct from pass/fail (05 §3b): the assertion could not
     /// be honestly evaluated because its analog evaluation window overlaps a
@@ -21,6 +31,9 @@ pub struct AssertResult {
     /// One-line detail (the measured value, the offending seed, etc).
     pub detail: String,
     /// If it failed, the first seed index that failed (for fuzzed runs).
+    /// Always present in the JSON, `null` on a pass, unlike `why` and `waived`
+    /// which are omitted.
+    #[schemars(schema_with = "schema_nullable_seed", required)]
     pub failing_seed: Option<u32>,
     /// Every ensemble member this assertion failed on (empty on a pass). For a
     /// tolerance ensemble this is the per-seed failure list the report and
@@ -31,15 +44,18 @@ pub struct AssertResult {
     /// On a real red: one sentence naming the OBSERVED shortfall ("dipped to
     /// 3.300 V, 0.100 V below your 3.4 V floor"), computed from the first
     /// failing member's measurement. The human report prints it as the `why:`
-    /// line in place of the generic per-kind pointer. Absent on pass/INVALID
-    /// and on kinds whose detail already carries the diagnosis.
+    /// line in place of the generic per-kind pointer. ABSENT (not null) on
+    /// pass/INVALID and on kinds whose detail already carries the diagnosis.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "schema_absent_or_string")]
     pub why: Option<String>,
     /// Set when an active waiver (hauksbee-waivers.toml beside the board)
     /// covers this failure: the reason + expiry, e.g.
     /// "fab-confirmed artifact (until 2026-09-01)". A waived failure stays
-    /// visible on every surface but does not gate the exit code.
+    /// visible on every surface but does not gate the exit code. ABSENT (not
+    /// null) when no waiver covers this result.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "schema_absent_or_string")]
     pub waived: Option<String>,
     /// Net names this assertion judges, for waiver matching. Not serialized:
     /// the JSON surface already carries them in the label/detail.
@@ -48,6 +64,26 @@ pub struct AssertResult {
     /// Component references this assertion judges, for waiver matching.
     #[serde(skip)]
     pub subject_refs: Vec<String>,
+}
+
+/// An ensemble-member index that is ALWAYS emitted and may be `null`. Hand
+/// written for the same reason as `report::schema_nullable_string`: schemars'
+/// `required` attribute would drop `null` from the type and promise a number
+/// where a passing assertion really does carry `null`.
+fn schema_nullable_seed(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({
+        "type": ["integer", "null"],
+        "format": "uint32",
+        "minimum": 0
+    })
+}
+
+/// A string that is OMITTED rather than set to `null` when it has no value
+/// (`skip_serializing_if`). The plain `Option<String>` schema would allow
+/// `null`, which this surface never emits; a consumer checking for the key's
+/// presence is doing the right thing, and the schema should say so.
+fn schema_absent_or_string(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({ "type": "string" })
 }
 
 /// Evaluate every assertion in the spec; returns one result per assertion.
