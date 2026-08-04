@@ -1,19 +1,18 @@
 $ hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --firmware testdata/firmware/demo/demo.hex --headless --seconds 1.0
 co-sim: 1.00s headless...
 
-simulated 1.000s over 5 nets
+simulated 1.000s in 0.77s wall (1.303x realtime) over 5 nets
 
 most active nets:
 ┌────────────────────────────┬──────────┬──────────┬──────────┐
 │ Net                        │ min (V)  │ max (V)  │ toggles  │
 ├────────────────────────────┼──────────┼──────────┼──────────┤
-│ D13                        │    0.000 │    4.595 │        9 │
-│ LED_A                      │    0.000 │    1.920 │        0 │
+│ D13                        │    0.000 │    4.601 │        9 │
+│ LED_A                      │    0.000 │    1.967 │        0 │
+│ +5V                        │    5.000 │    5.000 │        0 │
 │ ADC0                       │    2.500 │    2.500 │        0 │
 │ GND                        │    0.000 │    0.000 │        0 │
-│ +5V                        │    5.000 │    5.000 │        0 │
 └────────────────────────────┴──────────┴──────────┴──────────┘
 
-UART output (17 bytes):
+UART output (18 bytes):
 hauksbee-demo v1
-[32mhauksbee-demo v1..[0m

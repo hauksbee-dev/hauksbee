@@ -1,3 +1,3 @@
 $ hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --drc
-DRC: 28 primitive(s), clearance rule 0.200 mm
+DRC: 42 primitive(s), clearance rule 0.200 mm
 no shorts or clearance violations.
