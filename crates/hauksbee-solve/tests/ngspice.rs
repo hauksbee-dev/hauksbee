@@ -717,9 +717,15 @@ fn write_results_md(results: &[DeckResult], ng_version: &str) {
          The test runs each deck in `crates/hauksbee-solve/tests/decks/` through both\n\
          ngspice `-b` and the hauksbee solver, then compares the worst-case error per\n\
          probe against the per-quantity tolerance declared in that deck's\n\
-         `expect.toml`.\n\n",
+         `expect.toml`.\n\n\
+         This check is not part of CI: it runs where ngspice is installed and skips\n\
+         otherwise, so the numbers below are from whichever machine last regenerated\n\
+         the file. The oracle version is that run's ngspice, not a pinned\n\
+         requirement, and a different ngspice may move the worst-case columns.\n\
+         `docs/spice-compat/compatibility.md` lists the supported cards that have no\n\
+         deck here at all.\n\n",
     );
-    s.push_str(&format!("- Oracle: **ngspice {ng_version}**\n"));
+    s.push_str(&format!("- Oracle: **{ng_version}**\n"));
     s.push_str(&format!("- Decks: **{}**\n", results.len()));
     let passed = results.iter().filter(|d| d.passed()).count();
     s.push_str(&format!("- Passing: **{passed}/{}**\n\n", results.len()));

@@ -6,7 +6,14 @@ ngspice `-b` and the hauksbee solver, then compares the worst-case error per
 probe against the per-quantity tolerance declared in that deck's
 `expect.toml`.
 
-- Oracle: **ngspice ngspice-45.2**
+This check is not part of CI: it runs where ngspice is installed and skips
+otherwise, so the numbers below are from whichever machine last regenerated
+the file. The oracle version is that run's ngspice, not a pinned
+requirement, and a different ngspice may move the worst-case columns.
+`docs/spice-compat/compatibility.md` lists the supported cards that have no
+deck here at all.
+
+- Oracle: **ngspice-45.2**
 - Decks: **42**
 - Passing: **42/42**
 

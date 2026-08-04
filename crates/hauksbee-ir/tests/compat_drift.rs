@@ -165,7 +165,7 @@ fn claims() -> Vec<Claim> {
         // ===================================================================
         // REFUSED, LOUDLY, each proves the exact message fragment the user sees.
         // ===================================================================
-        refuse("`T` transmission line", "Transmission lines were cut (dev-plan step 15); the letter is unknown.", "t\nT1 a 0 b 0 Z0=50 TD=1n\nR1 b 0 50\n.end\n", "unknown element type `T`"),
+        refuse("`T` transmission line", "Transmission lines are not implemented; the letter is unknown.", "t\nT1 a 0 b 0 Z0=50 TD=1n\nR1 b 0 50\n.end\n", "unknown element type `T`"),
         refuse("`J` JFET", "JFETs are unsupported; the element letter is unrecognized.", "t\nJ1 d g s JM\n.model JM NJF\nV1 d 0 5\n.end\n", "unknown element type `J`"),
         refuse("`Z` IGBT / MESFET", "`Z` devices are unsupported.", "t\nZ1 c g e ZM\nV1 c 0 5\n.end\n", "unknown element type `Z`"),
         refuse("`O` lossy line", "Lossy transmission lines (`O`/LTRA) are unsupported.", "t\nO1 a 0 b 0 OM\nV1 a 0 1\n.end\n", "unknown element type `O`"),
