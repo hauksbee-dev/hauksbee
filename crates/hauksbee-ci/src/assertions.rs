@@ -784,14 +784,23 @@ fn check_protection_trip(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool,
     }
 }
 
-/// Boot-coverage: the control net named by `net` must reach and hold its defined
-/// level (`min`, volts) by `deadline_ms` after reset, and no stress fault may
-/// fire during the boot window before it does. This makes the "Hi-Z control
-/// input" class decidable by running the firmware: on a net with no static
-/// board bias (the genuinely-undefined case this targets) only the firmware can
-/// bring it to level, so this measures whether the firmware drives it in time.
-/// A statically-biased net reads at level from t=0 and is out of scope (it is
-/// never undefined).
+/// Boot-coverage: the control net named by `net` must reach its defined level
+/// (`min`, volts) by `deadline_ms` after reset, hold it per `hold_ms`, and no
+/// stress fault may fire during the boot window before it does. This makes the
+/// "Hi-Z control input" class decidable by running the firmware: on a net with
+/// no static board bias (the genuinely-undefined case this targets) only the
+/// firmware can bring it to level, so this measures whether the firmware drives
+/// it in time. A statically-biased net reads at level from t=0 and is out of
+/// scope (it is never undefined).
+///
+/// The hold requirement has three shapes, selected by `hold_ms`:
+///   - absent: hold continuously through the whole boot deadline (the strict
+///     legacy default, right for a set-and-hold control net);
+///   - `0`: the level only needs to be REACHED by the deadline (a heartbeat /
+///     toggling net can never hold to the deadline, so this is its honest form);
+///   - `h > 0`: hold continuously for `h` ms after the FIRST reach; a hold
+///     window the simulation did not fully observe fails as unconfirmed rather
+///     than passing on hope.
 fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     let net = a.net.clone().unwrap_or_default();
     let level = a.min.unwrap_or(0.0);
@@ -799,26 +808,37 @@ fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     let key = (net.clone(), level.to_bits());
 
     // The boot window is [0, deadline], but the firmware run only produced data
-    // out to sim_ms. If the deadline lands past the end of the simulation the
-    // tail of the window was never observed, so "boot window clean" would be
-    // asserting coverage over an unsimulated interval, a false green. Report it
-    // as unmet (mirrors check_voltage's "never sampled" failure) rather than
-    // trusting a first-cross with no chance of a later drop being seen.
-    if deadline > out.sim_ms + 1e-9 {
-        return (
+    // out to sim_ms. In the hold-to-deadline form (hold_ms absent), a deadline
+    // past the end of the simulation means the tail of the window was never
+    // observed, so "boot window clean" would be asserting coverage over an
+    // unsimulated interval, a false green. Report it as unmet (mirrors
+    // check_voltage's "never sampled" failure) rather than trusting a
+    // first-cross with no chance of a later drop being seen. With hold_ms set,
+    // an in-window reach can be confirmed without simulating out to the
+    // deadline, so the guard only applies when nothing was ever observed to
+    // reach (below).
+    let sim_too_short = || {
+        (
             false,
             format!(
                 "boot deadline {deadline} ms is past the end of the {:.2} ms simulation, \
                  so boot coverage for control net '{net}' cannot be confirmed; extend the run duration",
                 out.sim_ms
             ),
-        );
+        )
+    };
+    if a.hold_ms.is_none() && deadline > out.sim_ms + 1e-9 {
+        return sim_too_short();
     }
 
     let first_cross = out.boot_first_cross_ms.get(&key).copied();
     let drop_after = out.boot_drop_after_cross_ms.get(&key).copied();
     match first_cross {
-        // Never reached its level at all, genuinely undriven or driven-but-low.
+        // Never reached its level at all. If the simulation also ended before
+        // the deadline, the un-simulated tail could still have held a reach, so
+        // that case is "cannot be confirmed", not "never reached".
+        None if deadline > out.sim_ms + 1e-9 => sim_too_short(),
+        // Genuinely undriven or driven-but-low over the whole observed window.
         None => (
             false,
             boot_below_threshold_msg(
@@ -837,23 +857,61 @@ fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
             ),
         ),
         Some(tc) => {
-            // Reached in time. It must then HOLD continuously through the
-            // deadline: a drop back below level at or before the deadline breaks
-            // coverage (a bare end-of-run latch would conflate this case with
-            // "never reached"). A drop AFTER the deadline is a legitimate release
-            // and does not fail, boot coverage is about the boot window only.
-            if let Some(td) = drop_after {
-                if td <= deadline + 1e-9 {
-                    return (
-                        false,
-                        format!(
-                            "control net '{net}' reached {level} V at {tc:.2} ms but fell back below it at {td:.2} ms, before the {deadline} ms boot deadline"
-                        ),
-                    );
+            // Reached in time. Now the hold requirement, per hold_ms.
+            match a.hold_ms {
+                // Absent: hold continuously through the deadline. A drop back
+                // below level at or before the deadline breaks coverage (a bare
+                // end-of-run latch would conflate this case with "never
+                // reached"). A drop AFTER the deadline is a legitimate release
+                // and does not fail, boot coverage is about the boot window only.
+                None => {
+                    if let Some(td) = drop_after {
+                        if td <= deadline + 1e-9 {
+                            return (
+                                false,
+                                format!(
+                                    "control net '{net}' reached {level} V at {tc:.2} ms but fell back below it at {td:.2} ms, before the {deadline} ms boot deadline"
+                                ),
+                            );
+                        }
+                    }
                 }
+                // hold_ms > 0: hold continuously for h ms after the first reach.
+                Some(h) if h > 0.0 => {
+                    if let Some(td) = drop_after {
+                        let held = td - tc;
+                        if held + 1e-9 < h {
+                            return (
+                                false,
+                                format!(
+                                    "control net '{net}' reached {level} V at {tc:.2} ms but held it only \
+                                     {held:.2} ms (fell back below at {td:.2} ms), shorter than the required \
+                                     hold_ms = {h}"
+                                ),
+                            );
+                        }
+                    } else if tc + h > out.sim_ms + 1e-9 {
+                        // Never observed to drop, but the hold window runs past
+                        // the end of the simulation: the tail was never seen, so
+                        // the hold cannot be confirmed (same honesty rule as the
+                        // deadline-past-sim-end guard above).
+                        return (
+                            false,
+                            format!(
+                                "control net '{net}' reached {level} V at {tc:.2} ms, but its {h} ms hold \
+                                 window runs past the end of the {:.2} ms simulation, so the hold cannot \
+                                 be confirmed; extend the run duration",
+                                out.sim_ms
+                            ),
+                        );
+                    }
+                }
+                // hold_ms = 0: reached by the deadline is enough; any later
+                // drop (a heartbeat's low phase) is expected, not a failure.
+                Some(_) => {}
             }
-            // Held through the deadline. Now require no stress fault fired in the
-            // boot window *before* the net was first driven (rails must hold and
+            // Hold satisfied. Now require no stress fault fired in the boot
+            // window *before* the net was first driven (rails must hold and
             // nothing over-stresses while the control input is still undefined).
             if let Some(ft) = out.first_fault_ms {
                 if ft < tc - 1e-9 {
@@ -865,9 +923,14 @@ fn check_boot_coverage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
                     );
                 }
             }
+            let hold_note = match a.hold_ms {
+                None => "boot window clean".to_string(),
+                Some(h) if h > 0.0 => format!("held {h} ms, boot window clean"),
+                Some(_) => "reach only (hold_ms = 0), boot window clean".to_string(),
+            };
             (
                 true,
-                format!("control net '{net}' driven to >= {level} V at {tc:.2} ms (<= {deadline} ms), boot window clean"),
+                format!("control net '{net}' driven to >= {level} V at {tc:.2} ms (<= {deadline} ms), {hold_note}"),
             )
         }
     }
@@ -2161,6 +2224,81 @@ mod tests {
         assert!(
             !msg.contains("fell back below"),
             "never-reached must not read as a reached-then-dropped: {msg}"
+        );
+    }
+
+    // E32: hold_ms makes boot_coverage decidable on heartbeat / toggling nets,
+    // where hold-to-the-deadline can never pass. Two-sided on a toggling net
+    // (reached at 2 ms, dropped at 7 ms, i.e. a 5 ms high phase): hold_ms = 0
+    // passes (reach only), hold_ms longer than the high phase fails with the
+    // hold shortfall named. A solid net (never drops) passes both, and an
+    // unobserved hold tail fails as unconfirmed instead of passing on hope.
+    #[test]
+    fn boot_coverage_hold_ms_is_two_sided_on_toggling_and_solid_nets() {
+        use super::check_boot_coverage;
+        use crate::runner::RunOutcome;
+        use crate::spec::Assertion;
+
+        let key = ("HB".to_string(), 3.0_f64.to_bits());
+        let assertion = |hold: &str| -> Assertion {
+            toml::from_str(&format!(
+                "kind = \"boot_coverage\"\nnet = \"HB\"\nmin = 3.0\ndeadline_ms = 10.0\n{hold}"
+            ))
+            .unwrap()
+        };
+
+        // A toggling net: first reach 2 ms, first drop 7 ms (5 ms high phase).
+        let mut toggling = RunOutcome {
+            sim_ms: 100.0,
+            ..Default::default()
+        };
+        toggling.boot_first_cross_ms.insert(key.clone(), 2.0);
+        toggling.boot_drop_after_cross_ms.insert(key.clone(), 7.0);
+
+        let (ok, msg) = check_boot_coverage(&assertion("hold_ms = 0.0"), &toggling);
+        assert!(ok, "hold_ms = 0 must pass a toggling net that reached: {msg}");
+        assert!(msg.contains("reach only"), "the pass names its form: {msg}");
+
+        let (ok, msg) = check_boot_coverage(&assertion("hold_ms = 8.0"), &toggling);
+        assert!(
+            !ok,
+            "a hold longer than the high phase must fail the toggling net"
+        );
+        assert!(
+            msg.contains("held it only 5.00 ms") && msg.contains("hold_ms = 8"),
+            "the failure names the observed hold and the requirement: {msg}"
+        );
+
+        // The strict default (absent hold_ms) also fails it: dropped at 7 ms,
+        // before the 10 ms deadline.
+        let (ok, _msg) = check_boot_coverage(&assertion(""), &toggling);
+        assert!(!ok, "the hold-to-deadline default still fails a mid-window drop");
+
+        // A solid net: reached at 2 ms, never dropped, sim covers everything.
+        let mut solid = RunOutcome {
+            sim_ms: 100.0,
+            ..Default::default()
+        };
+        solid.boot_first_cross_ms.insert(key.clone(), 2.0);
+
+        let (ok, msg) = check_boot_coverage(&assertion("hold_ms = 0.0"), &solid);
+        assert!(ok, "a solid net passes hold_ms = 0: {msg}");
+        let (ok, msg) = check_boot_coverage(&assertion("hold_ms = 8.0"), &solid);
+        assert!(ok, "a solid net passes hold_ms = 8: {msg}");
+        assert!(msg.contains("held 8 ms"), "the pass names the hold: {msg}");
+
+        // An unobserved hold tail must fail loud: reached at 2 ms, sim ended at
+        // 6 ms, so an 8 ms hold window was never fully watched.
+        let mut short = RunOutcome {
+            sim_ms: 6.0,
+            ..Default::default()
+        };
+        short.boot_first_cross_ms.insert(key.clone(), 2.0);
+        let (ok, msg) = check_boot_coverage(&assertion("hold_ms = 8.0"), &short);
+        assert!(!ok, "an unobserved hold window must not pass: {msg}");
+        assert!(
+            msg.contains("cannot be confirmed"),
+            "it names the sim-too-short cause: {msg}"
         );
     }
 

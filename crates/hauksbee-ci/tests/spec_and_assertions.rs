@@ -311,6 +311,58 @@ fn boot_coverage_requires_net_min_and_deadline() {
     assert!(err.to_string().contains("deadline_ms"), "got: {err}");
 }
 
+// E51: boot_coverage with NO firmware staged is a hollow gate; the net could
+// only reach its level passively (a board pull / bias settling), which is the
+// vacuous pass the check exists to prevent. The spec must refuse to LOAD.
+#[test]
+fn boot_coverage_without_firmware_is_refused_at_load() {
+    let p = write_tmp(
+        "bootcov_no_fw.toml",
+        "board = \"b.kicad_pcb\"\nduration_ms = 10\n\
+         [[assert]]\nkind = \"boot_coverage\"\nnet = \"RES\"\nmin = 2.6\ndeadline_ms = 5.0\n",
+    );
+    let err = Spec::load(&p).unwrap_err().to_string();
+    assert!(
+        err.contains("needs `firmware = ...`"),
+        "the refusal must say the fix (add firmware): {err}"
+    );
+    assert!(
+        err.contains("passively") && err.contains("voltage"),
+        "the refusal must explain the passive-reach trap and point at `voltage`: {err}"
+    );
+
+    // Control: the same spec WITH a firmware line loads.
+    let p = write_tmp(
+        "bootcov_fw.toml",
+        "board = \"b.kicad_pcb\"\nfirmware = \"app.elf\"\nduration_ms = 10\n\
+         [[assert]]\nkind = \"boot_coverage\"\nnet = \"RES\"\nmin = 2.6\ndeadline_ms = 5.0\n",
+    );
+    Spec::load(&p).expect("boot_coverage with firmware loads");
+}
+
+// E32: hold_ms parses on boot_coverage, and a negative value is a load error.
+#[test]
+fn boot_coverage_hold_ms_parses_and_rejects_negative() {
+    let p = write_tmp(
+        "bootcov_hold.toml",
+        "board = \"b.kicad_pcb\"\nfirmware = \"app.elf\"\nduration_ms = 10\n\
+         [[assert]]\nkind = \"boot_coverage\"\nnet = \"HB\"\nmin = 3.0\ndeadline_ms = 10.0\nhold_ms = 2.5\n",
+    );
+    let spec = Spec::load(&p).expect("hold_ms parses");
+    assert_eq!(spec.asserts[0].hold_ms, Some(2.5));
+
+    let p = write_tmp(
+        "bootcov_hold_neg.toml",
+        "board = \"b.kicad_pcb\"\nfirmware = \"app.elf\"\nduration_ms = 10\n\
+         [[assert]]\nkind = \"boot_coverage\"\nnet = \"HB\"\nmin = 3.0\ndeadline_ms = 10.0\nhold_ms = -1.0\n",
+    );
+    let err = Spec::load(&p).unwrap_err().to_string();
+    assert!(
+        err.contains("hold_ms") && err.contains(">= 0"),
+        "negative hold_ms must be a named load error: {err}"
+    );
+}
+
 // --- scenario-scope validation (regression) --------------------------------
 //
 // A `scenario = "id"` scope on an assertion must name a declared [[scenario]]
