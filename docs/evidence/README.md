@@ -14,7 +14,9 @@ false positive this calibration had to kill (the Arduino Uno's `RESET-EN` solder
 jumper, read as an unfinished BOM entry); the full-corpus lint tally, in which one
 finding on the MNT Reform 2.0/2.5 DAC bus remains unadjudicated; a clearance gap of
 9.77e-15 mm that is touching copper and is classified as a clearance note only
-because the short test is a strict `gap <= 0.0`; one sweep row whose clean shorts
-result comes from a KiCad 10 file the tool marks UNRELIABLE; and the fact that
-several corpus guards address boards by a layout `scripts/fetch-corpus.sh` does not
-produce, so they do not yet run outside the maintainers' tree.
+because the short test is a strict `gap <= 0.0`; and one sweep row whose clean
+shorts result comes from a KiCad 10 file the tool marks UNRELIABLE.
+
+[`CORPUS.md`](CORPUS.md) carries the same discipline applied to the corpus itself:
+what the fetch lands, which gate reads which entry, which entries feed no gate, and
+the findings that surfaced on boards added to it.
