@@ -324,3 +324,72 @@ fn check_reports_all_unknown_component_refs_at_once() {
         .join("\n");
     assert!(msgs.contains("R_NOPE1") && msgs.contains("R_NOPE2"), "{msgs}");
 }
+
+// M2: a window that cannot overlap the run is a spec mistake `check` used to
+// wave through, leaving the RUNTIME to report it as a degenerate failure after
+// a full co-simulation. Every field below is individually in bounds; it is the
+// relationship to `duration_ms` that is impossible.
+#[test]
+fn check_rejects_a_sample_window_that_starts_after_the_run_ends() {
+    let body = "board = \"blinky.kicad_pcb\"\nduration_ms = 500\n\n\
+                [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = 1.0\nafter_ms = 500\n";
+    let (_dir, spec) = spec_dir("after", body);
+    let out = check(&spec, &["--json"]);
+    assert_eq!(out.status.code(), Some(2));
+    let diags = json_diags(&out);
+    assert_eq!(diags.len(), 1, "{diags:?}");
+    assert_eq!(diags[0]["code"], "bad-bound", "{diags:?}");
+    let msg = diags[0]["message"].as_str().unwrap();
+    assert!(msg.contains("after_ms") && msg.contains("duration_ms"), "{msg}");
+    assert!(msg.contains("nothing would ever be measured"), "{msg}");
+
+    // One millisecond inside the run is legitimate and must stay accepted.
+    let ok = body.replace("after_ms = 500", "after_ms = 499");
+    let (_dir, spec) = spec_dir("after-ok", &ok);
+    assert_eq!(check(&spec, &["--json"]).status.code(), Some(0));
+}
+
+#[test]
+fn check_rejects_a_deadline_past_the_end_of_the_run() {
+    let body = "board = \"blinky.kicad_pcb\"\nduration_ms = 100\n\n\
+                [[assert]]\nkind = \"toggle\"\nnet = \"D13\"\nmin_toggles = 3\n\
+                deadline_ms = 250\n";
+    let (_dir, spec) = spec_dir("deadline", body);
+    let out = check(&spec, &["--json"]);
+    assert_eq!(out.status.code(), Some(2));
+    let diags = json_diags(&out);
+    assert!(
+        diags.iter().any(|d| d["code"] == "bad-bound"
+            && d["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("deadline_ms") && m.contains("duration_ms"))),
+        "{diags:?}"
+    );
+
+    let ok = body.replace("deadline_ms = 250", "deadline_ms = 100");
+    let (_dir, spec) = spec_dir("deadline-ok", &ok);
+    assert_eq!(check(&spec, &["--json"]).status.code(), Some(0));
+}
+
+#[test]
+fn check_rejects_a_scenario_that_starts_after_the_run_ends() {
+    let body = "board = \"blinky.kicad_pcb\"\nduration_ms = 50\n\n\
+                [[scenario]]\nid = \"late\"\npart = \"R1\"\nprofile = \"short\"\n\
+                start_ms = 50\n\n\
+                [[assert]]\nkind = \"voltage\"\nnet = \"+5V\"\nmin = 1.0\n";
+    let (_dir, spec) = spec_dir("scenario", body);
+    let out = check(&spec, &["--json"]);
+    assert_eq!(out.status.code(), Some(2));
+    let diags = json_diags(&out);
+    assert!(
+        diags.iter().any(|d| d["code"] == "bad-bound"
+            && d["message"]
+                .as_str()
+                .is_some_and(|m| m.contains("start_ms") && m.contains("never fire"))),
+        "{diags:?}"
+    );
+
+    let ok = body.replace("start_ms = 50", "start_ms = 10");
+    let (_dir, spec) = spec_dir("scenario-ok", &ok);
+    assert_eq!(check(&spec, &["--json"]).status.code(), Some(0));
+}
