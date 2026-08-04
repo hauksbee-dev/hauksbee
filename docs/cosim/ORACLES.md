@@ -61,6 +61,7 @@ Worked example, on a board that ships in this repo so you can rerun it:
 
 ```
 $ hauksbee run crates/hauksbee-ci/examples/boards/boot_gate.kicad_pcb --drc --oracle
+note: this board has no routed copper (no track segments): the spacing check had only pads to compare, so a clean result here says nothing about routing that does not exist yet.
 DRC: 20 primitive(s), clearance rule 0.200 mm
 
 SHORTS (2):
@@ -71,7 +72,7 @@ SHORTS (2):
 
 oracle (kicad-cli 10.0.3): 7 touching-copper violation(s), 26 total DRC violation(s), 6 unconnected.
 hauksbee: 2 short(s), 0 clearance. -> agree: both find touching copper (2 hauksbee / 7 oracle; counts differ by decomposition).
-note: gate-grade finding(s) above, but this is a report command so the exit code is 0. Add --strict to exit 2 on them (exit contract: 0 = clean or report-only, 2 = findings under --strict, 3 = invalid for analysis), or gate CI with hauksbee-ci.
+note: gate-grade finding(s) above, but this is a report command so the exit code is 0. Add --strict to exit 2 on them (exit contract: 0 = clean or report-only, 1 = input error such as a missing or unreadable file, 2 = findings under --strict, 3 = invalid for analysis), or gate CI with hauksbee-ci.
 ```
 
 That is the decomposition point made concrete. One deliberate GND-to-+5V touch
