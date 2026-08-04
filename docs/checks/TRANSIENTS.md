@@ -440,6 +440,7 @@ hauksbee-ci: divider tolerance corners
         why: VOUT settled 0.150 V below your floor (2.250 V vs min 2.4 V)
 
 1/2 assertions passed in 0.03s - RED
+next: the "voltage" section of https://docs.hauksbee.dev/docs/ci/ci explains this check and its knobs
 ```
 
 One piece is still missing: an **ESR tolerance band** on the capacitor parasitics
