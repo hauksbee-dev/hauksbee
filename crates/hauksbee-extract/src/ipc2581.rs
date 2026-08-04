@@ -277,10 +277,7 @@ fn attrs(e: &BytesStart<'_>) -> HashMap<String, String> {
                 .map(|c| c.into_owned())
                 .unwrap_or_else(|_| String::from_utf8_lossy(&a.value).into_owned());
             let key = a.key.local_name();
-            (
-                String::from_utf8_lossy(key.as_ref()).into_owned(),
-                value,
-            )
+            (String::from_utf8_lossy(key.as_ref()).into_owned(), value)
         })
         .collect()
 }
@@ -621,7 +618,8 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
                         ));
                     }
                     "RefDes" => {
-                        if let (Some((refs, row)), Some(n)) = (in_bom_item.as_mut(), a.get("name")) {
+                        if let (Some((refs, row)), Some(n)) = (in_bom_item.as_mut(), a.get("name"))
+                        {
                             refs.push(strip_names(n, &step).to_string());
                             // A BomItem groups identical parts, so package /
                             // layer / populate are per-RefDes; the last one
@@ -992,10 +990,19 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
                 c.refdes,
                 c.package_ref,
                 sample_list(&declared),
-                sample_list(&unaccounted.iter().map(|s| s.to_string()).collect::<Vec<_>>()),
+                sample_list(
+                    &unaccounted
+                        .iter()
+                        .map(|s| s.to_string())
+                        .collect::<Vec<_>>()
+                ),
             ));
         }
-        let mut numbers: Vec<String> = if package_fits { declared.clone() } else { Vec::new() };
+        let mut numbers: Vec<String> = if package_fits {
+            declared.clone()
+        } else {
+            Vec::new()
+        };
         if let Some(r) = refd {
             for pin in r {
                 if !numbers.iter().any(|n| n == pin) {
@@ -1096,7 +1103,10 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
         .map(|c| c.reference.clone())
         .collect();
     let components = crate::merge_duplicate_references(
-        components.into_iter().filter(|c| !c.pins.is_empty()).collect(),
+        components
+            .into_iter()
+            .filter(|c| !c.pins.is_empty())
+            .collect(),
     );
 
     if !wrong_packages.is_empty() {
@@ -1200,7 +1210,11 @@ fn assign(
 
 /// Which side a component is on. The `<Layer>` table's `side` is authoritative
 /// when the layer is declared; otherwise the layer name and the mirror flag are.
-fn side_of(layer_ref: &str, mirrored: bool, layers: &BTreeMap<String, (String, String)>) -> &'static str {
+fn side_of(
+    layer_ref: &str,
+    mirrored: bool,
+    layers: &BTreeMap<String, (String, String)>,
+) -> &'static str {
     if let Some((_, side)) = layers.get(layer_ref) {
         match side.to_ascii_uppercase().as_str() {
             "TOP" => return "F.Cu",
@@ -1289,7 +1303,11 @@ fn sample_list(items: &[String]) -> String {
     if items.len() <= MAX {
         return items.join(", ");
     }
-    format!("{}, and {} more", items[..MAX].join(", "), items.len() - MAX)
+    format!(
+        "{}, and {} more",
+        items[..MAX].join(", "),
+        items.len() - MAX
+    )
 }
 
 #[cfg(test)]
@@ -1442,10 +1460,7 @@ mod tests {
         assert_eq!(out.board.net_members(mid.id).len(), 2);
         // No value anywhere: honestly unresolved rather than "RES-10K".
         assert_eq!(r1.value, "");
-        assert!(r1
-            .properties
-            .iter()
-            .any(|(k, _)| k == VALUE_UNRESOLVED_KEY));
+        assert!(r1.properties.iter().any(|(k, _)| k == VALUE_UNRESOLVED_KEY));
         assert_eq!(r1.lib_id, "RES-10K");
     }
 
@@ -1539,7 +1554,9 @@ mod tests {
 
     #[test]
     fn the_root_element_gates_the_sniff_and_the_read() {
-        assert!(!looks_like_ipc2581(b"<eagle version=\"9.0\"><drawing/></eagle>"));
+        assert!(!looks_like_ipc2581(
+            b"<eagle version=\"9.0\"><drawing/></eagle>"
+        ));
         assert!(!looks_like_ipc2581(b"(kicad_pcb (version 20240108))"));
         // The namespace alone is enough (a document rewritten without the root
         // in the first 4 KiB still declares it).
@@ -1547,7 +1564,10 @@ mod tests {
             b"<!-- comment --><ns:IPC-2581 xmlns:ns=\"http://webstds.ipc.org/2581\">"
         ));
         let err = extract("<eagle/>").expect_err("a non-IPC-2581 root must not read");
-        assert!(err.to_string().contains("not a IPC-2581 file"), "got: {err}");
+        assert!(
+            err.to_string().contains("not a IPC-2581 file"),
+            "got: {err}"
+        );
     }
 
     #[test]
@@ -1563,7 +1583,12 @@ mod tests {
   </Step></CadData></Ecad>
 </IPC-2581>"#;
         let out = extract(xml).expect("the document still reads");
-        let (x, y, r) = out.board.component("R1").expect("R1").position.expect("pos");
+        let (x, y, r) = out
+            .board
+            .component("R1")
+            .expect("R1")
+            .position
+            .expect("pos");
         assert!(
             x.is_finite() && y.is_finite() && r.is_finite(),
             "position {x},{y},{r} is not finite"
@@ -1598,7 +1623,10 @@ mod tests {
         assert_eq!(out.board.nets.len(), 2);
         // The step prefix is gone from both designators and net names.
         let c20 = out.board.component("C20").expect("C20");
-        assert_eq!(out.board.net_by_name("RESET").map(|n| n.name.as_str()), Some("RESET"));
+        assert_eq!(
+            out.board.net_by_name("RESET").map(|n| n.name.as_str()),
+            Some("RESET")
+        );
         // The pin's `name` is its identity; the `number` ordinal must not become one.
         let mut pins: Vec<&str> = c20.pins.iter().map(|p| p.number.as_str()).collect();
         pins.sort_unstable();
@@ -1631,7 +1659,11 @@ mod tests {
         assert_eq!(out.board.nets.len(), 2);
         let r5 = out.board.component("R5").expect("R5");
         assert_eq!(r5.pins.len(), 2);
-        assert_eq!(r5.pins[0].position, Some((1.0, 2.0)), "the LayerPad location");
+        assert_eq!(
+            r5.pins[0].position,
+            Some((1.0, 2.0)),
+            "the LayerPad location"
+        );
         assert_eq!(out.stats.connected_pins, 2);
     }
 
@@ -1659,7 +1691,10 @@ mod tests {
         assert_eq!(c1.value, "10uF");
         // And its placement is on the `<Xform>`, not in a sibling `<Location>`.
         assert_eq!(c1.position, Some((12.0, 8.0, 0.0)));
-        assert!(out.stats.bom_absent, "no BOM here, and the note must say so");
+        assert!(
+            out.stats.bom_absent,
+            "no BOM here, and the note must say so"
+        );
         assert!(out
             .stats
             .notes()
@@ -1707,6 +1742,10 @@ mod tests {
             "BUS:DATA",
             "an unknown tag is part of the name"
         );
-        assert_eq!(strip_prefix_tag("PIN:"), "PIN:", "an empty rest is not a prefix");
+        assert_eq!(
+            strip_prefix_tag("PIN:"),
+            "PIN:",
+            "an empty rest is not a prefix"
+        );
     }
 }

@@ -141,14 +141,17 @@ impl OdbTree {
     }
 
     pub(crate) fn get(&self, path: &str) -> Option<&[u8]> {
-        self.files.get(&path.to_ascii_lowercase()).map(Vec::as_slice)
+        self.files
+            .get(&path.to_ascii_lowercase())
+            .map(Vec::as_slice)
     }
 
     /// A file decoded as (lossy) text. ODB++ files are ASCII by spec; lossy
     /// decoding keeps a stray high byte in a free-text property from failing
     /// the whole job.
     pub(crate) fn text(&self, path: &str) -> Option<String> {
-        self.get(path).map(|b| String::from_utf8_lossy(b).into_owned())
+        self.get(path)
+            .map(|b| String::from_utf8_lossy(b).into_owned())
     }
 
     /// Every key under `prefix` (which must end in `/`), in sorted order.
@@ -378,7 +381,11 @@ const SNIFF_BYTES: u64 = 8 * 1024 * 1024;
 
 fn name_is_matrix(name: &str) -> bool {
     let n = name.replace('\\', "/").to_ascii_lowercase();
-    let n = n.strip_suffix(".z").or_else(|| n.strip_suffix(".gz")).unwrap_or(&n).to_string();
+    let n = n
+        .strip_suffix(".z")
+        .or_else(|| n.strip_suffix(".gz"))
+        .unwrap_or(&n)
+        .to_string();
     n == MATRIX_PATH || n.ends_with(&format!("/{MATRIX_PATH}"))
 }
 
@@ -417,10 +424,15 @@ mod tests {
     #[test]
     fn keys_are_case_folded_and_rebased_on_the_matrix() {
         let mut tree = OdbTree::new();
-        tree.insert("MyJob/MATRIX/Matrix", b"STEP {\n}\n".to_vec()).expect("insert");
-        tree.insert("MyJob/steps/PCB/eda/data", b"UNITS=MM\n".to_vec()).expect("insert");
+        tree.insert("MyJob/MATRIX/Matrix", b"STEP {\n}\n".to_vec())
+            .expect("insert");
+        tree.insert("MyJob/steps/PCB/eda/data", b"UNITS=MM\n".to_vec())
+            .expect("insert");
         tree.rebase_on_matrix();
-        assert!(tree.has_matrix(), "matrix found after case folding + rebase");
+        assert!(
+            tree.has_matrix(),
+            "matrix found after case folding + rebase"
+        );
         assert!(tree.get("steps/pcb/eda/data").is_some());
         assert_eq!(tree.dirs_under("steps/"), vec!["pcb".to_string()]);
     }
@@ -432,7 +444,8 @@ mod tests {
         enc.write_all(b"UNITS=MM\nF 3\n").expect("gz write");
         let gz = enc.finish().expect("gz finish");
         let mut tree = OdbTree::new();
-        tree.insert("steps/pcb/layers/f.cu/features.Z", gz).expect("insert");
+        tree.insert("steps/pcb/layers/f.cu/features.Z", gz)
+            .expect("insert");
         assert_eq!(
             tree.text("steps/pcb/layers/f.cu/features").as_deref(),
             Some("UNITS=MM\nF 3\n"),
@@ -445,7 +458,11 @@ mod tests {
     fn an_uninflatable_member_is_recorded_not_hidden() {
         let mut tree = OdbTree::new();
         // A Unix-`compress` .Z (magic 1f 9d), which is NOT gzip.
-        tree.insert("steps/pcb/layers/f.cu/features.Z", vec![0x1f, 0x9d, 0x90, 0x01]).expect("insert");
+        tree.insert(
+            "steps/pcb/layers/f.cu/features.Z",
+            vec![0x1f, 0x9d, 0x90, 0x01],
+        )
+        .expect("insert");
         assert_eq!(
             tree.undecompressed,
             vec!["steps/pcb/layers/f.cu/features".to_string()],

@@ -5,14 +5,14 @@
 
 Every number here is asserted, not observed. The gate fails the build when a startup-corrected speedup drops below its recorded floor, when an accuracy claim rises above its bound, or when a disclosed disagreement widens past its ceiling.
 
-Oracle: ngspice-45.2. ngspice process-start floor: 14.259 ms, measured as the minimum of five trivial-deck runs.
+Oracle: ngspice-45.2. ngspice process-start floor: 22.137 ms, measured as the minimum of five trivial-deck runs.
 
 `raw` divides ngspice's whole wall clock, process start included, by ours: it is what a user waiting at a shell experiences. `corrected` subtracts the process-start floor first: it is what the two solvers actually did, and it is the number the gate asserts, because it is the only one that is a claim about numerics.
 
 | case | hauksbee | steps | ngspice (raw) | ngspice (solver only) | speedup raw | speedup corrected | floor | vs ngspice | kind | bound | vs own monolith (waveform) | vs own monolith (settled) | verdict |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| half-wave rectifier, 5 ms tran | 1.140 ms | 1125 | 22.290 ms | 8.030 ms | 19.55x | 7.04x | 3.00x | 1.938e-3 | agreement | 1.000e-2 | n/a | n/a | PASS |
-| synapse array, 90 blocks, 400 us tran | 69.840 ms | 401 | 803.520 ms | 789.261 ms | 11.51x | 11.30x | 3.50x | 7.139e0 | disclosed drift | 1.200e1 | 1.998e-3 (bound 1.000e-2) | 1.405e-7 (bound 1.000e-5) | PASS |
+| half-wave rectifier, 5 ms tran | 2.136 ms | 1125 | 57.587 ms | 35.450 ms | 26.96x | 16.59x | 3.00x | 1.938e-3 | agreement | 1.000e-2 | n/a | n/a | PASS |
+| synapse array, 90 blocks, 400 us tran | 971.295 ms | 401 | 2008.683 ms | 1986.546 ms | 2.07x | 2.05x | 3.50x | 7.139e0 | disclosed drift | 1.200e1 | 1.998e-3 (bound 1.000e-2) | 1.405e-7 (bound 1.000e-5) | FAIL |
 
 Accuracy against ngspice is measured on the oracle's own `.print tran` table, sampled at the oracle's time points with linear interpolation into ours, relative to `max(|oracle|, 1% of full scale)` so a zero crossing cannot manufacture an infinite error.
 

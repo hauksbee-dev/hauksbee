@@ -416,7 +416,9 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
     let mut layer_components: Vec<RawComponent> = Vec::new();
     for layer in &comp_layers {
         let path = format!("steps/{step}/layers/{layer}/components");
-        let Some(text) = tree.text(&path) else { continue };
+        let Some(text) = tree.text(&path) else {
+            continue;
+        };
         let is_bottom = layer.contains("bot");
         layer_components.extend(records::parse_components_file(&text, is_bottom, job_units));
     }
@@ -434,7 +436,9 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
             ));
         }
         (
-            eda.as_ref().map(|e| e.components.clone()).unwrap_or_default(),
+            eda.as_ref()
+                .map(|e| e.components.clone())
+                .unwrap_or_default(),
             PlacementSource::EdaData,
         )
     } else {
@@ -451,7 +455,11 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
              ({}). Without placement there is no connectivity to check: \
              re-export the job with EDA data included",
             if steps.len() > 1 {
-                format!("none of its {} steps ({}) does, and step", steps.len(), steps.join(", "))
+                format!(
+                    "none of its {} steps ({}) does, and step",
+                    steps.len(),
+                    steps.join(", ")
+                )
             } else {
                 "step".to_string()
             },
@@ -543,7 +551,9 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
         let pkg = c.pkg_index.and_then(|i| packages.get(i));
         let mut pins: Vec<Pin> = Vec::with_capacity(c.toeprints.len());
         for t in &c.toeprints {
-            let pkg_pin = pkg.and_then(|p| p.pins.get(t.pin_index)).map(String::as_str);
+            let pkg_pin = pkg
+                .and_then(|p| p.pins.get(t.pin_index))
+                .map(String::as_str);
             // The pad's own name is authoritative; the package pin name at the
             // same index is the check. When only one exists, it is the name.
             let number = match (t.name.is_empty(), pkg_pin) {
@@ -648,7 +658,10 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
         .map(|c| c.reference.clone())
         .collect();
     let components = crate::merge_duplicate_references(
-        components.into_iter().filter(|c| !c.pins.is_empty()).collect(),
+        components
+            .into_iter()
+            .filter(|c| !c.pins.is_empty())
+            .collect(),
     );
     // Nets nothing is attached to, computed from the FINISHED board so it catches
     // a net lost anywhere above as well as one the job really declares unused.
@@ -775,7 +788,11 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
     // ── Layer accounting ─────────────────────────────────────────────────────
     let mut layers: Vec<OdbLayer> = Vec::new();
     let mut drills = 0usize;
-    for l in matrix.layers.iter().filter(|l| l.is_copper() || l.is_drill()) {
+    for l in matrix
+        .layers
+        .iter()
+        .filter(|l| l.is_copper() || l.is_drill())
+    {
         let path = format!("steps/{step}/layers/{}/features", l.name);
         let counts = match tree.text(&path) {
             Some(text) => parse_features(&text),
@@ -1064,7 +1081,8 @@ mod tests {
         let out = from_odbpp_archive(&zip_members(&members)).expect("job still reads");
         let joined = out.stats.disagreements.join(" | ");
         assert!(
-            joined.contains("exist in eda/data but not in the CAD netlist") && joined.contains("GND"),
+            joined.contains("exist in eda/data but not in the CAD netlist")
+                && joined.contains("GND"),
             "a net missing from the netlist must be named: {joined}"
         );
         assert!(
@@ -1086,7 +1104,8 @@ mod tests {
         for m in &mut members {
             if m.0 == "steps/pcb/layers/comp_+_top/components" {
                 // R1's second pad calls itself "K" where the package says "2".
-                m.1 = m.1.replace("TOP 1 1.8 1.0 0.0 N 2 0 2", "TOP 1 1.8 1.0 0.0 N 2 0 K");
+                m.1 =
+                    m.1.replace("TOP 1 1.8 1.0 0.0 N 2 0 2", "TOP 1 1.8 1.0 0.0 N 2 0 K");
             }
         }
         let out = from_odbpp_archive(&zip_members(&members)).expect("job reads");
@@ -1139,7 +1158,10 @@ mod tests {
             .expect_err("a job with nets but no placement must refuse");
         let msg = err.to_string();
         assert!(msg.contains("no component placement"), "got: {msg}");
-        assert!(msg.contains("4 net records"), "names what it did find: {msg}");
+        assert!(
+            msg.contains("4 net records"),
+            "names what it did find: {msg}"
+        );
         assert!(msg.contains("comp_+_top"), "names where it looked: {msg}");
     }
 
@@ -1148,12 +1170,11 @@ mod tests {
         let mut members = tiny_job();
         for m in &mut members {
             if m.0 == "steps/pcb/layers/comp_+_top/components" {
-                m.1 = m
-                    .1
-                    .lines()
-                    .filter(|l| !l.starts_with("TOP "))
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                m.1 =
+                    m.1.lines()
+                        .filter(|l| !l.starts_with("TOP "))
+                        .collect::<Vec<_>>()
+                        .join("\n");
             }
         }
         let err = from_odbpp_archive(&zip_members(&members))
@@ -1178,7 +1199,10 @@ mod tests {
         assert!(msg.contains("carries no net table"), "got: {msg}");
         assert!(msg.contains("2 component(s)"), "got: {msg}");
         assert!(msg.contains("4 pad(s) on a net"), "got: {msg}");
-        assert!(msg.contains("cannot be resolved to net names"), "got: {msg}");
+        assert!(
+            msg.contains("cannot be resolved to net names"),
+            "got: {msg}"
+        );
     }
 
     #[test]
@@ -1218,10 +1242,9 @@ mod tests {
             if m.0 == "steps/pcb/layers/comp_+_top/components" {
                 // Net 77 against a 4-entry table, and a net field that is not a
                 // number at all.
-                m.1 = m
-                    .1
-                    .replace("TOP 1 1.8 1.0 0.0 N 2 0 2", "TOP 1 1.8 1.0 0.0 N 77 0 2")
-                    .replace("TOP 0 3.2 1.0 0.0 N 2 1 1", "TOP 0 3.2 1.0 0.0 N MID 1 1");
+                m.1 =
+                    m.1.replace("TOP 1 1.8 1.0 0.0 N 2 0 2", "TOP 1 1.8 1.0 0.0 N 77 0 2")
+                        .replace("TOP 0 3.2 1.0 0.0 N 2 1 1", "TOP 0 3.2 1.0 0.0 N MID 1 1");
             }
         }
         let out = from_odbpp_archive(&zip_members(&members)).expect("the job still reads");
@@ -1232,7 +1255,8 @@ mod tests {
             "got: {joined}"
         );
         assert!(
-            joined.contains("net field that is not a net number") && joined.contains("R2.1 ('MID')"),
+            joined.contains("net field that is not a net number")
+                && joined.contains("R2.1 ('MID')"),
             "got: {joined}"
         );
         // And those pads really are reported unconnected, not guessed.
@@ -1327,10 +1351,9 @@ mod tests {
         let mut members = tiny_job();
         for m in &mut members {
             if m.0 == "steps/pcb/layers/comp_+_top/components" {
-                m.1 = m
-                    .1
-                    .replace("CMP 0 1.0 1.0 0 N R1", "CMP 0 NaN 1.0 0 N R1")
-                    .replace("TOP 1 4.8 1.0 0.0 N 3 0 2", "TOP 1 1e400 1.0 0.0 N 3 0 2");
+                m.1 =
+                    m.1.replace("CMP 0 1.0 1.0 0 N R1", "CMP 0 NaN 1.0 0 N R1")
+                        .replace("TOP 1 4.8 1.0 0.0 N 3 0 2", "TOP 1 1e400 1.0 0.0 N 3 0 2");
             }
         }
         let out = from_odbpp_archive(&zip_members(&members)).expect("the job still reads");
@@ -1405,7 +1428,10 @@ mod tests {
         assert!(looks_like_odbpp_dir(&dir), "a directory holding one job");
         let from_dir = from_odbpp(&dir).expect("directory job reads");
         let from_zip = from_odbpp_archive(&zip_members(&tiny_job())).expect("zip job reads");
-        assert_eq!(from_dir.board.components.len(), from_zip.board.components.len());
+        assert_eq!(
+            from_dir.board.components.len(),
+            from_zip.board.components.len()
+        );
         assert_eq!(from_dir.board.nets.len(), from_zip.board.nets.len());
         assert_eq!(from_dir.stats.pads, from_zip.stats.pads);
         let _ = std::fs::remove_dir_all(&dir);
