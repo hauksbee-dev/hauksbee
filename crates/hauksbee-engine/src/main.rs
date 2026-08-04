@@ -77,6 +77,11 @@ enum Command {
     /// `--plain` for a verdict a non-engineer can read. For the full assertion /
     /// fault flow, gate on `hauksbee-ci` or `hauksbee check-code`.
     ///
+    /// Exit contract: 0 = clean or report-only, 1 = input error (missing or
+    /// unreadable file, bad flags), 2 = findings under --strict, 3 = invalid
+    /// for analysis (the result cannot be trusted, so the run refuses to
+    /// pretend).
+    ///
     /// Example:
     ///   hauksbee run board.kicad_pcb --report --plain
     ///   hauksbee run board.kicad_pcb --drc --plain --strict
