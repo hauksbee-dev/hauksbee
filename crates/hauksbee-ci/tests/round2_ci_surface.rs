@@ -24,7 +24,9 @@ fn write_spec(dir: &std::path::Path, name: &str, kind_line: &str) -> PathBuf {
     std::fs::write(
         &p,
         format!(
-            "name = \"t\"\nboard = \"b.kicad_pcb\"\nduration_ms = 10\n\n\
+            // boot_coverage refuses to load without firmware (it would be a
+            // hollow gate), so the helper stages one.
+            "name = \"t\"\nboard = \"b.kicad_pcb\"\nfirmware = \"app.elf\"\nduration_ms = 10\n\n\
              [[assert]]\n{kind_line}\nnet = \"EN\"\nmin = 3.0\ndeadline_ms = 10.0\n"
         ),
     )

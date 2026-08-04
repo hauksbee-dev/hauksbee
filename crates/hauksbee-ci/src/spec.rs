@@ -773,8 +773,8 @@ pub struct Assertion {
     /// state check. `rail_window`: rail dip/recovery bounds over a scenario
     /// window. `protection_trip`: battery protection trips (or must not).
     /// `boot_coverage`: a control net is driven to `min` volts within
-    /// `deadline_ms` of reset (the kebab-case `boot-coverage` is the accepted
-    /// legacy spelling of the same kind). `phase_margin` / `ac_gain`:
+    /// `deadline_ms` of reset and held per `hold_ms` (the kebab-case
+    /// `boot-coverage` is the accepted legacy spelling of the same kind). `phase_margin` / `ac_gain`:
     /// small-signal loop checks (need an `[ac]` block). `hwtrace`: the run
     /// reproduces a captured hardware trace. `model_coverage`: enough of the
     /// board bound to a real device model.
@@ -903,6 +903,17 @@ pub struct Assertion {
     /// net must reach and hold `min` volts.
     #[serde(default)]
     pub deadline_ms: Option<f64>,
+    /// boot-coverage: how long (ms) the net must HOLD its level continuously
+    /// after first reaching it. Absent = hold through the whole boot deadline
+    /// (the strictest reading, right for a set-and-hold control net like a
+    /// display reset). `0` = the level only needs to be REACHED by the
+    /// deadline (right for a heartbeat / toggling net whose high phase is
+    /// shorter than the boot window, where hold-to-deadline can never pass).
+    /// A positive value = the level must hold continuously for that many ms
+    /// after the first reach; the run must be long enough to observe the
+    /// whole hold window or the check fails as unconfirmed.
+    #[serde(default)]
+    pub hold_ms: Option<f64>,
 
     // ── model_coverage ──────────────────────────────────────────────────────
     // How much of the board bound to a real device model. Vendors encrypt
@@ -1043,6 +1054,28 @@ impl Spec {
         }
         for a in &self.asserts {
             a.validate()?;
+        }
+        // boot_coverage without firmware is a hollow gate. The assertion exists
+        // to adjudicate "does the FIRMWARE drive this control net in time"; with
+        // no firmware loaded, nothing in the run can drive the net, so the only
+        // way it reaches its level is passively through the board (a pull, a
+        // supply divider settling) - exactly the vacuous pass the check exists
+        // to prevent. Refuse at load, like the empty-asserts rejection above.
+        if self.firmware.is_none() {
+            if let Some(a) = self
+                .asserts
+                .iter()
+                .find(|a| a.kind == "boot_coverage" || a.kind == "boot-coverage")
+            {
+                return Err(SpecError::Invalid(format!(
+                    "boot_coverage assertion '{}' needs `firmware = ...`: with no firmware \
+                     loaded, nothing in the run can drive the net, so it could only reach \
+                     its level passively (a board pull / bias), and the check would pass \
+                     without measuring anything; if the level is meant to be reached \
+                     passively, assert it with a `voltage` check instead",
+                    a.label()
+                )));
+            }
         }
         // An assertion's `scenario` scope must name a declared [[scenario]] id.
         // Without this, an unknown scope would silently fall back to a window
@@ -1481,6 +1514,7 @@ impl Assertion {
         for (field, val) in [
             ("after_ms", self.after_ms),
             ("deadline_ms", self.deadline_ms),
+            ("hold_ms", self.hold_ms),
         ] {
             if let Some(v) = val {
                 if !v.is_finite() {
@@ -1727,6 +1761,16 @@ impl Assertion {
                         self.net.as_deref().unwrap_or("?")
                     )));
                 }
+                if let Some(h) = self.hold_ms {
+                    if h < 0.0 {
+                        return Err(SpecError::Invalid(format!(
+                            "boot_coverage assertion on '{}': `hold_ms` must be >= 0 \
+                             (0 = the level only needs to be reached; absent = hold \
+                             through the whole deadline)",
+                            self.net.as_deref().unwrap_or("?")
+                        )));
+                    }
+                }
             }
             "model_coverage" => {
                 // Caught here rather than at run time: an assertion with no
@@ -1891,8 +1935,13 @@ impl Assertion {
             }
             "boot_coverage" | "boot-coverage" => {
                 let net = self.net.clone().unwrap_or_default();
+                let hold = match self.hold_ms {
+                    None => String::new(),
+                    Some(h) if h > 0.0 => format!(", held {h} ms"),
+                    Some(_) => ", reach only".to_string(),
+                };
                 format!(
-                    "{net} driven to >= {} V within {} ms of reset",
+                    "{net} driven to >= {} V within {} ms of reset{hold}",
                     self.min.unwrap_or(0.0),
                     self.deadline_ms.unwrap_or(0.0)
                 )

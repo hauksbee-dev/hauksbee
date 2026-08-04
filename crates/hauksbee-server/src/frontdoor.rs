@@ -819,10 +819,21 @@ async fn check_handler(
     let (board_name, fw_name, fw_bytes) = (parts.board_name, parts.fw_name, parts.fw_bytes);
 
     // The runner returns a ready JSON string (its own {ok:...} shape); relay
-    // it verbatim with the content-type header.
-    let json = match &fw_bytes {
-        Some(bytes) => (state.check)(&board_name, &board_bytes, Some((&fw_name, bytes)), &spec),
-        None => (state.check)(&board_name, &board_bytes, None, &spec),
+    // it verbatim with the content-type header. It BLOCKS for the whole child
+    // co-sim (up to the runner's own multi-minute timeout), so it must run on
+    // the blocking pool: called inline it would pin an async worker thread per
+    // active check, and a handful of concurrent checks could pin every worker
+    // and stall all the other routes (the same reason datasheet_check_handler
+    // uses spawn_blocking).
+    let check = state.check.clone();
+    let json = match tokio::task::spawn_blocking(move || match &fw_bytes {
+        Some(bytes) => (check)(&board_name, &board_bytes, Some((&fw_name, bytes)), &spec),
+        None => (check)(&board_name, &board_bytes, None, &spec),
+    })
+    .await
+    {
+        Ok(json) => json,
+        Err(_) => return json_error("the check task panicked; see the server log"),
     };
     (
         StatusCode::OK,
