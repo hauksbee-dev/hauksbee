@@ -54,25 +54,32 @@ duration_ms = 50
 
 # Attach the supplies the board expects.
 [[supply]]
-net = "+3.3V"
+net = "+5V"
 kind = "wall"
-volts = 3.3
+volts = 5.0
 
 # Assert what must hold.
 [[assert]]
-kind = "rail"
-net = "+3.3V"
-min = 3.2
-max = 3.4
+kind = "voltage"
+net = "+5V"
+min = 4.75
+max = 5.25
 
 [[assert]]
 kind = "no_faults"          # nothing exceeds its rating
 ```
 
-The available supply kinds, scenario/load profiles, and assertion kinds (`rail`,
-`rail_window`, `no_faults`, `uart`, `temperature`, loop stability, hardware-trace
-comparison, …) are documented in [`CI.md`](ci/CI.md), with runnable examples in
-[`EXAMPLES.md`](ci/EXAMPLES.md) and under [`../examples/ci-specs/`](../examples/ci-specs/).
+Every `kind` above is a real token. `kind` is a closed vocabulary on both
+blocks, so a near-miss is rejected at load rather than silently ignored:
+supplies take `ideal` / `bench` / `wall` / `usb` / `battery`, and assertions take
+`voltage`, `rail_window`, `no_faults`, `uart`, `toggle`, `max_current`,
+`max_temp`, `peripheral`, `protection_trip`, `boot_coverage`, `phase_margin`,
+`ac_gain`, `hwtrace`, and `model_coverage`. A rail window is `voltage` (or
+`rail_window`), a junction-temperature limit is `max_temp`, and loop stability is
+`phase_margin` / `ac_gain`. Those kinds, the scenario/load profiles, and every
+field each one takes are documented in [`CI.md`](ci/CI.md), with runnable examples
+in [`EXAMPLES.md`](ci/EXAMPLES.md) and under
+[`../examples/ci-specs/`](../examples/ci-specs/).
 
 ## Running it, locally, one command
 
