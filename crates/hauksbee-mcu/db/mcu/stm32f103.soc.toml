@@ -96,6 +96,16 @@ spi1: SPI.STM32SPI @ sysbus 0x40013000
 // HAL_Delay(n) takes 7.2n ms of simulated time and boot never finishes inside
 // a sane co-sim window. TIM1/TIM2 also serve as a 64-bit systime pair in some
 // firmware.
+//
+// This is the one clock here that is NOT the part's reset default, and it is a
+// deliberate, bounded divergence rather than an oversight. Renode models no F1
+// clock tree (the RCC above is a stub reporting every PLL as locked), so one
+// fixed timer rate has to serve both firmware classes, and only the post-PLL
+// rate lets a stock HAL project boot at all. The cost is stated instead of
+// hidden: bare-metal firmware that runs TIMx from the reset-default HSI sees
+// its timers 9x fast. SysTick, the core clock and `frequency_hz` all agree on
+// 8 MHz, so the paths a delay loop and a SysTick tick take are covered by the
+// clock-truth gate; a TIMx time base is not.
 timer1:
     frequency: 72000000
 timer2:
@@ -107,6 +117,31 @@ timer4:
 
 iwdg: Timers.STM32_IndependentWatchdog @ sysbus 0x40003000
     frequency: 40000
+
+// CLOCK TRUTH (tests/clock_truth.rs). The stock stm32f103.repl declares
+// `nvic systickFrequency: 72000000` and leaves `cpu PerformanceInMips` at
+// Renode's default 100, so a SysTick-timed firmware ran 9.09x fast (measured:
+// exactly 72/8) and an instruction busy-wait ran ~7x fast (measured 7.14x:
+// 100 MIPS against ~8 MIPS of real silicon). Both numbers made virtual time
+// cheaper than the board's, which is what let a time-based assertion pass at a
+// rate no blue pill can hit.
+//
+// 8 MHz is the F103's RESET DEFAULT: after reset the HSI is the system clock
+// (RM0008 §7.2) and this firmware enables no PLL, so it is the honest choice
+// and the one `frequency_hz` below declares. `frequency_hz` and these two
+// declarations are cross-checked at machine bring-up (renode::mod
+// `clock_declaration_mismatch`), so they cannot drift apart again.
+//
+// PerformanceInMips is Renode's instructions-per-second knob; a Cortex-M3
+// retires roughly one instruction per cycle, so the part's core clock in MHz
+// is the right setting. This is the same identity db/mcu/rp2040/rp2040.repl
+// uses (125 MIPS at 125 MHz), and RP2040 is the one backend that already
+// measured 1.00x.
+nvic:
+    systickFrequency: 8000000
+
+cpu:
+    PerformanceInMips: 8
 
 // Cortex-M bit-band aliases. The STM32F1 HAL drives RCC through them
 // (__HAL_RCC_LSI_ENABLE() is a write to RCC_CSR_LSION_BB = 0x42420480, not a
@@ -124,6 +159,19 @@ uart = "sysbus.usart1"
 frequency_hz = 8_000_000
 expected_e_machine = "EM_ARM"
 mcu_label = "STM32F103 (ARM Cortex-M3)"
+
+# WATCHDOG (measured). The inline platform's IWDG at 40 kHz does time out and
+# does reset: with a 50 ms reload never fed, the firmware's heartbeat stops at
+# the timeout and its boot marker flips a second time. But it resets ONCE, and
+# the core then stays quiet for the remaining 450 ms where the part would reboot
+# every 50 ms forever. So the first bite is real and anything the firmware would
+# have done on the reboots after it is not.
+watchdog_limitation = """\
+The STM32F103 independent watchdog fires and resets the core once in this \
+co-simulator, but the core does not resume afterwards: a part that would reboot \
+repeatedly under a starved watchdog goes quiet here instead, so only the FIRST \
+watchdog reset is represented on this run.\
+"""
 
 [[soc.ports]]
 letter = "A"
