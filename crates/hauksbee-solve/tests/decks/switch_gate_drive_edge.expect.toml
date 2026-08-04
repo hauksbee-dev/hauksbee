@@ -1,0 +1,59 @@
+# A relay's turn-on instant, read off a gate-drive RC, against the closed form.
+#
+# The CLOSED FORM is the gate here, and the oracle is the backstop. That ordering
+# is not a preference, it is what the synapse investigation established: on a
+# switching edge, ngspice does not bisect to the switch threshold. It closes the
+# relay at whatever timepoint it first notices the crossing and integrates the
+# whole straddling step already closed, so its answer carries an event-timing
+# error of order (its max step) x (the waveform's slew). Refining ngspice's own
+# grid on the synapse deck moved it 10x toward our answer (87.5 mV -> 8.5 mV as
+# tmax went 1 us -> 1 ns), which is the sense in which it was the one that was
+# wrong. A deck with an exact answer should assert against the exact answer.
+analysis = "tran"
+description = "Relay gating an RC gate load: turn-on instant and gate rise against the closed form v(g) = 5*(1 - exp(-(t - 10.6us)/11us))."
+# 5 V rail, so the comparison floor is 50 mV: the scale below which a gate voltage
+# is not a gate voltage.
+full_scale = 5.0
+
+[[probe]]
+expr = "v(g)"
+# LOOSE ON PURPOSE, and the reason is the oracle's, not ours. The deck pins
+# ngspice to a 20 ns maximum step, but 20 ns of event-timing error at the edge,
+# where the gate slews at 5 V / 11 us = 0.45 V/us, is 9 mV of voltage error at a
+# moment when v(g) itself is near zero, so against the 50 mV floor that reads as
+# ~0.2 relative however accurate both engines are. This bound is therefore a
+# check that the two agree about the SHAPE, and the closed-form bars below are
+# what actually hold the turn-on instant.
+reltol = 3.0e-1
+loose_reason = "bounded by ngspice's switch-event timing resolution at the edge (it does not bisect to the threshold), not by either engine's accuracy; the closed-form points carry the real bars at 1e-3"
+
+# One time constant after the make. The steepest point that is still far enough
+# from the edge for a timing error to be a small voltage error.
+[[probe.analytic]]
+at = 21.6e-6
+value = 3.160602794142789
+reltol = 2.0e-3
+note = "t = t_on + tau with t_on = 10.6us (control crosses von = 3.0 V) and tau = (RON + RG)*CG = 110*100n = 11us; v = 5*(1 - exp(-1))"
+
+[[probe.analytic]]
+at = 43.6e-6
+value = 4.751064659584264
+reltol = 1.0e-3
+note = "t = t_on + 3*tau; v = 5*(1 - exp(-3))"
+
+[[probe.analytic]]
+at = 65.6e-6
+value = 4.966310265004573
+reltol = 1.0e-3
+note = "t = t_on + 5*tau; v = 5*(1 - exp(-5))"
+
+# BEFORE the make, the gate must still be at its initial condition. This is the
+# early-conduction check: the old model, ramping across the whole hysteresis band
+# centred on VT = 2.5 V, was already part-way on at vctrl = 2.5 V (t = 10.5 us)
+# and would have put tens of millivolts on the gate here.
+[[probe.analytic]]
+at = 10.4e-6
+value = 0.0
+reltol = 1.0
+abstol = 1.0e-3
+note = "0.2us BEFORE the make threshold is reached, the gate's only dc path is a 1e9 ohm open switch, so it holds its IC=0; the 1 mV absolute floor is the bar. A band-ramp model conducting from VT would already be charging here"

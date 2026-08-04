@@ -171,10 +171,138 @@ pub struct StampCtx<'a> {
     /// converged control voltages and re-solves until none flip. `None` (every
     /// normal solve) keeps the smooth tanh + control tangent bit-identical.
     pub switch_freeze: Option<&'a std::collections::HashMap<DeviceId, bool>>,
+    /// LATCHED analog-switch states under [`crate::options::SwitchModel::Hysteretic`]
+    /// (keyed by device id), supplied by [`crate::newton::newton_solve`]'s
+    /// hysteretic outer loop.
+    ///
+    /// Distinct from `switch_freeze` in what it MEANS, which is why it is a
+    /// separate channel rather than a reuse. `switch_freeze` is a regularization:
+    /// the staged rescue pins a switch flat to hide a discontinuity Newton cannot
+    /// cross, and the pinned value carries no control dependence at all. This is
+    /// the DEVICE: the latch says which of the relay's two thresholds is currently
+    /// the live one (`von` while open, `voff` while closed), and the stamp still
+    /// resolves the conductance from the control voltage across a narrow ramp
+    /// about that threshold. So the switching INSTANT is the relay's, exact to
+    /// within the ramp width, while the device stays differentiable and Newton
+    /// keeps a continuous path through the transition.
+    ///
+    /// `switch_freeze` wins where both are present (the rescue path is mid-flight
+    /// and owns the decision).
+    pub switch_latch: Option<&'a std::collections::HashMap<DeviceId, bool>>,
     /// SPDT leg sibling map (device id -> complementary throw's device id) for
     /// the smooth break-before-make coupling. Consulted only when
     /// `effects.spdt_bbm` (the device-model default); empty/ignored otherwise.
     pub spdt_sibling: &'a std::collections::HashMap<DeviceId, DeviceId>,
+    /// Per-junction EVALUATION-voltage state for pn-junction limiting, supplied
+    /// by the live Newton iteration ([`crate::newton::newton_solve_core`]'s main
+    /// stamp) and absent everywhere else (residual probes, plan builds, tests).
+    ///
+    /// This is SPICE's own anchoring, and the distinction it carries is load
+    /// bearing. Anchoring pnjlim on the previous ITERATE makes a collapsed
+    /// junction a fixed point: when a relay hands a stiff divider to a
+    /// diode-connected base, the first Newton step launches the base to the
+    /// LINEAR network voltage (measured: 4.95 V), the lagged anchor keeps the
+    /// junction evaluated dead, the next linear solve reproduces the same
+    /// point, and the step norm reads converged at a root with `exp(40)*Is` =
+    /// 235 A of raw imbalance. Anchoring on the previous EVALUATION voltage
+    /// instead lets the evaluation point climb its log schedule (`vt*ln`)
+    /// every iteration while the node waits above, so within a handful of
+    /// iterations the junction wakes, conducts for real, and pulls the node
+    /// into the true root, which is how ngspice solves the same make step.
+    ///
+    /// `None` evaluates against `x_prev` exactly as before, so every path that
+    /// does not thread the state is bit-identical.
+    pub junction_eval: Option<&'a JunctionEval>,
+}
+
+/// Per-junction evaluation-voltage store for SPICE-style pnjlim anchoring
+/// (see [`StampCtx::junction_eval`]). Built once per workspace; values reset
+/// to NaN ("unseeded, fall back to the x_prev anchor") at every solve entry.
+pub struct JunctionEval {
+    /// Device id -> base slot in `vals`. A diode owns 1 slot (vd); a BJT owns
+    /// 2 (vbe, vbc).
+    slots: std::collections::HashMap<DeviceId, usize>,
+    /// The last evaluation voltage per junction; NaN = unseeded this solve.
+    vals: std::cell::RefCell<Vec<f64>>,
+    /// SPICE's `icheck`: set when any junction was LIMITED during the current
+    /// stamp (evaluated at a voltage other than the iterate's own). An
+    /// iteration that limited has not evaluated the real circuit, so its step
+    /// norm says nothing about a root: while the evaluation anchor is still
+    /// climbing its log schedule toward a suddenly-connected junction, the
+    /// ITERATE can sit perfectly still at the linear-network voltage
+    /// (measured: two zero-step iterations "converged" the mirror deck's make
+    /// onto the 235 A false root). The Newton loop reads-and-clears this each
+    /// iteration and refuses to call a limited iteration converged.
+    limited: std::cell::Cell<bool>,
+}
+
+impl JunctionEval {
+    /// Scan the circuit and allocate slots for every junction-limited device.
+    pub fn build(circuit: &Circuit) -> Self {
+        let mut slots = std::collections::HashMap::new();
+        let mut n = 0usize;
+        for (id, dev) in circuit.iter() {
+            match dev {
+                Device::Diode { .. } => {
+                    slots.insert(id, n);
+                    n += 1;
+                }
+                Device::Bjt { .. } => {
+                    slots.insert(id, n);
+                    n += 2;
+                }
+                _ => {}
+            }
+        }
+        JunctionEval {
+            slots,
+            vals: std::cell::RefCell::new(vec![f64::NAN; n]),
+            limited: std::cell::Cell::new(false),
+        }
+    }
+
+    /// Read-and-clear the "some junction was limited this stamp" flag.
+    pub fn take_limited(&self) -> bool {
+        self.limited.replace(false)
+    }
+
+    /// Mark every junction unseeded. Called at solve entry so no evaluation
+    /// anchor leaks between solves (each solve's first iteration anchors on
+    /// its own entry point, exactly the previous behaviour).
+    pub fn reset(&self) {
+        for v in self.vals.borrow_mut().iter_mut() {
+            *v = f64::NAN;
+        }
+    }
+
+    /// The stored evaluation anchor for junction `k` of `id`, or `fallback`
+    /// (the x_prev-derived anchor) when unseeded or untracked.
+    fn anchor(&self, id: DeviceId, k: usize, fallback: f64) -> f64 {
+        match self.slots.get(&id) {
+            Some(&s) => {
+                let v = self.vals.borrow()[s + k];
+                if v.is_finite() {
+                    v
+                } else {
+                    fallback
+                }
+            }
+            None => fallback,
+        }
+    }
+
+    /// Record the evaluation voltage this iteration actually used. `raw` is
+    /// the iterate's own junction voltage; a stored value that differs means
+    /// the evaluation was limited, which denies convergence this iteration
+    /// (see `limited`).
+    fn store(&self, id: DeviceId, k: usize, v: f64, raw: f64) {
+        if let Some(&s) = self.slots.get(&id) {
+            self.vals.borrow_mut()[s + k] = v;
+            if v != raw {
+                self.limited.set(true);
+            }
+        }
+    }
 }
 
 impl StampCtx<'_> {
@@ -1682,7 +1810,14 @@ fn stamp_diode<S: StampSink>(
     let vx = |i: Option<usize>| i.map(|i| ctx.x[i]).unwrap_or(0.0);
     let vx_prev = |i: Option<usize>| i.map(|i| ctx.x_prev[i]).unwrap_or(0.0);
     let vd_raw = vx(a_eff) - vx(k_i);
-    let vd_last = vx_prev(a_eff) - vx_prev(k_i);
+    // The limiting anchor: the last EVALUATION voltage where the live Newton
+    // threads its junction state (see StampCtx::junction_eval), the previous
+    // iterate otherwise.
+    let vd_iter_prev = vx_prev(a_eff) - vx_prev(k_i);
+    let vd_last = match ctx.junction_eval {
+        Some(je) => je.anchor(id, 0, vd_iter_prev),
+        None => vd_iter_prev,
+    };
     // Junction limiting. The forward exponential is limited by pnjlim toward
     // vcrit; the breakdown exponential is the same curve MIRRORED about
     // vd = -bv, so in the breakdown region (vd below -bv, with a 10·nvt skirt,
@@ -1716,6 +1851,10 @@ fn stamp_diode<S: StampSink>(
         if vd > vd_max {
             vd = vd_max;
         }
+    }
+
+    if let Some(je) = ctx.junction_eval {
+        je.store(id, 0, vd, vd_raw);
     }
 
     let (idc, gd_raw) = diode_eval(model, vd, t_c, temp_on);
@@ -1815,18 +1954,30 @@ fn stamp_bjt<S: StampSink>(
     // Iteration-path only; the converged root is unchanged.
     let vcrit_be = vcrit(is, model.nf * vt);
     let vcrit_bc = vcrit(is, model.nr * vt);
-    let vbe = pnjlim(
-        vbe,
-        sign * (vx_prev(bi) - vx_prev(ei)),
-        model.nf * vt,
-        vcrit_be,
-    );
-    let vbc = pnjlim(
-        vbc,
-        sign * (vx_prev(bi) - vx_prev(ci)),
-        model.nr * vt,
-        vcrit_bc,
-    );
+    // Limiting anchors: the last EVALUATION voltages when the live Newton
+    // threads its junction state (see StampCtx::junction_eval), the previous
+    // iterate otherwise. The evaluation anchor is what lets a collapsed
+    // diode-connected base climb its log schedule while the node itself waits
+    // at the linear-network voltage, instead of the false root becoming a
+    // fixed point of the lagged-iterate anchor (the mirror deck's 235 A
+    // "converged" make step).
+    let vbe_iter_prev = sign * (vx_prev(bi) - vx_prev(ei));
+    let vbc_iter_prev = sign * (vx_prev(bi) - vx_prev(ci));
+    let (vbe_last, vbc_last) = match ctx.junction_eval {
+        Some(je) => (
+            je.anchor(id, 0, vbe_iter_prev),
+            je.anchor(id, 1, vbc_iter_prev),
+        ),
+        None => (vbe_iter_prev, vbc_iter_prev),
+    };
+    let vbe_raw_j = vbe;
+    let vbc_raw_j = vbc;
+    let vbe = pnjlim(vbe, vbe_last, model.nf * vt, vcrit_be);
+    let vbc = pnjlim(vbc, vbc_last, model.nr * vt, vcrit_bc);
+    if let Some(je) = ctx.junction_eval {
+        je.store(id, 0, vbe, vbe_raw_j);
+        je.store(id, 1, vbc, vbc_raw_j);
+    }
 
     let nvf = model.nf * vt;
     let nvr = model.nr * vt;
@@ -2336,6 +2487,95 @@ fn stamp_mosfet<S: StampSink>(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// The `VSwitch` conductance ramp, shared verbatim by the transient/DC stamp and
+/// by the AC small-signal stamp.
+///
+/// Returns `(s, ds_dvctrl, ramp_off, ramp_on)`, where `s` is the selection
+/// fraction that log-interpolates the conductance
+/// `gsw = exp(ln goff + s*(ln gon - ln goff))`, and `ds_dvctrl` is its exact
+/// derivative (the control tangent both stamps need).
+///
+/// One function because the two paths drifted before: `.ac` kept its own copy of
+/// an unclamped tanh, so a relay whose DC solve had it latched hard open was
+/// reported by `.ac` as a mid-band modulator with a gain of 6.27 while the DC
+/// sensitivity at the same bias was exactly 0. A duplicated device model is a
+/// divergence waiting to be measured.
+///
+/// `latched` is `Some(on)` for a [`crate::options::SwitchModel::Hysteretic`]
+/// relay, naming which of its two thresholds is live; `None` is the smooth pass
+/// element, whose ramp spans the whole `[voff, von]` band.
+pub(crate) fn vswitch_ramp(
+    vctrl: f64,
+    von: f64,
+    voff: f64,
+    latched: Option<bool>,
+    transition_frac: f64,
+) -> (f64, f64, f64, f64) {
+    let (ramp_off, ramp_on) = match latched {
+        None => (voff, von),
+        Some(on) => {
+            // ONE-SIDED, anchored exactly on the live threshold, with the ramp
+            // lying on the side the relay is moving TOWARD. An open relay is at
+            // exactly `roff` at `von` and reaches `ron` at `von + w`; a closed one
+            // is at exactly `ron` at `voff` and reaches `roff` at `voff - w`.
+            //
+            // Anchored rather than centred because the threshold is a strict
+            // inequality in the model and in ngspice ("closed WHEN the control
+            // passes von"), so at the threshold itself the relay is still in its
+            // old state. A centred ramp put the half-conductance point there and
+            // disagreed maximally with the oracle at exactly the one control
+            // voltage the deck cares about (measured on `switch_sw_thresholds`:
+            // 0.99 relative error at VC = 2.5 V and nowhere else).
+            //
+            // It also makes the residual timing error one-signed: the switch can
+            // now only ever act LATE, by at most `w / dv_ctrl_dt`, never early.
+            // Turning on early is the failure that cost 7.1 relative on the
+            // synapse array, because it hands the load current before the circuit
+            // being modelled would have.
+            let w = (transition_frac * (von - voff).abs()).max(1e-12)
+                * if von >= voff { 1.0 } else { -1.0 };
+            if on {
+                (voff - w, voff)
+            } else {
+                (von, von + w)
+            }
+        }
+    };
+    let width = ramp_on - ramp_off;
+    let width = if width == 0.0 { 1e-12 } else { width };
+    // q = 0 at `ramp_off`, 1 at `ramp_on`; the division carries the orientation.
+    let q = ((vctrl - ramp_off) / width).clamp(0.0, 1.0);
+    // Smoothstep: monotone, C1, and it REACHES both rails at finite control
+    // voltage, which the previous unclamped tanh never did (measured on
+    // `von=2.5 voff=0.5 ron=10 roff=1e9`: 12.2 Ohm at vctrl=3 V against a stated
+    // 10, and 819 MOhm at vctrl=0 against a stated 1e9). Zero slope at both ends
+    // means a switch outside its band contributes no spurious control tangent and
+    // Newton sees no kink where the clamp engages.
+    let s = q * q * (3.0 - 2.0 * q);
+    let ds_dvctrl = 6.0 * q * (1.0 - q) / width;
+    (s, ds_dvctrl, ramp_off, ramp_on)
+}
+
+/// Log-interpolated switch conductance at selection fraction `s`.
+pub(crate) fn vswitch_g_from_s(s: f64, ron: f64, roff: f64) -> f64 {
+    let gon = 1.0 / ron.max(1e-12);
+    let goff = 1.0 / roff.max(1e-12);
+    (goff.ln() + s * (gon.ln() - goff.ln())).exp()
+}
+
+/// Which threshold of a hysteretic relay is live, or `None` for the smooth model
+/// (and for any switch the latch has no entry for yet).
+pub(crate) fn vswitch_latched(
+    opts: &SolverOptions,
+    latch: Option<&std::collections::HashMap<DeviceId, bool>>,
+    id: DeviceId,
+) -> Option<bool> {
+    if opts.effects.switch_model != crate::options::SwitchModel::Hysteretic {
+        return None;
+    }
+    latch?.get(&id).copied()
+}
+
 fn stamp_vswitch<S: StampSink>(
     ctx: &StampCtx,
     id: DeviceId,
@@ -2373,20 +2613,35 @@ fn stamp_vswitch<S: StampSink>(
     }
 
     let vctrl_raw = ctx.v(cp) - ctx.v(cn);
-    let vmid = 0.5 * (von + voff);
-    let span = ((von - voff).abs()).max(1e-9);
+
+    // HYSTERETIC (SPICE3 `SW`) threshold selection. The latch says which
+    // threshold is live: an OPEN relay closes when the control rises past `von`, a
+    // CLOSED one opens when it falls below `voff`, and neither responds to
+    // anything in between.
+    //
+    // The full band is emphatically NOT the transition width, which is the bug
+    // this replaces: `VH` is a hysteresis HALF-WIDTH, so ramping across
+    // `[VT-VH, VT+VH]` put the 50%-conductance point at `VT` and started
+    // conducting a whole `VH` early. Measured on the synapse deck's
+    // `SW(VT=1.5 VH=1.0)` with a 10 us 0->3 V edge: ngspice closes at
+    // vctrl = 2.5 V and opens at 0.5 V, while the band-wide ramp was effectively
+    // closed by ~1.6 V and open again by ~1.4 V, landing both edges ~3 us early.
+    // On a membrane slewing at 0.43 V/us that was the 7.1-relative divergence.
+    let latched = crate::stamp::vswitch_latched(ctx.opts, ctx.switch_latch, id);
+    let frac = ctx.opts.effects.switch_transition_frac;
+    let (_, _, ramp_off, ramp_on) = vswitch_ramp(vctrl_raw, von, voff, latched, frac);
+    let vmid = 0.5 * (ramp_on + ramp_off);
+    let span = (ramp_on - ramp_off).abs().max(1e-12);
     // CONTROL LIMITING (staged / dynamic path only, branch_reg > 0). The
-    // log-interpolated conductance gsw = exp(lgoff + s*(lgon-lgoff)) spans many
-    // decades (ron ~ ohms, roff ~ 1e9), so a single Newton iteration that moves
-    // the control voltage across the transition makes gsw jump multiple decades
-    // at once. On a switch carrying real current (e.g. a synapse spike-gate
-    // whose control is a climbing neuron V_out) that snap destabilizes the
-    // coupled solve and the per-step Newton fails right at the flip. Mirroring
-    // pn-junction limiting (pnjlim) for diodes, bound the per-iteration change
-    // in the tanh argument `u` to ~1 (about one transition-width / a few
-    // decades of conductance) anchored on the previous iterate, so Newton tracks
-    // the switch through its transition smoothly. branch_reg==0 (every normal
-    // solve) keeps vctrl unlimited and the path bit-identical.
+    // log-interpolated conductance spans many decades (ron ~ ohms, roff ~ 1e9), so
+    // a single Newton iteration that moves the control voltage across the
+    // transition makes gsw jump multiple decades at once. On a switch carrying
+    // real current (a synapse spike-gate whose control is a climbing neuron
+    // V_out) that snap destabilizes the coupled solve and the per-step Newton
+    // fails right at the flip. Mirroring pn-junction limiting for diodes, bound
+    // the per-iteration movement to about one transition width, anchored on the
+    // previous iterate. branch_reg == 0 (every normal solve) keeps vctrl unlimited
+    // and the path bit-identical.
     let vctrl = if ctx.branch_reg > 0.0 {
         let vctrl_old = ctx.v_prev(cp) - ctx.v_prev(cn);
         let u_new = 3.0 * (vctrl_raw - vmid) / span;
@@ -2397,15 +2652,9 @@ fn stamp_vswitch<S: StampSink>(
     } else {
         vctrl_raw
     };
-    // Smooth tanh transition between log-conductances. With u the tanh argument,
-    //   s   = 0.5 * (1 + tanh(u)),      u = 3*(vctrl - vmid)/span
-    //   gln = ln(goff) + s*(ln(gon) - ln(goff))
-    //   gsw = exp(gln)
     let lgon = gon.ln();
     let lgoff = goff.ln();
-    let u = 3.0 * (vctrl - vmid) / span;
-    let th = u.tanh();
-    let mut s = 0.5 * (1.0 + th);
+    let (mut s, ds_dvctrl, _, _) = vswitch_ramp(vctrl, von, voff, latched, frac);
 
     // BREAK-BEFORE-MAKE for SPDT legs (effects.spdt_bbm, the device-model
     // default; clearing that field restores the plain bridging model). A real
@@ -2470,7 +2719,8 @@ fn stamp_vswitch<S: StampSink>(
     // current rows to the (cp,cn) control columns, with
     //   gm_ctrl = d i / d vctrl = (v_a - v_b) * d gsw / d vctrl
     //   d gsw / d vctrl = gsw * (ln(gon) - ln(goff)) * ds/dvctrl
-    //   ds/dvctrl       = 0.5 * (1 - tanh^2(u)) * (3/span)
+    // with ds/dvctrl from `vswitch_ramp` (zero outside the band, where the
+    // smoothstep is clamped, so a fully-driven switch stamps no control tangent).
     // and a matching equivalent-current correction so the linearization is
     // exact at the operating point (same root, faster convergence). Stamping
     // this makes each switch Newton-linearized instead of a Picard fixed point.
@@ -2488,7 +2738,7 @@ fn stamp_vswitch<S: StampSink>(
     // stamp + the switch's own a/b dynamics still track the flip. The default
     // (true) keeps the tangent, the classic behavior.
     let skip_ctrl_gm = !ctx.opts.effects.switch_ctrl_gm;
-    let dgsw_dvctrl = gsw * (lgon - lgoff) * 0.5 * (1.0 - th * th) * (3.0 / span);
+    let dgsw_dvctrl = gsw * (lgon - lgoff) * ds_dvctrl;
     let vab = ctx.v(a) - ctx.v(b);
     let gm_ctrl = vab * dgsw_dvctrl;
     if gm_ctrl != 0.0 && !skip_ctrl_gm {
@@ -2986,7 +3236,9 @@ mod diode_physics_tests {
                 branch_reg: 0.0,
                 cmp_freeze: None,
                 switch_freeze: None,
+                switch_latch: None,
                 spdt_sibling: &spdt,
+                junction_eval: None,
             };
             let mut rhs = vec![0.0; layout.size];
             let mut mat = m;
@@ -3062,7 +3314,9 @@ mod diode_physics_tests {
             branch_reg: 0.0,
             cmp_freeze: None,
             switch_freeze: None,
+            switch_latch: None,
             spdt_sibling: &spdt,
+            junction_eval: None,
         };
         let mut rhs = vec![0.0; layout.size];
         stamp_all(&ctx, &mut m, &mut rhs);
@@ -3167,7 +3421,9 @@ mod bjt_physics_tests {
             branch_reg: 0.0,
             cmp_freeze: None,
             switch_freeze: None,
+            switch_latch: None,
             spdt_sibling: &spdt,
+            junction_eval: None,
         };
         let mut rhs = vec![0.0; layout.size];
         stamp_all(&ctx, &mut m, &mut rhs);
@@ -3351,7 +3607,9 @@ mod bjt_physics_tests {
             branch_reg: 0.0,
             cmp_freeze: None,
             switch_freeze: None,
+            switch_latch: None,
             spdt_sibling: &spdt,
+            junction_eval: None,
         };
         let mut f = vec![0.0; layout.size];
         stamp_residual(&ctx, &mut f);
@@ -3715,7 +3973,9 @@ mod bench {
             branch_reg: 1e-2,
             cmp_freeze: None,
             switch_freeze: None,
+            switch_latch: None,
             spdt_sibling: &spdt,
+            junction_eval: None,
         };
         let mut rhs = vec![0.0f64; n];
         let mut f = vec![0.0f64; n];
@@ -3798,7 +4058,9 @@ mod bench {
             branch_reg: 1e-2,
             cmp_freeze: None,
             switch_freeze: None,
+            switch_latch: None,
             spdt_sibling: &spdt,
+            junction_eval: None,
         };
         let mut rhs = vec![0.0f64; n];
         m.clear_values();

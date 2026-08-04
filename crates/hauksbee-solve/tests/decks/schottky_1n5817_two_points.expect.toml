@@ -15,8 +15,8 @@ description = "1N5817 at 1.0 A and 3.1 A, the two forward points Vishay 88525 pu
 
 [[probe]]
 expr = "V(v1a)"
-reltol = 0.002
+reltol = 1.0e-06
 
 [[probe]]
 expr = "V(v31a)"
-reltol = 0.002
+reltol = 1.0e-06

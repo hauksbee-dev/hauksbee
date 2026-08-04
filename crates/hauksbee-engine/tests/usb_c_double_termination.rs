@@ -50,6 +50,22 @@ fn load(root: &Path, rel: &str) -> ExtractedBoard {
     }
 }
 
+/// [`load`] for a board that is not redistributable, so absence is a skip.
+///
+/// `corpus.toml` lists the boards it cannot point at and states that nothing in
+/// the public test suite depends on them. This suite did: it read the RPi 4
+/// reconstruction through [`load`], which panics on a missing file, so the claim
+/// held only for as long as nobody ran the sweep on a corpus without it. Under
+/// `HAUKSBEE_REQUIRE_CORPUS` a missing local-only board is still a skip rather
+/// than a failure, because no fetch can obtain it.
+fn load_local_only(root: &Path, rel: &str) -> Option<ExtractedBoard> {
+    if !root.join(rel).exists() {
+        eprintln!("NOT RUN  {rel}: local-only board, not redistributable (corpus.toml)");
+        return None;
+    }
+    Some(load(root, rel))
+}
+
 #[test]
 fn devkit_external_cc_rd_is_dnp_so_no_double_termination() {
     // The regression guard: the external 5.1k Rd footprints are DNP, so once the
@@ -203,11 +219,15 @@ fn rpi4_external_rd_without_integrated_pmic_is_not_doubled() {
     // NOT marked DNP, so the audit still sees it (proving the DNP skip is
     // targeted, not a blanket suppression).
     let Some(root) = corpus_root() else { return };
+    let mut scanned = 0usize;
     for rel in [
         "rpi4_usbc_reconstruction/rpi4_usbc_repaired.kicad_sch",
         "rpi4_usbc_reconstruction/rpi4_usbc_as_designed.kicad_sch",
     ] {
-        let board = load(&root, rel);
+        let Some(board) = load_local_only(&root, rel) else {
+            continue;
+        };
+        scanned += 1;
         let audit = audit_cc_termination(&board)
             .unwrap_or_else(|| panic!("{rel}: no CC termination found"));
         assert!(
@@ -224,4 +244,8 @@ fn rpi4_external_rd_without_integrated_pmic_is_not_doubled() {
             "{rel}: no integrated-Rd PMIC"
         );
     }
+    // Say what ran. A silent zero here reads as a pass, and this case's whole
+    // point is that the DNP skip is targeted rather than a blanket suppression:
+    // proving that on nothing proves nothing.
+    eprintln!("SCANNED  rpi4 external-Rd case: {scanned} board(s)");
 }

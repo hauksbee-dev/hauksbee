@@ -289,6 +289,32 @@
       ],
       "type": "object"
     },
+    "CosimFallbackWindow": {
+      "description": "One sim-time window `[start_s, end_s)` whose answer was produced by a\nper-chunk fallback integration rung after the primary analog solve failed\nthere. `method` is the rung's stable name\n(`crate::scheduler::ChunkFallbackMethod::as_str`), `accuracy` its stated\ncost, so the record travels with the number it qualifies. Minimal on\npurpose: shaped so a typed error-budget/provenance spine can absorb it\nlater as one provenance tag per window.",
+      "properties": {
+        "accuracy": {
+          "type": "string"
+        },
+        "end_s": {
+          "format": "double",
+          "type": "number"
+        },
+        "method": {
+          "type": "string"
+        },
+        "start_s": {
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "start_s",
+        "end_s",
+        "method",
+        "accuracy"
+      ],
+      "type": "object"
+    },
     "CosimJson": {
       "description": "Machine-readable co-sim summary (today only emitted as CLI text). Populated\nfrom the headless run + the MCU binding. `substituted` is true when the part\nthe user asked for was modelled by a less-specific core (Track B).",
       "properties": {
@@ -325,6 +351,13 @@
           "description": "Sim-time windows `[start_s, end_s)` where the analog solve failed. Empty\n(and omitted from JSON) on a valid run.",
           "items": {
             "$ref": "#/definitions/CosimFailedWindow"
+          },
+          "type": "array"
+        },
+        "fallback_windows": {
+          "description": "Sim-time windows solved by a per-chunk FALLBACK integration rung after\nthe primary solve failed there, each carrying the method that produced\nit and that method's accuracy cost. These windows are solved (they do\nnot make the run analog-invalid) but their numbers are second-class:\na consumer reading a waveform is entitled to know which spans came from\na more dissipative method. Empty (and omitted) when the primary path\ncarried the whole run.",
+          "items": {
+            "$ref": "#/definitions/CosimFallbackWindow"
           },
           "type": "array"
         },

@@ -13,4 +13,4 @@ description = "USBLC6-2P6 forward drop at the datasheet's 10 mA test current"
 
 [[probe]]
 expr = "V(a)"
-reltol = 0.01
+reltol = 5.0e-05

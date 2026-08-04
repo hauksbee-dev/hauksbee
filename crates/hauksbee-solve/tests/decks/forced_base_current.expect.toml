@@ -14,8 +14,8 @@ description = "forced base current, the shape a datasheet test condition takes"
 
 [[probe]]
 expr = "V(base)"
-reltol = 0.005
+reltol = 2.0e-04
 
 [[probe]]
 expr = "V(coll)"
-reltol = 0.005
+reltol = 1.0e-06

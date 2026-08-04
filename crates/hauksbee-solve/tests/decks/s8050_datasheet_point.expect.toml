@@ -38,8 +38,8 @@ description = "S8050 NPN at the datasheet's 50 mA VBE test point"
 
 [[probe]]
 expr = "V(base)"
-reltol = 0.005
+reltol = 2.0e-04
 
 [[probe]]
 expr = "V(coll)"
-reltol = 0.005
+reltol = 1.0e-05

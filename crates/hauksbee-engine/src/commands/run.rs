@@ -719,6 +719,11 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         // refuse (exit 3) rather than complete a fake-quiet run.
         let analog_valid = engine.scheduler().analog_valid();
         let failed_chunk_count = engine.scheduler().failed_chunk_count();
+        // Chunks the primary solve failed but a fallback rung carried. These are
+        // solved windows, so they are NOT failures, but the number in them came
+        // from a more dissipative method and the reader is entitled to know
+        // which. Disclosed independently of `analog_valid` for that reason.
+        let fallback_chunk_count = engine.scheduler().fallback_chunk_count();
         let analog_abort = engine.scheduler().analog_abort_tripped();
         // A co-sim that drove no GPIO, produced no net toggles, AND emitted no
         // UART did not exercise the firmware. `any_gpio_driven()` is essential:
@@ -767,6 +772,20 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                         .to_string(),
                 });
             }
+            // Independent of analog_valid: a run can be fully valid AND contain
+            // windows a fallback rung produced. Silence here would let a
+            // first-order, dissipative window read as a first-class one.
+            if fallback_chunk_count > 0 {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::Coverage,
+                    message: format!(
+                        "co-sim analog solve fell back on {fallback_chunk_count} chunk(s); \
+                         those windows are converged but were produced by a more robust, \
+                         lower-accuracy method (see fallback_windows in the co-sim JSON \
+                         for the method and its accuracy cost per window)"
+                    ),
+                });
+            }
             // A non-convergent chunk held stale voltages: a loud coverage note so
             // a CI consumer that filters notes (not just the CosimJson body) sees
             // the analog side is not trustworthy over the failed windows (05 §3b).
@@ -774,10 +793,10 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 jr.notes.push(JsonNote {
                     kind: JsonNoteKind::Coverage,
                     message: format!(
-                        "co-sim analog solve failed to converge on {failed_chunk_count} \
-                         chunk(s); those windows held stale node voltages and are \
-                         reported as analog_valid:false; analog-derived findings over \
-                         them are not trustworthy"
+                        "co-sim analog solve failed on {failed_chunk_count} chunk(s) \
+                         that no fallback integration could carry; those windows held \
+                         stale node voltages and are reported as analog_valid:false; \
+                         analog-derived findings over them are not trustworthy"
                     ),
                 });
                 // One note PER failed window naming the interval and the
@@ -891,11 +910,19 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                      exercised, so this result cannot vouch for firmware behaviour",
                 ));
             }
+            if fallback_chunk_count > 0 {
+                report.heads_up.push(crate::plain::HeadsUp::note(format!(
+                    "co-sim analog solve fell back on {fallback_chunk_count} chunk(s): \
+                     those windows are converged, but a more robust and less accurate \
+                     method produced them, so fast transients and ringing inside them are \
+                     damped. Rerun with --json for the method and window of each"
+                )));
+            }
             if !analog_valid {
                 report.heads_up.push(crate::plain::HeadsUp::note(format!(
-                    "co-sim analog solve failed to converge on {failed_chunk_count} chunk(s); \
-                     those windows held stale voltages and cannot be trusted (analog_valid is \
-                     false)"
+                    "co-sim analog solve failed on {failed_chunk_count} chunk(s) that no \
+                     fallback integration could carry; those windows held stale voltages \
+                     and cannot be trusted (analog_valid is false)"
                 )));
                 // The interval AND the diagnosis, inline. "Rerun with --json to
                 // see the windows" was the whole defect: the one surface a
@@ -1035,8 +1062,8 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         if analog_abort {
             eprintln!(
                 "WARNING: co-sim analog solve failed to converge for {} chunks in a row \
-                 ({} failed chunks total); the run held stale voltages and cannot vouch \
-                 for the analog side. The usual cause is unresolved active parts leaving \
+                 ({} failed chunks total); no fallback integration could carry them, so \
+                 the run held stale voltages and cannot vouch for the analog side. The usual cause is unresolved active parts leaving \
                  nodes floating: {} active IC(s) are unresolved/open here (hauksbee models \
                  --help). See {}.",
                 crate::scheduler::STRICT_CONSECUTIVE_FAILED_ABORT,

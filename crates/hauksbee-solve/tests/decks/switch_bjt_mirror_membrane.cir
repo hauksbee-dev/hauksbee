@@ -1,0 +1,37 @@
+Relay gating a BJT current mirror into an RC load: the 7.1-relative deck
+* This is one block of the 90-block synapse array, reduced to the smallest circuit
+* that still reproduces the divergence the accuracy campaign was opened on. The
+* full array disagreed with ngspice by 7.1 RELATIVE on v(mem0); this one block
+* reproduced 6.65, which is what established the divergence as a per-block model
+* error rather than anything to do with coupling or partitioning.
+*
+* The shape is worth a deck on its own merits, and it is the shape the corpus was
+* missing: a switch whose edge is gated into a HIGH-GAIN stage. The relay hands
+* 10 k of reference resistance to a diode-connected NPN, the mirror copies that
+* ~0.43 mA into a 1 nF membrane held up by a 47 k pull-up, and the membrane slews
+* at 0.43 V/us. At that slew a 3 us error in the switching instant is 1.3 V, so
+* the circuit AMPLIFIES a switch-timing error into a voltage error. Any board with
+* a gate or an enable feeding a current mirror, a comparator, or a driver has this
+* property, which is why a switch-timing bug is worth more than its own volts.
+*
+* Three separate defects showed up here, all now fixed:
+*   - the relay's hysteresis band was being used as a conductance ramp, so both
+*     edges landed ~3 us early;
+*   - the ramp never reached RON or ROFF (12.2 ohm against a stated 10);
+*   - `CM0 ... IC=5` was ignored under `uic`, so the membrane started at 0 V and
+*     charged through the 47 k instead of sitting flat at 5 V.
+VCC vcc 0 DC 5
+VP0 ctrl0 0 PULSE(0 3 30u 10u 10u 50u 200u)
+S0 vcc sw0 ctrl0 0 SMOD
+RR0 sw0 ref0 10k
+RB0 ref0 0 1meg
+Q1_0 ref0 ref0 0 QMOD
+Q2_0 mem0 ref0 0 QMOD
+RM0 vcc mem0 47k
+CM0 mem0 0 1n IC=5
+.model SMOD SW(VT=1.5 VH=1.0 RON=10 ROFF=1e9)
+.model QMOD NPN(IS=1e-15 BF=150 VAF=80 NF=1.0)
+.tran 1u 400u 0 0.05u uic
+.print tran v(mem0)
+.options reltol=1e-4
+.end
