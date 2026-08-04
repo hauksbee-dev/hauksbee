@@ -717,6 +717,44 @@ fn normalize_path(p: &Path) -> PathBuf {
     out
 }
 
+/// Does this firmware image contradict its own extension? `Some(message)` when
+/// it does, `None` when it agrees or cannot be read (the missing-file case has
+/// its own, better error, and an unreadable file is not this function's story).
+///
+/// Both formats are trivially identifiable from their first bytes: an ELF opens
+/// with `\x7fELF`, an Intel HEX record with an ASCII colon. A mismatch is a
+/// renamed or mis-copied build artifact, and it has to be said HERE, because the
+/// native ELF reader's answer is an unprefixed line on stderr from inside C plus
+/// `rc=-1`, which names neither the file nor what is wrong with it.
+pub(crate) fn firmware_format_mismatch(path: &Path) -> Option<String> {
+    use std::io::Read;
+    let ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)?;
+    let mut head = [0u8; 4];
+    let read = std::fs::File::open(path)
+        .and_then(|mut f| f.read(&mut head))
+        .ok()?;
+    let is_elf = read >= 4 && head == [0x7f, b'E', b'L', b'F'];
+    let is_hex = read >= 1 && head[0] == b':';
+    match ext.as_str() {
+        "elf" if is_hex => Some(format!(
+            "{} is named .elf but its contents are an Intel HEX file (it starts with \
+             a ':' record, not the ELF magic). Rename it to .hex, or point `firmware` \
+             at the .elf your build actually produced",
+            path.display()
+        )),
+        "hex" if is_elf => Some(format!(
+            "{} is named .hex but its contents are an ELF binary (it starts with the \
+             ELF magic, not a ':' record). Rename it to .elf, or point `firmware` at \
+             the .hex your build actually produced",
+            path.display()
+        )),
+        _ => None,
+    }
+}
+
 /// Validate every component reference the spec names against the board, with
 /// near-match suggestions. Covers `[[override]]` refs and `max_current` assert
 /// refs (overrides are also checked again in `apply_overrides`, but doing it
@@ -1143,8 +1181,17 @@ fn run_one(
                     spec.base_dir.display()
                 ))
             })?;
-            // Existence is now guaranteed, so canonicalize for Renode (which
-            // resolves relative paths against its own temp working directory).
+            // Existence is guaranteed; now check the file is the FORMAT its
+            // extension claims, before the native loader is handed it. The C
+            // ELF reader prints its own unprefixed line to stderr and returns a
+            // bare `rc=-1`, so a .hex renamed .elf surfaced as "Unexpected ELF
+            // file type" from nowhere followed by "elf_read_firmware failed
+            // (rc=-1)" - two lines, neither of which names the actual problem.
+            if let Some(msg) = firmware_format_mismatch(&p) {
+                return Err(SpecError::Io(msg));
+            }
+            // Canonicalize for Renode (which resolves relative paths against
+            // its own temp working directory).
             Some(p.canonicalize().unwrap_or(p))
         }
         None => None,

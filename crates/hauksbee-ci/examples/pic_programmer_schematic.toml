@@ -15,7 +15,11 @@
 # CI give the same verdict where both exist.
 
 name = "pic_programmer schematic power-up sanity"
-board = "../../../../board-corpus/kicad-demos-src/demos/pic_programmer/pic_programmer.kicad_sch"
+# The path is where `scripts/fetch-corpus.sh` puts it with no arguments:
+# <repo>/board-corpus/<board id>/... (corpus.toml's `default_dir`, board id
+# `kicad_demos`). Fetch it with:
+#   scripts/fetch-corpus.sh --only kicad_demos
+board = "../../../board-corpus/kicad_demos/demos/pic_programmer/pic_programmer.kicad_sch"
 duration_ms = 1
 
 # No PCB, no firmware: feed VCC from a bench supply and check the design powers
