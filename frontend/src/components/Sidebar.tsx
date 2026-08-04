@@ -4,6 +4,7 @@ import type { Theme } from '../hooks/useTheme'
 import {
   BoardTargetIcon, ChecksIcon, LiveIcon, WrenchIcon, SunIcon, MoonIcon,
 } from './Icons'
+import { relTime } from '../lib/rel-time'
 
 // The app shell's left rail: wordmark + mark, the four real destinations
 // (Board, Checks, Live Sim, Environment), and the active board's identity
@@ -23,18 +24,8 @@ export interface NavState {
   faultCount: number
 }
 
-function relTime(ts: number, now: number): string {
-  const s = Math.max(0, Math.round((now - ts) / 1000))
-  if (s < 45) return 'just now'
-  const m = Math.round(s / 60)
-  if (m < 60) return `${m} min ago`
-  const h = Math.round(m / 60)
-  if (h < 24) return `${h} h ago`
-  return `${Math.round(h / 24)} d ago`
-}
-
 export function Sidebar({
-  nav, report, boardLabel, analyzedAt, theme, onToggleTheme,
+  nav, report, boardLabel, analyzedAt, theme, onToggleTheme, sessions,
 }: {
   nav: NavState
   report: WebReport | null
@@ -42,6 +33,10 @@ export function Sidebar({
   analyzedAt: number | null
   theme: Theme
   onToggleTheme: () => void
+  /** The saved-session indicator, pinned above the board identity card. Passed
+   *  as a node rather than as data: the rail's job is where things sit, and the
+   *  switcher owns a dialog, a rename and a delete of its own. */
+  sessions?: React.ReactNode
 }) {
   // Re-render on a slow clock so "analyzed N min ago" stays honest.
   const [now, setNow] = useState(Date.now())
@@ -136,6 +131,10 @@ export function Sidebar({
       </div>
 
       <div className="flex-1" />
+
+      {/* Saved sessions, then the active board's identity: what is remembered,
+          then what is loaded. */}
+      {sessions}
 
       {/* Active board identity, pinned */}
       {report?.ok && (

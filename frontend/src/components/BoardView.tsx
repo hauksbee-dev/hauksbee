@@ -11,6 +11,10 @@ import { displayNet } from '../lib/net-name'
 import { cssToken, onThemeChange } from '../lib/theme-tokens'
 import { acceptedFormatsSentence, withoutEngineFormatList } from '../lib/board-formats'
 import { ArriveOnce, StaggerItem } from '../motion'
+import { ExportMenu } from './ExportMenu'
+import type { SpecSnapshot } from '../hooks/useSessions'
+import { groupFindings } from '../lib/findings'
+import type { FindingGroup } from '../lib/findings'
 
 // The Board view with a report in hand: the viewer as the hero surface (with
 // its toolbar and layers panel), the plain-language verdict, and the findings.
@@ -69,17 +73,25 @@ function CopyButton({ text, label = 'Copy' }: { text: string; label?: string }) 
   )
 }
 
-export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
+export function BoardView({
+  session, onQueueCheck, onDriveLive, simMounted, engineVersion, spec, checks, sessionName,
+}: {
   session: BoardSession
   onQueueCheck: (check: { kind: string; net?: string; ref?: string }) => void
   onDriveLive: () => void
   simMounted: boolean
+  /** The hauksbee that produced the report, for the exported file's provenance. */
+  engineVersion: string | null
+  /** The spec the Checks pane composed, offered alongside the report. */
+  spec: SpecSnapshot | null
+  checks: { passed: number; failed: number; invalid: number } | null
+  sessionName: string | null
 }) {
   const r = session.report!
   const {
     boardUrl, selectedNet, selectedComponent, setSelectedNet, setSelectedComponent,
     busy, uploadError, uploadNotice, dismissNotice, firmwareFile, handleFirmware,
-    clearFirmware, boardFile, boardLabel, liveMode, onEmptyBoard,
+    clearFirmware, boardFile, boardLabel, liveMode, onEmptyBoard, restoredFrom,
   } = session
 
   // Every hook in this component lives ABOVE the unreadable-file branch below.
@@ -222,6 +234,51 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
         </div>
         </StaggerItem>
 
+        {/* A report that came out of storage rather than out of a run. It says
+            so for as long as it is on screen, and it says which actions are
+            unavailable, because everything that needs the board's bytes (a
+            re-run, a checks run, a live launch) cannot work from a saved report
+            and the buttons for them are gone rather than broken. */}
+        {restoredFrom && (
+          <div
+            data-testid="restored-notice"
+            className="mt-3 rounded-lg px-4 py-3 text-[13px] leading-relaxed"
+            style={{ background: 'var(--warn-bg)', border: '1px solid var(--warn-border)', color: 'var(--silk)' }}
+          >
+            <span className="text-[10px] font-bold tracking-widest uppercase block mb-1" style={{ color: 'var(--warn-strong)' }}>
+              Restored from a saved session
+            </span>
+            This is the report from{' '}
+            <b style={{ fontWeight: 600 }}>{restoredFrom.sessionName}</b>, kept in this browser.
+            The findings, the bind table and your composed checks are all here and can be
+            exported.{' '}
+            {restoredFrom.firmwareName
+              ? <>The board file and the firmware <span style={{ fontFamily: 'var(--font-mono)' }}>{restoredFrom.firmwareName}</span> are not: </>
+              : 'The board file itself is not: '}
+            running the checks again, or driving it live, needs{' '}
+            <span style={{ fontFamily: 'var(--font-mono)' }}>{restoredFrom.boardName}</span> dropped
+            once more.
+            <div className="mt-2.5">
+              <label
+                htmlFor="board-file"
+                data-testid="restored-redrop"
+                role="button"
+                tabIndex={0}
+                onKeyDown={e => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    document.getElementById('board-file')?.click()
+                  }
+                }}
+                className="hb-btn-primary hb-press inline-flex items-center px-3 text-[12px] cursor-pointer"
+                style={{ height: 30 }}
+              >
+                Drop the board again
+              </label>
+            </div>
+          </div>
+        )}
+
         {/* No live capability registered: the CLI hint remains (the header's
             primary action covers the launch/reconnect cases). */}
         {liveMode === 'none' && (
@@ -260,6 +317,25 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
             </span>
           </div>
         )}
+
+        {/* Everything this report can become. Below the verdict AND below every
+            line that qualifies it (the restored-session caveat, the unbound-parts
+            warning): those say how much to trust what is about to be exported,
+            so they are not something to read after the download button. */}
+        <div className="mt-3">
+          <ExportMenu
+            report={r}
+            boardLabel={boardLabel}
+            firmwareName={firmwareFile?.name ?? restoredFrom?.firmwareName ?? null}
+            analyzedAt={session.analyzedAt}
+            engineVersion={engineVersion}
+            spec={spec}
+            checks={checks}
+            sessionName={sessionName}
+            restored={restoredFrom !== null}
+          />
+        </div>
+
 
         {/* Directly under the line that says a model is missing: the offer to
             draft one. This is the moment the user learns they need it, and the
@@ -399,33 +475,8 @@ export function BoardView({ session, onQueueCheck, onDriveLive, simMounted }: {
   )
 }
 
-/** A run of findings that share level + why + fix (same-shaped): the DRC
- *  clearance case where 128 warnings differ only in which net-pair/location.
- *  Each item keeps its own `what` AND its own board location (if any). */
-interface FindingGroup {
-  level: string
-  why: string
-  fix: string
-  items: { what: string; x?: number; y?: number }[]
-}
-
 /** Pan-the-map callback for findings that carry board coordinates. */
 type LocateFn = (x: number, y: number, label: string) => void
-
-/** Collapse same-shaped findings so the shared explanation is shown ONCE.
- *  Order-independent: any findings with identical level/why/fix merge, no
- *  matter where they sit in the list. Nothing is hidden; every individual
- *  `what` is still listed, just under one explanation. */
-function groupFindings(findings: WebFinding[]): FindingGroup[] {
-  const groups: FindingGroup[] = []
-  for (const f of findings) {
-    const item = { what: f.what, x: f.x, y: f.y }
-    const g = groups.find(x => x.level === f.level && x.why === f.why && x.fix === f.fix)
-    if (g) g.items.push(item)
-    else groups.push({ level: f.level, why: f.why, fix: f.fix, items: [item] })
-  }
-  return groups
-}
 
 function SectionBlock({ section: s, onLocate }: { section: WebSection; onLocate?: LocateFn }) {
   const groups = groupFindings(s.findings)

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Sidebar } from './components/Sidebar'
+import { SessionRail } from './components/SessionSwitcher'
 import type { AppView } from './components/Sidebar'
 import { UploadView } from './components/UploadView'
 import { BoardView } from './components/BoardView'
@@ -10,6 +11,9 @@ import SimView from './SimView'
 import type { SimShellStatus } from './SimView'
 import { useTheme } from './hooks/useTheme'
 import { useBoardSession } from './hooks/useBoardSession'
+import { useSessions } from './hooks/useSessions'
+import type { SpecSnapshot } from './hooks/useSessions'
+import type { SavedSession } from './lib/session-store'
 import { BOARD_ACCEPT_ATTR } from './lib/board-formats'
 import { BoardTargetIcon, PlayIcon } from './components/Icons'
 import type { QueuedCheck, Startup, WebReport } from './types/report'
@@ -144,6 +148,13 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
     running: false, faults: 0, sessionBoard: null, connected: false,
   })
   const [checksSummary, setChecksSummary] = useState<ChecksSummary | null>(null)
+  // The spec as the Checks pane currently has it, lifted here because two things
+  // outside that pane need the same bytes: the Export menu and the saved session.
+  // The pane sets it and clears it on unmount; nothing here clears it, so a
+  // remount and a run-state reset in the same commit cannot race.
+  const [spec, setSpec] = useState<SpecSnapshot | null>(null)
+  // A resume that could not happen, said where the user asked for it.
+  const [resumeError, setResumeError] = useState<string | null>(null)
 
   // Checks queued from a board surface (net/component clicks on the report
   // map or the live sim) for the checks builder. The builder consumes by
@@ -215,6 +226,41 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
     setChecksSummary(null)
     setView('board')
   }, [session])
+
+  // Saved sessions. The board session above owns the run; this owns the memory
+  // of it, and the two only meet at the two callbacks below: one hands a
+  // re-fetched board file back for a REAL run, the other installs a stored
+  // report with nothing behind it (and says so, everywhere it shows).
+  const sessions = useSessions({
+    report,
+    firmwareName: session.firmwareFile?.name ?? session.restoredFrom?.firmwareName ?? null,
+    analyzedAt: session.analyzedAt,
+    engineVersion,
+    spec,
+    checks: checksSummary,
+    onReanalyze: session.handleBoard,
+    onRestoreReport: (saved: SavedSession) => {
+      if (!saved.report) return
+      session.restoreReport({
+        report: saved.report,
+        analyzedAt: saved.analyzedAt,
+        boardName: saved.board.fileName,
+        firmwareName: saved.firmwareName,
+        sessionName: saved.name,
+      })
+    },
+  })
+
+  const resumeSession = useCallback((id: string) => {
+    setResumeError(null)
+    void sessions.resume(id).then(result => {
+      if (result.kind === 'unavailable') {
+        setResumeError(result.reason)
+        return
+      }
+      setView('board')
+    })
+  }, [sessions])
 
   // A fresh report belongs to a (possibly) different board: last run's checks
   // summary would lie next to it.
@@ -382,6 +428,7 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
         analyzedAt={session.analyzedAt}
         theme={theme}
         onToggleTheme={toggleTheme}
+        sessions={<SessionRail state={sessions} onResume={resumeSession} />}
       />
 
       <div className="flex-1 flex flex-col min-w-0">
@@ -554,6 +601,34 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
           </div>
         )}
 
+        {/* A session that could not be reopened. Same place, and the same
+            plainness, as a launch failure: it says what is missing rather than
+            leaving a click that did nothing. */}
+        {resumeError && (
+          <div
+            data-testid="resume-error"
+            className="mx-5 mt-3 rounded-lg px-4 py-2.5 text-[13px]"
+            style={{ background: 'var(--warn-bg)', border: '1px solid var(--warn-border)', color: 'var(--silk)' }}
+          >
+            <span className="text-[10px] font-bold tracking-widest uppercase block mb-0.5" style={{ color: 'var(--warn-strong)' }}>
+              Could not reopen that session
+            </span>
+            {resumeError}. Drop the board again and everything you composed against it is
+            still here.
+            <div className="mt-2">
+              <button
+                type="button"
+                data-testid="resume-error-dismiss"
+                onClick={() => setResumeError(null)}
+                className="hb-btn hb-press px-3 text-[12px]"
+                style={{ height: 28 }}
+              >
+                Got it
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Views. Mounted once, hidden on navigation. */}
         <main className="flex-1 min-h-0 relative">
           <div style={{ display: view === 'board' ? 'block' : 'none', height: '100%' }}>
@@ -563,9 +638,18 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
                 onQueueCheck={queueCheck}
                 onDriveLive={driveLive}
                 simMounted={simMounted}
+                engineVersion={engineVersion}
+                spec={spec}
+                checks={checksSummary}
+                sessionName={sessions.current?.name ?? null}
               />
             ) : (
-              <UploadView session={session} onOpenLive={openLiveSession} />
+              <UploadView
+                session={session}
+                onOpenLive={openLiveSession}
+                sessions={sessions}
+                onResume={resumeSession}
+              />
             )}
           </div>
 
@@ -584,6 +668,7 @@ function Shell({ preloadedReport, preloadedBoardName, canLaunchLive, engineVersi
                 pendingChecks={queuedChecks}
                 onPendingConsumed={consumeChecks}
                 onSummary={setChecksSummary}
+                onSpec={setSpec}
               />
             </div>
           )}
