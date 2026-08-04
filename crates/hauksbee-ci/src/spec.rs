@@ -1011,9 +1011,49 @@ pub struct Assertion {
     pub max_active_unresolved: Option<usize>,
 }
 
+/// Whether the "spec" handed to us is actually a BOARD design file, detected
+/// by extension (`ext` lowercase) or content prefix, BEFORE the TOML parse.
+/// A KiCad board is one enormous line; letting it hit the TOML parser used to
+/// dump the entire board file into the terminal as error context.
+fn board_file_ext(ext: &str) -> bool {
+    matches!(
+        ext,
+        "kicad_pcb" | "kicad_sch" | "brd" | "pcbdoc" | "d356" | "net" | "board" | "zip"
+    )
+}
+
+/// Content sniff for the extensionless/renamed case: the KiCad s-expression
+/// headers and the netlist `(export` header.
+fn board_file_content(text: &str) -> bool {
+    let head = text.trim_start();
+    head.starts_with("(kicad_pcb") || head.starts_with("(kicad_sch") || head.starts_with("(export")
+}
+
+/// The board-not-a-spec repair message (mirrors the check-code style: name
+/// what happened and the exact command that fixes it).
+fn board_not_spec_message(path: &Path) -> String {
+    format!(
+        "'{}' is a board, not a spec: run  hauksbee-ci init {}  to scaffold a \
+         spec for it, then  hauksbee-ci run <spec.toml>",
+        path.display(),
+        path.display()
+    )
+}
+
 impl Spec {
     /// Load and validate a spec from a TOML file.
     pub fn load(path: &Path) -> Result<Self, SpecError> {
+        // Board-by-extension is decided before the read: a binary board
+        // (.PcbDoc) fails read_to_string with a UTF-8 error, which would hide
+        // the actual mistake.
+        let ext = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_ascii_lowercase())
+            .unwrap_or_default();
+        if board_file_ext(&ext) {
+            return Err(SpecError::Io(board_not_spec_message(path)));
+        }
         let text = std::fs::read_to_string(path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
                 // Never suggest an unrunnable command: the checkout-relative
@@ -1034,12 +1074,19 @@ impl Spec {
                 SpecError::Io(format!("reading {}: {e}", path.display()))
             }
         })?;
+        // Content sniff for a board file that was renamed .toml (or has no
+        // extension): same repair as the extension case above.
+        if board_file_content(&text) {
+            return Err(SpecError::Io(board_not_spec_message(path)));
+        }
         let mut spec: Spec = toml::from_str(&text).map_err(|e| SpecError::Toml {
             file: path.display().to_string(),
             // `e.to_string()` keeps the "at line N, column M" locator and the
             // caret-annotated snippet; `e.message()` dropped both, so a hand-author
-            // with a typo got the reason but no line to jump to.
-            message: e.to_string(),
+            // with a typo got the reason but no line to jump to. The snippet's
+            // context lines are width-capped: a machine-written file can be one
+            // enormous line, and the terminal is not the place to dump it.
+            message: crate::error::cap_context_width(&e.to_string()),
         })?;
         spec.base_dir = path
             .parent()

@@ -123,6 +123,25 @@ pub fn did_you_mean_hint(target: &str, options: &[&str]) -> String {
     }
 }
 
+/// Width-cap every line of an error message that quotes file content (the
+/// TOML parser's caret-annotated snippet). A machine-written input can be one
+/// enormous line, and quoting it whole buries the actual error; anything past
+/// the cap is elided with a marker. Lines within the cap pass through intact.
+pub fn cap_context_width(msg: &str) -> String {
+    const MAX: usize = 200;
+    msg.lines()
+        .map(|line| {
+            if line.chars().count() <= MAX {
+                line.to_string()
+            } else {
+                let head: String = line.chars().take(MAX).collect();
+                format!("{head} ...(line truncated)")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Classic Levenshtein edit distance.
 fn levenshtein(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
