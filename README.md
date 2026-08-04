@@ -110,11 +110,12 @@ hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --drc --plain  
 hauksbee-ci run crates/hauksbee-ci/examples/watchy.toml                            # run a CI spec the way a pipeline would
 ```
 
-On this board the DRC report finds no shorts and about fifty clearance
-warnings, spots where two nets sit closer than the board's own 0.2 mm rule.
-That is the honest verdict on a shipped design. To see what a real copper
-short looks like, run the `boot_gate` example in
-[`docs/ci/EXAMPLES.md`](docs/ci/EXAMPLES.md).
+The DRC report on this board is clean: `Looks healthy: no copper spacing (drc)
+problems found.` It reads the 0.150 mm clearance rule out of the board's own
+project file and finds nothing under it, which is the verdict a shipped,
+working design should get. A tool that manufactured warnings here would be
+teaching you to ignore it. To see what a real copper short looks like, run the
+`boot_gate` example in [`docs/ci/EXAMPLES.md`](docs/ci/EXAMPLES.md).
 
 **Then swap in your own board** (`my_board.kicad_pcb` is a placeholder for your file):
 

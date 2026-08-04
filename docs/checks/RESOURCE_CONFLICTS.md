@@ -187,7 +187,7 @@ resource-conflicts: 1 finding(s)
     '/PICO_CK-': net '/PICO_CK-' -> R10 -> net '/CK-' reaches HDMI1
     (HDMI-SWM-19))
 note: run the same command with --plain for a plain-language explanation of each finding and how to fix it.
-note: gate-grade finding(s) above, but this is a report command so the exit code is 0. Add --strict to exit 2 on them (exit contract: 0 = clean or report-only, 2 = findings under --strict, 3 = invalid for analysis), or gate CI with hauksbee-ci.
+note: gate-grade finding(s) above, but this is a report command so the exit code is 0. Add --strict to exit 2 on them (exit contract: 0 = clean or report-only, 1 = input error such as a missing or unreadable file, 2 = findings under --strict, 3 = invalid for analysis), or gate CI with hauksbee-ci.
 ```
 
 (The finding is one long line in the real output; it is wrapped here to fit the
