@@ -67,6 +67,42 @@ enum Command {
     /// Example:
     ///   cd ci && hauksbee-ci init ../hardware/board.kicad_pcb
     Init(InitArgs),
+
+    /// Install the pre-commit gate into this repository.
+    ///
+    /// Detects which hook mechanism the repo uses: a repo with a
+    /// `.pre-commit-config.yaml` gets the hauksbee-ci entry added to it (then
+    /// run `pre-commit install`); any other git repo gets a plain, self-
+    /// contained `.git/hooks/pre-commit`. Idempotent: re-running changes
+    /// nothing.
+    #[command(subcommand)]
+    Hook(HookCommand),
+
+    /// Print the GitHub Actions workflow that runs hauksbee-ci on every push
+    /// and pull request. `--write` writes it to
+    /// `.github/workflows/hauksbee.yml` (or a path you pass) instead;
+    /// idempotent, and it refuses to overwrite a diverged file.
+    GithubAction(GithubActionArgs),
+}
+
+#[derive(Subcommand)]
+enum HookCommand {
+    /// Wire the pre-commit gate into the repository containing the current
+    /// directory.
+    Install,
+}
+
+#[derive(Parser)]
+struct GithubActionArgs {
+    /// Write the workflow to this path instead of printing it. Passing the
+    /// flag with no value writes `.github/workflows/hauksbee.yml`.
+    #[arg(
+        long,
+        value_name = "PATH",
+        num_args = 0..=1,
+        default_missing_value = ".github/workflows/hauksbee.yml"
+    )]
+    write: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -75,8 +111,15 @@ struct RunArgs {
     /// a shell glob, `hauksbee-ci run ci/*.toml`) runs each in turn,
     /// aggregates one summary, merges everything into one --junit file, and
     /// exits with the worst code of the set (severity order 3 > 2 > 1 > 0).
-    #[arg(value_name = "SPEC", num_args = 1.., required = true)]
+    #[arg(value_name = "SPEC", num_args = 1.., required_unless_present = "example")]
     specs: Vec<PathBuf>,
+
+    /// Run an embedded example instead of a spec file (try `blinky`). The
+    /// example's spec, board and firmware are compiled into the binary and
+    /// materialized under the temp directory, so this works with no checkout
+    /// on disk.
+    #[arg(long, value_name = "NAME", conflicts_with = "specs")]
+    example: Option<String>,
 
     /// Write JUnit XML to this path (for the CI test-report step).
     #[arg(long, value_name = "OUT.XML")]
@@ -110,8 +153,10 @@ struct RunArgs {
 #[derive(Parser)]
 struct InitArgs {
     /// Board file to scaffold a spec from (.kicad_pcb, .kicad_sch, .net, .brd, .d356).
+    /// With no argument, looks for exactly one board file in the current
+    /// directory and tells you the command to run on it.
     #[arg(value_name = "BOARD")]
-    board: PathBuf,
+    board: Option<PathBuf>,
 
     /// Where to write the spec: a path ending in .toml is the spec file, and
     /// anything else is a directory (created if missing) that gets
@@ -125,10 +170,29 @@ fn main() -> ExitCode {
     // Renode/QEMU child on SIGTERM/SIGINT. See hauksbee_mcu::children.
     hauksbee_mcu::children::install_signal_reaper();
     let cli = Cli::parse();
-    let args = match cli.command {
+    let mut args = match cli.command {
         Command::Run(args) => args,
         Command::Init(args) => return cmd_init(args),
+        Command::Hook(HookCommand::Install) => return cmd_hook_install(),
+        Command::GithubAction(args) => return cmd_github_action(args),
     };
+
+    // --example: materialize the embedded example and run its spec like any
+    // other. The suggestion paths promise this works from a bare binary.
+    if let Some(name) = &args.example {
+        match hauksbee_ci::examples::materialize(name) {
+            Ok(spec) => {
+                if !args.quiet && !args.json {
+                    println!("example '{name}' materialized at {}", spec.display());
+                }
+                args.specs = vec![spec];
+            }
+            Err(e) => {
+                eprintln!("hauksbee-ci: {e}");
+                return ExitCode::from(2);
+            }
+        }
+    }
 
     // A co-sim is minutes of silence otherwise, which reads as a hang. Only for
     // a human watching: `--quiet` asked for silence, `--json` output is parsed,
@@ -247,14 +311,70 @@ fn main() -> ExitCode {
         println!("worst exit code of the set: {worst} (severity order 3 > 2 > 1 > 0)");
     }
 
+    // A GREEN run ends by pointing at whichever repo wiring (pre-commit hook,
+    // GitHub workflow) is missing, and says nothing when both are in place.
+    // RED runs end with the per-kind docs pointer inside the report instead.
+    if worst == 0 && !args.quiet && !args.json {
+        if let Ok(cwd) = std::env::current_dir() {
+            if let Some(step) = hauksbee_ci::integrate::green_next_step(&cwd) {
+                println!("{step}");
+            }
+        }
+    }
+
     ExitCode::from(worst)
+}
+
+/// `hauksbee-ci hook install`: exit 0 with the one-line outcome, 2 on error
+/// (no repo, unreadable config), matching the spec-error contract.
+fn cmd_hook_install() -> ExitCode {
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("hauksbee-ci: cannot determine the current directory: {e}");
+            return ExitCode::from(2);
+        }
+    };
+    match hauksbee_ci::integrate::hook_install(&cwd) {
+        Ok(msg) => {
+            println!("{msg}");
+            ExitCode::from(0)
+        }
+        Err(e) => {
+            eprintln!("hauksbee-ci: {e}");
+            ExitCode::from(2)
+        }
+    }
+}
+
+/// `hauksbee-ci github-action [--write [PATH]]`.
+fn cmd_github_action(args: GithubActionArgs) -> ExitCode {
+    match args.write {
+        None => {
+            print!("{}", hauksbee_ci::integrate::github_workflow_yaml());
+            ExitCode::from(0)
+        }
+        Some(path) => match hauksbee_ci::integrate::github_action_write(&path) {
+            Ok(msg) => {
+                println!("{msg}");
+                ExitCode::from(0)
+            }
+            Err(e) => {
+                eprintln!("hauksbee-ci: {e}");
+                ExitCode::from(2)
+            }
+        },
+    }
 }
 
 /// `hauksbee-ci init <board>`: scaffold a starter spec and print where it landed.
 /// Board / bind errors carry the crate's loud, did-you-mean style; exit 2 on any
 /// failure to match the spec-error contract of `run`.
 fn cmd_init(args: InitArgs) -> ExitCode {
-    match hauksbee_ci::init::init_to(&args.board, args.out.as_deref()) {
+    let Some(board) = args.board else {
+        return suggest_board_in_cwd();
+    };
+    match hauksbee_ci::init::init_to(&board, args.out.as_deref()) {
         Ok(path) => {
             println!("wrote starter spec to {}", path.display());
             println!("edit it, then run:  hauksbee-ci run {}", path.display());
@@ -270,6 +390,13 @@ fn cmd_init(args: InitArgs) -> ExitCode {
                  to the spec's own directory.",
                 path.display()
             );
+            // Both integrations install from the tool, so the spec is one
+            // command away from actually gating anything.
+            println!(
+                "\nwire it in:\n  \
+                 hauksbee-ci hook install          # block commits that break it\n  \
+                 hauksbee-ci github-action --write # run it on every push / PR"
+            );
             ExitCode::from(0)
         }
         Err(e) => {
@@ -277,4 +404,41 @@ fn cmd_init(args: InitArgs) -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// `hauksbee-ci init` with no board: when the current directory holds exactly
+/// one board file, name the exact command; otherwise list what was found.
+/// Always exit 2 (nothing was scaffolded).
+fn suggest_board_in_cwd() -> ExitCode {
+    const BOARD_EXTS: &[&str] = &["kicad_pcb", "kicad_sch", "net", "brd", "d356", "board"];
+    let mut boards: Vec<String> = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(".") {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            let path = entry.path();
+            let ext_matches = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .is_some_and(|e| BOARD_EXTS.contains(&e) || e.eq_ignore_ascii_case("pcbdoc"));
+            if path.is_file() && ext_matches {
+                boards.push(name);
+            }
+        }
+    }
+    boards.sort();
+    match boards.as_slice() {
+        [] => eprintln!(
+            "hauksbee-ci: init needs a board file and none was found here. \
+             Run `hauksbee-ci init <board>` with a .kicad_pcb, .kicad_sch, \
+             .net, .brd, .PcbDoc, .d356 or .board file."
+        ),
+        [one] => eprintln!("hauksbee-ci: found {one}; run:  hauksbee-ci init {one}"),
+        many => eprintln!(
+            "hauksbee-ci: found {} board files here ({}); pick one: \
+             hauksbee-ci init <board>",
+            many.len(),
+            many.join(", ")
+        ),
+    }
+    ExitCode::from(2)
 }

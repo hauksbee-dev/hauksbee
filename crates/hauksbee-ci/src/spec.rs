@@ -937,9 +937,18 @@ impl Spec {
     pub fn load(path: &Path) -> Result<Self, SpecError> {
         let text = std::fs::read_to_string(path).map_err(|e| {
             if e.kind() == std::io::ErrorKind::NotFound {
+                // Never suggest an unrunnable command: the checkout-relative
+                // example path only exists inside a hauksbee source tree; from
+                // a bare binary, point at the embedded example instead.
+                let checkout_example = Path::new("crates/hauksbee-ci/examples/blinky.toml");
+                let suggestion = if checkout_example.exists() {
+                    "hauksbee-ci run crates/hauksbee-ci/examples/blinky.toml"
+                } else {
+                    "hauksbee-ci run --example blinky"
+                };
                 SpecError::Io(format!(
                     "no spec file at '{}'. Check the path, or try a bundled example:\n  \
-                     hauksbee-ci run crates/hauksbee-ci/examples/blinky.toml",
+                     {suggestion}",
                     path.display()
                 ))
             } else {
