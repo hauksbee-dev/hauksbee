@@ -30,6 +30,7 @@
 //! canonical form defined here).
 
 pub mod altium;
+pub mod bom;
 pub mod dnp;
 pub mod drc;
 mod eagle;
@@ -41,6 +42,7 @@ mod netlist;
 pub mod netname;
 pub mod odbpp;
 mod pcb;
+pub mod placement;
 mod protel_ascii;
 pub mod reader;
 pub mod resource_conflict;
