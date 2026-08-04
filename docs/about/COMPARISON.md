@@ -36,7 +36,7 @@ load-bearing:
   always-on suite (`tests/analytic.rs`, plus `tests/ngspice.rs` and
   `tests/kicad_vectors.rs` when an ngspice binary is present) gates every run on
   hard error bounds: half-wave rectifier deck <2% rel, CE amplifier deck <0.2%
-  rel, RC ladder deck <1% rel, diode DC point <0.1%, BJT mirror ratio within 3%,
+  rel, RC ladder deck <1% rel, diode DC point <0.1% on V(d), <0.5% on the current, BJT mirror ratio within 3%,
   and the KiCad-authored vectors at <1% (rectifier) and <2% (3x-2N2222
   amplifier). Those are the numbers we stand behind.
 
@@ -56,7 +56,7 @@ ratios flatter hauksbee; they support "not close" rather than an exact multiple.
 | half-wave rectifier, 5ms tran | 1.4-2.7 ms, 1125 steps | 19x-37x wall-clock (ngspice 50-53 ms; the spread is ours, not ngspice's) | <2% rel |
 | synapse array, 90 blocks (partitioned) | 3.7x vs own monolithic this run; 3.5-7x across machines | ~15x (60.6 ms vs 915.5 ms) | 1.405e-7 vs monolithic |
 | small RC island, exact exponential steps | 100x fewer steps at equal accuracy (~38x wall) | n/a (measured against its own monolithic reference) | 9.6e-10 vs analytic |
-| RC ladder 1000 stages | 9.5k steps/s (Auto keeps monolithic: sparse LU already optimal there) | n/a (partitioned vs monolithic comparison) | <1e-6 vs monolithic |
+| RC ladder 1000 stages | same throughput either way, so Auto keeps it monolithic (sparse LU is already optimal on a tridiagonal pattern); the absolute rate is load-sensitive and has measured between 1.5k and 9.5k steps/s | n/a (partitioned vs monolithic comparison) | <1e-6 vs monolithic |
 | KiCad-authored vectors: rectifier / 3x-2N2222 amplifier | runs both via SpiceLoader | same netlists | 2.5e-5 / 0.92% max rel vs ngspice |
 
 The accuracy column entries marked "vs analytic" / "vs monolithic" are asserted

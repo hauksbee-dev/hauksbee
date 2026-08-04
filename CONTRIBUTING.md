@@ -169,11 +169,26 @@ Without the corpus, corpus-dependent tests **report as passed**, not as ignored.
 Rust has no runtime ignored state, so they early-return with a note on stderr and
 `cargo test` counts them green. This is the trap the whole section is about: a
 green suite on a machine with no corpus has measured nothing. Never read one as
-evidence. Make it a hard failure instead, which is what CI should always do:
+evidence. Make it a hard failure instead:
 
 ```bash
 HAUKSBEE_REQUIRE_CORPUS=1 cargo test --workspace
 ```
+
+**That command does not currently pass on a freshly fetched corpus, and the reason
+is our bug, not your checkout.** Several corpus suites address boards by the
+maintainers' `board-corpus/famous/<id>/...` layout described above, so with the
+variable set they hard-fail on board *location* rather than on any check firing:
+`known_faults` (3 failed), `strap_lint_corpus` (5 failed), `erc_contention_corpus`
+(1 failed, and its message says "board-corpus is absent" when what is absent is
+`board-corpus/famous`), plus one subtest each in `resource_conflict_corpus`,
+`si_corpus` and `drc_corpus`. `.github/workflows/corpus-gate.yml` runs this command,
+which is why that workflow has no green path today.
+
+So: run it to see which suites are genuinely covered, and read a failure naming a
+missing path as this known gap rather than as a regression you introduced. Reconciling
+the two layouts behind `hauksbee_testkit::board_path` is the fix, and it is a good
+first contribution.
 
 A handful of boards carry no redistribution rights at all, so they are absent
 from the manifest. Nothing in the public test suite depends on them.
