@@ -217,15 +217,14 @@ fn rp2040_descriptor_matches_its_documented_tiers() {
         cfg.extra_setup.iter().any(|c| c.contains("bootrom.elf")),
         "the boot ROM must be loaded: the SDK runtime calls into its function table"
     );
-    // The tiers the descriptor documents as NOT WIRED must really be unwired; a
-    // listed controller silently installs a bridge.
-    assert!(
-        cfg.i2c_controllers.is_empty(),
-        "I2C is documented as not wired"
-    );
+    // I2C is documented as proven; SPI as impossible with the vendored PL022
+    // (see renode_rp2040_bus.rs). A listed controller silently installs a
+    // bridge, so an SPI entry appearing here is a regression in honesty, not a
+    // feature.
+    assert_eq!(cfg.i2c_controllers, vec!["i2c0", "i2c1"]);
     assert!(
         cfg.spi_controllers.is_empty(),
-        "SPI is documented as not wired"
+        "SPI cannot be bridged through this platform's PL022 model"
     );
     assert!(
         cfg.adc_channels.is_empty(),
