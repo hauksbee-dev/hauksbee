@@ -144,7 +144,7 @@ do-not-populate: DNP parts are simulated as fitted (they are usually placed even
 net-lint: 2 finding(s)
   [medium] device_decode - U1 VBUS_MAX selector on net 'VBUS_max' decodes (Table 2) to {5V [SW1.1 (GND) -> 0 mV], 9V [SW1.2 (R13) -> 499 mV], 12V [SW1.3 (R14) -> 908 mV], 12V [SW1.4 (R15) -> 1315 mV], 19V [SW1.5 (open) -> 2185 mV], 19V [SW1.NC -> 2185 mV]}, but cannot reach {15V, 20V}: the divider's permanent pull-down plus switched-parallel legs cannot reproduce the datasheet's per-detent codes, so the top setting(s) are unreachable
   [high] device_decode - U1 VBUS_MIN net 'Net-(U1-VBUS_MIN)' decodes (Table 2) to 19V (2185 mV), GREATER than 4 of the VBUS_MAX selector's reachable detents (top band 19V): per EZ-PD BCR datasheet Note 1 (VBUS_MIN > VBUS_MAX), VBUS_MAX is used as both minimum and maximum, so the hard-wired VBUS_MIN silently overrides and defeats those selector positions
-note: gate-grade finding(s) above, but this is a report command so the exit code is 0. Add --strict to exit 2 on them (exit contract: 0 = clean or report-only, 2 = findings under --strict, 3 = invalid for analysis), or gate CI with hauksbee-ci.
+note: gate-grade finding(s) above, but this is a report command so the exit code is 0. Add --strict to exit 2 on them (exit contract: 0 = clean or report-only, 1 = input error such as a missing or unreadable file, 2 = findings under --strict, 3 = invalid for analysis), or gate CI with hauksbee-ci.
 ```
 
 Those are the same two findings, with the same detent voltages, that the unit
