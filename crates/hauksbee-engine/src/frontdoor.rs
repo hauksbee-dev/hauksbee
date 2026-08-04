@@ -1475,6 +1475,57 @@ fn top_gpio_nets(
 mod tests {
     use super::*;
 
+    /// The web report is the surface a user actually reads, so the exchange
+    /// readers' honesty has to be visible ON it, not merely computed.
+    ///
+    /// Two things are checked, and both were wrong before: the DRC section must
+    /// not claim an ODB++ job is a gerber archive, and the coverage note must not
+    /// say its circuit was reverse-extracted from copper geometry — the job states
+    /// its netlist, and the reader read it.
+    #[test]
+    fn an_exchange_board_gets_honest_coverage_notes_and_a_correct_not_checked_verdict() {
+        const ODB_ZIP: &[u8] =
+            include_bytes!("../../hauksbee-extract/tests/fixtures/exchange/boot_gate.odb.zip");
+        const IPC2581: &[u8] =
+            include_bytes!("../../hauksbee-extract/tests/fixtures/exchange/boot_gate.ipc2581.xml");
+
+        for (label, name, bytes, phrase) in [
+            ("ODB++", "b.odb.zip", ODB_ZIP, "an ODB++ job"),
+            ("IPC-2581", "b.xml", IPC2581, "an IPC-2581 document"),
+        ] {
+            let report = analyze(name, bytes);
+            let drc = report
+                .sections
+                .iter()
+                .find(|s| s.title == "Copper spacing (DRC)")
+                .unwrap_or_else(|| panic!("{label}: a DRC section"));
+            assert!(
+                drc.verdict.contains("Not checked"),
+                "{label}: clearance DRC must be reported as not run, not as clean: {}",
+                drc.verdict
+            );
+            assert!(
+                drc.verdict.contains(phrase),
+                "{label}: the verdict must name the input correctly: {}",
+                drc.verdict
+            );
+            assert!(
+                !drc.verdict.contains("gerber"),
+                "{label}: and must not call it a gerber archive: {}",
+                drc.verdict
+            );
+            let notes: Vec<&str> = report.notes.iter().map(|n| n.message.as_str()).collect();
+            assert!(
+                notes.iter().any(|n| n.contains("not reverse-engineered from copper")),
+                "{label}: the reader's coverage note must reach the report: {notes:?}"
+            );
+            assert!(
+                !notes.iter().any(|n| n.contains("reverse-extracted from the fab")),
+                "{label}: and must not claim the circuit came from copper: {notes:?}"
+            );
+        }
+    }
+
     /// R15: the web GPIO table must keep the highest-TOGGLE nets and present them
     /// activity-first, matching the CLI/JSON surfaces, not the 15 alphabetically-
     /// earliest driven nets. A most-active net with a late-sorting name must
