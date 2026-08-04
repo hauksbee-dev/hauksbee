@@ -546,18 +546,26 @@ pub fn newton_solve(
         // the rescue below rather than a refusal, so no deck that converges today
         // can start failing. `solve` runs the solve and reports both whether the
         // step settled and how badly the currents miss.
+        // The bar is a RELATIVE residual against `reltol`, generously scaled: a
+        // converged step is allowed 100x the solve's own relative tolerance before
+        // it is called a false root. The failure being caught is not a
+        // near-miss, it is a point where the junction tangent has collapsed and the
+        // imbalance is orders of magnitude out (measured: 238 A against
+        // milliamps), so the gate does not need to be tight to catch it and a
+        // tight one would reject good steps.
+        let bar = (opts.reltol * 100.0).max(1e-4);
         let solve = |ws: &mut Workspace, g: f64| -> (NewtonResult, f64) {
             let r = newton_solve_core(
                 ws, circuit, opts, time, dt, coeffs, state, dc, use_ic, g, src_scale,
             );
-            let res = residual_inf_norm_at(
-                ws, circuit, opts, time, coeffs, state, dc, use_ic, g, src_scale, 0.0,
+            let res = residual_rel_inf_norm_at(
+                ws, circuit, opts, time, coeffs, state, dc, use_ic, g, src_scale,
             );
             (r, res)
         };
         let (r0, res0) = solve(ws, gmin);
         last = r0;
-        if last.converged && !(res0.is_finite() && res0 <= crate::sim::OP_KCL_TOL) {
+        if last.converged && !(res0.is_finite() && res0 <= bar) {
             last.converged = false;
         }
         if !last.converged {
@@ -575,7 +583,25 @@ pub fn newton_solve(
             // solve has already failed, so a step that converges normally is
             // untouched.
             let had = ws.tran_line_search;
+            let had_reg = ws.staged_branch_reg;
+            // PER-NODE OSCILLATION DAMPING, which is the actual cure for what a
+            // flip step does to Newton. The failure is a pnjlim ORBIT: the linear
+            // solve asks to move the newly-connected junction a long way, the
+            // limiter clamps it to one thermal voltage, the next iterate asks to go
+            // back, and the undamped step norm sits pinned at exactly 2.586e-2 V
+            // for every iteration to max_newton while the residual does not move.
+            // A single global step length cannot break that (the Armijo search
+            // backtracks to its alpha floor and still sees no decrease), because the
+            // problem is one node reversing sign, not the whole step being too long.
+            // `damp_node_steps` damps exactly those nodes, progressively harder the
+            // longer they keep reversing, and it is armed by a nonzero branch
+            // regularizer. Arming it also enables the switch's own control limiting,
+            // which bounds the per-iteration movement across the conductance ramp.
+            //
+            // Both are restored below, so this is a property of the retry and not of
+            // the march.
             ws.tran_line_search = true;
+            ws.set_staged_branch_reg(1e-2);
             ws.x.copy_from_slice(&x_entry);
             for g in [1e-2, 1e-4, 1e-6, 1e-8, 1e-10] {
                 if g <= gmin {
@@ -583,8 +609,12 @@ pub fn newton_solve(
                 }
                 let _ = solve(ws, g);
             }
+            // The regularized rungs above have carried the iterate to a point the
+            // real network can be solved from; drop the regularizer for the final
+            // attempt so what is accepted is a root of the actual circuit.
+            ws.staged_branch_reg = had_reg;
             let (r1, res1) = solve(ws, gmin);
-            let ok1 = r1.converged && res1.is_finite() && res1 <= crate::sim::OP_KCL_TOL;
+            let ok1 = r1.converged && res1.is_finite() && res1 <= bar;
             if ok1 {
                 last = r1;
             } else if res1 < res0 {
@@ -604,7 +634,14 @@ pub fn newton_solve(
         if !last.converged {
             break;
         }
-        let next = eval_switch_states(circuit, &ws.layout, &ws.x, &latch, &pairs);
+        let next = eval_switch_states(
+            circuit,
+            &ws.layout,
+            &ws.x,
+            &latch,
+            &pairs,
+            opts.effects.switch_transition_frac,
+        );
         if std::env::var("HAUKSBEE_SWITCH_DBG").is_ok() {
             eprintln!(
                 "[switch] t={time:.6e} dc={dc} pass={pass} conv={} latch={latch:?} next={next:?}",
@@ -1419,6 +1456,60 @@ fn residual_inf_norm_at(
     worst
 }
 
+/// The worst node's KCL residual RELATIVE to the currents flowing into that node,
+/// which is SPICE's own current-convergence criterion:
+/// `|F_i| <= reltol*|I_i| + abstol`, rearranged so the caller compares one number
+/// against `reltol`.
+///
+/// An ABSOLUTE bar cannot serve a transient step. `.op`'s 1e-6 A works because a
+/// dc operating point's currents are milliamps, but a companion conductance scales
+/// as `C/h`, so the same 1 nF capacitor that carries nanoamps in dc carries 0.2 A
+/// of companion current at h = 50 ns. Holding that step to 1e-6 A demands a
+/// relative accuracy of 5e-6, tighter than the solve's own `reltol`, and it
+/// rejects perfectly good steps. Measured: an absolute bar here failed the
+/// current-mirror deck at its make instant by rejecting converged solves, and the
+/// driver then cut the step all the way to `dt_min`, where a 2e6 S companion
+/// against a 1e-9 S gmin is ill-conditioned enough to fail for real.
+///
+/// The scale per node is `max(|sum of g*x|, |rhs|)`, i.e. the larger of the
+/// currents leaving and entering, floored at `abstol` so an isolated node with no
+/// current at all is judged absolutely.
+fn residual_rel_inf_norm_at(
+    ws: &mut Workspace,
+    circuit: &Circuit,
+    opts: &SolverOptions,
+    time: f64,
+    coeffs: IntegCoeffs,
+    state: &ReactiveState,
+    dc: bool,
+    use_ic: bool,
+    gmin: f64,
+    src_scale: f64,
+) -> f64 {
+    let abs = residual_inf_norm_at(
+        ws, circuit, opts, time, coeffs, state, dc, use_ic, gmin, src_scale, 0.0,
+    );
+    if !abs.is_finite() {
+        return f64::INFINITY;
+    }
+    // `residual_inf_norm_at` leaves the assembled system in ws.matrix/ws.rhs, so
+    // the scale is read back from the same stamp the residual was measured on.
+    let mut worst = 0.0f64;
+    for i in 0..ws.layout.n_nodes {
+        let mut acc = 0.0;
+        for &(col, val) in ws.matrix.row(i) {
+            acc += val * ws.x[col];
+        }
+        let f = acc - ws.rhs[i];
+        let scale = acc.abs().max(ws.rhs[i].abs()).max(opts.abstol);
+        let rel = f.abs() / scale;
+        if rel > worst {
+            worst = rel;
+        }
+    }
+    worst
+}
+
 /// Node-block-only convergence test: every NODE voltage within
 /// `reltol*|v| + vntol`. Used by the staged-DC fallback, where the branch
 /// regularizer leaves a sub-nano-amp current ripple on the Vsource branches that
@@ -2071,12 +2162,33 @@ impl SpdtPairs {
 /// in its on-region is forced OFF (break) so the other can make. The
 /// Gauss-Seidel outer loop re-derives between inner solves, so as the control
 /// fully crosses, the make leg takes over cleanly after the break leg has opened.
+/// Resolve every relay's latched state from the converged control voltages.
+///
+/// `transition_frac` is the conductance ramp's width as a fraction of the band,
+/// and the latch flips at the ramp's FAR END rather than at the threshold itself:
+/// ON once the control passes `von + w`, OFF once it falls below `voff - w`.
+///
+/// That offset is what keeps the flip CONTINUOUS, and it is not a detail. The ramp
+/// an open relay uses runs from `von` up to `von + w`, and the one a closed relay
+/// uses runs from `voff` down to `voff - w`. If the latch flipped at `von`, then at
+/// the flip the old ramp would be at its `roff` end while the new ramp is already
+/// fully saturated at `ron`, so the conductance would jump the entire eight
+/// decades in a single Newton solve. Measured: that is exactly what broke the
+/// current-mirror deck, whose per-step Newton failed at t = 38.3 us, the make
+/// instant, at every timestep down to 1e-15. Flipping at `von + w` means the old
+/// ramp is ALSO saturated at `ron` there, so the two agree across the flip and
+/// Newton keeps a continuous path.
+///
+/// The device's switching instant is unaffected: conduction still begins at
+/// exactly `von`, since that is where the ramp starts. All the offset changes is
+/// when the bookkeeping catches up.
 fn eval_switch_states(
     circuit: &Circuit,
     layout: &Layout,
     x: &[f64],
     prev: &std::collections::HashMap<DeviceId, bool>,
     pairs: &SpdtPairs,
+    transition_frac: f64,
 ) -> std::collections::HashMap<DeviceId, bool> {
     // First pass: each switch's raw hysteretic decision and its "on-margin" (how
     // far the control sits past the on threshold; higher = more firmly on).
@@ -2096,9 +2208,16 @@ fn eval_switch_states(
             let vctrl = vp - vn;
             let vmid = 0.5 * (von + voff);
             let was_on = prev.get(&id).copied().unwrap_or(vctrl > vmid);
-            // Hysteresis at the switch's own band: turn ON above von, OFF below
-            // voff, otherwise hold. (For von==voff this is the mid crossing.)
-            let st = if was_on { vctrl > *voff } else { vctrl > *von };
+            // Hysteresis at the switch's own band, offset to the far end of the
+            // conductance ramp so the flip is continuous (see the fn docs). For
+            // von == voff the band is degenerate and both reduce to the crossing.
+            let w = (transition_frac * (von - voff).abs()).max(0.0)
+                * if von >= voff { 1.0 } else { -1.0 };
+            let st = if was_on {
+                vctrl > *voff - w
+            } else {
+                vctrl > *von + w
+            };
             on.insert(id, st);
             // On-margin relative to vmid (sign-agnostic to which leg): used only
             // to choose which leg breaks when both would make.
@@ -2165,7 +2284,14 @@ fn staged_event_solve(
     // switch-control / BJT-base nodes).
     let spdt = SpdtPairs::analyze(circuit);
     let mut cmp_states = eval_comparator_states(circuit, &ws.layout, seed, &Default::default());
-    let mut sw_states = eval_switch_states(circuit, &ws.layout, seed, &Default::default(), &spdt);
+    let mut sw_states = eval_switch_states(
+        circuit,
+        &ws.layout,
+        seed,
+        &Default::default(),
+        &spdt,
+        opts.effects.switch_transition_frac,
+    );
     if cmp_states.is_empty() && sw_states.is_empty() {
         return None; // nothing discrete to freeze: this path adds nothing.
     }
@@ -2204,7 +2330,14 @@ fn staged_event_solve(
         // Re-evaluate BOTH decision sets from the converged inner solution
         // (Gauss-Seidel over the discrete comparator + switch states).
         let next_cmp = eval_comparator_states(circuit, &ws.layout, &x, &cmp_states);
-        let next_sw = eval_switch_states(circuit, &ws.layout, &x, &sw_states, &spdt);
+        let next_sw = eval_switch_states(
+            circuit,
+            &ws.layout,
+            &x,
+            &sw_states,
+            &spdt,
+            opts.effects.switch_transition_frac,
+        );
         let cmp_flips = next_cmp
             .iter()
             .filter(|(k, v)| cmp_states.get(k) != Some(*v))
@@ -2280,7 +2413,14 @@ pub fn newton_solve_event(
     // control sitting in a hysteresis band holds, not chatters).
     let seed = ws.x.clone();
     let mut cmp_states = eval_comparator_states(circuit, &ws.layout, &seed, &Default::default());
-    let mut sw_states = eval_switch_states(circuit, &ws.layout, &seed, &Default::default(), &spdt);
+    let mut sw_states = eval_switch_states(
+        circuit,
+        &ws.layout,
+        &seed,
+        &Default::default(),
+        &spdt,
+        opts.effects.switch_transition_frac,
+    );
     if cmp_states.is_empty() && sw_states.is_empty() {
         // Nothing discrete to freeze: a plain step is already smooth. Caller
         // should not have routed here, but stay correct: one ordinary solve.
@@ -2374,7 +2514,14 @@ pub fn newton_solve_event(
 
         // Re-derive both discrete state sets from the converged inner solution.
         let next_cmp = eval_comparator_states(circuit, &ws.layout, &x, &cmp_states);
-        let want_sw = eval_switch_states(circuit, &ws.layout, &x, &sw_states, &spdt);
+        let want_sw = eval_switch_states(
+            circuit,
+            &ws.layout,
+            &x,
+            &sw_states,
+            &spdt,
+            opts.effects.switch_transition_frac,
+        );
 
         // Comparators flip freely (few, and they DRIVE the event). When the
         // comparators are self-deciding (cmp_smooth), their state isn't frozen so
@@ -3261,21 +3408,21 @@ mod switch_freeze_tests {
 
         // Control above von -> ON regardless of prior state.
         x[ci] = 3.0;
-        let s = eval_switch_states(&c, &layout, &x, &HashMap::new(), &SpdtPairs::empty());
+        let s = eval_switch_states(&c, &layout, &x, &HashMap::new(), &SpdtPairs::empty(), 0.0);
         assert_eq!(s.get(&id), Some(&true), "vctrl=3 > von=2 should be ON");
 
         // Control inside the band holds the prior state (hysteresis).
         x[ci] = 1.5;
         let mut prev = HashMap::new();
         prev.insert(id, true);
-        let held_on = eval_switch_states(&c, &layout, &x, &prev, &SpdtPairs::empty());
+        let held_on = eval_switch_states(&c, &layout, &x, &prev, &SpdtPairs::empty(), 0.0);
         assert_eq!(
             held_on.get(&id),
             Some(&true),
             "in-band should hold prior ON"
         );
         prev.insert(id, false);
-        let held_off = eval_switch_states(&c, &layout, &x, &prev, &SpdtPairs::empty());
+        let held_off = eval_switch_states(&c, &layout, &x, &prev, &SpdtPairs::empty(), 0.0);
         assert_eq!(
             held_off.get(&id),
             Some(&false),
@@ -3284,7 +3431,7 @@ mod switch_freeze_tests {
 
         // Control below voff -> OFF.
         x[ci] = 0.5;
-        let s = eval_switch_states(&c, &layout, &x, &HashMap::new(), &SpdtPairs::empty());
+        let s = eval_switch_states(&c, &layout, &x, &HashMap::new(), &SpdtPairs::empty(), 0.0);
         assert_eq!(s.get(&id), Some(&false), "vctrl=0.5 < voff=1 should be OFF");
     }
 
@@ -3413,8 +3560,8 @@ mod switch_freeze_tests {
         // The returned vector is a consistent fixed point: re-deriving the switch
         // states from it produces no flip.
         let states =
-            eval_switch_states(&c, &ws.layout, &root, &HashMap::new(), &SpdtPairs::empty());
-        let states2 = eval_switch_states(&c, &ws.layout, &root, &states, &SpdtPairs::empty());
+            eval_switch_states(&c, &ws.layout, &root, &HashMap::new(), &SpdtPairs::empty(), 0.0);
+        let states2 = eval_switch_states(&c, &ws.layout, &root, &states, &SpdtPairs::empty(), 0.0);
         assert_eq!(
             states, states2,
             "switch states at the root must be self-consistent"

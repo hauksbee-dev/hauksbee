@@ -1,0 +1,47 @@
+# `uic` must honour a capacitor's own IC=, and the decay from it is exact.
+#
+# This is a regression deck for a defect the 42-deck corpus could not see because
+# not one deck in it used `IC=`. Device initial conditions were dropped under
+# `uic`, so this node would have started at 0 V and stayed there (a discharged cap
+# across a resistor has nowhere to go), reading 0.000 where the closed form says
+# 5.000 at t = 0 and 1.839 at t = 100 us.
+#
+# t = 0 is included deliberately. The transient driver emits a sample at t = 0
+# from the starting unknown vector, so if the initial condition reaches only the
+# reactive history and not the node itself, the FIRST reported number is wrong
+# even though the rest of the waveform recovers. That is exactly the kind of error
+# that reads as a plotting artifact and is not.
+analysis = "tran"
+description = "Capacitor IC= under uic: the node starts at its declared 5 V and decays as 5*exp(-t/100us)."
+full_scale = 5.0
+
+[[probe]]
+expr = "v(out)"
+# Both engines integrate the same exponential on their own grids; the measured
+# disagreement is trapezoidal truncation at the requested 2 us step, and this bar
+# is 20x it.
+reltol = 1.0e-3
+
+[[probe.analytic]]
+at = 0.0
+value = 5.0
+reltol = 1.0e-9
+note = "the declared initial condition itself, reported at the first sample; exact, not integrated"
+
+[[probe.analytic]]
+at = 100.0e-6
+value = 1.8393972058572116
+reltol = 1.0e-3
+note = "one time constant: RC = 10k * 10n = 100us, v = 5*exp(-1)"
+
+[[probe.analytic]]
+at = 300.0e-6
+value = 0.24893534183931975
+reltol = 2.0e-3
+note = "three time constants: v = 5*exp(-3). The bar is looser than at one tau because trapezoidal truncation accumulates along the decay while the value shrinks, so the same absolute error is a larger fraction of it"
+
+[[probe.analytic]]
+at = 500.0e-6
+value = 0.03368973499542733
+reltol = 4.0e-3
+note = "five time constants: v = 5*exp(-5); same accumulation argument, one decade further down"

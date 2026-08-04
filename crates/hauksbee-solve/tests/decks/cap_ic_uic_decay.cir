@@ -1,0 +1,21 @@
+A capacitor's own IC= under uic, discharging through a resistor
+* `uic` on a `.tran` card means, in SPICE: skip the operating point and start from
+* the initial conditions given on the capacitor and inductor lines and on `.ic`
+* lines. The corpus had no deck asserting that, and the gap hid a real defect:
+* device IC= values were being ignored entirely, so a node a deck had DECLARED to
+* start at 5 V started at 0 and charged up through whatever path it had. On the
+* 90-block synapse array that alone put 2.82 V where ngspice read 5.00 V at
+* t = 39 us, a 44% error on a quantity the deck states outright.
+*
+* The board shape it stands for: any pre-charged rail or held-up node at the
+* moment a sequence begins. A supply that a model says starts at 5 V and actually
+* starts at 0 gets every brown-out and power-sequencing answer wrong.
+*
+* Closed form, exactly:  v(out)(t) = 5 * exp(-t / (10k * 10n)) = 5 * exp(-t/100us)
+* The only other conductance on the node is the solver's gmin (1e-12 S against
+* the resistor's 1e-4 S), which shifts the time constant by 1 part in 1e8.
+R1 out 0 10k
+C1 out 0 10n IC=5
+.tran 2u 500u uic
+.print tran v(out)
+.end
