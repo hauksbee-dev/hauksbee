@@ -413,6 +413,38 @@ jobs:
 
           exit "$fail"
 
+      # The default shape links libelf STATICALLY (hauksbee-mcu/build.rs; the
+      # archives come from libelf-dev/zlib1g-dev installed above). A NEEDED
+      # libelf.so.1 entry means that static link silently regressed, and the
+      # shipped binary exits 127 on any distro without libelf1
+      # (debian:bookworm-slim, ubuntu:24.04 minimal). Ask the ELF headers of
+      # the exact binaries about to be uploaded; a build-time claim is not
+      # evidence. Linux only: readelf/ELF do not exist on the darwin legs.
+      - name: Assert no dynamic libelf in the default binaries (Linux)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd hauksbee/dist
+          V="${{ steps.ver.outputs.version }}"
+          L="${{ matrix.label }}"
+          work="$(mktemp -d)"
+          tar -xzf "hauksbee-$V-$L.tar.gz" -C "$work"
+          fail=0
+          for b in hauksbee hauksbee-ci hauksbee-mcp; do
+            bin="$work/hauksbee-$V-$L/bin/$b"
+            echo "--- $b NEEDED entries ---"
+            readelf -d "$bin" | grep NEEDED || true
+            if readelf -d "$bin" | grep -q 'NEEDED.*libelf'; then
+              echo "::error title=Dynamic libelf::$b carries a NEEDED libelf entry; the static libelf link in hauksbee-mcu/build.rs regressed. This binary exits 127 on hosts without libelf1."
+              fail=1
+            fi
+            if readelf -d "$bin" | grep -q 'NEEDED.*libz\.so'; then
+              echo "::warning title=Dynamic zlib::$b links zlib dynamically; zlib1g-dev's libz.a was expected on this runner (build.rs prefers static=z)."
+            fi
+          done
+          exit "$fail"
+
       # Every checksum next to every artifact must verify before anything is
       # uploaded, so a stale or half-rewritten .sha256 can never ride along.
       - name: Verify every dist checksum

@@ -21,7 +21,7 @@ max_seconds = 30
 # Every section a --check pass owes the reader, each with its own verdict line.
 contains = [
   "== Copper spacing (DRC) ==",
-  "== Connectivity / lint ==",
+  "== Connectivity / lint (incl. MCU resource conflicts, boot strap pins) ==",
   "== Signal integrity ==",
   "== What this pass did not check ==",
   "Why it matters:",
@@ -34,11 +34,12 @@ contains = [
   "hauksbee-ci init <board>",
 ]
 matches = [
-  # Per-section verdicts, worded for a person: a count plus a severity read.
-  "^[0-9]+ issues found, none serious",
+  # Per-section verdicts, worded for a person. Watchy ships with its own
+  # .kicad_pro (min clearance 0.15 mm), under which the copper is clean, so
+  # the DRC section reads healthy rather than listing warnings.
+  "^Looks healthy: no copper spacing \\(drc\\) problems found\\.$",
   "^Looks healthy: no connectivity problems found\\.$",
   "^No signal-integrity failures, but [0-9]+ things worth a look",
-  "^Summary: [0-9]+ short\\(s\\), [0-9]+ net pair\\(s\\) below the clearance rule",
   # The heads-up points at `--report` for the bind table. If it puts a part count
   # in that sentence, the count has to be the size of the table it is pointing
   # at. Watchy binds 67 non-ignored parts into an 82-row table, so the only

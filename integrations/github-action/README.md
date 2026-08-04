@@ -1,6 +1,6 @@
 # hauksbee-ci GitHub Action
 
-A composite action that runs [`hauksbee-ci`](../../crates/hauksbee-ci) on your
+A composite action that runs [`hauksbee-ci`](https://docs.hauksbee.dev/docs/ci/ci) on your
 board and firmware, so every layout change boots the firmware on the emulated
 PCB and asserts the rails come up, the UART says hello, and the LED blinks,
 before anything reaches a bench.
