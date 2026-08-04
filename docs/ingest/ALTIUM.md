@@ -33,13 +33,22 @@ it from Altium Designer as a normal binary `.PcbDoc`.
 fresh clone without `git lfs pull` gives you a few hundred bytes of text instead
 of the board. Run `git lfs pull` first.
 
-In either of those two cases the file is not a board hauksbee recognises, and it
-says so without guessing:
+Neither case falls through to a generic "cannot read this" error. Both are
+recognised for what they actually are and told apart, because "your file is a
+stub the clone never downloaded" and "your file is the wrong Altium dialect"
+need different actions from you:
 
 ```
-error: unrecognized board format; tried altium, eagle, kicad-netlist,
-kicad-schematic, kicad-pcb, ipc-d356
+$ hauksbee run board.PcbDoc --report
+error: 'board.PcbDoc': this is a Git LFS pointer, not the board file itself: the repository stores the real file in Git LFS and it was never downloaded. Run `git lfs install && git lfs pull` in the repository, then retry with the real file
 ```
+
+The ASCII-Protel case names itself the same way, says it is what EasyEDA
+produces, and tells you to re-save from Altium Designer as a binary `.PcbDoc`.
+Only a file that matches none of the readers at all gets the generic message,
+which lists every format hauksbee does read. All three exit 1: a hard input
+error, distinct from a report that ran and found something (see the
+[exit-code contract](../ci/CI.md#exit-codes-the-pipeline-contract)).
 
 **What to expect from bind coverage.** Altium keeps the displayed component
 value as a bound field that resolves through a string table hauksbee does not

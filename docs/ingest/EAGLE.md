@@ -67,17 +67,25 @@ board, so the Eagle path gets the same treatment a KiCad board gets.
   unrelated `.brd`, which is a different binary format entirely and is ingested
   only through its gerbers.
 
-If hauksbee cannot read the file it says so and names every format it tried,
+If hauksbee cannot read the file it says so and names every format it does read,
 rather than guessing:
 
 ```
-error: unrecognized board format; tried altium, eagle, kicad-netlist,
-kicad-schematic, kicad-pcb, ipc-d356
+$ hauksbee run mystery.brd --report
+error: 'mystery.brd': unrecognized board format: hauksbee reads a KiCad board, schematic or netlist, an Eagle board, an Altium .PcbDoc (binary or ASCII), an IPC-D-356 netlist, or a folder or zip of gerbers
 ```
 
-That is also what a binary pre-6 `.brd` and a Git-LFS pointer file both look
-like. If your `.brd` is a few hundred bytes of text starting `version
-https://git-lfs.github.com/spec/v1`, run `git lfs pull` first.
+That is what a binary pre-Eagle-6 `.brd` looks like. A Git-LFS pointer does
+*not*: it is detected as itself, because the fix is specific and worth naming:
+
+```
+$ hauksbee run board.brd --report
+error: 'board.brd': this is a Git LFS pointer, not the board file itself: the repository stores the real file in Git LFS and it was never downloaded. Run `git lfs install && git lfs pull` in the repository, then retry with the real file
+```
+
+So if your `.brd` is a few hundred bytes of text starting `version
+https://git-lfs.github.com/spec/v1`, run `git lfs pull` first. Both messages
+exit 1, a hard input error rather than a finding.
 
 ## What to expect from bind rates
 
