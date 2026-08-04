@@ -189,6 +189,16 @@ so on a fetched corpus every lookup missed while the directory-exists check kept
 the skip from firing, and the gate reported green having examined nothing. Both
 layouts resolve now, and a gate that cannot find its inputs says so.
 
+Layout tolerance at the corpus root is not enough on its own, because two corpora
+can also disagree about the path WITHIN a board. The Corne row is the case: the
+hand-built corpus holds `crkbd/pcbs/corne-cherry.kicad_pcb`, flattened by hand,
+while upstream nests each switch variant a level deeper at
+`crkbd/pcbs/corne-cherry/hotswap/corne-cherry.kicad_pcb`. Only the flat path was
+named, so on any fetched corpus this row matched nothing and the sweep counted the
+shortfall as a skip. Rows that can differ list every candidate path, and
+`corpus.toml` pins the one the fetch lands in the entry's `expect` list so a fetch
+that stops landing it fails at the fetch rather than turning into a quiet gap here.
+
 Over the located pads, net-partition agreement runs 99.7% to 100.0% on every
 board that has ground truth: the recovered electrical graph is essentially
 identical where we placed a pad. The sub-100% rows are a handful of pads on tiny
@@ -267,13 +277,12 @@ gerber-format drill, and an Allegro `!`-delimited pick-and-place in mils.
 (GPL-v3 claimed in a forum thread, not asserted in the repository), so
 `corpus.toml` marks it `license_confirmed = false` and `scripts/fetch-corpus.sh`
 skips it unless you pass `--include-unconfirmed` and decide for yourself. On top
-of that, `crates/hauksbee-extract/tests/gerber_uconsole.rs` looks for it at
-`famous/uconsole_gerber`
-under the corpus root, which is the hand-built layout rather than the flat
-layout the fetch script writes, so the test prints `skipping uConsole (corpus
-absent)` and returns unless you place the directory there or set
-`HAUKSBEE_CORPUS_DIR` at a corpus laid out that way. Treat the figures below as
-a recorded run on a maintainer's corpus, not as something a clone reproduces.
+There is a second obstacle even with `--include-unconfirmed`: ClockworkPi publishes
+the films only inside a `.7z`, which the fetch cannot open, so the entry's `expect`
+path names the archive and unpacking it is a manual step. Treat the figures below
+as a recorded run on a maintainer's corpus who did that unpacking, not as something
+a clone reproduces. `gerber_uconsole.rs` prints `NOT RUN  uConsole mainboard: not in
+the default fetch` and never passes quietly.
 
 Reverse-extracted (`cargo run --example gerber_report -- <dir>`; the test
 asserts loose floors, not these exact values, since there is no ground truth to
