@@ -13,7 +13,9 @@
 //! capacitor footprint). KiCad does not treat intra-footprint pad copper as a
 //! board short, so neither does the detector: pads sharing a footprint owner
 //! are skipped. This is a real geometric fact handled by a principled rule, not
-//! a per-board allowlist. With that rule the entire corpus is short-clean.
+//! a per-board allowlist. With that rule the entire corpus is short-clean except
+//! for one recorded contact, `SHORT_EXCEPTIONS` below, which carries its evidence
+//! and an expiry.
 
 use std::path::{Path, PathBuf};
 
@@ -56,6 +58,76 @@ fn find_boards(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// A short this gate accepts, on the same terms `hauksbee-waivers.toml` accepts
+/// one: a stated reason and a stated expiry, never a bare suppression.
+struct ShortException {
+    /// Board file name the finding must be on.
+    board: &'static str,
+    /// The two net names, in either order.
+    nets: (&'static str, &'static str),
+    /// Why the geometry is what it is, and why it does not indict the board.
+    reason: &'static str,
+    /// `YYYY-MM-DD`, after which this stops applying and the gate goes red.
+    until: &'static str,
+}
+
+/// One entry, and it is a REAL zero-gap contact, not a measurement artefact.
+///
+/// Surfaced by adding the touching band to the shorts test (see
+/// `hauksbee_extract::SHORT_TOUCH_EPS_MM`): the gap measures 9.769962616701378e-15
+/// mm, so the old `gap <= 0.0` test filed it as a clearance note and the corpus
+/// was called short-clean on the strength of a rounding error. The right response
+/// is to record it, not to widen the test back until it disappears.
+const SHORT_EXCEPTIONS: &[ShortException] = &[ShortException {
+    board: "ESP32-EVB_Rev_",
+    nets: ("Net-(400MA_E1-Pad1)", "GND"),
+    reason: "A GND track meets pad 1 of 400MA_E1 at a measured 9.8e-15 mm on \
+             B.Cu. 400MA_E1 is a CLOSED SOLDER JUMPER (footprint \
+             OLIMEX_Jumpers-FP:SJ_Closed, value \"Closed\"): its pad 1 is on \
+             Net-(400MA_E1-Pad1), its pad 2 is on GND, and a third bridging pad \
+             joins them in copper. Those two nets are therefore connected BY \
+             DESIGN, 0.76 mm away, and GND copper reaching the jumper's other \
+             pad is the same connection arriving from the other side. The \
+             geometry is real and the report is right about it; the board is not \
+             faulty. Removing it properly needs the link-class recogniser \
+             (hauksbee-engine's is_jumper_or_net_tie, already used to exempt \
+             these parts from placeholder_value) to be reachable from the DRC, \
+             which is a cross-crate change this exception holds the place for.",
+    until: "2027-08-01",
+}];
+
+impl ShortException {
+    fn matches(&self, board_file: &str, a: &str, b: &str) -> bool {
+        board_file.contains(self.board)
+            && ((a == self.nets.0 && b == self.nets.1) || (a == self.nets.1 && b == self.nets.0))
+    }
+}
+
+/// Days since 1970-01-01 for a `YYYY-MM-DD` string.
+fn until_days(until: &str) -> Option<i64> {
+    let mut it = until.split('-');
+    let y: i64 = it.next()?.parse().ok()?;
+    let m: i64 = it.next()?.parse().ok()?;
+    let d: i64 = it.next()?.parse().ok()?;
+    if it.next().is_some() || !(1..=12).contains(&m) || !(1..=31).contains(&d) {
+        return None;
+    }
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let mp = (m + 9) % 12;
+    let doy = (153 * mp + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
+}
+
+fn today_days() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| (d.as_secs() as i64).div_euclid(86_400))
+        .unwrap_or(0)
+}
+
 #[test]
 fn corpus_boards_have_no_true_shorts() {
     let Some(root) = corpus_root() else {
@@ -67,6 +139,19 @@ fn corpus_boards_have_no_true_shorts() {
     boards.sort();
     assert!(!boards.is_empty(), "found at least one corpus board");
 
+    let today = today_days();
+    let expiries: Vec<i64> = SHORT_EXCEPTIONS
+        .iter()
+        .map(|e| {
+            until_days(e.until).unwrap_or_else(|| {
+                panic!(
+                    "short exception for {} has an unparseable `until` ({:?}); use YYYY-MM-DD",
+                    e.board, e.until
+                )
+            })
+        })
+        .collect();
+    let mut excused = vec![0usize; SHORT_EXCEPTIONS.len()];
     let mut scanned = 0usize;
     let mut skipped = 0usize;
     let mut total_clearance = 0usize;
@@ -91,17 +176,40 @@ fn corpus_boards_have_no_true_shorts() {
         scanned += 1;
         total_clearance += report.clearance_violations().count();
         total_prims += report.primitive_count;
-        if report.short_count() > 0 {
-            let names: Vec<String> = report
-                .shorts()
-                .take(3)
-                .map(|f| format!("{}<->{}@{}", f.net_a_name, f.net_b_name, f.layer))
-                .collect();
+        let file = board.file_name().unwrap().to_string_lossy().to_string();
+        let mut unexcused: Vec<String> = Vec::new();
+        for f in report.shorts() {
+            match SHORT_EXCEPTIONS
+                .iter()
+                .position(|e| e.matches(&file, &f.net_a_name, &f.net_b_name))
+            {
+                Some(i) if today <= expiries[i] => {
+                    excused[i] += 1;
+                }
+                Some(i) => unexcused.push(format!(
+                    "{}<->{}@{} (exception EXPIRED {}: {})",
+                    f.net_a_name,
+                    f.net_b_name,
+                    f.layer,
+                    SHORT_EXCEPTIONS[i].until,
+                    SHORT_EXCEPTIONS[i].reason
+                )),
+                None => unexcused.push(format!(
+                    "{}<->{}@{} gap={:e}",
+                    f.net_a_name, f.net_b_name, f.layer, f.gap_mm
+                )),
+            }
+        }
+        if !unexcused.is_empty() {
             offenders.push(format!(
-                "{}: {} short(s) [{}]",
-                board.file_name().unwrap().to_string_lossy(),
-                report.short_count(),
-                names.join(", ")
+                "{file}: {} short(s) [{}]",
+                unexcused.len(),
+                unexcused
+                    .iter()
+                    .take(3)
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(", ")
             ));
         }
     }
@@ -110,6 +218,13 @@ fn corpus_boards_have_no_true_shorts() {
         "corpus DRC: scanned {scanned} board(s) ({skipped} skipped unparseable), \
          {total_prims} primitive(s), {total_clearance} clearance violation(s)"
     );
+    hauksbee_testkit::scanned("corpus DRC short sweep", scanned);
+    for (e, n) in SHORT_EXCEPTIONS.iter().zip(&excused) {
+        eprintln!(
+            "EXCEPTION  {} {:?}: absorbed {n} short(s), expires {}",
+            e.board, e.nets, e.until
+        );
+    }
     assert!(
         scanned >= 40,
         "the bulk of the corpus parsed and was scanned"
@@ -131,10 +246,22 @@ fn hunt_sbc_a13_project_rules_resolve_netclasses_and_diff_pairs() {
     let board_path = root.join("famous/hunt/sbc-a13/hardware/module.kicad_pcb");
     let pro_path = root.join("famous/hunt/sbc-a13/hardware/module.kicad_pro");
     if !board_path.exists() || !pro_path.exists() {
-        if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-            panic!("HAUKSBEE_REQUIRE_CORPUS=1 but sbc-a13 hunt board/project files are missing");
-        }
-        eprintln!("sbc-a13 hunt board absent; skipping project-rule regression");
+        // `hunt/` is the maintainers' actively-probed set, deliberately outside
+        // corpus.toml (see the `find_boards` note below: some of these boards have
+        // genuine defects being reported upstream). So `HAUKSBEE_REQUIRE_CORPUS`
+        // cannot be what makes it mandatory: keyed off that, this test failed on
+        // every runner that ran the documented public fetch, and corpus-gate.yml
+        // had no green path. `HAUKSBEE_REQUIRE_HUNT_CORPUS=1` is the flag for a
+        // maintainer who does have it.
+        assert!(
+            std::env::var("HAUKSBEE_REQUIRE_HUNT_CORPUS").is_err(),
+            "HAUKSBEE_REQUIRE_HUNT_CORPUS set but the sbc-a13 hunt board/project files are missing"
+        );
+        eprintln!(
+            "NOT RUN  sbc-a13 project-rule regression: the hunt/ set is not in \
+             corpus.toml's public fetch. Set HAUKSBEE_REQUIRE_HUNT_CORPUS=1 to \
+             make this mandatory."
+        );
         return;
     }
     let board_text = std::fs::read_to_string(&board_path).expect("read sbc-a13 board");
