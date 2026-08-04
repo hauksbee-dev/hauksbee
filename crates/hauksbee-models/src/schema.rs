@@ -80,6 +80,34 @@ pub struct ModelEntry {
     /// Rust match arm. See [`crate::logic_spec`].
     #[serde(default, skip_serializing_if = "crate::logic_spec::Logic::is_empty")]
     pub logic: crate::logic_spec::Logic,
+
+    /// How an external resistor sets this part's operating current, for parts
+    /// whose current the *board* chooses rather than the part.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_program: Option<CurrentProgram>,
+}
+
+/// How an external resistor programs a part's operating current.
+///
+/// A charger's PROG pin, a load switch's ILIM/ISET pin: the part's
+/// [`Ratings::max_current_a`] is a *ceiling*, and the board picks a value below
+/// it by fitting one resistor. Charging that ceiling to a rail would invent a
+/// load the design never pushes, which is the same reasoning that already keeps
+/// a FET's drain rating out of the ampacity attribution. A part carrying this
+/// block has its rail current computed from the resistor actually fitted, and is
+/// left unattributed (with the gap recorded) when that resistor cannot be read.
+///
+/// Cite the datasheet equation in a comment next to each entry: the constant is
+/// stated per part and is not derivable from anything else in the model.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct CurrentProgram {
+    /// The pin role (a value in [`ModelEntry::pins`]) the programming resistor
+    /// sits on. The resistor runs from that pin to ground.
+    pub pin: String,
+
+    /// The datasheet's programming constant, in volts: `I(A) = k_volts / R(Ω)`.
+    /// The MCP73833 states `I_REG = 1000 V / R_PROG`, so `k_volts = 1000`.
+    pub k_volts: f64,
 }
 
 /// One boot strapping pin, straight from the part's reference manual.

@@ -24,15 +24,18 @@ use hauksbee_ir::{Device, NodeId, SourceKind};
 use hauksbee_models::ModelLibrary;
 use hauksbee_solve::SolverOptions;
 
-fn famous_root() -> Option<PathBuf> {
-    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join("famous");
-    if p.exists() {
-        return Some(p);
-    }
-    require_corpus(&p.display().to_string());
-    None
+/// The directory the corpus boards sit directly under, whichever layout this
+/// machine has, or `None` with a printed note.
+///
+/// Resolved through the testkit rather than by joining `famous/` here: that
+/// level exists only in the hand-built corpus, so a hard join found nothing on
+/// the corpus `scripts/fetch-corpus.sh` produces, and every sweep below walked
+/// an empty directory and reported the empty walk as a pass.
+fn corpus_root() -> Option<PathBuf> {
+    hauksbee_testkit::corpus_boards_root_or_skip(
+        env!("CARGO_MANIFEST_DIR"),
+        "behavioral-fault corpus sweep",
+    )
 }
 
 fn require_corpus(what: &str) {
@@ -143,7 +146,7 @@ fn ltc4020_input_power(path: &PathBuf) -> Option<f64> {
 
 #[test]
 fn ltc4020_overdraws_on_mb25_and_is_clean_on_mb30() {
-    let Some(root) = famous_root() else {
+    let Some(root) = corpus_root() else {
         return;
     };
     let mb25 = root.join("mnt_reform/reform2-motherboard25-pcb/reform2-motherboard25.kicad_pcb");
@@ -205,7 +208,7 @@ fn ltc6803_leak(path: &PathBuf) -> Option<f64> {
 
 #[test]
 fn ltc6803_leaks_on_mb20_and_is_clean_on_mb25() {
-    let Some(root) = famous_root() else {
+    let Some(root) = corpus_root() else {
         return;
     };
     let mb20 = root.join("mnt_reform/reform2-motherboard-pcb/reform2-motherboard.kicad_pcb");
@@ -273,7 +276,7 @@ fn npm1300_shphld_sleep_v(path: &PathBuf) -> Option<f64> {
 
 #[test]
 fn npm1300_shphld_feeds_gpio_on_120_and_is_clean_on_121() {
-    let Some(root) = famous_root() else {
+    let Some(root) = corpus_root() else {
         return;
     };
     let v120 = root.join("zswatch_devkit/v1.2.0/ZSWatch-Watch-DevKit.kicad_pcb");
@@ -323,7 +326,7 @@ fn npm1300_shphld_feeds_gpio_on_120_and_is_clean_on_121() {
 fn behavioral_parts_do_not_manufacture_faults_on_clean_board() {
     use hauksbee_engine::HauksbeeEngine;
     use hauksbee_server::engine::Engine;
-    let Some(root) = famous_root() else {
+    let Some(root) = corpus_root() else {
         return;
     };
     let mb30 = root.join("mnt_reform/reform2-motherboard30-pcb/reform2-motherboard30.kicad_pcb");
@@ -383,7 +386,7 @@ fn rng_ss_driven(path: &PathBuf) -> Option<(bool, String)> {
 
 #[test]
 fn ltc4020_rng_ss_destabilises_only_when_driven() {
-    let Some(root) = famous_root() else {
+    let Some(root) = corpus_root() else {
         return;
     };
     let mb20 = root.join("mnt_reform/reform2-motherboard-pcb/reform2-motherboard.kicad_pcb");

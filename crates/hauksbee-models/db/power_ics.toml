@@ -504,6 +504,13 @@ max_junction_temp_c = 145.0  # maximum junction temperature; also TLIM, the
                              # constant-temperature-mode setpoint
 theta_ja_c_per_w = 130.0     # stated with the complete-charge-cycle figure
 
+# I_BAT = 1200 V / R_PROG (datasheet "Programming Charge Current"), which is why
+# the ubiquitous 1.2 kOhm module charges at 1 A. The 1.2 A above is the BAT pin's
+# absolute maximum, not a load any board actually draws.
+[models.current_program]
+pin = "prog"
+k_volts = 1200.0
+
 # ── MCP73831: single-cell Li-Ion linear charger, SOT-23-5 ─────────────────────
 #
 # 14 instances across the SparkFun Thing Plus RP2040 and Thing Plus SAMD51. Same
@@ -585,6 +592,13 @@ max_voltage_v = 6.0          # recommended operating ceiling (abs max VDD 7.0 V)
 max_junction_temp_c = 125.0  # TJ operating max (TSD trips at 150 C typ)
 theta_ja_c_per_w = 230.0     # 5-lead SOT-23, 4-layer JC51-7 board
 
+# Same programming law as the MCP73833 below: datasheet section 4.2 states
+# I_REG = 1000 V / R_PROG, and a floating PROG disables charging entirely, so an
+# unreadable resistor means no attributable rail current rather than 500 mA.
+[models.current_program]
+pin = "prog"
+k_volts = 1000.0
+
 # ── MCP73833: 1 A single-cell Li-Ion charger, MSOP-10 ─────────────────────────
 #
 # Olimex ESP32-EVB U1 (5 instances). The bigger sibling of the MCP73831 above:
@@ -650,6 +664,14 @@ max_current_a = 1.0
 max_voltage_v = 6.0          # recommended ceiling (abs max VDD 7.0 V)
 max_junction_temp_c = 125.0
 theta_ja_c_per_w = 113.0     # MSOP-10, 4-layer JC51-7 board
+
+# The 1 A rating above is the CEILING. The board picks the charge current with
+# one resistor on PROG, so a rail-current check must read that resistor rather
+# than charge the ceiling to the rail. Datasheet section 5.2: I_REG = 1000 V /
+# R_PROG (R_PROG = 1 kOhm gives 1 A, 5 kOhm gives 200 mA).
+[models.current_program]
+pin = "prog"
+k_volts = 1000.0
 
 # ── BL4054B: 800 mA single-cell Li-Ion charger, SOT-23-5 ─────────────────────
 #

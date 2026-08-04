@@ -32,6 +32,7 @@ fn vreg(vout: f64) -> ModelEntry {
         straps: Vec::new(),
         behavioral: Default::default(),
         logic: Default::default(),
+        current_program: None,
     }
 }
 

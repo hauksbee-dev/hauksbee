@@ -168,9 +168,8 @@ fn kicad_pos_placement_export_is_read() {
     // inside a `#` comment. The CSV reader skipped the header as a comment and
     // then found no delimiter, so the file read as "not a P&P file" and every
     // KiCad fab folder silently lost the ONE input a gerber job needs to bind.
-    let placed = hauksbee_extract::gerber::placement::parse_pnp(&read(
-        "gerber_kicad_pos/board-all.pos",
-    ));
+    let placed =
+        hauksbee_extract::gerber::placement::parse_pnp(&read("gerber_kicad_pos/board-all.pos"));
     let refs: Vec<&str> = placed.iter().map(|p| p.reference.as_str()).collect();
     assert_eq!(refs, ["R1", "C1", "U1"], "all three rows must parse");
     // A value containing a space ("10k 1%") must not shift the columns after it:

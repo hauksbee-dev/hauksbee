@@ -32,21 +32,18 @@ use hauksbee_engine::checks::straps::strap_lint;
 use hauksbee_extract::{ExtractedBoard, LintCheck, NetLintReport, Severity};
 use hauksbee_models::ModelLibrary;
 
-fn famous_root() -> Option<PathBuf> {
-    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join("famous");
-    if p.exists() {
-        return Some(p);
-    }
-    if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-        panic!(
-            "HAUKSBEE_REQUIRE_CORPUS set but board-corpus/famous is missing: {}",
-            p.display()
-        );
-    }
-    eprintln!("board-corpus/famous absent; skipping strap-lint corpus test");
-    None
+/// The directory the corpus boards sit directly under, whichever layout this
+/// machine has, or `None` with a printed note.
+///
+/// Resolved through the testkit rather than by joining `famous/` here: that
+/// level exists only in the hand-built corpus, so a hard join found nothing on
+/// the corpus `scripts/fetch-corpus.sh` produces, and every sweep below walked
+/// an empty directory and reported the empty walk as a pass.
+fn corpus_root() -> Option<PathBuf> {
+    hauksbee_testkit::corpus_boards_root_or_skip(
+        env!("CARGO_MANIFEST_DIR"),
+        "strap-lint corpus calibration",
+    )
 }
 
 fn strap_report(path: &PathBuf) -> NetLintReport {
@@ -65,7 +62,7 @@ fn strap_findings(r: &NetLintReport) -> Vec<&hauksbee_extract::LintFinding> {
 /// for the 50 MHz clock, at High severity, naming the oscillator.
 #[test]
 fn olimex_rev_d_gpio0_clock_flagged() {
-    let Some(root) = famous_root() else { return };
+    let Some(root) = corpus_root() else { return };
     let pcb = root.join("olimex_esp32/HARDWARE/REV-D/ESP32-EVB_Rev_D.kicad_pcb");
     if !pcb.exists() {
         eprintln!("Olimex REV-D absent; skipping");
@@ -100,7 +97,7 @@ fn olimex_rev_d_gpio0_clock_flagged() {
 /// the false confidence the calibration forbids. So the test asserts it fires.
 #[test]
 fn olimex_rev_l_still_fires_fix_is_not_netlist_visible() {
-    let Some(root) = famous_root() else { return };
+    let Some(root) = corpus_root() else { return };
     let pcb = root.join("olimex_esp32/HARDWARE/REV-L/ESP32-EVB_Rev_L.kicad_pcb");
     if !pcb.exists() {
         eprintln!("Olimex REV-L absent; skipping");
@@ -122,7 +119,7 @@ fn olimex_rev_l_still_fires_fix_is_not_netlist_visible() {
 /// is silent. This proves the clean is real, not vacuous.
 #[test]
 fn watchy_esp32_straps_are_clean() {
-    let Some(root) = famous_root() else { return };
+    let Some(root) = corpus_root() else { return };
     let pcb = root.join("watchy_history/v2.0/Watchy.kicad_pcb");
     if !pcb.exists() {
         eprintln!("Watchy v2.0 absent; skipping");
@@ -145,7 +142,7 @@ fn watchy_esp32_straps_are_clean() {
 /// no wrong-rail pull. The strap lint examines it and is silent.
 #[test]
 fn rp2040_minimal_bootsel_is_clean() {
-    let Some(root) = famous_root() else { return };
+    let Some(root) = corpus_root() else { return };
     let dir = root.join("rp2040_minimal_kicad");
     if !dir.exists() {
         eprintln!("rp2040_minimal absent; skipping");
@@ -179,7 +176,7 @@ fn rp2040_minimal_bootsel_is_clean() {
 /// famous-sweep discipline). Every fire must be an Olimex GPIO0.
 #[test]
 fn strap_lint_only_fires_on_olimex_gpio0_across_corpus() {
-    let Some(root) = famous_root() else { return };
+    let Some(root) = corpus_root() else { return };
     let mut offenders: Vec<String> = Vec::new();
     let mut olimex_gpio0_hits = 0usize;
     // Walk every native CAD file; one representative per board is enough, but a
