@@ -11,11 +11,35 @@
 # `scripts/fetch-corpus.sh` reads this file and does that.
 #
 # The pin is the point. An upstream board that changes must not silently change
-# our results, so `rev` is a commit or tag, never a branch.
+# our results, so `rev` is a commit or tag, never a branch. A zip-hosted board
+# has no revision to pin, so `sha256` is its pin and the fetch refuses to
+# download one without it.
 #
 # Adding a board: record the upstream, the exact revision, and the licence. If
 # you cannot establish the licence, mark it `license_confirmed = false` and it
 # stays out of the default fetch.
+#
+# Fields, all optional except `id`, `url` and `license`:
+#
+#   rev                a commit or tag. Required for `kind = "git"` (the default).
+#   kind               "git" or "zip".
+#   sha256             the archive's hash. Required for `kind = "zip"`.
+#   dest               where the board lands under the corpus root, if not `id`.
+#                      Used to group the two halves of a revision pair.
+#   subdir             the only part of a large upstream the corpus wants;
+#                      everything else is dropped, and this level is kept.
+#   hoist              a directory inside the fetched tree whose CONTENTS are
+#                      lifted into the board directory, for an upstream that
+#                      keeps its design one level down.
+#   unpack             an archive inside the fetched tree to extract in place.
+#   license_confirmed  false keeps the board out of the default fetch.
+#   name               the human name for logs and --list.
+#
+# `dest`, `subdir`, `hoist` and `unpack` exist for one reason: the paths the
+# corpus tests ask for. A fetched corpus that puts a board somewhere no test
+# looks is worse than no corpus, because the tests skip and the skip reads as a
+# pass. Every one of these fields was added to close such a gap, and the note on
+# each entry says which.
 
 [meta]
 # Where fetch-corpus.sh puts things when HAUKSBEE_CORPUS_DIR is unset.
@@ -160,6 +184,7 @@ name = "ZSWatch DevKit 1.1.0"
 url = "https://github.com/ZSWatch/Watch-DevKit-HW"
 rev = "a9f27fe8a87b9cfee1b861e4e8459c8587e3d7d4"
 dest = "zswatch_devkit/v1.1.0"
+hoist = "dev-kit"
 license = "GPL-3.0"
 
 [[board]]
@@ -168,6 +193,7 @@ name = "ZSWatch DevKit 1.2.0 (pre-fix: I2C pull-ups, PR #158)"
 url = "https://github.com/ZSWatch/Watch-DevKit-HW"
 rev = "5eeee19"
 dest = "zswatch_devkit/v1.2.0"
+hoist = "devkit"
 license = "GPL-3.0"
 
 [[board]]
@@ -176,6 +202,7 @@ name = "ZSWatch DevKit 1.2.1 (fixed)"
 url = "https://github.com/ZSWatch/Watch-DevKit-HW"
 rev = "77abae3"
 dest = "zswatch_devkit/v1.2.1"
+hoist = "devkit"
 license = "GPL-3.0"
 
 # `rev` is the full 40-character sha, not the abbreviated `3eab4d1` that used to
@@ -306,6 +333,11 @@ url = "https://github.com/SolderedElectronics/Inkplate-6-hardware"
 # resolved to nothing and took this board out of every fetch. Pinned to the
 # commit rather than the branch, per the note at the top of this file.
 rev = "e14476d3bbddfb0e76815f4b1ffa6f7e26e54bad"
+# The films exist upstream only inside this archive. Unpacked flat into the board
+# directory, which is where gerber_inkplate.rs reads them from and where the
+# hand-built corpus has always had them. Without this the fetch left a zip and
+# the reverse-extraction gate had no films to reconstruct from.
+unpack = "Schematics, Gerber, BOM/v1.0/Inkplate 6 gerber files v1.0.zip"
 license = "MIT"
 
 [[board]]
