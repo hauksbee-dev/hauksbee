@@ -133,28 +133,94 @@ fn main() {
 /// archive exists on the build host, fall back to the dynamic probe and say
 /// so, rather than fail a dev build over a packaging concern.
 fn probe_static_preferred(name: &str, missing_msg: &str) {
-    // pkg-config's static mode does not verify a .a actually exists; it just
-    // emits `static=` link directives, which would fail at final link. Probe
-    // WITHOUT emitting first, check the archive is really there, and only
-    // then emit the static (or fallback dynamic) directives.
+    // Probe WITHOUT emitting cargo metadata first: static vs dynamic is
+    // decided below, only after checking the archive really exists on disk.
     let probe = pkg_config::Config::new()
         .cargo_metadata(false)
         .probe(name)
         .expect(missing_msg);
-    let has_static = probe.link_paths.iter().any(|dir| {
-        probe
-            .libs
-            .iter()
-            .any(|l| dir.join(format!("lib{l}.a")).exists())
-    });
-    if has_static {
-        let _ = pkg_config::Config::new().statik(true).probe(name);
-    } else {
-        let _ = pkg_config::probe_library(name);
-        println!(
-            "cargo:warning=hauksbee-mcu: no static {name} archive found on this build host; \
-             linking {name} dynamically. The installed binary will need the {name} shared \
-             library on the target machine; release builders should install the static package."
-        );
+
+    if cfg!(target_os = "macos") {
+        // macOS (Homebrew): the proven path, keep it. Homebrew prefixes such
+        // as /opt/homebrew/opt/libelf/lib are NOT in the pkg-config crate's
+        // system_roots, so its statik(true) mode genuinely emits `static=`
+        // there, and the Homebrew .pc files always publish -L so the archive
+        // shows up in link_paths for the existence check.
+        let has_static = probe.link_paths.iter().any(|dir| {
+            probe
+                .libs
+                .iter()
+                .any(|l| dir.join(format!("lib{l}.a")).exists())
+        });
+        if has_static {
+            let _ = pkg_config::Config::new().statik(true).probe(name);
+        } else {
+            let _ = pkg_config::probe_library(name);
+            let lib = probe.libs.first().map(String::as_str).unwrap_or(name);
+            print_dynamic_warning(name, lib);
+        }
+        return;
     }
+
+    // Linux (and other non-mac hosts): pkg_config's statik(true) mode can
+    // NEVER static-link a /usr-rooted archive. The crate's
+    // is_static_available() treats system_roots=[/usr] as "no static lib
+    // here" and silently emits a dynamic `-lelf` instead, so the old code
+    // took the "static" branch, suppressed the dynamic-link warning, and
+    // still produced a binary NEEDING libelf.so.1. Emit the link directives
+    // ourselves, and claim static only for an archive we have actually seen
+    // at the exact directory we emit.
+    //
+    // Search ladder: pkg-config's own -L paths (empty for system dirs, which
+    // is exactly why statik failed), then the package's real libdir asked
+    // straight from pkg-config, then the conventional multiarch locations.
+    let mut search_dirs: Vec<PathBuf> = probe.link_paths.clone();
+    let pkg_config_bin = env::var("PKG_CONFIG").unwrap_or_else(|_| "pkg-config".to_string());
+    if let Ok(out) = std::process::Command::new(&pkg_config_bin)
+        .args(["--variable=libdir", name])
+        .output()
+    {
+        if out.status.success() {
+            let libdir = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            if !libdir.is_empty() {
+                search_dirs.push(PathBuf::from(libdir));
+            }
+        }
+    }
+    for dir in [
+        "/usr/lib/x86_64-linux-gnu",
+        "/usr/lib/aarch64-linux-gnu",
+        "/usr/lib64",
+        "/usr/lib",
+        "/usr/local/lib",
+    ] {
+        search_dirs.push(PathBuf::from(dir));
+    }
+
+    for lib in &probe.libs {
+        let archive = format!("lib{lib}.a");
+        if let Some(dir) = search_dirs.iter().find(|d| d.join(&archive).exists()) {
+            println!("cargo:rustc-link-search=native={}", dir.display());
+            println!("cargo:rustc-link-lib=static={lib}");
+        } else {
+            // No archive anywhere on the ladder: link dynamically and SAY so.
+            // Never print nothing here; a silent dynamic link is exactly the
+            // false confidence this function used to produce.
+            for dir in &probe.link_paths {
+                println!("cargo:rustc-link-search=native={}", dir.display());
+            }
+            println!("cargo:rustc-link-lib={lib}");
+            print_dynamic_warning(name, lib);
+        }
+    }
+}
+
+/// The honest "you are getting a dynamic link" note, shared by every fallback
+/// path so no branch can quietly link dynamic without it.
+fn print_dynamic_warning(name: &str, lib: &str) {
+    println!(
+        "cargo:warning=hauksbee-mcu: no static {name} archive (lib{lib}.a) found on this build \
+         host; linking {lib} dynamically. The installed binary will need the {name} shared \
+         library on the target machine; release builders should install the static package."
+    );
 }
