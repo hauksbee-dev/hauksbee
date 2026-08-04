@@ -325,6 +325,9 @@ impl PowerSupply {
     /// terminal voltage the load sees is `v_internal - i*series_r`.
     pub fn update(&mut self, i_a: f64, last_cmd_v: f64, t: f64, dt: f64) -> f64 {
         let i = i_a.max(0.0);
+        // Computed before the match: the CC fold needs the series resistance
+        // to floor its command at rail >= 0 (see `cc_regulate`).
+        let rs = self.series_r();
         match self {
             PowerSupply::Ideal { volts } => *volts,
 
@@ -336,7 +339,7 @@ impl PowerSupply {
             PowerSupply::Bench {
                 volts,
                 current_limit_a,
-            } => cc_regulate(*volts, *current_limit_a, last_cmd_v, i),
+            } => cc_regulate(*volts, *current_limit_a, rs, last_cmd_v, i),
 
             // Nominal minus the ripple sine. The I·R_out drop is applied by the
             // solver through the series resistor, so we only add ripple here.
@@ -353,7 +356,7 @@ impl PowerSupply {
             // 5 V nominal; the connector/cable droop is the series resistor.
             // Past the spec limit, fold the commanded voltage back hard so the
             // current cannot run away (models the port's current-limit trip).
-            PowerSupply::Usb { spec } => cc_regulate(5.0, spec.current_limit_a(), last_cmd_v, i),
+            PowerSupply::Usb { spec } => cc_regulate(5.0, spec.current_limit_a(), rs, last_cmd_v, i),
 
             // Drain charge and recompute the open-circuit stack voltage. The
             // internal resistance drop is the series resistor (solver-applied).
@@ -403,13 +406,27 @@ impl PowerSupply {
 /// `limit` is `limit * v_cmd / i`. CV applies whenever that exceeds the
 /// setpoint. Anchoring to the *previous command* (not the setpoint) makes the
 /// loop convergent for resistive loads in one chunk and free of the
-/// bang-bang oscillation a setpoint-anchored law produces.
-fn cc_regulate(v_set: f64, limit_a: f64, last_cmd_v: f64, i_a: f64) -> f64 {
+/// bang-bang oscillation a setpoint-anchored law produces: for any load that
+/// responds to voltage, the iteration settles at exactly I = limit, with the
+/// rail at `v_cmd - limit * series_r` (positive).
+///
+/// The command is floored at `i * series_r`, the point where the RAIL sits
+/// at exactly 0 V. Without the floor, a load that does NOT respond to
+/// voltage (an ideal current-sink model drawing over the limit, e.g. a
+/// scenario burst bigger than the port) makes the iteration divergent: each
+/// chunk divides the command down, the command passes below `i * series_r`,
+/// and the "supply" starts holding a positive rail BELOW ground, a thing no
+/// current-limited source can do (it folds toward zero; it does not sink).
+/// The floor also keeps the failure modes distinguishable: a draw slightly
+/// over the limit sags geometrically (factor limit/i per chunk, so 1% over
+/// barely moves), while a short collapses to the 0 V floor in a few chunks.
+fn cc_regulate(v_set: f64, limit_a: f64, series_r: f64, last_cmd_v: f64, i_a: f64) -> f64 {
     if limit_a <= 0.0 || i_a <= 1e-12 {
         return v_set;
     }
     let v_cc = limit_a * (last_cmd_v.max(1e-6) / i_a);
-    v_set.min(v_cc).max(0.0)
+    let rail_floor = i_a * series_r;
+    v_set.min(v_cc.max(rail_floor)).max(0.0)
 }
 
 /// A supply stamped onto a circuit: the controllable `Vsource`, its series
@@ -611,6 +628,82 @@ mod tests {
         assert!(
             !s.protection_tripped(),
             "protection should re-arm on load removal"
+        );
+    }
+
+    /// The CC loop's two sides on a 0.5 A USB port (series R = 0.5 ohm).
+    ///
+    /// Side one: a resistive load drawing over the limit settles at exactly
+    /// I = limit within a few chunks, rail = v_cmd - limit*Rs, positive.
+    /// Side two: an ideal current-sink overload (a scenario burst bigger than
+    /// the port) must floor at rail = 0, never below: pre-fix, the iteration
+    /// divided the command to zero and held the rail NEGATIVE through the
+    /// series resistor.
+    #[test]
+    fn cc_foldback_settles_resistive_loads_and_floors_current_sinks() {
+        let rs = 0.5;
+        let limit = 0.5;
+
+        // Resistive load sized to draw ~0.55 A at the 5 V setpoint.
+        let r_load = 5.0 / 0.55 - rs;
+        let mut s = PowerSupply::Usb {
+            spec: UsbSpec::V5_0_5A,
+        };
+        let mut v_cmd = 5.0;
+        for _ in 0..50 {
+            let i = v_cmd / (rs + r_load);
+            v_cmd = s.update(i, v_cmd, 0.0, 1e-3);
+        }
+        let i_settled = v_cmd / (rs + r_load);
+        assert!(
+            (i_settled - limit).abs() < 1e-3,
+            "resistive overload must settle at I=limit, got {i_settled}"
+        );
+        let rail = v_cmd - i_settled * rs;
+        assert!(
+            (rail - (v_cmd - limit * rs)).abs() < 1e-3 && rail > 0.0,
+            "rail must sit at v_cmd - limit*Rs (positive), got {rail}"
+        );
+
+        // Ideal current sinks: 10% over collapses geometrically but the rail
+        // floors at 0 (command >= i*Rs), and a short-scale draw floors too.
+        for i_load in [0.55, 3.0] {
+            let mut s = PowerSupply::Usb {
+                spec: UsbSpec::V5_0_5A,
+            };
+            let mut v_cmd = 5.0;
+            let mut min_rail = f64::INFINITY;
+            for _ in 0..200 {
+                v_cmd = s.update(i_load, v_cmd, 0.0, 1e-3);
+                min_rail = min_rail.min(v_cmd - i_load * rs);
+            }
+            assert!(
+                min_rail >= -1e-9,
+                "a positive rail must never be held below ground \
+                 (i_load={i_load}, min rail={min_rail})"
+            );
+            assert!(
+                (v_cmd - i_load * rs).abs() < 1e-9,
+                "an unsatisfiable current-sink overload floors at rail = 0 \
+                 (i_load={i_load}, settled rail={})",
+                v_cmd - i_load * rs
+            );
+        }
+
+        // A draw 1% over the limit barely moves in the burst's first chunks:
+        // the fold factor is limit/i per chunk, so 1% over is visibly NOT a
+        // short.
+        let mut s = PowerSupply::Usb {
+            spec: UsbSpec::V5_0_5A,
+        };
+        let mut v_cmd = 5.0;
+        for _ in 0..10 {
+            v_cmd = s.update(0.505, v_cmd, 0.0, 1e-3);
+        }
+        let rail = v_cmd - 0.505 * rs;
+        assert!(
+            rail > 4.0,
+            "1% over the limit must sag gently, not collapse: rail={rail}"
         );
     }
 }

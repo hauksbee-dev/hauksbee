@@ -134,15 +134,22 @@ When a board does not bind what you expected:
 
 ```
 $ hauksbee models resolve my_board.kicad_pcb
-layer priority: builtin(0) < pack(10) < user-dir(20) < models-dir(30) < spice(40); specificity breaks ties within a layer
-Ref        Value                    Model                        Layer            Origin
-U3         ACME7400                 acme-7400                    pack(10)         acme-logic@1.0.0
-R1         10k                      r_fallback                   engine-fallback  engine-fallback
-D1         1N4148                   1n4148                       builtin(0)       diodes
+layer priority: builtin(0) < pack(10) < user-dir(20) < user-config-dir(25) < models-dir(30) < spice(40); specificity breaks ties within a layer
+┌─────┬──────────┬────────────┬─────────────────┬──────────────────┐
+│ Ref │ Value    │ Model      │ Layer           │ Origin           │
+├─────┼──────────┼────────────┼─────────────────┼──────────────────┤
+│ R1  │ 10k      │ r_fallback │ engine-fallback │ engine-fallback  │
+│ U3  │ ACME7400 │ acme-7400  │ pack(10)        │ acme-logic@1.0.0 │
+│ D1  │ 1N4148   │ 1n4148     │ builtin(0)      │ diodes           │
+└─────┴──────────┴────────────┴─────────────────┴──────────────────┘
 ```
 
 This shows, per component, which entry won, from which layer, from which
-source. Three things to read off it:
+source. The rows are ordered for reading rather than in board order: anything
+`UNRESOLVED` comes first, then `engine-fallback`, then the layers from
+most-user-supplied down to `builtin`, with natural reference order inside each
+group. So the parts you most likely need to act on are at the top of the output,
+not scattered through it. Four things to read off it:
 
 - The **Layer** column prints the layer name with its priority, so `pack(10)`
   and `builtin(0)` rather than bare names. Priorities are ordered, so you can
@@ -154,8 +161,11 @@ source. Three things to read off it:
   (`r_fallback` for a plain resistance). Seeing it against a part your pack was
   supposed to claim is the signal that your `match.value_re` did not hit.
 
-The banner line abbreviates: it omits `user-config-dir(25)`, which sits between
-`user-dir(20)` and `models-dir(30)`. The table above is the full list.
+- An `UNRESOLVED` row means no entry claimed the part *and* the engine had no
+  fallback for it either, so it binds OPEN. Those are the rows at the top.
+
+The banner line is the full priority list, `user-config-dir(25)` included, so the
+ordering you see there is the ordering the resolver actually applied.
 
 Run this command first when a pack "does not work". Nine times out of ten the
 entry lost a specificity tie inside its layer, or the `match.value_re` does not
