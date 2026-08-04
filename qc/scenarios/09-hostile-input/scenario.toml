@@ -60,7 +60,13 @@ contains = [
   "Check the path",
   # A dead end is not an error message: it has to offer something runnable.
   "try a bundled example",
-  "hauksbee run crates/hauksbee-ci/examples/boards/blinky.kicad_pcb --report",
+]
+matches = [
+  # The suggestion must be RUNNABLE from where the user stands: inside a
+  # hauksbee checkout it names the example board file; anywhere else (this
+  # harness runs in a scratch directory) it names the embedded example that
+  # ships in the binary itself.
+  "hauksbee run (crates/hauksbee-ci/examples/boards/blinky\\.kicad_pcb|--example blinky) --report",
 ]
 not_matches = ["panicked at", "RUST_BACKTRACE"]
 

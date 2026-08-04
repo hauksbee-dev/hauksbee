@@ -558,6 +558,11 @@ function GroupedFindingCard({ group: g, onLocate }: { group: FindingGroup; onLoc
                   type="button"
                   data-testid="finding-locate"
                   onClick={() => onLocate(it.x!, it.y!, it.what)}
+                  /* Named for the finding it locates. Fifty buttons reading
+                     "show on board" is one name fifty times over in the
+                     accessibility tree, which is fifty controls a screen
+                     reader cannot tell apart. */
+                  aria-label={`Show on board: ${it.what}`}
                   className="hb-press ml-2 cursor-pointer text-[11px]"
                   style={{ background: 'none', border: 'none', padding: 0, color: 'var(--copper-hi)', textDecoration: 'underline', textDecorationColor: 'var(--copper-deep)' }}
                 >
@@ -605,6 +610,7 @@ function FindingCard({ finding: f, onLocate }: { finding: WebFinding; onLocate?:
           type="button"
           data-testid="finding-locate"
           onClick={e => { e.stopPropagation(); locate!() }}
+          aria-label={`Show on board: ${f.what}`}
           className="hb-press ml-2 cursor-pointer text-[11px]"
           style={{ background: 'none', border: 'none', padding: 0, color: 'var(--copper-hi)', textDecoration: 'underline', textDecorationColor: 'var(--copper-deep)' }}
         >

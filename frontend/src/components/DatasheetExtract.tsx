@@ -453,7 +453,10 @@ export function DatasheetExtract({ openParts }: { openParts: WebOpenPart[] }) {
                 data-testid={`extract-start-${p.reference}`}
                 disabled={active !== null}
                 onClick={() => begin(p)}
-                title="Draft a model from a datasheet"
+                /* Named for its part. One row per unnamed part means one button
+                   per part, and "Draft a model from a datasheet" repeated down
+                   the list is a set of controls that cannot be told apart. */
+                aria-label={`Draft a model for ${p.reference} from a datasheet`}
                 className="hb-btn hb-press px-3 py-1 text-[12px] shrink-0 max-w-full whitespace-nowrap w-full sm:w-auto"
                 style={{ minHeight: 28 }}
               >
