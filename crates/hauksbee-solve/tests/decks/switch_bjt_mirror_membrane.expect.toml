@@ -1,0 +1,55 @@
+# The deck the accuracy campaign was opened on: a relay's edge amplified by a
+# current mirror into a slewing membrane.
+#
+# The bar on the waveform as a whole is set by ngspice's switch-event timing, not
+# by either engine's device physics. ngspice does not bisect to a switch threshold:
+# it closes the relay at whatever timepoint it first notices and integrates the
+# whole straddling step already closed. Measured on this exact deck, refining
+# ngspice's own maximum step moved its answer 10x toward ours:
+#     tmax      disagreement at t = 42 us
+#     1 us      87.5 mV
+#     100 ns    21.8 mV
+#     10 ns      9.7 mV
+#     1 ns       8.5 mV
+# so the deck pins tmax = 50 ns to keep the oracle honest, and the tolerance below
+# is sized for what remains of ITS error, not ours.
+#
+# The two things that ARE pinned hard are the flat regions, where no timing error
+# can hide: the pre-stimulus membrane (exactly its declared initial condition) and
+# the settled ON plateau (the operating point of the closed-switch circuit, which
+# agrees with ngspice's own `.op` of the same circuit to seven digits).
+analysis = "tran"
+description = "Relay gating a BJT current mirror into a 1nF membrane: the reduced one-block synapse deck, held on both flat regions and cross-checked through both edges."
+full_scale = 5.0
+
+[[probe]]
+expr = "v(mem0)"
+reltol = 6.0e-2
+loose_reason = "dominated by ngspice's switch-event timing on the two edges (it integrates the whole threshold-straddling step already switched), a per-sample error that a 0.43 V/us membrane turns into tens of millivolts; the flat-region points below are the hard bars"
+
+# Pre-stimulus: the membrane sits at exactly its declared initial condition. The
+# pulse does not start until 30 us.
+[[probe.analytic]]
+at = 0.0
+value = 5.0
+reltol = 1.0e-9
+note = "CM0's IC=5 under uic, reported at the first sample. Read 0.000 before device initial conditions were honoured"
+
+[[probe.analytic]]
+at = 20.0e-6
+value = 5.0
+reltol = 1.0e-6
+note = "still pre-stimulus and the relay is open at 1e9 ohm, so the membrane holds its initial charge: RM0's pull-up is already AT 5 V so there is nothing to charge toward, and the mirror is off. Read 2.34 V when the IC was dropped and the node charged up from 0 through the 47k"
+
+# Settled ON plateau: no longer slewing, so this is a pure device-physics reading.
+[[probe.analytic]]
+at = 60.0e-6
+value = 0.02852416
+reltol = 2.0e-3
+note = "the operating point of the closed-switch circuit: the mirror sinks ~0.43 mA, far past what the 47k pull-up can supply, so the membrane sits at Q2's saturation voltage. Independently confirmed as the `.op` of the same circuit with the relay held closed, where hauksbee and ngspice-45.2 agree to 7 digits (2.852417e-2 against 2.852412e-2)"
+
+[[probe.analytic]]
+at = 80.0e-6
+value = 0.02852416
+reltol = 2.0e-3
+note = "same plateau 20 us later; asserted twice so a drifting plateau cannot pass by crossing the right value once"

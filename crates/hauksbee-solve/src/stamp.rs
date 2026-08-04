@@ -2381,11 +2381,31 @@ pub(crate) fn vswitch_ramp(
     let (ramp_off, ramp_on) = match latched {
         None => (voff, von),
         Some(on) => {
-            let thr = if on { voff } else { von };
-            let half = 0.5
-                * (transition_frac * (von - voff).abs()).max(1e-12)
+            // ONE-SIDED, anchored exactly on the live threshold, with the ramp
+            // lying on the side the relay is moving TOWARD. An open relay is at
+            // exactly `roff` at `von` and reaches `ron` at `von + w`; a closed one
+            // is at exactly `ron` at `voff` and reaches `roff` at `voff - w`.
+            //
+            // Anchored rather than centred because the threshold is a strict
+            // inequality in the model and in ngspice ("closed WHEN the control
+            // passes von"), so at the threshold itself the relay is still in its
+            // old state. A centred ramp put the half-conductance point there and
+            // disagreed maximally with the oracle at exactly the one control
+            // voltage the deck cares about (measured on `switch_sw_thresholds`:
+            // 0.99 relative error at VC = 2.5 V and nowhere else).
+            //
+            // It also makes the residual timing error one-signed: the switch can
+            // now only ever act LATE, by at most `w / dv_ctrl_dt`, never early.
+            // Turning on early is the failure that cost 7.1 relative on the
+            // synapse array, because it hands the load current before the circuit
+            // being modelled would have.
+            let w = (transition_frac * (von - voff).abs()).max(1e-12)
                 * if von >= voff { 1.0 } else { -1.0 };
-            (thr - half, thr + half)
+            if on {
+                (voff - w, voff)
+            } else {
+                (von, von + w)
+            }
         }
     };
     let width = ramp_on - ramp_off;

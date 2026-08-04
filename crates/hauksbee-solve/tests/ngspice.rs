@@ -305,11 +305,45 @@ struct ProbeExpect {
     /// AC phase tolerance in degrees (absolute). Required for `.ac` probes.
     #[serde(default)]
     phase_abstol: Option<f64>,
+    /// CLOSED-FORM expectations for this probe, checked in addition to the
+    /// oracle comparison. See [`AnalyticPoint`].
+    #[serde(default)]
+    analytic: Vec<AnalyticPoint>,
     /// Why this probe's bound is allowed to sit further than [`MAX_HEADROOM`]
     /// above the error actually measured. Absent means it is not: see
     /// [`headroom_verdict`].
     #[serde(default)]
     loose_reason: Option<String>,
+}
+
+/// One closed-form expectation: at sweep point `at` (seconds for `tran`, volts for
+/// `dc`, hertz for `ac`), the probe must equal `value`.
+///
+/// An analytic expectation outranks the oracle wherever one exists. ngspice is a
+/// second implementation, not a definition, and the synapse investigation showed
+/// what that costs: ngspice does not bisect to a switch threshold, so on its
+/// default grid it integrated a whole straddling step with the relay already
+/// closed and reported a membrane 87.5 mV from the truth. Refining its own grid
+/// moved it 10x toward our answer. A deck that can state its own answer in closed
+/// form should assert against that, and use ngspice only to catch what the closed
+/// form does not cover.
+#[derive(Deserialize)]
+struct AnalyticPoint {
+    /// Sweep coordinate: seconds (`tran`), the swept source value (`dc`), hertz
+    /// (`ac`), ignored for `op`.
+    #[serde(default)]
+    at: f64,
+    /// The closed-form value.
+    value: f64,
+    /// Relative tolerance on `value`.
+    reltol: f64,
+    /// Absolute floor, for a `value` near zero.
+    #[serde(default)]
+    abstol: Option<f64>,
+    /// The derivation, so a reader can check the number rather than trust it.
+    /// Required: an unexplained analytic constant is indistinguishable from a
+    /// value copied out of a previous run.
+    note: String,
 }
 
 /// How far a declared tolerance may sit above the error actually measured before
@@ -543,6 +577,47 @@ fn worst_abs_error(xs: &[f64], ours: &[f64], ng: &NgSeries) -> (f64, f64) {
     (worst, at)
 }
 
+/// Check every closed-form expectation on one probe, appending a result row each.
+///
+/// `xs`/`vs` are OUR series on our own sweep axis; the analytic value is compared
+/// at `at` by interpolating our series there, the same way the oracle comparison
+/// resamples. For `op` there is no axis and the single sample is used.
+fn check_analytic(
+    out: &mut Vec<QtyResult>,
+    label: &str,
+    pe: &ProbeExpect,
+    xs: &[f64],
+    vs: &[f64],
+    axis: &str,
+) {
+    for (k, a) in pe.analytic.iter().enumerate() {
+        assert!(
+            !a.note.trim().is_empty(),
+            "{label}: analytic point {k} needs a `note` deriving its value"
+        );
+        let ours = if xs.len() <= 1 {
+            vs[0]
+        } else {
+            interp(&NgSeries { t: xs.to_vec(), v: vs.to_vec() }, a.at)
+        };
+        let floor = a.abstol.unwrap_or(1e-12);
+        let err = (ours - a.value).abs() / a.value.abs().max(floor);
+        out.push(QtyResult {
+            probe: format!("{label} vs closed form"),
+            worst_err: err,
+            at: format!("{axis}={:.3e}", a.at),
+            reltol: a.reltol,
+            pass: err < a.reltol,
+            // The headroom rule does not apply to a closed form. There is no
+            // second implementation whose grid could move, so the only thing
+            // between the bound and the measurement is the deck author's honesty
+            // about the model's own accuracy, and a bound chosen to match the
+            // physics is not evidence of a hole.
+            too_loose: None,
+        });
+    }
+}
+
 /// Look up a probe's value in a parsed `.op` listing.
 fn op_value(
     probe: &Probe,
@@ -613,6 +688,7 @@ fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
                     pass: err < pe.reltol,
                     too_loose: headroom_verdict(pe, err),
                 });
+                check_analytic(&mut quantities, &pr.label(), pe, &[0.0], &[ours_val], "op");
             }
         }
         "tran" => {
@@ -644,6 +720,7 @@ fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
                     pass: worst < pe.reltol,
                     too_loose: headroom_verdict(pe, worst),
                 });
+                check_analytic(&mut quantities, &pr.label(), pe, &ours_t, &ours_v, "t");
             }
         }
         "dc" => {
@@ -679,6 +756,7 @@ fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
                     pass: worst < pe.reltol,
                     too_loose: headroom_verdict(pe, worst),
                 });
+                check_analytic(&mut quantities, &pr.label(), pe, &ours_x, &ours_v, "sweep");
             }
         }
         "ac" => {
@@ -727,6 +805,14 @@ fn run_deck(bin: &Path, cir_path: &Path) -> DeckResult {
                     pass: wm < pe.reltol,
                     too_loose: headroom_verdict(pe, wm),
                 });
+                check_analytic(
+                    &mut quantities,
+                    &format!("{} mag", pr.label()),
+                    pe,
+                    &ours_f,
+                    &ours_mag,
+                    "f",
+                );
 
                 // Phase: absolute tolerance in degrees.
                 let ph_tol = pe.phase_abstol.unwrap_or_else(|| {
