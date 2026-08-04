@@ -35,7 +35,10 @@
 //! Producers also prefix names for uniqueness — `CMP:U1`, `NET:GND`, `PIN:7`,
 //! `LAYER:F.Cu` — while others (Allegro) write them bare. A leading
 //! `<KNOWN>:` prefix is stripped from both forms so `CMP:U1` and `U1` are the
-//! same component; see [`strip_prefix_tag`].
+//! same component; see [`strip_prefix_tag`]. KiCad additionally escapes the
+//! characters the format restricts, so a net `Net-(U4-LNA_IN/RF)` arrives as
+//! `Net-(U4-LNA_IN{slash}RF)`; that is undone, but only for files KiCad wrote
+//! ([`crate::unescape_kicad_name`]).
 //!
 //! ## Two sources of connectivity, and the disagreement between them
 //!
@@ -119,6 +122,8 @@ pub struct Ipc2581Stats {
     pub pads_per_layer: Vec<(String, usize)>,
     /// Pins that ended up on a net.
     pub connected_pins: usize,
+    /// Placements dropped as board artwork because they carry no pad at all.
+    pub artwork: Vec<String>,
     /// Cross-checks that did not agree, each a whole sentence.
     pub disagreements: Vec<String>,
 }
@@ -574,6 +579,19 @@ fn unit_scale(units: &str) -> f64 {
 pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
     let doc = scan(text)?;
     let mut disagreements: Vec<String> = Vec::new();
+    // KiCad escapes every name it writes into an exchange format
+    // ([`crate::unescape_kicad_name`]). Escaped names are used INTERNALLY (the
+    // pin → net map and the package lookups all key on what the document says)
+    // and un-escaped only on the way into the IR, so nothing depends on the
+    // order the two forms are compared in.
+    let kicad = doc.producer.to_ascii_uppercase().contains("KICAD");
+    let unescape = |s: &str| -> String {
+        if kicad {
+            crate::unescape_kicad_name(s)
+        } else {
+            s.to_string()
+        }
+    };
 
     // The step to read: the first that has components, else the first at all.
     let step = doc
@@ -702,7 +720,7 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
         .iter()
         .map(|n| Net {
             id: net_ids[n.as_str()],
-            name: n.clone(),
+            name: unescape(n),
         })
         .collect();
 
@@ -720,7 +738,6 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
 
     let mut wrong_packages: Vec<String> = Vec::new();
     let mut components: Vec<Component> = Vec::with_capacity(raw_components.len());
-    let mut used: HashSet<String> = HashSet::new();
     let mut connected_pins = 0usize;
     let mut orphan_refs: BTreeSet<String> = BTreeSet::new();
     let placed: HashSet<&str> = raw_components.iter().map(|c| c.refdes.as_str()).collect();
@@ -782,7 +799,7 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
                     .get(&(step.clone(), c.refdes.clone(), number.clone()))
                     .map(|(x, y)| (x * doc.units_mm, y * doc.units_mm));
                 Pin {
-                    number: number.clone(),
+                    number: unescape(number),
                     net,
                     function: String::new(),
                     kind: String::new(),
@@ -828,18 +845,14 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
             c.layer_ref.clone()
         };
 
-        let base = if c.refdes.is_empty() {
+        // Kept verbatim, and merged (not renamed) when the document places two
+        // instances under one designator; see
+        // [`crate::merge_duplicate_references`].
+        let reference = if c.refdes.is_empty() {
             format!("UNK{idx}")
         } else {
-            c.refdes.clone()
+            unescape(&c.refdes)
         };
-        let mut reference = base.clone();
-        let mut n = 2;
-        while used.contains(&reference) {
-            reference = format!("{base}_{n}");
-            n += 1;
-        }
-        used.insert(reference.clone());
 
         components.push(Component {
             reference,
@@ -853,6 +866,16 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
             pins,
         });
     }
+    // A placement with no pad is board artwork, not a part (see the same rule in
+    // `pcb.rs` and [`crate::odbpp`]): dropped, and named in the stats.
+    let artwork: Vec<String> = components
+        .iter()
+        .filter(|c| c.pins.is_empty())
+        .map(|c| c.reference.clone())
+        .collect();
+    let components = crate::merge_duplicate_references(
+        components.into_iter().filter(|c| !c.pins.is_empty()).collect(),
+    );
 
     if !wrong_packages.is_empty() {
         disagreements.push(format!(
@@ -890,7 +913,7 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
             // IPC-2581 step names carry a `BOARD:` prefix from KiCad and the
             // design name from Allegro; either is a better board name than the
             // file stem, and the prefix is already stripped.
-            name: step.clone(),
+            name: unescape(&step),
             nets,
             components,
         },
@@ -904,6 +927,7 @@ pub fn extract(text: &str) -> Result<Ipc2581Extraction, ExtractError> {
             copper_layers,
             pads_per_layer,
             connected_pins,
+            artwork,
             disagreements,
         },
     })

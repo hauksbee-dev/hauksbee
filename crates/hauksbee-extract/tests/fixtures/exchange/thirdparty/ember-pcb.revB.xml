@@ -1,0 +1,769 @@
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<IPC-2581 revision="B" xmlns="http://webstds.ipc.org/2581">
+    <Content roleRef="Owner">
+        <StepRef name="ipcFile"/>
+        <LayerRef name="SOLDERMASK_TOP"/>
+        <LayerRef name="TOP"/>
+        <LayerRef name="DIELECTRIC_INDEX_3"/>
+        <LayerRef name="LYR-2_PLANE-1"/>
+        <LayerRef name="DIELECTRIC_INDEX_5"/>
+        <LayerRef name="LYR-3_SIG-1"/>
+        <LayerRef name="DIELECTRIC_INDEX_7"/>
+        <LayerRef name="LYR-4_PLANE-2"/>
+        <LayerRef name="DIELECTRIC_INDEX_9"/>
+        <LayerRef name="LYR-5_PLANE-3"/>
+        <LayerRef name="DIELECTRIC_INDEX_11"/>
+        <LayerRef name="LYR-6_PLANE-4"/>
+        <LayerRef name="DIELECTRIC_INDEX_13"/>
+        <LayerRef name="LYR-7_PLANE-5"/>
+        <LayerRef name="DIELECTRIC_INDEX_15"/>
+        <LayerRef name="LYR-8_PLANE-6"/>
+        <LayerRef name="DIELECTRIC_INDEX_17"/>
+        <LayerRef name="LYR-9_PLANE-7"/>
+        <LayerRef name="DIELECTRIC_INDEX_19"/>
+        <LayerRef name="LYR-10_SIG-2"/>
+        <LayerRef name="DIELECTRIC_INDEX_21"/>
+        <LayerRef name="LYR-11_PLANE-8"/>
+        <LayerRef name="DIELECTRIC_INDEX_23"/>
+        <LayerRef name="BOTTOM"/>
+        <LayerRef name="SOLDERMASK_BOTTOM"/>
+        <DictionaryColor>
+            <EntryColor id="COLOR_SOLDERMASK_TOP">
+                <Color r="255" g="0" b="0"/>
+            </EntryColor>
+            <EntryColor id="COLOR_Top">
+                <Color r="255" g="0" b="0"/>
+            </EntryColor>
+            <EntryColor id="COLOR_LYR-2_PLANE-1">
+                <Color r="255" g="0" b="0"/>
+            </EntryColor>
+            <EntryColor id="COLOR_LYR-3_SIG-1">
+                <Color r="255" g="0" b="0"/>
+            </EntryColor>
+            <EntryColor id="COLOR_LYR-4_PLANE-2">
+                <Color r="255" g="0" b="0"/>
+            </EntryColor>
+            <EntryColor id="COLOR_LYR-5_PLANE-3">
+                <Color r="255" g="0" b="0"/>
+            </EntryColor>
+            <EntryColor id="COLOR_LYR-6_PLANE-4">
+                <Color r="255" g="0" b="0"/>
+            </EntryColor>
+            <EntryColor id="COLOR_LYR-7_PLANE-5">
+                <Color r="255" g="0" b="0"/>
+            </EntryColor>
+            <EntryColor id="COLOR_LYR-8_PLANE-6">
+                <Color r="255" g="0" b="0"/>
+            </EntryColor>
+            <EntryColor id="COLOR_LYR-9_PLANE-7">
+                <Color r="255" g="0" b="0"/>
+            </EntryColor>
+            <EntryColor id="COLOR_LYR-10_SIG-2">
+                <Color r="255" g="0" b="0"/>
+            </EntryColor>
+            <EntryColor id="COLOR_LYR-11_PLANE-8">
+                <Color r="255" g="0" b="0"/>
+            </EntryColor>
+            <EntryColor id="COLOR_Bottom">
+                <Color r="0" g="0" b="255"/>
+            </EntryColor>
+            <EntryColor id="COLOR_SOLDERMASK_BOTTOM">
+                <Color r="255" g="0" b="0"/>
+            </EntryColor>
+        </DictionaryColor>
+        <DictionaryLineDesc units="INCH">
+            <EntryLineDesc id="ROUND_0">
+                <LineDesc lineEnd="ROUND" lineWidth="0.00000"/>
+            </EntryLineDesc>
+        </DictionaryLineDesc>
+        <DictionaryFillDesc units="INCH">
+            <EntryFillDesc id="SOLID_FILL">
+                <FillDesc fillProperty="FILL"/>
+            </EntryFillDesc>
+            <EntryFillDesc id="HOLLOW">
+                <FillDesc fillProperty="HOLLOW"/>
+            </EntryFillDesc>
+        </DictionaryFillDesc>
+        <DictionaryStandard units="INCH"/>
+        <DictionaryUser units="INCH"/>
+    </Content>
+    <LogisticHeader>
+        <Role id="OWNER" roleFunction="SENDER"/>
+        <Enterprise id="UNKNOWN" code="UNKNOWN"/>
+        <Person name="Design" enterpriseRef="UNKNOWN" roleRef="Owner"/>
+    </LogisticHeader>
+    <HistoryRecord number="1" origination="test_03-06" software="test_Allegro" lastChange="test_04-06">
+        <FileRevision fileRevisionId="1.a" comment="NO COMMENTS">
+            <SoftwarePackage name="test All" revision="1.1.1" vendor="test_Cadance">
+                <Certification certificationStatus="test Cerified"/>
+            </SoftwarePackage>
+        </FileRevision>
+    </HistoryRecord>
+    <Ecad name="Design">
+        <CadHeader units="INCH">
+            <Spec name="SPEC_LAYER_SOLDERMASK_TOP">
+                <General type="MATERIAL">
+                    <Property text="Soldermask"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="MASK"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="0.00"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="4.2"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="4.2"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_TOP">
+                <General type="MATERIAL">
+                    <Property text="COPPER"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="CONDUCTOR"/>
+                </General>
+                <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+                    <Property text="NOT_EMBEDDED"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="595900.000000"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="4.500000"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="0.0"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_3">
+                <General type="MATERIAL">
+                    <Property text="FR370HR"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="DIELECTRIC"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="0.00"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="3.63"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="null"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_LYR-2_PLANE-1">
+                <General type="MATERIAL">
+                    <Property text="COPPER"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="PLANE"/>
+                </General>
+                <General type="OTHER" comment="LAYER_IS_SHIELD">
+                    <Property text="true"/>
+                </General>
+                <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+                    <Property text="NOT_EMBEDDED"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="595900.000000"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="4.500000"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="0.0"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_5">
+                <General type="MATERIAL">
+                    <Property text="FR370HR"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="DIELECTRIC"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="0.00"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="3.84"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="null"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_LYR-3_SIG-1">
+                <General type="MATERIAL">
+                    <Property text="COPPER"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="CONDUCTOR"/>
+                </General>
+                <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+                    <Property text="NOT_EMBEDDED"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="595900.000000"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="4.500000"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="0.0"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_7">
+                <General type="MATERIAL">
+                    <Property text="FR370HR"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="DIELECTRIC"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="0.00"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="3.63"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="null"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_LYR-4_PLANE-2">
+                <General type="MATERIAL">
+                    <Property text="COPPER"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="PLANE"/>
+                </General>
+                <General type="OTHER" comment="LAYER_IS_SHIELD">
+                    <Property text="true"/>
+                </General>
+                <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+                    <Property text="NOT_EMBEDDED"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="595900.000000"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="4.500000"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="0.0"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_9">
+                <General type="MATERIAL">
+                    <Property text="FR370HR"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="DIELECTRIC"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="0.00"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="3.84"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="null"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_LYR-5_PLANE-3">
+                <General type="MATERIAL">
+                    <Property text="COPPER"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="PLANE"/>
+                </General>
+                <General type="OTHER" comment="LAYER_IS_SHIELD">
+                    <Property text="true"/>
+                </General>
+                <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+                    <Property text="NOT_EMBEDDED"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="595900.000000"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="4.500000"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="0.0"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_11">
+                <General type="MATERIAL">
+                    <Property text="FR370HR"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="DIELECTRIC"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="0.00"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="3.63"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="null"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_LYR-6_PLANE-4">
+                <General type="MATERIAL">
+                    <Property text="COPPER"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="PLANE"/>
+                </General>
+                <General type="OTHER" comment="LAYER_IS_SHIELD">
+                    <Property text="true"/>
+                </General>
+                <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+                    <Property text="NOT_EMBEDDED"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="595900.000000"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="4.500000"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="0.0"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_13">
+                <General type="MATERIAL">
+                    <Property text="FR370HR"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="DIELECTRIC"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="0.00"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="3.84"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="null"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_LYR-7_PLANE-5">
+                <General type="MATERIAL">
+                    <Property text="COPPER"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="PLANE"/>
+                </General>
+                <General type="OTHER" comment="LAYER_IS_SHIELD">
+                    <Property text="true"/>
+                </General>
+                <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+                    <Property text="NOT_EMBEDDED"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="595900.000000"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="4.500000"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="0.0"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_15">
+                <General type="MATERIAL">
+                    <Property text="FR370HR"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="DIELECTRIC"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="0.00"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="3.63"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="null"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_LYR-8_PLANE-6">
+                <General type="MATERIAL">
+                    <Property text="COPPER"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="PLANE"/>
+                </General>
+                <General type="OTHER" comment="LAYER_IS_SHIELD">
+                    <Property text="true"/>
+                </General>
+                <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+                    <Property text="NOT_EMBEDDED"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="595900.000000"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="4.500000"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="0.0"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_17">
+                <General type="MATERIAL">
+                    <Property text="FR370HR"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="DIELECTRIC"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="0.00"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="3.84"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="null"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_LYR-9_PLANE-7">
+                <General type="MATERIAL">
+                    <Property text="COPPER"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="PLANE"/>
+                </General>
+                <General type="OTHER" comment="LAYER_IS_SHIELD">
+                    <Property text="true"/>
+                </General>
+                <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+                    <Property text="NOT_EMBEDDED"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="595900.000000"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="4.500000"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="0.0"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_19">
+                <General type="MATERIAL">
+                    <Property text="FR370HR"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="DIELECTRIC"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="0.00"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="3.63"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="null"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_LYR-10_SIG-2">
+                <General type="MATERIAL">
+                    <Property text="COPPER"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="CONDUCTOR"/>
+                </General>
+                <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+                    <Property text="NOT_EMBEDDED"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="595900.000000"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="4.500000"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="0.0"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_21">
+                <General type="MATERIAL">
+                    <Property text="FR370HR"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="DIELECTRIC"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="0.00"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="3.84"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="null"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_LYR-11_PLANE-8">
+                <General type="MATERIAL">
+                    <Property text="COPPER"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="PLANE"/>
+                </General>
+                <General type="OTHER" comment="LAYER_IS_SHIELD">
+                    <Property text="true"/>
+                </General>
+                <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+                    <Property text="NOT_EMBEDDED"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="595900.000000"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="4.500000"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="0.0"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_DIELECTRIC_INDEX_23">
+                <General type="MATERIAL">
+                    <Property text="FR370HR"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="DIELECTRIC"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="0.00"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="3.63"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="null"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_BOTTOM">
+                <General type="MATERIAL">
+                    <Property text="COPPER"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="CONDUCTOR"/>
+                </General>
+                <General type="OTHER" comment="LAYER_EMBEDDED_STATUS">
+                    <Property text="NOT_EMBEDDED"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="595900.000000"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="4.500000"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="0.0"/>
+                </Dielectric>
+            </Spec>
+            <Spec name="SPEC_LAYER_SOLDERMASK_BOTTOM">
+                <General type="MATERIAL">
+                    <Property text="Soldermask"/>
+                </General>
+                <General type="OTHER" comment="LAYER_TYPE">
+                    <Property text="MASK"/>
+                </General>
+                <Conductor type="CONDUCTIVITY">
+                    <Property unit="MHO/CM" value="0.00"/>
+                </Conductor>
+                <Dielectric type="DIELECTRIC_CONSTANT">
+                    <Property value="4.200000"/>
+                </Dielectric>
+                <Dielectric type="LOSS_TANGENT">
+                    <Property value="4.2"/>
+                </Dielectric>
+            </Spec>
+        </CadHeader>
+        <CadData>
+            <Layer name="SOLDERMASK_TOP" layerFunction="SOLDERMASK" side="TOP" polarity="POSITIVE"/>
+            <Layer name="TOP" layerFunction="CONDUCTOR" side="TOP" polarity="POSITIVE"/>
+            <Layer name="DIELECTRIC_INDEX_3" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="LYR-2_PLANE-1" layerFunction="PLANE" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="DIELECTRIC_INDEX_5" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="LYR-3_SIG-1" layerFunction="CONDUCTOR" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="DIELECTRIC_INDEX_7" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="LYR-4_PLANE-2" layerFunction="PLANE" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="DIELECTRIC_INDEX_9" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="LYR-5_PLANE-3" layerFunction="PLANE" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="DIELECTRIC_INDEX_11" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="LYR-6_PLANE-4" layerFunction="PLANE" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="DIELECTRIC_INDEX_13" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="LYR-7_PLANE-5" layerFunction="PLANE" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="DIELECTRIC_INDEX_15" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="LYR-8_PLANE-6" layerFunction="PLANE" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="DIELECTRIC_INDEX_17" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="LYR-9_PLANE-7" layerFunction="PLANE" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="DIELECTRIC_INDEX_19" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="LYR-10_SIG-2" layerFunction="CONDUCTOR" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="DIELECTRIC_INDEX_21" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="LYR-11_PLANE-8" layerFunction="PLANE" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="DIELECTRIC_INDEX_23" layerFunction="DIELPREG" side="INTERNAL" polarity="POSITIVE"/>
+            <Layer name="BOTTOM" layerFunction="CONDUCTOR" side="BOTTOM" polarity="POSITIVE"/>
+            <Layer name="SOLDERMASK_BOTTOM" layerFunction="SOLDERMASK" side="BOTTOM" polarity="POSITIVE"/>
+            <Stackup name="PRIMARY" overallThickness="0.06282" tolPlus="10" tolMinus="10" whereMeasured="METAL">
+                <StackupGroup name="GROUP_PRIMARY" thickness="0.06282" tolPlus="10" tolMinus="10">
+                    <StackupLayer layerOrGroupRef="SOLDERMASK_TOP" thickness="0.0005" tolPlus="0.00" tolMinus="0.00" sequence="1">
+                        <SpecRef id="SPEC_LAYER_SOLDERMASK_TOP"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="TOP" thickness="0.0014500000000000001" tolPlus="0.00" tolMinus="0.00" sequence="2">
+                        <SpecRef id="SPEC_LAYER_TOP"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_3" thickness="0.003348" tolPlus="0.00" tolMinus="0.00" sequence="3">
+                        <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_3"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="LYR-2_PLANE-1" thickness="7.0E-4" tolPlus="0.00" tolMinus="0.00" sequence="4">
+                        <SpecRef id="SPEC_LAYER_LYR-2_PLANE-1"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_5" thickness="0.004" tolPlus="0.00" tolMinus="0.00" sequence="5">
+                        <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_5"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="LYR-3_SIG-1" thickness="7.0E-4" tolPlus="0.00" tolMinus="0.00" sequence="6">
+                        <SpecRef id="SPEC_LAYER_LYR-3_SIG-1"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_7" thickness="0.006416000000000001" tolPlus="0.00" tolMinus="0.00" sequence="7">
+                        <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_7"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="LYR-4_PLANE-2" thickness="7.0E-4" tolPlus="0.00" tolMinus="0.00" sequence="8">
+                        <SpecRef id="SPEC_LAYER_LYR-4_PLANE-2"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_9" thickness="0.004" tolPlus="0.00" tolMinus="0.00" sequence="9">
+                        <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_9"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="LYR-5_PLANE-3" thickness="7.0E-4" tolPlus="0.00" tolMinus="0.00" sequence="10">
+                        <SpecRef id="SPEC_LAYER_LYR-5_PLANE-3"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_11" thickness="0.0066960000000000006" tolPlus="0.00" tolMinus="0.00" sequence="11">
+                        <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_11"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="LYR-6_PLANE-4" thickness="7.0E-4" tolPlus="0.00" tolMinus="0.00" sequence="12">
+                        <SpecRef id="SPEC_LAYER_LYR-6_PLANE-4"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_13" thickness="0.004" tolPlus="0.00" tolMinus="0.00" sequence="13">
+                        <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_13"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="LYR-7_PLANE-5" thickness="7.0E-4" tolPlus="0.00" tolMinus="0.00" sequence="14">
+                        <SpecRef id="SPEC_LAYER_LYR-7_PLANE-5"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_15" thickness="0.0066960000000000006" tolPlus="0.00" tolMinus="0.00" sequence="15">
+                        <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_15"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="LYR-8_PLANE-6" thickness="7.0E-4" tolPlus="0.00" tolMinus="0.00" sequence="16">
+                        <SpecRef id="SPEC_LAYER_LYR-8_PLANE-6"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_17" thickness="0.004" tolPlus="0.00" tolMinus="0.00" sequence="17">
+                        <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_17"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="LYR-9_PLANE-7" thickness="7.0E-4" tolPlus="0.00" tolMinus="0.00" sequence="18">
+                        <SpecRef id="SPEC_LAYER_LYR-9_PLANE-7"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_19" thickness="0.006416000000000001" tolPlus="0.00" tolMinus="0.00" sequence="19">
+                        <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_19"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="LYR-10_SIG-2" thickness="7.0E-4" tolPlus="0.00" tolMinus="0.00" sequence="20">
+                        <SpecRef id="SPEC_LAYER_LYR-10_SIG-2"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_21" thickness="0.004" tolPlus="0.00" tolMinus="0.00" sequence="21">
+                        <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_21"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="LYR-11_PLANE-8" thickness="7.0E-4" tolPlus="0.00" tolMinus="0.00" sequence="22">
+                        <SpecRef id="SPEC_LAYER_LYR-11_PLANE-8"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="DIELECTRIC_INDEX_23" thickness="0.003348" tolPlus="0.00" tolMinus="0.00" sequence="23">
+                        <SpecRef id="SPEC_LAYER_DIELECTRIC_INDEX_23"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="BOTTOM" thickness="0.0014500000000000001" tolPlus="0.00" tolMinus="0.00" sequence="24">
+                        <SpecRef id="SPEC_LAYER_BOTTOM"/>
+                    </StackupLayer>
+                    <StackupLayer layerOrGroupRef="SOLDERMASK_BOTTOM" thickness="0.0005" tolPlus="0.00" tolMinus="0.00" sequence="25">
+                        <SpecRef id="SPEC_LAYER_SOLDERMASK_BOTTOM"/>
+                    </StackupLayer>
+                </StackupGroup>
+            </Stackup>
+            <Step name="ipcFile">
+                <LayerFeature layerRef="SOLDERMASK_TOP">
+                    <Set>
+                        <ColorRef id="COLOR_SOLDERMASK_TOP"/>
+                    </Set>
+                </LayerFeature>
+                <LayerFeature layerRef="TOP">
+                    <Set>
+                        <ColorRef id="COLOR_TOP"/>
+                    </Set>
+                </LayerFeature>
+                <LayerFeature layerRef="LYR-2_PLANE-1">
+                    <Set>
+                        <ColorRef id="COLOR_LYR-2_PLANE-1"/>
+                    </Set>
+                </LayerFeature>
+                <LayerFeature layerRef="LYR-3_SIG-1">
+                    <Set>
+                        <ColorRef id="COLOR_LYR-3_SIG-1"/>
+                    </Set>
+                </LayerFeature>
+                <LayerFeature layerRef="LYR-4_PLANE-2">
+                    <Set>
+                        <ColorRef id="COLOR_LYR-4_PLANE-2"/>
+                    </Set>
+                </LayerFeature>
+                <LayerFeature layerRef="LYR-5_PLANE-3">
+                    <Set>
+                        <ColorRef id="COLOR_LYR-5_PLANE-3"/>
+                    </Set>
+                </LayerFeature>
+                <LayerFeature layerRef="LYR-6_PLANE-4">
+                    <Set>
+                        <ColorRef id="COLOR_LYR-6_PLANE-4"/>
+                    </Set>
+                </LayerFeature>
+                <LayerFeature layerRef="LYR-7_PLANE-5">
+                    <Set>
+                        <ColorRef id="COLOR_LYR-7_PLANE-5"/>
+                    </Set>
+                </LayerFeature>
+                <LayerFeature layerRef="LYR-8_PLANE-6">
+                    <Set>
+                        <ColorRef id="COLOR_LYR-8_PLANE-6"/>
+                    </Set>
+                </LayerFeature>
+                <LayerFeature layerRef="LYR-9_PLANE-7">
+                    <Set>
+                        <ColorRef id="COLOR_LYR-9_PLANE-7"/>
+                    </Set>
+                </LayerFeature>
+                <LayerFeature layerRef="LYR-10_SIG-2">
+                    <Set>
+                        <ColorRef id="COLOR_LYR-10_SIG-2"/>
+                    </Set>
+                </LayerFeature>
+                <LayerFeature layerRef="LYR-11_PLANE-8">
+                    <Set>
+                        <ColorRef id="COLOR_LYR-11_PLANE-8"/>
+                    </Set>
+                </LayerFeature>
+                <LayerFeature layerRef="BOTTOM">
+                    <Set>
+                        <ColorRef id="COLOR_BOTTOM"/>
+                    </Set>
+                </LayerFeature>
+                <LayerFeature layerRef="SOLDERMASK_BOTTOM">
+                    <Set>
+                        <ColorRef id="COLOR_SOLDERMASK_BOTTOM"/>
+                    </Set>
+                </LayerFeature>
+            </Step>
+        </CadData>
+    </Ecad>
+</IPC-2581>
