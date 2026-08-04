@@ -290,13 +290,23 @@ fn push_spec_error(diags: &mut Vec<Diagnostic>, text: &str, err: &SpecError) {
             fix: None,
         }),
         SpecError::Invalid(m) => {
-            let (line, col) = locate_from_message(text, m);
+            // The did-you-mean lives in ONE place on a diagnostic: `fix`. It
+            // arrives spliced into the validation message (that is the shape
+            // `run`'s stderr wants, where there is no separate field for it),
+            // and the renderer appends `fix` after the message, so leaving it in
+            // both printed it twice: "... (did you mean 'voltage'?) (did you
+            // mean 'voltage'?)". Split it out rather than dropping either half.
+            let (message, fix) = split_did_you_mean(m);
+            // Locate against the message with the suggestion removed: otherwise
+            // an identifier that only appears in the suggestion could win the
+            // line/col, pointing the editor at the wrong token.
+            let (line, col) = locate_from_message(text, &message);
             diags.push(Diagnostic {
                 line,
                 col,
                 code: classify_invalid(m),
-                message: m.clone(),
-                fix: did_you_mean_fix(m),
+                message,
+                fix,
             });
         }
     }
@@ -348,12 +358,39 @@ fn classify_invalid(msg: &str) -> &'static str {
     }
 }
 
-/// Extract a fix suggestion from a message's did-you-mean clause, when present.
-fn did_you_mean_fix(msg: &str) -> Option<String> {
-    let start = msg.find("did you mean")?;
-    let rest = &msg[start..];
-    let end = rest.find('?').map(|i| i + 1).unwrap_or(rest.len());
-    Some(rest[..end].trim_end_matches(')').to_string())
+/// Split a validation message into (message without its did-you-mean clause,
+/// the clause as a `fix`). Returns the message unchanged and `None` when there
+/// is no clause.
+///
+/// Both spellings the crate produces are handled: the parenthesised
+/// `... 'voltag' (did you mean 'voltage'?)` of the closed-vocabulary errors, and
+/// the trailing `...; did you mean: R1, R9?` of the net / reference suggesters.
+/// The punctuation that introduced the clause goes with it, so what is left
+/// reads as a finished sentence rather than trailing a stray `(` or `;`.
+fn split_did_you_mean(msg: &str) -> (String, Option<String>) {
+    let Some(start) = msg.find("did you mean") else {
+        return (msg.to_string(), None);
+    };
+    // Every construction site ends the clause with a question mark.
+    let end = msg[start..]
+        .find('?')
+        .map(|i| start + i + 1)
+        .unwrap_or(msg.len());
+    let clause = msg[start..end].to_string();
+    let mut lead = start;
+    let mut trail = end;
+    if msg[..lead].ends_with(" (") {
+        lead -= 2;
+        if msg[trail..].starts_with(')') {
+            trail += 1;
+        }
+    } else if msg[..lead].ends_with("; ") {
+        lead -= 2;
+    } else if msg[..lead].ends_with(' ') {
+        lead -= 1;
+    }
+    let cleaned = format!("{}{}", &msg[..lead], &msg[trail..]);
+    (cleaned.trim().to_string(), Some(clause))
 }
 
 /// For an `unknown field \`x\`, expected ...` message: suggest the nearest
@@ -439,13 +476,40 @@ mod tests {
     }
 
     #[test]
-    fn did_you_mean_fix_extracts_the_clause() {
+    fn the_did_you_mean_clause_moves_out_of_the_message_into_the_fix() {
+        // M5: the message carried the suggestion AND the renderer appended `fix`,
+        // so `check` printed the did-you-mean twice. `fix` is the single source.
         let msg = "unknown assertion kind 'voltag' (did you mean 'voltage'?) (expected ...)";
+        let (message, fix) = split_did_you_mean(msg);
+        assert_eq!(fix.as_deref(), Some("did you mean 'voltage'?"));
+        assert_eq!(message, "unknown assertion kind 'voltag' (expected ...)");
+        assert!(!message.contains("did you mean"));
+
+        // The suggester's trailing-clause spelling, and its punctuation.
+        let refs = "max_current assert references unknown component 'R98'; did you mean: R9?";
+        let (message, fix) = split_did_you_mean(refs);
+        assert_eq!(fix.as_deref(), Some("did you mean: R9?"));
         assert_eq!(
-            did_you_mean_fix(msg).as_deref(),
-            Some("did you mean 'voltage'?")
+            message,
+            "max_current assert references unknown component 'R98'"
         );
-        assert_eq!(did_you_mean_fix("no clause here"), None);
+
+        let (message, fix) = split_did_you_mean("no clause here");
+        assert_eq!(fix, None);
+        assert_eq!(message, "no clause here");
+    }
+
+    #[test]
+    fn the_rendered_line_carries_the_suggestion_exactly_once() {
+        let d = Diagnostic {
+            line: None,
+            col: None,
+            code: "unknown-kind",
+            message: "unknown assertion kind 'voltag'".to_string(),
+            fix: Some("did you mean 'voltage'?".to_string()),
+        };
+        let rendered = d.render_human(Path::new("ci/power-up.toml"));
+        assert_eq!(rendered.matches("did you mean").count(), 1, "{rendered}");
     }
 
     #[test]
