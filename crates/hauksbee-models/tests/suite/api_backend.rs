@@ -81,9 +81,12 @@ fn api_backend_sends_the_documented_request_shape() {
 
     let dir = tempfile::tempdir().unwrap();
     // A text stand-in for the PDF: the backend under test never renders it,
-    // and extract_pdf_text degrades to a placeholder when it cannot.
+    // and extract_pdf_text degrades to a placeholder when it cannot. It must
+    // still carry the %PDF magic, because `run` prechecks the magic bytes
+    // before choosing a backend so a renamed HTML page is never shipped to an
+    // LLM; a header-less stand-in is rejected before any request goes out.
     let pdf = dir.path().join("1n914test.pdf");
-    std::fs::write(&pdf, "IF=200mA VRRM=100V test datasheet body").unwrap();
+    std::fs::write(&pdf, "%PDF-1.4\nIF=200mA VRRM=100V test datasheet body").unwrap();
 
     let key_env = "HAUKSBEE_API_BACKEND_TEST_KEY";
     // SAFETY: this variable is unique to this test; nothing else reads it.
