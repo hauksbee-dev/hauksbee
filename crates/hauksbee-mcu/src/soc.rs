@@ -13,7 +13,15 @@
 //! [soc]
 //! backend = "renode"
 //! machine = "f401"
-//! platform_repl = "@platforms/cpus/stm32f4.repl"
+//! platform_repl = """
+//! using "platforms/cpus/stm32f4.repl"
+//!
+//! nvic:
+//!     systickFrequency: 16000000
+//!
+//! cpu:
+//!     PerformanceInMips: 16
+//! """
 //! cpu_path = "sysbus.cpu"
 //! uart = "sysbus.usart2"
 //! frequency_hz = 16_000_000
@@ -36,6 +44,10 @@
 //! set, all carried by this schema so a descriptor reproduces its constructor
 //! byte-for-byte:
 //!   - `machine`, `mcu_label`, `frequency_hz`, always present on the structs.
+//!     `platform_repl` is inline source above rather than the plan's bare stock
+//!     path, because a Renode part must declare its own core clock and be held
+//!     to it: see [`check_clock_declarations`].
+//!   - `watchdog_limitation`, the per-part watchdog coverage statement.
 //!   - `extra_setup` / `post_load_setup`; the FE310 bring-up footgun (PRCI
 //!     clock tags + `{cpu} PC vinit`) lives in `post_load_setup`, not code.
 //!   - `[soc.spi].extra_repl`; the STM32F103 SPI1-injection fragment.
@@ -734,12 +746,13 @@ impl crate::qemu::QemuConfig {
 
 // ── Shared validation helpers ────────────────────────────────────────────────
 
-/// Refuse a zero advisory clock.
+/// Refuse a zero part clock.
 ///
-/// `frequency_hz` is documented as advisory (the emulator clocks its own
-/// platform), but it is not inert: `Mcu::run_cycles` on both external backends
-/// divides a cycle count by it to get the run window, so a zero clock asks for
-/// an infinite window instead of erroring.
+/// The emulator clocks its own platform, so this field does not set the emulated
+/// rate by itself, but it is not inert twice over: `Mcu::run_cycles` on both
+/// external backends divides a cycle count by it to get the run window, so a
+/// zero clock asks for an infinite window instead of erroring, and on Renode
+/// [`check_clock_declarations`] holds the platform's own declarations to it.
 fn validate_frequency(frequency_hz: u64) -> Result<(), SocError> {
     if frequency_hz == 0 {
         return Err(SocError::ZeroFrequency);
@@ -774,7 +787,10 @@ fn repl_property_values(source: &str, property: &str) -> Vec<u64> {
             continue;
         };
         let value = value.trim().trim_end_matches(';').trim();
-        let parsed = match value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")) {
+        let parsed = match value
+            .strip_prefix("0x")
+            .or_else(|| value.strip_prefix("0X"))
+        {
             Some(hex) => u64::from_str_radix(hex, 16).ok(),
             None => value.parse::<u64>().ok(),
         };
@@ -1453,7 +1469,8 @@ mcu_label = "test part"
     /// the 9.00x the error reports is the rate the clock-truth gate measured.
     #[test]
     fn a_platform_clock_that_disagrees_with_frequency_hz_is_refused() {
-        let lying = descriptor("").replace("systickFrequency: 8000000", "systickFrequency: 72000000");
+        let lying =
+            descriptor("").replace("systickFrequency: 8000000", "systickFrequency: 72000000");
         match SocConfig::from_soc_toml(&lying) {
             Err(SocError::ClockMismatch {
                 property,
@@ -1480,7 +1497,9 @@ mcu_label = "test part"
                 assert_eq!(property, "cpu PerformanceInMips");
                 assert_eq!(declared, 100);
             }
-            other => panic!("a 100-MIPS declaration on an 8 MHz part must be refused, got {other:?}"),
+            other => {
+                panic!("a 100-MIPS declaration on an 8 MHz part must be refused, got {other:?}")
+            }
         }
     }
 

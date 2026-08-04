@@ -83,6 +83,13 @@ fn firmware(name: &str) -> Option<PathBuf> {
 fn measure(cfg: RenodeConfig, elf: &PathBuf, pin: PinId) -> Option<f64> {
     let mut mcu = RenodeBackend::new(cfg).ok()?;
     mcu.load_firmware(elf).ok()?;
+    // Poll only the port the firmware drives. Every chunk costs one Monitor
+    // round trip per polled register, and the F103 descriptor carries seven
+    // ports with a CRL/CRH pair each: left unhinted, a 500-chunk measurement
+    // spends 21 round trips per chunk reading ports no firmware here touches.
+    // This is also what the engine does with a bound board, so the gate
+    // measures the path the product uses.
+    mcu.set_active_ports(&[pin.port]);
 
     // Chunk index of every edge seen, so the whole edge train is available in
     // the failure message rather than only the deadline.

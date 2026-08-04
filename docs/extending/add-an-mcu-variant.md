@@ -55,7 +55,17 @@ reasoning:
 [soc]
 backend = "renode"
 machine = "f103"
-platform_repl = "@platforms/cpus/stm32f103.repl"
+platform_repl = """
+using "platforms/cpus/stm32f103.repl"
+
+# The part's reset-default core clock, cross-checked against frequency_hz
+# below. The real file's platform is much longer; this is the clock part.
+nvic:
+    systickFrequency: 8000000
+
+cpu:
+    PerformanceInMips: 8
+"""
 cpu_path = "sysbus.cpu"
 uart = "sysbus.usart1"
 frequency_hz = 8_000_000
@@ -83,18 +93,32 @@ Go field by field. The schema is `RenodeSoc` in `soc.rs`. QEMU descriptors
 have their own shape (`arch`, `icount_shift`, mailbox-style `banks`), see
 `esp32.soc.toml`:
 
-- `platform_repl`: the Renode platform to load. `@platforms/...` paths
-  resolve inside the Renode installation. A local `.repl` file path also
-  works, as does `@{support}/<name>.repl` for a platform that arrives in a
-  support bundle.
+- `platform_repl`: the Renode platform to load. A multi-line string is inline
+  `.repl` source, which is the form you want: the loader requires the platform to
+  declare the part's core clock (`cpu PerformanceInMips` in MHz, and
+  `nvic systickFrequency` in Hz on a Cortex-M part) and refuses a value that
+  disagrees with `frequency_hz`, so extend a stock file with `using` rather than
+  pointing straight at it. A single-line `@platforms/...` path resolves inside
+  the Renode installation, a local `.repl` file path also works, and
+  `@{support}/<name>.repl` names a platform that arrives in a support bundle
+  (whose `.repl` is checked for the same declarations).
 - `support_bundle` (optional): the name of a bundle of peripheral models to
   unpack and compile before the platform loads, for a part Renode models not
   at all. See the last section below.
 - `cpu_path` / `uart`: the platform's names for the CPU and console UART
   (`sysbus.`-qualified, exactly as Renode's monitor addresses them).
-- `frequency_hz`, `expected_e_machine` (`EM_ARM`, `EM_RISCV`, `EM_XTENSA`,
-  `EM_AVR`). hauksbee checks firmware ELFs against this field, so an ESP32
-  binary refuses loudly on an ARM part. `mcu_label` is the report string.
+- `frequency_hz`: the part's core clock, and NOT advisory. It is cross-checked
+  against the platform's own declarations above and a mismatch is refused at
+  load, because four shipped platforms once ran 4.5x to 9x fast on the strength
+  of the two disagreeing in silence.
+- `expected_e_machine` (`EM_ARM`, `EM_RISCV`, `EM_XTENSA`, `EM_AVR`). hauksbee
+  checks firmware ELFs against this field, so an ESP32 binary refuses loudly on
+  an ARM part. `mcu_label` is the report string.
+- `watchdog_limitation` (optional): one sentence saying how this part's watchdog
+  fidelity falls short, rendered verbatim on every report surface. Leaving it out
+  claims that a starved watchdog reboots the core the way silicon does, which on
+  the shipped parts is true of exactly one of them, so leave it out only if you
+  measured it.
 - `[[soc.ports]]`, one per GPIO port: `letter`, the platform `peripheral`
   name (**without** `sysbus.`, the backend prepends it when polling),
   `odr_offset` (the output-data register's byte offset), and `width` (the port's

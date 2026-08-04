@@ -96,9 +96,10 @@ field name is a loud parse error rather than a value that vanishes.
 | `support_bundle` | no | string | Peripheral models to compile before the platform loads (tier C) |
 | `cpu_path` | yes | string | The CPU for state queries, e.g. `"sysbus.cpu"` |
 | `uart` | no | string | The UART to bridge to a host socket. Omit the field for no UART; a blank string is refused |
-| `frequency_hz` | yes | integer | Advisory: Renode clocks the platform from the `.repl`, so this does not set the emulated clock. It is what `Mcu::frequency` reports, and `Mcu::run_cycles` divides a cycle count by it to get a run window, so 0 is refused |
+| `frequency_hz` | yes | integer | The part's core clock. Renode clocks the platform from the `.repl`, so this does not set the emulated clock by itself, which is why the loader CROSS-CHECKS it against the platform's own declarations and refuses a mismatch (see below). 0 is refused |
 | `expected_e_machine` | yes | `EM_ARM`, `EM_RISCV`, `EM_XTENSA`, `EM_AVR` | The ISA gate. A wrong-architecture ELF is refused before it runs as garbage |
 | `mcu_label` | yes | string | The human name in reports and errors |
+| `watchdog_limitation` | no | string | How this part's watchdog fidelity falls short, as one sentence rendered verbatim on every report surface. Omitting it CLAIMS that an armed, never-fed watchdog reboots the core the way silicon does, so omit it only if you measured that |
 | `extra_setup` | no | array of strings | Monitor commands run after the platform loads, before the firmware |
 | `post_load_setup` | no | array of strings | Monitor commands run after the firmware loads. `{cpu}` is substituted with `cpu_path` |
 
@@ -116,6 +117,39 @@ newline:
 
 So a `.repl` is not TOML and never becomes TOML, but it does not have to be a
 separate file: it can be a multi-line string inside one.
+
+**You will use the inline form, because a Renode part has to declare its core
+clock and the single-line form cannot.** The loader requires the platform to
+declare `cpu PerformanceInMips` (the part's core clock in MHz) and, on a
+Cortex-M part, `nvic systickFrequency` (the same clock in Hz), and refuses any
+value that disagrees with `frequency_hz`. So the smallest legal Renode
+`platform_repl` extends a stock file with three lines:
+
+```toml
+platform_repl = """
+using "platforms/cpus/stm32f072.repl"
+
+nvic:
+    systickFrequency: 8000000
+
+cpu:
+    PerformanceInMips: 8
+"""
+frequency_hz = 8_000_000
+```
+
+This is not ceremony. Four shipped platforms used to run simulated time at
+Renode's clock rate instead of the part's, measured 9.09x, 6.58x and 4.51x fast,
+because the stock `.repl` declared a 72 MHz SysTick and a 100 MIPS core whatever
+part the descriptor claimed, and `frequency_hz` cancels out of the engine's own
+arithmetic so nothing disagreed. Declare the RESET DEFAULT unless you can justify
+otherwise: a platform with no clock-tree model cannot follow a firmware's PLL
+bring-up, so the rate the part runs at before firmware touches anything is the
+one that is true for every image. Other clock domains (a watchdog's own
+oscillator, a timer block on its own bus branch) are yours to get right and are
+deliberately not policed by the cross-check. `docs/cosim/MCU.md` carries the
+measured per-backend table and `crates/hauksbee-mcu/tests/clock_truth.rs` is the
+gate that keeps it true.
 
 The literal `{support}` token in `platform_repl`, `extra_setup` and
 `post_load_setup` is replaced with the unpacked support-bundle directory. A
@@ -221,9 +255,11 @@ named error naming the field, and each aborts the run:
 unknown `backend`; a descriptor whose declared backend disagrees with the spec
 that resolved it; a backend this build was not compiled with; an empty
 `platform_repl`, `machine`, `cpu_path` or `uart`; a `frequency_hz` of 0; a
-`{support}` token in a field with no `support_bundle` to substitute it; an unknown
-`expected_e_machine`; an unknown `support_bundle` (with the list this build
-carries); a port of zero width or wider than 32; two ports sharing a letter; a
+`{support}` token in a field with no `support_bundle` to substitute it; a Renode
+platform declaring a core clock (`cpu PerformanceInMips`, `nvic
+systickFrequency`) that disagrees with `frequency_hz`, or declaring none at all;
+an unknown `expected_e_machine`; an unknown `support_bundle` (with the list this
+build carries); a port of zero width or wider than 32; two ports sharing a letter; a
 `dir` encoding that decodes fewer pins than its port is wide; a duplicated bus
 controller name; an ADC entry with neither or both injection forms; a duplicated
 ADC `channel`; an ADC `max_count` of 0 or a non-positive or non-finite
@@ -429,12 +465,28 @@ than a fabricated count.
 [soc]
 backend = "renode"
 machine = "f072"
-platform_repl = "@platforms/cpus/stm32f072.repl"
+platform_repl = """
+using "platforms/cpus/stm32f072.repl"
+
+# The F072's reset default: the HSI is the system clock after reset (RM0091
+# §6.2) and the walkthrough firmware enables no PLL. Both declarations are
+# cross-checked against frequency_hz below.
+nvic:
+    systickFrequency: 8000000
+
+cpu:
+    PerformanceInMips: 8
+"""
 cpu_path = "sysbus.cpu"
 uart = "sysbus.usart1"
 frequency_hz = 8_000_000
 expected_e_machine = "EM_ARM"
 mcu_label = "STM32F072 (ARM Cortex-M0)"
+watchdog_limitation = """\
+Watchdog behaviour is UNVERIFIED on this part in this co-simulator: nobody has \
+measured whether an unserviced watchdog resets the core here, so a firmware \
+recovery path that depends on it is untested on this run.\
+"""
 
 [[soc.ports]]
 letter = "C"
