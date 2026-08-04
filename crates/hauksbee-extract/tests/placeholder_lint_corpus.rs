@@ -52,13 +52,14 @@ struct Exception {
 /// The corpus is not uniformly fully specified, and this is the one place it is
 /// not. Keep this list at the size of the evidence, never at the size of the
 /// noise.
-const EXCEPTIONS: &[Exception] = &[Exception {
-    // The original Lily58 (`pcb/`) and the Pro (`Pro/PCB/`), on every extraction
-    // path each ships. Not Pro_V2, whose R1 carries a real value ("50k"); the
-    // reference filter below is what keeps this from reaching anything else.
-    board: "lily58/",
-    refs: &["R1", "R2"],
-    reason: "TRUE POSITIVE, kept on purpose. R1 and R2 are the I2C pull-ups: \
+const EXCEPTIONS: &[Exception] = &[
+    Exception {
+        // The original Lily58 (`pcb/`) and the Pro (`Pro/PCB/`), on every extraction
+        // path each ships. Not Pro_V2, whose R1 carries a real value ("50k"); the
+        // reference filter below is what keeps this from reaching anything else.
+        board: "lily58/",
+        refs: &["R1", "R2"],
+        reason: "TRUE POSITIVE, kept on purpose. R1 and R2 are the I2C pull-ups: \
              R1 sits between SDA and VCC, R2 between SCL and VCC (Lily58.net \
              nets 6, 7 and 46), and upstream's value for both is the literal \
              string \"R\" - the KiCad library symbol name, never replaced with a \
@@ -68,8 +69,30 @@ const EXCEPTIONS: &[Exception] = &[Exception {
              order. The check is right and is not being weakened; this records \
              that the corpus contains a shipped keyboard that genuinely is \
              under-specified.",
-    until: "2027-08-01",
-}];
+        until: "2027-08-01",
+    },
+    Exception {
+        // The control PCB only. The power PCB (Switch-N-Sense) is fully specified,
+        // and the reference filter is what keeps this from reaching it.
+        board: "bms_5s50_sc/control-pcb/",
+        refs: &["L3"],
+        reason: "TRUE ABOUT THE LAYOUT, which is the file that was handed over. L3's \
+             Value in BMS-5s.kicad_pcb is the literal library symbol name \"L\", \
+             and the layout carries no part-number property at all: grep the file \
+             for PartNumber or BLM18AG601SN1D and both are absent, so from the \
+             layout alone there is nothing to order and nothing to simulate. The \
+             SCHEMATIC does specify it: control-pcb/mcu.sch gives L3 \
+             Manufacturer=Murata and PartNumber=BLM18AG601SN1D, a ferrite bead. \
+             This is the Olimex rev-B situation in a different costume, where two \
+             files of one design disagree and each reading is right about the file \
+             it was given. It is recorded rather than dismissed because the fix is \
+             a real one and not a threshold: teach the placeholder check to accept \
+             a manufacturer part number as specification, and to consult the \
+             schematic's fields when a layout has none. Until then the check is \
+             right about BMS-5s.kicad_pcb and this says so.",
+        until: "2027-02-01",
+    },
+];
 
 impl Exception {
     fn matches(&self, path: &Path, message: &str) -> bool {
