@@ -206,6 +206,49 @@ impl Transient {
                     ws.x[i] = val;
                 }
             }
+            // DEVICE initial conditions (`Cxxx a b <val> IC=v`, `Lxxx ... IC=i`)
+            // are part of what `uic` MEANS in SPICE, not an optional extra: "the
+            // initial conditions given on the capacitor and inductor lines and on
+            // .ic lines are used". Ignoring them was a wrong ANSWER, not a
+            // convergence choice. On the synapse block's membrane
+            // (`CM0 mem0 0 1n IC=5`) ngspice starts at 5.000 V while we started
+            // at 0 and charged up through the 47 kΩ pull-up, so the whole
+            // pre-stimulus window read 5*(1-exp(-t/47µs)) instead of a flat 5 V:
+            // 2.82 V against 5 V at t = 39 µs, a 44% error on a quantity the deck
+            // states outright.
+            //
+            // A grounded capacitor's IC pins its live node directly. A floating
+            // one states a DIFFERENCE, which is a constraint rather than an
+            // assignment, so it is left to the reactive history below (the
+            // companion drives the pair to the stated difference on the first
+            // step) and to any `.ic` card the deck also gave. `.ic` wins where
+            // both speak, having named the node explicitly.
+            let named: std::collections::HashSet<u32> = circuit
+                .initial_conditions
+                .iter()
+                .map(|&(nid, _)| nid.0)
+                .collect();
+            for dev in &circuit.devices {
+                let (live, other, v0) = match dev {
+                    hauksbee_ir::Device::Capacitor {
+                        a, b, ic: Some(v), ..
+                    } => (*a, *b, *v),
+                    _ => continue,
+                };
+                let (live, v0) = if other.is_ground() {
+                    (live, v0)
+                } else if live.is_ground() {
+                    (other, -v0)
+                } else {
+                    continue;
+                };
+                if named.contains(&live.0) {
+                    continue;
+                }
+                if let Some(i) = ws.layout.node(live) {
+                    ws.x[i] = v0;
+                }
+            }
         } else {
             // The DC solve manages its own staged regularizers internally and
             // leaves the workspace flag at 0.
@@ -267,19 +310,17 @@ impl Transient {
         }
 
         let mut state = ReactiveState::new(n_dev);
-        // Under FromZero the reactive history stays at its all-zero construction
-        // value (x1 = x2 = 0, dx1 = 0 for every cap and inductor): the board
-        // powers on from rest, ignoring any device initial conditions. Otherwise
-        // seed it from the DC operating point as usual.
+        // Seed the reactive history from `ws.x`, which is now the DC operating
+        // point (the normal path) or the `uic` start assembled just above.
         //
-        // EXCEPTION: FromZero WITH `.ic` node voltages, seed the reactive state
-        // from the now-nonzero ws.x so a capacitor spanning an `.ic` node starts
-        // at the corresponding voltage (`seed_reactive_state` derives the cap
-        // voltage from its node values), giving the physically-correct initial
-        // charge instead of a first-step current spike.
-        if !from_zero || has_ic {
-            seed_reactive_state(&mut state, circuit, &ws, opts);
-        }
+        // `seed_reactive_state` is the single place that reads a device's own `ic`
+        // and prefers it over the node-derived value, so calling it is exactly
+        // what makes `uic` honour `IC=`. It is unconditional now: with `ws.x` at
+        // rest and no `ic` anywhere it reproduces the all-zero construction value
+        // it used to be skipped in favour of, so a genuine power-on-from-rest
+        // march (`FromZero` + `Ramped` sources, no IC anywhere) is unchanged.
+        seed_reactive_state(&mut state, circuit, &ws, opts);
+        let _ = has_ic;
 
         let mut t = 0.0;
         let mut dt = match opts.step {

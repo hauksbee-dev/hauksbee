@@ -761,6 +761,7 @@ mod tests {
             branch_reg: 0.0,
             cmp_freeze: None,
             switch_freeze: None,
+            switch_latch: None,
             spdt_sibling: &spdt,
         };
 
@@ -923,6 +924,7 @@ mod tests {
                 branch_reg: 0.0,
                 cmp_freeze: None,
                 switch_freeze: None,
+                switch_latch: None,
                 spdt_sibling: &spdt,
             };
             let mut rhs = vec![0.0f64; n];
@@ -1016,6 +1018,7 @@ mod tests {
             branch_reg: 0.0,
             cmp_freeze: None,
             switch_freeze: None,
+            switch_latch: None,
             spdt_sibling: &spdt,
         };
         let mut m_ref = m.clone();
