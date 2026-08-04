@@ -8,10 +8,13 @@ The discipline behind all three: a check earns its place by being shown not to
 fire on known-good shipped boards before it lands, and misses are reported with
 the reason rather than hidden.
 
-Where that discipline stops is written down too. `FAMOUS_SWEEP.md` records the
+Where that discipline stops is written down too, because evidence documents that
+only recorded their wins would not be evidence. `FAMOUS_SWEEP.md` carries: the
 false positive this calibration had to kill (the Arduino Uno's `RESET-EN` solder
-jumper, read as an unfinished BOM entry) and the corpus gate that now holds it at
-zero, and it notes that several older corpus guards address boards by a layout
-`scripts/fetch-corpus.sh` does not produce, so they do not yet run outside the
-maintainers' tree. Evidence documents that only recorded their wins would not be
-evidence.
+jumper, read as an unfinished BOM entry); the full-corpus lint tally, in which one
+finding on the MNT Reform 2.0/2.5 DAC bus remains unadjudicated; a clearance gap of
+9.77e-15 mm that is touching copper and is classified as a clearance note only
+because the short test is a strict `gap <= 0.0`; one sweep row whose clean shorts
+result comes from a KiCad 10 file the tool marks UNRELIABLE; and the fact that
+several corpus guards address boards by a layout `scripts/fetch-corpus.sh` does not
+produce, so they do not yet run outside the maintainers' tree.
