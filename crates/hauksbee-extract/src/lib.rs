@@ -19,6 +19,11 @@
 //! - [`ExtractedBoard::from_altium_pcb`], Altium Designer `.PcbDoc` (binary
 //!   OLE2). This unlocks the professional / enterprise / regulated tier; see
 //!   `docs/ingest/ALTIUM.md`.
+//! - [`ExtractedBoard::from_odbpp`] / [`ExtractedBoard::from_ipc2581`], the two
+//!   fab/assembly *exchange* formats. Both state the netlist rather than needing
+//!   it reverse-engineered from copper, so a board that only ever leaves its CAD
+//!   tool as an ODB++ `.tgz` or an IPC-2581 XML is fully ingestible. See
+//!   [`odbpp`] and [`ipc2581`] for what each carries and what is dropped.
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-extract/README.md (the
 //! crate tour) and docs/how-and-why/hauksbee-extract/netlist.md (the
@@ -30,9 +35,11 @@ pub mod drc;
 mod eagle;
 pub mod gerber;
 mod ipc356;
+pub mod ipc2581;
 mod netlint;
 mod netlist;
 pub mod netname;
+pub mod odbpp;
 mod pcb;
 mod protel_ascii;
 pub mod reader;
@@ -70,6 +77,12 @@ pub enum ExtractError {
     Xml(String),
     #[error("altium: {0}")]
     Altium(String),
+    /// An ODB++ job input problem, already phrased as a whole human sentence.
+    #[error("{0}")]
+    Odb(String),
+    /// An IPC-2581 document problem, already phrased as a whole human sentence.
+    #[error("{0}")]
+    Ipc2581(String),
     #[error("not a {expected} file (root is {found:?})")]
     WrongRoot {
         expected: &'static str,
@@ -254,6 +267,28 @@ impl ExtractedBoard {
     /// the same way a `.kicad_pcb` does. See [`altium`] and `docs/ingest/ALTIUM.md`.
     pub fn from_altium_pcb(bytes: &[u8]) -> Result<Self, ExtractError> {
         altium::extract(bytes)
+    }
+
+    /// ODB++ (Siemens/Valor) design archive: a directory, a `.tgz` or a `.zip`.
+    /// Reads nets, components and pads from the job's own EDA data rather than
+    /// reverse-engineering them from copper, and cross-checks that data against
+    /// the job's CAD netlist. See [`odbpp`] for the accounting this discards
+    /// ([`odbpp::OdbExtraction::stats`] keeps it) and what is deliberately not
+    /// modelled.
+    pub fn from_odbpp(path: &Path) -> Result<Self, ExtractError> {
+        odbpp::from_odbpp(path).map(|e| e.board)
+    }
+
+    /// ODB++ from archive bytes (`.tgz` / `.tar` / `.zip`), for the web path
+    /// that has an upload rather than a path.
+    pub fn from_odbpp_archive(bytes: &[u8]) -> Result<Self, ExtractError> {
+        odbpp::from_odbpp_archive(bytes).map(|e| e.board)
+    }
+
+    /// IPC-2581 (DPMX) design-exchange XML, revision B or C, namespaced or not.
+    /// See [`ipc2581`]; [`ipc2581::extract`] keeps the read's accounting.
+    pub fn from_ipc2581(text: &str) -> Result<Self, ExtractError> {
+        ipc2581::extract(text).map(|e| e.board)
     }
 
     /// ASCII Protel board export (`|RECORD=Board|KIND=Protel_Advanced_PCB`
