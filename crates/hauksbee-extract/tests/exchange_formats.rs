@@ -680,6 +680,253 @@ fn a_real_allegro_bom_only_revision_c_export_refuses_and_says_why() {
     assert!(msg.contains("bom-only"), "and the fix is named: {msg}");
 }
 
+/// Real third-party IPC-2581 documents in the shared corpus, one per producer,
+/// with the numbers each one really yields.
+///
+/// These are the evidence that the reader handles what the FORMAT is in the
+/// wild rather than what one exporter happens to write, and every one of them
+/// found a real bug: Zuken names its netlist children `<LogicalNetPin>` rather
+/// than `<PinRef>` and prefixes every name with the step; Altium hangs its
+/// `<PinRef>`s off `<PadStack net><LayerPad>` and writes no `<Set>` connectivity
+/// at all; Allegro's rev-A exporter writes nameless `<Pin>` elements; one
+/// document puts `<LogicalNet>` at the root, outside `<Ecad>` entirely. Before
+/// these, four of the six read as a board with nets and zero connections.
+///
+/// Provenance (all fetched 2026-08-04, none produced by KiCad):
+/// * `allegro-testcase10.revC.xml` — Cadence Allegro 17.4, rev C, 21 MB;
+///   github.com/sjgallagher2/ipc2581 @ befdfb02, `examples/testcase10-Rev C
+///   data/testcase10-RevC-Full.xml` (MIT). The IPC-2581 Consortium's testcase10.
+/// * `allegro-testcase3.revA.xml` — Cadence Allegro 16.62, rev A, 3.6 MB;
+///   ipc2581.com's published Test Case 3 archive.
+/// * `zuken-testcase4-board.xml` / `zuken-testcase7-bd-sample.xml` — Zuken
+///   CR5000 (`ipc2581out.exe` 13.1 and 1.0), no `revision` attribute at all;
+///   ipc2581.com's published Test Case 4 and 7 archives.
+/// * `altium-switch-board.revB.xml` — Altium, rev B, 5.3 MB;
+///   github.com/mgburr/ipc2581-to-kicad @ 8d7144f (no stated licence, which is
+///   why it lives in the corpus and is not committed here).
+/// * `handauthored-led-power-board.revC.xml` — rev C, 18 KB, same repo; no
+///   `<SoftwarePackage>` and no tool fingerprint, so it is most likely a
+///   hand-written fixture rather than a real export, and is treated as an
+///   exercise of the shape rather than as evidence about a producer.
+///
+/// The two larger Zuken/Allegro archives and a 43 MB BeagleBone export were
+/// deliberately left out as redundant; see the notes above for what each adds.
+///
+/// (file, components, nets, netted pads, net source, copper layers)
+const IPC_CORPUS: &[(&str, usize, usize, usize, ipc2581::NetSource, usize)] = &[
+    (
+        "allegro-testcase10.revC.xml",
+        56,
+        514,
+        1746,
+        ipc2581::NetSource::LogicalNet,
+        18,
+    ),
+    (
+        "allegro-testcase3.revA.xml",
+        41,
+        262,
+        487,
+        ipc2581::NetSource::LogicalNet,
+        6,
+    ),
+    (
+        "zuken-testcase4-board.xml",
+        719,
+        1549,
+        3623,
+        ipc2581::NetSource::LogicalNet,
+        8,
+    ),
+    (
+        "zuken-testcase7-bd-sample.xml",
+        160,
+        126,
+        576,
+        ipc2581::NetSource::LogicalNet,
+        4,
+    ),
+    (
+        "altium-switch-board.revB.xml",
+        27,
+        15,
+        71,
+        ipc2581::NetSource::LayerFeature,
+        2,
+    ),
+    (
+        "handauthored-led-power-board.revC.xml",
+        10,
+        5,
+        17,
+        ipc2581::NetSource::LogicalNet,
+        2,
+    ),
+];
+
+fn corpus_file(sub: &str, name: &str) -> Option<PathBuf> {
+    let root = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))?;
+    let p = root.join(sub).join(name);
+    if p.is_file() {
+        return Some(p);
+    }
+    assert!(
+        std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_err(),
+        "HAUKSBEE_REQUIRE_CORPUS set but {} is absent",
+        p.display()
+    );
+    None
+}
+
+#[test]
+fn real_third_party_ipc2581_documents_read_with_full_connectivity() {
+    let mut read = 0;
+    for (name, comps, nets, netted, source, copper) in IPC_CORPUS {
+        let Some(path) = corpus_file("ipc2581", name) else {
+            eprintln!("{name} not in board-corpus; skipping");
+            continue;
+        };
+        read += 1;
+        let text = read_text(&path);
+        assert!(
+            ipc2581::looks_like_ipc2581(text.as_bytes()),
+            "{name} must be recognised as IPC-2581"
+        );
+        let out = ipc2581::extract(&text).unwrap_or_else(|e| panic!("{name} must read: {e}"));
+        let b = &out.board;
+        assert_eq!(b.components.len(), *comps, "{name}: components");
+        assert_eq!(b.nets.len(), *nets, "{name}: nets");
+        assert_eq!(
+            b.components
+                .iter()
+                .flat_map(|c| c.pins.iter())
+                .filter(|p| p.net.is_some())
+                .count(),
+            *netted,
+            "{name}: pads on a net"
+        );
+        assert_eq!(out.stats.net_source, *source, "{name}: net source");
+        assert_eq!(
+            out.stats.copper_layers.len(),
+            *copper,
+            "{name}: copper layers"
+        );
+
+        // Internal consistency, since there is no native reading to compare
+        // against: every pad's net must be one the document declares, no
+        // designator may repeat, and no pin may be nameless (all three were
+        // broken by the producer-specific bugs these files exposed).
+        let ids: BTreeSet<i64> = b.nets.iter().map(|n| n.id).collect();
+        let mut seen: BTreeSet<&str> = BTreeSet::new();
+        for c in &b.components {
+            assert!(
+                seen.insert(c.reference.as_str()),
+                "{name}: {} appears twice",
+                c.reference
+            );
+            assert!(
+                !c.reference.contains(':'),
+                "{name}: {} kept a producer prefix, which no model binder can \
+                 match",
+                c.reference
+            );
+            assert!(!c.pins.is_empty(), "{name}: {} has no pad", c.reference);
+            for p in &c.pins {
+                assert!(
+                    !p.number.trim().is_empty(),
+                    "{name}: {} has a nameless pad",
+                    c.reference
+                );
+                if let Some(id) = p.net {
+                    assert!(
+                        ids.contains(&id),
+                        "{name}: {}.{} is on undeclared net {id}",
+                        c.reference,
+                        p.number
+                    );
+                }
+            }
+        }
+        assert!(
+            b.lint().undeclared_nets.is_empty(),
+            "{name}: the net graph must be lint-clean"
+        );
+        // A net nothing is attached to is invisible downstream, so the reader
+        // must ACCOUNT for every one of them rather than pass it along silently.
+        // Allegro's testcase3 declares exactly one (`Unused_04712D00`); the other
+        // five documents declare none, so this is a real check and not a rubber
+        // stamp.
+        let used: BTreeSet<i64> = b
+            .components
+            .iter()
+            .flat_map(|c| c.pins.iter())
+            .filter_map(|p| p.net)
+            .collect();
+        let orphans: BTreeSet<&str> = b
+            .nets
+            .iter()
+            .filter(|n| !used.contains(&n.id))
+            .map(|n| n.name.as_str())
+            .collect();
+        let reported: BTreeSet<&str> = out
+            .stats
+            .nets_without_pads
+            .iter()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(
+            orphans, reported,
+            "{name}: every net that touches no pad must be named in the stats"
+        );
+        if !orphans.is_empty() {
+            assert!(
+                out.stats
+                    .notes()
+                    .iter()
+                    .any(|n| n.contains("touch no component pad")),
+                "{name}: and must reach a report as a note"
+            );
+        }
+    }
+    if read == 0 {
+        eprintln!("no IPC-2581 corpus documents present; nothing verified");
+    }
+}
+
+#[test]
+fn a_zuken_document_keeps_its_step_prefixed_names_usable() {
+    // The single most consequential producer quirk found: Zuken prefixes every
+    // name with the step, so `refDes="bd-sample:IC11"`. Left in place the
+    // connectivity still resolves (both sides are prefixed) and the board looks
+    // fine — but not one reference designator or net name is usable.
+    let Some(path) = corpus_file("ipc2581", "zuken-testcase7-bd-sample.xml") else {
+        eprintln!("Zuken corpus document absent; skipping");
+        return;
+    };
+    let out = ipc2581::extract(&read_text(&path)).expect("reads");
+    assert_eq!(out.stats.step, "bd-sample");
+    assert!(
+        out.board.component("IC11").is_some(),
+        "the step prefix must be stripped from the designator"
+    );
+    assert!(
+        out.board.net_by_name("RESET").is_some(),
+        "and from the net name"
+    );
+    // And its package pins are the netlist's names, not the `number` ordinals
+    // Zuken puts alongside them.
+    let ic11 = out.board.component("IC11").expect("IC11");
+    assert!(
+        ic11.pins.iter().any(|p| p.number == "13"),
+        "pin 13 (which the netlist references) must exist; got {:?}",
+        ic11.pins.iter().map(|p| &p.number).collect::<Vec<_>>()
+    );
+    assert!(
+        !ic11.pins.iter().any(|p| p.number.contains('.')),
+        "a Zuken `number` ordinal (\"0.0\") must never become a pin name"
+    );
+}
+
 /// The real Valor NPI job in the shared corpus: a Mentor PowerPCB design with
 /// 813 components and 643 nets, in INCH units, with the placement on the
 /// component layers and `;attrs;sysattrs` tails. There is no native reading of
@@ -709,7 +956,21 @@ fn the_real_valor_npi_job_reads_and_is_internally_consistent() {
     );
     let out = odbpp::from_odbpp_archive(&bytes).expect("the real job reads");
 
-    assert_eq!(out.board.components.len(), 813, "440 top + 373 bottom");
+    // 813 CMP records, of which six (FID1..FID6, the fiducials) have no pad and
+    // are board artwork rather than parts — the same rule the KiCad reader
+    // applies, and named in the stats rather than quietly dropped.
+    assert_eq!(
+        out.board.components.len(),
+        807,
+        "813 placements less 6 fiducials"
+    );
+    let mut artwork = out.stats.artwork.clone();
+    artwork.sort();
+    assert_eq!(
+        artwork,
+        vec!["FID1", "FID2", "FID3", "FID4", "FID5", "FID6"],
+        "the dropped placements must be named"
+    );
     assert_eq!(out.board.nets.len(), 643, "644 NET records less $NONE$");
     assert_eq!(out.stats.pads, 2811, "1921 top + 890 bottom toeprints");
     assert_eq!(out.stats.step, "step");

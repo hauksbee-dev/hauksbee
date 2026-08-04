@@ -99,6 +99,16 @@ pub struct NormalizedBoard {
     pub raw: Vec<u8>,
     /// What the input was recognised as.
     pub kind: InputKind,
+    /// Whole-sentence coverage notes the READER produced for this input: where
+    /// the connectivity came from, what the format could not state, and every
+    /// cross-check inside the file that disagreed with itself.
+    ///
+    /// The exchange readers compute all of that and it used to stop at the
+    /// extract crate's boundary, which is the same failure as not computing it:
+    /// a stale CAD netlist, a wrong package reference, or a `.Z` member that
+    /// would not inflate were all found, unit-tested, and invisible to the user.
+    /// Surfaces render these alongside their own notes.
+    pub notes: Vec<String>,
 }
 
 impl NormalizedBoard {
@@ -127,6 +137,25 @@ impl NormalizedBoard {
     /// inputs [`is_gerber`](Self::is_gerber) also covers.
     pub fn is_gerber_archive(&self) -> bool {
         self.kind == InputKind::Gerber
+    }
+}
+
+/// How to name this input kind in a user-facing sentence.
+///
+/// The three geometry-less kinds share a capability ([`NormalizedBoard::is_gerber`])
+/// but not a description, and a report that says "which a gerber archive does not
+/// carry" over an ODB++ job is stating something false about where the
+/// connectivity came from — on exactly the axis these readers exist to be honest
+/// about.
+pub fn input_kind_phrase(kind: InputKind) -> &'static str {
+    match kind {
+        InputKind::Gerber => "a gerber archive",
+        InputKind::Odb => "an ODB++ job",
+        InputKind::Ipc2581 => "an IPC-2581 document",
+        InputKind::Altium => "an Altium .PcbDoc",
+        InputKind::Schematic => "a schematic",
+        InputKind::BoardCode => "a Board-as-Code source",
+        InputKind::Text => "this input",
     }
 }
 
@@ -218,13 +247,14 @@ pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, B
     // or Board-as-Code). Keyed on the `matrix/matrix` member, which no gerber
     // archive has.
     if hauksbee_extract::odbpp::looks_like_odbpp_archive(contents) {
-        let board = ExtractedBoard::from_odbpp_archive(contents)
+        let out = hauksbee_extract::odbpp::from_odbpp_archive(contents)
             .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
         return Ok(NormalizedBoard {
-            board,
+            board: out.board,
             layout_text: None,
             raw: contents.to_vec(),
             kind: InputKind::Odb,
+            notes: out.stats.notes(),
         });
     }
 
@@ -238,6 +268,7 @@ pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, B
             layout_text: None,
             raw: contents.to_vec(),
             kind: InputKind::Altium,
+            notes: Vec::new(),
         });
     }
 
@@ -256,6 +287,7 @@ pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, B
                     layout_text: None,
                     raw: contents.to_vec(),
                     kind: InputKind::Gerber,
+                    notes: Vec::new(),
                 });
             }
         }
@@ -279,24 +311,36 @@ pub fn from_bytes(file_name: &str, contents: &[u8]) -> Result<NormalizedBoard, B
     } else {
         text.into_owned()
     };
-    let board = ExtractedBoard::from_auto(&text)
-        .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
     // IPC-2581 is text but not KiCad-parseable text, so it must NOT be handed to
     // the geometry-bearing checks as `layout_text`: `ExtractedBoard::drc` returns
     // an empty report for content it does not recognise, and an empty report
     // renders as "no copper spacing problems found" — a vacuous green over a
-    // board whose clearances were never examined.
-    let is_ipc2581 =
-        !is_board_code && hauksbee_extract::ipc2581::looks_like_ipc2581(text.as_bytes());
+    // board whose clearances were never examined. It goes through the reader
+    // directly rather than through `from_auto` so the read's own coverage notes
+    // survive.
+    if !is_board_code && hauksbee_extract::ipc2581::looks_like_ipc2581(text.as_bytes()) {
+        let out = hauksbee_extract::ipc2581::extract(&text)
+            .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
+        return Ok(NormalizedBoard {
+            board: out.board,
+            layout_text: None,
+            raw: contents.to_vec(),
+            kind: InputKind::Ipc2581,
+            notes: out.stats.notes(),
+        });
+    }
+    let board = ExtractedBoard::from_auto(&text)
+        .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
     Ok(NormalizedBoard {
         board,
-        layout_text: (!is_ipc2581).then(|| text.clone()),
+        layout_text: Some(text),
         raw: contents.to_vec(),
-        kind: match (is_board_code, is_ipc2581) {
-            (true, _) => InputKind::BoardCode,
-            (_, true) => InputKind::Ipc2581,
-            _ => InputKind::Text,
+        kind: if is_board_code {
+            InputKind::BoardCode
+        } else {
+            InputKind::Text
         },
+        notes: Vec::new(),
     })
 }
 
@@ -334,14 +378,16 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
         // one format the reader registry cannot claim, because a directory has no
         // bytes to sniff.
         if hauksbee_extract::odbpp::looks_like_odbpp_dir(path) {
-            let board = ExtractedBoard::from_odbpp(path)
+            let out = hauksbee_extract::odbpp::from_odbpp(path)
                 .map_err(|e| BoardInputError::Extract(format!("'{}': {e}", path.display())))?;
+            let notes = out.stats.notes();
             return Ok(with_name_fallback(
                 NormalizedBoard {
-                    board,
+                    board: out.board,
                     layout_text: None,
                     raw: Vec::new(),
                     kind: InputKind::Odb,
+                    notes,
                 },
                 path,
             ));
@@ -381,6 +427,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
                 layout_text: None,
                 raw: Vec::new(),
                 kind: InputKind::Gerber,
+                notes: Vec::new(),
             },
             path,
         ));
@@ -432,14 +479,16 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
     // branch below claims every zip as gerbers. Content-sniffed, so a job saved
     // under any extension still reads.
     if hauksbee_extract::odbpp::looks_like_odbpp_archive(&raw) {
-        let board = ExtractedBoard::from_odbpp_archive(&raw)
+        let out = hauksbee_extract::odbpp::from_odbpp_archive(&raw)
             .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
+        let notes = out.stats.notes();
         return Ok(with_name_fallback(
             NormalizedBoard {
-                board,
+                board: out.board,
                 layout_text: None,
                 raw,
                 kind: InputKind::Odb,
+                notes,
             },
             path,
         ));
@@ -463,6 +512,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
                     layout_text: Some(compiled),
                     raw,
                     kind: InputKind::BoardCode,
+                    notes: Vec::new(),
                 },
                 path,
             ));
@@ -483,6 +533,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
                 layout_text: None,
                 raw,
                 kind: InputKind::Gerber,
+                notes: Vec::new(),
             },
             path,
         ));
@@ -498,6 +549,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
                 layout_text: None,
                 raw,
                 kind: InputKind::Altium,
+                notes: Vec::new(),
             },
             path,
         ));
@@ -520,6 +572,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
                 layout_text: Some(compiled),
                 raw,
                 kind: InputKind::BoardCode,
+                notes: Vec::new(),
             },
             path,
         ));
@@ -529,14 +582,16 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
     // must not reach `ExtractedBoard::drc`, whose empty report for unrecognised
     // content would render as a clean clearance check that never ran.
     if hauksbee_extract::ipc2581::looks_like_ipc2581(&raw) {
-        let board = ExtractedBoard::from_ipc2581(&text)
+        let out = hauksbee_extract::ipc2581::extract(&text)
             .map_err(|e| BoardInputError::Extract(format!("'{file_name}': {e}")))?;
+        let notes = out.stats.notes();
         return Ok(with_name_fallback(
             NormalizedBoard {
-                board,
+                board: out.board,
                 layout_text: None,
                 raw,
                 kind: InputKind::Ipc2581,
+                notes,
             },
             path,
         ));
@@ -558,6 +613,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
                 layout_text: Some(text),
                 raw,
                 kind: InputKind::Schematic,
+                notes: Vec::new(),
             },
             path,
         ));
@@ -588,6 +644,7 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
             layout_text: Some(text),
             raw,
             kind: InputKind::Text,
+            notes: Vec::new(),
         },
         path,
     ))
@@ -1177,6 +1234,57 @@ fn main {
             assert_eq!(other.board.nets.len(), native.board.nets.len(), "nets");
             let pads = |b: &ExtractedBoard| -> usize { b.components.iter().map(|c| c.pins.len()).sum() };
             assert_eq!(pads(&other.board), pads(&native.board), "pads");
+        }
+    }
+
+    #[test]
+    fn an_exchange_input_carries_the_readers_own_coverage_notes() {
+        // The readers compute where the connectivity came from and every
+        // cross-check inside the file that disagreed. Leaving that inside the
+        // extract crate is the same as not computing it.
+        for (label, norm) in [
+            ("ODB++", from_bytes("b.odb.zip", ODB_ZIP).expect("odb")),
+            ("IPC-2581", from_bytes("b.xml", IPC2581).expect("ipc")),
+        ] {
+            assert!(
+                !norm.notes.is_empty(),
+                "{label}: the read's notes must survive normalization"
+            );
+            let joined = norm.notes.join(" | ");
+            assert!(
+                joined.contains("not reverse-engineered from copper"),
+                "{label}: the note must say the netlist was READ: {joined}"
+            );
+            assert!(
+                joined.contains("were not run"),
+                "{label}: and that the geometry checks did not run: {joined}"
+            );
+        }
+        // ODB++ from KiCad has no populate flag, so the note must say the DNP
+        // state is unknown rather than let `dnp: false` read as "fitted".
+        let odb = from_bytes("b.odb.zip", ODB_ZIP).expect("odb");
+        assert!(
+            odb.notes.iter().any(|n| n.contains("cannot tell a do-not-populate")),
+            "got: {:?}",
+            odb.notes
+        );
+        // A native KiCad board has nothing to add, and must not gain a note.
+        assert!(from_bytes("b.kicad_pcb", KICAD).expect("native").notes.is_empty());
+    }
+
+    #[test]
+    fn the_input_kind_phrase_never_calls_a_non_gerber_input_a_gerber() {
+        // The DRC "Not checked" verdict and the coverage note both name the
+        // input; naming an ODB++ job "a gerber archive" states something false
+        // about where its connectivity came from.
+        assert_eq!(input_kind_phrase(InputKind::Gerber), "a gerber archive");
+        assert_eq!(input_kind_phrase(InputKind::Odb), "an ODB++ job");
+        assert_eq!(input_kind_phrase(InputKind::Ipc2581), "an IPC-2581 document");
+        for kind in [InputKind::Odb, InputKind::Ipc2581] {
+            assert!(
+                !input_kind_phrase(kind).contains("gerber"),
+                "{kind:?} must not be described as a gerber input"
+            );
         }
     }
 

@@ -10,8 +10,10 @@
 //! * A trailing `;<key>=<value>,...` on a record carries feature attributes,
 //!   keyed by the `@n <name>` table at the top of the same file.
 //! * `UNITS=MM` or `UNITS=INCH` at the top of the file sets the length unit for
-//!   every coordinate in it. Different files in one job may disagree, so units
-//!   are read per file and never inherited from `misc/info`.
+//!   every coordinate in it. Different files in one job may legitimately
+//!   disagree, so units are read PER FILE, with `misc/info`'s `UNITS` as the
+//!   job-wide default for a file that declares none (which the spec allows and
+//!   real producers use).
 //! * The block-structured files (`matrix`, `stephdr`, `tools`) use
 //!   `TYPE {\n KEY=VALUE\n }` blocks.
 
@@ -140,6 +142,23 @@ pub(crate) struct Package {
     pub(crate) pins: Vec<String>,
 }
 
+/// What a `TOP` record's net field said.
+///
+/// A plain `usize` collapsed three different situations into one — "on no net",
+/// "on net 77 which this job never declares", and "the field was not a number" —
+/// and the last two are faults a reader must report rather than quietly turn
+/// into a floating pad.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NetRef {
+    /// Ordinal 0: ODB++'s `$NONE$`, a pad deliberately on no net.
+    None,
+    /// A net ordinal into `eda/data`'s `NET` sequence. Not yet known to be in
+    /// range: the table is not available at parse time.
+    Num(usize),
+    /// The field was not a number. Kept verbatim so the report can quote it.
+    Unparseable(String),
+}
+
 /// One pad of a placed component ("toeprint" in ODB++ terms).
 #[derive(Debug, Clone)]
 pub(crate) struct Toeprint {
@@ -147,8 +166,8 @@ pub(crate) struct Toeprint {
     pub(crate) pin_index: usize,
     pub(crate) x_mm: f64,
     pub(crate) y_mm: f64,
-    /// Net ordinal from `eda/data`'s `NET` sequence; 0 is the `$NONE$` net.
-    pub(crate) net: usize,
+    /// The net this pad claims, as the record stated it.
+    pub(crate) net: NetRef,
     /// The pad name as the placement records it.
     pub(crate) name: String,
 }
@@ -188,18 +207,27 @@ pub(crate) struct EdaData {
     pub(crate) layers: Vec<String>,
 }
 
-/// `MM` vs `INCH` for one file, and the multiplier to millimetres.
-fn units_scale(text: &str) -> f64 {
-    for line in text.lines().take(40) {
-        let line = line.trim();
-        if let Some(v) = line.strip_prefix("UNITS=") {
-            if v.trim().eq_ignore_ascii_case("INCH") {
-                return 25.4;
-            }
-            return 1.0;
-        }
+/// The multiplier from a `UNITS=` value to millimetres.
+pub(crate) fn unit_scale(value: &str) -> f64 {
+    if value.trim().eq_ignore_ascii_case("INCH") {
+        25.4
+    } else {
+        1.0
     }
-    1.0
+}
+
+/// This file's own `UNITS=` line, if it declares one.
+///
+/// `None` matters: ODB++ makes `misc/info`'s `UNITS` the JOB default, and a
+/// producer that declares `UNITS=INCH` there and omits it per file is entitled
+/// to. Defaulting to millimetres here instead of asking the caller for the job
+/// default made every coordinate in such a job 25.4× too small, silently.
+pub(crate) fn declared_units(text: &str) -> Option<f64> {
+    text.lines()
+        .take(40)
+        .filter_map(|l| l.trim().strip_prefix("UNITS="))
+        .map(unit_scale)
+        .next()
 }
 
 /// Split a record line into its body and its feature-attribute tail.
@@ -253,8 +281,10 @@ fn attrs_say_no_pop(attrs: Option<&str>, names: &[String]) -> bool {
 
 /// Parse `eda/data`: net names, package definitions and (when the producer puts
 /// them there) the placed components.
-pub(crate) fn parse_eda_data(text: &str) -> EdaData {
-    let scale = units_scale(text);
+/// `job_units` is the job default from `misc/info`, used when the file itself
+/// declares no `UNITS=` line.
+pub(crate) fn parse_eda_data(text: &str, job_units: f64) -> EdaData {
+    let scale = declared_units(text).unwrap_or(job_units);
     let names = attr_names(text);
     let mut out = EdaData::default();
     // Which multi-line record we are inside. A `#` comment does not end one.
@@ -324,8 +354,12 @@ pub(crate) fn parse_eda_data(text: &str) -> EdaData {
 /// Parse a component-layer `components` file (`steps/<step>/layers/comp_+_top/
 /// components`). Same CMP/PRP/TOP grammar as `eda/data`, and the layer fixes
 /// the board side.
-pub(crate) fn parse_components_file(text: &str, is_bottom: bool) -> Vec<RawComponent> {
-    let scale = units_scale(text);
+pub(crate) fn parse_components_file(
+    text: &str,
+    is_bottom: bool,
+    job_units: f64,
+) -> Vec<RawComponent> {
+    let scale = declared_units(text).unwrap_or(job_units);
     let names = attr_names(text);
     let mut out: Vec<RawComponent> = Vec::new();
     for raw in text.lines() {
@@ -413,7 +447,11 @@ fn parse_top(body: &str, scale: f64) -> Option<Toeprint> {
         pin_index: t[1].parse::<usize>().ok()?,
         x_mm: t[2].parse::<f64>().ok()? * scale,
         y_mm: t[3].parse::<f64>().ok()? * scale,
-        net: t[6].parse::<usize>().unwrap_or(0),
+        net: match t[6].parse::<usize>() {
+            Ok(0) => NetRef::None,
+            Ok(n) => NetRef::Num(n),
+            Err(_) => NetRef::Unparseable(t[6].to_string()),
+        },
         // The toeprint name is optional in the grammar; when it is absent the
         // package pin name is the only name there is, and the caller falls back
         // to it rather than inventing "".
@@ -580,6 +618,7 @@ mod tests {
         let eda = parse_eda_data(
             "UNITS=INCH\nNET $NONE$\nNET GND\nPKG P 1 0 0 1 1;\nPIN 1 T 0 0 0 E T\n\
              CMP 0 1.0 2.0 0 N R1 R_0603\nTOP 0 1.0 2.0 0 N 1 0 1\n",
+            1.0,
         );
         let c = &eda.components[0];
         assert!((c.x_mm - 25.4).abs() < 1e-9, "1 inch is 25.4 mm");
@@ -594,12 +633,40 @@ mod tests {
             "UNITS=MM\n@0 .no_pop\n# CMP 0\nCMP 0 1.0 2.0 0 N R1 Res ;0\n\
              PRP Value '10k'\n#\nTOP 0 1.0 2.0 0 N 3 0 1\nTOP 1 3.0 2.0 0 N 4 0 2\n",
             false,
+            1.0,
         );
         assert_eq!(comps.len(), 1);
         assert_eq!(comps[0].toeprints.len(), 2);
         assert_eq!(comps[0].props, vec![("Value".into(), "10k".into())]);
         assert!(comps[0].no_pop, ".no_pop attribute is honoured");
-        assert_eq!(comps[0].toeprints[1].net, 4);
+        assert_eq!(comps[0].toeprints[1].net, NetRef::Num(4));
+    }
+
+    #[test]
+    fn a_net_field_that_is_not_a_number_is_kept_rather_than_read_as_no_net() {
+        // `unwrap_or(0)` turned a malformed net field into ODB++'s "no net",
+        // which reports a connected pad as floating with nothing said.
+        let comps = parse_components_file(
+            "UNITS=MM\nCMP 0 0 0 0 N R1 R ;\nTOP 0 0 0 0.0 N GND 0 1\n\
+             TOP 1 1 0 0.0 N 0 0 2\nTOP 2 2 0 0.0 N 7 0 3\n",
+            false,
+            1.0,
+        );
+        let t = &comps[0].toeprints;
+        assert_eq!(t[0].net, NetRef::Unparseable("GND".to_string()));
+        assert_eq!(t[1].net, NetRef::None, "ordinal 0 is $NONE$");
+        assert_eq!(t[2].net, NetRef::Num(7));
+    }
+
+    #[test]
+    fn a_file_with_no_units_line_takes_the_job_default() {
+        // ODB++ makes `misc/info`'s UNITS the job default. Assuming millimetres
+        // for a file that declares nothing made an INCH job 25.4x too small.
+        assert_eq!(declared_units("UNITS=INCH\nF 0\n"), Some(25.4));
+        assert_eq!(declared_units("UNITS=MM\nF 0\n"), Some(1.0));
+        assert_eq!(declared_units("ID=61435\nF 0\n"), None);
+        let comps = parse_components_file("CMP 0 1.0 0 0 N R1 R ;\n", false, 25.4);
+        assert!((comps[0].x_mm - 25.4).abs() < 1e-9, "job default applied");
     }
 
     #[test]
