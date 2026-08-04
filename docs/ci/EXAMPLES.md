@@ -78,7 +78,13 @@ SHORTS (2):
   [SERIOUS] GND touches +5V on F.Cu (gap 0.0000 mm) at x=112.0, y=100.0
 
 2 short(s), 0 below-rule group(s), 0 at-limit group(s).
+note: gate-grade finding(s) above, but this is a report command so the exit code is 0. Add --strict to exit 2 on them (exit contract: 0 = clean or report-only, 2 = findings under --strict, 3 = invalid for analysis), or gate CI with hauksbee-ci.
 ```
+
+That last line is on stderr, and it is there because this run exited 0. A report
+command prints what it found and does not gate; `--strict` is what turns the
+same findings into exit 2. Without the note, a pipeline could read the green tick
+next to a serious short and conclude the board is clean.
 
 The same finding in `--plain`:
 
@@ -94,7 +100,11 @@ The same finding in `--plain`:
      What to do:     Pull the two pieces of copper apart so there is a clear gap
        between them, or remove the bit of copper that bridges them ...
 
+2. [SERIOUS] ... the same short where it crosses the front copper layer (F.Cu),
+   same wording, same coordinates ...
+
 Summary: 2 short(s), 0 net pair(s) below the clearance rule, 0 at minimum clearance (no margin).
+note: gate-grade finding(s) above, but this is a report command so the exit code is 0. Add --strict to exit 2 on them (exit contract: 0 = clean or report-only, 2 = findings under --strict, 3 = invalid for analysis), or gate CI with hauksbee-ci.
 ```
 
 On a board with many similar near-miss clearance findings, `--plain` prints
@@ -158,8 +168,10 @@ hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --serve
 
 The Watchy is the "point it at a real board" case. hauksbee extracts the
 circuit its copper implements and binds 59 of its 67 simulatable parts from
-the stock model library. It states plainly which active parts it does not recognise (the
-TP4054 charger, the BMA423 IMU, the e-paper panel) instead of guessing. Add
+the stock model library. It states plainly which active parts it does not
+recognise (the BMA423 IMU, and `U1`, the SR2HARU e-paper panel) instead of
+guessing, and names them again in the bottom line as the reason the analog and
+thermal results on their nets are not to be trusted. Add
 `--report` for the static verdict, or `--serve` for the live 2D/3D viewer.
 
 It prints the URL to open (`http://127.0.0.1:3001` by default). Change the
