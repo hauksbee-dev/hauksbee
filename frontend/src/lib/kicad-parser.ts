@@ -487,9 +487,36 @@ function parseGrArc(c: SNode[]): GrArc {
   const startNode = findChild(c, 'start')
   const midNode = findChild(c, 'mid')
   const endNode = findChild(c, 'end')
+  const angleNode = findChild(c, 'angle')
   const strokeNode = findChild(c, 'stroke')
   const layer = layerStr(findChild(c, 'layer'))
   const width = strokeNode ? num(findChild(strokeNode, 'width')?.[1]) : num(findChild(c, 'width')?.[1])
+  // KiCad 6 writes three points: (start, mid, end). KiCad 5 and earlier write a
+  // centre, one endpoint and a swept angle: (start = CENTRE, end = the first
+  // endpoint, angle = degrees swept). Defaulting the absent mid to the origin
+  // put a point at (0,0) on every legacy arc, so an Edge.Cuts outline never
+  // closed and the 3D view fell back to a bounding box: any pre-6 board a user
+  // dropped in rendered as a blank slab.
+  //
+  // The sweep is positive in the file's own y-down frame. Measured rather than
+  // reasoned: converting all 14 Edge.Cuts arcs of the KiCad-5 Watchy this way
+  // lands every far endpoint exactly on a neighbouring segment's endpoint, gap
+  // 0.0000 mm, where the opposite sign leaves 10 of 14 stranded by up to 4.1 mm.
+  if (!midNode && angleNode) {
+    const centre = parseXY(startNode)
+    const first = parseXY(endNode)
+    const r = Math.hypot(first.x - centre.x, first.y - centre.y)
+    const t0 = Math.atan2(first.y - centre.y, first.x - centre.x)
+    const sweep = (num(angleNode[1]) * Math.PI) / 180
+    const at = (t: number) => ({ x: centre.x + r * Math.cos(t), y: centre.y + r * Math.sin(t) })
+    return {
+      start: first,
+      mid: at(t0 + sweep / 2),
+      end: at(t0 + sweep),
+      layer,
+      width: width || 0.05,
+    }
+  }
   const mid = midNode ? parseXY(midNode) : { x: 0, y: 0 }
   return { start: parseXY(startNode), mid, end: parseXY(endNode), layer, width: width || 0.05 }
 }
