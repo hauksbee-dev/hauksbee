@@ -120,53 +120,58 @@ re-run. The two-sided gate is
 kills the primary march is rescued and recorded, and a structurally singular
 board still refuses loudly.
 
-### A backend's clock rate is only verified against the part on two of six
+### A backend's clock rate is verified on five of six, and QEMU is approximate
 
 Time-based co-sim results rest on the emulator advancing at the part's clock
-rate, and only `renode:rp2040` and `simavr:atmega328p` are measured against it.
-Firmware whose real half-period is 20 ms, so 50 edges per second, produces:
+rate. `simavr:atmega328p`, `renode:rp2040`, `renode:stm32f103`,
+`renode:stm32f4_discovery` and `renode:nrf52840` are each measured at the part's
+rate to within the 0.2% quantization of the measurement, and
+`crates/hauksbee-mcu/tests/clock_truth.rs` re-measures the three Renode STM32 and
+nRF parts on every run. Four platforms previously ran 4.5x to 9x fast, because
+the stock platform file declared a 72 MHz SysTick and a 100 MIPS core whatever
+part the descriptor claimed, and `frequency_hz` cancelled out of the engine's
+arithmetic so nothing disagreed. Each descriptor now declares the part's
+reset-default core clock inline, and the loader refuses a descriptor whose
+declarations disagree with `frequency_hz` or which declares no core clock at all,
+bundled platforms included, so the defect cannot be re-added as data.
 
-| Backend | Edges/s | Simulated time runs |
-|---|---|---|
-| `renode:rp2040` | 50 | at the part's rate |
-| `simavr:atmega328p` | exact per cycle | at the part's rate |
-| `renode:stm32f103` | 450 | 9x fast |
-| `renode:nrf52840` | 327 | 6.5x fast |
-| `qemu:esp32`, `-s3`, `-c3` | 13.5 to 14.5 | 1.35x to 1.45x slow, and host-load dependent |
+Two gaps remain. `qemu:esp32`, `-s3` and `-c3` run 1.35x to 1.45x slow and the
+figure is host-load dependent by construction: the guest keeps running during the
+QMP `cont` and `stop` round trips and that slack is uncredited, and a requested
+5 ms boot chunk runs 8 ms of guest time while the engine credits 5 ms. Treat
+ESP32 virtual time as approximate to within tens of percent.
+`renode:sifive_fe310` has its core clock corrected from 100 MIPS to the part's
+16 MHz, but a RISC-V part has no SysTick and the stock platform's CLINT frequency
+disagrees with the real FE310's 32768 Hz `mtime`, so there is no silicon-exact
+reference on that part to assert against: it is corrected rather than gated.
 
-The cause is per platform, not per emulator: `stm32f103.repl` declares a 72 MHz
-SysTick against the 8 MHz the descriptor declares, which is exactly the 9x, and
-`PerformanceInMips` is 100 against roughly 8 MIPS of real silicon. RP2040 is
-right because `db/mcu/rp2040/rp2040.repl` sets both to the part's real clock.
-`renode:stm32f4_discovery` and `renode:sifive_fe310` carry the same defect by
-inspection. QEMU paces virtual time against wall clock, so its ratio is not
-reproducible across machines.
+One trap worth keeping, because it hides the defect in the flattering direction:
+the GPIO poll aliases any half-period near the chunk width. At 5 ms chunks the
+9x-fast STM32F103 firmware measured a perfect 100 edges. A clock measurement must
+use a chunk finer than the half-period a WRONG sim would produce, not merely
+finer than the right one.
 
-What this means for a result: a `toggle` frequency or a `boot_coverage`
-`deadline_ms` on an unverified backend is measuring the emulator's clock. A
-minimum toggle COUNT, the order of GPIO transitions, UART content, rail voltages
-under load, and every static check are unaffected. Closing it means declaring
-each part's clock in its platform file and gating it, which is scoped work rather
-than a research problem.
+### An unserviced watchdog does not reset the MCU on most Renode parts or on QEMU
 
-One trap worth recording for anyone measuring this: the GPIO poll aliases any
-half-period near the chunk width. At 5 ms chunks the STM32F103 firmware above
-measures a perfect 100 edges; at 200 microsecond chunks the same firmware
-measures 450. A fidelity measurement must use a chunk well below the firmware's
-period or it will confirm whatever it started with.
+`simavr` is the exception and now behaves: a starved `wdt_enable(WDTO_15MS)`
+reboots the core at the right virtual time, repeatedly, and the reboots are
+reported rather than treated as a silent restart, because an assertion that
+passed across a reboot was not measuring the run it claimed. It previously
+livelocked the co-sim, because the reset rewound a cycle counter the chunk loop
+was waiting on.
 
-### An unserviced watchdog does not reset the MCU on Renode or QEMU
-
-On `renode:nrf52840` the watchdog can be armed and read back as running, with a
-correct 32768 Hz counter, and still never fire: 1.000 s of simulated time
-produces zero resets where silicon produces twenty. On the ESP32 family the
-watchdogs are deliberately disabled at launch (a paused guest would otherwise
-trip them), which is the right call for a co-simulator and is not currently
-stated anywhere the reader sees. Either way, firmware that hangs runs forever in
-simulation, so any assertion about behaviour after a hang is fiction. The AVR
-backend does reset, but an unfed watchdog there currently livelocks the co-sim
-rather than rebooting it, because the reset rewinds a cycle counter the chunk
-loop is waiting on.
+Elsewhere the watchdog is a coverage hole and is surfaced as one per part. On
+`renode:nrf52840` a watchdog arms and reads back as running with a correct
+32768 Hz reload and never fires: zero resets in 1.000 s of simulated time where
+silicon gives twenty. On `renode:stm32f103` the IWDG does fire and reset once,
+and the core then goes quiet where the part would reboot every timeout forever.
+On the ESP32 family the timer-group watchdogs are disabled at launch, which is
+the right call because a paused guest would otherwise trip them. On
+`renode:stm32f4_discovery`, `renode:sifive_fe310` and `renode:rp2040` nobody has
+run a starved watchdog to its timeout, and the two parts that were measured
+disagree with each other, so nothing is inferred. Firmware that hangs still runs
+forever on those parts, so any assertion about behaviour after a hang is fiction,
+but a run on them says so rather than reading healthy.
 
 ### Power-up state is not modelled: no brownout reset, no strap latch, no fuses
 
