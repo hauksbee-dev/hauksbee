@@ -193,6 +193,116 @@ pub struct StampCtx<'a> {
     /// the smooth break-before-make coupling. Consulted only when
     /// `effects.spdt_bbm` (the device-model default); empty/ignored otherwise.
     pub spdt_sibling: &'a std::collections::HashMap<DeviceId, DeviceId>,
+    /// Per-junction EVALUATION-voltage state for pn-junction limiting, supplied
+    /// by the live Newton iteration ([`crate::newton::newton_solve_core`]'s main
+    /// stamp) and absent everywhere else (residual probes, plan builds, tests).
+    ///
+    /// This is SPICE's own anchoring, and the distinction it carries is load
+    /// bearing. Anchoring pnjlim on the previous ITERATE makes a collapsed
+    /// junction a fixed point: when a relay hands a stiff divider to a
+    /// diode-connected base, the first Newton step launches the base to the
+    /// LINEAR network voltage (measured: 4.95 V), the lagged anchor keeps the
+    /// junction evaluated dead, the next linear solve reproduces the same
+    /// point, and the step norm reads converged at a root with `exp(40)*Is` =
+    /// 235 A of raw imbalance. Anchoring on the previous EVALUATION voltage
+    /// instead lets the evaluation point climb its log schedule (`vt*ln`)
+    /// every iteration while the node waits above, so within a handful of
+    /// iterations the junction wakes, conducts for real, and pulls the node
+    /// into the true root, which is how ngspice solves the same make step.
+    ///
+    /// `None` evaluates against `x_prev` exactly as before, so every path that
+    /// does not thread the state is bit-identical.
+    pub junction_eval: Option<&'a JunctionEval>,
+}
+
+/// Per-junction evaluation-voltage store for SPICE-style pnjlim anchoring
+/// (see [`StampCtx::junction_eval`]). Built once per workspace; values reset
+/// to NaN ("unseeded, fall back to the x_prev anchor") at every solve entry.
+pub struct JunctionEval {
+    /// Device id -> base slot in `vals`. A diode owns 1 slot (vd); a BJT owns
+    /// 2 (vbe, vbc).
+    slots: std::collections::HashMap<DeviceId, usize>,
+    /// The last evaluation voltage per junction; NaN = unseeded this solve.
+    vals: std::cell::RefCell<Vec<f64>>,
+    /// SPICE's `icheck`: set when any junction was LIMITED during the current
+    /// stamp (evaluated at a voltage other than the iterate's own). An
+    /// iteration that limited has not evaluated the real circuit, so its step
+    /// norm says nothing about a root: while the evaluation anchor is still
+    /// climbing its log schedule toward a suddenly-connected junction, the
+    /// ITERATE can sit perfectly still at the linear-network voltage
+    /// (measured: two zero-step iterations "converged" the mirror deck's make
+    /// onto the 235 A false root). The Newton loop reads-and-clears this each
+    /// iteration and refuses to call a limited iteration converged.
+    limited: std::cell::Cell<bool>,
+}
+
+impl JunctionEval {
+    /// Scan the circuit and allocate slots for every junction-limited device.
+    pub fn build(circuit: &Circuit) -> Self {
+        let mut slots = std::collections::HashMap::new();
+        let mut n = 0usize;
+        for (id, dev) in circuit.iter() {
+            match dev {
+                Device::Diode { .. } => {
+                    slots.insert(id, n);
+                    n += 1;
+                }
+                Device::Bjt { .. } => {
+                    slots.insert(id, n);
+                    n += 2;
+                }
+                _ => {}
+            }
+        }
+        JunctionEval {
+            slots,
+            vals: std::cell::RefCell::new(vec![f64::NAN; n]),
+            limited: std::cell::Cell::new(false),
+        }
+    }
+
+    /// Read-and-clear the "some junction was limited this stamp" flag.
+    pub fn take_limited(&self) -> bool {
+        self.limited.replace(false)
+    }
+
+    /// Mark every junction unseeded. Called at solve entry so no evaluation
+    /// anchor leaks between solves (each solve's first iteration anchors on
+    /// its own entry point, exactly the previous behaviour).
+    pub fn reset(&self) {
+        for v in self.vals.borrow_mut().iter_mut() {
+            *v = f64::NAN;
+        }
+    }
+
+    /// The stored evaluation anchor for junction `k` of `id`, or `fallback`
+    /// (the x_prev-derived anchor) when unseeded or untracked.
+    fn anchor(&self, id: DeviceId, k: usize, fallback: f64) -> f64 {
+        match self.slots.get(&id) {
+            Some(&s) => {
+                let v = self.vals.borrow()[s + k];
+                if v.is_finite() {
+                    v
+                } else {
+                    fallback
+                }
+            }
+            None => fallback,
+        }
+    }
+
+    /// Record the evaluation voltage this iteration actually used. `raw` is
+    /// the iterate's own junction voltage; a stored value that differs means
+    /// the evaluation was limited, which denies convergence this iteration
+    /// (see `limited`).
+    fn store(&self, id: DeviceId, k: usize, v: f64, raw: f64) {
+        if let Some(&s) = self.slots.get(&id) {
+            self.vals.borrow_mut()[s + k] = v;
+            if v != raw {
+                self.limited.set(true);
+            }
+        }
+    }
 }
 
 impl StampCtx<'_> {
@@ -1700,7 +1810,14 @@ fn stamp_diode<S: StampSink>(
     let vx = |i: Option<usize>| i.map(|i| ctx.x[i]).unwrap_or(0.0);
     let vx_prev = |i: Option<usize>| i.map(|i| ctx.x_prev[i]).unwrap_or(0.0);
     let vd_raw = vx(a_eff) - vx(k_i);
-    let vd_last = vx_prev(a_eff) - vx_prev(k_i);
+    // The limiting anchor: the last EVALUATION voltage where the live Newton
+    // threads its junction state (see StampCtx::junction_eval), the previous
+    // iterate otherwise.
+    let vd_iter_prev = vx_prev(a_eff) - vx_prev(k_i);
+    let vd_last = match ctx.junction_eval {
+        Some(je) => je.anchor(id, 0, vd_iter_prev),
+        None => vd_iter_prev,
+    };
     // Junction limiting. The forward exponential is limited by pnjlim toward
     // vcrit; the breakdown exponential is the same curve MIRRORED about
     // vd = -bv, so in the breakdown region (vd below -bv, with a 10·nvt skirt,
@@ -1734,6 +1851,10 @@ fn stamp_diode<S: StampSink>(
         if vd > vd_max {
             vd = vd_max;
         }
+    }
+
+    if let Some(je) = ctx.junction_eval {
+        je.store(id, 0, vd, vd_raw);
     }
 
     let (idc, gd_raw) = diode_eval(model, vd, t_c, temp_on);
@@ -1833,18 +1954,30 @@ fn stamp_bjt<S: StampSink>(
     // Iteration-path only; the converged root is unchanged.
     let vcrit_be = vcrit(is, model.nf * vt);
     let vcrit_bc = vcrit(is, model.nr * vt);
-    let vbe = pnjlim(
-        vbe,
-        sign * (vx_prev(bi) - vx_prev(ei)),
-        model.nf * vt,
-        vcrit_be,
-    );
-    let vbc = pnjlim(
-        vbc,
-        sign * (vx_prev(bi) - vx_prev(ci)),
-        model.nr * vt,
-        vcrit_bc,
-    );
+    // Limiting anchors: the last EVALUATION voltages when the live Newton
+    // threads its junction state (see StampCtx::junction_eval), the previous
+    // iterate otherwise. The evaluation anchor is what lets a collapsed
+    // diode-connected base climb its log schedule while the node itself waits
+    // at the linear-network voltage, instead of the false root becoming a
+    // fixed point of the lagged-iterate anchor (the mirror deck's 235 A
+    // "converged" make step).
+    let vbe_iter_prev = sign * (vx_prev(bi) - vx_prev(ei));
+    let vbc_iter_prev = sign * (vx_prev(bi) - vx_prev(ci));
+    let (vbe_last, vbc_last) = match ctx.junction_eval {
+        Some(je) => (
+            je.anchor(id, 0, vbe_iter_prev),
+            je.anchor(id, 1, vbc_iter_prev),
+        ),
+        None => (vbe_iter_prev, vbc_iter_prev),
+    };
+    let vbe_raw_j = vbe;
+    let vbc_raw_j = vbc;
+    let vbe = pnjlim(vbe, vbe_last, model.nf * vt, vcrit_be);
+    let vbc = pnjlim(vbc, vbc_last, model.nr * vt, vcrit_bc);
+    if let Some(je) = ctx.junction_eval {
+        je.store(id, 0, vbe, vbe_raw_j);
+        je.store(id, 1, vbc, vbc_raw_j);
+    }
 
     let nvf = model.nf * vt;
     let nvr = model.nr * vt;
@@ -3105,6 +3238,7 @@ mod diode_physics_tests {
                 switch_freeze: None,
                 switch_latch: None,
                 spdt_sibling: &spdt,
+                junction_eval: None,
             };
             let mut rhs = vec![0.0; layout.size];
             let mut mat = m;
@@ -3182,6 +3316,7 @@ mod diode_physics_tests {
             switch_freeze: None,
             switch_latch: None,
             spdt_sibling: &spdt,
+            junction_eval: None,
         };
         let mut rhs = vec![0.0; layout.size];
         stamp_all(&ctx, &mut m, &mut rhs);
@@ -3288,6 +3423,7 @@ mod bjt_physics_tests {
             switch_freeze: None,
             switch_latch: None,
             spdt_sibling: &spdt,
+            junction_eval: None,
         };
         let mut rhs = vec![0.0; layout.size];
         stamp_all(&ctx, &mut m, &mut rhs);
@@ -3473,6 +3609,7 @@ mod bjt_physics_tests {
             switch_freeze: None,
             switch_latch: None,
             spdt_sibling: &spdt,
+            junction_eval: None,
         };
         let mut f = vec![0.0; layout.size];
         stamp_residual(&ctx, &mut f);
@@ -3838,6 +3975,7 @@ mod bench {
             switch_freeze: None,
             switch_latch: None,
             spdt_sibling: &spdt,
+            junction_eval: None,
         };
         let mut rhs = vec![0.0f64; n];
         let mut f = vec![0.0f64; n];
@@ -3922,6 +4060,7 @@ mod bench {
             switch_freeze: None,
             switch_latch: None,
             spdt_sibling: &spdt,
+            junction_eval: None,
         };
         let mut rhs = vec![0.0f64; n];
         m.clear_values();

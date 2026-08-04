@@ -46,7 +46,7 @@ note = "still pre-stimulus and the relay is open at 1e9 ohm, so the membrane hol
 at = 60.0e-6
 value = 0.02852416
 reltol = 2.0e-3
-note = "the operating point of the closed-switch circuit: the mirror sinks ~0.43 mA, far past what the 47k pull-up can supply, so the membrane sits at Q2's saturation voltage. Independently confirmed as the `.op` of the same circuit with the relay held closed, where hauksbee and ngspice-45.2 agree to 7 digits (2.852417e-2 against 2.852412e-2)"
+note = "the operating point of the closed-switch circuit: the mirror sinks ~0.43 mA, far past what the 47k pull-up can supply, so the membrane sits at Q2's saturation voltage. Independently confirmed as the `.op` of the same circuit with the relay held closed, where hauksbee and the oracle agree to 7 digits (2.852417e-2 against 2.852412e-2)"
 
 [[probe.analytic]]
 at = 80.0e-6

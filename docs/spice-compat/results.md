@@ -7,36 +7,41 @@ probe against the per-quantity tolerance declared in that deck's
 `expect.toml`.
 
 - Oracle: **ngspice ngspice-45.2**
-- Decks: **43**
-- Passing: **42/43**
+- Decks: **46**
+- Passing: **46/46**
 
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Headroom | Where | Result |
 |------|----------|----------|------------------|-----------|----------|-------|--------|
 | ao3400a_rdson | op | `V(d)` | 1.473e-7 | 5.0e-6 | 34x | op | PASS |
-| bjt_bias | op | `V(coll)` | 1.088e-5 | 5.0e-4 | 46x | op | PASS |
-|  |  | `V(base)` | 1.922e-6 | 5.0e-5 | 26x | op | PASS |
-|  |  | `V(emit)` | 2.563e-6 | 1.0e-4 | 39x | op | PASS |
+| bjt_bias | op | `V(coll)` | 9.512e-6 | 1.0e-4 | 11x | op | PASS |
+|  |  | `V(base)` | 1.633e-6 | 5.0e-5 | 31x | op | PASS |
+|  |  | `V(emit)` | 2.253e-6 | 1.0e-4 | 44x | op | PASS |
 | bjt_ce_amp | tran | `V(c)` | 2.071e-4 | 2.0e-3 | 10x | t=6.213e-5s | PASS |
-| bjt_sgp_high_injection | op | `I(VC)` | 7.446e-6 | 2.0e-4 | 27x | op | PASS |
-|  |  | `I(VB)` | 7.213e-6 | 2.0e-4 | 28x | op | PASS |
+| bjt_sgp_high_injection | op | `I(VC)` | 7.445e-6 | 2.0e-4 | 27x | op | PASS |
+|  |  | `I(VB)` | 7.212e-6 | 2.0e-4 | 28x | op | PASS |
 | bjt_switch_tail | tran | `V(c)` | 3.362e-5 | 1.0e-3 | 30x | t=2.045e-6s | PASS |
 | bsource_clamp | tran | `V(out)` | 1.037e-4 | 5.0e-3 | 48x | t=6.614e-4s | PASS |
 | bsource_opamp_subckt | tran | `V(out)` | 1.016e-4 | 5.0e-3 | 49x | t=1.436e-3s | PASS |
 | bsource_time | tran | `V(out)` | 2.334e-4 | 1.0e-2 | 43x | t=3.654e-6s | PASS |
+| cap_ic_uic_decay | tran | `V(out)` | 2.000e-4 | 1.0e-3 | 5x | t=0.000e0s | PASS |
+|  |  | `V(out) vs closed form` | 0.000e0 | 1.0e-9 | exact | t=0.000e0 | PASS |
+|  |  | `V(out) vs closed form` | 6.865e-6 | 1.0e-3 | 146x | t=1.000e-4 | PASS |
+|  |  | `V(out) vs closed form` | 5.982e-5 | 2.0e-3 | 33x | t=3.000e-4 | PASS |
+|  |  | `V(out) vs closed form` | 1.658e-4 | 4.0e-3 | 24x | t=5.000e-4 | PASS |
 | cccs_mirror | tran | `V(out)` | 1.873e-4 | 5.0e-3 | 27x | t=1.644e-6s | PASS |
 | cccs_subckt | tran | `V(out)` | 1.873e-4 | 5.0e-3 | 27x | t=1.644e-6s | PASS |
 | ccvs_transres | tran | `V(out)` | 8.614e-3 | 1.0e-2 | 1x | t=9.225e-6s | PASS |
 | cj2301_rdson | op | `V(d)` | 9.710e-8 | 2.0e-6 | 21x | op | PASS |
-| diode_iv_dc | dc | `V(d)` | 1.093e-4 | 5.0e-3 | 46x | sweep=8.500e-1 | PASS |
+| diode_iv_dc | dc | `V(d)` | 1.094e-4 | 5.0e-3 | 46x | sweep=8.500e-1 | PASS |
 |  |  | `V(a,d)` | 9.617e-4 | 2.0e-2 | 21x | sweep=6.500e-1 | PASS |
-| diode_op | op | `V(d)` | 4.572e-6 | 1.0e-4 | 22x | op | PASS |
-|  |  | `I(V1)` | 5.044e-7 | 2.0e-5 | 40x | op | PASS |
+| diode_op | op | `V(d)` | 4.556e-6 | 1.0e-4 | 22x | op | PASS |
+|  |  | `I(V1)` | 5.018e-7 | 2.0e-5 | 40x | op | PASS |
 | diode_rectifier | tran | `V(out)` | 6.834e-5 | 2.0e-3 | 29x | t=1.232e-3s | PASS |
 | diode_rectifier_charge | tran | `V(out)` | 3.313e-4 | 1.0e-2 | 30x | t=2.192e-5s | PASS |
-| diode_reverse_recovery | tran | `V(a)` | 3.864e-2 | 5.0e-2 | 1x | t=1.308e-6s | PASS |
+| diode_reverse_recovery | tran | `V(a)` | 3.863e-2 | 5.0e-2 | 1x | t=1.308e-6s | PASS |
 | diode_zener_breakdown | op | `V(out)` | 2.009e-5 | 5.0e-4 | 25x | op | PASS |
-| flyback_diode | tran | `V(out)` | 1.578e-2 | 5.0e-2 | 3x | t=2.557e-5s | PASS |
-| forced_base_current | op | `V(base)` | 7.555e-6 | 2.0e-4 | 26x | op | PASS |
+| flyback_diode | tran | `V(out)` | 1.583e-2 | 5.0e-2 | 3x | t=2.556e-5s | PASS |
+| forced_base_current | op | `V(base)` | 7.556e-6 | 2.0e-4 | 26x | op | PASS |
 |  |  | `V(coll)` | 3.510e-9 | 1.0e-6 | 285x | op | PASS |
 | mos_body_bias | dc | `V(d)` | 6.591e-3 | 3.0e-2 | 5x | sweep=1.800e0 | PASS |
 | mos_body_diode | tran | `V(d)` | 1.216e-1 | 2.5e-1 | 2x | t=2.049e-6s | PASS |
@@ -58,16 +63,26 @@ probe against the per-quantity tolerance declared in that deck's
 |  |  | `V(in)` | 0.000e0 | 1.0e-6 | exact | op | PASS |
 |  |  | `I(V1)` | 6.250e-9 | 1.0e-6 | 160x | op | PASS |
 | rlc_series | tran | `V(out)` | 8.504e-3 | 2.0e-2 | 2x | t=2.925e-6s | PASS |
-| s8050_datasheet_point | op | `V(base)` | 7.150e-6 | 2.0e-4 | 28x | op | PASS |
-|  |  | `V(coll)` | 2.965e-7 | 1.0e-5 | 34x | op | PASS |
-| schottky_1n5817_two_points | op | `V(v1a)` | 7.997e-9 | 1.0e-6 | 125x | op | PASS |
-|  |  | `V(v31a)` | 2.811e-8 | 1.0e-6 | 36x | op | PASS |
-| switch_sw_thresholds | dc | `V(out)` | 1.000e0 | 1.0e-4 | 0x | sweep=2.500e0 | **FAIL** |
-|  |  | `V(out) vs closed form` | 9.990e-10 | 1.0e-5 | 10010x | sweep=0.000e0 | PASS |
-|  |  | `V(out) vs closed form` | 9.990e-10 | 1.0e-5 | 10010x | sweep=1.500e0 | PASS |
-|  |  | `V(out) vs closed form` | 9.990e-10 | 1.0e-5 | 10010x | sweep=2.400e0 | PASS |
-|  |  | `V(out) vs closed form` | 9.901e-12 | 1.0e-6 | 101000x | sweep=2.600e0 | PASS |
-|  |  | `V(out) vs closed form` | 9.901e-12 | 1.0e-6 | 101000x | sweep=3.000e0 | PASS |
+| s8050_datasheet_point | op | `V(base)` | 7.149e-6 | 2.0e-4 | 28x | op | PASS |
+|  |  | `V(coll)` | 2.964e-7 | 1.0e-5 | 34x | op | PASS |
+| schottky_1n5817_two_points | op | `V(v1a)` | 9.271e-9 | 1.0e-6 | 108x | op | PASS |
+|  |  | `V(v31a)` | 2.887e-8 | 1.0e-6 | 35x | op | PASS |
+| switch_bjt_mirror_membrane | tran | `V(mem0)` | 5.322e-2 | 6.0e-2 | 1x | t=5.148e-5s | PASS |
+|  |  | `V(mem0) vs closed form` | 0.000e0 | 1.0e-9 | exact | t=0.000e0 | PASS |
+|  |  | `V(mem0) vs closed form` | 1.630e-8 | 1.0e-6 | 61x | t=2.000e-5 | PASS |
+|  |  | `V(mem0) vs closed form` | 2.805e-7 | 2.0e-3 | 7129x | t=6.000e-5 | PASS |
+|  |  | `V(mem0) vs closed form` | 2.805e-7 | 2.0e-3 | 7129x | t=8.000e-5 | PASS |
+| switch_gate_drive_edge | tran | `V(g)` | 2.949e-2 | 3.0e-1 | 10x | t=1.063e-5s | PASS |
+|  |  | `V(g) vs closed form` | 3.205e-4 | 2.0e-3 | 6x | t=2.160e-5 | PASS |
+|  |  | `V(g) vs closed form` | 2.888e-5 | 1.0e-3 | 35x | t=4.360e-5 | PASS |
+|  |  | `V(g) vs closed form` | 3.743e-6 | 1.0e-3 | 267x | t=6.560e-5 | PASS |
+|  |  | `V(g) vs closed form` | 5.200e-4 | 1.0e0 | 1923x | t=1.040e-5 | PASS |
+| switch_sw_thresholds | dc | `V(out)` | 9.990e-9 | 1.0e-6 | 100x | sweep=2.550e0 | PASS |
+|  |  | `V(out) vs closed form` | 9.990e-10 | 1.0e-5 | 10010x | sweep=5.000e-2 | PASS |
+|  |  | `V(out) vs closed form` | 9.990e-10 | 1.0e-5 | 10010x | sweep=1.550e0 | PASS |
+|  |  | `V(out) vs closed form` | 9.990e-10 | 1.0e-5 | 10010x | sweep=2.450e0 | PASS |
+|  |  | `V(out) vs closed form` | 9.901e-12 | 1.0e-6 | 101000x | sweep=2.550e0 | PASS |
+|  |  | `V(out) vs closed form` | 9.901e-12 | 1.0e-6 | 101000x | sweep=3.050e0 | PASS |
 | usblc6_forward | op | `V(a)` | 1.370e-6 | 5.0e-5 | 37x | op | PASS |
 | vccs_gm | tran | `V(out)` | 3.025e-3 | 1.0e-2 | 3x | t=1.010e-4s | PASS |
 | vcvs_gain | tran | `V(out)` | 8.650e-3 | 1.0e-2 | 1x | t=9.327e-6s | PASS |
@@ -88,6 +103,7 @@ probe against the per-quantity tolerance declared in that deck's
 - **bsource_clamp**: B-source tanh soft clamp (V-output) of a divided 1 kHz sine
 - **bsource_opamp_subckt**: behavioral opamp subckt (B gain stage), closed-loop x10 sine
 - **bsource_time**: time-dependent B-source (two-tone) into an RC low-pass
+- **cap_ic_uic_decay**: Capacitor IC= under uic: the node starts at its declared 5 V and decays as 5*exp(-t/100us).
 - **cccs_mirror**: CCCS mirror (gain 2 into 500 || 100n) of an ammeter current
 - **cccs_subckt**: CCCS in a subckt controlled by its own local ammeter
 - **ccvs_transres**: CCVS transresistance (3k on a 2k-sourced ammeter) into RC
@@ -115,6 +131,8 @@ probe against the per-quantity tolerance declared in that deck's
 - **rlc_series**: series RLC underdamped step response
 - **s8050_datasheet_point**: S8050 NPN at the datasheet's 50 mA VBE test point
 - **schottky_1n5817_two_points**: 1N5817 at 1.0 A and 3.1 A, the two forward points Vishay 88525 publishes
+- **switch_bjt_mirror_membrane**: Relay gating a BJT current mirror into a 1nF membrane: the reduced one-block synapse deck, held on both flat regions and cross-checked through both edges.
+- **switch_gate_drive_edge**: Relay gating an RC gate load: turn-on instant and gate rise against the closed form v(g) = 5*(1 - exp(-(t - 10.6us)/11us)).
 - **switch_sw_thresholds**: SPICE3 SW relay: holds ROFF across its whole hysteresis band from a cold start, then presents exactly RON past VT+VH.
 - **usblc6_forward**: USBLC6-2P6 forward drop at the datasheet's 10 mA test current
 - **vccs_gm**: VCCS gm-block (1 mS into 2k || 50n) pulse response

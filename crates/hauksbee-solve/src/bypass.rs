@@ -475,6 +475,7 @@ mod tests {
             switch_freeze: None,
             switch_latch: None,
             spdt_sibling: spdt,
+            junction_eval: None,
         }
     }
 
