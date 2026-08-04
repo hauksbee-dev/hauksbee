@@ -74,7 +74,7 @@ pub fn definitions() -> Value {
                     },
                     "spec_toml": {
                         "type": "string",
-                        "description": "The hauksbee-ci spec as TOML text, WITHOUT `board` or `firmware` keys (they are injected from the path arguments). Format: docs/ci/CI.md. Minimal example: duration_ms = 10 plus one [[assert]] block."
+                        "description": format!("The hauksbee-ci spec as TOML text, WITHOUT `board` or `firmware` keys (they are injected from the path arguments). Format: {}. Minimal example: duration_ms = 10 plus one [[assert]] block.", hauksbee_ir::docs_url("docs/ci/CI.md"))
                     },
                     "firmware_path": {
                         "type": "string",

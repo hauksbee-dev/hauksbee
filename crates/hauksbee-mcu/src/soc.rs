@@ -810,8 +810,9 @@ fn not_found_hint(spec: &str, builtins: &[&'static str]) -> String {
     hint.push_str(&format!(
         " Available built-ins: {}. Run `hauksbee models list --builtin` to \
          list them, or add a `<part>.soc.toml` descriptor in $HAUKSBEE_MCU_DIR \
-         or ~/.config/hauksbee/mcu (docs/extending/add-an-mcu-variant.md).",
-        builtins.join(", ")
+         or ~/.config/hauksbee/mcu ({}).",
+        builtins.join(", "),
+        hauksbee_ir::docs_url("docs/extending/add-an-mcu-variant.md")
     ));
     hint
 }

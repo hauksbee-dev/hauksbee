@@ -405,8 +405,9 @@ pub fn from_path(path: &Path) -> Result<NormalizedBoard, BoardInputError> {
 fn gerber_path_message(path: &Path, e: &str) -> String {
     format!(
         "gerber extraction from '{}' failed: {e}. Point at the gerber job \
-         folder (or a .zip of it) containing the copper/drill files (see docs/ingest/GERBER.md).",
-        path.display()
+         folder (or a .zip of it) containing the copper/drill files (see {}).",
+        path.display(),
+        hauksbee_ir::docs_url("docs/ingest/GERBER.md")
     )
 }
 

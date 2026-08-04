@@ -242,8 +242,9 @@ pub fn list(builtin: bool) -> anyhow::Result<()> {
              ~/.config/hauksbee/mcu (it overrides the built-in of the same part), plus a\n  \
              [[models]] kind=\"mcu\" routing entry mapping your board's part value to it: two\n  \
              TOML files, no recompile. Copy the closest built-in above as a template; the\n  \
-             full recipe is docs/extending/add-an-mcu-variant.md.\n  \
-             For the model db as it applies to a board, use `hauksbee models resolve <board>`."
+             full recipe is {}.\n  \
+             For the model db as it applies to a board, use `hauksbee models resolve <board>`.",
+            hauksbee_ir::docs_url("docs/extending/add-an-mcu-variant.md")
         );
         println!();
     }

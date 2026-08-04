@@ -311,11 +311,13 @@ pub fn unrecognized_message(bytes: &[u8]) -> String {
             .to_string();
     }
     if crate::protel_ascii::looks_like_pipe_records(bytes) {
-        return "this is an ASCII Protel export (what EasyEDA produces); hauksbee reads \
-                the Protel_Advanced_PCB board form of it directly, and this file is \
-                not one. Open it in Altium Designer and re-save as a binary .PcbDoc, \
-                or see docs/ingest/ALTIUM.md"
-            .to_string();
+        return format!(
+            "this is an ASCII Protel export (what EasyEDA produces); hauksbee reads \
+             the Protel_Advanced_PCB board form of it directly, and this file is \
+             not one. Open it in Altium Designer and re-save as a binary .PcbDoc, \
+             or see {}",
+            hauksbee_ir::docs_url("docs/ingest/ALTIUM.md")
+        );
     }
     "unrecognized board format: hauksbee reads a KiCad board, schematic or netlist, \
      an Eagle board, an Altium .PcbDoc (binary or ASCII), an IPC-D-356 netlist, or \

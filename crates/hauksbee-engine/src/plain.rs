@@ -765,7 +765,7 @@ pub fn plain_si(report: &SiReport) -> PlainReport {
             SiCheck::ControlledImpedance => (
                 format!("A trace that should be a controlled impedance is out of range ({}).", short_msg(&f.message)),
                 "Fast signals like USB or Ethernet need their traces to present a specific impedance (for example 90 ohm differential for USB) so the signal does not reflect off the wire. If the trace width / spacing for your board stackup gives the wrong impedance, you get reflections, and the link can be marginal or fail at speed.".to_string(),
-                "Adjust the trace width and pair spacing for your actual layer stackup so the estimated impedance hits the target (tools and the formulas in docs/checks/SI_CHECKS.md give the geometry); or have the fab build a controlled-impedance stackup to your spec.".to_string(),
+                format!("Adjust the trace width and pair spacing for your actual layer stackup so the estimated impedance hits the target (tools and the formulas in {} give the geometry); or have the fab build a controlled-impedance stackup to your spec.", hauksbee_ir::docs_url("docs/checks/SI_CHECKS.md")),
             ),
             SiCheck::TraceAmpacity => (
                 format!("A routed trace is too narrow for the current it has to carry ({}).", short_msg(&f.message)),
@@ -851,11 +851,13 @@ fn actionable_info_note(f: &SiFinding) -> Option<HeadsUp> {
              formally declare a controlled-impedance stackup; it is informational, not a \
              confirmed failure, but a value well off target on a real high-speed net can \
              make the link marginal or fail to enumerate.",
-            "If this pair is NOT a high-speed link (USB/Ethernet/HDMI), you can ignore it. \
-             If it is: adjust the trace width and pair spacing for your actual layer \
-             stackup so the estimate lands near the target (the formulas are in \
-             docs/checks/SI_CHECKS.md), or ask your fab to build a controlled-impedance stackup \
-             to spec.",
+            format!(
+                "If this pair is NOT a high-speed link (USB/Ethernet/HDMI), you can ignore it. \
+                 If it is: adjust the trace width and pair spacing for your actual layer \
+                 stackup so the estimate lands near the target (the formulas are in \
+                 {}), or ask your fab to build a controlled-impedance stackup to spec.",
+                hauksbee_ir::docs_url("docs/checks/SI_CHECKS.md")
+            ),
         ),
         SiCheck::ControlledImpedance => HeadsUp::glossed(
             format!("A single-ended trace ({affected}) is off its impedance target ({core})."),
@@ -864,10 +866,13 @@ fn actionable_info_note(f: &SiFinding) -> Option<HeadsUp> {
              back instead of reaching the antenna, costing range and sensitivity. This is a \
              computed estimate, flagged only because the board did not formally declare a \
              controlled-impedance stackup.",
-            "If this is not a controlled-impedance RF path, this estimate is informational. \
-             If it is: widen or narrow the trace for your actual layer stackup so the \
-             estimate lands near 50 ohm (the formulas are in docs/checks/SI_CHECKS.md), or \
-             ask your fab to build a controlled-impedance stackup to spec.",
+            format!(
+                "If this is not a controlled-impedance RF path, this estimate is informational. \
+                 If it is: widen or narrow the trace for your actual layer stackup so the \
+                 estimate lands near 50 ohm (the formulas are in {}), or \
+                 ask your fab to build a controlled-impedance stackup to spec.",
+                hauksbee_ir::docs_url("docs/checks/SI_CHECKS.md")
+            ),
         ),
         _ => HeadsUp::note(format!("{core} ({affected}).")),
     })
