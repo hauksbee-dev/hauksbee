@@ -14,7 +14,8 @@ use schemars::generate::SchemaSettings;
 use serde_json::json;
 use std::path::PathBuf;
 
-const REGEN: &str = "UPDATE_RUN_SCHEMA=1 cargo test -p hauksbee-engine --test run_report_schema_drift";
+const REGEN: &str =
+    "UPDATE_RUN_SCHEMA=1 cargo test -p hauksbee-engine --test run_report_schema_drift";
 
 fn schema_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("schemas/hauksbee-run-report.schema.json")
@@ -101,7 +102,14 @@ fn emitted_document_carries_schema_version_and_rollup() {
     );
     let v: serde_json::Value = serde_json::from_str(&report.to_json()).expect("one JSON document");
     assert_eq!(v["schema_version"], RUN_REPORT_SCHEMA_VERSION);
-    for key in ["ok", "verdict", "serious_count", "actionable_count", "board", "bind"] {
+    for key in [
+        "ok",
+        "verdict",
+        "serious_count",
+        "actionable_count",
+        "board",
+        "bind",
+    ] {
         assert!(v.get(key).is_some(), "missing rollup/header key {key}");
     }
 }

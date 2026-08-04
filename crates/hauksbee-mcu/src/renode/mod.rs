@@ -2401,7 +2401,8 @@ mod tests {
         assert_eq!(arg, "@platforms/cpus/stm32f103.repl");
         assert!(file.is_none(), "a path reference needs no temp file");
 
-        let source = "using \"platforms/cpus/stm32f103.repl\"\n\nspi1: SPI.STM32SPI @ sysbus 0x40013000\n";
+        let source =
+            "using \"platforms/cpus/stm32f103.repl\"\n\nspi1: SPI.STM32SPI @ sysbus 0x40013000\n";
         let (arg, file) = materialize_platform(source).unwrap();
         let path = file.expect("inline source is backed by a temp file");
         assert_eq!(arg, format!("@{}", path.display()));

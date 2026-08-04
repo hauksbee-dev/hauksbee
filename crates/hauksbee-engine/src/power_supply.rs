@@ -356,7 +356,9 @@ impl PowerSupply {
             // 5 V nominal; the connector/cable droop is the series resistor.
             // Past the spec limit, fold the commanded voltage back hard so the
             // current cannot run away (models the port's current-limit trip).
-            PowerSupply::Usb { spec } => cc_regulate(5.0, spec.current_limit_a(), rs, last_cmd_v, i),
+            PowerSupply::Usb { spec } => {
+                cc_regulate(5.0, spec.current_limit_a(), rs, last_cmd_v, i)
+            }
 
             // Drain charge and recompute the open-circuit stack voltage. The
             // internal resistance drop is the series resistor (solver-applied).

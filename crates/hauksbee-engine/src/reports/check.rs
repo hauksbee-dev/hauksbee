@@ -285,7 +285,10 @@ pub fn gather_findings(
     let mut drc = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
-        ExtractedBoard::drc_with_clearance_rules(text, kicad_pro_clearance_rules(board_path, board))?
+        ExtractedBoard::drc_with_clearance_rules(
+            text,
+            kicad_pro_clearance_rules(board_path, board),
+        )?
     };
     let mut lint = crate::checks::engine_lint(board, lib);
     let geo_text = if altium_present { None } else { Some(text) };

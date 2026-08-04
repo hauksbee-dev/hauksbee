@@ -285,9 +285,7 @@ fn push_spec_error(diags: &mut Vec<Diagnostic>, text: &str, err: &SpecError) {
                     line,
                     col,
                     code: "unknown-net",
-                    message: format!(
-                        "'{net}' (referenced in {ctx}) is not a net on the board"
-                    ),
+                    message: format!("'{net}' (referenced in {ctx}) is not a net on the board"),
                     fix,
                 });
             }

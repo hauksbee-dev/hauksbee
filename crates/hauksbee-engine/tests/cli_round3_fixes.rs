@@ -386,7 +386,11 @@ fn check_ends_with_a_single_verdict_line() {
     let out = run(&["run", b.to_str().unwrap(), "--check"]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let so = stdout(&out);
-    let last = so.lines().rev().find(|l| !l.trim().is_empty()).unwrap_or("");
+    let last = so
+        .lines()
+        .rev()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("");
     assert!(
         last.starts_with("VERDICT: "),
         "the last line is the verdict: {last:?}"
@@ -414,7 +418,13 @@ fn coverage_heads_up_names_models_new_with_the_first_unresolved_ref() {
          \t}\n}\n",
     )
     .unwrap();
-    let out = run(&["run", p.to_str().unwrap(), "--headless", "--seconds", "0.01"]);
+    let out = run(&[
+        "run",
+        p.to_str().unwrap(),
+        "--headless",
+        "--seconds",
+        "0.01",
+    ]);
     assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
     let so = stdout(&out);
     assert!(
@@ -459,7 +469,12 @@ fn pads_only_board_gets_the_unrouted_copper_note() {
     .unwrap();
     for flag in ["--drc", "--check"] {
         let out = run(&["run", p.to_str().unwrap(), flag]);
-        assert_eq!(out.status.code(), Some(0), "{flag} stderr: {}", stderr(&out));
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{flag} stderr: {}",
+            stderr(&out)
+        );
         assert!(
             stdout(&out).contains("no routed copper"),
             "{flag} must carry the pads-only caveat: {}",

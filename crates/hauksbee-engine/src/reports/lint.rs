@@ -264,7 +264,10 @@ mod tests {
         let lint = hauksbee_extract::render_netlint(&empty);
         assert_ne!(res, lint);
         assert!(res.starts_with("resource-conflicts:"), "{res}");
-        assert!(res.contains("checked:"), "a clean run names the scope: {res}");
+        assert!(
+            res.contains("checked:"),
+            "a clean run names the scope: {res}"
+        );
         assert!(!res.contains("net-lint:"), "{res}");
     }
     use crate::binder::BoundBoard;

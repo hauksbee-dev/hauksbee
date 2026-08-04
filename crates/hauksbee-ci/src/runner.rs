@@ -966,7 +966,8 @@ fn check_trackable_assert_refs(spec: &Spec, bound: &BoundBoard) -> Result<(), Sp
             continue; // Spec::load already rejected the missing-net form.
         };
         let supply = spec.supplies.iter().find(|s| &s.net == net);
-        let protected = supply.is_some_and(|s| s.kind == "battery" && s.protection_trip_a.is_some());
+        let protected =
+            supply.is_some_and(|s| s.kind == "battery" && s.protection_trip_a.is_some());
         if !protected {
             let why = match supply {
                 None => "no [[supply]] is configured on that net, so it is an ideal rail with \
@@ -2443,7 +2444,8 @@ fn suppress_rail(bound: &mut BoundBoard, net: &str) {
             }
             // A bare ideal source stamped directly on the rail node.
             Device::Vsource { name, p, .. }
-                if *p == node && (name == &format!("Vsupply_{net}") || name.starts_with("Vrail")) =>
+                if *p == node
+                    && (name == &format!("Vsupply_{net}") || name.starts_with("Vrail")) =>
             {
                 let (nm, a, b) = (name.clone(), *p, NodeId::GROUND);
                 *dev = Device::Resistor {
@@ -2481,7 +2483,9 @@ fn hollow_gate_warnings(spec: &Spec, bound: &BoundBoard) -> Vec<String> {
         if !matches!(a.kind.as_str(), "voltage" | "rail_window") {
             continue;
         }
-        let Some(net) = a.net.as_deref() else { continue };
+        let Some(net) = a.net.as_deref() else {
+            continue;
+        };
         if ideal_fed.contains(net) {
             out.push(format!(
                 "assertion '{}' reads net '{net}', which your own ideal source feeds \
@@ -3355,10 +3359,8 @@ address = 0x48
     /// the assertion was structurally green.
     #[test]
     fn protection_trip_on_unprotected_supply_refuses_at_load() {
-        let dir = std::env::temp_dir().join(format!(
-            "hauksbee-ci-prot-guard-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("hauksbee-ci-prot-guard-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let load = |name: &str, body: &str| -> Spec {
             let p = dir.join(name);

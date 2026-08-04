@@ -290,7 +290,11 @@ fn the_hook_honours_hauksbee_ci_specs() {
     std::fs::create_dir_all(dir.join("hardware")).unwrap();
     // `board = "../blinky.kicad_pcb"` still resolves: both directories are one
     // level under the repo root.
-    std::fs::rename(dir.join("ci/power-up.toml"), dir.join("hardware/power-up.toml")).unwrap();
+    std::fs::rename(
+        dir.join("ci/power-up.toml"),
+        dir.join("hardware/power-up.toml"),
+    )
+    .unwrap();
     install(dir);
     git(dir, &["add", "-A"]);
 
