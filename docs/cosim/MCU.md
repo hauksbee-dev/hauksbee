@@ -130,7 +130,7 @@ in-process AVR backend and bridged/contracted on the external emulators.
 | GPIO out (`on_pin_change`) | yes (per-edge IRQ) | yes (ODR poll over TCP) | yes (RAM-mailbox diff) |
 | GPIO in (`set_digital_in`) | yes | yes | yes (gdbstub `M` write) |
 | UART (`uart_write` / `on_uart`) | yes | yes | yes (serial socket) |
-| ADC inject (`set_analog_in`) | yes | per-platform `AdcChannelMap` (Monitor feed command or result-word write); **no shipped Renode platform carries a map** (their stock `.repl`s model no ADC, verified live), so injections there are DROPPED and surfaced as a coverage warning on every report surface (see "ADC / bus coverage by platform") | yes, RAM-mailbox count slots (firmware contract) |
+| ADC inject (`set_analog_in`) | yes | per-platform `AdcChannelMap` (Monitor feed command or result-word write), and only where a descriptor declares one: `renode:rp2040` inputs 0..3 do, and the STM32F103/F4/nRF52/FE310 descriptors do not, because those platforms model no ADC peripheral at all (verified live). An injection with no map is DROPPED and surfaced as a coverage warning on every report surface, never silently. Absence is per platform rather than a property of Renode: the STM32F0 family's stock platform does model an ADC with a `SetDefaultValue` hook, so a descriptor for one can map channels without vendoring anything. See "ADC / bus coverage by platform" | yes, RAM-mailbox count slots (firmware contract) |
 | I2C slave models (`on_i2c`) | yes (TWI decode) | yes on platforms whose descriptor names controllers (STM32F103/F4 `i2c1`, nRF52840 `twi0`/`twi1`); a slave bound on a controller-less platform is recorded as UNEXERCISED and surfaced on every report surface, and a CI `peripheral` assertion against it FAILS | yes, RAM-mailbox bus cells (firmware contract); plus temperature pushes into the machine's own tmp105 |
 | SPI slave models (`on_spi`) | yes | yes on platforms with named controllers (STM32F103 `spi1` via `extra_repl`, F4 `spi2`/`spi3`, nRF52840 `spi2`); controller-less platforms get the same UNEXERCISED recording/surfacing | yes, RAM-mailbox bus cells (firmware contract) |
 | Drive direction (`pins_configured_output`) | yes (DDR hooks) | yes on dir-mapped platforms: STM32F103 (CRL/CRH), STM32F4 (MODER), nRF52840 (DIR), polled alongside the ODR; RP2040/FE310 carry no verified dir map and stay direction-blind | no (mailbox carries levels only) |
@@ -912,7 +912,9 @@ on a RISC-V core, proving the backend stays ISA-agnostic.
 - **ADC injection needs a per-platform map on Renode.** Renode's ADC
   peripheral API is per-SoC (`FeedSample` / `SetDefaultValue` vary by
   family), and the stock STM32F103/F4/nRF52/FE310 platform descriptions
-  model no ADC at all, so `set_analog_in` delivers counts only where a
+  model no ADC at all (the STM32F0 family's does, with `SetDefaultValue`,
+  so the gap is per family and not a limit of the emulator), so
+  `set_analog_in` delivers counts only where a
   `RenodeConfig::adc_channels` recipe says how (a Monitor feed command for
   a modeled ADC, or a `WriteDoubleWord` into the result word the firmware
   reads). hauksbee records an unmapped channel's drop and surfaces it on
