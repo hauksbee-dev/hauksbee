@@ -67,6 +67,14 @@ Configure which directories are searched for specs with `HAUKSBEE_CI_SPECS`
 (colon-separated, default `ci:.`), and point at a binary that is not on `PATH`
 with `HAUKSBEE_CI_BIN`.
 
+If the binary cannot be found at all, the hook **blocks the commit** and says so.
+A gate that passes because the tool is missing is green forever on a fresh clone,
+which is worse than no gate, since the repo looks checked. Set
+`HAUKSBEE_CI_HOOK_OPTIONAL=1` to opt into skipping in that case (useful in an
+environment where the binary genuinely is not installed for everyone yet), or
+`git commit --no-verify` to override once. The plain `.git/hooks/pre-commit` that
+`hauksbee-ci hook install` writes honours the same variable.
+
 ## Local install (working inside this repo, or without the framework)
 
 The `.pre-commit-config.yaml` in this directory shows the `repo: local` form:

@@ -81,8 +81,15 @@ enum Command {
     /// against the model DB, tolerance patterns matching real components,
     /// MCU/emulator resolution, and of course every behavioral assertion.
     ///
-    /// All independent errors are reported in one invocation, not one per
-    /// run. Exit code: 0 when every spec is valid, 2 otherwise.
+    /// Independent errors are reported together in one invocation rather than
+    /// one per run, in file order. The exception is an error that stops the file
+    /// becoming a spec at all: a TOML syntax error, an unknown key, a missing
+    /// required key. Deserialization stops at the first of those, so it is
+    /// reported alone and the validations below it do not run; fix it and
+    /// re-run to see the rest.
+    ///
+    /// Exit code: 0 when every spec is valid, 2 otherwise.
+    #[command(verbatim_doc_comment)]
     Check(CheckArgs),
 
     /// Scaffold a starter spec from a board, so your first spec is an edit.
@@ -144,7 +151,13 @@ struct RunArgs {
     /// a shell glob, `hauksbee-ci run ci/*.toml`) runs each in turn,
     /// aggregates one summary, merges everything into one --junit file, and
     /// exits with the worst code of the set (severity order 3 > 2 > 1 > 0).
-    #[arg(value_name = "SPEC", num_args = 1.., required_unless_present = "example")]
+    /// Optional only because `--example` takes its place.
+    //
+    // Deliberately NOT `required_unless_present = "example"`: clap's message for
+    // that contradicted the help it sends the reader to (`<SPEC>...` required
+    // against `[SPEC]...` optional) and mentioned neither the flag that makes it
+    // optional nor how to get a spec. `missing_spec_error` says all three.
+    #[arg(value_name = "SPEC", num_args = 1..)]
     specs: Vec<PathBuf>,
 
     /// Run an embedded example instead of a spec file (try `blinky`). The
@@ -235,6 +248,11 @@ fn main() -> ExitCode {
         }
         Command::GithubAction(args) => return cmd_github_action(args),
     };
+
+    if args.specs.is_empty() && args.example.is_none() {
+        eprintln!("{}", missing_spec_error());
+        return ExitCode::from(2);
+    }
 
     // --example: materialize the embedded example and run its spec like any
     // other. The suggestion paths promise this works from a bare binary.
@@ -384,6 +402,20 @@ fn main() -> ExitCode {
     ExitCode::from(worst)
 }
 
+/// What `hauksbee-ci run` with nothing to run says. Names both ways to give it
+/// something (a spec file, or the bundled example that needs no checkout) and
+/// the command that writes a first spec, because "the following required
+/// arguments were not provided: <SPEC>..." tells someone with no spec yet
+/// nothing they can act on.
+fn missing_spec_error() -> String {
+    "hauksbee-ci: run needs a spec to run, and none was given.\n\
+     \x20 a spec file:        hauksbee-ci run ci/power-up.toml\n\
+     \x20 several at once:    hauksbee-ci run ci/*.toml\n\
+     \x20 no spec yet:        hauksbee-ci run --example blinky   (bundled, needs no checkout)\n\
+     \x20 scaffold your own:  hauksbee-ci init <board>"
+        .to_string()
+}
+
 /// `hauksbee-ci hook install`: exit 0 with the one-line outcome, 2 on error
 /// (no repo, unreadable config), matching the spec-error contract.
 fn cmd_hook_install() -> ExitCode {
@@ -413,16 +445,25 @@ fn cmd_github_action(args: GithubActionArgs) -> ExitCode {
             print!("{}", hauksbee_ci::integrate::github_workflow_yaml());
             ExitCode::from(0)
         }
-        Some(path) => match hauksbee_ci::integrate::github_action_write(&path) {
-            Ok(msg) => {
-                println!("{msg}");
-                ExitCode::from(0)
+        Some(path) => {
+            let cwd = match std::env::current_dir() {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("hauksbee-ci: cannot determine the current directory: {e}");
+                    return ExitCode::from(2);
+                }
+            };
+            match hauksbee_ci::integrate::github_action_write(&cwd, &path) {
+                Ok(msg) => {
+                    println!("{msg}");
+                    ExitCode::from(0)
+                }
+                Err(e) => {
+                    eprintln!("hauksbee-ci: {e}");
+                    ExitCode::from(2)
+                }
             }
-            Err(e) => {
-                eprintln!("hauksbee-ci: {e}");
-                ExitCode::from(2)
-            }
-        },
+        }
     }
 }
 
