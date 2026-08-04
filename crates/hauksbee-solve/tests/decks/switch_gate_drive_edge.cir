@@ -1,0 +1,31 @@
+Relay gating a gate-drive RC: the observable is WHEN it starts conducting
+* The board shape this stands for: a switch (analog switch, load-switch enable,
+* relay contact) handing a rail to a gate through its series resistance. What a
+* hardware engineer takes from this waveform is the turn-on instant and the
+* gate's rise, because those set dead time and shoot-through margin. A switch
+* that conducts early here is a switch that would tell you a half-bridge is safe
+* when it is not.
+*
+* Everything about the answer is exactly computable:
+*   the control ramps 0 -> 5 V over 1 us starting at 10 us, so
+*     vctrl(t) = 5 * (t - 10u) / 1u
+*   and the relay makes at von = VT + VH = 3.0 V, i.e. at EXACTLY t_on = 10.6 us.
+*   From there the gate is an RC charged through (RON + RG) = 110 ohm into
+*   CG = 100 nF, so tau = 11 us and
+*     v(g)(t) = 5 * (1 - exp(-(t - 10.6u) / 11u)).
+* The control edge is 1 us for 5 V, so the model's 10 mV conductance ramp
+* (1% of the 1 V band) is 2 ns of turn-on lag: 0.02% of tau, which is why the
+* closed-form bars below can be tight.
+*
+* The gate node's ONLY dc path is the switch, so `IC=0` under `uic` is what holds
+* it at 0 before the edge; that is deliberate, and it is a second thing this deck
+* guards.
+VCC vcc 0 DC 5
+VC ctrl 0 PWL(0 0 10u 0 11u 5)
+S1 vcc n1 ctrl 0 SMOD
+RG n1 g 100
+CG g 0 100n IC=0
+.model SMOD SW(VT=2.5 VH=0.5 RON=10 ROFF=1e9)
+.tran 0.2u 80u 0 0.02u uic
+.print tran v(g)
+.end

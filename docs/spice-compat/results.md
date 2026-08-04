@@ -7,8 +7,8 @@ probe against the per-quantity tolerance declared in that deck's
 `expect.toml`.
 
 - Oracle: **ngspice ngspice-45.2**
-- Decks: **42**
-- Passing: **42/42**
+- Decks: **43**
+- Passing: **42/43**
 
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Headroom | Where | Result |
 |------|----------|----------|------------------|-----------|----------|-------|--------|
@@ -62,6 +62,12 @@ probe against the per-quantity tolerance declared in that deck's
 |  |  | `V(coll)` | 2.965e-7 | 1.0e-5 | 34x | op | PASS |
 | schottky_1n5817_two_points | op | `V(v1a)` | 7.997e-9 | 1.0e-6 | 125x | op | PASS |
 |  |  | `V(v31a)` | 2.811e-8 | 1.0e-6 | 36x | op | PASS |
+| switch_sw_thresholds | dc | `V(out)` | 1.000e0 | 1.0e-4 | 0x | sweep=2.500e0 | **FAIL** |
+|  |  | `V(out) vs closed form` | 9.990e-10 | 1.0e-5 | 10010x | sweep=0.000e0 | PASS |
+|  |  | `V(out) vs closed form` | 9.990e-10 | 1.0e-5 | 10010x | sweep=1.500e0 | PASS |
+|  |  | `V(out) vs closed form` | 9.990e-10 | 1.0e-5 | 10010x | sweep=2.400e0 | PASS |
+|  |  | `V(out) vs closed form` | 9.901e-12 | 1.0e-6 | 101000x | sweep=2.600e0 | PASS |
+|  |  | `V(out) vs closed form` | 9.901e-12 | 1.0e-6 | 101000x | sweep=3.000e0 | PASS |
 | usblc6_forward | op | `V(a)` | 1.370e-6 | 5.0e-5 | 37x | op | PASS |
 | vccs_gm | tran | `V(out)` | 3.025e-3 | 1.0e-2 | 3x | t=1.010e-4s | PASS |
 | vcvs_gain | tran | `V(out)` | 8.650e-3 | 1.0e-2 | 1x | t=9.327e-6s | PASS |
@@ -109,6 +115,7 @@ probe against the per-quantity tolerance declared in that deck's
 - **rlc_series**: series RLC underdamped step response
 - **s8050_datasheet_point**: S8050 NPN at the datasheet's 50 mA VBE test point
 - **schottky_1n5817_two_points**: 1N5817 at 1.0 A and 3.1 A, the two forward points Vishay 88525 publishes
+- **switch_sw_thresholds**: SPICE3 SW relay: holds ROFF across its whole hysteresis band from a cold start, then presents exactly RON past VT+VH.
 - **usblc6_forward**: USBLC6-2P6 forward drop at the datasheet's 10 mA test current
 - **vccs_gm**: VCCS gm-block (1 mS into 2k || 50n) pulse response
 - **vcvs_gain**: VCVS gain-4 block driving an RC low-pass (1 kHz sine)

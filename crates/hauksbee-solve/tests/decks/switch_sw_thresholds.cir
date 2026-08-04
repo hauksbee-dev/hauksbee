@@ -1,0 +1,25 @@
+SPICE3 SW relay: thresholds and rails, swept upward from a cold start
+* The corpus had NO voltage-switch deck at all, which is how a model that
+* mis-read VH as a transition width shipped. This is the closest thing to a
+* datasheet reading of the device: 1 V through the switch into a 1 k load, so
+* v(out) reports the switch resistance directly as Rsw = (1/v(out) - 1) * 1k.
+*
+* Swept from 0.05 V upward, so the relay starts OPEN (SPICE's power-on state,
+* and measured: a `.op` at any control voltage below VT+VH reports the full
+* ROFF) and must HOLD open all the way to VT+VH = 2.5 V, including at VT itself
+* where a transition-band model would report the geometric mean 100 k.
+*
+* The 0.05 V offset is deliberate: it makes the sweep STRADDLE the 2.5 V make
+* threshold (2.45, 2.55) instead of landing on it. At the threshold exactly, the
+* comparison is a strict inequality on a value the sweep arithmetic cannot
+* produce exactly anyway (0 + 25*0.1 is 2.5000000000000004 in double, which
+* ngspice reads as already past), so a sample there measures floating-point
+* rounding rather than either simulator's switch model.
+VIN in 0 DC 1
+S1 in out ctrl 0 SMOD
+RL out 0 1k
+VC ctrl 0 DC 0
+.model SMOD SW(VT=1.5 VH=1.0 RON=10 ROFF=1e9)
+.dc VC 0.05 3.05 0.1
+.print dc v(out)
+.end
