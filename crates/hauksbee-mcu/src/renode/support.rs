@@ -1,4 +1,5 @@
 //! Platform-support bundles: peripheral models Renode does not ship.
+//! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/renode.md.
 //!
 //! # Why this exists
 //!
