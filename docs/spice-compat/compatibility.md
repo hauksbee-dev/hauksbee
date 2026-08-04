@@ -11,9 +11,27 @@ subset** of SPICE. The promise is narrow and testable:
 
 Two mechanisms back this promise:
 
-1. **Fidelity.** CI cross-checks every supported card against ngspice on a
-   corpus of decks with per-quantity tolerances. [`results.md`](results.md)
-   holds the living results table.
+1. **Fidelity.** A differential corpus of 42 decks cross-checks the loader and
+   solver against ngspice with per-quantity tolerances.
+   [`results.md`](results.md) holds the living results table.
+
+   Read that mechanism's reach precisely, because it is narrower than "every
+   supported card, in CI". It is **not in CI**: no workflow installs ngspice or
+   runs the check, so `ngspice_corpus` (`crates/hauksbee-solve/tests/ngspice.rs`)
+   executes on a developer machine that happens to have ngspice on `PATH` and
+   prints a skip notice otherwise. The published numbers in `results.md` come
+   from such a local run, not from a gate. Setting
+   `HAUKSBEE_REQUIRE_NGSPICE=1` turns a missing oracle into a hard failure,
+   which is what a runner that intends to gate on it should do.
+
+   Nor does it reach every supported card. Seven entries in the Supported tables
+   below have **no deck in the differential corpus at all**: the `S`
+   voltage-controlled switch, its `.model ... SW/VSWITCH`, `.temp`, `.include`,
+   `.lib`, `.plot`, and the `PWL` source function. Those rows are proven to
+   *parse*, by the drift test in mechanism 2, and are not proven to *agree
+   numerically with ngspice* by anything. Where a card's whole job is numeric,
+   the switch element and model especially, treat the absence of a deck as the
+   open question it is.
 2. **No drift.** The "Supported" and "Refused" tables below are *generated
    from* `crates/hauksbee-ir/tests/compat_drift.rs`, and every row in them is
    checked against the loader on every `cargo test`. Each row carries a minimal
@@ -126,6 +144,23 @@ loader ignores the deck's first line, which is its title.
 |------|--------------|
 | `{expr}` values | Curly-brace arithmetic over `.param` names anywhere a numeric value is taken (evalexpr, bare f64s). |
 <!-- END GENERATED: supported -->
+
+**Which of those rows the ngspice corpus does not reach.** Every row above is
+proven to parse. Seven are not cross-checked against ngspice by any deck, so
+their numeric behaviour rests on the implementation and its unit tests alone:
+
+| Uncovered row | Table | Why it matters |
+|---------------|-------|----------------|
+| `S` voltage switch | Element cards | Switching thresholds and `ron`/`roff` behaviour are purely numeric, so no deck means no numeric agreement evidence |
+| `.model ... SW/VSWITCH` | `.model` types | Supplies `vt vh ron roff` to the row above; untested for the same reason |
+| `.temp` | Directives | Sets one global temperature, which shifts every temperature-dependent model at once |
+| `.include` / `.inc` | Directives | Splicing is structural, but see the resolution trap in §4 |
+| `.lib <file> <section>` | Directives | As above |
+| `.plot` | Directives | Treated as `.print`; output-side only |
+| `PWL` | Source functions | A waveform primitive with no waveform comparison behind it |
+
+Adding a deck for any of them is a welcome contribution; `results.md` documents
+the deck-plus-expectation format.
 
 ---
 
@@ -248,7 +283,7 @@ message the user sees. The drift test asserts this fragment.
 
 | Card / form | Why it refuses | Error fragment (substring of the exact message) |
 |-------------|----------------|--------------------------------------------------|
-| `T` transmission line | Transmission lines were cut (dev-plan step 15); the letter is unknown. | `unknown element type `T`` |
+| `T` transmission line | Transmission lines are not implemented; the letter is unknown. | `unknown element type `T`` |
 | `J` JFET | JFETs are unsupported; the element letter is unrecognized. | `unknown element type `J`` |
 | `Z` IGBT / MESFET | `Z` devices are unsupported. | `unknown element type `Z`` |
 | `O` lossy line | Lossy transmission lines (`O`/LTRA) are unsupported. | `unknown element type `O`` |
@@ -306,6 +341,24 @@ above:
   power-on start directly. Without `uic`, `.ic` is refused, because the
   loader has no DC-pinning machinery. Device-level capacitor `ic=` is
   honored under `uic`.
+- **`.include` / `.lib` resolve against the working directory, not the deck.**
+  This one bites, so it is worth stating as behaviour rather than as a footnote.
+  `hauksbee sim` reads the deck into memory and parses the string, and a string
+  has no directory of its own, so a relative `.include` resolves against the
+  process working directory. A deck in `sub/` that includes `parts.inc` beside
+  itself therefore loads from `sub/` and fails from the parent:
+
+  ```
+  $ hauksbee sim sub/deck.cir
+  error: line 2: `.include` file `parts.inc` not found (tried: ./parts.inc): `.include parts.inc`
+  $ cd sub && hauksbee sim deck.cir     # the same deck, now found
+  ```
+
+  It refuses loudly and names what it tried, so nothing is silently mis-simulated,
+  but the fix is to `cd` to the deck's directory or make the include path
+  absolute. Library callers that want deck-relative inclusion have it:
+  `SpiceLoader::load_file` resolves against the including file's directory first
+  and the top deck's directory second.
 - **Node-name case handling.** SPICE names are case-insensitive. The loader
   matches node and device names case-insensitively, so `V(OUT)` and a later
   `R1 out 0` refer to the same node. A control/coupling reference that
