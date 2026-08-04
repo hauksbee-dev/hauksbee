@@ -1,0 +1,367 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:schemaLocation="http://webstds.ipc.org/2581 http://webstds.ipc.org/2581/IPC-2581C.xsd">
+  <Content roleRef="Owner">
+    <FunctionMode mode="ASSEMBLY"/>
+    <StepRef name="BOARD:power_resistor"/>
+    <LayerRef name="LAYER:F.Silkscreen"/>
+    <LayerRef name="LAYER:F.Paste"/>
+    <LayerRef name="LAYER:F.Mask"/>
+    <LayerRef name="LAYER:F.Cu"/>
+    <LayerRef name="LAYER:DIELECTRIC_1"/>
+    <LayerRef name="LAYER:B.Cu"/>
+    <LayerRef name="LAYER:B.Mask"/>
+    <LayerRef name="LAYER:B.Paste"/>
+    <LayerRef name="LAYER:B.Silkscreen"/>
+    <DictionaryColor/>
+    <DictionaryLineDesc units="MILLIMETER">
+      <EntryLineDesc id="LINE_1">
+        <LineDesc lineWidth="0.0" lineEnd="ROUND"/>
+      </EntryLineDesc>
+      <EntryLineDesc id="LINE_2">
+        <LineDesc lineWidth="0.150" lineEnd="ROUND"/>
+      </EntryLineDesc>
+    </DictionaryLineDesc>
+    <DictionaryFillDesc units="MILLIMETER"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="RECT_1">
+        <RectCenter width="1.5240" height="1.5240"/>
+      </EntryStandard>
+    </DictionaryStandard>
+    <DictionaryUser units="MILLIMETER"/>
+  </Content>
+  <LogisticHeader>
+    <Role id="Owner" roleFunction="SENDER"/>
+    <Enterprise id="UNKNOWN" code="NONE"/>
+    <Person name="UNKNOWN" enterpriseRef="UNKNOWN" roleRef="Owner"/>
+  </LogisticHeader>
+  <HistoryRecord number="1" origination="2026-08-04T13:28:39" software="KiCad EDA" lastChange="2026-08-04T13:28:39">
+    <FileRevision fileRevisionId="1" comment="NO COMMENT" label="NO LABEL">
+      <SoftwarePackage name="KiCad" revision="9.0.3" vendor="KiCad EDA">
+        <Certification certificationStatus="SELFTEST"/>
+      </SoftwarePackage>
+    </FileRevision>
+  </HistoryRecord>
+  <Bom name="BOM:power_resistor">
+    <BomHeader revision="1.0" assembly="KI:power_resistor">
+      <StepRef name="BOARD:power_resistor"/>
+    </BomHeader>
+    <BomItem OEMDesignNumberRef="REF:Resistor_SMD_R_2512_6332Metric_30" quantity="1" pinCount="2" category="ELECTRICAL">
+      <RefDes name="CMP:R1" packageRef="PKG:R_2512_6332Metric" populate="true" layerRef="LAYER:F.Cu"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="KICAD" textualCharacteristicName="Value" textualCharacteristicValue="30"/>
+      </Characteristics>
+    </BomItem>
+  </Bom>
+  <Ecad name="Design">
+    <CadHeader units="MILLIMETER">
+      <Spec name="SPEC_LAYER:F.Silkscreen">
+        <General type="MATERIAL">
+          <Property text="Top Silk Screen"/>
+          <Property text="Color : Not specified"/>
+          <Property text="Type : Top Silk Screen"/>
+        </General>
+      </Spec>
+      <Spec name="SPEC_LAYER:F.Paste">
+        <General type="MATERIAL">
+          <Property/>
+        </General>
+      </Spec>
+      <Spec name="SPEC_LAYER:F.Mask">
+        <General type="MATERIAL">
+          <Property text="SOLDERMASK"/>
+          <Property text="Color : Not specified"/>
+          <Property text="Type : Top Solder Mask"/>
+        </General>
+      </Spec>
+      <Spec name="SPEC_LAYER:F.Cu">
+        <General type="MATERIAL">
+          <Property text="COPPER"/>
+        </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property unit="SIEMENS/M" value="5.959E7"/>
+        </Conductor>
+      </Spec>
+      <Spec name="SPEC_LAYER:DIELECTRIC_1">
+        <General type="MATERIAL">
+          <Property text="FR4"/>
+          <Property text="Type : core"/>
+        </General>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="4.50"/>
+        </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.020"/>
+        </Dielectric>
+      </Spec>
+      <Spec name="SPEC_LAYER:B.Cu">
+        <General type="MATERIAL">
+          <Property text="COPPER"/>
+        </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property unit="SIEMENS/M" value="5.959E7"/>
+        </Conductor>
+      </Spec>
+      <Spec name="SPEC_LAYER:B.Mask">
+        <General type="MATERIAL">
+          <Property text="SOLDERMASK"/>
+          <Property text="Color : Not specified"/>
+          <Property text="Type : Bottom Solder Mask"/>
+        </General>
+      </Spec>
+      <Spec name="SPEC_LAYER:B.Paste">
+        <General type="MATERIAL">
+          <Property/>
+        </General>
+      </Spec>
+      <Spec name="SPEC_LAYER:B.Silkscreen">
+        <General type="MATERIAL">
+          <Property text="Bottom Silk Screen"/>
+          <Property text="Color : Not specified"/>
+          <Property text="Type : Bottom Silk Screen"/>
+        </General>
+      </Spec>
+    </CadHeader>
+    <CadData>
+      <Layer name="LAYER:F.Silkscreen" layerFunction="SILKSCREEN" polarity="POSITIVE" side="TOP"/>
+      <Layer name="LAYER:F.Paste" layerFunction="SOLDERPASTE" polarity="POSITIVE" side="TOP"/>
+      <Layer name="LAYER:F.Mask" layerFunction="SOLDERMASK" polarity="POSITIVE" side="TOP"/>
+      <Layer name="LAYER:F.Cu" layerFunction="CONDUCTOR" polarity="POSITIVE" side="TOP"/>
+      <Layer name="LAYER:DIELECTRIC_1" layerFunction="DIELCORE" polarity="POSITIVE" side="INTERNAL"/>
+      <Layer name="LAYER:B.Cu" layerFunction="CONDUCTOR" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="LAYER:B.Mask" layerFunction="SOLDERMASK" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="LAYER:B.Paste" layerFunction="SOLDERPASTE" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="LAYER:B.Silkscreen" layerFunction="SILKSCREEN" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="LAYER:F.Adhesive" layerFunction="GLUE" polarity="POSITIVE" side="TOP"/>
+      <Layer name="LAYER:B.Adhesive" layerFunction="GLUE" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="LAYER:User.Drawings" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
+      <Layer name="LAYER:User.Comments" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
+      <Layer name="LAYER:User.Eco1" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
+      <Layer name="LAYER:User.Eco2" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
+      <Layer name="LAYER:Edge.Cuts" layerFunction="BOARD_OUTLINE" polarity="POSITIVE" side="ALL"/>
+      <Layer name="LAYER:Margin" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
+      <Layer name="LAYER:B.Courtyard" layerFunction="COURTYARD" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="LAYER:F.Courtyard" layerFunction="COURTYARD" polarity="POSITIVE" side="TOP"/>
+      <Layer name="LAYER:B.Fab" layerFunction="ASSEMBLY" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="LAYER:F.Fab" layerFunction="ASSEMBLY" polarity="POSITIVE" side="TOP"/>
+      <Layer name="LAYER:Rescue"/>
+      <Layer name="LAYER:User.1" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
+      <Layer name="LAYER:User.2" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
+      <Layer name="LAYER:User.3" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
+      <Layer name="LAYER:User.4" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
+      <Stackup name="Primary_Stackup" overallThickness="1.60" tolPlus="0.0" tolMinus="0.0" whereMeasured="MASK" stackupStatus="PROPOSED">
+        <StackupGroup name="Primary_Stackup_Group" thickness="1.60" tolPlus="0.0" tolMinus="0.0">
+          <StackupLayer layerOrGroupRef="LAYER:F.Silkscreen" thickness="0.0" tolPlus="0.0" tolMinus="0.0" sequence="0">
+            <SpecRef id="SPEC_LAYER:F.Silkscreen"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:F.Paste" thickness="0.0" tolPlus="0.0" tolMinus="0.0" sequence="1">
+            <SpecRef id="SPEC_LAYER:F.Paste"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:F.Mask" thickness="0.010" tolPlus="0.0" tolMinus="0.0" sequence="2">
+            <SpecRef id="SPEC_LAYER:F.Mask"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:F.Cu" thickness="0.0350" tolPlus="0.0" tolMinus="0.0" sequence="3">
+            <SpecRef id="SPEC_LAYER:F.Cu"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:DIELECTRIC_1" thickness="1.510" tolPlus="0.0" tolMinus="0.0" sequence="4">
+            <SpecRef id="SPEC_LAYER:DIELECTRIC_1"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:B.Cu" thickness="0.0350" tolPlus="0.0" tolMinus="0.0" sequence="5">
+            <SpecRef id="SPEC_LAYER:B.Cu"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:B.Mask" thickness="0.010" tolPlus="0.0" tolMinus="0.0" sequence="6">
+            <SpecRef id="SPEC_LAYER:B.Mask"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:B.Paste" thickness="0.0" tolPlus="0.0" tolMinus="0.0" sequence="7">
+            <SpecRef id="SPEC_LAYER:B.Paste"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:B.Silkscreen" thickness="0.0" tolPlus="0.0" tolMinus="0.0" sequence="8">
+            <SpecRef id="SPEC_LAYER:B.Silkscreen"/>
+          </StackupLayer>
+        </StackupGroup>
+      </Stackup>
+      <Step name="BOARD:power_resistor" type="BOARD">
+        <NonstandardAttribute name="FOOTPRINT_COUNT" type="INTEGER" value="1"/>
+        <PadStackDef name="PADSTACK_1">
+          <PadstackPadDef layerRef="LAYER:F.Mask" padUse="REGULAR">
+            <Location x="0.0" y="0.0"/>
+            <StandardPrimitiveRef id="RECT_1"/>
+          </PadstackPadDef>
+          <PadstackPadDef layerRef="LAYER:B.Cu" padUse="REGULAR">
+            <Location x="0.0" y="0.0"/>
+            <StandardPrimitiveRef id="RECT_1"/>
+          </PadstackPadDef>
+          <PadstackPadDef layerRef="LAYER:B.Mask" padUse="REGULAR">
+            <Location x="0.0" y="0.0"/>
+            <StandardPrimitiveRef id="RECT_1"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <Datum x="0.0" y="0.0"/>
+        <Package name="KI:R_2512_6332Metric_1" type="OTHER" pinOne="1" pinOneOrientation="OTHER">
+          <Outline>
+            <Polygon>
+              <PolyBegin x="-0.7620" y="0.7620"/>
+              <PolyStepSegment x="2.7620" y="0.7620"/>
+              <PolyStepSegment x="2.7620" y="-0.7620"/>
+              <PolyStepSegment x="-0.7620" y="-0.7620"/>
+              <PolyStepSegment x="-0.7620" y="0.7620"/>
+            </Polygon>
+            <LineDescRef id="LINE_1"/>
+          </Outline>
+          <PickupPoint x="0.0" y="0.0"/>
+          <Pin number="PIN:1" electricalType="ELECTRICAL" type="SURFACE">
+            <Location x="0.0" y="0.0"/>
+            <StandardPrimitiveRef id="RECT_1"/>
+          </Pin>
+          <Pin number="PIN:2" electricalType="ELECTRICAL" type="SURFACE">
+            <Location x="2.0" y="0.0"/>
+            <StandardPrimitiveRef id="RECT_1"/>
+          </Pin>
+        </Package>
+        <Component refDes="CMP:R1" packageRef="KI:R_2512_6332Metric_1" part="REF:Resistor_SMD_R_2512_6332Metric_30" layerRef="LAYER:F.Cu" mountType="THMT">
+          <Location x="100.0" y="-100.0"/>
+        </Component>
+        <LayerFeature layerRef="LAYER:F.Mask">
+          <Set>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="100.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:R1" pin="PIN:1"/>
+            </Pad>
+          </Set>
+          <Set>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="102.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:R1" pin="PIN:2"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="LAYER:B.Cu">
+          <Set net="NET:+5V">
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="100.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:R1" pin="PIN:1"/>
+            </Pad>
+          </Set>
+          <Set net="NET:GND">
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="102.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:R1" pin="PIN:2"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="LAYER:B.Mask">
+          <Set>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="100.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:R1" pin="PIN:1"/>
+            </Pad>
+          </Set>
+          <Set>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="102.0" y="-100.0"/>
+              <StandardPrimitiveRef id="RECT_1"/>
+              <PinRef componentRef="CMP:R1" pin="PIN:2"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="LAYER:F.Silkscreen">
+          <Set geometryUsage="TEXT" componentRef="CMP:R1">
+            <NonstandardAttribute name="TEXT" value="R1" type="STRING"/>
+            <Features>
+              <Location x="0.0" y="0.0"/>
+              <UserSpecial>
+                <Line startX="99.788333" startY="-100.579726" endX="99.364999" endY="-99.974964">
+                  <LineDescRef id="LINE_2"/>
+                </Line>
+                <Polyline>
+                  <PolyBegin x="99.062618" y="-100.579726"/>
+                  <PolyStepSegment x="99.062618" y="-99.309726"/>
+                  <PolyStepSegment x="99.546428" y="-99.309726"/>
+                  <PolyStepSegment x="99.667380" y="-99.370202"/>
+                  <PolyStepSegment x="99.727857" y="-99.430678"/>
+                  <PolyStepSegment x="99.788333" y="-99.551630"/>
+                  <PolyStepSegment x="99.788333" y="-99.733059"/>
+                  <PolyStepSegment x="99.727857" y="-99.854011"/>
+                  <PolyStepSegment x="99.667380" y="-99.914488"/>
+                  <PolyStepSegment x="99.546428" y="-99.974964"/>
+                  <PolyStepSegment x="99.062618" y="-99.974964"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Line startX="100.997857" startY="-100.579726" endX="100.272142" endY="-100.579726">
+                  <LineDescRef id="LINE_2"/>
+                </Line>
+                <Polyline>
+                  <PolyBegin x="100.634999" y="-100.579726"/>
+                  <PolyStepSegment x="100.634999" y="-99.309726"/>
+                  <PolyStepSegment x="100.514047" y="-99.491154"/>
+                  <PolyStepSegment x="100.393095" y="-99.612107"/>
+                  <PolyStepSegment x="100.272142" y="-99.672583"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+              </UserSpecial>
+            </Features>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="LAYER:F.Fab">
+          <Set geometryUsage="TEXT" componentRef="CMP:R1">
+            <NonstandardAttribute name="TEXT" value="30" type="STRING"/>
+            <Features>
+              <Location x="0.0" y="0.0"/>
+              <UserSpecial>
+                <Polyline>
+                  <PolyBegin x="98.971904" y="-101.309726"/>
+                  <PolyStepSegment x="99.758095" y="-101.309726"/>
+                  <PolyStepSegment x="99.334761" y="-101.793535"/>
+                  <PolyStepSegment x="99.516190" y="-101.793535"/>
+                  <PolyStepSegment x="99.637142" y="-101.854011"/>
+                  <PolyStepSegment x="99.697618" y="-101.914488"/>
+                  <PolyStepSegment x="99.758095" y="-102.035440"/>
+                  <PolyStepSegment x="99.758095" y="-102.337821"/>
+                  <PolyStepSegment x="99.697618" y="-102.458773"/>
+                  <PolyStepSegment x="99.637142" y="-102.519250"/>
+                  <PolyStepSegment x="99.516190" y="-102.579726"/>
+                  <PolyStepSegment x="99.153333" y="-102.579726"/>
+                  <PolyStepSegment x="99.032380" y="-102.519250"/>
+                  <PolyStepSegment x="98.971904" y="-102.458773"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+                <Polyline>
+                  <PolyBegin x="100.544285" y="-101.309726"/>
+                  <PolyStepSegment x="100.665238" y="-101.309726"/>
+                  <PolyStepSegment x="100.786190" y="-101.370202"/>
+                  <PolyStepSegment x="100.846666" y="-101.430678"/>
+                  <PolyStepSegment x="100.907142" y="-101.551630"/>
+                  <PolyStepSegment x="100.967619" y="-101.793535"/>
+                  <PolyStepSegment x="100.967619" y="-102.095916"/>
+                  <PolyStepSegment x="100.907142" y="-102.337821"/>
+                  <PolyStepSegment x="100.846666" y="-102.458773"/>
+                  <PolyStepSegment x="100.786190" y="-102.519250"/>
+                  <PolyStepSegment x="100.665238" y="-102.579726"/>
+                  <PolyStepSegment x="100.544285" y="-102.579726"/>
+                  <PolyStepSegment x="100.423333" y="-102.519250"/>
+                  <PolyStepSegment x="100.362857" y="-102.458773"/>
+                  <PolyStepSegment x="100.302380" y="-102.337821"/>
+                  <PolyStepSegment x="100.241904" y="-102.095916"/>
+                  <PolyStepSegment x="100.241904" y="-101.793535"/>
+                  <PolyStepSegment x="100.302380" y="-101.551630"/>
+                  <PolyStepSegment x="100.362857" y="-101.430678"/>
+                  <PolyStepSegment x="100.423333" y="-101.370202"/>
+                  <PolyStepSegment x="100.544285" y="-101.309726"/>
+                  <LineDescRef id="LINE_2"/>
+                </Polyline>
+              </UserSpecial>
+            </Features>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+  <Avl name="Primary_Vendor_List">
+    <AvlHeader title="BOM" source="KiCad" author="OWNER" datetime="2026-08-04T13:28:39" version="1"/>
+    <AvlItem OEMDesignNumber="REF:Resistor_SMD_R_2512_6332Metric_30"/>
+  </Avl>
+</IPC-2581>

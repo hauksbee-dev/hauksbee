@@ -208,6 +208,49 @@ impl BoardReader for AltiumReader {
     }
 }
 
+/// IPC-2581 (DPMX) design-exchange XML, revision B or C. Detected by its root
+/// element / namespace ([`crate::ipc2581::looks_like_ipc2581`]), never by the
+/// `.xml` extension, so an Eagle `.brd` (also XML) and an arbitrary XML file
+/// both fall through.
+pub struct Ipc2581Reader;
+impl BoardReader for Ipc2581Reader {
+    fn name(&self) -> &str {
+        "ipc-2581"
+    }
+    fn detects(&self, bytes: &[u8], _path: Option<&Path>) -> bool {
+        crate::ipc2581::looks_like_ipc2581(bytes)
+    }
+    fn read(&self, bytes: &[u8], _path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
+        ExtractedBoard::from_ipc2581(&String::from_utf8_lossy(bytes))
+    }
+}
+
+/// ODB++ (Siemens/Valor) design archive in its `.tgz` / `.tar` / `.zip` form.
+/// Detected by the `matrix/matrix` member inside the archive
+/// ([`crate::odbpp::looks_like_odbpp_archive`]), which is what makes a tree an
+/// ODB++ job and which a zip of gerbers never has. Declared binary so a text
+/// input handed to [`ExtractedBoard::from_auto_bytes`] cannot reach it, and so
+/// this reader is consulted *before* an archive is treated as gerbers.
+///
+/// The DIRECTORY form has no bytes to sniff and so cannot go through the
+/// registry; `hauksbee-engine`'s board-input normalizer detects it by path with
+/// [`crate::odbpp::looks_like_odbpp_dir`].
+pub struct OdbppReader;
+impl BoardReader for OdbppReader {
+    fn name(&self) -> &str {
+        "odb++"
+    }
+    fn detects(&self, bytes: &[u8], _path: Option<&Path>) -> bool {
+        crate::odbpp::looks_like_odbpp_archive(bytes)
+    }
+    fn read(&self, bytes: &[u8], _path: Option<&Path>) -> Result<ExtractedBoard, ReadError> {
+        ExtractedBoard::from_odbpp_archive(bytes)
+    }
+    fn is_binary(&self) -> bool {
+        true
+    }
+}
+
 // ── The registry ──────────────────────────────────────────────────────────────
 
 /// An ordered set of [`BoardReader`]s. Detection walks the list front-to-back
@@ -222,18 +265,23 @@ impl BoardReader for AltiumReader {
 /// fork can deliberately shadow a builtin. Among the builtins the order mirrors
 /// the legacy sniff precedence, eagle → netlist → schematic → pcb → ipc356,
 /// with the binary Altium reader consulted first (its check is a couple of
-/// bytes and it can never match text).
+/// bytes and it can never match text). The two exchange formats slot in on the
+/// same reasoning: the ODB++ reader keys on an archive container, which no text
+/// format can be, and IPC-2581 sits ahead of Eagle only for reading order —
+/// both are XML but their root elements are disjoint.
 pub struct Registry {
     readers: Vec<Box<dyn BoardReader>>,
 }
 
 impl Registry {
-    /// The seven formats hauksbee reads natively.
+    /// The nine formats hauksbee reads natively.
     pub fn builtin() -> Self {
         Registry {
             readers: vec![
                 Box::new(AltiumReader),
+                Box::new(OdbppReader),
                 Box::new(ProtelAsciiReader),
+                Box::new(Ipc2581Reader),
                 Box::new(EagleReader),
                 Box::new(KicadNetlistReader),
                 Box::new(KicadSchematicReader),
@@ -333,8 +381,9 @@ pub fn unrecognized_message(bytes: &[u8]) -> String {
         );
     }
     "unrecognized board format: hauksbee reads a KiCad board, schematic or netlist, \
-     an Eagle board, an Altium .PcbDoc (binary or ASCII), an IPC-D-356 netlist, or \
-     a folder or zip of gerbers"
+     an Eagle board, an Altium .PcbDoc (binary or ASCII), an IPC-2581 document, an \
+     ODB++ job (folder, .tgz or .zip), an IPC-D-356 netlist, or a folder or zip of \
+     gerbers"
         .to_string()
 }
 

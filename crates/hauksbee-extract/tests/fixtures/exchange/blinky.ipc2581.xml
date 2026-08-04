@@ -1,0 +1,566 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<IPC-2581 revision="C" xmlns="http://webstds.ipc.org/2581" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xsi:schemaLocation="http://webstds.ipc.org/2581 http://webstds.ipc.org/2581/IPC-2581C.xsd">
+  <Content roleRef="Owner">
+    <FunctionMode mode="ASSEMBLY"/>
+    <StepRef name="BOARD:blinky"/>
+    <LayerRef name="LAYER:F.SilkS"/>
+    <LayerRef name="LAYER:F.Mask"/>
+    <LayerRef name="LAYER:F.Cu"/>
+    <LayerRef name="LAYER:DIELECTRIC_1"/>
+    <LayerRef name="LAYER:B.Cu"/>
+    <LayerRef name="LAYER:B.Mask"/>
+    <LayerRef name="LAYER:B.SilkS"/>
+    <DictionaryColor/>
+    <DictionaryLineDesc units="MILLIMETER">
+      <EntryLineDesc id="LINE_1">
+        <LineDesc lineWidth="0.0" lineEnd="ROUND"/>
+      </EntryLineDesc>
+    </DictionaryLineDesc>
+    <DictionaryFillDesc units="MILLIMETER"/>
+    <DictionaryStandard units="MILLIMETER">
+      <EntryStandard id="CIRCLE_1">
+        <Circle diameter="1.0"/>
+      </EntryStandard>
+      <EntryStandard id="RECT_2">
+        <RectCenter width="1.0" height="1.0"/>
+      </EntryStandard>
+    </DictionaryStandard>
+    <DictionaryUser units="MILLIMETER">
+      <EntryUser id="UCIRCLE_1">
+        <UserSpecial>
+          <Circle diameter="0.000002">
+            <LineDesc lineWidth="0.10" lineEnd="ROUND"/>
+            <FillDesc fillProperty="HOLLOW"/>
+          </Circle>
+        </UserSpecial>
+      </EntryUser>
+    </DictionaryUser>
+  </Content>
+  <LogisticHeader>
+    <Role id="Owner" roleFunction="SENDER"/>
+    <Enterprise id="UNKNOWN" code="NONE"/>
+    <Person name="UNKNOWN" enterpriseRef="UNKNOWN" roleRef="Owner"/>
+  </LogisticHeader>
+  <HistoryRecord number="1" origination="2026-08-04T13:28:23" software="KiCad EDA" lastChange="2026-08-04T13:28:23">
+    <FileRevision fileRevisionId="1" comment="NO COMMENT" label="NO LABEL">
+      <SoftwarePackage name="KiCad" revision="9.0.3" vendor="KiCad EDA">
+        <Certification certificationStatus="SELFTEST"/>
+      </SoftwarePackage>
+    </FileRevision>
+  </HistoryRecord>
+  <Bom name="BOM:blinky">
+    <BomHeader revision="1.0" assembly="KI:blinky">
+      <StepRef name="BOARD:blinky"/>
+    </BomHeader>
+    <BomItem OEMDesignNumberRef="REF:LED_THT_LED_D5.0mm_RED_LED" quantity="1" pinCount="2" category="ELECTRICAL">
+      <RefDes name="CMP:D1" packageRef="PKG:LED_D5.0mm" populate="true" layerRef="LAYER:F.Cu"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="KICAD" textualCharacteristicName="Value" textualCharacteristicValue="RED_LED"/>
+      </Characteristics>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="REF:Package_QFP_TQFP-32_7x7mm_P0.8mm_ATmega328P" quantity="1" pinCount="6" category="ELECTRICAL">
+      <RefDes name="CMP:U1" packageRef="PKG:TQFP-32_7x7mm_P0.8mm" populate="true" layerRef="LAYER:F.Cu"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="KICAD" textualCharacteristicName="Value" textualCharacteristicValue="ATmega328P"/>
+      </Characteristics>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="REF:Resistor_THT_R_Axial_DIN0207_L6.3mm_D2.5mm_10k" quantity="2" pinCount="2" category="ELECTRICAL">
+      <RefDes name="CMP:R2" packageRef="PKG:R_Axial_DIN0207_L6.3mm_D2.5mm" populate="true" layerRef="LAYER:F.Cu"/>
+      <RefDes name="CMP:R3" packageRef="PKG:R_Axial_DIN0207_L6.3mm_D2.5mm" populate="true" layerRef="LAYER:F.Cu"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="KICAD" textualCharacteristicName="Value" textualCharacteristicValue="10k"/>
+      </Characteristics>
+    </BomItem>
+    <BomItem OEMDesignNumberRef="REF:Resistor_THT_R_Axial_DIN0207_L6.3mm_D2.5mm_330" quantity="1" pinCount="2" category="ELECTRICAL">
+      <RefDes name="CMP:R1" packageRef="PKG:R_Axial_DIN0207_L6.3mm_D2.5mm" populate="true" layerRef="LAYER:F.Cu"/>
+      <Characteristics category="ELECTRICAL">
+        <Textual definitionSource="KICAD" textualCharacteristicName="Value" textualCharacteristicValue="330"/>
+      </Characteristics>
+    </BomItem>
+  </Bom>
+  <Ecad name="Design">
+    <CadHeader units="MILLIMETER">
+      <Spec name="SPEC_LAYER:F.SilkS">
+        <General type="MATERIAL">
+          <Property text="Top Silk Screen"/>
+          <Property text="Color : Not specified"/>
+          <Property text="Type : Top Silk Screen"/>
+        </General>
+      </Spec>
+      <Spec name="SPEC_LAYER:F.Mask">
+        <General type="MATERIAL">
+          <Property text="SOLDERMASK"/>
+          <Property text="Color : Not specified"/>
+          <Property text="Type : Top Solder Mask"/>
+        </General>
+      </Spec>
+      <Spec name="SPEC_LAYER:F.Cu">
+        <General type="MATERIAL">
+          <Property text="COPPER"/>
+        </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property unit="SIEMENS/M" value="5.959E7"/>
+        </Conductor>
+      </Spec>
+      <Spec name="SPEC_LAYER:DIELECTRIC_1">
+        <General type="MATERIAL">
+          <Property text="FR4"/>
+          <Property text="Type : core"/>
+        </General>
+        <Dielectric type="DIELECTRIC_CONSTANT">
+          <Property value="4.50"/>
+        </Dielectric>
+        <Dielectric type="LOSS_TANGENT">
+          <Property value="0.020"/>
+        </Dielectric>
+      </Spec>
+      <Spec name="SPEC_LAYER:B.Cu">
+        <General type="MATERIAL">
+          <Property text="COPPER"/>
+        </General>
+        <Conductor type="CONDUCTIVITY">
+          <Property unit="SIEMENS/M" value="5.959E7"/>
+        </Conductor>
+      </Spec>
+      <Spec name="SPEC_LAYER:B.Mask">
+        <General type="MATERIAL">
+          <Property text="SOLDERMASK"/>
+          <Property text="Color : Not specified"/>
+          <Property text="Type : Bottom Solder Mask"/>
+        </General>
+      </Spec>
+      <Spec name="SPEC_LAYER:B.SilkS">
+        <General type="MATERIAL">
+          <Property text="Bottom Silk Screen"/>
+          <Property text="Color : Not specified"/>
+          <Property text="Type : Bottom Silk Screen"/>
+        </General>
+      </Spec>
+    </CadHeader>
+    <CadData>
+      <Layer name="LAYER:F.SilkS" layerFunction="SILKSCREEN" polarity="POSITIVE" side="TOP"/>
+      <Layer name="LAYER:F.Mask" layerFunction="SOLDERMASK" polarity="POSITIVE" side="TOP"/>
+      <Layer name="LAYER:F.Cu" layerFunction="CONDUCTOR" polarity="POSITIVE" side="TOP"/>
+      <Layer name="LAYER:DIELECTRIC_1" layerFunction="DIELCORE" polarity="POSITIVE" side="INTERNAL"/>
+      <Layer name="LAYER:B.Cu" layerFunction="CONDUCTOR" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="LAYER:B.Mask" layerFunction="SOLDERMASK" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="LAYER:B.SilkS" layerFunction="SILKSCREEN" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="LAYER:Edge.Cuts" layerFunction="BOARD_OUTLINE" polarity="POSITIVE" side="ALL"/>
+      <Layer name="LAYER:Margin" layerFunction="DOCUMENT" polarity="POSITIVE" side="NONE"/>
+      <Layer name="LAYER:B.Courtyard" layerFunction="COURTYARD" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="LAYER:F.Courtyard" layerFunction="COURTYARD" polarity="POSITIVE" side="TOP"/>
+      <Layer name="LAYER:B.Fab" layerFunction="ASSEMBLY" polarity="POSITIVE" side="BOTTOM"/>
+      <Layer name="LAYER:F.Fab" layerFunction="ASSEMBLY" polarity="POSITIVE" side="TOP"/>
+      <Layer name="DRILL:F.Cu_B.Cu" layerFunction="DRILL" polarity="POSITIVE" side="ALL">
+        <Span fromLayer="LAYER:F.Cu" toLayer="LAYER:B.Cu"/>
+      </Layer>
+      <Stackup name="Primary_Stackup" overallThickness="1.60" tolPlus="0.0" tolMinus="0.0" whereMeasured="MASK" stackupStatus="PROPOSED">
+        <StackupGroup name="Primary_Stackup_Group" thickness="1.60" tolPlus="0.0" tolMinus="0.0">
+          <StackupLayer layerOrGroupRef="LAYER:F.SilkS" thickness="0.0" tolPlus="0.0" tolMinus="0.0" sequence="0">
+            <SpecRef id="SPEC_LAYER:F.SilkS"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:F.Mask" thickness="0.010" tolPlus="0.0" tolMinus="0.0" sequence="1">
+            <SpecRef id="SPEC_LAYER:F.Mask"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:F.Cu" thickness="0.0350" tolPlus="0.0" tolMinus="0.0" sequence="2">
+            <SpecRef id="SPEC_LAYER:F.Cu"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:DIELECTRIC_1" thickness="1.510" tolPlus="0.0" tolMinus="0.0" sequence="3">
+            <SpecRef id="SPEC_LAYER:DIELECTRIC_1"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:B.Cu" thickness="0.0350" tolPlus="0.0" tolMinus="0.0" sequence="4">
+            <SpecRef id="SPEC_LAYER:B.Cu"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:B.Mask" thickness="0.010" tolPlus="0.0" tolMinus="0.0" sequence="5">
+            <SpecRef id="SPEC_LAYER:B.Mask"/>
+          </StackupLayer>
+          <StackupLayer layerOrGroupRef="LAYER:B.SilkS" thickness="0.0" tolPlus="0.0" tolMinus="0.0" sequence="6">
+            <SpecRef id="SPEC_LAYER:B.SilkS"/>
+          </StackupLayer>
+        </StackupGroup>
+      </Stackup>
+      <Step name="BOARD:blinky" type="BOARD">
+        <NonstandardAttribute name="FOOTPRINT_COUNT" type="INTEGER" value="5"/>
+        <PadStackDef name="PADSTACK_2">
+          <PadstackPadDef layerRef="LAYER:F.Cu" padUse="REGULAR">
+            <Location x="0.0" y="0.0"/>
+            <StandardPrimitiveRef id="RECT_2"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <PadStackDef name="PADSTACK_1">
+          <PadstackHoleDef name="PTH1_1" diameter="0.000001" platingStatus="PLATED" plusTol="0.0" minusTol="0.0" x="0.0" y="0.0"/>
+          <PadstackPadDef layerRef="LAYER:F.Cu" padUse="REGULAR">
+            <Location x="0.0" y="0.0"/>
+            <UserPrimitiveRef id="UCIRCLE_1"/>
+          </PadstackPadDef>
+          <PadstackPadDef layerRef="LAYER:B.Cu" padUse="REGULAR">
+            <Location x="0.0" y="0.0"/>
+            <UserPrimitiveRef id="UCIRCLE_1"/>
+          </PadstackPadDef>
+        </PadStackDef>
+        <Datum x="0.0" y="0.0"/>
+        <Package name="KI:R_Axial_DIN0207_L6.3mm_D2.5mm_1" type="OTHER" pinOne="1" pinOneOrientation="OTHER">
+          <Outline>
+            <Polygon>
+              <PolyBegin x="-0.50" y="0.099456"/>
+              <PolyStepSegment x="-0.423880" y="0.283227"/>
+              <PolyStepSegment x="-0.283227" y="0.423880"/>
+              <PolyStepSegment x="-0.099456" y="0.50"/>
+              <PolyStepSegment x="2.099456" y="0.50"/>
+              <PolyStepSegment x="2.283227" y="0.423880"/>
+              <PolyStepSegment x="2.423880" y="0.283227"/>
+              <PolyStepSegment x="2.50" y="0.099456"/>
+              <PolyStepSegment x="2.50" y="-0.099456"/>
+              <PolyStepSegment x="2.423880" y="-0.283227"/>
+              <PolyStepSegment x="2.283227" y="-0.423880"/>
+              <PolyStepSegment x="2.099456" y="-0.50"/>
+              <PolyStepSegment x="-0.099456" y="-0.50"/>
+              <PolyStepSegment x="-0.283227" y="-0.423880"/>
+              <PolyStepSegment x="-0.423880" y="-0.283227"/>
+              <PolyStepSegment x="-0.50" y="-0.099456"/>
+              <PolyStepSegment x="-0.50" y="0.099456"/>
+            </Polygon>
+            <LineDescRef id="LINE_1"/>
+          </Outline>
+          <PickupPoint x="0.0" y="0.0"/>
+          <Pin number="PIN:1" electricalType="ELECTRICAL" type="THRU">
+            <Location x="0.0" y="0.0"/>
+            <StandardPrimitiveRef id="CIRCLE_1"/>
+          </Pin>
+          <Pin number="PIN:2" electricalType="ELECTRICAL" type="THRU">
+            <Location x="2.0" y="0.0"/>
+            <StandardPrimitiveRef id="CIRCLE_1"/>
+          </Pin>
+        </Package>
+        <Package name="KI:TQFP-32_7x7mm_P0.8mm_2" type="OTHER" pinOne="UNKNOWN" pinOneOrientation="OTHER">
+          <Outline>
+            <Polygon>
+              <PolyBegin x="-3.50" y="0.50"/>
+              <PolyStepSegment x="3.50" y="0.50"/>
+              <PolyStepSegment x="3.50" y="-3.50"/>
+              <PolyStepSegment x="2.50" y="-3.50"/>
+              <PolyStepSegment x="-3.50" y="-1.50"/>
+              <PolyStepSegment x="-3.50" y="0.50"/>
+            </Polygon>
+            <LineDescRef id="LINE_1"/>
+          </Outline>
+          <PickupPoint x="0.0" y="0.0"/>
+          <Pin number="PIN:7" electricalType="ELECTRICAL" type="SURFACE">
+            <Location x="-3.0" y="0.0"/>
+            <StandardPrimitiveRef id="RECT_2"/>
+          </Pin>
+          <Pin number="PIN:8" electricalType="ELECTRICAL" type="SURFACE">
+            <Location x="-3.0" y="-1.0"/>
+            <StandardPrimitiveRef id="RECT_2"/>
+          </Pin>
+          <Pin number="PIN:19" electricalType="ELECTRICAL" type="SURFACE">
+            <Location x="3.0" y="0.0"/>
+            <StandardPrimitiveRef id="RECT_2"/>
+          </Pin>
+          <Pin number="PIN:20" electricalType="ELECTRICAL" type="SURFACE">
+            <Location x="3.0" y="-1.0"/>
+            <StandardPrimitiveRef id="RECT_2"/>
+          </Pin>
+          <Pin number="PIN:22" electricalType="ELECTRICAL" type="SURFACE">
+            <Location x="3.0" y="-2.0"/>
+            <StandardPrimitiveRef id="RECT_2"/>
+          </Pin>
+          <Pin number="PIN:23" electricalType="ELECTRICAL" type="SURFACE">
+            <Location x="3.0" y="-3.0"/>
+            <StandardPrimitiveRef id="RECT_2"/>
+          </Pin>
+        </Package>
+        <Component refDes="CMP:R2" packageRef="KI:R_Axial_DIN0207_L6.3mm_D2.5mm_1" part="REF:Resistor_THT_R_Axial_DIN0207_L6.3mm_D2.5mm_10k" layerRef="LAYER:F.Cu" mountType="THMT">
+          <Location x="-7.1980" y="6.6050"/>
+        </Component>
+        <Component refDes="CMP:R3" packageRef="KI:R_Axial_DIN0207_L6.3mm_D2.5mm_1" part="REF:Resistor_THT_R_Axial_DIN0207_L6.3mm_D2.5mm_10k" layerRef="LAYER:F.Cu" mountType="THMT">
+          <Location x="5.690" y="0.3890"/>
+        </Component>
+        <Component refDes="CMP:D1" packageRef="KI:R_Axial_DIN0207_L6.3mm_D2.5mm_1" part="REF:LED_THT_LED_D5.0mm_RED_LED" layerRef="LAYER:F.Cu" mountType="THMT">
+          <Location x="4.9880" y="-7.2040"/>
+        </Component>
+        <Component refDes="CMP:U1" packageRef="KI:TQFP-32_7x7mm_P0.8mm_2" part="REF:Package_QFP_TQFP-32_7x7mm_P0.8mm_ATmega328P" layerRef="LAYER:F.Cu" mountType="THMT">
+          <Location x="-4.0560" y="-2.9130"/>
+        </Component>
+        <Component refDes="CMP:R1" packageRef="KI:R_Axial_DIN0207_L6.3mm_D2.5mm_1" part="REF:Resistor_THT_R_Axial_DIN0207_L6.3mm_D2.5mm_330" layerRef="LAYER:F.Cu" mountType="THMT">
+          <Location x="0.8050" y="6.0760"/>
+        </Component>
+        <LayerFeature layerRef="LAYER:F.Cu">
+          <Set net="NET:+5V">
+            <Features>
+              <UserSpecial>
+                <Line startX="-7.0560" startY="-2.9130" endX="-7.0560" endY="-2.087830">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="-7.0560" startY="-2.087830" endX="-7.1980" endY="-1.945830">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="-7.1980" startY="-1.945830" endX="-7.1980" endY="6.6050">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="-1.0560" startY="-3.9130" endX="-3.049920" endY="-3.9130">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="-3.049920" startY="-3.9130" endX="-4.049920" endY="-2.9130">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="-4.049920" startY="-2.9130" endX="-7.0560" endY="-2.9130">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+              </UserSpecial>
+            </Features>
+            <Pad padstackDefRef="PADSTACK_2">
+              <Location x="-7.0560" y="-2.9130"/>
+              <StandardPrimitiveRef id="RECT_2"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:7"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_2">
+              <Location x="-1.0560" y="-3.9130"/>
+              <StandardPrimitiveRef id="RECT_2"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:20"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="-7.1980" y="6.6050"/>
+              <StandardPrimitiveRef id="CIRCLE_1"/>
+              <PinRef componentRef="CMP:R2" pin="PIN:1"/>
+            </Pad>
+          </Set>
+          <Set net="NET:ADC0">
+            <Features>
+              <UserSpecial>
+                <Line startX="5.690" startY="0.3890" endX="1.8050" endY="4.2740">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="1.8050" startY="4.2740" endX="1.8050" endY="6.247720">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="1.8050" startY="6.247720" endX="1.145570" endY="6.907150">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="1.145570" startY="6.907150" endX="-4.895850" endY="6.907150">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="-4.895850" startY="6.907150" endX="-5.1980" endY="6.6050">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="-1.0560" startY="-5.9130" endX="-0.230830" endY="-5.9130">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="-0.230830" startY="-5.9130" endX="-0.230830" endY="-5.531830">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="-0.230830" startY="-5.531830" endX="5.690" endY="0.3890">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+              </UserSpecial>
+            </Features>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="5.690" y="0.3890"/>
+              <StandardPrimitiveRef id="CIRCLE_1"/>
+              <PinRef componentRef="CMP:R3" pin="PIN:1"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_2">
+              <Location x="-1.0560" y="-5.9130"/>
+              <StandardPrimitiveRef id="RECT_2"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:23"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="-5.1980" y="6.6050"/>
+              <StandardPrimitiveRef id="CIRCLE_1"/>
+              <PinRef componentRef="CMP:R2" pin="PIN:2"/>
+            </Pad>
+          </Set>
+          <Set net="NET:D13">
+            <Features>
+              <UserSpecial>
+                <Line startX="0.8050" startY="6.0760" endX="-1.0560" endY="4.2150">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="-1.0560" startY="4.2150" endX="-1.0560" endY="-2.9130">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+              </UserSpecial>
+            </Features>
+            <Pad padstackDefRef="PADSTACK_2">
+              <Location x="-1.0560" y="-2.9130"/>
+              <StandardPrimitiveRef id="RECT_2"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:19"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="0.8050" y="6.0760"/>
+              <StandardPrimitiveRef id="CIRCLE_1"/>
+              <PinRef componentRef="CMP:R1" pin="PIN:1"/>
+            </Pad>
+          </Set>
+          <Set net="NET:GND">
+            <Features>
+              <UserSpecial>
+                <Line startX="-1.8860" startY="-4.9130" endX="-5.230830" endY="-4.9130">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="-5.230830" startY="-4.9130" endX="-6.230830" endY="-3.9130">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="-1.0560" startY="-4.9130" endX="-1.8860" endY="-4.9130">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="-1.8860" startY="-4.9130" endX="-1.8860" endY="-6.548830">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="-1.8860" startY="-6.548830" endX="-0.405450" endY="-8.029380">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="-0.405450" startY="-8.029380" endX="6.162620" endY="-8.029380">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="6.162620" startY="-8.029380" endX="6.9880" endY="-7.2040">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="-7.0560" startY="-3.9130" endX="-6.230830" endY="-3.9130">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+              </UserSpecial>
+            </Features>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="7.690" y="0.3890"/>
+              <StandardPrimitiveRef id="CIRCLE_1"/>
+              <PinRef componentRef="CMP:R3" pin="PIN:2"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="6.9880" y="-7.2040"/>
+              <StandardPrimitiveRef id="CIRCLE_1"/>
+              <PinRef componentRef="CMP:D1" pin="PIN:K"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_2">
+              <Location x="-7.0560" y="-3.9130"/>
+              <StandardPrimitiveRef id="RECT_2"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:8"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_2">
+              <Location x="-1.0560" y="-4.9130"/>
+              <StandardPrimitiveRef id="RECT_2"/>
+              <PinRef componentRef="CMP:U1" pin="PIN:22"/>
+            </Pad>
+          </Set>
+          <Set net="NET:LED_A">
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="4.9880" y="-7.2040"/>
+              <StandardPrimitiveRef id="CIRCLE_1"/>
+              <PinRef componentRef="CMP:D1" pin="PIN:A"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="2.8050" y="6.0760"/>
+              <StandardPrimitiveRef id="CIRCLE_1"/>
+              <PinRef componentRef="CMP:R1" pin="PIN:2"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="LAYER:B.Cu">
+          <Set net="NET:+5V">
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="-7.1980" y="6.6050"/>
+              <StandardPrimitiveRef id="CIRCLE_1"/>
+              <PinRef componentRef="CMP:R2" pin="PIN:1"/>
+            </Pad>
+          </Set>
+          <Set net="NET:ADC0">
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="5.690" y="0.3890"/>
+              <StandardPrimitiveRef id="CIRCLE_1"/>
+              <PinRef componentRef="CMP:R3" pin="PIN:1"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="-5.1980" y="6.6050"/>
+              <StandardPrimitiveRef id="CIRCLE_1"/>
+              <PinRef componentRef="CMP:R2" pin="PIN:2"/>
+            </Pad>
+          </Set>
+          <Set net="NET:D13">
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="0.8050" y="6.0760"/>
+              <StandardPrimitiveRef id="CIRCLE_1"/>
+              <PinRef componentRef="CMP:R1" pin="PIN:1"/>
+            </Pad>
+          </Set>
+          <Set net="NET:GND">
+            <Features>
+              <UserSpecial>
+                <Line startX="6.9880" startY="-7.2040" endX="7.690" endY="-6.5020">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="7.690" startY="-6.5020" endX="7.690" endY="0.3890">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+              </UserSpecial>
+            </Features>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="7.690" y="0.3890"/>
+              <StandardPrimitiveRef id="CIRCLE_1"/>
+              <PinRef componentRef="CMP:R3" pin="PIN:2"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="6.9880" y="-7.2040"/>
+              <StandardPrimitiveRef id="CIRCLE_1"/>
+              <PinRef componentRef="CMP:D1" pin="PIN:K"/>
+            </Pad>
+          </Set>
+          <Set net="NET:LED_A">
+            <Features>
+              <UserSpecial>
+                <Line startX="2.8050" startY="6.0760" endX="2.8050" endY="-5.0210">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+                <Line startX="2.8050" startY="-5.0210" endX="4.9880" endY="-7.2040">
+                  <LineDesc lineWidth="0.250" lineEnd="ROUND"/>
+                </Line>
+              </UserSpecial>
+            </Features>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="4.9880" y="-7.2040"/>
+              <StandardPrimitiveRef id="CIRCLE_1"/>
+              <PinRef componentRef="CMP:D1" pin="PIN:A"/>
+            </Pad>
+            <Pad padstackDefRef="PADSTACK_1">
+              <Location x="2.8050" y="6.0760"/>
+              <StandardPrimitiveRef id="CIRCLE_1"/>
+              <PinRef componentRef="CMP:R1" pin="PIN:2"/>
+            </Pad>
+          </Set>
+        </LayerFeature>
+        <LayerFeature layerRef="DRILL:F.Cu_B.Cu">
+          <Set geometry="PADSTACK_1" net="NET:+5V">
+            <Hole name="H1" diameter="0.000001" platingStatus="PLATED" plusTol="0.0" minusTol="0.0" x="-7.1980" y="6.6050"/>
+          </Set>
+          <Set geometry="PADSTACK_1" net="NET:ADC0">
+            <Hole name="H2" diameter="0.000001" platingStatus="PLATED" plusTol="0.0" minusTol="0.0" x="-5.1980" y="6.6050"/>
+          </Set>
+          <Set geometry="PADSTACK_1" net="NET:ADC0">
+            <Hole name="H3" diameter="0.000001" platingStatus="PLATED" plusTol="0.0" minusTol="0.0" x="5.690" y="0.3890"/>
+          </Set>
+          <Set geometry="PADSTACK_1" net="NET:GND">
+            <Hole name="H4" diameter="0.000001" platingStatus="PLATED" plusTol="0.0" minusTol="0.0" x="7.690" y="0.3890"/>
+          </Set>
+          <Set geometry="PADSTACK_1" net="NET:LED_A">
+            <Hole name="H5" diameter="0.000001" platingStatus="PLATED" plusTol="0.0" minusTol="0.0" x="4.9880" y="-7.2040"/>
+          </Set>
+          <Set geometry="PADSTACK_1" net="NET:GND">
+            <Hole name="H6" diameter="0.000001" platingStatus="PLATED" plusTol="0.0" minusTol="0.0" x="6.9880" y="-7.2040"/>
+          </Set>
+          <Set geometry="PADSTACK_1" net="NET:D13">
+            <Hole name="H7" diameter="0.000001" platingStatus="PLATED" plusTol="0.0" minusTol="0.0" x="0.8050" y="6.0760"/>
+          </Set>
+          <Set geometry="PADSTACK_1" net="NET:LED_A">
+            <Hole name="H8" diameter="0.000001" platingStatus="PLATED" plusTol="0.0" minusTol="0.0" x="2.8050" y="6.0760"/>
+          </Set>
+        </LayerFeature>
+      </Step>
+    </CadData>
+  </Ecad>
+  <Avl name="Primary_Vendor_List">
+    <AvlHeader title="BOM" source="KiCad" author="OWNER" datetime="2026-08-04T13:28:23" version="1"/>
+    <AvlItem OEMDesignNumber="REF:Resistor_THT_R_Axial_DIN0207_L6.3mm_D2.5mm_10k"/>
+    <AvlItem OEMDesignNumber="REF:LED_THT_LED_D5.0mm_RED_LED"/>
+    <AvlItem OEMDesignNumber="REF:Package_QFP_TQFP-32_7x7mm_P0.8mm_ATmega328P"/>
+    <AvlItem OEMDesignNumber="REF:Resistor_THT_R_Axial_DIN0207_L6.3mm_D2.5mm_330"/>
+  </Avl>
+</IPC-2581>

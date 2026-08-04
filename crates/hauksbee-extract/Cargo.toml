@@ -33,6 +33,13 @@ serde_json.workspace = true
 thiserror.workspace = true
 toml = "0.8"
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+# ODB++ archives. The spec's distribution form is a gzipped tar and Altium and
+# Cadence both write one; ODB++ also permits any individual file inside a job to
+# be stored gzipped with a `.Z` suffix, which real fab archives use for the large
+# `features` files. `tar` is the crate cargo itself uses and `flate2` was already
+# in the tree (zip's deflate backend), so neither is a new supply-chain surface.
+flate2 = "1"
+tar = "0.4"
 
 [dev-dependencies]
 hauksbee-testkit = { path = "../hauksbee-testkit" }
