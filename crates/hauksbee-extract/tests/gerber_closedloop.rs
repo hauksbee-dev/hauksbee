@@ -245,12 +245,6 @@ fn agreement(native: &ExtractedBoard, recon: &ExtractedBoard) -> Agreement {
     }
 }
 
-/// Run the closed loop on one board. Returns Some(agreement) or None when the
-/// environment can't run it (skipped).
-fn run_board(rel: &str, tag: &str) -> Option<Agreement> {
-    run_board_any(&[rel], tag)
-}
-
 /// The same, for a board the two corpora pin at different upstream revisions and
 /// so at different paths. The first path that resolves is the one this machine
 /// has; naming only one skips silently on the other.
