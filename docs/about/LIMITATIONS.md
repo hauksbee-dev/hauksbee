@@ -89,21 +89,36 @@ What is honestly missing:
 These are the genuine open limitations the code carries today, each with the
 reason it is open and what would close it.
 
-### A co-sim chunk whose analog solve fails holds stale voltages
+### A co-sim chunk no fallback can solve holds stale voltages
 
-The co-sim advances the circuit in chunks. If the analog solver fails to
-converge on a chunk, that chunk's node voltages are the previous chunk's, not a
-solved answer, so every voltage, current and fault reading inside that window is
-fiction. The run says so rather than hiding it: a warning names the failed chunk
-count and the time spans, `--strict` turns it into a failing exit, and the web
-report raises it as a finding on the co-sim card. What it cannot do is give you a
-number for those windows, and it will not invent one.
+The co-sim advances the circuit in chunks. A chunk whose primary analog solve
+fails to converge is retried on a fallback ladder before the run gives up, in
+order of increasing desperation: the same integration with the maximum step
+bounded to a small fraction of the chunk, backward Euler at that bounded step,
+backward Euler from a cold start (the warm seed dropped so the operating point
+re-runs the full gmin and source-stepping continuation), and finally the chunk
+subdivided into quarters marched back to back. A chunk a rung carries is a real
+converged solve, and the run says which: the window, the rung that produced it,
+and that rung's accuracy cost are recorded per chunk and surfaced as
+`fallback_windows` in the co-sim JSON and the default text summary. A backward
+Euler window is first order and numerically dissipative, so fast transients and
+ringing inside it are damped relative to the second-order primary solve; the
+record states that rather than letting the span read as first class.
 
-The usual cause is structural rather than numerical: unresolved active parts
-leaving nodes floating (`hauksbee models --help` lists what is unresolved), a
-stiff or singular section, or conflicting rails. Resolve the parts or simplify
-the offending section and re-run. What would close this is per-chunk fallback
-integration, which is not built.
+What remains open is the chunk no rung can carry. Its node voltages are the
+previous chunk's, not a solved answer, so every voltage, current and fault
+reading inside that window is fiction, and the run says so rather than hiding
+it: a warning names the failed chunk count and the time spans, `--strict` turns
+it into a failing exit, and the web report raises it as a finding on the co-sim
+card. It will not invent a number for those windows. The usual cause there is
+structural rather than numerical: unresolved active parts leaving nodes
+floating (`hauksbee models --help` lists what is unresolved), a section with no
+reachable operating point, or conflicting rails, none of which any integration
+method can solve. Resolve the parts or simplify the offending section and
+re-run. The two-sided gate is
+`crates/hauksbee-engine/tests/cosim_fallback_chunk.rs`: a board whose fire step
+kills the primary march is rescued and recorded, and a structurally singular
+board still refuses loudly.
 
 ### nRF5340 has no co-sim backend
 

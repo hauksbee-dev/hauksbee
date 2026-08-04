@@ -16,4 +16,4 @@ description = "1N4733A shunt regulator: a 12 V rail clamped to about 5.1 V"
 
 [[probe]]
 expr = "V(vz)"
-reltol = 0.01
+reltol = 1.0e-04

@@ -1,5 +1,5 @@
 # CE amplifier gain vs ngspice (dev-plan 04 §3.2 cross-check target 1).
-# Measured worst vs ngspice-46: 2.071e-4 (at t=62.1 us, mid-sine) — the gain,
+# Measured worst: 2.071e-4 (at t=62.1 us, mid-sine). The gain,
 # rb division and (fixed-direction) Early factor all track ngspice to a few
 # mV on a ~12 V scale. The bar is ~10x the measured worst, not a blind bound.
 analysis = "tran"
@@ -9,4 +9,4 @@ skip_initial = 50e-6
 
 [[probe]]
 expr = "V(c)"
-reltol = 0.002
+reltol = 2.0e-03

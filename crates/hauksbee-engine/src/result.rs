@@ -654,6 +654,15 @@ pub struct CosimJson {
     /// (and omitted from JSON) on a valid run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub failed_windows: Vec<CosimFailedWindow>,
+    /// Sim-time windows solved by a per-chunk FALLBACK integration rung after
+    /// the primary solve failed there, each carrying the method that produced
+    /// it and that method's accuracy cost. These windows are solved (they do
+    /// not make the run analog-invalid) but their numbers are second-class:
+    /// a consumer reading a waveform is entitled to know which spans came from
+    /// a more dissipative method. Empty (and omitted) when the primary path
+    /// carried the whole run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallback_windows: Vec<CosimFallbackWindow>,
     /// Per-SPI-bus transaction-framing tier: "exact" (framed on real CS GPIO
     /// edges), "backend" (the emulator frames CS itself), or "heuristic" (the
     /// chunk-boundary fallback, honest about its two documented failure
@@ -762,6 +771,21 @@ pub struct CosimFailedWindow {
     /// from JSON) when empty, so an older consumer keeps parsing.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub reason: String,
+}
+
+/// One sim-time window `[start_s, end_s)` whose answer was produced by a
+/// per-chunk fallback integration rung after the primary analog solve failed
+/// there. `method` is the rung's stable name
+/// (`crate::scheduler::ChunkFallbackMethod::as_str`), `accuracy` its stated
+/// cost, so the record travels with the number it qualifies. Minimal on
+/// purpose: shaped so a typed error-budget/provenance spine can absorb it
+/// later as one provenance tag per window.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct CosimFallbackWindow {
+    pub start_s: f64,
+    pub end_s: f64,
+    pub method: String,
+    pub accuracy: String,
 }
 
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]

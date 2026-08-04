@@ -2,6 +2,6 @@ analysis = "ac"
 description = "RC low-pass Bode: magnitude and phase of V(out) vs a unit AC source, 10 Hz .. 1 MHz at 10 points/decade. Corner near 1 kHz (-3 dB, -45 deg)."
 [[probe]]
 expr = "V(out)"
-reltol = 0.01
+reltol = 1.0e-05
 abstol = 1e-6
-phase_abstol = 1.0
+phase_abstol = 1.0e-02

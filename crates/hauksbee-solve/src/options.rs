@@ -154,6 +154,45 @@ pub enum StepControl {
     },
 }
 
+/// How a `VSwitch`'s conductance moves between `roff` and `ron` as its control
+/// voltage crosses the band `[voff, von]`.
+///
+/// These are two DIFFERENT DEVICES, not two numerical approximations of one, so
+/// the choice is a modelling decision the caller makes rather than a tuning
+/// knob:
+///
+/// * [`SwitchModel::Hysteretic`] is the SPICE3 `.model SW/CSW` device, which is
+///   what `.model S... SW(VT=… VH=…)` in a deck asks for and what ngspice
+///   implements: a LATCHING relay. It closes the instant the control passes
+///   `von = VT + VH`, opens the instant it falls below `voff = VT - VH`, and
+///   HOLDS its previous state anywhere in between. Measured against
+///   ngspice-45.2 (`crates/hauksbee-solve/tests/decks/switch_*`): the transition
+///   is a single-timestep snap from exactly `roff` to exactly `ron`, with no
+///   interpolation region at all, and a genuine memory band. `VH` is a
+///   HYSTERESIS half-width; it is not a transition width.
+///
+/// * [`SwitchModel::Smooth`] is a real analog pass element (a CMOS switch, a
+///   MOSFET used as a gate): a monotone, memoryless, differentiable conductance
+///   ramp across `[voff, von]`, saturating to exactly `roff` at or below `voff`
+///   and exactly `ron` at or above `von`. It has NO hysteresis, because a bare
+///   pass gate has none. Use it when the two band edges genuinely describe where
+///   the device starts and finishes conducting (the board binder's analog
+///   switches), and when a differentiable device is needed for the coupled
+///   Newton (the SPDT break-before-make path in `stamp_vswitch`).
+///
+/// Default is [`SwitchModel::Hysteretic`], because the overwhelming majority of
+/// `VSwitch` devices arrive from a SPICE `.model SW` card whose meaning is fixed
+/// by SPICE3, and because it is the setting under which an ngspice cross-check
+/// is comparing the same device on both sides.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum SwitchModel {
+    /// SPICE3 / ngspice `SW`: latching relay, hard snap at each threshold.
+    #[default]
+    Hysteretic,
+    /// Real analog pass element: smooth monotone ramp, no memory.
+    Smooth,
+}
+
 /// Device-physics switches. Each `false` removes the corresponding term from
 /// every device that has it.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -204,6 +243,28 @@ pub struct DeviceEffects {
     /// path uses (every normal solve keeps the discrete bang-bang model).
     #[serde(default = "default_cmp_smooth_gain")]
     pub cmp_smooth_gain: f64,
+    /// Which `VSwitch` device the solver stamps. See [`SwitchModel`]; the
+    /// default is the SPICE3 `SW` relay a deck's `.model` card asks for.
+    #[serde(default)]
+    pub switch_model: SwitchModel,
+    /// Width of a [`SwitchModel::Hysteretic`] relay's conductance ramp, as a
+    /// fraction of its own `|von - voff|` band.
+    ///
+    /// The relay's switching THRESHOLDS are exact whatever this is; the ramp only
+    /// says how abruptly the conductance crosses one of them. It exists because a
+    /// literal step is worse on both counts that matter: no real switch is
+    /// discontinuous, and a flat pin costs the per-step Newton its continuous path
+    /// through the transition (measured: a hard pin handed the synapse mirror's
+    /// cold diode-connected base a 0.69 V jump in a single step and it settled at
+    /// a false root).
+    ///
+    /// The default 0.01 is a timing error of `0.01*|von-voff| / dv_ctrl_dt`: on the
+    /// synapse deck's `SW(VT=1.5 VH=1.0)` band driven by a 0.3 V/µs edge, 20 mV of
+    /// ramp is 67 ns of switching-instant uncertainty against a 400 µs march.
+    /// Shrink it for a sharper edge, at the cost of a stiffer step; a value at or
+    /// below zero is treated as the smallest usable ramp rather than a step.
+    #[serde(default = "default_switch_transition_frac")]
+    pub switch_transition_frac: f64,
 }
 
 fn default_true() -> bool {
@@ -214,6 +275,9 @@ fn default_spdt_bbm_k() -> f64 {
 }
 fn default_cmp_smooth_gain() -> f64 {
     2000.0
+}
+fn default_switch_transition_frac() -> f64 {
+    0.01
 }
 
 impl Default for DeviceEffects {
@@ -227,6 +291,8 @@ impl Default for DeviceEffects {
             spdt_bbm_k: 6.0,
             switch_ctrl_gm: true,
             cmp_smooth_gain: 2000.0,
+            switch_model: SwitchModel::Hysteretic,
+            switch_transition_frac: 0.01,
         }
     }
 }

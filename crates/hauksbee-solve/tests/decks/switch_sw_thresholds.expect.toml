@@ -1,0 +1,71 @@
+# The SPICE3 `SW` relay's thresholds and rails, cross-checked and stated in
+# closed form.
+#
+# WHY THIS DECK MATTERS FOR HARDWARE. A voltage switch is how a board model
+# represents an analog switch, a load switch's enable, or a relay contact, and
+# what a hardware engineer reads off it is WHEN it conducts. Getting that wrong by
+# a hysteresis half-width moves every downstream edge, which is the difference
+# between a gate driver told its input arrived on time and one that is not. A
+# tenth of a percent on the on-resistance would not matter; a volt of threshold
+# error does.
+#
+# The closed form here is exact, not approximate: an ideal switch in series with
+# a load is a resistive divider, and both switch states are a single division.
+#   open:   v(out) = 1 * 1000 / (1e9 + 1000)   = 9.99999e-7
+#   closed: v(out) = 1 * 1000 / (10   + 1000)  = 0.990099009900990
+# so the analytic points below pin the device's OWN ron and roff, which is what
+# the old unclamped-tanh model got wrong (it reported 12.2 ohm at a control of
+# 3 V against a stated 10, and 819 Mohm at 0 V against a stated 1e9).
+#
+# The mid-band point is the load-bearing one. At VC = 1.55 V, essentially the
+# centre of the VH = 1.0 hysteresis band, an OPEN relay is still open: VH is a
+# hysteresis half-width, and the device does not respond to anything between
+# VT-VH and VT+VH. A model treating the band as a ramp sits near the geometric
+# mean, ~100 k, four decades wrong.
+analysis = "dc"
+description = "SPICE3 SW relay: holds ROFF across its whole hysteresis band from a cold start, then presents exactly RON past VT+VH."
+# The observable spans nine decades of resistance, so a relative bar on v(out)
+# alone would be dominated by the 1 uV off-state. full_scale = 1 V gives the
+# comparison a 10 mV floor, which is the scale on which the ON reading matters.
+full_scale = 1.0
+
+[[probe]]
+expr = "v(out)"
+# Away from the threshold tie both engines are exact here: the disagreement is the
+# floating-point noise of a single division. 20x headroom off that would demand a
+# bound below the corpus floor, so the floor is the bound.
+reltol = 1.0e-6
+
+# Fully open, well below the break threshold.
+[[probe.analytic]]
+at = 0.05
+value = 9.99999e-7
+reltol = 1.0e-5
+note = "resistive divider, switch at ROFF: 1 V * 1k / (1e9 + 1k) = 9.99999e-7"
+
+# Essentially the centre of the hysteresis band, swept up from open: STILL open.
+[[probe.analytic]]
+at = 1.55
+value = 9.99999e-7
+reltol = 1.0e-5
+note = "just past VT = 1.5 V. A relay swept up from open holds ROFF until VT+VH, so this is the same divider as at 0.05 V; a band-ramp model would sit near sqrt(ron*roff) = 100k, i.e. v(out) near 9.9e-3"
+
+# Just below the make threshold: still open.
+[[probe.analytic]]
+at = 2.45
+value = 9.99999e-7
+reltol = 1.0e-5
+note = "below VT+VH = 2.5 V, so still the ROFF divider"
+
+# Past the make threshold: exactly RON.
+[[probe.analytic]]
+at = 2.55
+value = 0.99009900990099
+reltol = 1.0e-6
+note = "switch closed at RON: 1 V * 1k / (10 + 1k) = 0.990099009900990"
+
+[[probe.analytic]]
+at = 3.05
+value = 0.99009900990099
+reltol = 1.0e-6
+note = "same closed divider; a fully driven relay presents its stated RON exactly, with no residual dependence on how far past the threshold the control sits"

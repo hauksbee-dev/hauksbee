@@ -9,6 +9,18 @@ fn opts() -> SolverOptions {
     SolverOptions::fixed(1e-6)
 }
 
+/// Options selecting the SMOOTH analog pass element rather than the default
+/// SPICE3 relay. The switch tests below are about the smooth device: a relay is
+/// at `ron` or at `roff` and has no mid-transition bias to modulate, and its two
+/// SPDT throws cannot both be part-way on, so a break-before-make contest between
+/// analog conductances is not something it can exhibit. Both are real properties
+/// of the real pass element, so they are tested on the model that has them.
+fn smooth_switch_opts() -> SolverOptions {
+    let mut o = opts();
+    o.effects.switch_model = hauksbee_solve::SwitchModel::Smooth;
+    o
+}
+
 /// Build an RC low-pass: Vin -> R -> out -> C -> gnd. Unit AC source at `in`.
 fn rc_lowpass(r: f64, c: f64) -> (Circuit, f64) {
     let mut ckt = Circuit::new();
@@ -822,7 +834,9 @@ fn spdt_bbm_loser_leg_is_open_in_ac_like_dc() {
         points: 1,
         sweep: Sweep::Linear,
     };
-    let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
+    let resp = AcAnalysis::new(smooth_switch_opts())
+        .run(&ckt, &spec)
+        .unwrap();
     let va = resp.points[0].node(&ckt, "a").unwrap().norm();
     let vout = resp.points[0].node(&ckt, "out").unwrap().norm();
     assert!(
@@ -954,7 +968,9 @@ fn vswitch_mid_transition_control_modulation_appears_in_ac() {
         points: 1,
         sweep: Sweep::Linear,
     };
-    let resp = AcAnalysis::new(opts()).run(&ckt, &spec).unwrap();
+    let resp = AcAnalysis::new(smooth_switch_opts())
+        .run(&ckt, &spec)
+        .unwrap();
     let vout_ac = resp.points[0].node(&ckt, "out").unwrap().norm();
 
     // A fixed resistor at the quiescent conductance gives ~0 here (the through
@@ -972,7 +988,7 @@ fn vswitch_mid_transition_control_modulation_appears_in_ac() {
         let mut c = build(vc);
         let out = c.node("out");
         let mut ws = hauksbee_solve::Workspace::new(&c);
-        hauksbee_solve::dc_operating_point(&mut ws, &c, &opts()).unwrap();
+        hauksbee_solve::dc_operating_point(&mut ws, &c, &smooth_switch_opts()).unwrap();
         ws.x[ws.layout.node(out).unwrap()]
     };
     let d = 1e-5;
@@ -985,7 +1001,7 @@ fn vswitch_mid_transition_control_modulation_appears_in_ac() {
 
     // Gate parity: effects.switch_ctrl_gm=false must drop the modulation path
     // in AC exactly as it does in transient, leaving the bare conductance.
-    let mut no_gm = opts();
+    let mut no_gm = smooth_switch_opts();
     no_gm.effects.switch_ctrl_gm = false;
     let resp = AcAnalysis::new(no_gm).run(&ckt, &spec).unwrap();
     let vout_off = resp.points[0].node(&ckt, "out").unwrap().norm();

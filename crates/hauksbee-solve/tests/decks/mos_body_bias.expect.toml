@@ -1,8 +1,8 @@
-# MOS body effect vs ngspice-46 (dev-plan 04 §3.3).
+# MOS body effect vs ngspice (dev-plan 04 §3.3).
 # ngspice level 1 uses the identical vto + gamma*(sqrt(phi-vbs)-sqrt(phi))
 # expression, so the curves coincide except at the threshold knee, where
 # hauksbee's smooth subthreshold tail (ngspice level 1 has zero current
-# below vth) drops v(d) by ~60 mV early — the documented Level-1 deviation.
+# below vth) drops v(d) by ~60 mV early: the documented Level-1 deviation.
 # Measured worst 1.09e-2 at the shifted threshold (sweep = 1.75 V, exactly
 # the GAMMA/PHI prediction); the bar is ~3x that.
 analysis = "dc"
@@ -11,4 +11,4 @@ full_scale = 5.0
 
 [[probe]]
 expr = "V(d)"
-reltol = 0.03
+reltol = 3.0e-02
