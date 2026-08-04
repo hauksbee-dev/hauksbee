@@ -1542,8 +1542,11 @@ fn map_columns(
         // rest are recorded as ignored. The Reference role has its own carve-out:
         // an assembly BOM split by board side carries `topDesignator` and
         // `bottomDesignator`, which are one reference column in two halves.
-        let tie_matters = !matches!(role, ColumnRole::DistributorPart | ColumnRole::Manufacturer)
-            && !(role == ColumnRole::Reference && side_split_designators(&tied));
+        let unused_for_identity =
+            matches!(role, ColumnRole::DistributorPart | ColumnRole::Manufacturer);
+        let one_column_in_halves =
+            role == ColumnRole::Reference && side_split_designators(&tied);
+        let tie_matters = !unused_for_identity && !one_column_in_halves;
         if tied.len() > 1 && tie_matters {
             return Err(BomError::AmbiguousColumn {
                 name: name.to_string(),
