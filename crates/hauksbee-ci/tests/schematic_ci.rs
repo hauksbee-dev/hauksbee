@@ -22,12 +22,40 @@ fn schematic_example() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("examples/pic_programmer_schematic.toml")
 }
 
-/// The corpus pic_programmer project directory, if the corpus symlink is
-/// present in this checkout.
+/// The board the checked-in example spec actually points at, resolved the way
+/// the loader resolves it (relative to the spec file's own directory).
+fn example_board_path() -> PathBuf {
+    let spec = schematic_example();
+    let text = std::fs::read_to_string(&spec).expect("read the example spec");
+    let board = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.starts_with('#'))
+        .find_map(|l| l.strip_prefix("board"))
+        .and_then(|rest| rest.trim_start().strip_prefix('='))
+        .map(|v| v.trim().trim_matches('"').to_string())
+        .expect("the example spec has a board key");
+    spec.parent().expect("spec has a parent").join(board)
+}
+
+/// The corpus pic_programmer project directory, if the corpus is present in
+/// this checkout.
+///
+/// Resolved through the testkit helper rather than joining one hardcoded name,
+/// because the corpus has two accepted layouts: the hand-built tree calls this
+/// board `kicad-demos-src`, `scripts/fetch-corpus.sh` calls it `kicad_demos`.
+/// Naming only the first meant every test here skipped for anyone who followed
+/// CONTRIBUTING and ran the fetch, and a skip nobody reads is not a gate.
 fn pic_programmer_dir() -> PathBuf {
-    hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join("kicad-demos-src/demos/pic_programmer")
+    for name in ["kicad-demos-src", "kicad_demos"] {
+        if let Some(p) = hauksbee_testkit::corpus_board(
+            env!("CARGO_MANIFEST_DIR"),
+            &format!("{name}/demos/pic_programmer"),
+        ) {
+            return p;
+        }
+    }
+    PathBuf::new()
 }
 
 fn write_tmp(name: &str, body: &str) -> PathBuf {
@@ -65,9 +93,17 @@ kind = "no_faults"
 
 #[test]
 fn schematic_example_spec_passes() {
-    let dir = pic_programmer_dir();
-    if !dir.join("pic_programmer.kicad_sch").exists() {
-        eprintln!("corpus pic_programmer missing; skipping");
+    // Skip on the EXAMPLE's own board path, not on whether some corpus
+    // directory exists. Those are two different questions, and while they were
+    // asked separately the corpus could be present with the example's `board`
+    // pointing somewhere else entirely, and the test that exists to catch that
+    // was the one thing skipping.
+    if !example_board_path().exists() {
+        eprintln!(
+            "the example's board is not in this checkout ({}); skipping. Fetch it \
+             with: scripts/fetch-corpus.sh --only kicad_demos",
+            example_board_path().display()
+        );
         return;
     }
     let result = run(&RunConfig {

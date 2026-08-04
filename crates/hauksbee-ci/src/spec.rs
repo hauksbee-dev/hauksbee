@@ -1174,6 +1174,21 @@ impl Spec {
                 } else {
                     "hauksbee-ci run --example blinky"
                 };
+                // A path with glob metacharacters in it never came from the
+                // shell: the shell would have expanded it, or reported no
+                // matches itself. So the user quoted it, and the multi-spec
+                // documentation ("hauksbee-ci run ci/*.toml") is exactly the
+                // thing that invites the quotes. Say so, because "no spec file
+                // at 'ci/*.toml'" sends people to check a path that is fine.
+                if looks_like_a_glob(path) {
+                    return SpecError::Io(format!(
+                        "no spec file at '{}', and that looks like a glob. hauksbee-ci \
+                         does not expand one itself; your shell does, and quoting it \
+                         stopped that. Drop the quotes:\n  hauksbee-ci run {}",
+                        path.display(),
+                        path.display()
+                    ));
+                }
                 SpecError::Io(format!(
                     "no spec file at '{}'. Check the path, or try a bundled example:\n  \
                      {suggestion}",
@@ -1197,10 +1212,7 @@ impl Spec {
             // enormous line, and the terminal is not the place to dump it.
             message: crate::error::cap_context_width(&e.to_string()),
         })?;
-        spec.base_dir = path
-            .parent()
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
+        spec.base_dir = base_dir_of(path);
         spec.normalize();
         spec.validate()?;
         Ok(spec)
@@ -1264,7 +1276,31 @@ impl Spec {
             self.base_dir.join(p)
         }
     }
+}
 
+/// Does this path carry shell glob metacharacters? Only meaningful once the
+/// path is known not to exist: a file genuinely named `*.toml` is possible, and
+/// if it exists nothing here runs.
+fn looks_like_a_glob(path: &Path) -> bool {
+    let s = path.to_string_lossy();
+    s.contains('*') || s.contains('?') || (s.contains('[') && s.contains(']'))
+}
+
+/// The directory a spec's relative paths resolve against: the spec file's
+/// parent, or `.` when there is none.
+///
+/// `Path::parent()` on a bare filename returns `Some("")`, not `None`, so the
+/// obvious `unwrap_or(".")` never fires and the empty string reaches every
+/// message that names where a path was resolved from ("resolved relative to the
+/// spec file at "). Joining is unaffected either way; the printing is not.
+pub(crate) fn base_dir_of(path: &Path) -> PathBuf {
+    match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p.to_path_buf(),
+        _ => PathBuf::from("."),
+    }
+}
+
+impl Spec {
     /// Structural validation independent of the board (fast, no extraction).
     /// Net-name validation happens later in the runner once the board is bound.
     ///

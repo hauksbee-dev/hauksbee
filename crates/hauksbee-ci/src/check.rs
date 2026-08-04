@@ -53,7 +53,8 @@ pub struct Diagnostic {
     /// (a numeric value outside its documented bounds), `conflicting-fields`
     /// (mutually exclusive keys set together), `board-load` (the board file
     /// failed to resolve/load), `firmware-missing` (the `firmware` path does not
-    /// resolve to a readable image), `invalid-spec` (anything else).
+    /// resolve to a readable image), `firmware-format` (the image is there but is
+    /// not the format its extension claims), `invalid-spec` (anything else).
     pub code: &'static str,
     /// Human-readable description of the problem.
     pub message: String,
@@ -123,10 +124,7 @@ pub fn check_spec(path: &Path, opts: &CheckOptions) -> Vec<Diagnostic> {
         Ok(s) => s,
         Err(e) => return vec![toml_diagnostic(&text, &e)],
     };
-    spec.base_dir = path
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    spec.base_dir = crate::spec::base_dir_of(path);
     spec.normalize();
 
     let mut diags: Vec<Diagnostic> = Vec::new();
@@ -171,6 +169,14 @@ pub fn check_spec(path: &Path, opts: &CheckOptions) -> Vec<Diagnostic> {
             diags.push(d);
         }
     }
+    // Report in FILE order. The phases above run structural-then-board, so an
+    // unknown net on line 6 came out after a bad bound on line 12, and a reader
+    // working down their spec had to jump back and forth. Diagnostics with no
+    // line (an unreadable file, a message naming nothing that appears in the
+    // text) cannot be placed, so they go last rather than at an arbitrary
+    // line 0. The sort is stable, so two findings on one line keep the phase
+    // order that produced them.
+    diags.sort_by_key(|d| (d.line.unwrap_or(u32::MAX), d.col.unwrap_or(u32::MAX)));
     diags
 }
 
@@ -191,7 +197,18 @@ fn firmware_diagnostic(spec: &Spec, text: &str) -> Option<Diagnostic> {
         Err(e) => return Some(firmware_diag(text, &declared, &e.to_string())),
     };
     match hauksbee_engine::validate_firmware_path(&resolved) {
-        Ok(_) => None,
+        Ok(_) => {
+            // The image exists; is it the format its extension claims? `run`
+            // refuses a .hex renamed .elf, so `check` has to as well, or the
+            // editor-facing validator says OK about a spec the runner rejects.
+            crate::runner::firmware_format_mismatch(&resolved).map(|m| Diagnostic {
+                code: "firmware-format",
+                // The message already names both repairs; the missing-file fix
+                // ("build the firmware first") would be wrong advice here.
+                fix: None,
+                ..firmware_diag(text, &declared, &m)
+            })
+        }
         Err(e) => Some(firmware_diag(text, &declared, &e.to_string())),
     }
 }
