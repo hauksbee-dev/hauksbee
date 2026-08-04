@@ -133,11 +133,11 @@ fn extract_root_from_path(path: &Path) -> Result<ExtractedBoard, ExtractError> {
         .unwrap_or_default()
         .to_string();
     let mut builder = NetlistBuilder::new();
-    // The root sheet counts as visited, so a sub-sheet pointing back at the top
-    // file closes the cycle here instead of recursing into it.
+    // The root sheet is the first ancestor, so a sub-sheet pointing back at the
+    // top file closes the cycle here instead of recursing into it.
     builder
-        .visited_sheets
-        .insert(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
+        .ancestor_sheets
+        .push(path.canonicalize().unwrap_or_else(|_| path.to_path_buf()));
     let root = builder.add_sheet_doc(&doc, "/", base.as_deref(), Some(name))?;
     builder.finish(root)
 }
@@ -383,15 +383,26 @@ struct NetlistBuilder {
     /// schematic path cries wolf on a deliberately-unconnected control pin.
     no_connect_nodes: Vec<usize>,
     next_sheet: SheetId,
-    /// Sub-sheet files already pulled in, canonicalized. A `Sheetfile` that
-    /// points back at an ancestor (a sheet that references itself, or two
-    /// sheets that reference each other) is a cycle, and following it recurses
-    /// until the thread's stack aborts the process. Both shapes occur in real
-    /// projects: a sheet duplicated by copy-paste keeps the original's
-    /// `Sheetfile`, and a renamed file can leave a stale mutual reference.
-    /// A visited set is also the right answer for the benign case of one
-    /// sub-sheet included twice: its contents are already in the netlist.
-    visited_sheets: std::collections::HashSet<PathBuf>,
+    /// The chain of sub-sheet files currently being expanded, canonicalized,
+    /// innermost last. A `Sheetfile` that points back at one of its own
+    /// ancestors (a sheet that references itself, or two sheets that reference
+    /// each other) is a cycle, and following it recurses until the thread's
+    /// stack aborts the process. Both shapes occur in real projects: a sheet
+    /// duplicated by copy-paste keeps the original's `Sheetfile`, and a renamed
+    /// file can leave a stale mutual reference.
+    ///
+    /// An ancestor CHAIN and not a set of every file ever seen, which is the
+    /// distinction between a cycle and a reused sub-sheet. A hierarchy that
+    /// places one sub-sheet several times is the ordinary way to draw a
+    /// multi-channel board, and each placement is a separate set of parts with
+    /// its own designators: LumenPnP's mobo places `mosfet.kicad_sch` four
+    /// times and `motor_driver.kicad_sch` six, and KiCad numbers their parts
+    /// R42/R44/R46/R48 and so on through each symbol's `(instances)` block. A
+    /// set-based guard read the second placement as already-in-the-netlist and
+    /// dropped it, so that board extracted 188 of its 359 parts and three of its
+    /// six MOSFETs, silently, with every coverage ratio computed over the
+    /// remainder.
+    ancestor_sheets: Vec<PathBuf>,
     /// How deep the current `Sheetfile` recursion is. The visited set stops
     /// cycles; this stops a pathological but acyclic chain (a generated project
     /// nesting thousands of unique sheets) from reaching the same stack limit.
@@ -435,7 +446,7 @@ impl NetlistBuilder {
             bus_boundaries: Vec::new(),
             no_connect_nodes: Vec::new(),
             next_sheet: 0,
-            visited_sheets: std::collections::HashSet::new(),
+            ancestor_sheets: Vec::new(),
             sheet_depth: 0,
         }
     }
@@ -967,13 +978,16 @@ impl NetlistBuilder {
             // key; fall back to the joined path when the file does not exist,
             // which the read below then reports as a missing sub-sheet.
             let key = child.canonicalize().unwrap_or_else(|_| child.clone());
-            if self.sheet_depth < MAX_SHEET_DEPTH && self.visited_sheets.insert(key) {
+            let is_cycle = self.ancestor_sheets.contains(&key);
+            if self.sheet_depth < MAX_SHEET_DEPTH && !is_cycle {
                 if let Ok(text) = std::fs::read_to_string(&child) {
                     if let Ok(doc) = forge_sexpr::parse(&text) {
                         let child_dir = child.parent().map(Path::to_path_buf);
                         self.sheet_depth += 1;
+                        self.ancestor_sheets.push(key);
                         let result =
                             self.add_sheet_doc(&doc, &child_path, child_dir.as_deref(), None);
+                        self.ancestor_sheets.pop();
                         self.sheet_depth -= 1;
                         result?;
                     }
