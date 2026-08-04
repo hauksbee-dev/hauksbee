@@ -173,12 +173,15 @@ macro_rules! f072_or_skip {
 fn f072_driving_firmware_toggles_pc6_and_prints() {
     f072_or_skip!(mcu, "blinky.elf");
 
+    // The levels, not just a count: a bridge that re-reported the same ODR value
+    // as an "edge" would satisfy a count and fail the alternation below, which is
+    // the toggle the probe transcript read as 0x40, 0x00, 0x40, 0x00, 0x40, 0x00.
     let pc6 = PinId { port: 'C', bit: 6 };
-    let edges: Arc<Mutex<u32>> = Arc::new(Mutex::new(0));
-    let counter = edges.clone();
-    mcu.on_pin_change(Box::new(move |pin, _high, _cycle| {
+    let levels: Arc<Mutex<Vec<bool>>> = Arc::new(Mutex::new(Vec::new()));
+    let recorder = levels.clone();
+    mcu.on_pin_change(Box::new(move |pin, high, _cycle| {
         if pin == pc6 {
-            *counter.lock().unwrap() += 1;
+            recorder.lock().unwrap().push(high);
         }
     }));
     let uart: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
@@ -189,16 +192,25 @@ fn f072_driving_firmware_toggles_pc6_and_prints() {
         mcu.run_micros(50_000).expect("run a 50 ms chunk");
     }
 
-    let n = *edges.lock().unwrap();
+    let seen = levels.lock().unwrap().clone();
     assert!(
-        n >= 2,
-        "PC6 must be seen toggling through the mapped ODR offset; got {n} edges"
+        seen.len() >= 2,
+        "PC6 must be seen toggling through the mapped ODR offset; got {} edges",
+        seen.len()
     );
-    let text = String::from_utf8_lossy(&uart.lock().unwrap()).to_string();
     assert!(
-        text.contains("hello from stm32f072"),
-        "USART1 must reach the host; got {text:?}"
+        seen.windows(2).all(|w| w[0] != w[1]),
+        "consecutive PC6 edges must alternate level, not repeat one: {seen:?}"
     );
+    let bytes = uart.lock().unwrap().clone();
+    let text = String::from_utf8_lossy(&bytes).to_string();
+    // Exactly the banner, byte for byte. The firmware prints nothing else until
+    // it is asked, so a longer stream would mean the bridge added something.
+    assert_eq!(
+        text, "hello from stm32f072\r\n",
+        "USART1 must deliver exactly the banner"
+    );
+    assert_eq!(bytes.len(), 22, "the banner is 22 bytes");
 
     // Direction is observable because every port carries a MODER map, and the
     // pins the firmware configured are exactly the ones reported.
