@@ -1,0 +1,230 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "anyOf": [
+    {
+      "allOf": [
+        {
+          "$ref": "#/definitions/CiJsonReport"
+        }
+      ],
+      "description": "A spec that ran. `ok` is `true`; the verdict is in `passed` / `exit_code`."
+    },
+    {
+      "allOf": [
+        {
+          "$ref": "#/definitions/CiJsonError"
+        }
+      ],
+      "description": "A spec that never ran: unreadable spec, desynced net/component\nreference, missing board or firmware. `ok` is `false` and the run\ncontributes exit 2."
+    }
+  ],
+  "definitions": {
+    "AssertResult": {
+      "description": "The result of one assertion across all seeds. Serialized verbatim into the\n`results` array of the `hauksbee-ci run --json` document, so the published\nschema is generated from this type: see\n`crates/hauksbee-ci/tests/ci_report_schema_drift.rs`. `why` and `waived` are\nthe only two fields a consumer may find ABSENT rather than null.",
+      "properties": {
+        "detail": {
+          "description": "One-line detail (the measured value, the offending seed, etc).",
+          "type": "string"
+        },
+        "failing_seed": {
+          "description": "If it failed, the first seed index that failed (for fuzzed runs).\nAlways present in the JSON, `null` on a pass, unlike `why` and `waived`\nwhich are omitted.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "failing_seeds": {
+          "description": "Every ensemble member this assertion failed on (empty on a pass). For a\ntolerance ensemble this is the per-seed failure list the report and\nJUnit surface, together with the pass-rate.",
+          "items": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": "array"
+        },
+        "invalid": {
+          "description": "A THIRD outcome distinct from pass/fail (05 §3b): the assertion could not\nbe honestly evaluated because its analog evaluation window overlaps a\nchunk the solver failed on, so the samples there are held-stale. When\n`invalid` is true, `passed` is always false, but this is NOT an ordinary\nfailure: the run exits 3 (invalid-for-analysis) rather than 1, even below\nthe consecutive-abort threshold. A normal pass or fail leaves it `false`.",
+          "type": "boolean"
+        },
+        "kind": {
+          "description": "The assertion kind, as the spec's `kind` token (`voltage`, `uart`,\n`blink`, `no_faults`, `hwtrace`, ...).",
+          "type": "string"
+        },
+        "label": {
+          "description": "The assertion's label: its `label` in the spec, or a generated one\nnaming the kind and subject.",
+          "type": "string"
+        },
+        "passed": {
+          "description": "Did the assertion hold on every ensemble member. False on an ordinary\nred, on a waived red, and on an INVALID result.",
+          "type": "boolean"
+        },
+        "seeds_total": {
+          "description": "How many ensemble members were evaluated.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "waived": {
+          "description": "Set when an active waiver (hauksbee-waivers.toml beside the board)\ncovers this failure: the reason + expiry, e.g.\n\"fab-confirmed artifact (until 2026-09-01)\". A waived failure stays\nvisible on every surface but does not gate the exit code. ABSENT (not\nnull) when no waiver covers this result.",
+          "type": "string"
+        },
+        "why": {
+          "description": "On a real red: one sentence naming the OBSERVED shortfall (\"dipped to\n3.300 V, 0.100 V below your 3.4 V floor\"), computed from the first\nfailing member's measurement. The human report prints it as the `why:`\nline in place of the generic per-kind pointer. ABSENT (not null) on\npass/INVALID and on kinds whose detail already carries the diagnosis.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "kind",
+        "passed",
+        "invalid",
+        "detail",
+        "failing_seed",
+        "failing_seeds",
+        "seeds_total"
+      ],
+      "type": "object"
+    },
+    "CiJsonError": {
+      "description": "The error line: a spec that could not be run at all.",
+      "properties": {
+        "error": {
+          "description": "Why the spec did not run, the same sentence stderr carries.",
+          "type": "string"
+        },
+        "ok": {
+          "const": false,
+          "description": "Always `false` on an error line.",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ok",
+        "error"
+      ],
+      "type": "object"
+    },
+    "CiJsonReport": {
+      "description": "The machine-readable result of one spec's run: the `--json` document, and\nwhat the web checks panel consumes via `/api/check`.\n\nEvery field below is ALWAYS present, including `coverage`, which is `null`\nrather than absent when the run was not a tolerance ensemble. The only\nconditionally-absent keys in the whole document are `why` and `waived`\ninside each element of `results` (see [`AssertResult`]), which are omitted\nentirely rather than set to `null`.",
+      "properties": {
+        "analog_abort": {
+          "description": "Did the analog co-sim trip the consecutive-failed-chunk abort. Forces\n`exit_code` 3 on its own, even when no single assertion was affected.",
+          "type": "boolean"
+        },
+        "assertions_passed": {
+          "description": "Did every assertion pass or carry an active waiver. True with\n`run_valid: false` means \"nothing failed, but do not trust it\".",
+          "type": "boolean"
+        },
+        "board": {
+          "description": "The board file the spec bound, as the spec wrote it.",
+          "type": "string"
+        },
+        "coverage": {
+          "description": "The one-line tolerance-ensemble coverage claim, worded so it cannot\nover-claim. `null` when the run was not an ensemble. Always present:\nnullable, not absent.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "coverage_warnings": {
+          "description": "Co-sim coverage holes: dropped ADC injections, never-exercised bus\nperipherals. Non-empty means part of the co-sim path never ran.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "dead_rails": {
+          "description": "Nets that name themselves a supply but that nothing powered. Non-empty\nmeans the operating point every result below was solved around is\nfiction.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "elapsed_s": {
+          "description": "Wall-clock duration of the run, in seconds.",
+          "format": "double",
+          "type": "number"
+        },
+        "exit_code": {
+          "description": "The process exit code this run contributes: 0 green, 1 red, 3 invalid\nfor analysis. Never 2 here, a spec error is the error variant instead.",
+          "format": "int32",
+          "type": "integer"
+        },
+        "ok": {
+          "const": true,
+          "description": "Always `true` on a report line. A `false` here is the error variant,\nwhich carries `error` and none of the fields below.",
+          "type": "boolean"
+        },
+        "passed": {
+          "description": "The OVERALL verdict: `exit_code == 0`. Green only when the run was\ntrustworthy AND every assertion held. Never read this without\n`run_valid`: `assertions_passed` alone can be true over a run whose\nanalog side collapsed.",
+          "type": "boolean"
+        },
+        "results": {
+          "description": "One entry per assertion, in spec order. An `hwtrace` assertion expands\nto one entry per (channel, feature), so this can be longer than the\nspec's `[[assert]]` list.",
+          "items": {
+            "$ref": "#/definitions/AssertResult"
+          },
+          "type": "array"
+        },
+        "run_valid": {
+          "description": "Was the run trustworthy: `false` when the analog co-sim aborted or any\nassertion's evaluation window overlapped a failed solve chunk.",
+          "type": "boolean"
+        },
+        "schema_version": {
+          "description": "[`CI_REPORT_SCHEMA_VERSION`]: the shape of this document.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "seeds": {
+          "description": "How many ensemble members ran (fuzz seeds, or tolerance members).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "spec_name": {
+          "description": "The spec's `name`, or its file stem when the spec did not set one.",
+          "type": "string"
+        },
+        "substitutions": {
+          "description": "One entry per MCU co-simulated on a SUBSTITUTE core. Non-empty means a\ngreen verdict does not vouch for firmware on the requested silicon.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "waiver_notes": {
+          "description": "Waiver-file housekeeping: a lapsed waiver, an active waiver that matched\nnothing, a malformed file that was ignored.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "schema_version",
+        "ok",
+        "spec_name",
+        "board",
+        "passed",
+        "assertions_passed",
+        "run_valid",
+        "exit_code",
+        "analog_abort",
+        "seeds",
+        "elapsed_s",
+        "coverage",
+        "substitutions",
+        "coverage_warnings",
+        "dead_rails",
+        "waiver_notes",
+        "results"
+      ],
+      "type": "object"
+    }
+  },
+  "description": "One line of `hauksbee-ci run <spec>... --json`: a run report (`ok: true`) or a spec/board error (`ok: false`). A multi-spec invocation prints one line per spec (NDJSON) and may mix the two. schema_version 1. GENERATED from `CiJsonLine` in crates/hauksbee-ci/src/report.rs and `AssertResult` in crates/hauksbee-ci/src/assertions.rs. Do not hand-edit; regenerate with: UPDATE_CI_REPORT_SCHEMA=1 cargo test -p hauksbee-ci --test ci_report_schema_drift",
+  "title": "hauksbee-ci run --json output line"
+}

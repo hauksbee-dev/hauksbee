@@ -56,6 +56,11 @@ hauksbee-mcu = { version = "0.1.0", path = "../hauksbee-mcu", default-features =
 
 [dev-dependencies]
 hauksbee-testkit = { path = "../hauksbee-testkit" }
+# The `--json` schema test validates the bytes the binary really emits against
+# the generated schema, which needs a real draft-07 validator rather than a
+# hand-rolled walk. default-features = false keeps reqwest/rustls out: the
+# schema is local, so remote `$ref` resolution is not wanted.
+jsonschema = { version = "0.49", default-features = false }
 # The firmware-input parity test zips a committed .hex to prove a spec's
 # `firmware = "fw.zip"` resolves exactly like `run --firmware` does.
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
