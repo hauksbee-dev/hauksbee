@@ -20,10 +20,9 @@
 //! `wdt.elf` starves its watchdog; `nowdt.elf` is the same firmware with the one
 //! arming line removed. The control completed every chunk even while the first
 //! hung, so a green result on the pair cannot come from a harness that stopped
-//! looking. `avr_reboots_and_reports_it` also checks the reboot is COUNTED, and
-//! `a_firmware_with_no_watchdog_never_reports_a_reset` checks the counter does
-//! not fire on its own: a rewind detector that triggered on ordinary running
-//! would report phantom reboots forever.
+//! looking. The starved image must also report its reboots as COUNTED, and the
+//! control must report zero: a rewind detector that triggered on ordinary
+//! running would report phantom reboots forever.
 //!
 //! # Timing
 //!
@@ -35,7 +34,7 @@
 #![cfg(feature = "avr")]
 
 use hauksbee_mcu::{AvrMcu, Mcu};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 const CHUNK_US: u64 = 5_000;
@@ -53,7 +52,7 @@ fn firmware(name: &str) -> Option<PathBuf> {
 ///
 /// "Chunks completed" is the whole point: before the fix this function did not
 /// return, so the assertion that matters most is that the loop terminates.
-fn run(elf: &PathBuf) -> (u32, u32, u64) {
+fn run(elf: &Path) -> (u32, u32, u64) {
     let mut mcu = AvrMcu::atmega328p_16mhz().expect("create MCU");
     mcu.load_firmware(elf).expect("load firmware");
 
