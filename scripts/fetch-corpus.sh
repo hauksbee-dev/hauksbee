@@ -86,6 +86,8 @@ for b in doc.get("board", []):
         # revision pair overrides it so both halves group under one directory.
         b.get("dest", b["id"]),
         b.get("sha256", ""),
+        b.get("hoist", ""),
+        b.get("unpack", ""),
         b.get("name", b["id"]),
     ]))
 PY
@@ -262,7 +264,7 @@ else
   mkdir -p "$DIR"
 fi
 
-while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed dest_rel sha256 name; do
+while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed dest_rel sha256 hoist unpack name; do
   [ "$tag" = "BOARD" ] || continue
   wanted "$id" || continue
   total=$((total + 1))
@@ -291,21 +293,74 @@ while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed dest_rel 
   if [ "$FORCE" = 1 ]; then rm -rf "$dest"; fi
   mkdir -p "$(dirname "$dest")"
 
-  info "$id  <- $url${rev:+ @ $rev}"
+  # Name the destination when the manifest overrode it, and say when the pin is a
+  # hash rather than a revision. Both are visible in the log rather than
+  # something you have to go and look up in corpus.toml.
+  where=""
+  [ "$dest_rel" = "$id" ] || where=" -> $dest_rel"
+  info "$id$where  <- $url${rev:+ @ $rev}${sha256:+ @ sha256:${sha256:0:12}}"
   case "$kind" in
     git) fetch_git "$id" "$url" "$rev" "$dest"          || { failed=$((failed+1)); FAILED_IDS+=("$id"); rm -rf "$dest.partial"; warn "$id FAILED"; continue; } ;;
     zip) fetch_zip "$id" "$url" "$sha256" "$dest"       || { failed=$((failed+1)); FAILED_IDS+=("$id"); rm -rf "$dest.partial"; warn "$id FAILED"; continue; } ;;
     *) warn "$id: unknown kind '$kind'"; failed=$((failed+1)); FAILED_IDS+=("$id"); continue ;;
   esac
 
+  # `subdir`: only this part of a large upstream is wanted. KiCad's own
+  # repository is the case that forced this. The manifest has said
+  # `subdir = "demos"` since the entry was added and nothing acted on it, so the
+  # fetch pulled in KiCad's `qa/` tree too, and the zero-shorts corpus gate then
+  # ran over boards whose entire purpose is to reproduce a KiCad bug
+  # (issue14559, issue5750, vme-wren). Those are not known-good hardware; they
+  # are regression fixtures, and grading a false-positive gate on them is a
+  # category error. Everything outside the subtree goes. The subtree LEVEL stays
+  # (`kicad_demos/demos/<project>`), because that is the path the corpus tests
+  # resolve.
+  if [ -n "$subdir" ] && [ -d "$dest/$subdir" ]; then
+    find "$dest" -mindepth 1 -maxdepth 1 \
+      ! -name "$subdir" ! -name '.hauksbee-rev' \
+      ! -iname 'LICENSE*' ! -iname 'COPYING*' ! -iname 'README*' \
+      -exec rm -rf {} + 2>/dev/null || true
+  fi
+
+  # `hoist`: the upstream keeps the design one level down, and the corpus does
+  # not. The ZSWatch DevKit revisions ship as `<repo>/devkit/*` (and `dev-kit/*`
+  # at 1.1.0) while every test asks for `zswatch_devkit/v1.2.0/<file>`, so a
+  # fetched corpus had the boards on disk and no test could find one. Lift the
+  # subtree's contents into the board directory.
+  if [ -n "$hoist" ] && [ -d "$dest/$hoist" ]; then
+    # A dotglob-safe move: `mv "$dest/$hoist"/* ` misses dotfiles and breaks on
+    # a name with a space, both of which occur in this corpus.
+    find "$dest/$hoist" -mindepth 1 -maxdepth 1 -exec mv -f {} "$dest/" \; 2>/dev/null || true
+    rmdir "$dest/$hoist" 2>/dev/null || true
+  fi
+
+  # `unpack`: a board published as an archive inside a repository. The Inkplate 6
+  # gerbers are the case: the repo carries them only as
+  # `Schematics, Gerber, BOM/v1.0/... .zip`, so a fetched corpus had a zip where
+  # the reverse-extraction test wanted a directory of films.
+  if [ -n "$unpack" ] && [ -f "$dest/$unpack" ]; then
+    if command -v unzip >/dev/null 2>&1; then
+      unzip -q -o -j "$dest/$unpack" -d "$dest" 2>/dev/null || \
+        warn "$id: could not unpack $unpack"
+      rm -f "$dest/$unpack"
+    else
+      warn "$id: unzip is absent, leaving $unpack packed"
+    fi
+  fi
+
   # Keep only the design files and the paperwork. Upstream repos carry 3D
   # models, production archives and firmware that we never read, and that turn
   # a lean corpus into gigabytes.
+  #
+  # `*.TXT` is case-sensitive on purpose: it is Altium's drill-file extension
+  # (the Inkplate's EPD_board-RoundHoles.TXT and its slot files), and the gerber
+  # reader cannot stitch layers without it. Matching case-insensitively would
+  # drag in every readme.txt and changelog.txt in every upstream.
   find "$dest" -type f \
     ! -iname '*.kicad_pcb' ! -iname '*.kicad_sch' ! -iname '*.kicad_pro' \
     ! -iname '*.sch' ! -iname '*.brd' ! -iname '*.net' ! -iname '*.PcbDoc' \
     ! -iname '*.d356' ! -iname '*.art' ! -iname '*.g?[lb]' ! -iname '*.drl' \
-    ! -iname '*.gbr' ! -iname '*.zip' ! -iname '*.7z' \
+    ! -iname '*.gbr' ! -iname '*.zip' ! -iname '*.7z' ! -name '*.TXT' \
     ! -iname 'LICENSE*' ! -iname 'COPYING*' ! -iname 'README*' \
     ! -name '.hauksbee-rev' \
     -delete 2>/dev/null || true
