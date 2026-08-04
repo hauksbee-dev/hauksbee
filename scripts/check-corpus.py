@@ -46,9 +46,12 @@ HONOURED_FIELDS = {
     "unpack": 'b.get("unpack"',
     "license": 'b.get("license"',
     "license_confirmed": 'b.get("license_confirmed"',
+    "known_good": 'b.get("known_good"',
+    "known_good_note": 'b["known_good_note"]',
 }
 # Fields this script itself honours, rather than the fetch.
 CHECKED_HERE = {"expect", "axes", "license_note"}
+NOT_KNOWN_GOOD_MARKER = ".hauksbee-not-known-good"
 # Every axis an entry may claim. Spelling is fixed so coverage can be counted
 # rather than guessed at, and a typo cannot quietly invent a new axis.
 AXES = {
@@ -145,6 +148,15 @@ def check_manifest(doc, script_src):
         if b.get("license") == "unconfirmed" and b.get("license_confirmed", True):
             bad.append(f"{bid}: license says unconfirmed but license_confirmed is not false")
 
+        if b.get("known_good", True) is False and not b.get("known_good_note", "").strip():
+            bad.append(
+                f"{bid}: known_good = false with no known_good_note. Excluding a "
+                f"board from the silence gates without saying why is how a gate "
+                f"quietly narrows its own input set"
+            )
+        if b.get("known_good_note") and b.get("known_good", True):
+            bad.append(f"{bid}: known_good_note without known_good = false; nothing reads it")
+
         for a in b.get("axes", []):
             if a not in AXES:
                 bad.append(f"{bid}: unknown axis `{a}`; add it to AXES or fix the spelling")
@@ -217,6 +229,19 @@ def check_landed(doc, root, include_unconfirmed):
                         f"carries {sorted(strays)[:6]}. This is the KiCad qa/ "
                         f"failure: boards outside the wanted subtree reach the gate"
                     )
+        marker = os.path.join(dest, NOT_KNOWN_GOOD_MARKER)
+        if b.get("known_good", True) is False:
+            if not os.path.isfile(marker):
+                bad.append(
+                    f"{bid}: known_good = false and {dest_rel}/{NOT_KNOWN_GOOD_MARKER} "
+                    f"is missing, so the silence gates would grade themselves on it"
+                )
+        elif os.path.isfile(marker):
+            bad.append(
+                f"{bid}: {dest_rel}/{NOT_KNOWN_GOOD_MARKER} is present and the "
+                f"manifest does not declare known_good = false"
+            )
+
         for d in b.get("drop", []):
             if os.path.exists(os.path.join(dest, d)):
                 bad.append(f"{bid}: drop `{d}` is declared and {dest_rel}/{d} is still there")
