@@ -783,19 +783,22 @@ fn main {
     #[test]
     fn empty_upload_says_the_file_is_empty() {
         let err = from_bytes("blank.kicad_pcb", b"").expect_err("empty must not normalize");
-        assert!(
-            err.to_string().contains("this file is empty"),
-            "got: {err}"
-        );
+        assert!(err.to_string().contains("this file is empty"), "got: {err}");
     }
 
     #[test]
     fn firmware_zip_gets_pointed_at_the_firmware_slot() {
         for (label, entry) in [
-            ("platformio", ("firmware/platformio.ini", b"[env:uno]".as_slice())),
+            (
+                "platformio",
+                ("firmware/platformio.ini", b"[env:uno]".as_slice()),
+            ),
             (
                 "pio tree",
-                ("proj/.pio/build/uno/firmware.hex", b":00000001FF".as_slice()),
+                (
+                    "proj/.pio/build/uno/firmware.hex",
+                    b":00000001FF".as_slice(),
+                ),
             ),
             ("hex image", ("blink.hex", b":00000001FF".as_slice())),
         ] {
