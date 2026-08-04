@@ -26,9 +26,9 @@ finds the built image inside automatically, or builds it with your `pio`.
 | Code | Meaning |
 |---|---|
 | 0 | Green: all checks/assertions held. |
-| 1 | Red: an assertion failed (the JSON says which and on which seed). |
-| 2 | Input error: bad spec, missing board, unreadable file. |
-| 3 | Invalid for analysis: the analog solve aborted, results are not trustworthy. Never treat as green OR as an ordinary failure. |
+| 1 | Red: an assertion failed and no active waiver covers it (the JSON says which and on which seed). |
+| 2 | Input error: bad spec, missing board, unreadable file, a usage error, or a requested `--junit`/`--sarif` path that could not be written. |
+| 3 | Invalid for analysis: the analog solve aborted, or an assertion's window overlapped a failed solve span, so results are not trustworthy. Never treat as green OR as an ordinary failure. |
 
 Trust the JSON `passed` field only together with `run_valid`. `hauksbee-ci
 run --json` reports `passed` (the process verdict, false on exit 3),
@@ -38,10 +38,12 @@ run --json` reports `passed` (the process verdict, false on exit 3),
 
 - `hauksbee run <board> --json`: top-level verdict plus per-section findings.
   Schema: `docs/analysis/JSON_OUTPUT.md`.
-- `hauksbee-ci run <spec> --json`: `{ok, passed, assertions_passed, run_valid,
-  exit_code, analog_abort, coverage, substitutions, coverage_warnings,
-  results[]}` where each result is `{label, kind, passed, invalid, detail,
-  failing_seed, failing_seeds, seeds_total}`.
+- `hauksbee-ci run <spec> --json`: two line kinds, discriminated by `ok`, with a
+  `schema_version`, a generated schema at
+  `crates/hauksbee-ci/schemas/hauksbee-ci-report.schema.json`, and a
+  compatibility policy. The field table, the five outcome shapes and which keys
+  are absent rather than null are in `docs/ci/JSON_OUTPUT.md`; read that rather
+  than a list here, which is how this one went stale.
 - Honesty qualifiers are data, not prose. Substitute MCU cores, dropped ADC
   injections, and coverage holes appear in `substitutions` /
   `coverage_warnings`. Surface them to the user. A green run with a

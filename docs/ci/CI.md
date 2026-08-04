@@ -1030,10 +1030,18 @@ Two commands gate, with two deliberately different contracts:
 
 | exit | meaning |
 |---|---|
-| 0 | every assertion held (GREEN) |
-| 1 | at least one assertion failed (RED) |
-| 2 | spec / board error (desynced spec, missing board, bad TOML) |
-| 3 | invalid for analysis: the analog solve aborted, so the result is not trustworthy and the run refuses to pretend |
+| 0 | every assertion held, or every failure is covered by an active waiver (GREEN) |
+| 1 | at least one assertion failed and no active waiver covers it (RED) |
+| 2 | spec / board error (desynced spec, missing board, bad TOML), a usage error, or a requested output file (`--junit`, `--sarif`) that could not be written |
+| 3 | invalid for analysis: the analog solve aborted, or an assertion's evaluation window overlapped a failed solve span, so the result is not trustworthy and the run refuses to pretend |
+
+Two of those rows are easy to misread from the table alone. A waived failure
+exits 0 while its own result still reports `passed: false`, so a consumer reading
+per-assertion results sees a failure on a green build: that is deliberate, and
+`docs/ci/JSON_OUTPUT.md` says how to read the three verdict fields together.
+Exit 3 does not require the solve to have given up entirely; a single assertion
+whose window overlapped one failed chunk is enough, which is the point, because
+that assertion's answer rests on voltages nobody solved.
 
 A multi-spec invocation (`hauksbee-ci run ci/*.toml`) exits with the worst
 code of the set, severity order 3 > 2 > 1 > 0. Copy-paste pipeline blocks for
