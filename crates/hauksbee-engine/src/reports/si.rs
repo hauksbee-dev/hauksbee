@@ -71,7 +71,7 @@ pub fn emit(
     if !matches!(mode, OutputMode::Json) {
         print!(
             "{}",
-            super::check::render_waivers_scoped(&waived, &waivers, Some("si"), true)
+            super::check::render_waivers_scoped(&waived, &waivers, &["si"], true)
         );
     }
     super::note_ungated_findings(strict, si_fails(&report));
