@@ -145,5 +145,7 @@ The full menu is in [`extending/README.md`](extending/README.md).
 
 ## Going deeper
 
-[`docs/DOCS_MAP.md`](DOCS_MAP.md) maps every doc in the tree to the question it
-answers.
+[`docs/DOCS_MAP.md`](DOCS_MAP.md) maps every doc in the shipped set to the
+question it answers. The development tree also carries internal working notes
+(plans, hunt logs, teaching drafts) that the map deliberately does not index and
+a release does not carry.
