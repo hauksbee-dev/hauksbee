@@ -112,6 +112,141 @@ impl EnsembleCoverage {
     }
 }
 
+/// Version of the `hauksbee-ci run --json` document shape, carried in every
+/// emitted line as `schema_version`. Additive fields do NOT bump it (a
+/// consumer that ignores unknown keys keeps working); a removal, a rename, or
+/// a changed meaning does. The published contract, including what counts as
+/// additive, is `docs/ci/JSON_OUTPUT.md`.
+pub const CI_REPORT_SCHEMA_VERSION: u32 = 1;
+
+/// One line of `hauksbee-ci run --json`: either a run report or a spec/board
+/// error. The two are told apart by `ok`, which is `true` on a report and
+/// `false` on an error, so a consumer branches on one boolean before reading
+/// anything else. A multi-spec invocation prints one of these per spec, one per
+/// line (NDJSON), and the variants may be mixed within the one stream.
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+#[serde(untagged)]
+pub enum CiJsonLine {
+    /// A spec that ran. `ok` is `true`; the verdict is in `passed` / `exit_code`.
+    Report(Box<CiJsonReport>),
+    /// A spec that never ran: unreadable spec, desynced net/component
+    /// reference, missing board or firmware. `ok` is `false` and the run
+    /// contributes exit 2.
+    Error(CiJsonError),
+}
+
+/// The machine-readable result of one spec's run: the `--json` document, and
+/// what the web checks panel consumes via `/api/check`.
+///
+/// Every field below is ALWAYS present, including `coverage`, which is `null`
+/// rather than absent when the run was not a tolerance ensemble. The only
+/// conditionally-absent keys in the whole document are `why` and `waived`
+/// inside each element of `results` (see [`AssertResult`]), which are omitted
+/// entirely rather than set to `null`.
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+pub struct CiJsonReport {
+    /// [`CI_REPORT_SCHEMA_VERSION`]: the shape of this document.
+    pub schema_version: u32,
+    /// Always `true` on a report line. A `false` here is the error variant,
+    /// which carries `error` and none of the fields below.
+    #[schemars(schema_with = "schema_true")]
+    pub ok: bool,
+    /// The spec's `name`, or its file stem when the spec did not set one.
+    pub spec_name: String,
+    /// The board file the spec bound, as the spec wrote it.
+    pub board: String,
+    /// The OVERALL verdict: `exit_code == 0`. Green only when the run was
+    /// trustworthy AND every assertion held. Never read this without
+    /// `run_valid`: `assertions_passed` alone can be true over a run whose
+    /// analog side collapsed.
+    pub passed: bool,
+    /// Did every assertion pass or carry an active waiver. True with
+    /// `run_valid: false` means "nothing failed, but do not trust it".
+    pub assertions_passed: bool,
+    /// Was the run trustworthy: `false` when the analog co-sim aborted or any
+    /// assertion's evaluation window overlapped a failed solve chunk.
+    pub run_valid: bool,
+    /// The process exit code this run contributes: 0 green, 1 red, 3 invalid
+    /// for analysis. Never 2 here, a spec error is the error variant instead.
+    pub exit_code: i32,
+    /// Did the analog co-sim trip the consecutive-failed-chunk abort. Forces
+    /// `exit_code` 3 on its own, even when no single assertion was affected.
+    pub analog_abort: bool,
+    /// How many ensemble members ran (fuzz seeds, or tolerance members).
+    pub seeds: u32,
+    /// Wall-clock duration of the run, in seconds.
+    pub elapsed_s: f64,
+    /// The one-line tolerance-ensemble coverage claim, worded so it cannot
+    /// over-claim. `null` when the run was not an ensemble. Always present:
+    /// nullable, not absent.
+    #[schemars(schema_with = "schema_nullable_string", required)]
+    pub coverage: Option<String>,
+    /// One entry per MCU co-simulated on a SUBSTITUTE core. Non-empty means a
+    /// green verdict does not vouch for firmware on the requested silicon.
+    pub substitutions: Vec<String>,
+    /// Co-sim coverage holes: dropped ADC injections, never-exercised bus
+    /// peripherals. Non-empty means part of the co-sim path never ran.
+    pub coverage_warnings: Vec<String>,
+    /// Nets that name themselves a supply but that nothing powered. Non-empty
+    /// means the operating point every result below was solved around is
+    /// fiction.
+    pub dead_rails: Vec<String>,
+    /// Waiver-file housekeeping: a lapsed waiver, an active waiver that matched
+    /// nothing, a malformed file that was ignored.
+    pub waiver_notes: Vec<String>,
+    /// One entry per assertion, in spec order. An `hwtrace` assertion expands
+    /// to one entry per (channel, feature), so this can be longer than the
+    /// spec's `[[assert]]` list.
+    pub results: Vec<AssertResult>,
+}
+
+/// The error line: a spec that could not be run at all.
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+pub struct CiJsonError {
+    /// Always `false` on an error line.
+    #[schemars(schema_with = "schema_false")]
+    pub ok: bool,
+    /// Why the spec did not run, the same sentence stderr carries.
+    pub error: String,
+}
+
+impl CiJsonError {
+    /// The error line for a spec that could not be run.
+    pub fn new(error: impl Into<String>) -> Self {
+        Self {
+            ok: false,
+            error: error.into(),
+        }
+    }
+
+    /// Serialize to the single line `hauksbee-ci run --json` prints.
+    pub fn render_json(&self) -> String {
+        serde_json::to_string(self).unwrap_or_else(|_| {
+            "{\"ok\":false,\"error\":\"could not serialize the spec error\"}".to_string()
+        })
+    }
+}
+
+/// `ok: true`, as a schema constant: the discriminator a consumer branches on
+/// has to be pinned, or the two variants of [`CiJsonLine`] are structurally
+/// ambiguous to a validator.
+fn schema_true(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({ "type": "boolean", "const": true })
+}
+
+/// `ok: false`, the error variant's discriminator. See [`schema_true`].
+fn schema_false(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({ "type": "boolean", "const": false })
+}
+
+/// A string that is ALWAYS emitted and may be `null`. Written by hand because
+/// schemars' `required` attribute marks the key required by dropping `null`
+/// from the type, which would promise a string where a consumer really does
+/// see `null`, the opposite of the field's contract.
+pub(crate) fn schema_nullable_string(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    schemars::json_schema!({ "type": ["string", "null"] })
+}
+
 impl CiResult {
     /// True if every assertion passed or was waived. An INVALID assertion has
     /// `passed == false` and can never be waived, so it is not counted here.
@@ -134,6 +269,39 @@ impl CiResult {
         self.results.iter().filter(|r| r.waived.is_some()).count()
     }
 
+    /// The run result as the published JSON document. Built as a real type
+    /// rather than an ad-hoc object so that the committed schema
+    /// (`crates/hauksbee-ci/schemas/hauksbee-ci-report.schema.json`) is
+    /// GENERATED from it and a new field cannot ship without appearing in the
+    /// contract: `tests/ci_report_schema_drift.rs` fails when the two diverge.
+    pub fn json_report(&self) -> CiJsonReport {
+        CiJsonReport {
+            schema_version: CI_REPORT_SCHEMA_VERSION,
+            ok: true,
+            spec_name: self.spec_name.clone(),
+            board: self.board.clone(),
+            // The OVERALL verdict is the process verdict: green only when the
+            // run was valid AND every assertion held. `passed()` alone ignores
+            // an analog abort (exit 3, every assertion left false-but-not-failed),
+            // which would render a green "all passed" over an untrustworthy run.
+            passed: self.exit_code() == 0,
+            // The two components, so a consumer can tell "an assertion failed"
+            // from "the run itself was not trustworthy".
+            assertions_passed: self.passed(),
+            run_valid: !self.analog_invalid(),
+            exit_code: self.exit_code(),
+            analog_abort: self.analog_abort,
+            seeds: self.seeds,
+            elapsed_s: self.elapsed.as_secs_f64(),
+            coverage: self.coverage.as_ref().map(|c| c.describe()),
+            substitutions: self.substitutions.clone(),
+            coverage_warnings: self.coverage_warnings.clone(),
+            dead_rails: self.dead_rails.clone(),
+            waiver_notes: self.waiver_notes.clone(),
+            results: self.results.clone(),
+        }
+    }
+
     /// Machine-readable run result (the `--json` surface, and what the web
     /// checks panel consumes via `/api/check`). One stable JSON object: the
     /// overall verdict, the per-assertion results verbatim, and every honesty
@@ -141,32 +309,8 @@ impl CiResult {
     /// coverage wording), a consumer must never see a cleaner story than the
     /// terminal does.
     pub fn render_json(&self) -> String {
-        let value = serde_json::json!({
-            "ok": true,
-            "spec_name": self.spec_name,
-            "board": self.board,
-            // The OVERALL verdict is the process verdict: green only when the
-            // run was valid AND every assertion held. `passed()` alone ignores
-            // an analog abort (exit 3, every assertion left false-but-not-failed),
-            // which would render a green "all passed" over an untrustworthy run.
-            "passed": self.exit_code() == 0,
-            // The two components, so a consumer can tell "an assertion failed"
-            // from "the run itself was not trustworthy".
-            "assertions_passed": self.passed(),
-            "run_valid": !self.analog_invalid(),
-            "exit_code": self.exit_code(),
-            "analog_abort": self.analog_abort,
-            "seeds": self.seeds,
-            "elapsed_s": self.elapsed.as_secs_f64(),
-            "coverage": self.coverage.as_ref().map(|c| c.describe()),
-            "substitutions": self.substitutions,
-            "coverage_warnings": self.coverage_warnings,
-            "dead_rails": self.dead_rails,
-            "waiver_notes": self.waiver_notes,
-            "results": self.results,
-        });
-        serde_json::to_string(&value).unwrap_or_else(|e| {
-            format!("{{\"ok\":false,\"error\":\"could not serialize the run result: {e}\"}}")
+        serde_json::to_string(&self.json_report()).unwrap_or_else(|e| {
+            CiJsonError::new(format!("could not serialize the run result: {e}")).render_json()
         })
     }
 
