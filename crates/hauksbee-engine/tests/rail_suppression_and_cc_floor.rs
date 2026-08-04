@@ -46,12 +46,8 @@ fn a_suppressed_rail_with_no_supply_reads_about_zero() {
 
     // Sanity, so the zero below is a consequence of the suppression and not of a
     // board that never had a rail: the unsuppressed rail sits at 5 V.
-    let mut baseline = Scheduler::new(
-        bound_load_board("1k"),
-        None,
-        SolverOptions::default(),
-    )
-    .expect("baseline scheduler");
+    let mut baseline = Scheduler::new(bound_load_board("1k"), None, SolverOptions::default())
+        .expect("baseline scheduler");
     baseline.chunk_s = 1e-4;
     for _ in 0..20 {
         baseline.step(1e-4);
@@ -165,11 +161,7 @@ fn a_draw_under_the_limit_does_not_fold() {
     use hauksbee_server::engine::Engine;
     let mut v = 0.0;
     for _ in 0..200 {
-        v = *engine
-            .step(1e-4)
-            .net_voltages
-            .get("+5V")
-            .unwrap_or(&0.0);
+        v = *engine.step(1e-4).net_voltages.get("+5V").unwrap_or(&0.0);
     }
     assert!(
         (v - 5.0).abs() < 0.05,
@@ -192,7 +184,11 @@ fn suppressing_a_net_with_no_rail_reports_nothing_done() {
         !bound.suppress_rail("GND"),
         "ground carries no auto-rail to suppress"
     );
-    assert_eq!(bound.circuit.devices.len(), before, "the board is untouched");
+    assert_eq!(
+        bound.circuit.devices.len(),
+        before,
+        "the board is untouched"
+    );
     assert!(
         bound.supplies.iter().any(|s| s.net_name == "+5V"),
         "the real rail must survive an unrelated suppression"

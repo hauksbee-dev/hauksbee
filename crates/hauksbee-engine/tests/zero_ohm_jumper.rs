@@ -83,13 +83,15 @@ fn a_zero_ohm_link_binds_as_a_milliohm_jumper_with_a_note() {
         .devices
         .iter()
         .filter_map(|d| match d {
-            Device::Resistor { name, ohms, .. } if *ohms < 1.0 => {
-                Some((name.as_str(), *ohms))
-            }
+            Device::Resistor { name, ohms, .. } if *ohms < 1.0 => Some((name.as_str(), *ohms)),
             _ => None,
         })
         .collect();
-    assert_eq!(links.len(), 10, "all ten 0R jumpers must be bound: {links:?}");
+    assert_eq!(
+        links.len(),
+        10,
+        "all ten 0R jumpers must be bound: {links:?}"
+    );
     for (name, ohms) in &links {
         assert!(
             (*ohms - 1e-3).abs() < 1e-12,

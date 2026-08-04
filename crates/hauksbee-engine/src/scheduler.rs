@@ -2134,7 +2134,9 @@ impl Scheduler {
         if mcu_run_failed && chunk_converged {
             self.record_failed_chunk(
                 chunk,
-                Some("MCU refused to advance; the digital side of this chunk never ran".to_string()),
+                Some(
+                    "MCU refused to advance; the digital side of this chunk never ran".to_string(),
+                ),
             );
         }
         // The consecutive-failure streak resets ONLY on a fully-successful chunk
@@ -2506,9 +2508,8 @@ impl Scheduler {
             Some(prev) if (start - prev.1).abs() <= chunk * 1e-6 => prev.1 = end,
             _ => {
                 self.failed_windows.push((start, end));
-                self.failed_window_reasons.push(
-                    reason.unwrap_or_else(|| "analog march did not advance".to_string()),
-                );
+                self.failed_window_reasons
+                    .push(reason.unwrap_or_else(|| "analog march did not advance".to_string()));
             }
         }
         debug_assert_eq!(self.failed_windows.len(), self.failed_window_reasons.len());
@@ -2585,14 +2586,7 @@ impl Scheduler {
         self.failed_windows
             .iter()
             .zip(self.failed_window_reasons.iter())
-            .map(|((a, b), why)| {
-                format!(
-                    "{:.3}-{:.3} ms: {}",
-                    a * 1e3,
-                    b * 1e3,
-                    why
-                )
-            })
+            .map(|((a, b), why)| format!("{:.3}-{:.3} ms: {}", a * 1e3, b * 1e3, why))
             .collect()
     }
 
@@ -6827,5 +6821,4 @@ mod pulse_and_contention_tests {
             sched.driver_contentions()
         );
     }
-
 }
