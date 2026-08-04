@@ -343,6 +343,15 @@
           "format": "double",
           "default": null
         },
+        "hold_ms": {
+          "description": "boot-coverage: how long (ms) the net must HOLD its level continuously\nafter first reaching it. Absent = hold through the whole boot deadline\n(the strictest reading, right for a set-and-hold control net like a\ndisplay reset). `0` = the level only needs to be REACHED by the\ndeadline (right for a heartbeat / toggling net whose high phase is\nshorter than the boot window, where hold-to-deadline can never pass).\nA positive value = the level must hold continuously for that many ms\nafter the first reach; the run must be long enough to observe the\nwhole hold window or the check fails as unconfirmed.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null
+        },
         "id": {
           "description": "peripheral: the `id` of the `[[peripheral]]` / `[[sensor]]` to read.",
           "type": [
@@ -352,7 +361,7 @@
           "default": null
         },
         "kind": {
-          "description": "Assertion kind. `voltage`: net stays in [min, max]. `uart`: output\ncontains/matches. `toggle`: net toggles at `freq_hz` or >= `min_toggles`.\n`no_faults`: no stress faults raised. `max_current`: I(ref) <= amps.\n`max_temp`: Tj(ref) <= celsius (or device max). `peripheral`: peripheral\nstate check. `rail_window`: rail dip/recovery bounds over a scenario\nwindow. `protection_trip`: battery protection trips (or must not).\n`boot_coverage`: a control net is driven to `min` volts within\n`deadline_ms` of reset (the kebab-case `boot-coverage` is the accepted\nlegacy spelling of the same kind). `phase_margin` / `ac_gain`:\nsmall-signal loop checks (need an `[ac]` block). `hwtrace`: the run\nreproduces a captured hardware trace. `model_coverage`: enough of the\nboard bound to a real device model.",
+          "description": "Assertion kind. `voltage`: net stays in [min, max]. `uart`: output\ncontains/matches. `toggle`: net toggles at `freq_hz` or >= `min_toggles`.\n`no_faults`: no stress faults raised. `max_current`: I(ref) <= amps.\n`max_temp`: Tj(ref) <= celsius (or device max). `peripheral`: peripheral\nstate check. `rail_window`: rail dip/recovery bounds over a scenario\nwindow. `protection_trip`: battery protection trips (or must not).\n`boot_coverage`: a control net is driven to `min` volts within\n`deadline_ms` of reset and held per `hold_ms` (the kebab-case\n`boot-coverage` is the accepted legacy spelling of the same kind). `phase_margin` / `ac_gain`:\nsmall-signal loop checks (need an `[ac]` block). `hwtrace`: the run\nreproduces a captured hardware trace. `model_coverage`: enough of the\nboard bound to a real device model.",
           "type": "string",
           "enum": [
             "voltage",

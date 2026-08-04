@@ -12,10 +12,113 @@
 # Verified against the installed Renode 1.16.1: STM32F1GPIOPort reads CRL/CRH
 # back as written. The stm32f1_crl_crh encoding reads CRL at `offset` and CRH
 # at `offset + 4`.
+#
+# PLATFORM (why platform_repl is inline source, not the stock path): the stock
+# Renode 1.16.1 `platforms/cpus/stm32f103.repl` models no RCC at all — a single
+# read-only tag for RCC_CR, every other RCC register unimplemented (reads
+# return the SVD reset value, writes are dropped). Stock CubeMX HAL firmware
+# polls RCC_CSR for LSIRDY and RCC_CFGR for SWS, so on the stock platform it
+# spins forever in HAL_RCC_OscConfig and never reaches main(). The inline
+# platform below extends the stock file with the peripherals the HAL clock
+# tree needs; it was proven live against the AnyShake Explorer's real
+# PlatformIO/CubeMX firmware (boot stalled at HAL_RCC_OscConfig before, PC13
+# heartbeat observed after).
 [soc]
 backend = "renode"
 machine = "f103"
-platform_repl = "@platforms/cpus/stm32f103.repl"
+platform_repl = """
+// STM32F103 platform for stock CubeMX HAL firmware.
+//
+// Extends the stock Renode stm32f103.repl with what the HAL clock tree needs:
+//
+//   rcc       STM32F1 RCC with self-completing ready bits (CSR/BDCR/CR) and
+//             SWS mirroring SW in CFGR.
+//   flashCtrl FLASH_ACR as read/write storage so the HAL's latency read-back
+//             check passes.
+//   dma1      the F1 DMA1. Register-compatible with the STM32G0 DMA IP that
+//             Renode models (ISR/IFCR + 7 channel blocks). HAL UART/SPI/ADC
+//             traffic is commonly DMA-driven, so without this no DMA byte ever
+//             moves.
+//   spi1      not in the stock platform at any offset.
+//   iwdg      the independent watchdog HAL projects feed.
+
+using "platforms/cpus/stm32f103.repl"
+
+rcc: Python.PythonPeripheral @ sysbus <0x40021000, +0x400>
+    size: 0x400
+    initable: true
+    script: '''
+if request.IsInit:
+    rccregs = [0] * (size / 4)
+    rccregs[0] = 0x83
+    rccregs[9] = 0x0C000000
+elif request.IsRead:
+    request.Value = rccregs[request.Offset >> 2]
+elif request.IsWrite:
+    rccoff = request.Offset >> 2
+    rccval = request.Value
+    if rccoff == 0:
+        if rccval & 0x1: rccval = rccval | 0x2
+        if rccval & 0x10000: rccval = rccval | 0x20000
+        if rccval & 0x1000000: rccval = rccval | 0x2000000
+    elif rccoff == 1:
+        rccval = (rccval & 0xFFFFFFF3) | ((rccval & 0x3) << 2)
+    elif rccoff == 8:
+        if rccval & 0x1: rccval = rccval | 0x2
+    elif rccoff == 9:
+        if rccval & 0x1: rccval = rccval | 0x2
+    rccregs[rccoff] = rccval
+'''
+
+flashCtrl: Python.PythonPeripheral @ sysbus <0x40022000, +0x400>
+    size: 0x400
+    initable: true
+    script: '''
+if request.IsInit:
+    facregs = [0] * (size / 4)
+    facregs[0] = 0x30
+elif request.IsRead:
+    request.Value = facregs[request.Offset >> 2]
+elif request.IsWrite:
+    facregs[request.Offset >> 2] = request.Value
+'''
+
+dma1: DMA.STM32G0DMA @ sysbus 0x40020000
+    numberOfChannels: 7
+    [0-6] -> nvic@[11-17]
+
+spi1: SPI.STM32SPI @ sysbus 0x40013000
+
+// The stock platform clocks every STM32_Timer at 10 MHz. HAL projects run the
+// timers from a 72 MHz PLL (8 MHz HSE x9; APB1/2 timer clocks are both 72 MHz
+// on the F1), and the HAL time base is a timer programmed for a 1 ms tick
+// assuming exactly that. At 10 MHz the tick lands at ~139 Hz, so every
+// HAL_Delay(n) takes 7.2n ms of simulated time and boot never finishes inside
+// a sane co-sim window. TIM1/TIM2 also serve as a 64-bit systime pair in some
+// firmware.
+timer1:
+    frequency: 72000000
+timer2:
+    frequency: 72000000
+timer3:
+    frequency: 72000000
+timer4:
+    frequency: 72000000
+
+iwdg: Timers.STM32_IndependentWatchdog @ sysbus 0x40003000
+    frequency: 40000
+
+// Cortex-M bit-band aliases. The STM32F1 HAL drives RCC through them
+// (__HAL_RCC_LSI_ENABLE() is a write to RCC_CSR_LSION_BB = 0x42420480, not a
+// read-modify-write of RCC_CSR). The stock stm32f103.repl maps no bit-band
+// region, so those writes land on "non existing peripheral at 0x42420480" and
+// the enable never reaches the RCC at all.
+// (Only the peripheral alias. The SRAM alias at 0x22000000 cannot be mapped on
+// this platform: the stock repl declares `sram` as 0x10000000 bytes wide, so it
+// already owns 0x20000000-0x2FFFFFFF. The HAL does not bit-band SRAM.)
+bitbandPeripherals: Miscellaneous.BitBanding @ sysbus <0x42000000, +0x2000000>
+    peripheralBase: 0x40000000
+"""
 cpu_path = "sysbus.cpu"
 uart = "sysbus.usart1"
 frequency_hz = 8_000_000
@@ -70,8 +173,7 @@ dir = { offset = 0x00, encoding = "stm32f1_crl_crh" }
 controllers = ["i2c1"]
 
 [soc.spi]
-# SPI1 is not in the stock stm32f103.repl; we add it via `extra_repl` when an SPI
-# slave is attached. A single-line definition without the IRQ connection works
-# for polling-mode firmware (the firmware checks SR flags, not the NVIC).
+# SPI1 is defined by the inline platform above (it is not in the stock
+# stm32f103.repl at any offset), so no `extra_repl` injection is needed; a
+# second definition would collide with the platform's.
 controllers = ["spi1"]
-extra_repl = "spi1: SPI.STM32SPI @ sysbus 0x40013000"

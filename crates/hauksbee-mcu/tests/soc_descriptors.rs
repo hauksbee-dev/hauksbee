@@ -94,17 +94,50 @@ fn fe310_post_load_setup_is_carried() {
     assert!(c.post_load_setup[0].contains("PRCI_HFROSCCFG"));
 }
 
-/// The STM32F103's SPI extra_repl fragment (also predated by the plan example)
-/// is carried; the F4's is correctly absent.
+/// The STM32F103's SPI1 moved from an `extra_repl` injection into the inline
+/// platform itself (the HAL clock-tree platform defines it unconditionally),
+/// so `extra_repl` must be ABSENT: injecting a second `spi1` at the same
+/// sysbus address would collide with the platform's. The F4's is also absent.
 #[test]
-fn spi_extra_repl_is_carried_where_present() {
+fn spi_extra_repl_is_absent_where_the_platform_defines_the_controller() {
     let f103 = RenodeConfig::from_soc_toml(STM32F103).unwrap();
-    assert_eq!(
-        f103.spi_extra_repl.as_deref(),
-        Some("spi1: SPI.STM32SPI @ sysbus 0x40013000")
+    assert_eq!(f103.spi_extra_repl, None);
+    assert!(
+        f103.platform.contains("spi1: SPI.STM32SPI @ sysbus 0x40013000"),
+        "spi1 lives in the inline platform now"
     );
     let f4 = RenodeConfig::from_soc_toml(STM32F4).unwrap();
     assert_eq!(f4.spi_extra_repl, None);
+}
+
+/// E33: the shipped stm32f103 descriptor carries the proven HAL clock-tree
+/// platform inline (RCC ready bits, FLASH_ACR, DMA1, SPI1, IWDG, 72 MHz
+/// timers, peripheral bit-banding) so stock F1 CubeMX HAL firmware boots
+/// instead of spinning forever in HAL_RCC_OscConfig on the stock platform.
+#[test]
+fn stm32f103_descriptor_ships_the_hal_boot_platform_inline() {
+    let c = RenodeConfig::from_soc_toml(STM32F103).unwrap();
+    assert!(
+        c.platform.contains('\n'),
+        "platform_repl is inline source, not a stock path"
+    );
+    assert!(
+        c.platform.contains("using \"platforms/cpus/stm32f103.repl\""),
+        "the inline platform extends the stock one"
+    );
+    for needle in [
+        "rcc: Python.PythonPeripheral @ sysbus <0x40021000, +0x400>",
+        "flashCtrl: Python.PythonPeripheral @ sysbus <0x40022000, +0x400>",
+        "dma1: DMA.STM32G0DMA @ sysbus 0x40020000",
+        "iwdg: Timers.STM32_IndependentWatchdog @ sysbus 0x40003000",
+        "bitbandPeripherals: Miscellaneous.BitBanding @ sysbus <0x42000000, +0x2000000>",
+        "frequency: 72000000",
+    ] {
+        assert!(c.platform.contains(needle), "platform must carry {needle}");
+    }
+    // The I2C single-read prefetch gate keys on the platform STRING containing
+    // "stm32f1"; the `using` line keeps it firing for the inline form.
+    assert!(c.platform.to_ascii_lowercase().contains("stm32f1"));
 }
 
 /// The AdcChannelMap schema (05 §5.1, post-plan) loads: no built-in uses it, but

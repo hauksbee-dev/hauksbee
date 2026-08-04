@@ -301,6 +301,48 @@ fn validate_web_limits(spec_fragment: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// How long a SIGTERM'd hauksbee-ci child gets to run its emulator reaper and
+/// exit before the SIGKILL fallback.
+#[cfg(unix)]
+const STOP_GRACE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Stop a timed-out `hauksbee-ci` child WITHOUT orphaning its emulators.
+///
+/// The E50 leak: a bare `child.kill()` is SIGKILL, which the child cannot
+/// catch, so the QEMU / Renode emulators it spawned (each in its OWN process
+/// group, deliberately, see hauksbee_mcu::children) are orphaned and keep
+/// free-running at full CPU forever. Verified live: SIGKILL of a mid-co-sim
+/// `hauksbee-ci run` leaves `qemu-system-xtensa` running; SIGTERM reaps it.
+/// hauksbee-ci installs `hauksbee_mcu::children::install_signal_reaper`, so a
+/// SIGTERM lets it group-kill every registered emulator before dying. Repeated
+/// timed-out web checks each leaking one full-speed QEMU is exactly the slow
+/// starvation that ends with the whole `hauksbee serve` box unresponsive or
+/// the server killed, so: TERM first, grace period, then the KILL fallback for
+/// a child too wedged to run its handler.
+fn stop_child(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        // Freshly-exited child: nothing to signal (kill(2) on a reaped pid
+        // could hit a recycled process; on a zombie it is harmless but
+        // pointless). try_wait also reaps, making the pid check meaningful.
+        if matches!(child.try_wait(), Ok(Some(_))) {
+            return;
+        }
+        unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+        let term_sent = std::time::Instant::now();
+        while term_sent.elapsed() < STOP_GRACE {
+            if matches!(child.try_wait(), Ok(Some(_))) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+    // Windows (no signals), or a unix child that ignored/never reached its
+    // TERM handler inside the grace period.
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// Stage the uploaded files, inject the path keys, run `hauksbee-ci --json`,
 /// and relay its JSON. Every failure mode returns `{"ok":false,"error":...}`
 /// so the browser always has something readable.
@@ -399,7 +441,7 @@ pub fn run_web_check(
             Ok(Some(_)) => break,
             Ok(None) => {
                 if started.elapsed() > CHECK_TIMEOUT {
-                    let _ = child.kill();
+                    stop_child(&mut child);
                     return err_json(&format!(
                         "the check run exceeded {}s and was stopped; shorten duration_ms \
                          or run it from the CLI: hauksbee-ci run <spec>",
@@ -644,6 +686,75 @@ kind = "no_faults"
     #[test]
     fn unparseable_fragment_is_passed_through() {
         assert_eq!(validate_web_limits("this = = not toml ]["), Ok(()));
+    }
+
+    /// E50 regression: a timed-out child must get SIGTERM (so its signal
+    /// reaper can kill the emulators it spawned), not a blind SIGKILL. A child
+    /// that exits on TERM must NOT be SIGKILLed; verified by its exit status
+    /// carrying the clean trap exit, not a signal death.
+    #[cfg(unix)]
+    #[test]
+    fn stop_child_terms_gracefully_so_the_childs_reaper_can_run() {
+        use std::os::unix::process::ExitStatusExt;
+        let flag = std::env::temp_dir().join(format!("hauksbee-stopchild-{}", std::process::id()));
+        let _ = std::fs::remove_file(&flag);
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "trap 'exit 0' TERM; : > '{}'; while :; do sleep 0.05; done",
+                flag.display()
+            ))
+            .spawn()
+            .expect("spawn trap child");
+        // Wait for the trap to be installed (the flag file appears after it).
+        let t0 = std::time::Instant::now();
+        while !flag.exists() {
+            assert!(t0.elapsed() < CHECK_TIMEOUT, "child never became ready");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        stop_child(&mut child);
+        let status = child.wait().expect("child reaped");
+        assert_eq!(
+            status.signal(),
+            None,
+            "a TERM-handling child must exit through its handler, not be SIGKILLed: {status}"
+        );
+        assert!(status.success(), "the trap exits 0: {status}");
+        let _ = std::fs::remove_file(&flag);
+    }
+
+    /// The fallback: a child that ignores SIGTERM is still SIGKILLed after the
+    /// grace period, so a wedged run cannot outlive its request forever.
+    #[cfg(unix)]
+    #[test]
+    fn stop_child_kills_a_term_ignoring_child_after_the_grace() {
+        use std::os::unix::process::ExitStatusExt;
+        let flag = std::env::temp_dir().join(format!(
+            "hauksbee-stopchild-stubborn-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&flag);
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!(
+                "trap '' TERM; : > '{}'; while :; do sleep 0.05; done",
+                flag.display()
+            ))
+            .spawn()
+            .expect("spawn stubborn child");
+        let t0 = std::time::Instant::now();
+        while !flag.exists() {
+            assert!(t0.elapsed() < CHECK_TIMEOUT, "child never became ready");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        stop_child(&mut child);
+        let status = child.wait().expect("child reaped");
+        assert_eq!(
+            status.signal(),
+            Some(libc::SIGKILL),
+            "a TERM-ignoring child gets the KILL fallback: {status}"
+        );
+        let _ = std::fs::remove_file(&flag);
     }
 
     /// Acquire the full budget of slots, confirm the next acquire is refused,
