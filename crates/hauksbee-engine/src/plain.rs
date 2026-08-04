@@ -108,6 +108,13 @@ impl HeadsUp {
 pub struct PlainReport {
     /// What was checked, e.g. "Copper spacing (DRC)". Drives the verdict line.
     pub subject: String,
+    /// Overrides the noun phrase the verdict line builds from `subject`. Set it
+    /// when the default ("no {subject, lowercased} problems found") would either
+    /// mangle an acronym or name the wrong thing. `--resources` is both: it runs
+    /// one member of the lint family, so the shared `plain_netlint` subject
+    /// ("connectivity") had it reporting "no connectivity problems found" over a
+    /// pass that only ever looked at MCU resource conflicts.
+    pub verdict_noun: Option<String>,
     pub findings: Vec<PlainFinding>,
     /// Actionable info-level notes promoted into a "Heads up:" section. These are
     /// NOT counted as findings (they don't change the verdict), but they are also
@@ -138,6 +145,7 @@ impl PlainReport {
     fn new(subject: &str) -> Self {
         PlainReport {
             subject: subject.to_string(),
+            verdict_noun: None,
             findings: Vec::new(),
             heads_up: Vec::new(),
         }
@@ -200,6 +208,15 @@ impl PlainReport {
     /// The one-line overall verdict.
     pub fn verdict(&self) -> String {
         let n = self.findings.len();
+        // The two noun phrases the verdict slots in. `verdict_noun` supplies both
+        // verbatim; otherwise they are built from the heading-cased `subject`.
+        let (healthy_noun, failure_noun) = match &self.verdict_noun {
+            Some(noun) => (noun.clone(), noun.clone()),
+            None => {
+                let lower = self.subject.to_lowercase();
+                (format!("{lower} problems"), format!("{lower} failures"))
+            }
+        };
         if n == 0 {
             // No failures, but if there are actionable heads-up notes (e.g. a USB
             // pair off its impedance target), don't claim "no problems found",
@@ -209,14 +226,10 @@ impl PlainReport {
                 let hn = self.heads_up.len();
                 let things = if hn == 1 { "thing" } else { "things" };
                 return format!(
-                    "No {} failures, but {hn} {things} worth a look (see below).",
-                    self.subject.to_lowercase()
+                    "No {failure_noun}, but {hn} {things} worth a look (see below)."
                 );
             }
-            return format!(
-                "Looks healthy: no {} problems found.",
-                self.subject.to_lowercase()
-            );
+            return format!("Looks healthy: no {healthy_noun} found.");
         }
         let serious = self.serious_count();
         let issues = if n == 1 { "issue" } else { "issues" };
