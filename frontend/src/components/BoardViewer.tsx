@@ -227,6 +227,8 @@ export function BoardViewer({
   const [error, setError] = useState<string | null>(null)
   const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d')
   const [layersOpen, setLayersOpen] = useState(false)
+  const layersWrap = useRef<HTMLDivElement>(null)
+  const layersTrigger = useRef<HTMLButtonElement>(null)
   // `capture-on-focus` only: has the reader claimed the map by clicking it?
   // Until then the wheel belongs to the page. Cleared by a click anywhere else,
   // so the map gives the page back the moment attention moves on.
@@ -1045,8 +1047,40 @@ export function BoardViewer({
     return [...board.nets.values()].filter(Boolean).sort()
   }, [netOptions, boardInfo, board])
 
+  // Same dismissal as the export menu and the session switcher: an outside
+  // click or Escape. The panel covers a third of the map, so re-finding the one
+  // button that closes it is not an acceptable way out. Escape hands focus back
+  // to the trigger, because a keyboard reader who dismissed the panel has to
+  // land somewhere, and the control they just used is the only sane place.
+  useEffect(() => {
+    if (!layersOpen) return
+    const onDown = (e: MouseEvent) => {
+      if (!layersWrap.current?.contains(e.target as Node)) setLayersOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return
+      // The expanded view listens for Escape on `window`, which bubbles LAST,
+      // after `document`. Stopping propagation here is what makes the panel the
+      // innermost dismissible surface: one Escape closes the panel and leaves
+      // the map expanded, a second collapses it. A guard on the other effect
+      // cannot do this, because within a single keydown React has not yet
+      // processed the state change and both listeners are still attached.
+      e.stopPropagation()
+      setLayersOpen(false)
+      layersTrigger.current?.focus()
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [layersOpen])
+
   // Escape leaves the expanded view, the way every other fullscreen surface
   // behaves. Only bound while expanded, so it never eats an Escape elsewhere.
+  // Bound on `window` deliberately: it is the last node an Escape reaches, so
+  // any dismissible surface inside the view gets first refusal on the key.
   useEffect(() => {
     if (!fullscreen || !onToggleFullscreen) return
     const onKey = (e: KeyboardEvent) => {
@@ -1172,6 +1206,7 @@ export function BoardViewer({
           >
             <button
               type="button"
+              data-testid="view-2d"
               onClick={() => setViewMode('2d')}
               className="hb-press"
               style={toolbarBtn(viewMode === '2d')}
@@ -1180,6 +1215,7 @@ export function BoardViewer({
             </button>
             <button
               type="button"
+              data-testid="view-3d"
               disabled={!glbUrl && !board}
               onClick={() => { if (glbUrl || board) setViewMode('3d') }}
               title={!glbUrl && !board ? 'The board has not loaded yet' : undefined}
@@ -1261,11 +1297,15 @@ export function BoardViewer({
         </div>
 
         {viewMode === '2d' && board && (
-          <div className="flex flex-col items-end gap-2 ml-auto pointer-events-auto">
+          <div ref={layersWrap} className="flex flex-col items-end gap-2 ml-auto pointer-events-auto">
             <button
               type="button"
+              ref={layersTrigger}
+              data-testid="layers-toggle"
               onClick={() => setLayersOpen(o => !o)}
               aria-expanded={layersOpen}
+              aria-haspopup="dialog"
+              title={layersOpen ? 'Close the layer controls (Esc)' : 'Show and hide board layers'}
               className="hb-press rounded-lg"
               style={{
                 ...toolbarBtn(layersOpen),
