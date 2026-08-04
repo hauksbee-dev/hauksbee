@@ -26,21 +26,18 @@ use std::path::{Path, PathBuf};
 use hauksbee_engine::checks::usb_c::audit_cc_termination;
 use hauksbee_extract::ExtractedBoard;
 
-fn famous_root() -> Option<PathBuf> {
-    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join("famous");
-    if p.exists() {
-        return Some(p);
-    }
-    if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-        panic!(
-            "HAUKSBEE_REQUIRE_CORPUS set but board-corpus is missing at {}",
-            p.display()
-        );
-    }
-    eprintln!("corpus absent; skipping (set HAUKSBEE_REQUIRE_CORPUS=1 to fail)");
-    None
+/// The directory the corpus boards sit directly under, whichever layout this
+/// machine has, or `None` with a printed note.
+///
+/// Resolved through the testkit rather than by joining `famous/` here: that
+/// level exists only in the hand-built corpus, so a hard join found nothing on
+/// the corpus `scripts/fetch-corpus.sh` produces, and every sweep below walked
+/// an empty directory and reported the empty walk as a pass.
+fn corpus_root() -> Option<PathBuf> {
+    hauksbee_testkit::corpus_boards_root_or_skip(
+        env!("CARGO_MANIFEST_DIR"),
+        "USB-C CC double-termination corpus sweep",
+    )
 }
 
 fn load(root: &Path, rel: &str) -> ExtractedBoard {
@@ -59,7 +56,7 @@ fn devkit_external_cc_rd_is_dnp_so_no_double_termination() {
     // extractor honours DNP the DevKit presents the nPM1300 internal Rd alone.
     // No double-termination on any revision. (Before the DNP fix this fired -
     // the false positive the Tarski meta-lesson exists to catch.)
-    let Some(root) = famous_root() else { return };
+    let Some(root) = corpus_root() else { return };
     for rel in [
         "zswatch_devkit/v1.1.0/Dev-Kit.kicad_pcb",
         "zswatch_devkit/v1.2.0/ZSWatch-Watch-DevKit.kicad_pcb",
@@ -97,7 +94,7 @@ fn devkit_external_cc_rd_is_dnp_so_no_double_termination() {
 fn devkit_external_cc_resistors_are_marked_dnp() {
     // Directly assert the populate status the audit depends on, so the test
     // documents the ground truth rather than trusting the audit's internals.
-    let Some(root) = famous_root() else { return };
+    let Some(root) = corpus_root() else { return };
     let board = load(
         &root,
         "zswatch_devkit/v1.2.0/ZSWatch-Watch-DevKit.kicad_pcb",
@@ -116,7 +113,7 @@ fn devkit_external_cc_resistors_are_marked_dnp() {
 
 #[test]
 fn mainboard_internal_rd_only_is_clean() {
-    let Some(root) = famous_root() else { return };
+    let Some(root) = corpus_root() else { return };
     let board = load(&root, "zswatch_mainboard/watch/ZSWatch-Watch.kicad_pcb");
     let audit = audit_cc_termination(&board).expect("mainboard CC termination found");
     assert!(!audit.has_double_termination());
@@ -139,7 +136,7 @@ fn lily58_dual_receptacle_both_halves_terminated() {
     // The fix audits every receptacle and credits any recognised ground. Both
     // halves now present an independent, correct 5.1k Rd on each CC pin (R2/R3
     // on J1 to GND, R11/R12 on J6 to GNDA), verified against the .kicad_pcb.
-    let Some(root) = famous_root() else { return };
+    let Some(root) = corpus_root() else { return };
     let board = load(&root, "lily58/Pro_V2/Pro_V2.kicad_pcb");
     let audit = audit_cc_termination(&board).expect("lily58 CC termination found");
 
@@ -205,7 +202,7 @@ fn rpi4_external_rd_without_integrated_pmic_is_not_doubled() {
     // integrated-Rd PMIC, so that Rd is the sole, correct termination - and it is
     // NOT marked DNP, so the audit still sees it (proving the DNP skip is
     // targeted, not a blanket suppression).
-    let Some(root) = famous_root() else { return };
+    let Some(root) = corpus_root() else { return };
     for rel in [
         "rpi4_usbc_reconstruction/rpi4_usbc_repaired.kicad_sch",
         "rpi4_usbc_reconstruction/rpi4_usbc_as_designed.kicad_sch",

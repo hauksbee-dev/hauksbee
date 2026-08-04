@@ -419,6 +419,31 @@ This is what lets one model produce different behaviour on two board
 revisions with no model edit, the basis of the project's two-sided fault
 validations.
 
+Both mechanisms above name a resistor by reference designator, which ties the
+model to one board's schematic. A third, `[models.current_program]`, is derived
+from topology instead and so works on any board:
+
+```toml
+[models.ratings]
+max_current_a = 1.0        # the part's ceiling
+
+# I_REG = 1000 V / R_PROG (datasheet section 5.2)
+[models.current_program]
+pin = "prog"               # a role in [models.pins]
+k_volts = 1000.0
+```
+
+Declare it for any part whose operating current the *board* chooses with one
+resistor: a charger's PROG, a load switch's ILIM or ISET. Two things follow.
+Checks that need a rail current compute it from the resistor actually fitted, by
+walking from that pin to ground through two-terminal parts (a closed solder link
+is a short, an open one blocks the path). And the part's `max_current_a` stops
+being read as a load anywhere, because for these parts it is a capability: the
+Olimex ESP32-EVB programs its MCP73833 at 200 mA, and treating the 1 A ceiling as
+the rail current over-reported it fivefold. A part with a current-programming pin
+and no equation is still excluded from load attribution, so adding the block
+gains coverage and omitting it costs only coverage, never correctness.
+
 ## Adding a custom part without recompiling
 
 A custom behavioural part is just a TOML file dropped into a user directory.

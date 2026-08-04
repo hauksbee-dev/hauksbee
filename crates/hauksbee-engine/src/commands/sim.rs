@@ -50,8 +50,7 @@ pub fn run(
                 // Never suggest an unrunnable command: the checkout path only
                 // exists inside a hauksbee source tree; elsewhere, point at
                 // the embedded example.
-                let checkout =
-                    std::path::Path::new("examples/decks/rlc_ringdown.cir");
+                let checkout = std::path::Path::new("examples/decks/rlc_ringdown.cir");
                 let suggestion = if checkout.exists() {
                     "hauksbee sim examples/decks/rlc_ringdown.cir --tran --print V(out)"
                 } else {

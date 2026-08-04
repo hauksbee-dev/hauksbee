@@ -108,7 +108,7 @@ const FLOORS: &[Floor] = &[
 ///
 /// Weaker than the per-board floors because it cannot localise a regression, but
 /// it catches a broad narrowing that happens to miss all five named boards.
-const CORPUS_WIDE_FLOOR_PCT: f64 = 22.5;  // measured 23.7% (3791 of 16022)
+const CORPUS_WIDE_FLOOR_PCT: f64 = 22.5; // measured 23.7% (3791 of 16022)
 
 // ─── the board reader ────────────────────────────────────────────────────────
 //
@@ -315,7 +315,10 @@ fn collect(dir: &Path, out: &mut Vec<PathBuf>) {
                 continue;
             }
             collect(&p, out);
-        } else if p.extension().is_some_and(|x| x == "kicad_pcb" || x == "brd") {
+        } else if p
+            .extension()
+            .is_some_and(|x| x == "kicad_pcb" || x == "brd")
+        {
             out.push(p);
         }
     }

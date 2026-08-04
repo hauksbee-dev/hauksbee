@@ -424,6 +424,7 @@ mod tests {
             straps: Vec::new(),
             behavioral: Default::default(),
             logic: Default::default(),
+            current_program: None,
         };
         let compiled = CompiledEntry::compile(entry).expect("compiles");
         let q = ComponentQuery {
