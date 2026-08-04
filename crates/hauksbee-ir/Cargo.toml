@@ -14,6 +14,11 @@ rust-version.workspace = true
 [dependencies]
 strum = { version = "0.27", features = ["derive"] }
 serde = { workspace = true }
+# The evidence spine (`evidence.rs`) is the one vocabulary every producer and
+# renderer reads, and it reaches the published `--json` contract, which has a
+# schema drift test. Deriving the schema where the types live is what keeps that
+# contract from being described twice; the version matches the engine's and ci's.
+schemars = "1.2"
 thiserror = { workspace = true }
 # The `.param` / `{expr}` environment and subckt parameter substitution evaluate
 # arithmetic expressions in the SPICE front-end. `evalexpr` is already the

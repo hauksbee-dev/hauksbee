@@ -17,6 +17,7 @@
 mod bexpr;
 pub mod debug;
 pub mod docs_url;
+pub mod evidence;
 mod models;
 mod source;
 mod spice;
