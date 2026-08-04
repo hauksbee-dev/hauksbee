@@ -46,11 +46,23 @@ pub fn run(
     // actionable message, not a deck-malformed refusal.
     let text = std::fs::read_to_string(file).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            anyhow::anyhow!(
-                "no deck at '{}'. Check the path, or try a bundled example:\n  \
-                 hauksbee sim examples/learn/04-time-integration/rlc_ringdown.cir --tran --print V(out)",
-                file.display()
-            )
+            {
+                // Never suggest an unrunnable command: the checkout path only
+                // exists inside a hauksbee source tree; elsewhere, point at
+                // the embedded example.
+                let checkout =
+                    std::path::Path::new("examples/learn/04-time-integration/rlc_ringdown.cir");
+                let suggestion = if checkout.exists() {
+                    "hauksbee sim examples/learn/04-time-integration/rlc_ringdown.cir --tran --print V(out)"
+                } else {
+                    "hauksbee sim --example rlc_ringdown --tran --print V(out)"
+                };
+                anyhow::anyhow!(
+                    "no deck at '{}'. Check the path, or try a bundled example:\n  \
+                     {suggestion}",
+                    file.display()
+                )
+            }
         } else {
             anyhow::anyhow!("reading '{}': {e}", file.display())
         }
