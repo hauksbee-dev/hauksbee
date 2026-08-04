@@ -94,7 +94,7 @@ pub fn emit(
     if !matches!(mode, OutputMode::Json) {
         print!(
             "{}",
-            super::check::render_waivers_scoped(&waived, &waivers, Some("drc"), true)
+            super::check::render_waivers_scoped(&waived, &waivers, &["drc"], true)
         );
     }
     // Strict: any true short fails the gate (clearance-only does not). An

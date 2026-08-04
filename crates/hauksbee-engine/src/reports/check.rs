@@ -353,25 +353,30 @@ pub(crate) fn render_waivers(
     waived: &[crate::waiver::WaivedFinding],
     waivers: &crate::waiver::WaiverSet,
 ) -> String {
-    render_waivers_scoped(waived, waivers, None, true)
+    // The full `--check` suite evaluates exactly these waiver checks; naming
+    // any other check's waiver stale here would tell the user to delete a
+    // waiver this command never consulted (e.g. a `ci` waiver for
+    // hauksbee-ci's assertions).
+    render_waivers_scoped(waived, waivers, &["drc", "lint", "si"], true)
 }
 
 /// [`render_waivers`], restricted to the checks a narrower command actually ran.
 ///
 /// `--drc` never runs the SI checks, so an SI waiver necessarily matches
 /// nothing there; reporting it "stale" would tell the user to delete a waiver
-/// that is doing its job. `scope` keeps the expired/stale sections to the named
-/// check. `report_stale` is off for subset commands (`--resources` runs only
+/// that is doing its job. `scope` keeps the expired/stale sections to the
+/// checks the running gate actually evaluated (empty = no restriction).
+/// `report_stale` is off for subset commands (`--resources` runs only
 /// part of the lint family, so a no-hit proves nothing about the waiver).
 pub(crate) fn render_waivers_scoped(
     waived: &[crate::waiver::WaivedFinding],
     waivers: &crate::waiver::WaiverSet,
-    scope: Option<&str>,
+    scope: &[&str],
     report_stale: bool,
 ) -> String {
     use std::fmt::Write;
     let in_scope = |w: &&crate::waiver::Waiver| {
-        scope.is_none_or(|s| w.check.eq_ignore_ascii_case(s))
+        scope.is_empty() || scope.iter().any(|s| w.check.eq_ignore_ascii_case(s))
     };
     let expired: Vec<_> = waivers.expired().into_iter().filter(in_scope).collect();
     let stale: Vec<_> = if report_stale {
@@ -486,4 +491,50 @@ pub fn emit_combined_json(
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::render_waivers;
+
+    /// E48: the full `--check` suite evaluates drc/lint/si waivers only, so
+    /// its waiver section must not name a `ci` waiver stale: hauksbee-ci owns
+    /// that check, this command never consulted it, and "matched nothing"
+    /// here would tell the user to delete a waiver doing its job elsewhere.
+    #[test]
+    fn stale_reporting_names_only_the_checks_this_gate_evaluates() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("hauksbee-waivers.toml");
+        std::fs::write(
+            &path,
+            r#"
+[[waive]]
+check = "ci"
+kind = "voltage"
+nets = ["+5V"]
+reason = "known sag until the supply rework lands"
+until = "2030-01-01"
+
+[[waive]]
+check = "si"
+kind = "controlled_impedance"
+nets = ["USB_DP"]
+reason = "prototype stackup"
+until = "2030-01-01"
+"#,
+        )
+        .unwrap();
+        let set = crate::waiver::WaiverSet::load(&path).unwrap();
+        // Neither waiver matched anything: only the si one (an evaluated
+        // check) may be reported stale.
+        let out = render_waivers(&[], &set);
+        assert!(
+            out.contains("si/controlled_impedance"),
+            "the evaluated check's stale waiver must be named:\n{out}"
+        );
+        assert!(
+            !out.contains("ci/voltage"),
+            "a ci waiver must not be reported by the static suite:\n{out}"
+        );
+    }
 }
