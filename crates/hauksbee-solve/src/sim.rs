@@ -152,6 +152,26 @@ fn resolve_branch_device(circuit: &Circuit, name: &str) -> Result<hauksbee_ir::D
     Err(format!("no element named `{name}` in the deck"))
 }
 
+/// The effective options for a deck run: a `.temp` card in the netlist sets
+/// the analysis temperature, exactly as it does in ngspice.
+///
+/// REGRESSION SHAPE. `.temp` was parsed into [`Circuit::temp_c`] and then
+/// consumed by nothing: every deck simulated at 27 C regardless of the card,
+/// while the oracle honored it (93 mV on a silicon diode drop at 85 C, 254 mV
+/// on a TC1 divider; see `tests/decks/temp_diode_tc_85.cir`). Precedence: a
+/// caller that already moved `temperature_c` off the SPICE default of 27 C
+/// stated an explicit control (the server's SetControls slider), and an
+/// explicit control outranks the deck's card; otherwise the deck speaks. At
+/// the default the two readings coincide, so nothing changes for a caller who
+/// wants 27 C.
+fn opts_with_deck_temp(circuit: &Circuit, opts: &SolverOptions) -> SolverOptions {
+    let mut o = opts.clone();
+    if o.temperature_c == 27.0 && circuit.temp_c != 27.0 {
+        o.temperature_c = circuit.temp_c;
+    }
+    o
+}
+
 /// Run the DC operating point and read the requested probes off the solved
 /// unknown vector. `Err` on non-convergence or an unresolvable probe.
 pub fn run_op(
@@ -159,6 +179,7 @@ pub fn run_op(
     opts: &SolverOptions,
     probes: &[Probe],
 ) -> Result<SimOutput, String> {
+    let opts = &opts_with_deck_temp(circuit, opts);
     let mut ws = Workspace::new(circuit);
     dc_operating_point(&mut ws, circuit, opts)?;
 
@@ -233,7 +254,7 @@ pub fn run_tran(
     tstop: f64,
     probes: &[Probe],
 ) -> Result<SimOutput, String> {
-    let wf = Transient::new(opts.clone()).run(circuit, tstop)?;
+    let wf = Transient::new(opts_with_deck_temp(circuit, opts)).run(circuit, tstop)?;
     let n = wf.time.len();
 
     let node_series = |name: &str| -> Result<Vec<f64>, String> {
@@ -411,7 +432,7 @@ pub fn run_ac(
         points: ac.points,
         sweep,
     };
-    let resp = AcAnalysis::new(opts.clone()).run(circuit, &spec)?;
+    let resp = AcAnalysis::new(opts_with_deck_temp(circuit, opts)).run(circuit, &spec)?;
 
     // Resolve each probe's node id(s) once, up front, so a typo fails cleanly.
     enum AcTarget {

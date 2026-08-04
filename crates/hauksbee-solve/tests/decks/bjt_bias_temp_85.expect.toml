@@ -1,0 +1,25 @@
+# bjt_bias at .temp 85: the SGP temperature path against the oracle.
+#
+# The clean-room counterpart is bjt_bias (identical netlist at 27 C), so this
+# pair is two-sided: a broken temperature path leaves bjt_bias green and fails
+# this deck by ~100 mV at the base (VBE(T)) and >0.5 V at the collector (the
+# amplified copy). The tolerances bound the same physics as bjt_bias's, at the
+# same order, because both engines apply the same IS(T)/Vt(T) law; anything
+# past ~1 mV here is a modelling disagreement, not grid noise.
+analysis = "op"
+description = "NPN common-emitter bias point at 85 C: VBE(T) moves the whole bias chain"
+
+[[probe]]
+expr = "V(coll)"
+reltol = 1.0e-4
+abstol = 1.0e-3
+
+[[probe]]
+expr = "V(base)"
+reltol = 5.0e-5
+abstol = 1.0e-3
+
+[[probe]]
+expr = "V(emit)"
+reltol = 1.0e-4
+abstol = 1.0e-3
