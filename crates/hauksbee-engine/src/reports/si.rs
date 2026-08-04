@@ -4,6 +4,8 @@
 //! renders in the requested mode and, under `--strict`, exits non-zero on a real
 //! finding. CLI glue over the extract- and engine-layer SI checks.
 
+use std::path::Path;
+
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 
@@ -15,6 +17,7 @@ use super::{si_fails, OutputMode};
 /// Print the SI report in `mode`, then (under `strict`) exit non-zero on a real
 /// finding.
 pub fn emit(
+    board_path: &Path,
     board: &ExtractedBoard,
     text: &str,
     altium_present: bool,
@@ -29,12 +32,29 @@ pub fn emit(
     // trace-ampacity + input-cap-ripple checks. Shared with `--check`, the JSON
     // aggregate, the TUI and the web front door so every SI surface runs the
     // identical set.
-    let report = crate::checks::engine_si(board, lib, geo_text);
+    let mut report = crate::checks::engine_si(board, lib, geo_text);
+    // Waivers, same semantics as `--check`: an SI finding the board's owner
+    // overruled must come out of THIS gate too, or `--si --strict` turns red on
+    // a board `--check --strict` passes. Same key as check.rs, so one waiver
+    // file covers both commands.
+    let mut waivers = super::check::load_waivers(board_path);
+    let (kept, waived) = waivers.partition("si", std::mem::take(&mut report.findings), |f| {
+        (
+            f.check.as_str().to_string(),
+            f.nets.clone(),
+            f.refs.clone(),
+            f.message.clone(),
+        )
+    });
+    report.findings = kept;
     match mode {
         OutputMode::Json => {
             let bound = bind_board(board, lib);
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
             jr.findings = Some(si_findings_json(&report));
+            // A green verdict that quietly dropped findings would be worse than
+            // no waivers at all, so the machine surface carries them too.
+            jr.waived = waived.iter().cloned().map(Into::into).collect();
             println!("{}", jr.to_json());
         }
         OutputMode::Plain => print!("{}", crate::plain_si(&report).render()),
@@ -48,9 +68,15 @@ pub fn emit(
             }
         }
     }
+    if !matches!(mode, OutputMode::Json) {
+        print!(
+            "{}",
+            super::check::render_waivers_scoped(&waived, &waivers, Some("si"), true)
+        );
+    }
     super::note_ungated_findings(strict, si_fails(&report));
     if strict && si_fails(&report) {
-        std::process::exit(2);
+        super::strict_gate_exit(mode, &super::si_gate_items(&report));
     }
     Ok(())
 }

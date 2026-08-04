@@ -1,0 +1,6 @@
+hauksbee-ci: unknown_key.toml: could not parse spec unknown_key.toml: TOML parse error at line 2, column 1
+  |
+2 | duraton_ms = 5
+  | ^^^^^^^^^^
+unknown field `duraton_ms`, expected one of `name`, `board`, `firmware`, `fit`, `no_fit`, `dnp`, `asbuilt`, `mcu`, `duration_ms`, `frame_ms`, `ambient_c`, `supply`, `net_drive`, `peripheral`, `suppress_rail`, `override`, `tolerance`, `ensemble`, `fuzz`, `scenario`, `profile`, `decoupling`, `ac`, `assert`, `sensor`
+

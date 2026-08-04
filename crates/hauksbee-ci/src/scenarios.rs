@@ -36,6 +36,7 @@ pub struct Scenario {
     pub supply_net: Option<String>,
     /// When the profile's activity begins (ms into the run). Default 0.
     #[serde(default)]
+    #[schemars(range(min = 0.0))]
     pub start_ms: f64,
     /// Deterministic seed for profile jitter. Default 0.
     #[serde(default)]
@@ -47,9 +48,14 @@ pub struct Scenario {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InlineProfile {
+    /// The profile id a `[[scenario]]`'s `profile` field references. Shadows a
+    /// built-in profile of the same name for this spec.
     pub id: String,
+    /// Free-text note on what this load profile represents.
     #[serde(default)]
     pub description: String,
+    /// The `[[profile.segment]]` blocks, applied in order, describing the
+    /// current the part draws over time.
     #[serde(default, rename = "segment")]
     pub segments: Vec<InlineSegment>,
 }
@@ -58,15 +64,24 @@ pub struct InlineProfile {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct InlineSegment {
+    /// Peak current drawn during this segment (A).
     pub level_a: f64,
+    /// Ramp time from the previous level to `level_a` (s). 0 = a step edge,
+    /// which is the worst case for inrush and the reason to model it.
     #[serde(default)]
     pub rise_s: f64,
+    /// How long the segment holds `level_a` (s).
     #[serde(default)]
     pub duration_s: f64,
+    /// Repeat period (s). Non-zero makes the segment a burst that fires every
+    /// `period_s` (e.g. a radio TX slot); 0 runs it once.
     #[serde(default)]
     pub period_s: f64,
+    /// Current drawn between bursts (A). Defaults to 0 (fully idle).
     #[serde(default)]
     pub idle_a: Option<f64>,
+    /// Deterministic jitter (s) applied to the burst start, seeded from the
+    /// scenario's `seed`, so repeats are not perfectly aligned.
     #[serde(default)]
     pub jitter_s: f64,
 }
@@ -112,11 +127,17 @@ pub struct Decoupling {
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CapOverride {
+    /// The capacitor's reference designator, e.g. "C12".
     #[serde(rename = "ref")]
     pub reference: String,
+    /// Equivalent series resistance (ohms), overriding the package/dielectric
+    /// default inferred from the footprint.
     #[serde(default)]
+    #[schemars(range(min = 0.0))]
     pub esr_ohms: Option<f64>,
+    /// Equivalent series inductance (henries), overriding the inferred default.
     #[serde(default)]
+    #[schemars(range(min = 0.0))]
     pub esl_henries: Option<f64>,
 }
 

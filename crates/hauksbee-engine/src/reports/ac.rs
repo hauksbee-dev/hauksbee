@@ -32,6 +32,44 @@ pub fn emit(
         ac_nodes.to_vec()
     };
 
+    // Validate explicitly requested nets BEFORE the sweep: when EVERY
+    // requested node is unknown there is nothing to sweep, so this is user
+    // misuse caught up front (an error with near matches, the --probe
+    // contract) with the documented invalid-for-analysis exit (3), instead of
+    // paying for a full sweep and then only warning about it. A PARTIAL miss
+    // still sweeps: the found nets are real data and the JSON contract
+    // surfaces the missing ones in `not_found_nets`.
+    if !ac_nodes.is_empty()
+        && nodes
+            .iter()
+            .all(|n| !bound.net_names.iter().any(|k| k == n))
+    {
+        let summary = BindSummary::from_report(&bound.report);
+        let missing = nodes.join(", ");
+        let reason = format!("no requested AC nodes found in the circuit: {missing}");
+        if json {
+            let mut jr = JsonReport::new(&bound.name, summary);
+            jr.ac = Some(AcJson {
+                validity: Validity::invalid(reason),
+                nets: Vec::new(),
+                no_signal_path_nets: Vec::new(),
+                not_found_nets: nodes.clone(),
+                coverage: None,
+            });
+            println!("{}", jr.to_json());
+        } else {
+            eprintln!("error: AC result not valid: {reason}");
+            for n in &nodes {
+                let near = crate::reports::cosim::nearest_nets(n, &bound.net_names, 5);
+                if !near.is_empty() {
+                    eprintln!("  '{n}': did you mean {}?", near.join(", "));
+                }
+            }
+            eprintln!("  run --list-nets to see every net name, then re-run.");
+        }
+        std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+    }
+
     let resp = AcAnalysis::new(SolverOptions::default())
         .run(circuit, &spec)
         .map_err(|e| anyhow::anyhow!("AC analysis: {e}"))?;
@@ -93,7 +131,7 @@ pub fn emit(
             });
             println!("{}", jr.to_json());
         } else {
-            eprintln!("WARNING: AC result not valid: {reason}");
+            eprintln!("error: AC result not valid: {reason}");
             // Did-you-mean per missing node, then the discoverability pointer,
             // matching the net-not-found pattern the co-sim / spec surfaces use.
             for n in &nodes {

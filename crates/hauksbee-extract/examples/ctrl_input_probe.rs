@@ -1,6 +1,6 @@
 //! Measurement harness for the "undriven control input at power-up" candidate
 //! check, kept so the decisive NEGATIVE engineering result in
-//! `docs/record/KNOWN_FAULTS_VALIDATION.md` is auditable and re-runnable.
+//! `docs/evidence/KNOWN_FAULTS_VALIDATION.md` is auditable and re-runnable.
 //!
 //! Pattern: a non-rail, non-ground net carrying a dedicated control-pin function
 //! (OE / EN / RST / CS / SHDN) with NO pull resistor on the net reaching a rail

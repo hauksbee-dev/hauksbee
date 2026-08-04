@@ -28,6 +28,26 @@ pub struct AssertResult {
     pub failing_seeds: Vec<u32>,
     /// How many ensemble members were evaluated.
     pub seeds_total: u32,
+    /// On a real red: one sentence naming the OBSERVED shortfall ("dipped to
+    /// 3.300 V, 0.100 V below your 3.4 V floor"), computed from the first
+    /// failing member's measurement. The human report prints it as the `why:`
+    /// line in place of the generic per-kind pointer. Absent on pass/INVALID
+    /// and on kinds whose detail already carries the diagnosis.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    /// Set when an active waiver (hauksbee-waivers.toml beside the board)
+    /// covers this failure: the reason + expiry, e.g.
+    /// "fab-confirmed artifact (until 2026-09-01)". A waived failure stays
+    /// visible on every surface but does not gate the exit code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waived: Option<String>,
+    /// Net names this assertion judges, for waiver matching. Not serialized:
+    /// the JSON surface already carries them in the label/detail.
+    #[serde(skip)]
+    pub subject_nets: Vec<String>,
+    /// Component references this assertion judges, for waiver matching.
+    #[serde(skip)]
+    pub subject_refs: Vec<String>,
 }
 
 /// Evaluate every assertion in the spec; returns one result per assertion.
@@ -84,6 +104,10 @@ fn evaluate_hwtrace(
         failing_seed: None,
         failing_seeds: Vec::new(),
         seeds_total: outcomes.len() as u32,
+        why: None,
+        waived: None,
+        subject_nets: Vec::new(),
+        subject_refs: Vec::new(),
     };
 
     let path = match hwtrace::trace_path(spec, a) {
@@ -171,6 +195,10 @@ fn evaluate_hwtrace(
                         failing_seed: Some(out.seed),
                         failing_seeds: vec![out.seed],
                         seeds_total: outcomes.len() as u32,
+                        why: None,
+                        waived: None,
+                        subject_nets: vec![ch.net.clone()],
+                        subject_refs: Vec::new(),
                     });
                     continue;
                 }
@@ -197,6 +225,10 @@ fn evaluate_hwtrace(
                 failing_seed: failing_seeds.first().copied(),
                 failing_seeds,
                 seeds_total: outcomes.len() as u32,
+                why: None,
+                waived: None,
+                subject_nets: vec![ch.net.clone()],
+                subject_refs: Vec::new(),
             });
         }
     }
@@ -236,21 +268,31 @@ fn evaluate_one(
     // letting a diverged sibling refuse the whole assertion (otherwise a genuine
     // brownout on one corner is silently downgraded to INVALID by an unrelated
     // convergence hiccup on another).
+    // The nets/refs this assertion judges, carried on the result so the waiver
+    // layer can match a failure against hauksbee-waivers.toml without walking
+    // back to the spec (hwtrace expansion breaks any index-based mapping).
+    let subject_nets: Vec<String> = [a.net.as_ref(), a.supply_net.as_ref()]
+        .into_iter()
+        .flatten()
+        .cloned()
+        .collect();
+    let subject_refs: Vec<String> = a.reference.iter().cloned().collect();
+
     let mut last_detail = String::new();
-    let mut failures: Vec<(&RunOutcome, String)> = Vec::new();
+    let mut failures: Vec<(&RunOutcome, String, Option<String>)> = Vec::new();
     for out in outcomes {
         if member_invalid(out) {
             continue;
         }
-        let (ok, detail) = check_seed(a, out);
+        let (ok, detail, why) = check_seed(a, out);
         if ok {
             last_detail = detail;
         } else {
-            failures.push((out, detail));
+            failures.push((out, detail, why));
         }
     }
 
-    if let Some((first, first_detail)) = failures.first() {
+    if let Some((first, first_detail, first_why)) = failures.first() {
         // Lead with the first failing member's measurement, then the exact
         // sampled component values it ran with (the actionable artifact), then
         // the ensemble pass-rate.
@@ -269,7 +311,7 @@ fn evaluate_one(
             let failing: Vec<String> = failures
                 .iter()
                 .take(8)
-                .map(|(o, _)| o.seed.to_string())
+                .map(|(o, _, _)| o.seed.to_string())
                 .collect();
             let more = if failures.len() > 8 { ", …" } else { "" };
             // The passed count must exclude held-stale (INVALID) members, not fold
@@ -298,8 +340,12 @@ fn evaluate_one(
             invalid: false,
             detail,
             failing_seed: Some(failures[0].0.seed),
-            failing_seeds: failures.iter().map(|(o, _)| o.seed).collect(),
+            failing_seeds: failures.iter().map(|(o, _, _)| o.seed).collect(),
             seeds_total: outcomes.len() as u32,
+            why: first_why.clone(),
+            waived: None,
+            subject_nets,
+            subject_refs,
         };
     }
 
@@ -338,6 +384,10 @@ fn evaluate_one(
                     failing_seed: Some(out.seed),
                     failing_seeds: vec![out.seed],
                     seeds_total: outcomes.len() as u32,
+                    why: None,
+                    waived: None,
+                    subject_nets,
+                    subject_refs,
                 };
             }
         }
@@ -356,6 +406,10 @@ fn evaluate_one(
         failing_seed: None,
         failing_seeds: Vec::new(),
         seeds_total: outcomes.len() as u32,
+        why: None,
+        waived: None,
+        subject_nets,
+        subject_refs,
     }
 }
 
@@ -405,7 +459,9 @@ fn analog_eval_window(a: &Assertion, out: &RunOutcome) -> Option<(f64, f64)> {
         "voltage" => Some((a.after_ms.unwrap_or(0.0) / 1000.0, end)),
         "toggle" => Some((0.0, end)),
         "max_current" | "max_temp" => Some((0.0, end)),
-        "boot-coverage" => Some((0.0, a.deadline_ms.map(|d| d / 1000.0).unwrap_or(end))),
+        "boot_coverage" | "boot-coverage" => {
+            Some((0.0, a.deadline_ms.map(|d| d / 1000.0).unwrap_or(end)))
+        }
         "rail_window" => Some((0.0, end)),
         // A vcd_sink's `transitions` field counts analog per-frame threshold
         // crossings (exactly like `toggle`), so a chunk the solver failed on
@@ -418,23 +474,30 @@ fn analog_eval_window(a: &Assertion, out: &RunOutcome) -> Option<(f64, f64)> {
     }
 }
 
-/// Check one assertion against one seed's outcome. Returns (passed, detail).
-fn check_seed(a: &Assertion, out: &RunOutcome) -> (bool, String) {
+/// Check one assertion against one seed's outcome. Returns (passed, detail,
+/// why): `why` is the observed-shortfall sentence a failing bound computes
+/// (`None` on a pass, and on kinds whose detail already IS the diagnosis,
+/// e.g. boot_coverage's drive-state analysis).
+fn check_seed(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
+    // Adapter for the kinds whose checks carry no separate `why`.
+    fn plain((ok, detail): (bool, String)) -> (bool, String, Option<String>) {
+        (ok, detail, None)
+    }
     match a.kind.as_str() {
         "voltage" => check_voltage(a, out),
-        "uart" => check_uart(a, out),
+        "uart" => plain(check_uart(a, out)),
         "toggle" => check_toggle(a, out),
-        "no_faults" => check_no_faults(out),
+        "no_faults" => plain(check_no_faults(out)),
         "max_current" => check_max_current(a, out),
         "max_temp" => check_max_temp(a, out),
-        "peripheral" => check_peripheral(a, out),
+        "peripheral" => plain(check_peripheral(a, out)),
         "rail_window" => check_rail_window(a, out),
-        "protection_trip" => check_protection_trip(a, out),
-        "boot-coverage" => check_boot_coverage(a, out),
-        "model_coverage" => check_model_coverage(a, out),
+        "protection_trip" => plain(check_protection_trip(a, out)),
+        "boot_coverage" | "boot-coverage" => plain(check_boot_coverage(a, out)),
+        "model_coverage" => plain(check_model_coverage(a, out)),
         "phase_margin" => check_phase_margin(a, out),
         "ac_gain" => check_ac_gain(a, out),
-        other => (false, format!("unknown assertion kind '{other}'")),
+        other => (false, format!("unknown assertion kind '{other}'"), None),
     }
 }
 
@@ -544,28 +607,61 @@ fn check_model_coverage(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, 
 
 /// rail_window: judge a rail's behaviour over a scenario window: min/max bounds,
 /// dip duration below a threshold, and recovery time.
-fn check_rail_window(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, String) {
+fn check_rail_window(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
     let net = a.net.clone().unwrap_or_default();
     let scope = a.scenario.clone().unwrap_or_default();
     let Some(win) = out.rail_windows.get(&(scope.clone(), net.clone())) else {
         return (
             false,
             format!("net '{net}' was never sampled in scenario window '{scope}'"),
+            None,
         );
     };
     if win.samples.is_empty() {
-        return (false, format!("net '{net}' had no samples in the window"));
+        return (
+            false,
+            format!("net '{net}' had no samples in the window"),
+            None,
+        );
     }
 
+    // Same marking discipline as check_voltage: the failing clause carries
+    // `<- FAILED HERE`, the passing clauses stay un-annotated, and the why
+    // names the observed excess (volts of sag, ms over the dip budget).
     let mut ok = true;
     let mut parts = Vec::new();
+    let mut whys = Vec::new();
     if let Some(lo) = a.min {
-        ok &= win.min_v >= lo - 1e-6;
-        parts.push(format!("min={:.3}V (>= {lo}V)", win.min_v));
+        if win.min_v >= lo - 1e-6 {
+            parts.push(format!("min={:.3}V (>= {lo}V)", win.min_v));
+        } else {
+            ok = false;
+            parts.push(format!(
+                "min={:.3}V < required {lo}V <- FAILED HERE",
+                win.min_v
+            ));
+            whys.push(format!(
+                "{net} sagged to {:.3} V in the window, {:.3} V below your {lo} V floor",
+                win.min_v,
+                lo - win.min_v
+            ));
+        }
     }
     if let Some(hi) = a.max {
-        ok &= win.max_v <= hi + 1e-6;
-        parts.push(format!("max={:.3}V (<= {hi}V)", win.max_v));
+        if win.max_v <= hi + 1e-6 {
+            parts.push(format!("max={:.3}V (<= {hi}V)", win.max_v));
+        } else {
+            ok = false;
+            parts.push(format!(
+                "max={:.3}V > allowed {hi}V <- FAILED HERE",
+                win.max_v
+            ));
+            whys.push(format!(
+                "{net} rose to {:.3} V in the window, {:.3} V above your {hi} V ceiling",
+                win.max_v,
+                win.max_v - hi
+            ));
+        }
     }
     if let (Some(d), Some(for_ms)) = (a.dip_below, a.for_max_ms) {
         // A duration needs at least two samples to measure (windows(2) yields
@@ -580,8 +676,18 @@ fn check_rail_window(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, Str
             ));
         } else {
             let dip_ms = win.dip_duration_s(d) * 1000.0;
-            ok &= dip_ms <= for_ms + 1e-6;
-            parts.push(format!("dip<{d}V for {dip_ms:.2}ms (<= {for_ms}ms)"));
+            if dip_ms <= for_ms + 1e-6 {
+                parts.push(format!("dip<{d}V for {dip_ms:.2}ms (<= {for_ms}ms)"));
+            } else {
+                ok = false;
+                parts.push(format!(
+                    "dip<{d}V for {dip_ms:.2}ms > allowed {for_ms}ms <- FAILED HERE"
+                ));
+                whys.push(format!(
+                    "{net} sat below {d} V for {dip_ms:.2} ms, {:.2} ms longer than your budget",
+                    dip_ms - for_ms
+                ));
+            }
         }
     }
     if let (Some(d), Some(r), Some(within_ms)) = (a.dip_below, a.recover_to, a.recover_within_ms) {
@@ -593,10 +699,21 @@ fn check_rail_window(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, Str
             ));
         } else {
             let rec_ms = win.recovery_s(d, r) * 1000.0;
-            ok &= rec_ms <= within_ms + 1e-6;
-            parts.push(format!(
-                "recover-to-{r}V in {rec_ms:.2}ms (<= {within_ms}ms)"
-            ));
+            if rec_ms <= within_ms + 1e-6 {
+                parts.push(format!(
+                    "recover-to-{r}V in {rec_ms:.2}ms (<= {within_ms}ms)"
+                ));
+            } else {
+                ok = false;
+                parts.push(format!(
+                    "recover-to-{r}V in {rec_ms:.2}ms > allowed {within_ms}ms <- FAILED HERE"
+                ));
+                whys.push(format!(
+                    "{net} took {rec_ms:.2} ms to climb back to {r} V after dipping below \
+                     {d} V, {:.2} ms past your recovery deadline",
+                    rec_ms - within_ms
+                ));
+            }
         }
     }
 
@@ -608,6 +725,11 @@ fn check_rail_window(a: &crate::spec::Assertion, out: &RunOutcome) -> (bool, Str
             win.min_v,
             win.max_v
         ),
+        if whys.is_empty() {
+            None
+        } else {
+            Some(whys.join("; "))
+        },
     )
 }
 
@@ -911,31 +1033,76 @@ fn check_peripheral(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     (false, format!("peripheral '{id}' assertion incomplete"))
 }
 
-fn check_voltage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
+fn check_voltage(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
     let net = a.net.clone().unwrap_or_default();
     let thr = a.after_ms.unwrap_or(0.0);
     let Some(win) = out.windows.get(&(net.clone(), thr.to_bits())) else {
         return (
             false,
             format!("net '{net}' was never sampled (no window at {thr}ms)"),
+            None,
         );
     };
     if win.samples == 0 {
-        return (false, format!("net '{net}' had no samples after {thr}ms"));
+        return (
+            false,
+            format!("net '{net}' had no samples after {thr}ms"),
+            None,
+        );
     }
     // For a >= bound we care about the worst (minimum) the rail dipped to in
-    // the window; for a <= bound, the worst (maximum) it rose to.
+    // the window; for a <= bound, the worst (maximum) it rose to. A failing
+    // bound is MARKED in the detail and the passing one left un-annotated, so
+    // a two-bound failure reads at a glance; the `why` names the observed
+    // shortfall in volts, which is the number the fix has to close.
     let mut ok = true;
     let mut parts = Vec::new();
+    let mut whys = Vec::new();
     if let Some(lo) = a.min {
         let worst = win.min_v;
-        ok &= worst >= lo - 1e-6;
-        parts.push(format!("min={worst:.3}V (>= {lo}V)"));
+        if worst >= lo - 1e-6 {
+            parts.push(format!("min={worst:.3}V (>= {lo}V)"));
+        } else {
+            ok = false;
+            parts.push(format!("min={worst:.3}V < required {lo}V <- FAILED HERE"));
+            whys.push(if win.last_v >= lo - 1e-6 {
+                format!(
+                    "{net} dipped to {worst:.3} V, {:.3} V below your {lo} V floor, \
+                     before settling back to {:.3} V",
+                    lo - worst,
+                    win.last_v
+                )
+            } else {
+                format!(
+                    "{net} settled {:.3} V below your floor ({:.3} V vs min {lo} V)",
+                    lo - win.last_v,
+                    win.last_v
+                )
+            });
+        }
     }
     if let Some(hi) = a.max {
         let worst = win.max_v;
-        ok &= worst <= hi + 1e-6;
-        parts.push(format!("max={worst:.3}V (<= {hi}V)"));
+        if worst <= hi + 1e-6 {
+            parts.push(format!("max={worst:.3}V (<= {hi}V)"));
+        } else {
+            ok = false;
+            parts.push(format!("max={worst:.3}V > allowed {hi}V <- FAILED HERE"));
+            whys.push(if win.last_v <= hi + 1e-6 {
+                format!(
+                    "{net} rose to {worst:.3} V, {:.3} V above your {hi} V ceiling, \
+                     before settling back to {:.3} V",
+                    worst - hi,
+                    win.last_v
+                )
+            } else {
+                format!(
+                    "{net} settled {:.3} V above your ceiling ({:.3} V vs max {hi} V)",
+                    win.last_v - hi,
+                    win.last_v
+                )
+            });
+        }
     }
     let when = if thr > 0.0 {
         format!(" after {thr}ms")
@@ -949,6 +1116,11 @@ fn check_voltage(a: &Assertion, out: &RunOutcome) -> (bool, String) {
             parts.join(", "),
             win.last_v
         ),
+        if whys.is_empty() {
+            None
+        } else {
+            Some(whys.join("; "))
+        },
     )
 }
 
@@ -1001,13 +1173,19 @@ fn check_uart(a: &Assertion, out: &RunOutcome) -> (bool, String) {
     }
 }
 
-fn check_toggle(a: &Assertion, out: &RunOutcome) -> (bool, String) {
+fn check_toggle(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
     let net = a.net.clone().unwrap_or_default();
     let toggles = out.toggles.get(&net).copied().unwrap_or(0);
 
     if let Some(min) = a.min_toggles {
         let ok = toggles >= min;
-        return (ok, format!("{net}: {toggles} toggles (need >= {min})"));
+        let why = (!ok).then(|| {
+            format!(
+                "{net} toggled {toggles} time(s) over the run, {} short of your {min} minimum",
+                min - toggles
+            )
+        });
+        return (ok, format!("{net}: {toggles} toggles (need >= {min})"), why);
     }
     if let Some(freq) = a.freq_hz {
         // A full square-wave period is two toggles, so frequency = toggles /
@@ -1022,28 +1200,37 @@ fn check_toggle(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         let lo = freq * (1.0 - tol);
         let hi = freq * (1.0 + tol);
         let ok = measured >= lo && measured <= hi;
+        let why = (!ok).then(|| {
+            format!(
+                "{net} ran at ~{measured:.2} Hz, outside your {lo:.2}-{hi:.2} Hz band \
+                 ({freq} Hz ±{:.0}%)",
+                tol * 100.0
+            )
+        });
         return (
             ok,
             format!(
                 "{net}: ~{measured:.2} Hz from {toggles} toggles (want {freq} Hz ±{:.0}%)",
                 tol * 100.0
             ),
+            why,
         );
     }
-    (false, format!("{net}: toggle assertion incomplete"))
+    (false, format!("{net}: toggle assertion incomplete"), None)
 }
 
 /// phase_margin: the loop's phase margin (degrees) at gain crossover must lie in
 /// the requested bound. The loop gain is read at `net` from the shared AC sweep.
-fn check_phase_margin(a: &Assertion, out: &RunOutcome) -> (bool, String) {
+fn check_phase_margin(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
     let net = a.net.clone().unwrap_or_default();
     let Some(ac) = &out.ac else {
-        return (false, "no AC analysis ran (missing [ac] block)".into());
+        return (false, "no AC analysis ran (missing [ac] block)".into(), None);
     };
     let Some(m) = ac.margins.get(&net) else {
         return (
             false,
             format!("net '{net}' produced no loop-stability margins"),
+            None,
         );
     };
     let Some(pm) = m.phase_margin_deg else {
@@ -1053,18 +1240,37 @@ fn check_phase_margin(a: &Assertion, out: &RunOutcome) -> (bool, String) {
                 "loop '{net}' never crosses 0 dB in the swept band (no gain crossover; DC loop gain {:.1} dB)",
                 m.dc_gain_db
             ),
+            None,
         );
     };
     let fc = m.gain_crossover_hz.unwrap_or(f64::NAN);
     let mut ok = true;
     let mut parts = Vec::new();
+    let mut whys = Vec::new();
     if let Some(lo) = a.min {
-        ok &= pm >= lo - 1e-6;
-        parts.push(format!(">= {lo}"));
+        if pm >= lo - 1e-6 {
+            parts.push(format!(">= {lo}"));
+        } else {
+            ok = false;
+            parts.push(format!("{pm:.2} deg < required {lo} deg <- FAILED HERE"));
+            whys.push(format!(
+                "the loop crossed 0 dB with {pm:.2} deg of phase in hand, {:.2} deg \
+                 less than your {lo} deg floor",
+                lo - pm
+            ));
+        }
     }
     if let Some(hi) = a.max {
-        ok &= pm <= hi + 1e-6;
-        parts.push(format!("<= {hi}"));
+        if pm <= hi + 1e-6 {
+            parts.push(format!("<= {hi}"));
+        } else {
+            ok = false;
+            parts.push(format!("{pm:.2} deg > allowed {hi} deg <- FAILED HERE"));
+            whys.push(format!(
+                "the loop's phase margin came out {:.2} deg above your {hi} deg ceiling",
+                pm - hi
+            ));
+        }
     }
     (
         ok,
@@ -1072,24 +1278,30 @@ fn check_phase_margin(a: &Assertion, out: &RunOutcome) -> (bool, String) {
             "loop {net}: phase margin {pm:.2} deg at fc={fc:.4} Hz ({})",
             parts.join(", ")
         ),
+        if whys.is_empty() {
+            None
+        } else {
+            Some(whys.join("; "))
+        },
     )
 }
 
 /// ac_gain: the magnitude (dB) at `net` must lie in the requested bound, at the
 /// frequency `freq_hz` (interpolated) or, if absent, over the whole sweep.
-fn check_ac_gain(a: &Assertion, out: &RunOutcome) -> (bool, String) {
+fn check_ac_gain(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
     let net = a.net.clone().unwrap_or_default();
     let Some(ac) = &out.ac else {
-        return (false, "no AC analysis ran (missing [ac] block)".into());
+        return (false, "no AC analysis ran (missing [ac] block)".into(), None);
     };
     let Some(bode) = ac.bode.get(&net) else {
         return (
             false,
             format!("net '{net}' was not sampled by the AC sweep"),
+            None,
         );
     };
     if bode.is_empty() {
-        return (false, format!("net '{net}' has no AC data"));
+        return (false, format!("net '{net}' has no AC data"), None);
     }
 
     // A requested frequency outside the swept band cannot be measured, interp_db
@@ -1105,6 +1317,7 @@ fn check_ac_gain(a: &Assertion, out: &RunOutcome) -> (bool, String) {
             return (
                 false,
                 format!("ac_gain for '{net}' has a non-finite freq_hz ({f}); set a real frequency"),
+                None,
             );
         }
         let (f_lo, f_hi) = (bode[0].0, bode[bode.len() - 1].0);
@@ -1115,6 +1328,7 @@ fn check_ac_gain(a: &Assertion, out: &RunOutcome) -> (bool, String) {
                     "ac_gain for '{net}' requested {f} Hz is outside the swept band \
                      {f_lo}-{f_hi} Hz; widen [ac] fstart/fstop or move the check in-band"
                 ),
+                None,
             );
         }
     }
@@ -1138,14 +1352,23 @@ fn check_ac_gain(a: &Assertion, out: &RunOutcome) -> (bool, String) {
 
     let mut ok = true;
     let mut parts = Vec::new();
+    let mut whys = Vec::new();
     if let Some(lo) = a.min {
         let worst = if a.freq_hz.is_some() {
             db
         } else {
             bode.iter().map(|p| p.1).fold(f64::INFINITY, f64::min)
         };
-        ok &= worst >= lo - 1e-6;
-        parts.push(format!("min={worst:.3}dB (>= {lo})"));
+        if worst >= lo - 1e-6 {
+            parts.push(format!("min={worst:.3}dB (>= {lo})"));
+        } else {
+            ok = false;
+            parts.push(format!("min={worst:.3}dB < required {lo}dB <- FAILED HERE"));
+            whys.push(format!(
+                "{net} measured {worst:.3} dB {where_str}, {:.3} dB below your {lo} dB floor",
+                lo - worst
+            ));
+        }
     }
     if let Some(hi) = a.max {
         let worst = if a.freq_hz.is_some() {
@@ -1153,10 +1376,26 @@ fn check_ac_gain(a: &Assertion, out: &RunOutcome) -> (bool, String) {
         } else {
             bode.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max)
         };
-        ok &= worst <= hi + 1e-6;
-        parts.push(format!("max={worst:.3}dB (<= {hi})"));
+        if worst <= hi + 1e-6 {
+            parts.push(format!("max={worst:.3}dB (<= {hi})"));
+        } else {
+            ok = false;
+            parts.push(format!("max={worst:.3}dB > allowed {hi}dB <- FAILED HERE"));
+            whys.push(format!(
+                "{net} measured {worst:.3} dB {where_str}, {:.3} dB above your {hi} dB ceiling",
+                worst - hi
+            ));
+        }
     }
-    (ok, format!("{net} gain {where_str}: {}", parts.join(", ")))
+    (
+        ok,
+        format!("{net} gain {where_str}: {}", parts.join(", ")),
+        if whys.is_empty() {
+            None
+        } else {
+            Some(whys.join("; "))
+        },
+    )
 }
 
 /// Linear interpolation (in log-frequency) of magnitude dB at frequency `f`.
@@ -1198,7 +1437,7 @@ fn check_no_faults(out: &RunOutcome) -> (bool, String) {
     }
 }
 
-fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String) {
+fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
     let reference = a.reference.clone().unwrap_or_default();
     let limit = a.amps.unwrap_or(0.0);
     // Aggregate over the package's units, exactly like `check_max_temp`:
@@ -1225,10 +1464,23 @@ fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String) {
             } else {
                 String::new()
             };
-            (
-                ok,
-                format!("I({reference}) peak {peak:.4}A (<= {limit}A){unit}"),
-            )
+            let peak_s = format_amps(peak);
+            if ok {
+                (
+                    true,
+                    format!("I({reference}) peak {peak_s} (<= {limit}A){unit}"),
+                    None,
+                )
+            } else {
+                (
+                    false,
+                    format!("I({reference}) peak {peak_s} > limit {limit}A <- FAILED HERE{unit}"),
+                    Some(format!(
+                        "{reference} drew {peak_s} at peak, {} over your {limit} A limit",
+                        format_amps(peak - limit)
+                    )),
+                )
+            }
         }
         None => (
             // No current data. The runner rejects a max_current on an untracked
@@ -1241,6 +1493,7 @@ fn check_max_current(a: &Assertion, out: &RunOutcome) -> (bool, String) {
                 "I({reference}): no current data was recorded for this component; \
                  the guard was never evaluated, so it cannot be reported green"
             ),
+            None,
         ),
     }
 }
@@ -1275,7 +1528,7 @@ fn key_belongs_to_ref(reference: &str, key: &str) -> bool {
 /// (`key_belongs_to_ref`): `peak_temp_c` and the fault list are keyed by the
 /// stamped device name, which for a multi-unit package is the per-unit
 /// `SW1_q1` / `SW1_s0` form, never the bare `SW1` the assertion names.
-fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String) {
+fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String, Option<String>) {
     let reference = a.reference.clone().unwrap_or_default();
     // Hottest matching entry: the bare ref for a single device, or the hottest
     // unit of a multi-unit package.
@@ -1299,10 +1552,25 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String) {
                 } else {
                     String::new()
                 };
-                (
-                    ok,
-                    format!("Tj({reference}) peak {tj:.1}C{unit} (<= {limit}C)"),
-                )
+                if ok {
+                    (
+                        true,
+                        format!("Tj({reference}) peak {tj:.1}C{unit} (<= {limit}C)"),
+                        None,
+                    )
+                } else {
+                    (
+                        false,
+                        format!(
+                            "Tj({reference}) peak {tj:.1}C > ceiling {limit}C <- FAILED HERE{unit}"
+                        ),
+                        Some(format!(
+                            "{reference} ran {:.1} C hotter than your {limit} C ceiling \
+                             (peak {tj:.1} C{unit})",
+                            tj - limit
+                        )),
+                    )
+                }
             }
             None => {
                 // No thermal data. The runner rejects a max_temp on a component
@@ -1320,6 +1588,7 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String) {
                              {:.1}C <= {limit}C); skipped",
                             out.ambient_c
                         ),
+                        None,
                     )
                 } else {
                     (
@@ -1329,6 +1598,12 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String) {
                              (no dissipation, but ambient alone is over-limit)",
                             out.ambient_c
                         ),
+                        Some(format!(
+                            "{reference} sat idle at the {:.1} C ambient, {:.1} C over your \
+                             {limit} C ceiling; the ceiling is below the spec's ambient_c",
+                            out.ambient_c,
+                            out.ambient_c - limit
+                        )),
                     )
                 }
             }
@@ -1349,13 +1624,34 @@ fn check_max_temp(a: &Assertion, out: &RunOutcome) -> (bool, String) {
                 "Tj({}) exceeded device max: {:.1}C > {:.1}C at {:.1}ms",
                 f.component, f.value, f.limit, f.t_ms
             ),
+            Some(format!(
+                "{} ran {:.1} C past its own {:.1} C max junction temperature at {:.1} ms",
+                f.component,
+                f.value - f.limit,
+                f.limit,
+                f.t_ms
+            )),
         ),
         None => {
-            let detail = match peak {
-                Some((_, tj)) => format!("Tj({reference}) peak {tj:.1}C, within device max"),
-                None => format!("Tj({reference}): no dissipation measured; within device max"),
+            // No sample at all: the junction was never estimated, so this
+            // guard was never evaluated. Reporting it green would be the
+            // same vacuous pass the load-time untracked-ref refusal exists to
+            // prevent; fail with the reason instead (max_current's no-data
+            // branch is the same discipline).
+            let Some((_, tj)) = peak else {
+                return (
+                    false,
+                    format!(
+                        "Tj({reference}): no dissipation was ever measured, so its junction \
+                         temperature was never estimated; the guard was never evaluated and \
+                         cannot be reported green (give the assert an explicit `celsius`, \
+                         or point it at a part this run actually stresses)"
+                    ),
+                    None,
+                );
             };
-            (true, detail)
+            let detail = format!("Tj({reference}) peak {tj:.1}C, within device max");
+            (true, detail, None)
         }
     }
 }
@@ -1996,7 +2292,7 @@ mod tests {
         // would auto-pass a rail that is in fact under the threshold.
         let mut win = RailWindow::new();
         win.observe(0.099, 2.5);
-        let (ok, msg) = check_rail_window(&a, &outcome_with_window(win));
+        let (ok, msg, _why) = check_rail_window(&a, &outcome_with_window(win));
         assert!(
             !ok,
             "a 1-sample dip window must not auto-pass; got pass: {msg}"
@@ -2010,7 +2306,7 @@ mod tests {
         let mut good = RailWindow::new();
         good.observe(0.000, 5.0);
         good.observe(0.010, 5.0);
-        let (ok2, msg2) = check_rail_window(&a, &outcome_with_window(good));
+        let (ok2, msg2, _why) = check_rail_window(&a, &outcome_with_window(good));
         assert!(ok2, "a 2-sample window that never dips must pass: {msg2}");
     }
 
@@ -2068,7 +2364,7 @@ mod tests {
             toml::from_str("kind = \"max_temp\"\nref = \"SW1\"\ncelsius = 150.0\n").unwrap();
         // Many independent builds must all name the SAME (lowest-key) unit.
         for _ in 0..16 {
-            let (ok, msg) = check_max_temp(&a, &outcome_with_tied_temps());
+            let (ok, msg, _why) = check_max_temp(&a, &outcome_with_tied_temps());
             assert!(ok, "100 C is under the 150 C ceiling: {msg}");
             assert!(
                 msg.contains("SW1_q1"),
@@ -2188,17 +2484,49 @@ mod tests {
             ..Default::default()
         };
 
-        let (ok, msg) = check_max_temp(&assertion(70.0), &hot);
+        let (ok, msg, _why) = check_max_temp(&assertion(70.0), &hot);
         assert!(
             !ok,
             "idle U3 at ambient 85C must fail a 70C ceiling, not auto-pass: {msg}"
         );
         // A ceiling above ambient still passes the idle part.
-        let (ok2, msg2) = check_max_temp(&assertion(105.0), &hot);
+        let (ok2, msg2, _why) = check_max_temp(&assertion(105.0), &hot);
         assert!(
             ok2,
             "idle U3 at ambient 85C is within a 105C ceiling: {msg2}"
         );
+    }
+
+    // The celsius-less form on a part with NO temperature sample must FAIL
+    // ("guard never evaluated"), not report "within device max": the junction
+    // was never estimated, so a green there vouches for nothing (the same
+    // discipline as max_current's no-data branch).
+    #[test]
+    fn max_temp_without_ceiling_and_without_any_sample_fails_not_passes() {
+        use super::check_max_temp;
+        use crate::runner::RunOutcome;
+
+        let a: crate::spec::Assertion =
+            toml::from_str("kind = \"max_temp\"\nref = \"U2\"\n").unwrap();
+        let idle = RunOutcome::default(); // no peak_temp_c entry, no faults
+        let (ok, msg, _why) = check_max_temp(&a, &idle);
+        assert!(
+            !ok,
+            "no sample + no ceiling must fail loud, not pass vacuously: {msg}"
+        );
+        assert!(
+            msg.contains("never evaluated"),
+            "the reason names the vacuousness: {msg}"
+        );
+        // With a real sample under the device max, the form still passes.
+        let mut peak_temp_c = std::collections::HashMap::new();
+        peak_temp_c.insert("U2".to_string(), 61.0);
+        let warm = RunOutcome {
+            peak_temp_c,
+            ..Default::default()
+        };
+        let (ok2, msg2, _why) = check_max_temp(&a, &warm);
+        assert!(ok2, "a measured junction below device max passes: {msg2}");
     }
 
     // A max_current assert on a multi-unit package (resistor/diode array) names
@@ -2231,7 +2559,7 @@ mod tests {
 
         // Within a 0.5 A limit (peak unit is 0.12 A): must PASS. Base bug always
         // reported "no current data … cannot be reported green" here.
-        let (ok, msg) = check_max_current(&assertion(0.5), &out);
+        let (ok, msg, _why) = check_max_current(&assertion(0.5), &out);
         assert!(
             ok,
             "a resistor array within its current limit must pass, not miss its unit keys: {msg}"
@@ -2241,7 +2569,7 @@ mod tests {
             "message must name the peak unit: {msg}"
         );
         // And it must still be able to FAIL when a unit exceeds the limit.
-        let (ok_over, msg_over) = check_max_current(&assertion(0.10), &out);
+        let (ok_over, msg_over, _why_over) = check_max_current(&assertion(0.10), &out);
         assert!(
             !ok_over,
             "the hottest-current unit (0.12 A) must trip a 0.10 A limit: {msg_over}"
@@ -2277,7 +2605,7 @@ mod tests {
             "kind = \"rail_window\"\nnet = \"VBUS\"\nscenario = \"load\"\nmin = 3.0\n",
         )
         .unwrap();
-        let (ok, msg) = check_rail_window(&a, &out);
+        let (ok, msg, _why) = check_rail_window(&a, &out);
         assert!(
             !ok,
             "a rail that sagged to 2.9V mid-frame must FAIL a 3.0V floor, not pass on the settled 3.3V: {msg}"
@@ -2294,7 +2622,7 @@ mod tests {
             rail_windows: rw2,
             ..Default::default()
         };
-        let (ok2, _msg2) = check_rail_window(&a, &out_ok);
+        let (ok2, _msg2, _why) = check_rail_window(&a, &out_ok);
         assert!(ok2, "a rail that stayed above 3.0V must pass");
     }
 
@@ -2577,7 +2905,7 @@ mod tests {
         let above: crate::spec::Assertion =
             toml::from_str("kind = \"ac_gain\"\nnet = \"OUT\"\nfreq_hz = 1e6\nmax = -20.0\n")
                 .unwrap();
-        let (ok, msg) = check_ac_gain(&above, &out);
+        let (ok, msg, _why) = check_ac_gain(&above, &out);
         assert!(
             !ok,
             "out-of-band 1 MHz must fail, not clamp-and-pass: {msg}"
@@ -2593,7 +2921,7 @@ mod tests {
         let inband: crate::spec::Assertion =
             toml::from_str("kind = \"ac_gain\"\nnet = \"OUT\"\nfreq_hz = 1000.0\nmax = -20.0\n")
                 .unwrap();
-        let (_, msg2) = check_ac_gain(&inband, &out);
+        let (_, msg2, _why2) = check_ac_gain(&inband, &out);
         assert!(
             !msg2.contains("outside the swept band"),
             "in-band is measured normally: {msg2}"
@@ -2606,11 +2934,41 @@ mod tests {
         let nan_freq: crate::spec::Assertion =
             toml::from_str("kind = \"ac_gain\"\nnet = \"OUT\"\nfreq_hz = nan\nmax = -20.0\n")
                 .unwrap();
-        let (ok, msg3) = check_ac_gain(&nan_freq, &out);
+        let (ok, msg3, _why) = check_ac_gain(&nan_freq, &out);
         assert!(!ok, "a NaN freq_hz must fail, not clamp-and-report: {msg3}");
         assert!(
             msg3.contains("non-finite"),
             "msg names the non-finite freq cause: {msg3}"
         );
+    }
+}
+
+/// Adaptive current formatting: a sub-100 uA peak printed as "0.0000A" is
+/// illegible, so the unit follows the magnitude (A / mA / uA; exact zero stays
+/// "0 A").
+pub(crate) fn format_amps(amps: f64) -> String {
+    let mag = amps.abs();
+    if amps == 0.0 {
+        "0 A".to_string()
+    } else if mag >= 0.1 {
+        format!("{amps:.4} A")
+    } else if mag >= 1e-4 {
+        format!("{:.3} mA", amps * 1e3)
+    } else {
+        format!("{:.3} uA", amps * 1e6)
+    }
+}
+
+#[cfg(test)]
+mod format_amps_tests {
+    use super::format_amps;
+
+    #[test]
+    fn small_currents_get_legible_units() {
+        assert_eq!(format_amps(0.0), "0 A");
+        assert_eq!(format_amps(1.2345), "1.2345 A");
+        assert_eq!(format_amps(0.0123), "12.300 mA");
+        // The old rendering of this value was "0.0000A".
+        assert_eq!(format_amps(4.2e-5), "42.000 uA");
     }
 }

@@ -9,6 +9,17 @@ use hauksbee_server::Server;
 use crate::engine::HauksbeeEngine;
 
 pub fn read_board_text(path: &Path) -> anyhow::Result<String> {
+    // A directory here would surface as the raw OS errno ("Is a directory");
+    // say what is wrong and note the asymmetry with from-code, which accepts
+    // a directory holding one .board file.
+    if path.is_dir() {
+        anyhow::bail!(
+            "'{}' is a directory; to-code reads a single board file, so pass the \
+             .kicad_pcb inside it (from-code does accept a directory containing one \
+             .board file; to-code does not).",
+            path.display()
+        );
+    }
     std::fs::read_to_string(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             anyhow::anyhow!(

@@ -32,7 +32,9 @@ pub mod gerber;
 mod ipc356;
 mod netlint;
 mod netlist;
+pub mod netname;
 mod pcb;
+mod protel_ascii;
 pub mod reader;
 pub mod resource_conflict;
 mod schematic;
@@ -60,7 +62,9 @@ use std::path::Path;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExtractError {
-    #[error("parse: {0}")]
+    // The inner ParseError already says "parse error at line N"; a "parse:"
+    // template here rendered the doubled "parse: parse error" prefix.
+    #[error("{0}")]
     Parse(#[from] forge_sexpr::ParseError),
     #[error("xml: {0}")]
     Xml(String),
@@ -71,11 +75,15 @@ pub enum ExtractError {
         expected: &'static str,
         found: Option<String>,
     },
-    /// No registered [`reader::BoardReader`] recognised the input. `tried`
-    /// enumerates every reader that was offered the bytes, in order, a more
-    /// actionable failure than surfacing only the last fallback's error.
-    #[error("unrecognized board format; tried {tried}")]
-    Unrecognized { tried: String },
+    /// A gerber job input problem, already phrased as a whole human sentence.
+    #[error("{0}")]
+    Gerber(String),
+    /// No registered [`reader::BoardReader`] recognised the input. The message
+    /// is built by [`reader::unrecognized_message`]: it special-cases the
+    /// common look-alikes (empty file, Git LFS pointer, ASCII Protel exports)
+    /// and otherwise lists the accepted formats in user words.
+    #[error("{message}")]
+    Unrecognized { message: String },
     /// A caller-supplied reference designator does not exist on the board.
     #[error("{0}")]
     UnknownReference(String),
@@ -248,6 +256,14 @@ impl ExtractedBoard {
         altium::extract(bytes)
     }
 
+    /// ASCII Protel board export (`|RECORD=Board|KIND=Protel_Advanced_PCB`
+    /// pipe-delimited text): the `.pcbdoc` form EasyEDA and several converters
+    /// produce instead of Altium Designer's binary OLE2 container. Reads nets,
+    /// components, pads and comment texts; carries no copper geometry for DRC.
+    pub fn from_protel_ascii(text: &str) -> Result<Self, ExtractError> {
+        protel_ascii::extract(text)
+    }
+
     /// Altium `.PcbDoc` geometric short / clearance DRC, the binary-format twin
     /// of [`Self::drc`]. Reads copper geometry (tracks, arcs, vias, pads,
     /// polygons) per net and feeds the same detection engine the KiCad and Eagle
@@ -296,7 +312,8 @@ impl ExtractedBoard {
     /// Delegates to the [`reader::Registry`]: each format is a
     /// [`reader::BoardReader`] that owns its own detection, rather than one
     /// hard-coded substring ladder. An input no reader recognises fails with
-    /// [`ExtractError::Unrecognized`], which names every reader that was tried.
+    /// [`ExtractError::Unrecognized`], whose message describes the accepted
+    /// formats in user words (see [`reader::unrecognized_message`]).
     pub fn from_auto(text: &str) -> Result<Self, ExtractError> {
         reader::Registry::builtin().read(text.as_bytes(), None)
     }

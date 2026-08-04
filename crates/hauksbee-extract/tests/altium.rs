@@ -101,6 +101,43 @@ fn track_record(
     rec
 }
 
+/// Build a TEXTS6 record (marker 0x05 + two sub-records): the fixed properties
+/// block (component link at +7, `isComment` flag at +40, `isDesignator` at
+/// +41) then the Pascal-string text.
+fn text_record(component: u16, text: &str, is_comment: bool, is_designator: bool) -> Vec<u8> {
+    let mut rec = vec![0x05u8];
+    // Sub-record 1: 252 bytes, the length real exports use.
+    let mut p = vec![0u8; 252];
+    p[7..9].copy_from_slice(&component.to_le_bytes());
+    p[40] = is_comment as u8;
+    p[41] = is_designator as u8;
+    rec.extend(subrecord(&p));
+    // Sub-record 2: the text as a Pascal string.
+    let mut t = vec![text.len() as u8];
+    t.extend_from_slice(text.as_bytes());
+    rec.extend(subrecord(&t));
+    rec
+}
+
+/// One component named `refdes` (extra properties appended verbatim) with two
+/// copper pads, as a (Components6, Pads6) stream pair.
+fn one_passive(refdes: &str, extra_props: &str) -> (Vec<u8>, Vec<u8>) {
+    let comps = props(&format!(
+        "|LAYER=TOP|X=0mil|Y=0mil|ROTATION=0|PATTERN=RESC3216X70N|SOURCEDESIGNATOR={refdes}{extra_props}"
+    ));
+    let mut pads = Vec::new();
+    pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 0.5));
+    pads.extend(pad_record("2", 1, 1, 0, 1.0, 0.0, 0.5));
+    (comps, pads)
+}
+
+fn two_net_stream() -> Vec<u8> {
+    let mut nets = Vec::new();
+    nets.extend(props("|NAME=A"));
+    nets.extend(props("|NAME=B"));
+    nets
+}
+
 /// Assemble a minimal binary `.PcbDoc` in memory from the given stream bodies.
 fn build_pcbdoc(streams: &[(&str, Vec<u8>)]) -> Vec<u8> {
     let cursor = Cursor::new(Vec::new());
@@ -200,6 +237,128 @@ fn extracts_nets_components_and_pad_nets() {
     let p1 = r1.pins.iter().find(|p| p.number == "1").unwrap();
     let (x, _) = p1.position.unwrap();
     assert!((x - 10.0).abs() < 1e-3, "pad x ~ 10mm, got {x}");
+}
+
+#[test]
+fn comment_text_is_the_value_designator_text_is_not() {
+    // (i) A COMMENT-flagged text supplies the value, unchanged behavior.
+    let (comps, pads) = one_passive("R1", "");
+    let mut texts = Vec::new();
+    texts.extend(text_record(0, "R1", false, true)); // the designator label
+    texts.extend(text_record(0, "10k", true, false)); // the comment/value
+    let bytes = build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+        ("Texts6", texts),
+    ]);
+    let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
+    assert_eq!(board.component("R1").unwrap().value, "10k");
+}
+
+#[test]
+fn missing_value_is_unresolved_never_the_refdes() {
+    // (iii) No comment, no SOURCEDESCRIPTION: the value stays empty with the
+    // unresolved reason attached. The refdes must NOT leak into the value:
+    // "R74" as a value binds downstream as a fabricated 0.74 ohm resistor,
+    // and "RED" (an LED designator) as 1 ohm.
+    for refdes in ["R74", "RED"] {
+        let (comps, pads) = one_passive(refdes, "");
+        let mut texts = Vec::new();
+        // Only a designator text exists, carrying the refdes string; the old
+        // flag mixup read exactly this record as the comment.
+        texts.extend(text_record(0, refdes, false, true));
+        let bytes = build_pcbdoc(&[
+            ("Nets6", two_net_stream()),
+            ("Components6", comps),
+            ("Pads6", pads),
+            ("Texts6", texts),
+        ]);
+        let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
+        let c = board.component(refdes).expect(refdes);
+        assert_eq!(
+            c.value, "",
+            "{refdes}: a missing value must stay empty, not become the refdes"
+        );
+        assert!(
+            c.properties.iter().any(|(k, v)| k == "value_unresolved"
+                && v == "no value in the PcbDoc; Altium keeps values in the .SchDoc"),
+            "{refdes}: the unresolved reason must be exposed, got {:?}",
+            c.properties
+        );
+    }
+}
+
+#[test]
+fn sourcedescription_supplies_the_value_before_unresolved() {
+    // (ii) No comment, but a parseable SOURCEDESCRIPTION: value and ratings
+    // come from it, and no unresolved reason is attached.
+    let (comps, pads) = one_passive(
+        "C7",
+        "|SOURCEDESCRIPTION=Cap Ceramic 1uF 16V X7R 10% SMD 0603",
+    );
+    let bytes = build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+    ]);
+    let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
+    let c = board.component("C7").unwrap();
+    assert_eq!(c.value, "1uF");
+    assert!(c
+        .properties
+        .iter()
+        .any(|(k, v)| k == "voltage_rating" && v == "16V"));
+    assert!(
+        !c.properties.iter().any(|(k, _)| k == "value_unresolved"),
+        "a recovered value must not carry the unresolved reason"
+    );
+
+    // The resistor form with a spaced unit and a power rating.
+    let (comps, pads) = one_passive(
+        "R3",
+        "|SOURCEDESCRIPTION=Resistor SMD chip 1 Ohm 250mW 1% 1206",
+    );
+    let bytes = build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+    ]);
+    let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
+    let c = board.component("R3").unwrap();
+    assert_eq!(c.value, "1Ohm");
+    assert!(c
+        .properties
+        .iter()
+        .any(|(k, v)| k == "power_rating" && v == "250mW"));
+}
+
+#[test]
+fn non_copper_pad_records_are_not_pins() {
+    // A 2-pad passive whose footprint also carries a pad record on a
+    // non-copper layer (paste/mask/mechanical). Counting that record as a pin
+    // made the part a 3-pad "ambiguous bussed array" downstream.
+    let comps =
+        props("|LAYER=TOP|X=0mil|Y=0mil|ROTATION=0|PATTERN=RESC3216X70N|SOURCEDESIGNATOR=R9");
+    let mut pads = Vec::new();
+    pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 0.5));
+    pads.extend(pad_record("2", 1, 1, 0, 1.0, 0.0, 0.5));
+    // Layer 37 is a mask layer in Altium's numbering: not copper.
+    pads.extend(pad_record("3", 37, 0xFFFF, 0, 0.5, 0.0, 0.6));
+    let bytes = build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+    ]);
+    let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
+    let c = board.component("R9").unwrap();
+    assert_eq!(
+        c.pins.len(),
+        2,
+        "only copper pads are pins; got {:?}",
+        c.pins.iter().map(|p| &p.number).collect::<Vec<_>>()
+    );
+    assert!(c.pins.iter().all(|p| p.number != "3"));
 }
 
 #[test]

@@ -825,7 +825,68 @@ fn check_trackable_assert_refs(spec: &Spec, bound: &BoundBoard) -> Result<(), Sp
                      guard would report green without ever being evaluated"
                 )));
             }
+            // The celsius-less form ("<= device max") is only falsifiable when
+            // the model carries a REAL datasheet Tj(max). On a part bound to a
+            // generic fallback, the per-package default ceiling sits so high
+            // the overpower monitor always trips first, so the assertion can
+            // never fail: a gate that reads green while checking nothing.
+            // Refuse at load, the same discipline as the untracked-ref
+            // refusals above.
+            "max_temp" if a.celsius.is_none() => {
+                let has_real_tj = bound.device_meta.iter().any(|m| {
+                    ref_or_unit_matches(reference, &m.reference)
+                        && m.ratings.max_junction_temp_c.is_some()
+                });
+                if !has_real_tj {
+                    return Err(SpecError::Invalid(format!(
+                        "max_temp on '{reference}' needs an explicit `celsius`: {reference} \
+                         is bound to a generic fallback model whose device max is a \
+                         per-package default, not a datasheet limit, so the celsius-less \
+                         form can never fail; add `celsius = <your ceiling in C>`"
+                    )));
+                }
+            }
             _ => {}
+        }
+    }
+    // protection_trip can only observe a supply whose model carries a
+    // protection latch: today that is a `battery` supply with an explicit
+    // `protection_trip_a`. Every other leg (ideal / bench / wall / usb, or a
+    // battery without the trip fields) reports `tripped = false` forever, so
+    // "protection held" would pass green while the rail is overloaded 10x.
+    // Same discipline as the refusals above: a guard that can never fire must
+    // error at load, not pass.
+    for a in &spec.asserts {
+        if a.kind != "protection_trip" {
+            continue;
+        }
+        let Some(net) = &a.supply_net else {
+            continue; // Spec::load already rejected the missing-net form.
+        };
+        let supply = spec.supplies.iter().find(|s| &s.net == net);
+        let protected = supply.is_some_and(|s| s.kind == "battery" && s.protection_trip_a.is_some());
+        if !protected {
+            let why = match supply {
+                None => "no [[supply]] is configured on that net, so it is an ideal rail with \
+                         no protection model"
+                    .to_string(),
+                Some(s) if s.kind == "battery" => {
+                    "the battery supply on that net has no `protection_trip_a`, so it is an \
+                     unprotected pack"
+                        .to_string()
+                }
+                Some(s) => format!(
+                    "the `{}` supply on that net models its current limit as voltage foldback, \
+                     not a latching protection trip",
+                    s.kind
+                ),
+            };
+            return Err(SpecError::Invalid(format!(
+                "protection_trip assert references supply net '{net}', but {why}; the trip \
+                 state can never become true, so the guard would report green without ever \
+                 being evaluated; add `protection_trip_a` (and `protection_delay_ms`) to a \
+                 battery [[supply]] on '{net}', or drop the assert"
+            )));
         }
     }
     Ok(())
@@ -964,6 +1025,14 @@ fn run_one(
     {
         drive_net(&mut bound, &net, volts);
     }
+
+    // Hollow-gate honesty: a voltage/rail_window assertion reading a net that
+    // an IDEAL source (a declared `kind = "ideal"` leg, a binder auto-rail, or
+    // a [[net_drive]]) feeds directly cannot fail for a board reason: the
+    // source holds the net at its programmed voltage regardless of what the
+    // board does. Behavioral legs (bench/wall/usb/battery) are exempt: their
+    // current limits and droop are exactly what such an assertion tests.
+    let hollow_warnings = hollow_gate_warnings(spec, &bound);
 
     // Map net name -> node for fast sampling, and remember which components are
     // monitorable for peak-current (resistors/diodes by name).
@@ -1110,7 +1179,7 @@ fn run_one(
     let boot_watch: Vec<(String, f64)> = spec
         .asserts
         .iter()
-        .filter(|a| a.kind == "boot-coverage")
+        .filter(|a| a.kind == "boot_coverage" || a.kind == "boot-coverage")
         .filter_map(|a| Some((a.net.clone()?, a.min?)))
         .collect();
     let mut boot_first_cross_ms: HashMap<(String, u64), f64> = HashMap::new();
@@ -1429,6 +1498,7 @@ fn run_one(
                     .iter()
                     .map(|b| b.message()),
             )
+            .chain(hollow_warnings.iter().cloned())
             .collect(),
         dead_rails,
         unexercised_bus_ids: engine
@@ -2239,18 +2309,35 @@ fn snapshot_peripherals(
     out
 }
 
-/// Remove the binder's auto-rail on `net`: drop its [`SupplyLeg`] and replace
-/// the leg's internal Vsource with an open (1 TΩ) so the net floats except for
-/// whatever the board itself feeds it.
+/// Remove the binder's auto-rail on `net`: drop its [`SupplyLeg`] and
+/// disconnect the leg's stamped devices so the net floats except for whatever
+/// the board itself feeds it.
+///
+/// The leg's topology matters here (round-2 fix): `SupplyLeg::stamp` places
+/// `Vsupply_<net>` on a PRIVATE node (`__supply_<net>`) behind a series
+/// `Rsupply_<net>` resistor, so matching "a Vsource whose positive node is
+/// the rail" never found it and suppress_rail was a silent NO-OP: the ideal
+/// source kept sourcing through its milliohm series resistor and every
+/// "suppressed" rail still read nominal. The reliable cut is the series
+/// resistor itself: open `Rsupply_<net>` (1 TΩ) and the source is isolated on
+/// its private node no matter how the leg is modelled. The direct-Vsource
+/// match is kept for any bare `Vrail_*` ideal source stamped straight onto
+/// the net (the pre-leg binder shape).
 fn suppress_rail(bound: &mut BoundBoard, net: &str) {
     let Some(node) = bound.node(net) else { return };
     bound.supplies.retain(|s| s.net != node);
-    // The leg's source is named "Vsupply_<net>"; turn it (and any "Vrail_")
-    // source on this node into an open resistor.
-    let target = format!("Vsupply_{net}");
+    let series = format!("Rsupply_{net}");
     for dev in bound.circuit.devices.iter_mut() {
-        if let Device::Vsource { name, p, .. } = dev {
-            if *p == node && (name == &target || name.starts_with("Vrail")) {
+        match dev {
+            // The leg's series resistor: opening it disconnects the private
+            // drive node from the rail.
+            Device::Resistor { name, ohms, .. } if name == &series => {
+                *ohms = 1e12;
+            }
+            // A bare ideal source stamped directly on the rail node.
+            Device::Vsource { name, p, .. }
+                if *p == node && (name == &format!("Vsupply_{net}") || name.starts_with("Vrail")) =>
+            {
                 let (nm, a, b) = (name.clone(), *p, NodeId::GROUND);
                 *dev = Device::Resistor {
                     name: nm,
@@ -2260,8 +2347,45 @@ fn suppress_rail(bound: &mut BoundBoard, net: &str) {
                     tc1: None,
                 };
             }
+            _ => {}
         }
     }
+}
+
+/// One warning per voltage/rail_window assertion whose net is fed DIRECTLY by
+/// an ideal source: a declared `kind = "ideal"` supply leg, a binder
+/// auto-rail (also stamped as an ideal leg), or a `[[net_drive]]`. Such an
+/// assertion is a hollow gate: the source holds the net at its programmed
+/// voltage, so the check cannot fail for a board reason and its green vouches
+/// for nothing. Behavioral legs (bench / wall / usb / battery) are exempt on
+/// purpose, their droop and current limits are exactly what a rail assertion
+/// tests, and so is a net an ideal source feeds only *through* board parts.
+fn hollow_gate_warnings(spec: &Spec, bound: &BoundBoard) -> Vec<String> {
+    use hauksbee_engine::power_supply::PowerSupply;
+    let ideal_fed: std::collections::HashSet<&str> = bound
+        .supplies
+        .iter()
+        .filter(|leg| matches!(leg.supply, PowerSupply::Ideal { .. }))
+        .map(|leg| leg.net_name.as_str())
+        .chain(spec.net_drives.iter().map(|d| d.net.as_str()))
+        .collect();
+    let mut out = Vec::new();
+    for a in &spec.asserts {
+        if !matches!(a.kind.as_str(), "voltage" | "rail_window") {
+            continue;
+        }
+        let Some(net) = a.net.as_deref() else { continue };
+        if ideal_fed.contains(net) {
+            out.push(format!(
+                "assertion '{}' reads net '{net}', which your own ideal source feeds \
+                 directly; it cannot fail for a board reason (the source holds the net at \
+                 its programmed voltage). Assert on a net the board derives from it, or \
+                 model the real supply (bench/usb/battery) so droop is possible",
+                a.label()
+            ));
+        }
+    }
+    out
 }
 
 /// Force `net` to a fixed DC voltage by stamping an ideal source (unless one is
@@ -2316,21 +2440,37 @@ fn attach_supply(bound: &mut BoundBoard, s: &SupplySpec) -> Result<(), SpecError
 
 /// Map a [`SupplySpec`] to the engine's behavioral [`PowerSupply`].
 fn build_supply(s: &SupplySpec) -> Result<PowerSupply, SpecError> {
-    let v = s.volts.unwrap_or(5.0);
+    // SupplySpec::validate already rejected a missing volts / usb / chemistry
+    // at load; the error paths here are defense in depth for callers that
+    // construct a SupplySpec without going through Spec::load. No silent
+    // default: a guessed 5.0 V on a 3.3 V board fabricates faults.
+    let volts_required = || {
+        SpecError::Invalid(format!(
+            "supply on '{}': `{}` needs an explicit `volts`",
+            s.net, s.kind
+        ))
+    };
     let supply = match s.kind.as_str() {
-        "ideal" => PowerSupply::Ideal { volts: v },
+        "ideal" => PowerSupply::Ideal {
+            volts: s.volts.ok_or_else(volts_required)?,
+        },
         "bench" => PowerSupply::Bench {
-            volts: v,
+            volts: s.volts.ok_or_else(volts_required)?,
             current_limit_a: s.current_limit_a.unwrap_or(1.0),
         },
         "wall" => PowerSupply::Wall {
-            volts: v,
+            volts: s.volts.ok_or_else(volts_required)?,
             r_out_ohms: s.r_out_ohms.unwrap_or(0.5),
             ripple_vpp: s.ripple_vpp.unwrap_or(0.1),
             ripple_hz: s.ripple_hz.unwrap_or(100.0),
         },
         "usb" => PowerSupply::Usb {
-            spec: match s.usb.as_deref().unwrap_or("5v0.5a") {
+            spec: match s.usb.as_deref().ok_or_else(|| {
+                SpecError::Invalid(format!(
+                    "supply on '{}': `usb` needs an explicit profile (5v0.5a|5v1.5a|5v3a)",
+                    s.net
+                ))
+            })? {
                 "5v0.5a" | "5v_0.5a" => UsbSpec::V5_0_5A,
                 "5v1.5a" | "5v_1.5a" => UsbSpec::V5_1_5A,
                 "5v3a" | "5v_3a" => UsbSpec::V5_3A,
@@ -2343,7 +2483,13 @@ fn build_supply(s: &SupplySpec) -> Result<PowerSupply, SpecError> {
             },
         },
         "battery" => PowerSupply::Battery {
-            chemistry: match s.chemistry.as_deref().unwrap_or("liion") {
+            chemistry: match s.chemistry.as_deref().ok_or_else(|| {
+                SpecError::Invalid(format!(
+                    "supply on '{}': `battery` needs an explicit `chemistry` \
+                     (liion|alkaline|nimh|lifepo4)",
+                    s.net
+                ))
+            })? {
                 "liion" | "lipo" => Chemistry::LiIon,
                 "alkaline" => Chemistry::Alkaline,
                 "nimh" => Chemistry::NiMh,
@@ -3023,5 +3169,97 @@ address = 0x48
             warnings.is_empty(),
             "non-qemu backends must not warn: {warnings:?}"
         );
+    }
+
+    /// protection_trip on a supply leg with no protection model must REFUSE at
+    /// load. Before the guard, "[PASS] +5V protection held" was reported while
+    /// 5 A was drawn from a 500 mA USB profile: the USB/bench foldback never
+    /// sets a trip latch, and an unprotected battery has nothing to latch, so
+    /// the assertion was structurally green.
+    #[test]
+    fn protection_trip_on_unprotected_supply_refuses_at_load() {
+        let dir = std::env::temp_dir().join(format!(
+            "hauksbee-ci-prot-guard-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        let load = |name: &str, body: &str| -> Spec {
+            let p = dir.join(name);
+            std::fs::write(&p, body).unwrap();
+            Spec::load(&p).expect("spec loads")
+        };
+        let bound = BoundBoard {
+            name: "prot-guard".to_string(),
+            circuit: hauksbee_ir::Circuit::new(),
+            net_nodes: HashMap::new(),
+            net_names: Vec::new(),
+            digital: Vec::new(),
+            mcus: Vec::new(),
+            dnp_mcus: Vec::new(),
+            component_kinds: HashMap::new(),
+            input_sources: HashMap::new(),
+            supplies: Vec::new(),
+            behavioral: Vec::new(),
+            device_meta: Vec::new(),
+            dacs: Vec::new(),
+            report: hauksbee_engine::report::BindReport::default(),
+        };
+        let assert_block = "[[assert]]\nkind = \"protection_trip\"\n\
+             supply_net = \"+5V\"\nexpect_trip = false\n";
+
+        // No [[supply]] on the net at all: an ideal rail, nothing to trip.
+        let spec = load(
+            "none.toml",
+            &format!("board = \"b.kicad_pcb\"\nduration_ms = 1\n{assert_block}"),
+        );
+        let err = check_trackable_assert_refs(&spec, &bound)
+            .expect_err("ideal auto-rail carries no protection model");
+        assert!(
+            err.to_string().contains("no [[supply]]"),
+            "names the missing supply: {err}"
+        );
+
+        // A USB profile: current-limited by foldback, but no protection latch.
+        let spec = load(
+            "usb.toml",
+            &format!(
+                "board = \"b.kicad_pcb\"\nduration_ms = 1\n\
+                 [[supply]]\nnet = \"+5V\"\nkind = \"usb\"\nusb = \"5v0.5a\"\n{assert_block}"
+            ),
+        );
+        let err = check_trackable_assert_refs(&spec, &bound)
+            .expect_err("usb foldback is not a protection latch");
+        assert!(
+            err.to_string().contains("voltage foldback"),
+            "explains the usb refusal: {err}"
+        );
+
+        // A battery without protection_trip_a: an unprotected pack.
+        let spec = load(
+            "batt-unprot.toml",
+            &format!(
+                "board = \"b.kicad_pcb\"\nduration_ms = 1\n\
+                 [[supply]]\nnet = \"+5V\"\nkind = \"battery\"\nchemistry = \"liion\"\n{assert_block}"
+            ),
+        );
+        let err = check_trackable_assert_refs(&spec, &bound)
+            .expect_err("an unprotected battery has nothing to latch");
+        assert!(
+            err.to_string().contains("protection_trip_a"),
+            "points at the missing field: {err}"
+        );
+
+        // A protected battery: the guard accepts, the trip is observable.
+        let spec = load(
+            "batt-prot.toml",
+            &format!(
+                "board = \"b.kicad_pcb\"\nduration_ms = 1\n\
+                 [[supply]]\nnet = \"+5V\"\nkind = \"battery\"\nchemistry = \"liion\"\n\
+                 protection_trip_a = 1.0\nprotection_delay_ms = 2.0\n{assert_block}"
+            ),
+        );
+        check_trackable_assert_refs(&spec, &bound)
+            .expect("a protected battery pack is a checkable guard");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

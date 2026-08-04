@@ -1,18 +1,20 @@
 //! `hauksbee-models`, PCB component model library.
 //!
 //! Given a component identified by lib_id, value, footprint, or part-number,
-//! this crate resolves a simulation model definition. Physics arrives by five
-//! authoring routes (built-in DB, installed model packs, codex datasheet
-//! extraction, hand-written behavioural models, user SPICE) that map onto
-//! explicit priority layers ([`SourceLayer`], 06-extensibility-sdk §3):
+//! this crate resolves a simulation model definition. Physics arrives by
+//! several authoring routes (built-in DB, installed model packs, LLM
+//! datasheet extraction, hand-written behavioural models, user SPICE) that
+//! map onto six explicit priority layers ([`SourceLayer`],
+//! 06-extensibility-sdk §3):
 //!
-//! | layer                        | priority |
-//! |------------------------------|----------|
-//! | built-in db                  | 0        |
-//! | installed packs              | 10       |
-//! | user model dirs              | 20       |
-//! | `--models-dir`               | 30       |
-//! | user SPICE cards             | 40       |
+//! | layer                                    | priority |
+//! |------------------------------------------|----------|
+//! | built-in db                              | 0        |
+//! | installed packs                          | 10       |
+//! | user model dir (`~/.hauksbee/models`)    | 20       |
+//! | user config dir (`~/.config/hauksbee/models`) | 25  |
+//! | `--models-dir`                           | 30       |
+//! | user SPICE cards                         | 40       |
 //!
 //! Higher layer wins outright; *within* a layer the specificity score breaks
 //! the tie (see [`matcher`]). Same-layer conflicts between two different

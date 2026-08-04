@@ -1,0 +1,10 @@
+board = "nope.kicad_pcb"
+
+[[peripheral]]
+id = "trace"
+type = "vcd_sink"
+net = "CLK"
+vcd_path = "out.vcd"
+
+[[assert]]
+kind = "no_faults"

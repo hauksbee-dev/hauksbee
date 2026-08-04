@@ -105,6 +105,7 @@ fn ci_result(results: Vec<hauksbee_ci::assertions::AssertResult>, analog_abort: 
         substitutions: Vec::new(),
         coverage_warnings: Vec::new(),
         dead_rails: Vec::new(),
+        waiver_notes: Vec::new(),
     }
 }
 

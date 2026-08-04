@@ -56,6 +56,15 @@ fn synth_eagle() -> Vec<u8> {
         .to_vec()
 }
 
+/// A minimal ASCII Protel `.pcbdoc`: leading `|RECORD=` pipe records with the
+/// `Protel_Advanced_PCB` kind, which is exactly what the reader keys on.
+fn synth_protel_ascii() -> Vec<u8> {
+    b"|RECORD=Board|KIND=Protel_Advanced_PCB|VERSION=5.00\n\
+      |RECORD=Net|ID=0|NAME=GND\n\
+      |RECORD=Component|ID=0|LAYER=TOP|X=0mil|Y=0mil|ROTATION=0|PATTERN=R0603|SOURCEDESIGNATOR=R1\n"
+        .to_vec()
+}
+
 /// A minimal Altium `.PcbDoc`: an OLE2 container carrying a `Nets6` storage,
 /// which is exactly what `looks_like_pcbdoc` keys on.
 fn synth_altium() -> Vec<u8> {
@@ -142,6 +151,12 @@ fn detection_matrix_every_fixture() {
         path: None,
         expected: "altium",
     });
+    cases.push(Case {
+        label: "<synth> protel-ascii.pcbdoc".into(),
+        bytes: synth_protel_ascii(),
+        path: None,
+        expected: "protel-ascii",
+    });
 
     assert!(
         cases.len() >= 10,
@@ -211,10 +226,11 @@ fn detection_matrix_every_fixture() {
 fn probe_all(bytes: &[u8], path: Option<&Path>) -> Vec<&'static str> {
     use hauksbee_extract::reader::{
         AltiumReader, BoardReader, EagleReader, Ipc356Reader, KicadNetlistReader, KicadPcbReader,
-        KicadSchematicReader,
+        KicadSchematicReader, ProtelAsciiReader,
     };
     let readers: Vec<(&'static str, Box<dyn BoardReader>)> = vec![
         ("altium", Box::new(AltiumReader)),
+        ("protel-ascii", Box::new(ProtelAsciiReader)),
         ("eagle", Box::new(EagleReader)),
         ("kicad-netlist", Box::new(KicadNetlistReader)),
         ("kicad-schematic", Box::new(KicadSchematicReader)),
@@ -229,17 +245,21 @@ fn probe_all(bytes: &[u8], path: Option<&Path>) -> Vec<&'static str> {
 }
 
 #[test]
-fn unrecognized_error_enumerates_readers() {
+fn unrecognized_error_speaks_user_words() {
     let reg = Registry::builtin();
     let err = reg
         .read(b"this is not a board file at all", None)
         .unwrap_err();
     let msg = err.to_string();
-    // Every reader name appears in the failure.
-    for name in reg.reader_names() {
-        assert!(msg.contains(name), "error should name {name}: {msg}");
-    }
     assert!(msg.contains("unrecognized"), "got: {msg}");
+    // The accepted formats are described in user words, never internal
+    // reader ids.
+    for phrase in ["KiCad", "Eagle", "Altium", "IPC-D-356", "gerbers"] {
+        assert!(msg.contains(phrase), "error should mention {phrase}: {msg}");
+    }
+    for id in reg.reader_names() {
+        assert!(!msg.contains(id), "no internal reader id {id}: {msg}");
+    }
 }
 
 #[test]

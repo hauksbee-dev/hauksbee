@@ -1,0 +1,68 @@
+name = "power-up sanity"
+board = "boards/blinky.kicad_pcb"
+duration_ms = 200
+frame_ms = 1.0
+suppress_rail = ["ANALOG_VDD"]
+
+[[supply]]
+net = "+5V"
+kind = "bench"
+volts = 5.0
+current_limit_a = 1.0
+
+[[supply]]
+net = "VBAT"
+kind = "battery"
+chemistry = "liion"
+cells = 1
+soc = 0.8
+
+[[net_drive]]
+net = "WSEL"
+volts = 5.0
+
+[[override]]
+ref = "R_Shunt15301"
+value = "0.05"
+tolerance = 5.0
+distribution = "gaussian"
+
+[ensemble]
+seeds = 8
+mode = "monte-carlo"
+
+[[peripheral]]
+id = "BTN1"
+type = "pushbutton"
+net = "BUTTON"
+to = "GND"
+bounce_ms = 5.0
+
+[[peripheral.event]]
+t_ms = 100
+value = 1
+
+[[scenario]]
+id = "boot"
+part = "U5"
+profile = "esp32_boot_wifi"
+start_ms = 10
+
+[[assert]]
+kind = "voltage"
+net = "ANALOG_VDD"
+min = 4.9
+after_ms = 50
+
+[[assert]]
+kind = "boot_coverage"
+net = "DISP_EN"
+min = 2.4
+deadline_ms = 500
+
+[[assert]]
+kind = "rail_window"
+net = "+5V"
+scenario = "boot"
+dip_below = 4.6
+for_max_ms = 2.0

@@ -1,0 +1,8 @@
+board = "nope.kicad_pcb"
+
+[[supply]]
+net = "VBUS"
+kind = "usb"
+
+[[assert]]
+kind = "no_faults"

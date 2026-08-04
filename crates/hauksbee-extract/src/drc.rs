@@ -436,7 +436,10 @@ pub struct DrcFinding {
     pub net_b_name: String,
     /// Copper layer the violation is on (e.g. "F.Cu").
     pub layer: String,
-    /// Representative location (mm), the midpoint of the closest approach.
+    /// Location (mm): the point of closest approach between the two
+    /// primitives, i.e. the midpoint of the shortest copper edge-to-edge span
+    /// (the contact point when the copper overlaps; a point of the contained
+    /// copper for full containment).
     pub x: f64,
     pub y: f64,
     /// Signed copper-edge gap (mm). <= 0 for an overlap, the penetration depth
@@ -608,34 +611,64 @@ impl RTreeObject for Leaf {
 
 // ── Distance helpers (all in mm) ─────────────────────────────────────────────
 
-/// Squared distance from point P to segment AB.
-fn point_seg_dist2(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
+/// Closest point on segment AB to point P, with the squared distance.
+fn point_seg_closest(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> ((f64, f64), f64) {
     let dx = bx - ax;
     let dy = by - ay;
     let len2 = dx * dx + dy * dy;
     if len2 <= f64::EPSILON {
         let ex = px - ax;
         let ey = py - ay;
-        return ex * ex + ey * ey;
+        return ((ax, ay), ex * ex + ey * ey);
     }
     let t = (((px - ax) * dx + (py - ay) * dy) / len2).clamp(0.0, 1.0);
     let cx = ax + t * dx;
     let cy = ay + t * dy;
     let ex = px - cx;
     let ey = py - cy;
-    ex * ex + ey * ey
+    ((cx, cy), ex * ex + ey * ey)
 }
 
-/// Minimum distance between two segments (centerlines), 0 if they cross.
-fn seg_seg_dist(a1: (f64, f64), a2: (f64, f64), b1: (f64, f64), b2: (f64, f64)) -> f64 {
+/// Minimum distance between two segments (centerlines) plus the closest point
+/// pair (on AB, on CD). 0 with the crossing point (both) when they cross.
+fn seg_seg_closest(
+    a1: (f64, f64),
+    a2: (f64, f64),
+    b1: (f64, f64),
+    b2: (f64, f64),
+) -> (f64, (f64, f64), (f64, f64)) {
     if segments_intersect(a1, a2, b1, b2) {
-        return 0.0;
+        let d1x = a2.0 - a1.0;
+        let d1y = a2.1 - a1.1;
+        let d2x = b2.0 - b1.0;
+        let d2y = b2.1 - b1.1;
+        let denom = d1x * d2y - d1y * d2x;
+        if denom.abs() > 1e-12 {
+            let t = (((b1.0 - a1.0) * d2y - (b1.1 - a1.1) * d2x) / denom).clamp(0.0, 1.0);
+            let p = (a1.0 + t * d1x, a1.1 + t * d1y);
+            return (0.0, p, p);
+        }
+        // Colinear touch: the endpoint candidates below find a zero-distance
+        // pair.
     }
-    let d = point_seg_dist2(a1.0, a1.1, b1.0, b1.1, b2.0, b2.1)
-        .min(point_seg_dist2(a2.0, a2.1, b1.0, b1.1, b2.0, b2.1))
-        .min(point_seg_dist2(b1.0, b1.1, a1.0, a1.1, a2.0, a2.1))
-        .min(point_seg_dist2(b2.0, b2.1, a1.0, a1.1, a2.0, a2.1));
-    d.sqrt()
+    let mut best = (f64::INFINITY, a1, b1);
+    let (p, d2) = point_seg_closest(b1.0, b1.1, a1.0, a1.1, a2.0, a2.1);
+    if d2 < best.0 {
+        best = (d2, p, b1);
+    }
+    let (p, d2) = point_seg_closest(b2.0, b2.1, a1.0, a1.1, a2.0, a2.1);
+    if d2 < best.0 {
+        best = (d2, p, b2);
+    }
+    let (p, d2) = point_seg_closest(a1.0, a1.1, b1.0, b1.1, b2.0, b2.1);
+    if d2 < best.0 {
+        best = (d2, a1, p);
+    }
+    let (p, d2) = point_seg_closest(a2.0, a2.1, b1.0, b1.1, b2.0, b2.1);
+    if d2 < best.0 {
+        best = (d2, a2, p);
+    }
+    (best.0.sqrt(), best.1, best.2)
 }
 
 /// Orientation sign of the triplet (p, q, r): >0 ccw, <0 cw, 0 colinear.
@@ -681,36 +714,27 @@ fn point_in_polygon(px: f64, py: f64, poly: &[(f64, f64)]) -> bool {
     inside
 }
 
-/// Minimum distance from point P to the closed polygon boundary.
-fn point_poly_edge_dist(px: f64, py: f64, poly: &[(f64, f64)]) -> f64 {
-    let n = poly.len();
-    if n == 0 {
-        return f64::INFINITY;
-    }
-    if n == 1 {
-        return ((px - poly[0].0).powi(2) + (py - poly[0].1).powi(2)).sqrt();
-    }
-    let mut best = f64::INFINITY;
-    let mut j = n - 1;
-    for i in 0..n {
-        best = best.min(point_seg_dist2(
-            px, py, poly[j].0, poly[j].1, poly[i].0, poly[i].1,
-        ));
-        j = i;
-    }
-    best.sqrt()
-}
-
 /// Minimum boundary-to-boundary distance between two polygons (0 if their
-/// edges cross). Containment is handled by the caller via point-in-polygon.
-fn poly_poly_edge_dist(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
-    let mut best = f64::INFINITY;
+/// edges cross) plus the closest point pair (on `a`, on `b`). Containment is
+/// handled by the caller via point-in-polygon.
+fn poly_poly_closest(a: &[(f64, f64)], b: &[(f64, f64)]) -> (f64, (f64, f64), (f64, f64)) {
     let na = a.len();
     let nb = b.len();
+    let mut best = (f64::INFINITY, (0.0, 0.0), (0.0, 0.0));
+    if na == 0 || nb == 0 {
+        return best;
+    }
     if na < 2 || nb < 2 {
-        // Degenerate: fall back to nearest-vertex.
+        // Degenerate: fall back to nearest a-vertex against b's boundary.
         for &pa in a {
-            best = best.min(point_poly_edge_dist(pa.0, pa.1, b));
+            let mut jb = nb - 1;
+            for ib in 0..nb {
+                let (q, d2) = point_seg_closest(pa.0, pa.1, b[jb].0, b[jb].1, b[ib].0, b[ib].1);
+                if d2.sqrt() < best.0 {
+                    best = (d2.sqrt(), pa, q);
+                }
+                jb = ib;
+            }
         }
         return best;
     }
@@ -720,9 +744,10 @@ fn poly_poly_edge_dist(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
         let a2 = a[ia];
         let mut jb = nb - 1;
         for ib in 0..nb {
-            let b1 = b[jb];
-            let b2 = b[ib];
-            best = best.min(seg_seg_dist(a1, a2, b1, b2));
+            let cand = seg_seg_closest(a1, a2, b[jb], b[ib]);
+            if cand.0 < best.0 {
+                best = cand;
+            }
             jb = ib;
         }
         ja = ia;
@@ -730,24 +755,37 @@ fn poly_poly_edge_dist(a: &[(f64, f64)], b: &[(f64, f64)]) -> f64 {
     best
 }
 
-/// Centerline distance between two capsules' segments (radii subtracted by
-/// the caller).
-fn capsule_centerline_dist(a: &Capsule, b: &Capsule) -> f64 {
-    seg_seg_dist((a.ax, a.ay), (a.bx, a.by), (b.ax, b.ay), (b.bx, b.by))
+/// The reported violation location for a closest centerline/boundary point
+/// pair `pa`/`pb` carrying copper radii `ra`/`rb`: the midpoint of the copper
+/// edge-to-edge span along the closest-approach line. For a positive gap that
+/// is the middle of the air gap; for an overlap it lands inside the shared
+/// copper (the contact point); clamped between `pa` and `pb` so deep
+/// penetrations stay on the copper.
+fn closest_approach_point(pa: (f64, f64), pb: (f64, f64), ra: f64, rb: f64) -> (f64, f64) {
+    let dx = pb.0 - pa.0;
+    let dy = pb.1 - pa.1;
+    let d = (dx * dx + dy * dy).sqrt();
+    if d <= f64::EPSILON {
+        return pa;
+    }
+    let t = ((ra + d - rb) / (2.0 * d)).clamp(0.0, 1.0);
+    (pa.0 + dx * t, pa.1 + dy * t)
 }
 
 /// Signed copper-edge gap between two primitives. Negative means they overlap
-/// (the magnitude is roughly the penetration), and the returned `(x, y)` is a
-/// representative point of closest approach.
+/// (the magnitude is roughly the penetration), and the returned `(x, y)` is
+/// the point of closest approach (see [`closest_approach_point`]; for full
+/// containment, a point of the contained copper).
 fn shape_gap(a: &Shape, b: &Shape) -> (f64, (f64, f64)) {
     match (a, b) {
         (Shape::Capsule(ca), Shape::Capsule(cb)) => {
-            let d = capsule_centerline_dist(ca, cb) - ca.r - cb.r;
-            let mid = (
-                (ca.ax + ca.bx + cb.ax + cb.bx) / 4.0,
-                (ca.ay + ca.by + cb.ay + cb.by) / 4.0,
+            let (d, pa, pb) = seg_seg_closest(
+                (ca.ax, ca.ay),
+                (ca.bx, ca.by),
+                (cb.ax, cb.ay),
+                (cb.bx, cb.by),
             );
-            (d, mid)
+            (d - ca.r - cb.r, closest_approach_point(pa, pb, ca.r, cb.r))
         }
         (Shape::Capsule(c), Shape::Polygon { pts, r })
         | (Shape::Polygon { pts, r }, Shape::Capsule(c)) => {
@@ -757,41 +795,46 @@ fn shape_gap(a: &Shape, b: &Shape) -> (f64, (f64, f64)) {
             // inside and no vertex is near.
             let seg_a = (c.ax, c.ay);
             let seg_b = (c.bx, c.by);
-            let mut best = f64::INFINITY;
+            // Containment: either capsule endpoint inside the polygon (the
+            // track terminates within the pad / pour copper). Fully engulfed:
+            // a hard overlap regardless of edge distance, located at the
+            // contained endpoint.
+            if point_in_polygon(c.ax, c.ay, pts) {
+                return (-(c.r + r).max(0.0) - 1e-6, seg_a);
+            }
+            if point_in_polygon(c.bx, c.by, pts) {
+                return (-(c.r + r).max(0.0) - 1e-6, seg_b);
+            }
+            let mut best = (f64::INFINITY, seg_a, seg_a);
             let n = pts.len();
             if n >= 2 {
                 let mut j = n - 1;
                 for i in 0..n {
-                    best = best.min(seg_seg_dist(seg_a, seg_b, pts[j], pts[i]));
+                    let cand = seg_seg_closest(seg_a, seg_b, pts[j], pts[i]);
+                    if cand.0 < best.0 {
+                        best = cand;
+                    }
                     j = i;
                 }
             } else if n == 1 {
-                best = point_seg_dist2(pts[0].0, pts[0].1, c.ax, c.ay, c.bx, c.by).sqrt();
+                let (p, d2) = point_seg_closest(pts[0].0, pts[0].1, c.ax, c.ay, c.bx, c.by);
+                best = (d2.sqrt(), p, pts[0]);
             }
-            // Containment: either capsule endpoint inside the polygon (the
-            // track terminates within the pad / pour copper).
-            let contained = point_in_polygon(c.ax, c.ay, pts) || point_in_polygon(c.bx, c.by, pts);
-            let gap = if contained {
-                // Fully engulfed: a hard overlap regardless of edge distance.
-                -(c.r + r).max(0.0) - 1e-6
-            } else {
-                best - c.r - r
-            };
-            // Representative point: capsule midpoint (close enough for display).
-            (gap, ((c.ax + c.bx) / 2.0, (c.ay + c.by) / 2.0))
+            let (d, pc, pp) = best;
+            (d - c.r - r, closest_approach_point(pc, pp, c.r, *r))
         }
         (Shape::Polygon { pts: pa, r: ra }, Shape::Polygon { pts: pb, r: rb }) => {
-            let edge = poly_poly_edge_dist(pa, pb) - ra - rb;
-            // Containment either way is a hard overlap.
-            let contained = pa.first().is_some_and(|&(x, y)| point_in_polygon(x, y, pb))
-                || pb.first().is_some_and(|&(x, y)| point_in_polygon(x, y, pa));
-            let gap = if contained {
-                edge.min(0.0) - 1e-6
-            } else {
-                edge
-            };
-            let mid = pa.first().copied().unwrap_or((0.0, 0.0));
-            (gap, mid)
+            let (d, qa, qb) = poly_poly_closest(pa, pb);
+            let edge = d - ra - rb;
+            // Containment either way is a hard overlap, located at a vertex of
+            // the contained outline.
+            if pa.first().is_some_and(|&(x, y)| point_in_polygon(x, y, pb)) {
+                return (edge.min(0.0) - 1e-6, pa[0]);
+            }
+            if pb.first().is_some_and(|&(x, y)| point_in_polygon(x, y, pa)) {
+                return (edge.min(0.0) - 1e-6, pb[0]);
+            }
+            (edge, closest_approach_point(qa, qb, *ra, *rb))
         }
     }
 }
@@ -824,18 +867,22 @@ impl NetResolver {
     }
 
     fn declare(&mut self, id: i64, name: String) {
+        // Same normalization as pcb.rs's NetTable: file-syntax escapes end
+        // here, so DRC findings name nets the way the schematic shows them.
+        let name = crate::netname::unescape_net_name(&name);
         self.by_name.entry(name.clone()).or_insert(id);
         self.by_id.entry(id).or_insert(name);
         self.next_synthetic = self.next_synthetic.max(id + 1);
     }
 
     fn id_of(&mut self, name: &str) -> i64 {
-        if let Some(&id) = self.by_name.get(name) {
+        let name = crate::netname::unescape_net_name(name);
+        if let Some(&id) = self.by_name.get(&name) {
             return id;
         }
         let id = self.next_synthetic.max(1);
         self.next_synthetic = id + 1;
-        self.declare(id, name.to_string());
+        self.declare(id, name);
         id
     }
 
@@ -1393,20 +1440,39 @@ fn collect_pad(
         // roundrect we keep a corner radius as inflation so the rounded copper
         // is not overstated.
         _ => {
+            let min_side = sx.min(sy);
             let rr = if shape_tok == "roundrect" {
                 let ratio = pad.find_f64("roundrect_rratio").unwrap_or(0.0);
-                ratio * sx.min(sy)
+                ratio * min_side
             } else {
                 0.0
             };
-            // Inset the rectangle by the corner radius and carry `r` so the
-            // rounded outline is represented as inset-poly + radius.
-            rect_polygon(
-                (sx - 2.0 * rr).max(0.0),
-                (sy - 2.0 * rr).max(0.0),
-                &outline_to_world,
-                rr,
-            )
+            // KiCad stores chamfered pads as roundrect with `(chamfer_ratio N)`
+            // + `(chamfer <corners...>)`: each named corner gets a straight
+            // 45-degree cut of size ratio * min(w, h), while the un-named
+            // corners keep the roundrect radius. Treating such a pad as a full
+            // rectangle manufactures false shorts against copper legitimately
+            // routed through the notch (the Kailh-socket pads on PolyKybd
+            // slice 0.77 mm off both bottom corners and a 45-degree track
+            // passes through; KiCad 9 DRC reports no short there).
+            let chamfered = chamfered_corners(pad);
+            let ch = if chamfered.iter().any(|&c| c) {
+                (pad.find_f64("chamfer_ratio").unwrap_or(0.0) * min_side).max(0.0)
+            } else {
+                0.0
+            };
+            if ch > 0.0 {
+                chamfered_rect_polygon(sx, sy, rr, ch, chamfered, &outline_to_world)
+            } else {
+                // Inset the rectangle by the corner radius and carry `r` so the
+                // rounded outline is represented as inset-poly + radius.
+                rect_polygon(
+                    (sx - 2.0 * rr).max(0.0),
+                    (sy - 2.0 * rr).max(0.0),
+                    &outline_to_world,
+                    rr,
+                )
+            }
         }
     };
 
@@ -1430,6 +1496,97 @@ fn rect_polygon(w: f64, h: f64, to_world: &dyn Fn(f64, f64) -> (f64, f64), r: f6
         to_world(-hw, hh),
     ];
     Shape::Polygon { pts, r }
+}
+
+/// Which corners a pad's `(chamfer <corners...>)` list names, in the fixed
+/// order [top_left, top_right, bottom_right, bottom_left] (pad-local frame,
+/// y-down, matching KiCad's file coordinates: "top" is negative y).
+fn chamfered_corners(pad: &List) -> [bool; 4] {
+    let mut out = [false; 4];
+    if let Some(ch) = pad.find("chamfer") {
+        for t in (0..).map_while(|i| ch.arg_value(i)) {
+            match t.as_str() {
+                "top_left" => out[0] = true,
+                "top_right" => out[1] = true,
+                "bottom_right" => out[2] = true,
+                "bottom_left" => out[3] = true,
+                _ => {}
+            }
+        }
+    }
+    out
+}
+
+/// A chamfered (round)rect pad outline of size (w, h), corner radius `rr` on
+/// the non-chamfered corners and a straight 45-degree cut of size `ch` on each
+/// corner flagged in `chamfered` ([top_left, top_right, bottom_right,
+/// bottom_left], pad-local y-down frame), built via the world transform.
+///
+/// Same representation strategy as `rect_polygon` for a roundrect: the
+/// returned polygon is the outline deflated by `rr`, carried with inflation
+/// radius `rr` so the rounded corners are exact. The chamfer cut line is
+/// therefore also deflated: its axis intercepts sit (sqrt(2) - 1) * rr inside
+/// the true ones, so the inflated cut edge lands exactly on KiCad's. The only
+/// approximation is at the cut's two endpoints, which inflate to radius-`rr`
+/// arcs instead of sharp vertices, understating the copper there by at most
+/// ~0.09 * rr (zero whenever rr is 0, the common chamfered-pad case).
+fn chamfered_rect_polygon(
+    w: f64,
+    h: f64,
+    rr: f64,
+    ch: f64,
+    chamfered: [bool; 4],
+    to_world: &dyn Fn(f64, f64) -> (f64, f64),
+) -> Shape {
+    let hw = w / 2.0;
+    let hh = h / 2.0;
+    let cut = ch + (std::f64::consts::SQRT_2 - 1.0) * rr;
+    // Corner order matches rect_polygon: TL, TR, BR, BL. `(cx, cy)` is the
+    // corner's quadrant sign; `vert_first` is whether the outline traversal
+    // enters the corner along the vertical pad edge (so the vertex on that
+    // edge comes first).
+    let corners = [
+        (-1.0, -1.0, true),
+        (1.0, -1.0, false),
+        (1.0, 1.0, true),
+        (-1.0, 1.0, false),
+    ];
+    let mut local: Vec<(f64, f64)> = Vec::with_capacity(8);
+    for (i, &(cx, cy, vert_first)) in corners.iter().enumerate() {
+        if chamfered[i] {
+            let on_vert = (cx * (hw - rr).max(0.0), cy * (hh - cut).max(0.0));
+            let on_horz = (cx * (hw - cut).max(0.0), cy * (hh - rr).max(0.0));
+            if vert_first {
+                local.push(on_vert);
+                local.push(on_horz);
+            } else {
+                local.push(on_horz);
+                local.push(on_vert);
+            }
+        } else {
+            local.push((cx * (hw - rr).max(0.0), cy * (hh - rr).max(0.0)));
+        }
+    }
+    // A maximal chamfer (ratio 0.5 on adjacent corners of a square-ish pad)
+    // can make consecutive vertices coincide; drop the duplicates.
+    let mut pts: Vec<(f64, f64)> = Vec::with_capacity(local.len());
+    for &(x, y) in &local {
+        if pts
+            .last()
+            .is_none_or(|&(px, py)| (px - x).abs() > 1e-9 || (py - y).abs() > 1e-9)
+        {
+            pts.push((x, y));
+        }
+    }
+    if pts.len() > 1 {
+        let first = pts[0];
+        let last = *pts.last().unwrap();
+        if (first.0 - last.0).abs() <= 1e-9 && (first.1 - last.1).abs() <= 1e-9 {
+            pts.pop();
+        }
+    }
+    let pts = pts.into_iter().map(|(x, y)| to_world(x, y)).collect();
+    Shape::Polygon { pts, r: rr }
 }
 
 /// Read a custom pad's polygon outline, transformed to world coordinates.

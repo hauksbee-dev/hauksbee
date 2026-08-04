@@ -42,6 +42,43 @@ fn dnp_flag_parsed_from_pcb_attr_and_schematic_symbol() {
 }
 
 #[test]
+fn duplicate_refdes_footprints_merge_into_one_component() {
+    // Two footprints sharing one reference designator (a testpoint placed on
+    // both board sides, the Watchy TP4/TP5 pattern) are one electrical part.
+    // They must extract as ONE component whose pins are the union of both
+    // instances, or every downstream count (bind table rows, num_components)
+    // reports the same part twice.
+    let pcb = r#"(kicad_pcb (version 20240108)
+  (net 0 "")
+  (net 1 "3V3")
+  (footprint "TestPoint:TestPoint_Pad" (layer "F.Cu")
+    (property "Reference" "TP4")
+    (property "Value" "3V3")
+    (pad "1" smd circle (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "3V3")))
+  (footprint "TestPoint:TestPoint_Pad" (layer "B.Cu")
+    (property "Reference" "TP4")
+    (property "Value" "3V3")
+    (pad "1" smd circle (at 0 0) (size 1 1) (layers "B.Cu") (net 1 "3V3")))
+  (footprint "Resistor_SMD:R_0402_1005Metric" (layer "F.Cu")
+    (property "Reference" "R1")
+    (property "Value" "10k")
+    (pad "1" smd roundrect (at 5 0) (size 0.5 0.5) (layers "F.Cu") (net 1 "3V3"))))
+"#;
+    let board = ExtractedBoard::from_kicad_pcb(pcb).unwrap();
+    assert_eq!(
+        board.components.len(),
+        2,
+        "TP4's two instances merge; R1 stays separate"
+    );
+    let tp4 = board
+        .components
+        .iter()
+        .find(|c| c.reference == "TP4")
+        .expect("TP4 survives as one component");
+    assert_eq!(tp4.pins.len(), 2, "TP4 keeps both instances' pads");
+}
+
+#[test]
 fn oversized_net_id_keeps_declared_name() {
     // A net id too large for i64 must not have its digit string adopted as
     // the net's name: the declared name is authoritative, and downstream

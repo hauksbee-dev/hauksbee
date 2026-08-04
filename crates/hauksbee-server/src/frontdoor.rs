@@ -191,6 +191,23 @@ pub struct ToolHooks {
 /// the frontend reads error bodies as text, not JSON.
 const MAX_UPLOAD_BYTES: usize = 256 * 1024 * 1024;
 
+/// Rewrite axum's stock 413 ("length limit exceeded") so the body NAMES the
+/// limit; the frontend shows error bodies verbatim, and a message that says
+/// what the cap is lets it tell the user something actionable.
+async fn name_upload_limit_413(resp: axum::response::Response) -> axum::response::Response {
+    if resp.status() == StatusCode::PAYLOAD_TOO_LARGE {
+        return (
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "upload too large: this server accepts at most {} MB per request",
+                MAX_UPLOAD_BYTES / (1024 * 1024)
+            ),
+        )
+            .into_response();
+    }
+    resp
+}
+
 struct FrontDoorState {
     analyze: Analyzer,
 }
@@ -203,6 +220,7 @@ pub fn router(analyze: Analyzer) -> Router {
     Router::new()
         .route("/api/analyze", post(analyze_handler))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .layer(axum::middleware::map_response(name_upload_limit_413))
         .with_state(state)
 }
 
@@ -224,6 +242,7 @@ pub fn api_routes(analyze: FirmwareAnalyzer) -> Router {
         .route("/api/analyze", post(analyze_handler_fw))
         .route("/api/analyze-with-firmware", post(analyze_firmware_handler))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .layer(axum::middleware::map_response(name_upload_limit_413))
         .with_state(state)
 }
 
@@ -247,6 +266,7 @@ pub fn check_route(check: CheckRunner) -> Router {
     Router::new()
         .route("/api/check", post(check_handler))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .layer(axum::middleware::map_response(name_upload_limit_413))
         .with_state(state)
 }
 
@@ -268,6 +288,7 @@ pub fn live_routes(hub: Arc<crate::LiveHub>, launch: LiveLauncher) -> Router {
         .route("/api/live/launch", post(live_launch_handler))
         .route("/api/live/status", get(live_status_handler))
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
+        .layer(axum::middleware::map_response(name_upload_limit_413))
         .with_state(state)
 }
 

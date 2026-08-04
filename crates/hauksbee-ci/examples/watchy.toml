@@ -3,8 +3,9 @@
 #   hauksbee-ci run crates/hauksbee-ci/examples/watchy.toml
 #
 # The board is the SQFMI Watchy, an ESP32-S3 e-paper smartwatch, vendored
-# unmodified from the upstream project under its MIT licence. 86 parts, 685
-# copper segments, two rails, a battery charger and a boost converter. It is
+# unmodified from the upstream project under its MIT licence. 86 footprints
+# making 82 distinct parts, 685 copper segments, two rails, a battery charger
+# and a boost converter. It is
 # here because a first run should meet a board someone actually fabricated,
 # not a fixture with one footprint on it.
 #

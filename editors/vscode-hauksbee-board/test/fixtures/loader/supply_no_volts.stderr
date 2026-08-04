@@ -1,0 +1,1 @@
+hauksbee-ci: supply_no_volts.toml: invalid spec: supply on '+5V': `bench` needs an explicit `volts`; add the rail's real voltage (e.g. `volts = 3.3`). Nothing is assumed: a wrong guess here would fabricate faults on a healthy board

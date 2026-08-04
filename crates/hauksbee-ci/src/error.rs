@@ -82,6 +82,34 @@ pub fn near_matches(target: &str, known: &[String], limit: usize) -> Vec<String>
         .collect()
 }
 
+/// The closest option to `target` within edit distance 2, for a "did you
+/// mean ...?" hint on a closed vocabulary (assertion kinds, supply kinds,
+/// peripheral types). Distance 2 covers the real mistakes (a dropped letter, a
+/// swapped pair, an added character) without ever suggesting something the
+/// user plainly did not type; a full-list dump already follows in the error,
+/// so a wild guess here would only mislead.
+pub fn did_you_mean(target: &str, options: &[&str]) -> Option<String> {
+    let t = target.to_ascii_lowercase();
+    options
+        .iter()
+        .map(|o| (levenshtein(&t, &o.to_ascii_lowercase()), *o))
+        .filter(|(d, _)| *d <= 2)
+        .min_by_key(|(d, _)| *d)
+        // Distance 0 means the vocabulary DOES contain the word and the caller
+        // rejected it anyway; that is a caller bug, not a typo, so no hint.
+        .filter(|(d, _)| *d > 0)
+        .map(|(_, o)| o.to_string())
+}
+
+/// Format the `did_you_mean` hint as the parenthetical the error messages
+/// splice in: `" (did you mean 'voltage'?)"`, or empty when nothing is close.
+pub fn did_you_mean_hint(target: &str, options: &[&str]) -> String {
+    match did_you_mean(target, options) {
+        Some(s) => format!(" (did you mean '{s}'?)"),
+        None => String::new(),
+    }
+}
+
 /// Classic Levenshtein edit distance.
 fn levenshtein(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
@@ -137,5 +165,21 @@ mod tests {
         let known = vec!["ANALOG_VDD".to_string(), "+5V".to_string()];
         let s = near_matches("zzzzzzzzzz", &known, 3);
         assert!(s.is_empty(), "garbage should not match: {s:?}");
+    }
+
+    #[test]
+    fn did_you_mean_catches_a_typo_within_two_edits() {
+        let kinds = ["voltage", "uart", "toggle", "no_faults"];
+        assert_eq!(did_you_mean("voltag", &kinds).as_deref(), Some("voltage"));
+        assert_eq!(did_you_mean("volage", &kinds).as_deref(), Some("voltage"));
+        assert_eq!(did_you_mean("tooggle", &kinds).as_deref(), Some("toggle"));
+    }
+
+    #[test]
+    fn did_you_mean_stays_quiet_when_nothing_is_close() {
+        let kinds = ["voltage", "uart", "toggle"];
+        assert_eq!(did_you_mean("frobnicate", &kinds), None);
+        // An exact vocabulary member is not a typo; no hint.
+        assert_eq!(did_you_mean("voltage", &kinds), None);
     }
 }

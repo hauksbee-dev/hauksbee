@@ -421,3 +421,58 @@ fn run_script_uncaught_refusal_carries_the_structured_throw() {
     assert!(is_error, "uncaught throw is an error result: {v}");
     assert_eq!(v["thrown"]["status"], "invalid_for_analysis", "{v}");
 }
+
+// ── CLI flag answers (round-9 #29) ──────────────────────────────────────────
+//
+// `--version` and `--help` used to exit 0 with NOTHING on stdout, which told a
+// packaging smoke test (or a human checking what they installed) precisely
+// nothing. A flag answer must be a real answer.
+
+#[test]
+fn version_flag_prints_the_version_and_exits_zero() {
+    for flag in ["--version", "-V"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_hauksbee-mcp"))
+            .arg(flag)
+            .output()
+            .expect("run hauksbee-mcp");
+        assert!(out.status.success(), "{flag} must exit 0");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert_eq!(
+            stdout.trim(),
+            format!("hauksbee-mcp {}", env!("CARGO_PKG_VERSION")),
+            "{flag} stdout: {stdout:?}"
+        );
+    }
+}
+
+#[test]
+fn help_flag_prints_usage_and_exits_zero() {
+    for flag in ["--help", "-h"] {
+        let out = Command::new(env!("CARGO_BIN_EXE_hauksbee-mcp"))
+            .arg(flag)
+            .output()
+            .expect("run hauksbee-mcp");
+        assert!(out.status.success(), "{flag} must exit 0");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains("USAGE"), "{flag} stdout: {stdout}");
+        assert!(
+            stdout.contains("MCP stdio server"),
+            "help must say what this binary is: {stdout}"
+        );
+        assert!(stdout.contains("--version"), "{flag} stdout: {stdout}");
+    }
+}
+
+#[test]
+fn unknown_flag_fails_loudly_instead_of_starting_the_server() {
+    let out = Command::new(env!("CARGO_BIN_EXE_hauksbee-mcp"))
+        .arg("--definitely-not-a-flag")
+        .output()
+        .expect("run hauksbee-mcp");
+    assert!(!out.status.success(), "an unknown flag must not exit 0");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--definitely-not-a-flag") && stderr.contains("--help"),
+        "stderr must name the argument and point at --help: {stderr}"
+    );
+}

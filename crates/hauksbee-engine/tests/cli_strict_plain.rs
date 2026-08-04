@@ -218,9 +218,10 @@ fn ac_all_requested_nodes_missing_is_invalid_not_valid() {
 }
 
 #[test]
-fn ac_all_requested_nodes_missing_text_warns_and_exits_three() {
-    // Same honesty hole on the TEXT surface: a WARNING line + exit 3, never a
-    // table presented as a valid result.
+fn ac_all_requested_nodes_missing_text_errors_and_exits_three() {
+    // Same honesty hole on the TEXT surface: an error line + exit 3, never a
+    // table presented as a valid result. Round 2 hardened this from a WARNING
+    // to an error, validated BEFORE the sweep, with did-you-mean suggestions.
     let b = clean_board();
     let out = run(&[
         "run",
@@ -238,8 +239,12 @@ fn ac_all_requested_nodes_missing_text_warns_and_exits_three() {
     );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("WARNING") && stderr.contains("not valid"),
-        "expected a WARNING that the AC result is not valid; got: {stderr}"
+        stderr.contains("error") && stderr.contains("not valid"),
+        "expected an error that the AC result is not valid; got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("WARNING"),
+        "a typo'd --ac-node is an error, not a WARNING; got: {stderr}"
     );
 }
 

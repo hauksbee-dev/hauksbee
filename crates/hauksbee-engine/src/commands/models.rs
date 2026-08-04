@@ -138,6 +138,12 @@ pub fn add(source: &str) -> anyhow::Result<()> {
         let is_tar = ["tar.gz", "tgz", "tar"]
             .iter()
             .any(|ext| source.ends_with(&format!(".{ext}")));
+        if !path.exists() {
+            anyhow::bail!(
+                "no pack at '{source}': pass a pack directory, a .tar.gz/.tgz/.tar \
+                 tarball, or a git URL (https://…, git@…, ssh://…)"
+            );
+        }
         if path.is_file() && is_tar {
             let tmp = tempfile::tempdir()?;
             run_tool(
@@ -153,6 +159,12 @@ pub fn add(source: &str) -> anyhow::Result<()> {
             let dir = find_pack_root(tmp.path())?;
             _staging = Some(tmp);
             dir
+        } else if path.is_file() {
+            anyhow::bail!(
+                "'{source}' is a file but not a tarball hauksbee can unpack: pass a \
+                 pack directory, a .tar.gz/.tgz/.tar tarball, or a git URL \
+                 (https://…, git@…, ssh://…)"
+            );
         } else {
             _staging = None;
             path
@@ -319,27 +331,64 @@ fn resolve_rows(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoard) ->
         .collect()
 }
 
+/// Render a Unicode box-drawing table from a header row and data rows, the
+/// same style as the bind table in `report.rs`. Column widths fit the widest
+/// cell; a row shorter than the header renders its missing cells empty.
+pub fn box_table(headers: &[&str], rows: &[Vec<String>]) -> String {
+    let cols = headers.len();
+    let mut widths: Vec<usize> = headers.iter().map(|h| h.len()).collect();
+    for row in rows {
+        for (i, cell) in row.iter().take(cols).enumerate() {
+            widths[i] = widths[i].max(cell.len());
+        }
+    }
+
+    let rule = |l: &str, m: &str, r: &str| {
+        let mut s = String::from(l);
+        for (i, w) in widths.iter().enumerate() {
+            s.push_str(&"─".repeat(w + 2));
+            s.push_str(if i + 1 == cols { r } else { m });
+        }
+        s.push('\n');
+        s
+    };
+    let line = |cells: &[String]| {
+        let mut s = String::from("│");
+        for (i, w) in widths.iter().enumerate() {
+            let cell = cells.get(i).map(String::as_str).unwrap_or("");
+            s.push_str(&format!(" {cell:<w$} │", w = w));
+        }
+        s.push('\n');
+        s
+    };
+
+    let mut out = String::new();
+    out.push_str(&rule("┌", "┬", "┐"));
+    out.push_str(&line(
+        &headers.iter().map(|h| h.to_string()).collect::<Vec<_>>(),
+    ));
+    out.push_str(&rule("├", "┼", "┤"));
+    for row in rows {
+        out.push_str(&line(row));
+    }
+    out.push_str(&rule("└", "┴", "┘"));
+    out
+}
+
 /// The `models resolve` table, separated from I/O so tests can assert on it.
 pub fn resolve_report(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoard) -> String {
-    use std::fmt::Write;
-    let mut out = String::new();
-    let _ = writeln!(
-        out,
-        "layer priority: builtin(0) < pack(10) < user-dir(20) < models-dir(30) < spice(40); \
-         specificity breaks ties within a layer"
+    let mut out = String::from(
+        "layer priority: builtin(0) < pack(10) < user-dir(20) < user-config-dir(25) < \
+         models-dir(30) < spice(40); specificity breaks ties within a layer\n",
     );
-    let _ = writeln!(
-        out,
-        "{:<10} {:<24} {:<28} {:<16} {}",
-        "Ref", "Value", "Model", "Layer", "Origin"
-    );
-    for row in resolve_rows(lib, board) {
-        let _ = writeln!(
-            out,
-            "{:<10} {:<24} {:<28} {:<16} {}",
-            row.reference, row.value, row.model, row.layer, row.origin
-        );
-    }
+    let rows: Vec<Vec<String>> = resolve_rows(lib, board)
+        .into_iter()
+        .map(|r| vec![r.reference, r.value, r.model, r.layer, r.origin])
+        .collect();
+    out.push_str(&box_table(
+        &["Ref", "Value", "Model", "Layer", "Origin"],
+        &rows,
+    ));
     out
 }
 
@@ -417,15 +466,25 @@ fn run_tool(tool: &str, args: &[&str], doing: &str) -> anyhow::Result<()> {
 /// unless the caller has said yes, either interactively or with `--yes` for a
 /// script. Running the extraction and mentioning the fact afterwards would be
 /// the wrong order: the user cannot unsend it.
+#[allow(clippy::too_many_arguments)]
 pub fn extract(
     pdf: &std::path::Path,
     part: &str,
     kind: &str,
     out_dir: Option<&std::path::Path>,
     assume_yes: bool,
+    backend: Option<hauksbee_models::datasheet::Backend>,
+    model: Option<String>,
+    api_base: Option<String>,
+    api_key_env: Option<String>,
 ) -> anyhow::Result<()> {
     use hauksbee_models::datasheet;
 
+    // Flag sanity before file checks: a pasted key must be refused before
+    // anything else happens, whatever else is wrong with the invocation.
+    if let Some(name) = &api_key_env {
+        datasheet::validate_api_key_env_name(name)?;
+    }
     if !pdf.is_file() {
         anyhow::bail!("no datasheet at '{}'", pdf.display());
     }
@@ -456,7 +515,11 @@ pub fn extract(
     }
 
     let args = datasheet::Args::new(pdf.to_path_buf(), part.to_string(), kind.to_string())
-        .out_dir(out_dir.map(std::path::Path::to_path_buf));
+        .out_dir(out_dir.map(std::path::Path::to_path_buf))
+        .model(model)
+        .backend(backend)
+        .api_base(api_base)
+        .api_key_env(api_key_env);
     datasheet::run(args)?;
 
     println!();
@@ -466,4 +529,33 @@ pub fn extract(
          outright."
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::box_table;
+
+    /// The shared table renderer: box-drawing frame, padded columns, one line
+    /// per row. Both `models resolve` and the doctor's TTY view sit on this.
+    #[test]
+    fn box_table_renders_a_padded_box_drawing_table() {
+        let out = box_table(
+            &["Name", "Status"],
+            &[
+                vec!["avr".to_string(), "builtin".to_string()],
+                vec!["renode".to_string(), "ok".to_string()],
+            ],
+        );
+        let lines: Vec<&str> = out.lines().collect();
+        assert_eq!(lines.len(), 6, "frame + header + rule + 2 rows:\n{out}");
+        assert!(lines[0].starts_with('┌') && lines[0].ends_with('┐'));
+        assert_eq!(lines[1], "│ Name   │ Status  │");
+        assert!(lines[2].starts_with('├') && lines[2].contains('┼'));
+        assert_eq!(lines[3], "│ avr    │ builtin │");
+        assert_eq!(lines[4], "│ renode │ ok      │");
+        assert!(lines[5].starts_with('└') && lines[5].ends_with('┘'));
+        // Every line is equally wide, so the frame is actually a box.
+        let width = lines[0].chars().count();
+        assert!(lines.iter().all(|l| l.chars().count() == width), "{out}");
+    }
 }

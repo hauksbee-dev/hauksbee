@@ -1,0 +1,19 @@
+# A spec with one of each mistake, for the headless diagnostics test.
+name = "deliberately broken"
+board = "../hardware/blinky.kicad_pcb"
+duration_ms = 20
+
+[[supply]]
+net = "+5V"
+kind = "bench"
+
+[[assert]]
+kind = "voltag"
+net = "+5V"
+min = 4.9
+
+[[assert]]
+kind = "voltage"
+net = "+5V"
+min = 5.0
+max = 1.0

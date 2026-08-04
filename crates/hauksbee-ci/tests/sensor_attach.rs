@@ -75,7 +75,7 @@ fn sensor_attach_lm75_hot_flag_goes_high() {
     let bc = result
         .results
         .iter()
-        .find(|r| r.kind == "boot-coverage")
+        .find(|r| r.kind == "boot_coverage")
         .expect("boot-coverage assertion must be present in lm75_thermostat.toml");
     assert!(
         bc.passed,

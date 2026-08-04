@@ -31,6 +31,9 @@ pub struct RunConfig {
     pub thermal: bool,
     pub ambient: f64,
     pub plain: bool,
+    /// `--plain` DRC: print every clearance finding in full instead of
+    /// condensing repeated near-identical ones past the first few.
+    pub verbose: bool,
     pub json: bool,
     pub strict: bool,
     pub strict_thermal: bool,
@@ -75,6 +78,10 @@ pub struct RunConfig {
     /// fitted values) between the design files and the real reworked board,
     /// applied to the bound board before the engine is built.
     pub asbuilt: Option<std::path::PathBuf>,
+    /// Write the full static suite as a JUnit XML report here (CI artifact).
+    pub junit: Option<std::path::PathBuf>,
+    /// Write the full static suite as a SARIF 2.1.0 report here (CI artifact).
+    pub sarif: Option<std::path::PathBuf>,
 }
 
 pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
@@ -137,6 +144,114 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         anyhow::bail!("--probe records co-sim waveforms and needs --headless");
     }
 
+    // Flag-consistency contract (the --probe guard above is the model): a flag
+    // that names an output artifact or an analysis input whose producing
+    // analysis was not requested is an ERROR, because honouring it silently
+    // means a file that never appears or a selector that selects nothing. A
+    // flag that merely loses a rendering/serving preference to a
+    // higher-precedence one WARNS on stderr and continues.
+    if cfg.probe_csv.is_some() && cfg.probe.is_empty() {
+        anyhow::bail!(
+            "--probe-csv names an output file, but no --probe net was given; \
+             add --probe <NET> (and --headless)"
+        );
+    }
+    if cfg.ac_csv.is_some() && cfg.ac.is_none() {
+        anyhow::bail!(
+            "--ac-csv names an output file, but no --ac sweep was requested; \
+             add --ac <FSTART:FSTOP:POINTS>"
+        );
+    }
+    if (!cfg.ac_node.is_empty() || cfg.ac_loop.is_some()) && cfg.ac.is_none() {
+        anyhow::bail!(
+            "--ac-node/--ac-loop describe an --ac sweep, but no --ac was requested; \
+             add --ac <FSTART:FSTOP:POINTS>"
+        );
+    }
+    if cfg.ampacity && (cfg.json || cfg.plain) {
+        anyhow::bail!(
+            "--ampacity is a text-only report with no --json/--plain form yet; \
+             refusing rather than silently ignoring the output flag"
+        );
+    }
+    if cfg.plain && cfg.json {
+        eprintln!(
+            "warning: --plain and --json were both given; --json wins (machine output \
+             has no prose form)"
+        );
+    }
+    if cfg.serve
+        && (cfg.report
+            || cfg.drc
+            || cfg.lint
+            || cfg.si
+            || cfg.resources
+            || cfg.usb_c
+            || cfg.check
+            || cfg.ampacity
+            || cfg.thermal)
+    {
+        eprintln!("warning: a report flag prints and exits, so --serve is ignored here");
+    }
+    if cfg.oracle && !cfg.drc {
+        eprintln!("warning: --oracle only applies with --drc; ignored");
+    }
+
+    // --asbuilt describes the physical board, so it is validated and applied on
+    // EVERY path, not only the simulating one (the static report branches used
+    // to silently discard it). A bad path, a parse error, or an overlay that
+    // does not describe this board is a hard error everywhere. The bound board
+    // it produced is reused by the circuit-reading branches below (--ac,
+    // --list-nets, co-sim, --serve).
+    let mut prebound: Option<crate::binder::BoundBoard> = None;
+    if let Some(asbuilt_path) = &cfg.asbuilt {
+        let overlay = crate::asbuilt::AsBuiltOverlay::load(asbuilt_path)?;
+        let mut b = bind_board(&board, &lib);
+        let overlay_report = overlay.apply(&mut b)?;
+        // Under --json stdout must stay one machine document, so the applied
+        // narration is suppressed there (the validation above still ran).
+        if !quiet && !cfg.json {
+            println!("as-built overlay {} applied:", asbuilt_path.display());
+            for line in &overlay_report.lines {
+                println!("  {line}");
+            }
+            println!(
+                "  note: the copper/netlist checks read the DESIGN files; the overlay is \
+                 applied to the simulated circuit (co-sim, --ac, --serve)."
+            );
+        }
+        prebound = Some(b);
+    }
+
+    // --junit/--sarif: the full static suite (same checks and waiver
+    // discipline as --check) written as CI artifacts BEFORE the chosen report
+    // renders, so any selector, or none, can produce them alongside its
+    // normal output.
+    if cfg.junit.is_some() || cfg.sarif.is_some() {
+        let findings = crate::reports::check::gather_findings(
+            &cfg.board, &board, &text, &raw, is_altium, &lib,
+        )?;
+        if let Some(p) = &cfg.junit {
+            std::fs::write(
+                p,
+                crate::reports::ci_artifacts::junit_xml(
+                    &crate::commands::common::file_name(&cfg.board),
+                    &findings,
+                ),
+            )
+            .map_err(|e| anyhow::anyhow!("writing --junit '{}': {e}", p.display()))?;
+            eprintln!("wrote JUnit report to {}", p.display());
+        }
+        if let Some(p) = &cfg.sarif {
+            std::fs::write(
+                p,
+                crate::reports::ci_artifacts::sarif_json(&cfg.board, &findings),
+            )
+            .map_err(|e| anyhow::anyhow!("writing --sarif '{}': {e}", p.display()))?;
+            eprintln!("wrote SARIF report to {}", p.display());
+        }
+    }
+
     // --serial-attach bridges a host serial port to the firmware's UART, so
     // without firmware there is nothing on the far end to answer. Refuse here,
     // before any binding work, rather than open a port onto silence.
@@ -151,7 +266,10 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // --ac-node / --ac-loop without grepping the layout. One net per line on
     // stdout (pipeable); a JSON array under --json.
     if cfg.list_nets {
-        let bound = bind_board(&board, &lib);
+        let bound = match prebound.take() {
+            Some(b) => b,
+            None => bind_board(&board, &lib),
+        };
         let mut nets: Vec<String> = bound.net_names.clone();
         nets.sort();
         if cfg.json {
@@ -178,6 +296,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             &lib,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.strict,
+            cfg.verbose,
         );
     }
 
@@ -201,6 +320,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.oracle,
             cfg.strict,
+            cfg.verbose,
         );
     }
 
@@ -216,6 +336,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // resource-conflict check (a lint-class structural check too), print, exit.
     if cfg.lint {
         return crate::reports::lint::emit(
+            &cfg.board,
             &board,
             &lib,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
@@ -226,6 +347,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // --resources: run only the MCU internal resource-conflict check, print, exit.
     if cfg.resources {
         return crate::reports::lint::emit_resources(
+            &cfg.board,
             &board,
             &lib,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
@@ -249,6 +371,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // KiCad layout text, so it is passed through.
     if cfg.si {
         return crate::reports::si::emit(
+            &cfg.board,
             &board,
             &text,
             is_altium,
@@ -261,7 +384,12 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // --ac: small-signal AC sweep on the bound circuit, print Bode + (optional)
     // loop-stability margins, then exit. Informational like the other reports.
     if let Some(ac_arg) = &cfg.ac {
-        let bound = bind_board(&board, &lib);
+        // The overlay-applied bound board when --asbuilt was given, so the AC
+        // sweep runs on the reworked circuit.
+        let bound = match prebound.take() {
+            Some(b) => b,
+            None => bind_board(&board, &lib),
+        };
         return crate::reports::ac::emit(
             &bound,
             ac_arg,
@@ -310,6 +438,27 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         && !is_altium
         && (cfg.tui || stdout_is_tty);
     if launch_tui {
+        // The TUI rebuilds its board from the layout text, so it cannot apply
+        // the overlay; refuse rather than show pristine-design numbers under an
+        // --asbuilt flag the user believes is in effect.
+        if cfg.asbuilt.is_some() {
+            anyhow::bail!(
+                "the interactive dashboard does not apply --asbuilt; run a report \
+                 (--check/--report) or a co-sim (--headless/--serve) instead"
+            );
+        }
+        // Forcing the TUI without a terminal on the other end fails deep inside
+        // the terminal setup with a bare OS error; say what is actually wrong.
+        if cfg.tui
+            && !stdout_is_tty
+            && !std::io::IsTerminal::is_terminal(&std::io::stdin())
+        {
+            anyhow::bail!(
+                "the interactive dashboard needs a terminal, and neither stdin nor stdout \
+                 is one (output is piped or redirected). Drop --tui and use --check/--report \
+                 for a report, --json for machine output, or --serve for the browser UI"
+            );
+        }
         return crate::tui::run(
             &cfg.board,
             &text,
@@ -319,22 +468,13 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     }
 
     // Bind with the layered library (so a --models-dir / user-dir custom part is
-    // in scope), then build the engine from the bound board.
-    let mut bound = bind_board(&board, &lib);
-    // --asbuilt: apply the declarative rework overlay post-bind, pre-engine
-    // (the same seam the flagship prep uses). Fail-loud: an overlay that does
-    // not describe this board aborts the run with its line-numbered error.
-    if let Some(asbuilt_path) = &cfg.asbuilt {
-        let overlay = crate::asbuilt::AsBuiltOverlay::load(asbuilt_path)?;
-        let report = overlay.apply(&mut bound)?;
-        if !quiet {
-            println!("as-built overlay {} applied:", asbuilt_path.display());
-            for line in &report.lines {
-                println!("  {line}");
-            }
-        }
-    }
-    let bound = bound;
+    // in scope), then build the engine from the bound board. When --asbuilt was
+    // given, the overlay was already validated, applied and narrated up front;
+    // reuse that bound board rather than re-binding and re-applying.
+    let bound = match prebound.take() {
+        Some(b) => b,
+        None => bind_board(&board, &lib),
+    };
     // Net names captured before `bound` is consumed, for --probe validation.
     let probe_known_nets: Vec<String> = if cfg.probe.is_empty() {
         Vec::new()
@@ -444,6 +584,9 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
 
         let board_name = engine.report().board_name.clone();
         let summary = BindSummary::from_report(engine.report());
+        // Captured before `summary` is consumed by the JSON branch; the
+        // convergence-abort diagnosis below names this count.
+        let unresolved_active_count = crate::result::coverage_open_active_refs(&summary).len();
         let mut uart_seen = false;
         let headless = crate::reports::cosim::run_headless(
             &mut engine,
@@ -694,7 +837,8 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 report.heads_up.push(crate::plain::HeadsUp::note(format!(
                     "co-sim coverage: {} of {} critical parts modelled: {} active IC(s) are \
                      unresolved or open, so firmware/analog/thermal results on their nets are \
-                     INCOMPLETE (the copper/DRC checks are unaffected). Add models with --models-dir.",
+                     INCOMPLETE (the copper/DRC checks are unaffected). Add models with --models-dir \
+                     (hauksbee models --help).",
                     summary.critical_parts_bound_n,
                     summary.critical_parts_total,
                     open.len()
@@ -729,7 +873,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 println!(
                     "co-sim coverage: {} of {} critical parts modelled: {} active IC(s) \
                      unresolved/open, so firmware/analog results on their nets are INCOMPLETE; \
-                     add models with --models-dir (copper/DRC checks are unaffected).",
+                     add models with --models-dir (hauksbee models --help; copper/DRC checks are unaffected).",
                     summary.critical_parts_bound_n,
                     summary.critical_parts_total,
                     open.len()
@@ -759,18 +903,30 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             eprintln!(
                 "WARNING: co-sim analog solve failed to converge for {} chunks in a row \
                  ({} failed chunks total); the run held stale voltages and cannot vouch \
-                 for the analog side.",
+                 for the analog side. The usual cause is unresolved active parts leaving \
+                 nodes floating: {} active IC(s) are unresolved/open here (hauksbee models \
+                 --help). See docs/learn/05-going-fast.md.",
                 crate::scheduler::STRICT_CONSECUTIVE_FAILED_ABORT,
                 failed_chunk_count,
+                unresolved_active_count,
             );
             if let Some(code) = strict_analog_exit_code(cfg.strict && analog_abort) {
                 std::process::exit(code);
             }
         }
 
-        // Strict: any fault raised during the run fails the gate.
+        // Strict: any fault raised during the run fails the gate, and the last
+        // line says so; a bare exit 2 reads as a tool crash, and --plain's
+        // "worth a look" verdict used to contradict the failing code.
         if cfg.strict && !faults.is_empty() {
-            std::process::exit(2);
+            let items: Vec<String> = faults
+                .iter()
+                .map(|f| format!("cosim-{} {}", f.kind.as_str(), f.component))
+                .collect();
+            crate::reports::strict_gate_exit(
+                crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
+                &items,
+            );
         }
         // --strict-boot: opt-in escalation of the boot-safety advisory to a
         // failing gate (exit 2). The run was valid and these are real findings

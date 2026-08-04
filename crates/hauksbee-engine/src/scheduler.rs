@@ -269,6 +269,12 @@ pub struct Scheduler {
     /// later chunk converges, so a strict post-run check still sees a streak that
     /// crossed the abort threshold mid-run.
     max_consecutive_failed_chunks: u32,
+    /// The solver's message from the most recent failed chunk (e.g. "Newton
+    /// failed at t=... even at dt_min=...", device-named when a behavioural
+    /// fault caused it). Kept so the failure surfaces with its cause instead
+    /// of being discarded; also printed once at the start of each failed
+    /// streak, which is the breadcrumb a bisection needs.
+    last_solve_error: Option<String>,
     /// Standalone GPIO-edge-driven digital components (indices into `digital`)
     /// advanced through the generalized micro-tick replay (05 §1.2), NOT through
     /// a 595 chain or the 165 responder. Empty on the current corpus (every GPIO
@@ -781,6 +787,7 @@ impl Scheduler {
             failed_windows: Vec::new(),
             consecutive_failed_chunks: 0,
             max_consecutive_failed_chunks: 0,
+            last_solve_error: None,
             replay_chips,
             replay_pin_nets,
             last_chunk_edges: Vec::new(),
@@ -2353,7 +2360,18 @@ impl Scheduler {
                 self.last_dc_seed = Some(final_x);
                 true
             }
-            Err(_) => {
+            Err(err) => {
+                // Keep the solver's own reason (it names a behavioural-fault
+                // device when one caused the failure), and say it once per
+                // failed streak: a silent Err(_) here cost an hour of manual
+                // bisection on a board whose solve failed for a nameable cause.
+                if self.consecutive_failed_chunks == 0 {
+                    eprintln!(
+                        "WARNING: analog solve failed at t={:.6e}s: {err}",
+                        self.sim_time
+                    );
+                }
+                self.last_solve_error = Some(err);
                 // The transient march failed to advance. If the DC operating
                 // point at t=0 was still captured (the streaming sink fires once
                 // before the march loop), use it: a converged DC bias is a far
@@ -2491,6 +2509,13 @@ impl Scheduler {
         &self.failed_windows
     }
 
+    /// The solver's message from the most recent non-convergent chunk, or
+    /// `None` if every chunk this run solved. Pairs with `failed_windows`, so
+    /// a failed span carries its cause, not just its extent.
+    pub fn last_solve_error(&self) -> Option<&str> {
+        self.last_solve_error.as_deref()
+    }
+
     /// False once any chunk this run failed to solve faithfully: either the
     /// analog march diverged (held stale voltages over a window) or an MCU
     /// refused to advance (`run_micros` errored), so the digital side of that
@@ -2532,6 +2557,7 @@ impl Scheduler {
         self.failed_windows.clear();
         self.consecutive_failed_chunks = 0;
         self.max_consecutive_failed_chunks = 0;
+        self.last_solve_error = None;
         for st in self.stats.values_mut() {
             *st = Default::default();
         }

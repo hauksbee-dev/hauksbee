@@ -17,9 +17,11 @@ use std::path::PathBuf;
 use hauksbee_ci::{run, RunConfig};
 
 fn corpus() -> PathBuf {
-    hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join("famous")
+    // Through the shared resolver, which accepts both the hand-built
+    // `famous/<id>` layout and the `<id>` layout scripts/fetch-corpus.sh
+    // produces. Joining `famous` directly is what made this calibration skip
+    // silently for anyone who used the documented fetch.
+    hauksbee_testkit::corpus_boards_root(env!("CARGO_MANIFEST_DIR")).unwrap_or_default()
 }
 
 fn require_corpus() -> bool {

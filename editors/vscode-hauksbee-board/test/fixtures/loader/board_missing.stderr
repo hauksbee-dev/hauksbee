@@ -1,0 +1,1 @@
+hauksbee-ci: valid.toml: no board file at 'boards/blinky.kicad_pcb' (resolved from the spec's `board` key). Check that path; it is taken relative to the spec file's directory

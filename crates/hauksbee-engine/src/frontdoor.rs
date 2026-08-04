@@ -851,8 +851,8 @@ fn analog_invalid_finding(failed_chunks: u64, windows: &[WebFailedWindow]) -> We
         why: format!(
             "The analog solver failed on {failed_chunks} {chunk_word} covering {spans}. \
              Over those windows the co-sim held stale node voltages instead of a real \
-             solve, so any voltage, current or fault reading there is fiction (05 §3b, \
-             refuse rather than fake)."
+             solve, so any voltage, current or fault reading there is fiction (see \
+             docs/learn/05-going-fast.md: refuse rather than fake)."
         ),
         fix: "Treat electrical results inside those windows as unknown. A stiff or \
               structurally singular section (conflicting rails, an unconverging \

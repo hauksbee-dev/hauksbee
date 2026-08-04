@@ -152,10 +152,12 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
     }
 
     if copper.is_empty() {
-        return Err(ExtractError::WrongRoot {
-            expected: "a directory containing copper gerber files",
-            found: None,
-        });
+        return Err(ExtractError::Gerber(
+            "no copper gerber layers found here; point hauksbee at the fab output \
+             folder (or a zip of it) that contains the copper layer files \
+             (.gtl/.gbl, or *-F_Cu.gbr style) alongside the drill file"
+                .to_string(),
+        ));
     }
 
     // Resolve copper layer order (top -> bottom).
@@ -377,11 +379,34 @@ impl ExtractedBoard {
         {
             from_gerber_zip(path).map(|g| g.board)
         } else {
-            Err(ExtractError::WrongRoot {
-                expected: "a gerber directory or .zip",
-                found: None,
-            })
+            Err(ExtractError::Gerber(
+                "not a gerber job: expected a directory of gerber files, or a .zip of one"
+                    .to_string(),
+            ))
         }
+    }
+}
+
+#[cfg(test)]
+mod error_message_tests {
+    use super::from_gerber_dir;
+
+    #[test]
+    fn no_copper_error_is_one_human_sentence() {
+        // The old template collision rendered "not a a directory containing
+        // copper gerber files file (root is None)". The message must be a
+        // whole sentence with no Rust Option debug in it.
+        let dir =
+            std::env::temp_dir().join(format!("hauksbee-gerber-empty-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let msg = match from_gerber_dir(&dir) {
+            Ok(_) => panic!("an empty dir has no copper"),
+            Err(e) => e.to_string(),
+        };
+        assert!(msg.contains("no copper gerber layers"), "got: {msg}");
+        assert!(!msg.contains("None"), "no Option debug: {msg}");
+        assert!(!msg.contains("not a a"), "no doubled article: {msg}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
 

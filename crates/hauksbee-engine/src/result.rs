@@ -36,6 +36,11 @@ use crate::report::{BindOutcome, BindReport};
 /// any future caller share one source of truth.
 pub const EXIT_INVALID_FOR_ANALYSIS: i32 = 3;
 
+/// Version of the `run --json` document contract (`JsonReport` plus the
+/// `ok`/`verdict`/`serious_count`/`actionable_count` rollup `to_json`
+/// prepends). Bump on a breaking change only; additive fields keep it.
+pub const RUN_REPORT_SCHEMA_VERSION: u32 = 1;
+
 /// Exit code a strict headless run (`--strict`) or hauksbee-ci must use when the
 /// analog co-sim tripped the consecutive-failed-chunk abort. Centralised so both
 /// entry points resolve the same code ([`EXIT_INVALID_FOR_ANALYSIS`]) and a test
@@ -51,7 +56,7 @@ pub fn strict_analog_exit_code(analog_abort_tripped: bool) -> Option<i32> {
 
 /// One unresolved part that sits on a connected (active) net, with the
 /// electrical consequence of defaulting it to open.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct UnresolvedActive {
     pub reference: String,
     pub value: String,
@@ -69,7 +74,7 @@ pub struct UnresolvedActive {
 /// "How many parts resolved" is the wrong unit when the 17% that did not are the
 /// entire active circuit. The honest metrics are: did the MCU and the active
 /// power ICs bind, and which active-path parts are open?
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct BindSummary {
     pub resolved: usize,
     pub unresolved: usize,
@@ -241,8 +246,12 @@ impl BindSummary {
         };
         let _ = writeln!(
             s,
-            "\nbind summary: {} of {} non-ignored parts resolved; critical_parts_bound: {} ({})",
-            self.resolved, self.non_ignored, self.critical_parts_bound, mcu_state,
+            "\nbind summary: {} of {} non-ignored parts resolved; Critical parts modelled: {} of {} ({})",
+            self.resolved,
+            self.non_ignored,
+            self.critical_parts_bound_n,
+            self.critical_parts_total,
+            mcu_state,
         );
         // Surface the same union the web/json personas do: active ICs that are
         // unresolved OR resolved-but-open on the live circuit both make
@@ -256,29 +265,77 @@ impl BindSummary {
                  analog/AC/thermal results on their nets are NOT trustworthy."
             );
         }
+        // ONE grouped section per bucket. The table above already marks each
+        // affected row, so this section groups the refs and states the shared
+        // consequence once, instead of repeating a near-identical sentence per
+        // part. Natural refdes order, so the list is scannable and stable.
         if !self.active_path_unresolved.is_empty() {
             let _ = writeln!(
                 s,
-                "active_path_unresolved ({}):",
-                self.active_path_unresolved.len()
+                "Active parts left open ({}): {}",
+                self.active_path_unresolved.len(),
+                grouped_refs(&self.active_path_unresolved),
             );
-            for u in &self.active_path_unresolved {
-                let _ = writeln!(s, "  {} ({}): {}", u.reference, u.value, u.consequence);
+            let actives = self
+                .active_path_unresolved
+                .iter()
+                .filter(|u| u.active_ic)
+                .count();
+            if actives > 0 {
+                let _ = writeln!(
+                    s,
+                    "  {} of these are active ICs left OPEN: analog/AC/thermal results on \
+                     their nets are NOT trustworthy.",
+                    actives
+                );
+            }
+            if actives < self.active_path_unresolved.len() {
+                let _ = writeln!(
+                    s,
+                    "  The rest default to OPEN: nets through them are isolated in simulation."
+                );
             }
         }
-        let open_resolved: Vec<&UnresolvedActive> = self
+        let open_resolved: Vec<UnresolvedActive> = self
             .resolved_but_open_active
             .iter()
             .filter(|u| u.active_ic)
+            .cloned()
             .collect();
         if !open_resolved.is_empty() {
-            let _ = writeln!(s, "resolved_but_open_active ({}):", open_resolved.len());
-            for u in open_resolved {
-                let _ = writeln!(s, "  {} ({}): {}", u.reference, u.value, u.consequence);
-            }
+            let _ = writeln!(
+                s,
+                "Modelled active parts with open/undriven pins ({}): {}",
+                open_resolved.len(),
+                grouped_refs(&open_resolved),
+            );
+            let _ = writeln!(
+                s,
+                "  They sit on the live circuit but do not drive their nets, so \
+                 analog/AC/thermal results there are NOT fully trustworthy."
+            );
         }
         s
     }
+}
+
+/// `"U3 (XC6206), U5 (TP4056), ..."`: the refs of a banner bucket in natural
+/// refdes order, one line, so the section lists WHO once and the shared
+/// consequence once instead of a sentence per part.
+fn grouped_refs(parts: &[UnresolvedActive]) -> String {
+    let mut sorted: Vec<&UnresolvedActive> = parts.iter().collect();
+    sorted.sort_by_key(|u| crate::report::natural_ref_key(&u.reference));
+    sorted
+        .iter()
+        .map(|u| {
+            if u.value.trim().is_empty() {
+                u.reference.clone()
+            } else {
+                format!("{} ({})", u.reference, u.value)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Whether a reference designator names an active IC (prefix U / IC / MCU),
@@ -352,7 +409,7 @@ pub fn ac_is_all_sentinel(bode: &[(f64, f64, f64)]) -> bool {
 }
 
 /// A validity verdict for an analysis that can be meaningless: AC and thermal.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct Validity {
     pub valid: bool,
     /// Set only when `valid` is false: the named reason, listing offending refs.
@@ -445,7 +502,7 @@ pub fn thermal_validity(dissipating_rows: usize, summary: &BindSummary) -> Valid
 /// its own (the partial-coverage thermal escalation is opt-in behind
 /// `--strict-thermal`). `partial == true` means a renderer should print a
 /// coverage caveat even though the check itself produced rows.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct CheckCoverage {
     /// Covered active ICs / total active ICs, clamped to `[0, 1]`: how much of the
     /// active circuit the check actually modelled. `1.0` when every active IC is
@@ -530,7 +587,7 @@ pub fn coverage_open_active_refs(summary: &BindSummary) -> Vec<String> {
 /// [`JsonFinding`]: a note never gates a CI pipeline and never changes an exit
 /// code; it is the structured home for honesty annotations that must never be
 /// silently absent (bind roles, co-sim substitution, coverage caveats, SI info).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct JsonNote {
     pub kind: JsonNoteKind,
     pub message: String,
@@ -539,14 +596,14 @@ pub struct JsonNote {
 /// One row of the boot-state panel: a transistor gate and what the firmware does
 /// to it at power-up (`driven_high` / `driven_low` / `floating`). Informational
 /// (reported, not judged), so a consumer can read it without it being a verdict.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct BootGateJson {
     pub reference: String,
     pub net: String,
     pub state: String,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Serialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum JsonNoteKind {
     BindRole,
@@ -563,7 +620,7 @@ pub enum JsonNoteKind {
 /// Machine-readable co-sim summary (today only emitted as CLI text). Populated
 /// from the headless run + the MCU binding. `substituted` is true when the part
 /// the user asked for was modelled by a less-specific core (Track B).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct CosimJson {
     pub mcu_ref: String,
     /// The actual backend string from `BindOutcome::Mcu { backend }`.
@@ -637,7 +694,7 @@ pub struct CosimJson {
 }
 
 /// One sub-chunk GPIO pulse warning (see [`CosimJson::short_pulses`]).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct CosimShortPulse {
     pub net: String,
     pub mcu_ref: String,
@@ -652,7 +709,7 @@ pub struct CosimShortPulse {
 }
 
 /// One runtime driver-contention finding (see [`CosimJson::driver_contention`]).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct CosimDriverContention {
     pub net: String,
     pub mcu_ref: String,
@@ -665,7 +722,7 @@ pub struct CosimDriverContention {
 }
 
 /// One dropped ADC injection channel (see [`CosimJson::adc_dropped`]).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct CosimAdcDrop {
     pub mcu_ref: String,
     pub channel: u8,
@@ -676,7 +733,7 @@ pub struct CosimAdcDrop {
 }
 
 /// One never-exercised bus peripheral (see [`CosimJson::unexercised_buses`]).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct CosimUnexercisedBus {
     pub id: String,
     /// `"I2C"` or `"SPI"`.
@@ -686,7 +743,7 @@ pub struct CosimUnexercisedBus {
 }
 
 /// One SPI bus's framing tier (see [`CosimJson::spi_framing`]).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct CosimSpiFraming {
     pub bus: String,
     pub mode: String,
@@ -695,13 +752,13 @@ pub struct CosimSpiFraming {
 /// One sim-time window `[start_s, end_s)` where the analog solve failed to
 /// converge and the co-sim held stale voltages. Reported so a consumer knows the
 /// exact span that cannot be trusted rather than inferring a quiet run.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct CosimFailedWindow {
     pub start_s: f64,
     pub end_s: f64,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct NetActivity {
     pub net: String,
     pub toggles: u64,
@@ -714,7 +771,7 @@ pub struct NetActivity {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// A real short between two nets (gap <= 0: touching copper).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct DrcShort {
     pub net_a: String,
     pub net_b: String,
@@ -733,7 +790,7 @@ pub struct DrcShort {
 /// A group of clearance findings that share (net_a, net_b, layer, root cause),
 /// collapsed to one line with a count. `at_limit` separates `gap == rule` (no
 /// margin, but not below) from genuine sub-clearance violations.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct DrcGroup {
     pub net_a: String,
     pub net_b: String,
@@ -804,7 +861,7 @@ impl DrcGroup {
 
 /// The DRC report, restructured into honest buckets: real shorts kept verbatim,
 /// clearance findings grouped, and `gap == rule` separated from `gap < rule`.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct DrcStructured {
     pub clearance_rule_mm: f64,
     pub primitive_count: usize,
@@ -1002,7 +1059,7 @@ use hauksbee_extract::{LintCheck, NetLintReport, Severity, SiCheck, SiReport, Si
 
 /// One finding in the uniform machine-readable shape (§4.1): every check's
 /// findings serialize the same way, so a CI pipeline or AI never parses prose.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct JsonFinding {
     /// Which check produced it ("si" / "lint" / "drc").
     pub check: String,
@@ -1176,8 +1233,12 @@ pub fn fault_findings_json(faults: &[crate::stress::FaultEvent]) -> Vec<JsonFind
 /// The top-level `--json` document. Only the section(s) for the requested check
 /// are populated; the rest stay `None` (omitted from output). `board` + `bind`
 /// are always present so an AI always has the bind-role context (Theme F).
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct JsonReport {
+    /// Version of the `run --json` document contract. Bumped when a field
+    /// changes meaning or is removed; purely additive fields do not bump it.
+    /// The generated schema lives in `crates/hauksbee-engine/schemas/`.
+    pub schema_version: u32,
     pub board: String,
     pub bind: BindSummary,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1210,7 +1271,7 @@ pub struct JsonReport {
 }
 
 /// One overruled finding on the machine surface.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct JsonWaived {
     /// Which check produced it ("si" / "lint" / "drc").
     pub check: String,
@@ -1237,7 +1298,7 @@ impl From<crate::waiver::WaivedFinding> for JsonWaived {
 }
 
 /// AC sweep in JSON: validity first, then the bode rows only when valid.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct AcJson {
     #[serde(flatten)]
     pub validity: Validity,
@@ -1261,7 +1322,7 @@ pub struct AcJson {
     pub coverage: Option<CheckCoverage>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct AcNetJson {
     pub net: String,
     /// `[freq_hz, mag_db, phase_deg]` triples.
@@ -1269,7 +1330,7 @@ pub struct AcNetJson {
 }
 
 /// Thermal in JSON: validity first, then the per-device peak temps when valid.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct ThermalJson {
     #[serde(flatten)]
     pub validity: Validity,
@@ -1282,7 +1343,7 @@ pub struct ThermalJson {
     pub coverage: Option<CheckCoverage>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct ThermalDeviceJson {
     pub reference: String,
     pub tj_c: f64,
@@ -1293,6 +1354,7 @@ impl JsonReport {
     /// Start a JSON report with just the always-present board + bind header.
     pub fn new(board_name: &str, bind: BindSummary) -> Self {
         JsonReport {
+            schema_version: RUN_REPORT_SCHEMA_VERSION,
             board: board_name.to_string(),
             bind,
             findings: None,

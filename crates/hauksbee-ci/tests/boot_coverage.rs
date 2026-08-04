@@ -1,7 +1,7 @@
 //! Boot-coverage assertion: the formerly-rejected "Hi-Z control input" class,
 //! made decidable by running the firmware.
 //!
-//! `docs/record/KNOWN_FAULTS_VALIDATION.md` records two faults (Watchy e-paper RES#,
+//! `docs/evidence/KNOWN_FAULTS_VALIDATION.md` records two faults (Watchy e-paper RES#,
 //! ZSWatch DISPLAY-EN) as honest misses: a control net is driven only by an MCU
 //! GPIO that goes Hi-Z at reset, so its power-up default is undefined, and the
 //! netlist *cannot encode the load's intended default* (a display that must be
@@ -99,7 +99,7 @@ fn gate_driven_promptly_passes() {
     let bc = result
         .results
         .iter()
-        .find(|r| r.kind == "boot-coverage")
+        .find(|r| r.kind == "boot_coverage")
         .expect("boot-coverage assertion present");
     assert!(bc.passed, "boot-coverage must pass: {}", bc.detail);
     assert!(
@@ -133,7 +133,7 @@ fn gate_left_floating_fails_naming_the_net() {
     let bc = result
         .results
         .iter()
-        .find(|r| r.kind == "boot-coverage")
+        .find(|r| r.kind == "boot_coverage")
         .expect("boot-coverage assertion present");
     assert!(
         !bc.passed,
@@ -150,7 +150,7 @@ fn gate_left_floating_fails_naming_the_net() {
 // Watchy v1.5 e-paper RES# boot-coverage on the REAL board, ESP32 QEMU backend.
 //
 // This executes the formerly-MISSED Watchy display-RES# validation row
-// (docs/record/KNOWN_FAULTS_VALIDATION.md) end-to-end: the unmodified corpus Watchy
+// (docs/evidence/KNOWN_FAULTS_VALIDATION.md) end-to-end: the unmodified corpus Watchy
 // v1.5 layout, its RES net (no pull in v1.5, U1 ESP32-PICO-D4 pad 28 = GPIO9),
 // the Espressif QEMU esp32 machine booting a reduced display-init firmware that
 // drives GPIO9 HIGH. Two-sided: the display-init firmware PASSES (drives RES in
@@ -214,7 +214,7 @@ fn watchy_v15_display_res_driven_passes() {
     let bc = result
         .results
         .iter()
-        .find(|r| r.kind == "boot-coverage")
+        .find(|r| r.kind == "boot_coverage")
         .expect("boot-coverage assertion present");
     assert!(
         bc.passed,
@@ -261,7 +261,7 @@ fn watchy_v15_display_res_undriven_fails() {
     let bc = result
         .results
         .iter()
-        .find(|r| r.kind == "boot-coverage")
+        .find(|r| r.kind == "boot_coverage")
         .expect("boot-coverage assertion present");
     assert!(
         !bc.passed,

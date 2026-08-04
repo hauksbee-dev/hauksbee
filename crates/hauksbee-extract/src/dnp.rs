@@ -191,10 +191,22 @@ impl ExtractedBoard {
             .map(|r| r.as_str())
             .collect();
         if !unknown.is_empty() {
-            return Err(crate::ExtractError::UnknownReference(format!(
-                "unknown reference(s): {}. Check the reference designators against the board.",
-                unknown.join(", ")
-            )));
+            // Did-you-mean, matching the net-facing flags (--probe/--ac-node):
+            // a one-character typo should hand back the intended designator.
+            let known: Vec<&str> = self
+                .components
+                .iter()
+                .map(|c| c.reference.as_str())
+                .collect();
+            let mut msg = format!("unknown reference(s): {}.", unknown.join(", "));
+            for u in &unknown {
+                let near = nearest_references(u, &known, 3);
+                if !near.is_empty() {
+                    msg.push_str(&format!(" '{u}': did you mean {}?", near.join(", ")));
+                }
+            }
+            msg.push_str(" Check the reference designators against the board.");
+            return Err(crate::ExtractError::UnknownReference(msg));
         }
         if let Some(clash) = fit.iter().find(|r| no_fit.contains(r)) {
             return Err(crate::ExtractError::UnknownReference(format!(
@@ -241,5 +253,53 @@ impl ExtractedBoard {
             }
         }
         Ok(decision)
+    }
+}
+
+/// Closest reference designators to a mistyped one, case-insensitive, capped at
+/// `limit`, with a distance cutoff so wild typos suggest nothing rather than
+/// noise. Small and local: the engine's net-name matcher is not visible from
+/// this crate.
+fn nearest_references(target: &str, known: &[&str], limit: usize) -> Vec<String> {
+    fn dist(a: &str, b: &str) -> usize {
+        let a: Vec<char> = a.chars().collect();
+        let b: Vec<char> = b.chars().collect();
+        let mut row: Vec<usize> = (0..=b.len()).collect();
+        for (i, ca) in a.iter().enumerate() {
+            let mut prev = row[0];
+            row[0] = i + 1;
+            for (j, cb) in b.iter().enumerate() {
+                let cur = row[j + 1];
+                row[j + 1] = (prev + usize::from(ca != cb)).min(row[j] + 1).min(cur + 1);
+                prev = cur;
+            }
+        }
+        row[b.len()]
+    }
+    let t = target.to_ascii_lowercase();
+    let mut scored: Vec<(usize, &str)> = known
+        .iter()
+        .map(|k| (dist(&t, &k.to_ascii_lowercase()), *k))
+        .collect();
+    scored.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(b.1)));
+    let cutoff = (target.len() / 2).max(2);
+    scored
+        .into_iter()
+        .filter(|(d, _)| *d <= cutoff)
+        .take(limit)
+        .map(|(_, k)| k.to_string())
+        .collect()
+}
+
+#[cfg(test)]
+mod nearest_reference_tests {
+    use super::nearest_references;
+
+    #[test]
+    fn one_char_typo_suggests_the_designator() {
+        let known = ["R7", "R71", "C3", "U1"];
+        let near = nearest_references("R17", &known, 3);
+        assert!(near.contains(&"R71".to_string()) || near.contains(&"R7".to_string()));
+        assert!(nearest_references("XYZZY99", &known, 3).is_empty());
     }
 }
