@@ -215,6 +215,10 @@ id = "lumenpnp"
 name = "Opulo LumenPnP motherboard and ring light"
 url = "https://github.com/opulo-inc/lumenpnp"
 rev = "3eab4d12cda4b97031d52c1119461cba226d1a33"
+# Upstream keeps the boards at pnp/pcb/{mobo,ring-light}; every test asks for
+# lumenpnp/mobo/... . Without this the fetched corpus had the motherboard on disk
+# and the ERC calibration recorded it as unloadable.
+hoist = "pnp/pcb"
 license = "CERN-OHL-W-2.0"
 
 [[board]]
