@@ -120,7 +120,8 @@ Reports exit 0 by default even when they find something. `--strict` (alias `--fa
 
 The exact exit-code contract for `hauksbee run`:
 - **0**: clean, or a report-only run (no `--strict`, whatever it found). A gate-grade finding without `--strict` prints a stderr note saying so.
-- **2**: gate-grade findings under `--strict` (or `--strict-boot`).
+- **1**: the board was never analysed (unreadable or unrecognized file, a Git LFS pointer, a bad path). Your input, not your board.
+- **2**: gate-grade findings under `--strict` (or `--strict-boot`), or a usage error.
 - **3**: invalid for analysis (e.g. an aborted analog solve refuses to pretend).
 
 For `hauksbee-ci run`:
