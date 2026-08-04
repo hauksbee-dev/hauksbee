@@ -71,12 +71,34 @@
 [soc]
 backend = "renode"
 machine = "f072"
-platform_repl = "@platforms/cpus/stm32f072.repl"
+platform_repl = """
+// STM32F072 platform: the stock Renode file plus this part's real core clock.
+//
+// The two clock declarations are not optional decoration. A Renode platform
+// that declares neither runs the core and SysTick at Renode's own defaults,
+// which have no relation to the part: four shipped platforms did exactly that
+// and ran simulated time 4.5x to 9x fast. The descriptor loader cross-checks
+// both against `frequency_hz` below and refuses a mismatch
+// (soc::check_clock_declarations), so this is the shape every new Renode part
+// has to use.
+//
+// 8 MHz is the F072's RESET DEFAULT: the HSI is the system clock after reset
+// (RM0091 §6.2) and the walkthrough firmware enables no PLL.
+
+using "platforms/cpus/stm32f072.repl"
+
+nvic:
+    systickFrequency: 8000000
+
+cpu:
+    PerformanceInMips: 8
+"""
 cpu_path = "sysbus.cpu"
 uart = "sysbus.usart1"
 # The HSI, which is what the walkthrough firmware runs from and never leaves.
-# This field is advisory for the engine's bookkeeping: Renode clocks the
-# platform from the .repl's own frequencies regardless of what is written here.
+# NOT advisory: the loader refuses a descriptor whose platform declares a core
+# clock that disagrees with this number, so this field and the two declarations
+# in `platform_repl` above are one fact with one failure mode.
 frequency_hz = 8_000_000
 expected_e_machine = "EM_ARM"
 mcu_label = "STM32F072 (ARM Cortex-M0)"

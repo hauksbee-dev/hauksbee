@@ -329,6 +329,48 @@ pub trait Mcu {
         Vec::new()
     }
 
+    /// How this backend's watchdog fidelity falls short of the part, or `None`
+    /// when an armed watchdog that is never fed reboots the core the way
+    /// silicon does.
+    ///
+    /// This is a coverage warning in exactly the sense
+    /// [`Mcu::adc_dropped_channels`] is: the run happened, but one thing the
+    /// board would have done did not, so a green result on that path means
+    /// less than it looks. A firmware whose watchdog never bites in
+    /// co-simulation is a firmware whose watchdog is untested, and the user
+    /// has to be told rather than left to infer it from a passing run.
+    ///
+    /// Measured on the shipped backends:
+    ///
+    /// - `simavr` reboots at the right virtual time and reports the reboot
+    ///   through [`Mcu::watchdog_resets`], so it returns `None`.
+    /// - `renode:nrf52840` arms cleanly (RUNSTATUS reads 1, CRV reads back a
+    ///   correct 32768 Hz reload) and then never fires: zero resets in 1.000 s
+    ///   of simulated time where the part gives twenty.
+    /// - `qemu:esp32*` has its timer-group watchdogs disabled at launch on
+    ///   purpose, because a paused guest would otherwise be reset between
+    ///   chunks. That is the right call for a co-simulator and the wrong thing
+    ///   to leave unstated.
+    ///
+    /// The string is a whole sentence, because it is rendered verbatim on the
+    /// report surfaces and nothing downstream should have to compose prose from
+    /// a flag.
+    fn watchdog_limitation(&self) -> Option<String> {
+        None
+    }
+
+    /// Times an unserviced watchdog rebooted the core during this run.
+    ///
+    /// Nonzero is not an error, it is a FINDING: firmware behaviour observed
+    /// after a reboot belongs to a rebooted core, so an assertion that passed
+    /// across one was not measuring what it claimed. Backends that cannot
+    /// reboot at all report 0 and say so through
+    /// [`Mcu::watchdog_limitation`], which is why the two are read together
+    /// and neither means anything alone.
+    fn watchdog_resets(&self) -> u64 {
+        0
+    }
+
     /// Whether this backend can actually host engine-provided I2C slave models,
     /// i.e. whether [`Mcu::on_i2c`] wires the callback to something the firmware's
     /// bus traffic reaches. False means a bound I2C peripheral is silently never

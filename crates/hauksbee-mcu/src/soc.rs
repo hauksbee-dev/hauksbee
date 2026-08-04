@@ -107,6 +107,60 @@ pub enum SocError {
     )]
     ZeroFrequency,
 
+    /// The platform declares a core clock that disagrees with
+    /// `soc.frequency_hz`. This is the error the whole clock cross-check exists
+    /// for: four shipped platforms declared a rate 4.5x to 9x off the part's,
+    /// simulated time ran at the emulator's clock rate instead of the part's,
+    /// and nothing complained because `frequency_hz` cancels out of the
+    /// engine's own `cycles = seconds * frequency_hz` bookkeeping.
+    #[error(
+        "soc.frequency_hz is {frequency_hz} Hz but the platform declares \
+         {property}: {declared}, which is {expected_prose}. Simulated time \
+         would run at {ratio:.3}x the part's real rate. Fix whichever is wrong; \
+         they describe the same clock."
+    )]
+    ClockMismatch {
+        /// The `.repl` property that disagrees.
+        property: &'static str,
+        /// The value the platform declares.
+        declared: u64,
+        /// The descriptor's declared part clock.
+        frequency_hz: u64,
+        /// What the property would have to be to agree, in words.
+        expected_prose: String,
+        /// Sim rate over the part's real rate, the quantity the clock-truth
+        /// gate measures, so the error and the test speak the same units.
+        ratio: f64,
+    },
+
+    /// A Renode descriptor whose platform declares no core clock at all.
+    ///
+    /// Refused rather than defaulted, because "no declaration" is precisely how
+    /// the nRF52840 came to run 6.58x fast: with neither `PerformanceInMips` nor
+    /// `systickFrequency` given, both fall to Renode defaults that have nothing
+    /// to do with the part, and a descriptor pointing straight at a stock
+    /// `@platforms/...` file cannot state a clock at all. `platform_repl`
+    /// accepts inline `.repl` source, so extending the stock platform with
+    /// `using "platforms/..."` plus the two declarations costs three lines and
+    /// makes the claim checkable.
+    #[error(
+        "the platform for this Renode part declares no core clock, so Renode \
+         picks its own and simulated time has no relation to the part. Make \
+         platform_repl inline source (a `using \"{platform}\"` line plus \
+         `cpu PerformanceInMips: {mips}` and, on a Cortex-M part, \
+         `nvic systickFrequency: {frequency_hz}`) so the declared clock can be \
+         checked against soc.frequency_hz"
+    )]
+    UndeclaredClock {
+        /// The platform reference the descriptor currently uses, so the error
+        /// can quote the `using` line the author needs.
+        platform: String,
+        /// `frequency_hz` in MHz, the value `PerformanceInMips` wants.
+        mips: u64,
+        /// The descriptor's declared part clock.
+        frequency_hz: u64,
+    },
+
     /// An identifier field was present but blank. `platform_repl` has its own
     /// [`SocError::EmptyPlatform`]; these are the fields that reach the
     /// emulator as an empty Monitor or command-line argument, where the failure
@@ -314,6 +368,13 @@ mod renode_schema {
         pub frequency_hz: u64,
         pub expected_e_machine: String,
         pub mcu_label: String,
+        /// How this part's watchdog fidelity falls short, as a whole sentence
+        /// rendered verbatim on the report surfaces. Omitted means "an armed,
+        /// never-fed watchdog reboots the core the way silicon does", which is
+        /// a claim, so it belongs to whoever measured it and the descriptor
+        /// says which part they measured.
+        #[serde(default)]
+        pub watchdog_limitation: Option<String>,
         #[serde(default)]
         pub extra_setup: Vec<String>,
         #[serde(default)]
@@ -494,6 +555,13 @@ mod renode_schema {
                     });
                 }
             }
+            // The clock is one fact declared in two places; refuse a
+            // descriptor whose two places disagree, or which declares none.
+            super::check_clock_declarations(
+                &self.platform_repl,
+                self.support_bundle.as_deref(),
+                self.frequency_hz,
+            )?;
             let expected_e_machine = crate::elf::e_machine_from_name(&self.expected_e_machine)
                 .ok_or_else(|| SocError::UnknownEMachine(self.expected_e_machine.clone()))?;
 
@@ -532,6 +600,7 @@ mod renode_schema {
                 spi_extra_repl: self.spi.extra_repl,
                 expected_e_machine,
                 mcu_label: self.mcu_label,
+                watchdog_limitation: self.watchdog_limitation,
                 adc_channels,
             })
         }
@@ -674,6 +743,135 @@ impl crate::qemu::QemuConfig {
 fn validate_frequency(frequency_hz: u64) -> Result<(), SocError> {
     if frequency_hz == 0 {
         return Err(SocError::ZeroFrequency);
+    }
+    Ok(())
+}
+
+/// Read one `.repl` property's value wherever it appears in a platform source.
+///
+/// The grammar this needs is tiny: `.repl` writes `name: value` one per line,
+/// values here are plain decimal or `0x` integers, and `//` starts a comment.
+/// A full parser would be a second implementation of Renode's, which is exactly
+/// the kind of thing that drifts; this reads the two properties that describe a
+/// core clock and ignores everything else. Comment lines are skipped so the
+/// prose in a descriptor (which quotes the old wrong values on purpose, as
+/// evidence) is not mistaken for a declaration.
+#[cfg(feature = "renode")]
+fn repl_property_values(source: &str, property: &str) -> Vec<u64> {
+    let mut out = Vec::new();
+    for line in source.lines() {
+        let line = line.trim();
+        if line.starts_with("//") || line.starts_with('#') {
+            continue;
+        }
+        // Strip a trailing comment before looking for the property, so
+        // `frequency: 40000  // the IWDG's own clock` still parses.
+        let code = line.split("//").next().unwrap_or(line);
+        let Some(rest) = code.split_once(property).map(|(_, r)| r) else {
+            continue;
+        };
+        let Some(value) = rest.strip_prefix(':') else {
+            continue;
+        };
+        let value = value.trim().trim_end_matches(';').trim();
+        let parsed = match value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")) {
+            Some(hex) => u64::from_str_radix(hex, 16).ok(),
+            None => value.parse::<u64>().ok(),
+        };
+        if let Some(v) = parsed {
+            out.push(v);
+        }
+    }
+    out
+}
+
+/// Cross-check the platform's declared CORE clock against `soc.frequency_hz`,
+/// and refuse a part that declares none.
+///
+/// # Why this is a load failure and not a lint
+///
+/// `frequency_hz` was decorative on Renode: it cancels out of both
+/// `cycles = seconds * frequency_hz` and `Mcu::frequency`, so a descriptor could
+/// claim an 8 MHz part while its platform ran a 72 MHz SysTick and nothing
+/// anywhere disagreed. That is what let four backends ship running 4.5x to 9x
+/// fast. A warning would have been ignored for the same reason the mismatch was:
+/// nothing downstream depended on the number. Refusing at load makes the two
+/// declarations one fact with one failure mode, so a new part cannot be added
+/// with a lying clock even by an author who has never read this file.
+///
+/// # What counts as the core clock
+///
+/// Only `cpu PerformanceInMips` (the instructions-per-second knob, whose honest
+/// value is the core clock in MHz, as `db/mcu/rp2040/rp2040.repl` already had
+/// it) and `nvic systickFrequency` (the Cortex-M SysTick source). Every OTHER
+/// `frequency:` in a platform is a different clock domain, a 40 kHz IWDG, a
+/// 32768 Hz WDT, a timer block on its own APB branch, and holding those to the
+/// core rate would be wrong. Those domains are documented per descriptor and
+/// gated by measurement (`tests/clock_truth.rs`) rather than by this check.
+///
+/// A part with no NVIC (the RISC-V FE310) legitimately declares no
+/// `systickFrequency`; `PerformanceInMips` is the one declaration every Renode
+/// part can and must make.
+#[cfg(feature = "renode")]
+fn check_clock_declarations(
+    platform_repl: &str,
+    support_bundle: Option<&str>,
+    frequency_hz: u64,
+) -> Result<(), SocError> {
+    // Every source the declarations could live in. Inline `platform_repl` is
+    // the normal case; a bundled platform's `.repl` files are embedded in the
+    // binary, so a part whose platform lives in a bundle is checked too rather
+    // than exempted (RP2040 is the one backend that was already correct, and it
+    // should be able to prove that, not be trusted about it).
+    let mut sources: Vec<String> = Vec::new();
+    if platform_repl.contains('\n') {
+        sources.push(platform_repl.to_string());
+    }
+    if let Some(bundle) = support_bundle.and_then(crate::renode::support::lookup) {
+        sources.extend(bundle.repl_sources());
+    }
+
+    let mut found_any = false;
+    for source in &sources {
+        for declared in repl_property_values(source, "systickFrequency") {
+            found_any = true;
+            if declared != frequency_hz {
+                return Err(SocError::ClockMismatch {
+                    property: "nvic systickFrequency",
+                    declared,
+                    frequency_hz,
+                    expected_prose: format!("not the declared part clock of {frequency_hz} Hz"),
+                    ratio: declared as f64 / frequency_hz as f64,
+                });
+            }
+        }
+        for declared in repl_property_values(source, "PerformanceInMips") {
+            found_any = true;
+            // MIPS is the core clock in MHz, so a part whose clock is not a
+            // whole number of MHz cannot be expressed and the mismatch below
+            // reports it rather than silently rounding.
+            if declared.saturating_mul(1_000_000) != frequency_hz {
+                return Err(SocError::ClockMismatch {
+                    property: "cpu PerformanceInMips",
+                    declared,
+                    frequency_hz,
+                    expected_prose: format!(
+                        "not the declared part clock of {frequency_hz} Hz expressed in MHz \
+                         ({} MIPS)",
+                        frequency_hz / 1_000_000
+                    ),
+                    ratio: (declared as f64 * 1e6) / frequency_hz as f64,
+                });
+            }
+        }
+    }
+
+    if !found_any {
+        return Err(SocError::UndeclaredClock {
+            platform: platform_repl.trim().trim_start_matches('@').to_string(),
+            mips: frequency_hz / 1_000_000,
+            frequency_hz,
+        });
     }
     Ok(())
 }
@@ -1222,7 +1420,15 @@ mod loader_refusal_tests {
 [soc]
 backend = "renode"
 machine = "m"
-platform_repl = "@platforms/cpus/stm32f072.repl"
+platform_repl = """
+using "platforms/cpus/stm32f072.repl"
+
+nvic:
+    systickFrequency: 8000000
+
+cpu:
+    PerformanceInMips: 8
+"""
 cpu_path = "sysbus.cpu"
 frequency_hz = 8_000_000
 expected_e_machine = "EM_ARM"
@@ -1239,6 +1445,110 @@ mcu_label = "test part"
     #[test]
     fn the_baseline_descriptor_is_valid() {
         SocConfig::from_soc_toml(&descriptor("")).expect("the baseline must load");
+    }
+
+    /// The whole point of the clock cross-check: a descriptor that claims one
+    /// clock while its platform declares another is REFUSED, not warned about.
+    /// The two numbers here are the real ones the STM32F103 shipped with, and
+    /// the 9.00x the error reports is the rate the clock-truth gate measured.
+    #[test]
+    fn a_platform_clock_that_disagrees_with_frequency_hz_is_refused() {
+        let lying = descriptor("").replace("systickFrequency: 8000000", "systickFrequency: 72000000");
+        match SocConfig::from_soc_toml(&lying) {
+            Err(SocError::ClockMismatch {
+                property,
+                declared,
+                frequency_hz,
+                ratio,
+                ..
+            }) => {
+                assert_eq!(property, "nvic systickFrequency");
+                assert_eq!(declared, 72_000_000);
+                assert_eq!(frequency_hz, 8_000_000);
+                assert!((ratio - 9.0).abs() < 1e-9, "ratio was {ratio}");
+            }
+            other => panic!("a 9x clock lie must be refused at load, got {other:?}"),
+        }
+
+        // And the CPU-speed half, which is the other measured error: 100 MIPS
+        // against an 8 MHz part is the 7.14x an instruction busy-wait showed.
+        let lying = descriptor("").replace("PerformanceInMips: 8", "PerformanceInMips: 100");
+        match SocConfig::from_soc_toml(&lying) {
+            Err(SocError::ClockMismatch {
+                property, declared, ..
+            }) => {
+                assert_eq!(property, "cpu PerformanceInMips");
+                assert_eq!(declared, 100);
+            }
+            other => panic!("a 100-MIPS declaration on an 8 MHz part must be refused, got {other:?}"),
+        }
+    }
+
+    /// A platform that declares NO clock is refused too, because that is how
+    /// the nRF52840 came to run 6.58x fast: the stock file declared neither
+    /// property, so both fell to Renode defaults unrelated to the part.
+    #[test]
+    fn a_platform_that_declares_no_clock_at_all_is_refused() {
+        let silent = format!(
+            r#"
+[soc]
+backend = "renode"
+machine = "m"
+platform_repl = "@platforms/cpus/stm32f072.repl"
+cpu_path = "sysbus.cpu"
+frequency_hz = 8_000_000
+expected_e_machine = "EM_ARM"
+mcu_label = "test part"
+"#
+        );
+        match SocConfig::from_soc_toml(&silent) {
+            Err(SocError::UndeclaredClock { mips, platform, .. }) => {
+                assert_eq!(mips, 8);
+                // The message quotes the path back so the author can paste the
+                // `using` line rather than work it out.
+                assert_eq!(platform, "platforms/cpus/stm32f072.repl");
+            }
+            other => panic!("a platform with no declared clock must be refused, got {other:?}"),
+        }
+    }
+
+    /// Other clock DOMAINS are left alone. A 40 kHz watchdog and a 32768 Hz RTC
+    /// are not the core clock, and a check that policed every `frequency:` in a
+    /// platform would refuse every correct descriptor in the tree.
+    #[test]
+    fn a_non_core_clock_domain_is_not_held_to_the_core_rate() {
+        let with_iwdg = descriptor("").replace(
+            "cpu:\n    PerformanceInMips: 8",
+            "iwdg: Timers.STM32_IndependentWatchdog @ sysbus 0x40003000\n    frequency: 40000\n\ncpu:\n    PerformanceInMips: 8",
+        );
+        SocConfig::from_soc_toml(&with_iwdg)
+            .expect("a 40 kHz watchdog is a different clock domain, not a lying core clock");
+    }
+
+    /// The prose in a descriptor quotes the OLD WRONG values on purpose, as the
+    /// evidence for why the fix exists. A check that read comments would refuse
+    /// every descriptor that documents itself.
+    #[test]
+    fn a_commented_out_declaration_is_not_a_declaration() {
+        let documented = descriptor("").replace(
+            "nvic:",
+            "// was `systickFrequency: 72000000`, which ran 9.00x fast\nnvic:",
+        );
+        SocConfig::from_soc_toml(&documented)
+            .expect("a comment quoting the old wrong value is evidence, not a declaration");
+    }
+
+    /// Every shipped descriptor passes the cross-check, which is the claim that
+    /// makes the clock-truth gate's per-part numbers meaningful: the gate
+    /// measures three parts, this covers all of them.
+    #[test]
+    fn every_builtin_descriptor_declares_a_consistent_clock() {
+        for spec in SocConfig::builtin_specs() {
+            let src = SocConfig::builtin_source(spec).expect("advertised spec has source");
+            SocConfig::from_soc_toml(src).unwrap_or_else(|e| {
+                panic!("shipped descriptor {spec} must pass the clock cross-check: {e}")
+            });
+        }
     }
 
     /// Every spec the resolver advertises has embedded source behind it, and
@@ -1303,9 +1613,17 @@ mcu_label = "test part"
 
     #[test]
     fn a_support_token_with_no_bundle_is_refused_per_field() {
-        let platform = descriptor("").replace(
-            "platform_repl = \"@platforms/cpus/stm32f072.repl\"",
-            "platform_repl = \"@{support}/mine.repl\"",
+        let platform = format!(
+            r#"
+[soc]
+backend = "renode"
+machine = "m"
+platform_repl = "@{{support}}/mine.repl"
+cpu_path = "sysbus.cpu"
+frequency_hz = 8_000_000
+expected_e_machine = "EM_ARM"
+mcu_label = "test part"
+"#
         );
         assert!(
             matches!(
