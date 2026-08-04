@@ -165,9 +165,9 @@ enum Command {
     /// statement (URL below).
     ///
     /// Example (self-contained decks bundled under examples/learn/):
-    ///   hauksbee sim examples/learn/02-mna-by-hand/divider.cir --op --print V(out)
-    ///   hauksbee sim examples/learn/04-time-integration/rlc_ringdown.cir --tran --print V(out)
-    ///   hauksbee sim examples/learn/02-mna-by-hand/rc_lowpass_ac.cir --ac --print V(out)
+    ///   hauksbee sim examples/decks/divider.cir --op --print V(out)
+    ///   hauksbee sim examples/decks/rlc_ringdown.cir --tran --print V(out)
+    ///   hauksbee sim examples/decks/rc_lowpass_ac.cir --ac --print V(out)
     #[command(verbatim_doc_comment, after_help = sim_after_help())]
     Sim(SimArgs),
 

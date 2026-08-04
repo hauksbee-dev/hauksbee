@@ -1,0 +1,33 @@
+# LM75 temperature sensor -- minimal declarative I2C register-map spec.
+# Datasheet: NXP LM75B. Temp register 0x00: 11-bit two's-complement,
+# 0.125 C/LSB, left-justified in a 16-bit big-endian word (LM75B; the
+# classic LM75A is 9-bit/0.5 C -- same encoding shape, fewer bits).
+
+[sensor]
+name        = "LM75"
+bus         = "i2c"
+i2c_address = 0x48   # A2=A1=A0 = GND
+
+[[sensor.input]]
+name    = "temperature_c"
+default = 25.0
+
+# 0x01 Configuration (R/W): stored and read back; shutdown/OS bits are
+# not interpreted (conversion is always "on" in sim).
+[[sensor.write_register]]
+addr     = 0x01
+encoding = "u8"
+store    = "config"
+default  = 0.0
+
+[[sensor.register]]
+addr     = 0x00
+encoding = "i16_be"
+expr     = "round(temperature_c * 8) * 32"   # 0.125 C/LSB, left-justified (<<5)
+[[sensor.register]]
+addr     = 0x01
+encoding = "u8"
+expr     = "confg"
+
+[sensor.protocol]
+style = "i2c_pointer"
