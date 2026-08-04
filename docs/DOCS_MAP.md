@@ -64,6 +64,8 @@ own board, firmware, and spec, and the one local command that runs them, and
 |---|---|
 | [`ci/CI.md`](ci/CI.md) | Headless hardware CI: the core workflow, spec format, assertions |
 | [`ci/EXAMPLES.md`](ci/EXAMPLES.md) | Install, first run, every runnable example |
+| [`ci/RECIPES.md`](ci/RECIPES.md) | Copy-paste pipeline blocks for GitHub, GitLab, Jenkins, Azure, Buildkite |
+| [`ci/JSON_OUTPUT.md`](ci/JSON_OUTPUT.md) | `hauksbee-ci run --json`: the published shape, its schema, and the compatibility policy |
 | [`ci/DOCKER.md`](ci/DOCKER.md) | Container images and how to run them |
 
 **"What is the evidence?"**: [`evidence/`](evidence/)
