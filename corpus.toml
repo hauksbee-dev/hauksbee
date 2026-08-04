@@ -58,6 +58,11 @@
 #   license_confirmed  optional: false keeps the board out of the default fetch.
 #   license_note       optional: how the licence was established, when the SPDX
 #                      id alone does not say.
+#   known_good         optional: false excludes the board from the silence gates,
+#                      which grade themselves on hardware known to be fine. It is
+#                      still fetched, still parsed, still counted for format
+#                      coverage. Requires `known_good_note`.
+#   known_good_note    optional: why. Required when `known_good = false`.
 #   name               optional: the human name for logs and --list.
 #
 # `dest`, `subdir`, `drop`, `hoist` and `unpack` exist for one reason: the paths
@@ -303,6 +308,21 @@ url = "https://github.com/OLIMEX/ESP32-POE"
 rev = "a9ccb127e4eff6bf58b2e366adc8dca24b42d9e7"
 license = "Apache-2.0"
 axes = ["kicad5", "kicad6", "dev-board", "industrial-sensor", "esp32", "medium"]
+known_good = false
+known_good_note = """
+Shipped and sold for years, and the shorts check fires on two of its revisions. \
+Rev L1: three `+3V3` <-> `+3.3V` contacts on B.Cu clustered at x=95.7-96.3, \
+y=123.4-123.9, tightest -0.011 mm, where a 1.016 mm `+3.3V` track crosses the \
+filled `+3V3` pour. No part joins the two nets anywhere on the board, and the \
+board carries three distinct 3.3 V nets (`+3V3`, `+3.3V`, `+3.3VLAN`). Rev M2: \
+one `/+5V_USB` <-> `Net-(D7-A)` contact on B.Cu at -0.508 mm, half of a 1.016 mm \
+track width. Both readings are of KiCad's own stored fill polygons rather than of \
+zone outlines, so the geometry in the file is real; whether the FABRICATED board \
+has it depends on whether that stored fill is current with the tracks, which the \
+repository's own gerbers for these revisions would settle. Until somebody settles \
+it, this board is not evidence that the check stays quiet on good hardware, and \
+saying otherwise either way would be a guess.
+"""
 expect = [
   "HARDWARE/ESP32-PoE-hardware-revision-G1/ESP32-PoE_Rev_G1.kicad_pcb",
   "HARDWARE/ESP32-PoE-hardware-revision-B1/ESP32-PoE_Rev_B1.kicad_pcb",
@@ -570,6 +590,15 @@ rev = "56958640c73c7febf3bce6e1eefbbdffd5a2db1b"
 license = "CERN-OHL-1.2"
 license_note = "LICENSE is the CERN OHL v1.2 text with an added silkscreen-attribution condition"
 axes = ["kicad5", "kicad6", "motor-driver", "medium"]
+known_good = false
+known_good_note = """
+Shipped and sold for years, and the shorts check fires once on Duet2 v1.05: \
+`FAN2-` <-> `5V_EXT` on B.Cu at -0.254 mm. FAN2- is the low-side switched return \
+of a fan header and 5V_EXT is the external 5 V input, so a contact between them \
+would be a real defect and not a naming artefact, which is exactly why it needs \
+adjudication rather than an exception. Unadjudicated, so this board is not \
+evidence that the check stays quiet on good hardware.
+"""
 subdir = "Duet2"
 expect = [
   "Duet2/Duet2v1.05/Duet2.kicad_pcb",
@@ -617,6 +646,19 @@ url = "https://github.com/mzuelch/CATs-Eurosynth"
 rev = "ee70506817f1fb5fa16a87c3e2a54a6ded8ee441"
 license = "MIT"
 axes = ["kicad5", "kicad8", "audio", "avr", "no-mcu", "small"]
+known_good = false
+known_good_note = """
+DIY community modules by a single maintainer, adapted from other people's \
+designs, not a reviewed product anyone sold, so they were never known-good in the \
+sense a silence gate needs. The shorts check finds copper contacts on three of the \
+88: `GND` <-> `RESET` on Baby 8 at -0.125 to -0.200 mm, `GND` <-> `Net-(D4-Pad1)` \
+on Envelope Follower Main at seven places across both copper layers, and `GND` <-> \
+`Net-(R14-Pad2)` on HAGIWO 4Ch Sampler at -0.058 mm. On a board class the project's \
+own hunts describe as where real bugs survive, these are candidates for a hunt \
+rather than evidence of silence, and they are unadjudicated either way. The entry \
+earns its place on the analogue axis regardless: 88 layouts of op-amp signal \
+chains, VCAs and filters, which nothing else in the corpus supplies.
+"""
 expect = [
   "Modules/CGS/Analog Switch Matrix/Electronics/Main/CGS Analog Switch Matrix Main.kicad_pcb",
   "Modules/CGS/Analog Switch Matrix/Electronics/Main/CGS Analog Switch Matrix Main.sch",
@@ -736,6 +778,19 @@ drop = [
 ]
 license = "CC0-1.0 / MIT / Apache-2.0 / ISC (mixed, see LICENSE files)"
 axes = ["kicad9", "regression-fixture", "no-mcu", "small"]
+known_good = false
+known_good_note = """
+These are reference designs shipped to demonstrate KiCad, not products anyone \
+manufactured and sold, so they were never known-good hardware in the sense a \
+silence gate needs. The distinction has teeth: the trace-ampacity check fires on \
+demos/pic_programmer, whose `Net-(D1-K)` runs 0.50 mm of copper under the 1.50 A \
+the 7805 beside it is rated for, where IPC-2221 wants 0.53 mm at a 10 C rise. \
+That reading is right about the file. Nobody ever built the board to find out \
+whether it mattered, which is precisely why it cannot serve as evidence that the \
+check stays quiet on hardware that is fine. The entry stays for what it is good \
+for: 16 layouts and 53 schematics of KiCad 9 format coverage, and a hierarchy \
+depth nothing else here reaches.
+"""
 expect = [
   "demos/pic_programmer/pic_programmer.kicad_pcb",
   "demos/pic_programmer/pic_programmer.kicad_sch",

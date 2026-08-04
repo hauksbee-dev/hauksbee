@@ -250,6 +250,72 @@ pub fn private_asset(env_var: &str, rel: &str, what: &str) -> Option<PathBuf> {
     )
 }
 
+/// The marker `scripts/fetch-corpus.sh` writes into a board directory that
+/// `corpus.toml` declares `known_good = false`.
+pub const NOT_KNOWN_GOOD_MARKER: &str = ".hauksbee-not-known-good";
+
+/// True when this board is fetched for format or axis coverage but is NOT part of
+/// the known-good set a silence gate may grade itself on.
+///
+/// Two kinds of entry carry the marker, and `corpus.toml` says which per board:
+/// a reference design that was never a manufactured product (KiCad's own demos),
+/// and a shipped board on which a gate fires and the finding has not yet been
+/// adjudicated. Neither may be counted as "a known-good board this check stayed
+/// quiet on", because the first was never known-good and the second is exactly
+/// the question under investigation.
+///
+/// The marker is looked for at the board's own directory and above it up to the
+/// corpus root, because a board's design files sit at whatever depth its upstream
+/// chose and the marker is written once per entry.
+pub fn not_known_good(board: &Path, corpus_root: &Path) -> Option<String> {
+    let mut dir = if board.is_dir() {
+        Some(board)
+    } else {
+        board.parent()
+    };
+    while let Some(d) = dir {
+        let marker = d.join(NOT_KNOWN_GOOD_MARKER);
+        if marker.is_file() {
+            return Some(
+                std::fs::read_to_string(&marker)
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string(),
+            );
+        }
+        if d == corpus_root {
+            break;
+        }
+        dir = d.parent();
+    }
+    None
+}
+
+/// Print what a gate declined to grade itself on, and why.
+///
+/// Every exclusion is announced. A gate that quietly narrowed its own input set
+/// is the same failure as one that scanned nothing: the pass says more than the
+/// run earned. Pair this with [`scanned`], which reports what it did cover.
+///
+/// The reason is printed in full once and abbreviated after that. One entry can
+/// hold twenty layouts, and twenty copies of the same paragraph buries the counts
+/// a reader came for.
+pub fn excluded(gate: &str, board: &str, why: &str) {
+    use std::collections::HashSet;
+    use std::sync::{Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    let first = SEEN
+        .get_or_init(Default::default)
+        .lock()
+        .map(|mut s| s.insert(why.to_string()))
+        .unwrap_or(true);
+    if first {
+        eprintln!("NOT KNOWN-GOOD  {gate}: {board} excluded. {why}");
+    } else {
+        eprintln!("NOT KNOWN-GOOD  {gate}: {board} excluded (same reason as above)");
+    }
+}
+
 /// Record how many boards a corpus gate actually scanned, and fail on zero.
 ///
 /// Call this in every corpus gate that got as far as having a corpus root. The

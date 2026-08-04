@@ -92,6 +92,9 @@ for b in doc.get("board", []):
         # paths, joined with the record separator's sibling so one field can
         # carry several.
         "\x1e".join(b.get("drop", [])),
+        # Newlines would break the one-record-per-line protocol, and the note is a
+        # multi-line TOML string.
+        "" if b.get("known_good", True) else " ".join(b["known_good_note"].split()),
         b.get("name", b["id"]),
     ]))
 PY
@@ -268,7 +271,7 @@ else
   mkdir -p "$DIR"
 fi
 
-while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed dest_rel sha256 hoist unpack drop name; do
+while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed dest_rel sha256 hoist unpack drop not_known_good name; do
   [ "$tag" = "BOARD" ] || continue
   wanted "$id" || continue
   total=$((total + 1))
@@ -463,6 +466,16 @@ while IFS=$'\x1f' read -r tag id kind url rev subdir license confirmed dest_rel 
   if ! find "$dest" -type f \( -iname 'LICENSE*' -o -iname 'LICENCE*' -o -iname 'COPYING*' -o -iname 'README*' \) \
        | grep -q .; then
     warn "$id: no licence or readme file survived the fetch; the terms are recorded in corpus.toml only"
+  fi
+
+  # `known_good = false`: the board is fetched and parsed, but the silence gates
+  # must not grade themselves on it. The reason travels with the board rather than
+  # living only in the manifest, so a suite can say out loud what it declined to
+  # count and why without parsing TOML. Written last, after every prune, because
+  # the keep-filter would otherwise delete it.
+  if [ -n "$not_known_good" ]; then
+    printf '%s\n' "$not_known_good" > "$dest/.hauksbee-not-known-good"
+    warn "$id is fetched but NOT known-good: the silence gates skip it"
   fi
 
   boards=$(find "$dest" \( -iname '*.kicad_pcb' -o -iname '*.brd' -o -iname '*.net' -o -iname '*.PcbDoc' \) 2>/dev/null | wc -l | tr -d ' ')
