@@ -238,8 +238,18 @@ pub struct RenodeConfig {
     pub uart: Option<String>,
     /// GPIO ports to bridge, in engine-facing order.
     pub ports: Vec<PortMap>,
-    /// Clock frequency in Hz reported by [`Mcu::frequency`]. Renode models the
-    /// platform's own clocking; this is advisory for the engine's bookkeeping.
+    /// The part's core clock in Hz, reported by [`Mcu::frequency`].
+    ///
+    /// NOT advisory, though it used to be described that way. Renode does clock
+    /// the machine from the platform description rather than from this field, so
+    /// this number cannot set the emulated rate on its own, and that is exactly
+    /// why the descriptor loader cross-checks it against the platform's own
+    /// `cpu PerformanceInMips` / `nvic systickFrequency` and refuses a mismatch
+    /// (`soc::check_clock_declarations`). Treating it as advisory is what let
+    /// four platforms ship running 4.5x to 9x fast: it cancels out of both
+    /// `cycles = seconds * frequency_hz` and [`Mcu::frequency`], so a 9x
+    /// disagreement with the platform produced no wrong answer anywhere the
+    /// engine looked.
     pub frequency_hz: u64,
     /// Extra Monitor commands run verbatim after platform load and before the
     /// firmware is started (e.g. attaching a button so a GPIO input has a

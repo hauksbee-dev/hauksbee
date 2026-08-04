@@ -175,6 +175,140 @@ firmware support**: unmodified vendor firmware sees none of it (the cells
 are gated on a `BUS_MAGIC` word), and each mailbox function retires the day
 the fork grows the corresponding peripheral hook.
 
+### Clock fidelity by backend: does a firmware delay cost the right virtual time?
+
+Two of the assertions hauksbee sells are time-based, so this is the table to
+read before you trust one. It answers a single question per backend: firmware
+whose real-silicon half-period is a known quantity is booted, and the ratio
+below is the rate simulated time ran at, divided by the rate the part runs at.
+`1.00x` means a `sleep_ms(20)` costs 20 ms of virtual time. Above `1.00x`
+means virtual time is CHEAPER than the board's, which is the direction that
+turns a rate no hardware can hit into a passing assertion.
+
+Every number is measured on this host, not derived from a datasheet.
+
+| Backend | ratio | how it is measured |
+|---------|-------|--------------------|
+| `simavr:atmega328p` | **1.00x, exact** | cycle-exact by construction: 80,000 cycles per 5 ms chunk is 16.000 MHz, and one `_delay_ms(5)` toggle per chunk |
+| `renode:rp2040` | **1.00x** | stock pico-sdk firmware, 20 ms of virtual time per `sleep_ms(20)` |
+| `renode:stm32f103` | **1.00x** (was 9.09x fast) | `tests/clock_truth.rs`, a SysTick-timed 100 ms half-period |
+| `renode:stm32f4_discovery` | **1.00x** (was 4.51x fast) | same gate |
+| `renode:nrf52840` | **1.00x** (was 6.58x fast) | same gate |
+| `renode:sifive_fe310` | core clock corrected, **not gated** | no silicon-exact timing reference exists on this part here; see below |
+| `qemu:esp32` / `-s3` / `-c3` | **1.35x to 1.45x slow, and host-load dependent** | `vTaskDelay(100 ms)` over a 2.000 s window |
+
+**What was wrong, and why nothing caught it.** Four Renode platforms ran
+simulated time at the EMULATOR's clock rate instead of the part's. The stock
+`platforms/cpus/stm32f103.repl` declares `nvic systickFrequency: 72000000`
+against a descriptor that declares an 8 MHz part, and 72/8 is exactly the 9.09x
+measured; `stm32f4.repl` carries the same 72 MHz line against a 16 MHz part, for
+4.51x. Every stock platform also left `cpu PerformanceInMips` at Renode's 100,
+against roughly 8 MIPS of real F103 silicon, which is the 7.14x an instruction
+busy-wait showed. The nRF52840's platform declared neither property, so both
+fell to Renode defaults with no relation to the part.
+
+Nothing complained because the descriptor's `frequency_hz` was decorative on
+Renode: it cancels out of both `cycles = seconds * frequency_hz` and
+`Mcu::frequency`, so the descriptor could disagree with its platform by 9x in
+silence. RP2040 was right for the opposite reason: its platform is hauksbee's
+own, and it set `PerformanceInMips` and `systickFrequency` to the part's real
+125 MHz and carried real clock-tree models.
+
+**How it is prevented rather than just corrected.** Each affected descriptor now
+declares the part's clock inline (`platform_repl` accepts multi-line `.repl`
+source, so a stock platform is extended with a `using` line and two properties
+rather than vendored), and the descriptor loader cross-checks those declarations
+against `frequency_hz` and REFUSES a mismatch, or a Renode platform that
+declares no core clock at all (`soc::check_clock_declarations`). A new part
+cannot be added with a lying clock. `tests/clock_truth.rs` then measures each
+gated part against real firmware and fails outside 5%, because a declaration
+proves what the platform says and only a measurement proves what it does.
+
+**Which clock each part declares, and why.** The reset default, in every case
+where firmware has not configured a PLL: 8 MHz HSI on the F103 (RM0008 §7.2),
+16 MHz HSI on the F407 (RM0090 §6.2), 16 MHz HFROSC on the FE310 (FE310-G002
+manual §6.2). The nRF52840 has no choice to make: its M4 runs at 64 MHz whether
+the source is the internal oscillator or the crystal. The reset default is the
+honest choice because Renode's STM32 and nRF platforms model no clock tree that
+could follow a firmware's PLL bring-up, so one fixed rate has to be declared,
+and the rate the part runs at before firmware touches anything is the one that
+is true for every image rather than for some.
+
+**The measurement trap, stated because it nearly buried the bug.** GPIO is
+observed by polling the output register once per chunk, so a half-period at or
+below the chunk width aliases. At 5 ms chunks the 9x-fast F103 firmware read a
+perfect 100 edges in 2 s and looked exact; the same firmware at 200 us chunks
+read 450. Any clock measurement here uses a chunk at least 10x finer than the
+half-period a WRONG sim would produce, not merely finer than the right one, and
+the gate measures the sim time at which the Nth edge arrives rather than an edge
+count, so a missed edge can only make the part look slow and never fast.
+
+**What remains open.**
+
+- **`qemu:esp32*` runs 1.35x to 1.45x slow, and the figure is host-load
+  dependent by construction.** `run_seconds` does QMP `cont`, host sleep, QMP
+  `stop`, and the guest keeps running during the round trips; that slack is
+  unmeasurable from here and left uncredited. Boot is separately distorted: a
+  requested 5 ms chunk runs 8 ms of guest time under the boot-window floor while
+  the engine credits 5 ms. Treat ESP32 virtual time as approximate to within
+  tens of percent, not as a clock.
+- **The F103's TIMx blocks stay at 72 MHz** while its core and SysTick are at
+  8 MHz. That is deliberate: only the post-PLL timer rate lets a stock CubeMX HAL
+  project boot at all on a platform with no clock tree, and the alternative was a
+  HAL time base landing at 139 Hz. The cost is that bare-metal firmware running
+  TIMx from the reset-default HSI sees its timers 9x fast. The paths a delay loop
+  and a SysTick tick take are gated; a TIMx time base is not.
+- **The FE310's CLINT is declared at 62 MHz** by the stock platform, while the
+  real FE310 drives `mtime` from the 32.768 kHz always-on RTC. That is a
+  different clock domain from the core, so the loader's cross-check deliberately
+  does not police it, and it is left alone rather than changed on a guess: the
+  in-tree Zephyr shell image is the only FE310 firmware available and it does not
+  exercise `mtime` on a path this repo can observe. A 1892x edit to a timer
+  nobody can measure is how the original defect was introduced.
+- **`renode:sifive_fe310` is corrected but not gated.** Its
+  `PerformanceInMips` went from Renode's 100 to the part's 16, which is
+  unambiguous, but a RISC-V part has no SysTick and the CLINT rate above is
+  unverified, so there is no silicon-exact reference on this part to assert
+  against. Instruction-timed delays are now roughly right instead of roughly 6x
+  fast; nothing stronger is claimed.
+
+### Watchdog fidelity by backend (an unserviced watchdog may not reset)
+
+A firmware whose recovery path depends on the watchdog biting is a firmware
+whose watchdog is untested if the co-simulator's watchdog does not bite. That is
+a coverage hole in exactly the sense a dropped ADC injection is, so it is
+surfaced the same way: `Mcu::watchdog_limitation` returns a sentence, and a run
+on an affected part carries it on every report surface rather than leaving the
+user to infer it from a passing result. `Mcu::watchdog_resets` reports reboots
+that did happen, because firmware behaviour observed after a reboot belongs to a
+rebooted core.
+
+| Backend | armed and never fed | how it is known |
+|---------|---------------------|-----------------|
+| `simavr:atmega328p` | **reboots, at the right virtual time, repeatedly** | `tests/avr_watchdog.rs`, two-sided against the same firmware with the arming line removed |
+| `renode:stm32f103` | **resets once, then the core does not resume** | measured: the heartbeat stops at the timeout and the boot marker flips a second time, then 450 ms of silence where the part would reboot every 50 ms |
+| `renode:nrf52840` | **never fires** | measured: RUNSTATUS reads 1 and CRV reads back a correct 32768 Hz reload, and 1.000 s of simulated time gives zero resets where the part gives twenty |
+| `qemu:esp32` / `-s3` / `-c3` | **disabled on purpose** | the backend passes `wdt_disable=true` for the timer groups at launch |
+| `renode:stm32f4_discovery`, `renode:sifive_fe310`, `renode:rp2040` | **unverified** | nobody has run a starved watchdog to the timeout on these parts, and the two that were measured disagree with each other, so neither can be inferred |
+
+Disabling the ESP32 watchdogs is the right call and stays: co-simulation pauses
+the guest at every chunk boundary while the analog side solves, and a running
+timer-group watchdog would read those pauses as a hung firmware and reset a core
+that is doing nothing wrong. What was wrong was that the trade lived only in a
+source comment, where a user reading a green report never saw it.
+
+**The AVR watchdog used to hang the co-simulator**, which is worth knowing
+because the symptom looked like slowness rather than a bug.
+`wdt_enable(WDTO_15MS)` with no `wdt_reset()` livelocked: simavr's `avr_reset`
+zeroes `avr->cycle`, and the backend's step loop ran against an absolute
+cumulative cycle target that a rewound counter can never reach, so the chunk in
+which the watchdog first fired never returned while the emulator kept executing
+firmware at full speed. The loop now follows a rewound counter, re-anchoring the
+target and keeping the unspent part of the chunk's budget so the rebooted core
+still runs out the simulated time the engine paid for. A watchdog reboot is
+reported as a finding, not treated as a silent restart, because an assertion
+that passed across one was not measuring the run it claimed to.
+
 ### ADC / bus coverage by platform (and how a hole is surfaced)
 
 An external co-sim can degrade silently: the platform has no ADC injection
