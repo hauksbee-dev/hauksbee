@@ -11,11 +11,23 @@
 //! layers (`top`/`gnd02`/`pwr04`/`gnd05`/`bottom`), and a `!`-delimited
 //! pick-and-place in mils. See docs/ingest/GERBER.md.
 //!
-//! Skipped when the corpus is absent; required under `HAUKSBEE_REQUIRE_CORPUS=1`.
+//! Reported NOT RUN when the boards are absent, which on a public checkout they
+//! always are: ClockworkPi publishes these with no licence statement, so
+//! corpus.toml marks them `license_confirmed = false` and the default fetch
+//! skips them. `HAUKSBEE_REQUIRE_CORPUS=1` therefore cannot be what makes them
+//! mandatory, or the nightly gate is red by construction on a corpus that was
+//! fetched exactly as documented. `HAUKSBEE_REQUIRE_UCONSOLE_CORPUS=1` is, for a
+//! run that passed `--include-unconfirmed` and decided for itself.
 
 use std::path::PathBuf;
 
 use hauksbee_extract::gerber::from_gerber_dir;
+
+/// Whether an absent uConsole set should FAIL rather than report NOT RUN. See
+/// the module note: these boards are outside the default fetch on purpose.
+fn require_uconsole() -> bool {
+    std::env::var("HAUKSBEE_REQUIRE_UCONSOLE_CORPUS").is_ok()
+}
 
 /// Through the shared resolver, which accepts both the hand-built `famous/<id>`
 /// layout and the `<id>` layout scripts/fetch-corpus.sh produces. Joining the
@@ -36,10 +48,15 @@ fn cm4_dir() -> Option<PathBuf> {
 #[test]
 fn uconsole_mainboard_reconstructs() {
     let Some(dir) = uconsole_dir() else {
-        if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-            panic!("corpus required but uconsole_gerber missing");
-        }
-        eprintln!("skipping uConsole (corpus absent)");
+        assert!(
+            !require_uconsole(),
+            "HAUKSBEE_REQUIRE_UCONSOLE_CORPUS set but uconsole_gerber is absent"
+        );
+        eprintln!(
+            "NOT RUN  uConsole mainboard: not in the default fetch (licence \
+             unconfirmed). Fetch with --include-unconfirmed and set \
+             HAUKSBEE_REQUIRE_UCONSOLE_CORPUS=1 to make this mandatory."
+        );
         return;
     };
 
@@ -102,10 +119,11 @@ fn uconsole_per_net_copper_is_reconstructed_and_planes_are_poured() {
     use hauksbee_extract::gerber::connect::GerberCopperKind;
 
     let Some(dir) = uconsole_dir() else {
-        if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-            panic!("corpus required but uconsole_gerber missing");
-        }
-        eprintln!("skipping uConsole copper (corpus absent)");
+        assert!(
+            !require_uconsole(),
+            "HAUKSBEE_REQUIRE_UCONSOLE_CORPUS set but uconsole_gerber is absent"
+        );
+        eprintln!("NOT RUN  uConsole per-net copper: not in the default fetch");
         return;
     };
 
@@ -165,10 +183,11 @@ fn cm4_adapter_reconstructs_and_planes_are_poured() {
     use hauksbee_extract::gerber::connect::GerberCopperKind;
 
     let Some(dir) = cm4_dir() else {
-        if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-            panic!("corpus required but uconsole_cm4_adapter_gerber missing");
-        }
-        eprintln!("skipping CM4 adapter (corpus absent)");
+        assert!(
+            !require_uconsole(),
+            "HAUKSBEE_REQUIRE_UCONSOLE_CORPUS set but uconsole_cm4_adapter_gerber is absent"
+        );
+        eprintln!("NOT RUN  CM4 adapter: not in the default fetch");
         return;
     };
 

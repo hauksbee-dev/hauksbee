@@ -15,33 +15,26 @@ use std::path::PathBuf;
 
 use hauksbee_extract::{audit_trace_currents, net_copper_from_root, CopperKind, TraceAudit};
 
-fn corpus_famous() -> Option<PathBuf> {
-    let p = hauksbee_testkit::corpus_dir(env!("CARGO_MANIFEST_DIR"))
-        .unwrap_or_default()
-        .join("famous");
-    if p.exists() {
-        Some(p)
-    } else if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-        panic!("HAUKSBEE_REQUIRE_CORPUS set but board-corpus/famous is absent");
-    } else {
-        None
-    }
+/// The LumenPnP motherboard, in whichever corpus layout this machine has.
+///
+/// This resolved `<corpus>/famous/lumenpnp/...` directly, a level that exists
+/// only in the hand-built corpus; on the layout `scripts/fetch-corpus.sh`
+/// produces the board sits at `<corpus>/lumenpnp/...` and the sweep skipped (or,
+/// under `HAUKSBEE_REQUIRE_CORPUS=1`, failed on the path rather than on the
+/// copper).
+fn mobo() -> Option<PathBuf> {
+    hauksbee_testkit::corpus_or_skip(
+        env!("CARGO_MANIFEST_DIR"),
+        "lumenpnp/mobo/mobo.kicad_pcb",
+        "LumenPnP trace-current sweep",
+    )
 }
 
 #[test]
 fn lumenpnp_motor_supply_is_poured_and_coil_traces_are_adequately_sized() {
-    let Some(famous) = corpus_famous() else {
-        eprintln!("corpus absent; skipping LumenPnP trace-current sweep");
-        return;
-    };
-    let path = famous.join("lumenpnp/mobo/mobo.kicad_pcb");
-    let Ok(text) = std::fs::read_to_string(&path) else {
-        if std::env::var("HAUKSBEE_REQUIRE_CORPUS").is_ok() {
-            panic!("LumenPnP mobo missing under required corpus");
-        }
-        eprintln!("LumenPnP mobo missing; skipping");
-        return;
-    };
+    let Some(path) = mobo() else { return };
+    let text = std::fs::read_to_string(&path).expect("read the LumenPnP motherboard");
+    hauksbee_testkit::scanned("LumenPnP trace-current sweep", 1);
     let doc = forge_sexpr::parse(&text).expect("kicad_pcb parses");
     let copper = net_copper_from_root(doc.root().expect("root"));
 
