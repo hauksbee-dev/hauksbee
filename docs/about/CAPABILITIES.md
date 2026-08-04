@@ -19,6 +19,7 @@
 | Thermal (`--thermal`) | Steady-state junction temperature per dissipating device (Tj = Tambient + P × θJA) | Differentiated | AVR: no. Other MCUs: same as co-sim (it runs a short headless co-sim) |
 | USB-C CC compliance (`--usb-c`) | The attach a compliant source sees from the receptacle's CC termination, and whether it applies VBUS. Flags the Raspberry-Pi-4-class shared-CC-pulldown fault | Differentiated | No |
 | Full static suite (`--check`, alias `--all`) | Bind report + DRC + lint + SI in one pass | Convenience over the rows above | No |
+| CI artifacts (`--junit`, `--sarif`) | The static suite as JUnit XML or SARIF 2.1.0, so a pipeline renders findings without a spec | Commodity formats, zero-config path | No |
 | AC analysis (`--ac`) | Small-signal Bode, gain crossover, phase margin | Differentiated | No |
 | Firmware co-sim (`--firmware --headless`) | Firmware-driven GPIO/peripheral faults, actual rail voltages under real firmware load | **The differentiator** | AVR: no. STM32/nRF52/RISC-V: Renode. ESP32 family: Espressif QEMU |
 | Behavioral goal assertions (`hauksbee-ci run`) | Whether the firmware makes the hardware do its job: rails, UART output, blink rate, boot timing, temperature, loop stability | **The differentiator** | Same as co-sim above |
@@ -117,6 +118,17 @@ double-termination, and multi-receptacle cases.
 
 The whole static suite in one pass: bind report, DRC, lint, and signal
 integrity. This is the flag a pre-commit hook or a first look wants.
+
+### CI artifacts (`--junit`, `--sarif`)
+
+Either flag makes any `hauksbee run` publish the whole static suite as a file a
+CI system already knows how to render, whichever report flag was actually asked
+for: `--junit <out.xml>` for JUnit XML (a testsuite per check, a testcase per
+finding, serious findings as failures) and `--sarif <out.sarif>` for SARIF 2.1.0,
+which GitHub code scanning turns into pull-request annotations. Waivers are
+applied first, so a waived finding is absent from the file rather than present
+and ignored. This is the gate path for a repo with no spec written yet: pair
+either flag with `--strict` so the exit code agrees with the artifact.
 
 ### Waivers
 
