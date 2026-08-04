@@ -21,7 +21,15 @@
 //!
 //! It arrives as a directory, a `.tgz` (the spec's form, and Altium's and
 //! Cadence's default) or a `.zip` (KiCad's default). All three are normalized to
-//! one in-memory file map first; see [`tree`].
+//! one in-memory file map first; see [`tree`], which also bounds how much an
+//! archive may inflate to ([`tree::MAX_INFLATED_BYTES`]) — a `.tgz` of
+//! compressible text is a natural decompression bomb, and one measured at 400 KiB
+//! expanded to 400 MiB.
+//!
+//! A job may hold several steps, and a fab deliverable routinely ships
+//! `steps/panel` (an array of board instances, with no components of its own)
+//! ahead of `steps/pcb`. The step that is read is the first one carrying a
+//! PLACEMENT, and the others are named in [`OdbStats::disagreements`].
 //!
 //! ## Two places the placement can live, and why both are read
 //!
@@ -47,8 +55,18 @@
 //!   fewer points than pads, means one of the two views is stale);
 //! * each pad's own name vs the name at that index in the package it claims;
 //! * the component layers' placement vs `eda/data`'s, when both exist;
-//! * every `features` file's `F <n>` header vs the features actually parsed;
-//! * `.Z`/`.gz` members that would not inflate.
+//! * every `features` file's `F <n>` header vs the features actually parsed —
+//!   but only where every record in the file was recognised, so an unmodelled
+//!   record type does not get reported as the header lying;
+//! * `.Z`/`.gz` members that would not inflate;
+//! * every pad's net ordinal against the net table's length, and every net
+//!   against the pads that reference it.
+//!
+//! A pad whose net ordinal is out of range, or whose net field is not a number,
+//! or a job with no net table at all: these three used to become "no net"
+//! silently, which reports a connected board as a disconnected one. The first two
+//! are now named; the third is a refusal, because without `eda/data`'s `NET`
+//! sequence the ordinals on every pad mean nothing at all.
 //!
 //! ## Deliberately dropped
 //!
@@ -763,7 +781,10 @@ fn extract_tree(tree: OdbTree) -> Result<OdbExtraction, ExtractError> {
             Some(text) => parse_features(&text),
             None => FeatureCounts::default(),
         };
-        if let Some(declared) = counts.declared {
+        // Only when this reader recognised every record in the file: otherwise a
+        // shortfall is its own gap, not the header lying, and reporting it as a
+        // disagreement teaches the reader to be ignored.
+        if let Some(declared) = counts.declared.filter(|_| counts.unknown_records == 0) {
             if declared != counts.total() {
                 disagreements.push(format!(
                     "layer {} declares {declared} features in its `F` header but \
@@ -1295,6 +1316,50 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("expands to more than"), "got: {msg}");
         assert!(msg.contains("MiB"), "the limit is named: {msg}");
+    }
+
+    #[test]
+    fn a_non_finite_coordinate_never_reaches_the_ir() {
+        // `parse::<f64>()` accepts `NaN`, `inf` and `1e400`. A distance compared
+        // against any of them is silently false, which is how a clearance or
+        // length check turns into a meaningless pass; the native readers refuse
+        // such a file outright, so nothing non-finite may get in here either.
+        let mut members = tiny_job();
+        for m in &mut members {
+            if m.0 == "steps/pcb/layers/comp_+_top/components" {
+                m.1 = m
+                    .1
+                    .replace("CMP 0 1.0 1.0 0 N R1", "CMP 0 NaN 1.0 0 N R1")
+                    .replace("TOP 1 4.8 1.0 0.0 N 3 0 2", "TOP 1 1e400 1.0 0.0 N 3 0 2");
+            }
+        }
+        let out = from_odbpp_archive(&zip_members(&members)).expect("the job still reads");
+        for c in &out.board.components {
+            if let Some((x, y, r)) = c.position {
+                assert!(
+                    x.is_finite() && y.is_finite() && r.is_finite(),
+                    "{}: position {x},{y},{r} is not finite",
+                    c.reference
+                );
+            }
+            for p in &c.pins {
+                if let Some((x, y)) = p.position {
+                    assert!(
+                        x.is_finite() && y.is_finite(),
+                        "{}.{}: pad position {x},{y} is not finite",
+                        c.reference,
+                        p.number
+                    );
+                }
+            }
+        }
+        // The records carrying them are dropped, not silently zeroed: R1's
+        // placement and R2's second pad are gone rather than sitting at the origin
+        // pretending to be real geometry.
+        assert!(
+            out.board.component("R1").is_none(),
+            "the component whose placement was not a number must not be invented"
+        );
     }
 
     #[test]

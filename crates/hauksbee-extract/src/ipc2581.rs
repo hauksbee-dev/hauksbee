@@ -22,23 +22,30 @@
 //!       <LayerFeature layerRef><Set net><Pad><PinRef/>  per-layer copper
 //! ```
 //!
-//! ## Both revisions, and both namespace habits
+//! ## What "the format" actually means in the wild
 //!
-//! Revisions B and C are what real exports are, and they differ in ways that do
-//! not touch what is read here. The document may be namespaced
-//! (`xmlns="http://webstds.ipc.org/2581"`, what KiCad and Allegro write) or bare
-//! (what several converters write, and what a document that has been through an
-//! XSLT often becomes). Elements are matched on their **local name**, so both
-//! forms parse identically and a future revision's added elements are ignored
-//! rather than fatal.
+//! The shape above is the schema's. Real exports diverge from it in ways that are
+//! all schema-valid and all fatal to a reader that assumes one producer, so each
+//! one is handled explicitly. Every item here was found by reading a real
+//! document from a real tool, and each was the difference between a full netlist
+//! and a board with nets and **zero connections**:
 //!
-//! Producers also prefix names for uniqueness — `CMP:U1`, `NET:GND`, `PIN:7`,
-//! `LAYER:F.Cu` — while others (Allegro) write them bare. A leading
-//! `<KNOWN>:` prefix is stripped from both forms so `CMP:U1` and `U1` are the
-//! same component; see [`strip_prefix_tag`]. KiCad additionally escapes the
-//! characters the format restricts, so a net `Net-(U4-LNA_IN/RF)` arrives as
-//! `Net-(U4-LNA_IN{slash}RF)`; that is undone, but only for files KiCad wrote
-//! ([`crate::unescape_kicad_name`]).
+//! | What varies | Who | Handled by |
+//! |---|---|---|
+//! | Revision `A`, `B`, `C`, or no `revision` attribute at all | Allegro 16.6 / Altium / KiCad / Zuken | nothing keys on it; it is only reported |
+//! | Namespaced or bare element names | all / converters | matching on the **local name** |
+//! | `<LogicalNetPin>` instead of `<PinRef>` inside `<LogicalNet>` | Zuken CR5000 | both element names accepted |
+//! | `<PadStack net><LayerPad><PinRef/>` instead of `<LayerFeature><Set net><Pad>` | Altium | both containers accepted |
+//! | Names prefixed with the step (`bd-sample:IC11`) | Zuken | [`strip_names`] |
+//! | Names prefixed with a tag (`CMP:U1`, `NET:GND`) | KiCad | [`strip_prefix_tag`] |
+//! | `{slash}`-escaped names | KiCad | [`crate::unescape_kicad_name`], gated on the producer |
+//! | `<Pin name="1" number="0.0">` — `number` is an ORDINAL | Zuken | `name` preferred over `number` |
+//! | `<Pin>` with neither `name` nor `number` | Allegro 16.6 | ignored rather than treated as a nameless pin |
+//! | Placement on `<Xform x y>` rather than `<Location>` | converters | both read |
+//! | `value` attribute on `<Component>` | converters | read, below the BOM's `Value` |
+//! | `<LogicalNet>` at the document root, outside `<Ecad>` | converters | unkeyed connectivity is folded into the step |
+//! | `layerFunction` of `PLANE` / `SIGNAL` / `MIXED`, not just `CONDUCTOR` | Allegro / Zuken | all counted as copper |
+//! | Component side as `A-Component` / `Top Layer`, not `TOP` | Zuken / Altium | the `<Layer>` table's `side`, then name heuristics |
 //!
 //! ## Two sources of connectivity, and the disagreement between them
 //!
@@ -52,11 +59,13 @@
 //!
 //! The other cross-check worth having is package-vs-placement. A component
 //! names a `<Package>`, and the package declares its pins; the `<PinRef>`s name
-//! pins too. Where the referenced pins are entirely disjoint from the declared
-//! ones the package assignment is simply wrong (KiCad 9 de-duplicates packages
-//! by pad geometry and so gives a 2-pin LED the resistor's package, whose pins
-//! are `1`/`2` where the LED's are `A`/`K`), and the referenced pins are used
-//! alone rather than unioned into a phantom four-pad part.
+//! pins too. The package's pins are used only when they ACCOUNT FOR every
+//! referenced pin: a package that merely overlaps the netlist is a package for a
+//! different part (KiCad 9 de-duplicates packages by pad geometry and so gives a
+//! 2-pin LED the resistor's package, whose pins are `1`/`2` where the LED's are
+//! `A`/`K`), and unioning the two grows the part phantom unconnected pads that
+//! read downstream as open-pin findings. So the netlist's pins stand alone and the
+//! mismatch is named.
 //!
 //! ## Deliberately unsupported
 //!
@@ -720,8 +729,21 @@ fn scan(text: &str) -> Result<Doc, ExtractError> {
     Ok(doc)
 }
 
+/// A numeric attribute, or 0.0.
+///
+/// Non-finite values are dropped rather than adopted: `parse::<f64>()` accepts
+/// `inf`, `NaN` and an overflowing exponent, and a distance compared against NaN
+/// is silently false, which turns a clearance or length check into a meaningless
+/// pass. The native readers refuse such a file outright
+/// (`pcb::reject_non_finite_geometry`); an IPC-2581 coordinate only ever reaches
+/// a pad position, so falling back to 0.0 keeps the same guarantee — no
+/// non-finite number enters the IR — without discarding a whole document over one
+/// bad attribute.
 fn num(a: &HashMap<String, String>, key: &str) -> f64 {
-    a.get(key).and_then(|v| v.parse::<f64>().ok()).unwrap_or(0.0)
+    a.get(key)
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| v.is_finite())
+        .unwrap_or(0.0)
 }
 
 /// IPC-2581 `units` values, as a multiplier to millimetres.
@@ -1526,6 +1548,153 @@ mod tests {
         ));
         let err = extract("<eagle/>").expect_err("a non-IPC-2581 root must not read");
         assert!(err.to_string().contains("not a IPC-2581 file"), "got: {err}");
+    }
+
+    #[test]
+    fn a_non_finite_coordinate_never_reaches_the_ir() {
+        let xml = r#"<IPC-2581 revision="C">
+  <Ecad><CadHeader units="MILLIMETER"/><CadData><Step name="s">
+    <Package name="P"><Pin number="1"/><Pin number="2"/></Package>
+    <Component refDes="R1" packageRef="P" layerRef="TOP">
+      <Location x="NaN" y="1e400"/><Xform rotation="inf"/>
+    </Component>
+    <LogicalNet name="A"><PinRef componentRef="R1" pin="1"/></LogicalNet>
+    <LogicalNet name="B"><PinRef componentRef="R1" pin="2"/></LogicalNet>
+  </Step></CadData></Ecad>
+</IPC-2581>"#;
+        let out = extract(xml).expect("the document still reads");
+        let (x, y, r) = out.board.component("R1").expect("R1").position.expect("pos");
+        assert!(
+            x.is_finite() && y.is_finite() && r.is_finite(),
+            "position {x},{y},{r} is not finite"
+        );
+    }
+
+    #[test]
+    fn zuken_and_altium_element_names_are_read_as_connectivity() {
+        // Two producer shapes that carried full netlists the reader used to see
+        // nothing in. Kept as unit tests as well as corpus tests so the shapes
+        // stay covered without the multi-megabyte files.
+        let zuken = r#"<IPC-2581 xmlns="http://webstds.ipc.org/2581">
+  <Content><FunctionMode mode="DESIGN" level="1"/></Content>
+  <Ecad><CadHeader units="MILLIMETER"/><CadData>
+    <Layer name="A-Component" side="TOP" context="BOARD" layerFunction="COMPONENT"/>
+    <Layer name="B-Component" side="BOTTOM" context="BOARD" layerFunction="COMPONENT"/>
+    <Layer name="Conductive1" side="TOP" context="BOARD" layerFunction="SIGNAL"/>
+    <Step name="bd">
+      <Package name="bd:CC-CHP-2125"><Pin name="1" type="THRU" number="0.0"/><Pin name="2" type="THRU" number="1.0"/></Package>
+      <Component part="ECJ" refDes="bd:C20" layerRef="A-Component" packageRef="bd:CC-CHP-2125"/>
+      <Component part="LM218D" refDes="bd:IC11" layerRef="B-Component" packageRef="bd:CC-CHP-2125"/>
+      <LogicalNet name="bd:RESET" netClass="SIGNAL">
+        <LogicalNetPin pin="1" componentRef="bd:IC11"/>
+        <LogicalNetPin pin="1" componentRef="bd:C20"/>
+      </LogicalNet>
+      <LogicalNet name="bd:GND"><LogicalNetPin pin="2" componentRef="bd:C20"/></LogicalNet>
+    </Step>
+  </CadData></Ecad>
+</IPC-2581>"#;
+        let out = extract(zuken).expect("the Zuken shape reads");
+        assert_eq!(out.stats.net_source, NetSource::LogicalNet);
+        assert_eq!(out.board.nets.len(), 2);
+        // The step prefix is gone from both designators and net names.
+        let c20 = out.board.component("C20").expect("C20");
+        assert_eq!(out.board.net_by_name("RESET").map(|n| n.name.as_str()), Some("RESET"));
+        // The pin's `name` is its identity; the `number` ordinal must not become one.
+        let mut pins: Vec<&str> = c20.pins.iter().map(|p| p.number.as_str()).collect();
+        pins.sort_unstable();
+        assert_eq!(pins, vec!["1", "2"]);
+        // The `<Layer>` table resolves `A-`/`B-Component` to the right sides.
+        assert_eq!(c20.layer, "F.Cu");
+        assert_eq!(out.board.component("IC11").expect("IC11").layer, "B.Cu");
+        let reset = out.board.net_by_name("RESET").expect("RESET");
+        assert_eq!(out.board.net_members(reset.id).len(), 2);
+        assert_eq!(out.stats.copper_layers, vec!["Conductive1"]);
+
+        let altium = r#"<IPC-2581 revision="B" xmlns="http://webstds.ipc.org/2581">
+  <Content roleRef="Owner"><FunctionMode mode="USERDEF" level="1"/></Content>
+  <Ecad><CadData>
+    <Layer name="Top Layer" layerFunction="CONDUCTOR" side="TOP"/>
+    <Step name="SWITCH BOARD">
+      <Package name="0603"><Pin number="1"/><Pin number="2"/></Package>
+      <Component refDes="R5" packageRef="0603" layerRef="Top Layer"/>
+      <PadStack net="+5V">
+        <LayerPad layerRef="Top Layer"><Location x="1.0" y="2.0"/><PinRef componentRef="R5" pin="1"/></LayerPad>
+      </PadStack>
+      <PadStack net="GND">
+        <LayerPad layerRef="Top Layer"><Location x="3.0" y="2.0"/><PinRef componentRef="R5" pin="2"/></LayerPad>
+      </PadStack>
+    </Step>
+  </CadData></Ecad>
+</IPC-2581>"#;
+        let out = extract(altium).expect("the Altium shape reads");
+        assert_eq!(out.stats.net_source, NetSource::LayerFeature);
+        assert_eq!(out.board.nets.len(), 2);
+        let r5 = out.board.component("R5").expect("R5");
+        assert_eq!(r5.pins.len(), 2);
+        assert_eq!(r5.pins[0].position, Some((1.0, 2.0)), "the LayerPad location");
+        assert_eq!(out.stats.connected_pins, 2);
+    }
+
+    #[test]
+    fn connectivity_declared_outside_the_step_still_reaches_its_components() {
+        // A real document puts `<LogicalNet>` at the root, outside `<Ecad>`; the
+        // components are inside a step, so the two were filed under different
+        // keys and never met.
+        let xml = r#"<IPC-2581 revision="C">
+  <LogicalNet name="VIN"><PinRef componentRef="C1" pin="1"/><PinRef componentRef="U1" pin="1"/></LogicalNet>
+  <LogicalNet name="GND"><PinRef componentRef="C1" pin="2"/><PinRef componentRef="U1" pin="2"/></LogicalNet>
+  <Ecad><CadData><Step name="LED_POWER_BOARD">
+    <Package name="C_0805"><Pin number="1"/><Pin number="2"/></Package>
+    <Component refDes="C1" packageRef="C_0805" layerRef="TOP_COPPER" value="10uF">
+      <Xform x="12.0" y="8.0" rotation="0"/>
+    </Component>
+    <Component refDes="U1" packageRef="C_0805" layerRef="TOP_COPPER" value="AP2112K-3.3"/>
+  </Step></CadData></Ecad>
+</IPC-2581>"#;
+        let out = extract(xml).expect("reads");
+        assert_eq!(out.board.nets.len(), 2);
+        assert_eq!(out.stats.connected_pins, 4);
+        let c1 = out.board.component("C1").expect("C1");
+        // The `value` attribute on `<Component>` is outside the schema but real.
+        assert_eq!(c1.value, "10uF");
+        // And its placement is on the `<Xform>`, not in a sibling `<Location>`.
+        assert_eq!(c1.position, Some((12.0, 8.0, 0.0)));
+        assert!(out.stats.bom_absent, "no BOM here, and the note must say so");
+        assert!(out
+            .stats
+            .notes()
+            .iter()
+            .any(|n| n.contains("carries no BOM")));
+    }
+
+    #[test]
+    fn a_package_that_only_partly_matches_does_not_fabricate_pads() {
+        // Overlap is not enough: a 3-pin package borrowed by a part whose netlist
+        // pins are `1` and `K` "fitted" on the strength of `1`, and the part came
+        // out with four pads, two of them invented and unconnected.
+        let xml = r#"<IPC-2581 revision="C">
+  <Ecad><CadData><Step name="s">
+    <Package name="SOT23"><Pin number="1"/><Pin number="2"/><Pin number="3"/></Package>
+    <Component refDes="D1" packageRef="SOT23" layerRef="TOP"><Location x="0" y="0"/></Component>
+    <LogicalNet name="A"><PinRef componentRef="D1" pin="1"/></LogicalNet>
+    <LogicalNet name="B"><PinRef componentRef="D1" pin="K"/></LogicalNet>
+  </Step></CadData></Ecad>
+</IPC-2581>"#;
+        let out = extract(xml).expect("reads");
+        let d1 = out.board.component("D1").expect("D1");
+        let mut pins: Vec<&str> = d1.pins.iter().map(|p| p.number.as_str()).collect();
+        pins.sort_unstable();
+        assert_eq!(pins, vec!["1", "K"], "no pads 2 and 3 invented");
+        assert!(
+            out.stats
+                .disagreements
+                .iter()
+                .any(|d| d.contains("package reference is wrong")
+                    && d.contains("declares 1, 2, 3")
+                    && d.contains("netlist also uses K")),
+            "the mismatch must name both sides: {:?}",
+            out.stats.disagreements
+        );
     }
 
     #[test]
