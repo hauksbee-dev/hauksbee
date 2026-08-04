@@ -120,6 +120,71 @@ re-run. The two-sided gate is
 kills the primary march is rescued and recorded, and a structurally singular
 board still refuses loudly.
 
+### A backend's clock rate is only verified against the part on two of six
+
+Time-based co-sim results rest on the emulator advancing at the part's clock
+rate, and only `renode:rp2040` and `simavr:atmega328p` are measured against it.
+Firmware whose real half-period is 20 ms, so 50 edges per second, produces:
+
+| Backend | Edges/s | Simulated time runs |
+|---|---|---|
+| `renode:rp2040` | 50 | at the part's rate |
+| `simavr:atmega328p` | exact per cycle | at the part's rate |
+| `renode:stm32f103` | 450 | 9x fast |
+| `renode:nrf52840` | 327 | 6.5x fast |
+| `qemu:esp32`, `-s3`, `-c3` | 13.5 to 14.5 | 1.35x to 1.45x slow, and host-load dependent |
+
+The cause is per platform, not per emulator: `stm32f103.repl` declares a 72 MHz
+SysTick against the 8 MHz the descriptor declares, which is exactly the 9x, and
+`PerformanceInMips` is 100 against roughly 8 MIPS of real silicon. RP2040 is
+right because `db/mcu/rp2040/rp2040.repl` sets both to the part's real clock.
+`renode:stm32f4_discovery` and `renode:sifive_fe310` carry the same defect by
+inspection. QEMU paces virtual time against wall clock, so its ratio is not
+reproducible across machines.
+
+What this means for a result: a `toggle` frequency or a `boot_coverage`
+`deadline_ms` on an unverified backend is measuring the emulator's clock. A
+minimum toggle COUNT, the order of GPIO transitions, UART content, rail voltages
+under load, and every static check are unaffected. Closing it means declaring
+each part's clock in its platform file and gating it, which is scoped work rather
+than a research problem.
+
+One trap worth recording for anyone measuring this: the GPIO poll aliases any
+half-period near the chunk width. At 5 ms chunks the STM32F103 firmware above
+measures a perfect 100 edges; at 200 microsecond chunks the same firmware
+measures 450. A fidelity measurement must use a chunk well below the firmware's
+period or it will confirm whatever it started with.
+
+### An unserviced watchdog does not reset the MCU on Renode or QEMU
+
+On `renode:nrf52840` the watchdog can be armed and read back as running, with a
+correct 32768 Hz counter, and still never fire: 1.000 s of simulated time
+produces zero resets where silicon produces twenty. On the ESP32 family the
+watchdogs are deliberately disabled at launch (a paused guest would otherwise
+trip them), which is the right call for a co-simulator and is not currently
+stated anywhere the reader sees. Either way, firmware that hangs runs forever in
+simulation, so any assertion about behaviour after a hang is fiction. The AVR
+backend does reset, but an unfed watchdog there currently livelocks the co-sim
+rather than rebooting it, because the reset rewinds a cycle counter the chunk
+loop is waiting on.
+
+### Power-up state is not modelled: no brownout reset, no strap latch, no fuses
+
+Three related gaps, all on the digital side:
+
+- **No POR or BOR.** Nothing resets the MCU in response to a rail event. A board
+  that browns out on inrush has that collapse caught by a `rail` assertion while
+  its firmware keeps executing as though the supply held.
+- **Straps are not sampled at the reset latch.** Input injection is skipped on
+  the first chunk, so a board's strap bias reaches the core only after the boot
+  ROM has already latched. hauksbee ships a strap-pin lint, and that lint is
+  entirely static: co-sim does not corroborate it.
+- **No non-volatile configuration.** Fuse bytes, option bytes, eFuse and UICR are
+  not modelled and the descriptor format has no field for them. A factory-fuse
+  ATmega328P runs at 1 MHz where hauksbee assumes 16, and a clock-source
+  bring-up always succeeds, so a missing or dead crystal, which is the most
+  common first-spin boot failure there is, cannot be reproduced.
+
 ### nRF5340 has no co-sim backend
 
 The Renode 1.16.1 portable build ships no nRF5340 platform, so the

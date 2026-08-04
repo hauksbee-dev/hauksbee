@@ -29,7 +29,10 @@ That is the coupling surface, the part a peripheral model or the scheduler
 drives. The trait (`crates/hauksbee-mcu/src/traits.rs`) also carries status and
 fidelity accessors the engine reads rather than drives: `state`, `frequency`,
 `reset`, `cycle_exact`, `pins_configured_output`, `uart_rx_overflow`,
-`set_active_ports`.
+`set_active_ports`. `reset` is implemented on the AVR backend only; on Renode and
+QEMU it errors, and nothing in the engine calls it in response to a rail event,
+so a board that browns out has its analog collapse caught by a `rail` assertion
+while its firmware keeps executing as though the supply held.
 
 ### `on_input_responder`, closing a readback inside the firmware's bit-bang loop
 
