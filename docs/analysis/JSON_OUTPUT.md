@@ -64,9 +64,9 @@ when the corresponding analysis ran.
 | section | present when | shape |
 |---|---|---|
 | `board` | always | board name |
-| `bind` | always | `BindSummary`: `resolved`, `unresolved`, `non_ignored`, `critical_parts_bound` (+ `_n`/`_total`), `mcu_bound`, `active_path_unresolved[]`, `resolved_but_open_active[]` |
+| `bind` | always | `BindSummary`: `resolved`, `unresolved`, `non_ignored`, `critical_parts_bound` (the `"4/6"` display string), `critical_parts_bound_n`, `critical_parts_total`, `mcu_bound`, `active_path_unresolved[]`, `resolved_but_open_active[]` |
 | `findings` | lint / SI / co-sim faults ran | array of `Finding` (below) |
-| `drc` | `--report`/`--drc` | `clearance_rule_mm`, `primitive_count`, `shorts[]`, `violations[]`, `at_limit[]`, optional `version_warning` |
+| `drc` | `--drc` / `--check` | `clearance_rule_mm`, `primitive_count`, `shorts[]`, `violations[]`, `at_limit[]`, optional `version_warning` |
 | `ac` | `--ac` | `valid` (+ `reason`), `nets[]` (`{net, points:[[freq,mag_db,phase]]}`), `no_signal_path_nets[]`, `not_found_nets[]`, `coverage` |
 | `thermal` | `--thermal` | `valid` (+ `reason`), `ambient_c`, `devices[]` (`{reference, tj_c, over_limit}`), `coverage` |
 | `boot_gates` | boot-state panel | per-transistor-gate power-up state (informational) |
