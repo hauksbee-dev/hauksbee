@@ -3140,6 +3140,56 @@ impl Scheduler {
         out
     }
 
+    /// How a net arrived at the level it is sitting at.
+    ///
+    /// The distinction boot coverage lives or dies on (E51). A control net that
+    /// reaches its level because a pull-up holds it there has NOT been shown to
+    /// boot: `boot_coverage` passed on a watchy RES net at 1 ms with no firmware
+    /// staged at all, which is a green verdict vouching for firmware behaviour
+    /// that never ran.
+    pub fn level_provenance(&self, net: &str) -> LevelProvenance {
+        if self.firmware_driven_nets().iter().any(|n| n == net) {
+            return LevelProvenance::FirmwareDriven;
+        }
+        if self.mcus.is_empty() {
+            // No MCU is modelled at all, so nothing digital could have driven
+            // anything. The level is the passive network's, with certainty; pin
+            // direction observability does not enter into it.
+            return LevelProvenance::Passive;
+        }
+        if !self.drive_direction_observable() {
+            // A levels-only backend cannot tell a held-low output from a
+            // floating input, so neither "firmware drove it" nor "the network
+            // did" is a claim this run can support.
+            return LevelProvenance::Unobservable;
+        }
+        LevelProvenance::Passive
+    }
+
+    /// One clause stating how `net` arrived at `volts` at `t_ms`, for any caller
+    /// about to report that a control net reached a level.
+    ///
+    /// The wording is the point. "Driven to 3.3 V at 1.00 ms" is a claim about
+    /// firmware; when no firmware drove the net, the honest sentence names the
+    /// passive network instead, and when the backend cannot tell, it says that.
+    pub fn level_reached_clause(&self, net: &str, volts: f64, t_ms: f64) -> String {
+        match self.level_provenance(net) {
+            LevelProvenance::FirmwareDriven => format!(
+                "control net '{net}' was driven to {volts:.3} V by firmware at {t_ms:.2} ms"
+            ),
+            LevelProvenance::Passive => format!(
+                "control net '{net}' reached {volts:.3} V at {t_ms:.2} ms PASSIVELY: no \
+                 firmware drove it, so this is the passive network's level (a pull resistor \
+                 or a rail), not a firmware action"
+            ),
+            LevelProvenance::Unobservable => format!(
+                "control net '{net}' reached {volts:.3} V at {t_ms:.2} ms, but this MCU \
+                 backend cannot report pin direction, so whether firmware drove it or the \
+                 passive network held it there is UNKNOWN"
+            ),
+        }
+    }
+
     /// MCU GPIO nets the firmware drove to a *defined* level during the run,
     /// either it wrote the pin (a `last_levels` entry, high or low) or it
     /// configured the pin as an output (so an output-low-held pin counts as
@@ -3981,6 +4031,24 @@ fn resolve_renode_config(part: &str) -> anyhow::Result<hauksbee_mcu::RenodeConfi
 ///     GPIO port carries a direction-register map (`dir = {...}`, verified
 ///     per-part; see `db/mcu/*.soc.toml`);
 ///   - anything else (QEMU, unknown futures), false, fail-safe.
+/// How a net arrived at the level it is sitting at.
+///
+/// Reported by [`Scheduler::level_provenance`]. A caller about to claim a
+/// control net "was driven" to a level must consult this first: a level reached
+/// passively is a fact about the passive network, not about firmware, and
+/// presenting it as the latter is the E51 defect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LevelProvenance {
+    /// An MCU drove the net to a defined level this run.
+    FirmwareDriven,
+    /// Nothing drove it: the level is the passive network's, a pull resistor or
+    /// a rail. Reported only when the run can actually support the claim, i.e.
+    /// there is no MCU at all, or every MCU's backend reports pin direction.
+    Passive,
+    /// The MCU backend cannot report pin direction, so neither claim is honest.
+    Unobservable,
+}
+
 pub fn backend_reports_drive_direction(backend: &str) -> bool {
     if !backend_is_external(backend) {
         return true;
@@ -6180,6 +6248,122 @@ mod tests {
             "stale capture buffers must be dropped"
         );
     }
+
+    /// A control net that reaches its level with NOTHING driving it must be
+    /// reported as having got there passively (E51).
+    ///
+    /// `boot_coverage` passed on a watchy RES net with no firmware staged at
+    /// all: the net reached its level at 1 ms because a pull-up held it there,
+    /// and the verdict read "driven to >= 3.0 V at 1.00 ms". That sentence
+    /// vouches for firmware that never ran.
+    ///
+    /// Two-sided: with no MCU the provenance is passive with certainty, with a
+    /// direction-blind backend it is honestly unknown, and with a core that
+    /// actually drove the pin it is firmware-driven.
+    #[test]
+    fn a_passively_reached_level_is_not_reported_as_firmware_driven() {
+        let mut circuit = Circuit::new();
+        let res = circuit.node("RES");
+        // A pull-up holding RES at the rail: the passive network, no firmware.
+        circuit.add(Device::Vsource {
+            name: "Vsupply_VCC".into(),
+            p: res,
+            n: NodeId::GROUND,
+            kind: hauksbee_ir::SourceKind::Dc(3.3),
+        });
+        let mut net_nodes = HashMap::new();
+        net_nodes.insert("RES".to_string(), res);
+        let bound = crate::binder::BoundBoard {
+            name: "passive_res".into(),
+            circuit,
+            net_nodes,
+            net_names: vec!["RES".into()],
+            digital: Vec::new(),
+            mcus: Vec::new(),
+            dnp_mcus: Vec::new(),
+            component_kinds: HashMap::new(),
+            input_sources: HashMap::new(),
+            supplies: Vec::new(),
+            behavioral: Vec::new(),
+            device_meta: Vec::new(),
+            dacs: Vec::new(),
+            report: crate::report::BindReport::default(),
+        };
+        let mut sched = Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+
+        // No MCU at all: nothing digital could have driven it, so the passive
+        // verdict is certain, not hedged.
+        assert_eq!(sched.level_provenance("RES"), LevelProvenance::Passive);
+        let clause = sched.level_reached_clause("RES", 3.3, 1.0);
+        assert!(
+            clause.contains("PASSIVELY") && clause.contains("no firmware drove it"),
+            "must say the level was reached passively: {clause}"
+        );
+        assert!(
+            !clause.contains("was driven to"),
+            "must NOT imply firmware drove it: {clause}"
+        );
+
+        // A direction-blind backend cannot support either claim.
+        let binding = |reference: &str, role_net: Option<NodeId>| {
+            let mut role_nets = HashMap::new();
+            if let Some(n) = role_net {
+                role_nets.insert("pb5".to_string(), n);
+            }
+            McuBinding {
+                reference: reference.into(),
+                backend: "qemu:test".into(),
+                requested_part: String::new(),
+                pad_roles: HashMap::new(),
+                role_nets,
+                gpio_drivers: HashMap::new(),
+                adc_nets: HashMap::new(),
+                adc_pin: HashMap::new(),
+                module: false,
+                max_supply_v: None,
+            }
+        };
+        sched.mcus.push(core_with_hooks(
+            Box::new(DirCore { observable: false }),
+            binding("U1", Some(res)),
+        ));
+        sched.responder_registries.push(None);
+        assert_eq!(
+            sched.level_provenance("RES"),
+            LevelProvenance::Unobservable,
+            "a backend that cannot report pin direction must not claim either way"
+        );
+        let clause = sched.level_reached_clause("RES", 3.3, 1.0);
+        assert!(clause.contains("UNKNOWN"), "{clause}");
+
+        // Now a core that reports direction AND actually wrote the pin: this is
+        // the only case where "driven by firmware" is true.
+        sched.mcus.clear();
+        sched.responder_registries.clear();
+        sched.mcus.push(core_with_hooks(
+            Box::new(DirCore { observable: true }),
+            binding("U1", Some(res)),
+        ));
+        sched.responder_registries.push(None);
+        assert_eq!(
+            sched.level_provenance("RES"),
+            LevelProvenance::Passive,
+            "a core that never touched the pin has not driven it"
+        );
+        // `gpio_of_role` normalises the port letter to uppercase.
+        sched.mcus[0].last_levels.insert(('B', 5), true);
+        assert_eq!(
+            sched.level_provenance("RES"),
+            LevelProvenance::FirmwareDriven,
+            "a written pin is firmware-driven"
+        );
+        let clause = sched.level_reached_clause("RES", 3.3, 1.0);
+        assert!(
+            clause.contains("was driven to") && clause.contains("by firmware"),
+            "{clause}"
+        );
+        assert!(!clause.contains("PASSIVELY"), "{clause}");
+    }
 }
 
 /// The product-path wiring the fresh-context critic proved missing: backend
@@ -6643,4 +6827,5 @@ mod pulse_and_contention_tests {
             sched.driver_contentions()
         );
     }
+
 }
