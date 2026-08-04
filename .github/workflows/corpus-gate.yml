@@ -111,6 +111,16 @@ jobs:
       # Lift the per-gate counts out of a 100k-line log into the run summary, so
       # "what did this gate actually look at" is the first thing on the page
       # rather than something you have to go and reconstruct.
+      #
+      # Not anchored to the start of the line, deliberately: with
+      # `--test-threads=1` cargo writes `test <name> ... ` and leaves the line
+      # open, so the first thing a test prints lands mid-line. An anchored `^SCANNED`
+      # silently dropped about half the counts, which would have made this summary
+      # its own small version of the problem it reports on.
+      #
+      # EXCEPTION and NOT RUN lines come along too. A gate that excused a finding,
+      # or did not run at all, is exactly what a reader of this summary needs to
+      # see next to the counts rather than have to go looking for.
       - name: Per-gate board counts
         if: always()
         run: |
@@ -118,7 +128,8 @@ jobs:
             echo "## Boards scanned per gate"
             echo
             echo '```'
-            grep '^SCANNED ' corpus-gate.log || echo "no gate reported a count"
+            grep -oE '(SCANNED|EXCEPTION|NOT RUN) .*' corpus-gate.log \
+              || echo "no gate reported a count: treat this run as unaudited"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
