@@ -269,6 +269,36 @@ fn a_hand_maintained_spreadsheet_reads_its_mpn_and_its_dnp_column() {
     assert_eq!(row.manufacturer.as_deref(), Some("Murata Electronics"));
 }
 
+#[test]
+fn the_mapping_used_is_recorded_in_the_shape_the_docs_quote() {
+    // Half the non-interactive contract is that a run which proceeds on a
+    // detected mapping SAYS which mapping it used. This asserts the exact block,
+    // because `docs/ingest/BOM.md` quotes it and a paraphrased example in a doc
+    // is a lie with a delay on it.
+    let bom = read_bom("bom/kicad_grouped_mpn.csv");
+    let lines = bom.provenance.lines();
+    let rendered: Vec<&str> = lines.iter().map(String::as_str).collect();
+    assert_eq!(
+        &rendered[1..],
+        &[
+            "  reference <- \"Reference(s)\" (certain)",
+            "  value <- \"Value\" (certain)",
+            "  mpn <- \"MPN\" (certain)",
+            "  quantity <- \"Qty\" (certain)",
+            "  footprint <- \"Footprint\" (certain)",
+            "  contributed: part identity: 60 reference designators over 22 rows, 1 of them \
+             carrying a manufacturer part number",
+            "  ignored:     column \"Item\": no analysis reads it",
+            "  ignored:     column \"Datasheet\": no analysis reads it",
+        ]
+    );
+    assert!(
+        rendered[0].ends_with("(kicad_grouped_bom, sha256 5296073e)"),
+        "{}",
+        rendered[0]
+    );
+}
+
 // ── Refusals, on both their exit code and their message ─────────────────────
 
 #[test]
