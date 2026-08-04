@@ -557,8 +557,9 @@ sources, about 377 kB, and Renode's compiler runs on each new machine rather
 than once per process. Measured on the 2.00 s corpus run above: 15.5 s of
 wall clock in total, of which the simulation itself accounted for 7.3 s, so
 bring-up costs roughly eight seconds before any firmware instruction executes.
-The three RP2040 integration suites therefore take tens of seconds each
-(measured: 22 s, 28 s, 18 s) where the whole five-test STM32 suite takes 11 s.
+The three RP2040 integration suites therefore take tens of seconds each,
+measured between 8 s and 28 s per suite across runs for one to six tests, where
+the whole five-test STM32 suite takes 6 s to 11 s.
 Nothing is wrong when that happens; the trade is paying compile time for a
 platform that does not otherwise exist.
 
