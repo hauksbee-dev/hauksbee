@@ -303,3 +303,104 @@ fn cross_validate_against_kicad_altium_importer() {
         offenders.join("\n  ")
     );
 }
+
+/// Every Altium `.PcbDoc` the PUBLIC fetch lands, extracted and short-checked.
+///
+/// The sweep above names its boards from a hardcoded list under `<corpus>/altium`,
+/// a family that is not in `corpus.toml` and is absent from every public fetch. So
+/// when `corpus.toml` gained the ODrive v2 and v3 designs, the only Altium binaries
+/// anyone can obtain by following CONTRIBUTING, they landed on disk and no gate read
+/// them: the sweep looked in a directory they are not in and reported NOT RUN, which
+/// is the same shape of nothing as a sweep that matches no board.
+///
+/// This walks the corpus for `.PcbDoc` rather than naming files, so an Altium board
+/// added to the manifest is covered the moment it is fetched instead of when
+/// somebody remembers to extend a list. The `altium/` family is skipped because the
+/// sweep above covers it with per-board floors this cannot know.
+#[test]
+fn fetched_altium_boards_extract_and_are_short_clean() {
+    let Some(root) = corpus_root() else {
+        eprintln!("NOT RUN  fetched Altium sweep: board-corpus not present");
+        assert!(!hauksbee_testkit::require_assets());
+        return;
+    };
+    let boards_root =
+        hauksbee_testkit::corpus_boards_root(env!("CARGO_MANIFEST_DIR")).unwrap_or(root);
+
+    let mut found: Vec<PathBuf> = Vec::new();
+    collect_pcbdoc(&boards_root, &mut found);
+    found.retain(|p| {
+        !p.components()
+            .any(|c| c.as_os_str().eq_ignore_ascii_case("altium"))
+    });
+    found.sort();
+
+    let mut scanned = 0usize;
+    let mut offenders: Vec<String> = Vec::new();
+    for path in &found {
+        let name = path
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .to_string();
+        let Ok(bytes) = std::fs::read(path) else {
+            continue;
+        };
+        // An unreadable board is a failure and not a skip: it is in the manifest and
+        // the manifest self-check confirmed it landed, so the only explanation left
+        // is that hauksbee cannot read a file it claims to support.
+        let board = ExtractedBoard::from_altium_pcb(&bytes)
+            .unwrap_or_else(|e| panic!("{} extracts: {e}", path.display()));
+        let report = ExtractedBoard::altium_drc(&bytes)
+            .unwrap_or_else(|e| panic!("{} drc runs: {e}", path.display()));
+        scanned += 1;
+        let shorts = report.shorts().count();
+        eprintln!(
+            "{name:<26} {:>5} nets {:>5} comps {:>4} short(s)",
+            board.nets.len(),
+            board.components.len(),
+            shorts
+        );
+        if board.nets.is_empty() && board.components.is_empty() {
+            offenders.push(format!("{name}: read as empty, which is not a board"));
+        }
+        if shorts > 0 {
+            match hauksbee_testkit::not_known_good(path, &boards_root) {
+                Some(why) => hauksbee_testkit::excluded("fetched Altium sweep", &name, &why),
+                None => offenders.push(format!("{name}: {shorts} true short(s)")),
+            }
+        }
+    }
+
+    if scanned == 0 {
+        let msg = "no .PcbDoc in the fetched corpus. corpus.toml pins the ODrive v2 \
+                   and v3 designs, so either the fetch did not run or the keep-filter \
+                   dropped them.";
+        assert!(!hauksbee_testkit::require_assets(), "{msg}");
+        eprintln!("NOT RUN  fetched Altium sweep: {msg}");
+        return;
+    }
+    hauksbee_testkit::scanned("fetched Altium sweep", scanned);
+    assert!(
+        offenders.is_empty(),
+        "Altium boards from the public fetch must extract and be short-clean:\n  {}",
+        offenders.join("\n  ")
+    );
+}
+
+fn collect_pcbdoc(dir: &std::path::Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            collect_pcbdoc(&p, out);
+        } else if p
+            .extension()
+            .is_some_and(|x| x.eq_ignore_ascii_case("pcbdoc"))
+        {
+            out.push(p);
+        }
+    }
+}
