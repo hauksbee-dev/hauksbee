@@ -241,6 +241,8 @@ TMPDIR_BASE="${TMPDIR:-/tmp}"
 TMPDIR_BASE="${TMPDIR_BASE%/}"
 TMPDIR_WORK="$(mktemp -d "${TMPDIR_BASE}/get-hauksbee.XXXXXX")"
 trap 'rm -rf "${TMPDIR_WORK}"' EXIT
+# An interrupt mid-staging must not leave .hauksbee.new.$$ files behind.
+trap 'rm -rf "${TMPDIR_WORK}"; cleanup_staged 2>/dev/null || true; exit 130' INT TERM
 
 TARBALL_PATH="${TMPDIR_WORK}/${TARBALL_NAME}"
 CHECKSUM_PATH="${TMPDIR_WORK}/${CHECKSUM_NAME}"
@@ -394,7 +396,8 @@ if ! "${INSTALL_DIR}/hauksbee" --version >/dev/null 2>&1; then
   echo "" >&2
   echo "ERROR: installed, but ${INSTALL_DIR}/hauksbee cannot start on this system." >&2
   "${INSTALL_DIR}/hauksbee" --version 2>&1 | head -2 | sed 's/^/  /' >&2 || true
-  if "${INSTALL_DIR}/hauksbee" --version 2>&1 | grep -q 'libelf'; then
+  smoke_out="$("${INSTALL_DIR}/hauksbee" --version 2>&1 || true)"
+  if printf '%s' "${smoke_out}" | grep -q 'libelf'; then
     echo "  The default download needs the system libelf runtime:" >&2
     echo "    Debian/Ubuntu:  apt-get install libelf1" >&2
     echo "    Fedora/RHEL:    dnf install elfutils-libelf" >&2
