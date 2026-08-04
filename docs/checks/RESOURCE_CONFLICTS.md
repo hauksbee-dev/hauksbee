@@ -201,15 +201,25 @@ traced path leaves the buffer through the RC reconstruction filter (R19 and the
 AC-coupling cap C7) onto `/PWM_AUDIO_R` at the jack. Both demand slice 6
 channel A. Flagged on **rev C and rev D**.
 
-**The rev-B discriminator (and the ground-truth that makes the rev-C/D finding
-real).** Rev B is **SILENT, and that is correct.** Chased to the rev-B `.net`:
-there the DVI clock is on GP14/GP15 (`/PICO_CK+/-` -> module pins 19/20), which
-are PWM **slice 7**, while the audio is on GP28/GP27 (slice 6A/5B). No two PWM
-functions share a slice+channel, so there is genuinely no slice-6A conflict in
-rev B. The conflict was *introduced in rev C* when Olimex moved the DVI clock to
-GP12/GP13 (slice 6), colliding with the audio on GP28 (slice 6A). The check
-therefore flags exactly the revisions where the fault exists and stays silent on
-the one where it does not - the strongest form of two-sided validation.
+**The rev-B-netlist discriminator (and the ground-truth that makes the rev-C/D
+finding real).** The rev-B `.net` is **SILENT, and that is correct for that
+input**: there the DVI clock is on GP14/GP15 (`/PICO_CK+/-` -> module pins
+19/20), which are PWM **slice 7**, while the audio is on GP28/GP27 (slice
+6A/5B). No two PWM functions share a slice+channel, so that netlist genuinely
+has no slice-6A conflict - which proves the slice-6A fire elsewhere is real,
+not an any-RP2040-with-DVI-and-audio false positive.
+
+But that `.net` does not describe the manufactured rev B board. Its own
+`(source ...)` header says it was exported from `RP2040-PICO-PC_rev_A.sch`, and
+the rev-B **layout disagrees with it**: `RP2040-PICO-PC_rev_B.kicad_pcb` routes
+the DVI clock on GP12/GP13 (slice 6), and the shipped Gerbers in the same
+folder agree pad-for-pad (X2 attributes in `RP2040-PICO-PC_rev_B-F_Cu.gbr`:
+`U2` pad 16 = `/PICO_CK-`, pad 17 = `/PICO_CK+`). So the **rev B layout fires
+the slice-6A conflict, and that is a true positive about the physical board**
+(consistent with the open issue being reported against rev B). The check judges
+each input on what it actually says: silent on the stale rev-A netlist export,
+flagged on the layout the board was fabricated from and on every rev C/D input.
+Both sides are pinned by `tests/resource_conflict_corpus.rs`.
 
 ### SparkFun SAMD51 Thing Plus: QSPI group spent on plain SPI (NOTED, known issue #82)
 
@@ -343,7 +353,13 @@ BIN=target/release/hauksbee; C=../board-corpus/famous
 $BIN run "$C/olimex_rp2040_pico_pc/HARDWARE/RP2040-PICO-PC hardware revision D/RP2040-PICO-PC_rev_D.net" --resources
 $BIN run "$C/sparkfun_thingplus_samd51/Hardware/SAMD51_Thing_Plus.brd" --resources
 
-# SILENT: rev B (DVI clock on slice 7) and the clean RP2040 boards.
+# FLAGGED on the layout path too, including rev B (the fabricated board's
+# .kicad_pcb and Gerbers route the DVI clock on slice 6; see the
+# rev-B-netlist discriminator section above).
+$BIN run "$C/olimex_rp2040_pico_pc/HARDWARE/RP2040-PICO-PC hardware revision B/RP2040-PICO-PC_rev_B.kicad_pcb" --resources
+
+# SILENT: the rev B .net (a stale rev-A schematic export: DVI clock on slice 7)
+# and the clean RP2040 boards.
 $BIN run "$C/olimex_rp2040_pico_pc/HARDWARE/RP2040-PICO-PC hardware revision B/RP2040-PICO-PC_rev_B.net" --resources
 $BIN run "$C/rp2040_minimal_kicad/minimal/RP2040_minimal_r2/RP2040_minimal_r2.kicad_sch" --resources
 
