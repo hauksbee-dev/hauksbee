@@ -70,9 +70,11 @@ fn sim_help_states_the_working_capabilities() {
         help.contains("ngspice ASCII rawfile"),
         "help should describe the working ngspice ASCII rawfile output"
     );
-    // Cross-link to the drift-tested compatibility statement.
+    // Cross-link to the drift-tested compatibility statement, in the URL form
+    // an installed user can actually open (round 3 moved every help doc
+    // pointer off repo-relative paths).
     assert!(
-        help.contains("docs/spice-compat/compatibility.md"),
-        "help should cross-link the compatibility statement"
+        help.contains("docs.hauksbee.dev/docs/spice-compat/compatibility"),
+        "help should cross-link the compatibility statement URL"
     );
 }
