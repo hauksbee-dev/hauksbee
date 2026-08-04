@@ -267,6 +267,16 @@ pub struct RenodeConfig {
     pub expected_e_machine: u16,
     /// Human-readable MCU/board name for arch-mismatch error messages.
     pub mcu_label: String,
+    /// How this part's watchdog fidelity falls short of the real part, surfaced
+    /// through [`Mcu::watchdog_limitation`]. Per-part data rather than a
+    /// backend-wide constant, because it genuinely differs between platforms:
+    /// the F103's IWDG does time out and reset, while the nRF52840's WDT arms
+    /// cleanly and then never fires at all.
+    ///
+    /// `None` claims the part's watchdog behaves. That is a measurement, so a
+    /// descriptor that leaves it out is asserting one.
+    #[serde(default)]
+    pub watchdog_limitation: Option<String>,
     /// Per-channel ADC injection recipes (05 §5.1). Empty means ADC injection
     /// is a LOUD drop (a once-per-channel stderr warning), never a silent one.
     ///
@@ -1964,6 +1974,13 @@ impl Mcu for RenodeBackend {
         let mut chans: Vec<u8> = self.adc_unmapped_warned.iter().copied().collect();
         chans.sort_unstable();
         chans
+    }
+
+    fn watchdog_limitation(&self) -> Option<String> {
+        // Per-part descriptor data, not a backend constant: the shipped
+        // platforms genuinely differ, and the descriptor is where a measured
+        // per-part fact belongs.
+        self.config.watchdog_limitation.clone()
     }
 
     fn i2c_bus_modeled(&self) -> bool {

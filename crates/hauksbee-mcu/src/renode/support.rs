@@ -82,6 +82,22 @@ pub fn known_names() -> Vec<&'static str> {
 static BUNDLES: &[&SupportBundle] = &[&RP2040];
 
 impl SupportBundle {
+    /// Every `.repl` file in the bundle, as text.
+    ///
+    /// A part whose platform lives in a bundle names it by path
+    /// (`platform_repl = "@{support}/rp2040.repl"`), so the descriptor string
+    /// alone carries no clock declarations to check. The bundle's files are
+    /// embedded in the binary, so the descriptor loader's clock cross-check
+    /// (`soc::check_clock_declarations`) can read them without touching the
+    /// filesystem, and RP2040 is held to the same rule as every inline part.
+    pub fn repl_sources(&self) -> Vec<String> {
+        self.files
+            .iter()
+            .filter(|f| f.name.ends_with(".repl"))
+            .filter_map(|f| String::from_utf8(f.bytes.to_vec()).ok())
+            .collect()
+    }
+
     /// Write every file to a fresh directory under the system temp dir and
     /// return the directory.
     ///

@@ -1209,6 +1209,28 @@ impl Mcu for QemuBackend {
         self.config.frequency_hz
     }
 
+    /// Backend-wide, not per-part: the ESP32 family's timer-group watchdogs are
+    /// disabled by a `-global` on the QEMU command line
+    /// (`process.rs`, `wdt_disable=true`), so it is a property of how this
+    /// backend launches QEMU rather than of the descriptor.
+    ///
+    /// Disabling them is the right call and stays: co-simulation pauses the
+    /// guest at every chunk boundary while the analog side solves, and a
+    /// running timer-group watchdog would read those pauses as a hung firmware
+    /// and reset a core that is doing nothing wrong. The wrong part was that
+    /// the trade was recorded only in a source comment, where a user reading a
+    /// green report never sees it.
+    fn watchdog_limitation(&self) -> Option<String> {
+        Some(
+            "The ESP32 timer-group watchdogs are disabled in this co-simulator, \
+             because pausing the guest at every chunk boundary would otherwise \
+             trip them. An unserviced task or interrupt watchdog will NOT \
+             reboot the firmware here, however long it is starved, so watchdog \
+             recovery is untested on this run."
+                .to_string(),
+        )
+    }
+
     fn set_digital_in(&mut self, pin: PinId, high: bool) {
         // Drive the firmware-visible input by poking GPIO_IN_REG. Maintain a
         // shadow so we set/clear exactly the addressed bit.
