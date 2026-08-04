@@ -38,6 +38,12 @@ mod protel_ascii;
 pub mod reader;
 pub mod resource_conflict;
 mod schematic;
+/// Whether a parsed `.kicad_sch` is the ROOT of its hierarchy rather than a
+/// sub-sheet. Exported because the distinction decides whether a file can be
+/// extracted at all (a sub-sheet is refused, since its connectivity is only
+/// complete when read through its root), so a caller or a test needs to be able
+/// to ask the same question the reader asks.
+pub use schematic::is_root_sheet as schematic_is_root;
 pub mod si;
 pub mod trace_current;
 

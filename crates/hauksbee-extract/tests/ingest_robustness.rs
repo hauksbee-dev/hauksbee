@@ -36,12 +36,28 @@ fn message_says(msg: &str, phrases: &[&str]) {
     }
 }
 
+/// Guard the guard: these cycle fixtures only exercise the sub-sheet recursion
+/// if they read as ROOT schematics. A sub-sheet is turned away earlier, by the
+/// orphan-sub-sheet check, and the test would then pass without ever reaching
+/// the recursion it exists to protect. Assert the precondition explicitly so
+/// that failure is loud rather than silent.
+fn assert_is_root(name: &str) {
+    let text = read(name);
+    let doc = forge_sexpr::parse(&text).expect("fixture parses");
+    assert!(
+        hauksbee_extract::schematic_is_root(&doc),
+        "{name} must carry (sheet_instances) or the orphan-sub-sheet check \
+         short-circuits this test before the cycle is ever followed"
+    );
+}
+
 #[test]
 fn self_referencing_sheet_does_not_overflow_the_stack() {
     // Found in the wild as a copy-pasted sheet keeping the original's
     // `Sheetfile`. Following it recursed until the thread aborted the whole
     // process with "fatal runtime error: stack overflow": on `hauksbee serve`
     // that is a denial of service, not a bad parse. It must terminate.
+    assert_is_root("sheet_cycle.kicad_sch");
     let board = ExtractedBoard::from_kicad_schematic_path(&fixture("sheet_cycle.kicad_sch"))
         .expect("a sheet cycle must return, not abort");
     assert!(board.components.is_empty(), "the fixture has no symbols");
@@ -49,7 +65,10 @@ fn self_referencing_sheet_does_not_overflow_the_stack() {
 
 #[test]
 fn mutually_referencing_sheets_do_not_overflow_the_stack() {
-    // The two-file form of the same cycle: a -> b -> a.
+    // The two-file form of the same cycle: root a -> sub-sheet b -> back to a.
+    // Entering at the root follows the cycle directly; entering at the
+    // sub-sheet resolves to the root first and then follows it.
+    assert_is_root("sheet_cycle_a.kicad_sch");
     for entry in ["sheet_cycle_a.kicad_sch", "sheet_cycle_b.kicad_sch"] {
         ExtractedBoard::from_kicad_schematic_path(&fixture(entry))
             .unwrap_or_else(|e| panic!("{entry} must return, not abort: {e}"));
