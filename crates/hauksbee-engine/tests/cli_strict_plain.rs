@@ -474,6 +474,12 @@ fn plain_and_strict_compose() {
 
 /// A board with two crossing F.Cu tracks on different nets (a real geometric
 /// short), written at the given `.kicad_pcb` format version.
+///
+/// It carries a benign two-resistor divider as well, and needs to: a board with
+/// no components at all is refused as invalid for analysis on the part-level
+/// paths, because a "clean" verdict over zero parts is vacuous. Without the
+/// divider the `--check` leg below measured that refusal instead of the version
+/// gate it is here to pin. The divider is deliberately uninvolved in the short.
 fn crossing_short_board(version: u32, tag: &str) -> PathBuf {
     let path = std::env::temp_dir().join(format!(
         "hauksbee-vergate-{}-{}-{}.kicad_pcb",

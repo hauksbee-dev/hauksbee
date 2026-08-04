@@ -95,8 +95,8 @@ field name is a loud parse error rather than a value that vanishes.
 | `platform_repl` | yes | string | The platform. See the two forms below |
 | `support_bundle` | no | string | Peripheral models to compile before the platform loads (tier C) |
 | `cpu_path` | yes | string | The CPU for state queries, e.g. `"sysbus.cpu"` |
-| `uart` | no | string | The UART to bridge to a host socket. Omit it for no UART |
-| `frequency_hz` | yes | integer | Advisory clock for the engine's bookkeeping. Renode clocks the platform from the `.repl` |
+| `uart` | no | string | The UART to bridge to a host socket. Omit the field for no UART; a blank string is refused |
+| `frequency_hz` | yes | integer | Advisory: Renode clocks the platform from the `.repl`, so this does not set the emulated clock. It is what `Mcu::frequency` reports, and `Mcu::run_cycles` divides a cycle count by it to get a run window, so 0 is refused |
 | `expected_e_machine` | yes | `EM_ARM`, `EM_RISCV`, `EM_XTENSA`, `EM_AVR` | The ISA gate. A wrong-architecture ELF is refused before it runs as garbage |
 | `mcu_label` | yes | string | The human name in reports and errors |
 | `extra_setup` | no | array of strings | Monitor commands run after the platform loads, before the firmware |
@@ -118,9 +118,9 @@ So a `.repl` is not TOML and never becomes TOML, but it does not have to be a
 separate file: it can be a multi-line string inside one.
 
 The literal `{support}` token in `platform_repl`, `extra_setup` and
-`post_load_setup` is replaced with the unpacked support-bundle directory. With no
-bundle declared it is deliberately left alone, so Renode fails with a path error
-naming the token rather than looking for a file at `/rp2040.repl`.
+`post_load_setup` is replaced with the unpacked support-bundle directory. A
+descriptor that uses the token without declaring a `support_bundle` is refused at
+load, naming the field, because nothing can ever substitute it.
 
 ### `[[soc.ports]]`, one per GPIO port
 
@@ -147,8 +147,11 @@ reported as a drive, which is the conservative answer and the right default.
 suppresses every edge in silence. Add one only once both the offset and the
 emulator model's read-back are verified against a running machine.
 
-Note that `moder` and `stm32f1_crl_crh` decode 16 pins by construction. Pairing
-either with a port wider than 16 drops the top pins' edges silently.
+`moder` and `stm32f1_crl_crh` decode 16 pins by construction, so pairing either
+with a port wider than 16 would drop the top pins' edges silently. That is
+refused at load, naming the port, its width and the encoding: a mask that reads
+as zero above pin 15 is worse than omitting `dir`, which at least reports every
+output-state change. Use `dir_bits`, or narrow the port.
 
 ### `[soc.i2c]`, `[soc.spi]`
 
@@ -178,7 +181,15 @@ Exactly one of the last two. In a `monitor_command`, three tokens are
 substituted: `{count}` for a model fed raw codes, `{millivolts}` for an integer
 millivolt feed, and `{volts}` for a model whose method takes a real voltage.
 Picking the wrong one is silently off by the full-scale factor, so read the
-model's own signature before choosing.
+model's own signature before choosing. Picking none of them is a `models lint`
+finding: the command would run every chunk and feed the same constant, so
+injection would appear to work and never change.
+
+`full_scale_volts` and `max_count` are both divisors in the volts-to-count
+conversion, so a zero `max_count` or a non-positive or non-finite
+`full_scale_volts` is refused at load. So is the same `channel` mapped twice: the
+backend keys injection on the channel index, and the second recipe would shadow
+the first.
 
 A channel with no entry is not faked. Its injections are DROPPED and reported as
 a coverage hole on every surface, so a run whose firmware never received its
@@ -204,17 +215,27 @@ carries mailbox addresses instead of a register offset.
 
 ### What the loader checks, and what it does not
 
-Named, fail-loud errors at load, each aborting the run:
+The loader refuses a descriptor that has no correct execution. Every refusal is a
+named error naming the field, and each aborts the run:
 
 unknown `backend`; a descriptor whose declared backend disagrees with the spec
 that resolved it; a backend this build was not compiled with; an empty
-`platform_repl`; an unknown `expected_e_machine`; an unknown `support_bundle`
-(with the list this build carries); a port of zero width or wider than 32; two
-ports sharing a letter; a duplicated bus controller name; an ADC entry with
-neither or both injection forms; an unknown QEMU `arch`; and, through
-`deny_unknown_fields`, any field name that is not in the tables above.
+`platform_repl`, `machine`, `cpu_path` or `uart`; a `frequency_hz` of 0; a
+`{support}` token in a field with no `support_bundle` to substitute it; an unknown
+`expected_e_machine`; an unknown `support_bundle` (with the list this build
+carries); a port of zero width or wider than 32; two ports sharing a letter; a
+`dir` encoding that decodes fewer pins than its port is wide; a duplicated bus
+controller name; an ADC entry with neither or both injection forms; a duplicated
+ADC `channel`; an ADC `max_count` of 0 or a non-positive or non-finite
+`full_scale_volts`; an unknown QEMU `arch`; and, through `deny_unknown_fields`,
+any field name that is not in the tables above.
 
-What no file check can catch is a *plausible wrong number*. An `odr_offset` from
+Two things the loader accepts and `hauksbee models lint` reports, because both
+execute and what they mean depends on what you meant: a blank `mcu_label` (it
+reaches reports and arch-mismatch errors, never the emulator), and an ADC
+`monitor_command` with no substitution token.
+
+What no check can catch is a *plausible wrong number*. An `odr_offset` from
 the wrong family in the same vendor's range reads a real register that is not the
 output data register, and the co-sim then reports every pin as never driven, with
 no error anywhere. That is why these values are reviewed data with the
@@ -225,15 +246,42 @@ offset off a running machine before trusting it.
 
 Validate and inspect a descriptor without an emulator, firmware or a board:
 
-```bash
-hauksbee models lint mypart.soc.toml
+```
+$ hauksbee models lint crates/hauksbee-mcu/db/mcu/examples/stm32f072.soc.toml
+soc descriptor 'crates/hauksbee-mcu/db/mcu/examples/stm32f072.soc.toml': ok (renode:stm32f072)
+  part: STM32F072 (ARM Cortex-M0) on machine "f072"
+  platform: @platforms/cpus/stm32f072.repl
+  cpu: sysbus.cpu   clock: 8000000 Hz
+  uart bridge: sysbus.usart1
+  gpio port A: 16 pins on sysbus.gpioPortA, output state at +0x14, direction at +0x0 (Moder)
+  ...
+  i2c controllers: none
+  spi controllers: none
+  adc channel 0: 0..4095 counts over 0..3.3 V via monitor "sysbus.adc SetDefaultValue {millivolts} 0"
+  ...
+  setup commands: 0 before the firmware loads, 0 after
+  note: no i2c or spi controllers: a bound sensor is recorded UNEXERCISED and a CI peripheral assertion against it fails
+1 item(s) checked, 0 finding(s): clean
 ```
 
 It runs the same loader a co-sim runs, so "lint said ok" and "the co-sim accepts
-it" cannot disagree, then prints back what the descriptor will actually do (which
-register each port reads, which buses exist, which channels are injectable) and
-notes the capabilities it leaves absent. Run it after every edit. The full boot
-is the last check, not the first.
+it" cannot disagree, then prints back what the descriptor will actually do: which
+register each port reads, which buses exist, which channels are injectable, and a
+`note:` per capability the descriptor leaves absent. Notes are advisories and do
+not affect the exit code. No ADC map and no bus controllers is usually exactly
+right, and a warning about it would train you to ignore the output.
+
+A finding does affect the exit code (2), and names the field:
+
+```
+$ hauksbee models lint mypart.soc.toml
+soc descriptor 'mypart.soc.toml': ERROR: port '0' is 32 bits wide but its dir
+encoding "moder" decodes only 16 pins; pins 16 and above would read as inputs
+and their edges would be dropped silently. Use "dir_bits", or narrow the port
+1 item(s) checked, 1 finding(s)
+```
+
+Run it after every edit. The full boot is the last check, not the first.
 
 ## Tier B, worked: STM32F072 on a stock Renode platform
 
@@ -282,9 +330,9 @@ coincidence that makes the nearest-named descriptor the wrong one to copy.
 
 ### Step 2, build a firmware fixture that drives something, and one that does not
 
-`testdata/firmware/stm32f072_blinky/` is 180 lines of register-level C with no
-vendor SDK, built by `make` with `arm-none-eabi-gcc`. One source produces two
-images, and the second one is the point:
+`testdata/firmware/stm32f072_blinky/` is register-level C with no vendor SDK,
+built by `make` with `arm-none-eabi-gcc`. One source produces two images, and the
+second one is the point:
 
 - `blinky.elf` configures PC6 as an output and toggles it, holds PA5 high,
   brings up USART1 on PA9/PA10, prints a banner, and answers commands;
@@ -478,11 +526,16 @@ copy:
 
 - **No emulator.** The descriptor loads, and the offsets, widths, encodings, ADC
   tokens and empty controller lists are all pinned. Milliseconds, on any machine.
-- **A live boot, two-sided.** `blinky.elf` produces PC6 edges, the USART banner,
-  and exactly the configured-output set the firmware configured (PC6 and PA5, and
-  *not* PA9/PA10, since `moder` does not count alternate-function pins).
-  `quiet.elf` produces no edges, no bytes and no configured outputs. Plus the ADC
-  round trip at three voltages across two channels.
+- **A live boot, two-sided.** `blinky.elf` produces alternating PC6 edges, exactly
+  the 22-byte USART banner, and exactly the configured-output set the firmware
+  configured (PC6 and PA5, and *not* PA9/PA10, since `moder` does not count
+  alternate-function pins). `quiet.elf` produces no edges, no bytes and no
+  configured outputs. Plus the ADC round trip at three voltages across two
+  channels, with the first channel still holding its own value afterwards.
+
+Assert levels and counts, not "something happened": the alternation is what
+distinguishes a toggle from a bridge re-reporting one register value, and an exact
+byte count is what distinguishes the firmware's output from the bridge's.
 
 The live half skips when Renode is absent or the fixtures are not built, and says
 which, so a skip is never mistaken for a pass.
@@ -590,8 +643,9 @@ before.
       transcript is in the file's header comment. Not the datasheet alone: the
       emulator's registration point can differ from the block base, which is the
       exact bug that made the nRF52840's `odr_offset` read zero forever.
-- [ ] A `dir` map is present only if its read-back was verified, and its encoding
-      covers the port's width.
+- [ ] A `dir` map is present only if its read-back was verified against a running
+      machine. That its encoding covers the port's width is enforced at load, so
+      the reviewable half is the read-back.
 - [ ] `[soc.i2c]` and `[soc.spi]` name only controllers a byte has been watched
       to cross. Empty otherwise, with the reason written down.
 - [ ] `[[soc.adc]]` uses the substitution token the model's own method signature
