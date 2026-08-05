@@ -367,14 +367,13 @@ fn soc_inspection(config: &hauksbee_mcu::SocConfig) -> Vec<String> {
             // Unlike the Renode branch, the watchdog statement here is a
             // property of how the backend LAUNCHES QEMU (`wdt_disable=true` for
             // the timer groups) rather than of this file, so the descriptor has
-            // no field to read back. Say where the fact lives instead of
-            // restating the sentence: a second copy of it would be a second
-            // wording to drift.
-            out.push(
-                "watchdog: stated per-backend rather than per-descriptor for this family; the \
-                 qemu backend's own sentence is what a run reports verbatim on every surface"
-                    .to_string(),
-            );
+            // no field to read back. Quote the backend's own constant rather
+            // than restating it: this is the sentence a run reports verbatim on
+            // every surface, and a second copy would be a second wording.
+            out.push(format!(
+                "watchdog: {} (stated per-backend rather than per-descriptor for this family)",
+                hauksbee_mcu::qemu::WATCHDOG_LIMITATION
+            ));
         }
         #[cfg(not(any(feature = "renode", feature = "qemu")))]
         _ => out.push("this build carries no emulator backend".to_string()),

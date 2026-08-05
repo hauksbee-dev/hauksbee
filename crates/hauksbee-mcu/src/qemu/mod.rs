@@ -1187,6 +1187,20 @@ fn parse_leading_int(s: &str) -> Option<i64> {
     digits.parse().ok()
 }
 
+/// Why an ESP32 watchdog cannot bite here, stated once.
+///
+/// Backend-wide rather than per-descriptor: the reason is how this co-simulator
+/// drives QEMU, not anything a part declares. A `const` and not a string built
+/// inside [`Mcu::watchdog_limitation`] so that a static reader, `hauksbee models
+/// lint` in particular, can quote the same sentence a run reports rather than
+/// printing a second wording of it or claiming a fidelity this family does not
+/// have.
+pub const WATCHDOG_LIMITATION: &str =
+    "The ESP32 timer-group watchdogs are disabled in this co-simulator, because \
+     pausing the guest at every chunk boundary would otherwise trip them. An \
+     unserviced task or interrupt watchdog will NOT reboot the firmware here, \
+     however long it is starved, so watchdog recovery is untested on this run.";
+
 impl Mcu for QemuBackend {
     fn load_firmware(&mut self, _path: &Path) -> Result<()> {
         // QEMU boots from the flash image given at spawn; there is no separate
@@ -1221,14 +1235,7 @@ impl Mcu for QemuBackend {
     /// the trade was recorded only in a source comment, where a user reading a
     /// green report never sees it.
     fn watchdog_limitation(&self) -> Option<String> {
-        Some(
-            "The ESP32 timer-group watchdogs are disabled in this co-simulator, \
-             because pausing the guest at every chunk boundary would otherwise \
-             trip them. An unserviced task or interrupt watchdog will NOT \
-             reboot the firmware here, however long it is starved, so watchdog \
-             recovery is untested on this run."
-                .to_string(),
-        )
+        Some(WATCHDOG_LIMITATION.to_string())
     }
 
     fn set_digital_in(&mut self, pin: PinId, high: bool) {
