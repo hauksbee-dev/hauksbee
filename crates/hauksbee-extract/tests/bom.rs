@@ -64,9 +64,11 @@
 use std::path::{Path, PathBuf};
 
 use hauksbee_extract::bom::{
-    Bom, BomDialect, BomError, ColumnOverrides, ColumnRole, MappingConfidence,
+    Bom, BomDetection, BomDialect, BomError, ColumnOverrides, ColumnRole, MappingConfidence,
 };
-use hauksbee_extract::placement::{PlacementDialect, PlacementFile, Side};
+use hauksbee_extract::placement::{
+    PlacementDetection, PlacementDialect, PlacementError, PlacementFile, Side,
+};
 use hauksbee_extract::ExtractedBoard;
 
 fn fixture(rel: &str) -> PathBuf {
@@ -299,6 +301,14 @@ fn the_mapping_used_is_recorded_in_the_shape_the_docs_quote() {
     );
 }
 
+#[test]
+fn rendering_public_provenance_never_panics_on_a_short_digest() {
+    let mut provenance = read_bom("bom/kicad_grouped.csv").provenance;
+    provenance.sha256 = "bad".into();
+    let lines = provenance.lines();
+    assert!(lines[0].contains("sha256 invalid:bad"), "{}", lines[0]);
+}
+
 // ── Refusals, on both their exit code and their message ─────────────────────
 
 #[test]
@@ -378,6 +388,58 @@ fn two_columns_equally_entitled_to_one_role_refuse_rather_than_pick() {
 }
 
 #[test]
+fn side_split_designator_columns_are_combined_without_losing_either_side() {
+    let text = "topDesignator,bottomDesignator,Value,MPN\nR1,C1,10k,RC0402FR-0710KL\nR2,,47k,RC0402FR-0747KL\n,C2,100nF,CC0402KRX7R9BB104\n";
+    let bom = Bom::from_text(text, "two-sides.csv", &ColumnOverrides::new())
+        .expect("a side-split assembly BOM is one coherent reference source");
+
+    assert_eq!(bom.references(), vec!["C1", "C2", "R1", "R2"]);
+    assert_eq!(bom.row_for("R1").map(|r| r.value.as_str()), Some("10k"));
+    assert_eq!(bom.row_for("C1").map(|r| r.value.as_str()), Some("10k"));
+    assert_eq!(bom.row_for("C2").map(|r| r.value.as_str()), Some("100nF"));
+}
+
+#[test]
+fn identically_named_identity_columns_refuse_when_their_cells_disagree() {
+    for (header, row) in [
+        ("MPN", "R1,10k,TPS62130,TPS62135"),
+        ("Value", "R1,10k,10k,47k"),
+        ("DNP", "R1,10k,yes,no"),
+    ] {
+        let text = format!("Designator,Description,{header},{header}\n{row}\n");
+        let err = Bom::from_text(&text, "duplicate.csv", &ColumnOverrides::new())
+            .expect_err("conflicting duplicate identity columns must not first-win");
+        assert!(matches!(err, BomError::AmbiguousColumn { .. }), "{err:?}");
+        assert!(err.to_string().contains("two columns"), "{err}");
+    }
+}
+
+#[test]
+fn a_multiline_quoted_csv_cell_refuses_instead_of_truncating_the_row() {
+    let text = "Designator,Description,Value,MPN\nR1,\"precision resistor\nAEC-Q200 qualified\",10k,RC0402FR-0710KL\n";
+    let err = Bom::from_text(text, "multiline.csv", &ColumnOverrides::new())
+        .expect_err("a physical-line parser must not accept half of a logical CSV row");
+    let message = err.to_string();
+    assert!(message.contains("multiline quoted field"), "{message}");
+    assert!(message.contains("line 2"), "{message}");
+    assert!(message.contains("re-export"), "{message}");
+}
+
+#[test]
+fn windows_1252_bytes_decode_as_windows_1252_not_latin1_controls() {
+    let mut bytes = b"Designator,Value,MPN\nU1,regulator,ABC".to_vec();
+    bytes.push(0x96); // Windows-1252 EN DASH; Latin-1 would produce U+0096.
+    bytes.extend_from_slice(b"123\n");
+
+    let bom = Bom::from_bytes(&bytes, "cp1252.csv", &ColumnOverrides::new())
+        .expect("ordinary spreadsheet code-page output reads");
+    assert_eq!(
+        bom.row_for("U1").and_then(|row| row.mpn.as_deref()),
+        Some("ABC–123")
+    );
+}
+
+#[test]
 fn an_override_naming_a_column_that_is_not_there_says_which_columns_are() {
     let mut ov = ColumnOverrides::new();
     ov.set(ColumnRole::Mpn, "PartNo");
@@ -408,6 +470,25 @@ fn a_bad_column_flag_is_rejected_before_any_file_is_read() {
     );
 }
 
+#[test]
+fn artifact_probing_distinguishes_not_mine_from_an_actionable_candidate() {
+    let ambiguous = b"Designator,Value,MPN,Manufacturer Part Number\nR1,10k,ABC123,XYZ123\n";
+    assert!(matches!(
+        Bom::probe(ambiguous, "ambiguous.csv"),
+        BomDetection::Candidate(BomError::AmbiguousColumn { .. })
+    ));
+    assert!(matches!(
+        Bom::probe(b"name,email\nAda,ada@example.test\n", "people.csv"),
+        BomDetection::NotRecognized
+    ));
+
+    let broken = b"Designator,Mid X,Mid Y,Layer\nR1,left,nowhere,Top\n";
+    assert!(matches!(
+        PlacementFile::probe(broken, "broken-cpl.csv"),
+        PlacementDetection::Candidate(PlacementError::UnreadableCoordinates { .. })
+    ));
+}
+
 // ── The BOM disagreeing with itself ─────────────────────────────────────────
 
 #[test]
@@ -418,6 +499,16 @@ fn a_quantity_that_disagrees_with_its_own_reference_list_is_reported() {
     assert_eq!(bad.len(), 1);
     let (row, stated, enumerated) = bad[0];
     assert_eq!((row.value.as_str(), stated, enumerated), ("10k", 4, 3));
+}
+
+#[test]
+fn a_reference_appearing_in_two_bom_rows_refuses_instead_of_first_winning() {
+    let text = "Designator,Value,MPN\nU1,regulator,TPS62130\nU1,regulator,TPS62135\n";
+    let err = Bom::from_text(text, "duplicate-row.csv", &ColumnOverrides::new())
+        .expect_err("one designator cannot acquire two identities");
+    let message = err.to_string();
+    assert!(message.contains("U1"), "{message}");
+    assert!(message.contains("lines 2 and 3"), "{message}");
 }
 
 // ── Placement files ─────────────────────────────────────────────────────────
@@ -512,4 +603,14 @@ fn a_placement_file_that_is_not_one_refuses() {
     assert_eq!(err.exit_code(), 3);
     let msg = err.to_string();
     assert!(msg.contains("no X and Y"), "{msg}");
+}
+
+#[test]
+fn a_reference_appearing_twice_in_a_placement_file_refuses() {
+    let text = "Designator,Mid X,Mid Y,Layer,Rotation\nU1,1,2,Top,0\nU1,3,4,Bottom,180\n";
+    let err = PlacementFile::from_text(text, "duplicate-cpl.csv")
+        .expect_err("a part cannot be placed twice without an explicit panel model");
+    let message = err.to_string();
+    assert!(message.contains("U1"), "{message}");
+    assert!(message.contains("lines 2 and 3"), "{message}");
 }

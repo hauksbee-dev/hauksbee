@@ -119,6 +119,19 @@ pub enum BomError {
         rows: usize,
     },
 
+    /// One reference designator appears on more than one row, so row order
+    /// would otherwise decide its identity.
+    #[error(
+        "{name} names {reference} on lines {first_line} and {second_line}. One part cannot \
+         take two BOM rows; merge the rows or remove the stale one, then retry"
+    )]
+    DuplicateReference {
+        name: String,
+        reference: String,
+        first_line: usize,
+        second_line: usize,
+    },
+
     /// The file parsed as text but not as a table.
     #[error("{name} is not a readable table: {detail}. Re-export it and retry")]
     Unreadable { name: String, detail: String },
@@ -138,6 +151,19 @@ pub enum BomError {
     /// Reading the file from disk failed.
     #[error("cannot read {name}: {detail}")]
     Io { name: String, detail: String },
+}
+
+/// Result of cheaply probing a neighboring file during drag-and-drop discovery.
+/// A candidate retains its actionable refusal instead of disappearing into a
+/// false `bool` result.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BomDetection {
+    /// The bytes do not have BOM structure.
+    NotRecognized,
+    /// A complete, validated BOM; reuse it rather than parsing twice.
+    Ready(Bom),
+    /// The file is recognizably BOM-shaped but cannot be used safely.
+    Candidate(BomError),
 }
 
 impl BomError {
@@ -424,6 +450,14 @@ impl ColumnMap {
             .map(|a| a.header.as_str())
     }
 
+    fn indices_of(&self, role: ColumnRole) -> Vec<usize> {
+        self.used
+            .iter()
+            .filter(|a| a.role == role)
+            .map(|a| a.index)
+            .collect()
+    }
+
     /// The lines a report prints so the mapping actually used is never
     /// invisible. Recording the mapping is half the contract: a run that
     /// proceeds on a detected mapping must say which one it used.
@@ -574,8 +608,10 @@ impl BomProvenance {
     pub fn lines(&self) -> Vec<String> {
         let sha = if self.sha256.is_empty() {
             String::new()
-        } else {
+        } else if self.sha256.len() == 64 && self.sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
             format!(", sha256 {}", &self.sha256[..8])
+        } else {
+            format!(", sha256 invalid:{}", self.sha256)
         };
         let mut out = vec![format!("{} ({}{sha})", self.path, self.kind)];
         out.extend(self.column_map.lines());
@@ -670,11 +706,16 @@ impl Bom {
     /// Does this file look like a BOM at all? Cheap enough to run over every
     /// file beside a board, so a caller can find the BOM without being told.
     pub fn detects(bytes: &[u8]) -> bool {
-        let text = decode(bytes);
-        // The FULL read, not just the table search. A cheaper check that says yes
-        // where `read` says exit 3 would send a caller that autodetects the BOM
-        // beside a board straight into a refusal it did not ask for.
-        Self::parse(&text, "", "", &ColumnOverrides::new()).is_ok()
+        matches!(Self::probe(bytes, ""), BomDetection::Ready(_))
+    }
+
+    /// Probe a possible BOM without discarding a recognized file's diagnostic.
+    pub fn probe(bytes: &[u8], name: &str) -> BomDetection {
+        match Self::from_bytes(bytes, name, &ColumnOverrides::new()) {
+            Ok(bom) => BomDetection::Ready(bom),
+            Err(BomError::Empty { .. } | BomError::NotABom { .. }) => BomDetection::NotRecognized,
+            Err(error) => BomDetection::Candidate(error),
+        }
     }
 
     /// Every reference designator the BOM mentions, sorted and deduplicated.
@@ -747,10 +788,20 @@ impl Bom {
                 name: name.to_string(),
             });
         }
+        if let Some(line) = multiline_quoted_field_start(text) {
+            return Err(BomError::Unreadable {
+                name: name.to_string(),
+                detail: format!(
+                    "a multiline quoted field starts on line {line}; this reader refuses it \
+                     rather than splitting one logical CSV record into several parts; re-export \
+                     it without embedded line breaks"
+                ),
+            });
+        }
         let table = read_table(text, name)?;
         let dialect = table.dialect;
         let map = map_columns(&table, dialect, overrides, name)?;
-        let ref_index = map.index_of(ColumnRole::Reference).expect("mapped above");
+        let ref_indices = map.indices_of(ColumnRole::Reference);
         let ref_header = map
             .header_of(ColumnRole::Reference)
             .unwrap_or_default()
@@ -769,12 +820,18 @@ impl Bom {
                 let v = row.cells.get(i)?.trim();
                 (!v.is_empty() && v != "~" && v != "-").then(|| v.to_string())
             };
-            let raw_refs = row.cells.get(ref_index).map(String::as_str).unwrap_or("");
+            let raw_refs = ref_indices
+                .iter()
+                .filter_map(|i| row.cells.get(*i))
+                .map(String::as_str)
+                .filter(|cell| !cell.trim().is_empty())
+                .collect::<Vec<_>>()
+                .join(",");
             if raw_refs.trim().is_empty() {
                 continue;
             }
             rows_seen += 1;
-            let (references, placeholders) = split_references(raw_refs);
+            let (references, placeholders) = split_references(&raw_refs);
             skipped_placeholders.extend(placeholders);
             if references.is_empty() {
                 continue;
@@ -801,6 +858,26 @@ impl Bom {
                 column: ref_header,
                 rows: table.rows.len().max(rows_seen),
             });
+        }
+
+        let mut first_lines = std::collections::BTreeMap::<&str, usize>::new();
+        for row in &rows {
+            for reference in &row.references {
+                // A caller-confirmed customer-reference column can contain
+                // assembly-group prose alongside real designators. Repeated
+                // prose is not a duplicated component identity.
+                if !has_designator_shape(reference) {
+                    continue;
+                }
+                if let Some(first_line) = first_lines.insert(reference, row.line) {
+                    return Err(BomError::DuplicateReference {
+                        name: name.to_string(),
+                        reference: reference.clone(),
+                        first_line,
+                        second_line: row.line,
+                    });
+                }
+            }
         }
 
         let with_mpn = rows.iter().filter(|r| r.mpn.is_some()).count();
@@ -959,9 +1036,11 @@ pub(crate) fn decode(bytes: &[u8]) -> String {
     let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
     let text = match std::str::from_utf8(bytes) {
         Ok(s) => s.to_string(),
-        // Not UTF-8: treat it as Latin-1, which is what a Windows-1252 export
-        // is for every character a BOM actually uses.
-        Err(_) => bytes.iter().map(|&b| b as char).collect(),
+        // Spreadsheet exports commonly use Windows-1252. Its 0x80..0x9f range
+        // is punctuation and currency symbols, not the Latin-1 control range,
+        // so a byte-for-codepoint fallback corrupts ordinary descriptions and
+        // part numbers.
+        Err(_) => encoding_rs::WINDOWS_1252.decode(bytes).0.into_owned(),
     };
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
@@ -1036,8 +1115,9 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     h.iter().map(|x| format!("{x:08x}")).collect()
 }
 
-/// Split one delimited line, honouring RFC 4180 double quoting (a doubled quote
-/// inside a quoted field is one literal quote).
+/// Split one physical delimited line, honouring RFC 4180-style double quoting
+/// within that line (a doubled quote inside a quoted field is one literal
+/// quote). Multiline quoted fields are refused before this function is called.
 ///
 /// Hand-rolled rather than pulled in: the whole job is thirty lines, and the
 /// alternative is a new workspace dependency for every consumer of this crate.
@@ -1059,6 +1139,34 @@ pub(crate) fn split_delimited(line: &str, delim: char) -> Vec<String> {
     }
     out.push(cur);
     out.iter().map(|s| s.trim().to_string()).collect()
+}
+
+/// The first physical line whose quoted field continues over a line break.
+/// Returning the opening line makes the refusal actionable and, crucially,
+/// prevents the continuation from being parsed as a second component row.
+fn multiline_quoted_field_start(text: &str) -> Option<usize> {
+    let mut in_quotes = false;
+    let mut opened_on = 0usize;
+    for (line_index, line) in text.lines().enumerate() {
+        let mut chars = line.chars().peekable();
+        while let Some(ch) = chars.next() {
+            if ch != '"' {
+                continue;
+            }
+            if in_quotes && chars.peek() == Some(&'"') {
+                chars.next();
+                continue;
+            }
+            in_quotes = !in_quotes;
+            if in_quotes {
+                opened_on = line_index + 1;
+            }
+        }
+        if in_quotes {
+            return Some(opened_on);
+        }
+    }
+    None
 }
 
 /// The delimiter a line is most likely split on. Tab is checked before comma so
@@ -1609,9 +1717,28 @@ fn map_columns(
     let mut map = ColumnMap::default();
     for (role, mut candidates) in per_role {
         candidates.sort_by_key(|c| (c.confidence, c.index));
-        // Two columns spelled the same way are one column duplicated, not two
-        // competing claims: `Value` beside `VALUE`, or `Footprint` twice, are both
-        // real in exports, and taking the first is the only sane reading.
+        // Duplicate spellings are harmless only when they duplicate the data as
+        // well. Exporters do produce `Value` beside `VALUE`, but hand-edited
+        // sheets also leave two identically named columns carrying different
+        // revisions. The latter must not silently first-win.
+        for (i, left) in candidates.iter().enumerate() {
+            for right in candidates.iter().skip(i + 1) {
+                if left.header.trim().eq_ignore_ascii_case(right.header.trim())
+                    && !columns_equivalent(table, left.index, right.index)
+                {
+                    return Err(BomError::AmbiguousColumn {
+                        name: name.to_string(),
+                        role: role.flag_name().to_string(),
+                        headers: format!(
+                            "{:?} at columns {} and {}",
+                            left.header,
+                            left.index + 1,
+                            right.index + 1
+                        ),
+                    });
+                }
+            }
+        }
         let mut seen: Vec<String> = Vec::new();
         candidates.retain(|c| {
             let key = normalise_header(&c.header);
@@ -1644,6 +1771,20 @@ fn map_columns(
                     .collect::<Vec<_>>()
                     .join(" and "),
             });
+        }
+
+        if one_column_in_halves {
+            for candidate in candidates
+                .into_iter()
+                .filter(|candidate| candidate.confidence == best)
+            {
+                if candidate.confidence.usable_unattended() {
+                    map.used.push(candidate);
+                } else {
+                    map.left_unmapped.push(candidate);
+                }
+            }
+            continue;
         }
 
         let chosen = candidates.remove(0);
@@ -1689,6 +1830,19 @@ fn map_columns(
         .map(|(_, h)| h.clone())
         .collect();
     Ok(map)
+}
+
+fn columns_equivalent(table: &Table, left: usize, right: usize) -> bool {
+    table.rows.iter().all(|row| {
+        let cell = |index| {
+            row.cells
+                .get(index)
+                .map(String::as_str)
+                .unwrap_or("")
+                .trim()
+        };
+        cell(left) == cell(right)
+    })
 }
 
 /// True when the tied reference candidates are the top/bottom pair a

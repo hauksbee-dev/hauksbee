@@ -114,8 +114,27 @@ pub enum PlacementError {
     )]
     NoPlacements { name: String, dialect: &'static str },
 
+    #[error(
+        "{name} places {reference} on lines {first_line} and {second_line}. A part may appear \
+         only once unless a panel is modelled explicitly; export one board instance and retry"
+    )]
+    DuplicateReference {
+        name: String,
+        reference: String,
+        first_line: usize,
+        second_line: usize,
+    },
+
     #[error("cannot read {name}: {detail}")]
     Io { name: String, detail: String },
+}
+
+/// Tri-state result for discovering placement artifacts beside a board.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PlacementDetection {
+    NotRecognized,
+    Ready(PlacementFile),
+    Candidate(PlacementError),
 }
 
 impl PlacementError {
@@ -313,8 +332,18 @@ impl PlacementFile {
     /// Does this file look like a placement file? Cheap enough to run over every
     /// file beside a board.
     pub fn detects(bytes: &[u8]) -> bool {
-        let text = decode(bytes);
-        Self::parse(&text, "", "").is_ok()
+        matches!(Self::probe(bytes, ""), PlacementDetection::Ready(_))
+    }
+
+    /// Probe without collapsing a recognizable but unsafe artifact into false.
+    pub fn probe(bytes: &[u8], name: &str) -> PlacementDetection {
+        match Self::from_bytes(bytes, name) {
+            Ok(file) => PlacementDetection::Ready(file),
+            Err(PlacementError::Empty { .. } | PlacementError::NotAPlacementFile { .. }) => {
+                PlacementDetection::NotRecognized
+            }
+            Err(error) => PlacementDetection::Candidate(error),
+        }
     }
 
     /// The placement of one reference designator, if the file has it.
@@ -575,6 +604,18 @@ impl PlacementFile {
                     rows: rows.max(no_designator),
                 }
             });
+        }
+
+        let mut first_lines = std::collections::BTreeMap::<&str, usize>::new();
+        for placement in &placements {
+            if let Some(first_line) = first_lines.insert(&placement.reference, placement.line) {
+                return Err(PlacementError::DuplicateReference {
+                    name: name.to_string(),
+                    reference: placement.reference.clone(),
+                    first_line,
+                    second_line: placement.line,
+                });
+            }
         }
 
         let sides = placements.iter().filter(|p| p.side == Side::Bottom).count();
