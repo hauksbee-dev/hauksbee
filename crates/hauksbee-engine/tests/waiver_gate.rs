@@ -249,9 +249,10 @@ fn assert_waiver_parity(dir: &Path, board: &Path, flag: &str, check: &str, kind:
     // (b) An active waiver takes the finding out of the gate, out loud.
     write_waiver(dir, check, kind, nets, "2099-01-01");
     let (code, out) = single_check_strict(board, flag);
+    let expected_code = if flag == "--lint" { 3 } else { 0 };
     assert_eq!(
-        code, 0,
-        "{flag} --strict must honour the same waiver --check does:\n{out}"
+        code, expected_code,
+        "{flag} must remove the waived finding from the gate without turning independently undermined evidence green:\n{out}"
     );
     assert!(
         out.contains("Waived"),

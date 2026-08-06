@@ -9,6 +9,53 @@ use std::path::Path;
 
 use crate::result::JsonFinding;
 
+/// Convert non-clean evidence statuses into the same finding vocabulary CI
+/// writers already consume. Undermined evidence is gate-grade; qualified
+/// evidence remains visible without becoming green-by-omission.
+pub fn evidence_findings(maps: &[hauksbee_ir::evidence::EvidenceMap]) -> Vec<JsonFinding> {
+    use hauksbee_ir::evidence::EvidenceStatus;
+    maps.iter()
+        .filter_map(|map| {
+            let (severity, prefix) = match map.status() {
+                EvidenceStatus::Clean => return None,
+                EvidenceStatus::Qualified => ("warning", "QUALIFIED evidence"),
+                EvidenceStatus::Undermined => ("serious", "INVALID evidence"),
+            };
+            Some(JsonFinding {
+                check: "evidence".into(),
+                kind: map.status().as_str().into(),
+                severity: severity.into(),
+                nets: Vec::new(),
+                location_mm: None,
+                layer: None,
+                refs: Vec::new(),
+                actionable: true,
+                message: format!("{prefix}: {}", map.assertion()),
+                plain: format!("{prefix}: {}", map.assertion()),
+                fix: Some("resolve the cited assumptions, then re-run the assertion".into()),
+            })
+        })
+        .collect()
+}
+
+/// GitHub annotations for evidence that is not entitled to a clean result.
+pub fn github_evidence_annotations(maps: &[hauksbee_ir::evidence::EvidenceMap]) {
+    if std::env::var_os("GITHUB_ACTIONS").is_none() {
+        return;
+    }
+    for finding in evidence_findings(maps) {
+        let level = if finding.severity == "serious" {
+            "error"
+        } else {
+            "warning"
+        };
+        eprintln!(
+            "::{level} title=hauksbee evidence {}::{}",
+            finding.kind, finding.message
+        );
+    }
+}
+
 /// The one SARIF schema URL this writer targets, pinned so a consumer (GitHub
 /// code scanning validates against it) never sees a drifting reference. A unit
 /// test asserts the emitted document carries exactly this URL.
@@ -254,5 +301,42 @@ mod tests {
         assert!(
             esc.contains("x&lt;y") && esc.contains("A&amp;B") && esc.contains("m&quot;q&quot;")
         );
+    }
+
+    #[test]
+    fn undermined_evidence_is_a_failure_on_junit_and_sarif() {
+        use hauksbee_ir::evidence::{
+            Assumption, CausalPathIndex, EvidenceMap, EvidenceRegistry, NetScope, RunDate,
+        };
+        let registry = EvidenceRegistry::new(vec![Assumption::open_part(
+            "U9",
+            "regulator",
+            "no model matched",
+        )])
+        .unwrap();
+        let graph = CausalPathIndex::from_net_parts([("VBUS", ["U9"].as_slice())]).unwrap();
+        let traversal = graph
+            .traverse(&NetScope::new(["VBUS"], None).unwrap(), &registry)
+            .unwrap();
+        let map = EvidenceMap::from_traversal(
+            "VBUS peak stays below 5.5 V",
+            traversal,
+            &registry,
+            RunDate::from_epoch_days(20_666),
+        )
+        .unwrap();
+        let evidence = evidence_findings(&[map]).pop().unwrap();
+        assert_eq!(evidence.severity, "serious");
+        assert_eq!(evidence.kind, "undermined");
+        let junit = junit_xml("b", &[evidence.clone()]);
+        assert!(junit.contains("<failure"), "{junit}");
+        assert!(junit.contains("INVALID evidence"), "{junit}");
+        let sarif = sarif_json(Path::new("b.kicad_pcb"), &[evidence]);
+        let value: serde_json::Value = serde_json::from_str(&sarif).unwrap();
+        assert_eq!(value["runs"][0]["results"][0]["level"], "error");
+        assert!(value["runs"][0]["results"][0]["message"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("INVALID evidence"));
     }
 }

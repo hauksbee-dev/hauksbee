@@ -1,4 +1,4 @@
-use hauksbee_engine::result::{BindSummary, JsonFinding, JsonReport};
+use hauksbee_engine::result::{BindSummary, DrcShort, DrcStructured, JsonFinding, JsonReport};
 use hauksbee_engine::{bind_board, BoardEvidence};
 use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
 use hauksbee_ir::evidence::{EvidenceStatus, RunDate};
@@ -103,6 +103,97 @@ fn actual_finding_scope_selects_only_its_causal_path() {
     assert_eq!(maps[0].assertion(), "3V3 assertion");
     assert_eq!(maps[0].status(), EvidenceStatus::Undermined);
     assert_eq!(maps[0].assumptions().len(), 1);
+}
+
+#[test]
+fn drc_short_evidence_is_geometry_causal_and_cites_the_layout_artifact() {
+    let board = board();
+    let bound = bind_board(&board, &ModelLibrary::builtin());
+    let evidence =
+        BoardEvidence::from_bound(&board, &bound.report, &[], RunDate::from_epoch_days(20_666))
+            .unwrap()
+            .with_input_artifact(
+                "fixture.kicad_pcb",
+                b"(kicad_pcb (net 1 \"3V3\"))",
+                hauksbee_engine::board_input::InputKind::Text,
+            )
+            .unwrap();
+    let drc = DrcStructured {
+        clearance_rule_mm: 0.2,
+        primitive_count: 2,
+        shorts: vec![DrcShort {
+            net_a: "3V3".into(),
+            net_b: "GND".into(),
+            layer: "F.Cu".into(),
+            loc_mm: [1.0, 2.0],
+            gap_mm: 0.0,
+            severity: "serious".into(),
+            plain: "3V3 shorts GND".into(),
+            fix: "separate copper".into(),
+        }],
+        violations: vec![],
+        at_limit: vec![],
+        version_warning: None,
+    };
+
+    let maps = evidence.maps_for_drc(&drc).unwrap();
+    assert_eq!(maps.len(), 1);
+    assert!(maps[0].assertion().contains("3V3 shorts GND"));
+    assert_eq!(maps[0].status(), EvidenceStatus::Clean);
+    assert!(
+        maps[0].assumptions().is_empty(),
+        "R74 being open is not causal to copper geometry"
+    );
+    assert_eq!(maps[0].artifacts().len(), 1);
+    assert_eq!(evidence.inventory().len(), 1);
+    assert_eq!(evidence.inventory()[0].sha256().len(), 64);
+}
+
+#[test]
+fn numeric_simulation_assertions_carry_budget_and_semantic_substitution_only() {
+    let board = board();
+    let bound = bind_board(&board, &ModelLibrary::builtin());
+    let evidence =
+        BoardEvidence::from_bound(&board, &bound.report, &[], RunDate::from_epoch_days(20_666))
+            .unwrap()
+            .with_input_artifact(
+                "fixture.kicad_pcb",
+                b"(kicad_pcb)",
+                hauksbee_engine::board_input::InputKind::Text,
+            )
+            .unwrap()
+            .with_firmware_artifact("firmware.elf", b"\x7fELFfixture")
+            .unwrap()
+            .with_substitutions(&[hauksbee_engine::scheduler::McuSubstitution {
+                reference: "R1".into(),
+                backend: "renode:fixture".into(),
+                requested_part: "real-part".into(),
+                modelled_core: "stand-in-core".into(),
+            }])
+            .unwrap();
+    let budget =
+        BoardEvidence::transient_error_budget(0.0, 0.01, 0.001, &[(0.004, 0.005)], &[]).unwrap();
+    let map = evidence
+        .simulation_map(
+            "VBUS peak stays below 5.5 V",
+            &["VBUS".to_string()],
+            &[],
+            Some(budget),
+        )
+        .unwrap();
+
+    assert_eq!(map.status(), EvidenceStatus::Undermined);
+    assert!(map.error_budget().is_some());
+    assert_eq!(map.error_budget().unwrap().failed_windows().len(), 1);
+    assert_eq!(
+        map.artifacts().len(),
+        2,
+        "board and firmware are causal inputs"
+    );
+    assert!(evidence
+        .assumptions()
+        .iter()
+        .any(|a| a.kind() == hauksbee_ir::evidence::AssumptionKind::SubstituteModel));
 }
 
 #[test]

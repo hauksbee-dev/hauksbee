@@ -68,14 +68,26 @@ pub fn emit(
         &bound.report,
         reader_notes,
         hauksbee_ir::evidence::RunDate::from_system_clock(),
+    )?
+    .with_input_artifact(
+        board_path,
+        raw,
+        if altium_present {
+            crate::board_input::InputKind::Altium
+        } else {
+            crate::board_input::InputKind::Text
+        },
     )?;
+    let structured = DrcStructured::from_report(&report);
+    let maps = evidence.maps_for_drc(&structured)?;
+    let evidence = evidence.with_maps(maps);
     match mode {
         OutputMode::Json => {
             // Grouped DRC (Fix #8): shorts kept verbatim, clearance findings
             // grouped by (net_a, net_b, layer), at-limit separated from below-rule.
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
                 .with_evidence(&evidence);
-            jr.drc = Some(DrcStructured::from_report(&report));
+            jr.drc = Some(structured.clone());
             if unrouted {
                 jr.notes.push(crate::result::JsonNote {
                     kind: crate::result::JsonNoteKind::Coverage,
@@ -96,10 +108,7 @@ pub fn emit(
             // "at minimum clearance (no margin)" rather than the wrong "below".
             // Repeated near-identical clearance findings condense to aggregate
             // lines past the first few; --verbose restores every instance.
-            print!(
-                "{}",
-                crate::render_drc_condensed(&DrcStructured::from_report(&report), verbose)
-            );
+            print!("{}", crate::render_drc_condensed(&structured, verbose));
         }
         OutputMode::Text => {
             if unrouted {
@@ -108,7 +117,7 @@ pub fn emit(
             // Grouped, honest DRC: one line per (net pair + cause) with a count,
             // and gap==rule labelled "at minimum clearance (no margin)" rather
             // than the wrong "below the spacing the board asks for" (Fix #8).
-            print!("{}", DrcStructured::from_report(&report).render());
+            print!("{}", structured.render());
         }
     }
     if oracle && mode != OutputMode::Json {

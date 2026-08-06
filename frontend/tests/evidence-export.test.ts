@@ -14,6 +14,12 @@ test('the human export preserves evidence status and the actionable assumption c
     total: 0,
     sections: [],
     components: [],
+    inventory: [{
+      path: 'rail-check.kicad_pcb',
+      kind: 'ki_cad_pcb',
+      role: 'layout',
+      sha256: 'a'.repeat(64),
+    }],
     assumptions: [{
       id: 'open-part:U9',
       kind: 'open_part',
@@ -44,6 +50,8 @@ test('the human export preserves evidence status and the actionable assumption c
     restored: false,
   })
   expect(html).toContain('Evidence &amp; limitations')
+  expect(html).toContain('Input artifacts')
+  expect(html).toContain('sha256:' + 'a'.repeat(64))
   expect(html).toContain('3V3 stays above 3.1 V')
   expect(html).toContain('undermined')
   expect(html).toContain('U9 is treated as an open circuit.')
