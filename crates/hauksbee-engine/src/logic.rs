@@ -190,15 +190,22 @@ struct CompMemory {
     name: String,
     mask: u64,
     address: Vec<usize>,
-    write: Option<(usize, Edge)>,
-    prev_write: bool,
-    write_gates: Vec<(usize, Level)>,
+    writes: Vec<CompMemoryWrite>,
     read_gates: Vec<(usize, Level)>,
     data_in_names: Vec<String>,
     data_in_levels: Vec<bool>,
     data_out: Vec<usize>,
     byte_load_timeout_s: Option<f64>,
+    program_time_s: Option<f64>,
     storage: Arc<Mutex<ParallelMemoryStorage>>,
+}
+
+#[derive(Debug, Clone)]
+struct CompMemoryWrite {
+    pin: usize,
+    edge: Edge,
+    prev: bool,
+    gates: Vec<(usize, Level)>,
 }
 
 #[derive(Debug)]
@@ -226,9 +233,239 @@ struct ProtectedWriteWindow {
 struct ParallelMemoryStorage {
     cells: Box<[u64]>,
     protection: Option<SoftwareProtectionState>,
+    page_words: usize,
+    timed_page: Option<TimedPage>,
+    busy: Option<TimedProgram>,
+    last_timed_write_cycle: Option<u64>,
+}
+
+#[derive(Debug)]
+struct TimedPage {
+    page: usize,
+    values: Vec<(usize, u64)>,
+    load_count: usize,
+    last_cycle: u64,
+    poll_value: u64,
+}
+
+#[derive(Debug)]
+struct TimedProgram {
+    until_cycle: u64,
+    values: Vec<(usize, u64)>,
+    poll_value: u64,
+    toggle: bool,
 }
 
 impl ParallelMemoryStorage {
+    fn advance_timed(&mut self, cycle: u64) {
+        let complete = self
+            .busy
+            .as_ref()
+            .is_some_and(|busy| cycle >= busy.until_cycle);
+        if complete {
+            let busy = self.busy.take().expect("completion checked above");
+            for (address, value) in busy.values {
+                self.cells[address] = value;
+            }
+        }
+    }
+
+    fn begin_program(&mut self, program_cycles: u64) {
+        let Some(page) = self.timed_page.take() else {
+            return;
+        };
+        self.busy = Some(TimedProgram {
+            until_cycle: page.last_cycle.saturating_add(program_cycles),
+            values: page.values,
+            poll_value: page.poll_value,
+            toggle: false,
+        });
+    }
+
+    fn timed_write(
+        &mut self,
+        address: usize,
+        value: u64,
+        mask: u64,
+        cycle: u64,
+        timeout_cycles: u64,
+        program_cycles: u64,
+    ) -> bool {
+        if address >= self.cells.len() {
+            return false;
+        }
+        self.advance_timed(cycle);
+        if self.busy.is_some() {
+            // A write during the internal program cycle is inhibited.
+            return true;
+        }
+        let page = address / self.page_words;
+        let closes_previous = self.timed_page.as_ref().is_some_and(|pending| {
+            page != pending.page
+                || cycle < pending.last_cycle
+                || cycle - pending.last_cycle > timeout_cycles
+                || pending.load_count >= self.page_words
+        });
+        if closes_previous {
+            self.begin_program(program_cycles);
+            self.advance_timed(cycle);
+            if self.busy.is_some() {
+                return true;
+            }
+        }
+
+        let value = value & mask;
+        // Run the protection protocol, but move any resulting cell changes
+        // into the page latch until the internal program cycle completes.
+        let mut watched = vec![address];
+        if let Some(protection) = &self.protection {
+            watched.extend(
+                protection
+                    .command_buffer
+                    .iter()
+                    .map(|(address, _)| *address),
+            );
+        }
+        watched.sort_unstable();
+        watched.dedup();
+        let before: Vec<(usize, u64)> = watched
+            .iter()
+            .map(|&candidate| (candidate, self.cells[candidate]))
+            .collect();
+        let protection_was_enabled = self.protection.as_ref().is_some_and(|p| p.enabled);
+        let accepted = self.write(address, value, mask, false);
+        self.last_timed_write_cycle = Some(cycle);
+        let mut changes = Vec::new();
+        for (candidate, old) in before {
+            let new = self.cells[candidate];
+            if new != old {
+                changes.push((candidate, new));
+                self.cells[candidate] = old;
+            }
+        }
+        if changes.is_empty() {
+            let blocked_attempt = self.protection.as_ref().is_some_and(|protection| {
+                protection.enabled
+                    && protection.write_window.is_none()
+                    && protection.command_buffer.is_empty()
+            });
+            if blocked_attempt {
+                self.busy = Some(TimedProgram {
+                    until_cycle: cycle.saturating_add(program_cycles),
+                    values: Vec::new(),
+                    poll_value: value,
+                    toggle: false,
+                });
+            } else if protection_was_enabled && self.protection.as_ref().is_some_and(|p| !p.enabled)
+            {
+                // The final SDP-disable command itself has a write-cycle
+                // recovery interval even though it changes no array byte.
+                self.busy = Some(TimedProgram {
+                    until_cycle: cycle.saturating_add(program_cycles),
+                    values: Vec::new(),
+                    poll_value: value,
+                    toggle: false,
+                });
+            }
+            return accepted;
+        }
+        let pending = self.timed_page.get_or_insert_with(|| TimedPage {
+            page,
+            values: Vec::new(),
+            load_count: 0,
+            last_cycle: cycle,
+            poll_value: value,
+        });
+        for (changed_address, changed_value) in changes {
+            if let Some(existing) = pending
+                .values
+                .iter_mut()
+                .find(|(staged_address, _)| *staged_address == changed_address)
+            {
+                existing.1 = changed_value;
+            } else {
+                pending.values.push((changed_address, changed_value));
+            }
+        }
+        pending.last_cycle = cycle;
+        pending.load_count += 1;
+        pending.poll_value = value;
+        accepted
+    }
+
+    fn timed_read(
+        &mut self,
+        address: usize,
+        mask: u64,
+        cycle: u64,
+        program_cycles: u64,
+    ) -> Option<u64> {
+        if address >= self.cells.len() {
+            return None;
+        }
+        // An incomplete command-looking prefix is disambiguated by a read.
+        // Unprotected prefixes are ordinary bytes and therefore still need a
+        // program interval; protected prefixes are rejected attempts which
+        // enter busy without mutating the array.
+        if self.timed_page.is_none()
+            && self
+                .protection
+                .as_ref()
+                .is_some_and(|p| !p.command_buffer.is_empty())
+        {
+            let protected = self.protection.as_ref().is_some_and(|p| p.enabled);
+            let pending: Vec<usize> = self
+                .protection
+                .as_ref()
+                .into_iter()
+                .flat_map(|p| p.command_buffer.iter().map(|(address, _)| *address))
+                .collect();
+            let before: Vec<(usize, u64)> = pending
+                .iter()
+                .map(|&candidate| (candidate, self.cells[candidate]))
+                .collect();
+            let poll_value = self
+                .protection
+                .as_ref()
+                .and_then(|p| p.command_buffer.last().map(|(_, value)| *value))
+                .unwrap_or(0);
+            self.finish_write_period();
+            let mut values = Vec::new();
+            for (candidate, old) in before {
+                let new = self.cells[candidate];
+                if new != old {
+                    values.push((candidate, new));
+                    self.cells[candidate] = old;
+                }
+            }
+            if protected || !values.is_empty() {
+                self.busy = Some(TimedProgram {
+                    until_cycle: self
+                        .last_timed_write_cycle
+                        .unwrap_or(cycle)
+                        .saturating_add(program_cycles),
+                    values,
+                    poll_value,
+                    toggle: false,
+                });
+            }
+        }
+        if self.timed_page.is_some() {
+            self.begin_program(program_cycles);
+        }
+        self.advance_timed(cycle);
+        if let Some(busy) = &mut self.busy {
+            let mut value = self.cells[address] & mask;
+            // AT28 data polling: I/O7 is the complement of the last loaded
+            // data bit and I/O6 toggles on consecutive reads.
+            value = (value & !(1 << 7)) | ((!busy.poll_value) & (1 << 7));
+            busy.toggle = !busy.toggle;
+            value = (value & !(1 << 6)) | (u64::from(busy.toggle) << 6);
+            return Some(value & mask);
+        }
+        self.read(address, mask)
+    }
+
     fn finish_write_period(&mut self) {
         if let Some(protection) = &mut self.protection {
             protection.write_window = None;
@@ -340,14 +577,21 @@ impl ParallelMemoryStorage {
 pub(crate) struct ParallelMemoryPort {
     pub name: String,
     pub address: Vec<String>,
-    pub write: Option<(String, Edge)>,
-    pub write_gates: Vec<(String, Level)>,
+    pub writes: Vec<ParallelMemoryWritePort>,
     pub read_gates: Vec<(String, Level)>,
     pub data_in: Vec<String>,
     pub data_out: Vec<String>,
     pub byte_load_timeout_s: Option<f64>,
+    pub program_time_s: Option<f64>,
     storage: Arc<Mutex<ParallelMemoryStorage>>,
     mask: u64,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct ParallelMemoryWritePort {
+    pub pin: String,
+    pub edge: Edge,
+    pub gates: Vec<(String, Level)>,
 }
 
 impl ParallelMemoryPort {
@@ -366,6 +610,15 @@ impl ParallelMemoryPort {
             .read(address, self.mask)
     }
 
+    pub fn read_at(&self, address: usize, cycle: u64, frequency_hz: u64) -> Option<u64> {
+        let program_s = self.program_time_s?;
+        let program_cycles = seconds_to_cycles(program_s, frequency_hz);
+        self.storage
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .timed_read(address, self.mask, cycle, program_cycles)
+    }
+
     #[cfg(test)]
     pub fn write(&self, address: usize, value: u64) -> bool {
         self.storage
@@ -380,6 +633,32 @@ impl ParallelMemoryPort {
             .unwrap_or_else(|e| e.into_inner())
             .write(address, value, self.mask, gap_exceeded)
     }
+
+    pub fn write_at(&self, address: usize, value: u64, cycle: u64, frequency_hz: u64) -> bool {
+        let Some(program_s) = self.program_time_s else {
+            return self.write_after_gap(address, value, false);
+        };
+        let timeout_cycles = self
+            .byte_load_timeout_s
+            .map(|seconds| seconds_to_cycles(seconds, frequency_hz))
+            .unwrap_or(0);
+        let program_cycles = seconds_to_cycles(program_s, frequency_hz);
+        self.storage
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .timed_write(
+                address,
+                value,
+                self.mask,
+                cycle,
+                timeout_cycles,
+                program_cycles,
+            )
+    }
+}
+
+fn seconds_to_cycles(seconds: f64, frequency_hz: u64) -> u64 {
+    (seconds * frequency_hz.max(1) as f64).ceil().max(1.0) as u64
 }
 
 /// One bound, compiled `[models.logic]` part: pin tables, register state,
@@ -558,15 +837,31 @@ impl LogicComponent {
                 name: m.name.clone(),
                 mask,
                 address: m.address.iter().map(|p| input_idx[p.as_str()]).collect(),
-                write: m
+                writes: m
                     .write
-                    .as_ref()
-                    .map(|w| (input_idx[w.pin.as_str()], w.edge)),
-                prev_write: false,
-                write_gates: m
-                    .write_gates
                     .iter()
-                    .map(|g| (input_idx[g.pin.as_str()], g.active))
+                    .map(|w| CompMemoryWrite {
+                        pin: input_idx[w.pin.as_str()],
+                        edge: w.edge,
+                        prev: false,
+                        gates: m
+                            .write_gates
+                            .iter()
+                            .map(|g| (input_idx[g.pin.as_str()], g.active))
+                            .collect(),
+                    })
+                    .chain(m.write_cycles.iter().map(|w| {
+                        CompMemoryWrite {
+                            pin: input_idx[w.pin.as_str()],
+                            edge: w.edge,
+                            prev: false,
+                            gates: w
+                                .gates
+                                .iter()
+                                .map(|g| (input_idx[g.pin.as_str()], g.active))
+                                .collect(),
+                        }
+                    }))
                     .collect(),
                 read_gates: m
                     .read_gates
@@ -577,6 +872,7 @@ impl LogicComponent {
                 data_in_levels: vec![false; m.data_in.len()],
                 data_out: m.data_out.iter().map(|p| output_idx[p.as_str()]).collect(),
                 byte_load_timeout_s: m.byte_load_timeout_s,
+                program_time_s: m.program_time_s,
                 storage: Arc::new(Mutex::new(ParallelMemoryStorage {
                     cells: vec![m.init & mask; m.words as usize].into_boxed_slice(),
                     protection: m.software_data_protection.as_ref().map(|p| {
@@ -597,6 +893,10 @@ impl LogicComponent {
                             write_window: None,
                         }
                     }),
+                    page_words: m.page_words.unwrap_or(1) as usize,
+                    timed_page: None,
+                    busy: None,
+                    last_timed_write_cycle: None,
                 })),
             });
         }
@@ -750,14 +1050,20 @@ impl LogicComponent {
             // Unwired memory controls fail safe: selects/enables are inactive,
             // and the write strobe starts released so the first observed idle
             // level cannot manufacture a write edge.
-            for &(pin, active) in m.write_gates.iter().chain(&m.read_gates) {
+            for &(pin, active) in &m.read_gates {
                 input_defaults[pin] = match active {
                     Level::Low => true,
                     Level::High => false,
                 };
             }
-            if let Some((pin, edge)) = m.write {
-                input_defaults[pin] = match edge {
+            for write in &m.writes {
+                for &(pin, active) in &write.gates {
+                    input_defaults[pin] = match active {
+                        Level::Low => true,
+                        Level::High => false,
+                    };
+                }
+                input_defaults[write.pin] = match write.edge {
                     Edge::Rising => true,
                     Edge::Falling => false,
                 };
@@ -765,7 +1071,9 @@ impl LogicComponent {
         }
 
         for m in &mut memories {
-            m.prev_write = m.write.map(|(pin, _)| input_defaults[pin]).unwrap_or(false);
+            for write in &mut m.writes {
+                write.prev = input_defaults[write.pin];
+            }
         }
 
         // ── Initial output levels (power-on) ──
@@ -943,7 +1251,7 @@ impl LogicComponent {
     /// sub-chunk pulse trains demand edge-granular replay.
     pub fn is_sequential(&self) -> bool {
         self.registers.iter().any(|r| r.clock.is_some())
-            || self.memories.iter().any(|m| m.write.is_some())
+            || self.memories.iter().any(|m| !m.writes.is_empty())
     }
 
     /// Input pins that participate in sequential behaviour (register clocks,
@@ -971,13 +1279,18 @@ impl LogicComponent {
         }
         for m in &self.memories {
             pins.extend(m.address.iter().map(|&p| self.input_names[p].as_str()));
-            if let Some((p, _)) = m.write {
-                pins.push(self.input_names[p].as_str());
+            for write in &m.writes {
+                pins.push(self.input_names[write.pin].as_str());
+                pins.extend(
+                    write
+                        .gates
+                        .iter()
+                        .map(|&(p, _)| self.input_names[p].as_str()),
+                );
             }
             pins.extend(
-                m.write_gates
+                m.read_gates
                     .iter()
-                    .chain(&m.read_gates)
                     .map(|&(p, _)| self.input_names[p].as_str()),
             );
             pins.extend(m.data_in_names.iter().map(String::as_str));
@@ -1017,11 +1330,18 @@ impl LogicComponent {
                     .iter()
                     .map(|&p| self.input_names[p].clone())
                     .collect(),
-                write: m.write.map(|(p, edge)| (self.input_names[p].clone(), edge)),
-                write_gates: m
-                    .write_gates
+                writes: m
+                    .writes
                     .iter()
-                    .map(|&(p, active)| (self.input_names[p].clone(), active))
+                    .map(|w| ParallelMemoryWritePort {
+                        pin: self.input_names[w.pin].clone(),
+                        edge: w.edge,
+                        gates: w
+                            .gates
+                            .iter()
+                            .map(|&(p, active)| (self.input_names[p].clone(), active))
+                            .collect(),
+                    })
                     .collect(),
                 read_gates: m
                     .read_gates
@@ -1035,6 +1355,7 @@ impl LogicComponent {
                     .map(|&p| self.output_names[p].clone())
                     .collect(),
                 byte_load_timeout_s: m.byte_load_timeout_s,
+                program_time_s: m.program_time_s,
                 storage: m.storage.clone(),
                 mask: m.mask,
             })
@@ -1156,20 +1477,23 @@ impl LogicComponent {
         // 2b. Parallel memories commit on their declared, fully-qualified
         // write edge. Address and data are sampled from this exact tick.
         for m in &mut self.memories {
-            let Some((write_pin, edge)) = m.write else {
-                continue;
-            };
-            let cur = self.input_levels[write_pin];
-            let fired = match edge {
-                Edge::Rising => cur && !m.prev_write,
-                Edge::Falling => !cur && m.prev_write,
-            };
-            m.prev_write = cur;
-            let enabled = m
-                .write_gates
-                .iter()
-                .all(|&(pin, active)| active.is_active(self.input_levels[pin]));
-            if !fired || !enabled {
+            let mut qualified = false;
+            for write in &mut m.writes {
+                let cur = self.input_levels[write.pin];
+                let fired = match write.edge {
+                    Edge::Rising => cur && !write.prev,
+                    Edge::Falling => !cur && write.prev,
+                };
+                write.prev = cur;
+                let enabled = write
+                    .gates
+                    .iter()
+                    .all(|&(pin, active)| active.is_active(self.input_levels[pin]));
+                qualified |= fired && enabled;
+            }
+            // If two equivalent cycles qualify on one solver tick, this is
+            // still one physical bus write, not two byte loads.
+            if !qualified {
                 continue;
             }
             let address = m.address.iter().enumerate().fold(0usize, |a, (bit, &pin)| {
@@ -2134,6 +2458,204 @@ copy = "io0"
             acc | (u8::from(lc.output_level(&format!("io{bit}")).unwrap()) << bit)
         });
         assert_eq!(got, byte, "CE-inactive edge must not write");
+    }
+
+    #[test]
+    fn parallel_memory_accepts_declarative_we_and_ce_controlled_writes() {
+        let mut lc = compile(
+            r#"
+inputs = ["a0", "ce_n", "oe_n", "we_n"]
+outputs = ["io0"]
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["a0"]
+write_cycles = [
+  { pin = "we_n", edge = "rising", gates = [{ pin = "ce_n", active = "low" }] },
+  { pin = "ce_n", edge = "rising", gates = [{ pin = "we_n", active = "low" }] },
+]
+read_gates = [
+  { pin = "ce_n", active = "low" },
+  { pin = "oe_n", active = "low" },
+  { pin = "we_n", active = "high" },
+]
+data_in = ["io0"]
+data_out = ["io0"]
+"#,
+        );
+
+        // WE-controlled write to address 0.
+        tick_with(
+            &mut lc,
+            &[
+                ("a0", false),
+                ("ce_n", false),
+                ("oe_n", true),
+                ("we_n", false),
+                ("io0", false),
+            ],
+        );
+        tick_with(
+            &mut lc,
+            &[
+                ("a0", false),
+                ("ce_n", false),
+                ("oe_n", true),
+                ("we_n", true),
+                ("io0", false),
+            ],
+        );
+
+        // CE-controlled write to address 1 while WE remains low.
+        tick_with(
+            &mut lc,
+            &[
+                ("a0", true),
+                ("ce_n", false),
+                ("oe_n", true),
+                ("we_n", false),
+                ("io0", false),
+            ],
+        );
+        tick_with(
+            &mut lc,
+            &[
+                ("a0", true),
+                ("ce_n", true),
+                ("oe_n", true),
+                ("we_n", false),
+                ("io0", false),
+            ],
+        );
+
+        let port = lc.memory_ports().remove(0);
+        assert_eq!(port.read(0), Some(0));
+        assert_eq!(port.read(1), Some(0));
+    }
+
+    #[test]
+    fn timed_page_program_honors_exact_load_boundary_and_busy_polling() {
+        let lc = compile(
+            r#"
+inputs = ["a0", "a1", "ce_n", "oe_n", "we_n"]
+outputs = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+[[memory]]
+name = "cell"
+words = 4
+bits = 8
+page_words = 4
+byte_load_timeout_s = 0.00015
+program_time_s = 0.010
+init = 0xff
+address = ["a0", "a1"]
+write = { pin = "we_n", edge = "rising" }
+data_in = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+"#,
+        );
+        let port = lc.memory_ports().remove(0);
+        let hz = 1_000_000;
+
+        assert!(port.write_at(0, 0x80, 1_000, hz));
+        // Exactly 150 cycles is still part of the same page load.
+        assert!(port.write_at(1, 0x81, 1_150, hz));
+        assert_eq!(port.read_at(1, 2_000, hz), Some(0x7f));
+        // I/O6 toggles between successive busy reads; I/O7 remains the
+        // complement of the last loaded byte's I/O7.
+        assert_eq!(port.read_at(1, 2_001, hz), Some(0x3f));
+        assert_eq!(port.read_at(1, 11_149, hz), Some(0x7f));
+        assert_eq!(port.read_at(1, 11_150, hz), Some(0x81));
+        assert_eq!(port.read_at(0, 11_151, hz), Some(0x80));
+        assert_eq!(port.read_at(1, 11_151, hz), Some(0x81));
+    }
+
+    #[test]
+    fn timed_page_program_accepts_64_words_but_151_cycles_closes_the_page() {
+        let address = (0..7).map(|bit| format!("a{bit}")).collect::<Vec<_>>();
+        let data = (0..8).map(|bit| format!("io{bit}")).collect::<Vec<_>>();
+        let mut inputs = address.clone();
+        inputs.push("we_n".to_string());
+        let spec = format!(
+            r#"
+inputs = [{}]
+outputs = [{}]
+[[memory]]
+name = "cell"
+words = 128
+bits = 8
+page_words = 64
+byte_load_timeout_s = 0.00015
+program_time_s = 0.010
+init = 0xff
+address = [{}]
+write = {{ pin = "we_n", edge = "rising" }}
+data_in = [{}]
+data_out = [{}]
+"#,
+            inputs
+                .iter()
+                .map(|name| format!("\"{name}\""))
+                .collect::<Vec<_>>()
+                .join(", "),
+            data.iter()
+                .map(|name| format!("\"{name}\""))
+                .collect::<Vec<_>>()
+                .join(", "),
+            address
+                .iter()
+                .map(|name| format!("\"{name}\""))
+                .collect::<Vec<_>>()
+                .join(", "),
+            data.iter()
+                .map(|name| format!("\"{name}\""))
+                .collect::<Vec<_>>()
+                .join(", "),
+            data.iter()
+                .map(|name| format!("\"{name}\""))
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+        let logic: Logic = toml::from_str(&spec).unwrap();
+        let lc = LogicComponent::compile("page", &logic).unwrap();
+        let port = lc.memory_ports().remove(0);
+        for address in 0..64 {
+            assert!(port.write_at(address, address as u64, 1_000 + address as u64, 1_000_000));
+        }
+        assert_eq!(port.read_at(63, 2_000, 1_000_000), Some(0xff));
+        assert_eq!(port.read_at(63, 11_063, 1_000_000), Some(63));
+        for address in 0..64 {
+            assert_eq!(
+                port.read_at(address, 11_064, 1_000_000),
+                Some(address as u64)
+            );
+        }
+
+        assert!(port.write_at(64, 0x11, 20_000, 1_000_000));
+        // 151 µs is outside the inclusive load window, so this write arrives
+        // while the previous word is already internally programming.
+        assert!(port.write_at(65, 0x22, 20_151, 1_000_000));
+        assert_eq!(port.read_at(64, 30_000, 1_000_000), Some(0x11));
+        assert_eq!(port.read_at(65, 30_000, 1_000_000), Some(0xff));
+    }
+
+    #[test]
+    fn protected_timed_write_attempt_enters_busy_without_changing_data() {
+        let logic: Logic = toml::from_str(PARALLEL_EEPROM).unwrap();
+        let mut logic = logic;
+        logic.memories[0].program_time_s = Some(0.010);
+        logic.memories[0]
+            .software_data_protection
+            .as_mut()
+            .unwrap()
+            .initial = true;
+        let lc = LogicComponent::compile("protected", &logic).unwrap();
+        let port = lc.memory_ports().remove(0);
+        assert!(port.write_at(0, 0x00, 100, 1_000_000));
+        assert_eq!(port.read_at(0, 101, 1_000_000), Some(0xff));
+        assert_eq!(port.read_at(0, 102, 1_000_000), Some(0xbf));
+        assert_eq!(port.read_at(0, 10_100, 1_000_000), Some(0xff));
     }
 
     #[test]
