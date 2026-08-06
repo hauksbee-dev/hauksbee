@@ -129,7 +129,9 @@ fn a_consumer_can_build_every_kind_and_read_every_sentence() {
             "DDR_CLK",
             "the fab confirmed the stackup",
             "2027-06-01",
-        ),
+            today(),
+        )
+        .unwrap(),
     ];
     for a in &registry {
         a.validate().expect("a constructor's output is well formed");
@@ -172,15 +174,20 @@ fn a_consumer_can_render_the_rests_on_block_but_cannot_reword_it() {
             MatchConfidence::High,
         )
         .unwrap()])
-        .with_parameters(vec![ParameterProvenance {
-            parameter: "U2.vout".into(),
-            value: "3.3 V".into(),
-            origin: ValueOrigin::Model {
-                model_id: "xc6206".into(),
-                layer: ModelLayer::Pack,
-                confidence: MatchConfidence::Exact,
-            },
-        }])
+        .with_parameters(
+            &registry,
+            vec![ParameterProvenance::new(
+                "U2.vout",
+                "3.3 V",
+                ValueOrigin::Model {
+                    model_id: "xc6206".into(),
+                    layer: ModelLayer::Pack,
+                    confidence: MatchConfidence::Exact,
+                },
+            )
+            .unwrap()],
+        )
+        .unwrap()
         .with_error_budget(ErrorBudget::new(
             IntegrationTolerance::new(1e-3, 1e-12, 1e-14).unwrap(),
         ))
