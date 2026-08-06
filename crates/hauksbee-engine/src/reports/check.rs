@@ -21,6 +21,7 @@ pub fn emit(
     board: &ExtractedBoard,
     text: &str,
     raw: &[u8],
+    input_kind: crate::board_input::InputKind,
     altium_present: bool,
     lib: &ModelLibrary,
     reader_notes: &[String],
@@ -36,15 +37,7 @@ pub fn emit(
         reader_notes,
         hauksbee_ir::evidence::RunDate::from_system_clock(),
     )?
-    .with_input_artifact(
-        board_path,
-        raw,
-        if altium_present {
-            crate::board_input::InputKind::Altium
-        } else {
-            crate::board_input::InputKind::Text
-        },
-    )?;
+    .with_input_artifact(board_path, raw, input_kind)?;
     let mut drc = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
@@ -116,6 +109,15 @@ pub fn emit(
     actual_findings.extend(usbc.as_ref().and_then(usbc_finding_json));
     let mut evidence_maps = evidence.maps_for_drc(&drc_structured)?;
     evidence_maps.extend(evidence.maps_for_findings(&actual_findings)?);
+    for (check, assertion) in [
+        ("drc", "DRC input coverage"),
+        ("si", "Signal-integrity input coverage"),
+    ] {
+        let coverage = evidence.check_coverage_map(check, assertion)?;
+        if coverage.status() != hauksbee_ir::evidence::EvidenceStatus::Clean {
+            evidence_maps.push(coverage);
+        }
+    }
     let evidence = evidence.with_maps(evidence_maps);
 
     // Zero routed copper (D2): a pads-only board passes the spacing check
@@ -554,6 +556,7 @@ pub fn emit_combined_json(
     board: &ExtractedBoard,
     text: &str,
     raw: &[u8],
+    input_kind: crate::board_input::InputKind,
     altium_present: bool,
     lib: &ModelLibrary,
     reader_notes: &[String],
@@ -566,15 +569,7 @@ pub fn emit_combined_json(
         reader_notes,
         hauksbee_ir::evidence::RunDate::from_system_clock(),
     )?
-    .with_input_artifact(
-        board_path,
-        raw,
-        if altium_present {
-            crate::board_input::InputKind::Altium
-        } else {
-            crate::board_input::InputKind::Text
-        },
-    )?;
+    .with_input_artifact(board_path, raw, input_kind)?;
     let drc = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
@@ -599,6 +594,15 @@ pub fn emit_combined_json(
     findings.extend(usbc.as_ref().and_then(usbc_finding_json));
     let mut maps = evidence.maps_for_drc(&drc_structured)?;
     maps.extend(evidence.maps_for_findings(&findings)?);
+    for (check, assertion) in [
+        ("drc", "DRC input coverage"),
+        ("si", "Signal-integrity input coverage"),
+    ] {
+        let coverage = evidence.check_coverage_map(check, assertion)?;
+        if coverage.status() != hauksbee_ir::evidence::EvidenceStatus::Clean {
+            maps.push(coverage);
+        }
+    }
     let evidence = evidence.with_maps(maps);
     let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
         .with_evidence(&evidence);

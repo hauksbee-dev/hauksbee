@@ -40,12 +40,16 @@ run --json` reports `passed` (the process verdict, false on exit 3),
   Schema: `docs/analysis/JSON_OUTPUT.md`.
 - `hauksbee-ci run <spec> --json`: `{ok, passed, assertions_passed, run_valid,
   exit_code, analog_abort, coverage, substitutions, coverage_warnings,
-  results[]}` where each result is `{label, kind, passed, invalid, detail,
-  failing_seed, failing_seeds, seeds_total}`.
-- Honesty qualifiers are data, not prose. Substitute MCU cores, dropped ADC
-  injections, and coverage holes appear in `substitutions` /
-  `coverage_warnings`. Surface them to the user. A green run with a
-  substitution is not the same claim as a green run on real silicon.
+  inventory[], assumptions[], evidence[], results[]}` where each result is
+  `{label, kind, passed, invalid, detail, failing_seed, failing_seeds,
+  seeds_total, evidence?}`. Published schema:
+  `crates/hauksbee-ci/schemas/hauksbee-ci-result.schema.json`.
+- Honesty qualifiers are typed data, not prose. `assumptions[]` is the canonical
+  registry and each result's `evidence` lists its causal assumption ids,
+  artifacts, models, parameters and numerical error budget. Legacy
+  `substitutions` / `coverage_warnings` remain compatibility projections.
+  Surface the typed records; qualified evidence is not the same claim as a
+  clean run on real silicon.
 
 ## The spec is the contract
 
