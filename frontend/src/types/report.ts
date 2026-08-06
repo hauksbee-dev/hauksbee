@@ -124,6 +124,14 @@ export interface EvidenceMap {
   status: 'clean' | 'qualified' | 'undermined'
 }
 
+export interface ArtifactProvenance {
+  path: string
+  kind: string
+  role: string
+  sha256?: string
+  contributed?: Array<{ what: string; detail: string }>
+}
+
 export interface WebReport {
   ok: boolean
   error?: string | null
@@ -138,6 +146,7 @@ export interface WebReport {
   components: WebComponent[]
   bind?: BindSummaryWeb | null
   /** Canonical assumption registry and per-assertion maps from the engine. */
+  inventory?: ArtifactProvenance[]
   assumptions?: EvidenceAssumption[]
   evidence?: EvidenceMap[]
   notes?: JsonNote[]

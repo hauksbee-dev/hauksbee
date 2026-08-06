@@ -147,6 +147,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // the KiCad-parseable layout text (empty for Altium/gerber, which have
     // none; those checks get the bytes twin or an honest "not checked").
     let norm = crate::board_input::from_path(&cfg.board)?;
+    let input_kind = norm.kind;
     let is_altium = norm.is_binary();
     let is_board_code = norm.kind == crate::board_input::InputKind::BoardCode;
     let reader_notes = norm.notes;
@@ -327,9 +328,20 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // pipeline archives carries the whole run, not just the static half.
     let mut ci_findings: Option<Vec<crate::result::JsonFinding>> = None;
     if cfg.junit.is_some() || cfg.sarif.is_some() {
-        let findings = crate::reports::check::gather_findings(
+        let mut findings = crate::reports::check::gather_findings(
             &cfg.board, &board, &text, &raw, is_altium, &lib,
         )?;
+        let bound = bind_board(&board, &lib);
+        let evidence = crate::evidence::BoardEvidence::from_bound(
+            &board,
+            &bound.report,
+            &reader_notes,
+            hauksbee_ir::evidence::RunDate::from_system_clock(),
+        )?
+        .with_input_artifact(&cfg.board, &raw, input_kind)?;
+        let maps = evidence.maps_for_findings(&findings)?;
+        findings.extend(crate::reports::ci_artifacts::evidence_findings(&maps));
+        crate::reports::ci_artifacts::github_evidence_annotations(&maps);
         write_ci_artifacts(&cfg, &findings)?;
         ci_findings = Some(findings);
     }
@@ -419,7 +431,8 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             &bound.report,
             &reader_notes,
             hauksbee_ir::evidence::RunDate::from_system_clock(),
-        )?;
+        )?
+        .with_input_artifact(&cfg.board, &raw, input_kind)?;
         return crate::reports::ampacity::emit(&text, is_altium, &evidence);
     }
 
@@ -459,7 +472,8 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             &bound.report,
             &reader_notes,
             hauksbee_ir::evidence::RunDate::from_system_clock(),
-        )?;
+        )?
+        .with_input_artifact(&cfg.board, &raw, input_kind)?;
         return crate::reports::usb_c::emit(
             &board,
             &evidence,
@@ -498,7 +512,8 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             &bound.report,
             &reader_notes,
             hauksbee_ir::evidence::RunDate::from_system_clock(),
-        )?;
+        )?
+        .with_input_artifact(&cfg.board, &raw, input_kind)?;
         return crate::reports::ac::emit(
             &bound,
             &evidence,
@@ -589,12 +604,24 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         Some(b) => b,
         None => bind_board(&board, &lib),
     };
-    let board_evidence = crate::evidence::BoardEvidence::from_bound(
+    let mut board_evidence = crate::evidence::BoardEvidence::from_bound(
         &board,
         &bound.report,
         &reader_notes,
         hauksbee_ir::evidence::RunDate::from_system_clock(),
-    )?;
+    )?
+    .with_input_artifact(&cfg.board, &raw, input_kind)?;
+    if let Some(firmware) = &cfg.firmware {
+        board_evidence = board_evidence.with_firmware_artifact(
+            firmware,
+            &std::fs::read(firmware).map_err(|error| {
+                anyhow::anyhow!(
+                    "reading firmware evidence '{}': {error}",
+                    firmware.display()
+                )
+            })?,
+        )?;
+    }
     // Net names captured before `bound` is consumed, for --probe validation.
     let probe_known_nets: Vec<String> = if cfg.probe.is_empty() {
         Vec::new()
@@ -626,6 +653,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         cfg.firmware.as_deref(),
         &format!("/boards/{}", crate::commands::common::file_name(&cfg.board)),
     )?;
+    board_evidence = board_evidence.with_substitutions(engine.scheduler().substitutions())?;
 
     // --apply-shorts: bridge every detected copper short before simulating.
     if cfg.apply_shorts {
@@ -730,19 +758,8 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         )?;
         let achieved_factor = headless.realtime_factor();
         let wall_s = headless.wall_s;
+        let simulated_s = headless.sim_s;
         let faults = headless.faults;
-
-        // Rewrite the CI artifacts with the co-sim's stress faults appended
-        // (as check "cosim" findings), BEFORE any strict gate can exit: the
-        // JUnit/SARIF a pipeline archives must carry the fault that failed
-        // the build, not only the static suite.
-        if !faults.is_empty() {
-            if let Some(base) = &ci_findings {
-                let mut all = base.clone();
-                all.extend(crate::result::fault_findings_json(&faults));
-                write_ci_artifacts(&cfg, &all)?;
-            }
-        }
 
         // Co-sim honesty summary (Track B): total net toggles, UART activity, and
         // any chip substitution detected at build time. Built from the SAME run
@@ -796,8 +813,73 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         let has_boot_advisory = !held_high_boot_nets.is_empty();
         let gate_rows = &boot_advisory.gate_states;
 
+        let failed_windows = engine.scheduler().failed_windows().to_vec();
+        let fallback_owned: Vec<(f64, f64, String)> = engine
+            .scheduler()
+            .fallback_windows()
+            .iter()
+            .map(|&(start, end, method)| (start, end, method.as_str().to_string()))
+            .collect();
+        let fallback: Vec<(f64, f64, &str)> = fallback_owned
+            .iter()
+            .map(|(start, end, method)| (*start, *end, method.as_str()))
+            .collect();
+        let budget = crate::evidence::BoardEvidence::transient_error_budget(
+            0.0,
+            simulated_s,
+            engine.scheduler().chunk_s,
+            &failed_windows,
+            &fallback,
+        )?;
+        let fault_findings = crate::result::fault_findings_json(&faults);
+        let mut cosim_maps = Vec::new();
+        for finding in &fault_findings {
+            cosim_maps.push(board_evidence.simulation_map(
+                finding.message.clone(),
+                &finding.nets,
+                &finding.refs,
+                Some(budget.clone()),
+            )?);
+        }
+        if let Some(summary) = &cosim {
+            cosim_maps.push(board_evidence.simulation_map(
+                format!(
+                    "Firmware behaviour for {} executed on {}",
+                    summary.mcu_ref, summary.requested_part
+                ),
+                &[],
+                std::slice::from_ref(&summary.mcu_ref),
+                Some(budget.clone()),
+            )?);
+            for activity in &summary.activity_summary {
+                cosim_maps.push(board_evidence.simulation_map(
+                    format!(
+                        "{} toggled {} times between {:.6} V and {:.6} V",
+                        activity.net, activity.toggles, activity.v_min, activity.v_max
+                    ),
+                    std::slice::from_ref(&activity.net),
+                    &[],
+                    Some(budget.clone()),
+                )?);
+            }
+        }
+        let run_evidence = board_evidence.clone().with_maps(cosim_maps);
+
+        // Rewrite CI artifacts from the final co-sim evidence object before a
+        // strict gate can exit. Invalid evidence is a failure in JUnit/SARIF and
+        // a GitHub error annotation; qualified evidence remains visible.
+        if let Some(base) = &ci_findings {
+            let mut all = base.clone();
+            all.extend(fault_findings.clone());
+            all.extend(crate::reports::ci_artifacts::evidence_findings(
+                run_evidence.maps(),
+            ));
+            write_ci_artifacts(&cfg, &all)?;
+        }
+        crate::reports::ci_artifacts::github_evidence_annotations(run_evidence.maps());
+
         if cfg.json {
-            let mut jr = JsonReport::new(&board_name, summary).with_evidence(&board_evidence);
+            let mut jr = JsonReport::new(&board_name, summary).with_evidence(&run_evidence);
             // A substitution is an info-level note that must never be silently
             // absent (it changes how much the co-sim result can be trusted).
             for sub in engine.scheduler().substitutions() {
@@ -931,7 +1013,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             // to omit them entirely, so a CI consumer parsing the JSON saw a clean
             // run over a board the co-sim flagged (a destroyed MOSFET, overcurrent…).
             if !faults.is_empty() {
-                jr.findings = Some(crate::result::fault_findings_json(&faults));
+                jr.findings = Some(fault_findings.clone());
             }
             jr.cosim = cosim;
             println!("{}", jr.to_json());
@@ -1085,7 +1167,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         }
 
         if !cfg.json {
-            print!("{}", board_evidence.render_plain());
+            print!("{}", run_evidence.render_plain());
         }
 
         // 0-activity refusal (Track B): warn always; under --strict this is a hard
@@ -1152,7 +1234,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             }
             std::process::exit(2);
         }
-        if cfg.strict && board_evidence.is_undermined() {
+        if cfg.strict && run_evidence.is_undermined() {
             std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
         }
         return Ok(());

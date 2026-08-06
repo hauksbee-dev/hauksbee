@@ -298,6 +298,18 @@ pub struct WebCosimSection {
     pub substituted: bool,
 }
 
+/// Evidence inputs captured before the co-sim scheduler is dropped. Keeping
+/// these beside (but out of) the public presentation type prevents the web
+/// path from trying to infer causal scope back from rendered prose.
+struct WebCosimEvidence {
+    faults: Vec<crate::stress::FaultEvent>,
+    activity_nets: Vec<String>,
+    failed_windows: Vec<(f64, f64)>,
+    fallback_windows: Vec<(f64, f64, String)>,
+    substitutions: Vec<crate::scheduler::McuSubstitution>,
+    seconds_simulated: f64,
+}
+
 /// One row of the web boot-state panel: a transistor gate control net and what
 /// the firmware does to it at power-up. Mirrors the CLI `BootGateJson`.
 #[derive(Debug, Clone, Serialize)]
@@ -370,6 +382,9 @@ pub struct WebReport {
     /// healthy" while it is. Mirrors the CLI/JSON bind surface (parity fix).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bind: Option<BindSummaryWeb>,
+    /// Content-addressed inputs consumed by the analysis.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inventory: Vec<hauksbee_ir::evidence::ArtifactProvenance>,
     /// First-class assumptions from the same evidence object as CLI JSON/plain.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assumptions: Vec<hauksbee_ir::evidence::Assumption>,
@@ -427,6 +442,7 @@ fn unreadable(file_name: &str, error: String) -> WebReport {
         sections: Vec::new(),
         components: Vec::new(),
         bind: None,
+        inventory: Vec::new(),
         assumptions: Vec::new(),
         evidence: Vec::new(),
         notes: Vec::new(),
@@ -563,7 +579,9 @@ fn analyze_normalized(
         &bound.report,
         &norm.notes,
         hauksbee_ir::evidence::RunDate::from_system_clock(),
-    ) {
+    )
+    .and_then(|evidence| evidence.with_input_artifact(file_name, &norm.raw, norm.kind))
+    {
         Ok(evidence) => evidence,
         Err(error) => {
             return (
@@ -572,6 +590,50 @@ fn analyze_normalized(
             )
         }
     };
+    let drc_structured = crate::result::DrcStructured::from_report(&drc);
+    let mut actual_findings = crate::result::lint_findings_json(&lint);
+    actual_findings.extend(crate::result::si_findings_json(&si));
+    actual_findings.extend(
+        crate::usb_c_report(board)
+            .as_ref()
+            .and_then(crate::result::usbc_finding_json),
+    );
+    let mut actual_maps = match evidence.maps_for_drc(&drc_structured) {
+        Ok(maps) => maps,
+        Err(error) => {
+            return (
+                unreadable(file_name, format!("could not build DRC evidence: {error}")),
+                drc,
+            )
+        }
+    };
+    match evidence.maps_for_findings(&actual_findings) {
+        Ok(maps) => actual_maps.extend(maps),
+        Err(error) => {
+            return (
+                unreadable(
+                    file_name,
+                    format!("could not build finding evidence: {error}"),
+                ),
+                drc,
+            )
+        }
+    }
+    if actual_maps.is_empty() {
+        match evidence.static_coverage_map() {
+            Ok(map) => actual_maps.push(map),
+            Err(error) => {
+                return (
+                    unreadable(
+                        file_name,
+                        format!("could not build coverage evidence: {error}"),
+                    ),
+                    drc,
+                )
+            }
+        }
+    }
+    let evidence = evidence.with_maps(actual_maps);
 
     // Notes: bind-role caveat (active IC open on the live circuit). These mirror
     // the CLI/JSON `notes` so the web never silently omits an honesty annotation.
@@ -666,6 +728,7 @@ fn analyze_normalized(
         sections,
         components,
         bind: Some(bind_web),
+        inventory: evidence.inventory().to_vec(),
         assumptions: evidence.assumptions().to_vec(),
         evidence: evidence.maps().to_vec(),
         notes,
@@ -725,13 +788,93 @@ pub fn analyze_with_firmware(
             return report;
         }
     };
-    let mut cosim = run_web_cosim(
+    let (mut cosim, cosim_evidence) = run_web_cosim(
         &norm.board,
         file_name,
         &resolved.name,
         &resolved.bytes,
         &drc,
     );
+    if let Some(captured) = cosim_evidence {
+        let lib = ModelLibrary::builtin();
+        let bound = bind_board(&norm.board, &lib);
+        let evidence_result = crate::evidence::BoardEvidence::from_bound(
+            &norm.board,
+            &bound.report,
+            &norm.notes,
+            hauksbee_ir::evidence::RunDate::from_system_clock(),
+        )
+        .and_then(|evidence| evidence.with_input_artifact(file_name, &norm.raw, norm.kind))
+        .and_then(|evidence| evidence.with_firmware_artifact(&resolved.name, &resolved.bytes));
+        if let Ok(mut evidence) = evidence_result {
+            evidence = match evidence.clone().with_substitutions(&captured.substitutions) {
+                Ok(evidence) => evidence,
+                Err(_) => evidence,
+            };
+            let fallback: Vec<(f64, f64, &str)> = captured
+                .fallback_windows
+                .iter()
+                .map(|(start, end, method)| (*start, *end, method.as_str()))
+                .collect();
+            if let Ok(budget) = crate::evidence::BoardEvidence::transient_error_budget(
+                0.0,
+                captured.seconds_simulated,
+                1.0 / 1000.0,
+                &captured.failed_windows,
+                &fallback,
+            ) {
+                let mut maps = report.evidence.clone();
+                for fault in &captured.faults {
+                    if let Ok(map) = evidence.simulation_map(
+                        format!(
+                            "Firmware co-sim stress: {} {} = {:.6} (limit {:.6})",
+                            fault.component,
+                            fault.kind.as_str(),
+                            fault.value,
+                            fault.limit
+                        ),
+                        &[],
+                        std::slice::from_ref(&fault.component),
+                        Some(budget.clone()),
+                    ) {
+                        maps.push(map);
+                    }
+                }
+                for substitution in &captured.substitutions {
+                    if let Ok(map) = evidence.simulation_map(
+                        format!(
+                            "Firmware behaviour for {} executed on substitute core {}",
+                            substitution.reference, substitution.modelled_core
+                        ),
+                        &[],
+                        std::slice::from_ref(&substitution.reference),
+                        Some(budget.clone()),
+                    ) {
+                        maps.push(map);
+                    }
+                }
+                for net in &captured.activity_nets {
+                    if let Ok(map) = evidence.simulation_map(
+                        format!("Firmware co-sim activity on net {net}"),
+                        std::slice::from_ref(net),
+                        &[],
+                        Some(budget.clone()),
+                    ) {
+                        maps.push(map);
+                    }
+                }
+                evidence = evidence.with_maps(maps);
+                report.inventory = evidence.inventory().to_vec();
+                report.assumptions = evidence.assumptions().to_vec();
+                report.evidence = evidence.maps().to_vec();
+                if report.total == 0 && evidence.is_undermined() {
+                    report.headline = "No blocking findings, but firmware evidence is undermined; substituted or unresolved inputs invalidate affected co-sim assertions.".to_string();
+                } else if report.total == 0 && evidence.has_caveats() {
+                    report.headline = "No blocking findings, but firmware evidence is qualified; see the evidence limitations below.".to_string();
+                }
+            }
+        }
+    }
     if let Some(note) = &resolved.note {
         // Say which image actually ran when it came out of an archive/build,
         // so a wrong-env surprise is diagnosable from the report itself.
@@ -966,7 +1109,7 @@ fn run_web_cosim(
     fw_name: &str,
     fw_bytes: &[u8],
     drc: &hauksbee_extract::DrcReport,
-) -> WebCosimSection {
+) -> (WebCosimSection, Option<WebCosimEvidence>) {
     use crate::plain::plain_faults;
     use crate::stress::{FaultEvent, FaultKind};
     use hauksbee_server::engine::Engine;
@@ -984,9 +1127,9 @@ fn run_web_cosim(
     let lib = ModelLibrary::builtin();
     let bound = bind_board(board, &lib);
     if bound.mcus.is_empty() {
-        return cosim_unavailable(
+        return (cosim_unavailable(
             "No microcontroller was found on this board; the firmware co-sim needs an MCU to run on.",
-        );
+        ), None);
     }
     // Web path is in-process (simavr) only: external emulator backends
     // (Renode/QEMU) advance over a TCP socket, and their boot alone takes tens
@@ -1023,7 +1166,7 @@ fn run_web_cosim(
                      it with one click."
                 .to_string();
         }
-        return section;
+        return (section, None);
     }
 
     // Write the firmware bytes verbatim to a temp file (the MCU loader is
@@ -1046,11 +1189,17 @@ fn run_web_cosim(
     {
         Ok(t) => t,
         Err(e) => {
-            return cosim_unavailable(format!("Could not stage the firmware for co-sim: {e}."))
+            return (
+                cosim_unavailable(format!("Could not stage the firmware for co-sim: {e}.")),
+                None,
+            )
         }
     };
     if let Err(e) = tmp.write_all(fw_bytes).and_then(|_| tmp.flush()) {
-        return cosim_unavailable(format!("Could not write the firmware for co-sim: {e}."));
+        return (
+            cosim_unavailable(format!("Could not write the firmware for co-sim: {e}.")),
+            None,
+        );
     }
 
     // Build the engine from the board we already extracted and bound above
@@ -1061,10 +1210,13 @@ fn run_web_cosim(
         // Architecture mismatch / corrupt firmware: the static analysis still
         // succeeded, so report co-sim failure as a note, not a hard error.
         Err(e) => {
-            return cosim_unavailable(format!(
-                "The firmware could not be loaded onto this board's MCU: {e}. \
+            return (
+                cosim_unavailable(format!(
+                    "The firmware could not be loaded onto this board's MCU: {e}. \
                  (Check the firmware matches the MCU's architecture.)"
-            ))
+                )),
+                None,
+            )
         }
     };
 
@@ -1369,20 +1521,35 @@ fn run_web_cosim(
         })
         .collect();
 
-    let substituted = !engine.scheduler().substitutions().is_empty();
-    WebCosimSection {
-        ran: true,
+    let captured = WebCosimEvidence {
+        faults,
+        activity_nets: gpio_nets.iter().map(|net| net.name.clone()).collect(),
+        failed_windows: sched.failed_windows().to_vec(),
+        fallback_windows: sched
+            .fallback_windows()
+            .iter()
+            .map(|&(start, end, method)| (start, end, method.as_str().to_string()))
+            .collect(),
+        substitutions: sched.substitutions().to_vec(),
         seconds_simulated,
-        uart_output,
-        findings,
-        gpio_nets,
-        analog_valid,
-        failed_windows,
-        spi_framing,
-        boot_gates,
-        firmware_exercised: firmware_ran,
-        substituted,
-    }
+    };
+    let substituted = !captured.substitutions.is_empty();
+    (
+        WebCosimSection {
+            ran: true,
+            seconds_simulated,
+            uart_output,
+            findings,
+            gpio_nets,
+            analog_valid,
+            failed_windows,
+            spi_framing,
+            boot_gates,
+            firmware_exercised: firmware_ran,
+            substituted,
+        },
+        Some(captured),
+    )
 }
 
 /// The single line at the top of the web report.
@@ -1974,6 +2141,7 @@ fn main {
         let object = value.as_object_mut().unwrap();
         object.remove("assumptions");
         object.remove("evidence");
+        object.remove("inventory");
         let golden_value: serde_json::Value = serde_json::from_str(golden).unwrap();
         assert_eq!(
             value, golden_value,
@@ -2210,11 +2378,23 @@ fn main {
             BOOT_GATE_FW,
         );
         assert!(r.ok, "static analysis still succeeds: {:?}", r.error);
-        let cosim = r.cosim.expect("cosim present once firmware was supplied");
+        let cosim = r
+            .cosim
+            .as_ref()
+            .expect("cosim present once firmware was supplied");
         if cosim.ran {
             assert!(
                 cosim.seconds_simulated > 0.0,
                 "a run that ran must have advanced time"
+            );
+            assert_eq!(r.inventory.len(), 2, "board and firmware are both cited");
+            assert!(r
+                .inventory
+                .iter()
+                .all(|artifact| artifact.sha256().len() == 64));
+            assert!(
+                r.evidence.iter().any(|map| map.error_budget().is_some()),
+                "web co-sim assertions carry the same numerical budget as CLI assertions"
             );
         } else {
             assert!(

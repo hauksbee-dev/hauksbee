@@ -2,13 +2,16 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
+use std::path::Path;
 
 use crate::report::{BindOutcome, BindReport};
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_ir::evidence::{
-    Assumption, AssumptionSource, CausalPathIndex, EvidenceError, EvidenceMap, EvidenceRegistry,
-    EvidenceStatus, MatchConfidence, ModelLayer, ModelOnPath, NetScope, ParameterProvenance,
-    RunDate, Scope, Subject, ValueOrigin,
+    ArtifactId, ArtifactKind, ArtifactProvenance, ArtifactRole, Assumption, AssumptionSource,
+    CausalPathIndex, Contribution, ErrorBudget, EvidenceError, EvidenceMap, EvidenceRegistry,
+    EvidenceStatus, IntegrationMethod, IntegrationTolerance, MatchConfidence, ModelLayer,
+    ModelOnPath, NetScope, ParameterProvenance, RunDate, Scope, Subject, TimeWindow, ValueOrigin,
+    WindowMethod,
 };
 use hauksbee_models::Confidence;
 use sha2::{Digest, Sha256};
@@ -30,6 +33,8 @@ pub struct BoardEvidence {
     today: RunDate,
     assumptions: Vec<Assumption>,
     maps: Vec<EvidenceMap>,
+    board_artifact: Option<ArtifactId>,
+    firmware_artifact: Option<ArtifactId>,
 }
 
 impl BoardEvidence {
@@ -176,7 +181,117 @@ impl BoardEvidence {
             today,
             assumptions: registry.assumptions().to_vec(),
             maps,
+            board_artifact: None,
+            firmware_artifact: None,
         })
+    }
+
+    /// Attach the exact board bytes the reader consumed. The SHA belongs to the
+    /// original upload/path, not the normalized in-memory board, so a report can
+    /// be reproduced and audited without guessing which source revision ran.
+    pub fn with_input_artifact(
+        mut self,
+        path: impl AsRef<Path>,
+        raw: &[u8],
+        kind: crate::board_input::InputKind,
+    ) -> Result<Self, EvidenceError> {
+        let path = path.as_ref();
+        let (artifact_kind, role) = input_artifact_kind(path, kind);
+        let digest = hex_digest(&Sha256::digest(raw));
+        let reader_assumptions = self
+            .registry
+            .assumptions()
+            .iter()
+            .filter(|a| a.source() == AssumptionSource::Reader)
+            .map(|a| a.id().clone())
+            .collect();
+        let artifact = ArtifactProvenance::new(
+            path.to_string_lossy(),
+            artifact_kind,
+            role,
+            digest,
+            reader_assumptions,
+        )?
+        .with_contributions(vec![
+            Contribution {
+                what: "connectivity".into(),
+                detail: "component and net incidence consumed by binding and electrical checks"
+                    .into(),
+            },
+            Contribution {
+                what: "copper_geometry".into(),
+                detail: "layout geometry consumed by DRC when this input format carries it".into(),
+            },
+        ]);
+        self.board_artifact = Some(self.registry.add_artifact(artifact)?);
+        Ok(self)
+    }
+
+    /// Attach the exact firmware image consumed by a co-simulation.
+    pub fn with_firmware_artifact(
+        mut self,
+        path: impl AsRef<Path>,
+        raw: &[u8],
+    ) -> Result<Self, EvidenceError> {
+        let path = path.as_ref();
+        let kind = match path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("hex") => ArtifactKind::IntelHex,
+            _ => ArtifactKind::Elf,
+        };
+        let artifact = ArtifactProvenance::new(
+            path.to_string_lossy(),
+            kind,
+            ArtifactRole::Firmware,
+            hex_digest(&Sha256::digest(raw)),
+            Vec::new(),
+        )?
+        .with_contributions(vec![Contribution {
+            what: "firmware_image".into(),
+            detail: "instructions executed by the MCU co-simulation backend".into(),
+        }]);
+        self.firmware_artifact = Some(self.registry.add_artifact(artifact)?);
+        Ok(self)
+    }
+
+    /// Add only substitutions the scheduler actually recorded. Binder family
+    /// matching is provenance, not automatically a semantic stand-in; it does
+    /// not enter this assumption registry.
+    pub fn with_substitutions(
+        mut self,
+        substitutions: &[crate::scheduler::McuSubstitution],
+    ) -> Result<Self, EvidenceError> {
+        if substitutions.is_empty() {
+            return Ok(self);
+        }
+        let artifacts = self.registry.artifacts().to_vec();
+        let mut assumptions = self.registry.assumptions().to_vec();
+        for sub in substitutions {
+            let assumption = Assumption::substitute_model(
+                AssumptionSource::Scheduler,
+                &sub.reference,
+                &sub.requested_part,
+                &sub.modelled_core,
+            );
+            if !assumptions.iter().any(|a| a.id() == assumption.id()) {
+                assumptions.push(assumption);
+            }
+        }
+        let mut registry = EvidenceRegistry::new(assumptions)?;
+        for artifact in artifacts {
+            registry.add_artifact(artifact)?;
+        }
+        self.assumptions = registry.assumptions().to_vec();
+        self.registry = registry;
+        Ok(self)
+    }
+
+    pub fn inventory(&self) -> &[ArtifactProvenance] {
+        self.registry.artifacts()
     }
 
     pub fn assumptions(&self) -> &[Assumption] {
@@ -202,6 +317,18 @@ impl BoardEvidence {
             .any(|map| map.status() != EvidenceStatus::Clean)
     }
 
+    /// A real report-coverage assertion for an otherwise finding-free static
+    /// analysis. This is not a synthetic pass result: it states exactly which
+    /// extracted nets the front door inspected and therefore carries any
+    /// reader limitations that constrain that coverage claim.
+    pub fn static_coverage_map(&self) -> Result<EvidenceMap, EvidenceError> {
+        let nets: Vec<String> = self.refs_by_net.keys().cloned().collect();
+        self.map_for_nets(
+            format!("Static analysis covered {} extracted nets", nets.len()),
+            nets,
+        )
+    }
+
     /// Build maps for the report's actual assertions. Nets are authoritative;
     /// a refs-only finding resolves to every net touching those refs.
     pub fn maps_for_findings(
@@ -221,9 +348,145 @@ impl BoardEvidence {
             if nets.is_empty() {
                 continue;
             }
-            maps.push(self.map_for_nets(finding.message.clone(), nets.into_iter().collect())?);
+            let nets: Vec<String> = nets.into_iter().collect();
+            maps.push(if finding.check == "drc" {
+                self.geometry_map(finding.message.clone(), &nets)?
+            } else {
+                self.map_for_nets(finding.message.clone(), nets)?
+            });
         }
         Ok(maps)
+    }
+
+    /// One causal assertion per real DRC result. Geometry maps deliberately
+    /// traverse no component models: an open op-amp cannot invalidate the fact
+    /// that two pieces of copper touch.
+    pub fn maps_for_drc(
+        &self,
+        drc: &crate::result::DrcStructured,
+    ) -> Result<Vec<EvidenceMap>, EvidenceError> {
+        let mut maps = Vec::new();
+        for short in &drc.shorts {
+            maps.push(self.geometry_map(
+                short.plain.clone(),
+                &[short.net_a.clone(), short.net_b.clone()],
+            )?);
+        }
+        for group in drc.violations.iter().chain(&drc.at_limit) {
+            maps.push(self.geometry_map(
+                group.plain.clone(),
+                &[group.net_a.clone(), group.net_b.clone()],
+            )?);
+        }
+        Ok(maps)
+    }
+
+    pub fn geometry_map(
+        &self,
+        assertion: impl Into<String>,
+        nets: &[String],
+    ) -> Result<EvidenceMap, EvidenceError> {
+        let empty: Vec<String> = Vec::new();
+        let incidence: Vec<(&str, &[String])> = nets
+            .iter()
+            .map(|net| (net.as_str(), empty.as_slice()))
+            .collect();
+        let index = CausalPathIndex::from_net_parts(incidence)?;
+        let scope = NetScope::new(nets.iter().map(String::as_str), None)?;
+        let traversal = index.traverse(&scope, &self.registry)?;
+        let mut map =
+            EvidenceMap::from_traversal(assertion, traversal, &self.registry, self.today)?;
+        if let Some(artifact) = self.board_artifact {
+            map = map.with_artifacts(&self.registry, [artifact])?;
+        }
+        Ok(map)
+    }
+
+    /// A numeric simulation assertion over nets and/or component references.
+    /// It consumes the board and (when present) firmware artifacts and carries
+    /// the producer's validated numerical budget.
+    pub fn simulation_map(
+        &self,
+        assertion: impl Into<String>,
+        nets: &[String],
+        references: &[String],
+        budget: Option<ErrorBudget>,
+    ) -> Result<EvidenceMap, EvidenceError> {
+        let mut scoped_nets: BTreeSet<String> = nets.iter().cloned().collect();
+        for (net, refs) in &self.refs_by_net {
+            if references.iter().any(|reference| refs.contains(reference)) {
+                scoped_nets.insert(net.clone());
+            }
+        }
+        if scoped_nets.is_empty() {
+            return Err(EvidenceError::Empty {
+                field: "simulation_map.nets",
+            });
+        }
+        let mut map = self.map_for_nets(assertion.into(), scoped_nets.into_iter().collect())?;
+        let artifacts = [self.board_artifact, self.firmware_artifact]
+            .into_iter()
+            .flatten();
+        map = map.with_artifacts(&self.registry, artifacts)?;
+        if let Some(budget) = budget {
+            map = map.with_error_budget(budget);
+        }
+        Ok(map)
+    }
+
+    /// Error budget for transient/thermal/co-sim numeric claims, populated from
+    /// the solver's actual default tolerances plus the run's measured windows.
+    pub fn transient_error_budget(
+        start_s: f64,
+        end_s: f64,
+        event_time_error_s: f64,
+        failed_windows: &[(f64, f64)],
+        fallback_windows: &[(f64, f64, &str)],
+    ) -> Result<ErrorBudget, EvidenceError> {
+        let options = hauksbee_solve::SolverOptions::default();
+        let tolerance = IntegrationTolerance::new(options.reltol, options.abstol, options.chgtol)?;
+        let mut budget = ErrorBudget::new(tolerance)
+            .with_method(WindowMethod::new(
+                TimeWindow::new(start_s, end_s)?,
+                IntegrationMethod::Trapezoidal,
+                0.0,
+            )?)
+            .with_event_time_error(event_time_error_s)?;
+        for &(start, end) in failed_windows {
+            budget = budget.with_failed_window(TimeWindow::new(start, end)?);
+        }
+        for &(start, end, method) in fallback_windows {
+            let (method, cost) = match method {
+                "reduced-step" => (IntegrationMethod::ReducedStep, 0.001),
+                "backward-euler" => (IntegrationMethod::BackwardEuler, 0.1),
+                "cold-start-backward-euler" => (IntegrationMethod::ColdStartBackwardEuler, 0.1),
+                "subdivided-backward-euler" => (IntegrationMethod::SubdividedBackwardEuler, 0.1),
+                _ => (IntegrationMethod::BackwardEuler, 0.1),
+            };
+            budget = budget.with_method(WindowMethod::new(
+                TimeWindow::new(start, end)?,
+                method,
+                cost,
+            )?);
+        }
+        Ok(budget)
+    }
+
+    /// Numerical settings behind a non-transient solver result such as an AC
+    /// sweep. No time method is claimed because frequency-domain solves do not
+    /// integrate a time window.
+    pub fn solver_error_budget() -> Result<ErrorBudget, EvidenceError> {
+        let options = hauksbee_solve::SolverOptions::default();
+        Ok(ErrorBudget::new(IntegrationTolerance::new(
+            options.reltol,
+            options.abstol,
+            options.chgtol,
+        )?))
+    }
+
+    pub fn with_maps(mut self, maps: Vec<EvidenceMap>) -> Self {
+        self.maps = maps;
+        self
     }
 
     fn map_for_nets(
@@ -341,5 +604,31 @@ fn confidence(value: Confidence) -> MatchConfidence {
         Confidence::Exact => MatchConfidence::Exact,
         Confidence::Family => MatchConfidence::High,
         Confidence::Guessed | Confidence::Unresolved => MatchConfidence::Guessed,
+    }
+}
+
+fn input_artifact_kind(
+    path: &Path,
+    kind: crate::board_input::InputKind,
+) -> (ArtifactKind, ArtifactRole) {
+    use crate::board_input::InputKind;
+    match kind {
+        InputKind::Schematic => (ArtifactKind::KiCadSchematic, ArtifactRole::Schematic),
+        InputKind::Altium => (ArtifactKind::AltiumPcbDoc, ArtifactRole::Layout),
+        InputKind::Gerber => (ArtifactKind::GerberArchive, ArtifactRole::FabArchive),
+        InputKind::Odb => (ArtifactKind::OdbPlusPlus, ArtifactRole::FabArchive),
+        InputKind::Ipc2581 => (ArtifactKind::Ipc2581, ArtifactRole::FabArchive),
+        InputKind::BoardCode => (ArtifactKind::BoardCode, ArtifactRole::Layout),
+        InputKind::Text => match path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("brd") => (ArtifactKind::EagleBoard, ArtifactRole::Layout),
+            Some("d356") => (ArtifactKind::Ipc356, ArtifactRole::Netlist),
+            Some("net") => (ArtifactKind::KiCadNetlist, ArtifactRole::Netlist),
+            _ => (ArtifactKind::KiCadPcb, ArtifactRole::Layout),
+        },
     }
 }

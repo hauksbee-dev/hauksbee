@@ -207,7 +207,8 @@ function bindHtml(report: WebReport): string {
 function evidenceHtml(report: WebReport): string {
   const maps = report.evidence ?? []
   const assumptions = report.assumptions ?? []
-  if (maps.length === 0 && assumptions.length === 0) return ''
+  const inventory = report.inventory ?? []
+  if (maps.length === 0 && assumptions.length === 0 && inventory.length === 0) return ''
 
   const count = (status: string) => maps.filter(map => map.status === status).length
   const caveated = maps.filter(map => map.status !== 'clean')
@@ -225,6 +226,11 @@ function evidenceHtml(report: WebReport): string {
       <div class="gloss"><b>Effect:</b> ${esc(assumption.consequence)}</div>
       <div class="gloss"><b>What closes it:</b> ${esc(assumption.replacement)}</div>
     </div>`).join('')
+  const artifacts = inventory.map(artifact => `<tr>
+      <td>${esc(artifact.path)}</td>
+      <td class="mono">${esc(artifact.kind)}</td>
+      <td class="mono">${esc(artifact.sha256 ? `sha256:${artifact.sha256}` : 'digest unavailable')}</td>
+    </tr>`).join('')
 
   return `<section>
     <h2>Evidence &amp; limitations</h2>
@@ -237,6 +243,12 @@ function evidenceHtml(report: WebReport): string {
       ? `<div class="scroll-x"><table>
           <thead><tr><th>Assertion</th><th>Status</th><th>Rests on</th></tr></thead>
           <tbody>${rows}</tbody>
+        </table></div>`
+      : ''}
+    ${artifacts
+      ? `<h3>Input artifacts</h3><div class="scroll-x"><table>
+          <thead><tr><th>Path</th><th>Kind</th><th>Digest</th></tr></thead>
+          <tbody>${artifacts}</tbody>
         </table></div>`
       : ''}
     ${cards}

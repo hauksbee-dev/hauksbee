@@ -65,8 +65,8 @@ Five rules fire on what the layout actually did, not on what the CSS meant:
 - nothing sticky or fixed sits on top of a control.
 
 Violations print one line each with the surface, the viewport, the DOM path, the
-rule and the measured numbers, and the offending state is screenshotted to
-`frontend/test-results/visual-lint/`. CI runs the same command in the
+rule and the measured numbers, and the offending state is uploaded from the
+frontend visual-lint test-results directory. CI runs the same command in the
 `frontend-visual-lint` job and uploads those screenshots on a failure. It serves
 `frontend/dist` with `tests/visual-lint/fixture-server.ts`, which replays real
 `hauksbee serve` responses from `tests/visual-lint/fixtures/`, so no engine
