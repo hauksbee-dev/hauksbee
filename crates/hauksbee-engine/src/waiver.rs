@@ -24,6 +24,7 @@
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-engine/waiver.md.
 
+use hauksbee_ir::evidence::{parse_ymd_epoch_days, RunDate, WaiverState};
 use serde::Deserialize;
 use std::path::Path;
 
@@ -51,15 +52,6 @@ pub struct Waiver {
     pub until: String,
 }
 
-/// A waiver's state against the current date.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WaiverState {
-    /// In force: findings it matches do not gate the build.
-    Active,
-    /// Past its `until` date: findings it matches gate the build again.
-    Expired,
-}
-
 /// Every waiver loaded for a run, plus what each one did.
 #[derive(Debug, Clone, Default)]
 pub struct WaiverSet {
@@ -71,7 +63,7 @@ pub struct WaiverSet {
     hits: Vec<usize>,
     /// Today, as days since the Unix epoch. Captured once per run so a long run
     /// cannot have a waiver lapse halfway through it.
-    today: i64,
+    today: RunDate,
 }
 
 /// One waived finding, for the report.
@@ -110,8 +102,8 @@ struct WaiverFile {
 }
 
 impl WaiverSet {
-    /// Load a waiver file. `today` is days since the Unix epoch.
-    pub fn load_at(path: &Path, today: i64) -> Result<Self, WaiverError> {
+    /// Load a waiver file using the run's captured, credibility-checked date.
+    pub fn load_at(path: &Path, today: RunDate) -> Result<Self, WaiverError> {
         let text = std::fs::read_to_string(path)
             .map_err(|e| WaiverError::Io(format!("reading {}: {e}", path.display())))?;
         let file: WaiverFile = toml::from_str(&text).map_err(|e| {
@@ -130,7 +122,7 @@ impl WaiverSet {
 
     /// Load a waiver file, dating it against the system clock.
     pub fn load(path: &Path) -> Result<Self, WaiverError> {
-        Self::load_at(path, today_epoch_days())
+        Self::load_at(path, RunDate::from_system_clock())
     }
 
     /// Look for the default waiver file beside `board`. Absent is not an error:
@@ -156,13 +148,7 @@ impl WaiverSet {
     }
 
     fn state(&self, w: &Waiver) -> WaiverState {
-        match parse_ymd(&w.until) {
-            // Expiry is end-of-day: a waiver dated today is still in force
-            // today, which is what someone writing "until the fab confirms on
-            // Friday" means.
-            Some(day) if day >= self.today => WaiverState::Active,
-            _ => WaiverState::Expired,
-        }
+        self.today.waiver_state(&w.until)
     }
 
     /// The first active waiver matching this finding, if any. Recording the hit
@@ -271,7 +257,7 @@ impl Waiver {
                  apart from a bug once whoever wrote it has moved on"
             )));
         }
-        if parse_ymd(&self.until).is_none() {
+        if parse_ymd_epoch_days(&self.until).is_none() {
             return Err(WaiverError::Invalid(format!(
                 "{where_}: `until` must be a date as YYYY-MM-DD, got '{}'. An expiry is \
                  required: a waiver that never lapses is a disabled check wearing a \
@@ -289,83 +275,6 @@ impl Waiver {
         }
         Ok(())
     }
-}
-
-/// Parse `YYYY-MM-DD` into days since the Unix epoch. `None` on anything else,
-/// including a well-formed string naming a day that does not exist.
-fn parse_ymd(s: &str) -> Option<i64> {
-    let mut parts = s.trim().split('-');
-    let y: i64 = parts.next()?.parse().ok()?;
-    let m: u32 = parts.next()?.parse().ok()?;
-    let d: u32 = parts.next()?.parse().ok()?;
-    if parts.next().is_some() || !(1..=12).contains(&m) || d < 1 || d > days_in_month(y, m) {
-        return None;
-    }
-    Some(days_from_civil(y, m, d))
-}
-
-fn is_leap(y: i64) -> bool {
-    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
-}
-
-fn days_in_month(y: i64, m: u32) -> u32 {
-    match m {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if is_leap(y) => 29,
-        2 => 28,
-        _ => 0,
-    }
-}
-
-/// Howard Hinnant's days-from-civil: calendar date to days since 1970-01-01,
-/// no dependency and no drift. Adding a date crate for one comparison would be
-/// a heavier answer than the question deserves.
-fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = (m as i64 + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + d as i64 - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
-}
-
-/// The earliest date this build will believe from the system clock.
-///
-/// Expiry is only meaningful if "now" cannot move backwards. A clock behind
-/// this date re-arms every lapsed waiver, silently, which fails OPEN: the one
-/// direction this feature must never fail in. It happens for ordinary reasons,
-/// not just malice: a container with no RTC before NTP settles, a machine with
-/// a dead CMOS battery, a deliberately backdated job.
-///
-/// Set to the day this check was written. A build running before it is either
-/// mis-clocked or being backdated, and either way its answer about what has
-/// expired cannot be trusted.
-const CLOCK_FLOOR_EPOCH_DAYS: i64 = 20_663; // 2026-07-29
-
-/// Today, as days since the Unix epoch, from the system clock.
-///
-/// A clock that reads earlier than `CLOCK_FLOOR_EPOCH_DAYS` is treated as that
-/// floor, not as what it says. That keeps the failure direction right: an
-/// implausible clock makes waivers look expired, so findings gate, rather than
-/// resurrecting waivers somebody deliberately let lapse.
-pub fn today_epoch_days() -> i64 {
-    let read = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| (d.as_secs() / 86_400) as i64)
-        // A clock before 1970 is not a reason to crash a board check.
-        .unwrap_or(0);
-    if read < CLOCK_FLOOR_EPOCH_DAYS {
-        eprintln!(
-            "WARNING: the system clock reads earlier than this build was made, so it \
-             cannot be trusted to decide what has expired. Treating every waiver dated \
-             before {} as lapsed.",
-            "2026-07-29"
-        );
-        return CLOCK_FLOOR_EPOCH_DAYS;
-    }
-    read
 }
 
 #[cfg(test)]
@@ -391,7 +300,7 @@ until = "2030-01-01"
     fn an_active_waiver_covers_its_finding_and_nothing_else() {
         let dir = tempfile::tempdir().unwrap();
         let p = write(dir.path(), GOOD);
-        let mut set = WaiverSet::load_at(&p, days_from_civil(2026, 7, 29)).unwrap();
+        let mut set = WaiverSet::load_at(&p, RunDate::from_epoch_days(20_663)).unwrap();
 
         assert!(
             set.take_waiver(
@@ -427,7 +336,11 @@ until = "2030-01-01"
         let dir = tempfile::tempdir().unwrap();
         let p = write(dir.path(), GOOD);
         // One day after the 2030-01-01 expiry.
-        let mut set = WaiverSet::load_at(&p, days_from_civil(2030, 1, 2)).unwrap();
+        let mut set = WaiverSet::load_at(
+            &p,
+            RunDate::from_epoch_days(parse_ymd_epoch_days("2030-01-02").unwrap()),
+        )
+        .unwrap();
         assert!(
             set.take_waiver(
                 "si",
@@ -446,7 +359,11 @@ until = "2030-01-01"
     fn a_waiver_is_in_force_on_its_expiry_date() {
         let dir = tempfile::tempdir().unwrap();
         let p = write(dir.path(), GOOD);
-        let mut set = WaiverSet::load_at(&p, days_from_civil(2030, 1, 1)).unwrap();
+        let mut set = WaiverSet::load_at(
+            &p,
+            RunDate::from_epoch_days(parse_ymd_epoch_days("2030-01-01").unwrap()),
+        )
+        .unwrap();
         assert!(
             set.take_waiver(
                 "si",
@@ -519,7 +436,7 @@ until = "2030-01-01"
     fn a_waiver_that_matched_nothing_is_reported_stale() {
         let dir = tempfile::tempdir().unwrap();
         let p = write(dir.path(), GOOD);
-        let mut set = WaiverSet::load_at(&p, days_from_civil(2026, 7, 29)).unwrap();
+        let mut set = WaiverSet::load_at(&p, RunDate::from_epoch_days(20_663)).unwrap();
         assert_eq!(set.stale().len(), 1, "nothing matched it yet");
         set.take_waiver(
             "si",
@@ -536,18 +453,30 @@ until = "2030-01-01"
 
     #[test]
     fn an_impossible_date_is_refused() {
-        assert_eq!(parse_ymd("2026-02-30"), None, "February has no 30th");
-        assert_eq!(parse_ymd("2026-13-01"), None, "there is no month 13");
-        assert_eq!(parse_ymd("2025-02-29"), None, "2025 is not a leap year");
-        assert!(parse_ymd("2024-02-29").is_some(), "2024 is");
+        assert_eq!(
+            parse_ymd_epoch_days("2026-02-30"),
+            None,
+            "February has no 30th"
+        );
+        assert_eq!(
+            parse_ymd_epoch_days("2026-13-01"),
+            None,
+            "there is no month 13"
+        );
+        assert_eq!(
+            parse_ymd_epoch_days("2025-02-29"),
+            None,
+            "2025 is not a leap year"
+        );
+        assert!(parse_ymd_epoch_days("2024-02-29").is_some(), "2024 is");
     }
 
     #[test]
-    fn days_from_civil_matches_known_epochs() {
-        assert_eq!(days_from_civil(1970, 1, 1), 0);
-        assert_eq!(days_from_civil(1970, 1, 2), 1);
-        assert_eq!(days_from_civil(1969, 12, 31), -1);
-        assert_eq!(days_from_civil(2000, 3, 1), 11017);
+    fn shared_calendar_matches_known_epochs() {
+        assert_eq!(parse_ymd_epoch_days("1970-01-01"), Some(0));
+        assert_eq!(parse_ymd_epoch_days("1970-01-02"), Some(1));
+        assert_eq!(parse_ymd_epoch_days("1969-12-31"), Some(-1));
+        assert_eq!(parse_ymd_epoch_days("2000-03-01"), Some(11017));
     }
 
     #[test]
@@ -568,28 +497,20 @@ reason = "expired on purpose"
 until = "2026-01-01"
 "#,
         );
-        // A clock reading 2020, well before the waiver's own expiry.
-        let mut set = WaiverSet::load_at(&p, days_from_civil(2020, 1, 1)).unwrap();
-        // load_at takes the caller's date verbatim, which is what makes it
-        // testable; the floor lives in today_epoch_days, so assert that.
-        assert!(
-            today_epoch_days() >= CLOCK_FLOOR_EPOCH_DAYS,
-            "the clock read must never fall below the floor"
-        );
-        // And with the floor applied, the waiver is lapsed.
-        let mut floored = WaiverSet::load_at(&p, CLOCK_FLOOR_EPOCH_DAYS).unwrap();
-        assert!(
-            floored
-                .take_waiver("si", "controlled_impedance", &["USB_DP".into()], &[], "x")
-                .is_none(),
-            "a waiver dated 2026-01-01 is lapsed at the floor"
-        );
-        // Sanity: the un-floored 2020 read WOULD have resurrected it, which is
-        // the bug the floor prevents.
+        // A clock reading 2020 is rejected by RunDate instead of being clamped
+        // into a believable date. Unknown dates expire every waiver.
+        let mut set = WaiverSet::load_at(&p, RunDate::from_epoch_days(18_262)).unwrap();
         assert!(
             set.take_waiver("si", "controlled_impedance", &["USB_DP".into()], &[], "x")
-                .is_some(),
-            "this is the failure mode: believing a backdated clock re-arms it"
+                .is_none(),
+            "an untrustworthy clock cannot cover any finding"
+        );
+        let mut unknown = WaiverSet::load_at(&p, RunDate::unknown()).unwrap();
+        assert!(
+            unknown
+                .take_waiver("si", "controlled_impedance", &["USB_DP".into()], &[], "x")
+                .is_none(),
+            "an absent clock reading is fail-closed too"
         );
     }
 

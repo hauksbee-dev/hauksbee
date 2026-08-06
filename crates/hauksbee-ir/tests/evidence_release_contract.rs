@@ -2,8 +2,8 @@ use hauksbee_ir::evidence::{
     ArtifactKind, ArtifactProvenance, ArtifactRole, Assumption, AssumptionId, AssumptionKind,
     CausalPathIndex, EntityKind, EntityRef, ErrorBudget, EvidenceError, EvidenceMap,
     EvidenceRegistry, EvidenceStatus, IntegrationMethod, IntegrationTolerance, MatchConfidence,
-    ModelLayer, ModelOnPath, ModelUncertainty, NetScope, ParameterRef, Residual, RunDate, Scope,
-    SubjectSet, TimeWindow, WindowMethod,
+    ModelLayer, ModelOnPath, ModelUncertainty, NetScope, ParameterProvenance, ParameterRef,
+    Residual, RunDate, Scope, SubjectSet, TimeWindow, ValueOrigin, WindowMethod,
 };
 
 fn today() -> RunDate {
@@ -196,4 +196,55 @@ fn artifact_and_map_references_are_checked_against_one_registry() {
         .with_artifacts(&registry, [artifact_id])
         .unwrap();
     assert_eq!(map.artifacts(), &[artifact_id]);
+
+    let missing_default = ParameterProvenance::new(
+        "U2.vout",
+        "3.3 V",
+        ValueOrigin::Default {
+            assumption: AssumptionId::new(AssumptionKind::DefaultParameter, "U2/vout"),
+        },
+    )
+    .unwrap();
+    assert!(matches!(
+        map.with_parameters(&registry, vec![missing_default]),
+        Err(EvidenceError::MissingAssumption { .. })
+    ));
+}
+
+#[test]
+fn waiver_status_and_prose_share_the_same_run_date() {
+    let active = Assumption::waived(
+        "si",
+        "controlled_impedance",
+        "DDR_CLK",
+        "fab accepted the stackup",
+        "2030-01-01",
+        RunDate::from_epoch_days(20_666),
+    )
+    .unwrap();
+    let expired = Assumption::waived(
+        "si",
+        "controlled_impedance",
+        "DDR_CLK",
+        "fab accepted the stackup",
+        "2026-01-01",
+        RunDate::from_epoch_days(20_666),
+    )
+    .unwrap();
+
+    assert!(active.consequence().contains("does not gate this run"));
+    assert!(expired.consequence().contains("has lapsed"));
+    assert_eq!(
+        EvidenceMap::derive_status(&[active], today()),
+        EvidenceStatus::Qualified
+    );
+    assert_eq!(
+        EvidenceMap::derive_status(&[expired], today()),
+        EvidenceStatus::Undermined
+    );
+
+    assert!(matches!(
+        Assumption::waived("si", "rule", "N1", "reason", "not-a-date", today()),
+        Err(EvidenceError::InvalidDate { .. })
+    ));
 }
