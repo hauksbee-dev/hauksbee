@@ -95,6 +95,35 @@ export interface JsonNote {
   message: string
 }
 
+/** One immutable run assumption from hauksbee-ir. The sentence fields are the
+ * canonical wording shared by CLI, JSON and web; clients display them rather
+ * than paraphrasing the limitation. */
+export interface EvidenceAssumption {
+  id: string
+  kind: string
+  source: string
+  scope: { type: string; value?: unknown }
+  statement: string
+  because: string
+  consequence: string
+  replacement: string
+  expires?: string
+}
+
+/** The evidence attached to one reported assertion. Provenance fields are kept
+ * structurally open here because their tagged IR variants remain additive; the
+ * web needs the stable assertion/status/assumption contract to render trust. */
+export interface EvidenceMap {
+  assertion: string
+  artifacts?: number[]
+  models?: unknown[]
+  parameters?: unknown[]
+  assumptions?: string[]
+  error_budget?: unknown
+  coverage?: string
+  status: 'clean' | 'qualified' | 'undermined'
+}
+
 export interface WebReport {
   ok: boolean
   error?: string | null
@@ -108,6 +137,9 @@ export interface WebReport {
   sections: WebSection[]
   components: WebComponent[]
   bind?: BindSummaryWeb | null
+  /** Canonical assumption registry and per-assertion maps from the engine. */
+  assumptions?: EvidenceAssumption[]
+  evidence?: EvidenceMap[]
   notes?: JsonNote[]
   /** Every net name, sorted; the checks builder's pickers. */
   nets?: string[]
