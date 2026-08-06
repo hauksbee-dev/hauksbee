@@ -1288,7 +1288,11 @@ pub(crate) fn slice_fixed_width(line: &str, starts: &[usize]) -> Vec<String> {
     let mut bounds: Vec<usize> = Vec::with_capacity(starts.len());
     for (k, &from) in starts.iter().enumerate() {
         let mut at = from.min(cs.len());
-        if k > 0 && at > 0 && at < cs.len() && !cs[at].is_whitespace() && !cs[at - 1].is_whitespace()
+        if k > 0
+            && at > 0
+            && at < cs.len()
+            && !cs[at].is_whitespace()
+            && !cs[at - 1].is_whitespace()
         {
             let floor = bounds[k - 1];
             while at > floor && !cs[at - 1].is_whitespace() {
@@ -1426,8 +1430,13 @@ fn role_candidates(key: &str, dialect: Option<BomDialect>) -> Vec<(ColumnRole, M
         | "reference_s"
         | "references"
         | "reference" => push(Reference, Certain),
-        "ref" | "refs" | "top_designator" | "bottom_designator" | "topdesignator"
-        | "bottomdesignator" | "component_reference" => push(Reference, Likely),
+        "ref"
+        | "refs"
+        | "top_designator"
+        | "bottom_designator"
+        | "topdesignator"
+        | "bottomdesignator"
+        | "component_reference" => push(Reference, Likely),
         "parts" => push(Reference, Likely),
         "part" => push(Reference, if eagle { Certain } else { Guess }),
         "customer_reference" | "component_number_on_pcb" => push(Reference, Guess),
