@@ -9,8 +9,8 @@ use hauksbee_models::ModelLibrary;
 use crate::binder::bind_board;
 use crate::engine::HauksbeeEngine;
 use crate::result::{
-    strict_analog_exit_code, BindSummary, BootGateJson, JsonNote, JsonNoteKind, JsonReport,
-    EXIT_INVALID_FOR_ANALYSIS,
+    strict_analog_exit_code, BindSummary, BootGateJson, JsonInputEvidence, JsonNote, JsonNoteKind,
+    JsonReport, EXIT_INVALID_FOR_ANALYSIS,
 };
 
 /// Plain (non-clap) mirror of the binary's `RunArgs`, so the `run` orchestrator
@@ -18,6 +18,9 @@ use crate::result::{
 /// match `RunArgs` exactly; the binary builds one and hands it over.
 pub struct RunConfig {
     pub board: std::path::PathBuf,
+    pub bom: Option<std::path::PathBuf>,
+    pub bom_columns: Vec<String>,
+    pub placement: Option<std::path::PathBuf>,
     pub firmware: Option<std::path::PathBuf>,
     pub seconds: f64,
     pub headless: bool,
@@ -90,6 +93,24 @@ pub struct RunConfig {
     pub sarif: Option<std::path::PathBuf>,
 }
 
+fn input_kind_name(kind: crate::board_input::InputKind) -> &'static str {
+    use crate::board_input::InputKind;
+    match kind {
+        InputKind::Text => "layout_or_netlist",
+        InputKind::Schematic => "kicad_schematic",
+        InputKind::Altium => "altium_pcbdoc",
+        InputKind::Gerber => "gerber_archive",
+        InputKind::Odb => "odbpp",
+        InputKind::Ipc2581 => "ipc2581",
+        InputKind::BoardCode => "board_as_code",
+    }
+}
+
+fn valid_digest(digest: &str) -> Option<String> {
+    (digest.len() == 64 && digest.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .then(|| digest.to_string())
+}
+
 pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // Bare `--plain` means "the prose report": imply --check rather than fall
     // through to the TUI/non-TTY hint. Without this, a piped `run <board>
@@ -147,11 +168,102 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // the KiCad-parseable layout text (empty for Altium/gerber, which have
     // none; those checks get the bytes twin or an honest "not checked").
     let norm = crate::board_input::from_path(&cfg.board)?;
+    let input_kind = norm.kind;
+    let input_notes = norm.notes.clone();
     let is_altium = norm.is_binary();
     let is_board_code = norm.kind == crate::board_input::InputKind::BoardCode;
     let raw = norm.raw;
     let text = norm.layout_text.unwrap_or_default();
     let mut board = norm.board;
+    // Layered model library: builtin < ~/.hauksbee/models (datasheet-extracted)
+    // < ~/.config/hauksbee/models (user) < --models-dir (highest). Identity
+    // reconciliation needs the same library the subsequent bind uses, so build
+    // it before BOM/PnP are applied rather than resolving them under a smaller
+    // universe of models.
+    let extra: Vec<&std::path::Path> = cfg.models_dir.as_deref().into_iter().collect();
+    let lib = ModelLibrary::builtin_with_user_dirs(&extra);
+
+    let mut inputs = vec![JsonInputEvidence {
+        path: cfg.board.display().to_string(),
+        kind: "board".to_string(),
+        format: input_kind_name(input_kind).to_string(),
+        sha256: None,
+        contributed: vec![format!(
+            "{} components and {} nets",
+            board.components.len(),
+            board.nets.len()
+        )],
+        ignored: input_notes,
+        identity: Vec::new(),
+    }];
+
+    if let Some(path) = &cfg.bom {
+        let mut overrides = hauksbee_extract::bom::ColumnOverrides::new();
+        for pair in &cfg.bom_columns {
+            let (role, header) = hauksbee_extract::bom::ColumnOverrides::parse_pair(pair)
+                .map_err(anyhow::Error::msg)?;
+            overrides.set(role, header);
+        }
+        let artifact = hauksbee_extract::bom::Bom::read_with(path, &overrides)?;
+        let identity = crate::binder::apply_bom_identity(&mut board, &artifact, &lib)?;
+        inputs.push(JsonInputEvidence {
+            path: artifact.provenance.path.clone(),
+            kind: "bom".to_string(),
+            format: artifact.provenance.kind.clone(),
+            sha256: valid_digest(&artifact.provenance.sha256),
+            contributed: artifact
+                .provenance
+                .contributed
+                .iter()
+                .map(|item| format!("{}: {}", item.what, item.detail))
+                .collect(),
+            ignored: artifact
+                .provenance
+                .ignored
+                .iter()
+                .map(|item| format!("{}: {}", item.what, item.why))
+                .collect(),
+            identity: identity.lines(),
+        });
+    }
+    if let Some(path) = &cfg.placement {
+        let artifact = hauksbee_extract::placement::PlacementFile::read(path)?;
+        let identity = crate::binder::apply_placement_identity(&mut board, &artifact, &lib)?;
+        inputs.push(JsonInputEvidence {
+            path: artifact.provenance.path.clone(),
+            kind: "placement".to_string(),
+            format: artifact.provenance.kind.clone(),
+            sha256: valid_digest(&artifact.provenance.sha256),
+            contributed: artifact
+                .provenance
+                .contributed
+                .iter()
+                .map(|item| format!("{}: {}", item.what, item.detail))
+                .collect(),
+            ignored: artifact
+                .provenance
+                .ignored
+                .iter()
+                .map(|item| format!("{}: {}", item.what, item.why))
+                .collect(),
+            identity: identity.lines(),
+        });
+    }
+    if inputs.len() > 1 && !quiet && !cfg.json {
+        eprintln!("Input inventory:");
+        for input in &inputs {
+            eprintln!("  {} ({}, {})", input.path, input.kind, input.format);
+            for line in &input.contributed {
+                eprintln!("    contributed: {line}");
+            }
+            for line in &input.ignored {
+                eprintln!("    ignored: {line}");
+            }
+            for line in &input.identity {
+                eprintln!("    identity: {}", line.trim());
+            }
+        }
+    }
     // Do-not-populate policy, applied before binding because DNP decides
     // whether a part is stamped at all. The decision is printed rather than
     // assumed: a board where a part was quietly added or dropped is a board
@@ -203,12 +315,6 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         }
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
     }
-    // Layered model library: builtin < ~/.hauksbee/models (datasheet-extracted)
-    // < ~/.config/hauksbee/models (user) < --models-dir (highest). A custom
-    // behavioural part dropped in any of these loads with no recompile.
-    let extra: Vec<&std::path::Path> = cfg.models_dir.as_deref().into_iter().collect();
-    let lib = ModelLibrary::builtin_with_user_dirs(&extra);
-
     // --probe records live waveforms, which only exist during a co-sim; it is
     // meaningless for the static reports and the interactive server. Fail loudly
     // rather than silently ignore the flag.
@@ -386,6 +492,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             &board,
             &lib,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
+            &inputs,
         );
     }
 

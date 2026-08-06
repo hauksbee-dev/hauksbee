@@ -41,8 +41,17 @@ fn board(parts: &[(&str, &str)]) -> ExtractedBoard {
             "U" => 10,
             _ => 2,
         };
+        let footprint = match prefix.as_str() {
+            "U" => "Package_DFN_QFN:QFN-10-1EP_3x3mm_P0.5mm",
+            "Q" => "Package_TO_SOT_SMD:SOT-23",
+            "D" => "Diode_SMD:D_SOD-123",
+            "C" => "Capacitor_SMD:C_0402_1005Metric",
+            "R" => "Resistor_SMD:R_0402_1005Metric",
+            "TP" => "TestPoint:TestPoint_Pad_D1.0mm",
+            _ => "Package_TO_SOT_SMD:SOT-23",
+        };
         text.push_str(&format!(
-            "  (module Package_TO_SOT_SMD:SOT-23 (layer F.Cu)\n    (at {} 100)\n\
+            "  (module {footprint} (layer F.Cu)\n    (at {} 100)\n\
              \x20   (fp_text reference {reference} (at 0 0) (layer F.SilkS))\n\
              \x20   (fp_text value {} (at 0 2) (layer F.Fab))\n",
             100 + i * 10,
@@ -199,6 +208,40 @@ fn a_bom_whose_dimension_disagrees_with_the_layout_is_refused() {
 }
 
 #[test]
+fn an_explicit_manufacturer_contradiction_is_refused() {
+    let mut b = board(&[("U1", "MCP4728")]);
+    b.components[0]
+        .properties
+        .push(("Manufacturer".to_string(), "Microchip".to_string()));
+
+    let err = apply_bom_identity(
+        &mut b,
+        &bom("Designator,Value,Manufacturer\nU1,MCP4728,Texas Instruments\n"),
+        &ModelLibrary::builtin(),
+    )
+    .expect_err("two explicit manufacturers cannot both describe the same fitted part");
+    let message = err.to_string();
+    assert!(message.contains("Microchip"), "{message}");
+    assert!(message.contains("Texas Instruments"), "{message}");
+}
+
+#[test]
+fn a_package_pin_count_contradiction_is_refused() {
+    let mut b = board(&[("U1", "MCP4728")]);
+    assert_eq!(b.components[0].pins.len(), 10, "fixture premise");
+
+    let err = apply_bom_identity(
+        &mut b,
+        &bom("Designator,Value,Footprint\nU1,MCP4728,QFN-16\n"),
+        &ModelLibrary::builtin(),
+    )
+    .expect_err("a 16-pad package cannot describe a ten-pad board footprint");
+    let message = err.to_string();
+    assert!(message.contains("QFN-16"), "{message}");
+    assert!(message.contains("10 pads"), "{message}");
+}
+
+#[test]
 fn a_bom_for_a_different_board_entirely_is_refused_by_name() {
     let mut b = board(&[("R1", "10k"), ("R2", "10k")]);
     let err = apply_bom_identity(
@@ -221,6 +264,36 @@ fn a_bom_for_a_different_board_entirely_is_refused_by_name() {
 }
 
 #[test]
+fn ten_percent_reference_overlap_is_still_a_different_board() {
+    let board_parts: Vec<(String, String)> = (1..=10)
+        .map(|n| (format!("R{n}"), "10k".to_string()))
+        .collect();
+    let borrowed: Vec<(&str, &str)> = board_parts
+        .iter()
+        .map(|(reference, value)| (reference.as_str(), value.as_str()))
+        .collect();
+    let mut b = board(&borrowed);
+    let mut text = String::from("Designator,Value\n");
+    for n in 1..=10 {
+        text.push_str(&format!("R{n},10k\n"));
+    }
+    for n in 1..=90 {
+        text.push_str(&format!("X{n},10k\n"));
+    }
+
+    let err = apply_bom_identity(&mut b, &bom(&text), &ModelLibrary::builtin())
+        .expect_err("ten matches among one hundred rows must not be trusted");
+    assert!(matches!(
+        err,
+        IdentityRefusal::WrongBoard {
+            total: 100,
+            matched: 10,
+            ..
+        }
+    ));
+}
+
+#[test]
 fn a_placement_file_from_another_revision_is_refused_on_its_positions() {
     let mut b = board(&[("R1", "10k"), ("R2", "10k")]);
     // Same designators, both in the wrong place.
@@ -233,6 +306,64 @@ fn a_placement_file_from_another_revision_is_refused_on_its_positions() {
     let msg = err.to_string();
     assert!(msg.contains("R1 sits at"), "{msg}");
     assert!(msg.contains("different revisions of the board"), "{msg}");
+}
+
+#[test]
+fn a_placement_file_with_the_wrong_side_is_refused() {
+    let mut b = board(&[("R1", "10k")]);
+    let file = PlacementFile::from_text(
+        "Designator,Mid X,Mid Y,Rotation,Layer\nR1,100,100,0,bottom\n",
+        "wrong-side.csv",
+    )
+    .expect("placement reads");
+    let err = apply_placement_identity(&mut b, &file, &ModelLibrary::builtin())
+        .expect_err("a part cannot be placed on both board faces");
+    assert!(err.to_string().contains("bottom side"), "{err}");
+}
+
+#[test]
+fn a_placement_file_with_the_wrong_rotation_is_refused() {
+    let mut b = board(&[("R1", "10k")]);
+    let file = PlacementFile::from_text(
+        "Designator,Mid X,Mid Y,Rotation,Layer\nR1,100,100,90,top\n",
+        "wrong-rotation.csv",
+    )
+    .expect("placement reads");
+    let err = apply_placement_identity(&mut b, &file, &ModelLibrary::builtin())
+        .expect_err("a ninety-degree assembly disagreement is unsafe");
+    assert!(err.to_string().contains("90"), "{err}");
+    assert!(err.to_string().contains("rotation"), "{err}");
+}
+
+#[test]
+fn a_placement_file_without_comparable_layout_positions_is_refused() {
+    let mut b = board(&[("R1", "10k")]);
+    b.components[0].position = None;
+    let file = PlacementFile::from_text(
+        "Designator,Mid X,Mid Y,Rotation,Layer\nR1,100,100,0,top\n",
+        "unverifiable.csv",
+    )
+    .expect("placement reads");
+    let err = apply_placement_identity(&mut b, &file, &ModelLibrary::builtin())
+        .expect_err("shared names are not a position cross-check when the layout has no positions");
+    assert!(err.to_string().contains("no comparable positions"), "{err}");
+}
+
+#[test]
+fn half_of_a_placement_file_belonging_to_another_board_is_refused() {
+    let mut b = board(&[("R1", "10k")]);
+    let file = PlacementFile::from_text(
+        "Designator,Mid X,Mid Y,Rotation,Layer\n\
+         R1,100,100,0,top\nX1,100,100,0,top\n",
+        "mixed-board.csv",
+    )
+    .expect("placement reads");
+    let err = apply_placement_identity(&mut b, &file, &ModelLibrary::builtin())
+        .expect_err("fifty percent off-board placements are not a trustworthy export");
+    assert!(
+        err.to_string().contains("placed but not on the board"),
+        "{err}"
+    );
 }
 
 // ── Precedence, tested in both directions ───────────────────────────────────
@@ -464,9 +595,9 @@ fn a_bom_that_says_a_dnp_part_is_populated_advises_and_does_not_act() {
 }
 
 #[test]
-fn a_bom_that_says_a_populated_part_is_not_fitted_advises_the_other_way() {
-    // The half the layout does not carry at all: nothing in the board file says
-    // R1 is unfitted, and the BOM does.
+fn a_bom_that_says_an_unspecified_part_is_not_fitted_advises_without_inventing_a_conflict() {
+    // `dnp=false` is the representation used when a reader found no explicit
+    // DNP marker. It must not be promoted to an explicit "fitted" assertion.
     let mut b = board(&[("R1", "10k")]);
     let report = apply_bom_identity(
         &mut b,
@@ -477,14 +608,26 @@ fn a_bom_that_says_a_populated_part_is_not_fitted_advises_the_other_way() {
     assert_eq!(report.advice.no_fit, vec!["R1".to_string()]);
     assert!(report.advice.fit.is_empty());
     assert!(!b.component("R1").unwrap().dnp, "still not acted on");
-    assert!(
-        report.findings.iter().any(|f| matches!(
-            f,
-            IdentityFinding::PopulateDisagrees { reference, .. } if reference == "R1"
-        )),
-        "{:?}",
-        report.findings
-    );
+    assert!(!report.findings.iter().any(|f| matches!(
+        f,
+        IdentityFinding::PopulateDisagrees { reference, .. } if reference == "R1"
+    )));
+}
+
+#[test]
+fn a_bom_without_a_population_column_leaves_population_unspecified() {
+    let mut b = board(&[("R1", "10k")]);
+    let report = apply_bom_identity(
+        &mut b,
+        &bom("Designator,Value\nR1,10k\n"),
+        &ModelLibrary::builtin(),
+    )
+    .expect("agreement");
+    assert!(report.advice.is_empty());
+    assert!(!report
+        .findings
+        .iter()
+        .any(|f| matches!(f, IdentityFinding::PopulateDisagrees { .. })));
 }
 
 #[test]
