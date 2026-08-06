@@ -1280,6 +1280,7 @@ pub enum ArtifactRole {
 pub enum ArtifactKind {
     KiCadPcb,
     KiCadSchematic,
+    KiCadNetlist,
     EagleBoard,
     AltiumPcbDoc,
     GerberArchive,

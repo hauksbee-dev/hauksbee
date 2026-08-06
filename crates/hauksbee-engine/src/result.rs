@@ -39,7 +39,7 @@ pub const EXIT_INVALID_FOR_ANALYSIS: i32 = 3;
 /// Version of the `run --json` document contract (`JsonReport` plus the
 /// `ok`/`verdict`/`serious_count`/`actionable_count` rollup `to_json`
 /// prepends). Bump on a breaking change only; additive fields keep it.
-pub const RUN_REPORT_SCHEMA_VERSION: u32 = 1;
+pub const RUN_REPORT_SCHEMA_VERSION: u32 = 2;
 
 /// Exit code a strict headless run (`--strict`) or hauksbee-ci must use when the
 /// analog co-sim tripped the consecutive-failed-chunk abort. Centralised so both
@@ -1271,6 +1271,9 @@ pub struct JsonReport {
     pub schema_version: u32,
     pub board: String,
     pub bind: BindSummary,
+    /// Exact inputs consumed by this run, content-addressed for reproducibility.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inventory: Vec<hauksbee_ir::evidence::ArtifactProvenance>,
     /// First-class assumptions collected from the real reader/bind path.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub assumptions: Vec<hauksbee_ir::evidence::Assumption>,
@@ -1393,6 +1396,7 @@ impl JsonReport {
             schema_version: RUN_REPORT_SCHEMA_VERSION,
             board: board_name.to_string(),
             bind,
+            inventory: Vec::new(),
             assumptions: Vec::new(),
             evidence: Vec::new(),
             findings: None,
@@ -1408,6 +1412,7 @@ impl JsonReport {
 
     /// Attach the one evidence object used by every report renderer.
     pub fn with_evidence(mut self, evidence: &crate::evidence::BoardEvidence) -> Self {
+        self.inventory = evidence.inventory().to_vec();
         self.assumptions = evidence.assumptions().to_vec();
         self.evidence = evidence.maps().to_vec();
         self

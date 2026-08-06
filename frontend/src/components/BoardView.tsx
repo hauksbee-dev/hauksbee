@@ -360,7 +360,7 @@ export function BoardView({
           </div>
         ))}
 
-        {((r.assumptions?.length ?? 0) > 0 || (r.evidence?.length ?? 0) > 0) && (
+        {((r.inventory?.length ?? 0) > 0 || (r.assumptions?.length ?? 0) > 0 || (r.evidence?.length ?? 0) > 0) && (
           <details
             data-testid="evidence-panel"
             open={evidenceSummary.undermined > 0}
@@ -380,6 +380,19 @@ export function BoardView({
               These are the engine's derived evidence statuses. An invalid assertion is not
               entitled to a pass/fail verdict until the limitation below is closed.
             </p>
+            {(r.inventory?.length ?? 0) > 0 && (
+              <div className="mt-3 text-[12px]" style={{ color: 'var(--silk-dim)' }}>
+                <div className="font-semibold" style={{ color: 'var(--silk)' }}>Input artifacts</div>
+                {(r.inventory ?? []).map((artifact, index) => (
+                  <div key={`${index}:${artifact.path}`} className="mt-1 grid gap-x-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                    <span className="truncate" title={artifact.path}>{artifact.path}</span>
+                    <span className="tnum" style={{ fontFamily: 'var(--font-mono)' }}>
+                      {artifact.sha256 ? `sha256:${artifact.sha256.slice(0, 12)}…` : 'digest unavailable'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
             {(r.assumptions ?? []).map(assumption => (
               <div
                 key={assumption.id}

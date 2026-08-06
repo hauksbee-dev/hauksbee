@@ -85,6 +85,145 @@
       "minimum": 0,
       "type": "integer"
     },
+    "ArtifactKind": {
+      "description": "The normalized input format. Shared by provenance producers and renderers.",
+      "enum": [
+        "ki_cad_pcb",
+        "ki_cad_schematic",
+        "ki_cad_netlist",
+        "eagle_board",
+        "altium_pcb_doc",
+        "gerber_archive",
+        "odb_plus_plus",
+        "ipc2581",
+        "ipc356",
+        "board_code",
+        "bom",
+        "placement",
+        "elf",
+        "intel_hex",
+        "toml"
+      ],
+      "type": "string"
+    },
+    "ArtifactProvenance": {
+      "description": "One input artifact: what it was, what it gave the run, what in it was ignored, and which cross-checks it passed.",
+      "properties": {
+        "assumptions": {
+          "description": "Assumptions this artifact's limitations raised, by id, so the inventory\nrow and the assumption registry cross-reference instead of duplicating\ntext.",
+          "items": {
+            "$ref": "#/definitions/AssumptionId"
+          },
+          "type": "array"
+        },
+        "contributed": {
+          "description": "What it contributed.",
+          "items": {
+            "$ref": "#/definitions/Contribution"
+          },
+          "type": "array"
+        },
+        "cross_checks": {
+          "description": "Cross-checks run on it.",
+          "items": {
+            "$ref": "#/definitions/CrossCheck"
+          },
+          "type": "array"
+        },
+        "ignored": {
+          "description": "What in it was deliberately not used.",
+          "items": {
+            "$ref": "#/definitions/IgnoredInput"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ArtifactKind"
+            }
+          ],
+          "description": "What the normalizer recognised it as: \"kicad_pcb\", \"altium_pcbdoc\",\n\"gerber_archive\", \"odbpp\", \"ipc2581\", \"board_code\", \"elf\", \"hex\",\n\"toml\", and so on."
+        },
+        "path": {
+          "description": "Path as the user gave it, not canonicalized: the report must read back\nin the user's own vocabulary.",
+          "type": "string"
+        },
+        "role": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ArtifactRole"
+            }
+          ],
+          "description": "The role it played."
+        },
+        "sha256": {
+          "description": "SHA-256 of the bytes read (of the archive, for archives). Empty only\nfor a gerber DIRECTORY, where there is no single file to hash.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "role"
+      ],
+      "type": "object"
+    },
+    "ArtifactRole": {
+      "description": "What role an input artifact played in the run.",
+      "oneOf": [
+        {
+          "const": "layout",
+          "description": "A board layout.",
+          "type": "string"
+        },
+        {
+          "const": "schematic",
+          "description": "A schematic.",
+          "type": "string"
+        },
+        {
+          "const": "netlist",
+          "description": "A netlist.",
+          "type": "string"
+        },
+        {
+          "const": "fab_archive",
+          "description": "A fabrication archive (gerbers, ODB++, IPC-2581).",
+          "type": "string"
+        },
+        {
+          "const": "firmware",
+          "description": "A firmware image.",
+          "type": "string"
+        },
+        {
+          "const": "bom",
+          "description": "A bill of materials.",
+          "type": "string"
+        },
+        {
+          "const": "spec",
+          "description": "A CI spec / assertion file.",
+          "type": "string"
+        },
+        {
+          "const": "waivers",
+          "description": "A waiver file.",
+          "type": "string"
+        },
+        {
+          "const": "model_pack",
+          "description": "A model pack or models directory.",
+          "type": "string"
+        },
+        {
+          "const": "soc_descriptor",
+          "description": "An MCU / SoC descriptor.",
+          "type": "string"
+        }
+      ]
+    },
     "Assumption": {
       "description": "One thing the run took as true, or deliberately did not examine, without evidence for it, with the four sentences that say what, why, what it costs, and what would close it.",
       "properties": {
@@ -367,6 +506,24 @@
         "total_active_count",
         "open_active_on_live_circuit",
         "partial"
+      ],
+      "type": "object"
+    },
+    "Contribution": {
+      "description": "One concrete thing an artifact contributed to the run.",
+      "properties": {
+        "detail": {
+          "description": "The specifics, one sentence, e.g. \"netlist read from the document's\nLogicalNet section, not reverse-engineered from copper\".",
+          "type": "string"
+        },
+        "what": {
+          "description": "What, as a stable slug: \"connectivity\", \"copper_geometry\",\n\"placements\", \"component_values\", \"dnp_flags\", \"firmware_image\",\n\"net_names\", \"clearance_rules\".",
+          "type": "string"
+        }
+      },
+      "required": [
+        "what",
+        "detail"
       ],
       "type": "object"
     },
@@ -671,6 +828,29 @@
       "required": [
         "id",
         "bus"
+      ],
+      "type": "object"
+    },
+    "CrossCheck": {
+      "description": "A cross-check the reader ran between two sources inside (or across)\nartifacts, and whether they agreed. A disagreement additionally raises a\nparser-limitation assumption; an agreement is positive evidence and belongs\nin the inventory in its own right.",
+      "properties": {
+        "agreed": {
+          "description": "Whether the two sources agreed.",
+          "type": "boolean"
+        },
+        "detail": {
+          "description": "The specifics, one sentence.",
+          "type": "string"
+        },
+        "what": {
+          "description": "What was cross-checked.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "what",
+        "agreed",
+        "detail"
       ],
       "type": "object"
     },
@@ -1022,6 +1202,24 @@
           "type": "string"
         }
       ]
+    },
+    "IgnoredInput": {
+      "description": "One member or section of an artifact that was deliberately not used.",
+      "properties": {
+        "what": {
+          "description": "The member: a file inside an archive, a section of a document, or a\nsibling file the reader saw and skipped.",
+          "type": "string"
+        },
+        "why": {
+          "description": "Why, one sentence.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "what",
+        "why"
+      ],
+      "type": "object"
     },
     "IntegrationMethod": {
       "description": "The integration algorithm used for a solved window.",
@@ -1804,7 +2002,7 @@
       "type": "object"
     }
   },
-  "description": "The document `hauksbee run <board> --json` (and the per-report --json surfaces) emits. schema_version 1. GENERATED from `JsonReport` in crates/hauksbee-engine/src/result.rs plus the ok/verdict/serious_count/actionable_count rollup `to_json` prepends. Do not hand-edit; regenerate with: UPDATE_RUN_SCHEMA=1 cargo test -p hauksbee-engine --test run_report_schema_drift",
+  "description": "The document `hauksbee run <board> --json` (and the per-report --json surfaces) emits. schema_version 2. GENERATED from `JsonReport` in crates/hauksbee-engine/src/result.rs plus the ok/verdict/serious_count/actionable_count rollup `to_json` prepends. Do not hand-edit; regenerate with: UPDATE_RUN_SCHEMA=1 cargo test -p hauksbee-engine --test run_report_schema_drift",
   "properties": {
     "ac": {
       "anyOf": [
@@ -1879,6 +2077,13 @@
         "array",
         "null"
       ]
+    },
+    "inventory": {
+      "description": "Exact inputs consumed by this run, content-addressed for reproducibility.",
+      "items": {
+        "$ref": "#/definitions/ArtifactProvenance"
+      },
+      "type": "array"
     },
     "notes": {
       "description": "Info-level notes (bind roles, co-sim substitution, coverage caveats, SI\ninfo) that must never be silently absent but never gate a CI pipeline.\nAdditive + `skip_serializing_if` so the schema stays backward-compatible.",

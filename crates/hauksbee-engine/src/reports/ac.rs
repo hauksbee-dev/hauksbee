@@ -239,13 +239,31 @@ pub fn emit(
         }
     }
 
+    // Causal evidence for the numbers actually emitted. A frequency-domain
+    // sweep consumes the board/model path and solver tolerances, but no
+    // transient time window or firmware artifact.
+    let ac_budget = crate::evidence::BoardEvidence::solver_error_budget()?;
+    let mut ac_maps = Vec::new();
+    for (net, bode) in &per_net {
+        if bode.is_empty() || ac_is_all_sentinel(bode) {
+            continue;
+        }
+        ac_maps.push(evidence.simulation_map(
+            format!("AC response for net {net}"),
+            std::slice::from_ref(net),
+            &[],
+            Some(ac_budget.clone()),
+        )?);
+    }
+    let report_evidence = evidence.clone().with_maps(ac_maps);
+
     if json {
         // Valid sweep: emit the structured bode per net. Skip empty/not-found
         // nets AND any individual net that is all-sentinel (no path to THIS net),
         // so a JSON consumer never sees -6000 dB rows presented as real data
         // alongside valid:true. The skipped nets are listed so the omission is
         // explicit, never silent.
-        let mut jr = JsonReport::new(&bound.name, summary).with_evidence(evidence);
+        let mut jr = JsonReport::new(&bound.name, summary).with_evidence(&report_evidence);
         let nets: Vec<AcNetJson> = per_net
             .iter()
             .filter(|(_, b)| !b.is_empty() && !ac_is_all_sentinel(b))
@@ -386,7 +404,7 @@ pub fn emit(
         }
     }
 
-    print!("{}", evidence.render_plain());
+    print!("{}", report_evidence.render_plain());
 
     Ok(())
 }
