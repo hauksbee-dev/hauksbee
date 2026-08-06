@@ -547,7 +547,7 @@ pub struct QemuBackend {
     /// of the backend (UART, GPIO output, stepping) still works.
     gdb: Option<GdbStub>,
     uart: UartSocket,
-    _process: QemuProcess,
+    process: QemuProcess,
     /// When the caller handed us a bare app ELF, this is the merged flash
     /// image built from it (see [`flashimage`]); QEMU boots from this file, so
     /// it must live exactly as long as the process does.
@@ -717,7 +717,12 @@ impl QemuBackend {
         qmp.set_timeout(Duration::from_secs(20));
         // The guest is running at boot; pause it so the first chunk starts from a
         // known stopped state (the lockstep is cont -> window -> stop).
-        let _ = qmp.stop();
+        if let Err(e) = qmp.stop() {
+            return match process.ensure_running("performing the initial QMP stop") {
+                Err(death) => Err(death).context(format!("initial QMP stop failed: {e:#}")),
+                Ok(()) => Err(e).context("performing the initial QMP stop"),
+            };
+        }
 
         // Attach a gdbstub for GPIO-input memory writes. Best-effort: if it fails
         // we keep going with input injection disabled (the common demo path
@@ -742,7 +747,7 @@ impl QemuBackend {
             qmp,
             gdb,
             uart,
-            _process: process,
+            process,
             _flash_temp: flash_temp,
             last_out,
             in_shadow,
@@ -773,20 +778,39 @@ impl QemuBackend {
 
     /// Read one bank's output-mirror word from the RAM mailbox, preferring QMP
     /// `xp`, falling back to the gdbstub on a parse failure.
-    fn read_out(&mut self, bank: &GpioBank) -> u32 {
+    fn read_out(&mut self, bank: &GpioBank) -> Result<u32> {
         match self.qmp.read_u32(bank.out_reg) {
-            Ok(v) => v,
-            Err(_) => self
-                .gdb
-                .as_mut()
-                .and_then(|g| g.read_u32(bank.out_reg).ok())
-                .unwrap_or_else(|| *self.last_out.get(&bank.letter).unwrap_or(&0)),
+            Ok(v) => Ok(v),
+            Err(qmp_err) => {
+                if let Err(death) = self
+                    .process
+                    .ensure_running("reading a GPIO output word over QMP")
+                {
+                    return Err(death).context(format!(
+                        "QMP GPIO read at {:#x} failed: {qmp_err:#}",
+                        bank.out_reg
+                    ));
+                }
+                match self.gdb.as_mut() {
+                    Some(gdb) => gdb.read_u32(bank.out_reg).with_context(|| {
+                        format!(
+                            "QMP GPIO read at {:#x} failed ({qmp_err:#}); \
+                             gdb fallback failed too",
+                            bank.out_reg
+                        )
+                    }),
+                    None => Err(qmp_err).context(format!(
+                        "QMP GPIO read at {:#x} failed and no gdbstub fallback is attached",
+                        bank.out_reg
+                    )),
+                }
+            }
         }
     }
 
     /// Poll the relevant banks' OUT registers, diff against the snapshot, fire
     /// per-bit edges for the wired pins.
-    fn poll_gpio_edges(&mut self) {
+    fn poll_gpio_edges(&mut self) -> Result<()> {
         let banks: Vec<GpioBank> = match &self.active_ports {
             Some(active) => self
                 .config
@@ -802,7 +826,7 @@ impl QemuBackend {
         // `cycle_exact()` is false (05 §1.1). Snapshot before the callback borrow.
         let cyc = self.cycles;
         for bank in &banks {
-            let new = self.read_out(bank);
+            let new = self.read_out(bank)?;
             let prev = *self.last_out.get(&bank.letter).unwrap_or(&0);
             if new != prev {
                 let changed = new ^ prev;
@@ -824,6 +848,7 @@ impl QemuBackend {
                 self.last_out.insert(bank.letter, new);
             }
         }
+        Ok(())
     }
 
     /// Drain UART bytes the firmware emitted and dispatch them.
@@ -853,10 +878,20 @@ impl QemuBackend {
         if !self.firmware_loaded {
             bail!("no firmware image booted in the QEMU machine");
         }
-        self.qmp.cont().context("qmp cont")?;
+        if let Err(e) = self.qmp.cont() {
+            return match self.process.ensure_running("servicing QMP cont") {
+                Err(death) => Err(death).context(format!("QMP cont failed: {e:#}")),
+                Ok(()) => Err(e).context("qmp cont"),
+            };
+        }
         let window = run_window(seconds, self.boot_complete);
         std::thread::sleep(window);
-        self.qmp.stop().context("qmp stop")?;
+        if let Err(e) = self.qmp.stop() {
+            return match self.process.ensure_running("servicing QMP stop") {
+                Err(death) => Err(death).context(format!("QMP stop failed: {e:#}")),
+                Ok(()) => Err(e).context("qmp stop"),
+            };
+        }
 
         // Credit cycles from the window we ACTUALLY ran, not the requested
         // `seconds`: during boot the floor/cap reshapes the real run, so
@@ -881,11 +916,15 @@ impl QemuBackend {
             }
         }
 
-        self.poll_gpio_edges();
+        self.poll_gpio_edges()?;
         // Service the mailbox bus cells while the guest is paused (05 §5.2),
         // so a firmware spin-waiting on RSP_SEQ proceeds next chunk.
         self.service_bus_mailbox()?;
         self.pump_uart_out();
+        // A child that died after replying to `stop` must make this chunk fail,
+        // even if a buffered/fallback read happened to return stale state.
+        self.process
+            .ensure_running("completing the QEMU co-simulation chunk")?;
         Ok(())
     }
 
