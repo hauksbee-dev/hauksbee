@@ -17,6 +17,7 @@ pub fn emit(
     csv: Option<&Path>,
     ac_loop: Option<&str>,
     json: bool,
+    inputs: &[crate::result::JsonInputEvidence],
 ) -> anyhow::Result<()> {
     use hauksbee_solve::{AcAnalysis, AcSpec, LoopStability, SolverOptions};
 
@@ -48,7 +49,7 @@ pub fn emit(
         let missing = nodes.join(", ");
         let reason = format!("no requested AC nodes found in the circuit: {missing}");
         if json {
-            let mut jr = JsonReport::new(&bound.name, summary);
+            let mut jr = JsonReport::new(&bound.name, summary).with_inputs(inputs);
             jr.ac = Some(AcJson {
                 validity: Validity::invalid(reason),
                 nets: Vec::new(),
@@ -118,7 +119,7 @@ pub fn emit(
         let missing = nodes.join(", ");
         let reason = format!("no requested AC nodes found in the circuit: {missing}");
         if json {
-            let mut jr = JsonReport::new(&bound.name, summary);
+            let mut jr = JsonReport::new(&bound.name, summary).with_inputs(inputs);
             jr.ac = Some(AcJson {
                 validity: Validity::invalid(reason),
                 nets: Vec::new(),
@@ -159,7 +160,7 @@ pub fn emit(
             .unwrap_or("the requested node");
         let reason = no_signal_path_reason(net, &summary);
         if json {
-            let mut jr = JsonReport::new(&bound.name, summary);
+            let mut jr = JsonReport::new(&bound.name, summary).with_inputs(inputs);
             jr.ac = Some(AcJson {
                 validity: Validity::invalid(reason),
                 nets: Vec::new(),
@@ -196,7 +197,7 @@ pub fn emit(
             if json {
                 // Structured refusal on the JSON surface too, a consumer reading
                 // stdout (not the exit code) must see valid:false, not empty output.
-                let mut jr = JsonReport::new(&bound.name, summary);
+                let mut jr = JsonReport::new(&bound.name, summary).with_inputs(inputs);
                 jr.ac = Some(AcJson {
                     validity: Validity::invalid(reason),
                     nets: vec![],
@@ -240,7 +241,7 @@ pub fn emit(
         // so a JSON consumer never sees -6000 dB rows presented as real data
         // alongside valid:true. The skipped nets are listed so the omission is
         // explicit, never silent.
-        let mut jr = JsonReport::new(&bound.name, summary);
+        let mut jr = JsonReport::new(&bound.name, summary).with_inputs(inputs);
         let nets: Vec<AcNetJson> = per_net
             .iter()
             .filter(|(_, b)| !b.is_empty() && !ac_is_all_sentinel(b))
