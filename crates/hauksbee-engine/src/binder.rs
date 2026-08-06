@@ -4274,6 +4274,21 @@ fn kind_word(kind: ComponentKind) -> String {
     format!("{kind:?}").to_ascii_lowercase()
 }
 
+/// A model in the words a user recognises: its own description, or its kind when
+/// it has none.
+///
+/// Never the model id. An id like `signal_diode_1n4148_fallback` is an internal
+/// identifier the user never typed, and `docs/STYLE.md` rules those out of
+/// user-facing text for the good reason that they send a reader looking for a file
+/// rather than at their board.
+fn model_words(model: &ModelEntry) -> String {
+    if model.description.trim().is_empty() {
+        kind_word(model.kind)
+    } else {
+        model.description.clone()
+    }
+}
+
 fn confidence_word(c: Confidence) -> &'static str {
     match c {
         Confidence::Exact => "exact",
@@ -4577,6 +4592,48 @@ pub fn apply_placement_identity(
     apply_identity(board, &file.identity_hints(), lib)
 }
 
+/// Did the LAYOUT name a part, as opposed to stating a parameter or nothing?
+///
+/// A non-empty value that does not parse as a magnitude is a name: `ATmega328P-AU`,
+/// `BSS138`, `LM4040BIM3-2.0`. A parseable magnitude (`10k`, `100nF`) is a
+/// parameter. An empty value, KiCad's `~`, and the marker an Altium read leaves
+/// behind are all nothing.
+fn layout_names_a_part(comp: &Component) -> bool {
+    let v = comp.value.trim();
+    !v.is_empty()
+        && v != "~"
+        && parse_value(v).is_none()
+        && !comp
+            .properties
+            .iter()
+            .any(|(k, _)| k == hauksbee_extract::altium::VALUE_UNRESOLVED_KEY)
+}
+
+/// Do two identity strings plausibly name the same part?
+///
+/// Package and reel suffixes are the reason this exists: `ATmega328P-AU` and
+/// `ATmega328P`, `BSS138` and `BSS138-7-F`, `BC847B` and `BC847B,215` are one part
+/// written two ways, and refusing a run over a suffix would make the feature
+/// unusable. Compared on alphanumerics only, case-insensitively: either a prefix
+/// of the other, or a shared prefix of five characters, which is long enough that
+/// `STM32F103C8` and `ATmega328P` share nothing.
+fn names_same_part(a: &str, b: &str) -> bool {
+    let norm = |s: &str| -> String {
+        s.chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_ascii_uppercase()
+    };
+    let (a, b) = (norm(a), norm(b));
+    if a.is_empty() || b.is_empty() {
+        return false;
+    }
+    if a.starts_with(&b) || b.starts_with(&a) {
+        return true;
+    }
+    a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count() >= 5
+}
+
 /// The component as it looks with an artifact's part number attached.
 ///
 /// Two things are attached, and the second needs explaining. The part number goes
@@ -4607,17 +4664,30 @@ fn probe_with_mpn(comp: &Component, mpn: &str) -> Component {
 
 /// True when the artifact's part number identified a part the layout could not.
 ///
-/// Deliberately the narrowest rule that delivers the gain: the part number is used
-/// only where the layout identified NOTHING. That is precedence rules 1 and 2
-/// together. A layout that already reached a model keeps it, and if the part
-/// number reaches a different one, [`contradiction_between`] has already refused
-/// the whole read rather than letting this function quietly pick a winner.
+/// The narrowest rule that delivers the gain, which is precedence rules 1 and 2
+/// together: the part number is used only where the layout did not decide.
+///
+/// "Did not decide" is `Unresolved` OR `Guessed`, and the second half matters as
+/// much as the first. A `Guessed` reading is what a footprint prefix alone
+/// produces for a part with no value: it is a shape, not a claim about a device,
+/// so a part number that reaches an exact model is better evidence and replaces
+/// it. A layout that reached `Exact` or `Family` keeps its reading, and if the
+/// part number reaches a different one, [`contradiction_between`] has already
+/// refused the whole read rather than letting this function quietly pick a winner.
 fn identity_improves(
     before: &hauksbee_models::Resolution,
     after: &hauksbee_models::Resolution,
 ) -> bool {
-    before.confidence == Confidence::Unresolved
-        && after.confidence != Confidence::Unresolved
+    let rank = |c: Confidence| match c {
+        Confidence::Exact => 0,
+        Confidence::Family => 1,
+        Confidence::Guessed => 2,
+        Confidence::Unresolved => 3,
+    };
+    matches!(
+        before.confidence,
+        Confidence::Unresolved | Confidence::Guessed
+    ) && rank(after.confidence) < rank(before.confidence)
         && after.model.is_some()
 }
 
@@ -4635,6 +4705,35 @@ fn value_dimension(value: &str) -> Option<&'static str> {
         "F" => Some("a capacitance"),
         "H" => Some("an inductance"),
         "R" | "Ω" | "OHM" | "OHMS" => Some("a resistance"),
+        _ => None,
+    }
+}
+
+/// Is this bare magnitude written on a scale its designator never uses?
+///
+/// Returns the phrase a refusal uses, or `None` when the value is fine or states
+/// its own unit (in which case the dimension detectors have already judged it).
+/// The multiplier is the evidence: a capacitor or inductor written with a `k` or
+/// `M` multiplier is a resistance value in the wrong row, and a resistor written in
+/// pico or femto is a capacitance.
+fn wrong_scale_for_designator(reference: &str, value: &str) -> Option<&'static str> {
+    let parsed = parse_value(value)?;
+    if parsed.unit.is_some() {
+        return None;
+    }
+    let suffix = parsed.suffix?.to_ascii_uppercase();
+    let prefix: String = reference
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    match prefix.as_str() {
+        "C" | "L" if matches!(suffix.as_str(), "K" | "M" | "MEG" | "G" | "T") => {
+            Some("a resistance-scale value")
+        }
+        "R" if matches!(suffix.as_str(), "P" | "N" | "F" | "A") => {
+            Some("a capacitance-scale value")
+        }
         _ => None,
     }
 }
@@ -4696,21 +4795,47 @@ fn contradiction_between(
     // value, because the model library ANDs its match rules: a query carrying
     // both a value and a part number that name different parts matches neither,
     // and the disagreement would go unnoticed.
+    //
+    // The test is whether the LAYOUT NAMED A PART, not what confidence it reached.
+    // Those come apart in both directions and each way costs something real. A
+    // bare `Diode_SMD:D_SOD-123` footprint with no value at all reaches a model
+    // (a generic 1N4148 stand-in, at `Guessed`), and treating that as the layout
+    // naming a part refuses the whole file over a BOM that AGREES with it. A
+    // layout value of `ATmega328P-AU` also reaches only `Guessed`, because the
+    // library has no entry for that exact suffix, but the board plainly named a
+    // part, and a BOM saying `STM32F103C8` is then two different boards.
+    //
+    // So: the layout named a part when its value is a non-empty string that is not
+    // a magnitude. A magnitude is a parameter, not a name.
     if let Some(mpn) = &hint.mpn {
-        let layout = resolve(lib, comp);
-        if let Some(l) = &layout.model {
+        if layout_names_a_part(comp) {
+            let layout = resolve(lib, comp);
             let artifact = resolve(lib, &probe_with_mpn(comp, mpn));
             let decisive = matches!(artifact.confidence, Confidence::Exact | Confidence::Family);
-            if let Some(a) = &artifact.model {
-                if l.id != a.id && decisive {
+            if let (Some(l), Some(a)) = (&layout.model, &artifact.model) {
+                // Different models are not automatically different parts: the
+                // layout's reading is often an engine stand-in for the very part
+                // the BOM names (`ATmega328P-AU` reaching a fallback while
+                // `ATmega328P` reaches the library entry). Two strings that name
+                // the same part are not a disagreement, so the strings decide and
+                // the models only widen it to a kind mismatch.
+                let same_part = names_same_part(&comp.value, mpn);
+                if decisive && l.id != a.id && !same_part {
                     return Some(format!(
-                        "{reference} is {:?} ({}, {}) on the layout and {:?} ({}, {}) in the BOM",
+                        "{reference} is {:?} (\"{}\") on the layout and {:?} (\"{}\") in the BOM",
                         comp.value,
-                        l.id,
+                        model_words(l),
+                        mpn,
+                        model_words(a),
+                    ));
+                }
+                if l.kind != a.kind && !same_part {
+                    return Some(format!(
+                        "{reference} is {:?} (a {}) on the layout and {:?} (a {}) in the BOM",
+                        comp.value,
                         kind_word(l.kind),
                         mpn,
-                        a.id,
-                        kind_word(a.kind)
+                        kind_word(a.kind),
                     ));
                 }
             }
@@ -4753,7 +4878,35 @@ fn contradiction_between(
             ));
         }
     }
-    // 4. A passive value against a part the layout resolved as a semiconductor.
+    // 4. A magnitude on the wrong scale for its designator.
+    //
+    // `C9` with an empty layout value and a BOM value of `10k`. No dimension is
+    // stated on either side, no model resolves, and the designator prefix agrees
+    // with the BOM that this is a capacitor, so detectors 1 to 3 all pass it
+    // through and the fill path builds a 10 kilofarad capacitor: a dead short at
+    // every frequency, from a plausible-looking cell.
+    //
+    // The tell is the MULTIPLIER, not the magnitude. Capacitors and inductors are
+    // written in pico, nano, micro and milli; a `k` or a `M` on one is a resistance
+    // value pasted into the wrong row. The reverse holds for a resistor written in
+    // pico. Absolute bounds would be the wrong tool, because a 3000 F supercapacitor
+    // is a real part.
+    if !artifact_value.is_empty() {
+        if let Some(scale) = wrong_scale_for_designator(reference, artifact_value) {
+            if comp.value.trim() != artifact_value.trim() {
+                return Some(format!(
+                    "{reference} is a {} designator and the BOM calls it \
+                     {artifact_value:?}, which is {scale}",
+                    reference
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphabetic())
+                        .collect::<String>()
+                ));
+            }
+        }
+    }
+
+    // 5. A passive value against a part the layout resolved as a semiconductor.
     //
     // This is the case the feature exists for: the BOM calls Q5 a `10k` and the
     // layout calls it a MOSFET. It needs its own detector because `10k` carries

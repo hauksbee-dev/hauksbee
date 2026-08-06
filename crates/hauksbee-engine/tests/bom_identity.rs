@@ -253,9 +253,47 @@ fn two_files_naming_different_chips_for_one_designator_is_refused() {
     .expect_err("must refuse");
     assert_eq!(err.exit_code(), 3);
     let msg = err.to_string();
-    assert!(msg.contains("atmega328p"), "{msg}");
-    assert!(msg.contains("stm32f103c8"), "{msg}");
+    // Named in the words the model library uses for a human, never by model id:
+    // an id is an identifier the user never typed.
+    assert!(msg.contains("\"ATmega328P-AU\" (\"ATmega328P"), "{msg}");
+    assert!(msg.contains("\"STM32F103C8\" (\"STM32F103C8"), "{msg}");
+    assert!(!msg.contains("_fallback"), "{msg}");
     assert_eq!(b.component("U1").unwrap().value, "ATmega328P-AU");
+}
+
+#[test]
+fn a_bom_agreeing_with_a_footprint_guess_is_not_a_contradiction() {
+    // The regression this exists for. A bare diode footprint with NO value
+    // resolves to a generic stand-in at `guessed` confidence. That is a shape,
+    // not the layout naming a part, so a BOM that names the very part the
+    // stand-in stands in for must be a gain and not a refusal of the whole file.
+    let mut b = board(&[("D1", "")]);
+    let report = apply_bom_identity(
+        &mut b,
+        &bom("Designator,Value,MPN\nD1,,1N4148W\n"),
+        &ModelLibrary::builtin(),
+    )
+    .expect("an agreeing BOM must not refuse the file");
+    assert_eq!(report.identified.len(), 1);
+    assert_eq!(report.identified[0].before, Confidence::Guessed);
+    assert_eq!(report.identified[0].after, Confidence::Family);
+    assert_eq!(report.identified[0].layout_value, "");
+}
+
+#[test]
+fn a_package_suffix_is_not_a_different_part() {
+    // The other side of the same rule. `ATmega328P-AU` and `ATMEGA328P` are one
+    // part written two ways, and the layout's reading of the first is an engine
+    // stand-in rather than the library entry, so the model ids differ. Refusing
+    // over a package suffix would make the feature unusable.
+    let mut b = board(&[("U1", "ATmega328P-AU")]);
+    let report = apply_bom_identity(
+        &mut b,
+        &bom("Designator,Value,MPN\nU1,ATmega328P-AU,ATMEGA328P\n"),
+        &ModelLibrary::builtin(),
+    )
+    .expect("a suffix is not a disagreement");
+    assert!(report.findings.is_empty(), "{:?}", report.findings);
 }
 
 #[test]
