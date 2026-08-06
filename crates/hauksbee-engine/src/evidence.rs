@@ -1,4 +1,10 @@
 //! Production adapter from a bound board to the shared IR evidence spine.
+//!
+//! This module translates reader accounting, binder decisions, model matches,
+//! solver fallbacks, CI inputs, and live waivers into one validated
+//! [`BoardEvidence`] object. Report producers ask it for assertion-scoped maps;
+//! renderers only project those maps, so provenance and trust status cannot
+//! drift between terminal, JSON, web, JUnit, SARIF, and GitHub output.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
@@ -8,10 +14,10 @@ use crate::report::{BindOutcome, BindReport};
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_ir::evidence::{
     ArtifactId, ArtifactKind, ArtifactProvenance, ArtifactRole, Assumption, AssumptionSource,
-    CausalPathIndex, Contribution, ErrorBudget, EvidenceError, EvidenceMap, EvidenceRegistry,
-    EvidenceStatus, IntegrationMethod, IntegrationTolerance, MatchConfidence, ModelLayer,
-    ModelOnPath, NetScope, ParameterProvenance, RunDate, Scope, Subject, TimeWindow, ValueOrigin,
-    WindowMethod,
+    CausalPathIndex, Contribution, CrossCheck, EntityKind, EntityRef, ErrorBudget, EvidenceError,
+    EvidenceMap, EvidenceRegistry, EvidenceStatus, IgnoredInput, IntegrationMethod,
+    IntegrationTolerance, MatchConfidence, ModelLayer, ModelOnPath, NetScope, ParameterProvenance,
+    RunDate, Scope, Subject, SubjectSet, TimeWindow, ValueOrigin, WindowMethod,
 };
 use hauksbee_models::Confidence;
 use sha2::{Digest, Sha256};
@@ -20,6 +26,13 @@ use sha2::{Digest, Sha256};
 struct ModelFact {
     model_id: String,
     confidence: MatchConfidence,
+}
+
+#[derive(Debug, Clone)]
+struct DefaultFact {
+    parameter: String,
+    value: String,
+    assumption: hauksbee_ir::evidence::AssumptionId,
 }
 
 /// The evidence registry and one validated map per electrical net in a bound
@@ -35,6 +48,11 @@ pub struct BoardEvidence {
     maps: Vec<EvidenceMap>,
     board_artifact: Option<ArtifactId>,
     firmware_artifact: Option<ArtifactId>,
+    supporting_artifacts: Vec<ArtifactId>,
+    defaults_by_ref: BTreeMap<String, Vec<DefaultFact>>,
+    reader_contributions: Vec<Contribution>,
+    reader_ignored: Vec<IgnoredInput>,
+    reader_cross_checks: Vec<CrossCheck>,
 }
 
 impl BoardEvidence {
@@ -53,26 +71,43 @@ impl BoardEvidence {
                 assumptions.push(Assumption::open_part(&row.reference, &row.value, reason));
             }
         }
+        let mut reader_contributions = Vec::new();
+        let mut reader_ignored = Vec::new();
+        let mut reader_cross_checks = Vec::new();
         let mut seen_reader_notes = BTreeSet::new();
         for note in reader_notes {
             let normalized = note.trim();
             if !seen_reader_notes.insert(normalized) {
                 continue;
             }
-            // The id belongs to the limitation, not its position in the reader's
-            // note vector. Positional ids silently changed identity whenever a
-            // reader learned one additional limitation or reordered its notes.
-            // A full SHA-256 keeps the id bounded when it is repeated on every
-            // affected map while making collisions computationally infeasible.
-            let digest = Sha256::digest(normalized.as_bytes());
-            let key = format!("reader-note/{}", hex_digest(&digest));
-            assumptions.push(Assumption::reduced_fidelity(
-                AssumptionSource::Reader,
-                Subject::new(&key, "the input reader's coverage"),
-                Scope::Board,
-                note,
-                "supply the original native layout and BOM, or correct the source export, then re-run",
-            ));
+            classify_reader_note(
+                normalized,
+                board,
+                &mut assumptions,
+                &mut reader_contributions,
+                &mut reader_ignored,
+                &mut reader_cross_checks,
+            )?;
+        }
+
+        let mut defaults_by_ref: BTreeMap<String, Vec<DefaultFact>> = BTreeMap::new();
+        for row in &report.rows {
+            for guess in &row.guesses {
+                let (pin, role) = guessed_pin_role(guess);
+                assumptions.push(Assumption::inferred_pin_role(&row.reference, &pin, &role));
+            }
+            if let Some((parameter, value)) = documented_default(row.warning.as_deref()) {
+                let assumption = Assumption::default_parameter(&row.reference, &parameter, &value);
+                defaults_by_ref
+                    .entry(row.reference.clone())
+                    .or_default()
+                    .push(DefaultFact {
+                        parameter,
+                        value,
+                        assumption: assumption.id().clone(),
+                    });
+                assumptions.push(assumption);
+            }
         }
 
         let registry = EvidenceRegistry::new(assumptions)?;
@@ -127,32 +162,43 @@ impl BoardEvidence {
             let mut models = Vec::new();
             let mut parameters = Vec::new();
             for reference in refs {
-                let Some(row) = rows.get(reference.as_str()) else {
-                    continue;
-                };
-                let Some(model_id) = row.model_id.as_deref() else {
-                    continue;
-                };
-                let confidence = match row.confidence {
-                    Confidence::Exact => MatchConfidence::Exact,
-                    Confidence::Family => MatchConfidence::High,
-                    Confidence::Guessed | Confidence::Unresolved => MatchConfidence::Guessed,
-                };
-                models.push(ModelOnPath::new(
-                    reference,
-                    model_id,
-                    ModelLayer::Unspecified,
-                    confidence,
-                )?);
-                parameters.push(ParameterProvenance::new(
-                    format!("{reference}.model"),
-                    model_id,
-                    ValueOrigin::Model {
-                        model_id: model_id.to_string(),
-                        layer: ModelLayer::Unspecified,
-                        confidence,
-                    },
-                )?);
+                if let Some(row) = rows.get(reference.as_str()) {
+                    if let Some(model_id) = row.model_id.as_deref() {
+                        let confidence = match row.confidence {
+                            Confidence::Exact => MatchConfidence::Exact,
+                            Confidence::Family => MatchConfidence::High,
+                            Confidence::Guessed | Confidence::Unresolved => {
+                                MatchConfidence::Guessed
+                            }
+                        };
+                        models.push(ModelOnPath::new(
+                            reference,
+                            model_id,
+                            ModelLayer::Unspecified,
+                            confidence,
+                        )?);
+                        parameters.push(ParameterProvenance::new(
+                            format!("{reference}.model"),
+                            model_id,
+                            ValueOrigin::Model {
+                                model_id: model_id.to_string(),
+                                layer: ModelLayer::Unspecified,
+                                confidence,
+                            },
+                        )?);
+                    }
+                }
+                if let Some(defaults) = defaults_by_ref.get(reference) {
+                    for default in defaults {
+                        parameters.push(ParameterProvenance::new(
+                            format!("{reference}.{}", default.parameter),
+                            &default.value,
+                            ValueOrigin::Default {
+                                assumption: default.assumption.clone(),
+                            },
+                        )?);
+                    }
+                }
             }
             map = map.with_models(models);
             map = map.with_parameters(&registry, parameters)?;
@@ -183,6 +229,11 @@ impl BoardEvidence {
             maps,
             board_artifact: None,
             firmware_artifact: None,
+            supporting_artifacts: Vec::new(),
+            defaults_by_ref,
+            reader_contributions,
+            reader_ignored,
+            reader_cross_checks,
         })
     }
 
@@ -205,6 +256,8 @@ impl BoardEvidence {
             .filter(|a| a.source() == AssumptionSource::Reader)
             .map(|a| a.id().clone())
             .collect();
+        let mut contributions = input_contributions(kind);
+        contributions.extend(self.reader_contributions.clone());
         let artifact = ArtifactProvenance::new(
             path.to_string_lossy(),
             artifact_kind,
@@ -212,17 +265,9 @@ impl BoardEvidence {
             digest,
             reader_assumptions,
         )?
-        .with_contributions(vec![
-            Contribution {
-                what: "connectivity".into(),
-                detail: "component and net incidence consumed by binding and electrical checks"
-                    .into(),
-            },
-            Contribution {
-                what: "copper_geometry".into(),
-                detail: "layout geometry consumed by DRC when this input format carries it".into(),
-            },
-        ]);
+        .with_contributions(contributions)
+        .with_ignored(self.reader_ignored.clone())
+        .with_cross_checks(self.reader_cross_checks.clone());
         self.board_artifact = Some(self.registry.add_artifact(artifact)?);
         Ok(self)
     }
@@ -255,6 +300,52 @@ impl BoardEvidence {
             detail: "instructions executed by the MCU co-simulation backend".into(),
         }]);
         self.firmware_artifact = Some(self.registry.add_artifact(artifact)?);
+        Ok(self)
+    }
+
+    /// Attach a TOML input that directly shaped the run (CI spec or waivers).
+    pub fn with_toml_artifact(
+        mut self,
+        path: impl AsRef<Path>,
+        raw: &[u8],
+        role: ArtifactRole,
+        contribution: Contribution,
+    ) -> Result<Self, EvidenceError> {
+        let artifact = ArtifactProvenance::new(
+            path.as_ref().to_string_lossy(),
+            ArtifactKind::Toml,
+            role,
+            hex_digest(&Sha256::digest(raw)),
+            Vec::new(),
+        )?
+        .with_contributions(vec![contribution]);
+        let id = self.registry.add_artifact(artifact)?;
+        self.supporting_artifacts.push(id);
+        Ok(self)
+    }
+
+    /// Merge facts produced after binding (scheduler, solver, live waiver).
+    /// Existing artifact indices remain stable and every map is rebuilt later.
+    pub fn with_assumptions(
+        mut self,
+        new_assumptions: impl IntoIterator<Item = Assumption>,
+    ) -> Result<Self, EvidenceError> {
+        let artifacts = self.registry.artifacts().to_vec();
+        let mut assumptions = self.registry.assumptions().to_vec();
+        for assumption in new_assumptions {
+            if !assumptions
+                .iter()
+                .any(|known| known.id() == assumption.id())
+            {
+                assumptions.push(assumption);
+            }
+        }
+        let mut registry = EvidenceRegistry::new(assumptions)?;
+        for artifact in artifacts {
+            registry.add_artifact(artifact)?;
+        }
+        self.assumptions = registry.assumptions().to_vec();
+        self.registry = registry;
         Ok(self)
     }
 
@@ -329,6 +420,28 @@ impl BoardEvidence {
         )
     }
 
+    /// Evidence for a check-level coverage claim. This is what keeps a
+    /// geometry-less input from turning an empty DRC/SI finding list into a
+    /// synthetic clean pass: `NotChecked` is check-scoped, so it belongs on an
+    /// explicit coverage assertion even when there are no findings to map.
+    pub fn check_coverage_map(
+        &self,
+        check: &str,
+        assertion: impl Into<String>,
+    ) -> Result<EvidenceMap, EvidenceError> {
+        let assertion = assertion.into();
+        let nets: Vec<String> = self.refs_by_net.keys().cloned().collect();
+        let mut map = self.map_for_nets_with_check(
+            assertion.clone(),
+            nets,
+            Some((check, assertion.as_str())),
+        )?;
+        if let Some(artifact) = self.board_artifact {
+            map = map.with_artifacts(&self.registry, [artifact])?;
+        }
+        Ok(map)
+    }
+
     /// Build maps for the report's actual assertions. Nets are authoritative;
     /// a refs-only finding resolves to every net touching those refs.
     pub fn maps_for_findings(
@@ -386,6 +499,7 @@ impl BoardEvidence {
         assertion: impl Into<String>,
         nets: &[String],
     ) -> Result<EvidenceMap, EvidenceError> {
+        let assertion = assertion.into();
         let empty: Vec<String> = Vec::new();
         let incidence: Vec<(&str, &[String])> = nets
             .iter()
@@ -393,7 +507,7 @@ impl BoardEvidence {
             .collect();
         let index = CausalPathIndex::from_net_parts(incidence)?;
         let scope = NetScope::new(nets.iter().map(String::as_str), None)?;
-        let traversal = index.traverse(&scope, &self.registry)?;
+        let traversal = index.traverse_assertion(&scope, "drc", &assertion, &self.registry)?;
         let mut map =
             EvidenceMap::from_traversal(assertion, traversal, &self.registry, self.today)?;
         if let Some(artifact) = self.board_artifact {
@@ -426,10 +540,53 @@ impl BoardEvidence {
         let mut map = self.map_for_nets(assertion.into(), scoped_nets.into_iter().collect())?;
         let artifacts = [self.board_artifact, self.firmware_artifact]
             .into_iter()
-            .flatten();
+            .flatten()
+            .chain(self.supporting_artifacts.iter().copied());
         map = map.with_artifacts(&self.registry, artifacts)?;
         if let Some(budget) = budget {
             map = map.with_error_budget(budget);
+        }
+        Ok(map)
+    }
+
+    /// Build the map the production CI runner attaches to one evaluated
+    /// assertion. Check-scoped facts use the stable result label so a waiver or
+    /// an unexercised peripheral cannot leak onto a sibling assertion.
+    pub fn ci_assertion_map(
+        &self,
+        assertion: impl Into<String>,
+        nets: &[String],
+        references: &[String],
+        budget: Option<ErrorBudget>,
+        coverage: Option<&str>,
+    ) -> Result<EvidenceMap, EvidenceError> {
+        let assertion = assertion.into();
+        let mut scoped_nets: BTreeSet<String> = nets.iter().cloned().collect();
+        for (net, refs) in &self.refs_by_net {
+            if references.iter().any(|reference| refs.contains(reference)) {
+                scoped_nets.insert(net.clone());
+            }
+        }
+        // Board-wide assertions (`no_faults`, model coverage) have no explicit
+        // subject. Their honest causal path is the whole extracted board.
+        if scoped_nets.is_empty() {
+            scoped_nets.extend(self.refs_by_net.keys().cloned());
+        }
+        let mut map = self.map_for_nets_with_check(
+            assertion.clone(),
+            scoped_nets.into_iter().collect(),
+            Some(("ci", assertion.as_str())),
+        )?;
+        let artifacts = [self.board_artifact, self.firmware_artifact]
+            .into_iter()
+            .flatten()
+            .chain(self.supporting_artifacts.iter().copied());
+        map = map.with_artifacts(&self.registry, artifacts)?;
+        if let Some(budget) = budget {
+            map = map.with_error_budget(budget);
+        }
+        if let Some(coverage) = coverage {
+            map = map.with_coverage(coverage);
         }
         Ok(map)
     }
@@ -494,8 +651,23 @@ impl BoardEvidence {
         assertion: String,
         nets: Vec<String>,
     ) -> Result<EvidenceMap, EvidenceError> {
+        self.map_for_nets_with_check(assertion, nets, None)
+    }
+
+    fn map_for_nets_with_check(
+        &self,
+        assertion: String,
+        nets: Vec<String>,
+        check_scope: Option<(&str, &str)>,
+    ) -> Result<EvidenceMap, EvidenceError> {
         let scope = NetScope::new(nets.clone(), None)?;
-        let traversal = self.index.traverse(&scope, &self.registry)?;
+        let traversal = match check_scope {
+            Some((check, key)) => {
+                self.index
+                    .traverse_assertion(&scope, check, key, &self.registry)?
+            }
+            None => self.index.traverse(&scope, &self.registry)?,
+        };
         let mut map =
             EvidenceMap::from_traversal(assertion, traversal, &self.registry, self.today)?;
         let references: BTreeSet<&str> = nets
@@ -508,6 +680,17 @@ impl BoardEvidence {
         let mut parameters = Vec::new();
         for reference in references {
             let Some(fact) = self.model_by_ref.get(reference) else {
+                if let Some(defaults) = self.defaults_by_ref.get(reference) {
+                    for default in defaults {
+                        parameters.push(ParameterProvenance::new(
+                            format!("{reference}.{}", default.parameter),
+                            &default.value,
+                            ValueOrigin::Default {
+                                assumption: default.assumption.clone(),
+                            },
+                        )?);
+                    }
+                }
                 continue;
             };
             models.push(ModelOnPath::new(
@@ -525,6 +708,17 @@ impl BoardEvidence {
                     confidence: fact.confidence,
                 },
             )?);
+            if let Some(defaults) = self.defaults_by_ref.get(reference) {
+                for default in defaults {
+                    parameters.push(ParameterProvenance::new(
+                        format!("{reference}.{}", default.parameter),
+                        &default.value,
+                        ValueOrigin::Default {
+                            assumption: default.assumption.clone(),
+                        },
+                    )?);
+                }
+            }
         }
         map = map.with_models(models);
         map.with_parameters(&self.registry, parameters)
@@ -631,4 +825,154 @@ fn input_artifact_kind(
             _ => (ArtifactKind::KiCadPcb, ArtifactRole::Layout),
         },
     }
+}
+
+fn input_contributions(kind: crate::board_input::InputKind) -> Vec<Contribution> {
+    use crate::board_input::InputKind;
+    let mut out = vec![Contribution {
+        what: "connectivity".into(),
+        detail: match kind {
+            InputKind::Gerber => "connectivity reconstructed from the fabrication copper".into(),
+            InputKind::Odb => "connectivity read from the ODB++ job's EDA data".into(),
+            InputKind::Ipc2581 => "connectivity read from the IPC-2581 logical netlist".into(),
+            _ => "component and net incidence consumed by binding and electrical checks".into(),
+        },
+    }];
+    if matches!(
+        kind,
+        InputKind::Text | InputKind::Altium | InputKind::Gerber | InputKind::BoardCode
+    ) {
+        out.push(Contribution {
+            what: "copper_geometry".into(),
+            detail: match kind {
+                InputKind::Gerber => {
+                    "fabrication copper consumed by connectivity reconstruction".into()
+                }
+                _ => "layout geometry consumed by geometry-bearing checks".into(),
+            },
+        });
+    }
+    out
+}
+
+fn classify_reader_note(
+    note: &str,
+    board: &ExtractedBoard,
+    assumptions: &mut Vec<Assumption>,
+    contributions: &mut Vec<Contribution>,
+    ignored: &mut Vec<IgnoredInput>,
+    cross_checks: &mut Vec<CrossCheck>,
+) -> Result<(), EvidenceError> {
+    let lower = note.to_ascii_lowercase();
+    if lower.contains("not reverse-engineered from copper") {
+        contributions.push(Contribution {
+            what: "connectivity".into(),
+            detail: note.to_string(),
+        });
+        if lower.contains("clearance drc") && lower.contains("were not run") {
+            assumptions.push(Assumption::not_checked(
+                AssumptionSource::Reader,
+                "drc",
+                None,
+                "the exchange input carries no native layout representation the clearance checker consumes",
+                "supply the original native layout file alongside this exchange artifact, then re-run",
+            ));
+        }
+        if lower.contains("trace-geometry si") && lower.contains("were not run") {
+            assumptions.push(Assumption::not_checked(
+                AssumptionSource::Reader,
+                "si",
+                None,
+                "the exchange input carries no native routed-trace representation the SI checker consumes",
+                "supply the original native layout file alongside this exchange artifact, then re-run",
+            ));
+        }
+        return Ok(());
+    }
+    if lower.contains("treated every placed part as fitted")
+        || lower.contains("every placed part has been treated as fitted")
+    {
+        let subjects = board
+            .components
+            .iter()
+            .filter(|component| !component.reference.trim().is_empty())
+            .map(|component| EntityRef::new(EntityKind::Part, component.reference.clone()))
+            .collect::<Result<Vec<_>, _>>()?;
+        let scope = if subjects.is_empty() {
+            Scope::Board
+        } else {
+            Scope::Subjects(SubjectSet::new(subjects)?)
+        };
+        assumptions.push(Assumption::fitted_by_default(
+            AssumptionSource::Reader,
+            Subject::same("the exchange input"),
+            scope,
+        ));
+        return Ok(());
+    }
+    if lower.contains("disagree") || lower.contains("mismatch") || lower.contains("contradict") {
+        cross_checks.push(CrossCheck {
+            what: "reader source agreement".into(),
+            agreed: false,
+            detail: note.to_string(),
+        });
+        let digest = Sha256::digest(note.as_bytes());
+        let key = format!("reader-cross-check/{}", hex_digest(&digest));
+        assumptions.push(Assumption::parser_limitation(
+            AssumptionSource::Reader,
+            Subject::new(&key, "the reader's disagreeing sources"),
+            Scope::Board,
+            note,
+            "correct or re-export the source data so its internal connectivity descriptions agree, then re-run",
+        ));
+        return Ok(());
+    }
+    if lower.contains("board artwork") || lower.contains("nothing downstream can see") {
+        ignored.push(IgnoredInput {
+            what: "reader-excluded input content".into(),
+            why: note.to_string(),
+        });
+        return Ok(());
+    }
+
+    // Unknown notes remain visible and stable; only known positive accounting is
+    // promoted to provenance instead of becoming a caveat.
+    let digest = Sha256::digest(note.as_bytes());
+    let key = format!("reader-note/{}", hex_digest(&digest));
+    assumptions.push(Assumption::reduced_fidelity(
+        AssumptionSource::Reader,
+        Subject::new(&key, "the input reader's coverage"),
+        Scope::Board,
+        note,
+        "supply the original native layout and BOM, or correct the source export, then re-run",
+    ));
+    Ok(())
+}
+
+fn guessed_pin_role(message: &str) -> (String, String) {
+    let pin = message
+        .strip_prefix("pad ")
+        .and_then(|rest| rest.split_once(" role "))
+        .map(|(pin, _)| pin.trim().to_string())
+        .unwrap_or_else(|| "an unnamed pin".into());
+    let role = message
+        .split("role '")
+        .nth(1)
+        .and_then(|rest| rest.split_once('\'').map(|(role, _)| role.to_string()))
+        .unwrap_or_else(|| "inferred".into());
+    (pin, role)
+}
+
+fn documented_default(warning: Option<&str>) -> Option<(String, String)> {
+    let warning = warning?;
+    if warning.contains("vreg model has no `vout` param") {
+        let value = warning
+            .split("assumed ")
+            .nth(1)
+            .and_then(|rest| rest.split_whitespace().next())
+            .unwrap_or("5.0")
+            .to_string();
+        return Some(("vout".into(), value));
+    }
+    None
 }

@@ -163,7 +163,7 @@ fn no_example_asserts_a_rail_its_own_ideal_source_holds() {
 }
 
 #[test]
-fn the_first_run_example_is_a_board_someone_fabricated() {
+fn the_first_run_example_is_real_and_refuses_unresolved_evidence() {
     // The README, START_HERE, install.sh and the bundle all point a newcomer at
     // this one spec. It has to exist, run from a bare checkout, and be about a
     // real board rather than a fixture.
@@ -190,11 +190,14 @@ fn the_first_run_example_is_a_board_someone_fabricated() {
         .expect("run hauksbee-ci");
     assert_eq!(
         out.status.code(),
-        Some(0),
-        "the first thing a newcomer runs must go green:\n{}\n{}",
+        Some(hauksbee_engine::result::EXIT_INVALID_FOR_ANALYSIS),
+        "the real-board first run must refuse unresolved model evidence:\n{}\n{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
-    assert!(stdout.contains("GREEN"), "and say so plainly:\n{stdout}");
+    assert!(
+        stdout.contains("2/2 assertions passed") && stdout.contains("INVALID"),
+        "the checks still execute, but the report must say their evidence is invalid:\n{stdout}"
+    );
 }

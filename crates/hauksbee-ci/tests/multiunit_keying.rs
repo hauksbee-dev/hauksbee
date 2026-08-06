@@ -34,6 +34,7 @@ fn load_spec(name: &str, toml: &str) -> Spec {
 fn outcome_with(peak_temp_c: HashMap<String, f64>, faults: Vec<RunFault>) -> RunOutcome {
     RunOutcome {
         bind: None,
+        evidence: None,
         seed: 0,
         windows: HashMap::new(),
         uart: HashMap::new(),
@@ -55,6 +56,7 @@ fn outcome_with(peak_temp_c: HashMap<String, f64>, faults: Vec<RunFault>) -> Run
         ac: None,
         analog_valid: true,
         failed_windows: Vec::new(),
+        fallback_windows: Vec::new(),
         analog_abort: false,
         sampled_values: Vec::new(),
         net_series: HashMap::new(),

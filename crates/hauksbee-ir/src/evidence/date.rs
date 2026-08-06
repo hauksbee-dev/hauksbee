@@ -1,4 +1,12 @@
 //! Shared, fail-closed waiver date policy.
+//!
+//! Waiver loading, evidence status derivation, and report rendering all use
+//! this single parser and clock-credibility rule. Capturing the date once keeps
+//! a run internally consistent; treating malformed, pre-floor, or unavailable
+//! dates as expired prevents a broken clock from silently reactivating an old
+//! authorization.
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-ir/evidence.md
 
 use serde::{Deserialize, Serialize};
 

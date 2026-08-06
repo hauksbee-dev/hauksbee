@@ -632,14 +632,23 @@ is nothing to excuse them from.
   A waived failure appears as a `<skipped>` testcase carrying the waiver
   reason. A multi-spec run writes ONE merged document, one `<testsuite>` per
   spec, with honest aggregate counts.
+- **JSON** with `--json`: one typed run object containing the exact
+  `inventory`, canonical `assumptions`, and one causal `evidence` map per
+  result as well as the verdict fields. Numeric assertions carry their solver
+  error budget. An evidence map whose derived status is `undermined` makes the
+  assertion INVALID (exit 3), never green; a live waiver is a visible,
+  assertion-scoped `waived` assumption. The checked-in contract is
+  `crates/hauksbee-ci/schemas/hauksbee-ci-result.schema.json` and its drift
+  test is `crates/hauksbee-ci/tests/result_schema_drift.rs`.
 - **GitHub annotations**: when `GITHUB_ACTIONS` is set, `::error` workflow
   commands are emitted for failing/INVALID assertions so they show inline in
   the Checks UI. GitHub truncates at 10 annotations per type per step, so the
   budget is spent on verdicts: passing assertions emit no per-assertion
   `::notice` (the log and JUnit carry them), per-assertion errors are capped
   at 8 plus an overflow line plus the rollup, and warnings (dead rails,
-  waived failures, substitutions, coverage holes) are capped at 9 plus an
-  overflow line.
+  waived failures, typed evidence assumptions, substitutions, coverage holes)
+  are capped at 9 plus an overflow line. The same stable assumption id and
+  constructor-composed wording appear in JSON, human, JUnit and GitHub output.
 - **Several specs at once**: `hauksbee-ci run a.toml b.toml` (or a shell glob,
   `hauksbee-ci run ci/*.toml`) runs each spec in turn, prints a per-spec
   verdict summary at the end, merges everything into the one `--junit` file,

@@ -162,6 +162,10 @@ pub struct RunOutcome {
     /// where consecutive. Assertion evaluation marks any assertion whose window
     /// overlaps one of these INVALID rather than pass/fail.
     pub failed_windows: Vec<(f64, f64)>,
+    /// Windows solved by a fallback integration rung, with its stable method
+    /// name. These are valid numbers, but their error budget must say which
+    /// lower-fidelity method produced each span.
+    pub fallback_windows: Vec<(f64, f64, String)>,
     /// True once the analog solve failed `STRICT_CONSECUTIVE_FAILED_ABORT` chunks
     /// in a row at any point (the strict/CI hard-refusal condition). Drives exit 3
     /// on its own, even if no single assertion's window happened to overlap.
@@ -213,6 +217,10 @@ pub struct RunOutcome {
     /// in a report, or coverage falls silently the day a new part lands.
     /// `None` only in test-constructed outcomes, never in a real run.
     pub bind: Option<hauksbee_engine::result::BindSummary>,
+    /// The production board/bind/scheduler evidence collected for this member.
+    /// `None` only in narrow assertion-unit fixtures; every real runner outcome
+    /// carries it and the top-level `run` path fails closed if it is absent.
+    pub evidence: Option<hauksbee_engine::BoardEvidence>,
 }
 
 /// The shared AC analysis outcome attached to every seed's run.
@@ -387,7 +395,11 @@ pub fn run_spec_with_lib(
     // the ExtractedBoard, but overrides do, so we re-derive per run).
     let board_path = spec.board_path();
     crate::progress::say(&format!("  reading {}", board_path.display()));
-    let base = load_board(&board_path)?;
+    let normalized = load_normalized_board(&board_path)?;
+    let input_kind = normalized.kind;
+    let input_raw = normalized.raw;
+    let reader_notes = normalized.notes;
+    let base = normalized.board;
     crate::progress::say(&format!(
         "  read {} components across {} nets",
         base.components.len(),
@@ -472,7 +484,18 @@ pub fn run_spec_with_lib(
     let mut outcomes = Vec::with_capacity(plans.len());
     let member_count = plans.len();
     for plan in &plans {
-        let mut outcome = run_one(spec, &base, &thresholds, plan, lib, member_count)?;
+        let mut outcome = run_one(
+            spec,
+            &base,
+            &thresholds,
+            plan,
+            lib,
+            member_count,
+            &board_path,
+            input_kind,
+            &input_raw,
+            &reader_notes,
+        )?;
         outcome.ac = match &shared_ac {
             Some(ac) => Some(ac.clone()),
             None if spec.ac.is_some() => {
@@ -579,6 +602,12 @@ fn compute_ac(
 /// text places footprints with net-named pads (full connectivity, no copper
 /// tracks), and everything hauksbee-ci checks is netlist-driven.
 pub(crate) fn load_board(board_path: &Path) -> Result<ExtractedBoard, SpecError> {
+    load_normalized_board(board_path).map(|normalized| normalized.board)
+}
+
+fn load_normalized_board(
+    board_path: &Path,
+) -> Result<hauksbee_engine::board_input::NormalizedBoard, SpecError> {
     // CI-specific guard the normalizer does not carry: a spec pointing at a
     // sub-sheet rather than the hierarchy root is an incomplete board.
     let is_sch = board_path
@@ -599,26 +628,22 @@ pub(crate) fn load_board(board_path: &Path) -> Result<ExtractedBoard, SpecError>
     }
 
     use hauksbee_engine::board_input::{self, BoardInputError};
-    board_input::from_path(board_path)
-        .map(|norm| norm.board)
-        .map_err(|e| match e {
-            // Re-word the file-system failures with the spec-relative context
-            // (the path came from the spec's `board` key, not argv).
-            BoardInputError::NotFound { path } => SpecError::Io(format!(
-                "no board file at '{path}' (resolved from the spec's `board` key). \
+    board_input::from_path(board_path).map_err(|e| match e {
+        // Re-word the file-system failures with the spec-relative context
+        // (the path came from the spec's `board` key, not argv).
+        BoardInputError::NotFound { path } => SpecError::Io(format!(
+            "no board file at '{path}' (resolved from the spec's `board` key). \
                  Check that path; it is taken relative to the spec file's directory"
-            )),
-            BoardInputError::Io { path, message } => {
-                SpecError::Io(format!("reading board {path}: {message}"))
-            }
-            BoardInputError::Schematic(e) => {
-                SpecError::Invalid(format!("extracting schematic: {e}"))
-            }
-            BoardInputError::Extract(e) => SpecError::Invalid(format!("extracting board: {e}")),
-            // Zip / gerber / Board-as-Code failures already carry a
-            // self-contained, file-naming message.
-            other => SpecError::Invalid(other.to_string()),
-        })
+        )),
+        BoardInputError::Io { path, message } => {
+            SpecError::Io(format!("reading board {path}: {message}"))
+        }
+        BoardInputError::Schematic(e) => SpecError::Invalid(format!("extracting schematic: {e}")),
+        BoardInputError::Extract(e) => SpecError::Invalid(format!("extracting board: {e}")),
+        // Zip / gerber / Board-as-Code failures already carry a
+        // self-contained, file-naming message.
+        other => SpecError::Invalid(other.to_string()),
+    })
 }
 
 /// Best-effort: is `sch` a sub-sheet referenced by another `.kicad_sch`? If so,
@@ -1056,6 +1081,10 @@ fn run_one(
     plan: &crate::tolerance::SeedPlan,
     lib: &ModelLibrary,
     member_count: usize,
+    board_path: &Path,
+    input_kind: hauksbee_engine::board_input::InputKind,
+    input_raw: &[u8],
+    reader_notes: &[String],
 ) -> Result<RunOutcome, SpecError> {
     let seed = plan.seed;
     let mut board = apply_overrides(spec, base)?;
@@ -1132,6 +1161,7 @@ fn run_one(
     // board does. Behavioral legs (bench/wall/usb/battery) are exempt: their
     // current limits and droop are exactly what such an assertion tests.
     let hollow_warnings = hollow_gate_warnings(spec, &bound);
+    let hollow_assumptions = hollow_gate_assumptions(spec, &bound);
 
     // Map net name -> node for fast sampling, and remember which components are
     // monitorable for peak-current (resistors/diodes by name).
@@ -1558,6 +1588,101 @@ fn run_one(
 
     let protection_tripped_scoped = scope_protection_trips(&protection_trip_t, &scenario_windows);
 
+    let fallback_windows: Vec<(f64, f64, String)> = engine
+        .scheduler()
+        .fallback_windows()
+        .iter()
+        .map(|&(start, end, method)| (start, end, method.as_str().to_string()))
+        .collect();
+    let mut production_assumptions = hollow_assumptions;
+    for drop in engine.scheduler().adc_dropped() {
+        let scope = hauksbee_ir::evidence::Scope::Nets(
+            hauksbee_ir::evidence::NetScope::new([drop.net.as_str()], None)
+                .map_err(|e| SpecError::Invalid(format!("building ADC evidence: {e}")))?,
+        );
+        production_assumptions.push(hauksbee_ir::evidence::Assumption::not_exercised(
+            hauksbee_ir::evidence::AssumptionSource::Scheduler,
+            hauksbee_ir::evidence::Subject::new(
+                &format!("adc/{}/{}", drop.mcu_ref, drop.channel),
+                &format!("{} ADC channel {} on net {}", drop.mcu_ref, drop.channel, drop.net),
+            ),
+            scope,
+            "the MCU backend has no ADC injection map, so the firmware never received the solved voltage",
+            "add the ADC injection recipe to the SoC descriptor, then re-run",
+        ));
+    }
+    for bus in engine.scheduler().unexercised_buses() {
+        for assertion in spec
+            .asserts
+            .iter()
+            .filter(|assertion| assertion.id.as_deref() == Some(bus.id.as_str()))
+        {
+            production_assumptions.push(hauksbee_ir::evidence::Assumption::not_exercised(
+                hauksbee_ir::evidence::AssumptionSource::Scheduler,
+                hauksbee_ir::evidence::Subject::new(
+                    &format!("{}/{}", bus.bus.to_ascii_lowercase(), bus.id),
+                    &format!("{} peripheral {}", bus.bus, bus.id),
+                ),
+                hauksbee_ir::evidence::Scope::Check {
+                    check: "ci".into(),
+                    kind: Some(assertion.label()),
+                },
+                "this MCU platform models no matching controller, so firmware traffic never reached it",
+                "add the controller to the SoC descriptor, then re-run",
+            ));
+        }
+    }
+    let all_nets: Vec<&str> = board
+        .nets
+        .iter()
+        .filter(|net| !net.name.trim().is_empty())
+        .map(|net| net.name.as_str())
+        .collect();
+    for (start, end, method) in &fallback_windows {
+        let scope = hauksbee_ir::evidence::Scope::Nets(
+            hauksbee_ir::evidence::NetScope::new(
+                all_nets.iter().copied(),
+                Some(
+                    hauksbee_ir::evidence::TimeWindow::new(*start, *end).map_err(|e| {
+                        SpecError::Invalid(format!("building fallback evidence: {e}"))
+                    })?,
+                ),
+            )
+            .map_err(|e| SpecError::Invalid(format!("building fallback evidence: {e}")))?,
+        );
+        production_assumptions.push(hauksbee_ir::evidence::Assumption::reduced_fidelity(
+            hauksbee_ir::evidence::AssumptionSource::Solver,
+            hauksbee_ir::evidence::Subject::new(
+                &format!("fallback/{method}/{start:.9}-{end:.9}"),
+                &format!("the analog solve over {start:.6}-{end:.6} s"),
+            ),
+            scope,
+            &format!("the primary integration failed and the {method} fallback produced the accepted values"),
+            "resolve the convergence cause so the primary trapezoidal march carries this window, then re-run",
+        ));
+    }
+    let mut evidence = hauksbee_engine::BoardEvidence::from_bound(
+        &board,
+        engine.report(),
+        reader_notes,
+        hauksbee_ir::evidence::RunDate::from_system_clock(),
+    )
+    .and_then(|evidence| evidence.with_input_artifact(board_path, input_raw, input_kind))
+    .and_then(|evidence| evidence.with_substitutions(engine.scheduler().substitutions()))
+    .and_then(|evidence| evidence.with_assumptions(production_assumptions))
+    .map_err(|e| SpecError::Invalid(format!("building run evidence: {e}")))?;
+    if let Some(path) = firmware.as_deref() {
+        let bytes = std::fs::read(path).map_err(|error| {
+            SpecError::Io(format!(
+                "reading firmware evidence '{}': {error}",
+                path.display()
+            ))
+        })?;
+        evidence = evidence
+            .with_firmware_artifact(path, &bytes)
+            .map_err(|e| SpecError::Invalid(format!("building firmware evidence: {e}")))?;
+    }
+
     Ok(RunOutcome {
         seed,
         windows,
@@ -1574,6 +1699,7 @@ fn run_one(
         bind: Some(hauksbee_engine::result::BindSummary::from_report(
             engine.report(),
         )),
+        evidence: Some(evidence),
         sim_ms: engine.scheduler().sim_time * 1000.0,
         boot_first_cross_ms,
         boot_drop_after_cross_ms,
@@ -1583,6 +1709,7 @@ fn run_one(
         ac: None,
         analog_valid,
         failed_windows,
+        fallback_windows,
         analog_abort,
         sampled_values: plan.values.clone(),
         net_series,
@@ -2497,6 +2624,27 @@ fn hollow_gate_warnings(spec: &Spec, bound: &BoundBoard) -> Vec<String> {
         }
     }
     out
+}
+
+fn hollow_gate_assumptions(
+    spec: &Spec,
+    bound: &BoundBoard,
+) -> Vec<hauksbee_ir::evidence::Assumption> {
+    use hauksbee_engine::power_supply::PowerSupply;
+    let ideal_fed: std::collections::HashSet<&str> = bound
+        .supplies
+        .iter()
+        .filter(|leg| matches!(leg.supply, PowerSupply::Ideal { .. }))
+        .map(|leg| leg.net_name.as_str())
+        .chain(spec.net_drives.iter().map(|drive| drive.net.as_str()))
+        .collect();
+    spec.asserts
+        .iter()
+        .filter(|assertion| matches!(assertion.kind.as_str(), "voltage" | "rail_window"))
+        .filter_map(|assertion| assertion.net.as_deref())
+        .filter(|net| ideal_fed.contains(net))
+        .map(hauksbee_ir::evidence::Assumption::held_by_ideal_source)
+        .collect()
 }
 
 /// Force `net` to a fixed DC voltage by stamping an ideal source (unless one is
