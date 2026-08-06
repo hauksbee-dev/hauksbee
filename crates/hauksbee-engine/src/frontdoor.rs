@@ -614,7 +614,12 @@ fn analyze_normalized(
     // Any heads-up note (e.g. the 171-ohm USB controlled-impedance note) is an
     // actionable observation, so the headline must NOT read "Looks healthy".
     let has_heads_up = sections.iter().any(|s| !s.heads_up.is_empty());
-    let headline = overall_headline(total, serious, has_heads_up, bind_web.active_path_open());
+    let mut headline = overall_headline(total, serious, has_heads_up, bind_web.active_path_open());
+    if total == 0 && evidence.is_undermined() {
+        headline = "No blocking findings, but evidence is undermined; results touching unresolved inputs are invalid for analysis. See the evidence below.".to_string();
+    } else if total == 0 && evidence.has_caveats() {
+        headline = "No blocking findings, but some evidence is qualified; see the evidence limitations below.".to_string();
+    }
 
     let components = board
         .components
@@ -1955,7 +1960,7 @@ fn main {
     }
 
     #[test]
-    fn golden_parity_plain_kicad_pcb_report_is_unchanged() {
+    fn evidence_fields_are_additive_to_the_plain_kicad_web_golden() {
         // The whole point of routing analyze() through the board_input
         // normalizer is that NOTHING moves for the common case. This golden was
         // captured from the pre-normalizer analyze() on boot_gate.kicad_pcb;
@@ -1965,10 +1970,14 @@ fn main {
         // location: the two DRC shorts now carry x=112.0, y=100.0.)
         let golden = include_str!("../../../testdata/golden/boot_gate_web_report.json");
         let json = analyze_json("boot_gate.kicad_pcb", SHORTED);
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let object = value.as_object_mut().unwrap();
+        object.remove("assumptions");
+        object.remove("evidence");
+        let golden_value: serde_json::Value = serde_json::from_str(golden).unwrap();
         assert_eq!(
-            json,
-            golden.trim_end(),
-            "the plain .kicad_pcb web report must be byte-identical to the pre-refactor golden"
+            value, golden_value,
+            "adding evidence must leave every pre-existing web-report field unchanged"
         );
     }
 

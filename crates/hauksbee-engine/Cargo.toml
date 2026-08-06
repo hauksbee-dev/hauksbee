@@ -49,6 +49,7 @@ thiserror = { workspace = true }
 clap = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+sha2 = "0.11"
 # The run --json report schema is GENERATED from the result types (same
 # pattern as hauksbee-ci's spec schema).
 schemars = "1.2"
