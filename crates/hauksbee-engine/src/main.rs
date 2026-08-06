@@ -579,6 +579,28 @@ struct RunArgs {
     #[arg(value_name = "BOARD", required_unless_present = "example")]
     board: Option<PathBuf>,
 
+    /// Bill of materials to reconcile with the board before binding. Common
+    /// KiCad, Altium, LCSC/JLCPCB and hand-maintained CSV/TSV exports are
+    /// detected from their headers.
+    #[arg(long, value_name = "FILE", help_heading = "Identity inputs")]
+    bom: Option<PathBuf>,
+
+    /// Confirm an ambiguous BOM column as ROLE=HEADER. Repeat for multiple
+    /// roles; accepted roles are reference, value, mpn, manufacturer,
+    /// quantity, footprint, populate, and distributor_part.
+    #[arg(
+        long = "bom-column",
+        value_name = "ROLE=HEADER",
+        requires = "bom",
+        help_heading = "Identity inputs"
+    )]
+    bom_columns: Vec<String>,
+
+    /// Pick-and-place/CPL file to reconcile with layout positions, rotations
+    /// and sides before its values or packages are used.
+    #[arg(long, value_name = "FILE", help_heading = "Identity inputs")]
+    placement: Option<PathBuf>,
+
     /// Run an embedded example board instead of a file (try `blinky`). The
     /// board is compiled into the binary and materialized under the temp
     /// directory, so this works with no checkout on disk.
@@ -1349,6 +1371,9 @@ fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
         // Present by construction: clap requires BOARD unless --example, and
         // the dispatch materializes the example board before calling here.
         board: a.board.expect("BOARD or --example (enforced by clap)"),
+        bom: a.bom,
+        bom_columns: a.bom_columns,
+        placement: a.placement,
         firmware: a.firmware,
         asbuilt: a.asbuilt,
         junit: a.junit,

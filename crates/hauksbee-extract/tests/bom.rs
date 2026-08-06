@@ -269,6 +269,14 @@ fn a_hand_maintained_spreadsheet_reads_its_mpn_and_its_dnp_column() {
     assert_eq!(row.references, vec!["C3", "C2", "C1"]);
     assert_eq!(row.mpn.as_deref(), Some("GCM21BR72A104KA37L"));
     assert_eq!(row.manufacturer.as_deref(), Some("Murata Electronics"));
+
+    let hint = bom
+        .identity_hints()
+        .into_iter()
+        .find(|h| h.reference == "C1")
+        .expect("C1 contributes an identity hint");
+    assert_eq!(hint.manufacturer.as_deref(), Some("Murata Electronics"));
+    assert_eq!(hint.footprint, row.footprint);
 }
 
 #[test]
@@ -581,7 +589,19 @@ fn the_generic_cpl_shape_jlcpcb_accepts_reads_as_placement() {
     assert_eq!(file.dialect, PlacementDialect::GenericCpl);
     let c1 = file.get("C1").expect("C1 is in the file");
     assert_eq!(c1.value, "4.7uF");
-    assert!((c1.rotation_deg - 90.0).abs() < 1e-9);
+    assert!((c1.rotation_deg.expect("rotation") - 90.0).abs() < 1e-9);
+}
+
+#[test]
+fn a_missing_side_and_rotation_stay_unknown() {
+    let file = PlacementFile::from_text("Designator,Mid X,Mid Y\nR1,10.0,20.0\n", "positions.csv")
+        .expect("coordinates alone are a recognizable placement file");
+    let r1 = file.get("R1").expect("R1");
+    assert_eq!(r1.side, Side::Unknown);
+    assert_eq!(r1.rotation_deg, None);
+    assert!(file.provenance.ignored.iter().any(|item| {
+        item.what.contains("board side") && item.why.contains("not used for side reconciliation")
+    }));
 }
 
 #[test]

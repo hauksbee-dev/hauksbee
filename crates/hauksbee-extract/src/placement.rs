@@ -51,6 +51,11 @@ use crate::ExtractedBoard;
 /// to notice changes.
 pub const POSITION_TOLERANCE_MM: f64 = 0.01;
 
+/// Rotation values within a tenth of a degree are the same placement. This is
+/// larger than exporter rounding and much smaller than an assembly-relevant
+/// change.
+pub const ROTATION_TOLERANCE_DEG: f64 = 0.1;
+
 /// How many lines of banner a placement file may spend before its header.
 /// Altium's pick-and-place spends up to thirteen.
 const MAX_BANNER_LINES: usize = 40;
@@ -198,16 +203,20 @@ impl PlacementDialect {
 pub enum Side {
     Top,
     Bottom,
+    /// The file omitted its side column or the cell used an unrecognized value.
+    /// Unknown is never interpreted as top or bottom during reconciliation.
+    Unknown,
 }
 
 impl Side {
     /// The KiCad copper-layer name, so a side can be compared against
     /// [`crate::Component::layer`] without either side of the comparison
     /// guessing.
-    pub fn kicad_layer(self) -> &'static str {
+    pub fn kicad_layer(self) -> Option<&'static str> {
         match self {
-            Side::Top => "F.Cu",
-            Side::Bottom => "B.Cu",
+            Side::Top => Some("F.Cu"),
+            Side::Bottom => Some("B.Cu"),
+            Side::Unknown => None,
         }
     }
 
@@ -217,6 +226,7 @@ impl Side {
         match self {
             Side::Top => "top",
             Side::Bottom => "bottom",
+            Side::Unknown => "unknown",
         }
     }
 
@@ -278,7 +288,8 @@ pub struct Placement {
     /// Position in millimetres, converted from whatever the file stated.
     pub x_mm: f64,
     pub y_mm: f64,
-    pub rotation_deg: f64,
+    /// Rotation in degrees, or `None` when the export did not state one.
+    pub rotation_deg: Option<f64>,
     pub side: Side,
     /// One-based source line.
     pub line: usize,
@@ -373,11 +384,12 @@ impl PlacementFile {
     pub fn identity_hints(&self) -> Vec<IdentityHint> {
         self.placements
             .iter()
-            .filter(|p| !p.value.is_empty())
             .map(|p| IdentityHint {
                 reference: p.reference.clone(),
-                value: Some(p.value.clone()),
+                value: (!p.value.is_empty()).then(|| p.value.clone()),
                 mpn: None,
+                manufacturer: None,
+                footprint: (!p.package.is_empty()).then(|| p.package.clone()),
                 populate: None,
                 source: self.provenance.path.clone(),
                 source_kind: self.provenance.kind.to_string(),
@@ -416,7 +428,8 @@ impl PlacementFile {
                 continue;
             };
             check.matched += 1;
-            if let Some((x, y, _rot)) = comp.position {
+            if let Some((x, y, board_rotation)) = comp.position {
+                check.comparable_positions += 1;
                 let dx = (x - (p.x_mm + offset.0)).abs();
                 let dy = (y - (y_sign * p.y_mm + offset.1)).abs();
                 if dx > POSITION_TOLERANCE_MM || dy > POSITION_TOLERANCE_MM {
@@ -426,13 +439,28 @@ impl PlacementFile {
                         placement_mm: (p.x_mm, p.y_mm),
                     });
                 }
+                if let Some(placement_rotation) = p.rotation_deg {
+                    if rotation_difference(board_rotation, placement_rotation)
+                        > ROTATION_TOLERANCE_DEG
+                    {
+                        check.rotation_disagreements.push(RotationDisagreement {
+                            reference: p.reference.clone(),
+                            board_deg: board_rotation,
+                            placement_deg: placement_rotation,
+                        });
+                    }
+                }
             }
-            if !comp.layer.is_empty() && comp.layer != p.side.kicad_layer() {
-                check.side_disagreements.push(SideDisagreement {
-                    reference: p.reference.clone(),
-                    board_layer: comp.layer.clone(),
-                    placement_side: p.side,
-                });
+            match p.side.kicad_layer() {
+                Some(layer) if !comp.layer.is_empty() && comp.layer != layer => {
+                    check.side_disagreements.push(SideDisagreement {
+                        reference: p.reference.clone(),
+                        board_layer: comp.layer.clone(),
+                        placement_side: p.side,
+                    });
+                }
+                None => check.unknown_sides.push(p.reference.clone()),
+                _ => {}
             }
         }
         let placed: Vec<&str> = self
@@ -563,7 +591,7 @@ impl PlacementFile {
                 Some(s) => s,
                 None => {
                     no_side += 1;
-                    Side::Top
+                    Side::Unknown
                 }
             };
             placements.push(Placement {
@@ -572,7 +600,7 @@ impl PlacementFile {
                 package: cell(cols.package).to_string(),
                 x_mm: units.to_mm(x),
                 y_mm: units.to_mm(y),
-                rotation_deg: parse_coord(cell(cols.rotation)).unwrap_or(0.0),
+                rotation_deg: parse_coord(cell(cols.rotation)),
                 side,
                 line: n + 1,
             });
@@ -649,7 +677,7 @@ impl PlacementFile {
         if no_side > 0 {
             ignored.push(IgnoredInput {
                 what: format!("{no_side} rows with no readable board side"),
-                why: "read as top, which is what every writer surveyed defaults to".to_string(),
+                why: "left unknown and not used for side reconciliation".to_string(),
             });
         }
         if !bad_coords.is_empty() {
@@ -696,6 +724,14 @@ pub struct SideDisagreement {
     pub placement_side: Side,
 }
 
+/// One part whose orientation differs after normalizing angles modulo 360.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RotationDisagreement {
+    pub reference: String,
+    pub board_deg: f64,
+    pub placement_deg: f64,
+}
+
 /// What a placement file and the board it claims to describe agree and disagree
 /// about.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -707,6 +743,11 @@ pub struct PlacementCrossCheck {
     pub only_on_board: Vec<String>,
     pub position_disagreements: Vec<PositionDisagreement>,
     pub side_disagreements: Vec<SideDisagreement>,
+    pub rotation_disagreements: Vec<RotationDisagreement>,
+    /// Shared designators for which the layout actually exposed a position.
+    pub comparable_positions: usize,
+    /// Shared designators whose placement side was not stated or recognized.
+    pub unknown_sides: Vec<String>,
     /// Designators found on both sides.
     pub matched: usize,
     /// The constant translation from the file's frame to the board's, when the two
@@ -734,8 +775,13 @@ impl PlacementCrossCheck {
         if self.matched == 0 {
             return !self.only_in_placement.is_empty();
         }
-        self.position_disagreements.len() * 2 > self.matched
-            || self.only_in_placement.len() > self.matched
+        let placement_total = self.matched + self.only_in_placement.len();
+        self.comparable_positions == 0
+            || !self.position_disagreements.is_empty()
+            || !self.side_disagreements.is_empty()
+            || !self.rotation_disagreements.is_empty()
+            || (!self.only_in_placement.is_empty()
+                && self.only_in_placement.len() * 2 >= placement_total)
     }
 
     /// The lines a report prints. Empty when the two agree about everything,
@@ -754,6 +800,12 @@ impl PlacementCrossCheck {
                 self.only_in_placement.join(", ")
             ));
         }
+        if self.matched > 0 && self.comparable_positions == 0 {
+            out.push(
+                "  the files share designators but the layout exposes no comparable positions"
+                    .to_string(),
+            );
+        }
         for d in &self.position_disagreements {
             out.push(format!(
                 "  {} sits at ({:.4}, {:.4}) mm on the board and ({:.4}, {:.4}) mm in the \
@@ -769,8 +821,25 @@ impl PlacementCrossCheck {
                 d.placement_side.describe()
             ));
         }
+        for d in &self.rotation_disagreements {
+            out.push(format!(
+                "  {} has {:.3} degree rotation on the board and {:.3} degrees in the placement file",
+                d.reference, d.board_deg, d.placement_deg
+            ));
+        }
+        if !self.unknown_sides.is_empty() {
+            out.push(format!(
+                "  side was not stated for: {}; those rows were not used for side reconciliation",
+                self.unknown_sides.join(", ")
+            ));
+        }
         out
     }
+}
+
+fn rotation_difference(a: f64, b: f64) -> f64 {
+    let delta = (a - b).rem_euclid(360.0);
+    delta.min(360.0 - delta)
 }
 
 // ── Header detection ────────────────────────────────────────────────────────

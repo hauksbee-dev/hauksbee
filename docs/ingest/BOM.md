@@ -20,6 +20,25 @@ Two rules shape everything below:
    the report authoritative about a device that is not on the board, and every
    number downstream inherits that. Erroring is fine. Mis-binding is not.
 
+The executable path is direct:
+
+```sh
+hauksbee run board.kicad_pcb --bom bom.csv --placement positions.csv --report
+hauksbee run board.kicad_pcb --bom bom.csv --placement positions.csv --report --json
+```
+
+An ambiguous BOM header can be confirmed explicitly:
+
+```sh
+hauksbee run board.kicad_pcb --bom bom.csv \
+  --bom-column 'reference=Customer Reference' --report
+```
+
+Both artifacts are reconciled before binding. A refusal leaves the board
+unchanged. `--report --json` includes a typed `inputs[]` inventory for the
+board, BOM and placement file, including hashes, contributions, ignored fields
+and identity changes.
+
 ## What is read
 
 Both readers detect the dialect from the file's content, never from its
@@ -186,7 +205,14 @@ the first would bind whichever the exporter happened to write first. A tie
 between two columns nothing reads for identity, two distributor order codes or
 two manufacturer-name columns, is not a refusal: the first is taken and the rest
 recorded as ignored. Two columns spelled the same way (`Value` beside `VALUE`)
-are one column duplicated, and the first wins.
+are accepted only when every row carries equivalent cells. If the cells differ,
+the file refuses: column order is not an authority rule.
+
+Rows are subject to the same uniqueness rule. A designator appearing in two BOM
+rows, or twice in one placement file, refuses with both source lines. A
+multiline quoted CSV record is refused with its first line and re-export
+guidance; it is never split into two apparent parts. UTF-8 and Windows-1252
+spreadsheet exports are decoded explicitly.
 
 **A position file that places nothing** (24). A side-specific export does this
 when that side of the board is empty. It is refused rather than read as an empty
@@ -245,7 +271,7 @@ computed from the pair would describe a board that does not exist. Use the BOM
 that was exported from this layout, or drop it and analyse the layout alone
 ```
 
-Four independent detectors find these, because each alone misses cases the others
+Six independent detectors find these, because each alone misses cases the others
 catch:
 
 - **Two files, two parts.** The layout resolves a model and the BOM's part number
@@ -262,6 +288,17 @@ catch:
 - **A passive value on a semiconductor.** The case this feature exists for: the
   layout resolves `Q5` as a MOSFET and the BOM's value is a bare magnitude. A
   transistor's value is never one.
+- **Two explicit manufacturers.** A BOM manufacturer conflicts only with a
+  manufacturer property the layout actually carries. A missing property is
+  unknown, never guessed.
+- **Package identity.** Recognized package families and explicit pin counts are
+  compared against the layout footprint and its actual pad count. Free-form
+  package prose that cannot be normalized is not promoted to certainty.
+
+Part-number compatibility is deliberately narrow. Exact alphanumeric identity
+is accepted, as are the documented ordering suffix forms `-AU`, `-7-F` and
+`,215`. A shared prefix is not identity: `TPS62130` and `TPS62135`, or
+`ATmega328P` and `ATmega328PB`, remain different parts.
 
 Contradictions are gathered before anything is applied, so a refused BOM leaves
 the board exactly as the layout described it.
@@ -275,27 +312,35 @@ it is a BOM for a different board. Check which file goes with which layout, then
 retry
 ```
 
-The threshold is one designator in ten: a BOM legitimately carries mechanical
-parts, a panel's worth of extras and a variant's worth of alternates, but not
-ninety per cent of them.
+At least half of the BOM's distinct designators must be on the board. Mechanical
+parts and panel extras are ordinary, but they cannot outnumber the actual board
+population. Ten matches in a hundred is refused, not accepted at a boundary.
 
 A pick-and-place file gets the same treatment on its own terms. It states where
-each part sits, the layout states the same thing, and a majority of the shared
-parts disagreeing by more than 0.01 mm means the file is from another revision.
+each part sits, the layout states the same thing, and any shared coordinate
+disagreement beyond 0.01 mm, side disagreement, or rotation disagreement beyond
+0.1 degrees refuses before identity is applied. Angles compare modulo 360. The
+file also refuses when no shared designator has a comparable layout position,
+or when at least half of its placements are not on the board.
 The tolerance is deliberately far tighter than any real placement difference:
 every writer surveyed emits four decimal places or better, so the only thing it
 absorbs is rounding, and moving a part by a tenth of a millimetre between
 revisions is a change worth noticing.
 
+A missing or unrecognized side remains `unknown`; it is recorded and omitted
+from the side comparison, never read as top. A missing rotation likewise
+remains absent rather than becoming zero degrees.
+
 ### The mismatch cases
 
 | Case | What happens |
 |---|---|
-| A refdes in the BOM that is not on the board | Reported by name. Ordinary in small numbers: a BOM covers mechanical parts with no footprint, a panel, or a variant. Beyond nine in ten, it is a different board and refuses |
+| A refdes in the BOM that is not on the board | Reported by name. Ordinary in small numbers: a BOM covers mechanical parts with no footprint, a panel, or a variant. If fewer than half of the BOM designators match, it is a different board and refuses |
 | A board part absent from the BOM | Reported by name, never fatal. A BOM legitimately omits test points and fiducials. Worth saying because the BOM was the artifact that could have identified them |
 | A BOM row's quantity disagreeing with the number of designators the same row lists | Reported. The list wins: it is the enumerated fact and the quantity is a number derived from it |
 | A part on the board that the pick-and-place file does not place | Reported. Ordinary: only the SMD side gets placed, and KiCad excludes test points and artwork placeholders from position files |
-| A DNP disagreement between the layout and the BOM's populate column | Reported, and turned into `--fit` / `--no-fit` advice. Never applied. See below |
+| An explicit layout DNP marker against a BOM `populate=yes` | Reported, and turned into `--fit` advice. Never applied. See below |
+| No explicit layout DNP marker against a BOM `DNP=yes` | `--no-fit` advice without a fabricated disagreement: the layout state is unspecified, not explicitly fitted |
 
 A quantity that disagrees with the number of placements is not a separate case.
 It is a designator missing from one side or the other, which the first two rows
@@ -320,8 +365,10 @@ So the BOM's populate column becomes advice:
 The advice feeds straight into the same `--fit` / `--no-fit` lists the policy
 already takes, so honouring the BOM is one flag and is recorded in the run's own
 DNP report rather than in a second place. The half worth having is the other
-direction: a BOM saying a part is not populated where the layout does not mark it
-DNP is information the board file does not carry at all.
+direction: a BOM saying a part is not populated where the layout does not mark
+it DNP is information the board file does not carry at all. In that case
+`dnp=false` means unspecified, not an explicit fitted claim, so the run gives
+`--no-fit` advice without inventing a conflict.
 
 ## Provenance
 
@@ -346,10 +393,9 @@ becoming a second vocabulary for the same idea.
 
 ## Honest limitations
 
-- **The surface is library API today.** `Bom::read`, `PlacementFile::read` and
-  the binder's identity reconciliation are all callable and tested, and the
-  refusal messages name the `--bom` and `--bom-column` flags they are designed
-  for. Wiring those flags into the CLI and the `hauksbee-ci` spec is not done.
+- **The CLI surface is live; the `hauksbee-ci` spec surface is not.** `run`
+  accepts `--bom`, repeatable `--bom-column`, and `--placement`. The same typed
+  fields are not yet accepted in a `hauksbee-ci` project specification.
 - **A reference range is not expanded.** A BOM that writes `R1-R4` in one cell
   yields one designator called `R1-R4`, which then reports as not on the board.
   No file in the survey used the form; a BOM that does will say so loudly rather
@@ -365,6 +411,9 @@ becoming a second vocabulary for the same idea.
   different set of parts under one layout reads as a BOM disagreeing with the
   layout about which parts are fitted, and produces populate advice rather than a
   variant.
+- **Multiline CSV cells require a re-export.** They are refused explicitly
+  rather than misparsed. Single-line quoted cells, including embedded
+  delimiters and grouped reference lists, remain supported.
 - **The gerber-only path has its own reader.** When the fab package is the whole
   design there is no layout to reconcile against, so guessing is the best answer
   available and refusing would mean refusing the board. That path keeps its
