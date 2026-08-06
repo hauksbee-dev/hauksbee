@@ -291,6 +291,7 @@ pub enum Scope {
         check: String,
         /// The specific rule inside the check, when the scope is that narrow.
         #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[schemars(with = "String")]
         kind: Option<String>,
     },
 }
@@ -352,6 +353,11 @@ pub struct Assumption {
     /// every run-derived kind, since an expiry on a machine observation would
     /// mean nothing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    // The schema must not permit `null`: this field is either an absent key or a
+    // date string, and a published schema that allows a third encoding is a
+    // schema the module's own writers would fail to satisfy. Narrowing it after
+    // publication breaks every validating consumer, so it is pinned now.
+    #[schemars(with = "String")]
     expires: Option<String>,
 }
 
@@ -405,6 +411,20 @@ fn sentence(s: &str) -> String {
 /// truth of the kind, which is always still true.
 fn sentence_or(s: &str, fallback: &str) -> String {
     sentence(&or_else(s, fallback))
+}
+
+/// A scope's name list from one name, empty when there is no name.
+///
+/// An empty string in a `refs` or `nets` list is worse than no list: the
+/// traversal compares those against real designators, and `""` is a record that
+/// matches nothing while looking like a record that matches something.
+fn refs_of(name: &str) -> Vec<String> {
+    let name = fragment(name);
+    if name.is_empty() {
+        Vec::new()
+    } else {
+        vec![name]
+    }
 }
 
 /// A tidied fragment, or the fallback when the producer had nothing. Same
@@ -562,7 +582,7 @@ impl Assumption {
         // the ID keeps the raw subject and lets `AssumptionId` disambiguate:
         // prose in an id would collide two blank-designator parts onto one
         // entry, and the evidence map's dedupe would then drop one of them.
-        let subject = reference;
+        let subject = fragment(reference);
         let reference = or_else(reference, "an unnamed part");
         let value = fragment(value);
         let named = if value.is_empty() {
@@ -582,9 +602,9 @@ impl Assumption {
         Self::build(
             AssumptionKind::OpenPart,
             AssumptionSource::Binder,
-            subject,
+            &subject,
             Scope::Parts {
-                refs: vec![subject.to_string()],
+                refs: refs_of(&subject),
             },
             format!("{named} is treated as an open circuit."),
             because,
@@ -613,16 +633,16 @@ impl Assumption {
         // A producer with no name for one side still has a real gap to report,
         // so the sentence names what it can rather than leaving a hole. The id
         // keeps the raw subject: see `open_part`.
-        let subject = reference;
+        let subject = fragment(reference);
         let reference = or_else(reference, "an unnamed part");
         let requested = or_else(requested, "the part the board asks for");
         let stand_in = or_else(stand_in, "a stand-in model");
         Self::build(
             AssumptionKind::SubstituteModel,
             source,
-            subject,
+            &subject,
             Scope::Parts {
-                refs: vec![subject.to_string()],
+                refs: refs_of(&subject),
             },
             format!("{reference} is modelled by {stand_in}, not {requested}."),
             format!(
@@ -658,7 +678,7 @@ impl Assumption {
             AssumptionSource::Binder,
             &subject,
             Scope::Parts {
-                refs: vec![part_ref],
+                refs: refs_of(&part_ref),
             },
             format!("{reference} pin {pin} is taken to be its {role} pin."),
             "The inputs named no role for that pin, so the pin-rule table inferred one from \
@@ -692,7 +712,7 @@ impl Assumption {
             AssumptionSource::Binder,
             &subject,
             Scope::Parts {
-                refs: vec![part_ref],
+                refs: refs_of(&part_ref),
             },
             format!("{reference}.{parameter} is taken as {value}, a documented default."),
             "No input carried a value for it.".to_string(),
@@ -720,7 +740,7 @@ impl Assumption {
     /// "FittedByDefault (subject part)" row asks for.
     pub fn fitted_by_default(source: AssumptionSource, input: Subject<'_>, scope: Scope) -> Self {
         let input_key = input.key;
-        let input = or_else(input.text, "this input");
+        let input = or_else(&input.text_or_key(), "this input");
         Self::build(
             AssumptionKind::FittedByDefault,
             source,
@@ -751,15 +771,26 @@ impl Assumption {
         because: &str,
         replacement: &str,
     ) -> Self {
-        let check = or_else(check, AssumptionId::UNNAMED_SUBJECT);
         let rule = rule.map(fragment).filter(|r| !r.is_empty());
         // A check that could not run one of its rules says nothing about that
         // rule, not about the whole check, and the scope has to say which or the
         // traversal will put it on the path of every assertion that touches the
         // check.
+        //
+        // The ID keeps the raw check name, empty and all, so that two nameless
+        // ones are disambiguated by their statements rather than colliding on a
+        // sentinel and losing one to the evidence map's dedupe. The PROSE gets
+        // the sentinel.
+        let raw = fragment(check);
+        let check = or_else(check, AssumptionId::UNNAMED_SUBJECT);
         let (subject, named) = match &rule {
-            Some(r) => (format!("{check}/{r}"), format!("{check} {r}")),
-            None => (check.clone(), check.clone()),
+            Some(r) => (format!("{raw}/{r}"), format!("{check} {r}")),
+            None => (raw.clone(), check.clone()),
+        };
+        let subject = if raw.is_empty() && rule.is_none() {
+            String::new()
+        } else {
+            subject
         };
         Self::build(
             AssumptionKind::NotChecked,
@@ -856,14 +887,14 @@ impl Assumption {
     pub fn held_by_ideal_source(net: &str) -> Self {
         // An unnamed net is ordinary board data, not a producer bug. Prose in the
         // sentences, raw subject in the id: see `open_part`.
-        let subject = net;
+        let subject = fragment(net);
         let net = or_else(net, "an unnamed net");
         Self::build(
             AssumptionKind::ReducedFidelity,
             AssumptionSource::Check,
-            subject,
+            &subject,
             Scope::Nets {
-                nets: vec![subject.to_string()],
+                nets: refs_of(&subject),
             },
             format!("Net {net} is held by an ideal source."),
             "Nothing on the board sets its voltage in this run: a stimulus does.".to_string(),
@@ -936,6 +967,30 @@ impl Assumption {
         let kind = or_else(kind, "an unnamed rule");
         let subject_text = or_else(subject, "an unnamed subject");
         let until = fragment(until);
+        // The waiver file requires an expiry, so a missing one means a producer
+        // dropped it. Composing a date clause around nothing would put two
+        // half-written sentences on the report ("until , so this result is..."),
+        // and the status already fails closed here, so say what happened instead.
+        let (consequence, replacement) = if until.is_empty() {
+            (
+                "It carries no expiry, so nothing here can tell whether it is still in force, \
+                 and this run treats it as lapsed."
+                    .to_string(),
+                "Give the waiver an expiry date in the waiver file, or fix the finding."
+                    .to_string(),
+            )
+        } else {
+            (
+                format!(
+                    "It does not gate this run until {until}, so this result is clean by \
+                     authorization rather than by measurement."
+                ),
+                format!(
+                    "Fix the finding, or let the waiver lapse on {until}, after which it gates \
+                     again."
+                ),
+            )
+        };
         Self::build(
             AssumptionKind::Waived,
             AssumptionSource::User,
@@ -945,21 +1000,14 @@ impl Assumption {
                 kind: Some(kind.clone()),
             },
             format!("The {check} {kind} finding on {subject_text} is waived by hand."),
-            // The waiver gate requires a reason, so an empty one means a
-            // producer dropped it on the way here. Saying that is more use to a
-            // reader than an empty line where the justification should be.
+            // Same reasoning for the reason: the file requires one, so an empty
+            // one is worth saying rather than leaving blank.
             sentence_or(
                 reason,
                 "no reason reached this report, though the waiver file requires one",
             ),
-            format!(
-                "It does not gate this run until {until}, so this result is clean by \
-                 authorization rather than by measurement."
-            ),
-            format!(
-                "Fix the finding, or let the waiver lapse on {until}, after which it gates \
-                 again."
-            ),
+            consequence,
+            replacement,
             Some(until),
         )
     }
@@ -988,7 +1036,7 @@ impl Assumption {
             // A gap in a composed sentence means a producer passed an empty
             // datum where a subject or a value belonged, which reads as a
             // half-written sentence rather than as an obvious bug.
-            if text.contains("  ") || text.contains(" .") {
+            if text.contains("  ") || text.contains(" .") || text.contains(" ,") {
                 return Err(format!(
                     "{}: `{name}` has a hole where a datum belongs: {text:?}",
                     self.id
@@ -1035,6 +1083,11 @@ impl Assumption {
             (AssumptionKind::Waived, None) => {
                 Err(format!("{}: a waived assumption needs an expiry", self.id))
             }
+            // Note what is NOT checked here: whether the expiry parses. The
+            // waiver file's own loader validates its `until` field and refuses a
+            // malformed one, and that machinery deliberately stays where it is.
+            // An unreadable date reaching this far is handled where it matters,
+            // by the status rule reading it as lapsed.
             (k, Some(_)) if k != AssumptionKind::Waived => Err(format!(
                 "{}: a run-derived assumption must not carry an expiry",
                 self.id
@@ -1335,6 +1388,7 @@ pub struct ErrorBudget {
     /// `number`. A quantity that is not a number is not a measurement, and this
     /// field is already optional, so the honest encoding is absence.
     #[serde(default, skip_serializing_if = "residual_is_not_a_number")]
+    #[schemars(with = "Residual")]
     pub residual: Option<Residual>,
     /// Windows with NO valid solution: the run held stale values there. Any
     /// quantity read inside one of these is not a measurement.
@@ -1344,6 +1398,7 @@ pub struct ErrorBudget {
     /// co-sim chunk quantization: an edge is observed at a chunk boundary.
     /// Omitted when not finite.
     #[serde(default, skip_serializing_if = "opt_f64_is_not_a_number")]
+    #[schemars(with = "f64")]
     pub event_time_error_s: Option<f64>,
     /// Interval bounds models place on parameters behind these numbers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1384,30 +1439,36 @@ impl ErrorBudget {
     /// absent; a silently shortened one is not. A budget this refuses is a
     /// producer bug, and the debug assertion says which part.
     pub fn publishable(self) -> Option<Self> {
-        let tolerances_real = self.tolerance.reltol.is_finite()
+        self.unpublishable_reason().is_none().then_some(self)
+    }
+
+    /// Why this budget cannot be published, if it cannot. Separate from
+    /// [`Self::publishable`] and free of assertions so that BOTH profiles can
+    /// test the rule: a guarantee about release behaviour that only a debug build
+    /// exercises is not a tested guarantee, and CI runs the tests in debug.
+    pub fn unpublishable_reason(&self) -> Option<&'static str> {
+        if !(self.tolerance.reltol.is_finite()
             && self.tolerance.abstol.is_finite()
-            && self.tolerance.chgtol.is_finite();
-        let windows_real = self.methods.iter().all(|m| m.window.is_finite())
-            && self.failed_windows.iter().all(TimeWindow::is_finite);
-        let intervals_real = self
+            && self.tolerance.chgtol.is_finite())
+        {
+            return Some("a non-finite tolerance says nothing about how good these numbers are");
+        }
+        if !(self.methods.iter().all(|m| m.window.is_finite())
+            && self.failed_windows.iter().all(TimeWindow::is_finite))
+        {
+            return Some("a time window whose own bounds are not numbers describes nothing");
+        }
+        if !self
             .model_uncertainty
             .iter()
-            .all(|u| u.low.is_finite() && u.high.is_finite());
-        debug_assert!(
-            tolerances_real,
-            "an error budget with a non-finite tolerance says nothing about how good \
-             its numbers are"
-        );
-        debug_assert!(
-            windows_real,
-            "a time window whose own bounds are not numbers describes nothing"
-        );
-        debug_assert!(
-            intervals_real,
-            "an interval bound must be a real number: a one-sided datasheet limit needs \
-             a finite other side, because an infinity is not JSON"
-        );
-        (tolerances_real && windows_real && intervals_real).then_some(self)
+            .all(|u| u.low.is_finite() && u.high.is_finite())
+        {
+            return Some(
+                "an interval bound must be a real number: a one-sided datasheet limit needs \
+                 a finite other side, because an infinity is not JSON",
+            );
+        }
+        None
     }
 
     /// The common shape: known tolerances, nothing else measured yet.
@@ -1641,6 +1702,7 @@ pub struct EvidenceMap {
     // claim that a quantity read inside it is not a measurement, so a mutable
     // budget would let a later stage delete that claim rather than a record.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "ErrorBudget")]
     error_budget: Option<ErrorBudget>,
     /// Statistical coverage wording for ensemble assertions. Not an
     /// assumption: an accurate statement of method.
@@ -1648,6 +1710,7 @@ pub struct EvidenceMap {
     // which puts it in the same class as the sentence fields rather than in the
     // class of index lists.
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "String")]
     coverage: Option<String>,
     /// How much this conclusion is entitled to claim, derived from the
     /// assumptions on its causal path.
@@ -1791,6 +1854,14 @@ impl EvidenceMap {
     /// whole rather than shortened, whether or not the producer remembered to
     /// look.
     pub fn with_error_budget(mut self, budget: ErrorBudget) -> Self {
+        // Loud in debug, safe in release: a budget this refuses is a producer
+        // bug, and the producer should hear about it rather than wonder where
+        // its numbers went.
+        debug_assert!(
+            budget.unpublishable_reason().is_none(),
+            "{}",
+            budget.unpublishable_reason().unwrap_or_default()
+        );
         self.error_budget = budget.publishable();
         self
     }
@@ -2278,20 +2349,150 @@ mod tests {
             Assumption::open_part("R7", "10k", "").id().as_str(),
             "open-part:R7"
         );
-        for a in [
-            Assumption::held_by_ideal_source(""),
-            Assumption::inferred_pin_role("", "", ""),
-            Assumption::default_parameter("", "", ""),
-            Assumption::waived("", "", "", "", "2027-06-01"),
-            Assumption::substitute_model(AssumptionSource::Binder, "", "", ""),
-        ] {
-            let subject = a.id().as_str().split_once(':').unwrap().1;
+        // EVERY constructor, because one that substitutes prose or a bare
+        // sentinel before the id is composed is one that collides two gaps onto
+        // one entry, and the dedupe then eats one. That is the failure this whole
+        // scheme exists to prevent, so the coverage is exhaustive rather than
+        // representative.
+        let nameless: Vec<(Assumption, Assumption)> = vec![
+            (
+                Assumption::open_part("", "10k", "no model matched"),
+                Assumption::open_part("", "47k", "no model matched"),
+            ),
+            (
+                Assumption::substitute_model(AssumptionSource::Binder, "", "a", "b"),
+                Assumption::substitute_model(AssumptionSource::Binder, "", "c", "d"),
+            ),
+            (
+                Assumption::inferred_pin_role("", "", "output"),
+                Assumption::inferred_pin_role("", "", "input"),
+            ),
+            (
+                Assumption::default_parameter("", "", "3.3 V"),
+                Assumption::default_parameter("", "", "5 V"),
+            ),
+            (
+                Assumption::fitted_by_default(
+                    AssumptionSource::Reader,
+                    Subject::same(""),
+                    Scope::Board,
+                ),
+                Assumption::fitted_by_default(
+                    AssumptionSource::Reader,
+                    Subject::new("", "the second archive"),
+                    Scope::Board,
+                ),
+            ),
+            (
+                Assumption::not_checked(AssumptionSource::Reader, "", None, "no copper", "add one"),
+                Assumption::not_checked(
+                    AssumptionSource::Reader,
+                    "",
+                    None,
+                    "no firmware",
+                    "supply one",
+                ),
+            ),
+            (
+                Assumption::not_exercised(
+                    AssumptionSource::Scheduler,
+                    Subject::same(""),
+                    Scope::Board,
+                    "a",
+                    "b",
+                ),
+                Assumption::not_exercised(
+                    AssumptionSource::Scheduler,
+                    Subject::new("", "the second bus"),
+                    Scope::Board,
+                    "c",
+                    "d",
+                ),
+            ),
+            (
+                Assumption::reduced_fidelity(
+                    AssumptionSource::Solver,
+                    Subject::same(""),
+                    Scope::Board,
+                    "a",
+                    "b",
+                ),
+                Assumption::reduced_fidelity(
+                    AssumptionSource::Solver,
+                    Subject::new("", "the second span"),
+                    Scope::Board,
+                    "c",
+                    "d",
+                ),
+            ),
+            (
+                Assumption::held_by_ideal_source(""),
+                Assumption::held_by_ideal_source("   "),
+            ),
+            (
+                Assumption::parser_limitation(
+                    AssumptionSource::Reader,
+                    Subject::same(""),
+                    Scope::Board,
+                    "a",
+                    "b",
+                ),
+                Assumption::parser_limitation(
+                    AssumptionSource::Reader,
+                    Subject::new("", "the second finding"),
+                    Scope::Board,
+                    "c",
+                    "d",
+                ),
+            ),
+            (
+                Assumption::waived("", "", "", "why", "2027-06-01"),
+                Assumption::waived("", "", "", "another why", "2027-06-01"),
+            ),
+        ];
+        for (first, second) in nameless {
+            let subject = first.id().as_str().split_once(':').unwrap().1;
             assert!(
                 subject.starts_with("unnamed-"),
-                "{} carries prose in its id",
-                a.id()
+                "{} does not go through the disambiguator",
+                first.id()
             );
+            // Distinct statements, distinct ids, both surviving the map.
+            if first.statement() != second.statement() {
+                assert_ne!(
+                    first.id(),
+                    second.id(),
+                    "two gaps collided on {}",
+                    first.id()
+                );
+                let map = EvidenceMap::new("A", &[first, second], today());
+                assert_eq!(map.assumptions().len(), 2, "a real gap went missing");
+            }
         }
+    }
+
+    #[test]
+    fn a_waiver_that_lost_its_expiry_says_so_instead_of_leaving_a_gap() {
+        // The waiver file requires an expiry and its own loader refuses anything
+        // else, so a missing one here is a producer bug. Composing a date clause
+        // around nothing would put "until , so this result is..." on the report,
+        // which is a half-written sentence rather than an obvious bug.
+        let a = Assumption::waived("si", "controlled_impedance", "DDR_CLK", "why", "");
+        assert!(
+            a.consequence().contains("carries no expiry"),
+            "{}",
+            a.consequence()
+        );
+        assert!(!a.consequence().contains(" ,"));
+        assert!(!a.replacement().contains(" ,"));
+        // Well formed: whether the date PARSES is the waiver file loader's rule,
+        // not this crate's, and the status rule is where an unreadable one is
+        // handled.
+        a.validate().unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(
+            EvidenceMap::derive_status(std::slice::from_ref(&a), today()),
+            EvidenceStatus::Undermined
+        );
     }
 
     #[test]
@@ -2663,13 +2864,11 @@ mod tests {
     /// bounds went bad hides the divergence that window was recording. An absent
     /// budget is visibly absent.
     ///
-    /// Release-mode behaviour, because the debug assertions are the loud half and
-    /// they are compiled out exactly where the guarantee matters.
+    /// Runs in BOTH profiles, deliberately: the guarantee is about what a release
+    /// build publishes, CI runs the tests in debug, and a rule tested only where
+    /// the debug assertions fire is a rule with no test at all. So the assertions
+    /// live at the call site and the rule itself is assertion-free.
     #[test]
-    #[cfg_attr(
-        debug_assertions,
-        ignore = "the debug assertions fire first, by design"
-    )]
     fn a_budget_that_cannot_be_published_is_withheld_whole() {
         let budget = ErrorBudget {
             failed_windows: vec![
@@ -2710,15 +2909,56 @@ mod tests {
                 chgtol: 1e-14,
             })
         };
-        // The map checks on the way in, so a producer cannot forget, and the
-        // real window that WAS solved does not get published beside a deleted
-        // one as though nothing had gone wrong.
-        let map = EvidenceMap::new("A", &[], today()).with_error_budget(budget.clone());
-        assert!(
-            map.error_budget().is_none(),
-            "a budget carrying a non-number must be withheld, not shortened"
-        );
-        assert!(budget.publishable().is_none());
+        // Withheld whole, so the real window that WAS solved is not published
+        // beside a deleted one as though nothing had gone wrong.
+        assert!(budget.unpublishable_reason().is_some());
+        assert!(budget.clone().publishable().is_none());
+        // Each offending shape on its own, so a partial rule cannot pass.
+        for (bad, why) in [
+            (
+                ErrorBudget::new(IntegrationTolerance {
+                    reltol: f64::NAN,
+                    abstol: 1e-12,
+                    chgtol: 1e-14,
+                }),
+                "tolerance",
+            ),
+            (
+                ErrorBudget {
+                    failed_windows: vec![TimeWindow {
+                        start_s: f64::INFINITY,
+                        end_s: 1.0,
+                    }],
+                    ..ErrorBudget::new(IntegrationTolerance {
+                        reltol: 1e-3,
+                        abstol: 1e-12,
+                        chgtol: 1e-14,
+                    })
+                },
+                "failed window",
+            ),
+            (
+                ErrorBudget {
+                    model_uncertainty: vec![ModelUncertainty {
+                        parameter: "Q2.beta".into(),
+                        low: 100.0,
+                        high: f64::INFINITY,
+                        basis: "datasheet minimum only".into(),
+                    }],
+                    ..ErrorBudget::new(IntegrationTolerance {
+                        reltol: 1e-3,
+                        abstol: 1e-12,
+                        chgtol: 1e-14,
+                    })
+                },
+                "interval",
+            ),
+        ] {
+            assert!(
+                bad.publishable().is_none(),
+                "a budget with a non-finite {why} must be withheld"
+            );
+        }
 
         // A budget whose numbers are all real is published unchanged and reads
         // back in.
@@ -2798,6 +3038,36 @@ mod tests {
         serde_json::to_string(&schemars::schema_for!(ArtifactProvenance)).unwrap();
         serde_json::to_string(&schemars::schema_for!(ParameterProvenance)).unwrap();
         serde_json::to_string(&schemars::schema_for!(ErrorBudget)).unwrap();
+    }
+
+    #[test]
+    fn the_published_schema_does_not_permit_a_null_the_writers_never_write() {
+        // An optional field here is an ABSENT KEY, never `null`: the whole
+        // non-finite discipline exists because a `null` cannot be read back
+        // against a `number`. A schema that permits a third encoding is a schema
+        // this module's own writers would fail, and narrowing it after
+        // publication breaks every validating consumer, so it is pinned now.
+        for (name, schema) in [
+            ("EvidenceMap", schemars::schema_for!(EvidenceMap)),
+            ("ErrorBudget", schemars::schema_for!(ErrorBudget)),
+            ("Assumption", schemars::schema_for!(Assumption)),
+            ("Scope", schemars::schema_for!(Scope)),
+        ] {
+            let text = serde_json::to_string(&schema).unwrap();
+            assert!(
+                !text.contains("\"null\""),
+                "{name}'s schema permits null: {text}"
+            );
+        }
+        // Optional fields stay optional, though: absence is the encoding.
+        let map = serde_json::to_value(schemars::schema_for!(EvidenceMap)).unwrap();
+        let required: Vec<&str> = map["required"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(required, ["assertion", "status"]);
     }
 
     // ── the discrimination fixture ──────────────────────────────────────
