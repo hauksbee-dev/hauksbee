@@ -27,6 +27,8 @@ use std::time::{Duration, Instant};
 const HELPER_FLAG: &str = "HAUKSBEE_TEST_REAPER_HELPER";
 /// Where the fake emulator writes its forked grandchild's pid.
 const GRANDCHILD_PID_FILE: &str = "HAUKSBEE_TEST_GRANDCHILD_PID_FILE";
+/// Where the fake emulator records the argv used for a normal spawn.
+const ARGS_FILE: &str = "HAUKSBEE_TEST_QEMU_ARGS_FILE";
 
 /// Both real tests mutate process-wide env vars (`HAUKSBEE_QEMU_XTENSA`, the
 /// pid-file path) before spawning, so they must not interleave.
@@ -60,6 +62,7 @@ fn write_fake_qemu(dir: &Path) -> std::path::PathBuf {
         format!(
             "#!/bin/sh\n\
              if [ \"$1\" = \"-machine\" ]; then echo 'esp32 fake machine'; exit 0; fi\n\
+             if [ -n \"${{{ARGS_FILE}:-}}\" ]; then printf '%s\\n' \"$@\" > \"${{{ARGS_FILE}}}\"; fi\n\
              sleep 300 &\n\
              echo $! > \"${{{GRANDCHILD_PID_FILE}}}\"\n\
              exec sleep 300\n"
@@ -69,6 +72,122 @@ fn write_fake_qemu(dir: &Path) -> std::path::PathBuf {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
     bin
+}
+
+/// Write a fake accepted by discovery which then dies with a distinctive
+/// non-zero status and stderr. This pins the diagnostics a later QMP failure
+/// must retain after the child is gone.
+fn write_dying_fake_qemu(dir: &Path) -> std::path::PathBuf {
+    let bin = dir.join("qemu-system-xtensa-dies");
+    std::fs::write(
+        &bin,
+        "#!/bin/sh\n\
+         if [ \"$1\" = \"-machine\" ]; then echo 'esp32 fake machine'; exit 0; fi\n\
+         echo 'synthetic qemu fatal marker' >&2\n\
+         exit 73\n",
+    )
+    .unwrap();
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).unwrap();
+    bin
+}
+
+/// A QEMU flash drive is writable by default. Every process must therefore use
+/// QEMU's temporary snapshot layer rather than writing the caller's raw image,
+/// especially when the default test harness boots that same tracked image in
+/// parallel.
+#[test]
+fn spawned_flash_drive_uses_a_private_snapshot() {
+    if std::env::var_os(HELPER_FLAG).is_some() {
+        return;
+    }
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let fake = write_fake_qemu(dir.path());
+    let pid_file = dir.path().join("grandchild.pid");
+    let args_file = dir.path().join("argv.txt");
+    let flash = dir.path().join("tracked-flash.bin");
+    std::fs::write(&flash, [0xe9]).unwrap();
+
+    std::env::set_var("HAUKSBEE_QEMU_XTENSA", &fake);
+    std::env::set_var(GRANDCHILD_PID_FILE, &pid_file);
+    std::env::set_var(ARGS_FILE, &args_file);
+
+    let proc = hauksbee_mcu::qemu::QemuProcess::spawn(
+        hauksbee_mcu::qemu::QemuArch::Xtensa,
+        "esp32",
+        &flash,
+        0,
+        4465,
+        4466,
+    )
+    .expect("fake emulator spawns");
+    let _ = read_grandchild_pid(&pid_file);
+    let args = std::fs::read_to_string(&args_file).expect("fake emulator recorded argv");
+
+    assert!(
+        args.lines().any(|arg| {
+            arg.starts_with("file=")
+                && arg.contains("if=mtd")
+                && arg.contains("format=raw")
+                && arg.contains("snapshot=on")
+        }),
+        "the writable MTD drive must use a per-process snapshot; argv was:\n{args}"
+    );
+
+    std::env::remove_var(ARGS_FILE);
+    drop(proc);
+}
+
+/// Once QEMU dies, callers need the operation, exit status, and captured
+/// stderr. A bare QMP "connection closed" / BrokenPipe is not actionable and
+/// repeated chunks must not lose the original process-death evidence.
+#[test]
+fn process_death_reports_status_and_stderr() {
+    if std::env::var_os(HELPER_FLAG).is_some() {
+        return;
+    }
+    let _serial = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    let fake = write_dying_fake_qemu(dir.path());
+    std::env::set_var("HAUKSBEE_QEMU_XTENSA", &fake);
+
+    let mut proc = hauksbee_mcu::qemu::QemuProcess::spawn(
+        hauksbee_mcu::qemu::QemuArch::Xtensa,
+        "esp32",
+        &dir.path().join("flash.bin"),
+        0,
+        4467,
+        4468,
+    )
+    .expect("fake emulator spawns before it exits");
+
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let err = loop {
+        match proc.ensure_running("servicing QMP stop") {
+            Ok(()) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Ok(()) => panic!("fake QEMU did not exit"),
+            Err(e) => break e,
+        }
+    };
+    let message = format!("{err:#}");
+    assert!(message.contains("servicing QMP stop"), "{message}");
+    assert!(message.contains("exit status: 73"), "{message}");
+    assert!(message.contains("synthetic qemu fatal marker"), "{message}");
+
+    // `Child::try_wait` remains queryable after exit. The next failed chunk
+    // must retain the same cause instead of degrading to a bare BrokenPipe.
+    let repeated = proc
+        .ensure_running("servicing the next QMP cont")
+        .expect_err("dead QEMU stays dead");
+    let repeated = format!("{repeated:#}");
+    assert!(repeated.contains("exit status: 73"), "{repeated}");
+    assert!(
+        repeated.contains("synthetic qemu fatal marker"),
+        "{repeated}"
+    );
 }
 
 /// Read the grandchild pid the fake emulator recorded, waiting for the file.
