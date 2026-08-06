@@ -151,15 +151,16 @@ the GPIO poll aliases any half-period near the chunk width. At 5 ms chunks the
 use a chunk finer than the half-period a WRONG sim would produce, not merely
 finer than the right one.
 
-### Parallel EEPROM programming is functional, not a busy-waveform model
+### Parallel EEPROM programming models digital busy status, not charge-pump physics
 
 The built-in AT28C256 path models the real bidirectional bus, final stored
 bytes, software protection, 64-byte page boundaries, and the 150 µs inter-byte
 deadline on cycle-exact simavr. It does not model the internal 3/10 ms charge-
-pump interval, I/O7 data-polling complement, I/O6 toggle-bit waveform, endurance,
-retention, or optional 12 V chip erase. Firmware that waits before ordinary
-readback is covered; firmware whose behavior depends on polling the busy
-waveform is not, and must not use the functional result as timing evidence.
+pump physics, endurance, retention, or optional 12 V chip erase. It does defer
+cell commits for the declared maximum program interval and returns the I/O7
+data-polling complement and alternating I/O6 toggle bit while busy. The generic
+AT28C256 identity uses the conservative 10 ms maximum; a shorter delay must be
+justified by an explicitly resolved faster part, not inferred from the family.
 
 ### An unserviced watchdog does not reset the MCU on most Renode parts or on QEMU
 
