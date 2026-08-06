@@ -1322,9 +1322,26 @@ fn main() -> anyhow::Result<()> {
         } else {
             eprintln!("error: {e}");
         }
-        std::process::exit(1);
+        std::process::exit(error_exit_code(e));
     }
     result
+}
+
+/// Preserve the typed invalid-for-analysis contract through anyhow's shared
+/// CLI error envelope. Parser and reconciliation errors are not failed checks:
+/// there was no trustworthy board state to check, so they exit 3 in text and
+/// JSON modes alike.
+fn error_exit_code(error: &anyhow::Error) -> i32 {
+    if let Some(error) = error.downcast_ref::<hauksbee_extract::bom::BomError>() {
+        return error.exit_code();
+    }
+    if let Some(error) = error.downcast_ref::<hauksbee_extract::placement::PlacementError>() {
+        return error.exit_code();
+    }
+    if let Some(error) = error.downcast_ref::<hauksbee_engine::binder::IdentityRefusal>() {
+        return error.exit_code();
+    }
+    1
 }
 
 /// Whether a path carries an extension of a BOARD design format (the inputs

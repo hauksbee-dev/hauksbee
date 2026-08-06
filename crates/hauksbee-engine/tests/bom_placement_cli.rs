@@ -77,4 +77,35 @@ fn board_bom_and_placement_feed_the_release_cli_and_json_inventory() {
                 .any(|line| line.as_str().is_some_and(|s| s.contains("U9 identified")))
         })
     }));
+
+    std::fs::write(
+        &bom,
+        "Assembly Ref,Value,MPN\nU9,,MCP4728\nU9,,STM32F103C8\n",
+    )
+    .expect("conflicting BOM fixture");
+    let refused = Command::new(env!("CARGO_BIN_EXE_hauksbee"))
+        .args([
+            "run",
+            board.to_str().unwrap(),
+            "--bom",
+            bom.to_str().unwrap(),
+            "--bom-column",
+            "reference=Assembly Ref",
+            "--report",
+            "--json",
+        ])
+        .output()
+        .expect("hauksbee refusal runs");
+    assert_eq!(
+        refused.status.code(),
+        Some(3),
+        "unsafe identity input is invalid for analysis: {}",
+        String::from_utf8_lossy(&refused.stdout)
+    );
+    let error: serde_json::Value =
+        serde_json::from_slice(&refused.stdout).expect("refusal is one JSON document");
+    assert_eq!(error["ok"], false);
+    assert!(error["error"].as_str().is_some_and(|message| {
+        message.contains("lines") && message.contains("One part cannot take two BOM rows")
+    }));
 }
