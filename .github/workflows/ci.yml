@@ -106,6 +106,21 @@ jobs:
       - run: shellcheck integrations/github-action/*.sh
       - run: shellcheck --severity=warning scripts/make-public.sh scripts/build-public-mirror.sh
 
+  release-evidence-invariants:
+    name: release evidence invariants (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Pure stdlib tests: no corpus fetch, browser, server, or network. These
+      # prove that a renamed board cannot become unseen again, ledger prefix
+      # edits are detected, archives stay inside their declared source, and a
+      # browser artifact cannot be attached to a different reservation.
+      - run: python3 -m unittest qc.tests.test_unseen_boards
+      # A repository with no release run is allowed on an ordinary PR. If the
+      # canonical ledger exists, however, every reservation must terminate and
+      # every retained artifact must still match its recorded digest.
+      - run: python3 -m qc.unseen_boards audit-history
+
   docs:
     name: cargo doc (rendered module docs stay valid)
     runs-on: ubuntu-latest

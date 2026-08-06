@@ -1114,6 +1114,13 @@ possibly-phantom shorts do not gate. The printed caveat says to cross-check.
 
 ## For contributors: the static-check corpus gates
 
+The real-browser release layer is documented separately in
+[`RELEASE_BOARD_GATES.md`](RELEASE_BOARD_GATES.md). It distinguishes the
+exhaustive known-corpus journey from the exactly-five external unseen-board
+iteration and records append-only, content-addressed evidence. These browser
+gates complement the static-check calibration below; neither is evidence that
+the other ran.
+
 This section is about hauksbee's own test discipline, not about writing specs.
 The bring-up CI this page documents runs *firmware on a board under
 assertions*. The static checks (`--drc`, `--lint`, `--si`) have a separate,
