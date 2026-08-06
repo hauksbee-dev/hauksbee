@@ -22,15 +22,31 @@
 //! ```
 
 use hauksbee_ir::evidence::{
-    ArtifactProvenance, ArtifactRole, Assumption, AssumptionKind, AssumptionSource, Contribution,
-    ErrorBudget, EvidenceMap, EvidenceStatus, IntegrationTolerance, ModelOnPath,
-    ParameterProvenance, RunDate, Scope, Subject, ValueOrigin,
+    ArtifactKind, ArtifactProvenance, ArtifactRole, Assumption, AssumptionKind, AssumptionSource,
+    CausalPathIndex, Contribution, ErrorBudget, EvidenceMap, EvidenceRegistry, EvidenceStatus,
+    IntegrationTolerance, MatchConfidence, ModelLayer, ModelOnPath, NetScope, ParameterProvenance,
+    RunDate, Scope, Subject, ValueOrigin,
 };
 
 /// 2026-08-01. A run builds this from its own clock reading; a fixed value keeps
 /// the test off the wall clock.
 fn today() -> RunDate {
     RunDate::from_epoch_days(20_666)
+}
+
+fn traversed_map(
+    assertion: &str,
+    net: &str,
+    refs: &[&str],
+    assumptions: Vec<Assumption>,
+) -> (EvidenceRegistry, EvidenceMap) {
+    let registry = EvidenceRegistry::new(assumptions).unwrap();
+    let graph = CausalPathIndex::from_net_parts([(net, refs)]).unwrap();
+    let traversal = graph
+        .traverse(&NetScope::new([net], None).unwrap(), &registry)
+        .unwrap();
+    let map = EvidenceMap::from_traversal(assertion, traversal, &registry, today()).unwrap();
+    (registry, map)
 }
 
 /// A renderer's whole job, done with public API only: pick the assumptions on an
@@ -85,18 +101,14 @@ fn a_consumer_can_build_every_kind_and_read_every_sentence() {
         Assumption::not_exercised(
             AssumptionSource::Scheduler,
             Subject::new("i2c0", "the i2c0 bus"),
-            Scope::Nets {
-                nets: vec!["SDA".into()],
-            },
+            Scope::Nets(NetScope::new(["SDA"], None).unwrap()),
             "the MCU backend models no I2C controller on this platform",
             "run on a platform whose backend models the controller",
         ),
         Assumption::reduced_fidelity(
             AssumptionSource::Scheduler,
             Subject::new("spi0/framing", "SPI framing on spi0"),
-            Scope::Nets {
-                nets: vec!["SCK".into()],
-            },
+            Scope::Nets(NetScope::new(["SCK"], None).unwrap()),
             "the chunk-boundary heuristic",
             "expose the chip-select GPIO",
         ),
@@ -129,9 +141,8 @@ fn a_consumer_can_build_every_kind_and_read_every_sentence() {
         // The traversal needs the scope, and it is readable without being
         // writable.
         match a.scope() {
-            Scope::Board | Scope::Parts { .. } | Scope::Nets { .. } => {}
+            Scope::Board | Scope::Subjects(_) | Scope::Parameter(_) | Scope::Nets(_) => {}
             Scope::Check { check, .. } => assert!(!check.is_empty()),
-            Scope::TimeWindow { .. } => {}
         }
         assert!(matches!(
             a.source(),
@@ -147,32 +158,35 @@ fn a_consumer_can_build_every_kind_and_read_every_sentence() {
 
 #[test]
 fn a_consumer_can_render_the_rests_on_block_but_cannot_reword_it() {
-    let registry = vec![Assumption::open_part("U2", "XC6206", "no model matched")];
-    let map = EvidenceMap::new("3V3 stays above 3.1 V", &registry, today())
-        .with_artifacts(vec![0])
-        .with_models(vec![ModelOnPath {
-            reference: "U2".into(),
-            model_id: "xc6206".into(),
-            layer: "pack".into(),
-            confidence: "high".into(),
-        }])
+    let (registry, map) = traversed_map(
+        "3V3 stays above 3.1 V",
+        "3V3",
+        &["U2"],
+        vec![Assumption::open_part("U2", "XC6206", "no model matched")],
+    );
+    let map = map
+        .with_models(vec![ModelOnPath::new(
+            "U2",
+            "xc6206",
+            ModelLayer::Pack,
+            MatchConfidence::High,
+        )
+        .unwrap()])
         .with_parameters(vec![ParameterProvenance {
             parameter: "U2.vout".into(),
             value: "3.3 V".into(),
             origin: ValueOrigin::Model {
                 model_id: "xc6206".into(),
-                layer: "pack".into(),
-                confidence: "exact".into(),
+                layer: ModelLayer::Pack,
+                confidence: MatchConfidence::Exact,
             },
         }])
-        .with_error_budget(ErrorBudget::new(IntegrationTolerance {
-            reltol: 1e-3,
-            abstol: 1e-12,
-            chgtol: 1e-14,
-        }))
+        .with_error_budget(ErrorBudget::new(
+            IntegrationTolerance::new(1e-3, 1e-12, 1e-14).unwrap(),
+        ))
         .with_coverage("Monte Carlo, 32 members");
 
-    let block = rests_on_block(&map, &registry);
+    let block = rests_on_block(&map, registry.assumptions());
     assert!(block.contains("Undermined"));
     assert!(block.contains("[open-part:U2]"));
     assert!(block.contains("is treated as an open circuit."));
@@ -185,22 +199,24 @@ fn a_consumer_can_render_the_rests_on_block_but_cannot_reword_it() {
 fn a_consumer_cannot_obtain_a_clean_map_over_an_undermining_set() {
     // There is one constructor, and it decides. `with_*` cannot reach the
     // status, and there is no setter, no Default, and no public field to swap.
-    let undermining = [Assumption::open_part("X", "XC6206", "no model matched")];
-    let map = EvidenceMap::new("A", &undermining, today())
-        .with_artifacts(vec![0, 1, 2])
+    let (_registry, map) = traversed_map(
+        "A",
+        "3V3",
+        &["X"],
+        vec![Assumption::open_part("X", "XC6206", "no model matched")],
+    );
+    let map = map
         .with_models(Vec::new())
         .with_coverage("whatever a caller likes");
     assert_eq!(map.status(), EvidenceStatus::Undermined);
 
     // Clone plus builder methods cannot launder it either.
-    let cloned = map.clone().with_artifacts(Vec::new());
+    let cloned = map.clone();
     assert_eq!(cloned.status(), EvidenceStatus::Undermined);
 
     // And an empty set is the only route to Clean.
-    assert_eq!(
-        EvidenceMap::new("B", &[], today()).status(),
-        EvidenceStatus::Clean
-    );
+    let (_registry, clean) = traversed_map("B", "VBUS", &["J1"], Vec::new());
+    assert_eq!(clean.status(), EvidenceStatus::Clean);
 }
 
 #[test]
@@ -210,22 +226,21 @@ fn a_producer_can_populate_the_inventory_and_the_json_round_trips() {
         Subject::new("odbpp", "the ODB++ archive"),
         Scope::Board,
     );
-    let artifact = ArtifactProvenance {
-        path: "boards/rev-c.tgz".into(),
-        kind: "odbpp".into(),
-        role: ArtifactRole::FabArchive,
-        sha256: "a".repeat(64),
-        contributed: vec![Contribution {
-            what: "connectivity".into(),
-            detail: "nets read from the archive's netlist section".into(),
-        }],
-        ignored: Vec::new(),
-        cross_checks: Vec::new(),
-        assumptions: vec![assumption.id().clone()],
-    };
+    let artifact = ArtifactProvenance::new(
+        "boards/rev-c.tgz",
+        ArtifactKind::OdbPlusPlus,
+        ArtifactRole::FabArchive,
+        "a".repeat(64),
+        vec![assumption.id().clone()],
+    )
+    .unwrap()
+    .with_contributions(vec![Contribution {
+        what: "connectivity".into(),
+        detail: "nets read from the archive's netlist section".into(),
+    }]);
     let json = serde_json::to_string(&artifact).expect("serializes");
-    let back: ArtifactProvenance = serde_json::from_str(&json).expect("round-trips");
-    assert_eq!(back, artifact);
+    let doc: serde_json::Value = serde_json::from_str(&json).expect("is valid JSON");
+    assert_eq!(doc["kind"], "odb_plus_plus");
 
     // The judgements serialize but do NOT deserialize: an assumption or an
     // evidence status is produced, and parsing one back would mint it outside
@@ -237,7 +252,7 @@ fn a_producer_can_populate_the_inventory_and_the_json_round_trips() {
     assert_eq!(doc["kind"], "fitted_by_default");
     assert_eq!(doc["scope"]["type"], "board");
 
-    let map = EvidenceMap::new("A", std::slice::from_ref(&assumption), today());
+    let (_registry, map) = traversed_map("A", "3V3", &["R7"], vec![assumption.clone()]);
     let json = serde_json::to_string(&map).expect("serializes");
     let doc: serde_json::Value = serde_json::from_str(&json).expect("is a JSON document");
     assert_eq!(doc["status"], "undermined");

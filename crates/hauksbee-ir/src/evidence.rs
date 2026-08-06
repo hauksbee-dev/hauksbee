@@ -94,6 +94,15 @@ pub enum EvidenceError {
     /// An assumption registry contains the same stable id twice.
     #[error("duplicate assumption id {id}")]
     DuplicateAssumption { id: String },
+    /// An artifact cites an assumption absent from the run registry.
+    #[error("artifact cites assumption {id} absent from the evidence registry")]
+    MissingAssumption { id: String },
+    /// An evidence map cites an artifact absent from the run inventory.
+    #[error("evidence map cites artifact index {index}, but inventory length is {len}")]
+    MissingArtifact { index: usize, len: usize },
+    /// A supplied SHA-256 is not an empty directory marker or 64 hex digits.
+    #[error("artifact sha256 must be empty or 64 hexadecimal digits")]
+    InvalidSha256,
     /// An assertion named a net absent from the validated incidence index.
     #[error("causal traversal has no incidence record for net {net}")]
     UnknownNet { net: String },
@@ -120,7 +129,7 @@ pub enum EvidenceError {
     Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
 )]
 #[serde(transparent)]
-pub struct AssumptionId(pub String);
+pub struct AssumptionId(String);
 
 impl AssumptionId {
     /// The subject an id falls back to when the producer had none. A board can
@@ -147,30 +156,16 @@ impl AssumptionId {
     /// 8-hex digest of it becomes the disambiguator. It stays deterministic
     /// across runs, because the statement is composed from the same inputs.
     fn disambiguated(kind: AssumptionKind, subject: &str, statement: &str) -> Self {
-        let unnamed = if subject.trim().is_empty() {
-            Some(format!(
-                "{}-{:08x}",
+        let subject = if subject.trim().is_empty() {
+            format!(
+                "{}-{}",
                 Self::UNNAMED_SUBJECT,
-                fnv1a(statement)
-            ))
+                hex_bytes(statement.as_bytes())
+            )
         } else {
-            None
+            subject.trim().to_string()
         };
-        let subject = unnamed.as_deref().unwrap_or(subject);
-        let mut out = String::with_capacity(subject.len());
-        let mut pending_space = false;
-        for ch in subject.trim().chars() {
-            if ch.is_whitespace() {
-                pending_space = true;
-                continue;
-            }
-            if pending_space {
-                out.push('_');
-                pending_space = false;
-            }
-            out.push(if ch == ':' { '_' } else { ch });
-        }
-        Self(format!("{}:{out}", kind.slug()))
+        Self(format!("{}:{}", kind.slug(), escape_id_component(&subject)))
     }
 
     /// The id as a string.
@@ -179,17 +174,25 @@ impl AssumptionId {
     }
 }
 
-/// FNV-1a, 32-bit, for disambiguating an unnameable subject. A digest, not a
-/// hash table key: it needs to be stable across runs and across builds, which
-/// rules out `DefaultHasher`, and it needs no collision resistance, which rules
-/// out a dependency.
-fn fnv1a(s: &str) -> u32 {
-    let mut h: u32 = 0x811c_9dc5;
-    for b in s.as_bytes() {
-        h ^= u32::from(*b);
-        h = h.wrapping_mul(0x0100_0193);
+fn escape_id_component(value: &str) -> String {
+    let mut out = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'/') {
+            out.push(char::from(byte));
+        } else {
+            out.push('%');
+            out.push_str(&format!("{byte:02X}"));
+        }
     }
-    h
+    out
+}
+
+fn hex_bytes(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push_str(&format!("{byte:02x}"));
+    }
+    out
 }
 
 impl std::fmt::Display for AssumptionId {
@@ -300,29 +303,123 @@ pub enum AssumptionSource {
 /// decision: the causal-path traversal compares an assertion's subject nets and
 /// refs against these, and only assumptions that match land in an
 /// [`EvidenceMap`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum EntityKind {
+    /// A placed component or footprint.
+    Part,
+    /// One pin on a placed component.
+    Pin,
+    /// A logical bus or peripheral.
+    Bus,
+    /// An input artifact.
+    Artifact,
+    /// A board-level object that is not one of the narrower kinds.
+    BoardObject,
+}
+
+/// A typed, non-empty causal subject.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, schemars::JsonSchema)]
+pub struct EntityRef {
+    kind: EntityKind,
+    id: String,
+}
+
+impl EntityRef {
+    /// Construct a named subject.
+    pub fn new(kind: EntityKind, id: impl Into<String>) -> Result<Self, EvidenceError> {
+        let id = id.into();
+        if id.trim().is_empty() {
+            return Err(EvidenceError::Empty {
+                field: "entity_ref.id",
+            });
+        }
+        Ok(Self { kind, id })
+    }
+
+    /// The subject category.
+    pub fn kind(&self) -> EntityKind {
+        self.kind
+    }
+
+    /// The stable subject id.
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+}
+
+/// A non-empty, deduplicated subject set.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+pub struct SubjectSet(Vec<EntityRef>);
+
+impl SubjectSet {
+    /// Construct a set in deterministic first-seen order.
+    pub fn new<I>(subjects: I) -> Result<Self, EvidenceError>
+    where
+        I: IntoIterator<Item = EntityRef>,
+    {
+        let mut out = Vec::new();
+        for subject in subjects {
+            if !out.contains(&subject) {
+                out.push(subject);
+            }
+        }
+        if out.is_empty() {
+            return Err(EvidenceError::Empty {
+                field: "subject_set",
+            });
+        }
+        Ok(Self(out))
+    }
+
+    /// The subjects in deterministic first-seen order.
+    pub fn as_slice(&self) -> &[EntityRef] {
+        &self.0
+    }
+}
+
+/// One model or input parameter on a specific causal subject.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, schemars::JsonSchema)]
+pub struct ParameterRef {
+    subject: EntityRef,
+    parameter: String,
+}
+
+impl ParameterRef {
+    /// Construct a subject-qualified parameter.
+    pub fn new(subject: EntityRef, parameter: impl Into<String>) -> Result<Self, EvidenceError> {
+        let parameter = parameter.into();
+        if parameter.trim().is_empty() {
+            return Err(EvidenceError::Empty {
+                field: "parameter_ref.parameter",
+            });
+        }
+        Ok(Self { subject, parameter })
+    }
+
+    /// The subject carrying the parameter.
+    pub fn subject(&self) -> &EntityRef {
+        &self.subject
+    }
+
+    /// The parameter's stable name.
+    pub fn parameter(&self) -> &str {
+        &self.parameter
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum Scope {
     /// The whole run, e.g. every placed part treated as fitted because there
     /// was no BOM at all.
     Board,
-    /// Specific parts, by reference designator.
-    Parts {
-        /// The reference designators.
-        refs: Vec<String>,
-    },
-    /// Specific nets, by name.
-    Nets {
-        /// The net names.
-        nets: Vec<String>,
-    },
-    /// A sim-time window, seconds.
-    TimeWindow {
-        /// Window start, seconds.
-        start_s: f64,
-        /// Window end, seconds.
-        end_s: f64,
-    },
+    /// Specific typed subjects.
+    Subjects(SubjectSet),
+    /// One subject-qualified parameter.
+    Parameter(ParameterRef),
+    /// Specific nets, optionally restricted to an observation window.
+    Nets(NetScope),
     /// One named check ("drc", "si", "lint"), for `NotChecked` and `Waived`.
     Check {
         /// The check name.
@@ -451,18 +548,32 @@ fn sentence_or(s: &str, fallback: &str) -> String {
     sentence(&or_else(s, fallback))
 }
 
-/// A scope's name list from one name, empty when there is no name.
-///
-/// An empty string in a `refs` or `nets` list is worse than no list: the
-/// traversal compares those against real designators, and `""` is a record that
-/// matches nothing while looking like a record that matches something.
-fn refs_of(name: &str) -> Vec<String> {
-    let name = fragment(name);
-    if name.is_empty() {
-        Vec::new()
-    } else {
-        vec![name]
-    }
+fn part_scope(reference: &str) -> Scope {
+    let reference = or_else(reference, AssumptionId::UNNAMED_SUBJECT);
+    Scope::Subjects(SubjectSet(vec![EntityRef {
+        kind: EntityKind::Part,
+        id: reference,
+    }]))
+}
+
+fn parameter_scope(reference: &str, parameter: &str) -> Scope {
+    let reference = or_else(reference, AssumptionId::UNNAMED_SUBJECT);
+    let parameter = or_else(parameter, AssumptionId::UNNAMED_SUBJECT);
+    Scope::Parameter(ParameterRef {
+        subject: EntityRef {
+            kind: EntityKind::Part,
+            id: reference,
+        },
+        parameter,
+    })
+}
+
+fn net_scope(net: &str) -> Scope {
+    let net = or_else(net, AssumptionId::UNNAMED_SUBJECT);
+    Scope::Nets(NetScope {
+        nets: vec![net],
+        window: None,
+    })
 }
 
 /// A tidied fragment, or the fallback when the producer had nothing. Same
@@ -641,9 +752,7 @@ impl Assumption {
             AssumptionKind::OpenPart,
             AssumptionSource::Binder,
             &subject,
-            Scope::Parts {
-                refs: refs_of(&subject),
-            },
+            part_scope(&subject),
             format!("{named} is treated as an open circuit."),
             because,
             format!(
@@ -679,9 +788,7 @@ impl Assumption {
             AssumptionKind::SubstituteModel,
             source,
             &subject,
-            Scope::Parts {
-                refs: refs_of(&subject),
-            },
+            part_scope(&subject),
             format!("{reference} is modelled by {stand_in}, not {requested}."),
             format!(
                 "No model matched {requested}, and {stand_in} was the closest stand-in \
@@ -715,9 +822,7 @@ impl Assumption {
             AssumptionKind::InferredPinRole,
             AssumptionSource::Binder,
             &subject,
-            Scope::Parts {
-                refs: refs_of(&part_ref),
-            },
+            part_scope(&part_ref),
             format!("{reference} pin {pin} is taken to be its {role} pin."),
             "The inputs named no role for that pin, so the pin-rule table inferred one from \
              the part's shape."
@@ -749,9 +854,7 @@ impl Assumption {
             AssumptionKind::DefaultParameter,
             AssumptionSource::Binder,
             &subject,
-            Scope::Parts {
-                refs: refs_of(&part_ref),
-            },
+            parameter_scope(&part_ref, &parameter),
             format!("{reference}.{parameter} is taken as {value}, a documented default."),
             "No input carried a value for it.".to_string(),
             format!(
@@ -931,9 +1034,7 @@ impl Assumption {
             AssumptionKind::ReducedFidelity,
             AssumptionSource::Check,
             &subject,
-            Scope::Nets {
-                nets: refs_of(&subject),
-            },
+            net_scope(&subject),
             format!("Net {net} is held by an ideal source."),
             "Nothing on the board sets its voltage in this run: a stimulus does.".to_string(),
             format!(
@@ -1105,16 +1206,9 @@ impl Assumption {
                 self.kind.slug()
             ));
         }
-        // A scope reaches the published `assumptions` array, and a window bound
-        // that is not a number serializes as JSON `null` against a schema that
-        // says `number`: one of those makes a whole report unreadable.
-        if let Scope::TimeWindow { start_s, end_s } = self.scope {
-            if !start_s.is_finite() || !end_s.is_finite() {
-                return Err(format!(
-                    "{}: a time-window scope's bounds must be real numbers, got \
-                     [{start_s}, {end_s})",
-                    self.id
-                ));
+        if let Scope::Check { check, .. } = &self.scope {
+            if check.trim().is_empty() {
+                return Err(format!("{}: a check scope needs a check name", self.id));
             }
         }
         match (self.kind, self.expires.as_deref()) {
@@ -1165,6 +1259,58 @@ pub enum ArtifactRole {
     SocDescriptor,
 }
 
+/// The normalized input format. Shared by provenance producers and renderers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactKind {
+    KiCadPcb,
+    KiCadSchematic,
+    EagleBoard,
+    AltiumPcbDoc,
+    GerberArchive,
+    OdbPlusPlus,
+    Ipc2581,
+    Ipc356,
+    BoardCode,
+    Bom,
+    Placement,
+    Elf,
+    IntelHex,
+    Toml,
+}
+
+/// One layer of the model-resolution ladder.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ModelLayer {
+    Builtin,
+    Pack,
+    UserDir,
+    UserConfigDir,
+    ModelsDir,
+    Spice,
+    EngineFallback,
+}
+
+/// Confidence in a model or parameter match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchConfidence {
+    Exact,
+    High,
+    Heuristic,
+    Guessed,
+}
+
+/// How a user-authored override entered the run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum OverrideSource {
+    AsBuilt,
+    Spec,
+    Cli,
+}
+
 /// One concrete thing an artifact contributed to the run.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Contribution {
@@ -1206,24 +1352,18 @@ pub struct CrossCheck {
 /// [`EvidenceMap`] names artifacts by index into it.
 ///
 /// ```
-/// use hauksbee_ir::evidence::{ArtifactProvenance, ArtifactRole, Contribution};
+/// use hauksbee_ir::evidence::{ArtifactKind, ArtifactProvenance, ArtifactRole, Contribution};
 ///
-/// let a = ArtifactProvenance {
-///     path: "boards/blinky.kicad_pcb".into(),
-///     kind: "kicad_pcb".into(),
-///     role: ArtifactRole::Layout,
-///     sha256: "0".repeat(64),
-///     contributed: vec![Contribution {
+/// let a = ArtifactProvenance::new(
+///     "boards/blinky.kicad_pcb", ArtifactKind::KiCadPcb,
+///     ArtifactRole::Layout, "0".repeat(64), Vec::new()
+/// ).unwrap().with_contributions(vec![Contribution {
 ///         what: "connectivity".into(),
 ///         detail: "nets read from the file's net table".into(),
-///     }],
-///     ignored: Vec::new(),
-///     cross_checks: Vec::new(),
-///     assumptions: Vec::new(),
-/// };
-/// assert_eq!(a.role, ArtifactRole::Layout);
+///     }]);
+/// assert_eq!(a.role(), ArtifactRole::Layout);
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 #[schemars(
     description = "One input artifact: what it was, what it gave the run, \
                           what in it was ignored, and which cross-checks it passed."
@@ -1231,34 +1371,104 @@ pub struct CrossCheck {
 pub struct ArtifactProvenance {
     /// Path as the user gave it, not canonicalized: the report must read back
     /// in the user's own vocabulary.
-    pub path: String,
+    path: String,
     /// What the normalizer recognised it as: "kicad_pcb", "altium_pcbdoc",
     /// "gerber_archive", "odbpp", "ipc2581", "board_code", "elf", "hex",
     /// "toml", and so on.
-    pub kind: String,
+    kind: ArtifactKind,
     /// The role it played.
-    pub role: ArtifactRole,
+    role: ArtifactRole,
     /// SHA-256 of the bytes read (of the archive, for archives). Empty only
     /// for a gerber DIRECTORY, where there is no single file to hash.
     #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub sha256: String,
+    sha256: String,
     /// What it contributed.
     // Skipped when empty like every other vec in this module: an artifact that
     // contributed nothing says so by carrying no key, and adding this skip after
     // the schema publishes would remove a key a consumer may index.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub contributed: Vec<Contribution>,
+    contributed: Vec<Contribution>,
     /// What in it was deliberately not used.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub ignored: Vec<IgnoredInput>,
+    ignored: Vec<IgnoredInput>,
     /// Cross-checks run on it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub cross_checks: Vec<CrossCheck>,
+    cross_checks: Vec<CrossCheck>,
     /// Assumptions this artifact's limitations raised, by id, so the inventory
     /// row and the assumption registry cross-reference instead of duplicating
     /// text.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub assumptions: Vec<AssumptionId>,
+    assumptions: Vec<AssumptionId>,
+}
+
+impl ArtifactProvenance {
+    /// Construct one artifact record. Referential integrity for `assumptions`
+    /// is checked when the artifact enters an [`EvidenceRegistry`].
+    pub fn new(
+        path: impl Into<String>,
+        kind: ArtifactKind,
+        role: ArtifactRole,
+        sha256: impl Into<String>,
+        assumptions: Vec<AssumptionId>,
+    ) -> Result<Self, EvidenceError> {
+        let path = path.into();
+        let sha256 = sha256.into();
+        if path.trim().is_empty() {
+            return Err(EvidenceError::Empty {
+                field: "artifact.path",
+            });
+        }
+        if !sha256.is_empty()
+            && (sha256.len() != 64 || !sha256.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        {
+            return Err(EvidenceError::InvalidSha256);
+        }
+        Ok(Self {
+            path,
+            kind,
+            role,
+            sha256,
+            contributed: Vec::new(),
+            ignored: Vec::new(),
+            cross_checks: Vec::new(),
+            assumptions,
+        })
+    }
+
+    pub fn path(&self) -> &str {
+        &self.path
+    }
+
+    pub fn kind(&self) -> ArtifactKind {
+        self.kind
+    }
+
+    pub fn role(&self) -> ArtifactRole {
+        self.role
+    }
+
+    pub fn sha256(&self) -> &str {
+        &self.sha256
+    }
+
+    pub fn assumptions(&self) -> &[AssumptionId] {
+        &self.assumptions
+    }
+
+    pub fn with_contributions(mut self, contributions: Vec<Contribution>) -> Self {
+        self.contributed = contributions;
+        self
+    }
+
+    pub fn with_ignored(mut self, ignored: Vec<IgnoredInput>) -> Self {
+        self.ignored = ignored;
+        self
+    }
+
+    pub fn with_cross_checks(mut self, cross_checks: Vec<CrossCheck>) -> Self {
+        self.cross_checks = cross_checks;
+        self
+    }
 }
 
 /// Where a bound parameter's value came from.
@@ -1280,9 +1490,9 @@ pub enum ValueOrigin {
         /// The model that supplied it.
         model_id: String,
         /// Which layer of the model ladder it came from.
-        layer: String,
+        layer: ModelLayer,
         /// How good the match was.
-        confidence: String,
+        confidence: MatchConfidence,
     },
     /// A documented default, naming the assumption that records it.
     Default {
@@ -1292,7 +1502,7 @@ pub enum ValueOrigin {
     /// The user overrode it (an as-built overlay, a spec field, a CLI flag).
     UserOverride {
         /// How the override arrived.
-        via: String,
+        via: OverrideSource,
     },
 }
 
@@ -1313,12 +1523,12 @@ pub struct ParameterProvenance {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// A sim-time window, seconds, half-open `[start_s, end_s)`.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct TimeWindow {
     /// Window start, seconds.
-    pub start_s: f64,
+    start_s: f64,
     /// Window end, seconds, exclusive.
-    pub end_s: f64,
+    end_s: f64,
 }
 
 impl TimeWindow {
@@ -1337,6 +1547,14 @@ impl TimeWindow {
     pub fn is_finite(&self) -> bool {
         self.start_s.is_finite() && self.end_s.is_finite()
     }
+
+    pub fn start_s(self) -> f64 {
+        self.start_s
+    }
+
+    pub fn end_s(self) -> f64 {
+        self.end_s
+    }
 }
 
 /// One window and the integration method that produced it. The primary method
@@ -1345,16 +1563,16 @@ impl TimeWindow {
 /// method names verbatim ("trapezoidal", "gear2", "backward-euler",
 /// "reduced-step", "cold-start-backward-euler",
 /// "subdivided-backward-euler").
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct WindowMethod {
     /// The span this method produced.
-    pub window: TimeWindow,
+    window: TimeWindow,
     /// The method's stable name.
-    pub method: String,
+    method: IntegrationMethod,
     /// The accuracy cost, stated: empty for the primary method, a sentence for
     /// a more dissipative rung.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub accuracy: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    accuracy_cost: f64,
 }
 
 /// The integration algorithm used for a solved window.
@@ -1386,26 +1604,34 @@ impl WindowMethod {
         non_negative("window_method.accuracy_cost", accuracy_cost)?;
         Ok(Self {
             window,
-            method: serde_json_name(method),
-            accuracy: if accuracy_cost == 0.0 {
-                String::new()
-            } else {
-                format!("relative error bound {accuracy_cost}")
-            },
+            method,
+            accuracy_cost,
         })
+    }
+
+    pub fn window(&self) -> TimeWindow {
+        self.window
+    }
+
+    pub fn method(&self) -> IntegrationMethod {
+        self.method
+    }
+
+    pub fn accuracy_cost(&self) -> f64 {
+        self.accuracy_cost
     }
 }
 
 /// The solver's convergence and truncation-error settings for this result.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct IntegrationTolerance {
     /// Relative tolerance for Newton convergence and local-truncation-error
     /// control.
-    pub reltol: f64,
+    reltol: f64,
     /// Absolute current tolerance, amps.
-    pub abstol: f64,
+    abstol: f64,
     /// Charge tolerance, coulombs (capacitor local truncation error).
-    pub chgtol: f64,
+    chgtol: f64,
 }
 
 impl IntegrationTolerance {
@@ -1420,15 +1646,48 @@ impl IntegrationTolerance {
             chgtol,
         })
     }
+
+    pub fn reltol(self) -> f64 {
+        self.reltol
+    }
+
+    pub fn abstol(self) -> f64 {
+        self.abstol
+    }
+
+    pub fn chgtol(self) -> f64 {
+        self.chgtol
+    }
 }
 
 /// The final accepted Newton residual, worst node.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct Residual {
     /// `max |f(x)|` over the residual vector at acceptance.
-    pub max_abs: f64,
+    max_abs: f64,
     /// The node or branch carrying it, for the "who" question.
-    pub at: String,
+    at: String,
+}
+
+impl Residual {
+    pub fn new(max_abs: f64, at: impl Into<String>) -> Result<Self, EvidenceError> {
+        non_negative("residual.max_abs", max_abs)?;
+        let at = at.into();
+        if at.trim().is_empty() {
+            return Err(EvidenceError::Empty {
+                field: "residual.at",
+            });
+        }
+        Ok(Self { max_abs, at })
+    }
+
+    pub fn max_abs(&self) -> f64 {
+        self.max_abs
+    }
+
+    pub fn at(&self) -> &str {
+        &self.at
+    }
 }
 
 /// Interval bounds a model places on a derived quantity. This is the socket for
@@ -1440,16 +1699,16 @@ pub struct Residual {
 /// not JSON: it would serialize as `null` against a schema that says `number`
 /// and no consumer could read it back. Whoever lands the producer picks the
 /// physical limit and says so in `basis`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct ModelUncertainty {
     /// Which parameter carries the interval ("Q2.beta", "D1.vf").
-    pub parameter: String,
+    parameter: String,
     /// Interval low bound.
-    pub low: f64,
+    low: f64,
     /// Interval high bound.
-    pub high: f64,
+    high: f64,
     /// Where the interval came from ("datasheet min/max", "pack tolerance").
-    pub basis: String,
+    basis: String,
 }
 
 impl ModelUncertainty {
@@ -1516,16 +1775,8 @@ fn non_negative(field: &'static str, value: f64) -> Result<(), EvidenceError> {
     }
 }
 
-fn serde_json_name(method: IntegrationMethod) -> String {
-    match method {
-        IntegrationMethod::Trapezoidal => "trapezoidal",
-        IntegrationMethod::Gear2 => "gear2",
-        IntegrationMethod::BackwardEuler => "backward-euler",
-        IntegrationMethod::ReducedStep => "reduced-step",
-        IntegrationMethod::ColdStartBackwardEuler => "cold-start-backward-euler",
-        IntegrationMethod::SubdividedBackwardEuler => "subdivided-backward-euler",
-    }
-    .to_string()
+fn is_zero(value: &f64) -> bool {
+    *value == 0.0
 }
 
 /// Everything a consumer needs to know about how good a number is.
@@ -1538,15 +1789,12 @@ fn serde_json_name(method: IntegrationMethod) -> String {
 /// ```
 /// use hauksbee_ir::evidence::{ErrorBudget, IntegrationTolerance};
 ///
-/// let b = ErrorBudget::new(IntegrationTolerance {
-///     reltol: 1e-3,
-///     abstol: 1e-12,
-///     chgtol: 1e-14,
-/// });
-/// assert!(b.methods.is_empty());
-/// assert!(b.failed_windows.is_empty());
+/// let tolerance = IntegrationTolerance::new(1e-3, 1e-12, 1e-14).unwrap();
+/// let b = ErrorBudget::new(tolerance);
+/// assert!(b.methods().is_empty());
+/// assert!(b.failed_windows().is_empty());
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 #[schemars(
     description = "How good a number is: integration tolerances, which method \
                           produced which time window, the accepted residual, the \
@@ -1554,105 +1802,77 @@ fn serde_json_name(method: IntegrationMethod) -> String {
 )]
 pub struct ErrorBudget {
     /// The solver settings the numbers were produced under.
-    pub tolerance: IntegrationTolerance,
+    tolerance: IntegrationTolerance,
     /// Which method produced which span. One entry for a homogeneous run.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub methods: Vec<WindowMethod>,
+    methods: Vec<WindowMethod>,
     /// The accepted Newton residual, when the producing path measured one.
-    /// Omitted, rather than written as JSON `null`, when the number is not
-    /// finite. JSON has no NaN and no infinity, `serde_json` writes them as
-    /// `null`, and a `null` then fails to read back against a schema that says
-    /// `number`. A quantity that is not a number is not a measurement, and this
-    /// field is already optional, so the honest encoding is absence.
-    #[serde(default, skip_serializing_if = "residual_is_not_a_number")]
+    /// Present only when the producer measured a finite, non-negative residual.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "Residual")]
-    pub residual: Option<Residual>,
+    residual: Option<Residual>,
     /// Windows with NO valid solution: the run held stale values there. Any
     /// quantity read inside one of these is not a measurement.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub failed_windows: Vec<TimeWindow>,
+    failed_windows: Vec<TimeWindow>,
     /// Worst-case timestamp error for events, seconds. Today this is the
     /// co-sim chunk quantization: an edge is observed at a chunk boundary.
-    /// Omitted when not finite.
-    #[serde(default, skip_serializing_if = "opt_f64_is_not_a_number")]
+    /// Constructed only from a finite, non-negative value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(with = "f64")]
-    pub event_time_error_s: Option<f64>,
+    event_time_error_s: Option<f64>,
     /// Interval bounds models place on parameters behind these numbers.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub model_uncertainty: Vec<ModelUncertainty>,
-}
-
-/// True when an optional measurement is absent or not a real number.
-///
-/// JSON has no NaN and no infinity: `serde_json` writes them as `null`, which
-/// then fails to read back as an `f64` against a schema that says `number`. And
-/// a diverged march is exactly where a residual goes non-finite, so this is the
-/// normal case rather than a pathological one. A quantity that is not a number
-/// is not a measurement, so it is omitted, which the field's `Option` shape
-/// already means.
-fn opt_f64_is_not_a_number(v: &Option<f64>) -> bool {
-    !v.is_some_and(|x| x.is_finite())
-}
-
-/// True when the residual is absent or carries a non-finite magnitude. Same
-/// reasoning as [`opt_f64_is_not_a_number`].
-fn residual_is_not_a_number(v: &Option<Residual>) -> bool {
-    !v.as_ref().is_some_and(|r| r.max_abs.is_finite())
+    model_uncertainty: Vec<ModelUncertainty>,
 }
 
 impl ErrorBudget {
+    pub fn with_method(mut self, method: WindowMethod) -> Self {
+        self.methods.push(method);
+        self
+    }
+
+    pub fn with_residual(mut self, residual: Residual) -> Self {
+        self.residual = Some(residual);
+        self
+    }
+
+    pub fn with_failed_window(mut self, window: TimeWindow) -> Self {
+        self.failed_windows.push(window);
+        self
+    }
+
+    pub fn with_uncertainty(mut self, uncertainty: ModelUncertainty) -> Self {
+        self.model_uncertainty.push(uncertainty);
+        self
+    }
+
+    pub fn tolerance(&self) -> IntegrationTolerance {
+        self.tolerance
+    }
+
+    pub fn methods(&self) -> &[WindowMethod] {
+        &self.methods
+    }
+
+    pub fn residual(&self) -> Option<&Residual> {
+        self.residual.as_ref()
+    }
+
+    pub fn failed_windows(&self) -> &[TimeWindow] {
+        &self.failed_windows
+    }
+
+    pub fn model_uncertainty(&self) -> &[ModelUncertainty] {
+        &self.model_uncertainty
+    }
+
     /// Attach a finite, non-negative event timestamp error. Invalid values are
     /// errors, not absent fields.
     pub fn with_event_time_error(mut self, seconds: f64) -> Result<Self, EvidenceError> {
         non_negative("error_budget.event_time_error_s", seconds)?;
         self.event_time_error_s = Some(seconds);
         Ok(self)
-    }
-    /// The budget if it can be published, `None` if it cannot.
-    ///
-    /// JSON has no NaN and no infinity. `serde_json` writes both as `null`, and a
-    /// `null` then fails to read back as the `number` this schema promises, so
-    /// ONE non-finite value makes the whole run report unparseable. The optional
-    /// numbers skip themselves. The required ones cannot, and the tempting repair
-    /// is to drop the offending entries, which is exactly the wrong move for the
-    /// most important of them: a consumer reading `failed_windows: []` concludes
-    /// that every quantity in the run is a measurement, so quietly deleting a
-    /// window whose bounds went bad hides the divergence it was recording.
-    ///
-    /// So the whole budget is withheld instead. An absent budget is visibly
-    /// absent; a silently shortened one is not. A budget this refuses is a
-    /// producer bug, and the debug assertion says which part.
-    pub fn publishable(self) -> Option<Self> {
-        self.unpublishable_reason().is_none().then_some(self)
-    }
-
-    /// Why this budget cannot be published, if it cannot. Separate from
-    /// [`Self::publishable`] and free of assertions so that BOTH profiles can
-    /// test the rule: a guarantee about release behaviour that only a debug build
-    /// exercises is not a tested guarantee, and CI runs the tests in debug.
-    pub fn unpublishable_reason(&self) -> Option<&'static str> {
-        if !(self.tolerance.reltol.is_finite()
-            && self.tolerance.abstol.is_finite()
-            && self.tolerance.chgtol.is_finite())
-        {
-            return Some("a non-finite tolerance says nothing about how good these numbers are");
-        }
-        if !(self.methods.iter().all(|m| m.window.is_finite())
-            && self.failed_windows.iter().all(TimeWindow::is_finite))
-        {
-            return Some("a time window whose own bounds are not numbers describes nothing");
-        }
-        if !self
-            .model_uncertainty
-            .iter()
-            .all(|u| u.low.is_finite() && u.high.is_finite())
-        {
-            return Some(
-                "an interval bound must be a real number: a one-sided datasheet limit needs \
-                 a finite other side, because an infinity is not JSON",
-            );
-        }
-        None
     }
 
     /// The common shape: known tolerances, nothing else measured yet.
@@ -1673,19 +1893,70 @@ impl ErrorBudget {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// A model on the causal path.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct ModelOnPath {
     /// The part it is bound to.
-    pub reference: String,
+    reference: String,
     /// The model that bound.
-    pub model_id: String,
+    model_id: String,
     /// Which layer of the model ladder it came from: "builtin", "pack",
     /// "user-dir", "user-config-dir", "models-dir", "spice",
     /// "engine-fallback".
-    pub layer: String,
+    layer: ModelLayer,
     /// How good the match was.
-    pub confidence: String,
+    confidence: MatchConfidence,
 }
+
+impl ModelOnPath {
+    /// Construct a typed model-path record.
+    pub fn new(
+        reference: impl Into<String>,
+        model_id: impl Into<String>,
+        layer: ModelLayer,
+        confidence: MatchConfidence,
+    ) -> Result<Self, EvidenceError> {
+        let reference = reference.into();
+        let model_id = model_id.into();
+        if reference.trim().is_empty() {
+            return Err(EvidenceError::Empty {
+                field: "model_on_path.reference",
+            });
+        }
+        if model_id.trim().is_empty() {
+            return Err(EvidenceError::Empty {
+                field: "model_on_path.model_id",
+            });
+        }
+        Ok(Self {
+            reference,
+            model_id,
+            layer,
+            confidence,
+        })
+    }
+
+    pub fn reference(&self) -> &str {
+        &self.reference
+    }
+
+    pub fn model_id(&self) -> &str {
+        &self.model_id
+    }
+
+    pub fn layer(&self) -> ModelLayer {
+        self.layer
+    }
+
+    pub fn confidence(&self) -> MatchConfidence {
+        self.confidence
+    }
+}
+
+/// Stable index into one validated run inventory. The inner index is private;
+/// only [`EvidenceRegistry::add_artifact`] can mint one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, schemars::JsonSchema)]
+#[serde(transparent)]
+pub struct ArtifactId(usize);
 
 /// A registry whose stable ids are unique and whose assumptions have passed
 /// structural validation. Traversal and map construction share this instance,
@@ -1693,6 +1964,7 @@ pub struct ModelOnPath {
 #[derive(Debug, Clone)]
 pub struct EvidenceRegistry {
     assumptions: Vec<Assumption>,
+    artifacts: Vec<ArtifactProvenance>,
 }
 
 impl EvidenceRegistry {
@@ -1709,19 +1981,44 @@ impl EvidenceRegistry {
                 });
             }
         }
-        Ok(Self { assumptions })
+        Ok(Self {
+            assumptions,
+            artifacts: Vec::new(),
+        })
     }
 
     /// The validated assumptions in deterministic registry order.
     pub fn assumptions(&self) -> &[Assumption] {
         &self.assumptions
     }
+
+    /// Add an artifact after resolving all assumption references.
+    pub fn add_artifact(
+        &mut self,
+        artifact: ArtifactProvenance,
+    ) -> Result<ArtifactId, EvidenceError> {
+        let known: HashSet<&AssumptionId> = self.assumptions.iter().map(Assumption::id).collect();
+        for id in artifact.assumptions() {
+            if !known.contains(id) {
+                return Err(EvidenceError::MissingAssumption { id: id.to_string() });
+            }
+        }
+        let id = ArtifactId(self.artifacts.len());
+        self.artifacts.push(artifact);
+        Ok(id)
+    }
+
+    pub fn artifacts(&self) -> &[ArtifactProvenance] {
+        &self.artifacts
+    }
 }
 
 /// The net and optional observation interval an assertion causally reads.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct NetScope {
     nets: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "TimeWindow")]
     window: Option<TimeWindow>,
 }
 
@@ -1820,11 +2117,21 @@ impl CausalPathIndex {
             .iter()
             .filter(|assumption| match assumption.scope() {
                 Scope::Board => true,
-                Scope::Parts { refs } => refs.iter().any(|r| reachable_parts.contains(r)),
-                Scope::Nets { nets } => nets.iter().any(|n| subject.nets().contains(n)),
-                Scope::TimeWindow { start_s, end_s } => subject
-                    .window()
-                    .is_some_and(|window| *start_s < window.end_s && window.start_s < *end_s),
+                Scope::Subjects(subjects) => subjects.as_slice().iter().any(|entity| {
+                    entity.kind() == EntityKind::Part && reachable_parts.contains(entity.id())
+                }),
+                Scope::Parameter(parameter) => {
+                    parameter.subject().kind() == EntityKind::Part
+                        && reachable_parts.contains(parameter.subject().id())
+                }
+                Scope::Nets(nets) => {
+                    let overlaps_net = nets.nets().iter().any(|n| subject.nets().contains(n));
+                    let overlaps_time = match (nets.window(), subject.window()) {
+                        (Some(a), Some(b)) => a.start_s < b.end_s && b.start_s < a.end_s,
+                        _ => true,
+                    };
+                    overlaps_net && overlaps_time
+                }
                 Scope::Check { .. } => false,
             })
             .cloned()
@@ -1976,10 +2283,9 @@ impl RunDate {
 /// waivers already refuse to flip green, so the only routes back to a clean
 /// verdict are closing the assumption or acknowledging it in the open.
 ///
-/// What it does not guarantee, and cannot: that a producer hands over the right
-/// set. Passing `&[]` yields `Clean` from anywhere. Choosing the set is the
-/// traversal's job and the discrimination fixture's subject, not something a type
-/// can check.
+/// Construction requires the opaque result of [`CausalPathIndex::traverse`]. A
+/// caller cannot hand over an arbitrary empty slice and mint `Clean`; an unknown
+/// net is an error, while a known net with no on-path assumptions is clean.
 ///
 /// Like [`Assumption`], and for the same reason, the type does not implement
 /// `Deserialize`. A serialized map carries assumption *ids*, not kinds, so a
@@ -1992,16 +2298,23 @@ impl RunDate {
 /// way to get one.
 ///
 /// ```
-/// use hauksbee_ir::evidence::{Assumption, EvidenceMap, EvidenceStatus, RunDate};
+/// use hauksbee_ir::evidence::{Assumption, CausalPathIndex, EvidenceMap,
+///     EvidenceRegistry, EvidenceStatus, NetScope, RunDate};
 ///
 /// let today = RunDate::from_epoch_days(20_666); // 2026-08-01
 /// let open = Assumption::open_part("U2", "XC6206", "no model matched");
-/// let map = EvidenceMap::new("3V3 stays above 3.1 V", &[open], today)
-///     .with_artifacts(vec![0, 2]);
+/// let registry = EvidenceRegistry::new(vec![open]).unwrap();
+/// let graph = CausalPathIndex::from_net_parts([("3V3", ["U2"].as_slice()),
+///     ("VBUS", ["J1"].as_slice())]).unwrap();
+/// let on_3v3 = graph.traverse(&NetScope::new(["3V3"], None).unwrap(), &registry).unwrap();
+/// let map = EvidenceMap::from_traversal("3V3 stays above 3.1 V", on_3v3,
+///     &registry, today).unwrap();
 /// assert_eq!(map.status(), EvidenceStatus::Undermined);
 /// assert_eq!(map.assumptions()[0].as_str(), "open-part:U2");
 ///
-/// let clean = EvidenceMap::new("VBUS stays below 5.5 V", &[], today);
+/// let on_vbus = graph.traverse(&NetScope::new(["VBUS"], None).unwrap(), &registry).unwrap();
+/// let clean = EvidenceMap::from_traversal("VBUS stays below 5.5 V", on_vbus,
+///     &registry, today).unwrap();
 /// assert_eq!(clean.status(), EvidenceStatus::Clean);
 /// assert!(clean.assumptions().is_empty());
 /// ```
@@ -2020,7 +2333,7 @@ pub struct EvidenceMap {
     /// carrying no key, and adding this skip after the schema publishes would be
     /// the breaking change the once-only version bump is being saved for.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub artifacts: Vec<usize>,
+    artifacts: Vec<ArtifactId>,
     /// Models bound on the causal path.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub models: Vec<ModelOnPath>,
@@ -2089,7 +2402,7 @@ impl EvidenceMap {
     /// directions are not symmetric: a date read too LATE only expires waivers
     /// early, while a date read too early re-arms every lapsed one, silently, in
     /// the one direction this must never fail in.
-    pub fn new(assertion: impl Into<String>, on_path: &[Assumption], today: RunDate) -> Self {
+    fn new(assertion: impl Into<String>, on_path: &[Assumption], today: RunDate) -> Self {
         // Deduped, first occurrence winning. A traversal walking several nets
         // that share a part hands the same assumption over more than once, and
         // rendering it twice is noise; the status is a max, so duplicates never
@@ -2192,9 +2505,32 @@ impl EvidenceMap {
     }
 
     /// Attach the causal artifact indices.
-    pub fn with_artifacts(mut self, artifacts: Vec<usize>) -> Self {
-        self.artifacts = artifacts;
-        self
+    pub fn with_artifacts<I>(
+        mut self,
+        registry: &EvidenceRegistry,
+        artifacts: I,
+    ) -> Result<Self, EvidenceError>
+    where
+        I: IntoIterator<Item = ArtifactId>,
+    {
+        let mut validated = Vec::new();
+        for artifact in artifacts {
+            if artifact.0 >= registry.artifacts().len() {
+                return Err(EvidenceError::MissingArtifact {
+                    index: artifact.0,
+                    len: registry.artifacts().len(),
+                });
+            }
+            if !validated.contains(&artifact) {
+                validated.push(artifact);
+            }
+        }
+        self.artifacts = validated;
+        Ok(self)
+    }
+
+    pub fn artifacts(&self) -> &[ArtifactId] {
+        &self.artifacts
     }
 
     /// Attach the models on the causal path.
@@ -2209,21 +2545,12 @@ impl EvidenceMap {
         self
     }
 
-    /// Attach the error budget for this assertion's numbers. Checked on the way
-    /// in ([`ErrorBudget::publishable`]): a budget carrying a number that is not
-    /// a number would make the whole report unparseable, so it is withheld
-    /// whole rather than shortened, whether or not the producer remembered to
-    /// look.
+    /// Attach the validated error budget for this assertion's numbers. Every
+    /// invariant-bearing member has private fields and a fallible constructor,
+    /// so malformed numeric evidence cannot reach this method or disappear on
+    /// the way to JSON.
     pub fn with_error_budget(mut self, budget: ErrorBudget) -> Self {
-        // Loud in debug, safe in release: a budget this refuses is a producer
-        // bug, and the producer should hear about it rather than wonder where
-        // its numbers went.
-        debug_assert!(
-            budget.unpublishable_reason().is_none(),
-            "{}",
-            budget.unpublishable_reason().unwrap_or_default()
-        );
-        self.error_budget = budget.publishable();
+        self.error_budget = Some(budget);
         self
     }
 
@@ -2311,9 +2638,7 @@ mod tests {
             Assumption::fitted_by_default(
                 AssumptionSource::Reader,
                 Subject::new("odbpp", "the ODB++ archive"),
-                Scope::Parts {
-                    refs: vec!["R7".into()],
-                },
+                part_scope("R7"),
             ),
             Assumption::not_checked(
                 AssumptionSource::Reader,
@@ -2325,18 +2650,14 @@ mod tests {
             Assumption::not_exercised(
                 AssumptionSource::Scheduler,
                 Subject::new("i2c0", "the i2c0 bus"),
-                Scope::Nets {
-                    nets: vec!["SDA".into(), "SCL".into()],
-                },
+                Scope::Nets(NetScope::new(["SDA", "SCL"], None).unwrap()),
                 "the MCU backend models no I2C controller on this platform",
                 "run on a platform whose backend models the controller",
             ),
             Assumption::reduced_fidelity(
                 AssumptionSource::Scheduler,
                 Subject::new("spi0/framing", "SPI transaction framing on spi0"),
-                Scope::Nets {
-                    nets: vec!["SCK".into()],
-                },
+                Scope::Nets(NetScope::new(["SCK"], None).unwrap()),
                 "the chunk-boundary heuristic",
                 "expose the chip-select GPIO so framing reads real edges",
             ),
@@ -2422,7 +2743,7 @@ mod tests {
         // before the first colon.
         assert_eq!(
             AssumptionId::new(AssumptionKind::NotChecked, "spec check: rails").as_str(),
-            "not-checked:spec_check__rails"
+            "not-checked:spec%20check%3A%20rails"
         );
     }
 
@@ -2858,33 +3179,14 @@ mod tests {
 
     #[test]
     fn a_scope_window_that_is_not_numbers_is_refused() {
-        // A scope reaches the published assumptions array. A window bound that is
-        // not a number serializes as JSON `null` against a schema that says
-        // `number`, and one of those makes a whole report unreadable.
-        // `build`'s debug assertion catches this at construction, so the scope is
-        // set here by hand: what is under test is `validate`, which is the gate a
-        // registry calls on insert and the only one left in a release build.
-        let mut a = Assumption::not_exercised(
-            AssumptionSource::Solver,
-            Subject::same("the settling window"),
-            Scope::Board,
-            "the solve never reached it",
-            "extend the run",
-        );
-        a.scope = Scope::TimeWindow {
-            start_s: 0.0,
-            end_s: f64::NAN,
-        };
-        let err = a.validate().expect_err("a NaN bound must be refused");
-        assert!(err.contains("real numbers"), "{err}");
-        // A real window passes.
+        assert!(matches!(
+            TimeWindow::new(0.0, f64::NAN),
+            Err(EvidenceError::NonFinite { .. })
+        ));
         let ok = Assumption::not_exercised(
             AssumptionSource::Solver,
             Subject::same("the settling window"),
-            Scope::TimeWindow {
-                start_s: 0.0,
-                end_s: 0.5,
-            },
+            Scope::Nets(NetScope::new(["3V3"], Some(TimeWindow::new(0.0, 0.5).unwrap())).unwrap()),
             "the solve never reached it",
             "extend the run",
         );
@@ -3041,9 +3343,6 @@ mod tests {
             let back: T = serde_json::from_str(&text).expect("deserializes");
             assert_eq!(back, value);
         }
-        round_trips(Scope::Parts {
-            refs: vec!["R7".into()],
-        });
         round_trips(ParameterProvenance {
             parameter: "R7.resistance".into(),
             value: "10k".into(),
@@ -3052,12 +3351,6 @@ mod tests {
                 field: "value".into(),
             },
         });
-        round_trips(ErrorBudget::new(IntegrationTolerance {
-            reltol: 1e-3,
-            abstol: 1e-12,
-            chgtol: 1e-14,
-        }));
-
         // The judgements do not. Written as a source-text assertion because a
         // negative trait bound is not expressible: the derives are in this file,
         // so the file can check itself.
@@ -3131,8 +3424,9 @@ mod tests {
         assert_eq!(v["id"], "open-part:R7");
         assert_eq!(v["kind"], "open_part");
         assert_eq!(v["source"], "binder");
-        assert_eq!(v["scope"]["type"], "parts");
-        assert_eq!(v["scope"]["refs"][0], "R7");
+        assert_eq!(v["scope"]["type"], "subjects");
+        assert_eq!(v["scope"]["value"][0]["kind"], "part");
+        assert_eq!(v["scope"]["value"][0]["id"], "R7");
         // No expiry on a run-derived assumption, and the field is absent
         // rather than null: the common shape stays small.
         assert!(v.get("expires").is_none());
@@ -3147,22 +3441,41 @@ mod tests {
     #[test]
     fn evidence_map_json_shape_is_the_published_one() {
         let open = Assumption::open_part("U2", "XC6206", "no model matched");
+        let mut registry = EvidenceRegistry::new(vec![open.clone()]).unwrap();
+        let artifacts: Vec<ArtifactId> = (0..3)
+            .map(|index| {
+                registry
+                    .add_artifact(
+                        ArtifactProvenance::new(
+                            format!("board-{index}.kicad_pcb"),
+                            ArtifactKind::KiCadPcb,
+                            ArtifactRole::Layout,
+                            String::new(),
+                            Vec::new(),
+                        )
+                        .unwrap(),
+                    )
+                    .unwrap()
+            })
+            .collect();
         let map = EvidenceMap::new("3V3 stays above 3.1 V", &[open], today())
-            .with_artifacts(vec![0, 2])
-            .with_models(vec![ModelOnPath {
-                reference: "U2".into(),
-                model_id: "xc6206".into(),
-                layer: "pack".into(),
-                confidence: "high".into(),
-            }])
+            .with_artifacts(&registry, [artifacts[0], artifacts[2]])
+            .unwrap()
+            .with_models(vec![ModelOnPath::new(
+                "U2",
+                "xc6206",
+                ModelLayer::Pack,
+                MatchConfidence::High,
+            )
+            .unwrap()])
             .with_error_budget(ErrorBudget {
                 methods: vec![WindowMethod {
                     window: TimeWindow {
                         start_s: 0.0,
                         end_s: 0.05,
                     },
-                    method: "trapezoidal".into(),
-                    accuracy: String::new(),
+                    method: IntegrationMethod::Trapezoidal,
+                    accuracy_cost: 0.0,
                 }],
                 ..ErrorBudget::new(IntegrationTolerance {
                     reltol: 1e-3,
@@ -3183,173 +3496,14 @@ mod tests {
     }
 
     #[test]
-    fn a_number_that_is_not_a_number_is_omitted_rather_than_written_as_null() {
-        // JSON has no NaN and no infinity, and a diverged march is exactly where
-        // a residual goes non-finite. `serde_json` would write `null` against a
-        // schema that says `number`, which no consumer can read back.
-        let budget = ErrorBudget {
-            residual: Some(Residual {
-                max_abs: f64::NAN,
-                at: "n1".into(),
-            }),
-            event_time_error_s: Some(f64::INFINITY),
-            ..ErrorBudget::new(IntegrationTolerance {
-                reltol: 1e-3,
-                abstol: 1e-12,
-                chgtol: 1e-14,
-            })
-        };
-        let v = serde_json::to_value(&budget).unwrap();
-        assert!(v.get("residual").is_none(), "{v}");
-        assert!(v.get("event_time_error_s").is_none(), "{v}");
-        // A real measurement still rides.
-        let budget = ErrorBudget {
-            residual: Some(Residual {
-                max_abs: 4.2e-9,
-                at: "n1".into(),
-            }),
-            event_time_error_s: Some(1e-6),
-            ..budget
-        };
-        let v = serde_json::to_value(&budget).unwrap();
-        assert_eq!(v["residual"]["max_abs"], 4.2e-9);
-        assert_eq!(v["event_time_error_s"], 1e-6);
-        let back: ErrorBudget = serde_json::from_value(v).unwrap();
-        assert_eq!(back, budget);
-    }
-
-    /// A budget carrying a number that is not a number is withheld WHOLE, not
-    /// shortened. Dropping the offending entries is the tempting repair and the
-    /// wrong one: a consumer reading `failed_windows: []` concludes every
-    /// quantity in the run is a measurement, so quietly deleting a window whose
-    /// bounds went bad hides the divergence that window was recording. An absent
-    /// budget is visibly absent.
-    ///
-    /// Runs in BOTH profiles, deliberately: the guarantee is about what a release
-    /// build publishes, CI runs the tests in debug, and a rule tested only where
-    /// the debug assertions fire is a rule with no test at all. So the assertions
-    /// live at the call site and the rule itself is assertion-free.
-    #[test]
-    fn a_budget_that_cannot_be_published_is_withheld_whole() {
-        let budget = ErrorBudget {
-            failed_windows: vec![
-                TimeWindow {
-                    start_s: f64::NAN,
-                    end_s: 0.1,
-                },
-                TimeWindow {
-                    start_s: 0.2,
-                    end_s: 0.3,
-                },
-            ],
-            model_uncertainty: vec![
-                ModelUncertainty {
-                    parameter: "Q2.beta".into(),
-                    low: 100.0,
-                    high: f64::INFINITY,
-                    basis: "datasheet minimum only".into(),
-                },
-                ModelUncertainty {
-                    parameter: "D1.vf".into(),
-                    low: 0.55,
-                    high: 0.75,
-                    basis: "datasheet min/max".into(),
-                },
-            ],
-            methods: vec![WindowMethod {
-                window: TimeWindow {
-                    start_s: 0.0,
-                    end_s: f64::NEG_INFINITY,
-                },
-                method: "trapezoidal".into(),
-                accuracy: String::new(),
-            }],
-            ..ErrorBudget::new(IntegrationTolerance {
-                reltol: 1e-3,
-                abstol: 1e-12,
-                chgtol: 1e-14,
-            })
-        };
-        // Withheld whole, so the real window that WAS solved is not published
-        // beside a deleted one as though nothing had gone wrong.
-        assert!(budget.unpublishable_reason().is_some());
-        assert!(budget.clone().publishable().is_none());
-        // Each offending shape on its own, so a partial rule cannot pass.
-        for (bad, why) in [
-            (
-                ErrorBudget::new(IntegrationTolerance {
-                    reltol: f64::NAN,
-                    abstol: 1e-12,
-                    chgtol: 1e-14,
-                }),
-                "tolerance",
-            ),
-            (
-                ErrorBudget {
-                    failed_windows: vec![TimeWindow {
-                        start_s: f64::INFINITY,
-                        end_s: 1.0,
-                    }],
-                    ..ErrorBudget::new(IntegrationTolerance {
-                        reltol: 1e-3,
-                        abstol: 1e-12,
-                        chgtol: 1e-14,
-                    })
-                },
-                "failed window",
-            ),
-            (
-                ErrorBudget {
-                    model_uncertainty: vec![ModelUncertainty {
-                        parameter: "Q2.beta".into(),
-                        low: 100.0,
-                        high: f64::INFINITY,
-                        basis: "datasheet minimum only".into(),
-                    }],
-                    ..ErrorBudget::new(IntegrationTolerance {
-                        reltol: 1e-3,
-                        abstol: 1e-12,
-                        chgtol: 1e-14,
-                    })
-                },
-                "interval",
-            ),
-        ] {
-            assert!(
-                bad.publishable().is_none(),
-                "a budget with a non-finite {why} must be withheld"
-            );
-        }
-
-        // A budget whose numbers are all real is published unchanged and reads
-        // back in.
-        let good = ErrorBudget {
-            failed_windows: vec![TimeWindow {
-                start_s: 0.2,
-                end_s: 0.3,
-            }],
-            ..ErrorBudget::new(IntegrationTolerance {
-                reltol: 1e-3,
-                abstol: 1e-12,
-                chgtol: 1e-14,
-            })
-        };
-        let map = EvidenceMap::new("A", &[], today()).with_error_budget(good.clone());
-        assert_eq!(map.error_budget(), Some(&good));
-        let v = serde_json::to_value(&good).unwrap();
-        let back: ErrorBudget = serde_json::from_value(v).unwrap();
-        assert_eq!(back, good);
-    }
-
-    #[test]
     fn provenance_and_origin_shapes() {
         let p = ParameterProvenance {
             parameter: "U2.vout".into(),
             value: "3.3 V".into(),
             origin: ValueOrigin::Model {
                 model_id: "xc6206".into(),
-                layer: "pack".into(),
-                confidence: "exact".into(),
+                layer: ModelLayer::Pack,
+                confidence: MatchConfidence::Exact,
             },
         };
         let v = serde_json::to_value(&p).unwrap();
@@ -3357,7 +3511,7 @@ mod tests {
         assert_eq!(v["origin"]["layer"], "pack");
         let art = ArtifactProvenance {
             path: "boards/blinky.kicad_pcb".into(),
-            kind: "kicad_pcb".into(),
+            kind: ArtifactKind::KiCadPcb,
             role: ArtifactRole::Layout,
             sha256: String::new(),
             contributed: vec![Contribution {
@@ -3382,8 +3536,6 @@ mod tests {
         assert_eq!(v["role"], "layout");
         assert!(v.get("sha256").is_none(), "an empty hash is omitted");
         assert_eq!(v["assumptions"][0], "fitted-by-default:kicad_pcb");
-        let back: ArtifactProvenance = serde_json::from_value(v).unwrap();
-        assert_eq!(back, art);
     }
 
     #[test]
@@ -3485,8 +3637,17 @@ mod tests {
             registry
                 .iter()
                 .filter(|a| match &a.scope {
-                    Scope::Parts { refs } => refs.iter().any(|r| reachable.contains(&r.as_str())),
-                    Scope::Nets { nets } => nets.iter().any(|n| subject_nets.contains(&n.as_str())),
+                    Scope::Subjects(subjects) => subjects.as_slice().iter().any(|entity| {
+                        entity.kind() == EntityKind::Part && reachable.contains(&entity.id())
+                    }),
+                    Scope::Parameter(parameter) => {
+                        parameter.subject().kind() == EntityKind::Part
+                            && reachable.contains(&parameter.subject().id())
+                    }
+                    Scope::Nets(nets) => nets
+                        .nets()
+                        .iter()
+                        .any(|n| subject_nets.contains(&n.as_str())),
                     // A board-wide gap is on every assertion's path by
                     // definition, which is why a constructor that hardcodes
                     // Scope::Board for an undermining kind saturates a run.
@@ -3501,7 +3662,7 @@ mod tests {
                     // one worked example, is how they would go missing there:
                     // silent, and for the kinds where silence is hardest to
                     // notice.
-                    Scope::Check { .. } | Scope::TimeWindow { .. } => false,
+                    Scope::Check { .. } => false,
                 })
                 .cloned()
                 .collect()
@@ -3556,9 +3717,7 @@ mod tests {
         let scoped = vec![Assumption::fitted_by_default(
             AssumptionSource::Reader,
             Subject::new("odbpp", "the ODB++ archive"),
-            Scope::Parts {
-                refs: vec!["C1".into()],
-            },
+            part_scope("C1"),
         )];
         assert_eq!(
             EvidenceMap::new("A", &on_path_for(&["3V3"], incidence, &scoped), today()).status(),
@@ -3623,12 +3782,7 @@ mod tests {
         assert_eq!(a.id().as_str(), "reduced-fidelity:3V3");
         assert_eq!(a.statement(), "Net 3V3 is held by an ideal source.");
         assert!(a.consequence().contains("vouches for nothing"));
-        assert_eq!(
-            a.scope(),
-            &Scope::Nets {
-                nets: vec!["3V3".into()]
-            }
-        );
+        assert_eq!(a.scope(), &net_scope("3V3"));
         assert_eq!(
             EvidenceMap::derive_status(std::slice::from_ref(&a), today()),
             EvidenceStatus::Qualified
