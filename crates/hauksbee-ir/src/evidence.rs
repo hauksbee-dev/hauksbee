@@ -1295,6 +1295,8 @@ pub enum ArtifactKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "kebab-case")]
 pub enum ModelLayer {
+    /// The producer recorded a resolved model but not which ladder layer won.
+    Unspecified,
     Builtin,
     Pack,
     UserDir,
