@@ -42,6 +42,26 @@ use crate::peripherals::spi::SpiBus;
 use hauksbee_mcu::I2cEvent;
 use hauksbee_models::logic_spec::{Edge, Level};
 
+/// A responder's explicit ownership update for one MCU input pin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct InputDrive {
+    pub pin: (char, u8),
+    pub level: Option<bool>,
+}
+
+impl InputDrive {
+    pub fn drive(pin: (char, u8), high: bool) -> Self {
+        Self {
+            pin,
+            level: Some(high),
+        }
+    }
+
+    pub fn release(pin: (char, u8)) -> Self {
+        Self { pin, level: None }
+    }
+}
+
 /// One bit-banged input protocol instance: consumes MCU GPIO *output* edges
 /// on its watched pins and answers by driving MCU *input* pins.
 ///
@@ -58,13 +78,13 @@ pub trait InputResponder: Send {
     /// Handle one GPIO output edge on a watched pin (`high` is the pin's new
     /// level). Returns the MCU input pins to drive, applied immediately,
     /// before the firmware's next instruction.
-    fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<((char, u8), bool)>;
+    fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<InputDrive>;
 
     /// Cycle-stamped form used by cycle-exact push backends. Most responders
     /// are purely edge-ordered and use the default; devices with documented
     /// inter-edge timing windows can override it without coupling their model
     /// to an MCU implementation.
-    fn on_edge_at(&mut self, pin: (char, u8), high: bool, _cycle: u64) -> Vec<((char, u8), bool)> {
+    fn on_edge_at(&mut self, pin: (char, u8), high: bool, _cycle: u64) -> Vec<InputDrive> {
         self.on_edge(pin, high)
     }
 }
@@ -83,6 +103,9 @@ pub struct ResponderRegistry {
     responders: Vec<Box<dyn InputResponder>>,
     /// pin -> indices into `responders` watching it.
     by_pin: HashMap<(char, u8), Vec<usize>>,
+    /// Persistent ownership by responder source, then resolved wired-AND state.
+    drives: HashMap<(char, u8), HashMap<usize, bool>>,
+    resolved: HashMap<(char, u8), Option<bool>>,
 }
 
 impl ResponderRegistry {
@@ -102,32 +125,75 @@ impl ResponderRegistry {
     /// Route one GPIO output edge to every responder watching `pin`,
     /// concatenating their input-pin drives. This is the body of the single
     /// closure the scheduler installs via `Mcu::on_input_responder`.
-    pub fn dispatch(&mut self, pin: (char, u8), high: bool) -> Vec<((char, u8), bool)> {
+    pub fn dispatch(&mut self, pin: (char, u8), high: bool) -> Vec<InputDrive> {
         let Some(indices) = self.by_pin.get(&pin) else {
             return Vec::new();
         };
-        let mut drives = Vec::new();
+        let mut updates = Vec::new();
         for &i in indices {
-            drives.extend(self.responders[i].on_edge(pin, high));
+            updates.extend(
+                self.responders[i]
+                    .on_edge(pin, high)
+                    .into_iter()
+                    .map(|u| (i, u)),
+            );
         }
-        drives
+        self.resolve_updates(updates)
     }
 
     /// Cycle-stamped dispatch for the MCU callback path.
-    pub fn dispatch_at(
-        &mut self,
-        pin: (char, u8),
-        high: bool,
-        cycle: u64,
-    ) -> Vec<((char, u8), bool)> {
+    pub fn dispatch_at(&mut self, pin: (char, u8), high: bool, cycle: u64) -> Vec<InputDrive> {
         let Some(indices) = self.by_pin.get(&pin) else {
             return Vec::new();
         };
-        let mut drives = Vec::new();
+        let mut updates = Vec::new();
         for &i in indices {
-            drives.extend(self.responders[i].on_edge_at(pin, high, cycle));
+            updates.extend(
+                self.responders[i]
+                    .on_edge_at(pin, high, cycle)
+                    .into_iter()
+                    .map(|u| (i, u)),
+            );
         }
-        drives
+        self.resolve_updates(updates)
+    }
+
+    fn resolve_updates(&mut self, updates: Vec<(usize, InputDrive)>) -> Vec<InputDrive> {
+        let mut touched = Vec::new();
+        for (source, update) in updates {
+            let owners = self.drives.entry(update.pin).or_default();
+            match update.level {
+                Some(level) => {
+                    owners.insert(source, level);
+                }
+                None => {
+                    owners.remove(&source);
+                }
+            }
+            touched.push(update.pin);
+        }
+        touched.sort_unstable();
+        touched.dedup();
+        let mut out = Vec::new();
+        for pin in touched {
+            // Multiple open-drain responders are safe: any LOW owner wins. A
+            // HIGH owner can never mask another source's LOW assertion.
+            let next = self
+                .drives
+                .get(&pin)
+                .filter(|owners| !owners.is_empty())
+                .map(|owners| owners.values().all(|&level| level));
+            let previous = self.resolved.get(&pin).copied().flatten();
+            if previous == next {
+                continue;
+            }
+            self.resolved.insert(pin, next);
+            out.push(match next {
+                Some(level) => InputDrive::drive(pin, level),
+                None => InputDrive::release(pin),
+            });
+        }
+        out
     }
 
     pub fn is_empty(&self) -> bool {
@@ -181,18 +247,40 @@ pub(crate) struct ParallelMemoryResponder {
     frequency_hz: u64,
     volts: Arc<Mutex<Vec<f64>>>,
     address: Vec<ParallelSignal>,
-    write: Option<(ParallelSignal, Edge)>,
-    write_gates: Vec<(ParallelSignal, Level)>,
+    writes: Vec<ParallelMemoryWrite>,
     read_gates: Vec<(ParallelSignal, Level)>,
     data_in: Vec<ParallelSignal>,
     data_out: Vec<(char, u8)>,
     chains: Vec<Hc595Chain>,
     pin_levels: HashMap<(char, u8), bool>,
     watched: Vec<(char, u8)>,
-    prev_write: bool,
     last_write_cycle: Option<u64>,
     edge_cycle: Option<u64>,
     runtime: Arc<Mutex<ParallelMemoryRuntime>>,
+}
+
+#[derive(Clone)]
+pub(crate) struct ParallelMemoryWrite {
+    pub signal: ParallelSignal,
+    pub edge: Edge,
+    pub gates: Vec<(ParallelSignal, Level)>,
+    prev: bool,
+}
+
+impl ParallelMemoryWrite {
+    pub(crate) fn new(
+        signal: ParallelSignal,
+        edge: Edge,
+        gates: Vec<(ParallelSignal, Level)>,
+    ) -> Self {
+        Self {
+            signal,
+            edge,
+            gates,
+            // Controls default released, matching LogicComponent defaults.
+            prev: matches!(edge, Edge::Rising),
+        }
+    }
 }
 
 impl ParallelMemoryResponder {
@@ -204,8 +292,7 @@ impl ParallelMemoryResponder {
         frequency_hz: u64,
         volts: Arc<Mutex<Vec<f64>>>,
         address: Vec<ParallelSignal>,
-        write: Option<(ParallelSignal, Edge)>,
-        write_gates: Vec<(ParallelSignal, Level)>,
+        writes: Vec<ParallelMemoryWrite>,
         read_gates: Vec<(ParallelSignal, Level)>,
         data_in: Vec<ParallelSignal>,
         data_out: Vec<(char, u8)>,
@@ -214,8 +301,8 @@ impl ParallelMemoryResponder {
     ) -> Self {
         let mut watched: Vec<(char, u8)> = address
             .iter()
-            .chain(write.iter().map(|(s, _)| s))
-            .chain(write_gates.iter().map(|(s, _)| s))
+            .chain(writes.iter().map(|w| &w.signal))
+            .chain(writes.iter().flat_map(|w| w.gates.iter().map(|(s, _)| s)))
             .chain(read_gates.iter().map(|(s, _)| s))
             .chain(data_in.iter())
             .filter_map(|s| match s {
@@ -231,9 +318,6 @@ impl ParallelMemoryResponder {
         watched.sort_unstable();
         watched.dedup();
 
-        let prev_write = write
-            .map(|(_, edge)| matches!(edge, Edge::Rising))
-            .unwrap_or(false);
         ParallelMemoryResponder {
             id,
             port,
@@ -241,15 +325,13 @@ impl ParallelMemoryResponder {
             frequency_hz,
             volts,
             address,
-            write,
-            write_gates,
+            writes,
             read_gates,
             data_in,
             data_out,
             chains,
             pin_levels: HashMap::new(),
             watched,
-            prev_write,
             last_write_cycle: None,
             edge_cycle: None,
             runtime,
@@ -302,7 +384,7 @@ impl InputResponder for ParallelMemoryResponder {
         self.watched.clone()
     }
 
-    fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<((char, u8), bool)> {
+    fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<InputDrive> {
         self.pin_levels.insert(pin, high);
         for chain in &mut self.chains {
             chain.replay(&[(pin.0, pin.1, high)]);
@@ -310,37 +392,63 @@ impl InputResponder for ParallelMemoryResponder {
 
         let volts_guard = self.volts.lock().unwrap_or_else(|e| e.into_inner());
         let volts = volts_guard.as_slice();
-        if let Some((source, edge)) = self.write {
-            let cur = self.source_level(source, volts);
-            let fired = match edge {
-                Edge::Rising => cur && !self.prev_write,
-                Edge::Falling => !cur && self.prev_write,
+        let levels = self.levels;
+        let pin_levels = &self.pin_levels;
+        let chains = &self.chains;
+        let source_level = |source: ParallelSignal| match source {
+            ParallelSignal::Mcu(pin) => pin_levels.get(&pin).copied().unwrap_or(false),
+            ParallelSignal::Hc595 { chain, chip, bit } => chains
+                .get(chain)
+                .and_then(|c| c.latched.get(chip))
+                .map(|byte| byte & (1 << bit) != 0)
+                .unwrap_or(false),
+            ParallelSignal::Node(node) => {
+                let v = volts.get(node.0 as usize).copied().unwrap_or(0.0);
+                levels.decide(v, false)
+            }
+        };
+        let mut qualified = false;
+        for write in &mut self.writes {
+            let cur = source_level(write.signal);
+            let fired = match write.edge {
+                Edge::Rising => cur && !write.prev,
+                Edge::Falling => !cur && write.prev,
             };
-            self.prev_write = cur;
-            if fired && self.gates_active(&self.write_gates, volts) {
-                let address = self.address(volts);
-                let value = self.data_value(volts);
-                let gap_exceeded = match (
-                    self.edge_cycle,
-                    self.last_write_cycle,
-                    self.port.byte_load_timeout_s,
-                ) {
-                    (Some(now), Some(previous), Some(limit_s)) => {
-                        now < previous
-                            || (now - previous) as f64 > limit_s * self.frequency_hz.max(1) as f64
-                    }
-                    _ => false,
-                };
-                if self.edge_cycle.is_some() {
-                    self.last_write_cycle = self.edge_cycle;
+            write.prev = cur;
+            qualified |= fired
+                && write
+                    .gates
+                    .iter()
+                    .all(|&(source, active)| active.is_active(source_level(source)));
+        }
+        if qualified {
+            let address = self.address(volts);
+            let value = self.data_value(volts);
+            let gap_exceeded = match (
+                self.edge_cycle,
+                self.last_write_cycle,
+                self.port.byte_load_timeout_s,
+            ) {
+                (Some(now), Some(previous), Some(limit_s)) => {
+                    now < previous
+                        || (now - previous) as f64 > limit_s * self.frequency_hz.max(1) as f64
                 }
-                if !self.port.write_after_gap(address, value, gap_exceeded) {
-                    eprintln!(
-                        "ERROR: parallel memory '{}': write address {address:#x} is outside {} words",
-                        self.id,
-                        self.port.words()
-                    );
-                }
+                _ => false,
+            };
+            if self.edge_cycle.is_some() {
+                self.last_write_cycle = self.edge_cycle;
+            }
+            let accepted = if let Some(cycle) = self.edge_cycle {
+                self.port.write_at(address, value, cycle, self.frequency_hz)
+            } else {
+                self.port.write_after_gap(address, value, gap_exceeded)
+            };
+            if !accepted {
+                eprintln!(
+                    "ERROR: parallel memory '{}': write address {address:#x} is outside {} words",
+                    self.id,
+                    self.port.words()
+                );
             }
         }
 
@@ -350,10 +458,19 @@ impl InputResponder for ParallelMemoryResponder {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .read_enabled = false;
-            return Vec::new();
+            return self
+                .data_out
+                .iter()
+                .copied()
+                .map(InputDrive::release)
+                .collect();
         }
         let address = self.address(volts);
-        let Some(word) = self.port.read(address) else {
+        let word = self
+            .edge_cycle
+            .and_then(|cycle| self.port.read_at(address, cycle, self.frequency_hz))
+            .or_else(|| self.port.read(address));
+        let Some(word) = word else {
             eprintln!(
                 "ERROR: parallel memory '{}': read address {address:#x} is outside {} words",
                 self.id,
@@ -370,11 +487,11 @@ impl InputResponder for ParallelMemoryResponder {
         self.data_out
             .iter()
             .enumerate()
-            .map(|(bit, &pin)| (pin, word & (1 << bit) != 0))
+            .map(|(bit, &pin)| InputDrive::drive(pin, word & (1 << bit) != 0))
             .collect()
     }
 
-    fn on_edge_at(&mut self, pin: (char, u8), high: bool, cycle: u64) -> Vec<((char, u8), bool)> {
+    fn on_edge_at(&mut self, pin: (char, u8), high: bool, cycle: u64) -> Vec<InputDrive> {
         self.edge_cycle = Some(cycle);
         let drives = self.on_edge(pin, high);
         self.edge_cycle = None;
@@ -428,14 +545,14 @@ impl InputResponder for Hc165Responder {
         vec![self.pl_n, self.clk]
     }
 
-    fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<((char, u8), bool)> {
+    fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<InputDrive> {
         // Fixed lock order: voltage snapshot first, then the chain (both leaf
         // locks; nothing here takes them together the other way round).
         let v = self.volts.lock().unwrap_or_else(|e| e.into_inner());
         let node_v = |n: hauksbee_ir::NodeId| v.get(n.0 as usize).copied().unwrap_or(0.0);
         let mut ch = self.chain.lock().unwrap_or_else(|e| e.into_inner());
         match ch.on_edge(pin, high, &node_v, &self.levels) {
-            Some((miso, level)) => vec![(miso, level)],
+            Some((miso, level)) => vec![InputDrive::drive(miso, level)],
             None => Vec::new(),
         }
     }
@@ -627,7 +744,7 @@ impl InputResponder for BitBangSpiResponder {
         vec![self.pins.sclk, self.pins.mosi, self.pins.cs_n]
     }
 
-    fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<((char, u8), bool)> {
+    fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<InputDrive> {
         if pin == self.pins.mosi {
             // The master must hold MOSI stable through the slave's sample window;
             // the half-period at `sample_hold_level` (the clock's resting level
@@ -684,7 +801,7 @@ impl InputResponder for BitBangSpiResponder {
                 }
                 // CPHA=0: present bit 7 immediately; the slave drives MISO from
                 // CS assert, before the first clock.
-                return vec![(self.pins.miso, self.miso_bit())];
+                return vec![InputDrive::drive(self.pins.miso, self.miso_bit())];
             }
             if high && self.selected {
                 // CS deassert: end of transaction.
@@ -701,6 +818,7 @@ impl InputResponder for BitBangSpiResponder {
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .cs_deassert();
+                return vec![InputDrive::release(self.pins.miso)];
             }
             return Vec::new();
         }
@@ -762,7 +880,7 @@ impl InputResponder for BitBangSpiResponder {
         if let Some(next) = self.pending.take() {
             self.presented = next;
         }
-        vec![(self.pins.miso, self.miso_bit())]
+        vec![InputDrive::drive(self.pins.miso, self.miso_bit())]
     }
 }
 
@@ -898,21 +1016,21 @@ impl SoftI2cResponder {
     }
 
     /// Put a slave-driven level on the wire (records it for re-assertion).
-    fn drive_sda(&mut self, level: bool, out: &mut Vec<((char, u8), bool)>) {
+    fn drive_sda(&mut self, level: bool, out: &mut Vec<InputDrive>) {
         self.drive = Some(level);
-        out.push((self.sda_pin, level));
+        out.push(InputDrive::drive(self.sda_pin, level));
     }
 
     /// Release the line to the master: drive the idle-high pull-up level once
     /// and stop re-asserting.
-    fn release_sda(&mut self, out: &mut Vec<((char, u8), bool)>) {
+    fn release_sda(&mut self, out: &mut Vec<InputDrive>) {
         self.drive = None;
-        out.push((self.sda_pin, true));
+        out.push(InputDrive::release(self.sda_pin));
     }
 
     /// Fetch the next read byte from the addressed slave and put its MSB on
     /// the wire (entry into `ReadBits`, always at a falling edge).
-    fn begin_read_byte(&mut self, out: &mut Vec<((char, u8), bool)>) {
+    fn begin_read_byte(&mut self, out: &mut Vec<InputDrive>) {
         let byte = match self.dispatch(I2cEvent::Read { addr: self.addr }) {
             Some(b) => b,
             None => {
@@ -935,7 +1053,7 @@ impl SoftI2cResponder {
     /// dispatches a Stop, a repeated START legitimately ends the previous
     /// transfer without one (the register-read idiom: write pointer, Sr,
     /// read), and the slave models' `on_start` handles the rollover.
-    fn on_start(&mut self, out: &mut Vec<((char, u8), bool)>) {
+    fn on_start(&mut self, out: &mut Vec<InputDrive>) {
         self.phase = I2cPhase::MasterBits {
             is_addr: true,
             nbits: 0,
@@ -949,7 +1067,7 @@ impl SoftI2cResponder {
     /// A STOP was seen: close the transaction. The Stop event is recorded by
     /// the bus and its ctx-bearing `on_stop` is delivered by the scheduler's
     /// chunk-boundary `flush_stops`, same as the hardware-TWI path.
-    fn on_stop(&mut self, out: &mut Vec<((char, u8), bool)>) {
+    fn on_stop(&mut self, out: &mut Vec<InputDrive>) {
         // A physical STOP ends the WHOLE transaction, and a repeated-START
         // chain may have addressed several slaves, every one gets its Stop
         // (a DAC written in the first leg still commits its output net when
@@ -1022,7 +1140,7 @@ impl InputResponder for SoftI2cResponder {
         vec![self.scl_pin, self.sda_pin]
     }
 
-    fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<((char, u8), bool)> {
+    fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<InputDrive> {
         let mut out = Vec::new();
 
         if self.trace {
@@ -1086,7 +1204,7 @@ impl InputResponder for SoftI2cResponder {
                 // on the read side of the clock).
                 I2cPhase::SlaveAck { driven: true, .. } | I2cPhase::ReadBits { .. } => {
                     if let Some(level) = self.drive {
-                        out.push((self.sda_pin, level));
+                        out.push(InputDrive::drive(self.sda_pin, level));
                     }
                     if let I2cPhase::ReadBits { nbits, byte } = self.phase {
                         // Count the master's sample; after the 8th the next
@@ -1183,14 +1301,14 @@ mod tests {
     struct Probe {
         pins: Vec<(char, u8)>,
         seen: Vec<((char, u8), bool)>,
-        answer: Vec<((char, u8), bool)>,
+        answer: Vec<InputDrive>,
     }
 
     impl InputResponder for Probe {
         fn watched_pins(&self) -> Vec<(char, u8)> {
             self.pins.clone()
         }
-        fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<((char, u8), bool)> {
+        fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<InputDrive> {
             self.seen.push((pin, high));
             self.answer.clone()
         }
@@ -1202,7 +1320,7 @@ mod tests {
         reg.register(Box::new(Probe {
             pins: vec![('B', 5)],
             seen: Vec::new(),
-            answer: vec![(('B', 4), true)],
+            answer: vec![InputDrive::drive(('B', 4), true)],
         }));
         reg.register(Box::new(Probe {
             pins: vec![('D', 2)],
@@ -1211,9 +1329,54 @@ mod tests {
         }));
 
         // An edge on a watched pin answers; an unwatched pin answers nothing.
-        assert_eq!(reg.dispatch(('B', 5), true), vec![(('B', 4), true)]);
+        assert_eq!(
+            reg.dispatch(('B', 5), true),
+            vec![InputDrive::drive(('B', 4), true)]
+        );
         assert!(reg.dispatch(('C', 0), true).is_empty());
         assert!(reg.dispatch(('D', 2), false).is_empty());
+    }
+
+    #[test]
+    fn registry_releases_only_after_every_shared_responder_releases() {
+        let shared = ('B', 4);
+        let mut reg = ResponderRegistry::new();
+        reg.register(Box::new(Probe {
+            pins: vec![('B', 5)],
+            seen: Vec::new(),
+            answer: vec![InputDrive::drive(shared, false)],
+        }));
+        reg.register(Box::new(Probe {
+            pins: vec![('D', 2)],
+            seen: Vec::new(),
+            answer: vec![InputDrive::drive(shared, false)],
+        }));
+
+        assert_eq!(
+            reg.dispatch(('B', 5), true),
+            vec![InputDrive::drive(shared, false)]
+        );
+        assert!(reg.dispatch(('D', 2), true).is_empty());
+
+        reg.responders[0] = Box::new(Probe {
+            pins: vec![('B', 5)],
+            seen: Vec::new(),
+            answer: vec![InputDrive::release(shared)],
+        });
+        assert!(
+            reg.dispatch(('B', 5), false).is_empty(),
+            "the other source still owns the pin"
+        );
+
+        reg.responders[1] = Box::new(Probe {
+            pins: vec![('D', 2)],
+            seen: Vec::new(),
+            answer: vec![InputDrive::release(shared)],
+        });
+        assert_eq!(
+            reg.dispatch(('D', 2), false),
+            vec![InputDrive::release(shared)]
+        );
     }
 
     #[test]
@@ -1261,8 +1424,11 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
             1_000_000,
             Arc::new(Mutex::new(vec![0.0; 2])),
             vec![ParallelSignal::Mcu(a0), ParallelSignal::Mcu(a1)],
-            Some((ParallelSignal::Mcu(we), Edge::Rising)),
-            vec![(ParallelSignal::Mcu(ce), Level::Low)],
+            vec![ParallelMemoryWrite::new(
+                ParallelSignal::Mcu(we),
+                Edge::Rising,
+                vec![(ParallelSignal::Mcu(ce), Level::Low)],
+            )],
             vec![
                 (ParallelSignal::Mcu(ce), Level::Low),
                 (ParallelSignal::Mcu(oe), Level::Low),
@@ -1289,17 +1455,23 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
         responder.on_edge(we, false);
         responder.on_edge(we, true);
         let drives = responder.on_edge(oe, false);
-        let got = drives
-            .iter()
-            .enumerate()
-            .fold(0u8, |value, (bit, &(_, high))| {
-                value | (u8::from(high) << bit)
-            });
+        let got = drives.iter().enumerate().fold(0u8, |value, (bit, update)| {
+            value | (u8::from(update.level.expect("drive")) << bit)
+        });
         assert_eq!(got, 0x5a);
 
+        let releases = responder.on_edge(oe, true);
+        assert_eq!(
+            releases,
+            data.iter()
+                .copied()
+                .map(InputDrive::release)
+                .collect::<Vec<_>>(),
+            "OE high must explicitly release the persistent simavr input drives"
+        );
+
         // CE inactive suppresses both bus drive and write qualification.
-        assert!(responder.on_edge(ce, true).is_empty());
-        responder.on_edge(oe, true);
+        let _ = responder.on_edge(ce, true);
         for &pin in &data {
             responder.on_edge(pin, false);
         }
@@ -1307,12 +1479,9 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
         responder.on_edge(we, true);
         responder.on_edge(ce, false);
         let drives = responder.on_edge(oe, false);
-        let got = drives
-            .iter()
-            .enumerate()
-            .fold(0u8, |value, (bit, &(_, high))| {
-                value | (u8::from(high) << bit)
-            });
+        let got = drives.iter().enumerate().fold(0u8, |value, (bit, update)| {
+            value | (u8::from(update.level.expect("drive")) << bit)
+        });
         assert_eq!(got, 0x5a, "CE-high write pulse must not overwrite memory");
     }
 
@@ -1365,9 +1534,11 @@ addr_mask = 0x7f
 
     impl SpiMaster {
         fn edge(&mut self, pin: (char, u8), high: bool) {
-            for (p, level) in self.resp.on_edge(pin, high) {
-                assert_eq!(p, PINS.miso, "responder must only drive MISO");
-                self.miso = level;
+            for update in self.resp.on_edge(pin, high) {
+                assert_eq!(update.pin, PINS.miso, "responder must only update MISO");
+                if let Some(level) = update.level {
+                    self.miso = level;
+                }
             }
         }
         fn select(&mut self) {
@@ -1527,9 +1698,11 @@ addr_mask = 0x7f
 
     impl ModeMaster {
         fn edge(&mut self, pin: (char, u8), high: bool) {
-            for (p, level) in self.resp.on_edge(pin, high) {
-                assert_eq!(p, PINS.miso, "responder must only drive MISO");
-                self.miso = level;
+            for update in self.resp.on_edge(pin, high) {
+                assert_eq!(update.pin, PINS.miso, "responder must only update MISO");
+                if let Some(level) = update.level {
+                    self.miso = level;
+                }
             }
         }
         /// Park SCLK at the declared idle (CPOL) level before selecting.
@@ -1679,9 +1852,9 @@ style = "i2c_pointer"
 
     impl I2cMaster {
         fn edge(&mut self, pin: (char, u8), high: bool) {
-            for (p, level) in self.resp.on_edge(pin, high) {
-                assert_eq!(p, SDA, "responder must only drive SDA");
-                self.sda_in = level;
+            for update in self.resp.on_edge(pin, high) {
+                assert_eq!(update.pin, SDA, "responder must only update SDA");
+                self.sda_in = update.level.unwrap_or(true);
             }
         }
         fn init(&mut self) {
@@ -1915,16 +2088,19 @@ style = "i2c_pointer"
         reg.register(Box::new(Probe {
             pins: vec![('B', 5)],
             seen: Vec::new(),
-            answer: vec![(('B', 4), true)],
+            answer: vec![InputDrive::drive(('B', 4), true)],
         }));
         reg.register(Box::new(Probe {
             pins: vec![('B', 5)],
             seen: Vec::new(),
-            answer: vec![(('C', 1), false)],
+            answer: vec![InputDrive::drive(('C', 1), false)],
         }));
         assert_eq!(
             reg.dispatch(('B', 5), false),
-            vec![(('B', 4), true), (('C', 1), false)]
+            vec![
+                InputDrive::drive(('B', 4), true),
+                InputDrive::drive(('C', 1), false),
+            ]
         );
     }
 }
