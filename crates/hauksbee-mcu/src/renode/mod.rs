@@ -194,6 +194,24 @@ pub struct AdcChannelMap {
     pub max_count: u32,
 }
 
+/// Descriptor-provided bridge between board clock evidence and a Renode clock
+/// peripheral whose readiness state advances at co-simulation chunk boundaries.
+///
+/// The backend does not know RCC register layouts. A part descriptor supplies
+/// one command that declares whether the board has an external clock source and
+/// one command that advances the peripheral state machine by virtual
+/// microseconds. This keeps part-specific offsets and masks in the platform
+/// model while making readiness depend on board truth and simulated time.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClockControl {
+    /// Monitor command with `{present}` replaced by `1` or `0` before firmware
+    /// starts.
+    pub presence_command: String,
+    /// Monitor command with `{micros}` replaced by elapsed virtual microseconds
+    /// after every `RunFor` slice.
+    pub tick_command: String,
+}
+
 /// Per-MCU Renode configuration: enough to bring up a machine and wire it.
 ///
 /// This is the whole per-part surface as plain data, with no part-specific
@@ -261,6 +279,10 @@ pub struct RenodeConfig {
     /// common case where the ELF entry is correct. The literal `{cpu}` token is
     /// substituted with this config's `cpu` path so commands can be SoC-generic.
     pub post_load_setup: Vec<String>,
+    /// Optional descriptor-owned clock-readiness bridge. `None` means the
+    /// platform has no host-advanced external-clock state machine.
+    #[serde(default)]
+    pub clock_control: Option<ClockControl>,
     /// Renode I2C controller names that can host engine-provided I2C slaves.
     /// The STM32F103 thermostat firmware uses `i2c1`.
     pub i2c_controllers: Vec<String>,
@@ -352,6 +374,22 @@ impl RenodeConfig {
     /// Add one ADC channel injection recipe (05 §5.1). Chainable.
     pub fn with_adc_channel(mut self, map: AdcChannelMap) -> Self {
         self.adc_channels.push(map);
+        self
+    }
+
+    /// Declare whether the bound board supplies this MCU's external clock.
+    ///
+    /// A descriptor without a clock-control recipe is left unchanged. For a
+    /// descriptor that has one, the rendered command runs during machine setup,
+    /// before the first firmware instruction.
+    pub fn with_external_clock_present(mut self, present: bool) -> Self {
+        if let Some(clock) = &self.clock_control {
+            self.extra_setup.push(
+                clock
+                    .presence_command
+                    .replace("{present}", if present { "1" } else { "0" }),
+            );
+        }
         self
     }
 }
@@ -2037,6 +2075,21 @@ impl RenodeBackend {
         }
 
         self.cycles += (seconds * self.config.frequency_hz as f64).round() as u64;
+
+        // Advance a descriptor-owned oscillator/PLL state machine while the
+        // machine is paused. Readiness injected here becomes visible on the
+        // next slice, so chunk quantization can delay a transition by at most
+        // one slice but can never make it early.
+        if let Some(clock) = &self.config.clock_control {
+            let micros = (seconds * 1_000_000.0).round() as u64;
+            if micros > 0 {
+                let cmd = clock.tick_command.replace("{micros}", &micros.to_string());
+                let tick = self.monitor.command(&cmd)?;
+                if monitor_failed(&tick) {
+                    bail!("Renode clock-control tick failed ({cmd}): {tick}");
+                }
+            }
+        }
 
         // Exchange state after the chunk, matching the simavr backend's timing.
         self.poll_gpio_edges();
