@@ -444,7 +444,8 @@ fn a_package_suffix_is_not_a_different_part() {
     let mut b = board(&[("U1", "ATmega328P-AU")]);
     let report = apply_bom_identity(
         &mut b,
-        &bom("Designator,Value,MPN\nU1,ATmega328P-AU,ATMEGA328P\n"),
+        &bom("Designator,Value,MPN,Manufacturer\n\
+             U1,ATmega328P-AU,ATMEGA328P,Microchip Technology\n"),
         &ModelLibrary::builtin(),
     )
     .expect("a suffix is not a disagreement");

@@ -298,7 +298,8 @@ pub enum ColumnRole {
     /// The manufacturer part number. The only column that carries identity the
     /// layout cannot: a globally unique key naming exactly one device.
     Mpn,
-    /// The manufacturer name. Recorded, not used for matching.
+    /// The manufacturer name. Used only to refuse a hard contradiction with an
+    /// explicit manufacturer stored on the layout; absence remains unknown.
     Manufacturer,
     /// How many parts this row covers, for the internal-consistency check
     /// against the row's own reference list.
@@ -815,6 +816,7 @@ impl Bom {
 
         let mut rows = Vec::new();
         let mut skipped_placeholders: Vec<String> = Vec::new();
+        let mut duplicate_candidates: Vec<(String, usize)> = Vec::new();
         let mut rows_seen = 0usize;
         for row in &table.rows {
             let cell = |role: ColumnRole| -> Option<String> {
@@ -838,6 +840,11 @@ impl Bom {
             if references.is_empty() {
                 continue;
             }
+            duplicate_candidates.extend(
+                duplicate_identity_references(&raw_refs, &references)
+                    .into_iter()
+                    .map(|reference| (reference.to_string(), row.line)),
+            );
             let value = cell(ColumnRole::Value).unwrap_or_default();
             rows.push(BomRow {
                 references,
@@ -863,22 +870,14 @@ impl Bom {
         }
 
         let mut first_lines = std::collections::BTreeMap::<&str, usize>::new();
-        for row in &rows {
-            for reference in &row.references {
-                // A caller-confirmed customer-reference column can contain
-                // assembly-group prose alongside real designators. Repeated
-                // prose is not a duplicated component identity.
-                if !has_designator_shape(reference) {
-                    continue;
-                }
-                if let Some(first_line) = first_lines.insert(reference, row.line) {
-                    return Err(BomError::DuplicateReference {
-                        name: name.to_string(),
-                        reference: reference.clone(),
-                        first_line,
-                        second_line: row.line,
-                    });
-                }
+        for (reference, line) in &duplicate_candidates {
+            if let Some(first_line) = first_lines.insert(reference, *line) {
+                return Err(BomError::DuplicateReference {
+                    name: name.to_string(),
+                    reference: reference.clone(),
+                    first_line,
+                    second_line: *line,
+                });
             }
         }
 
@@ -1774,13 +1773,14 @@ fn map_columns(
 
         // Two columns equally entitled to one role. Refusing is only right for
         // a role the analysis actually reads: a tie between two distributor
-        // order codes or two manufacturer-name columns cannot make a bind wrong,
-        // because neither is used for identity, so the first is taken and the
-        // rest are recorded as ignored. The Reference role has its own carve-out:
+        // order-code columns cannot make a bind wrong, because they are never
+        // used for identity, so the first is taken and the rest are recorded as
+        // ignored. Manufacturer IS identity evidence: the binder refuses two
+        // explicit manufacturers for one part, so choosing one by column order
+        // would change whether a run is accepted. The Reference role has its own carve-out:
         // an assembly BOM split by board side carries `topDesignator` and
         // `bottomDesignator`, which are one reference column in two halves.
-        let unused_for_identity =
-            matches!(role, ColumnRole::DistributorPart | ColumnRole::Manufacturer);
+        let unused_for_identity = role == ColumnRole::DistributorPart;
         let one_column_in_halves = role == ColumnRole::Reference && side_split_designators(&tied);
         let tie_matters = !unused_for_identity && !one_column_in_halves;
         if tied.len() > 1 && tie_matters {
@@ -1930,6 +1930,23 @@ fn has_designator_shape(token: &str) -> bool {
         && rest
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '.')
+}
+
+/// References strong enough to enforce cross-row uniqueness.
+///
+/// A caller-confirmed customer-reference cell can contain prose such as
+/// `PH Crimp Connectors`; splitting that cell produces repeated words that are
+/// not component identities. Numeric-shaped tokens are unambiguous. Surveyed
+/// digit-free CAD identifiers (`RX`, `GND`, `MOTOR_POWER`, `V+`) are uppercase
+/// or symbolic, so they are also unambiguous when the original cell contains no
+/// lowercase prose. Spelling and case are retained exactly.
+fn duplicate_identity_references<'a>(raw: &str, references: &'a [String]) -> Vec<&'a str> {
+    let contains_lowercase_prose = raw.chars().any(|c| c.is_ascii_lowercase());
+    references
+        .iter()
+        .filter(|reference| has_designator_shape(reference) || !contains_lowercase_prose)
+        .map(String::as_str)
+        .collect()
 }
 
 /// A reference designator that names no specific part: KiCad's artwork

@@ -130,6 +130,17 @@ pub enum PlacementError {
         second_line: usize,
     },
 
+    #[error(
+        "{name} has two columns claiming the {role}: {headers}. hauksbee will not choose by \
+         column order because that would place parts at the wrong coordinates. Re-export the \
+         placement file with one {role} column"
+    )]
+    AmbiguousColumn {
+        name: String,
+        role: &'static str,
+        headers: String,
+    },
+
     #[error("cannot read {name}: {detail}")]
     Io { name: String, detail: String },
 }
@@ -417,7 +428,9 @@ impl PlacementFile {
     /// vector, so its parts still disagree.
     pub fn cross_check(&self, board: &ExtractedBoard) -> PlacementCrossCheck {
         let mut check = PlacementCrossCheck::default();
-        let (y_sign, offset) = self.frame_against(board);
+        let inferred_frame = self.frame_against(board);
+        let (y_sign, offset) = inferred_frame.unwrap_or((1.0, (0.0, 0.0)));
+        check.frame_inferred = inferred_frame.is_some();
         check.y_mirrored = y_sign < 0.0;
         if offset.0.abs() > POSITION_TOLERANCE_MM || offset.1.abs() > POSITION_TOLERANCE_MM {
             check.origin_offset_mm = Some(offset);
@@ -440,6 +453,7 @@ impl PlacementFile {
                     });
                 }
                 if let Some(placement_rotation) = p.rotation_deg {
+                    check.comparable_rotations += 1;
                     if rotation_difference(board_rotation, placement_rotation)
                         > ROTATION_TOLERANCE_DEG
                     {
@@ -453,12 +467,14 @@ impl PlacementFile {
             }
             match p.side.kicad_layer() {
                 Some(layer) if !comp.layer.is_empty() && comp.layer != layer => {
+                    check.comparable_sides += 1;
                     check.side_disagreements.push(SideDisagreement {
                         reference: p.reference.clone(),
                         board_layer: comp.layer.clone(),
                         placement_side: p.side,
                     });
                 }
+                Some(_) if !comp.layer.is_empty() => check.comparable_sides += 1,
                 None => check.unknown_sides.push(p.reference.clone()),
                 _ => {}
             }
@@ -488,7 +504,7 @@ impl PlacementFile {
     /// It is only applied from three matched parts up, because one or two parts
     /// are always explained perfectly by a translation through them, and a check
     /// that cannot fail is not a check.
-    fn frame_against(&self, board: &ExtractedBoard) -> (f64, (f64, f64)) {
+    fn frame_against(&self, board: &ExtractedBoard) -> Option<(f64, (f64, f64))> {
         let pairs: Vec<((f64, f64), (f64, f64))> = self
             .placements
             .iter()
@@ -498,7 +514,7 @@ impl PlacementFile {
             })
             .collect();
         if pairs.len() < 3 {
-            return (1.0, (0.0, 0.0));
+            return None;
         }
         let median = |mut v: Vec<f64>| -> f64 {
             v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
@@ -527,7 +543,7 @@ impl PlacementFile {
                 best = (sign, (dx, dy), score);
             }
         }
-        (best.0, best.1)
+        Some((best.0, best.1))
     }
 
     fn parse(text: &str, name: &str, sha: &str) -> Result<Self, PlacementError> {
@@ -540,7 +556,7 @@ impl PlacementFile {
         let units = stated_units(&lines, name)?;
 
         let (dialect, header_line, layout) =
-            find_header(&lines).ok_or_else(|| PlacementError::NotAPlacementFile {
+            find_header(&lines, name)?.ok_or_else(|| PlacementError::NotAPlacementFile {
                 name: name.to_string(),
             })?;
 
@@ -746,6 +762,10 @@ pub struct PlacementCrossCheck {
     pub rotation_disagreements: Vec<RotationDisagreement>,
     /// Shared designators for which the layout actually exposed a position.
     pub comparable_positions: usize,
+    /// Shared designators whose layout and placement both state a rotation.
+    pub comparable_rotations: usize,
+    /// Shared designators whose layout and placement both state a board side.
+    pub comparable_sides: usize,
     /// Shared designators whose placement side was not stated or recognized.
     pub unknown_sides: Vec<String>,
     /// Designators found on both sides.
@@ -757,9 +777,38 @@ pub struct PlacementCrossCheck {
     /// True when the file's Y axis runs the opposite way to the board's, which is
     /// what KiCad's own exporters do.
     pub y_mirrored: bool,
+    /// True when at least three comparable positions supported inferring the Y
+    /// direction and constant origin translation.
+    pub frame_inferred: bool,
 }
 
 impl PlacementCrossCheck {
+    /// One successful-reconciliation evidence line for an input inventory.
+    pub fn evidence_line(&self) -> String {
+        let placement_total = self.matched + self.only_in_placement.len();
+        let (dx, dy) = self.origin_offset_mm.unwrap_or((0.0, 0.0));
+        let frame = if self.frame_inferred {
+            format!(
+                "coordinate frame: Y axis {}, origin offset ({dx:.4}, {dy:.4}) mm",
+                if self.y_mirrored {
+                    "mirrored"
+                } else {
+                    "not mirrored"
+                }
+            )
+        } else {
+            "coordinate frame not inferred from fewer than 3 comparable positions".to_string()
+        };
+        format!(
+            "placement reconciliation: {} of {placement_total} placements match board \
+             designators; {} positions, {} rotations and {} sides compared; {frame}",
+            self.matched,
+            self.comparable_positions,
+            self.comparable_rotations,
+            self.comparable_sides
+        )
+    }
+
     /// True when this file describes a DIFFERENT board rather than a partly
     /// assembled one.
     ///
@@ -909,7 +958,10 @@ fn stated_units(lines: &[&str], name: &str) -> Result<Units, PlacementError> {
 }
 
 /// Find the header row, decide the dialect, and work out how to split the rows.
-fn find_header(lines: &[&str]) -> Option<(PlacementDialect, usize, Layout)> {
+fn find_header(
+    lines: &[&str],
+    name: &str,
+) -> Result<Option<(PlacementDialect, usize, Layout)>, PlacementError> {
     for (i, line) in lines.iter().take(MAX_BANNER_LINES).enumerate() {
         if line.trim().is_empty() {
             continue;
@@ -927,13 +979,13 @@ fn find_header(lines: &[&str]) -> Option<(PlacementDialect, usize, Layout)> {
         let bare = line.trim_start().trim_start_matches('#').trim();
         if line.trim_start().starts_with('#') {
             let (names, starts) = fixed_width_columns(line, &data);
-            if let Some(roles) = roles_from(&names) {
+            if let Some(roles) = roles_from(&names, name)? {
                 if roles.x.is_some() && roles.y.is_some() {
                     // A KiCad 4-era file writes the same header comma-separated.
                     if bare.contains(',') {
                         let cells = split_delimited(bare, ',');
-                        if let Some(roles) = roles_from(&cells) {
-                            return Some((
+                        if let Some(roles) = roles_from(&cells, name)? {
+                            return Ok(Some((
                                 PlacementDialect::KicadPosCsv,
                                 i,
                                 Layout {
@@ -941,10 +993,10 @@ fn find_header(lines: &[&str]) -> Option<(PlacementDialect, usize, Layout)> {
                                     delimiter: Some(','),
                                     starts: Vec::new(),
                                 },
-                            ));
+                            )));
                         }
                     }
-                    return Some((
+                    return Ok(Some((
                         PlacementDialect::KicadPosAscii,
                         i,
                         Layout {
@@ -952,7 +1004,7 @@ fn find_header(lines: &[&str]) -> Option<(PlacementDialect, usize, Layout)> {
                             delimiter: None,
                             starts,
                         },
-                    ));
+                    )));
                 }
             }
             continue;
@@ -962,11 +1014,11 @@ fn find_header(lines: &[&str]) -> Option<(PlacementDialect, usize, Layout)> {
         let delim = sniff_delimiter(line);
         let cells = split_delimited(line, delim);
         if cells.len() >= 3 {
-            if let Some(roles) = roles_from(&cells) {
+            if let Some(roles) = roles_from(&cells, name)? {
                 if roles.x.is_some() && roles.y.is_some() && roles.reference.is_some() {
                     let keys: Vec<String> = cells.iter().map(|c| normalise_header(c)).collect();
                     let dialect = dialect_from(&keys);
-                    return Some((
+                    return Ok(Some((
                         dialect,
                         i,
                         Layout {
@@ -974,7 +1026,7 @@ fn find_header(lines: &[&str]) -> Option<(PlacementDialect, usize, Layout)> {
                             delimiter: Some(delim),
                             starts: Vec::new(),
                         },
-                    ));
+                    )));
                 }
             }
         }
@@ -982,10 +1034,10 @@ fn find_header(lines: &[&str]) -> Option<(PlacementDialect, usize, Layout)> {
         // Fixed-width, which is Altium's `.txt` form.
         let (names, starts) = fixed_width_columns(line, &data);
         if names.len() >= 3 {
-            if let Some(roles) = roles_from(&names) {
+            if let Some(roles) = roles_from(&names, name)? {
                 if roles.x.is_some() && roles.y.is_some() && roles.reference.is_some() {
                     let keys: Vec<String> = names.iter().map(|c| normalise_header(c)).collect();
-                    return Some((
+                    return Ok(Some((
                         dialect_from(&keys),
                         i,
                         Layout {
@@ -993,12 +1045,12 @@ fn find_header(lines: &[&str]) -> Option<(PlacementDialect, usize, Layout)> {
                             delimiter: None,
                             starts,
                         },
-                    ));
+                    )));
                 }
             }
         }
     }
-    None
+    Ok(None)
 }
 
 /// Which dialect a delimited placement header belongs to.
@@ -1016,37 +1068,55 @@ fn dialect_from(keys: &[String]) -> PlacementDialect {
 /// Map a placement header row to roles. `None` when nothing in it is a
 /// coordinate, which is how a BOM handed to this reader is refused rather than
 /// read as a placement file with every position at the origin.
-fn roles_from(cells: &[String]) -> Option<Roles> {
+fn roles_from(cells: &[String], name: &str) -> Result<Option<Roles>, PlacementError> {
     let mut r = Roles::default();
+    let mut duplicate: Option<(&'static str, usize, usize)> = None;
     for (i, cell) in cells.iter().enumerate() {
         let key = normalise_header(cell);
-        let slot = match key.as_str() {
+        let (role, slot) = match key.as_str() {
             "ref"
             | "refs"
             | "reference"
             | "designator"
             | "designators"
             | "refdes"
-            | "reference_designator" => &mut r.reference,
-            "val" | "value" | "comment" => &mut r.value,
-            "package" | "footprint" => &mut r.package,
-            "posx" | "midx" | "mid_x" | "center_x_mm" | "centerx" | "x" | "ref_x" | "x_mm" => {
-                &mut r.x
+            | "reference_designator" => ("reference designator", &mut r.reference),
+            "val" | "value" | "comment" => ("value", &mut r.value),
+            "package" | "footprint" => ("package", &mut r.package),
+            "posx" | "midx" | "mid_x" | "center_x_mm" | "centerx" | "x" | "x_mm" => {
+                ("X position", &mut r.x)
             }
-            "posy" | "midy" | "mid_y" | "center_y_mm" | "centery" | "y" | "ref_y" | "y_mm" => {
-                &mut r.y
+            "posy" | "midy" | "mid_y" | "center_y_mm" | "centery" | "y" | "y_mm" => {
+                ("Y position", &mut r.y)
             }
-            "rot" | "rotation" | "angle" => &mut r.rotation,
-            "side" | "layer" | "tb" => &mut r.side,
+            "rot" | "rotation" | "angle" => ("rotation", &mut r.rotation),
+            "side" | "layer" | "tb" => ("board side", &mut r.side),
             _ => continue,
         };
-        // First column to claim a role keeps it: Altium writes both
-        // `Center-X(mm)` and `Ref X`, and the centre is the placement.
-        if slot.is_none() {
+        if let Some(first) = *slot {
+            duplicate.get_or_insert((role, first, i));
+        } else {
             *slot = Some(i);
         }
     }
-    (r.x.is_some() && r.y.is_some()).then_some(r)
+    if r.x.is_some() && r.y.is_some() {
+        if let Some((role, first, second)) = duplicate {
+            return Err(PlacementError::AmbiguousColumn {
+                name: name.to_string(),
+                role,
+                headers: format!(
+                    "{:?} and {:?} at columns {} and {}",
+                    cells[first],
+                    cells[second],
+                    first + 1,
+                    second + 1
+                ),
+            });
+        }
+        Ok(Some(r))
+    } else {
+        Ok(None)
+    }
 }
 
 /// Read one coordinate cell. Altium writes the unit into the cell
