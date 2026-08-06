@@ -84,10 +84,14 @@ jobs:
       # pure Python with no pcbnew/wx import, so they run anywhere.
       - run: python3 integrations/kicad-plugin/test_hauksbee_ci_core.py
       - run: python3 integrations/pre-commit/test_hauksbee_ci_precommit.py
+      # Repository privacy is a release invariant: the distribution mirror and
+      # developer tree must never be made public by the launch automation.
+      - run: python3 scripts/test-private-release-policy.py
       # The action's one decision with a wrong answer available: which build of
       # hauksbee-ci a run actually used.
       - run: bash integrations/github-action/test_pick_release_tag.sh
       - run: shellcheck integrations/github-action/*.sh
+      - run: shellcheck --severity=warning scripts/make-public.sh scripts/build-public-mirror.sh
 
   docs:
     name: cargo doc (rendered module docs stay valid)
