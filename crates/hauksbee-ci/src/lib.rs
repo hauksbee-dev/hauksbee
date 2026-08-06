@@ -87,7 +87,8 @@ pub struct RunConfig {
 pub fn apply_waivers(
     results: &mut [assertions::AssertResult],
     waivers: &mut hauksbee_engine::waiver::WaiverSet,
-) {
+) -> Vec<hauksbee_engine::waiver::WaivedFinding> {
+    let mut applied = Vec::new();
     for r in results.iter_mut() {
         if r.passed || r.invalid {
             continue;
@@ -96,8 +97,10 @@ pub fn apply_waivers(
             waivers.take_waiver("ci", &r.kind, &r.subject_nets, &r.subject_refs, &r.label)
         {
             r.waived = Some(format!("{} (until {})", w.reason, w.until));
+            applied.push(w);
         }
     }
+    applied
 }
 
 /// Every check surface a waiver's `check` field can name. A waiver naming
@@ -183,7 +186,7 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
             hauksbee_engine::waiver::WaiverSet::default()
         }
     };
-    apply_waivers(&mut results, &mut waivers);
+    let applied_waivers = apply_waivers(&mut results, &mut waivers);
     notes.extend(waiver_notes(&waivers));
     // A strict analog abort on ANY seed forces the invalid-for-analysis exit even
     // if no assertion's window happened to overlap the failed span (05 §3b).
@@ -251,6 +254,163 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     } else {
         None
     };
+    let mut evidence = outcomes
+        .first()
+        .and_then(|outcome| outcome.evidence.clone())
+        .ok_or_else(|| {
+            SpecError::Invalid(
+                "the production runner returned no evidence object; refusing to grade assertions"
+                    .into(),
+            )
+        })?;
+    for assumption in outcomes
+        .iter()
+        .skip(1)
+        .filter_map(|outcome| outcome.evidence.as_ref())
+        .flat_map(|evidence| evidence.assumptions().iter().cloned())
+    {
+        evidence = evidence
+            .with_assumptions([assumption])
+            .map_err(|error| SpecError::Invalid(format!("merging run evidence: {error}")))?;
+    }
+    let spec_bytes = std::fs::read(&cfg.spec).map_err(|error| {
+        SpecError::Io(format!(
+            "reading spec evidence '{}': {error}",
+            cfg.spec.display()
+        ))
+    })?;
+    evidence = evidence
+        .with_toml_artifact(
+            &cfg.spec,
+            &spec_bytes,
+            hauksbee_ir::evidence::ArtifactRole::Spec,
+            hauksbee_ir::evidence::Contribution {
+                what: "assertions".into(),
+                detail: "run configuration, stimuli, supplies, and assertion thresholds".into(),
+            },
+        )
+        .map_err(|error| SpecError::Invalid(format!("building spec evidence: {error}")))?;
+
+    let waiver_path = spec
+        .board_path()
+        .parent()
+        .unwrap_or_else(|| std::path::Path::new("."))
+        .join(hauksbee_engine::waiver::DEFAULT_WAIVER_FILE);
+    if waiver_path.is_file() {
+        let bytes = std::fs::read(&waiver_path).map_err(|error| {
+            SpecError::Io(format!(
+                "reading waiver evidence '{}': {error}",
+                waiver_path.display()
+            ))
+        })?;
+        evidence = evidence
+            .with_toml_artifact(
+                &waiver_path,
+                &bytes,
+                hauksbee_ir::evidence::ArtifactRole::Waivers,
+                hauksbee_ir::evidence::Contribution {
+                    what: "authorizations".into(),
+                    detail: "time-bounded human authorizations applied to matching CI findings"
+                        .into(),
+                },
+            )
+            .map_err(|error| SpecError::Invalid(format!("building waiver evidence: {error}")))?;
+    }
+    let today = hauksbee_ir::evidence::RunDate::from_system_clock();
+    let waiver_assumptions = applied_waivers.iter().map(|waiver| {
+        hauksbee_ir::evidence::Assumption::waived_assertion(
+            &waiver.check,
+            &waiver.kind,
+            &waiver.subject,
+            &waiver.subject,
+            &waiver.reason,
+            &waiver.until,
+            today,
+        )
+    });
+    for assumption in waiver_assumptions {
+        evidence = evidence
+            .with_assumptions([assumption.map_err(|error| {
+                SpecError::Invalid(format!("building live-waiver evidence: {error}"))
+            })?])
+            .map_err(|error| {
+                SpecError::Invalid(format!("building live-waiver evidence: {error}"))
+            })?;
+    }
+
+    let failed_windows: Vec<(f64, f64)> = outcomes
+        .iter()
+        .flat_map(|outcome| outcome.failed_windows.iter().copied())
+        .collect();
+    let fallback_owned: Vec<(f64, f64, String)> = outcomes
+        .iter()
+        .flat_map(|outcome| outcome.fallback_windows.iter().cloned())
+        .collect();
+    let fallback_windows: Vec<(f64, f64, &str)> = fallback_owned
+        .iter()
+        .map(|(start, end, method)| (*start, *end, method.as_str()))
+        .collect();
+    let sim_end_s = outcomes
+        .iter()
+        .map(|outcome| outcome.sim_ms / 1000.0)
+        .fold(0.0_f64, f64::max);
+    let transient_budget = hauksbee_engine::BoardEvidence::transient_error_budget(
+        0.0,
+        sim_end_s,
+        spec.frame_ms / 1000.0,
+        &failed_windows,
+        &fallback_windows,
+    )
+    .map_err(|error| SpecError::Invalid(format!("building CI error budget: {error}")))?;
+    let coverage_description = coverage.as_ref().map(report::EnsembleCoverage::describe);
+    let mut maps = Vec::with_capacity(results.len());
+    for result in &results {
+        let budget = if matches!(result.kind.as_str(), "phase_margin" | "ac_gain") {
+            Some(
+                hauksbee_engine::BoardEvidence::solver_error_budget().map_err(|error| {
+                    SpecError::Invalid(format!("building AC assertion budget: {error}"))
+                })?,
+            )
+        } else if assertion_has_numeric_result(&spec, result) {
+            Some(transient_budget.clone())
+        } else {
+            None
+        };
+        maps.push(
+            evidence
+                .ci_assertion_map(
+                    &result.label,
+                    &result.subject_nets,
+                    &result.subject_refs,
+                    budget,
+                    coverage_description.as_deref(),
+                )
+                .map_err(|error| {
+                    SpecError::Invalid(format!(
+                        "building evidence for assertion '{}': {error}",
+                        result.label
+                    ))
+                })?,
+        );
+    }
+    evidence = evidence.with_maps(maps);
+    for result in &mut results {
+        if evidence
+            .maps()
+            .iter()
+            .find(|map| map.assertion() == result.label)
+            .is_some_and(hauksbee_ir::evidence::EvidenceMap::is_undermined)
+        {
+            result.invalid = true;
+            result.waived = None;
+            if !result.detail.starts_with("INVALID evidence:") {
+                result.detail = format!(
+                    "INVALID evidence: this assertion rests on a critical unresolved assumption. {}",
+                    result.detail
+                );
+            }
+        }
+    }
     Ok(CiResult {
         spec_name: spec.name.clone(),
         board: spec.board.display().to_string(),
@@ -273,5 +433,53 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         },
         coverage_warnings,
         waiver_notes: notes,
+        inventory: evidence.inventory().to_vec(),
+        assumptions: evidence.assumptions().to_vec(),
+        evidence: evidence.maps().to_vec(),
     })
+}
+
+fn assertion_has_numeric_result(spec: &Spec, result: &assertions::AssertResult) -> bool {
+    let peripheral_has_field = spec
+        .asserts
+        .iter()
+        .any(|assertion| assertion.label() == result.label && assertion.field.is_some());
+    result_kind_is_numeric(&result.kind, peripheral_has_field)
+}
+
+fn result_kind_is_numeric(kind: &str, peripheral_has_field: bool) -> bool {
+    match kind {
+        "uart" | "no_faults" | "protection_trip" => false,
+        "peripheral" => peripheral_has_field,
+        _ => true,
+    }
+}
+
+#[cfg(test)]
+mod evidence_budget_tests {
+    use super::result_kind_is_numeric;
+
+    #[test]
+    fn every_numeric_assertion_vocabulary_gets_a_budget() {
+        for kind in [
+            "voltage",
+            "toggle",
+            "max_current",
+            "max_temp",
+            "rail_window",
+            "boot_coverage",
+            "boot-coverage",
+            "phase_margin",
+            "ac_gain",
+            "hwtrace",
+            "model_coverage",
+        ] {
+            assert!(result_kind_is_numeric(kind, false), "{kind}");
+        }
+        assert!(result_kind_is_numeric("peripheral", true));
+        for kind in ["uart", "no_faults", "protection_trip"] {
+            assert!(!result_kind_is_numeric(kind, false), "{kind}");
+        }
+        assert!(!result_kind_is_numeric("peripheral", false));
+    }
 }

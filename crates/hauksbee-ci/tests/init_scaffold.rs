@@ -321,11 +321,14 @@ fn uncomment_board_blocks(text: &str) -> String {
 }
 
 /// E46: the scaffold must not teach a hollow gate. A user who uncomments the
-/// rail blocks the scaffold wrote, following its own instructions, gets a run
-/// that is GREEN and carries NO coverage-hole warning about the scaffold's own
-/// output. The regression: the supply legs were scaffolded `kind = "ideal"` and
-/// the voltage asserts pointed at those same nets, so the very first run said
-/// the check it had just been handed cannot fail for a board reason.
+/// rail blocks the scaffold wrote, following its own instructions, gets a live,
+/// falsifiable run and carries NO coverage-hole warning about the scaffold's
+/// own output. A board with unresolved assumptions may now be INVALID rather
+/// than GREEN; that is the evidence spine refusing to bless an untrustworthy
+/// result. The original regression: the supply legs were scaffolded
+/// `kind = "ideal"` and the voltage asserts pointed at those same nets, so the
+/// very first run said the check it had just been handed cannot fail for a
+/// board reason.
 #[test]
 fn uncommenting_the_scaffolded_rail_blocks_gates_for_real() {
     for (src, tag) in [(blinky(), "hollow_blinky"), (watchy(), "hollow_watchy")] {
@@ -358,10 +361,12 @@ fn uncommenting_the_scaffolded_rail_blocks_gates_for_real() {
         })
         .unwrap_or_else(|e| panic!("{tag}: the uncommented rail spec runs, got: {e}"));
         let human = result.render_human();
+        let undermined = result.evidence.iter().any(|map| map.is_undermined());
         assert_eq!(
             result.exit_code(),
-            0,
-            "{tag}: following the scaffold's instructions stays GREEN, got:\n{human}"
+            if undermined { 3 } else { 0 },
+            "{tag}: the scaffold is GREEN only with trustworthy evidence and INVALID when an \
+             assertion is undermined, got:\n{human}"
         );
         assert!(
             !result

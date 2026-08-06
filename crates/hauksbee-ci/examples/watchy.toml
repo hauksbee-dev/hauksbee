@@ -9,7 +9,9 @@
 # here because a first run should meet a board someone actually fabricated,
 # not a fixture with one footprint on it.
 #
-# Runs in about half a second, so it is cheap to run before you trust it.
+# The two checks execute, but the run intentionally exits 3 / INVALID until
+# models are supplied for the unresolved parts on +3V3. That is the evidence
+# spine doing its job: a plausible voltage is not a trustworthy board verdict.
 
 name = "Watchy power-up"
 board = "boards/watchy.kicad_pcb"

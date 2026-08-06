@@ -9,6 +9,54 @@ use std::time::Duration;
 
 use crate::assertions::AssertResult;
 
+/// Published JSON shape for one evaluated assertion. Kept separate from the
+/// runtime [`AssertResult`] because subject nets/refs are internal waiver keys,
+/// while the causal evidence map is part of the external contract.
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CiJsonAssertion {
+    pub label: String,
+    pub kind: String,
+    pub passed: bool,
+    pub invalid: bool,
+    pub detail: String,
+    pub failing_seed: Option<u32>,
+    pub failing_seeds: Vec<u32>,
+    pub seeds_total: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub waived: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub evidence: Option<hauksbee_ir::evidence::EvidenceMap>,
+}
+
+/// The stable `hauksbee-ci run --json` document. This type, rather than an
+/// untyped `json!` tree, generates the checked-in schema drift test.
+#[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CiJsonReport {
+    pub ok: bool,
+    pub spec_name: String,
+    pub board: String,
+    pub passed: bool,
+    pub assertions_passed: bool,
+    pub run_valid: bool,
+    pub exit_code: i32,
+    pub analog_abort: bool,
+    pub seeds: u32,
+    pub elapsed_s: f64,
+    pub coverage: Option<String>,
+    pub substitutions: Vec<String>,
+    pub coverage_warnings: Vec<String>,
+    pub dead_rails: Vec<String>,
+    pub waiver_notes: Vec<String>,
+    pub inventory: Vec<hauksbee_ir::evidence::ArtifactProvenance>,
+    pub assumptions: Vec<hauksbee_ir::evidence::Assumption>,
+    pub evidence: Vec<hauksbee_ir::evidence::EvidenceMap>,
+    pub results: Vec<CiJsonAssertion>,
+}
+
 /// The full result of a CI run: the spec name, per-assertion results, the seed
 /// count, and timing.
 #[derive(Debug)]
@@ -50,6 +98,12 @@ pub struct CiResult {
     /// ignored). Surfaced on every format like `coverage_warnings`: a board
     /// carrying waivers has to look like one.
     pub waiver_notes: Vec<String>,
+    /// Exact files consumed by this run, shared with engine/web reports.
+    pub inventory: Vec<hauksbee_ir::evidence::ArtifactProvenance>,
+    /// The one typed assumption registry every CI renderer projects.
+    pub assumptions: Vec<hauksbee_ir::evidence::Assumption>,
+    /// One causal evidence map per evaluated assertion.
+    pub evidence: Vec<hauksbee_ir::evidence::EvidenceMap>,
 }
 
 /// What a tolerance-ensemble run covered, for the report headline.
@@ -141,30 +195,50 @@ impl CiResult {
     /// coverage wording), a consumer must never see a cleaner story than the
     /// terminal does.
     pub fn render_json(&self) -> String {
-        let value = serde_json::json!({
-            "ok": true,
-            "spec_name": self.spec_name,
-            "board": self.board,
+        let results = self
+            .results
+            .iter()
+            .map(|result| CiJsonAssertion {
+                label: result.label.clone(),
+                kind: result.kind.clone(),
+                passed: result.passed,
+                invalid: result.invalid,
+                detail: result.detail.clone(),
+                failing_seed: result.failing_seed,
+                failing_seeds: result.failing_seeds.clone(),
+                seeds_total: result.seeds_total,
+                why: result.why.clone(),
+                waived: result.waived.clone(),
+                evidence: self.evidence_for(&result.label).cloned(),
+            })
+            .collect();
+        let value = CiJsonReport {
+            ok: true,
+            spec_name: self.spec_name.clone(),
+            board: self.board.clone(),
             // The OVERALL verdict is the process verdict: green only when the
             // run was valid AND every assertion held. `passed()` alone ignores
             // an analog abort (exit 3, every assertion left false-but-not-failed),
             // which would render a green "all passed" over an untrustworthy run.
-            "passed": self.exit_code() == 0,
+            passed: self.exit_code() == 0,
             // The two components, so a consumer can tell "an assertion failed"
             // from "the run itself was not trustworthy".
-            "assertions_passed": self.passed(),
-            "run_valid": !self.analog_invalid(),
-            "exit_code": self.exit_code(),
-            "analog_abort": self.analog_abort,
-            "seeds": self.seeds,
-            "elapsed_s": self.elapsed.as_secs_f64(),
-            "coverage": self.coverage.as_ref().map(|c| c.describe()),
-            "substitutions": self.substitutions,
-            "coverage_warnings": self.coverage_warnings,
-            "dead_rails": self.dead_rails,
-            "waiver_notes": self.waiver_notes,
-            "results": self.results,
-        });
+            assertions_passed: self.passed(),
+            run_valid: !self.analog_invalid(),
+            exit_code: self.exit_code(),
+            analog_abort: self.analog_abort,
+            seeds: self.seeds,
+            elapsed_s: self.elapsed.as_secs_f64(),
+            coverage: self.coverage.as_ref().map(EnsembleCoverage::describe),
+            substitutions: self.substitutions.clone(),
+            coverage_warnings: self.coverage_warnings.clone(),
+            dead_rails: self.dead_rails.clone(),
+            waiver_notes: self.waiver_notes.clone(),
+            inventory: self.inventory.clone(),
+            assumptions: self.assumptions.clone(),
+            evidence: self.evidence.clone(),
+            results,
+        };
         serde_json::to_string(&value).unwrap_or_else(|e| {
             format!("{{\"ok\":false,\"error\":\"could not serialize the run result: {e}\"}}")
         })
@@ -198,6 +272,33 @@ impl CiResult {
         } else {
             1
         }
+    }
+
+    fn evidence_for(&self, label: &str) -> Option<&hauksbee_ir::evidence::EvidenceMap> {
+        self.evidence.iter().find(|map| map.assertion() == label)
+    }
+
+    fn evidence_text(&self, label: &str) -> String {
+        let Some(map) = self.evidence_for(label) else {
+            return String::new();
+        };
+        let mut out = format!("evidence: {}", map.status());
+        for id in map.assumptions() {
+            if let Some(assumption) = self.assumptions.iter().find(|a| a.id() == id) {
+                out.push_str(&format!(
+                    "\n[{}] {} Why: {} Effect: {} Fix: {}",
+                    id,
+                    assumption.statement(),
+                    assumption.because(),
+                    assumption.consequence(),
+                    assumption.replacement()
+                ));
+            }
+        }
+        if map.error_budget().is_some() {
+            out.push_str("\nerror budget: attached in JSON");
+        }
+        out
     }
 
     /// The unpowered-rail warning, or empty when every rail is fed.
@@ -248,6 +349,9 @@ impl CiResult {
                 "FAIL"
             };
             out.push_str(&format!("  [{mark}] {}\n        {}\n", r.label, r.detail));
+            for line in self.evidence_text(&r.label).lines() {
+                out.push_str(&format!("        {line}\n"));
+            }
             // On a real red (not a pass, not an INVALID refusal), add one
             // actionable "why" line.
             if !r.passed && !r.invalid {
@@ -286,7 +390,7 @@ impl CiResult {
             out.push_str(&format!("  waivers: {msg}\n"));
         }
         let verdict = if self.analog_invalid() {
-            "INVALID (analog co-sim did not converge)"
+            "INVALID (run or assertion evidence is not trustworthy)"
         } else if self.passed() {
             "GREEN"
         } else {
@@ -365,16 +469,22 @@ impl CiResult {
             self.elapsed.as_secs_f64()
         ));
         for r in &self.results {
+            let evidence = self.evidence_text(&r.label);
             out.push_str(&format!(
                 "    <testcase classname=\"{}\" name=\"{}\">\n",
                 xml_escape(&r.kind),
                 xml_escape(&r.label)
             ));
             if r.invalid {
+                let body = if evidence.is_empty() {
+                    r.detail.clone()
+                } else {
+                    format!("{}\n{evidence}", r.detail)
+                };
                 out.push_str(&format!(
                     "      <error message=\"{}\">{}</error>\n",
                     xml_escape(&r.detail),
-                    xml_escape(&r.detail)
+                    xml_escape(&body)
                 ));
             } else if let (false, Some(w)) = (r.passed, &r.waived) {
                 out.push_str(&format!(
@@ -382,24 +492,39 @@ impl CiResult {
                     xml_escape(&r.detail),
                     xml_escape(w)
                 ));
+                if !evidence.is_empty() {
+                    out.push_str(&format!(
+                        "      <system-out>{}</system-out>\n",
+                        xml_escape(&evidence)
+                    ));
+                }
             } else if !r.passed {
                 // The body carries the `why:` line as well as the measured one.
                 // Plenty of people only ever read the Tests tab of a CI run, and
                 // the why is the actionable half: without it the failure says
                 // what the number was and nothing about what to do next.
-                let body = match why_line(r) {
+                let mut body = match why_line(r) {
                     Some(why) => format!("{}\nwhy: {why}", r.detail),
                     None => r.detail.clone(),
                 };
+                if !evidence.is_empty() {
+                    body.push('\n');
+                    body.push_str(&evidence);
+                }
                 out.push_str(&format!(
                     "      <failure message=\"{}\">{}</failure>\n",
                     xml_escape(&r.detail),
                     xml_escape(&body)
                 ));
             } else {
+                let body = if evidence.is_empty() {
+                    r.detail.clone()
+                } else {
+                    format!("{}\n{evidence}", r.detail)
+                };
                 out.push_str(&format!(
                     "      <system-out>{}</system-out>\n",
-                    xml_escape(&r.detail)
+                    xml_escape(&body)
                 ));
             }
             out.push_str("    </testcase>\n");
@@ -513,6 +638,26 @@ impl CiResult {
                 gh_escape(r.waived.as_deref().unwrap_or(""))
             ));
         }
+        let mut surfaced_assumptions = std::collections::HashSet::new();
+        for map in self
+            .evidence
+            .iter()
+            .filter(|map| map.status() != hauksbee_ir::evidence::EvidenceStatus::Clean)
+        {
+            for id in map.assumptions() {
+                if !surfaced_assumptions.insert(id.clone()) {
+                    continue;
+                }
+                if let Some(assumption) = self.assumptions.iter().find(|a| a.id() == id) {
+                    warnings.push(format!(
+                        "ASSUMPTION {}::{} ({})",
+                        gh_escape(&id.to_string()),
+                        gh_escape(assumption.statement()),
+                        gh_escape(assumption.replacement())
+                    ));
+                }
+            }
+        }
         for msg in &self.substitutions {
             warnings.push(format!("SUBSTITUTE MCU::{}", gh_escape(msg)));
         }
@@ -535,7 +680,7 @@ impl CiResult {
         // The rollup: exactly one summary annotation, always emitted.
         if self.analog_invalid() {
             out.push_str(&format!(
-                "::error title=hauksbee-ci::analog co-sim did not converge - {} assertion(s) INVALID, run is invalid for analysis\n",
+                "::error title=hauksbee-ci::{} assertion(s) INVALID - run evidence is not trustworthy\n",
                 self.invalid_count()
             ));
         } else if self.passed() {
@@ -916,6 +1061,9 @@ mod why_line_tests {
             coverage_warnings: Vec::new(),
             dead_rails: Vec::new(),
             waiver_notes: Vec::new(),
+            inventory: Vec::new(),
+            assumptions: Vec::new(),
+            evidence: Vec::new(),
         }
     }
 
@@ -1033,6 +1181,9 @@ mod substitution_tests {
             coverage_warnings: Vec::new(),
             dead_rails: Vec::new(),
             waiver_notes: Vec::new(),
+            inventory: Vec::new(),
+            assumptions: Vec::new(),
+            evidence: Vec::new(),
         };
         let human = result.render_human();
         assert!(
@@ -1077,6 +1228,9 @@ mod substitution_tests {
             ],
             dead_rails: Vec::new(),
             waiver_notes: Vec::new(),
+            inventory: Vec::new(),
+            assumptions: Vec::new(),
+            evidence: Vec::new(),
         };
         let human = result.render_human();
         assert!(

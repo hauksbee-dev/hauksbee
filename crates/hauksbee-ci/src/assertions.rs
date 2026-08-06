@@ -1912,6 +1912,7 @@ mod tests {
             protection_tripped.insert("BATT".to_string(), false);
             RunOutcome {
                 bind: None,
+                evidence: None,
                 seed: 0,
                 windows: HashMap::new(),
                 uart: HashMap::new(),
@@ -1933,6 +1934,7 @@ mod tests {
                 ac: None,
                 analog_valid: true,
                 failed_windows: Vec::new(),
+                fallback_windows: Vec::new(),
                 analog_abort: false,
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),
@@ -1988,6 +1990,7 @@ mod tests {
             );
             RunOutcome {
                 bind: None,
+                evidence: None,
                 seed,
                 windows,
                 uart: HashMap::new(),
@@ -2009,6 +2012,7 @@ mod tests {
                 ac: None,
                 analog_valid: failed.is_empty(),
                 failed_windows: failed,
+                fallback_windows: Vec::new(),
                 analog_abort: false,
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),
@@ -2430,6 +2434,7 @@ mod tests {
             rail_windows.insert(("load".to_string(), "VBUS".to_string()), win);
             RunOutcome {
                 bind: None,
+                evidence: None,
                 seed: 0,
                 windows: HashMap::new(),
                 uart: HashMap::new(),
@@ -2451,6 +2456,7 @@ mod tests {
                 ac: None,
                 analog_valid: true,
                 failed_windows: Vec::new(),
+                fallback_windows: Vec::new(),
                 analog_abort: false,
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),
@@ -2509,6 +2515,7 @@ mod tests {
             peak_temp_c.insert("SW1_q3".to_string(), 100.0);
             RunOutcome {
                 bind: None,
+                evidence: None,
                 seed: 0,
                 windows: HashMap::new(),
                 uart: HashMap::new(),
@@ -2530,6 +2537,7 @@ mod tests {
                 ac: None,
                 analog_valid: true,
                 failed_windows: Vec::new(),
+                fallback_windows: Vec::new(),
                 analog_abort: false,
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),
@@ -2578,6 +2586,7 @@ mod tests {
             protection_tripped_scoped.insert(("steady".to_string(), "BATT".to_string()), false);
             RunOutcome {
                 bind: None,
+                evidence: None,
                 seed: 0,
                 windows: HashMap::new(),
                 uart: HashMap::new(),
@@ -2599,6 +2608,7 @@ mod tests {
                 ac: None,
                 analog_valid: true,
                 failed_windows: Vec::new(),
+                fallback_windows: Vec::new(),
                 analog_abort: false,
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),
