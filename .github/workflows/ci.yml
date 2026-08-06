@@ -43,6 +43,19 @@ jobs:
       # [workspace.lints.clippy]. Anything outside it fails here.
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
+  no-default-engine:
+    name: engine without default features
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      # Keep the core static-analysis build honest. This catches accidental
+      # simulator-only dependencies and runs the same behavioral tests, including
+      # the real watch-loop contract, in the smallest supported feature shape.
+      - run: cargo check -p hauksbee-engine --no-default-features
+      - run: cargo clippy -p hauksbee-engine --no-default-features --all-targets -- -D warnings
+      - run: cargo test -p hauksbee-engine --no-default-features --all-targets
+
   test:
     name: cargo test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

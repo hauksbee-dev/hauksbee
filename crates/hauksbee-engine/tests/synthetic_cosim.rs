@@ -157,6 +157,7 @@ fn synthetic_cosim_runs() {
 }
 
 /// Median of a sample vector (mutates by sorting).
+#[cfg(feature = "avr")]
 fn median(xs: &mut [f64]) -> f64 {
     xs.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let n = xs.len();
@@ -170,6 +171,7 @@ fn median(xs: &mut [f64]) -> f64 {
 }
 
 /// Parse the last "<number>mV" reading out of the demo firmware's UART stream.
+#[cfg(feature = "avr")]
 fn last_millivolts(s: &str) -> Option<u32> {
     let mut last = None;
     let bytes = s.as_bytes();

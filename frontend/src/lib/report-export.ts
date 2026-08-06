@@ -15,6 +15,7 @@
 
 import type { WebReport, WebSection } from '../types/report'
 import { groupFindings } from './findings'
+import { summarizeEvidence } from './evidence'
 
 export interface ReportExportInput {
   report: WebReport
@@ -200,6 +201,60 @@ function bindHtml(report: WebReport): string {
   </section>`
 }
 
+/** Human evidence projection. The JSON export carries every provenance field;
+ * this page keeps the trust decision readable by showing the status totals,
+ * every non-clean assertion, and the canonical four-sentence assumption chain. */
+function evidenceHtml(report: WebReport): string {
+  const maps = report.evidence ?? []
+  const assumptions = report.assumptions ?? []
+  const inventory = report.inventory ?? []
+  if (maps.length === 0 && assumptions.length === 0 && inventory.length === 0) return ''
+
+  const count = (status: string) => maps.filter(map => map.status === status).length
+  const caveated = maps.filter(map => map.status !== 'clean')
+  const rows = caveated.map(map => `<tr>
+      <td>${esc(map.assertion)}</td>
+      <td class="mono">${esc(map.status)}</td>
+      <td class="mono">${esc((map.assumptions ?? []).join(', ') || 'none')}</td>
+    </tr>`).join('')
+  const cards = assumptions.map(assumption => `<div class="card" style="border-left-color:${
+    assumption.kind === 'open_part' ? 'var(--warn)' : 'var(--note-accent)'
+  }">
+      <span class="tag mono" style="color:var(--warn-strong)">${esc(assumption.id)}</span>
+      <div class="what">${esc(assumption.statement)}</div>
+      <div class="gloss"><b>Why:</b> ${esc(assumption.because)}</div>
+      <div class="gloss"><b>Effect:</b> ${esc(assumption.consequence)}</div>
+      <div class="gloss"><b>What closes it:</b> ${esc(assumption.replacement)}</div>
+    </div>`).join('')
+  const artifacts = inventory.map(artifact => `<tr>
+      <td>${esc(artifact.path)}</td>
+      <td class="mono">${esc(artifact.kind)}</td>
+      <td class="mono">${esc(artifact.sha256 ? `sha256:${artifact.sha256}` : 'digest unavailable')}</td>
+    </tr>`).join('')
+
+  return `<section>
+    <h2>Evidence &amp; limitations</h2>
+    <p class="verdict-line">
+      ${maps.length} ${maps.length === 1 ? 'assertion' : 'assertions'} mapped:
+      ${count('clean')} clean, ${count('qualified')} qualified, ${count('undermined')} undermined.
+      The machine-readable JSON retains the full artifact, model, parameter and error-budget fields.
+    </p>
+    ${rows
+      ? `<div class="scroll-x"><table>
+          <thead><tr><th>Assertion</th><th>Status</th><th>Rests on</th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table></div>`
+      : ''}
+    ${artifacts
+      ? `<h3>Input artifacts</h3><div class="scroll-x"><table>
+          <thead><tr><th>Path</th><th>Kind</th><th>Digest</th></tr></thead>
+          <tbody>${artifacts}</tbody>
+        </table></div>`
+      : ''}
+    ${cards}
+  </section>`
+}
+
 function cosimHtml(report: WebReport): string {
   const c = report.cosim
   if (!c) return ''
@@ -247,8 +302,9 @@ export function buildReportHtml(input: ReportExportInput): string {
   let verdictBorder = 'var(--ok-border)', verdictBg = 'var(--ok-bg)'
   const bindOpen = !!r.bind?.active_path_unresolved?.length
   const hasHeadsUp = (r.sections ?? []).some(s => s.heads_up?.length)
+  const evidenceSummary = summarizeEvidence(r.evidence)
   if (r.serious > 0) { verdictBorder = 'var(--err-border)'; verdictBg = 'var(--err-bg)' }
-  else if (r.total > 0 || bindOpen || hasHeadsUp) { verdictBorder = 'var(--warn-border)'; verdictBg = 'var(--warn-bg)' }
+  else if (r.total > 0 || bindOpen || hasHeadsUp || evidenceSummary.caveated > 0) { verdictBorder = 'var(--warn-border)'; verdictBg = 'var(--warn-bg)' }
 
   const version = input.engineVersion ?? input.appVersion
   const title = `hauksbee report: ${r.board_name || r.file_name}`
@@ -400,6 +456,8 @@ ${(r.notes ?? [])
   .map(n => `<div class="note-row"><b>Note:</b> ${esc(n.message)}</div>`).join('\n')}
 
 ${bindHtml(r)}
+
+${evidenceHtml(r)}
 
 ${(r.sections ?? []).map(sectionHtml).join('\n')}
 
