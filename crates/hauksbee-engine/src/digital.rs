@@ -574,6 +574,14 @@ impl DigitalComponent {
             .unwrap_or(false)
     }
 
+    /// Compiled parallel-memory ports, if this declarative part owns any.
+    pub(crate) fn memory_ports(&self) -> Vec<crate::logic::ParallelMemoryPort> {
+        self.logic
+            .as_ref()
+            .map(LogicComponent::memory_ports)
+            .unwrap_or_default()
+    }
+
     /// Input pins whose edge timing matters (register clocks / resets /
     /// loads / enables / serial data), per the spec.
     pub fn sequential_pins(&self) -> Vec<&str> {
@@ -689,6 +697,7 @@ pub fn order_595_chain(digital: &[DigitalComponent]) -> Vec<usize> {
 ///
 /// This carries the same per-chip 8-bit shift/latch logic as `tick_595`, but
 /// driven by ordered edges instead of one node-voltage sample per chunk.
+#[derive(Debug, Clone)]
 pub struct Hc595Chain {
     /// Chip indices into the scheduler's `digital` vec, in daisy-chain order
     /// (head first).

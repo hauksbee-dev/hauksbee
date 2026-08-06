@@ -191,6 +191,16 @@ struct LiveMcu {
     digital_in_levels: HashMap<(char, u8), bool>,
 }
 
+/// Scheduler-side analogue projection of one edge-synchronous parallel
+/// memory. Firmware reads from the responder inside its own instruction loop;
+/// this handle applies the responder's final bus state to the circuit before
+/// the analogue solve so reports and contention checks see the same device.
+struct ParallelMemoryDrive {
+    component: usize,
+    outputs: Vec<String>,
+    runtime: Arc<Mutex<crate::responders::ParallelMemoryRuntime>>,
+}
+
 /// The scheduler driving one bound board.
 pub struct Scheduler {
     pub circuit: Circuit,
@@ -287,6 +297,11 @@ pub struct Scheduler {
     /// board with no responders keeps the backend hook empty (zero per-edge
     /// cost).
     responder_registries: Vec<Option<Arc<Mutex<crate::responders::ResponderRegistry>>>>,
+    /// Parallel-memory parts whose bidirectional buses are answered at MCU
+    /// edge granularity. Their component indices are skipped by ordinary tick
+    /// and replay paths to prevent a stale, second write decision.
+    parallel_memory_drives: Vec<ParallelMemoryDrive>,
+    parallel_memory_chips: std::collections::HashSet<usize>,
     /// Latest solved node voltages, shared with the 165 read chains so their
     /// PL-load sampling (which fires inside the MCU run, before this chunk's
     /// solve) sees the previous chunk's settled latch voltages.
@@ -888,6 +903,8 @@ impl Scheduler {
             unexercised_buses: Vec::new(),
             hc165_chains: Vec::new(),
             responder_registries: Vec::new(),
+            parallel_memory_drives: Vec::new(),
+            parallel_memory_chips: std::collections::HashSet::new(),
             input_volts: Arc::new(Mutex::new(vec![0.0; n_nodes])),
             forced_node_volts: HashMap::new(),
             failed_chunks: 0,
@@ -921,6 +938,7 @@ impl Scheduler {
         // readback (bit-banged SCLK + digitalRead(MISO)) resolves at edge
         // granularity.
         sched.build_and_install_165_chains();
+        sched.build_and_install_parallel_memories();
 
         // Wire up the board's MCP4728 quad DACs: build one spec-driven I2C
         // slave per binding at its assigned address, attach them on a shared
@@ -958,6 +976,7 @@ impl Scheduler {
         let mut edge_exact: std::collections::HashSet<usize> =
             self.chain_chips.iter().copied().collect();
         edge_exact.extend(self.replay_chips.iter().copied());
+        edge_exact.extend(self.parallel_memory_chips.iter().copied());
         for c in &self.hc165_chains {
             let c = c.lock().unwrap_or_else(|e| e.into_inner());
             edge_exact.extend(c.order.iter().copied());
@@ -1081,10 +1100,10 @@ impl Scheduler {
         let reg = Arc::new(Mutex::new(crate::responders::ResponderRegistry::new()));
         let cb = reg.clone();
         self.mcus[mi].core.on_input_responder(Box::new(
-            move |pin: PinId, high: bool| -> Vec<(PinId, bool)> {
+            move |pin: PinId, high: bool, cycle: u64| -> Vec<(PinId, bool)> {
                 cb.lock()
                     .unwrap_or_else(|e| e.into_inner())
-                    .dispatch((pin.port, pin.bit), high)
+                    .dispatch_at((pin.port, pin.bit), high, cycle)
                     .into_iter()
                     .map(|((port, bit), level)| (PinId { port, bit }, level))
                     .collect()
@@ -1150,6 +1169,207 @@ impl Scheduler {
                 self.mcus[mi].responder_input_pins.insert(miso);
                 self.hc165_chains.push(chain);
                 break;
+            }
+        }
+    }
+
+    /// Discover declarative parallel memories whose data bus reaches one live
+    /// MCU and install an edge-synchronous responder. Address bits may be
+    /// direct GPIO, settled/static nodes, or outputs of any MCU-owned 74HC595
+    /// chain (including several independent chains sharing SER/RCLK, as on the
+    /// Nano EEPROM Programmer). The responder owns write timing for installed
+    /// parts; ordinary tick/replay paths are disabled for those components.
+    fn build_and_install_parallel_memories(&mut self) {
+        use crate::responders::{ParallelMemoryResponder, ParallelMemoryRuntime, ParallelSignal};
+
+        struct Pending {
+            mcu: usize,
+            component: usize,
+            outputs: Vec<String>,
+            output_pins: Vec<(char, u8)>,
+            runtime: Arc<Mutex<ParallelMemoryRuntime>>,
+            responder: ParallelMemoryResponder,
+        }
+
+        let gpio_maps: Vec<HashMap<i64, (char, u8)>> = self
+            .mcus
+            .iter()
+            .map(|m| {
+                m.binding
+                    .gpio_drivers
+                    .iter()
+                    .map(|(&(port, bit), drv)| (drv.net.0 as i64, (port, bit)))
+                    .collect()
+            })
+            .collect();
+        let mut pending = Vec::new();
+
+        for component in 0..self.digital.len() {
+            let ports = self.digital[component].memory_ports();
+            for port in ports {
+                for (mcu, gpio) in gpio_maps.iter().enumerate() {
+                    // The synchronous responder is a push-backend facility.
+                    // Poll backends cannot apply a data-bus answer between two
+                    // guest instructions; leave the component on the ordinary
+                    // tick path there (with its sub-chunk cadence warning)
+                    // instead of claiming edge-exact ownership and then never
+                    // answering a read.
+                    if !self.mcus[mcu].core.cycle_exact() {
+                        continue;
+                    }
+                    let chains: Vec<crate::digital::Hc595Chain> = self
+                        .chains
+                        .iter()
+                        .zip(&self.chain_mcu)
+                        .filter(|(_, owner)| **owner == mcu)
+                        .map(|(chain, _)| chain.clone())
+                        .collect();
+
+                    let signal_for_node = |node: NodeId| -> ParallelSignal {
+                        if let Some(&pin) = gpio.get(&(node.0 as i64)) {
+                            return ParallelSignal::Mcu(pin);
+                        }
+                        for (chain_i, chain) in chains.iter().enumerate() {
+                            for (chip_i, &digital_i) in chain.order.iter().enumerate() {
+                                for (bit, role) in ["qa", "qb", "qc", "qd", "qe", "qf", "qg", "qh"]
+                                    .iter()
+                                    .enumerate()
+                                {
+                                    if self.digital[digital_i].roles.get(*role) == Some(&node) {
+                                        return ParallelSignal::Hc595 {
+                                            chain: chain_i,
+                                            chip: chip_i,
+                                            bit: bit as u8,
+                                        };
+                                    }
+                                }
+                            }
+                        }
+                        ParallelSignal::Node(node)
+                    };
+                    let role_signal = |role: &str| {
+                        self.digital[component]
+                            .roles
+                            .get(role)
+                            .copied()
+                            .map(signal_for_node)
+                    };
+
+                    let Some(address) = port
+                        .address
+                        .iter()
+                        .map(|role| role_signal(role))
+                        .collect::<Option<Vec<_>>>()
+                    else {
+                        continue;
+                    };
+                    let write = if let Some((role, edge)) = &port.write {
+                        let Some(signal) = role_signal(role) else {
+                            continue;
+                        };
+                        Some((signal, *edge))
+                    } else {
+                        None
+                    };
+                    let Some(write_gates) = port
+                        .write_gates
+                        .iter()
+                        .map(|(role, active)| role_signal(role).map(|s| (s, *active)))
+                        .collect::<Option<Vec<_>>>()
+                    else {
+                        continue;
+                    };
+                    let Some(read_gates) = port
+                        .read_gates
+                        .iter()
+                        .map(|(role, active)| role_signal(role).map(|s| (s, *active)))
+                        .collect::<Option<Vec<_>>>()
+                    else {
+                        continue;
+                    };
+                    let Some(data_in) = port
+                        .data_in
+                        .iter()
+                        .map(|role| role_signal(role))
+                        .collect::<Option<Vec<_>>>()
+                    else {
+                        continue;
+                    };
+                    let Some(output_pins) = port
+                        .data_out
+                        .iter()
+                        .map(|role| {
+                            let node = self.digital[component].roles.get(role)?;
+                            gpio.get(&(node.0 as i64)).copied()
+                        })
+                        .collect::<Option<Vec<_>>>()
+                    else {
+                        continue;
+                    };
+
+                    let runtime = Arc::new(Mutex::new(ParallelMemoryRuntime::default()));
+                    let responder = ParallelMemoryResponder::new(
+                        format!("{}.{}", self.digital[component].reference, port.name),
+                        port.clone(),
+                        self.digital[component].levels,
+                        self.mcus[mcu].core.frequency(),
+                        self.input_volts.clone(),
+                        address,
+                        write,
+                        write_gates,
+                        read_gates,
+                        data_in,
+                        output_pins.clone(),
+                        chains,
+                        runtime.clone(),
+                    );
+                    pending.push(Pending {
+                        mcu,
+                        component,
+                        outputs: port.data_out.clone(),
+                        output_pins,
+                        runtime,
+                        responder,
+                    });
+                    break;
+                }
+            }
+        }
+
+        for item in pending {
+            self.responder_registry(item.mcu)
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .register(Box::new(item.responder));
+            self.mcus[item.mcu]
+                .responder_input_pins
+                .extend(item.output_pins);
+            self.parallel_memory_chips.insert(item.component);
+            self.parallel_memory_drives.push(ParallelMemoryDrive {
+                component: item.component,
+                outputs: item.outputs,
+                runtime: item.runtime,
+            });
+        }
+        self.replay_chips
+            .retain(|chip| !self.parallel_memory_chips.contains(chip));
+    }
+
+    fn apply_parallel_memory_outputs(&mut self) {
+        for binding in &self.parallel_memory_drives {
+            let runtime = binding.runtime.lock().unwrap_or_else(|e| e.into_inner());
+            let component = &mut self.digital[binding.component];
+            for (bit, role) in binding.outputs.iter().enumerate() {
+                let Some(driver) = component.drivers.get_mut(role) else {
+                    continue;
+                };
+                driver.set_enabled(&mut self.circuit, runtime.read_enabled);
+                if runtime.read_enabled {
+                    driver.set_volts(
+                        &mut self.circuit,
+                        component.levels.drive_volts(runtime.word & (1 << bit) != 0),
+                    );
+                }
             }
         }
     }
@@ -2167,7 +2387,10 @@ impl Scheduler {
             let volts = self.node_volts.clone();
             let node_v = |n: NodeId| volts.get(n.0 as usize).copied().unwrap_or(0.0);
             for (i, d) in self.digital.iter_mut().enumerate() {
-                if self.chain_chips.contains(&i) || self.replay_chips.contains(&i) {
+                if self.chain_chips.contains(&i)
+                    || self.replay_chips.contains(&i)
+                    || self.parallel_memory_chips.contains(&i)
+                {
                     continue;
                 }
                 d.tick(&mut self.circuit, &node_v);
@@ -2184,6 +2407,7 @@ impl Scheduler {
             }
             self.chains = chains;
         }
+        self.apply_parallel_memory_outputs();
 
         // 5b'. Runtime driver-contention monitor (the model-vs-MCU half of the
         // field failure the static lint documents as out of static reach in
