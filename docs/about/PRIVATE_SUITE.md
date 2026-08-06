@@ -2,7 +2,7 @@
 
 hauksbee was built for a board it cannot publish. That board belongs to
 Tarski, not to this project. So its netlists, as-built overlay, firmware
-images, and synapse map are absent from the public repository, and so is
+images, and synapse map are absent from the release mirror, and so is
 every test that reads them.
 
 This page exists to make the gap visible. A suite that quietly shrinks reads
