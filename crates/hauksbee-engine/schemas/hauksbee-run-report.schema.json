@@ -803,6 +803,52 @@
       ],
       "type": "object"
     },
+    "JsonInputEvidence": {
+      "description": "Machine-readable input inventory for BOM/placement-aware runs.",
+      "properties": {
+        "contributed": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "format": {
+          "description": "Detected format within that type.",
+          "type": "string"
+        },
+        "identity": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "ignored": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "kind": {
+          "description": "Stable broad type: `board`, `bom`, or `placement`.",
+          "type": "string"
+        },
+        "path": {
+          "type": "string"
+        },
+        "sha256": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "kind",
+        "format"
+      ],
+      "type": "object"
+    },
     "JsonNote": {
       "description": "An info-level, never-`--strict`, always-emitted note. Distinct from\n[`JsonFinding`]: a note never gates a CI pipeline and never changes an exit\ncode; it is the structured home for honesty annotations that must never be\nsilently absent (bind roles, co-sim substitution, coverage caveats, SI info).",
       "properties": {
@@ -1052,6 +1098,13 @@
         "array",
         "null"
       ]
+    },
+    "inputs": {
+      "description": "Every explicitly supplied input and what it contributed to this run.\nEmpty on older/internal call paths that have no inventory context.",
+      "items": {
+        "$ref": "#/definitions/JsonInputEvidence"
+      },
+      "type": "array"
     },
     "notes": {
       "description": "Info-level notes (bind roles, co-sim substitution, coverage caveats, SI\ninfo) that must never be silently absent but never gate a CI pipeline.\nAdditive + `skip_serializing_if` so the schema stays backward-compatible.",
