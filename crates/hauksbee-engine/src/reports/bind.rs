@@ -7,17 +7,23 @@ use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 
 use crate::binder::bind_board;
-use crate::result::{BindSummary, JsonReport};
+use crate::result::{BindSummary, JsonInputEvidence, JsonReport};
 
 use super::OutputMode;
 
 /// Print the bind report in `mode`, then return.
-pub fn emit(board: &ExtractedBoard, lib: &ModelLibrary, mode: OutputMode) -> anyhow::Result<()> {
+pub fn emit(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    mode: OutputMode,
+    inputs: &[JsonInputEvidence],
+) -> anyhow::Result<()> {
     let bound = bind_board(board, lib);
     let summary = BindSummary::from_report(&bound.report);
     match mode {
         OutputMode::Json => {
-            let report = JsonReport::new(&bound.name, summary);
+            let mut report = JsonReport::new(&bound.name, summary);
+            report.inputs = inputs.to_vec();
             println!("{}", report.to_json());
         }
         OutputMode::Text | OutputMode::Plain => {

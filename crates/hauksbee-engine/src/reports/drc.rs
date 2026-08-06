@@ -9,7 +9,7 @@ use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 
 use crate::binder::bind_board;
-use crate::result::{BindSummary, DrcStructured, JsonReport};
+use crate::result::{BindSummary, DrcStructured, JsonInputEvidence, JsonReport};
 
 use super::{kicad_pro_clearance_rules, OutputMode};
 
@@ -27,6 +27,7 @@ pub fn emit(
     oracle: bool,
     strict: bool,
     verbose: bool,
+    inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
     let mut report = if altium_present {
         ExtractedBoard::altium_drc(raw)?
@@ -66,7 +67,8 @@ pub fn emit(
             // Grouped DRC (Fix #8): shorts kept verbatim, clearance findings
             // grouped by (net_a, net_b, layer), at-limit separated from below-rule.
             let bound = bind_board(board, lib);
-            let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
+            let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
+                .with_inputs(inputs);
             jr.drc = Some(DrcStructured::from_report(&report));
             if unrouted {
                 jr.notes.push(crate::result::JsonNote {
