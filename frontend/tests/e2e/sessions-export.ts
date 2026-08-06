@@ -16,10 +16,9 @@
 //   HB_E2E_BASE=http://127.0.0.1:3457 bun run tests/e2e/sessions-export.ts
 //   bun run tests/e2e/sessions-export.ts          # spawns the fixture server
 //
-// Against the fixture server every upload returns the same watchy report, so
-// two boards collapse into one session; the multi-session block detects that and
-// says so rather than pretending to have tested it. Run it against a real
-// `hauksbee serve` for the full pass.
+// The fixture replays one captured engine report but preserves each uploaded
+// filename. That distinction is enough to exercise the complete multi-session
+// flow without inventing analysis results for a second board.
 
 import { chromium } from 'playwright'
 import type { Browser, ConsoleMessage, Page } from 'playwright'
@@ -351,9 +350,8 @@ async function main() {
   idx = await sessionIndex(page)
   const multi = idx.length >= 2
   if (!multi) {
-    note('both boards produced the same report (fixture server), so they share one '
-      + 'session id and the multi-session block cannot run here; run with '
-      + 'HB_E2E_BASE against a real `hauksbee serve`')
+    note('the server returned the same board identity for two uploads; '
+      + 'multi-session behavior cannot be exercised against this server')
   }
   ok('a second board makes a second session', multi, `${idx.length} sessions`)
 

@@ -15,6 +15,7 @@ import { file } from 'bun'
 import { existsSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { withBoardIdentity } from './fixture-report'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const DIST = join(here, '../../dist')
@@ -34,13 +35,22 @@ const json = (body: unknown, status = 200) =>
 /** Endpoints the lint's surfaces actually hit, in the shape the real server
  *  answers with. Anything else under /api returns 501 so a new fetch shows up
  *  as a loud gap rather than a silently empty panel. */
-function api(url: URL, method: string): Response | null {
+async function uploadedBoardName(req: Request): Promise<string | null> {
+  const header = req.headers.get('X-Board-Filename')
+  if (header) return header
+  if (!req.headers.get('content-type')?.startsWith('multipart/form-data')) return null
+  const board = (await req.formData()).get('board')
+  return board instanceof File ? board.name : null
+}
+
+async function api(req: Request, url: URL): Promise<Response | null> {
+  const method = req.method
   const p = url.pathname
   if (p === '/api/startup' && method === 'GET') return fixture('startup.json')
   if (p === '/api/live/status' && method === 'GET') return fixture('live-status.json')
   if ((p === '/api/analyze' || p === '/api/analyze-with-firmware') && method === 'POST') {
-    // One report for any upload: the lint always feeds it the watchy sample.
-    return fixture('analyze-watchy.json')
+    const captured = await file(join(FIXTURES, 'analyze-watchy.json')).json() as Record<string, unknown>
+    return json(withBoardIdentity(captured, await uploadedBoardName(req)))
   }
   if (p === '/api/check' && method === 'POST') return fixture('check-run.json')
   if (p === '/api/deps' && method === 'GET') return fixture('deps.json')
@@ -67,7 +77,7 @@ const server = Bun.serve({
   idleTimeout: 60,
   async fetch(req) {
     const url = new URL(req.url)
-    const stubbed = api(url, req.method)
+    const stubbed = await api(req, url)
     if (stubbed) return stubbed
 
     // Static dist/, with index.html for anything that is not a real file (the

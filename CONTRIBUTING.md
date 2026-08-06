@@ -46,6 +46,22 @@ Some tests need real boards. See below.
 download/verify/install flow against a local mock of GitHub's release
 endpoints. It builds the real bundle, so it needs cargo and python3.
 
+### Frontend checks
+
+```bash
+cd frontend
+bun run lint
+bun run test:unit
+bun run build
+bun run test:e2e
+```
+
+The end-to-end command runs the Layers-dismissal, saved-session/export, and 3D
+idle/responsiveness flows in sequence. It starts one fixture server on an
+operating-system-selected port and always stops it after the run. Screenshots
+and downloads go under `frontend/test-results/e2e/`. Set `HB_E2E_BASE` only
+when running an individual flow against an already-running real server.
+
 ### Visual lint
 
 ```bash
@@ -67,7 +83,8 @@ Five rules fire on what the layout actually did, not on what the CSS meant:
 Violations print one line each with the surface, the viewport, the DOM path, the
 rule and the measured numbers, and the offending state is screenshotted to
 `frontend/test-results/visual-lint/`. CI runs the same command in the
-`frontend-visual-lint` job and uploads those screenshots on a failure. It serves
+`frontend-quality` job and uploads the browser-test artifacts on a failure. It
+serves
 `frontend/dist` with `tests/visual-lint/fixture-server.ts`, which replays real
 `hauksbee serve` responses from `tests/visual-lint/fixtures/`, so no engine
 build is needed; point the lint at a real server with
@@ -265,8 +282,9 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 
 CI runs the same four checks. `cargo doc` renders the module headers as
 documentation, so `cargo doc --open` is how you read them the way a reader
-will. A change that touches `frontend/` also has to clear the visual lint
-(above). Beyond that:
+will. A change that touches `frontend/` also has to clear lint, unit tests, the
+production build, the end-to-end browser flows, and visual lint (above). Beyond
+that:
 
 **A check that fires must be right.** The corpus gate exists because a hardware
 tool that cries wolf gets switched off, and a switched-off tool catches nothing.

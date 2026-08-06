@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "mock-server": "bun run mock-server.ts",
     "visual-lint": "bun run tests/visual-lint/lint.ts",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test:unit": "bun test",
+    "test:e2e": "bun run tests/e2e/run.ts"
   },
   "dependencies": {
     "@tailwindcss/vite": "^4.2.2",
