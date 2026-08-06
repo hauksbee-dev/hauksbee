@@ -768,6 +768,8 @@ impl Bom {
                     reference: r.clone(),
                     value: (!row.value.is_empty()).then(|| row.value.clone()),
                     mpn: row.mpn.clone(),
+                    manufacturer: row.manufacturer.clone(),
+                    footprint: row.footprint.clone(),
                     populate: row.populate,
                     source: self.provenance.path.clone(),
                     source_kind: self.provenance.kind.to_string(),
@@ -798,7 +800,7 @@ impl Bom {
                 ),
             });
         }
-        let table = read_table(text, name)?;
+        let table = read_table(text, name, overrides)?;
         let dialect = table.dialect;
         let map = map_columns(&table, dialect, overrides, name)?;
         let ref_indices = map.indices_of(ColumnRole::Reference);
@@ -972,6 +974,11 @@ pub struct IdentityHint {
     /// The manufacturer part number, the only field that carries identity the
     /// layout cannot supply.
     pub mpn: Option<String>,
+    /// Manufacturer name, retained for comparison with an explicit layout
+    /// property. It is not itself a globally unique identity key.
+    pub manufacturer: Option<String>,
+    /// Package or footprint named by the artifact, when present.
+    pub footprint: Option<String>,
     /// What the artifact says about fitting this part.
     pub populate: Option<bool>,
     /// The artifact this came from, for attribution.
@@ -1217,7 +1224,7 @@ pub(crate) fn normalise_header(raw: &str) -> String {
 
 /// Read a text file as a table, finding the header row past any banner and
 /// deciding the dialect.
-fn read_table(text: &str, name: &str) -> Result<Table, BomError> {
+fn read_table(text: &str, name: &str, overrides: &ColumnOverrides) -> Result<Table, BomError> {
     let lines: Vec<&str> = text.lines().collect();
 
     // Fixed-width Eagle first: its header is recognised by shape, and its
@@ -1238,9 +1245,24 @@ fn read_table(text: &str, name: &str) -> Result<Table, BomError> {
             continue;
         }
         let keys: Vec<String> = cells.iter().map(|c| normalise_header(c)).collect();
-        let Some(dialect) = classify_headers(&keys) else {
-            continue;
-        };
+        let dialect = classify_headers(&keys).or_else(|| {
+            let wanted = overrides.get(ColumnRole::Reference)?;
+            let wanted = normalise_header(wanted);
+            let has_override = keys.iter().any(|key| key == &wanted);
+            let has_supporting = keys.iter().any(|key| {
+                role_candidates(key, None).iter().any(|(role, _)| {
+                    matches!(
+                        role,
+                        ColumnRole::Value
+                            | ColumnRole::Mpn
+                            | ColumnRole::Footprint
+                            | ColumnRole::Quantity
+                    )
+                })
+            });
+            (has_override && has_supporting).then_some(BomDialect::Spreadsheet)
+        });
+        let Some(dialect) = dialect else { continue };
         let headers: Vec<String> = cells
             .iter()
             .map(|c| c.trim().trim_matches('"').trim().to_string())

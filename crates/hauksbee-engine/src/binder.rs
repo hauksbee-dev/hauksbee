@@ -4120,8 +4120,10 @@ pub enum IdentityFinding {
         enumerated: usize,
         source: String,
     },
-    /// The layout's own do-not-populate flag and the BOM's populate column
-    /// disagree. Never resolved here; see [`IdentityReport::advice`].
+    /// The layout explicitly marks a part do-not-populate while the BOM
+    /// explicitly says it is fitted. Never resolved here; see
+    /// [`IdentityReport::advice`]. A false layout DNP flag is unspecified, not
+    /// an explicit fitted assertion, and therefore cannot create this finding.
     PopulateDisagrees {
         reference: String,
         layout_says_dnp: bool,
@@ -4200,9 +4202,9 @@ impl IdentityFinding {
 pub struct FitAdvice {
     /// Parts the layout marks DNP that the artifact says are populated.
     pub fit: Vec<String>,
-    /// Parts the layout does not mark DNP that the artifact says are not
-    /// populated. This is the half the layout does not carry at all, so it is the
-    /// half worth having.
+    /// Parts without an explicit layout DNP marker that the artifact says are
+    /// not populated. This is information the layout reader may not carry at
+    /// all, so it remains explicit policy advice rather than a contradiction.
     pub no_fit: Vec<String>,
 }
 
@@ -4258,7 +4260,8 @@ impl IdentityReport {
         }
         if !self.advice.no_fit.is_empty() {
             out.push(format!(
-                "  the BOM says these parts are not populated, and the layout does not: {}. \
+                "  the BOM says these parts are not populated, while the layout has no explicit \
+                 DNP marker: {}. \
                  Re-run with --no-fit {} to honour it",
                 self.advice.no_fit.join(", "),
                 self.advice.no_fit.join(",")
@@ -4340,9 +4343,12 @@ impl IdentityRefusal {
 }
 
 /// Below this share of an artifact's designators matching the board, the two are
-/// not the same board. One in ten: a BOM legitimately carries mechanical parts
-/// and a panel's worth of extras, but not ninety per cent of them.
-const WRONG_BOARD_MATCH_RATIO: f64 = 0.1;
+/// not the same board. A BOM may legitimately carry mechanical parts and panel
+/// extras, but those cannot outnumber the actual board population. Treating ten
+/// matching rows among a hundred as sufficient made a same-prefix board family
+/// look compatible even though ninety per cent of the asserted identities were
+/// for another design.
+const WRONG_BOARD_MATCH_RATIO: f64 = 0.5;
 
 /// Apply identity from a BOM or a placement file to a board, before binding.
 ///
@@ -4501,7 +4507,7 @@ pub fn apply_identity(
             } else if !dnp && !populate {
                 report.advice.no_fit.push(hint.reference.clone());
             }
-            if dnp == populate {
+            if dnp && populate {
                 report.findings.push(IdentityFinding::PopulateDisagrees {
                     reference: hint.reference.clone(),
                     layout_says_dnp: dnp,
@@ -4579,13 +4585,24 @@ pub fn apply_placement_identity(
     let check = file.cross_check(board);
     if check.is_different_board() {
         let detail = check.lines().join("; ");
+        let mut contradictions: Vec<String> = check
+            .position_disagreements
+            .iter()
+            .map(|d| d.reference.clone())
+            .chain(check.side_disagreements.iter().map(|d| d.reference.clone()))
+            .chain(
+                check
+                    .rotation_disagreements
+                    .iter()
+                    .map(|d| d.reference.clone()),
+            )
+            .chain(check.only_in_placement.iter().cloned())
+            .collect();
+        contradictions.sort();
+        contradictions.dedup();
         return Err(IdentityRefusal::Contradiction {
             artifact: file.provenance.path.clone(),
-            contradictions: check
-                .position_disagreements
-                .iter()
-                .map(|d| d.reference.clone())
-                .collect(),
+            contradictions,
             detail,
         });
     }
@@ -4613,25 +4630,52 @@ fn layout_names_a_part(comp: &Component) -> bool {
 ///
 /// Package and reel suffixes are the reason this exists: `ATmega328P-AU` and
 /// `ATmega328P`, `BSS138` and `BSS138-7-F`, `BC847B` and `BC847B,215` are one part
-/// written two ways, and refusing a run over a suffix would make the feature
-/// unusable. Compared on alphanumerics only, case-insensitively: either a prefix
-/// of the other, or a shared prefix of five characters, which is long enough that
-/// `STM32F103C8` and `ATmega328P` share nothing.
+/// written two ways. Only those documented suffix forms are discarded. A shared
+/// prefix is not identity: `TPS62130` and `TPS62135`, or `ATmega328P` and
+/// `ATmega328PB`, are different orderable devices despite differing near the end.
 fn names_same_part(a: &str, b: &str) -> bool {
-    let norm = |s: &str| -> String {
+    fn norm(s: &str) -> String {
         s.chars()
             .filter(|c| c.is_ascii_alphanumeric())
             .collect::<String>()
             .to_ascii_uppercase()
-    };
-    let (a, b) = (norm(a), norm(b));
-    if a.is_empty() || b.is_empty() {
+    }
+
+    fn without_known_ordering_suffix(s: &str) -> String {
+        let upper = s.trim().to_ascii_uppercase();
+        for suffix in ["-7-F", ",215", "-AU"] {
+            if let Some(core) = upper.strip_suffix(suffix) {
+                if !core.is_empty() {
+                    return norm(core);
+                }
+            }
+        }
+        norm(&upper)
+    }
+
+    let (normal_a, normal_b) = (norm(a), norm(b));
+    if normal_a.is_empty() || normal_b.is_empty() {
         return false;
     }
-    if a.starts_with(&b) || b.starts_with(&a) {
-        return true;
+    normal_a == normal_b || without_known_ordering_suffix(a) == without_known_ordering_suffix(b)
+}
+
+#[cfg(test)]
+mod part_name_tests {
+    use super::names_same_part;
+
+    #[test]
+    fn similar_five_character_prefixes_are_not_the_same_part() {
+        assert!(!names_same_part("TPS62130", "TPS62135"));
+        assert!(!names_same_part("ATmega328P", "ATmega328PB"));
     }
-    a.chars().zip(b.chars()).take_while(|(x, y)| x == y).count() >= 5
+
+    #[test]
+    fn documented_package_and_reel_suffixes_are_compatible() {
+        assert!(names_same_part("ATmega328P-AU", "ATmega328P"));
+        assert!(names_same_part("BSS138", "BSS138-7-F"));
+        assert!(names_same_part("BC847B", "BC847B,215"));
+    }
 }
 
 /// The component as it looks with an artifact's part number attached.
@@ -4781,6 +4825,46 @@ fn contradiction_between(
     lib: &ModelLibrary,
 ) -> Option<String> {
     let reference = &comp.reference;
+
+    // Two explicit manufacturers cannot both be true. Most layout formats do
+    // not carry a manufacturer at all; absence is unknown and never treated as
+    // a contradiction.
+    if let (Some(layout), Some(artifact)) = (
+        explicit_manufacturer(comp),
+        hint.manufacturer
+            .as_deref()
+            .filter(|s| !s.trim().is_empty()),
+    ) {
+        if normalise_identity_text(layout) != normalise_identity_text(artifact) {
+            return Some(format!(
+                "{reference} names manufacturer {layout:?} on the layout and {artifact:?} in the BOM"
+            ));
+        }
+    }
+
+    // Package names vary by CAD library, so compare only standardized package
+    // families and explicit pin counts. The actual pad count is stronger than
+    // either string and catches a stale QFN-16 row against a ten-pad footprint.
+    if let Some(artifact_package) = hint.footprint.as_deref().filter(|s| !s.trim().is_empty()) {
+        if let Some(pins) = package_pin_count(artifact_package) {
+            if !comp.pins.is_empty() && pins != comp.pins.len() {
+                return Some(format!(
+                    "{reference} is {artifact_package:?} in the BOM ({pins} pins) but the board footprint has {} pads",
+                    comp.pins.len()
+                ));
+            }
+        }
+        if let (Some(layout_family), Some(artifact_family)) = (
+            package_family(&comp.footprint),
+            package_family(artifact_package),
+        ) {
+            if layout_family != artifact_family {
+                return Some(format!(
+                    "{reference} uses package family {layout_family} on the layout and {artifact_family} ({artifact_package:?}) in the BOM"
+                ));
+            }
+        }
+    }
 
     // 1. Two files, two parts.
     //
@@ -4937,6 +5021,54 @@ fn contradiction_between(
                 comp.value,
                 kind_word(layout_kind.expect("matched above"))
             ));
+        }
+    }
+    None
+}
+
+fn normalise_identity_text(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_uppercase()
+}
+
+fn explicit_manufacturer(comp: &Component) -> Option<&str> {
+    comp.properties.iter().find_map(|(key, value)| {
+        let key = normalise_identity_text(key);
+        matches!(
+            key.as_str(),
+            "MANUFACTURER" | "MANUFACTURERNAME" | "MFR" | "MFG"
+        )
+        .then_some(value.as_str())
+    })
+}
+
+fn package_family(package: &str) -> Option<&'static str> {
+    let package = normalise_identity_text(package);
+    [
+        "TSSOP", "SSOP", "SOIC", "TQFP", "LQFP", "QFN", "DFN", "BGA", "DIP", "SOT",
+    ]
+    .into_iter()
+    .find(|family| package.contains(family))
+}
+
+fn package_pin_count(package: &str) -> Option<usize> {
+    let upper = package.to_ascii_uppercase();
+    for family in [
+        "TSSOP", "SSOP", "SOIC", "TQFP", "LQFP", "QFN", "DFN", "BGA", "DIP",
+    ] {
+        let Some(start) = upper.find(family) else {
+            continue;
+        };
+        let suffix = &upper[start + family.len()..];
+        let digits: String = suffix
+            .chars()
+            .skip_while(|c| !c.is_ascii_digit())
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if let Ok(pins) = digits.parse() {
+            return Some(pins);
         }
     }
     None
