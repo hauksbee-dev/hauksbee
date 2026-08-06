@@ -200,9 +200,9 @@ pub trait Mcu {
     /// Register a synchronous input responder.
     ///
     /// On every GPIO output edge (the same edges `on_pin_change` sees) the
-    /// responder is invoked with the pin and its new level, and returns a list
-    /// of input pins to drive, applied *immediately*, before the firmware's
-    /// next instruction, within the same `run_micros`. This is the mechanism
+    /// responder is invoked with the pin, its new level, and the exact edge
+    /// cycle, and returns a list of input pins to drive, applied *immediately*,
+    /// before the firmware's next instruction, within the same `run_micros`. This is the mechanism
     /// that lets a firmware bit-bang a clock and `digitalRead` the resulting
     /// serial-out bit in the SAME tight loop: e.g. a 74HC165 presenting its next
     /// QH bit onto MISO on each SCLK edge. Resolving the response per output edge
@@ -215,7 +215,7 @@ pub trait Mcu {
     #[allow(clippy::type_complexity)]
     fn on_input_responder(
         &mut self,
-        _responder: Box<dyn FnMut(PinId, bool) -> Vec<(PinId, bool)> + Send>,
+        _responder: Box<dyn FnMut(PinId, bool, u64) -> Vec<(PinId, bool)> + Send>,
     ) {
     }
 
