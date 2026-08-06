@@ -16,8 +16,8 @@ set_digital_in(pin, hi)   drive an external input pin
 set_analog_in(ch, volts)  inject an ADC voltage
 on_pin_change(cb)         callback per GPIO output edge:
                           (PinId{port,bit}, level, cycle stamp)
-on_input_responder(cb)    SYNCHRONOUS responder: per output edge, returns input
-                          pins to drive immediately (before the next instruction)
+on_input_responder(cb)    SYNCHRONOUS responder: per cycle-stamped output edge,
+                          returns input pins before the next instruction
 uart_write(bytes)         inject UART RX bytes
 on_uart(cb)               callback per UART TX byte
 on_i2c(cb) / on_spi(cb)   intercept bus bytes, return the slave's reply
