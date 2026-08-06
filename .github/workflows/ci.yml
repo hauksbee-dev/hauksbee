@@ -113,8 +113,8 @@ jobs:
       # into internal-only paths, no em-dashes, no stale backticked repo paths.
       - run: python3 scripts/lint-docs-currency.py
 
-  frontend-visual-lint:
-    name: frontend visual lint (overflow + fit, five viewports)
+  frontend-quality:
+    name: frontend quality (lint, tests, browser flows, visual fit)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -132,9 +132,18 @@ jobs:
       - name: chromium for playwright
         working-directory: frontend
         run: bunx playwright install --with-deps chromium
+      - name: lint the frontend
+        working-directory: frontend
+        run: bun run lint
+      - name: frontend unit tests
+        working-directory: frontend
+        run: bun run test:unit
       - name: build the frontend
         working-directory: frontend
         run: bun run build
+      - name: frontend end-to-end flows
+        working-directory: frontend
+        run: bun run test:e2e
       # The site is a separate build and is linted tolerantly: if this step
       # fails or is skipped the app's lint still runs, and the lint reports the
       # site as skipped rather than failing on it.
@@ -153,12 +162,12 @@ jobs:
       - name: visual lint
         working-directory: frontend
         run: bun run visual-lint
-      - name: screenshots of the violating states
+      - name: browser-test screenshots
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: visual-lint-screenshots
-          path: frontend/test-results/visual-lint
+          name: frontend-browser-screenshots
+          path: frontend/test-results
           if-no-files-found: ignore
 
   scenario-qc:
