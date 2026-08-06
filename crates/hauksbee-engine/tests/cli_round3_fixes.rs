@@ -315,6 +315,7 @@ fn check_code_on_an_empty_board_refuses() {
 
 // ── M8: --probe validation ───────────────────────────────────────────────────
 
+#[cfg(feature = "avr")]
 #[test]
 fn empty_probe_is_rejected() {
     let b = blinky_board();
@@ -337,6 +338,7 @@ fn empty_probe_is_rejected() {
     );
 }
 
+#[cfg(feature = "avr")]
 #[test]
 fn unknown_probe_net_points_at_list_nets() {
     let b = blinky_board();

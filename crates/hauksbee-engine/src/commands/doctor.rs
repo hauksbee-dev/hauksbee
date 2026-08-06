@@ -191,6 +191,7 @@ pub fn run(_backends: bool, json: bool) -> anyhow::Result<()> {
 /// Collapse a possibly multi-line message to its first line (discovery errors
 /// are one line today, but this keeps the doctor table one-row-per-backend even
 /// if a resolver's message grows).
+#[cfg(any(feature = "qemu", feature = "renode"))]
 fn one_line(msg: &str) -> String {
     msg.lines().next().unwrap_or("").to_string()
 }

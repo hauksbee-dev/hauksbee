@@ -23,6 +23,7 @@ pub fn emit(
     board_path: &Path,
     board: &ExtractedBoard,
     lib: &ModelLibrary,
+    reader_notes: &[String],
     mode: OutputMode,
     strict: bool,
     inputs: &[JsonInputEvidence],
@@ -47,6 +48,12 @@ pub fn emit(
     report.findings = kept;
     // Bind once: both the JSON header and the pin-role guess surfacing read it.
     let bound = bind_board(board, lib);
+    let evidence = crate::evidence::BoardEvidence::from_bound(
+        board,
+        &bound.report,
+        reader_notes,
+        hauksbee_ir::evidence::RunDate::from_system_clock(),
+    )?;
     // Pin-role GUESS warnings: roles the binder inferred from the configurable
     // pin-rule table rather than an explicit pin-function. Nothing is silently
     // guessed, so the lint reports each one, but on the correct channel per
@@ -60,7 +67,10 @@ pub fn emit(
         .collect();
     match mode {
         OutputMode::Json => {
-            println!("{}", lint_json(&bound, &report, &guesses, &waived, inputs));
+            println!(
+                "{}",
+                lint_json(&bound, &report, &guesses, &waived, inputs, &evidence)?
+            );
         }
         OutputMode::Plain | OutputMode::Text => {
             match mode {
@@ -74,11 +84,15 @@ pub fn emit(
                 "{}",
                 super::check::render_waivers_scoped(&waived, &waivers, &["lint"], true)
             );
+            print!("{}", evidence.render_plain());
         }
     }
     super::note_ungated_findings(strict, lint_fails(&report));
     if strict && lint_fails(&report) {
         super::strict_gate_exit(mode, &super::lint_gate_items(&report));
+    }
+    if strict && evidence.is_undermined() {
+        std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())
 }
@@ -136,10 +150,13 @@ fn lint_json(
     guesses: &[(String, String)],
     waived: &[crate::waiver::WaivedFinding],
     inputs: &[JsonInputEvidence],
-) -> String {
-    let mut jr =
-        JsonReport::new(&bound.name, BindSummary::from_report(&bound.report)).with_inputs(inputs);
+    evidence: &crate::evidence::BoardEvidence,
+) -> Result<String, hauksbee_ir::evidence::EvidenceError> {
+    let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
+        .with_inputs(inputs)
+        .with_evidence(evidence);
     jr.findings = Some(lint_findings_json(report));
+    jr.attach_finding_evidence(evidence)?;
     jr.notes.extend(guesses.iter().map(|(r, g)| JsonNote {
         kind: JsonNoteKind::BindRole,
         message: format!("pin-role guess {r}: {g}"),
@@ -148,7 +165,7 @@ fn lint_json(
     // waivers at all, so the machine surface carries them too (same shape as
     // `--check --json`'s `waived` array).
     jr.waived = waived.iter().cloned().map(Into::into).collect();
-    jr.to_json()
+    Ok(jr.to_json())
 }
 
 /// `--resources`: only the MCU internal resource-conflict check (plus the
@@ -158,6 +175,7 @@ pub fn emit_resources(
     board_path: &Path,
     board: &ExtractedBoard,
     lib: &ModelLibrary,
+    reader_notes: &[String],
     mode: OutputMode,
     strict: bool,
     inputs: &[JsonInputEvidence],
@@ -177,12 +195,20 @@ pub fn emit_resources(
         )
     });
     report.findings = kept;
+    let bound = bind_board(board, lib);
+    let evidence = crate::evidence::BoardEvidence::from_bound(
+        board,
+        &bound.report,
+        reader_notes,
+        hauksbee_ir::evidence::RunDate::from_system_clock(),
+    )?;
     match mode {
         OutputMode::Json => {
-            let bound = bind_board(board, lib);
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
-                .with_inputs(inputs);
+                .with_inputs(inputs)
+                .with_evidence(&evidence);
             jr.findings = Some(lint_findings_json(&report));
+            jr.attach_finding_evidence(&evidence)?;
             // Same honesty rule as every other machine surface: the verdict may
             // not quietly drop findings, so the waived list travels with it.
             jr.waived = waived.iter().cloned().map(Into::into).collect();
@@ -211,6 +237,7 @@ pub fn emit_resources(
         }
     }
     if !matches!(mode, OutputMode::Json) {
+        print!("{}", evidence.render_plain());
         // No stale reporting here: --resources runs only part of the lint
         // family, so a lint waiver with no hit may simply belong to a check
         // this command never ran.
@@ -222,6 +249,9 @@ pub fn emit_resources(
     super::note_ungated_findings(strict, lint_fails(&report));
     if strict && lint_fails(&report) {
         super::strict_gate_exit(mode, &super::lint_gate_items(&report));
+    }
+    if strict && evidence.is_undermined() {
+        std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())
 }
@@ -309,12 +339,25 @@ mod tests {
     #[test]
     fn lint_json_with_guesses_is_one_valid_json_document() {
         let bound = empty_bound();
+        let board = ExtractedBoard {
+            name: "t".to_string(),
+            nets: Vec::new(),
+            components: Vec::new(),
+        };
+        let evidence = crate::evidence::BoardEvidence::from_bound(
+            &board,
+            &bound.report,
+            &[],
+            hauksbee_ir::evidence::RunDate::unknown(),
+        )
+        .expect("empty evidence is valid");
         let report = NetLintReport::default();
         let guesses = vec![
             ("U1.PA0".to_string(), "adc0".to_string()),
             ("U1.PB3".to_string(), "spi_sck".to_string()),
         ];
-        let out = lint_json(&bound, &report, &guesses, &[], &[]);
+        let out = lint_json(&bound, &report, &guesses, &[], &[], &evidence)
+            .expect("evidence attachment succeeds");
         // The ENTIRE output must parse as a single JSON value, no trailing text.
         let v: serde_json::Value =
             serde_json::from_str(&out).expect("lint --json must emit ONE parseable JSON document");
@@ -332,7 +375,8 @@ mod tests {
             .any(|n| n.get("message").and_then(|m| m.as_str())
                 == Some("pin-role guess U1.PA0: adc0")));
         // With no guesses, notes is omitted (skip_serializing_if) and it still parses.
-        let clean = lint_json(&bound, &report, &[], &[], &[]);
+        let clean = lint_json(&bound, &report, &[], &[], &[], &evidence)
+            .expect("evidence attachment succeeds");
         let cv: serde_json::Value = serde_json::from_str(&clean).expect("clean lint --json parses");
         assert!(cv.get("notes").is_none(), "no guesses => no notes key");
     }

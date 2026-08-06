@@ -5,7 +5,11 @@
 
 /// Print the trace-capacity report and return. `altium_present` boards carry no
 /// routed-copper geometry through this path yet, so they report an empty table.
-pub fn emit(text: &str, altium_present: bool) -> anyhow::Result<()> {
+pub fn emit(
+    text: &str,
+    altium_present: bool,
+    evidence: &crate::evidence::BoardEvidence,
+) -> anyhow::Result<()> {
     let rows = if altium_present {
         Vec::new()
     } else {
@@ -17,5 +21,6 @@ pub fn emit(text: &str, altium_present: bool) -> anyhow::Result<()> {
         hauksbee_extract::trace_capacity_report(&copper, &hauksbee_extract::TraceAudit::default())
     };
     print!("{}", hauksbee_extract::render_trace_capacity_report(&rows));
+    print!("{}", evidence.render_plain());
     Ok(())
 }

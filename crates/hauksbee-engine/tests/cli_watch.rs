@@ -2,11 +2,9 @@
 //! file changes. Detection + verdict + watch-set logic are unit-tested in the
 //! library (`commands::watch`); this exercises the compiled binary's live loop.
 //!
-//! Watch loops are inherently timing-dependent (filesystem-event latency varies
-//! by platform, especially macOS FSEvents), so the timeouts here are deliberately
-//! generous and the file is re-touched on a slow poll rather than once. If this
-//! ever proves flaky in CI it can be marked `#[ignore]`; the component behaviour
-//! is covered by the unit tests regardless.
+//! The production watcher polls a small, non-recursive dependency set, so this
+//! test makes one real content change and requires one observed re-run. It is a
+//! release contract, not an ignorable timing probe.
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -77,17 +75,12 @@ fn watch_reruns_on_change() {
         buf.lock().unwrap()
     );
 
-    // Now change the file (repeatedly, to ride out filesystem-event latency) and
-    // wait for run #2. Re-touch every 700ms so a missed/coalesced event retries.
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let mut saw_run2 = false;
-    while Instant::now() < deadline {
-        std::fs::write(&board, &bytes).unwrap();
-        if wait_for_short(&buf, "run #2", 700) {
-            saw_run2 = true;
-            break;
-        }
-    }
+    // A genuine content change. Rewriting the exact same bytes is not a change
+    // and native event backends are permitted to coalesce it away.
+    let mut changed = bytes.clone();
+    changed.extend_from_slice(b"\n# watch integration test\n");
+    std::fs::write(&board, changed).unwrap();
+    let saw_run2 = wait_for_short(&buf, "run #2", 30_000);
 
     let _ = child.kill();
     let _ = child.wait();
