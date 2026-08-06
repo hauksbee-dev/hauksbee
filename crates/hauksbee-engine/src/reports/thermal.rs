@@ -15,6 +15,7 @@ use crate::result::{
 /// (under `strict_thermal`) when coverage is only partial.
 pub fn emit(
     engine: &mut HauksbeeEngine,
+    evidence: &crate::evidence::BoardEvidence,
     ambient: f64,
     seconds: f64,
     json: bool,
@@ -33,7 +34,7 @@ pub fn emit(
     // moved into the JSON report.
     let coverage_refs = coverage_open_active_refs(&summary);
     if json {
-        let mut jr = JsonReport::new(&board_name, summary);
+        let mut jr = JsonReport::new(&board_name, summary).with_evidence(evidence);
         // Surface the partial-coverage caveat as an info note too, so a JSON
         // consumer that ignores `coverage` still sees the honesty annotation.
         if coverage.partial {
@@ -65,12 +66,16 @@ pub fn emit(
         if coverage.partial {
             emit_thermal_coverage_caveat(&coverage, &coverage_refs);
         }
+        print!("{}", evidence.render_plain());
     }
     if !validity.valid {
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
     }
     // Opt-in escalation: partial coverage fails only under --strict-thermal.
     if coverage.partial && strict_thermal {
+        std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+    }
+    if evidence.is_undermined() && strict_thermal {
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())

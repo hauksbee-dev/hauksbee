@@ -149,6 +149,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     let norm = crate::board_input::from_path(&cfg.board)?;
     let is_altium = norm.is_binary();
     let is_board_code = norm.kind == crate::board_input::InputKind::BoardCode;
+    let reader_notes = norm.notes;
     let raw = norm.raw;
     let text = norm.layout_text.unwrap_or_default();
     let mut board = norm.board;
@@ -375,6 +376,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             &raw,
             is_altium,
             &lib,
+            &reader_notes,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.strict,
             cfg.verbose,
@@ -385,6 +387,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         return crate::reports::bind::emit(
             &board,
             &lib,
+            &reader_notes,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
         );
     }
@@ -398,6 +401,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             &raw,
             is_altium,
             &lib,
+            &reader_notes,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.oracle,
             cfg.strict,
@@ -409,7 +413,14 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // without a per-net current spec this tells the user the bottleneck capacity
     // and explicitly asks for a current before pass/fail.
     if cfg.ampacity {
-        return crate::reports::ampacity::emit(&text, is_altium);
+        let bound = bind_board(&board, &lib);
+        let evidence = crate::evidence::BoardEvidence::from_bound(
+            &board,
+            &bound.report,
+            &reader_notes,
+            hauksbee_ir::evidence::RunDate::from_system_clock(),
+        )?;
+        return crate::reports::ampacity::emit(&text, is_altium, &evidence);
     }
 
     // --lint: run the connectivity lint-class checks, the boot strap-pin lint
@@ -420,6 +431,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             &cfg.board,
             &board,
             &lib,
+            &reader_notes,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.strict,
         );
@@ -431,6 +443,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             &cfg.board,
             &board,
             &lib,
+            &reader_notes,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.strict,
         );
@@ -440,8 +453,16 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // print the compliance report. The capability existed but was unreachable from
     // any user-facing surface; this is its CLI front door.
     if cfg.usb_c {
+        let bound = bind_board(&board, &lib);
+        let evidence = crate::evidence::BoardEvidence::from_bound(
+            &board,
+            &bound.report,
+            &reader_notes,
+            hauksbee_ir::evidence::RunDate::from_system_clock(),
+        )?;
         return crate::reports::usb_c::emit(
             &board,
+            &evidence,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.strict,
         );
@@ -457,6 +478,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             &text,
             is_altium,
             &lib,
+            &reader_notes,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.strict,
         );
@@ -471,8 +493,15 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             Some(b) => b,
             None => bind_board(&board, &lib),
         };
+        let evidence = crate::evidence::BoardEvidence::from_bound(
+            &board,
+            &bound.report,
+            &reader_notes,
+            hauksbee_ir::evidence::RunDate::from_system_clock(),
+        )?;
         return crate::reports::ac::emit(
             &bound,
+            &evidence,
             ac_arg,
             &cfg.ac_node,
             cfg.ac_csv.as_deref(),
@@ -491,7 +520,14 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // combined branch or those JSON paths become unreachable dead code.
     if cfg.json && !cfg.thermal && !cfg.headless {
         return crate::reports::check::emit_combined_json(
-            &cfg.board, &board, &text, &raw, is_altium, &lib, cfg.strict,
+            &cfg.board,
+            &board,
+            &text,
+            &raw,
+            is_altium,
+            &lib,
+            &reader_notes,
+            cfg.strict,
         );
     }
 
@@ -553,6 +589,12 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         Some(b) => b,
         None => bind_board(&board, &lib),
     };
+    let board_evidence = crate::evidence::BoardEvidence::from_bound(
+        &board,
+        &bound.report,
+        &reader_notes,
+        hauksbee_ir::evidence::RunDate::from_system_clock(),
+    )?;
     // Net names captured before `bound` is consumed, for --probe validation.
     let probe_known_nets: Vec<String> = if cfg.probe.is_empty() {
         Vec::new()
@@ -622,6 +664,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     if cfg.thermal {
         return crate::reports::thermal::emit(
             &mut engine,
+            &board_evidence,
             cfg.ambient,
             cfg.seconds,
             cfg.json,
@@ -754,7 +797,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         let gate_rows = &boot_advisory.gate_states;
 
         if cfg.json {
-            let mut jr = JsonReport::new(&board_name, summary);
+            let mut jr = JsonReport::new(&board_name, summary).with_evidence(&board_evidence);
             // A substitution is an info-level note that must never be silently
             // absent (it changes how much the co-sim result can be trusted).
             for sub in engine.scheduler().substitutions() {
@@ -1041,6 +1084,10 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             }
         }
 
+        if !cfg.json {
+            print!("{}", board_evidence.render_plain());
+        }
+
         // 0-activity refusal (Track B): warn always; under --strict this is a hard
         // refusal (exit 3), not a clean pass. The UART-AND-toggles guard avoids
         // false positives on firmware that is busy on the bus but quiet on GPIO.
@@ -1104,6 +1151,9 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 );
             }
             std::process::exit(2);
+        }
+        if cfg.strict && board_evidence.is_undermined() {
+            std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
         }
         return Ok(());
     }

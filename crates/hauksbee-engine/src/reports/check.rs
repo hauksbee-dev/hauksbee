@@ -23,12 +23,19 @@ pub fn emit(
     raw: &[u8],
     altium_present: bool,
     lib: &ModelLibrary,
+    reader_notes: &[String],
     mode: OutputMode,
     strict: bool,
     verbose: bool,
 ) -> anyhow::Result<()> {
     let bound = bind_board(board, lib);
     let summary = BindSummary::from_report(&bound.report);
+    let evidence = crate::evidence::BoardEvidence::from_bound(
+        board,
+        &bound.report,
+        reader_notes,
+        hauksbee_ir::evidence::RunDate::from_system_clock(),
+    )?;
     let mut drc = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
@@ -105,7 +112,7 @@ pub fn emit(
     let (serious, worth_a_look) = verdict_counts(&drc_structured, &lint, &si, &usbc);
     match mode {
         OutputMode::Json => {
-            let mut jr = JsonReport::new(&bound.name, summary);
+            let mut jr = JsonReport::new(&bound.name, summary).with_evidence(&evidence);
             jr.drc = Some(drc_structured);
             if unrouted {
                 jr.notes.push(crate::result::JsonNote {
@@ -118,6 +125,7 @@ pub fn emit(
             // Fold USB-C in as a finding so the aggregate stays one valid JSON doc.
             findings.extend(usbc.as_ref().and_then(usbc_finding_json));
             jr.findings = Some(findings);
+            jr.attach_finding_evidence(&evidence)?;
             // A green verdict that quietly dropped findings would be worse than
             // no waivers at all, so the machine surface carries them too.
             jr.waived = waived.iter().cloned().map(Into::into).collect();
@@ -180,6 +188,7 @@ pub fn emit(
         }
     }
     if !matches!(mode, OutputMode::Json) {
+        print!("{}", evidence.render_plain());
         print!("{}", render_waivers(&waived, &waivers));
         // One verdict line to end on (U4), matching the web/TUI verdict shape:
         // the last thing `--check` prints answers "is my board ok" without
@@ -195,6 +204,9 @@ pub fn emit(
     super::note_ungated_findings(strict, would_gate);
     if strict && would_gate {
         super::strict_gate_exit(mode, &gate_items(drc_gates, &drc, &lint, &si, &usbc));
+    }
+    if strict && evidence.is_undermined() {
+        std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())
 }
@@ -534,10 +546,18 @@ pub fn emit_combined_json(
     raw: &[u8],
     altium_present: bool,
     lib: &ModelLibrary,
+    reader_notes: &[String],
     strict: bool,
 ) -> anyhow::Result<()> {
     let bound = bind_board(board, lib);
-    let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
+    let evidence = crate::evidence::BoardEvidence::from_bound(
+        board,
+        &bound.report,
+        reader_notes,
+        hauksbee_ir::evidence::RunDate::from_system_clock(),
+    )?;
+    let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
+        .with_evidence(&evidence);
     let drc = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
@@ -561,6 +581,7 @@ pub fn emit_combined_json(
     // `--check --json` surfaces.
     findings.extend(usbc.as_ref().and_then(usbc_finding_json));
     jr.findings = Some(findings);
+    jr.attach_finding_evidence(&evidence)?;
     println!("{}", jr.to_json());
     // Honour `--strict` on the default machine command: a bare
     // `run <board> --json --strict` must gate a shorted/failing board like the
@@ -574,6 +595,9 @@ pub fn emit_combined_json(
             OutputMode::Json,
             &gate_items(drc_gates, &drc, &lint, &si, &usbc),
         );
+    }
+    if strict && evidence.is_undermined() {
+        std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())
 }
