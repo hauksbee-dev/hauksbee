@@ -192,6 +192,15 @@ impl Side {
         }
     }
 
+    /// The word a report prints, so a line reads as a sentence rather than as a
+    /// Rust variant name.
+    pub fn describe(self) -> &'static str {
+        match self {
+            Side::Top => "top",
+            Side::Bottom => "bottom",
+        }
+    }
+
     /// Read a side out of whatever the file called it: `top`, `bottom`, `TOP`,
     /// `TopLayer`, `BottomSolder`, `F.Cu`, `B.Cu`, `T`, `B`.
     fn parse(s: &str) -> Option<Side> {
@@ -348,8 +357,30 @@ impl PlacementFile {
     }
 
     /// Reconcile the file against the board it claims to describe.
+    ///
+    /// Two whole-file conventions are resolved before any part is judged, because
+    /// both are properties of the export and neither is a per-part fact.
+    ///
+    /// **The Y sign.** KiCad's exporters write Y negated relative to the board
+    /// file's own frame. Deciding that per part, by taking whichever sign is
+    /// closer, means a file that mirrors HALF the board matches everywhere and
+    /// reports nothing. So the sign is chosen once, by which choice fits the whole
+    /// file better, and then every part is judged under it.
+    ///
+    /// **The origin.** A position file exported against the drill/place origin is
+    /// the same board shifted by one constant vector, which is ordinary practice
+    /// and not a revision difference. So a constant translation is measured over
+    /// the matched parts and removed before residuals are judged, and reported in
+    /// [`PlacementCrossCheck::origin_offset_mm`] so the shift is stated rather than
+    /// swallowed. A genuinely different revision is not explained by one constant
+    /// vector, so its parts still disagree.
     pub fn cross_check(&self, board: &ExtractedBoard) -> PlacementCrossCheck {
         let mut check = PlacementCrossCheck::default();
+        let (y_sign, offset) = self.frame_against(board);
+        check.y_mirrored = y_sign < 0.0;
+        if offset.0.abs() > POSITION_TOLERANCE_MM || offset.1.abs() > POSITION_TOLERANCE_MM {
+            check.origin_offset_mm = Some(offset);
+        }
         for p in &self.placements {
             let Some(comp) = board.component(&p.reference) else {
                 check.only_in_placement.push(p.reference.clone());
@@ -357,12 +388,8 @@ impl PlacementFile {
             };
             check.matched += 1;
             if let Some((x, y, _rot)) = comp.position {
-                // KiCad's exporters write Y negated relative to the board file's
-                // own coordinate system (the position file uses a Y-up frame),
-                // so both signs are accepted for a match and only the magnitude
-                // of the disagreement is judged.
-                let dx = (x - p.x_mm).abs();
-                let dy = (y - p.y_mm).abs().min((y + p.y_mm).abs());
+                let dx = (x - (p.x_mm + offset.0)).abs();
+                let dy = (y - (y_sign * p.y_mm + offset.1)).abs();
                 if dx > POSITION_TOLERANCE_MM || dy > POSITION_TOLERANCE_MM {
                     check.position_disagreements.push(PositionDisagreement {
                         reference: p.reference.clone(),
@@ -393,6 +420,57 @@ impl PlacementFile {
         check.only_in_placement.sort();
         check.only_on_board.sort();
         check
+    }
+
+    /// The Y sign and the constant translation that best carry this file's
+    /// coordinate frame onto the board's, as `(y_sign, (dx, dy))` in millimetres.
+    ///
+    /// The offset is the MEDIAN of the per-part differences, not the mean: a
+    /// median is unmoved by a handful of parts that genuinely did move between
+    /// revisions, which is exactly the signal that must survive to be reported.
+    /// It is only applied from three matched parts up, because one or two parts
+    /// are always explained perfectly by a translation through them, and a check
+    /// that cannot fail is not a check.
+    fn frame_against(&self, board: &ExtractedBoard) -> (f64, (f64, f64)) {
+        let pairs: Vec<((f64, f64), (f64, f64))> = self
+            .placements
+            .iter()
+            .filter_map(|p| {
+                let (x, y, _) = board.component(&p.reference)?.position?;
+                Some(((x, y), (p.x_mm, p.y_mm)))
+            })
+            .collect();
+        if pairs.len() < 3 {
+            return (1.0, (0.0, 0.0));
+        }
+        let median = |mut v: Vec<f64>| -> f64 {
+            v.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+            v[v.len() / 2]
+        };
+        let dx = median(pairs.iter().map(|((x, _), (px, _))| x - px).collect());
+        let mut best = (1.0, (dx, 0.0), f64::INFINITY);
+        for sign in [1.0f64, -1.0] {
+            let dy = median(
+                pairs
+                    .iter()
+                    .map(|((_, y), (_, py))| y - sign * py)
+                    .collect(),
+            );
+            // Score by how many parts the frame explains, not by total error: one
+            // part that really moved must not outvote the frame that fits the rest.
+            let explained = pairs
+                .iter()
+                .filter(|((x, y), (px, py))| {
+                    (x - (px + dx)).abs() <= POSITION_TOLERANCE_MM
+                        && (y - (sign * py + dy)).abs() <= POSITION_TOLERANCE_MM
+                })
+                .count();
+            let score = -(explained as f64);
+            if score < best.2 {
+                best = (sign, (dx, dy), score);
+            }
+        }
+        (best.0, best.1)
     }
 
     fn parse(text: &str, name: &str, sha: &str) -> Result<Self, PlacementError> {
@@ -590,6 +668,13 @@ pub struct PlacementCrossCheck {
     pub side_disagreements: Vec<SideDisagreement>,
     /// Designators found on both sides.
     pub matched: usize,
+    /// The constant translation from the file's frame to the board's, when the two
+    /// use different origins. Reported rather than swallowed: a reader comparing a
+    /// coordinate by hand needs to know the frames differ.
+    pub origin_offset_mm: Option<(f64, f64)>,
+    /// True when the file's Y axis runs the opposite way to the board's, which is
+    /// what KiCad's own exporters do.
+    pub y_mirrored: bool,
 }
 
 impl PlacementCrossCheck {
@@ -616,6 +701,12 @@ impl PlacementCrossCheck {
     /// so a board whose placement file matches never mentions the subject.
     pub fn lines(&self) -> Vec<String> {
         let mut out = Vec::new();
+        if let Some((dx, dy)) = self.origin_offset_mm {
+            out.push(format!(
+                "  the placement file's origin is offset from the board's by \
+                 ({dx:.4}, {dy:.4}) mm; positions are compared with that removed"
+            ));
+        }
         if !self.only_in_placement.is_empty() {
             out.push(format!(
                 "  placed but not on the board: {}",
@@ -631,8 +722,10 @@ impl PlacementCrossCheck {
         }
         for d in &self.side_disagreements {
             out.push(format!(
-                "  {} is on {} in the board and {:?} in the placement file",
-                d.reference, d.board_layer, d.placement_side
+                "  {} is on {} in the board and the {} side in the placement file",
+                d.reference,
+                d.board_layer,
+                d.placement_side.describe()
             ));
         }
         out

@@ -431,7 +431,10 @@ impl ColumnMap {
         let mut out = Vec::new();
         for a in &self.used {
             let how = if a.confirmed_by_content {
-                "confirmed by the column's content".to_string()
+                format!(
+                    "{}, confirmed by the column's content",
+                    a.confidence.describe()
+                )
             } else {
                 a.confidence.describe().to_string()
             };
@@ -668,7 +671,10 @@ impl Bom {
     /// file beside a board, so a caller can find the BOM without being told.
     pub fn detects(bytes: &[u8]) -> bool {
         let text = decode(bytes);
-        read_table(&text, "").is_ok()
+        // The FULL read, not just the table search. A cheaper check that says yes
+        // where `read` says exit 3 would send a caller that autodetects the BOM
+        // beside a board straight into a refusal it did not ask for.
+        Self::parse(&text, "", "", &ColumnOverrides::new()).is_ok()
     }
 
     /// Every reference designator the BOM mentions, sorted and deduplicated.
@@ -1065,11 +1071,16 @@ pub(crate) fn sniff_delimiter(line: &str) -> char {
         (';', line.matches(';').count()),
         ('|', line.matches('|').count()),
     ];
+    // `max_by_key` returns the LAST maximum, which would silently make the last
+    // candidate win a tie. Folding with a strict `>` keeps the documented order.
     counts
         .iter()
-        .max_by_key(|(_, n)| *n)
         .filter(|(_, n)| *n > 0)
-        .map(|(d, _)| *d)
+        .fold(None::<(char, usize)>, |best, &(d, n)| match best {
+            Some((_, bn)) if bn >= n => best,
+            _ => Some((d, n)),
+        })
+        .map(|(d, _)| d)
         .unwrap_or(',')
 }
 
@@ -1131,7 +1142,7 @@ fn read_table(text: &str, name: &str) -> Result<Table, BomError> {
             .iter()
             .enumerate()
             .skip(i + 1)
-            .filter(|(_, l)| !l.trim().is_empty())
+            .filter(|(_, l)| !l.trim().is_empty() && !is_comment_line(l))
             .map(|(n, l)| {
                 let mut cells = split_delimited(l, delim);
                 cells.resize(width.max(cells.len()), String::new());
@@ -1264,11 +1275,33 @@ pub(crate) fn fixed_width_columns(header: &str, data: &[&str]) -> (Vec<String>, 
 /// right-trim a row whose last columns are blank.
 pub(crate) fn slice_fixed_width(line: &str, starts: &[usize]) -> Vec<String> {
     let cs: Vec<char> = line.chars().collect();
-    starts
+    // A column boundary must never fall INSIDE a token. Where it does, it is
+    // snapped left to the token's own start.
+    //
+    // This is what keeps a mis-estimated boundary from silently corrupting a
+    // number instead of failing. A right-aligned `174.2550` under a `PosX` header
+    // begins three characters left of the header, and a boundary landing between
+    // the `1` and the `7` reads `4.2550` out of it: a coordinate off by 170 mm,
+    // finite, plausible, and wrong. A boundary landing after a leading `-` loses
+    // the sign the same way. Snapping recovers the whole token, and the column to
+    // its left loses characters that were never its own.
+    let mut bounds: Vec<usize> = Vec::with_capacity(starts.len());
+    for (k, &from) in starts.iter().enumerate() {
+        let mut at = from.min(cs.len());
+        if k > 0 && at > 0 && at < cs.len() && !cs[at].is_whitespace() && !cs[at - 1].is_whitespace()
+        {
+            let floor = bounds[k - 1];
+            while at > floor && !cs[at - 1].is_whitespace() {
+                at -= 1;
+            }
+        }
+        bounds.push(at.max(bounds.last().copied().unwrap_or(0)));
+    }
+    bounds
         .iter()
         .enumerate()
         .map(|(k, &from)| {
-            let to = starts.get(k + 1).copied().unwrap_or(cs.len()).min(cs.len());
+            let to = bounds.get(k + 1).copied().unwrap_or(cs.len()).min(cs.len());
             if from >= cs.len() || to <= from {
                 return String::new();
             }
@@ -1283,20 +1316,27 @@ pub(crate) fn slice_fixed_width(line: &str, starts: &[usize]) -> Vec<String> {
         .collect()
 }
 
+/// True for a line that is a comment rather than data. Skipped both when
+/// detecting fixed-width column boundaries, where a run of prose would blank out
+/// every boundary, and when reading rows, where it would become a part.
+pub(crate) fn is_comment_line(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with('#') || t.starts_with("//") || t.starts_with(';')
+}
+
 /// Read a fixed-width Eagle partlist into a [`Table`].
 fn read_fixed_width(lines: &[&str], header_line: usize, dialect: BomDialect) -> Table {
-    let data: Vec<&str> = lines
-        .iter()
-        .skip(header_line + 1)
-        .filter(|l| !l.trim().is_empty())
-        .copied()
-        .collect();
-    let (headers, starts) = fixed_width_columns(lines[header_line], &data);
-    let rows = lines
+    let body: Vec<(usize, &str)> = lines
         .iter()
         .enumerate()
         .skip(header_line + 1)
-        .filter(|(_, l)| !l.trim().is_empty())
+        .filter(|(_, l)| !l.trim().is_empty() && !is_comment_line(l))
+        .map(|(n, l)| (n, *l))
+        .collect();
+    let data: Vec<&str> = body.iter().map(|(_, l)| *l).collect();
+    let (headers, starts) = fixed_width_columns(lines[header_line], &data);
+    let rows = body
+        .iter()
         .map(|(n, l)| TableRow {
             cells: slice_fixed_width(l, &starts),
             line: n + 1,
@@ -1386,18 +1426,19 @@ fn role_candidates(key: &str, dialect: Option<BomDialect>) -> Vec<(ColumnRole, M
         | "reference_s"
         | "references"
         | "reference" => push(Reference, Certain),
-        "ref" | "refs" | "top_designator" | "bottom_designator" | "component_reference" => {
-            push(Reference, Likely)
-        }
+        "ref" | "refs" | "top_designator" | "bottom_designator" | "topdesignator"
+        | "bottomdesignator" | "component_reference" => push(Reference, Likely),
         "parts" => push(Reference, Likely),
         "part" => push(Reference, if eagle { Certain } else { Guess }),
         "customer_reference" | "component_number_on_pcb" => push(Reference, Guess),
+        "component" | "item" | "row" => push(Reference, Guess),
 
         // ── value ──
         "value" => push(Value, Certain),
         "val" | "kicad_value" => push(Value, Likely),
         "comment" => push(Value, if comment_is_value { Likely } else { Guess }),
         "description_value" | "value_description" => push(Value, Likely),
+        "description" => push(Value, Guess),
 
         // ── manufacturer part number ──
         "mpn"
@@ -1530,13 +1571,24 @@ fn map_columns(
     // cell in it splits into tokens shaped like reference designators, it is the
     // reference column, and that is evidence rather than a guess. This is what
     // turns a Digi-Key BOM-manager export, whose designators live under the
-    // ambiguous header `Customer Reference`, from a refusal into a read, without
-    // ever promoting a column whose content says otherwise: a distributor order
-    // code (`296-1566-5-ND`) starts with a digit, a packaging cell (`Cut Tape`)
-    // has none, and a description is too long.
+    // ambiguous header `Customer Reference`, from a refusal into a read.
+    //
+    // Two guards, and the first is the important one. Only headers whose PURPOSE
+    // is a reference field are eligible, not any guess. Shape alone cannot tell a
+    // designator from a part number, because `BC547` and `LM358` have exactly the
+    // shape of `R547` and `LM358`; promoting a `Part` column full of part numbers
+    // on shape alone would attach every row to a designator the board does not
+    // have. So the evidence is "this header is the tool's own reference field AND
+    // its content agrees", which is a real claim, rather than "this column looks
+    // designator-ish", which is not.
     if let Some(candidates) = per_role.get_mut(&ColumnRole::Reference) {
         for c in candidates.iter_mut() {
+            let eligible = matches!(
+                normalise_header(&c.header).as_str(),
+                "customer_reference" | "component_number_on_pcb" | "reference_designator"
+            );
             if c.confidence == MappingConfidence::Guess
+                && eligible
                 && column_looks_like_references(table, c.index)
             {
                 c.confidence = MappingConfidence::Likely;
@@ -1636,7 +1688,10 @@ fn map_columns(
 fn side_split_designators(tied: &[&ColumnAssignment]) -> bool {
     tied.iter().all(|c| {
         let k = normalise_header(&c.header);
-        k == "top_designator" || k == "bottom_designator"
+        matches!(
+            k.as_str(),
+            "top_designator" | "bottom_designator" | "topdesignator" | "bottomdesignator"
+        )
     })
 }
 
@@ -1695,8 +1750,19 @@ fn has_designator_shape(token: &str) -> bool {
 /// A reference designator that names no specific part: KiCad's artwork
 /// placeholders (`REF**`, `G***`), Altium's logo row (`*`), and an
 /// unannotated designator whose number is still a question mark (`U?4`).
+/// ...and a token that cannot be a designator at all, which is how a footer line
+/// (`Total number of parts: 3 (generated by ...)`) stops becoming three phantom
+/// parts. A designator always contains a letter and never contains bracket or
+/// colon punctuation; `GND`, `V+`, `RX` and `MOTOR_POWER` are all real
+/// designators from the survey, so a digit is not required.
 fn is_placeholder_reference(s: &str) -> bool {
-    s.contains('*') || s.contains('?') || s.chars().all(|c| !c.is_ascii_alphanumeric())
+    s.contains('*')
+        || s.contains('?')
+        || s.contains(':')
+        || s.contains('(')
+        || s.contains(')')
+        || s.len() > 24
+        || !s.chars().any(|c| c.is_ascii_alphabetic())
 }
 
 /// Split a reference-designator cell into designators, returning the real ones
@@ -1792,7 +1858,43 @@ fn populate_from_value(value: &str) -> Option<bool> {
 /// empty, and an empty cell that reaches the binder as `Some("")` costs a bind.
 fn looks_like_mpn(s: &str) -> bool {
     let s = s.trim();
-    s.len() >= 3 && s.chars().any(|c| c.is_ascii_digit()) && !s.starts_with('~')
+    s.len() >= 3
+        && s.chars().any(|c| c.is_ascii_digit())
+        && !s.starts_with('~')
+        && !is_distributor_code(s)
+}
+
+/// Is this cell a distributor's own order code rather than a manufacturer part
+/// number?
+///
+/// A column called `LCSC` or `Digi-Key Part Number` is caught by its header, but a
+/// column called `Part Number` or `SKU` is not, and real sheets put an LCSC code
+/// under exactly that heading. So the SHAPE is checked as well, for the three
+/// families that have one: LCSC's `C` followed by digits only, Digi-Key's `-ND`
+/// suffix, and Mouser's `NNN-` numeric prefix. Matching a model regex against one
+/// of these is how a part binds to the wrong device.
+fn is_distributor_code(s: &str) -> bool {
+    let up = s.trim().to_ascii_uppercase();
+    // LCSC: C followed by four or more digits and nothing else.
+    if let Some(rest) = up.strip_prefix('C') {
+        if rest.len() >= 4 && rest.chars().all(|c| c.is_ascii_digit()) {
+            return true;
+        }
+    }
+    // Digi-Key: the `-ND` / `-1-ND` / `-CT-ND` suffix family.
+    if up.ends_with("-ND") || up.ends_with("-ND)") {
+        return true;
+    }
+    // Mouser: a three-or-four digit house prefix before a hyphen.
+    if let Some((head, tail)) = up.split_once('-') {
+        if (3..=4).contains(&head.len())
+            && head.chars().all(|c| c.is_ascii_digit())
+            && !tail.is_empty()
+        {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
