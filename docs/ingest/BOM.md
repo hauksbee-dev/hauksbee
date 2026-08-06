@@ -291,9 +291,12 @@ catch:
 - **Two explicit manufacturers.** A BOM manufacturer conflicts only with a
   manufacturer property the layout actually carries. A missing property is
   unknown, never guessed.
-- **Package identity.** Recognized package families and explicit pin counts are
-  compared against the layout footprint and its actual pad count. Free-form
-  package prose that cannot be normalized is not promoted to certainty.
+- **Package identity.** Recognized package families and explicit electrical-pad
+  counts are compared against the layout footprint's distinct numbered pads.
+  An explicitly named exposed pad such as `QFN-56-1EP` is included; unnamed
+  paste-only apertures and repeated shapes for one pad number are not invented
+  as extra pins. Free-form package prose that cannot be normalized is not
+  promoted to certainty.
 
 Part-number compatibility is deliberately narrow. Exact alphanumeric identity
 is accepted, as are the documented ordering suffix forms `-AU`, `-7-F` and
