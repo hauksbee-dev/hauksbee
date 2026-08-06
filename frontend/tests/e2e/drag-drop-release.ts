@@ -4,15 +4,16 @@
  * The caller supplies exactly five absolute board paths as a JSON array in
  * `HB_BOARD_FILES` and a running real Hauksbee server in `HB_E2E_BASE`. Each
  * file enters through an actual DataTransfer drop (not setInputFiles on the
- * app's picker), then has to produce a useful report and a matching JSON
- * export without browser errors. Raw response evidence and screenshots are
- * retained under `HB_E2E_OUT`.
+ * app's picker), then has to produce a useful report, a matching independent
+ * JSON export, and a live session whose pause/step/play controls advance the
+ * engine clock without browser errors. Redacted wire evidence and screenshots
+ * are retained under `HB_E2E_OUT`.
  */
 
 import { chromium } from 'playwright'
 import type { ConsoleMessage, Page } from 'playwright'
-import { basename, join } from 'node:path'
-import { mkdirSync } from 'node:fs'
+import { basename, isAbsolute, join } from 'node:path'
+import { mkdirSync, realpathSync } from 'node:fs'
 
 interface WebReport {
   ok: boolean
@@ -30,15 +31,28 @@ interface WebReport {
 }
 
 interface BoardResult {
-  path: string
   file: string
+  input_sha256: string
   elapsed_ms: number
   response_status: number
   response_capture_error: string | null
   report: WebReport | null
   exported: boolean
+  live_started: boolean
+  sim_time_before_s: number | null
+  sim_time_after_s: number | null
+  wire_events: WireEvent[]
   console_errors: string[]
   failures: string[]
+}
+
+interface WireEvent {
+  direction: 'sent' | 'received'
+  type: string
+  t?: number
+  sim_time?: number
+  running?: boolean
+  message?: string
 }
 
 const base = process.env.HB_E2E_BASE
@@ -51,6 +65,15 @@ const files = JSON.parse(rawFiles) as unknown
 if (!Array.isArray(files) || files.length !== 5 || !files.every(path => typeof path === 'string')) {
   throw new Error('HB_BOARD_FILES must contain exactly five path strings')
 }
+if (!files.every(isAbsolute)) throw new Error('every HB_BOARD_FILES entry must be an absolute path')
+const resolvedFiles = files.map(path => realpathSync(path))
+if (new Set(resolvedFiles).size !== 5) throw new Error('HB_BOARD_FILES must contain five distinct files')
+const fileDigests = await Promise.all(resolvedFiles.map(async path => (
+  new Bun.CryptoHasher('sha256').update(await Bun.file(path).arrayBuffer()).digest('hex')
+)))
+if (new Set(fileDigests).size !== 5) {
+  throw new Error('HB_BOARD_FILES must contain five distinct board contents')
+}
 
 mkdirSync(output, { recursive: true })
 
@@ -59,6 +82,152 @@ function watchConsole(page: Page, errors: string[]) {
     if (message.type() === 'error') errors.push(message.text())
   })
   page.on('pageerror', error => errors.push(`pageerror: ${error.message}`))
+}
+
+function watchWire(page: Page, events: WireEvent[]) {
+  page.on('websocket', socket => {
+    const record = (direction: WireEvent['direction'], raw: string | Buffer) => {
+      try {
+        const value = JSON.parse(String(raw)) as Record<string, unknown>
+        if (typeof value.type !== 'string') return
+        events.push({
+          direction,
+          type: value.type,
+          ...(typeof value.t === 'number' ? { t: value.t } : {}),
+          ...(typeof value.sim_time === 'number' ? { sim_time: value.sim_time } : {}),
+          ...(typeof value.running === 'boolean' ? { running: value.running } : {}),
+          ...(typeof value.message === 'string' ? { message: value.message } : {}),
+        })
+      } catch {
+        // Binary or non-JSON frames carry no Hauksbee protocol evidence.
+      }
+    }
+    socket.on('framesent', event => record('sent', event.payload))
+    socket.on('framereceived', event => record('received', event.payload))
+  })
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  if (value !== null && typeof value === 'object') {
+    const object = value as Record<string, unknown>
+    return `{${Object.keys(object).sort().map(key => `${JSON.stringify(key)}:${canonicalJson(object[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
+async function independentAnalysis(path: string): Promise<WebReport> {
+  const response = await fetch(new URL('/api/analyze', base!), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/octet-stream',
+      'X-Board-Filename': basename(path),
+    },
+    body: Bun.file(path),
+  })
+  if (!response.ok) throw new Error(`independent analysis returned HTTP ${response.status}`)
+  return await response.json() as WebReport
+}
+
+function parseSimTime(text: string): number {
+  const match = text.trim().match(/^([0-9]+(?:\.[0-9]+)?)\s*(µs|ms|s)$/)
+  if (!match) throw new Error(`unrecognised simulation time: ${JSON.stringify(text)}`)
+  const value = Number(match[1])
+  if (match[2] === 'µs') return value / 1_000_000
+  if (match[2] === 'ms') return value / 1_000
+  return value
+}
+
+async function waitForSimTimeAbove(page: Page, floor: number, timeoutMs = 10_000) {
+  const deadline = Date.now() + timeoutMs
+  const time = page.locator('[data-testid="transport-time"]')
+  while (Date.now() < deadline) {
+    // Ensure the foreground page gets a paint opportunity. Live messages are
+    // deliberately coalesced into requestAnimationFrame by useSimulation.
+    await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => resolve())))
+    const value = parseSimTime(await time.innerText())
+    if (value > floor) return value
+    await page.waitForTimeout(25)
+  }
+  throw new Error(
+    `simulation time did not advance beyond ${floor}s `
+      + `(rendered=${JSON.stringify(await time.innerText())})`,
+  )
+}
+
+async function exerciseLiveSimulation(page: Page, expectedFile: string, failures: string[]) {
+  let liveStarted = false
+  let before: number | null = null
+  let after: number | null = null
+  const run = page.locator('[data-testid="run-it"]')
+  if (await run.count() !== 1) {
+    failures.push('successful board report offered no live simulation action')
+    return { liveStarted, before, after }
+  }
+
+  const launchResponse = page.waitForResponse(response => (
+    response.request().method() === 'POST' && response.url().endsWith('/api/live/launch')
+  ), { timeout: 30_000 })
+  await run.click()
+  await page.waitForFunction(() => Boolean(
+    document.querySelector('[data-testid="live-replace-confirm"]')
+      || document.querySelector('[data-testid="transport-speed"]')
+      || document.querySelector('[data-testid="live-launch-error"]'),
+  ), null, { timeout: 180_000 })
+  if (await page.locator('[data-testid="live-replace-confirm"]').count() === 1) {
+    await page.locator('[data-testid="confirm-replace-live"]').click()
+  }
+
+  const launched = await launchResponse
+  const launchBody = await launched.json() as { ok?: boolean; board_name?: string; error?: string }
+  if (!launched.ok() || launchBody.ok !== true || launchBody.board_name !== expectedFile) {
+    failures.push(
+      `live launch identity mismatch: HTTP ${launched.status()} ${JSON.stringify(launchBody)}`,
+    )
+    return { liveStarted, before, after }
+  }
+  const liveStatus = await page.evaluate(async () => {
+    const response = await fetch('/api/live/status')
+    return await response.json() as { active?: boolean; board_name?: string }
+  })
+  if (liveStatus.active !== true || liveStatus.board_name !== expectedFile) {
+    failures.push(`live status identity mismatch: ${JSON.stringify(liveStatus)}`)
+    return { liveStarted, before, after }
+  }
+
+  await page.waitForFunction(() => Boolean(
+    document.querySelector('[data-testid="transport-speed"]')
+      || document.querySelector('[data-testid="live-launch-error"]'),
+  ), null, { timeout: 180_000 })
+  const launchError = page.locator('[data-testid="live-launch-error"]')
+  if (await launchError.count() === 1) {
+    failures.push(`live simulation refused: ${(await launchError.innerText()).trim()}`)
+    return { liveStarted, before, after }
+  }
+
+  await page.getByText('connected', { exact: true }).waitFor({ state: 'visible', timeout: 30_000 })
+  liveStarted = true
+  const time = page.locator('[data-testid="transport-time"]')
+  if (await time.count() !== 1) {
+    failures.push('live simulation exposes no measurable simulation clock')
+    return { liveStarted, before, after }
+  }
+
+  // Hold the loop, step exactly once, then resume it. A connected canvas that
+  // never advances is not tangible simulation benefit, and the three controls
+  // are the shortest real proof that the browser and engine are bidirectional.
+  const pause = page.getByRole('button', { name: 'Pause', exact: true })
+  if (await pause.count() === 1) await pause.click()
+  const play = page.getByRole('button', { name: 'Play', exact: true })
+  await play.waitFor({ state: 'visible' })
+  before = parseSimTime(await time.innerText())
+  await page.getByRole('button', { name: 'Step one millisecond', exact: true }).click()
+  const stepped = await waitForSimTimeAbove(page, before)
+  await play.click()
+  await pause.waitFor({ state: 'visible' })
+  after = await waitForSimTimeAbove(page, stepped)
+  await pause.click()
+  return { liveStarted, before, after }
 }
 
 async function prepareDrop(page: Page, path: string) {
@@ -110,9 +279,12 @@ async function finishDrop(page: Page) {
 
 async function runBoard(page: Page, path: string, index: number): Promise<BoardResult> {
   const file = basename(path)
+  const inputSha256 = fileDigests[resolvedFiles.indexOf(path)]
   const failures: string[] = []
   const consoleErrors: string[] = []
+  const wireEvents: WireEvent[] = []
   watchConsole(page, consoleErrors)
+  watchWire(page, wireEvents)
   await page.goto(base!, { waitUntil: 'domcontentloaded' })
   await page.waitForSelector('[data-testid="drop-zone"]', { timeout: 30_000 })
 
@@ -158,11 +330,24 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
     const exportPath = join(output, `${String(index + 1).padStart(2, '0')}-${file}.json`)
     await download.saveAs(exportPath)
     const exportedReport = await Bun.file(exportPath).json() as WebReport
-    if (report === null) report = exportedReport
-    exported = exportedReport.file_name === report.file_name
-      && exportedReport.num_components === report.num_components
-      && exportedReport.num_nets === report.num_nets
-    if (!exported) failures.push('JSON export does not match the report that was displayed')
+    const independentReport = await independentAnalysis(path)
+    if (report !== null && canonicalJson(exportedReport) !== canonicalJson(report)) {
+      failures.push('JSON export differs from the captured /api/analyze response')
+    }
+    if (canonicalJson(exportedReport) !== canonicalJson(independentReport)) {
+      failures.push('JSON export differs from an independent repeat analysis')
+    }
+    if (report === null) report = independentReport
+    const inventory = await page.locator('[data-testid="report-inventory"]').innerText()
+    const expectedInventory = `${exportedReport.board_name || exportedReport.file_name} · `
+      + `${exportedReport.num_components} ${exportedReport.num_components === 1 ? 'part' : 'parts'} · `
+      + `${exportedReport.num_nets} ${exportedReport.num_nets === 1 ? 'net' : 'nets'}`
+    const verdict = await page.locator('[data-testid="report-verdict"]').innerText()
+    if (inventory.trim() !== expectedInventory) failures.push('rendered board inventory differs from JSON export')
+    if (!verdict.includes(exportedReport.headline)) failures.push('rendered headline differs from JSON export')
+    exported = canonicalJson(exportedReport) === canonicalJson(independentReport)
+      && inventory.trim() === expectedInventory
+      && verdict.includes(exportedReport.headline)
 
     // Export feedback must remain readable without obscuring the next report
     // section. This caught an absolute-positioned toast overlapping the first
@@ -198,6 +383,17 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
     failures.push('report has no check sections')
   }
 
+  await page.screenshot({
+    path: join(output, `${String(index + 1).padStart(2, '0')}-${file}-report.png`),
+    fullPage: false,
+  })
+  let live = { liveStarted: false, before: null as number | null, after: null as number | null }
+  try {
+    live = await exerciseLiveSimulation(page, file, failures)
+  } catch (error) {
+    failures.push(`live simulation journey failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
+
   if (consoleErrors.length > 0) failures.push(`${consoleErrors.length} browser console error(s)`)
   await Bun.write(
     join(output, `${String(index + 1).padStart(2, '0')}-${file}.response.json`),
@@ -208,13 +404,17 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
     fullPage: false,
   })
   return {
-    path,
     file,
+    input_sha256: inputSha256,
     elapsed_ms: elapsed,
     response_status: response.status(),
     response_capture_error: responseCaptureError,
     report,
     exported,
+    live_started: live.liveStarted,
+    sim_time_before_s: live.before,
+    sim_time_after_s: live.after,
+    wire_events: wireEvents,
     console_errors: consoleErrors,
     failures,
   }
@@ -223,7 +423,7 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
 const browser = await chromium.launch({ headless: true })
 const results: BoardResult[] = []
 try {
-  for (const [index, path] of files.entries()) {
+  for (const [index, path] of resolvedFiles.entries()) {
     const context = await browser.newContext({
       baseURL: base,
       viewport: { width: 1440, height: 900 },
@@ -232,7 +432,28 @@ try {
     })
     const page = await context.newPage()
     page.setDefaultTimeout(30_000)
-    const result = await runBoard(page, path, index)
+    let result: BoardResult
+    try {
+      result = await runBoard(page, path, index)
+    } catch (error) {
+      // One malformed or hung board must not erase the other four journeys.
+      // Preserve a complete five-row result artifact and fail at the end.
+      result = {
+        file: basename(path),
+        input_sha256: fileDigests[index],
+        elapsed_ms: 0,
+        response_status: 0,
+        response_capture_error: null,
+        report: null,
+        exported: false,
+        live_started: false,
+        sim_time_before_s: null,
+        sim_time_after_s: null,
+        wire_events: [],
+        console_errors: [],
+        failures: [`journey crashed: ${error instanceof Error ? error.message : String(error)}`],
+      }
+    }
     results.push(result)
     console.log(
       `${result.failures.length === 0 ? 'PASS' : 'FAIL'} ${result.file} `
