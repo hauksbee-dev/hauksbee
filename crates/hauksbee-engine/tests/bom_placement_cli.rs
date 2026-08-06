@@ -1,4 +1,4 @@
-use std::process::Command;
+use std::{path::Path, process::Command};
 
 #[test]
 fn board_bom_and_placement_feed_the_release_cli_and_json_inventory() {
@@ -108,4 +108,49 @@ fn board_bom_and_placement_feed_the_release_cli_and_json_inventory() {
     assert!(error["error"].as_str().is_some_and(|message| {
         message.contains("lines") && message.contains("One part cannot take two BOM rows")
     }));
+}
+
+#[test]
+fn same_board_watchy_position_exports_pass_the_release_cli() {
+    let engine = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let board = engine.join("../hauksbee-ci/examples/boards/watchy.kicad_pcb");
+
+    for relative in [
+        "../hauksbee-extract/tests/fixtures/placement/watchy.pos",
+        "../hauksbee-extract/tests/fixtures/placement/watchy-pos.csv",
+    ] {
+        let placement = engine.join(relative);
+        let output = Command::new(env!("CARGO_BIN_EXE_hauksbee"))
+            .args([
+                "run",
+                board.to_str().expect("UTF-8 board fixture path"),
+                "--placement",
+                placement.to_str().expect("UTF-8 placement fixture path"),
+                "--report",
+                "--json",
+            ])
+            .output()
+            .expect("hauksbee runs on its ground-truth placement fixture");
+
+        assert!(
+            output.status.success(),
+            "the KiCad-exported placement belongs to this exact board ({relative})\n\
+             status: {:?}\nstderr: {}\nstdout: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let json: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("stdout is one JSON document");
+        let inputs = json["inputs"]
+            .as_array()
+            .expect("the successful report retains its input inventory");
+        assert_eq!(inputs.len(), 2, "board + placement: {json}");
+        assert!(inputs.iter().any(|input| {
+            input["kind"] == "placement"
+                && input["sha256"]
+                    .as_str()
+                    .is_some_and(|digest| digest.len() == 64)
+        }));
+    }
 }

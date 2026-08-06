@@ -226,7 +226,7 @@ fn an_explicit_manufacturer_contradiction_is_refused() {
 }
 
 #[test]
-fn a_package_pin_count_contradiction_is_refused() {
+fn a_package_electrical_pad_count_contradiction_is_refused() {
     let mut b = board(&[("U1", "MCP4728")]);
     assert_eq!(b.components[0].pins.len(), 10, "fixture premise");
 
@@ -238,7 +238,31 @@ fn a_package_pin_count_contradiction_is_refused() {
     .expect_err("a 16-pad package cannot describe a ten-pad board footprint");
     let message = err.to_string();
     assert!(message.contains("QFN-16"), "{message}");
-    assert!(message.contains("10 pads"), "{message}");
+    assert!(
+        message.contains("10 distinct numbered electrical pads"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_placement_package_contradiction_names_the_placement_file_not_a_bom() {
+    let mut b = board(&[("U1", "MCP4728")]);
+    let placement = PlacementFile::from_text(
+        "Designator,Package,Mid X,Mid Y,Rotation,Layer\n\
+         U1,QFN-16,100,100,0,top\n",
+        "positions.csv",
+    )
+    .expect("placement reads");
+
+    let err = apply_placement_identity(&mut b, &placement, &ModelLibrary::builtin())
+        .expect_err("a 16-pad placement package cannot describe a ten-pad footprint");
+    let message = err.to_string();
+    assert!(message.contains("in the placement file"), "{message}");
+    assert!(
+        message.contains("Use the placement file that was exported from this layout"),
+        "{message}"
+    );
+    assert!(!message.contains("BOM"), "{message}");
 }
 
 #[test]

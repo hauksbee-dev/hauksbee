@@ -4313,12 +4313,13 @@ pub enum IdentityRefusal {
         "{artifact} and the board disagree about what {} of the same parts ARE, which \
          means they are different revisions of the board rather than two views of \
          one: {detail}. Anything computed from the pair would describe a board that \
-         does not exist. Use the BOM that was exported from this layout, or drop it \
-         and analyse the layout alone",
+         does not exist. Use the {artifact_kind} that was exported from this layout, \
+         or drop it and analyse the layout alone",
         contradictions.len()
     )]
     Contradiction {
         artifact: String,
+        artifact_kind: String,
         contradictions: Vec<String>,
         detail: String,
     },
@@ -4400,6 +4401,7 @@ pub fn apply_identity(
         return Ok(report);
     }
     let source = hints[0].source.clone();
+    let artifact_kind = identity_artifact_kind(&hints[0]);
 
     // ── Is this even the same board? ────────────────────────────────────────
     let on_board: std::collections::HashSet<String> = board
@@ -4433,6 +4435,7 @@ pub fn apply_identity(
         let detail = contradictions.join("; ");
         return Err(IdentityRefusal::Contradiction {
             artifact: source,
+            artifact_kind: artifact_kind.to_string(),
             contradictions,
             detail,
         });
@@ -4602,6 +4605,7 @@ pub fn apply_placement_identity(
         contradictions.dedup();
         return Err(IdentityRefusal::Contradiction {
             artifact: file.provenance.path.clone(),
+            artifact_kind: "placement file".to_string(),
             contradictions,
             detail,
         });
@@ -4825,6 +4829,7 @@ fn contradiction_between(
     lib: &ModelLibrary,
 ) -> Option<String> {
     let reference = &comp.reference;
+    let artifact_kind = identity_artifact_kind(hint);
 
     // Two explicit manufacturers cannot both be true. Most layout formats do
     // not carry a manufacturer at all; absence is unknown and never treated as
@@ -4837,20 +4842,21 @@ fn contradiction_between(
     ) {
         if normalise_identity_text(layout) != normalise_identity_text(artifact) {
             return Some(format!(
-                "{reference} names manufacturer {layout:?} on the layout and {artifact:?} in the BOM"
+                "{reference} names manufacturer {layout:?} on the layout and {artifact:?} in the {artifact_kind}"
             ));
         }
     }
 
     // Package names vary by CAD library, so compare only standardized package
-    // families and explicit pin counts. The actual pad count is stronger than
-    // either string and catches a stale QFN-16 row against a ten-pad footprint.
+    // families and explicit electrical-pad counts. Distinct numbered pads are
+    // stronger evidence than raw shapes and catch a stale QFN-16 row against a
+    // ten-pad footprint without counting paste apertures as invented pins.
     if let Some(artifact_package) = hint.footprint.as_deref().filter(|s| !s.trim().is_empty()) {
-        if let Some(pins) = package_pin_count(artifact_package) {
-            if !comp.pins.is_empty() && pins != comp.pins.len() {
+        if let Some(expected_pads) = package_electrical_pad_count(artifact_package) {
+            let actual_pads = component_electrical_pad_count(comp);
+            if actual_pads > 0 && expected_pads != actual_pads {
                 return Some(format!(
-                    "{reference} is {artifact_package:?} in the BOM ({pins} pins) but the board footprint has {} pads",
-                    comp.pins.len()
+                    "{reference} is {artifact_package:?} in the {artifact_kind} ({expected_pads} electrical pads) but the board footprint has {actual_pads} distinct numbered electrical pads"
                 ));
             }
         }
@@ -4860,7 +4866,7 @@ fn contradiction_between(
         ) {
             if layout_family != artifact_family {
                 return Some(format!(
-                    "{reference} uses package family {layout_family} on the layout and {artifact_family} ({artifact_package:?}) in the BOM"
+                    "{reference} uses package family {layout_family} on the layout and {artifact_family} ({artifact_package:?}) in the {artifact_kind}"
                 ));
             }
         }
@@ -4906,7 +4912,7 @@ fn contradiction_between(
                 let same_part = names_same_part(&comp.value, mpn);
                 if decisive && l.id != a.id && !same_part {
                     return Some(format!(
-                        "{reference} is {:?} (\"{}\") on the layout and {:?} (\"{}\") in the BOM",
+                        "{reference} is {:?} (\"{}\") on the layout and {:?} (\"{}\") in the {artifact_kind}",
                         comp.value,
                         model_words(l),
                         mpn,
@@ -4915,7 +4921,7 @@ fn contradiction_between(
                 }
                 if l.kind != a.kind && !same_part {
                     return Some(format!(
-                        "{reference} is {:?} (a {}) on the layout and {:?} (a {}) in the BOM",
+                        "{reference} is {:?} (a {}) on the layout and {:?} (a {}) in the {artifact_kind}",
                         comp.value,
                         kind_word(l.kind),
                         mpn,
@@ -4939,7 +4945,7 @@ fn contradiction_between(
     ) {
         if l != a {
             return Some(format!(
-                "{reference} is {:?} ({l}) on the layout and {artifact_value:?} ({a}) in the BOM",
+                "{reference} is {:?} ({l}) on the layout and {artifact_value:?} ({a}) in the {artifact_kind}",
                 comp.value
             ));
         }
@@ -5017,7 +5023,7 @@ fn contradiction_between(
         if semiconductor {
             return Some(format!(
                 "{reference} is {:?} ({}) on the layout and {artifact_value:?}, a passive value, \
-                 in the BOM",
+                 in the {artifact_kind}",
                 comp.value,
                 kind_word(layout_kind.expect("matched above"))
             ));
@@ -5053,7 +5059,11 @@ fn package_family(package: &str) -> Option<&'static str> {
     .find(|family| package.contains(family))
 }
 
-fn package_pin_count(package: &str) -> Option<usize> {
+/// Number of electrical pads explicitly described by a package name.
+///
+/// KiCad's `QFN-56-1EP` spelling means 56 perimeter pads plus one exposed
+/// electrical pad. Paste-aperture subdivisions are not part of that count.
+fn package_electrical_pad_count(package: &str) -> Option<usize> {
     let upper = package.to_ascii_uppercase();
     for family in [
         "TSSOP", "SSOP", "SOIC", "TQFP", "LQFP", "QFN", "DFN", "BGA", "DIP",
@@ -5062,16 +5072,40 @@ fn package_pin_count(package: &str) -> Option<usize> {
             continue;
         };
         let suffix = &upper[start + family.len()..];
+        let Some(digit_start) = suffix.find(|c: char| c.is_ascii_digit()) else {
+            continue;
+        };
         let digits: String = suffix
             .chars()
             .skip_while(|c| !c.is_ascii_digit())
             .take_while(|c| c.is_ascii_digit())
             .collect();
-        if let Ok(pins) = digits.parse() {
-            return Some(pins);
+        if let Ok(pads) = digits.parse::<usize>() {
+            let after_count = &suffix[digit_start + digits.len()..];
+            let exposed_pad = after_count.starts_with("-1EP") || after_count.starts_with("_1EP");
+            return Some(pads + usize::from(exposed_pad));
         }
     }
     None
+}
+
+/// Distinct numbered pads are electrical terminals. An empty pad number marks
+/// a mechanical or paste-only aperture and must not turn stencil geometry into
+/// an invented IC pin. Repeated pad numbers are one electrical terminal.
+fn component_electrical_pad_count(comp: &Component) -> usize {
+    comp.pins
+        .iter()
+        .map(|pin| pin.number.trim())
+        .filter(|number| !number.is_empty())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+}
+
+fn identity_artifact_kind(hint: &hauksbee_extract::bom::IdentityHint) -> &'static str {
+    match hint.source_kind.as_str() {
+        "kicad_pos_ascii" | "kicad_pos_csv" | "altium_pick_and_place" | "cpl" => "placement file",
+        _ => "BOM",
+    }
 }
 
 /// Do two value strings for one part disagree about its magnitude?
