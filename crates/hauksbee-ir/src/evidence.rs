@@ -63,6 +63,44 @@
 //! Long-form how-and-why: docs/how-and-why/hauksbee-ir/evidence.md
 
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+
+/// A structural evidence error. These errors invalidate the producing result;
+/// they are never repaired by dropping the offending field.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum EvidenceError {
+    /// A required numeric value is NaN or infinite.
+    #[error("{field} must be finite, got {value}")]
+    NonFinite { field: &'static str, value: f64 },
+    /// A required tolerance or scale is zero or negative.
+    #[error("{field} must be greater than zero, got {value}")]
+    NonPositive { field: &'static str, value: f64 },
+    /// A magnitude that may be zero is negative.
+    #[error("{field} must not be negative, got {value}")]
+    Negative { field: &'static str, value: f64 },
+    /// A time interval ends before it starts.
+    #[error("time window is inverted: [{start_s}, {end_s})")]
+    InvertedWindow { start_s: f64, end_s: f64 },
+    /// An uncertainty interval has its bounds reversed.
+    #[error("uncertainty interval for {parameter} is inverted: [{low}, {high}]")]
+    InvertedInterval {
+        parameter: String,
+        low: f64,
+        high: f64,
+    },
+    /// A required identifier or collection is empty.
+    #[error("{field} must not be empty")]
+    Empty { field: &'static str },
+    /// An assumption registry contains the same stable id twice.
+    #[error("duplicate assumption id {id}")]
+    DuplicateAssumption { id: String },
+    /// An assertion named a net absent from the validated incidence index.
+    #[error("causal traversal has no incidence record for net {net}")]
+    UnknownNet { net: String },
+    /// A constructor-produced assumption failed its structural validation.
+    #[error("invalid assumption: {message}")]
+    InvalidAssumption { message: String },
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Assumptions
@@ -1284,6 +1322,16 @@ pub struct TimeWindow {
 }
 
 impl TimeWindow {
+    /// Construct a finite, ordered half-open time window.
+    pub fn new(start_s: f64, end_s: f64) -> Result<Self, EvidenceError> {
+        finite("time_window.start_s", start_s)?;
+        finite("time_window.end_s", end_s)?;
+        if end_s < start_s {
+            return Err(EvidenceError::InvertedWindow { start_s, end_s });
+        }
+        Ok(Self { start_s, end_s })
+    }
+
     /// Whether both bounds are real numbers. See [`ErrorBudget::sanitized`] for
     /// why a budget checks this before it is published.
     pub fn is_finite(&self) -> bool {
@@ -1309,6 +1357,45 @@ pub struct WindowMethod {
     pub accuracy: String,
 }
 
+/// The integration algorithm used for a solved window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum IntegrationMethod {
+    /// Trapezoidal integration.
+    Trapezoidal,
+    /// Second-order Gear integration.
+    Gear2,
+    /// Backward Euler integration.
+    BackwardEuler,
+    /// Backward Euler after reducing the step.
+    ReducedStep,
+    /// Backward Euler after rebuilding the local state.
+    ColdStartBackwardEuler,
+    /// Backward Euler over recursively subdivided chunks.
+    SubdividedBackwardEuler,
+}
+
+impl WindowMethod {
+    /// Construct one method record. `accuracy_cost` is a non-negative relative
+    /// error bound; invalid costs reject the whole producing budget.
+    pub fn new(
+        window: TimeWindow,
+        method: IntegrationMethod,
+        accuracy_cost: f64,
+    ) -> Result<Self, EvidenceError> {
+        non_negative("window_method.accuracy_cost", accuracy_cost)?;
+        Ok(Self {
+            window,
+            method: serde_json_name(method),
+            accuracy: if accuracy_cost == 0.0 {
+                String::new()
+            } else {
+                format!("relative error bound {accuracy_cost}")
+            },
+        })
+    }
+}
+
 /// The solver's convergence and truncation-error settings for this result.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct IntegrationTolerance {
@@ -1319,6 +1406,20 @@ pub struct IntegrationTolerance {
     pub abstol: f64,
     /// Charge tolerance, coulombs (capacitor local truncation error).
     pub chgtol: f64,
+}
+
+impl IntegrationTolerance {
+    /// Construct strictly-positive, finite solver tolerances.
+    pub fn new(reltol: f64, abstol: f64, chgtol: f64) -> Result<Self, EvidenceError> {
+        positive("integration_tolerance.reltol", reltol)?;
+        positive("integration_tolerance.abstol", abstol)?;
+        positive("integration_tolerance.chgtol", chgtol)?;
+        Ok(Self {
+            reltol,
+            abstol,
+            chgtol,
+        })
+    }
 }
 
 /// The final accepted Newton residual, worst node.
@@ -1349,6 +1450,82 @@ pub struct ModelUncertainty {
     pub high: f64,
     /// Where the interval came from ("datasheet min/max", "pack tolerance").
     pub basis: String,
+}
+
+impl ModelUncertainty {
+    /// Construct a finite, ordered uncertainty interval.
+    pub fn new(
+        parameter: impl Into<String>,
+        low: f64,
+        high: f64,
+        basis: impl Into<String>,
+    ) -> Result<Self, EvidenceError> {
+        finite("model_uncertainty.low", low)?;
+        finite("model_uncertainty.high", high)?;
+        let parameter = parameter.into();
+        if high < low {
+            return Err(EvidenceError::InvertedInterval {
+                parameter,
+                low,
+                high,
+            });
+        }
+        let basis = basis.into();
+        if parameter.trim().is_empty() {
+            return Err(EvidenceError::Empty {
+                field: "model_uncertainty.parameter",
+            });
+        }
+        if basis.trim().is_empty() {
+            return Err(EvidenceError::Empty {
+                field: "model_uncertainty.basis",
+            });
+        }
+        Ok(Self {
+            parameter,
+            low,
+            high,
+            basis,
+        })
+    }
+}
+
+fn finite(field: &'static str, value: f64) -> Result<(), EvidenceError> {
+    if value.is_finite() {
+        Ok(())
+    } else {
+        Err(EvidenceError::NonFinite { field, value })
+    }
+}
+
+fn positive(field: &'static str, value: f64) -> Result<(), EvidenceError> {
+    finite(field, value)?;
+    if value > 0.0 {
+        Ok(())
+    } else {
+        Err(EvidenceError::NonPositive { field, value })
+    }
+}
+
+fn non_negative(field: &'static str, value: f64) -> Result<(), EvidenceError> {
+    finite(field, value)?;
+    if value >= 0.0 {
+        Ok(())
+    } else {
+        Err(EvidenceError::Negative { field, value })
+    }
+}
+
+fn serde_json_name(method: IntegrationMethod) -> String {
+    match method {
+        IntegrationMethod::Trapezoidal => "trapezoidal",
+        IntegrationMethod::Gear2 => "gear2",
+        IntegrationMethod::BackwardEuler => "backward-euler",
+        IntegrationMethod::ReducedStep => "reduced-step",
+        IntegrationMethod::ColdStartBackwardEuler => "cold-start-backward-euler",
+        IntegrationMethod::SubdividedBackwardEuler => "subdivided-backward-euler",
+    }
+    .to_string()
 }
 
 /// Everything a consumer needs to know about how good a number is.
@@ -1424,6 +1601,13 @@ fn residual_is_not_a_number(v: &Option<Residual>) -> bool {
 }
 
 impl ErrorBudget {
+    /// Attach a finite, non-negative event timestamp error. Invalid values are
+    /// errors, not absent fields.
+    pub fn with_event_time_error(mut self, seconds: f64) -> Result<Self, EvidenceError> {
+        non_negative("error_budget.event_time_error_s", seconds)?;
+        self.event_time_error_s = Some(seconds);
+        Ok(self)
+    }
     /// The budget if it can be published, `None` if it cannot.
     ///
     /// JSON has no NaN and no infinity. `serde_json` writes both as `null`, and a
@@ -1501,6 +1685,159 @@ pub struct ModelOnPath {
     pub layer: String,
     /// How good the match was.
     pub confidence: String,
+}
+
+/// A registry whose stable ids are unique and whose assumptions have passed
+/// structural validation. Traversal and map construction share this instance,
+/// so an evidence map cannot cite an assumption absent from the run registry.
+#[derive(Debug, Clone)]
+pub struct EvidenceRegistry {
+    assumptions: Vec<Assumption>,
+}
+
+impl EvidenceRegistry {
+    /// Validate and index a run's assumption registry.
+    pub fn new(assumptions: Vec<Assumption>) -> Result<Self, EvidenceError> {
+        let mut ids = HashSet::with_capacity(assumptions.len());
+        for assumption in &assumptions {
+            assumption
+                .validate()
+                .map_err(|message| EvidenceError::InvalidAssumption { message })?;
+            if !ids.insert(assumption.id().clone()) {
+                return Err(EvidenceError::DuplicateAssumption {
+                    id: assumption.id().to_string(),
+                });
+            }
+        }
+        Ok(Self { assumptions })
+    }
+
+    /// The validated assumptions in deterministic registry order.
+    pub fn assumptions(&self) -> &[Assumption] {
+        &self.assumptions
+    }
+}
+
+/// The net and optional observation interval an assertion causally reads.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NetScope {
+    nets: Vec<String>,
+    window: Option<TimeWindow>,
+}
+
+impl NetScope {
+    /// Construct a non-empty net scope.
+    pub fn new<I, S>(nets: I, window: Option<TimeWindow>) -> Result<Self, EvidenceError>
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        let mut out = Vec::new();
+        for net in nets {
+            let net = net.into();
+            if net.trim().is_empty() {
+                return Err(EvidenceError::Empty {
+                    field: "net_scope.net",
+                });
+            }
+            if !out.contains(&net) {
+                out.push(net);
+            }
+        }
+        if out.is_empty() {
+            return Err(EvidenceError::Empty {
+                field: "net_scope.nets",
+            });
+        }
+        Ok(Self { nets: out, window })
+    }
+
+    /// The named nets in deterministic input order.
+    pub fn nets(&self) -> &[String] {
+        &self.nets
+    }
+
+    /// The assertion observation window, when it has one.
+    pub fn window(&self) -> Option<TimeWindow> {
+        self.window
+    }
+}
+
+/// Validated net-to-part incidence used by the first real causal traversal.
+#[derive(Debug, Clone)]
+pub struct CausalPathIndex {
+    net_parts: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl CausalPathIndex {
+    /// Build deterministic incidence from the binder-shaped `net -> refs`
+    /// boundary. Empty names are rejected rather than becoming unreachable.
+    pub fn from_net_parts<'a, I, R>(incidence: I) -> Result<Self, EvidenceError>
+    where
+        I: IntoIterator<Item = (&'a str, &'a [R])>,
+        R: AsRef<str> + 'a,
+    {
+        let mut net_parts = BTreeMap::new();
+        for (net, refs) in incidence {
+            if net.trim().is_empty() {
+                return Err(EvidenceError::Empty {
+                    field: "causal_path.net",
+                });
+            }
+            let entry = net_parts
+                .entry(net.to_string())
+                .or_insert_with(BTreeSet::new);
+            for reference in refs {
+                let reference = reference.as_ref();
+                if reference.trim().is_empty() {
+                    return Err(EvidenceError::Empty {
+                        field: "causal_path.reference",
+                    });
+                }
+                entry.insert(reference.to_string());
+            }
+        }
+        Ok(Self { net_parts })
+    }
+
+    /// Traverse one assertion's net scope against a validated registry.
+    pub fn traverse(
+        &self,
+        subject: &NetScope,
+        registry: &EvidenceRegistry,
+    ) -> Result<TraversalResult, EvidenceError> {
+        let mut reachable_parts = BTreeSet::new();
+        for net in subject.nets() {
+            let parts = self
+                .net_parts
+                .get(net)
+                .ok_or_else(|| EvidenceError::UnknownNet { net: net.clone() })?;
+            reachable_parts.extend(parts.iter().cloned());
+        }
+
+        let on_path = registry
+            .assumptions()
+            .iter()
+            .filter(|assumption| match assumption.scope() {
+                Scope::Board => true,
+                Scope::Parts { refs } => refs.iter().any(|r| reachable_parts.contains(r)),
+                Scope::Nets { nets } => nets.iter().any(|n| subject.nets().contains(n)),
+                Scope::TimeWindow { start_s, end_s } => subject
+                    .window()
+                    .is_some_and(|window| *start_s < window.end_s && window.start_s < *end_s),
+                Scope::Check { .. } => false,
+            })
+            .cloned()
+            .collect();
+        Ok(TraversalResult { on_path })
+    }
+}
+
+/// An opaque, validated causal traversal. Its field is private so only a
+/// traversal adapter in this module can authorize evidence-map construction.
+#[derive(Debug, Clone)]
+pub struct TraversalResult {
+    on_path: Vec<Assumption>,
 }
 
 /// How much a conclusion is entitled to claim, derived from the assumptions on
@@ -1719,6 +2056,30 @@ pub struct EvidenceMap {
 }
 
 impl EvidenceMap {
+    /// Construct from an opaque result emitted by the validated causal
+    /// traversal. The registry is repeated here deliberately: it is the
+    /// referential-integrity boundary and will grow the artifact checks too.
+    pub fn from_traversal(
+        assertion: impl Into<String>,
+        traversal: TraversalResult,
+        registry: &EvidenceRegistry,
+        today: RunDate,
+    ) -> Result<Self, EvidenceError> {
+        let known: HashSet<&AssumptionId> =
+            registry.assumptions().iter().map(Assumption::id).collect();
+        for assumption in &traversal.on_path {
+            if !known.contains(assumption.id()) {
+                return Err(EvidenceError::InvalidAssumption {
+                    message: format!(
+                        "traversal cited assumption {} absent from its registry",
+                        assumption.id()
+                    ),
+                });
+            }
+        }
+        Ok(Self::new(assertion, &traversal.on_path, today))
+    }
+
     /// The one constructor. `on_path` is the assumptions the causal-path
     /// traversal found for this assertion, whole rather than by id, because the
     /// status rule reads their kinds and expiries.
