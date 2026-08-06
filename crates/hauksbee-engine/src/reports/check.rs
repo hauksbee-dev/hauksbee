@@ -9,7 +9,8 @@ use hauksbee_models::ModelLibrary;
 
 use crate::binder::bind_board;
 use crate::result::{
-    lint_findings_json, si_findings_json, usbc_finding_json, BindSummary, DrcStructured, JsonReport,
+    lint_findings_json, si_findings_json, usbc_finding_json, BindSummary, DrcStructured,
+    JsonInputEvidence, JsonReport,
 };
 
 use super::{kicad_pro_clearance_rules, lint_fails, si_fails, OutputMode};
@@ -26,6 +27,7 @@ pub fn emit(
     mode: OutputMode,
     strict: bool,
     verbose: bool,
+    inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
     let bound = bind_board(board, lib);
     let summary = BindSummary::from_report(&bound.report);
@@ -105,7 +107,7 @@ pub fn emit(
     let (serious, worth_a_look) = verdict_counts(&drc_structured, &lint, &si, &usbc);
     match mode {
         OutputMode::Json => {
-            let mut jr = JsonReport::new(&bound.name, summary);
+            let mut jr = JsonReport::new(&bound.name, summary).with_inputs(inputs);
             jr.drc = Some(drc_structured);
             if unrouted {
                 jr.notes.push(crate::result::JsonNote {
@@ -535,9 +537,11 @@ pub fn emit_combined_json(
     altium_present: bool,
     lib: &ModelLibrary,
     strict: bool,
+    inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
     let bound = bind_board(board, lib);
-    let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
+    let mut jr =
+        JsonReport::new(&bound.name, BindSummary::from_report(&bound.report)).with_inputs(inputs);
     let drc = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {

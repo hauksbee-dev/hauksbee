@@ -1297,6 +1297,7 @@ name = "hauksbee-extract"
 version = "0.1.0"
 dependencies = [
  "cfb",
+ "encoding_rs",
  "flate2",
  "forge-sexpr",
  "gerber-types",

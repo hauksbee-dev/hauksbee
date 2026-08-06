@@ -11,7 +11,9 @@ use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 
 use crate::binder::bind_board;
-use crate::result::{lint_findings_json, BindSummary, JsonNote, JsonNoteKind, JsonReport};
+use crate::result::{
+    lint_findings_json, BindSummary, JsonInputEvidence, JsonNote, JsonNoteKind, JsonReport,
+};
 
 use super::{lint_fails, OutputMode};
 
@@ -23,6 +25,7 @@ pub fn emit(
     lib: &ModelLibrary,
     mode: OutputMode,
     strict: bool,
+    inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
     // device_decode lives inside engine_lint (so --check/--json/TUI/frontdoor
     // get it too), so it must not be spliced in here as well: that
@@ -57,7 +60,7 @@ pub fn emit(
         .collect();
     match mode {
         OutputMode::Json => {
-            println!("{}", lint_json(&bound, &report, &guesses, &waived));
+            println!("{}", lint_json(&bound, &report, &guesses, &waived, inputs));
         }
         OutputMode::Plain | OutputMode::Text => {
             match mode {
@@ -132,8 +135,10 @@ fn lint_json(
     report: &hauksbee_extract::NetLintReport,
     guesses: &[(String, String)],
     waived: &[crate::waiver::WaivedFinding],
+    inputs: &[JsonInputEvidence],
 ) -> String {
-    let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
+    let mut jr =
+        JsonReport::new(&bound.name, BindSummary::from_report(&bound.report)).with_inputs(inputs);
     jr.findings = Some(lint_findings_json(report));
     jr.notes.extend(guesses.iter().map(|(r, g)| JsonNote {
         kind: JsonNoteKind::BindRole,
@@ -155,6 +160,7 @@ pub fn emit_resources(
     lib: &ModelLibrary,
     mode: OutputMode,
     strict: bool,
+    inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
     let mut report = crate::checks::resources_lint(board, lib);
     // Resource conflicts are lint-class findings and ride the "lint" check in a
@@ -174,7 +180,8 @@ pub fn emit_resources(
     match mode {
         OutputMode::Json => {
             let bound = bind_board(board, lib);
-            let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
+            let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
+                .with_inputs(inputs);
             jr.findings = Some(lint_findings_json(&report));
             // Same honesty rule as every other machine surface: the verdict may
             // not quietly drop findings, so the waived list travels with it.
@@ -307,7 +314,7 @@ mod tests {
             ("U1.PA0".to_string(), "adc0".to_string()),
             ("U1.PB3".to_string(), "spi_sck".to_string()),
         ];
-        let out = lint_json(&bound, &report, &guesses, &[]);
+        let out = lint_json(&bound, &report, &guesses, &[], &[]);
         // The ENTIRE output must parse as a single JSON value, no trailing text.
         let v: serde_json::Value =
             serde_json::from_str(&out).expect("lint --json must emit ONE parseable JSON document");
@@ -325,7 +332,7 @@ mod tests {
             .any(|n| n.get("message").and_then(|m| m.as_str())
                 == Some("pin-role guess U1.PA0: adc0")));
         // With no guesses, notes is omitted (skip_serializing_if) and it still parses.
-        let clean = lint_json(&bound, &report, &[], &[]);
+        let clean = lint_json(&bound, &report, &[], &[], &[]);
         let cv: serde_json::Value = serde_json::from_str(&clean).expect("clean lint --json parses");
         assert!(cv.get("notes").is_none(), "no guesses => no notes key");
     }

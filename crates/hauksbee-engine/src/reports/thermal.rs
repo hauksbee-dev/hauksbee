@@ -6,8 +6,8 @@
 use crate::engine::HauksbeeEngine;
 use crate::result::{
     coverage_open_active_refs, thermal_coverage, thermal_validity, BindSummary, CheckCoverage,
-    JsonNote, JsonNoteKind, JsonReport, ThermalDeviceJson, ThermalJson, Validity,
-    EXIT_INVALID_FOR_ANALYSIS,
+    JsonInputEvidence, JsonNote, JsonNoteKind, JsonReport, ThermalDeviceJson, ThermalJson,
+    Validity, EXIT_INVALID_FOR_ANALYSIS,
 };
 
 /// Run the thermal estimate and print it (`json` selects JSON over the text
@@ -19,6 +19,7 @@ pub fn emit(
     seconds: f64,
     json: bool,
     strict_thermal: bool,
+    inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
     engine.scheduler_mut().set_ambient_c(ambient);
     let summary = BindSummary::from_report(engine.report());
@@ -33,7 +34,7 @@ pub fn emit(
     // moved into the JSON report.
     let coverage_refs = coverage_open_active_refs(&summary);
     if json {
-        let mut jr = JsonReport::new(&board_name, summary);
+        let mut jr = JsonReport::new(&board_name, summary).with_inputs(inputs);
         // Surface the partial-coverage caveat as an info note too, so a JSON
         // consumer that ignores `coverage` still sees the honesty annotation.
         if coverage.partial {

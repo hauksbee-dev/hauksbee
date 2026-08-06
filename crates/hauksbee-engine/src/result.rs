@@ -1302,6 +1302,10 @@ pub struct JsonReport {
     pub schema_version: u32,
     pub board: String,
     pub bind: BindSummary,
+    /// Every explicitly supplied input and what it contributed to this run.
+    /// Empty on older/internal call paths that have no inventory context.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inputs: Vec<JsonInputEvidence>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub findings: Option<Vec<JsonFinding>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1329,6 +1333,24 @@ pub struct JsonReport {
     /// prints them. A pipeline can watch this array grow.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub waived: Vec<JsonWaived>,
+}
+
+/// Machine-readable input inventory for BOM/placement-aware runs.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct JsonInputEvidence {
+    pub path: String,
+    /// Stable broad type: `board`, `bom`, or `placement`.
+    pub kind: String,
+    /// Detected format within that type.
+    pub format: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contributed: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ignored: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub identity: Vec<String>,
 }
 
 /// One overruled finding on the machine surface.
@@ -1418,6 +1440,7 @@ impl JsonReport {
             schema_version: RUN_REPORT_SCHEMA_VERSION,
             board: board_name.to_string(),
             bind,
+            inputs: Vec::new(),
             findings: None,
             drc: None,
             ac: None,
@@ -1427,6 +1450,12 @@ impl JsonReport {
             cosim: None,
             waived: Vec::new(),
         }
+    }
+
+    /// Attach the CLI's complete, ordered input inventory to a result document.
+    pub fn with_inputs(mut self, inputs: &[JsonInputEvidence]) -> Self {
+        self.inputs = inputs.to_vec();
+        self
     }
 
     /// A top-level machine verdict computed from the populated sections, so a CI
