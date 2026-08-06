@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
-/** Real-browser release gate for five board drag-and-drop journeys.
+/** Real-browser release gate for board drag-and-drop journeys.
  *
- * The caller supplies exactly five absolute board paths as a JSON array in
- * `HB_BOARD_FILES` and a running real Hauksbee server in `HB_E2E_BASE`. Each
+ * The external cohort supplies exactly five absolute board paths; the corpus
+ * cohort supplies every discovered board input. Each
  * file enters through an actual DataTransfer drop (not setInputFiles on the
  * app's picker), then has to produce a useful report, a matching independent
  * JSON export, and a live session whose pause/step/play controls advance the
@@ -57,13 +57,25 @@ interface WireEvent {
 
 const base = process.env.HB_E2E_BASE
 const rawFiles = process.env.HB_BOARD_FILES
+const cohort = process.env.HB_RELEASE_COHORT ?? 'external'
 const output = process.env.HB_E2E_OUT ?? join(import.meta.dir, '../../output/playwright/drag-drop')
 
 if (!base) throw new Error('HB_E2E_BASE must name a running real Hauksbee server')
-if (!rawFiles) throw new Error('HB_BOARD_FILES must be a JSON array of five absolute paths')
+if (!rawFiles) throw new Error('HB_BOARD_FILES must be a JSON array of absolute paths')
 const files = JSON.parse(rawFiles) as unknown
-if (!Array.isArray(files) || files.length !== 5 || !files.every(path => typeof path === 'string')) {
-  throw new Error('HB_BOARD_FILES must contain exactly five path strings')
+if (cohort !== 'external' && cohort !== 'corpus') {
+  throw new Error('HB_RELEASE_COHORT must be external or corpus')
+}
+if (!Array.isArray(files)
+    || files.length === 0
+    || (cohort === 'external' && files.length !== 5)
+    || !files.every(path => typeof path === 'string')
+    || new Set(files).size !== files.length) {
+  throw new Error(
+    cohort === 'external'
+      ? 'HB_BOARD_FILES must contain exactly five distinct path strings'
+      : 'HB_BOARD_FILES must contain every distinct corpus path',
+  )
 }
 if (!files.every(isAbsolute)) throw new Error('every HB_BOARD_FILES entry must be an absolute path')
 const resolvedFiles = files.map(path => realpathSync(path))
@@ -467,8 +479,8 @@ try {
   await browser.close()
 }
 
-await Bun.write(join(output, 'results.json'), JSON.stringify({ base, results }, null, 2))
+await Bun.write(join(output, 'results.json'), JSON.stringify({ base, cohort, results }, null, 2))
 const failed = results.filter(result => result.failures.length > 0)
 if (failed.length > 0) {
-  throw new Error(`${failed.length} of 5 drag-and-drop journeys failed; see ${output}/results.json`)
+  throw new Error(`${failed.length} of ${files.length} drag-and-drop journeys failed; see ${output}/results.json`)
 }
