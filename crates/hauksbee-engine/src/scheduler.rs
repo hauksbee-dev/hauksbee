@@ -4072,7 +4072,7 @@ fn instantiate_mcu(
     }
 
     let mut core: Box<dyn Mcu + Send> = if let Some(part) = backend.strip_prefix("renode:") {
-        instantiate_renode(part)?
+        instantiate_renode(part, binding.external_clock_present)?
     } else if let Some(part) = backend.strip_prefix("qemu:") {
         instantiate_qemu(part, firmware)?
     } else if let Some(family) = backend.strip_prefix("none:") {
@@ -4265,9 +4265,12 @@ fn family_stem(modelled_norm: &str) -> &str {
 
 /// Build a Renode-backed core for a `renode:<part>` backend string.
 #[cfg(feature = "renode")]
-fn instantiate_renode(part: &str) -> anyhow::Result<Box<dyn Mcu + Send>> {
+fn instantiate_renode(
+    part: &str,
+    external_clock_present: bool,
+) -> anyhow::Result<Box<dyn Mcu + Send>> {
     use hauksbee_mcu::RenodeBackend;
-    let config = resolve_renode_config(part)?;
+    let config = resolve_renode_config(part)?.with_external_clock_present(external_clock_present);
     Ok(Box::new(RenodeBackend::new(config)?))
 }
 
@@ -4624,6 +4627,7 @@ mod tests {
             reference: "U1".to_string(),
             backend: String::new(),
             requested_part: String::new(),
+            external_clock_present: false,
             pad_roles: HashMap::new(),
             role_nets: HashMap::new(),
             gpio_drivers,
@@ -5230,6 +5234,7 @@ mod tests {
             reference: "U1".into(),
             backend: "simavr:test".into(),
             requested_part: String::new(),
+            external_clock_present: false,
             pad_roles: HashMap::new(),
             role_nets: HashMap::new(),
             gpio_drivers,
@@ -5328,6 +5333,7 @@ mod tests {
                 reference: "U1".into(),
                 backend: "simavr:test".into(),
                 requested_part: String::new(),
+                external_clock_present: false,
                 pad_roles: HashMap::new(),
                 role_nets: HashMap::new(),
                 gpio_drivers,
@@ -5406,6 +5412,7 @@ mod tests {
                 reference: format!("U{idx}"),
                 backend: "simavr:test".into(),
                 requested_part: String::new(),
+                external_clock_present: false,
                 pad_roles: HashMap::new(),
                 role_nets: HashMap::new(),
                 gpio_drivers,
@@ -5526,6 +5533,7 @@ mod tests {
             reference: "U1".into(),
             backend: "simavr:test".into(),
             requested_part: String::new(),
+            external_clock_present: false,
             pad_roles: HashMap::new(),
             role_nets: HashMap::new(),
             gpio_drivers,
@@ -5592,6 +5600,7 @@ mod tests {
             reference: "U2".into(),
             backend: "renode:stm32f4".into(),
             requested_part: String::new(),
+            external_clock_present: false,
             pad_roles: HashMap::new(),
             role_nets: HashMap::new(),
             gpio_drivers: HashMap::new(),
@@ -5739,6 +5748,7 @@ mod tests {
             reference: "U1".into(),
             backend: "renode:nrf52840".into(),
             requested_part: String::new(),
+            external_clock_present: false,
             pad_roles: HashMap::new(),
             role_nets: HashMap::new(),
             gpio_drivers: HashMap::new(),
@@ -5814,6 +5824,7 @@ mod tests {
             reference: "U1".into(),
             backend: "renode:nrf52840".into(),
             requested_part: String::new(),
+            external_clock_present: false,
             pad_roles: HashMap::new(),
             role_nets: HashMap::new(),
             gpio_drivers: HashMap::new(),
@@ -5943,6 +5954,7 @@ mod tests {
             reference: "U1".into(),
             backend: "simavr:test".into(),
             requested_part: String::new(),
+            external_clock_present: false,
             pad_roles: HashMap::new(),
             role_nets: HashMap::new(),
             gpio_drivers,
@@ -6231,6 +6243,7 @@ mod tests {
             reference: "U1".into(),
             backend: "simavr:test".into(),
             requested_part: String::new(),
+            external_clock_present: false,
             pad_roles: HashMap::new(),
             role_nets: HashMap::new(),
             gpio_drivers: HashMap::new(),
@@ -6301,6 +6314,7 @@ mod tests {
             reference: reference.into(),
             backend: "simavr:test".into(),
             requested_part: String::new(),
+            external_clock_present: false,
             pad_roles: HashMap::new(),
             role_nets: HashMap::new(),
             gpio_drivers: HashMap::new(),
@@ -6361,6 +6375,7 @@ mod tests {
                 reference: if observable { "U1" } else { "U2" }.into(),
                 backend: "test".into(),
                 requested_part: String::new(),
+                external_clock_present: false,
                 pad_roles: HashMap::new(),
                 role_nets: HashMap::new(),
                 gpio_drivers,
@@ -6625,6 +6640,7 @@ mod tests {
             reference: "U1".into(),
             backend: "simavr:test".into(),
             requested_part: String::new(),
+            external_clock_present: false,
             pad_roles: HashMap::new(),
             role_nets: HashMap::new(),
             gpio_drivers: HashMap::new(),
@@ -6745,6 +6761,7 @@ mod tests {
                 reference: reference.into(),
                 backend: "qemu:test".into(),
                 requested_part: String::new(),
+                external_clock_present: false,
                 pad_roles: HashMap::new(),
                 role_nets,
                 gpio_drivers: HashMap::new(),
@@ -6979,6 +6996,7 @@ mod pulse_and_contention_tests {
             reference: "A1".into(),
             backend: "simavr:test".into(),
             requested_part: String::new(),
+            external_clock_present: false,
             pad_roles: HashMap::new(),
             role_nets: HashMap::new(),
             gpio_drivers,
@@ -7156,6 +7174,7 @@ mod pulse_and_contention_tests {
             reference: "A1".into(),
             backend: "simavr:test".into(),
             requested_part: String::new(),
+            external_clock_present: false,
             pad_roles: HashMap::new(),
             role_nets: HashMap::new(),
             gpio_drivers,
