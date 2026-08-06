@@ -11,6 +11,7 @@ use hauksbee_ir::evidence::{
     RunDate, Scope, Subject, ValueOrigin,
 };
 use hauksbee_models::Confidence;
+use sha2::{Digest, Sha256};
 
 #[derive(Debug, Clone)]
 struct ModelFact {
@@ -47,8 +48,19 @@ impl BoardEvidence {
                 assumptions.push(Assumption::open_part(&row.reference, &row.value, reason));
             }
         }
-        for (index, note) in reader_notes.iter().enumerate() {
-            let key = format!("reader-note/{}", index + 1);
+        let mut seen_reader_notes = BTreeSet::new();
+        for note in reader_notes {
+            let normalized = note.trim();
+            if !seen_reader_notes.insert(normalized) {
+                continue;
+            }
+            // The id belongs to the limitation, not its position in the reader's
+            // note vector. Positional ids silently changed identity whenever a
+            // reader learned one additional limitation or reordered its notes.
+            // A full SHA-256 keeps the id bounded when it is repeated on every
+            // affected map while making collisions computationally infeasible.
+            let digest = Sha256::digest(normalized.as_bytes());
+            let key = format!("reader-note/{}", hex_digest(&digest));
             assumptions.push(Assumption::reduced_fidelity(
                 AssumptionSource::Reader,
                 Subject::new(&key, "the input reader's coverage"),
@@ -181,6 +193,15 @@ impl BoardEvidence {
             .any(|map| map.status() == EvidenceStatus::Undermined)
     }
 
+    /// Whether at least one published assertion carries any evidence caveat.
+    /// Qualified evidence is still useful, but it must not sit under an
+    /// unqualified "Looks healthy" headline.
+    pub fn has_caveats(&self) -> bool {
+        self.maps
+            .iter()
+            .any(|map| map.status() != EvidenceStatus::Clean)
+    }
+
     /// Build maps for the report's actual assertions. Nets are authoritative;
     /// a refs-only finding resolves to every net touching those refs.
     pub fn maps_for_findings(
@@ -305,6 +326,14 @@ impl BoardEvidence {
         );
         value
     }
+}
+
+fn hex_digest(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        let _ = write!(out, "{byte:02x}");
+    }
+    out
 }
 
 fn confidence(value: Confidence) -> MatchConfidence {

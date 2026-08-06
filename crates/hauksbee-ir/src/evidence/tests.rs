@@ -225,6 +225,16 @@ fn case_sensitive_subjects_are_not_recapitalized() {
     assert!(b.because.starts_with("value_unresolved:"), "{}", b.because);
 }
 
+#[test]
+fn dot_prefixed_artifact_names_are_data_not_sentence_holes() {
+    let assumption = Assumption::open_part(
+        "R1",
+        "",
+        "no value in the PcbDoc; Altium keeps values in the .SchDoc",
+    );
+    assert!(assumption.validate().is_ok(), "{}", assumption.because());
+}
+
 /// An id with no subject names nothing: an acknowledgment file could not name
 /// it and a diff could not track it. No constructor can produce one, because
 /// a board legitimately carries an unnamed net or a blank designator and a

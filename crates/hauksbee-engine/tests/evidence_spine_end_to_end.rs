@@ -124,11 +124,61 @@ fn one_evidence_object_renders_reader_notes_in_json_and_plain() {
 
     for rendered in [&json, &plain] {
         assert!(rendered.contains("ODB++ input"), "{rendered}");
-        assert!(rendered.contains("reader-note/1"), "{rendered}");
+        assert!(rendered.contains("reader-note/"), "{rendered}");
         assert!(rendered.contains("open-part:R74"), "{rendered}");
     }
     assert!(json.contains("\"evidence\""));
     assert!(json.contains("\"assumptions\""));
+}
+
+#[test]
+fn reader_assumption_identity_survives_note_reordering_and_deduplicates_repeats() {
+    let board = board();
+    let bound = bind_board(&board, &ModelLibrary::builtin());
+    let first = "IPC-2581 input: connectivity came from the logical netlist.".to_string();
+    let second = "IPC-2581 input: the exporter renamed one reference designator.".to_string();
+
+    let original = BoardEvidence::from_bound(
+        &board,
+        &bound.report,
+        &[first.clone(), second.clone()],
+        RunDate::from_epoch_days(20_666),
+    )
+    .unwrap();
+    let reordered = BoardEvidence::from_bound(
+        &board,
+        &bound.report,
+        &[second.clone(), first.clone(), first.clone()],
+        RunDate::from_epoch_days(20_666),
+    )
+    .unwrap();
+
+    let id_for = |evidence: &BoardEvidence, note: &str| {
+        evidence
+            .assumptions()
+            .iter()
+            .find(|assumption| assumption.because().contains(note.trim_end_matches('.')))
+            .expect("reader note is represented")
+            .id()
+            .to_string()
+    };
+    assert_eq!(id_for(&original, &first), id_for(&reordered, &first));
+    assert_eq!(id_for(&original, &second), id_for(&reordered, &second));
+    assert!(
+        id_for(&original, &first).len() < 128,
+        "a stable id is repeated by every affected map and must not embed the full note"
+    );
+    assert_eq!(
+        reordered
+            .assumptions()
+            .iter()
+            .filter(
+                |assumption| assumption.source() == hauksbee_ir::evidence::AssumptionSource::Reader
+            )
+            .count(),
+        2,
+        "a repeated reader limitation is one assumption, not a construction failure or duplicate"
+    );
 }
 
 fn exchange_fixture() -> PathBuf {
@@ -151,7 +201,7 @@ fn ipc2581_reader_coverage_reaches_cli_json_and_plain_end_to_end() {
         );
         let text = String::from_utf8_lossy(&output.stdout);
         assert!(text.contains("IPC-2581 input"), "{mode}: {text}");
-        assert!(text.contains("reader-note/1"), "{mode}: {text}");
+        assert!(text.contains("reader-note/"), "{mode}: {text}");
         assert!(
             text.contains("Binding completeness for net"),
             "{mode}: {text}"
@@ -188,12 +238,12 @@ fn specialist_report_surfaces_reuse_the_reader_assumption() {
         );
         let text = String::from_utf8_lossy(&output.stdout);
         assert!(text.contains("IPC-2581 input"), "{args:?}: {text}");
-        assert!(text.contains("reader-note/1"), "{args:?}: {text}");
+        assert!(text.contains("reader-note/"), "{args:?}: {text}");
     }
 }
 
 #[test]
-fn web_report_serializes_the_same_first_class_assumptions_and_maps() {
+fn web_report_serializes_evidence_and_does_not_call_qualified_evidence_healthy() {
     let bytes =
         include_bytes!("../../hauksbee-extract/tests/fixtures/exchange/boot_gate.ipc2581.xml");
     let report = hauksbee_engine::analyze("boot_gate.ipc2581.xml", bytes);
@@ -202,5 +252,10 @@ fn web_report_serializes_the_same_first_class_assumptions_and_maps() {
     assert!(!report.evidence.is_empty());
     let serialized = serde_json::to_string(&report).unwrap();
     assert!(serialized.contains("IPC-2581 input"), "{serialized}");
-    assert!(serialized.contains("reader-note/1"), "{serialized}");
+    assert!(serialized.contains("reader-note/"), "{serialized}");
+    assert!(
+        !report.headline.contains("Looks healthy"),
+        "qualified evidence must not sit below an unqualified web verdict: {}",
+        report.headline
+    );
 }

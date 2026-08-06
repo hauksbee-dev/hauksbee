@@ -1187,7 +1187,10 @@ impl Assumption {
             // A gap in a composed sentence means a producer passed an empty
             // datum where a subject or a value belonged, which reads as a
             // half-written sentence rather than as an obvious bug.
-            if text.contains("  ") || text.contains(" .") || text.contains(" ,") {
+            // A dot-prefixed artifact token ("the .SchDoc") is data, not a
+            // missing interpolation. Only punctuation stranded at the end of
+            // a sentence is a hole; internal doubled whitespace remains one too.
+            if text.contains("  ") || text.ends_with(" .") || text.ends_with(" ,") {
                 return Err(format!(
                     "{}: `{name}` has a hole where a datum belongs: {text:?}",
                     self.id
