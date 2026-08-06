@@ -4217,6 +4217,9 @@ impl FitAdvice {
 /// What [`apply_identity`] did.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct IdentityReport {
+    /// Positive evidence that an auxiliary artifact was reconciled rather than
+    /// merely accepted because no contradiction happened to fire.
+    pub evidence: Vec<String>,
     /// Every part whose bind is owed to an artifact rather than to the layout.
     pub identified: Vec<IdentityAttribution>,
     /// Parts whose empty layout value an artifact filled.
@@ -4230,7 +4233,7 @@ impl IdentityReport {
     /// about everything and added nothing, so a run whose BOM says nothing new
     /// never mentions the subject.
     pub fn lines(&self) -> Vec<String> {
-        let mut out = Vec::new();
+        let mut out = self.evidence.clone();
         for a in &self.identified {
             out.push(format!(
                 "  {} identified from {} as {:?}: {} -> {}",
@@ -4610,7 +4613,9 @@ pub fn apply_placement_identity(
             detail,
         });
     }
-    apply_identity(board, &file.identity_hints(), lib)
+    let mut report = apply_identity(board, &file.identity_hints(), lib)?;
+    report.evidence.push(check.evidence_line());
+    Ok(report)
 }
 
 /// Did the LAYOUT name a part, as opposed to stating a parameter or nothing?
@@ -4632,12 +4637,13 @@ fn layout_names_a_part(comp: &Component) -> bool {
 
 /// Do two identity strings plausibly name the same part?
 ///
-/// Package and reel suffixes are the reason this exists: `ATmega328P-AU` and
-/// `ATmega328P`, `BSS138` and `BSS138-7-F`, `BC847B` and `BC847B,215` are one part
-/// written two ways. Only those documented suffix forms are discarded. A shared
-/// prefix is not identity: `TPS62130` and `TPS62135`, or `ATmega328P` and
-/// `ATmega328PB`, are different orderable devices despite differing near the end.
-fn names_same_part(a: &str, b: &str) -> bool {
+/// Vendor-specific package and reel suffixes are the reason this exists:
+/// `ATmega328P-AU`, `BSS138-7-F` and `BC847B,215` may be written without their
+/// ordering code in a layout. The suffix is removed only when the artifact also
+/// names the vendor that defines it; globally rewriting an arbitrary `-AU` or
+/// `,215` could merge two genuinely different orderable devices. A shared prefix
+/// is never identity.
+fn names_same_part(a: &str, b: &str, manufacturer: Option<&str>) -> bool {
     fn norm(s: &str) -> String {
         s.chars()
             .filter(|c| c.is_ascii_alphanumeric())
@@ -4645,9 +4651,20 @@ fn names_same_part(a: &str, b: &str) -> bool {
             .to_ascii_uppercase()
     }
 
-    fn without_known_ordering_suffix(s: &str) -> String {
+    fn without_vendor_ordering_suffix(s: &str, manufacturer: Option<&str>) -> String {
         let upper = s.trim().to_ascii_uppercase();
-        for suffix in ["-7-F", ",215", "-AU"] {
+        let vendor = manufacturer.map(norm).unwrap_or_default();
+        for (suffix, vendor_matches) in [
+            ("-7-F", vendor.starts_with("DIODESINC")),
+            (",215", vendor.contains("NEXPERIA")),
+            (
+                "-AU",
+                vendor.contains("MICROCHIP") || vendor.contains("ATMEL"),
+            ),
+        ] {
+            if !vendor_matches {
+                continue;
+            }
             if let Some(core) = upper.strip_suffix(suffix) {
                 if !core.is_empty() {
                     return norm(core);
@@ -4661,7 +4678,9 @@ fn names_same_part(a: &str, b: &str) -> bool {
     if normal_a.is_empty() || normal_b.is_empty() {
         return false;
     }
-    normal_a == normal_b || without_known_ordering_suffix(a) == without_known_ordering_suffix(b)
+    normal_a == normal_b
+        || without_vendor_ordering_suffix(a, manufacturer)
+            == without_vendor_ordering_suffix(b, manufacturer)
 }
 
 #[cfg(test)]
@@ -4670,15 +4689,32 @@ mod part_name_tests {
 
     #[test]
     fn similar_five_character_prefixes_are_not_the_same_part() {
-        assert!(!names_same_part("TPS62130", "TPS62135"));
-        assert!(!names_same_part("ATmega328P", "ATmega328PB"));
+        assert!(!names_same_part("TPS62130", "TPS62135", None));
+        assert!(!names_same_part("ATmega328P", "ATmega328PB", None));
     }
 
     #[test]
     fn documented_package_and_reel_suffixes_are_compatible() {
-        assert!(names_same_part("ATmega328P-AU", "ATmega328P"));
-        assert!(names_same_part("BSS138", "BSS138-7-F"));
-        assert!(names_same_part("BC847B", "BC847B,215"));
+        assert!(names_same_part(
+            "ATmega328P-AU",
+            "ATmega328P",
+            Some("Microchip Technology")
+        ));
+        assert!(names_same_part("BSS138", "BSS138-7-F", Some("Diodes Inc")));
+        assert!(names_same_part("BC847B", "BC847B,215", Some("Nexperia")));
+        assert!(names_same_part(
+            "BC847B",
+            "BC847B,215",
+            Some("Nexperia USA Inc.")
+        ));
+    }
+
+    #[test]
+    fn ordering_suffix_spellings_are_not_global_part_number_rewrites() {
+        assert!(!names_same_part("SENSOR-AU", "SENSOR", None));
+        assert!(!names_same_part("DRIVER-7-F", "DRIVER", None));
+        assert!(!names_same_part("MODULE,215", "MODULE", None));
+        assert!(!names_same_part("SENSOR-AU", "SENSOR", Some("Acme")));
     }
 }
 
@@ -4909,7 +4945,7 @@ fn contradiction_between(
                 // `ATmega328P` reaches the library entry). Two strings that name
                 // the same part are not a disagreement, so the strings decide and
                 // the models only widen it to a kind mismatch.
-                let same_part = names_same_part(&comp.value, mpn);
+                let same_part = names_same_part(&comp.value, mpn, hint.manufacturer.as_deref());
                 if decisive && l.id != a.id && !same_part {
                     return Some(format!(
                         "{reference} is {:?} (\"{}\") on the layout and {:?} (\"{}\") in the {artifact_kind}",

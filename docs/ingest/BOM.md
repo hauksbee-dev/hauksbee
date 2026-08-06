@@ -35,9 +35,13 @@ hauksbee run board.kicad_pcb --bom bom.csv \
 ```
 
 Both artifacts are reconciled before binding. A refusal leaves the board
-unchanged. `--report --json` includes a typed `inputs[]` inventory for the
-board, BOM and placement file, including hashes, contributions, ignored fields
-and identity changes.
+unchanged. Every board-analysis JSON result includes the same typed `inputs[]`
+inventory for the board, BOM and placement file, including hashes,
+contributions, ignored fields and identity changes. This covers the combined
+JSON result and `--report`, `--check`, `--drc`, `--lint`, `--resources`,
+`--usb-c`, `--si`, `--ac`, `--thermal` and `--headless`. `--list-nets --json`
+remains a bare array by design: it is a net-name discovery command, and neither
+artifact changes connectivity.
 
 ## What is read
 
@@ -201,15 +205,26 @@ way. The columns in the file are: ...
 
 **Two columns equally entitled to one role** (1). A file carrying both `MPN` and
 `Manufacturer Part Number` says nothing about which is authoritative, and picking
-the first would bind whichever the exporter happened to write first. A tie
-between two columns nothing reads for identity, two distributor order codes or
-two manufacturer-name columns, is not a refusal: the first is taken and the rest
-recorded as ignored. Two columns spelled the same way (`Value` beside `VALUE`)
-are accepted only when every row carries equivalent cells. If the cells differ,
-the file refuses: column order is not an authority rule.
+the first would bind whichever the exporter happened to write first. The same
+applies to two manufacturer columns: manufacturer participates in the hard
+layout/BOM identity check, so it cannot first-win. A tie between distributor
+order-code columns is not a refusal because those codes never reach identity;
+the first is recorded and the rest are ignored. Two columns spelled the same way
+(`Value` beside `VALUE`) are accepted only when every row carries equivalent
+cells. If the cells differ, the file refuses: column order is not an authority
+rule. A placement header follows the same rule for reference, value, package,
+X, Y, rotation and side roles. `Ref X`/`Ref Y` are not placement coordinates at
+all: in Altium they locate the annotation, while `Center-X`/`Center-Y` locate the
+part.
 
-Rows are subject to the same uniqueness rule. A designator appearing in two BOM
-rows, or twice in one placement file, refuses with both source lines. A
+Rows are subject to the same uniqueness rule. Numeric-shaped designators always
+participate. Digit-free identifiers seen in real CAD data such as `RX`, `GND`,
+`MOTOR_POWER` and `V+` participate when their source cell is identifier-like
+(uppercase/symbolic); this avoids turning repeated words in an explicitly
+overridden cell such as `PH Crimp Connectors` into phantom component collisions.
+Exact spelling and case are preserved. Repeating an identity across two BOM
+rows, or repeating any designator in a placement file, refuses with both source
+lines; an empty reference row is ignored and cannot collide. A
 multiline quoted CSV record is refused with its first line and re-export
 guidance; it is never split into two apparent parts. UTF-8 and Windows-1252
 spreadsheet exports are decoded explicitly.
@@ -299,9 +314,12 @@ catch:
   promoted to certainty.
 
 Part-number compatibility is deliberately narrow. Exact alphanumeric identity
-is accepted, as are the documented ordering suffix forms `-AU`, `-7-F` and
-`,215`. A shared prefix is not identity: `TPS62130` and `TPS62135`, or
-`ATmega328P` and `ATmega328PB`, remain different parts.
+is accepted. The documented ordering suffix forms `-AU`, `-7-F` and `,215` are
+removed only when the BOM also names the vendor that defines them: Atmel or
+Microchip, Diodes Incorporated, and Nexperia respectively. They are not global
+string rewrites; an arbitrary `SENSOR-AU` is not silently equated with `SENSOR`.
+A shared prefix is not identity: `TPS62130` and `TPS62135`, or `ATmega328P` and
+`ATmega328PB`, remain different parts.
 
 Contradictions are gathered before anything is applied, so a refused BOM leaves
 the board exactly as the layout described it.
@@ -329,6 +347,15 @@ The tolerance is deliberately far tighter than any real placement difference:
 every writer surveyed emits four decimal places or better, so the only thing it
 absorbs is rounding, and moving a part by a tenth of a millimetre between
 revisions is a change worth noticing.
+
+A successful reconciliation is evidence too, not merely the absence of an
+error. The placement input's `identity[]` inventory states how many placements
+matched board designators, and how many positions, rotations and sides were
+actually compared. It also states whether the file's Y axis was mirrored and
+the origin offset removed before comparison. Thus a clean result distinguishes
+75 checked coordinates from 75 rows whose optional fields were absent. A frame
+is inferred only from three or more comparable positions; with fewer, the
+inventory says it was not inferred instead of claiming a Y direction or origin.
 
 A missing or unrecognized side remains `unknown`; it is recorded and omitted
 from the side comparison, never read as top. A missing rotation likewise

@@ -10,7 +10,7 @@ use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 
 use crate::binder::bind_board;
-use crate::result::{si_findings_json, BindSummary, JsonReport};
+use crate::result::{si_findings_json, BindSummary, JsonInputEvidence, JsonReport};
 
 use super::{si_fails, OutputMode};
 
@@ -24,6 +24,7 @@ pub fn emit(
     lib: &ModelLibrary,
     mode: OutputMode,
     strict: bool,
+    inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
     // Altium geometry is not yet threaded into the SI text checks, so pass None
     // there; the connectivity-based SI checks still run on `board`.
@@ -50,7 +51,8 @@ pub fn emit(
     match mode {
         OutputMode::Json => {
             let bound = bind_board(board, lib);
-            let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
+            let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
+                .with_inputs(inputs);
             jr.findings = Some(si_findings_json(&report));
             // A green verdict that quietly dropped findings would be worse than
             // no waivers at all, so the machine surface carries them too.

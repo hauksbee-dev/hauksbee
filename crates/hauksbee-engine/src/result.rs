@@ -1421,6 +1421,12 @@ impl JsonReport {
         }
     }
 
+    /// Attach the CLI's complete, ordered input inventory to a result document.
+    pub fn with_inputs(mut self, inputs: &[JsonInputEvidence]) -> Self {
+        self.inputs = inputs.to_vec();
+        self
+    }
+
     /// A top-level machine verdict computed from the populated sections, so a CI
     /// consumer can read pass/fail without re-deriving it from every finding.
     /// Returns `(ok, verdict, serious_count, actionable_count)` where `verdict`

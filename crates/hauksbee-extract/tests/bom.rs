@@ -423,6 +423,20 @@ fn identically_named_identity_columns_refuse_when_their_cells_disagree() {
 }
 
 #[test]
+fn two_manufacturer_columns_refuse_instead_of_first_winning_identity() {
+    let text = "Designator,Value,Manufacturer,Manufacturer Name\n\
+                U1,MCP4728,Microchip,Texas Instruments\n";
+    let err = Bom::from_text(text, "two-manufacturers.csv", &ColumnOverrides::new())
+        .expect_err("manufacturer feeds the hard board/BOM identity check");
+
+    assert_eq!(err.exit_code(), 3);
+    let message = err.to_string();
+    assert!(message.contains("two columns"), "{message}");
+    assert!(message.contains("manufacturer"), "{message}");
+    assert!(message.contains("Manufacturer Name"), "{message}");
+}
+
+#[test]
 fn a_multiline_quoted_csv_cell_refuses_instead_of_truncating_the_row() {
     let text = "Designator,Description,Value,MPN\nR1,\"precision resistor\nAEC-Q200 qualified\",10k,RC0402FR-0710KL\n";
     let err = Bom::from_text(text, "multiline.csv", &ColumnOverrides::new())
@@ -519,7 +533,36 @@ fn a_reference_appearing_in_two_bom_rows_refuses_instead_of_first_winning() {
     assert!(message.contains("lines 2 and 3"), "{message}");
 }
 
+#[test]
+fn a_nonnumeric_reference_appearing_in_two_rows_also_refuses() {
+    let text = "Designator,Value,MPN\n\
+                RX,receiver,SN65HVD230\n\
+                ,an empty reference row is ignored,\n\
+                RX,receiver,MCP2562\n";
+    let err = Bom::from_text(text, "duplicate-nonnumeric.csv", &ColumnOverrides::new())
+        .expect_err("every accepted designator is component identity, not prose");
+
+    assert_eq!(err.exit_code(), 3);
+    let message = err.to_string();
+    assert!(message.contains("RX"), "{message}");
+    assert!(message.contains("lines 2 and 4"), "{message}");
+}
+
 // ── Placement files ─────────────────────────────────────────────────────────
+
+#[test]
+fn duplicate_placement_coordinate_columns_refuse_instead_of_first_winning() {
+    let text = "Designator,Mid X,X,Mid Y,Rotation,Layer\n\
+                R1,10.0,99.0,20.0,0,Top\n";
+    let err = PlacementFile::from_text(text, "ambiguous-cpl.csv")
+        .expect_err("two placement X claims cannot be resolved by column order");
+
+    assert_eq!(err.exit_code(), 3);
+    let message = err.to_string();
+    assert!(message.contains("X position"), "{message}");
+    assert!(message.contains("columns 2 and 3"), "{message}");
+    assert!(message.contains("Re-export"), "{message}");
+}
 
 #[test]
 fn a_kicad_position_file_agrees_with_the_board_it_was_exported_from() {
@@ -602,6 +645,33 @@ fn a_missing_side_and_rotation_stay_unknown() {
     assert!(file.provenance.ignored.iter().any(|item| {
         item.what.contains("board side") && item.why.contains("not used for side reconciliation")
     }));
+}
+
+#[test]
+fn fewer_than_three_positions_do_not_claim_a_coordinate_frame_was_inferred() {
+    let board = ExtractedBoard::from_kicad_pcb(
+        r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+          (net 0 "")
+          (net 1 "GND")
+          (module Resistor_SMD:R_0402 (layer F.Cu)
+            (at 10 20)
+            (fp_text reference R1 (at 0 0) (layer F.SilkS))
+            (fp_text value 10k (at 0 1) (layer F.Fab))
+            (pad 1 smd rect (at 0 0) (net 1 "GND"))))"#,
+    )
+    .expect("one-part board reads");
+    let file = PlacementFile::from_text(
+        "Designator,Mid X,Mid Y,Rotation,Layer\nR1,10,-20,0,Top\n",
+        "one-part.csv",
+    )
+    .expect("one-part placement reads");
+
+    let evidence = file.cross_check(&board).evidence_line();
+    assert!(
+        evidence.contains("coordinate frame not inferred from fewer than 3 comparable positions"),
+        "{evidence}"
+    );
+    assert!(!evidence.contains("Y axis not mirrored"), "{evidence}");
 }
 
 #[test]

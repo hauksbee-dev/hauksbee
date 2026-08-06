@@ -484,6 +484,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.strict,
             cfg.verbose,
+            &inputs,
         );
     }
 
@@ -509,6 +510,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             cfg.oracle,
             cfg.strict,
             cfg.verbose,
+            &inputs,
         );
     }
 
@@ -529,6 +531,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             &lib,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.strict,
+            &inputs,
         );
     }
 
@@ -540,6 +543,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             &lib,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.strict,
+            &inputs,
         );
     }
 
@@ -551,6 +555,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             &board,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.strict,
+            &inputs,
         );
     }
 
@@ -566,6 +571,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             &lib,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.strict,
+            &inputs,
         );
     }
 
@@ -585,6 +591,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             cfg.ac_csv.as_deref(),
             cfg.ac_loop.as_deref(),
             cfg.json,
+            &inputs,
         );
     }
 
@@ -598,7 +605,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
     // combined branch or those JSON paths become unreachable dead code.
     if cfg.json && !cfg.thermal && !cfg.headless {
         return crate::reports::check::emit_combined_json(
-            &cfg.board, &board, &text, &raw, is_altium, &lib, cfg.strict,
+            &cfg.board, &board, &text, &raw, is_altium, &lib, cfg.strict, &inputs,
         );
     }
 
@@ -733,6 +740,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             cfg.seconds,
             cfg.json,
             cfg.strict_thermal,
+            &inputs,
         );
     }
 
@@ -861,7 +869,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         let gate_rows = &boot_advisory.gate_states;
 
         if cfg.json {
-            let mut jr = JsonReport::new(&board_name, summary);
+            let mut jr = JsonReport::new(&board_name, summary).with_inputs(&inputs);
             // A substitution is an info-level note that must never be silently
             // absent (it changes how much the co-sim result can be trusted).
             for sub in engine.scheduler().substitutions() {

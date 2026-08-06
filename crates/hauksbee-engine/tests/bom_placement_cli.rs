@@ -152,5 +152,169 @@ fn same_board_watchy_position_exports_pass_the_release_cli() {
                     .as_str()
                     .is_some_and(|digest| digest.len() == 64)
         }));
+        let reconciliation = inputs
+            .iter()
+            .find(|input| input["kind"] == "placement")
+            .and_then(|input| input["identity"].as_array())
+            .and_then(|lines| {
+                lines.iter().find_map(|line| {
+                    line.as_str()
+                        .filter(|line| line.contains("placement reconciliation:"))
+                })
+            })
+            .unwrap_or_else(|| panic!("successful reconciliation evidence is missing: {json}"));
+        for fact in [
+            "75 of 75 placements match",
+            "75 positions",
+            "75 rotations",
+            "75 sides",
+            "Y axis mirrored",
+            "origin offset (0.0000, 0.0000) mm",
+        ] {
+            assert!(reconciliation.contains(fact), "{fact}: {reconciliation}");
+        }
+    }
+}
+
+#[test]
+fn ambiguous_release_artifacts_refuse_with_exit_three_and_the_actual_columns() {
+    let engine = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let board = engine.join("../hauksbee-ci/examples/boards/watchy.kicad_pcb");
+    let dir = tempfile::tempdir().expect("temp directory");
+
+    let cases = [
+        (
+            "placement",
+            "ambiguous-placement.csv",
+            "Designator,Mid X,X,Mid Y,Rotation,Layer\nU4,86.12,999,-85.91,-90,Top\n",
+            "X position",
+        ),
+        (
+            "bom",
+            "duplicate-nonnumeric.csv",
+            "Designator,Value,MPN\nRX,receiver,SN65HVD230\nRX,receiver,MCP2562\n",
+            "RX on lines 2 and 3",
+        ),
+        (
+            "bom",
+            "ambiguous-manufacturer.csv",
+            "Designator,Value,Manufacturer,Manufacturer Name\nU4,ESP32-S3,Espressif,Microchip\n",
+            "two columns that could be the manufacturer",
+        ),
+    ];
+
+    for (flag, name, body, expected) in cases {
+        let artifact = dir.path().join(name);
+        std::fs::write(&artifact, body).expect("artifact fixture");
+        let output = Command::new(env!("CARGO_BIN_EXE_hauksbee"))
+            .args([
+                "run",
+                board.to_str().expect("UTF-8 board fixture path"),
+                &format!("--{flag}"),
+                artifact.to_str().expect("UTF-8 artifact fixture path"),
+                "--report",
+                "--json",
+            ])
+            .output()
+            .expect("hauksbee refusal runs");
+
+        assert_eq!(
+            output.status.code(),
+            Some(3),
+            "{name} must be invalid for analysis\nstderr: {}\nstdout: {}",
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let json: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("refusal is one JSON document");
+        let message = json["error"].as_str().expect("structured refusal message");
+        assert!(message.contains(expected), "{name}: {message}");
+    }
+}
+
+#[test]
+fn every_applicable_board_analysis_json_document_carries_the_input_inventory() {
+    let dir = tempfile::tempdir().expect("temp directory");
+    let board = dir.path().join("inventory-board.kicad_pcb");
+    let bom = dir.path().join("inventory-bom.csv");
+    let placement = dir.path().join("inventory-placement.csv");
+    std::fs::write(
+        &board,
+        r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "VCC")
+  (module Resistor_SMD:R_0402_1005Metric (layer F.Cu)
+    (at 10 20)
+    (fp_text reference R1 (at 0 0) (layer F.SilkS))
+    (fp_text value 10k (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 2 "VCC"))
+    (pad 2 smd rect (at 1 0) (net 1 "GND"))))"#,
+    )
+    .expect("board fixture");
+    std::fs::write(
+        &bom,
+        "Designator,Value,MPN,Manufacturer,Footprint\n\
+         R1,10k,RC0402FR-0710KL,Yageo,R_0402_1005Metric\n",
+    )
+    .expect("BOM fixture");
+    std::fs::write(
+        &placement,
+        "Designator,Val,Package,Mid X,Mid Y,Rotation,Layer\n\
+         R1,10k,R_0402_1005Metric,10,20,0,top\n",
+    )
+    .expect("placement fixture");
+
+    // `--list-nets --json` deliberately remains a JSON array: it is a discovery
+    // command whose answer is only net names, and BOM/placement identity does
+    // not alter connectivity. Every actual board-analysis JSON document below
+    // uses the JsonReport/result contract and must retain the same evidence.
+    let modes: [(&str, &[&str]); 11] = [
+        ("combined", &[]),
+        ("report", &["--report"]),
+        ("check", &["--check"]),
+        ("drc", &["--drc"]),
+        ("lint", &["--lint"]),
+        ("resources", &["--resources"]),
+        ("usb-c", &["--usb-c"]),
+        ("si", &["--si"]),
+        ("ac", &["--ac", "10:100:2", "--ac-node", "VCC"]),
+        ("thermal", &["--thermal", "--seconds", "0.05"]),
+        ("headless", &["--headless", "--seconds", "0.05"]),
+    ];
+
+    for (label, mode_args) in modes {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_hauksbee"));
+        command.args([
+            "run",
+            board.to_str().expect("UTF-8 board path"),
+            "--bom",
+            bom.to_str().expect("UTF-8 BOM path"),
+            "--placement",
+            placement.to_str().expect("UTF-8 placement path"),
+        ]);
+        command.args(mode_args).arg("--json");
+        let output = command.output().expect("hauksbee analysis runs");
+
+        assert!(
+            output.status.success(),
+            "{label} failed with {:?}\nstderr: {}\nstdout: {}",
+            output.status.code(),
+            String::from_utf8_lossy(&output.stderr),
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let json: serde_json::Value = serde_json::from_slice(&output.stdout)
+            .unwrap_or_else(|error| panic!("{label} emitted invalid JSON: {error}"));
+        let inputs = json["inputs"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{label} omitted its input inventory: {json}"));
+        assert_eq!(
+            inputs
+                .iter()
+                .map(|input| &input["kind"])
+                .collect::<Vec<_>>(),
+            vec!["board", "bom", "placement"],
+            "{label}: {json}"
+        );
     }
 }

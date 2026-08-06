@@ -6,16 +6,29 @@
 
 use hauksbee_extract::ExtractedBoard;
 
+use crate::result::JsonInputEvidence;
+
 use super::OutputMode;
 
 /// Print the USB-C CC compliance report in `mode`, then (under `strict`) exit
 /// non-zero on a serious finding.
-pub fn emit(board: &ExtractedBoard, mode: OutputMode, strict: bool) -> anyhow::Result<()> {
+pub fn emit(
+    board: &ExtractedBoard,
+    mode: OutputMode,
+    strict: bool,
+    inputs: &[JsonInputEvidence],
+) -> anyhow::Result<()> {
     match crate::usb_c_report(board) {
         None => {
             match mode {
                 OutputMode::Json => {
-                    println!("{{\"check\":\"usb_c_cc\",\"level\":\"info\",\"headline\":\"no USB-C receptacle detected\"}}");
+                    let mut value = serde_json::json!({
+                        "check": "usb_c_cc",
+                        "level": "info",
+                        "headline": "no USB-C receptacle detected"
+                    });
+                    value["inputs"] = serde_json::to_value(inputs)?;
+                    println!("{}", serde_json::to_string(&value)?);
                 }
                 OutputMode::Plain | OutputMode::Text => {
                     println!("USB-C CC compliance: no USB-C receptacle with CC nets found on this board.");
@@ -24,7 +37,11 @@ pub fn emit(board: &ExtractedBoard, mode: OutputMode, strict: bool) -> anyhow::R
         }
         Some(report) => {
             match mode {
-                OutputMode::Json => println!("{}", report.to_json()),
+                OutputMode::Json => {
+                    let mut value: serde_json::Value = serde_json::from_str(&report.to_json())?;
+                    value["inputs"] = serde_json::to_value(inputs)?;
+                    println!("{}", serde_json::to_string(&value)?);
+                }
                 OutputMode::Plain => print!("{}", report.render_plain()),
                 OutputMode::Text => print!("{}", report.render()),
             }
