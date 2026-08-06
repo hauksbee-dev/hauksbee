@@ -361,7 +361,13 @@ export function TransportBar({
           are different numbers and the bar never prints one as the other. */}
       <div className="flex items-baseline gap-1.5 shrink-0" style={{ fontFamily: 'var(--font-mono)' }}>
         <span className="text-[10px] uppercase tracking-wider" style={{ color: 'var(--silk-faint)' }}>t</span>
-        <span className="text-[13px] font-semibold tnum" style={{ color: 'var(--silk)' }}>{formatTime(simTime)}</span>
+        <span
+          className="text-[13px] font-semibold tnum"
+          data-testid="transport-time"
+          style={{ color: 'var(--silk)' }}
+        >
+          {formatTime(simTime)}
+        </span>
         {realtimeFactor !== null && (
           <span
             className="text-[11px] tnum"

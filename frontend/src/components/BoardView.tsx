@@ -229,7 +229,11 @@ export function BoardView({
           style={{ border: `1px solid ${verdictBorder}`, background: verdictBg, fontSize: 15.5 }}
         >
           {r.headline}
-          <div className="text-xs mt-1.5 tnum" style={{ color: 'var(--silk-dim)' }}>
+          <div
+            className="text-xs mt-1.5 tnum"
+            data-testid="report-inventory"
+            style={{ color: 'var(--silk-dim)' }}
+          >
             {(r.board_name || r.file_name)} · {r.num_components}{' '}
             {r.num_components === 1 ? 'part' : 'parts'} · {r.num_nets}{' '}
             {r.num_nets === 1 ? 'net' : 'nets'}
