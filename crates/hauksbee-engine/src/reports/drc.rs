@@ -23,6 +23,7 @@ pub fn emit(
     raw: &[u8],
     altium_present: bool,
     lib: &ModelLibrary,
+    reader_notes: &[String],
     mode: OutputMode,
     oracle: bool,
     strict: bool,
@@ -61,12 +62,19 @@ pub fn emit(
     // Zero routed copper (D2): a pads-only board passes the spacing check
     // vacuously; say so prominently on every surface.
     let unrouted = !altium_present && super::unrouted_kicad_layout(text);
+    let bound = bind_board(board, lib);
+    let evidence = crate::evidence::BoardEvidence::from_bound(
+        board,
+        &bound.report,
+        reader_notes,
+        hauksbee_ir::evidence::RunDate::from_system_clock(),
+    )?;
     match mode {
         OutputMode::Json => {
             // Grouped DRC (Fix #8): shorts kept verbatim, clearance findings
             // grouped by (net_a, net_b, layer), at-limit separated from below-rule.
-            let bound = bind_board(board, lib);
-            let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
+            let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
+                .with_evidence(&evidence);
             jr.drc = Some(DrcStructured::from_report(&report));
             if unrouted {
                 jr.notes.push(crate::result::JsonNote {
@@ -107,6 +115,7 @@ pub fn emit(
         print!("{}", oracle_cross_check(board_path, &report));
     }
     if !matches!(mode, OutputMode::Json) {
+        print!("{}", evidence.render_plain());
         print!(
             "{}",
             super::check::render_waivers_scoped(&waived, &waivers, &["drc"], true)
@@ -119,6 +128,9 @@ pub fn emit(
     super::note_ungated_findings(strict, would_gate);
     if strict && would_gate {
         super::strict_gate_exit(mode, &super::drc_gate_items(&report));
+    }
+    if strict && evidence.is_undermined() {
+        std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())
 }

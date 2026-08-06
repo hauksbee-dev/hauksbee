@@ -370,6 +370,12 @@ pub struct WebReport {
     /// healthy" while it is. Mirrors the CLI/JSON bind surface (parity fix).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bind: Option<BindSummaryWeb>,
+    /// First-class assumptions from the same evidence object as CLI JSON/plain.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assumptions: Vec<hauksbee_ir::evidence::Assumption>,
+    /// Per-net evidence maps derived from actual board incidence.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<hauksbee_ir::evidence::EvidenceMap>,
     /// Info-level notes (bind roles, coverage caveats) that must never be
     /// silently absent. Additive + `skip_serializing_if` so the `/api/analyze`
     /// JSON schema stays backward-compatible.
@@ -421,6 +427,8 @@ fn unreadable(file_name: &str, error: String) -> WebReport {
         sections: Vec::new(),
         components: Vec::new(),
         bind: None,
+        assumptions: Vec::new(),
+        evidence: Vec::new(),
         notes: Vec::new(),
         nets: Vec::new(),
         component_kinds: std::collections::BTreeMap::new(),
@@ -550,6 +558,20 @@ fn analyze_normalized(
     let bound = bind_board(board, &lib);
     let bind_summary = BindSummary::from_report(&bound.report);
     let bind_web = BindSummaryWeb::from_summary(&bind_summary);
+    let evidence = match crate::evidence::BoardEvidence::from_bound(
+        board,
+        &bound.report,
+        &norm.notes,
+        hauksbee_ir::evidence::RunDate::from_system_clock(),
+    ) {
+        Ok(evidence) => evidence,
+        Err(error) => {
+            return (
+                unreadable(file_name, format!("could not build evidence map: {error}")),
+                drc,
+            )
+        }
+    };
 
     // Notes: bind-role caveat (active IC open on the live circuit). These mirror
     // the CLI/JSON `notes` so the web never silently omits an honesty annotation.
@@ -560,10 +582,14 @@ fn analyze_normalized(
     // reverse-extracted from copper. Saying "reverse-extracted from the fab
     // files' copper geometry" over an ODB++ job was simply false: that job states
     // its netlist, and the reader read it.
-    for message in &norm.notes {
+    for assumption in evidence
+        .assumptions()
+        .iter()
+        .filter(|assumption| assumption.source() == hauksbee_ir::evidence::AssumptionSource::Reader)
+    {
         notes.push(JsonNote {
             kind: JsonNoteKind::Coverage,
-            message: message.clone(),
+            message: assumption.because().to_string(),
         });
     }
     if norm.is_gerber_archive() {
@@ -635,6 +661,8 @@ fn analyze_normalized(
         sections,
         components,
         bind: Some(bind_web),
+        assumptions: evidence.assumptions().to_vec(),
+        evidence: evidence.maps().to_vec(),
         notes,
         nets,
         component_kinds: bound

@@ -12,6 +12,7 @@ use crate::result::{
 
 pub fn emit(
     bound: &crate::BoundBoard,
+    evidence: &crate::evidence::BoardEvidence,
     ac_arg: &str,
     ac_nodes: &[String],
     csv: Option<&Path>,
@@ -48,7 +49,7 @@ pub fn emit(
         let missing = nodes.join(", ");
         let reason = format!("no requested AC nodes found in the circuit: {missing}");
         if json {
-            let mut jr = JsonReport::new(&bound.name, summary);
+            let mut jr = JsonReport::new(&bound.name, summary).with_evidence(evidence);
             jr.ac = Some(AcJson {
                 validity: Validity::invalid(reason),
                 nets: Vec::new(),
@@ -66,6 +67,7 @@ pub fn emit(
                 }
             }
             eprintln!("  run --list-nets to see every net name, then re-run.");
+            print!("{}", evidence.render_plain());
         }
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
     }
@@ -118,7 +120,7 @@ pub fn emit(
         let missing = nodes.join(", ");
         let reason = format!("no requested AC nodes found in the circuit: {missing}");
         if json {
-            let mut jr = JsonReport::new(&bound.name, summary);
+            let mut jr = JsonReport::new(&bound.name, summary).with_evidence(evidence);
             jr.ac = Some(AcJson {
                 validity: Validity::invalid(reason),
                 nets: Vec::new(),
@@ -145,6 +147,7 @@ pub fn emit(
                 "  (none of the requested --ac-node nets exist in this circuit; \
                  run `--list-nets` to see every net name, then re-run.)"
             );
+            print!("{}", evidence.render_plain());
         }
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
     }
@@ -159,7 +162,7 @@ pub fn emit(
             .unwrap_or("the requested node");
         let reason = no_signal_path_reason(net, &summary);
         if json {
-            let mut jr = JsonReport::new(&bound.name, summary);
+            let mut jr = JsonReport::new(&bound.name, summary).with_evidence(evidence);
             jr.ac = Some(AcJson {
                 validity: Validity::invalid(reason),
                 nets: Vec::new(),
@@ -175,6 +178,7 @@ pub fn emit(
                  Bind the driving ICs with --models-dir, then re-run.)",
                 crate::result::AC_FLOOR_DB
             );
+            print!("{}", evidence.render_plain());
         }
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
     }
@@ -196,7 +200,7 @@ pub fn emit(
             if json {
                 // Structured refusal on the JSON surface too, a consumer reading
                 // stdout (not the exit code) must see valid:false, not empty output.
-                let mut jr = JsonReport::new(&bound.name, summary);
+                let mut jr = JsonReport::new(&bound.name, summary).with_evidence(evidence);
                 jr.ac = Some(AcJson {
                     validity: Validity::invalid(reason),
                     nets: vec![],
@@ -211,6 +215,7 @@ pub fn emit(
                     "  (no feedback path to measure at '{loop_net}'. Bind the driving \
                      ICs with --models-dir, then re-run.)"
                 );
+                print!("{}", evidence.render_plain());
             }
             std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
         }
@@ -240,7 +245,7 @@ pub fn emit(
         // so a JSON consumer never sees -6000 dB rows presented as real data
         // alongside valid:true. The skipped nets are listed so the omission is
         // explicit, never silent.
-        let mut jr = JsonReport::new(&bound.name, summary);
+        let mut jr = JsonReport::new(&bound.name, summary).with_evidence(evidence);
         let nets: Vec<AcNetJson> = per_net
             .iter()
             .filter(|(_, b)| !b.is_empty() && !ac_is_all_sentinel(b))
@@ -380,6 +385,8 @@ pub fn emit(
             _ => println!("  phase crossover    : none in band (phase never reaches -180 deg)"),
         }
     }
+
+    print!("{}", evidence.render_plain());
 
     Ok(())
 }
