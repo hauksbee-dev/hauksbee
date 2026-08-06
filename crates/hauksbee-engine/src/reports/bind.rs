@@ -15,15 +15,23 @@ use super::OutputMode;
 pub fn emit(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
+    reader_notes: &[String],
     mode: OutputMode,
     inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
     let bound = bind_board(board, lib);
     let summary = BindSummary::from_report(&bound.report);
+    let evidence = crate::evidence::BoardEvidence::from_bound(
+        board,
+        &bound.report,
+        reader_notes,
+        hauksbee_ir::evidence::RunDate::from_system_clock(),
+    )?;
     match mode {
         OutputMode::Json => {
-            let mut report = JsonReport::new(&bound.name, summary);
-            report.inputs = inputs.to_vec();
+            let report = JsonReport::new(&bound.name, summary)
+                .with_inputs(inputs)
+                .with_evidence(&evidence);
             println!("{}", report.to_json());
         }
         OutputMode::Text | OutputMode::Plain => {
@@ -55,6 +63,7 @@ pub fn emit(
                     println!("Bottom line: no active ICs to model; this is a passive board.");
                 }
             }
+            print!("{}", evidence.render_plain());
         }
     }
     Ok(())

@@ -14,19 +14,22 @@ use super::OutputMode;
 /// non-zero on a serious finding.
 pub fn emit(
     board: &ExtractedBoard,
+    evidence: &crate::evidence::BoardEvidence,
     mode: OutputMode,
     strict: bool,
     inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
-    match crate::usb_c_report(board) {
+    let report = crate::usb_c_report(board);
+    match &report {
         None => {
             match mode {
                 OutputMode::Json => {
-                    let mut value = serde_json::json!({
+                    let value = serde_json::json!({
                         "check": "usb_c_cc",
                         "level": "info",
                         "headline": "no USB-C receptacle detected"
                     });
+                    let mut value = evidence.enrich_json(value);
                     value["inputs"] = serde_json::to_value(inputs)?;
                     println!("{}", serde_json::to_string(&value)?);
                 }
@@ -35,21 +38,28 @@ pub fn emit(
                 }
             }
         }
-        Some(report) => {
-            match mode {
-                OutputMode::Json => {
-                    let mut value: serde_json::Value = serde_json::from_str(&report.to_json())?;
-                    value["inputs"] = serde_json::to_value(inputs)?;
-                    println!("{}", serde_json::to_string(&value)?);
-                }
-                OutputMode::Plain => print!("{}", report.render_plain()),
-                OutputMode::Text => print!("{}", report.render()),
+        Some(report) => match mode {
+            OutputMode::Json => {
+                let value: serde_json::Value = serde_json::from_str(&report.to_json())?;
+                let mut value = evidence.enrich_json(value);
+                value["inputs"] = serde_json::to_value(inputs)?;
+                println!("{}", serde_json::to_string(&value)?);
             }
-            super::note_ungated_findings(strict, report.is_serious());
-            if strict && report.is_serious() {
-                super::strict_gate_exit(mode, &[format!("usb_c_cc {}", report.headline)]);
-            }
-        }
+            OutputMode::Plain => print!("{}", report.render_plain()),
+            OutputMode::Text => print!("{}", report.render()),
+        },
+    }
+    if !matches!(mode, OutputMode::Json) {
+        print!("{}", evidence.render_plain());
+    }
+    let serious = report.as_ref().is_some_and(|report| report.is_serious());
+    super::note_ungated_findings(strict, serious);
+    if strict && serious {
+        let headline = &report.as_ref().expect("serious report exists").headline;
+        super::strict_gate_exit(mode, &[format!("usb_c_cc {headline}")]);
+    }
+    if strict && evidence.is_undermined() {
+        std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())
 }

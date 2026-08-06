@@ -39,7 +39,7 @@ pub const EXIT_INVALID_FOR_ANALYSIS: i32 = 3;
 /// Version of the `run --json` document contract (`JsonReport` plus the
 /// `ok`/`verdict`/`serious_count`/`actionable_count` rollup `to_json`
 /// prepends). Bump on a breaking change only; additive fields keep it.
-pub const RUN_REPORT_SCHEMA_VERSION: u32 = 1;
+pub const RUN_REPORT_SCHEMA_VERSION: u32 = 2;
 
 /// Exit code a strict headless run (`--strict`) or hauksbee-ci must use when the
 /// analog co-sim tripped the consecutive-failed-chunk abort. Centralised so both
@@ -1306,6 +1306,15 @@ pub struct JsonReport {
     /// Empty on older/internal call paths that have no inventory context.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub inputs: Vec<JsonInputEvidence>,
+    /// Exact inputs consumed by this run, content-addressed for reproducibility.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub inventory: Vec<hauksbee_ir::evidence::ArtifactProvenance>,
+    /// First-class assumptions collected from the real reader/bind path.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub assumptions: Vec<hauksbee_ir::evidence::Assumption>,
+    /// Per-net assertions derived from actual board incidence.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<hauksbee_ir::evidence::EvidenceMap>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub findings: Option<Vec<JsonFinding>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1441,6 +1450,9 @@ impl JsonReport {
             board: board_name.to_string(),
             bind,
             inputs: Vec::new(),
+            inventory: Vec::new(),
+            assumptions: Vec::new(),
+            evidence: Vec::new(),
             findings: None,
             drc: None,
             ac: None,
@@ -1456,6 +1468,29 @@ impl JsonReport {
     pub fn with_inputs(mut self, inputs: &[JsonInputEvidence]) -> Self {
         self.inputs = inputs.to_vec();
         self
+    }
+
+    /// Attach the one evidence object used by every report renderer.
+    pub fn with_evidence(mut self, evidence: &crate::evidence::BoardEvidence) -> Self {
+        self.inventory = evidence.inventory().to_vec();
+        self.assumptions = evidence.assumptions().to_vec();
+        self.evidence = evidence.maps().to_vec();
+        self
+    }
+
+    /// Replace the board-wide binding maps with maps for the actual findings
+    /// already attached to this report.
+    pub fn attach_finding_evidence(
+        &mut self,
+        evidence: &crate::evidence::BoardEvidence,
+    ) -> Result<(), hauksbee_ir::evidence::EvidenceError> {
+        if let Some(findings) = &self.findings {
+            let maps = evidence.maps_for_findings(findings)?;
+            if !maps.is_empty() {
+                self.evidence = maps;
+            }
+        }
+        Ok(())
     }
 
     /// A top-level machine verdict computed from the populated sections, so a CI
@@ -1526,7 +1561,11 @@ impl JsonReport {
             actionable += drc.violations.len();
         }
         let invalid = self.ac.as_ref().is_some_and(|a| !a.validity.valid)
-            || self.thermal.as_ref().is_some_and(|t| !t.validity.valid);
+            || self.thermal.as_ref().is_some_and(|t| !t.validity.valid)
+            || self
+                .evidence
+                .iter()
+                .any(hauksbee_ir::evidence::EvidenceMap::is_undermined);
         let verdict = if serious > 0 {
             "fail"
         } else if invalid {

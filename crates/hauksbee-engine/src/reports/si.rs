@@ -22,6 +22,7 @@ pub fn emit(
     text: &str,
     altium_present: bool,
     lib: &ModelLibrary,
+    reader_notes: &[String],
     mode: OutputMode,
     strict: bool,
     inputs: &[JsonInputEvidence],
@@ -48,12 +49,20 @@ pub fn emit(
         )
     });
     report.findings = kept;
+    let bound = bind_board(board, lib);
+    let evidence = crate::evidence::BoardEvidence::from_bound(
+        board,
+        &bound.report,
+        reader_notes,
+        hauksbee_ir::evidence::RunDate::from_system_clock(),
+    )?;
     match mode {
         OutputMode::Json => {
-            let bound = bind_board(board, lib);
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
-                .with_inputs(inputs);
+                .with_inputs(inputs)
+                .with_evidence(&evidence);
             jr.findings = Some(si_findings_json(&report));
+            jr.attach_finding_evidence(&evidence)?;
             // A green verdict that quietly dropped findings would be worse than
             // no waivers at all, so the machine surface carries them too.
             jr.waived = waived.iter().cloned().map(Into::into).collect();
@@ -71,6 +80,7 @@ pub fn emit(
         }
     }
     if !matches!(mode, OutputMode::Json) {
+        print!("{}", evidence.render_plain());
         print!(
             "{}",
             super::check::render_waivers_scoped(&waived, &waivers, &["si"], true)
@@ -79,6 +89,9 @@ pub fn emit(
     super::note_ungated_findings(strict, si_fails(&report));
     if strict && si_fails(&report) {
         super::strict_gate_exit(mode, &super::si_gate_items(&report));
+    }
+    if strict && evidence.is_undermined() {
+        std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())
 }
