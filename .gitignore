@@ -43,6 +43,7 @@ video/remotion/public/media/
 codex-webreview.log
 vendor/kicad-forge/Cargo.lock
 codex-routing-mosfet-review.log
+cursor-review*.log
 
 # Agent verification screenshots (scratch, never repo content)
 uifix/
