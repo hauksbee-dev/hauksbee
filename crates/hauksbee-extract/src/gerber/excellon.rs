@@ -248,6 +248,8 @@ pub fn parse(text: &str) -> DrillFile {
         // the G85 and parse both halves through the SAME modal reader, so the
         // units and zero-suppression that apply to the start apply to the end.
         if let Some((head, tail)) = split_g85(line) {
+            // A head with no coordinates means the cut starts from where the
+            // head already is, so the modal position IS the start point.
             let start = parse_xy_modal(
                 head,
                 metric,
@@ -256,7 +258,11 @@ pub fn parse(text: &str) -> DrillFile {
                 leading_zero_omitted,
                 &mut last_x,
                 &mut last_y,
-            );
+            )
+            .or(match (last_x, last_y) {
+                (Some(x), Some(y)) => Some((x, y)),
+                _ => None,
+            });
             let end = parse_xy_modal(
                 tail,
                 metric,
@@ -468,8 +474,8 @@ fn arc_center_offset(
     dec_digits: usize,
     leading_zero_omitted: bool,
 ) -> Option<(f64, f64)> {
-    let axis = |mark: char| -> Option<f64> {
-        let pos = line.find(mark)?;
+    let axis = |upper: char, lower: char| -> Option<f64> {
+        let pos = line.find([upper, lower])?;
         let rest = &line[pos + 1..];
         let end = rest
             .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
@@ -481,7 +487,7 @@ fn arc_center_offset(
             leading_zero_omitted,
         )
     };
-    Some((axis('I')?, axis('J')?))
+    Some((axis('I', 'i')?, axis('J', 'j')?))
 }
 
 /// Longest arc step (radians) before we split, whatever the radius.
@@ -587,9 +593,13 @@ fn split_g85(line: &str) -> Option<(&str, &str)> {
     let at = line.find("G85").or_else(|| line.find("g85"))?;
     let head = &line[..at];
     let tail = &line[at + 3..];
-    let has_axis =
-        |s: &str| s.contains('X') || s.contains('Y') || s.contains('x') || s.contains('y');
-    (has_axis(head) && has_axis(tail)).then_some((head, tail))
+    let has_axis = |s: &str| s.contains(['X', 'Y', 'x', 'y']);
+    // The far end has to be there for this to be a slot at all. The near end
+    // may be absent (`G85X9.0Y4.0`), in which case the cut starts from wherever
+    // the head already is, the same modality every other coordinate line has.
+    // Requiring both ends sent that form to the plain reader, which recorded a
+    // round hole at the slot's FAR end and lost the wall entirely.
+    has_axis(tail).then_some((head, tail))
 }
 
 /// Pull the copper layer pair out of an already-uppercased `TF.FileFunction`
@@ -683,8 +693,13 @@ fn parse_xy_modal(
     last_x: &mut Option<f64>,
     last_y: &mut Option<f64>,
 ) -> Option<(f64, f64)> {
-    let xi = line.find('X');
-    let yi = line.find('Y');
+    // Axis letters are matched in either case. Excellon is conventionally
+    // uppercase, but a file that writes `x1.0y2.0` describes the same hole, and
+    // reading nothing off it silently drops that hole (and, on a slot, the wall
+    // it anchors). Matching both cases costs a two-char pattern; uppercasing
+    // every line would cost an allocation per line on files with 100k of them.
+    let xi = line.find(['X', 'x']);
+    let yi = line.find(['Y', 'y']);
     if xi.is_none() && yi.is_none() {
         return None;
     }
@@ -1046,6 +1061,64 @@ M30
         );
         assert_eq!(d.holes.len(), 1, "only the drilled point: {:?}", d.holes);
         assert!((d.holes[0].x - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_g85_with_no_start_coordinates_cuts_from_the_current_position() {
+        // The modal form: the head is already at (3, 4), and `G85X9.0Y4.0`
+        // cuts from there. Requiring coordinates on both sides of the code sent
+        // this to the plain reader, which recorded a round hole at the slot's
+        // FAR end and lost the wall along with everything it touches.
+        let d = parse(
+            "\
+M48
+FMAT,2
+METRIC
+T1C0.600
+%
+G90
+G05
+T1
+X3.0Y4.0
+G85X9.0Y4.0
+M30
+",
+        );
+        assert_eq!(
+            d.holes.len(),
+            2,
+            "the positioning hit and the slot: {:?}",
+            d.holes
+        );
+        let slot = &d.holes[1];
+        assert!((slot.x - 3.0).abs() < 1e-9 && (slot.y - 4.0).abs() < 1e-9);
+        assert_eq!(slot.to, Some((9.0, 4.0)));
+    }
+
+    #[test]
+    fn lower_case_axis_letters_read_the_same_as_upper_case() {
+        // Excellon is conventionally uppercase, but a file that writes `x`/`y`
+        // describes the same holes. Reading nothing off those lines drops the
+        // hits, and on a slot the wall with them.
+        let d = parse(
+            "\
+M48
+FMAT,2
+METRIC
+T1C0.600
+%
+G90
+G05
+T1
+x1.0y2.0
+x3.0y4.0g85x9.0y4.0
+M30
+",
+        );
+        assert_eq!(d.holes.len(), 2, "got {:?}", d.holes);
+        assert!((d.holes[0].x - 1.0).abs() < 1e-9 && (d.holes[0].y - 2.0).abs() < 1e-9);
+        assert!((d.holes[1].x - 3.0).abs() < 1e-9);
+        assert_eq!(d.holes[1].to, Some((9.0, 4.0)));
     }
 
     #[test]
