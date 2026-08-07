@@ -62,7 +62,7 @@ fn codex_extracted_ltc4020_matches_hand_model_structurally() {
     // at 0 because the excerpt did not state the equation.
     let sp = c.iin_program.as_ref().expect("iin_program present");
     assert!(
-        sp.rsense_ref.is_some(),
+        !sp.rsense_refs.is_empty(),
         "codex bound an input sense resistor ref"
     );
     assert!(

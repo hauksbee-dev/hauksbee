@@ -12,6 +12,51 @@ use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
 use hauksbee_ir::Device;
 use hauksbee_models::ModelLibrary;
 
+#[test]
+fn inferred_same_hierarchy_altium_merge_stays_unbound_end_to_end() {
+    // A hierarchy identifies the channel, not the physical component. Two
+    // records without UNIQUEID can be merged by a shared identically-netted
+    // pad for connectivity, but that inference is not authoritative enough to
+    // stamp a precise resistor model.
+    let text = [
+        "|RECORD=Board|KIND=Protel_Advanced_PCB|VERSION=5.00",
+        "|RECORD=Net|ID=0|NAME=SIGNAL",
+        "|RECORD=Net|ID=1|NAME=GND",
+        "|RECORD=Component|ID=0|LAYER=TOP|PATTERN=R0603|SOURCEDESIGNATOR=R1|SOURCEHIERARCHICALPATH=\\ROOT",
+        "|RECORD=Component|ID=1|LAYER=BOTTOM|PATTERN=R0603|SOURCEDESIGNATOR=R1|SOURCEHIERARCHICALPATH=\\ROOT",
+        "|RECORD=Pad|COMPONENT=0|NET=0|LAYER=TOP|NAME=1|X=0mil|Y=0mil",
+        "|RECORD=Pad|COMPONENT=1|NET=0|LAYER=MULTILAYER|NAME=1|X=0mil|Y=0mil",
+        "|RECORD=Pad|COMPONENT=1|NET=1|LAYER=MULTILAYER|NAME=2|X=100mil|Y=0mil",
+        "|RECORD=Text|COMPONENT=1|COMMENT=True|TEXT=1k",
+    ]
+    .join("\n");
+
+    let board = ExtractedBoard::from_protel_ascii(&text).expect("extract ASCII Altium board");
+    assert_eq!(
+        board.components.len(),
+        1,
+        "split records remain one connectivity owner"
+    );
+    let resistor = board.component("R1").expect("merged R1");
+    assert!(
+        resistor
+            .properties
+            .iter()
+            .any(|(key, _)| key == hauksbee_extract::altium::REFERENCE_AMBIGUOUS_KEY),
+        "the extractor must carry inferred identity into the shared refusal gate"
+    );
+
+    let bound = bind_board(&board, &ModelLibrary::builtin());
+    let row = bound
+        .report
+        .rows
+        .iter()
+        .find(|row| row.reference == "R1")
+        .expect("R1 bind row");
+    assert_eq!(row.model_id, None, "inferred identity must remain open");
+    assert!(matches!(row.outcome, BindOutcome::Unresolved { .. }));
+}
+
 fn pin(number: &str, net: i64, function: &str) -> Pin {
     Pin {
         number: number.to_string(),
@@ -48,6 +93,94 @@ fn board(nets: &[(i64, &str)], components: Vec<Component>) -> ExtractedBoard {
             .collect(),
         components,
     }
+}
+
+fn ltc4020_program_board() -> ExtractedBoard {
+    board(
+        &[(1, "PVIN"), (2, "BAT")],
+        vec![
+            comp(
+                "U2",
+                "LTC4020EUHFPBF",
+                "QFN-38",
+                vec![pin("36", 1, ""), pin("20", 2, "")],
+            ),
+            comp("R8", "7.15k", "R_0603", Vec::new()),
+            comp("R49", "0.01R", "R_2512", Vec::new()),
+            comp("R50", "0.01R", "R_2512", Vec::new()),
+        ],
+    )
+}
+
+fn sole_converter_limit(board: &ExtractedBoard) -> Option<f64> {
+    let bound = bind_board(board, &ModelLibrary::builtin());
+    match bound.behavioral.as_slice() {
+        [] => None,
+        [converter] => converter.converter_iin_limit(),
+        devices => panic!(
+            "the fixture may bind at most one LTC4020 behavioural device, got {}",
+            devices.len()
+        ),
+    }
+}
+
+#[test]
+fn missing_program_evidence_does_not_stamp_an_unbounded_converter() {
+    let mut incomplete = ltc4020_program_board();
+    incomplete
+        .components
+        .retain(|component| component.reference != "R50");
+
+    let bound = bind_board(&incomplete, &ModelLibrary::builtin());
+    assert_eq!(
+        bound.behavioral.len(),
+        1,
+        "independently evidenced FSM behavior remains observable"
+    );
+    assert_eq!(
+        bound.behavioral[0].converter_out_node(),
+        None,
+        "an unresolved named shunt must suppress the converter output leg"
+    );
+}
+
+#[test]
+fn ambiguous_programming_resistor_identity_makes_the_limit_unknown() {
+    let clean = ltc4020_program_board();
+    let clean_limit = sole_converter_limit(&clean).expect("complete resistor evidence");
+    assert!((clean_limit - 1.7875).abs() < 1e-12, "got {clean_limit}");
+
+    for reference in ["R8", "R49", "R50"] {
+        let mut ambiguous = ltc4020_program_board();
+        ambiguous
+            .components
+            .iter_mut()
+            .find(|component| component.reference == reference)
+            .expect("fixture resistor")
+            .properties
+            .push((
+                hauksbee_extract::altium::REFERENCE_AMBIGUOUS_KEY.to_string(),
+                "same inferred designator has no authoritative source UID".to_string(),
+            ));
+        assert_eq!(
+            sole_converter_limit(&ambiguous),
+            None,
+            "identity-refused {reference} must not supply a precise current limit"
+        );
+    }
+}
+
+#[test]
+fn duplicate_programming_reference_never_uses_last_record_wins() {
+    let mut duplicated = ltc4020_program_board();
+    duplicated
+        .components
+        .push(comp("R8", "100k", "R_0603", Vec::new()));
+    assert_eq!(
+        sole_converter_limit(&duplicated),
+        None,
+        "two physical records with one designator are contradictory evidence, even when both parse"
+    );
 }
 
 /// Bug #1: a DNP component is on the layout but NOT assembled. It must

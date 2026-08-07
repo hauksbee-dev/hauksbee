@@ -4,6 +4,35 @@
 # param entries are needed; these entries exist only to anchor the kind and
 # provide pin maps for the match-rule engine.
 
+# United Chemi-Con EKYB630ELL122MLN3S, KYB series aluminium electrolytic.
+# Exact ordering-code match only: the 3.0 A figure belongs to this fitted part,
+# not to every 1200 uF capacitor. Manufacturer source (accessed 2026-08-07):
+# https://www.chemi-con.co.jp/en/products/detail-condenser.php?part_number=EKYB630ELL122MLN3S
+# 63 V, 1200 uF, 3.0 A_rms at 100 kHz / 105 C, 16 x 31.5 mm, 10,000 h.
+[[models]]
+id = "ucc_ekyb630ell122mln3s"
+kind = "passive"
+description = "United Chemi-Con EKYB 63 V 1200 uF electrolytic, exact MPN"
+
+[models.match]
+mpn_re = "^EKYB630ELL122MLN3S$"
+
+[models.params]
+# Allows a board that uses the ordering code as Value (rather than a separate
+# MPN property) to retain its nominal capacitance in simulation.
+value_override = "1200uF"
+
+[models.pins]
+"1" = "pos"
+"2" = "neg"
+
+[models.ratings]
+max_voltage_v = 63.0
+max_ripple_current_a = 3.0
+polarized = true
+
+# ─────────────────────────────────────────────────────────────────────────────
+
 [[models]]
 id = "generic_r"
 kind = "passive"

@@ -29,7 +29,7 @@
 //! Nothing here commits to a solve method; the engine decides how to realise
 //! each fact as Thevenin legs / sense resistors / source updates.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -259,19 +259,22 @@ pub struct Converter {
 /// inverted, describing the reciprocal law. The resistor values are read off the
 /// board at bind time, so changing the board resistor changes the limit, with
 /// no model edit, which is precisely how the Reform mb2.5->3.0 fix (R8 100k ->
-/// 7.15k) lands.
+/// 7.15k) lands. Named resistors are strict evidence: every named shunt must
+/// resolve and matching shunts must agree, otherwise the runtime abstains.
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
 pub struct SenseProgram {
-    /// The sense resistor on the input path (ohms). Either a literal, or read
-    /// from a named board resistor via `rsense_ref`.
+    /// The sense resistor on the input path (ohms). Use this only for a model
+    /// whose shunt is a literal rather than a named board component.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rsense_ohms: Option<f64>,
 
-    /// Board reference designator of the sense resistor, read at bind time.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rsense_ref: Option<String>,
+    /// Board reference designators of the sense shunts, read at bind time.
+    /// Multi-shunt Kelvin topologies list every shunt; all must resolve to the
+    /// same positive value. This is mutually exclusive with `rsense_ohms`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rsense_refs: Vec<String>,
 
-    /// The programming resistor (ohms), or read from `prog_ref`.
+    /// The programming resistor (ohms). Mutually exclusive with `prog_ref`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub prog_ohms: Option<f64>,
 
@@ -510,11 +513,29 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
             }
         }
         if let Some(sp) = &c.iin_program {
-            if sp.rsense_ohms.is_none() && sp.rsense_ref.is_none() {
-                errs.push("converter.iin_program: need rsense_ohms or rsense_ref".to_string());
+            if sp.rsense_ohms.is_some() == !sp.rsense_refs.is_empty() {
+                errs.push(
+                    "converter.iin_program: specify exactly one of rsense_ohms or rsense_refs"
+                        .to_string(),
+                );
             }
-            if sp.prog_ohms.is_none() && sp.prog_ref.is_none() {
-                errs.push("converter.iin_program: need prog_ohms or prog_ref".to_string());
+            if sp.prog_ohms.is_some() == sp.prog_ref.is_some() {
+                errs.push(
+                    "converter.iin_program: specify exactly one of prog_ohms or prog_ref"
+                        .to_string(),
+                );
+            }
+            let mut seen_shunts = BTreeSet::new();
+            for reference in &sp.rsense_refs {
+                if reference.trim().is_empty() {
+                    errs.push(
+                        "converter.iin_program: rsense_refs entries must be non-empty".to_string(),
+                    );
+                } else if !seen_shunts.insert(reference) {
+                    errs.push(format!(
+                        "converter.iin_program: rsense_refs repeats '{reference}'"
+                    ));
+                }
             }
             // The literal shunt / program resistances are the missing siblings of
             // the gates below: the engine floors them (`rsense.max(1e-6)`), so a
@@ -790,7 +811,7 @@ vout_setpoint = 14.4
 efficiency = 0.92
 
 [converter.iin_program]
-rsense_ref = "R49"
+rsense_refs = ["R49", "R50"]
 prog_ref = "R8"
 vprog_ref = 1.19
 prog_ref_ohms = 100000.0
@@ -826,7 +847,7 @@ vout_setpoint = 14.4
 efficiency = 0.92
 
 [converter.iin_program]
-rsense_ref = "R49"
+rsense_refs = ["R49", "R50"]
 prog_ref = "R8"
 vprog_ref = {vprog_ref}
 prog_ref_ohms = 100000.0
@@ -887,7 +908,7 @@ vout_setpoint = 14.4
 efficiency = 0.92
 
 [converter.iin_program]
-rsense_ref = "R49"
+rsense_refs = ["R49", "R50"]
 prog_ref = "R8"
 vprog_ref = 1.19
 prog_ref_ohms = {prog_ref_ohms}

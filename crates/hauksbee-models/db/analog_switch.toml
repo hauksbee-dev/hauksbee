@@ -133,6 +133,7 @@ max_voltage_v = 7.0
 #   Rev. 6-2, April 2023. One datasheet covers both parts; they share the switch
 #   die and differ in package and in whether the current limit is fixed
 #   (AP22815) or set by an external RLIM resistor (AP22615).
+# Primary source: https://www.diodes.com/datasheet/download/AP22815_615.pdf
 #
 # Datasheet figures used:
 #   RDS(on)  40 mOhm typ            @ VIN = 5.0 V, IOUT = 1 A
@@ -163,10 +164,10 @@ max_voltage_v = 7.0
 # the switch being off when the board intends it on. That is a visible,
 # diagnosable disagreement rather than a silent one.
 #
-# NOT MODELLED: the current limit itself (an ideal switch resistance has none),
-# the soft-start ramp, UVLO, output over-voltage protection, thermal shutdown,
-# and the FLG fault output. These are the part's whole reason for existing on a
-# USB port, and none of them is a resistance.
+# The AP22615's fitted-RLIM threshold is consumed by the ampacity check; the
+# ideal-switch solver still does not clamp current. The AP22815's fixed
+# threshold, soft-start ramp, UVLO, output over-voltage protection, thermal
+# shutdown, and FLG fault output are not dynamically modelled.
 [[models]]
 id = "ap22815"
 kind = "analog_switch"
@@ -188,8 +189,8 @@ vth  = 1.2       # EN VIH min, active-high ordering option; see the note above
 "4" = "ctrl"     # EN
 "5" = "s0"       # IN
 [models.ratings]
-max_pin_current_a = 2.0   # continuous through the switch, below the 3.1 A min
-                          # current-limit trip
+# The absolute-maximum table states only "load current: internal limited" and
+# gives no numeric pin-current destruction threshold, so do not invent one.
 max_voltage_v = 6.0       # VIN abs max (3.0 to 5.5 V operating)
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 85.0   # TSOT25, JEDEC 51-7 4-layer board
@@ -219,17 +220,24 @@ vth  = 1.2       # EN VIH min, active high (the A suffix)
 "5" = "iset"     # RLIM to GND sets the limit: ILIM(A) = 6800 / RLIM(Ohm)
 "6" = "s0"       # IN
 [models.ratings]
-max_pin_current_a = 2.0
+# As for AP22815, the absolute-maximum table gives no numeric load-current max.
 max_voltage_v = 6.0
 max_junction_temp_c = 150.0
 theta_ja_c_per_w = 80.0   # TSOT26
 theta_jc_c_per_w = 30.0
 
-# The current limit is the board's choice, not the part's: ILIM(A) = 6800 /
+# The nominal current-limit transfer is the board's choice: ILIM(A) = 6800 /
 # RLIM(Ohm) with RLIM to GND on ISET. Attributing the part's own ceiling to the
-# switched rail would invent a load, so the fitted resistor decides.
+# switched rail would invent a load, so the fitted resistor decides the point
+# estimate. The 6.8 kOhm table row has no published maximum; see the note below.
 [models.current_program]
 pin = "iset"
+semantics = "protection_limit"
+# This is an overload/OCP threshold, not a commanded output current. The
+# ampacity engine therefore never promotes it into a steady-state load. Do not
+# cap it at the 3 A recommended continuous current: that recommendation is VIN
+# dependent (1.5 A below 4 V) and is a different physical quantity.
+equation = "inverse_resistance"
 k_volts = 6800.0
 
 # ── PCA9306: dual bidirectional I2C voltage-level translator ─────────────────
