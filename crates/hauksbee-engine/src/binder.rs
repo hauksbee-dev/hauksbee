@@ -840,6 +840,21 @@ pub(crate) fn resolve(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::
         non_empty(&comp.footprint),
     );
     q.reference = Some(comp.reference.clone());
+    // A duplicate source designator with conflicting metadata is not a model
+    // match. The extractor keeps both electrical records so connectivity/DRC
+    // remain available, but binding either record would turn an unresolved
+    // identity choice into apparently precise simulation. Centralising the
+    // refusal here also protects every check that resolves through the binder.
+    if component_identity_conflict(comp).is_some() {
+        return hauksbee_models::Resolution {
+            model: None,
+            confidence: Confidence::Unresolved,
+            query: q,
+            source: None,
+            layer: None,
+            origin: None,
+        };
+    }
     // Pull a likely manufacturer part-number out of properties for mpn match.
     // Prefer a dedicated manufacturer-PN field; distributor part numbers
     // (e.g. "Mouser Part Number" = "621-BCM857BS-7-F") carry a distributor
@@ -1526,11 +1541,32 @@ fn non_empty(s: &str) -> Option<String> {
     }
 }
 
+fn component_identity_conflict(comp: &Component) -> Option<&str> {
+    comp.properties
+        .iter()
+        .find(|(key, _)| key == hauksbee_extract::DUPLICATE_REFERENCE_CONFLICT_KEY)
+        .map(|(_, value)| value.as_str())
+}
+
 /// Build the outcome for a component with no resolved model.
 fn unresolved_outcome(
     comp: &Component,
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
 ) -> (Option<String>, BindOutcome, Option<String>) {
+    if let Some(conflict) = component_identity_conflict(comp) {
+        let reason = format!("ambiguous duplicate designator: {conflict}; left open");
+        let warning = format!(
+            "cannot bind '{}' ({}): {reason}",
+            comp.reference, comp.value
+        );
+        return (
+            None,
+            BindOutcome::Unresolved {
+                reason: reason.clone(),
+            },
+            Some(warning),
+        );
+    }
     if let Some(McuFamilyRoute::NoPlatform { family }) = route_mcu_family(comp) {
         let msg = format!(
             "[auto-bind] {} \"{}\" recognized {family} but no co-sim platform; leaving UNRESOLVED. Override with a --models-dir entry.",
@@ -4011,7 +4047,7 @@ fn power_out_net_voltages(board: &ExtractedBoard) -> HashMap<i64, f64> {
     let mut out: HashMap<i64, f64> = HashMap::new();
     for comp in &board.components {
         // A DNP part's power_out pin drives nothing on the real board.
-        if comp.dnp {
+        if comp.dnp || component_identity_conflict(comp).is_some() {
             continue;
         }
         for pin in &comp.pins {
@@ -4080,6 +4116,83 @@ mod canonical_ground_tests {
         // VEE is a negative supply rail on bipolar-supply analog boards; pinning
         // it to 0 V would be a hard fault, so it is NOT canonical ground.
         assert!(!is_canonical_ground("VEE"));
+    }
+}
+
+#[cfg(test)]
+mod duplicate_identity_refusal_tests {
+    use super::*;
+
+    #[test]
+    fn conflicting_duplicate_identity_is_left_open_and_reported() {
+        let conflict = "records named 'R1' were kept distinct: footprints differ";
+        let board = ExtractedBoard {
+            name: "ambiguous".into(),
+            nets: vec![
+                hauksbee_extract::Net {
+                    id: 1,
+                    name: "SIGNAL".into(),
+                },
+                hauksbee_extract::Net {
+                    id: 2,
+                    name: "GND".into(),
+                },
+            ],
+            components: vec![Component {
+                reference: "R1".into(),
+                value: "1k".into(),
+                lib_id: "Device:R".into(),
+                footprint: "R_0603".into(),
+                position: None,
+                layer: "F.Cu".into(),
+                properties: vec![(
+                    hauksbee_extract::DUPLICATE_REFERENCE_CONFLICT_KEY.into(),
+                    conflict.into(),
+                )],
+                dnp: false,
+                pins: vec![
+                    hauksbee_extract::Pin {
+                        number: "1".into(),
+                        net: Some(1),
+                        function: "+5V".into(),
+                        kind: "power_out".into(),
+                        position: None,
+                    },
+                    hauksbee_extract::Pin {
+                        number: "2".into(),
+                        net: Some(2),
+                        function: String::new(),
+                        kind: String::new(),
+                        position: None,
+                    },
+                ],
+            }],
+        };
+
+        let bound = bind_board(&board, &ModelLibrary::builtin());
+        let row = bound
+            .report
+            .rows
+            .iter()
+            .find(|row| row.reference == "R1")
+            .unwrap();
+        assert_eq!(
+            row.model_id, None,
+            "ambiguous metadata must not select a model"
+        );
+        assert_eq!(row.confidence, Confidence::Unresolved);
+        assert!(matches!(
+            &row.outcome,
+            BindOutcome::Unresolved { reason }
+                if reason.contains("ambiguous duplicate designator") && reason.contains(conflict)
+        ));
+        assert!(row.warning.as_deref().is_some_and(|warning| {
+            warning.contains("cannot bind") && warning.contains(conflict)
+        }));
+        assert!(
+            bound.supplies.is_empty(),
+            "a conflicted power_out record must not manufacture an ideal supply"
+        );
     }
 }
 

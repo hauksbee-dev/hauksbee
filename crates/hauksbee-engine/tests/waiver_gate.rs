@@ -184,25 +184,35 @@ fn stage_lint_board(dir: &Path) -> PathBuf {
     p
 }
 
-/// A board whose only SI finding is the IPC-2221 trace-ampacity one: an
-/// AMS1117-3.3 (DB-modelled, cites 1.0 A) whose +3V3 rail is a single 0.15 mm
-/// hair of a trace. Same recipe as tests/si_ampacity_ripple.rs.
+/// A board whose only SI finding is the IPC-2221 trace-ampacity one: a TP4054
+/// in its 400 mA constant-current phase, programmed by the published 1.66 kOhm
+/// application value, whose VBAT rail is a 0.05 mm hair of a trace. This is an
+/// operating-current assertion, not a device capability rating. Same recipe as
+/// tests/si_ampacity_ripple.rs.
 fn stage_si_board(dir: &Path) -> PathBuf {
     let p = dir.join("board.kicad_pcb");
     std::fs::write(
         &p,
         r#"(kicad_pcb (version 20240101) (generator pcbnew)
   (net 0 "")
-  (net 1 "+3V3")
+  (net 1 "VBAT")
   (net 2 "VIN")
   (net 3 "GND")
-  (footprint "Package_TO_SOT_SMD:SOT-223-3_TabPin2" (layer "F.Cu") (at 0 0)
+  (net 4 "PROG")
+  (footprint "Package_TO_SOT_SMD:SOT-23-5" (layer "F.Cu") (at 0 0)
     (property "Reference" "U1")
-    (property "Value" "AMS1117-3.3")
-    (pad "1" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 3 "GND"))
-    (pad "2" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "+3V3"))
-    (pad "3" smd rect (at 0 -2) (size 1 1) (layers "F.Cu") (net 2 "VIN")))
-  (segment (start 0 0) (end 10 0) (width 0.15) (layer "F.Cu") (net 1))
+    (property "Value" "TP4054")
+    (pad "1" smd rect (at 0 3) (size 1 1) (layers "F.Cu"))
+    (pad "2" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 3 "GND"))
+    (pad "3" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VBAT"))
+    (pad "4" smd rect (at 0 -2) (size 1 1) (layers "F.Cu") (net 2 "VIN"))
+    (pad "5" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 4 "PROG")))
+  (footprint "Resistor_SMD:R_0603" (layer "F.Cu") (at 4 0)
+    (property "Reference" "R1")
+    (property "Value" "1.66k")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 4 "PROG"))
+    (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 3 "GND")))
+  (segment (start 0 0) (end 10 0) (width 0.05) (layer "F.Cu") (net 1))
 )"#,
     )
     .expect("write si board");
@@ -325,7 +335,7 @@ fn si_single_check_honours_the_same_waivers_as_check() {
         "--si",
         "si",
         "trace_ampacity",
-        r#"["+3V3"]"#,
+        r#"["VBAT"]"#,
     );
 }
 

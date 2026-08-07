@@ -508,6 +508,11 @@ fn unit_token(s: &str) -> Option<(String, &str)> {
         ("Ω", 4)
     } else if upper.starts_with("OHM") || upper.starts_with("OH") {
         ("Ω", if upper.starts_with("OHM") { 3 } else { 2 })
+    } else if upper.starts_with('O') {
+        // Common ASCII substitution in Altium comments: `330O +/-1%`.
+        // `parse_tail` accepts this token only when everything after the O is
+        // empty or an annotation, so words such as `330OUTPUT` still refuse.
+        ("Ω", 1)
     } else if upper.starts_with('R') {
         ("Ω", 1)
     } else if upper.starts_with('F') {
@@ -882,6 +887,24 @@ mod tests {
         check("22u X7R", 22e-6);
         check("10k Ohm", 10_000.0);
         check("600@100MHz", 600.0); // ferrite bead impedance@frequency
+    }
+
+    #[test]
+    fn letter_o_ohms_from_real_altium_comments_parse_without_accepting_words() {
+        for (raw, expected) in [
+            ("330O ±1%", 330.0),
+            ("120O ±1%", 120.0),
+            ("10KO ±1%", 10_000.0),
+            ("470O ±1%", 470.0),
+        ] {
+            let parsed = parse_value(raw).unwrap_or_else(|| panic!("{raw} must parse"));
+            assert!((parsed.si - expected).abs() < 1e-12, "{raw}: {parsed:?}");
+            assert_eq!(parsed.unit.as_deref(), Some("Ω"), "{raw}");
+        }
+        assert!(
+            parse_value("330OUTPUT").is_none(),
+            "a leading O only means ohms when the remainder is an annotation"
+        );
     }
 
     /// Round-29 (HIGH): a space BEFORE the SI multiplier ("10 kOhm") is the

@@ -262,8 +262,9 @@ pub struct BehavioralDevice {
 
     /// Optional input-power budget (W) and the input voltage it is referenced
     /// to (V): when set, an overpower fault is raised if the converter's
-    /// reflected input draw exceeds the budget. This is the "88 W from a 60 W
-    /// brick" check.
+    /// reflected input draw exceeds the budget. This covers reported charger
+    /// overdraw faults without baking a particular board's measured wattage
+    /// into the device model.
     input_budget: Option<(f64, f64)>,
     /// Faults this device raised since the last drain (e.g. input overdraw).
     pending_faults: Vec<FaultEvent>,
@@ -922,9 +923,8 @@ impl BehavioralDevice {
     }
 
     /// Raise an input-overdraw fault if the converter is drawing more input
-    /// power than `budget_w` from its supply (the "88 W from a 60 W brick"
-    /// check). Called by the scheduler with the configured brick budget. Latches
-    /// so it fires once per crossing.
+    /// power than `budget_w` from its supply. Called by the scheduler with the
+    /// configured brick budget. Latches so it fires once per crossing.
     pub fn check_input_budget(&mut self, vin: f64, budget_w: f64, t: f64) {
         let Some(c) = &self.converter else { return };
         let in_power = c.last_iin_a * vin.max(0.0);
@@ -970,12 +970,10 @@ fn resolve_iin_limit(c: &Converter, board_resistor: &dyn Fn(&str) -> Option<f64>
 ///
 /// so a LARGER programming resistor gives a HIGHER current limit (saturating at
 /// `v_sense_full`). This is the LTC4020 ILIMIT direction: the Reform handbook
-/// fix dropped R8 from 100k to 7.15k to LOWER the input-current limit, and with
-/// `prog_ref_ohms` / `vprog_ref` / `v_sense_full` chosen from the part's ILIMIT
-/// programming curve the two real board values straddle the 60 W brick budget
-/// (100k saturates well above 60 W, 7.15k lands at ~60 W). `rsense` and `prog`
-/// are read off the actual board (R49 and R8), so the limit moves when the board
-/// resistor moves, with no model edit, which is exactly the fix.
+/// fix dropped R8 from 100k to 7.15k to LOWER the input-current limit. Its model
+/// uses the published 50 uA * RILIMIT and 50 mV sense-limit relationship;
+/// `rsense` and `prog` are read off the actual board (R49 and R8), so the limit
+/// moves when the board resistor moves, with no model edit.
 pub fn program_iin_limit(sp: &SenseProgram, board_resistor: &dyn Fn(&str) -> Option<f64>) -> f64 {
     let rsense = sp
         .rsense_ref

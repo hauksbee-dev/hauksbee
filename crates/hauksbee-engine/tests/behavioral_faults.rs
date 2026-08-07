@@ -106,8 +106,10 @@ fn net_members(path: &PathBuf, refdes: &str, pad: &str) -> Vec<String> {
 //
 // Handbook: "Fixed/limited LTC4020 charge current overdraw (resistor R8 replaced
 // with 7.15k)." R8 programs the input-current limit against the input shunt R49.
-// mb2.5 (R8=100k) lets the charger pull ~88 W from a ~19 V / 60 W brick; mb3.0
-// (R8=7.15k) holds it at ~60 W. Both values are read off the real boards.
+// Maintainer evidence reports 75--88 W from a ~19 V / 60 W brick on mb2.5.
+// The model is not calibrated to that observation: it applies the datasheet
+// transfer to R8 and R49 read from each real board. With the corpus values that
+// means a 5 A nominal input-current limit on mb2.5 and 1.7875 A on mb3.0.
 // ───────────────────────────────────────────────────────────────────────────
 
 /// Run the LTC4020 focused subcircuit with a 19 V brick on VIN and a heavy
@@ -160,19 +162,20 @@ fn ltc4020_overdraws_on_mb25_and_is_clean_on_mb30() {
     };
     eprintln!("LTC4020 input power: mb2.5 = {p25:.1} W (R8=100k), mb3.0 = {p30:.1} W (R8=7.15k)");
 
-    // mb2.5 (faulty): over the 60 W brick budget, in the documented 88 W class.
+    // These windows pin the datasheet-derived transfer through the nonlinear
+    // solve, not an exact bench replay. The external 75--88 W observation is
+    // evidence for the fault; the 95.4/34.1 W predictions are model outputs.
     assert!(
-        p25 > 75.0 && p25 < 100.0,
-        "mb2.5 should over-draw the 60 W brick (75..100 W class), got {p25:.1} W"
+        p25 > 94.0 && p25 < 97.0,
+        "mb2.5 should reach the datasheet-derived ~95 W nominal prediction, got {p25:.1} W"
     );
-    // mb3.0 (fixed): held within the 60 W brick (a small margin for the solve).
     assert!(
-        p30 <= 62.0,
-        "mb3.0's R8=7.15k fix should hold the charger inside the 60 W brick, got {p30:.1} W"
+        p30 > 33.0 && p30 < 35.0,
+        "mb3.0's R8=7.15k fix should produce the datasheet-derived ~34 W nominal prediction, got {p30:.1} W"
     );
     // And the fix must be a real reduction, not a wash.
     assert!(
-        p25 - p30 > 20.0,
+        p25 - p30 > 60.0,
         "the R8 fix must materially cut the input draw, got {p25:.1} -> {p30:.1} W"
     );
 }

@@ -3235,9 +3235,10 @@ pub mod altium_drc {
 
         // Component refdes by index, so geometry can carry an owner (feeds the
         // jumper / star-ground escape-routing exemption in the sweep).
-        let comp_refs: Vec<String> = doc
-            .data("Components")
-            .map(|b| altium::parse_component_refs(&b))
+        let component_data = doc.data("Components");
+        let pad_data = doc.data("Pads");
+        let comp_refs: Vec<String> = component_data
+            .map(|components| altium::parse_component_refs(&components, pad_data.as_deref()))
             .unwrap_or_default();
         let owner_of = |idx: u16| -> String {
             if idx == NONE_U16 {
