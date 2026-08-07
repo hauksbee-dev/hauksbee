@@ -60,10 +60,12 @@ pub struct ConverterStage {
     pub inductor_ref: String,
     /// Inductor value (henries), if parseable.
     pub inductor_h: Option<f64>,
-    /// The bulk capacitor sitting input-rail -> ground, if one was found.
-    pub input_bulk_cap: Option<BulkCap>,
-    /// The bulk capacitor sitting output-rail -> ground, if one was found.
-    pub output_bulk_cap: Option<BulkCap>,
+    /// Every bulk capacitor sitting input-rail -> ground. Keeping the bank is
+    /// essential: ripple sharing across parallel parts cannot be inferred from
+    /// one arbitrarily selected capacitor.
+    pub input_bulk_caps: Vec<BulkCap>,
+    /// Every bulk capacitor sitting output-rail -> ground.
+    pub output_bulk_caps: Vec<BulkCap>,
     /// FET references that touch the switch node (for evidence / refs).
     pub switch_fets: Vec<String>,
 }
@@ -141,16 +143,17 @@ fn connected_pads(c: &Component) -> usize {
     seen.len()
 }
 
-/// A bulk capacitor across `rail` to ground: reference `C<n>`, one pad on the
-/// rail and one on a ground net. Returns the cap with its parsed value. Only
-/// "bulk" sizes (>= 1 uF) qualify so a small decoupling cap is not treated as
-/// the input bulk; the ripple math only makes sense for the bulk element.
-fn bulk_cap_on_rail(
+/// Bulk capacitors across `rail` to ground: reference `C<n>`, one pad on the
+/// rail and one on a ground net. Only "bulk" sizes (>= 1 uF) qualify so small
+/// decouplers are not treated as the switching-current bank. The full,
+/// deterministically ordered bank is returned; consumers must not pretend all
+/// ripple flows through whichever part happens to have the largest capacitance.
+fn bulk_caps_on_rail(
     board: &ExtractedBoard,
     rail_id: i64,
     ground_ids: &HashSet<i64>,
-) -> Option<BulkCap> {
-    let mut best: Option<BulkCap> = None;
+) -> Vec<BulkCap> {
+    let mut caps = Vec::new();
     for c in &board.components {
         if c.dnp {
             continue;
@@ -178,19 +181,20 @@ fn bulk_cap_on_rail(
                 continue;
             }
         }
-        let cap = BulkCap {
+        caps.push(BulkCap {
             reference: c.reference.clone(),
             value: c.value.clone(),
             farads,
-        };
-        // Prefer the largest parseable cap as "the" bulk element.
-        best = match (best, &cap.farads) {
-            (None, _) => Some(cap),
-            (Some(b), Some(f)) if b.farads.map(|bf| *f > bf).unwrap_or(true) => Some(cap),
-            (Some(b), _) => Some(b),
-        };
+        });
     }
-    best
+    caps.sort_by(|left, right| {
+        right
+            .farads
+            .partial_cmp(&left.farads)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.reference.cmp(&right.reference))
+    });
+    caps
 }
 
 /// Power pins of a FET: every connected pad that is not a gate. We do not always
@@ -306,11 +310,9 @@ pub fn detect_converters(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<Conv
                 rail_votes.iter().map(|(&k, &v)| (k, v)).collect();
             rail_list.sort_by_key(|&(id, _)| id);
             let mut input_rail_id = None;
-            let mut input_cap = None;
             for &(rail, _) in &rail_list {
-                if let Some(cap) = bulk_cap_on_rail(board, rail, &ground_ids) {
+                if !bulk_caps_on_rail(board, rail, &ground_ids).is_empty() {
                     input_rail_id = Some(rail);
-                    input_cap = Some(cap);
                     break;
                 }
             }
@@ -329,23 +331,22 @@ pub fn detect_converters(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<Conv
             };
 
             let name_of = |id: i64| board.net(id).map(|n| n.name.clone()).unwrap_or_default();
-            // Buck: output rail is the inductor's far net (the lower rail). Boost:
-            // the inductor's far net is the *input*. We classify by the rail
-            // voltages when the names are recognisable; default to Buck (the hunt
-            // case and the overwhelmingly common discrete stage). The ripple
-            // formula below uses D = Vout/Vin for a buck regardless, so a
-            // mislabelled boost would simply not match the buck ripple law and is
-            // left to the (future) boost arm rather than mis-firing.
-            let topology = classify_topology(&name_of(input_rail_id), &name_of(other_rail));
+            // Directionless synchronous connectivity is reversible: FET-side
+            // high rail + inductor-side low rail can be either a buck or a boost.
+            // Accept a direction only when rail names explicitly identify input
+            // and/or output. Numeric voltage ordering alone is not evidence.
+            let Some(topology) = classify_topology(&name_of(input_rail_id), &name_of(other_rail))
+            else {
+                continue;
+            };
             let (input_rail, output_rail) = match topology {
                 Topology::Buck => (input_rail_id, other_rail),
                 Topology::Boost => (other_rail, input_rail_id),
             };
             // Resolve the bulk caps from the final input/output rails directly,
             // so the mapping is correct regardless of buck/boost orientation.
-            let _ = &input_cap; // (the input-rail probe above only disambiguated the rail)
-            let input_bulk_cap = bulk_cap_on_rail(board, input_rail, &ground_ids);
-            let output_bulk_cap = bulk_cap_on_rail(board, output_rail, &ground_ids);
+            let input_bulk_caps = bulk_caps_on_rail(board, input_rail, &ground_ids);
+            let output_bulk_caps = bulk_caps_on_rail(board, output_rail, &ground_ids);
 
             used_switch_nodes.insert(cand_sw);
             stages.push(ConverterStage {
@@ -355,8 +356,8 @@ pub fn detect_converters(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<Conv
                 output_rail: (output_rail, name_of(output_rail)),
                 inductor_ref: ind.reference.clone(),
                 inductor_h: Some(*h),
-                input_bulk_cap,
-                output_bulk_cap,
+                input_bulk_caps,
+                output_bulk_caps,
                 switch_fets: switch_fets
                     .iter()
                     .map(|(c, _)| c.reference.clone())
@@ -368,42 +369,64 @@ pub fn detect_converters(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<Conv
     stages
 }
 
-/// Classify buck vs boost from the two rail names' nominal voltages when
-/// recognisable. Higher input than output -> buck; lower -> boost. Unknown ->
-/// buck (the common discrete case and the hunt's mppt-1210).
-fn classify_topology(input_name: &str, output_name: &str) -> Topology {
-    match (rail_nominal_v(input_name), rail_nominal_v(output_name)) {
-        (Some(vin), Some(vout)) if vout > vin => Topology::Boost,
-        _ => Topology::Buck,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RailDirection {
+    Input,
+    Output,
+}
+
+/// Direction hint from an explicit rail-role name. This intentionally does not
+/// infer direction from voltage magnitude: a synchronous buck and synchronous
+/// boost have the same undirected FET/inductor graph with the high and low rails
+/// exchanged.
+fn rail_direction(name: &str) -> Option<RailDirection> {
+    let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
+    let leaf = n.rsplit('/').next().unwrap_or(&n);
+    let role_tokens: Vec<&str> = leaf
+        .split(|ch: char| !ch.is_ascii_alphanumeric())
+        .filter(|token| !token.is_empty())
+        .collect();
+    let input = leaf == "IN"
+        || leaf == "INPUT"
+        || leaf == "VIN"
+        || leaf.starts_with("VIN_")
+        || leaf.ends_with("_VIN")
+        || leaf.ends_with("_IN")
+        || role_tokens
+            .iter()
+            .any(|token| matches!(*token, "IN" | "INPUT" | "VIN"));
+    let output = leaf == "OUT"
+        || leaf == "OUTPUT"
+        || leaf == "VOUT"
+        || leaf.starts_with("VOUT_")
+        || leaf.ends_with("_VOUT")
+        || leaf.ends_with("_OUT")
+        || role_tokens
+            .iter()
+            .any(|token| matches!(*token, "OUT" | "OUTPUT" | "VOUT"));
+    match (input, output) {
+        (true, false) => Some(RailDirection::Input),
+        (false, true) => Some(RailDirection::Output),
+        _ => None,
     }
 }
 
-/// Rough nominal voltage of a rail by name, for buck/boost classification only.
-/// Returns `None` for names that do not encode a voltage.
-fn rail_nominal_v(name: &str) -> Option<f64> {
-    let n = name.trim().trim_start_matches('/').to_ascii_uppercase();
-    let leaf = n.rsplit('/').next().unwrap_or(&n);
-    // Explicit numeric voltage tokens are reliable, so they come FIRST, a rail
-    // named "+12V" always reports 12 V regardless of any role-name hint below.
-    for (tok, v) in [
-        ("+12V", 12.0),
-        ("+5V", 5.0),
-        ("+3V3", 3.3),
-        ("+3.3V", 3.3),
-        ("+1V8", 1.8),
-    ] {
-        if leaf == tok {
-            return Some(v);
-        }
+/// Classify the FET-side rail versus the inductor-far rail. `None` is a first-
+/// class result: without a directional name, the graph is compatible with both
+/// buck and boost and a buck-only ripple equation must abstain.
+fn classify_topology(fet_side_name: &str, inductor_far_name: &str) -> Option<Topology> {
+    match (
+        rail_direction(fet_side_name),
+        rail_direction(inductor_far_name),
+    ) {
+        (Some(RailDirection::Input), Some(RailDirection::Output))
+        | (Some(RailDirection::Input), None)
+        | (None, Some(RailDirection::Output)) => Some(Topology::Buck),
+        (Some(RailDirection::Output), Some(RailDirection::Input))
+        | (Some(RailDirection::Output), None)
+        | (None, Some(RailDirection::Input)) => Some(Topology::Boost),
+        _ => None,
     }
-    // No role-name guessing at all. Fabricating a voltage from a name CONTAINING
-    // "SOLAR"/"PV"/"VBUS_IN" (or 13 V/40 V for VIN/VOUT/BAT) is unsafe twice
-    // over: "PV" is a substring of ordinary buck/gate-driver nets like PVDD/PVCC,
-    // and a fabricated voltage on the OUTPUT rail outranks a real "+12V" token
-    // on the input, flipping a buck to a boost and skipping the ripple check.
-    // Only explicit numeric tokens above are trustworthy; everything else is
-    // unknown, and classify_topology takes its documented Buck default.
-    None
 }
 
 #[cfg(test)]
@@ -420,42 +443,95 @@ mod tests {
     }
 
     #[test]
-    fn classify_buck_when_input_higher() {
-        assert_eq!(classify_topology("SOLAR+", "DCDC_OUT"), Topology::Buck);
-        assert_eq!(classify_topology("+12V", "+3V3"), Topology::Buck);
+    fn classify_buck_only_from_directional_rail_names() {
+        assert_eq!(
+            classify_topology("SOLAR+", "DCDC_OUT"),
+            Some(Topology::Buck)
+        );
+        assert_eq!(classify_topology("VIN", "VOUT"), Some(Topology::Buck));
+        assert_eq!(
+            classify_topology("PWR_IN_12V", "CORE_OUT_3V3"),
+            Some(Topology::Buck)
+        );
+        assert_eq!(classify_topology("+12V", "+3V3"), None);
     }
 
     #[test]
-    fn classify_boost_when_output_higher() {
-        assert_eq!(classify_topology("+3V3", "+12V"), Topology::Boost);
+    fn classify_boost_only_from_directional_rail_names() {
+        assert_eq!(classify_topology("VOUT", "VIN"), Some(Topology::Boost));
+        assert_eq!(classify_topology("+12V", "+3V3"), None);
     }
 
     #[test]
-    fn generic_output_name_does_not_fabricate_a_boost() {
-        // Regression (R5): a real 3.3 V buck whose output rail is just named
-        // generically "VOUT" must stay a Buck. A VOUT->13.0 guess would outrank
-        // the "+12V" input token and mis-flag the stage Boost, which silently
-        // skips its ripple check.
-        assert_eq!(rail_nominal_v("VOUT"), None);
-        assert_eq!(rail_nominal_v("VIN"), None);
-        assert_eq!(rail_nominal_v("BAT"), None);
-        assert_eq!(classify_topology("+12V", "VOUT"), Topology::Buck);
-        assert_eq!(classify_topology("VIN", "VOUT"), Topology::Buck);
-        // A numeric token still beats a generic name on the other rail.
-        assert_eq!(rail_nominal_v("+12V"), Some(12.0));
+    fn explicit_output_name_does_not_fabricate_voltage_or_direction() {
+        // VOUT supplies direction only. No nominal voltage is guessed from it.
+        assert_eq!(classify_topology("+12V", "VOUT"), Some(Topology::Buck));
+        assert_eq!(classify_topology("VIN", "VOUT"), Some(Topology::Buck));
     }
 
     #[test]
-    fn pv_substring_names_do_not_fabricate_a_voltage() {
-        // R6: "PVDD"/"PVCC" merely CONTAIN "PV" but are ordinary non-solar
-        // gate-driver/buck nets; "VBUS_IN" is a 5 V USB input, not 40 V. The
-        // old substring guess fabricated 40 V for all of them.
-        assert_eq!(rail_nominal_v("PVDD"), None);
-        assert_eq!(rail_nominal_v("PVCC"), None);
-        assert_eq!(rail_nominal_v("SOLAR+"), None);
-        assert_eq!(rail_nominal_v("VBUS_IN"), None);
-        // The real R6 failing scenario: a PV-ish name on the OUTPUT rail vs a
-        // real numeric input must not be forced to Boost by the 40 V guess.
-        assert_eq!(classify_topology("+12V", "PVDD_OUT"), Topology::Buck);
+    fn pv_substrings_do_not_supply_direction_but_explicit_suffixes_do() {
+        assert_eq!(rail_direction("PVDD"), None);
+        assert_eq!(rail_direction("PVCC"), None);
+        assert_eq!(rail_direction("SOLAR+"), None);
+        assert_eq!(rail_direction("VBUS_IN"), Some(RailDirection::Input));
+        assert_eq!(classify_topology("+12V", "PVDD_OUT"), Some(Topology::Buck));
+    }
+
+    #[test]
+    fn synchronous_boost_with_only_numeric_rail_names_is_not_called_a_buck() {
+        let component = |reference: &str, value: &str, pins: Vec<(&str, i64)>| -> Component {
+            Component {
+                reference: reference.into(),
+                value: value.into(),
+                lib_id: String::new(),
+                footprint: String::new(),
+                position: None,
+                layer: "F.Cu".into(),
+                properties: vec![],
+                dnp: false,
+                pins: pins
+                    .into_iter()
+                    .map(|(number, net)| Pin {
+                        number: number.into(),
+                        net: Some(net),
+                        function: String::new(),
+                        kind: String::new(),
+                        position: None,
+                    })
+                    .collect(),
+            }
+        };
+        let board = ExtractedBoard {
+            name: "ambiguous_sync_stage".into(),
+            nets: vec![
+                hauksbee_extract::Net {
+                    id: 1,
+                    name: "+3V3".into(),
+                },
+                hauksbee_extract::Net {
+                    id: 2,
+                    name: "SW".into(),
+                },
+                hauksbee_extract::Net {
+                    id: 3,
+                    name: "+12V".into(),
+                },
+                hauksbee_extract::Net {
+                    id: 4,
+                    name: "GND".into(),
+                },
+            ],
+            components: vec![
+                component("L1", "10uH", vec![("1", 1), ("2", 2)]),
+                component("Q1", "NMOS", vec![("1", 2), ("2", 3)]),
+                component("Q2", "NMOS", vec![("1", 2), ("2", 4)]),
+                component("C1", "100uF", vec![("1", 3), ("2", 4)]),
+            ],
+        };
+        assert!(
+            detect_converters(&board, &ModelLibrary::builtin()).is_empty(),
+            "directionless synchronous connectivity is compatible with boost; abstain"
+        );
     }
 }

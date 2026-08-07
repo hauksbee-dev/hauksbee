@@ -15,23 +15,24 @@
 //!
 //! ## Zero-false-positive boundary
 //!
-//! The check fires *only* when **both** the topology and the cap's ripple rating
-//! are known, and an output current is attributed from a citeable source:
+//! The check fires *only* when the topology, cap rating, output current, and
+//! nominal duty are all known from citeable sources:
 //!
 //!   - the [discrete converter stage](super::converter) must resolve (switch
 //!     node tied to a FET + inductor, an input bulk cap on the input rail);
-//!   - the input cap's ripple rating must be known, either from the DB
-//!     (`max_ripple_current_a`, a datasheet override) or a conservative
-//!     per-class default keyed on the cap's value/dielectric;
-//!   - the output current `I_out` must be attributed from a converter limit, an
-//!     output-rail current-sense/connector rating, or an explicit citation.
+//!   - the input cap's ripple rating must be decision-grade DB evidence
+//!     (`max_ripple_current_a` from a specific fitted-part datasheet);
+//!   - the output current `I_out` must be an operating-current attribution
+//!     (currently a `regulated_current` programming equation), not a converter
+//!     limit or regulator/connector rating;
+//!   - both rail names must carry one unambiguous nominal voltage, so the buck
+//!     duty `D = Vout/Vin` is evidence rather than an assumed global 0.5.
 //!
-//! When the topology resolves but the rating or `I_out` is unknown, the check
-//! emits an *info* note (the negative is on the record) and does not fire. It
-//! never invents a current or a rating.
+//! When any decision input is unknown, the check emits an *info* note (the
+//! negative is on the record) and does not fire. It never invents a current,
+//! rating, or duty.
 
 use hauksbee_extract::{ExtractedBoard, SiCheck, SiFinding, SiReport, SiSeverity};
-use hauksbee_models::value::parse_value;
 use hauksbee_models::ModelLibrary;
 
 use super::converter::{detect_converters, ConverterStage, Topology};
@@ -65,113 +66,98 @@ pub fn worst_case_ripple_over_duty(i_out_a: f64, d_lo: f64, d_hi: f64) -> f64 {
     a.max(b)
 }
 
-/// Conservative per-class default RMS ripple rating (A) for a bulk cap, keyed on
-/// its capacitance, when the datasheet rating is not in the DB. These are the
-/// LOW end of typical aluminium-electrolytic ripple ratings at switching
-/// frequency for the given capacitance, so the default under-states the cap's
-/// real capability: the check therefore only fires on a clear overstress and
-/// never on a cap whose true rating we merely do not have. A cap whose value
-/// does not parse returns `None` (no default, so the check stays silent on it).
-fn default_ripple_rating_a(farads: f64) -> Option<f64> {
-    if farads <= 0.0 {
-        return None;
-    }
-    let uf = farads * 1e6;
-    // Representative low-end aluminium-electrolytic ripple ratings (A_rms) at
-    // ~100 kHz / 105 C by capacitance band. Deliberately conservative (a real
-    // part of this size is usually rated higher), so the comparison is honest.
-    let rating = if uf >= 2200.0 {
-        4.0
-    } else if uf >= 1000.0 {
-        2.5
-    } else if uf >= 470.0 {
-        1.8
-    } else if uf >= 100.0 {
-        1.0
-    } else {
-        // Sub-100 uF: likely an MLCC or small electrolytic; ripple is rarely the
-        // limit and a default would be unreliable. Decline.
-        return None;
-    };
-    Some(rating)
-}
-
-/// Resolve the input bulk cap's ripple rating: datasheet (DB) first, then the
-/// conservative per-class default. `None` when neither is available.
+/// Resolve the exact fitted part's datasheet ripple rating. Capacitance alone
+/// cannot establish this value: dielectric, can size, ESR construction,
+/// temperature, and frequency all matter, so an absent part-specific rating is
+/// an explicit `None`, never a class heuristic.
 fn input_cap_ripple_rating(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     cap_ref: &str,
-    cap_farads: Option<f64>,
-) -> Option<(f64, bool)> {
-    if let Some(comp) = board.component(cap_ref) {
-        if let Some(r) = resolve(lib, comp)
-            .model
-            .and_then(|m| m.ratings.max_ripple_current_a)
-        {
-            return Some((r, true)); // datasheet-sourced
-        }
-    }
-    cap_farads
-        .and_then(default_ripple_rating_a)
-        .map(|r| (r, false))
+) -> Option<f64> {
+    board
+        .component(cap_ref)
+        .and_then(|comp| resolve(lib, comp).model)
+        .and_then(|model| model.ratings.max_ripple_current_a)
 }
 
 /// Attribute the converter's output current `I_out` (A) from a citeable source
 /// on the output or input rail. Returns `(i_out, citation)` or `None`.
 ///
-/// Sources, in order: a DB converter `iout_limit_a` whose output pin lands on
-/// the stage's output rail; a part with a continuous `max_current_a` rating on
-/// the output rail (a current-sense amp's max, a connector contact, a load
-/// switch). Never fabricates a current.
+/// The shared ampacity attribution contract supplies only established operating
+/// currents. It sums simultaneous regulated loads and excludes converter/OCP
+/// limits plus device/contact ratings, which are capabilities rather than draw.
 fn attribute_i_out(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
     stage: &ConverterStage,
 ) -> Option<(f64, String)> {
-    let out_id = stage.output_rail.0;
-    let mut best: Option<(f64, String)> = None;
-    for comp in &board.components {
-        if comp.dnp {
-            continue;
+    super::ampacity::attributed_operating_currents(board, lib).remove(&stage.output_rail.1)
+}
+
+/// Parse one voltage token from a rail name. Supported conventional spellings
+/// are `12V`, `3V3`, and `3.3V`, embedded in names such as `PWR_IN_12V` or
+/// `VOUT_3V3`. For hierarchical names only the leaf is electrically
+/// descriptive; parent-sheet tokens are ignored. More than one voltage token
+/// in that leaf is ambiguous and is refused.
+fn named_rail_voltage(name: &str) -> Option<f64> {
+    fn parse_token(token: &str) -> Option<f64> {
+        let parse_positive = |text: &str| {
+            let value = text.parse::<f64>().ok()?;
+            (value.is_finite() && value > 0.0).then_some(value)
+        };
+
+        if let Some(number) = token.strip_suffix('V') {
+            if !number.is_empty()
+                && number.chars().all(|ch| ch.is_ascii_digit() || ch == '.')
+                && number.chars().filter(|&ch| ch == '.').count() <= 1
+            {
+                return parse_positive(number);
+            }
         }
-        let touches_out = comp.pins.iter().any(|p| p.net == Some(out_id));
-        if !touches_out {
-            continue;
+
+        let mut parts = token.split('V');
+        let whole = parts.next()?;
+        let fraction = parts.next()?;
+        if parts.next().is_some()
+            || whole.is_empty()
+            || fraction.is_empty()
+            || !whole.chars().all(|ch| ch.is_ascii_digit())
+            || !fraction.chars().all(|ch| ch.is_ascii_digit())
+        {
+            return None;
         }
-        let Some(model) = resolve(lib, comp).model else {
+        parse_positive(&format!("{whole}.{fraction}"))
+    }
+
+    let leaf = name
+        .trim()
+        .trim_end_matches('/')
+        .rsplit('/')
+        .next()
+        .unwrap_or_default();
+    let upper = leaf.to_ascii_uppercase();
+    let mut found = None;
+    for token in upper.split(|ch: char| !(ch.is_ascii_alphanumeric() || ch == '.')) {
+        let Some(volts) = parse_token(token) else {
             continue;
         };
-        // Converter output-current limit on this rail.
-        let mut candidate: Option<f64> = None;
-        if let Some(conv) = &model.behavioral.converter {
-            if let Some(i) = conv.iout_limit_a {
-                candidate = Some(i);
-            }
+        if found.is_some() {
+            return None;
         }
-        // A continuous current rating on a regulator / connector on this rail.
-        // FETs are excluded (a device switch rating is not a proof of rail
-        // current), and a generic placeholder model never seeds an attribution.
-        if candidate.is_none() {
-            if let Some(i) = model.ratings.max_current_a {
-                use hauksbee_models::ComponentKind::*;
-                if matches!(model.kind, Vreg | Connector) && !model.id.starts_with("generic") {
-                    candidate = Some(i);
-                }
-            }
-        }
-        if let Some(i) = candidate {
-            let cite = format!(
-                "{} ({}) rated {:.1} A on the output rail [datasheet]",
-                comp.reference, model.id, i
-            );
-            best = match best {
-                Some((b, _)) if b >= i => best,
-                _ => Some((i, cite)),
-            };
-        }
+        found = Some(volts);
     }
-    best
+    found
+}
+
+/// Nominal buck duty from explicit voltage-bearing input/output rail names.
+/// A non-step-down ratio or either missing/ambiguous voltage returns `None`;
+/// callers must record an abstention instead of substituting a convenient duty.
+fn nominal_buck_duty(input_rail: &str, output_rail: &str) -> Option<f64> {
+    let input_v = named_rail_voltage(input_rail)?;
+    let output_v = named_rail_voltage(output_rail)?;
+    let duty = output_v / input_v;
+    (duty.is_finite() && duty > 0.0 && duty < 1.0).then_some(duty)
 }
 
 /// Run the input-cap ripple check and append findings / info notes to the SI
@@ -184,44 +170,64 @@ pub fn append_ripple(board: &ExtractedBoard, lib: &ModelLibrary, report: &mut Si
         if stage.topology != Topology::Buck {
             continue;
         }
-        let Some(cap) = &stage.input_bulk_cap else {
-            continue;
+        let cap = match stage.input_bulk_caps.as_slice() {
+            [] => continue,
+            [cap] => cap,
+            caps => {
+                report.findings.push(SiFinding {
+                    check: SiCheck::InputCapRipple,
+                    severity: SiSeverity::Info,
+                    message: format!(
+                        "input-cap ripple: buck stage '{} -> {}' has {} parallel input bulk capacitors ({}); their frequency-dependent impedance and ripple-current sharing are unknown - not flagged.",
+                        stage.input_rail.1,
+                        stage.output_rail.1,
+                        caps.len(),
+                        caps.iter()
+                            .map(|cap| cap.reference.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ),
+                    refs: caps.iter().map(|cap| cap.reference.clone()).collect(),
+                    nets: vec![stage.input_rail.1.clone()],
+                });
+                continue;
+            }
         };
-        let cap_farads = cap
-            .farads
-            .or_else(|| parse_value(cap.value.trim()).map(|v| v.si));
-
-        let rating = input_cap_ripple_rating(board, lib, &cap.reference, cap_farads);
+        let rating = input_cap_ripple_rating(board, lib, &cap.reference);
         let i_out = attribute_i_out(board, lib, stage);
 
-        // Both the rating and I_out must be known to fire. Otherwise, record the
-        // honest info note and move on.
-        let rating_known = rating.is_some();
-        let i_out_known = i_out.is_some();
-        let (Some((rating_a, from_datasheet)), Some((i_out_a, i_cite))) = (rating, i_out) else {
-            let why = if !rating_known && !i_out_known {
-                "neither its ripple rating nor the output current is known"
-            } else if !rating_known {
-                "its ripple rating is not known"
-            } else {
-                "the output current is not attributable"
-            };
-            report.findings.push(SiFinding {
-                check: SiCheck::InputCapRipple,
-                severity: SiSeverity::Info,
-                message: format!(
-                    "input-cap ripple: buck stage on '{}' (switch node '{}', inductor {}) has input \
-                     bulk cap {} ({}), but {why} - not flagged.",
-                    stage.input_rail.1,
-                    stage.switch_node.1,
-                    stage.inductor_ref,
-                    cap.reference,
-                    cap.value,
-                ),
-                refs: vec![cap.reference.clone()],
-                nets: vec![stage.input_rail.1.clone()],
-            });
-            continue;
+        // Both the exact fitted-part rating and I_out must be known to fire.
+        // Preserve whichever half is known in the abstention so the user can
+        // see the precise remaining evidence gap.
+        let (rating_a, i_out_a, i_cite) = match (rating, i_out) {
+            (Some(rating_a), Some((i_out_a, i_cite))) => (rating_a, i_out_a, i_cite),
+            (rating, i_out) => {
+                let why = match (rating, i_out.as_ref()) {
+                    (None, None) => "it has no part-specific datasheet ripple rating and the output current is not attributable".to_string(),
+                    (None, Some((i_out_a, citation))) => format!(
+                        "it has no part-specific datasheet ripple rating; attributable I_out {i_out_a:.2} A from: {citation}"
+                    ),
+                    (Some(rating_a), None) => format!(
+                        "it has a {rating_a:.2} A_rms part-specific datasheet rating but the output current is not attributable"
+                    ),
+                    (Some(_), Some(_)) => unreachable!("complete evidence handled above"),
+                };
+                report.findings.push(SiFinding {
+                    check: SiCheck::InputCapRipple,
+                    severity: SiSeverity::Info,
+                    message: format!(
+                        "input-cap ripple: buck stage on '{}' (switch node '{}', inductor {}) has input bulk cap {} ({}), but {why} - not flagged.",
+                        stage.input_rail.1,
+                        stage.switch_node.1,
+                        stage.inductor_ref,
+                        cap.reference,
+                        cap.value,
+                    ),
+                    refs: vec![cap.reference.clone()],
+                    nets: vec![stage.input_rail.1.clone()],
+                });
+                continue;
+            }
         };
 
         // A non-positive rating (a malformed or zero model-DB ratings entry;
@@ -244,8 +250,27 @@ pub fn append_ripple(board: &ExtractedBoard, lib: &ModelLibrary, report: &mut Si
             continue;
         }
 
-        // Worst-case ripple is at D = 0.5 (the sqrt(D-D^2) peak): 0.5 * I_out.
-        let i_rms = buck_input_cap_ripple_rms(i_out_a, 0.5);
+        let Some(duty) = nominal_buck_duty(&stage.input_rail.1, &stage.output_rail.1) else {
+            report.findings.push(SiFinding {
+                check: SiCheck::InputCapRipple,
+                severity: SiSeverity::Info,
+                message: format!(
+                    "input-cap ripple: buck stage '{} -> {}' has attributable I_out {:.2} A and {} ({}) has a {:.2} A_rms part-specific datasheet rating, but the rail names do not provide one unambiguous nominal voltage each; duty D=Vout/Vin is unknown - not flagged. I_out from: {}",
+                    stage.input_rail.1,
+                    stage.output_rail.1,
+                    i_out_a,
+                    cap.reference,
+                    cap.value,
+                    rating_a,
+                    i_cite,
+                ),
+                refs: vec![cap.reference.clone()],
+                nets: vec![stage.input_rail.1.clone(), stage.output_rail.1.clone()],
+            });
+            continue;
+        };
+
+        let i_rms = buck_input_cap_ripple_rms(i_out_a, duty);
         let ratio = i_rms / rating_a;
 
         if i_rms > rating_a {
@@ -253,20 +278,18 @@ pub fn append_ripple(board: &ExtractedBoard, lib: &ModelLibrary, report: &mut Si
                 check: SiCheck::InputCapRipple,
                 severity: SiSeverity::Medium,
                 message: format!(
-                    "input bulk cap {} ({}) on buck input '{}' carries ~{:.2} A_rms ripple \
-                     (I_out {:.1} A, worst-case D=0.5) but is rated {:.2} A_rms{}: ~{:.2}x \
+                    "input bulk cap {} ({}) on buck '{} -> {}' carries ~{:.2} A_rms ripple \
+                     (I_out {:.1} A, D={:.3} from named nominal rail voltages) but is rated {:.2} A_rms{}: ~{:.2}x \
                      overstress, which shortens cap life (I^2*ESR self-heating). I_out from: {}",
                     cap.reference,
                     cap.value,
                     stage.input_rail.1,
+                    stage.output_rail.1,
                     i_rms,
                     i_out_a,
+                    duty,
                     rating_a,
-                    if from_datasheet {
-                        " [datasheet]"
-                    } else {
-                        " [conservative per-class default]"
-                    },
+                    " [datasheet]",
                     ratio,
                     i_cite,
                 ),
@@ -278,11 +301,17 @@ pub fn append_ripple(board: &ExtractedBoard, lib: &ModelLibrary, report: &mut Si
                 check: SiCheck::InputCapRipple,
                 severity: SiSeverity::Info,
                 message: format!(
-                    "input bulk cap {} on '{}': ~{:.2} A_rms ripple vs {:.2} A_rms rating ({:.2}x) - ok.",
-                    cap.reference, stage.input_rail.1, i_rms, rating_a, ratio
+                    "input bulk cap {} on '{} -> {}': ~{:.2} A_rms ripple at D={:.3} from named nominal rail voltages vs {:.2} A_rms rating ({:.2}x) - ok.",
+                    cap.reference,
+                    stage.input_rail.1,
+                    stage.output_rail.1,
+                    i_rms,
+                    duty,
+                    rating_a,
+                    ratio
                 ),
                 refs: vec![cap.reference.clone()],
-                nets: vec![stage.input_rail.1.clone()],
+                nets: vec![stage.input_rail.1.clone(), stage.output_rail.1.clone()],
             });
         }
     }
@@ -313,6 +342,28 @@ mod tests {
         // Range entirely below 0.5 -> worst at the upper endpoint (nearer 0.5).
         let w = worst_case_ripple_over_duty(10.0, 0.2, 0.4);
         assert!((w - buck_input_cap_ripple_rms(10.0, 0.4)).abs() < 1e-9);
+    }
+
+    #[test]
+    fn nominal_buck_duty_requires_unambiguous_voltages_in_both_rail_names() {
+        assert_eq!(nominal_buck_duty("VIN_5V", "VOUT_2V5"), Some(0.5));
+        let duty = nominal_buck_duty("PWR_IN_12V", "CORE_OUT_3V3").unwrap();
+        assert!((duty - 0.275).abs() < 1e-12);
+        assert_eq!(nominal_buck_duty("VIN", "VOUT_3V3"), None);
+        assert_eq!(nominal_buck_duty("VIN_12V_24V", "VOUT_5V"), None);
+        assert_eq!(nominal_buck_duty("VIN_5V", "VOUT_12V"), None);
+        assert_eq!(nominal_buck_duty("VIN_0V", "VOUT_0V"), None);
+    }
+
+    #[test]
+    fn nominal_buck_duty_uses_only_the_hierarchical_net_leaf() {
+        // Parent-sheet labels describe hierarchy, not the electrical name of
+        // the leaf net. A voltage token in a parent path must never fabricate
+        // a nominal voltage for an otherwise unlabelled VIN/VOUT.
+        assert_eq!(named_rail_voltage("/12V_DOMAIN/VIN"), None);
+        assert_eq!(named_rail_voltage("/POWER_12V/VOUT_5V"), Some(5.0));
+        let duty = nominal_buck_duty("/POWER_TREE/VIN_12V", "/CORE_5V/VOUT_3V3").unwrap();
+        assert!((duty - 0.275).abs() < 1e-12);
     }
 
     // The hunt's mppt-1210-hus C1 case, hand-checked: 1200 uF / 3.0 A_rms rated,
@@ -366,22 +417,6 @@ mod tests {
         assert!(
             (i_rms / 3.0).is_finite(),
             "a real rating yields a finite ratio"
-        );
-    }
-
-    #[test]
-    fn conservative_default_is_below_typical_ratings() {
-        // A 1200 uF cap defaults to 2.5 A (conservative) when no datasheet rating
-        // is in the DB; the real UCC part is 3.0 A. The default under-states, so
-        // the check is honest (it will not over-fire on an undocumented cap).
-        let d = default_ripple_rating_a(1200e-6).unwrap();
-        assert!(
-            d <= 3.0,
-            "default {d} should not exceed the real ~3.0 A rating"
-        );
-        assert!(
-            default_ripple_rating_a(50e-6).is_none(),
-            "decline sub-100uF (MLCC/no default)"
         );
     }
 }

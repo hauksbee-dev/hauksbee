@@ -23,31 +23,31 @@ hauksbee run MyBoard.PcbDoc --lint --plain     # design lint in plain language
 full net connectivity in one file, so it is the complete source of truth and you
 do not need the rest of the project.
 
-**Binary, not ASCII Protel.** hauksbee reads the binary OLE2 `.PcbDoc` that
-Altium Designer writes. There is also a text variant whose file begins
-`|RECORD=Board|`, which is what tools such as EasyEDA emit when they claim an
-Altium export, and hauksbee does not read it. If you have one of those, re-save
-it from Altium Designer as a normal binary `.PcbDoc`.
+**Binary Altium and ASCII Protel are both accepted.** hauksbee reads the binary
+OLE2 `.PcbDoc` that Altium Designer writes and the pipe-delimited
+`Protel_Advanced_PCB` text form emitted by EasyEDA and several converters. The
+binary reader supports connectivity and copper geometry; the ASCII reader
+supports connectivity but not track/pour clearance geometry. Content sniffing
+selects the reader, so the filename extension and capitalization do not matter.
 
 **Git LFS pointers.** Large `.PcbDoc` files are commonly stored in Git LFS. A
 fresh clone without `git lfs pull` gives you a few hundred bytes of text instead
 of the board. Run `git lfs pull` first.
 
-Neither case falls through to a generic "cannot read this" error. Both are
-recognised for what they actually are and told apart, because "your file is a
-stub the clone never downloaded" and "your file is the wrong Altium dialect"
-need different actions from you:
+An LFS pointer does not fall through to a generic "cannot read this" error. It
+is identified as a missing payload because that needs a different action from
+an unsupported file:
 
 ```
 $ hauksbee run board.PcbDoc --report
 error: 'board.PcbDoc': this is a Git LFS pointer, not the board file itself: the repository stores the real file in Git LFS and it was never downloaded. Run `git lfs install && git lfs pull` in the repository, then retry with the real file
 ```
 
-The ASCII-Protel case names itself the same way, says it is what EasyEDA
-produces, and tells you to re-save from Altium Designer as a binary `.PcbDoc`.
-Only a file that matches none of the readers at all gets the generic message,
-which lists every format hauksbee does read. All three exit 1: a hard input
-error, distinct from a report that ran and found something (see the
+An ASCII pipe-record file whose `KIND` is not `Protel_Advanced_PCB` is also
+identified precisely: it is a Protel export, but it is not a supported board
+document. Only a file that matches none of the readers gets the generic
+message, which lists every format hauksbee does read. Input failures exit 1,
+distinct from a report that ran and found something (see the
 [exit-code contract](../ci/CI.md#exit-codes-the-pipeline-contract)).
 
 **What to expect from bind coverage.** Altium keeps the displayed component
@@ -75,6 +75,8 @@ Entry points:
 - `ExtractedBoard::from_altium_pcb(bytes)` reads connectivity (nets,
   components, netted pads) into the same `ExtractedBoard` the KiCad / Eagle /
   IPC / gerber paths produce.
+- `ExtractedBoard::from_protel_ascii(text)` reads connectivity from an ASCII
+  `Protel_Advanced_PCB` export into that same shape.
 - `ExtractedBoard::altium_drc(bytes)` runs the geometric short / clearance DRC
   over the board's copper: the binary twin of `ExtractedBoard::drc(text)`.
 - `ExtractedBoard::from_auto_bytes(bytes)` performs a content sniff. It
@@ -87,10 +89,12 @@ Entry points:
 
 ## The format
 
-A `.PcbDoc` is a Microsoft OLE2 / Compound File Binary (CFB) container: a
-filesystem-in-a-file of *storages* (directories) and *streams* (files). We
-open it with the battle-tested [`cfb`](https://docs.rs/cfb) crate rather than
-hand-rolling the FAT / DIFAT.
+An Altium Designer `.PcbDoc` is a Microsoft OLE2 / Compound File Binary (CFB)
+container: a filesystem-in-a-file of *storages* (directories) and *streams*
+(files). We open it with the battle-tested
+[`cfb`](https://docs.rs/cfb) crate rather than hand-rolling the FAT / DIFAT.
+An ASCII Protel board instead stores one `|KEY=VALUE|...` record per line; its
+explicit `ID`, `NET`, and `COMPONENT` fields carry the same connectivity.
 
 Each logical section is a sub-storage (`Nets6`, `Components6`, `Pads6`,
 `Tracks6`, `Arcs6`, `Vias6`, `Polygons6`, and so on) holding a `Data` stream
@@ -123,11 +127,51 @@ the nets, components, and netted pads. The DRC geometry extractor (the
 to `sweep_buckets`, the exact same R-tree short / clearance engine the KiCad
 and Eagle paths use. There is one detection engine, not three.
 
-Channel-replicated designs (the same `SOURCEDESIGNATOR` reused across
-identical sub-blocks, e.g. three FLASH banks all called `C1`) are
-disambiguated by appending the channel name from `SOURCEHIERARCHICALPATH`
-(`C1_FLASH2`), exactly as KiCad's importer does, so every component carries a
-unique reference for the binder.
+Binary and ASCII component records use one identity algorithm. Altium's
+`UNIQUEID` (with `SOURCEUNIQUEID` as an export/legacy fallback), paired with the
+full normalized `SOURCEHIERARCHICALPATH`, is authoritative. Distinct IDs in one
+hierarchy remain distinct physical parts even if they repeat the compiled
+`SOURCEDESIGNATOR`; repeated records with the same ID/path may merge as one split
+placement unless their known pin nets conflict. Both provenance fields are
+retained as `source_unique_id` / `source_hierarchical_path` properties.
+
+When a designator is reused across replicated channels, the full path is
+appended after `@`: `C1@A/FLASH2` and `C1@B/FLASH2` cannot collide merely because
+both paths end in `FLASH2`. The same properties are parsed from ASCII Protel
+records when an exporter supplies them.
+Generated channel names are checked against every genuine source designator;
+if a board really contains `C1@A/FLASH2`, that name wins and the generated one
+gets a stable `@source-<record>` discriminator.
+
+A hierarchy is a channel location, not by itself a physical component identity.
+When authoritative IDs are absent, repeated records—even in the same
+hierarchy—merge only when they share at least one
+identically-netted pad and no repeated pad number disagrees on its net. Merely
+having disjoint pad numbers is not proof that they are one part. The merged
+component carries a `reference_ambiguous` property recording the inference.
+Conflicting or insufficient pad evidence stays distinct under stable
+`@record-<id>` names; mixed groups never let a missing path collapse the named
+channels. Binary DRC uses these exact identities too, so a different-net
+overlap between ambiguous replicas cannot receive a same-owner exemption. Those
+kept-distinct ambiguous records also carry `duplicate_reference_conflict`: the
+binder leaves them open, because conservative DRC ownership is not evidence that
+the records are two independently modelable devices. An inferred merge without a
+non-empty `source_unique_id` likewise remains `reference_ambiguous` and is left
+open by every binding path. Only an authoritative UID can promote identity from
+DRC-safe connectivity evidence to simulation-grade component identity.
+
+The shared merge is conservative about metadata as well. A later placement may
+supply a missing value and clears the earlier `value_unresolved` marker, and
+non-conflicting properties are retained. Conflicting non-empty values,
+footprints, library ids, properties, or one pad number mapped to different nets
+preserve both records and attach `duplicate_reference_conflict` instead of
+silently choosing whichever record arrived first. A content-derived stable
+ordering gives the same record the unsuffixed name regardless of stream order;
+generated conflict names cannot replace a genuine source designator. The binder
+then leaves every conflicted identity open and reports the ambiguity rather than
+simulating a guessed part. Missing or numeric-only designators get per-record,
+collision-safe `UNK...` identities. The readers never invent the old `_2`
+suffixes.
 
 ## Accuracy: closed-loop cross-validation against KiCad
 
@@ -195,8 +239,13 @@ contract is pinned:
 
 - `crates/hauksbee-extract/tests/altium.rs` exercises synthetic in-memory
   `.PcbDoc` fixtures (built with `cfb`): the properties decoder, the `Pads6` /
-  `Tracks6` binary layouts, net / component index resolution, auto-detection,
-  and a deliberate-short DRC. No corpus needed.
+  `Tracks6` binary layouts, net / component index resolution, split-placement
+  and replicated-channel reference semantics (full paths, mixed metadata,
+  genuine-name collisions, conflicting pad nets, and DRC ownership),
+  auto-detection, and a deliberate-short DRC. `protel_ascii.rs` pins the same
+  identity path for ASCII, including numeric-only designators. Shared merge
+  tests cover both input orderings, property and footprint conflicts, and exact
+  duplicate pad records. No corpus is needed.
 - `crates/hauksbee-extract/tests/altium_corpus.rs` runs the real-board sweep
   (extraction + short-clean DRC) and the KiCad cross-validation. Corpus-gated.
 
@@ -247,20 +296,22 @@ partition agreement.
   that text is a bound field placeholder (`.Comment` / `.Designator`) whose
   literal resolves through `WideStrings6`, which we do not parse. The refdes
   (from `SOURCEDESIGNATOR`), footprint (`PATTERN`) and full connectivity are
-  solid. The value is often left empty. The binder works off footprint +
-  connectivity regardless, so this does not affect bind / DRC / lint / sim.
-  `hauksbee run <board.PcbDoc> --report` is where you see it: parts bind and
-  resolve with their `Value` column blank.
+  solid. The value is often left empty. Copper DRC and connectivity lint remain
+  valid, but value-dependent binding and therefore analog, thermal, and
+  firmware conclusions on that part are limited. The run report keeps the
+  value blank and records the unresolved reason instead of guessing a
+  magnitude.
 
 - **Newest-format designators (WideStrings) on some boards.** A few newer
   Altium files (e.g. the EBAZ4205) store no `SOURCEDESIGNATOR` in
   `Components6` at all. The refdes lives in a `WideStrings6`-indexed
   `Texts6` designator label whose byte layout is version-specific. On those
-  boards the component *references* come out blank. The **electrical model
-  is unaffected** (the EBAZ4205 still extracts 392 nets and 1742 netted
-  pins, and its DRC is short-clean); only the human-facing labels are
-  missing, which is why its KiCad cross-validation cannot perform the
-  label-keyed join. Resolving `WideStrings6` would lift this limit.
+  boards the component references become stable, collision-safe `UNK<record>` placeholders
+  rather than being merged under one blank label. The connectivity graph and
+  copper DRC still extract (the EBAZ4205 yields 392 nets and 1742 netted pins
+  and is short-clean), but reference-dependent model binding, diagnostics, and
+  KiCad cross-validation are limited. Resolving `WideStrings6` would lift this
+  limit.
 
 - **Copper-pour fill is not modelled.** Pour *outlines* (and therefore the
   pour's net) are read, but the filled copper with its antipads / thermal
@@ -268,11 +319,11 @@ partition agreement.
   does not participate in short detection (see the bug note above). Pad-,
   track-, via- and arc-level shorts are detected normally.
 
-- **ASCII `.pcbdoc` is not yet supported.** Altium also has a text variant
-  whose files begin `|RECORD=Board|` (e.g. SimpleFOCMini). We read only the
-  binary OLE2 form today. hauksbee detects the ASCII form as "not a binary
-  board" and currently falls through. An ASCII sample is kept in the
-  maintainers' corpus against a future path; it is not in the public fetch.
+- **ASCII `.pcbdoc` has connectivity, not copper geometry.** The
+  `Protel_Advanced_PCB` reader recovers nets, components, copper pads, values,
+  placements, and layers. It does not recover tracks, vias, arcs, regions, or
+  pours, so it cannot support geometric short/clearance claims. Use the binary
+  Altium document or Gerber fallback when those checks are required.
 
 - **`.SchDoc` (schematic) is not read.** The PCB was the priority because it
   carries full net connectivity in one file (the layout alone fully
