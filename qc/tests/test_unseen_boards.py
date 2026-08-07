@@ -1665,6 +1665,9 @@ expect = ["board-{number}.kicad_pcb"]
         )
         source = harness.read_text(encoding="utf-8")
         interface = source.split("interface BoardResult", 1)[1].split("}", 1)[0]
+        # `path`, `failures`, `report`, `exported`, and `response_status` are
+        # hard requirements of `_validate_browser_results`; the rest feed the
+        # retained-evidence document.
         for field in (
             "path",
             "file",
@@ -1672,6 +1675,7 @@ expect = ["board-{number}.kicad_pcb"]
             "report",
             "failures",
             "exported",
+            "response_status",
             "live_started",
         ):
             self.assertRegex(
