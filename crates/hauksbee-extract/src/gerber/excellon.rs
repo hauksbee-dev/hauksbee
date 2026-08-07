@@ -97,6 +97,12 @@ pub fn parse(text: &str) -> DrillFile {
         t.starts_with("M15") || t.starts_with("M015")
     });
     let mut tool_down = false;
+    // Whether we are inside a rout section, as opposed to a drill section of
+    // the same file. Distinct from `tool_down`: with the cutter up a rout line
+    // is still a MOVE, not a drilled point, and `G05` is what returns the file
+    // to drilling. Every rout-carrying board in the corpus brackets its
+    // sections exactly that way.
+    let mut rout_mode = false;
     // Modal coordinates: an Excellon body line may carry only X (keep the last
     // Y) or only Y (keep the last X), as Altium's exporter does. Track the last
     // value seen so a single-axis line resolves to a full (x, y).
@@ -216,11 +222,17 @@ pub fn parse(text: &str) -> DrillFile {
             }
             continue;
         }
-        // Tool select: lone `T<idx>` (no C).
+        // Tool select: `T<idx>` (no C). A dialect that puts the first hit on
+        // the same line (`T1X0.0Y0.0`) selects the tool AND drills, so only a
+        // select with nothing after it ends the line here; otherwise the
+        // coordinates carry on to the readers below and the hit survives.
         if let Some(idx) = parse_tool_select(line) {
             current = tools.get(&idx).copied();
             current_is_npth = npth_tools.contains(&idx);
-            continue;
+            let up = line.to_ascii_uppercase();
+            if !(up.contains('X') || up.contains('Y')) {
+                continue;
+            }
         }
         // ── G85 canned slot: `X<a>Y<b>G85X<c>Y<d>` cuts from (a,b) to (c,d) ──
         // Read before the rout block, because a G85 record is self-describing:
@@ -272,6 +284,7 @@ pub fn parse(text: &str) -> DrillFile {
             let up = line.to_ascii_uppercase();
             if up.starts_with("M15") || up.starts_with("M015") {
                 tool_down = true;
+                rout_mode = true;
                 continue;
             }
             if up.starts_with("M16") || up.starts_with("M17") || up.starts_with("M016") {
@@ -285,22 +298,36 @@ pub fn parse(text: &str) -> DrillFile {
             // first.
             let g = leading_g_code(&up);
             if g == Some(5) {
-                // Back to drill mode: the cutter is up by definition.
+                // Back to drill mode: the cutter is up by definition, and a
+                // bare coordinate line is a drilled point again.
                 tool_down = false;
+                rout_mode = false;
                 continue;
+            }
+            if matches!(g, Some(0) | Some(1) | Some(2) | Some(3)) {
+                rout_mode = true;
             }
             // A `G00` rapid positions the cutter without cutting, so it is a
             // move and never a hit. A `G01` while the cutter is down cuts a
             // slot from where it was to where it lands.
             //
-            // Motion codes are modal: a run of cuts is written `G01X..Y..` once
-            // and then bare `X..Y..` lines. With the cutter down those bare
-            // lines are cuts too, and reading them as drilled points instead
-            // both loses the wall and plants a hole the file never described.
-            let is_rapid = g == Some(0);
-            let is_cut = g == Some(1)
-                || (g.is_none() && tool_down && (up.contains('X') || up.contains('Y')));
-            if is_rapid || is_cut {
+            // Motion codes are modal: a run of moves is written with the code
+            // once and then bare `X..Y..` lines. Inside a rout section those
+            // bare lines are motion too, cuts while the cutter is down and
+            // plain moves while it is up. Letting them fall through to the
+            // drilled-point reader is wrong in both directions: with the cutter
+            // down it loses the wall, and with the cutter up it plants a plated
+            // hit where the file only repositioned. Which is why `rout_mode` is
+            // tracked separately from `tool_down`, and why `G05` clears it: a
+            // file that returns to drill mode really does drill bare
+            // coordinates again, which is how every rout-carrying board in the
+            // corpus is written.
+            let bare_motion = g.is_none() && rout_mode && (up.contains('X') || up.contains('Y'));
+            let is_linear = g == Some(0) || g == Some(1) || bare_motion;
+            // Geometry is cut only while the cutter is down; every other linear
+            // motion in a rout section just moves the head.
+            let is_cut = (g == Some(1) || bare_motion) && tool_down;
+            if is_linear {
                 let (px, py) = (last_x, last_y);
                 // The uppercased line throughout the rout block, so a file that
                 // writes its axis and centre letters in lower case is read the
@@ -314,13 +341,9 @@ pub fn parse(text: &str) -> DrillFile {
                     &mut last_x,
                     &mut last_y,
                 );
-                if let (Some((nx, ny)), Some(dia), true, Some(sx), Some(sy)) = (
-                    moved,
-                    current,
-                    is_cut && tool_down && !current_is_npth,
-                    px,
-                    py,
-                ) {
+                if let (Some((nx, ny)), Some(dia), true, Some(sx), Some(sy)) =
+                    (moved, current, is_cut && !current_is_npth, px, py)
+                {
                     holes.push(Hole {
                         x: sx,
                         y: sy,
@@ -1023,6 +1046,95 @@ M30
         );
         assert_eq!(d.holes.len(), 1, "only the drilled point: {:?}", d.holes);
         assert!((d.holes[0].x - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_modal_move_with_the_cutter_up_is_not_a_drilled_hit() {
+        // After `M16` the head is still in a rout section; a bare coordinate
+        // line repositions it. Reading that as a drilled point plants a plated
+        // barrel where the file only moved, and on a multi-layer board that
+        // barrel stitches the layers together. Note the asymmetry it fixes:
+        // the same move written `G01X0Y0` was already treated as a move.
+        let d = parse(
+            "\
+M48
+FMAT,2
+METRIC
+T1C0.800
+%
+G90
+T1
+G00X2.0Y2.0
+M15
+G01X8.0Y2.0
+M16
+X0.0Y0.0
+M30
+",
+        );
+        assert_eq!(d.holes.len(), 1, "only the cut: {:?}", d.holes);
+        assert_eq!(d.holes[0].to, Some((8.0, 2.0)));
+    }
+
+    #[test]
+    fn a_g05_returns_a_rout_file_to_drilling_bare_coordinates() {
+        // The other half of the same rule. A file that routs and then drills is
+        // how every rout-carrying board in the corpus is written, and after the
+        // `G05` a bare coordinate line is a hit again. Treating rout mode as
+        // sticky would silently drop every drilled hole after the first slot.
+        let d = parse(
+            "\
+M48
+FMAT,2
+METRIC
+T1C0.800
+%
+G90
+T1
+G00X2.0Y2.0
+M15
+G01X8.0Y2.0
+M16
+G05
+X1.0Y1.0
+X2.0Y1.0
+M30
+",
+        );
+        assert_eq!(
+            d.holes.len(),
+            3,
+            "one cut and two drilled hits: {:?}",
+            d.holes
+        );
+        assert!(d.holes[0].to.is_some());
+        assert!(d.holes[1].to.is_none() && d.holes[2].to.is_none());
+    }
+
+    #[test]
+    fn a_tool_select_carrying_its_first_hit_keeps_the_hit() {
+        // `T1X0.0Y0.0` selects tool 1 and drills at the origin. Consuming the
+        // whole line as a tool select drops the hole, and with it whatever the
+        // via was stitching.
+        let d = parse(
+            "\
+M48
+FMAT,2
+METRIC
+T1C0.400
+%
+G90
+T1X0.0Y0.0
+X1.0Y0.0
+M30
+",
+        );
+        assert_eq!(d.holes.len(), 2, "got {:?}", d.holes);
+        assert!(d.holes[0].x.abs() < 1e-9 && d.holes[0].y.abs() < 1e-9);
+        assert!(
+            (d.holes[0].diameter - 0.4).abs() < 1e-9,
+            "the tool was selected"
+        );
     }
 
     #[test]
