@@ -411,7 +411,7 @@ fn i2c_strong_pull_low_device_count_is_ok() {
     // 2.2k pull, 3 devices (~30 pF): t_r ~ 56 ns. Far under 1000 ns: info.
     let b = i2c_board("SDA", "2.2k", 3);
     let mut r = SiReport::default();
-    check_i2c_rise_time(&b, &mut r);
+    check_i2c_rise_time(&b, None, &mut r);
     assert_eq!(r.finding_count(), 0, "strong pull / few devices must be ok");
     assert!(r
         .of_check(SiCheck::I2cRiseTime)
@@ -424,7 +424,7 @@ fn i2c_weak_pull_heavy_bus_fires() {
     // over standard-mode 1000 ns: fires.
     let b = i2c_board("SDA", "10k", 20);
     let mut r = SiReport::default();
-    check_i2c_rise_time(&b, &mut r);
+    check_i2c_rise_time(&b, None, &mut r);
     assert_eq!(r.finding_count(), 1, "weak pull on a heavy bus must fire");
 }
 
@@ -440,7 +440,7 @@ fn i2c_no_pullup_is_not_our_finding() {
           (property "Reference" "U2") (property "Value" "S")
           (pad "1" smd rect (at 0 0) (net 1 "SDA")))"#);
     let mut r = SiReport::default();
-    check_i2c_rise_time(&b, &mut r);
+    check_i2c_rise_time(&b, None, &mut r);
     assert_eq!(
         r.findings.len(),
         0,
@@ -478,11 +478,91 @@ fn i2c_dual_pullups_combine_in_parallel_not_min() {
     }
     let b = pcb(&body);
     let mut r = SiReport::default();
-    check_i2c_rise_time(&b, &mut r);
+    check_i2c_rise_time(&b, None, &mut r);
     assert_eq!(
         r.finding_count(),
         0,
         "two 10k pull-ups are 5k in parallel: the bus is in spec, no false positive"
+    );
+}
+
+/// Full kicad_pcb text for a 10k-pulled SDA bus with `devices` sensor pins and a
+/// single routed track `track_mm` long, so the SAME text drives both extraction
+/// and geometry parsing.
+fn i2c_routed_text(devices: usize, track_mm: f64) -> String {
+    let mut body = String::from(
+        r#"(net 1 "SDA") (net 2 "+3V3")
+        (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
+          (property "Reference" "R1") (property "Value" "10k")
+          (pad "1" smd rect (at 0 0) (net 1 "SDA"))
+          (pad "2" smd rect (at 1 0) (net 2 "+3V3")))"#,
+    );
+    for i in 0..devices {
+        body.push_str(&format!(
+            r#"(footprint "Package_SO:SOIC-8" (at {} 8) (layer "F.Cu")
+              (property "Reference" "U{}") (property "Value" "SENSOR")
+              (pad "1" smd rect (at 0 0) (net 1 "SDA")))"#,
+            10 + i,
+            i + 1
+        ));
+    }
+    body.push_str(&format!(
+        r#"(segment (start 0 0) (end {track_mm} 0) (width 0.2) (layer "F.Cu") (net 1))"#
+    ));
+    format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})")
+}
+
+#[test]
+fn i2c_long_routing_pushes_a_marginal_bus_over() {
+    // 10k pull, 10 devices = 100 pF: t_r ~ 0.8473*10000*100e-3 = 847 ns, inside
+    // the 1000 ns standard-mode limit on pin capacitance ALONE. 100 mm of routed
+    // copper adds 100 pF (1 pF/mm), doubling C to 200 pF and t_r to ~1695 ns.
+    // Passing None for the trace length silently rates this in-spec.
+    let text = i2c_routed_text(10, 100.0);
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
+    assert_eq!(
+        r.finding_count(),
+        1,
+        "100 mm of trace capacitance must push a marginal bus over the limit"
+    );
+    assert!(
+        r.of_check(SiCheck::I2cRiseTime)
+            .any(|f| f.message.contains("100 mm routing")),
+        "the finding must name the routed length it counted"
+    );
+}
+
+#[test]
+fn i2c_short_routing_leaves_the_same_bus_silent() {
+    // The identical bus routed compactly (5 mm) is 105 pF / ~890 ns: in spec.
+    // Counting trace copper must not turn every marginal bus into a finding.
+    let text = i2c_routed_text(10, 5.0);
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
+    assert_eq!(
+        r.finding_count(),
+        0,
+        "a short-routed bus of the same devices stays in spec"
+    );
+}
+
+#[test]
+fn i2c_without_layout_says_routing_was_not_counted() {
+    // No layout: the pin-count model is a floor, not an answer, and the note must
+    // name the upload that would complete it rather than implying completeness.
+    let b = i2c_board("SDA", "2.2k", 3);
+    let mut r = SiReport::default();
+    check_i2c_rise_time(&b, None, &mut r);
+    assert!(
+        r.of_check(SiCheck::I2cRiseTime)
+            .any(|f| f.message.contains("routing capacitance NOT counted")
+                && f.message.contains(".kicad_pcb")),
+        "a layout-less run must disclose the missing routing term and the upload"
     );
 }
 

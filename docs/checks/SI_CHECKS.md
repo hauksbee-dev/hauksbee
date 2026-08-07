@@ -150,9 +150,18 @@ Too-weak a pull (R too high) or too much bus capacitance blows it.
 Bus capacitance is `Cbus = devices * 10 pF + trace_length * 1.0 pF/mm`:
 
 - 10 pF per I2C device pin (a common datasheet figure, refinable per part).
-- 1.0 pF/mm of routed trace (a conservative microstrip-over-plane figure. The
-  geometry refinement is a documented future improvement, the device-count
-  term is the floor used today).
+- 1.0 pF/mm of routed trace (a conservative microstrip-over-plane figure),
+  summed from the layout's discrete segments and arcs via `routed_length_mm`,
+  the same geometry the USB skew check reads.
+
+Both terms are real: on a 10-device bus behind a 10 kohm pull, 100 mm of routed
+copper doubles `Cbus` and takes `t_r` from ~847 ns (in spec) to ~1695 ns (out).
+Dropping the trace term therefore under-reports rise time, so a `.kicad_pcb`
+layout is always folded in when one is uploaded. **Without a layout the routing
+term is unavailable**, and the note says so in words (`routing capacitance NOT
+counted - upload the .kicad_pcb layout to include trace copper`): the
+device-count number is a floor, not a verdict. With a layout the note states the
+routed length it counted, so a reader can tell the two apart.
 
 This **upgrades** the existing netlint `missing_i2c_pullup` check from
 "is a pull-up present" to "is the pull-up *sufficient*". No-pull-up is
@@ -167,14 +176,20 @@ otherwise. This is exactly what keeps it silent on the proven-good corpus buses.
 
 ### Calibration evidence
 
-| Board / bus | Pull | Devices | `Cbus` | `t_r` | Verdict |
-|-------------|------|---------|--------|-------|---------|
-| Olimex UEXT (REV-L) | 2.2 kohm | 1 | ~10 pF | ~19 ns | ok |
-| ZSWatch RTC (PCA9306+RV-8263) | 3.3 kohm | 2 | ~20 pF | ~56 ns | ok |
-| ZSWatch Extension bus | 1.8 kohm | 8 | ~80 pF | ~122 ns | ok |
+Measured on the real layouts, with the routed term included:
+
+| Board / bus | Pull | Devices | Routing | `Cbus` | `t_r` | Verdict |
+|-------------|------|---------|---------|--------|-------|---------|
+| Olimex UEXT SDA (REV-L) | 2.2 kohm | 1 | 73 mm | ~83 pF | ~154 ns | ok |
+| ZSWatch RTC SDA (PCA9306+RV-8263) | 3.3 kohm | 2 | 1 mm | ~21 pF | ~60 ns | ok |
+| ZSWatch Extension SDA | 1.8 kohm | 8 | 62 mm | ~142 pF | ~216 ns | ok |
+
+Routed copper dominates on the sparsely-populated buses: the Olimex UEXT bus has
+one device pin and 73 mm of track, so 88% of its capacitance is trace, and a
+device-count-only model rates it ~19 ns instead of ~154 ns.
 
 The ZSWatch 8-device Extension bus is the corpus's closest-to-the-limit I2C bus
-and still sits ~8x under standard mode. The designers chose 1.8 kohm precisely
+and still sits ~4.6x under standard mode. The designers chose 1.8 kohm precisely
 because of the device count. It is the discriminating no-fire (a regression that
 mis-scaled the RC or counted the connector as a device would push it over and the
 corpus test would go red).

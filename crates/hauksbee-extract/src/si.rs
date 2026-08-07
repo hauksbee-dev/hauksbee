@@ -151,23 +151,28 @@ impl ExtractedBoard {
     /// Run all four signal-integrity checks. The raw `.kicad_pcb` text is needed
     /// for the geometry-bearing checks (antenna keepout, USB length skew); when
     /// it is absent or not a KiCad layout, those checks are inert (they report
-    /// nothing rather than guessing), while the netlist-only checks (crystal CL
-    /// from values, I2C rise time) still run.
+    /// nothing rather than guessing). The crystal CL check is netlist-only and
+    /// always runs. The I2C rise-time check runs either way, but folds routed
+    /// trace capacitance in when a layout is present and says out loud that it
+    /// could not when one is not.
     pub fn si_checks(&self, pcb_text: Option<&str>) -> SiReport {
         let mut report = SiReport::default();
         check_crystal_load_cap(self, &mut report);
-        check_i2c_rise_time(self, &mut report);
 
         // Geometry checks need the layout s-expression.
         let root = pcb_text
             .filter(|t| t.contains("(kicad_pcb"))
             .and_then(|t| forge_sexpr::parse(t).ok());
-        if let Some(doc) = &root {
-            if let Some(r) = doc.root() {
-                check_antenna_keepout(self, r, &mut report);
-                check_usb_diff_pair(self, r, &mut report);
-                impedance::check_controlled_impedance(self, r, &mut report);
-            }
+        let geom = root.as_ref().and_then(|doc| doc.root());
+
+        // The I2C bus model runs netlist-only, but folds in routed trace
+        // capacitance whenever the layout is available.
+        check_i2c_rise_time(self, geom, &mut report);
+
+        if let Some(r) = geom {
+            check_antenna_keepout(self, r, &mut report);
+            check_usb_diff_pair(self, r, &mut report);
+            impedance::check_controlled_impedance(self, r, &mut report);
         }
         report
     }
@@ -925,7 +930,7 @@ fn bus_capacitance_pf(
     (c_dev + c_trace, devices)
 }
 
-fn check_i2c_rise_time(board: &ExtractedBoard, report: &mut SiReport) {
+fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut SiReport) {
     for net in &board.nets {
         if net.id == 0 || is_unconnected_net(&net.name) {
             continue;
@@ -942,10 +947,11 @@ fn check_i2c_rise_time(board: &ExtractedBoard, report: &mut SiReport) {
         let Some(r) = pullup_ohms(board, net.id) else {
             continue;
         };
-        // Trace length is not parsed here (it needs the geometry root); the
-        // device-count model is the conservative floor. Geometry refinement is a
-        // documented future improvement.
-        let (c_bus, devices) = bus_capacitance_pf(board, net.id, None);
+        // Routed trace copper is real bus capacitance, so fold it in whenever the
+        // layout is available. Without a layout the device-count model is all we
+        // have; the message says so rather than passing it off as complete.
+        let trace_len_mm = root.map(|r| routed_length_mm(r, net.id));
+        let (c_bus, devices) = bus_capacitance_pf(board, net.id, trace_len_mm);
         if c_bus <= 0.0 {
             continue;
         }
@@ -960,6 +966,16 @@ fn check_i2c_rise_time(board: &ExtractedBoard, report: &mut SiReport) {
         let fast = is_fast_mode_name(&net.name);
         let limit = if fast { T_R_FAST_NS } else { T_R_STANDARD_NS };
 
+        // How the capacitance was arrived at, so a reader can tell a
+        // geometry-backed number from a pin-count-only floor.
+        let basis = match trace_len_mm {
+            Some(len) => format!("{devices} devices + {len:.0} mm routing"),
+            None => format!(
+                "{devices} devices, routing capacitance NOT counted - \
+                 upload the .kicad_pcb layout to include trace copper"
+            ),
+        };
+
         if t_r > limit {
             // Even the assumed (lenient) mode fails: a real finding.
             let sev = if t_r > limit * 1.5 {
@@ -971,9 +987,9 @@ fn check_i2c_rise_time(board: &ExtractedBoard, report: &mut SiReport) {
                 check: SiCheck::I2cRiseTime,
                 severity: sev,
                 message: format!(
-                    "I2C {role} '{}': pull-up {:.0} ohm x bus ~{:.0} pF ({} devices) gives t_r ~ {:.0} ns, \
+                    "I2C {role} '{}': pull-up {:.0} ohm x bus ~{:.0} pF ({}) gives t_r ~ {:.0} ns, \
                      over the {} limit {:.0} ns",
-                    net.name, r, c_bus, devices, t_r,
+                    net.name, r, c_bus, basis, t_r,
                     if fast { "fast-mode" } else { "standard-mode" },
                     limit
                 ),
@@ -985,8 +1001,8 @@ fn check_i2c_rise_time(board: &ExtractedBoard, report: &mut SiReport) {
                 check: SiCheck::I2cRiseTime,
                 severity: SiSeverity::Info,
                 message: format!(
-                    "I2C {role} '{}': pull-up {:.0} ohm x ~{:.0} pF ({} dev) -> t_r ~ {:.0} ns (< {:.0} ns) - ok",
-                    net.name, r, c_bus, devices, t_r, limit
+                    "I2C {role} '{}': pull-up {:.0} ohm x ~{:.0} pF ({}) -> t_r ~ {:.0} ns (< {:.0} ns) - ok",
+                    net.name, r, c_bus, basis, t_r, limit
                 ),
                 refs: vec![],
                 nets: vec![net.name.clone()],
