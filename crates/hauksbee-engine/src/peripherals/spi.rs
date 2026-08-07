@@ -8,9 +8,14 @@
 //! [`hauksbee_mcu::SpiEvent`] (MOSI byte) through `Mcu::on_spi`, and the handler
 //! returns the
 //! MISO byte the slave drives back on the same transfer. An [`SpiBus`] owns one
-//! slave (chip-select is not surfaced by the simavr SPI IRQ, so a single
-//! active slave per bus is the supported topology) and threads the byte stream
-//! through the slave's command state machine.
+//! slave and threads the byte stream through the slave's command state machine.
+//! Several buses can share one controller: the simavr SPI IRQ does not carry
+//! chip-select, so each bus tracks its own CS instead. When the binder resolved
+//! the slave's CS net to an MCU pin, a live GPIO hook frames the bus off the real
+//! CS edge and the scheduler's shared `on_spi` handler routes each byte to the
+//! selected bus, so the deselected slaves never see a sibling's traffic. A bus
+//! whose CS did not resolve falls back to the chunk-boundary heuristic, which
+//! only holds when it is the controller's lone slave.
 //!
 //! ## Bus-speed honesty (chunk-rate limit)
 //!
@@ -135,8 +140,9 @@ impl SpiFramingMode {
     }
 }
 
-/// The SPI bus peripheral: a single active slave whose byte stream is fed from
-/// the MCU's `on_spi` callback.
+/// The SPI bus peripheral: one slave whose byte stream is fed from the MCU's
+/// `on_spi` callback, gated by this bus's chip-select so several buses can share
+/// one controller.
 pub struct SpiBus {
     id: String,
     slave: Box<dyn SpiSlave>,
