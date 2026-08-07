@@ -198,9 +198,14 @@ Three related gaps, all on the digital side:
   entirely static: co-sim does not corroborate it.
 - **No non-volatile configuration.** Fuse bytes, option bytes, eFuse and UICR are
   not modelled and the descriptor format has no field for them. A factory-fuse
-  ATmega328P runs at 1 MHz where hauksbee assumes 16, and a clock-source
-  bring-up always succeeds, so a missing or dead crystal, which is the most
-  common first-spin boot failure there is, cannot be reproduced.
+  ATmega328P runs at 1 MHz where hauksbee assumes 16. The STM32F103 is the one
+  external-clock bring-up path that is now falsifiable: a populated crystal
+  bridging the modelled `OSC_IN`/`OSC_OUT` pads makes `HSERDY` rise after the
+  descriptor's nominal 2 ms startup, then an HSE-sourced PLL locks after 200 us;
+  a missing or DNP crystal leaves both waits blocked. That is presence and
+  timing evidence, not oscillator physics: wrong load capacitors, insufficient
+  drive, wrong frequency, and a dead or marginal crystal are not reproduced,
+  and other MCU backends still do not derive clock readiness from the board.
 
 ### nRF5340 has no co-sim backend
 

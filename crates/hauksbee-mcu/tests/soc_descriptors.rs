@@ -111,10 +111,9 @@ fn spi_extra_repl_is_absent_where_the_platform_defines_the_controller() {
     assert_eq!(f4.spi_extra_repl, None);
 }
 
-/// E33: the shipped stm32f103 descriptor carries the proven HAL clock-tree
-/// platform inline (RCC ready bits, FLASH_ACR, DMA1, SPI1, IWDG, 72 MHz
-/// timers, peripheral bit-banding) so stock F1 CubeMX HAL firmware boots
-/// instead of spinning forever in HAL_RCC_OscConfig on the stock platform.
+/// The shipped STM32F103 descriptor carries the HAL clock-tree platform inline
+/// and declares the host bridge that makes HSE/PLL readiness depend on board
+/// clock evidence and elapsed virtual time.
 #[test]
 fn stm32f103_descriptor_ships_the_hal_boot_platform_inline() {
     let c = RenodeConfig::from_soc_toml(STM32F103).unwrap();
@@ -140,6 +139,28 @@ fn stm32f103_descriptor_ships_the_hal_boot_platform_inline() {
     // The I2C single-read prefetch gate keys on the platform STRING containing
     // "stm32f1"; the `using` line keeps it firing for the inline form.
     assert!(c.platform.to_ascii_lowercase().contains("stm32f1"));
+
+    let clock = c
+        .clock_control
+        .as_ref()
+        .expect("STM32F103 must declare its clock-control bridge");
+    assert!(clock.presence_command.contains("{present}"));
+    assert!(clock.tick_command.contains("{micros}"));
+    assert_eq!(
+        c.clone()
+            .with_external_clock_present(true)
+            .extra_setup
+            .last()
+            .map(String::as_str),
+        Some("sysbus.rcc WriteDoubleWord 0x3FC 1")
+    );
+    assert_eq!(
+        c.with_external_clock_present(false)
+            .extra_setup
+            .last()
+            .map(String::as_str),
+        Some("sysbus.rcc WriteDoubleWord 0x3FC 0")
+    );
 }
 
 /// The AdcChannelMap schema (05 §5.1, post-plan) loads: no built-in uses it, but
@@ -285,6 +306,38 @@ fn zero_width_port_is_named() {
         "got: {err}"
     );
     assert!(err.to_string().contains("zero width"), "msg: {err}");
+}
+
+#[test]
+fn clock_control_templates_are_required() {
+    for (body, field, placeholder) in [
+        (
+            "[soc.clock_control]\npresence_command = \"clock SetPresent 1\"\ntick_command = \"clock Tick {micros}\"",
+            "presence_command",
+            "{present}",
+        ),
+        (
+            "[soc.clock_control]\npresence_command = \"clock SetPresent {present}\"\ntick_command = \"clock Tick 10\"",
+            "tick_command",
+            "{micros}",
+        ),
+    ] {
+        let src = format!(
+            "{}\n{body}",
+            renode_descriptor(ONE_PORT, "", "", "EM_ARM", "renode")
+        );
+        let err = RenodeConfig::from_soc_toml(&src).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                SocError::ClockControlTemplate {
+                    field: actual_field,
+                    placeholder: actual_placeholder,
+                } if actual_field == field && actual_placeholder == placeholder
+            ),
+            "got: {err}"
+        );
+    }
 }
 
 #[test]

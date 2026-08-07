@@ -128,7 +128,7 @@ pub fn validate_firmware_path(path: &Path) -> anyhow::Result<PathBuf> {
 pub use avr::AvrMcu;
 
 #[cfg(feature = "renode")]
-pub use renode::{AdcChannelMap, AdcInject, RenodeBackend, RenodeConfig};
+pub use renode::{AdcChannelMap, AdcInject, ClockControl, RenodeBackend, RenodeConfig};
 
 #[cfg(feature = "qemu")]
 pub use qemu::{QemuBackend, QemuConfig};

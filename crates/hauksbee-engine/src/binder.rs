@@ -47,6 +47,10 @@ pub struct McuBinding {
     /// warning when the modelled core is less specific than the requested part
     /// (Track B). May be empty when the board gives no value string.
     pub requested_part: String,
+    /// True when an assembled crystal/resonator physically bridges this MCU's
+    /// `osc_in` and `osc_out` nets. The Renode descriptor consumes this as
+    /// external-clock presence; a missing or DNP crystal must not make HSERDY.
+    pub external_clock_present: bool,
     /// Pad number -> role string from the model pin map (e.g. "19"->"pb5_sck").
     pub pad_roles: HashMap<String, String>,
     /// Role string -> net node it is wired to (only connected pins).
@@ -417,6 +421,20 @@ pub fn bind_board_with(
             warning,
             guesses,
         });
+    }
+
+    // Board truth for clock-ready emulation. The MCU pin map provides the
+    // semantic oscillator roles; the board provides population and
+    // connectivity. No reference-name or board-name special case is involved.
+    for mcu in &mut mcus {
+        let Some(&osc_in) = mcu.role_nets.get("osc_in") else {
+            continue;
+        };
+        let Some(&osc_out) = mcu.role_nets.get("osc_out") else {
+            continue;
+        };
+        mcu.external_clock_present =
+            assembled_crystal_bridges(board, lib, osc_in, osc_out, &node_of);
     }
 
     // ── Assign MCP4728 I2C addresses deterministically by reference order ────
@@ -3392,6 +3410,7 @@ fn bind_mcu(
         // e.g. STM32F411RET6 -> the stm32f4 backend. Empty when the board gives no
         // value (we still bind, but cannot name what was asked for).
         requested_part: comp.value.trim().to_string(),
+        external_clock_present: false,
         pad_roles,
         role_nets,
         gpio_drivers,
@@ -3401,6 +3420,52 @@ fn bind_mcu(
         max_supply_v: model.ratings.max_voltage_v,
     });
     log_mcu_auto_decision(comp, model, derived_when_empty.as_ref())
+}
+
+/// Whether a populated crystal/resonator bridges two MCU oscillator nodes.
+///
+/// Recognition reuses the binder's existing crystal evidence and the model
+/// library's footprint rules. Connectivity requires both oscillator nodes on
+/// the same component, so unrelated crystals elsewhere on the board do not
+/// enable this MCU's clock.
+fn assembled_crystal_bridges(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    osc_in: NodeId,
+    osc_out: NodeId,
+    node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
+) -> bool {
+    if osc_in == osc_out {
+        return false;
+    }
+    board.components.iter().any(|comp| {
+        if comp.dnp {
+            return false;
+        }
+        let prefix = comp
+            .reference
+            .chars()
+            .take_while(|c| c.is_ascii_alphabetic())
+            .collect::<String>()
+            .to_ascii_uppercase();
+        let model_is_crystal = resolve(lib, comp)
+            .model
+            .as_ref()
+            .is_some_and(|m| m.id.starts_with("crystal"));
+        if !is_crystal_like(&prefix, &comp.value) && !model_is_crystal {
+            return false;
+        }
+        let mut has_in = false;
+        let mut has_out = false;
+        for pin in &comp.pins {
+            match node_of(pin.net) {
+                Some(node) if node == osc_in => has_in = true,
+                Some(node) if node == osc_out => has_out = true,
+                _ => {}
+            }
+        }
+        has_in && has_out
+    })
 }
 
 fn log_mcu_auto_decision(
@@ -5722,6 +5787,7 @@ mod digital_ro_tests {
 #[cfg(test)]
 mod crystal_fallback_tests {
     use super::*;
+    use hauksbee_extract::{Net, Pin};
     use hauksbee_models::ComponentKind;
 
     fn comp(reference: &str, value: &str) -> Component {
@@ -5848,6 +5914,70 @@ mod crystal_fallback_tests {
         // A real 'C' capacitor still binds as a passive (no regression).
         let cap = fallback_entry(&comp("C7", "22pF")).expect("cap binds");
         assert_eq!(cap.kind, ComponentKind::Passive);
+    }
+
+    fn pin(number: &str, net: i64) -> Pin {
+        Pin {
+            number: number.to_string(),
+            net: Some(net),
+            function: String::new(),
+            kind: String::new(),
+            position: None,
+        }
+    }
+
+    fn stm32_clock_board(crystal_dnp: bool) -> ExtractedBoard {
+        let mut mcu = comp("U1", "STM32F103C8T6");
+        mcu.footprint = "Package_QFP:LQFP-48_7x7mm_P0.5mm".to_string();
+        mcu.pins = vec![pin("5", 1), pin("6", 2)];
+
+        let mut crystal = comp("Y1", "8MHz");
+        crystal.footprint = "Crystal:Crystal_SMD_3225-4Pin".to_string();
+        crystal.dnp = crystal_dnp;
+        crystal.pins = vec![pin("1", 1), pin("3", 2), pin("2", 3), pin("4", 3)];
+
+        ExtractedBoard {
+            name: "clock-evidence".to_string(),
+            nets: vec![
+                Net {
+                    id: 1,
+                    name: "OSC_IN".to_string(),
+                },
+                Net {
+                    id: 2,
+                    name: "OSC_OUT".to_string(),
+                },
+                Net {
+                    id: 3,
+                    name: "GND".to_string(),
+                },
+            ],
+            components: vec![mcu, crystal],
+        }
+    }
+
+    #[test]
+    fn assembled_crystal_on_oscillator_pins_is_clock_presence_evidence() {
+        let lib = ModelLibrary::builtin();
+        let bound = bind_board(&stm32_clock_board(false), &lib);
+        assert_eq!(bound.mcus.len(), 1);
+        let mcu = &bound.mcus[0];
+        assert!(mcu.role_nets.contains_key("osc_in"));
+        assert!(mcu.role_nets.contains_key("osc_out"));
+        assert!(
+            mcu.external_clock_present,
+            "an assembled Y1 bridging OSC_IN/OSC_OUT must enable external-clock readiness"
+        );
+    }
+
+    #[test]
+    fn dnp_crystal_is_not_clock_presence_evidence() {
+        let bound = bind_board(&stm32_clock_board(true), &ModelLibrary::builtin());
+        assert_eq!(bound.mcus.len(), 1);
+        assert!(
+            !bound.mcus[0].external_clock_present,
+            "a DNP crystal is absent from the assembled board"
+        );
     }
 
     fn comp_fp(reference: &str, value: &str, footprint: &str) -> Component {

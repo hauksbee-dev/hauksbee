@@ -191,6 +191,16 @@ pub enum SocError {
     )]
     SupportTokenWithoutBundle { field: &'static str },
 
+    /// A descriptor clock-control command omitted the value the backend must
+    /// substitute per board or per virtual-time slice.
+    #[error(
+        "soc.clock_control.{field} must contain {placeholder}: without it the clock model cannot vary with board presence or virtual time"
+    )]
+    ClockControlTemplate {
+        field: &'static str,
+        placeholder: &'static str,
+    },
+
     /// A 16-pin direction encoding on a port wider than 16 bits. `moder` and
     /// `stm32f1_crl_crh` decode 16 pins by construction, so the top pins read
     /// as inputs and every edge on them is suppressed: strictly worse than no
@@ -353,7 +363,9 @@ pub fn peek_backend(src: &str) -> Result<Backend, SocError> {
 #[cfg(feature = "renode")]
 mod renode_schema {
     use super::SocError;
-    use crate::renode::{AdcChannelMap, AdcInject, DirEncoding, PortMap, RenodeConfig};
+    use crate::renode::{
+        AdcChannelMap, AdcInject, ClockControl, DirEncoding, PortMap, RenodeConfig,
+    };
 
     /// TOML root: `[soc]`.
     #[derive(Debug, serde::Deserialize)]
@@ -391,6 +403,8 @@ mod renode_schema {
         pub extra_setup: Vec<String>,
         #[serde(default)]
         pub post_load_setup: Vec<String>,
+        #[serde(default)]
+        pub clock_control: Option<ClockControl>,
         // `PortMap` (letter/peripheral/odr_offset/width) already derives
         // Deserialize, so `[[soc.ports]]` maps straight onto it; the existing
         // derive does the mechanical parsing (06 §2: reuse the derives).
@@ -582,6 +596,25 @@ mod renode_schema {
             super::validate_controllers("i2c", &self.i2c.controllers)?;
             super::validate_controllers("spi", &self.spi.controllers)?;
 
+            if let Some(clock) = &self.clock_control {
+                super::validate_non_empty(&[
+                    ("clock_control.presence_command", &clock.presence_command),
+                    ("clock_control.tick_command", &clock.tick_command),
+                ])?;
+                if !clock.presence_command.contains("{present}") {
+                    return Err(SocError::ClockControlTemplate {
+                        field: "presence_command",
+                        placeholder: "{present}",
+                    });
+                }
+                if !clock.tick_command.contains("{micros}") {
+                    return Err(SocError::ClockControlTemplate {
+                        field: "tick_command",
+                        placeholder: "{micros}",
+                    });
+                }
+            }
+
             let mut seen_channels: Vec<u8> = Vec::new();
             for entry in &self.adc {
                 if seen_channels.contains(&entry.channel) {
@@ -607,6 +640,7 @@ mod renode_schema {
                 frequency_hz: self.frequency_hz,
                 extra_setup: self.extra_setup,
                 post_load_setup: self.post_load_setup,
+                clock_control: self.clock_control,
                 i2c_controllers: self.i2c.controllers,
                 spi_controllers: self.spi.controllers,
                 spi_extra_repl: self.spi.extra_repl,
