@@ -162,6 +162,45 @@ fn a_skipped_sole_processor_warns_on_its_own_row() {
     assert!(w.contains("--fit U1"), "{w}");
 }
 
+/// Two-sided DnpAbsent contract: the left-open 0R link contributes NOTHING to
+/// the bound circuit (the two ground planes it would bridge stay separate
+/// nodes), and its absence is on the bind report with the reason the policy
+/// recorded, not as a silent hole.
+#[test]
+fn a_left_open_link_contributes_nothing_and_its_absence_is_reported() {
+    let mut b = board();
+    let d = b.apply_dnp_policy(DnpPolicy::default(), &[], &[]).unwrap();
+    assert_eq!(d.left_open[0].reference, "R7", "the link stays open");
+
+    let bound = bind_board(&b, &ModelLibrary::builtin());
+    // Side 1: nothing anywhere. GND and GNDA are exactly the nets R7 would
+    // merge; distinct circuit nodes prove no device, wiring, or short was
+    // stamped for it.
+    let gnd = bound.net_nodes.get("GND").expect("GND is a net");
+    let gnda = bound.net_nodes.get("GNDA").expect("GNDA is a net");
+    assert_ne!(
+        gnd, gnda,
+        "a left-open DNP link must not merge the planes it would bridge"
+    );
+    // Side 2: visible. The row says why the part is absent, carrying the
+    // policy's recorded reason through the assembly contract.
+    let row = bound
+        .report
+        .rows
+        .iter()
+        .find(|r| r.reference == "R7")
+        .expect("R7 has a bind row");
+    match &row.outcome {
+        hauksbee_engine::report::BindOutcome::Skipped { reason } => {
+            assert_eq!(
+                reason, &DnpReason::ZeroOhmLink.describe().to_string(),
+                "the skip must carry the policy's reason, not a generic DNP line"
+            );
+        }
+        other => panic!("a DNP part must row as Skipped, got {other:?}"),
+    }
+}
+
 #[test]
 fn an_unknown_or_contradictory_reference_is_a_loud_error() {
     let mut b = board();
