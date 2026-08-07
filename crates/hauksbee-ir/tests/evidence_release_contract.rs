@@ -2,8 +2,9 @@ use hauksbee_ir::evidence::{
     ArtifactKind, ArtifactProvenance, ArtifactRole, Assumption, AssumptionId, AssumptionKind,
     CausalPathIndex, EntityKind, EntityRef, ErrorBudget, EvidenceError, EvidenceMap,
     EvidenceRegistry, EvidenceStatus, IntegrationMethod, IntegrationTolerance, MatchConfidence,
-    ModelLayer, ModelOnPath, ModelUncertainty, NetScope, ParameterProvenance, ParameterRef,
-    Residual, RunDate, Scope, SubjectSet, TimeWindow, ValueOrigin, WindowMethod,
+    ModelLayer, ModelOnPath, ModelSource, ModelSourceTier, ModelUncertainty, ModelValidation,
+    NetScope, ParameterProvenance, ParameterRef, Residual, RunDate, Scope, SubjectSet, TimeWindow,
+    ValueOrigin, WindowMethod,
 };
 
 fn today() -> RunDate {
@@ -112,8 +113,19 @@ fn stable_ids_do_not_collapse_distinct_subjects() {
 
 #[test]
 fn shared_model_and_artifact_vocabularies_are_typed() {
-    let model = ModelOnPath::new("U2", "xc6206", ModelLayer::Pack, MatchConfidence::Exact).unwrap();
+    let source = ModelSource::new(
+        ModelSourceTier::CuratedPack,
+        ModelLayer::Pack,
+        "acme-regulators@1.2.0",
+        ModelValidation::DatasheetCurves,
+        vec![
+            ModelUncertainty::interval("U2.vout", 3.201, 3.399, "V", "datasheet min/max").unwrap(),
+        ],
+    )
+    .unwrap();
+    let model = ModelOnPath::new("U2", "xc6206", source, MatchConfidence::Exact).unwrap();
     assert_eq!(model.layer(), ModelLayer::Pack);
+    assert_eq!(model.source().tier(), ModelSourceTier::CuratedPack);
     assert_eq!(model.confidence(), MatchConfidence::Exact);
 
     let artifact_kind = ArtifactKind::OdbPlusPlus;
@@ -121,6 +133,51 @@ fn shared_model_and_artifact_vocabularies_are_typed() {
         serde_json::to_value(artifact_kind).unwrap(),
         "odb_plus_plus"
     );
+}
+
+#[test]
+fn unknown_model_uncertainty_is_explicit_machine_readable_data() {
+    let source = ModelSource::new(
+        ModelSourceTier::DatasheetDerived,
+        ModelLayer::UserDir,
+        "xc6206.toml",
+        ModelValidation::PhysicalBoundsOnly,
+        vec![ModelUncertainty::unknown(
+            "U2.model",
+            "the source publishes no validated error interval",
+        )
+        .unwrap()],
+    )
+    .unwrap();
+
+    let json = serde_json::to_value(&source).unwrap();
+    assert_eq!(json["tier"], "datasheet-derived");
+    assert_eq!(json["validation"], "physical-bounds-only");
+    assert_eq!(json["uncertainty"][0]["status"], "unknown");
+    assert!(json["uncertainty"][0].get("low").is_none());
+    assert!(json["uncertainty"][0].get("high").is_none());
+}
+
+#[test]
+fn deserialized_intervals_are_revalidated_before_publication() {
+    let inverted: ModelUncertainty = serde_json::from_value(serde_json::json!({
+        "status": "interval",
+        "parameter": "U2.vout",
+        "low": 3.4,
+        "high": 3.2,
+        "unit": "V",
+        "kind": "specification-limits",
+        "basis": "datasheet limits"
+    }))
+    .unwrap();
+    assert!(ModelSource::new(
+        ModelSourceTier::DatasheetDerived,
+        ModelLayer::UserDir,
+        "u2.toml",
+        ModelValidation::PhysicalBoundsOnly,
+        vec![inverted],
+    )
+    .is_err());
 }
 
 #[test]
@@ -154,6 +211,33 @@ fn invalid_budget_members_cannot_be_constructed_or_silently_omitted() {
     assert_eq!(budget.methods().len(), 1);
     assert_eq!(budget.failed_windows().len(), 1);
     assert_eq!(budget.residual().unwrap().max_abs(), 4.2e-9);
+}
+
+#[test]
+fn typical_only_data_is_not_a_guaranteed_two_sided_accuracy_bound() {
+    use hauksbee_ir::evidence::ModelIntervalKind;
+
+    let typical = ModelUncertainty::interval_with_kind(
+        "U1.ilim",
+        0.75,
+        1.0,
+        "A",
+        ModelIntervalKind::TypicalRange,
+        "datasheet min/typ row; no maximum is published",
+    )
+    .unwrap();
+    assert!(!typical.is_strict_bound());
+
+    let limits = ModelUncertainty::interval_with_kind(
+        "U1.ilim",
+        3.1,
+        4.2,
+        "A",
+        ModelIntervalKind::SpecificationLimits,
+        "datasheet min/max limits under the published test conditions",
+    )
+    .unwrap();
+    assert!(limits.is_strict_bound());
 }
 
 #[test]
