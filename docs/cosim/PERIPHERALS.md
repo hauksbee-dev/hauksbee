@@ -77,6 +77,18 @@ pressed; pot/encoder: position; stimulus: DC level).
 These let firmware talk to realistic parts that are **not on the board
 model**, or stand in for bound-but-unmodelled board parts.
 
+Parallel memories that are physically present on the PCB are different: they
+bind as ordinary digital components rather than attached peripherals. The
+built-in AT28C256-class model provides a 32 KiB × 8 erased array, CE/OE/WE bus
+gating, WE-edge writes, 64-byte page boundaries, the 150 µs byte-load deadline,
+and the datasheet software-data-protection enable/program and disable sequences.
+On simavr, direct GPIO and 74HC595-supplied address bits are
+resolved on each firmware edge, and a read drives the MCU's input pins before
+its next instruction. This is the path a real parallel EEPROM programmer uses;
+no synthetic I2C/SPI adapter is inserted. See
+[`logic_spec.md`](../how-and-why/hauksbee-models/logic_spec.md) for the model
+contract and its timing boundary.
+
 ### I2C
 
 `I2cBus` is a router: it owns one or more `I2cSlave`s and registers as the

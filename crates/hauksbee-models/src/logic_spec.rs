@@ -217,6 +217,31 @@ pub struct TristateSpec {
     pub active: Level,
 }
 
+/// One address/value write in a memory's command protocol. Parallel EEPROMs
+/// use ordinary bus writes to enter and leave protected modes; declaring the
+/// sequence keeps that device-specific protocol in model data rather than in
+/// the engine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemoryCommandWrite {
+    pub address: u64,
+    pub value: u64,
+}
+
+/// Software-data-protection command sequences for an EEPROM-like memory.
+/// Writes are blocked while protection is enabled except for the exact
+/// `disable` sequence. The engine consumes command writes rather than storing
+/// them in the array, just as the physical device does.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SoftwareDataProtectionSpec {
+    /// Power-on protection state.
+    #[serde(default)]
+    pub initial: bool,
+    /// Exact sequence that enables protection.
+    pub enable: Vec<MemoryCommandWrite>,
+    /// Exact sequence that disables protection.
+    pub disable: Vec<MemoryCommandWrite>,
+}
+
 /// One addressable memory array (`[[models.logic.memory]]`): the data store
 /// of a parallel-bus memory part (a 28C-series EEPROM, a 62256-class SRAM, a
 /// 27C-series ROM), which is categorically wider than the 64-bit
@@ -248,6 +273,16 @@ pub struct MemorySpec {
     pub words: u64,
     /// Bits per word (8 for a byte-wide EEPROM), 1..=64.
     pub bits: u32,
+    /// Optional page size in words. Command-protected EEPROMs use this to
+    /// bound the data phase armed by an enable sequence. It must be a power
+    /// of two, no larger than the array, and divide the array exactly.
+    #[serde(default)]
+    pub page_words: Option<u64>,
+    /// Maximum interval between successive byte loads in one page operation.
+    /// Cycle-exact MCU responders use this to close an armed command-protected
+    /// write window after the device's documented inter-byte timeout.
+    #[serde(default)]
+    pub byte_load_timeout_s: Option<f64>,
     /// Address pins, LSB first (`address[0]` = A0). Declared inputs.
     pub address: Vec<String>,
     /// Write strobe: the edge that commits `data_in` at the sampled address
@@ -259,6 +294,12 @@ pub struct MemorySpec {
     /// low, for a chip-enable-qualified write). Declared inputs.
     #[serde(default)]
     pub write_gates: Vec<EnableSpec>,
+    /// Level gates that must ALL be active for the memory to drive
+    /// `data_out` (for example CE low, OE low, and WE high on a 28C256).
+    /// Keeping the complete read condition here prevents a partially-gated
+    /// bidirectional bus from fighting its master during writes.
+    #[serde(default)]
+    pub read_gates: Vec<EnableSpec>,
     /// Data pins sampled on the write edge, LSB first, one per bit. May name
     /// output pins (the bidirectional bus case above). Required with `write`,
     /// forbidden without it.
@@ -270,6 +311,10 @@ pub struct MemorySpec {
     /// Initial value of every word (the erased state; 0xFF for an EEPROM).
     #[serde(default)]
     pub init: u64,
+    /// Optional command-driven write protection, such as the AT28C256
+    /// software-data-protection protocol.
+    #[serde(default)]
+    pub software_data_protection: Option<SoftwareDataProtectionSpec>,
 }
 
 /// The `[models.logic]` block.
@@ -730,6 +775,24 @@ pub enum LogicSpecError {
     MemoryWordsInvalid { name: String, words: u64 },
 
     #[error(
+        "memory '{name}' declares page_words={page_words}; page size must be a nonzero power of \
+         two, no larger than and evenly dividing the {words}-word array"
+    )]
+    MemoryPageWordsInvalid {
+        name: String,
+        page_words: u64,
+        words: u64,
+    },
+
+    #[error(
+        "memory '{name}' declares byte_load_timeout_s={seconds}; it must be finite and positive"
+    )]
+    MemoryByteLoadTimeoutInvalid { name: String, seconds: f64 },
+
+    #[error("memory '{name}' declares byte_load_timeout_s without page_words")]
+    MemoryPageTimingWithoutPage { name: String },
+
+    #[error(
         "memory '{name}' declares {words} x {bits} bits, over the 128 Mbit cap; widen the \
          bound deliberately rather than allocating it by accident"
     )]
@@ -769,6 +832,37 @@ pub enum LogicSpecError {
 
     #[error("output '{name}' is assigned both by comb and by a memory's data_out")]
     MemoryOutputAlsoComb { name: String },
+
+    #[error("memory '{name}' declares software_data_protection but has no write strobe")]
+    MemoryProtectionWithoutWrite { name: String },
+
+    #[error("memory '{name}' software_data_protection {sequence} sequence is empty")]
+    MemoryCommandSequenceEmpty {
+        name: String,
+        sequence: &'static str,
+    },
+
+    #[error(
+        "memory '{name}' software_data_protection {sequence} command address {address:#x} is \
+         outside its {words}-word array"
+    )]
+    MemoryCommandAddressOutOfRange {
+        name: String,
+        sequence: &'static str,
+        address: u64,
+        words: u64,
+    },
+
+    #[error(
+        "memory '{name}' software_data_protection {sequence} command value {value:#x} does not \
+         fit its {bits}-bit data bus"
+    )]
+    MemoryCommandValueTooWide {
+        name: String,
+        sequence: &'static str,
+        value: u64,
+        bits: u32,
+    },
 
     #[error(
         "{context} references memory '{name}'; a memory array has no scalar value (its word \
@@ -1016,6 +1110,32 @@ impl Logic {
                     words: m.words,
                 });
             }
+            if let Some(page_words) = m.page_words {
+                if page_words == 0
+                    || !page_words.is_power_of_two()
+                    || page_words > m.words
+                    || m.words % page_words != 0
+                {
+                    return Err(LogicSpecError::MemoryPageWordsInvalid {
+                        name: m.name.clone(),
+                        page_words,
+                        words: m.words,
+                    });
+                }
+            }
+            if let Some(seconds) = m.byte_load_timeout_s {
+                if !seconds.is_finite() || seconds <= 0.0 {
+                    return Err(LogicSpecError::MemoryByteLoadTimeoutInvalid {
+                        name: m.name.clone(),
+                        seconds,
+                    });
+                }
+                if m.page_words.is_none() {
+                    return Err(LogicSpecError::MemoryPageTimingWithoutPage {
+                        name: m.name.clone(),
+                    });
+                }
+            }
             // Total size cap: 128 Mbit covers every 27C/28C/62xx/39SF-class
             // part by a wide margin while refusing an absurd allocation.
             const MAX_TOTAL_BITS: u128 = 128 * 1024 * 1024;
@@ -1066,6 +1186,9 @@ impl Logic {
             for g in &m.write_gates {
                 need_input(ctx("write gate"), &g.pin)?;
             }
+            for g in &m.read_gates {
+                need_input(ctx("read gate"), &g.pin)?;
+            }
             if m.data_out.len() != m.bits as usize {
                 return Err(LogicSpecError::MemoryDataWidthMismatch {
                     name: m.name.clone(),
@@ -1098,6 +1221,42 @@ impl Logic {
                     value: m.init,
                     bits: m.bits,
                 });
+            }
+            if let Some(protection) = &m.software_data_protection {
+                if m.write.is_none() {
+                    return Err(LogicSpecError::MemoryProtectionWithoutWrite {
+                        name: m.name.clone(),
+                    });
+                }
+                for (sequence, commands) in [
+                    ("enable", protection.enable.as_slice()),
+                    ("disable", protection.disable.as_slice()),
+                ] {
+                    if commands.is_empty() {
+                        return Err(LogicSpecError::MemoryCommandSequenceEmpty {
+                            name: m.name.clone(),
+                            sequence,
+                        });
+                    }
+                    for command in commands {
+                        if command.address >= m.words {
+                            return Err(LogicSpecError::MemoryCommandAddressOutOfRange {
+                                name: m.name.clone(),
+                                sequence,
+                                address: command.address,
+                                words: m.words,
+                            });
+                        }
+                        if command.value & !mask != 0 {
+                            return Err(LogicSpecError::MemoryCommandValueTooWide {
+                                name: m.name.clone(),
+                                sequence,
+                                value: command.value,
+                                bits: m.bits,
+                            });
+                        }
+                    }
+                }
             }
         }
 
@@ -1653,16 +1812,35 @@ outputs = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
 name = "cell"
 words = 32768
 bits = 8
+page_words = 64
+byte_load_timeout_s = 0.00015
 init = 0xFF
 address  = ["a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9",
             "a10", "a11", "a12", "a13", "a14"]
 write = { pin = "we_n", edge = "rising" }
 write_gates = [{ pin = "ce_n", active = "low" }]
+read_gates = [
+  { pin = "ce_n", active = "low" },
+  { pin = "oe_n", active = "low" },
+  { pin = "we_n", active = "high" },
+]
 data_in  = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
 data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
-
-[tristate]
-"io0..io7" = { enable = "oe_n", active = "low" }
+[memory.software_data_protection]
+initial = false
+enable = [
+    { address = 0x5555, value = 0xAA },
+    { address = 0x2AAA, value = 0x55 },
+    { address = 0x5555, value = 0xA0 },
+]
+disable = [
+    { address = 0x5555, value = 0xAA },
+    { address = 0x2AAA, value = 0x55 },
+    { address = 0x5555, value = 0x80 },
+    { address = 0x5555, value = 0xAA },
+    { address = 0x2AAA, value = 0x55 },
+    { address = 0x5555, value = 0x20 },
+]
 "#;
 
     #[test]
@@ -1682,8 +1860,138 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
         assert_eq!(v.memories.len(), 1);
         assert_eq!(v.memories[0].words, 32768);
         assert_eq!(v.memories[0].data_out.len(), 8);
+        let sdp = v.memories[0]
+            .software_data_protection
+            .as_ref()
+            .expect("28C256 SDP declaration survives validation");
+        assert_eq!(sdp.enable.len(), 3);
+        assert_eq!(sdp.disable.len(), 6);
         // The bus outputs are memory-driven, so no comb ASTs exist for them.
         assert!(v.comb.is_empty());
+    }
+
+    #[test]
+    fn software_data_protection_rejects_out_of_range_commands() {
+        let mut logic = parse_logic(EEPROM_28C256);
+        logic.memories[0]
+            .software_data_protection
+            .as_mut()
+            .unwrap()
+            .enable[0]
+            .address = 32768;
+        let e = logic
+            .validate_with_features(&[Logic::FEATURE_MEMORY])
+            .unwrap_err();
+        assert!(
+            matches!(e, LogicSpecError::MemoryCommandAddressOutOfRange {
+                ref name,
+                sequence: "enable",
+                address: 32768,
+                words: 32768,
+            } if name == "cell"),
+            "got: {e}"
+        );
+    }
+
+    #[test]
+    fn software_data_protection_rejects_values_wider_than_the_bus() {
+        let mut logic = parse_logic(EEPROM_28C256);
+        logic.memories[0]
+            .software_data_protection
+            .as_mut()
+            .unwrap()
+            .disable[5]
+            .value = 0x120;
+        let e = logic
+            .validate_with_features(&[Logic::FEATURE_MEMORY])
+            .unwrap_err();
+        assert!(
+            matches!(e, LogicSpecError::MemoryCommandValueTooWide {
+                ref name,
+                sequence: "disable",
+                value: 0x120,
+                bits: 8,
+            } if name == "cell"),
+            "got: {e}"
+        );
+    }
+
+    #[test]
+    fn software_data_protection_requires_a_writable_memory_and_both_sequences() {
+        let mut rom = parse_logic(EEPROM_28C256);
+        rom.memories[0].write = None;
+        rom.memories[0].data_in.clear();
+        let e = rom
+            .validate_with_features(&[Logic::FEATURE_MEMORY])
+            .unwrap_err();
+        assert!(
+            matches!(e, LogicSpecError::MemoryProtectionWithoutWrite { ref name } if name == "cell"),
+            "got: {e}"
+        );
+
+        let mut empty = parse_logic(EEPROM_28C256);
+        empty.memories[0]
+            .software_data_protection
+            .as_mut()
+            .unwrap()
+            .disable
+            .clear();
+        let e = empty
+            .validate_with_features(&[Logic::FEATURE_MEMORY])
+            .unwrap_err();
+        assert!(
+            matches!(e, LogicSpecError::MemoryCommandSequenceEmpty {
+                ref name,
+                sequence: "disable",
+            } if name == "cell"),
+            "got: {e}"
+        );
+    }
+
+    #[test]
+    fn memory_page_size_must_be_an_aligned_power_of_two() {
+        for page_words in [0, 63, 65536] {
+            let mut logic = parse_logic(EEPROM_28C256);
+            logic.memories[0].page_words = Some(page_words);
+            let e = logic
+                .validate_with_features(&[Logic::FEATURE_MEMORY])
+                .unwrap_err();
+            assert!(
+                matches!(e, LogicSpecError::MemoryPageWordsInvalid {
+                    ref name,
+                    page_words: got,
+                    words: 32768,
+                } if name == "cell" && got == page_words),
+                "page_words={page_words}: got {e}"
+            );
+        }
+    }
+
+    #[test]
+    fn memory_page_timing_must_be_positive_and_have_a_page() {
+        for seconds in [0.0, -1.0, f64::NAN] {
+            let mut logic = parse_logic(EEPROM_28C256);
+            logic.memories[0].byte_load_timeout_s = Some(seconds);
+            let e = logic
+                .validate_with_features(&[Logic::FEATURE_MEMORY])
+                .unwrap_err();
+            assert!(
+                matches!(e, LogicSpecError::MemoryByteLoadTimeoutInvalid { ref name, .. }
+                    if name == "cell"),
+                "byte_load_timeout_s={seconds:?}: got {e}"
+            );
+        }
+
+        let mut no_page = parse_logic(EEPROM_28C256);
+        no_page.memories[0].page_words = None;
+        let e = no_page
+            .validate_with_features(&[Logic::FEATURE_MEMORY])
+            .unwrap_err();
+        assert!(
+            matches!(e, LogicSpecError::MemoryPageTimingWithoutPage { ref name }
+                if name == "cell"),
+            "got: {e}"
+        );
     }
 
     #[test]
@@ -1728,6 +2036,20 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
     }
 
     #[test]
+    fn memory_read_gates_must_name_declared_inputs() {
+        let mut logic = parse_logic(EEPROM_28C256);
+        logic.memories[0].read_gates[1].pin = "missing_oe".into();
+        let e = logic
+            .validate_with_features(&[Logic::FEATURE_MEMORY])
+            .unwrap_err();
+        assert!(
+            matches!(e, LogicSpecError::UndeclaredPin { ref context, ref pin }
+                if context == "memory 'cell' read gate" && pin == "missing_oe"),
+            "got: {e}"
+        );
+    }
+
+    #[test]
     fn rom_shape_forbids_data_in_without_write() {
         let mut logic = parse_logic(EEPROM_28C256);
         logic.memories[0].write = None;
@@ -1742,6 +2064,7 @@ data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
         let mut rom = parse_logic(EEPROM_28C256);
         rom.memories[0].write = None;
         rom.memories[0].data_in.clear();
+        rom.memories[0].software_data_protection = None;
         rom.validate_with_features(&[Logic::FEATURE_MEMORY])
             .expect("27C-style ROM shape validates");
     }

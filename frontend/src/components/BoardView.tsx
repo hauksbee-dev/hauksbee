@@ -15,6 +15,7 @@ import { ExportMenu } from './ExportMenu'
 import type { SpecSnapshot } from '../hooks/useSessions'
 import { groupFindings } from '../lib/findings'
 import type { FindingGroup } from '../lib/findings'
+import { summarizeEvidence } from '../lib/evidence'
 
 // The Board view with a report in hand: the viewer as the hero surface (with
 // its toolbar and layers panel), the plain-language verdict, and the findings.
@@ -164,10 +165,12 @@ export function BoardView({
 
   const bindOpen = !!(r.bind?.active_path_unresolved?.length)
   const hasHeadsUp = (r.sections || []).some(s => s.heads_up?.length)
+  const evidenceSummary = summarizeEvidence(r.evidence)
+  const hasEvidenceCaveat = evidenceSummary.caveated > 0
   const runCommand = `hauksbee run ${boardLabel ?? r.file_name} --serve`
   let verdictBorder = 'var(--ok-border)', verdictBg = 'var(--ok-bg)'
   if (r.serious > 0) { verdictBorder = 'var(--err-border)'; verdictBg = 'var(--err-bg)' }
-  else if (r.total > 0 || bindOpen || hasHeadsUp) { verdictBorder = 'var(--warn-border)'; verdictBg = 'var(--warn-bg)' }
+  else if (r.total > 0 || bindOpen || hasHeadsUp || hasEvidenceCaveat) { verdictBorder = 'var(--warn-border)'; verdictBg = 'var(--warn-bg)' }
 
   return (
     <div className="h-full overflow-y-auto view-enter" data-testid="report">
@@ -226,7 +229,11 @@ export function BoardView({
           style={{ border: `1px solid ${verdictBorder}`, background: verdictBg, fontSize: 15.5 }}
         >
           {r.headline}
-          <div className="text-xs mt-1.5 tnum" style={{ color: 'var(--silk-dim)' }}>
+          <div
+            className="text-xs mt-1.5 tnum"
+            data-testid="report-inventory"
+            style={{ color: 'var(--silk-dim)' }}
+          >
             {(r.board_name || r.file_name)} · {r.num_components}{' '}
             {r.num_components === 1 ? 'part' : 'parts'} · {r.num_nets}{' '}
             {r.num_nets === 1 ? 'net' : 'nets'}
@@ -356,6 +363,71 @@ export function BoardView({
             <div className="text-sm mt-0.5" style={{ color: 'var(--silk)' }}>{n.message}</div>
           </div>
         ))}
+
+        {((r.inventory?.length ?? 0) > 0 || (r.assumptions?.length ?? 0) > 0 || (r.evidence?.length ?? 0) > 0) && (
+          <details
+            data-testid="evidence-panel"
+            open={evidenceSummary.undermined > 0}
+            className="mt-3 rounded-lg px-4 py-3"
+            style={{
+              border: `1px solid ${evidenceSummary.undermined > 0 ? 'var(--warn-border)' : 'var(--hairline)'}`,
+              background: 'var(--surface)',
+            }}
+          >
+            <summary className="cursor-pointer text-sm font-semibold" style={{ color: 'var(--silk)' }}>
+              Evidence &amp; limitations
+              <span className="ml-2 text-[11px] font-normal tnum" style={{ color: 'var(--silk-dim)' }}>
+                {evidenceSummary.clean} clean · {evidenceSummary.qualified} qualified · {evidenceSummary.undermined} invalid
+              </span>
+            </summary>
+            <p className="mt-2 text-[12px] leading-relaxed" style={{ color: 'var(--silk-dim)' }}>
+              These are the engine's derived evidence statuses. An invalid assertion is not
+              entitled to a pass/fail verdict until the limitation below is closed.
+            </p>
+            {(r.inventory?.length ?? 0) > 0 && (
+              <div className="mt-3 text-[12px]" style={{ color: 'var(--silk-dim)' }}>
+                <div className="font-semibold" style={{ color: 'var(--silk)' }}>Input artifacts</div>
+                {(r.inventory ?? []).map((artifact, index) => (
+                  <div key={`${index}:${artifact.path}`} className="mt-1 grid gap-x-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                    <span className="truncate" title={artifact.path}>{artifact.path}</span>
+                    <span className="tnum" style={{ fontFamily: 'var(--font-mono)' }}>
+                      {artifact.sha256 ? `sha256:${artifact.sha256.slice(0, 12)}…` : 'digest unavailable'}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+            {(r.assumptions ?? []).map(assumption => (
+              <div
+                key={assumption.id}
+                className="mt-2 rounded-md px-3 py-2.5 text-[12px] leading-relaxed"
+                style={{ border: '1px solid var(--hairline)', background: 'var(--canvas)' }}
+              >
+                <div className="text-[10px] font-semibold" style={{ color: 'var(--warn-strong)', fontFamily: 'var(--font-mono)' }}>
+                  {assumption.id}
+                </div>
+                <div className="mt-1 font-semibold" style={{ color: 'var(--silk)' }}>{assumption.statement}</div>
+                <div className="mt-1" style={{ color: 'var(--silk-dim)' }}><b>Why:</b> {assumption.because}</div>
+                <div style={{ color: 'var(--silk-dim)' }}><b>Effect:</b> {assumption.consequence}</div>
+                <div style={{ color: 'var(--silk-dim)' }}><b>What closes it:</b> {assumption.replacement}</div>
+              </div>
+            ))}
+            {(r.evidence ?? []).filter(map => map.status !== 'clean').length > 0 && (
+              <div className="mt-3 text-[12px]" style={{ color: 'var(--silk-dim)' }}>
+                <div className="font-semibold" style={{ color: 'var(--silk)' }}>Affected assertions</div>
+                {(r.evidence ?? []).filter(map => map.status !== 'clean').slice(0, 20).map((map, index) => (
+                  <div key={`${index}:${map.assertion}:${map.status}`} className="mt-1 flex gap-2">
+                    <span style={{ color: map.status === 'undermined' ? 'var(--warn-strong)' : 'var(--note)' }}>{map.status}</span>
+                    <span>{map.assertion}</span>
+                  </div>
+                ))}
+                {evidenceSummary.caveated > 20 && (
+                  <div className="mt-1">…and {evidenceSummary.caveated - 20} more in the JSON export.</div>
+                )}
+              </div>
+            )}
+          </details>
+        )}
 
         {/* Board map: the real renderer (pads, outline, pan/zoom, layers)
             whenever the uploaded file is KiCad layout text; the dot map only

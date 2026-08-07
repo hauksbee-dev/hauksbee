@@ -170,7 +170,7 @@ type SpiCb = Box<dyn FnMut(SpiEvent) -> u8 + Send>;
 /// the very next `digitalRead(MISO)` sees it. Resolving the readback per output
 /// edge (not once per analog chunk) is the read-direction analogue of the
 /// edge-driven 74HC595 write path.
-type InputResponderCb = Box<dyn FnMut(PinId, bool) -> Vec<(PinId, bool)> + Send>;
+type InputResponderCb = Box<dyn FnMut(PinId, bool, u64) -> Vec<(PinId, bool)> + Send>;
 
 struct Callbacks {
     on_pin_change: Option<PinChangeCb>,
@@ -410,7 +410,7 @@ macro_rules! make_port_hook {
                         // shadow while the responder closure stays borrowed.
                         let st = &mut *s;
                         if let Some(resp) = &mut st.callbacks.input_responder {
-                            for (in_pin, in_high) in resp(pin, high) {
+                            for (in_pin, in_high) in resp(pin, high, cycle) {
                                 unsafe {
                                     drive_ioport_input(avr, &mut st.ext_drive, in_pin, in_high);
                                 }
@@ -1234,7 +1234,7 @@ impl Mcu for AvrMcu {
 
     fn on_input_responder(
         &mut self,
-        responder: Box<dyn FnMut(PinId, bool) -> Vec<(PinId, bool)> + Send>,
+        responder: Box<dyn FnMut(PinId, bool, u64) -> Vec<(PinId, bool)> + Send>,
     ) {
         {
             let mut s = self.state.lock().unwrap();

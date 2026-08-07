@@ -879,17 +879,29 @@ pub(crate) fn resolve(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::
     // (e.g. "Mouser Part Number" = "621-BCM857BS-7-F") carry a distributor
     // prefix that breaks anchored mpn regexes, so avoid them. Fall back to the
     // value field, which is what most mpn_re rules are actually written for.
+    //
+    // A part number a BOM supplied sits under the reserved
+    // [`hauksbee_extract::bom::MPN_PROPERTY`] key and is preferred over the
+    // heuristic scan below, because the scan cannot tell a manufacturer part
+    // number from a distributor code and a board carrying both would lose the
+    // bind to the one that does not match.
     q.mpn = comp
         .properties
         .iter()
-        .find(|(k, _)| {
-            let k = k.to_ascii_lowercase().replace([' ', '-'], "_");
-            k.contains("mpn")
-                || k.contains("manufacturer_part")
-                || k == "part_number"
-                || k == "mfr_part"
-        })
+        .find(|(k, _)| k == hauksbee_extract::bom::MPN_PROPERTY)
         .map(|(_, v)| v.clone())
+        .or_else(|| {
+            comp.properties
+                .iter()
+                .find(|(k, _)| {
+                    let k = k.to_ascii_lowercase().replace([' ', '-'], "_");
+                    k.contains("mpn")
+                        || k.contains("manufacturer_part")
+                        || k == "part_number"
+                        || k == "mfr_part"
+                })
+                .map(|(_, v)| v.clone())
+        })
         .or_else(|| non_empty(&comp.value));
     let res = lib.resolve(&q);
     if res.confidence != Confidence::Unresolved {
@@ -4080,6 +4092,1116 @@ fn power_out_net_voltages(board: &ExtractedBoard) -> HashMap<i64, f64> {
         }
     }
     out
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Identity from a BOM or a placement file
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// What a bind owes to an artifact other than the layout.
+///
+/// Attribution is not decoration. Once a BOM can change what a part binds to, a
+/// reader has to be able to ask "which file decided this?", and the answer has to
+/// be per part rather than per run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IdentityAttribution {
+    pub reference: String,
+    /// The part number the artifact supplied.
+    pub mpn: String,
+    /// The artifact's path, as the caller gave it.
+    pub source: String,
+    /// The artifact's kind, e.g. `lcsc_bom`.
+    pub source_kind: String,
+    /// The value string the layout carried, kept so nothing the layout said is
+    /// lost when the part number stands in for an empty or unidentifying value.
+    pub layout_value: String,
+    /// What the part resolved to on the layout alone.
+    pub before: Confidence,
+    /// What it resolves to with the artifact's part number.
+    pub after: Confidence,
+    /// The model the part number reached, when it reached one.
+    pub model_id: Option<String>,
+}
+
+/// A value string an artifact supplied for a part whose layout value was empty.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilledValue {
+    pub reference: String,
+    pub value: String,
+    pub source: String,
+}
+
+/// Something the artifact and the board disagree about that is worth saying out
+/// loud but does not make the pair unusable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IdentityFinding {
+    /// Both files name the part and they disagree about what it is, within one
+    /// device class: the layout says `4k7` and the BOM says `10k`. The BOM's part
+    /// number wins, per the precedence in [`apply_identity`], and the number that
+    /// changed is named here so the change is never silent.
+    ValueDisagrees {
+        reference: String,
+        layout: String,
+        artifact: String,
+        source: String,
+    },
+    /// The artifact names designators the board does not have. Ordinary in small
+    /// numbers: a BOM covers mechanical parts with no footprint, a panel, or a
+    /// variant.
+    NotOnBoard {
+        references: Vec<String>,
+        source: String,
+    },
+    /// The board has parts the artifact does not name. Ordinary: a BOM omits test
+    /// points and fiducials. Worth saying because the artifact was the thing that
+    /// could have identified them.
+    NotInArtifact {
+        references: Vec<String>,
+        source: String,
+    },
+    /// A BOM row's stated quantity disagrees with the number of designators the
+    /// same row enumerates. The list wins: it is the enumerated fact and the
+    /// quantity is a number derived from it.
+    QuantityDisagrees {
+        references: Vec<String>,
+        stated: usize,
+        enumerated: usize,
+        source: String,
+    },
+    /// The layout explicitly marks a part do-not-populate while the BOM
+    /// explicitly says it is fitted. Never resolved here; see
+    /// [`IdentityReport::advice`]. A false layout DNP flag is unspecified, not
+    /// an explicit fitted assertion, and therefore cannot create this finding.
+    PopulateDisagrees {
+        reference: String,
+        layout_says_dnp: bool,
+        artifact_says_populate: bool,
+        source: String,
+    },
+}
+
+impl IdentityFinding {
+    /// The one line a report prints for this finding.
+    pub fn line(&self) -> String {
+        match self {
+            IdentityFinding::ValueDisagrees {
+                reference,
+                layout,
+                artifact,
+                source,
+            } => format!(
+                "{reference} is {layout:?} on the layout and {artifact:?} in {source}; the part \
+                 number from {source} is what bound, so check which revision is current"
+            ),
+            IdentityFinding::NotOnBoard { references, source } => format!(
+                "{source} names {} parts the board does not have: {}",
+                references.len(),
+                references.join(", ")
+            ),
+            IdentityFinding::NotInArtifact { references, source } => format!(
+                "{} parts on the board are not in {source}: {}",
+                references.len(),
+                references.join(", ")
+            ),
+            IdentityFinding::QuantityDisagrees {
+                references,
+                stated,
+                enumerated,
+                source,
+            } => format!(
+                "{source} states a quantity of {stated} for a row that lists {enumerated} \
+                 designators ({}); the list is what bound",
+                references.join(", ")
+            ),
+            IdentityFinding::PopulateDisagrees {
+                reference,
+                layout_says_dnp,
+                artifact_says_populate,
+                source,
+            } => format!(
+                "{reference} is {} on the layout and {} in {source}; the do-not-populate policy \
+                 decided it, not the BOM",
+                if *layout_says_dnp {
+                    "do-not-populate"
+                } else {
+                    "populated"
+                },
+                if *artifact_says_populate {
+                    "populated"
+                } else {
+                    "do-not-populate"
+                }
+            ),
+        }
+    }
+}
+
+/// `--fit` / `--no-fit` names a BOM's populate column implies.
+///
+/// Deliberately advice rather than action. hauksbee already has a DNP policy
+/// ([`hauksbee_extract::dnp::DnpPolicy`], applied by
+/// `ExtractedBoard::apply_dnp_policy`), that policy is the single place the
+/// question "is this part fitted?" is decided, and a second mechanism quietly
+/// overriding it from a purchasing spreadsheet is exactly the kind of hidden
+/// second opinion the DNP work exists to avoid. So the BOM's opinion is
+/// surfaced, and the caller feeds these two lists into `apply_dnp_policy` if it
+/// wants them honoured.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FitAdvice {
+    /// Parts the layout marks DNP that the artifact says are populated.
+    pub fit: Vec<String>,
+    /// Parts without an explicit layout DNP marker that the artifact says are
+    /// not populated. This is information the layout reader may not carry at
+    /// all, so it remains explicit policy advice rather than a contradiction.
+    pub no_fit: Vec<String>,
+}
+
+impl FitAdvice {
+    pub fn is_empty(&self) -> bool {
+        self.fit.is_empty() && self.no_fit.is_empty()
+    }
+}
+
+/// What [`apply_identity`] did.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IdentityReport {
+    /// Positive evidence that an auxiliary artifact was reconciled rather than
+    /// merely accepted because no contradiction happened to fire.
+    pub evidence: Vec<String>,
+    /// Every part whose bind is owed to an artifact rather than to the layout.
+    pub identified: Vec<IdentityAttribution>,
+    /// Parts whose empty layout value an artifact filled.
+    pub values_filled: Vec<FilledValue>,
+    pub findings: Vec<IdentityFinding>,
+    pub advice: FitAdvice,
+}
+
+impl IdentityReport {
+    /// The lines a report prints. Empty when the artifact agreed with the layout
+    /// about everything and added nothing, so a run whose BOM says nothing new
+    /// never mentions the subject.
+    pub fn lines(&self) -> Vec<String> {
+        let mut out = self.evidence.clone();
+        for a in &self.identified {
+            out.push(format!(
+                "  {} identified from {} as {:?}: {} -> {}",
+                a.reference,
+                a.source,
+                a.mpn,
+                confidence_word(a.before),
+                confidence_word(a.after)
+            ));
+        }
+        for v in &self.values_filled {
+            out.push(format!(
+                "  {} had no value on the layout; {} says {:?}",
+                v.reference, v.source, v.value
+            ));
+        }
+        for f in &self.findings {
+            out.push(format!("  {}", f.line()));
+        }
+        if !self.advice.fit.is_empty() {
+            out.push(format!(
+                "  the BOM says these DNP parts are populated: {}. Re-run with --fit {} to \
+                 honour it",
+                self.advice.fit.join(", "),
+                self.advice.fit.join(",")
+            ));
+        }
+        if !self.advice.no_fit.is_empty() {
+            out.push(format!(
+                "  the BOM says these parts are not populated, while the layout has no explicit \
+                 DNP marker: {}. \
+                 Re-run with --no-fit {} to honour it",
+                self.advice.no_fit.join(", "),
+                self.advice.no_fit.join(",")
+            ));
+        }
+        out
+    }
+}
+
+/// A component kind in the lower-case form a report prints, so a refusal reads
+/// as a sentence rather than as a Rust variant name.
+fn kind_word(kind: ComponentKind) -> String {
+    format!("{kind:?}").to_ascii_lowercase()
+}
+
+/// A model in the words a user recognises: its own description, or its kind when
+/// it has none.
+///
+/// Never the model id. An id like `signal_diode_1n4148_fallback` is an internal
+/// identifier the user never typed, and `docs/STYLE.md` rules those out of
+/// user-facing text for the good reason that they send a reader looking for a file
+/// rather than at their board.
+fn model_words(model: &ModelEntry) -> String {
+    if model.description.trim().is_empty() {
+        kind_word(model.kind)
+    } else {
+        model.description.clone()
+    }
+}
+
+fn confidence_word(c: Confidence) -> &'static str {
+    match c {
+        Confidence::Exact => "exact",
+        Confidence::Family => "family",
+        Confidence::Guessed => "guessed",
+        Confidence::Unresolved => "unresolved",
+    }
+}
+
+/// Why a set of identity hints cannot be used at all.
+///
+/// Both variants mean the same thing in different words: the two files describe
+/// different boards, so anything computed from the pair would be a fact about a
+/// board that does not exist. That is [`crate::result::EXIT_INVALID_FOR_ANALYSIS`],
+/// the same treatment a board still carrying Git merge-conflict markers gets.
+#[derive(Debug, Clone, thiserror::Error, PartialEq, Eq)]
+pub enum IdentityRefusal {
+    #[error(
+        "{artifact} and the board disagree about what {} of the same parts ARE, which \
+         means they are different revisions of the board rather than two views of \
+         one: {detail}. Anything computed from the pair would describe a board that \
+         does not exist. Use the {artifact_kind} that was exported from this layout, \
+         or drop it and analyse the layout alone",
+        contradictions.len()
+    )]
+    Contradiction {
+        artifact: String,
+        artifact_kind: String,
+        contradictions: Vec<String>,
+        detail: String,
+    },
+
+    #[error(
+        "{artifact} names {total} reference designators and only {matched} of them are \
+         on this board, so it is a BOM for a different board. Check which file goes \
+         with which layout, then retry"
+    )]
+    WrongBoard {
+        artifact: String,
+        total: usize,
+        matched: usize,
+    },
+}
+
+impl IdentityRefusal {
+    /// Always [`crate::result::EXIT_INVALID_FOR_ANALYSIS`].
+    pub fn exit_code(&self) -> i32 {
+        crate::result::EXIT_INVALID_FOR_ANALYSIS
+    }
+}
+
+/// Below this share of an artifact's designators matching the board, the two are
+/// not the same board. A BOM may legitimately carry mechanical parts and panel
+/// extras, but those cannot outnumber the actual board population. Treating ten
+/// matching rows among a hundred as sufficient made a same-prefix board family
+/// look compatible even though ninety per cent of the asserted identities were
+/// for another design.
+const WRONG_BOARD_MATCH_RATIO: f64 = 0.5;
+
+/// Apply identity from a BOM or a placement file to a board, before binding.
+///
+/// ## The precedence, and why
+///
+/// 1. **The layout decides whenever it can.** If the layout's value resolves the
+///    part exactly or by family, that reading stands. The layout is the file the
+///    netlist itself came from, so it is the description of the circuit; a BOM is
+///    a description of a purchase, and it goes stale between revisions in a way
+///    the layout cannot.
+/// 2. **A part number decides only where the layout could not.** Where the layout
+///    resolves nothing, or resolves only by a guess, an artifact's manufacturer
+///    part number is allowed to settle it. This is the whole gain: an MPN is a
+///    globally unique key naming exactly one device, so it identifies parts a
+///    value string leaves anonymous, and it takes nothing away from the layout
+///    because the layout said nothing. Every such bind is in
+///    [`IdentityReport::identified`], attributed to the file that supplied it.
+/// 3. **Two files naming different parts is refused, not merged.** If both
+///    resolve and they reach different models, that is not a disagreement to
+///    average: the files describe different revisions. Same for a class
+///    disagreement, which is the case this feature exists for, a part the BOM
+///    calls a `10k` and the layout calls a MOSFET.
+/// 4. **An artifact's VALUE column never outranks the layout's.** It is the same
+///    kind of claim, and it only fills a hole: a part whose layout value is empty,
+///    which is every part on an Altium `.PcbDoc`, since Altium keeps values in
+///    the schematic.
+/// 5. **A magnitude disagreement inside one part is reported, not acted on.** The
+///    layout says `10k` and the BOM says `4k7`: same device, different number.
+///    The layout's number is used and the disagreement is a
+///    [`IdentityFinding::ValueDisagrees`], because a number that changes between
+///    revisions is worth a line in the report and is not worth refusing a run
+///    over.
+///
+/// ## What it does not do
+///
+/// It does not touch the DNP decision. `apply_dnp_policy` owns that, and the
+/// artifact's populate column arrives as [`IdentityReport::advice`] for the
+/// caller to feed back in. A distributor order code is never used for identity at
+/// all; [`hauksbee_extract::bom`] drops those before they get here.
+pub fn apply_identity(
+    board: &mut ExtractedBoard,
+    hints: &[hauksbee_extract::bom::IdentityHint],
+    lib: &ModelLibrary,
+) -> Result<IdentityReport, IdentityRefusal> {
+    use hauksbee_extract::bom::{IDENTITY_SOURCE_PROPERTY, MPN_PROPERTY, VALUE_PROPERTY};
+
+    let mut report = IdentityReport::default();
+    if hints.is_empty() {
+        return Ok(report);
+    }
+    let source = hints[0].source.clone();
+    let artifact_kind = identity_artifact_kind(&hints[0]);
+
+    // ── Is this even the same board? ────────────────────────────────────────
+    let on_board: std::collections::HashSet<String> = board
+        .components
+        .iter()
+        .map(|c| c.reference.clone())
+        .collect();
+    let mut named: Vec<String> = hints.iter().map(|h| h.reference.clone()).collect();
+    named.sort();
+    named.dedup();
+    let matched = named.iter().filter(|r| on_board.contains(*r)).count();
+    if (matched as f64) < named.len() as f64 * WRONG_BOARD_MATCH_RATIO {
+        return Err(IdentityRefusal::WrongBoard {
+            artifact: source,
+            total: named.len(),
+            matched,
+        });
+    }
+
+    // ── Contradictions, gathered before anything is applied ─────────────────
+    let mut contradictions: Vec<String> = Vec::new();
+    for hint in hints {
+        let Some(comp) = board.component(&hint.reference) else {
+            continue;
+        };
+        if let Some(text) = contradiction_between(comp, hint, lib) {
+            contradictions.push(text);
+        }
+    }
+    if !contradictions.is_empty() {
+        let detail = contradictions.join("; ");
+        return Err(IdentityRefusal::Contradiction {
+            artifact: source,
+            artifact_kind: artifact_kind.to_string(),
+            contradictions,
+            detail,
+        });
+    }
+
+    // ── Apply ───────────────────────────────────────────────────────────────
+    for hint in hints {
+        let Some(idx) = board
+            .components
+            .iter()
+            .position(|c| c.reference == hint.reference)
+        else {
+            continue;
+        };
+
+        if let Some(mpn) = hint.mpn.as_ref() {
+            let before = resolve(lib, &board.components[idx]);
+            let probe = probe_with_mpn(&board.components[idx], mpn);
+            let substituted = probe.value != board.components[idx].value;
+            let after = resolve(lib, &probe);
+            if identity_improves(&before, &after) {
+                let comp = &mut board.components[idx];
+                let layout_value = comp.value.clone();
+                comp.properties
+                    .push((MPN_PROPERTY.to_string(), mpn.clone()));
+                comp.properties
+                    .push((IDENTITY_SOURCE_PROPERTY.to_string(), hint.source.clone()));
+                if substituted {
+                    comp.value = mpn.clone();
+                }
+                report.identified.push(IdentityAttribution {
+                    reference: hint.reference.clone(),
+                    mpn: mpn.clone(),
+                    source: hint.source.clone(),
+                    source_kind: hint.source_kind.clone(),
+                    layout_value,
+                    before: before.confidence,
+                    after: after.confidence,
+                    model_id: after.model.as_ref().map(|m| m.id.clone()),
+                });
+            }
+        }
+
+        // An artifact value fills a hole and nothing else.
+        if let Some(value) = &hint.value {
+            let comp = &mut board.components[idx];
+            if comp.value.trim().is_empty() {
+                comp.value = value.clone();
+                comp.properties
+                    .push((VALUE_PROPERTY.to_string(), value.clone()));
+                report.values_filled.push(FilledValue {
+                    reference: hint.reference.clone(),
+                    value: value.clone(),
+                    source: hint.source.clone(),
+                });
+            } else if let Some(text) = value_disagreement(&comp.value, value) {
+                let _ = text;
+                report.findings.push(IdentityFinding::ValueDisagrees {
+                    reference: hint.reference.clone(),
+                    layout: comp.value.clone(),
+                    artifact: value.clone(),
+                    source: hint.source.clone(),
+                });
+            }
+        }
+
+        // The populate column becomes advice, never an action.
+        if let Some(populate) = hint.populate {
+            let dnp = board.components[idx].dnp;
+            if dnp && populate {
+                report.advice.fit.push(hint.reference.clone());
+            } else if !dnp && !populate {
+                report.advice.no_fit.push(hint.reference.clone());
+            }
+            if dnp && populate {
+                report.findings.push(IdentityFinding::PopulateDisagrees {
+                    reference: hint.reference.clone(),
+                    layout_says_dnp: dnp,
+                    artifact_says_populate: populate,
+                    source: hint.source.clone(),
+                });
+            }
+        }
+    }
+
+    // ── The two directions of "one file knows about a part the other does not"
+    let not_on_board: Vec<String> = named
+        .iter()
+        .filter(|r| !on_board.contains(*r))
+        .cloned()
+        .collect();
+    if !not_on_board.is_empty() {
+        report.findings.push(IdentityFinding::NotOnBoard {
+            references: not_on_board,
+            source: source.clone(),
+        });
+    }
+    let named_set: std::collections::HashSet<&str> = named.iter().map(String::as_str).collect();
+    let mut not_in_artifact: Vec<String> = board
+        .components
+        .iter()
+        .filter(|c| !c.reference.is_empty() && !named_set.contains(c.reference.as_str()))
+        .map(|c| c.reference.clone())
+        .collect();
+    not_in_artifact.sort();
+    if !not_in_artifact.is_empty() {
+        report.findings.push(IdentityFinding::NotInArtifact {
+            references: not_in_artifact,
+            source,
+        });
+    }
+
+    Ok(report)
+}
+
+/// [`apply_identity`] for a whole BOM, plus the one reconciliation a BOM carries
+/// that a bare hint list cannot express: a row whose stated quantity disagrees
+/// with the number of designators the same row enumerates.
+///
+/// This is the entry point a caller with a BOM wants. Call it BEFORE
+/// `ExtractedBoard::apply_dnp_policy`, so that the policy sees the board this
+/// function may have added values to, and feed [`FitAdvice`] into that call if the
+/// BOM's populate column is to be honoured.
+pub fn apply_bom_identity(
+    board: &mut ExtractedBoard,
+    bom: &hauksbee_extract::bom::Bom,
+    lib: &ModelLibrary,
+) -> Result<IdentityReport, IdentityRefusal> {
+    let mut report = apply_identity(board, &bom.identity_hints(), lib)?;
+    for (row, stated, enumerated) in bom.quantity_disagreements() {
+        report.findings.push(IdentityFinding::QuantityDisagrees {
+            references: row.references.clone(),
+            stated,
+            enumerated,
+            source: bom.provenance.path.clone(),
+        });
+    }
+    Ok(report)
+}
+
+/// [`apply_identity`] for a placement file, which additionally reconciles where
+/// the parts sit. A placement file whose positions disagree with the layout's is
+/// from another revision, and that is refused for the same reason a contradicting
+/// BOM is.
+pub fn apply_placement_identity(
+    board: &mut ExtractedBoard,
+    file: &hauksbee_extract::placement::PlacementFile,
+    lib: &ModelLibrary,
+) -> Result<IdentityReport, IdentityRefusal> {
+    let check = file.cross_check(board);
+    if check.is_different_board() {
+        let detail = check.lines().join("; ");
+        let mut contradictions: Vec<String> = check
+            .position_disagreements
+            .iter()
+            .map(|d| d.reference.clone())
+            .chain(check.side_disagreements.iter().map(|d| d.reference.clone()))
+            .chain(
+                check
+                    .rotation_disagreements
+                    .iter()
+                    .map(|d| d.reference.clone()),
+            )
+            .chain(check.only_in_placement.iter().cloned())
+            .collect();
+        contradictions.sort();
+        contradictions.dedup();
+        return Err(IdentityRefusal::Contradiction {
+            artifact: file.provenance.path.clone(),
+            artifact_kind: "placement file".to_string(),
+            contradictions,
+            detail,
+        });
+    }
+    let mut report = apply_identity(board, &file.identity_hints(), lib)?;
+    report.evidence.push(check.evidence_line());
+    Ok(report)
+}
+
+/// Did the LAYOUT name a part, as opposed to stating a parameter or nothing?
+///
+/// A non-empty value that does not parse as a magnitude is a name: `ATmega328P-AU`,
+/// `BSS138`, `LM4040BIM3-2.0`. A parseable magnitude (`10k`, `100nF`) is a
+/// parameter. An empty value, KiCad's `~`, and the marker an Altium read leaves
+/// behind are all nothing.
+fn layout_names_a_part(comp: &Component) -> bool {
+    let v = comp.value.trim();
+    !v.is_empty()
+        && v != "~"
+        && parse_value(v).is_none()
+        && !comp
+            .properties
+            .iter()
+            .any(|(k, _)| k == hauksbee_extract::altium::VALUE_UNRESOLVED_KEY)
+}
+
+/// Do two identity strings plausibly name the same part?
+///
+/// Vendor-specific package and reel suffixes are the reason this exists:
+/// `ATmega328P-AU`, `BSS138-7-F` and `BC847B,215` may be written without their
+/// ordering code in a layout. The suffix is removed only when the artifact also
+/// names the vendor that defines it; globally rewriting an arbitrary `-AU` or
+/// `,215` could merge two genuinely different orderable devices. A shared prefix
+/// is never identity.
+fn names_same_part(a: &str, b: &str, manufacturer: Option<&str>) -> bool {
+    fn norm(s: &str) -> String {
+        s.chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .collect::<String>()
+            .to_ascii_uppercase()
+    }
+
+    fn without_vendor_ordering_suffix(s: &str, manufacturer: Option<&str>) -> String {
+        let upper = s.trim().to_ascii_uppercase();
+        let vendor = manufacturer.map(norm).unwrap_or_default();
+        for (suffix, vendor_matches) in [
+            ("-7-F", vendor.starts_with("DIODESINC")),
+            (",215", vendor.contains("NEXPERIA")),
+            (
+                "-AU",
+                vendor.contains("MICROCHIP") || vendor.contains("ATMEL"),
+            ),
+        ] {
+            if !vendor_matches {
+                continue;
+            }
+            if let Some(core) = upper.strip_suffix(suffix) {
+                if !core.is_empty() {
+                    return norm(core);
+                }
+            }
+        }
+        norm(&upper)
+    }
+
+    let (normal_a, normal_b) = (norm(a), norm(b));
+    if normal_a.is_empty() || normal_b.is_empty() {
+        return false;
+    }
+    normal_a == normal_b
+        || without_vendor_ordering_suffix(a, manufacturer)
+            == without_vendor_ordering_suffix(b, manufacturer)
+}
+
+#[cfg(test)]
+mod part_name_tests {
+    use super::names_same_part;
+
+    #[test]
+    fn similar_five_character_prefixes_are_not_the_same_part() {
+        assert!(!names_same_part("TPS62130", "TPS62135", None));
+        assert!(!names_same_part("ATmega328P", "ATmega328PB", None));
+    }
+
+    #[test]
+    fn documented_package_and_reel_suffixes_are_compatible() {
+        assert!(names_same_part(
+            "ATmega328P-AU",
+            "ATmega328P",
+            Some("Microchip Technology")
+        ));
+        assert!(names_same_part("BSS138", "BSS138-7-F", Some("Diodes Inc")));
+        assert!(names_same_part("BC847B", "BC847B,215", Some("Nexperia")));
+        assert!(names_same_part(
+            "BC847B",
+            "BC847B,215",
+            Some("Nexperia USA Inc.")
+        ));
+    }
+
+    #[test]
+    fn ordering_suffix_spellings_are_not_global_part_number_rewrites() {
+        assert!(!names_same_part("SENSOR-AU", "SENSOR", None));
+        assert!(!names_same_part("DRIVER-7-F", "DRIVER", None));
+        assert!(!names_same_part("MODULE,215", "MODULE", None));
+        assert!(!names_same_part("SENSOR-AU", "SENSOR", Some("Acme")));
+    }
+}
+
+/// The component as it looks with an artifact's part number attached.
+///
+/// Two things are attached, and the second needs explaining. The part number goes
+/// on the reserved property, which is where `resolve` looks for it. And where the
+/// layout's value carries no electrical parameter, the part number ALSO stands in
+/// for the value.
+///
+/// The substitution is not a shortcut. A model's match rules are ANDed, and nearly
+/// every entry in the library declares a `value_re` written against part numbers
+/// (`^MCP4728`, `^BSS138[A-Z0-9-]*$`). So a part number presented only as a part
+/// number matches nothing: the query still carries the layout's own value, and the
+/// value rule rejects it. Where the layout value is empty or is a part-number-shaped
+/// string, standing in for it costs nothing, because that string was not a
+/// parameter. Where the layout value PARSES as a magnitude, it is the part's
+/// electrical parameter and is never touched: replacing `10k` with
+/// `RC0402FR-0710KL` would delete the resistance.
+fn probe_with_mpn(comp: &Component, mpn: &str) -> Component {
+    let mut probe = comp.clone();
+    probe.properties.push((
+        hauksbee_extract::bom::MPN_PROPERTY.to_string(),
+        mpn.to_string(),
+    ));
+    if parse_value(&comp.value).is_none() {
+        probe.value = mpn.to_string();
+    }
+    probe
+}
+
+/// True when the artifact's part number identified a part the layout could not.
+///
+/// The narrowest rule that delivers the gain, which is precedence rules 1 and 2
+/// together: the part number is used only where the layout did not decide.
+///
+/// "Did not decide" is `Unresolved` OR `Guessed`, and the second half matters as
+/// much as the first. A `Guessed` reading is what a footprint prefix alone
+/// produces for a part with no value: it is a shape, not a claim about a device,
+/// so a part number that reaches an exact model is better evidence and replaces
+/// it. A layout that reached `Exact` or `Family` keeps its reading, and if the
+/// part number reaches a different one, [`contradiction_between`] has already
+/// refused the whole read rather than letting this function quietly pick a winner.
+fn identity_improves(
+    before: &hauksbee_models::Resolution,
+    after: &hauksbee_models::Resolution,
+) -> bool {
+    let rank = |c: Confidence| match c {
+        Confidence::Exact => 0,
+        Confidence::Family => 1,
+        Confidence::Guessed => 2,
+        Confidence::Unresolved => 3,
+    };
+    matches!(
+        before.confidence,
+        Confidence::Unresolved | Confidence::Guessed
+    ) && rank(after.confidence) < rank(before.confidence)
+        && after.model.is_some()
+}
+
+/// The device class of a value string, when it has one.
+///
+/// Only the three passive dimensions are claimed, because they are the only ones
+/// a value string states unambiguously: an `F` suffix is a capacitance and
+/// nothing else. A part number, a bare magnitude and an empty string all return
+/// `None`, which means "this says nothing about the class" rather than "no
+/// class", and nothing is refused on the strength of a `None`.
+fn value_dimension(value: &str) -> Option<&'static str> {
+    let parsed = parse_value(value)?;
+    let unit = parsed.unit?.to_ascii_uppercase();
+    match unit.as_str() {
+        "F" => Some("a capacitance"),
+        "H" => Some("an inductance"),
+        "R" | "Ω" | "OHM" | "OHMS" => Some("a resistance"),
+        _ => None,
+    }
+}
+
+/// Is this bare magnitude written on a scale its designator never uses?
+///
+/// Returns the phrase a refusal uses, or `None` when the value is fine or states
+/// its own unit (in which case the dimension detectors have already judged it).
+/// The multiplier is the evidence: a capacitor or inductor written with a `k` or
+/// `M` multiplier is a resistance value in the wrong row, and a resistor written in
+/// pico or femto is a capacitance.
+fn wrong_scale_for_designator(reference: &str, value: &str) -> Option<&'static str> {
+    let parsed = parse_value(value)?;
+    if parsed.unit.is_some() {
+        return None;
+    }
+    let suffix = parsed.suffix?.to_ascii_uppercase();
+    let prefix: String = reference
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    match prefix.as_str() {
+        "C" | "L" if matches!(suffix.as_str(), "K" | "M" | "MEG" | "G" | "T") => {
+            Some("a resistance-scale value")
+        }
+        "R" if matches!(suffix.as_str(), "P" | "N" | "F" | "A") => {
+            Some("a capacitance-scale value")
+        }
+        _ => None,
+    }
+}
+
+/// The dimension one value string states for one designator: the unit when the
+/// string carries one, otherwise the designator's own convention for a bare
+/// magnitude. `None` when neither says anything, which is every part number.
+fn dimension_of(reference: &str, value: &str) -> Option<&'static str> {
+    value_dimension(value).or_else(|| {
+        parse_value(value)
+            .is_some()
+            .then(|| designator_dimension(reference))
+            .flatten()
+    })
+}
+
+/// The class a reference-designator prefix implies, for the three passives.
+fn designator_dimension(reference: &str) -> Option<&'static str> {
+    let prefix: String = reference
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .collect::<String>()
+        .to_ascii_uppercase();
+    match prefix.as_str() {
+        "R" => Some("a resistance"),
+        "C" => Some("a capacitance"),
+        "L" => Some("an inductance"),
+        _ => None,
+    }
+}
+
+/// Do the two files disagree about the CLASS of one part, rather than about its
+/// value?
+///
+/// Two independent detectors, because either alone misses half the cases. The
+/// model library sees a part number the value parser cannot read: it resolves
+/// `AO3400A` to a MOSFET and `RC0402FR-0710KL` to a resistor, so a disagreement
+/// in [`ComponentKind`] is decisive. The value parser sees a dimension the model
+/// library has no entry for: `10k` against `100nF` is ohms against farads whether
+/// or not either resolves. And a designator prefix is itself a class claim, which
+/// catches the case the brief exists for: a `Q5` the BOM calls `10k`.
+fn contradiction_between(
+    comp: &Component,
+    hint: &hauksbee_extract::bom::IdentityHint,
+    lib: &ModelLibrary,
+) -> Option<String> {
+    let reference = &comp.reference;
+    let artifact_kind = identity_artifact_kind(hint);
+
+    // Two explicit manufacturers cannot both be true. Most layout formats do
+    // not carry a manufacturer at all; absence is unknown and never treated as
+    // a contradiction.
+    if let (Some(layout), Some(artifact)) = (
+        explicit_manufacturer(comp),
+        hint.manufacturer
+            .as_deref()
+            .filter(|s| !s.trim().is_empty()),
+    ) {
+        if normalise_identity_text(layout) != normalise_identity_text(artifact) {
+            return Some(format!(
+                "{reference} names manufacturer {layout:?} on the layout and {artifact:?} in the {artifact_kind}"
+            ));
+        }
+    }
+
+    // Package names vary by CAD library, so compare only standardized package
+    // families and explicit electrical-pad counts. Distinct numbered pads are
+    // stronger evidence than raw shapes and catch a stale QFN-16 row against a
+    // ten-pad footprint without counting paste apertures as invented pins.
+    if let Some(artifact_package) = hint.footprint.as_deref().filter(|s| !s.trim().is_empty()) {
+        if let Some(expected_pads) = package_electrical_pad_count(artifact_package) {
+            let actual_pads = component_electrical_pad_count(comp);
+            if actual_pads > 0 && expected_pads != actual_pads {
+                return Some(format!(
+                    "{reference} is {artifact_package:?} in the {artifact_kind} ({expected_pads} electrical pads) but the board footprint has {actual_pads} distinct numbered electrical pads"
+                ));
+            }
+        }
+        if let (Some(layout_family), Some(artifact_family)) = (
+            package_family(&comp.footprint),
+            package_family(artifact_package),
+        ) {
+            if layout_family != artifact_family {
+                return Some(format!(
+                    "{reference} uses package family {layout_family} on the layout and {artifact_family} ({artifact_package:?}) in the {artifact_kind}"
+                ));
+            }
+        }
+    }
+
+    // 1. Two files, two parts.
+    //
+    // The layout resolved the designator and the artifact's own part number
+    // resolves it to something else. Different KINDS is the obvious case; a
+    // different model of the same kind is the same problem in a quieter voice
+    // (two MCUs, two regulators), and is worth the same refusal because a run
+    // that silently swaps the simulated chip is exactly the confident wrong
+    // answer this feature must not produce.
+    //
+    // The part number is resolved on its own rather than alongside the layout's
+    // value, because the model library ANDs its match rules: a query carrying
+    // both a value and a part number that name different parts matches neither,
+    // and the disagreement would go unnoticed.
+    //
+    // The test is whether the LAYOUT NAMED A PART, not what confidence it reached.
+    // Those come apart in both directions and each way costs something real. A
+    // bare `Diode_SMD:D_SOD-123` footprint with no value at all reaches a model
+    // (a generic 1N4148 stand-in, at `Guessed`), and treating that as the layout
+    // naming a part refuses the whole file over a BOM that AGREES with it. A
+    // layout value of `ATmega328P-AU` also reaches only `Guessed`, because the
+    // library has no entry for that exact suffix, but the board plainly named a
+    // part, and a BOM saying `STM32F103C8` is then two different boards.
+    //
+    // So: the layout named a part when its value is a non-empty string that is not
+    // a magnitude. A magnitude is a parameter, not a name.
+    if let Some(mpn) = &hint.mpn {
+        if layout_names_a_part(comp) {
+            let layout = resolve(lib, comp);
+            let artifact = resolve(lib, &probe_with_mpn(comp, mpn));
+            let decisive = matches!(artifact.confidence, Confidence::Exact | Confidence::Family);
+            if let (Some(l), Some(a)) = (&layout.model, &artifact.model) {
+                // Different models are not automatically different parts: the
+                // layout's reading is often an engine stand-in for the very part
+                // the BOM names (`ATmega328P-AU` reaching a fallback while
+                // `ATmega328P` reaches the library entry). Two strings that name
+                // the same part are not a disagreement, so the strings decide and
+                // the models only widen it to a kind mismatch.
+                let same_part = names_same_part(&comp.value, mpn, hint.manufacturer.as_deref());
+                if decisive && l.id != a.id && !same_part {
+                    return Some(format!(
+                        "{reference} is {:?} (\"{}\") on the layout and {:?} (\"{}\") in the {artifact_kind}",
+                        comp.value,
+                        model_words(l),
+                        mpn,
+                        model_words(a),
+                    ));
+                }
+                if l.kind != a.kind && !same_part {
+                    return Some(format!(
+                        "{reference} is {:?} (a {}) on the layout and {:?} (a {}) in the {artifact_kind}",
+                        comp.value,
+                        kind_word(l.kind),
+                        mpn,
+                        kind_word(a.kind),
+                    ));
+                }
+            }
+        }
+    }
+
+    // 2. Two dimensions.
+    //
+    // A bare magnitude states no unit, so the designator supplies it: `10k` on an
+    // `R` is ohms and on a `C` is farads, which is the convention every value
+    // string relies on. That makes `10k` against `100nF` on one designator
+    // decisive without either side needing a model.
+    let artifact_value = hint.value.as_deref().unwrap_or("");
+    if let (Some(l), Some(a)) = (
+        dimension_of(reference, &comp.value),
+        dimension_of(reference, artifact_value),
+    ) {
+        if l != a {
+            return Some(format!(
+                "{reference} is {:?} ({l}) on the layout and {artifact_value:?} ({a}) in the {artifact_kind}",
+                comp.value
+            ));
+        }
+    }
+
+    // 3. A designator prefix against a stated dimension, for the case where the
+    //    layout's own value says nothing at all.
+    if let (Some(d), Some(a)) = (
+        designator_dimension(reference),
+        value_dimension(artifact_value),
+    ) {
+        if d != a {
+            return Some(format!(
+                "{reference} is a {} designator, so it is {d}, and the BOM calls it \
+                 {artifact_value:?} ({a})",
+                reference
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphabetic())
+                    .collect::<String>()
+            ));
+        }
+    }
+    // 4. A magnitude on the wrong scale for its designator.
+    //
+    // `C9` with an empty layout value and a BOM value of `10k`. No dimension is
+    // stated on either side, no model resolves, and the designator prefix agrees
+    // with the BOM that this is a capacitor, so detectors 1 to 3 all pass it
+    // through and the fill path builds a 10 kilofarad capacitor: a dead short at
+    // every frequency, from a plausible-looking cell.
+    //
+    // The tell is the MULTIPLIER, not the magnitude. Capacitors and inductors are
+    // written in pico, nano, micro and milli; a `k` or a `M` on one is a resistance
+    // value pasted into the wrong row. The reverse holds for a resistor written in
+    // pico. Absolute bounds would be the wrong tool, because a 3000 F supercapacitor
+    // is a real part.
+    if !artifact_value.is_empty() {
+        if let Some(scale) = wrong_scale_for_designator(reference, artifact_value) {
+            if comp.value.trim() != artifact_value.trim() {
+                return Some(format!(
+                    "{reference} is a {} designator and the BOM calls it \
+                     {artifact_value:?}, which is {scale}",
+                    reference
+                        .chars()
+                        .take_while(|c| c.is_ascii_alphabetic())
+                        .collect::<String>()
+                ));
+            }
+        }
+    }
+
+    // 5. A passive value against a part the layout resolved as a semiconductor.
+    //
+    // This is the case the feature exists for: the BOM calls Q5 a `10k` and the
+    // layout calls it a MOSFET. It needs its own detector because `10k` carries
+    // no unit, so no dimension is stated and detectors 2 and 3 cannot see it. A
+    // bare magnitude IS a passive value by convention, and a transistor's value
+    // is never one, so the pair is decisive.
+    if !artifact_value.is_empty() && parse_value(artifact_value).is_some() {
+        let layout_kind = resolve(lib, comp).model.map(|m| m.kind);
+        let semiconductor = matches!(
+            layout_kind,
+            Some(
+                ComponentKind::Nmos
+                    | ComponentKind::Pmos
+                    | ComponentKind::BjtNpn
+                    | ComponentKind::BjtPnp
+                    | ComponentKind::Diode
+                    | ComponentKind::Mcu
+                    | ComponentKind::Vreg
+                    | ComponentKind::Opamp
+                    | ComponentKind::Dac
+                    | ComponentKind::Adc
+            )
+        );
+        if semiconductor {
+            return Some(format!(
+                "{reference} is {:?} ({}) on the layout and {artifact_value:?}, a passive value, \
+                 in the {artifact_kind}",
+                comp.value,
+                kind_word(layout_kind.expect("matched above"))
+            ));
+        }
+    }
+    None
+}
+
+fn normalise_identity_text(text: &str) -> String {
+    text.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect::<String>()
+        .to_ascii_uppercase()
+}
+
+fn explicit_manufacturer(comp: &Component) -> Option<&str> {
+    comp.properties.iter().find_map(|(key, value)| {
+        let key = normalise_identity_text(key);
+        matches!(
+            key.as_str(),
+            "MANUFACTURER" | "MANUFACTURERNAME" | "MFR" | "MFG"
+        )
+        .then_some(value.as_str())
+    })
+}
+
+fn package_family(package: &str) -> Option<&'static str> {
+    let package = normalise_identity_text(package);
+    [
+        "TSSOP", "SSOP", "SOIC", "TQFP", "LQFP", "QFN", "DFN", "BGA", "DIP", "SOT",
+    ]
+    .into_iter()
+    .find(|family| package.contains(family))
+}
+
+/// Number of electrical pads explicitly described by a package name.
+///
+/// KiCad's `QFN-56-1EP` spelling means 56 perimeter pads plus one exposed
+/// electrical pad. Paste-aperture subdivisions are not part of that count.
+fn package_electrical_pad_count(package: &str) -> Option<usize> {
+    let upper = package.to_ascii_uppercase();
+    for family in [
+        "TSSOP", "SSOP", "SOIC", "TQFP", "LQFP", "QFN", "DFN", "BGA", "DIP",
+    ] {
+        let Some(start) = upper.find(family) else {
+            continue;
+        };
+        let suffix = &upper[start + family.len()..];
+        let Some(digit_start) = suffix.find(|c: char| c.is_ascii_digit()) else {
+            continue;
+        };
+        let digits: String = suffix
+            .chars()
+            .skip_while(|c| !c.is_ascii_digit())
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        if let Ok(pads) = digits.parse::<usize>() {
+            let after_count = &suffix[digit_start + digits.len()..];
+            let exposed_pad = after_count.starts_with("-1EP") || after_count.starts_with("_1EP");
+            return Some(pads + usize::from(exposed_pad));
+        }
+    }
+    None
+}
+
+/// Distinct numbered pads are electrical terminals. An empty pad number marks
+/// a mechanical or paste-only aperture and must not turn stencil geometry into
+/// an invented IC pin. Repeated pad numbers are one electrical terminal.
+fn component_electrical_pad_count(comp: &Component) -> usize {
+    comp.pins
+        .iter()
+        .map(|pin| pin.number.trim())
+        .filter(|number| !number.is_empty())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
+}
+
+fn identity_artifact_kind(hint: &hauksbee_extract::bom::IdentityHint) -> &'static str {
+    match hint.source_kind.as_str() {
+        "kicad_pos_ascii" | "kicad_pos_csv" | "altium_pick_and_place" | "cpl" => "placement file",
+        _ => "BOM",
+    }
+}
+
+/// Do two value strings for one part disagree about its magnitude?
+///
+/// Only fires when BOTH parse and both state a magnitude, so a part number
+/// against a value never registers here. A relative difference under a tenth of
+/// a per cent is the same value written two ways (`0.1uF` against `100nF`).
+fn value_disagreement(layout: &str, artifact: &str) -> Option<String> {
+    let l = parse_value(layout)?;
+    let a = parse_value(artifact)?;
+    let scale = l.si.abs().max(a.si.abs()).max(f64::MIN_POSITIVE);
+    ((l.si - a.si).abs() / scale > 1e-3).then(|| format!("{layout} against {artifact}"))
 }
 
 /// A natural-order sort key for a reference designator: the leading alpha

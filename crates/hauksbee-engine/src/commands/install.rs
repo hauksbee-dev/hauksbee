@@ -168,7 +168,6 @@ pub fn offer_esp_qemu_install(_backends: &[String]) -> anyhow::Result<()> {
 /// One-line y/N prompt on stderr, reading a line from stdin. Refuses (returns
 /// an error) when stdin is not a terminal, a piped stdin must never be able
 /// to "answer" a consent prompt.
-#[cfg(feature = "qemu")]
 fn confirm(prompt: &str) -> anyhow::Result<bool> {
     use std::io::{IsTerminal, Write};
     if !std::io::stdin().is_terminal() {

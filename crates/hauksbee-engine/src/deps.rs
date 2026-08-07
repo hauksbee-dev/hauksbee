@@ -629,6 +629,7 @@ fn probe_avr() -> DepStatus {
     }
 }
 
+#[cfg(feature = "qemu")]
 fn first_line(msg: &str) -> String {
     msg.lines().next().unwrap_or("").to_string()
 }
@@ -778,11 +779,11 @@ fn install_esp_qemu(progress: &mut dyn FnMut(&str)) -> Result<(), String> {
     #[cfg(not(feature = "qemu"))]
     {
         let _ = progress;
-        return Err(
+        Err(
             "this build of hauksbee was compiled without the `qemu` feature; rebuild \
              with it before installing the Espressif QEMU fork"
                 .to_string(),
-        );
+        )
     }
     #[cfg(feature = "qemu")]
     {

@@ -9,7 +9,8 @@ use hauksbee_models::ModelLibrary;
 
 use crate::binder::bind_board;
 use crate::result::{
-    lint_findings_json, si_findings_json, usbc_finding_json, BindSummary, DrcStructured, JsonReport,
+    lint_findings_json, si_findings_json, usbc_finding_json, BindSummary, DrcStructured,
+    JsonInputEvidence, JsonReport,
 };
 
 use super::{kicad_pro_clearance_rules, lint_fails, si_fails, OutputMode};
@@ -23,12 +24,29 @@ pub fn emit(
     raw: &[u8],
     altium_present: bool,
     lib: &ModelLibrary,
+    reader_notes: &[String],
     mode: OutputMode,
     strict: bool,
     verbose: bool,
+    inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
     let bound = bind_board(board, lib);
     let summary = BindSummary::from_report(&bound.report);
+    let evidence = crate::evidence::BoardEvidence::from_bound(
+        board,
+        &bound.report,
+        reader_notes,
+        hauksbee_ir::evidence::RunDate::from_system_clock(),
+    )?
+    .with_input_artifact(
+        board_path,
+        raw,
+        if altium_present {
+            crate::board_input::InputKind::Altium
+        } else {
+            crate::board_input::InputKind::Text
+        },
+    )?;
     let mut drc = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
@@ -95,6 +113,12 @@ pub fn emit(
         .chain(waived_si)
         .chain(waived_shorts)
         .collect();
+    let mut actual_findings = lint_findings_json(&lint);
+    actual_findings.extend(si_findings_json(&si));
+    actual_findings.extend(usbc.as_ref().and_then(usbc_finding_json));
+    let mut evidence_maps = evidence.maps_for_drc(&drc_structured)?;
+    evidence_maps.extend(evidence.maps_for_findings(&actual_findings)?);
+    let evidence = evidence.with_maps(evidence_maps);
 
     // Zero routed copper (D2): a pads-only board passes the spacing check
     // vacuously (there is nothing to space). Say so prominently instead of
@@ -105,7 +129,9 @@ pub fn emit(
     let (serious, worth_a_look) = verdict_counts(&drc_structured, &lint, &si, &usbc);
     match mode {
         OutputMode::Json => {
-            let mut jr = JsonReport::new(&bound.name, summary);
+            let mut jr = JsonReport::new(&bound.name, summary)
+                .with_inputs(inputs)
+                .with_evidence(&evidence);
             jr.drc = Some(drc_structured);
             if unrouted {
                 jr.notes.push(crate::result::JsonNote {
@@ -113,11 +139,7 @@ pub fn emit(
                     message: super::UNROUTED_COPPER_NOTE.to_string(),
                 });
             }
-            let mut findings = lint_findings_json(&lint);
-            findings.extend(si_findings_json(&si));
-            // Fold USB-C in as a finding so the aggregate stays one valid JSON doc.
-            findings.extend(usbc.as_ref().and_then(usbc_finding_json));
-            jr.findings = Some(findings);
+            jr.findings = Some(actual_findings.clone());
             // A green verdict that quietly dropped findings would be worse than
             // no waivers at all, so the machine surface carries them too.
             jr.waived = waived.iter().cloned().map(Into::into).collect();
@@ -180,6 +202,7 @@ pub fn emit(
         }
     }
     if !matches!(mode, OutputMode::Json) {
+        print!("{}", evidence.render_plain());
         print!("{}", render_waivers(&waived, &waivers));
         // One verdict line to end on (U4), matching the web/TUI verdict shape:
         // the last thing `--check` prints answers "is my board ok" without
@@ -195,6 +218,9 @@ pub fn emit(
     super::note_ungated_findings(strict, would_gate);
     if strict && would_gate {
         super::strict_gate_exit(mode, &gate_items(drc_gates, &drc, &lint, &si, &usbc));
+    }
+    if strict && evidence.is_undermined() {
+        std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())
 }
@@ -534,10 +560,26 @@ pub fn emit_combined_json(
     raw: &[u8],
     altium_present: bool,
     lib: &ModelLibrary,
+    reader_notes: &[String],
     strict: bool,
+    inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
     let bound = bind_board(board, lib);
-    let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
+    let evidence = crate::evidence::BoardEvidence::from_bound(
+        board,
+        &bound.report,
+        reader_notes,
+        hauksbee_ir::evidence::RunDate::from_system_clock(),
+    )?
+    .with_input_artifact(
+        board_path,
+        raw,
+        if altium_present {
+            crate::board_input::InputKind::Altium
+        } else {
+            crate::board_input::InputKind::Text
+        },
+    )?;
     let drc = if altium_present {
         ExtractedBoard::altium_drc(raw)?
     } else {
@@ -546,7 +588,7 @@ pub fn emit_combined_json(
             kicad_pro_clearance_rules(board_path, board),
         )?
     };
-    jr.drc = Some(DrcStructured::from_report(&drc));
+    let drc_structured = DrcStructured::from_report(&drc);
     let lint = crate::checks::engine_lint(board, lib);
     let geo_text = if altium_present { None } else { Some(text) };
     // Same SI chokepoint as the text path: the combined `run --json` must carry
@@ -560,6 +602,13 @@ pub fn emit_combined_json(
     // machine command must not be blind to a Serious CC fault that the explicit
     // `--check --json` surfaces.
     findings.extend(usbc.as_ref().and_then(usbc_finding_json));
+    let mut maps = evidence.maps_for_drc(&drc_structured)?;
+    maps.extend(evidence.maps_for_findings(&findings)?);
+    let evidence = evidence.with_maps(maps);
+    let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
+        .with_inputs(inputs)
+        .with_evidence(&evidence);
+    jr.drc = Some(drc_structured);
     jr.findings = Some(findings);
     println!("{}", jr.to_json());
     // Honour `--strict` on the default machine command: a bare
@@ -574,6 +623,9 @@ pub fn emit_combined_json(
             OutputMode::Json,
             &gate_items(drc_gates, &drc, &lint, &si, &usbc),
         );
+    }
+    if strict && evidence.is_undermined() {
+        std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())
 }
