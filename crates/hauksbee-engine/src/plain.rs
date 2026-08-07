@@ -412,20 +412,20 @@ pub fn plain_drc_structured(st: &crate::result::DrcStructured) -> PlainReport {
         return out;
     }
 
-    // On an unvalidated board format (KiCad 10+), the shorts may be phantom (an
-    // unhandled zone fill engulfing every net), so they carry a downgraded
+    // KiCad 10 name-only nets and keyhole antipads are handled, but exact native
+    // DRC finding parity remains unvalidated. Those results carry a downgraded
     // severity (set once in DrcStructured::from_report). Surface the caveat as a
     // never-dropped heads-up so the verdict is "worth a look", not "N serious".
     if let Some(w) = &st.version_warning {
         out.push_note(HeadsUp::glossed(
-            format!("The copper-short results below may be unreliable on this file: {w}"),
-            "This board was saved by a newer KiCad than hauksbee's copper reader was \
-             validated against, so its zone/fill format can be misread: a filled ground \
-             pour can look like it shorts every net it surrounds, producing shorts that \
-             are not really there (false alarms), or hiding a real one.",
-            "Treat any short below as \"check, don't panic\": open the board in KiCad and \
-             run its own DRC (Inspect -> Design Rules Checker) to confirm. If KiCad reports \
-             no short at that spot, it is a false alarm from the format gap.",
+            format!("These KiCad 10 copper findings are downgraded pending exact native-DRC parity: {w}"),
+            "Hauksbee handles KiCad 10's name-only nets and keyhole antipads. The remaining \
+             limitation is narrower: its complete finding set can still differ from KiCad's \
+             own DRC, and project clearance rules may live in the sibling .kicad_pro rather \
+             than the board text checked here.",
+            "Cross-check any short in KiCad 10's own DRC (Inspect -> Design Rules Checker). \
+             Until exact parity is validated, Hauksbee reports these findings as notes and \
+             keeps them out of strict CI gating.",
         ));
     }
 
@@ -1088,6 +1088,41 @@ mod tests {
         assert_eq!(plain.findings[0].level, PlainLevel::Warning);
         assert_eq!(plain.serious_count(), 0);
         assert!(plain.verdict().contains("none serious"));
+    }
+
+    #[test]
+    fn kicad_10_plain_caveat_describes_exact_parity_not_unhandled_zone_fill() {
+        const CLEARANCE_MM: f64 = 0.2;
+        const PRIMITIVE_COUNT: usize = 2;
+        let report = DrcReport {
+            clearance_mm: CLEARANCE_MM,
+            findings: vec![drc_short()],
+            primitive_count: PRIMITIVE_COUNT,
+            version_warning: Some(
+                "KiCad 10 name-only nets and keyhole antipads are handled, but remaining \
+                 findings are UNVALIDATED"
+                    .to_string(),
+            ),
+        };
+        let plain = plain_drc_structured(&crate::result::DrcStructured::from_report(&report));
+        let text = plain.render().to_lowercase();
+
+        assert!(text.contains("name-only nets"), "{text}");
+        assert!(text.contains("keyhole antipads"), "{text}");
+        assert!(
+            text.contains("exact") && text.contains("parity"),
+            "the remaining limitation is exact native-DRC parity:\n{text}"
+        );
+        assert!(
+            text.contains("downgrad"),
+            "the user-facing caveat must explain the safety demotion:\n{text}"
+        );
+        for stale_claim in ["ground pour", "shorts every net", "zone fill is unhandled"] {
+            assert!(
+                !text.contains(stale_claim),
+                "stale KiCad-10 claim {stale_claim:?} remained:\n{text}"
+            );
+        }
     }
 
     #[test]
