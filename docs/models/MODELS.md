@@ -464,7 +464,7 @@ Every `regulated_current` entry also declares non-empty `current_in_roles` and
 and overlap between the two directions fail validation. These are the exact
 main-power terminals to which the computed current may be attributed. Control,
 ground, enable, programming, and Kelvin-sense pins stay out unless the model
-author explicitly—and correctly—declares them. Protection thresholds need no
+author explicitly, and correctly, declares them. Protection thresholds need no
 power-role lists because they never become steady-state loads.
 
 For a regulated current, checks compute the populated DC-equivalent resistance

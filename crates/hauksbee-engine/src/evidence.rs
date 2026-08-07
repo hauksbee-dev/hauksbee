@@ -1,4 +1,10 @@
 //! Production adapter from a bound board to the shared IR evidence spine.
+//!
+//! The spine's vocabulary (artifacts, assumptions, contributions, error
+//! budgets) lives in `hauksbee-ir::evidence`; this module is the one place
+//! that translates a real bind (the board file, the firmware image, each
+//! component's model match and its confidence) into that vocabulary, so every
+//! report surface cites the same provenance instead of reconstructing it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
