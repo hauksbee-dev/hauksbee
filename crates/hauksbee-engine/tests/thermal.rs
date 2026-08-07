@@ -89,6 +89,82 @@ fn hand_checked_half_watt_sot23_reaches_150c() {
     );
 }
 
+/// Firmware PWM is a cross-layer thermal input: the electrical solve supplies
+/// each chunk's dissipation, while elapsed simulation time supplies the duty
+/// cycle. Three hot chunks followed by one off chunk are 75% duty, so a 1 W
+/// peak must heat like 0.75 W in the steady-state model. Sampling only the
+/// current chunk reports the 1 W peak (or ambient during the off chunk) and
+/// cannot produce the duty-cycle temperature.
+#[test]
+fn firmware_pwm_thermal_uses_time_weighted_duty_cycle() {
+    const AMBIENT_C: f64 = 25.0;
+    const PEAK_POWER_W: f64 = 1.0;
+    const DUTY_CYCLE: f64 = 0.75;
+    const THETA_JA_C_PER_W: f64 = 100.0;
+    const TJ_LIMIT_C: f64 = 90.0;
+    const CHUNK_S: f64 = 1.0e-3;
+    const PERIODS: usize = 3;
+    const CHUNKS_PER_PERIOD: usize = 4;
+
+    let mut circuit = Circuit::new();
+    let load = circuit.add(Device::Resistor {
+        name: "Q1".into(),
+        a: NodeId(1),
+        b: NodeId::GROUND,
+        ohms: 1.0,
+        tc1: None,
+    });
+    let meta = DeviceMeta {
+        reference: "Q1".into(),
+        device: load,
+        kind: ComponentKind::Nmos,
+        footprint: "Package_TO_SOT_SMD:SOT-23".into(),
+        ratings: Ratings {
+            max_power_w: Some(PEAK_POWER_W * 2.0),
+            theta_ja_c_per_w: Some(THETA_JA_C_PER_W),
+            max_junction_temp_c: Some(TJ_LIMIT_C),
+            ..Default::default()
+        },
+    };
+    let mut monitor = StressMonitor::new(vec![meta]);
+    monitor.ambient_c = AMBIENT_C;
+    let no_branch = |_: hauksbee_ir::DeviceId| None;
+    let mut overtemperature = Vec::new();
+
+    for chunk in 0..(PERIODS * CHUNKS_PER_PERIOD) {
+        let hot = chunk % CHUNKS_PER_PERIOD < 3;
+        let volts = [0.0, if hot { PEAK_POWER_W.sqrt() } else { 0.0 }];
+        let node_v = |node: NodeId| volts.get(node.0 as usize).copied().unwrap_or(0.0);
+        let t = (chunk + 1) as f64 * CHUNK_S;
+        overtemperature.extend(
+            monitor
+                .evaluate(&mut circuit, &node_v, &no_branch, t)
+                .into_iter()
+                .filter(|fault| fault.kind == FaultKind::Overtemperature),
+        );
+    }
+
+    let expected_tj = AMBIENT_C + PEAK_POWER_W * DUTY_CYCLE * THETA_JA_C_PER_W;
+    let reported_tj = monitor
+        .temp_by_ref()
+        .get("Q1")
+        .copied()
+        .expect("PWM-driven package has a duty-cycle temperature");
+    assert!(
+        (reported_tj - expected_tj).abs() < 1.0e-9,
+        "75% of 1 W through 100 C/W at 25 C must report 100 C, got {reported_tj}"
+    );
+    assert_eq!(
+        overtemperature.len(),
+        1,
+        "the 100 C duty-cycle temperature exceeds the 90 C limit once"
+    );
+    assert!(
+        (overtemperature[0].value - expected_tj).abs() < 1.0e-9,
+        "fault must carry the duty-cycle temperature, not the 125 C peak"
+    );
+}
+
 /// Two-sided: the same 0.5 W SOT-23 part is within limits at 25 C ambient
 /// (Tj = 150, limit 175) but pushed over when the ambient rises to 60 C
 /// (Tj = 60 + 125 = 185 > 175). Demonstrates the ambient knob and the fault.
