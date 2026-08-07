@@ -44,17 +44,34 @@ pub struct LayerPair {
     pub to: u32,
 }
 
+/// What a drill file's `TF.FileFunction` attribute said about the copper layers
+/// its hits reach.
+///
+/// The three states are genuinely different to the caller. `Absent` leaves the
+/// file name as the next place to look, and a plain single-drill job can safely
+/// read it as a through-hole. `Unreadable` means the file DID declare a span
+/// and we could not use it, which is never a licence to assume the whole stack:
+/// the declaration exists precisely because the span is not obvious.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DeclaredSpan {
+    /// The file carries no `TF.FileFunction` layer pair.
+    #[default]
+    Absent,
+    /// A layer pair we read.
+    Pair(LayerPair),
+    /// A `TF.FileFunction` was present but its layer pair is malformed,
+    /// reversed, or degenerate.
+    Unreadable,
+}
+
 /// Parsed drill file.
 #[derive(Debug, Clone, Default)]
 pub struct DrillFile {
     pub holes: Vec<Hole>,
     /// True when the file declares itself plated (PTH), or None if unknown.
     pub plated: Option<bool>,
-    /// The declared copper layer span, when the file carries an X2
-    /// `TF.FileFunction` attribute naming one. `None` means the file says
-    /// nothing about which layers its hits reach; the caller decides whether
-    /// that is safely a through-hole or an unknowable span it must refuse.
-    pub span: Option<LayerPair>,
+    /// What the file's X2 attribute said about the copper layers its hits span.
+    pub span: DeclaredSpan,
 }
 
 pub fn parse(text: &str) -> DrillFile {
@@ -70,7 +87,7 @@ pub fn parse(text: &str) -> DrillFile {
     let mut current_is_npth = false;
     let mut holes = Vec::new();
     let mut plated: Option<bool> = None;
-    let mut span: Option<LayerPair> = None;
+    let mut span = DeclaredSpan::Absent;
     // Routed-slot state. `M15` plunges the cutter, `G01` moves cut copper, `M16`
     // (or `M17`) retracts it. We only enter this mode on a file that actually
     // carries an `M15`: on every other file a `G00`/`G01` line keeps its old
@@ -110,7 +127,9 @@ pub fn parse(text: &str) -> DrillFile {
                 } else if up.contains("PLATED") || up.contains("PTH") {
                     plated = Some(true);
                 }
-                span = span.or_else(|| parse_file_function_span(&up));
+                if span == DeclaredSpan::Absent {
+                    span = parse_file_function_span(&up);
+                }
             }
             if let Some(eq) = up.find("FILE_FORMAT=").map(|i| i + "FILE_FORMAT=".len()) {
                 // `;FILE_FORMAT=2:5` -> 2 integer, 5 decimal digits.
@@ -250,6 +269,47 @@ pub fn parse(text: &str) -> DrillFile {
                 }
                 continue;
             }
+            // A `G02`/`G03` arc cut. Its wall is a curve, so the chord from
+            // start to end would miss every piece of copper the arc bulges
+            // towards; we tessellate it into short stadiums, the same treatment
+            // the RS-274X plotter gives a copper arc. Without the I/J centre
+            // offsets there is no arc to build, and the honest answer is no
+            // geometry at all: planting a round hole at the endpoint (what the
+            // fall-through to the plain coordinate reader would do) invents a
+            // hit the file never described.
+            let is_arc = up.starts_with("G02")
+                || up.starts_with("G03")
+                || up.starts_with("G2X")
+                || up.starts_with("G3X");
+            if is_arc {
+                let clockwise = up.starts_with("G02") || up.starts_with("G2");
+                let (px, py) = (last_x, last_y);
+                let moved = parse_xy_modal(
+                    line,
+                    metric,
+                    int_digits,
+                    dec_digits,
+                    leading_zero_omitted,
+                    &mut last_x,
+                    &mut last_y,
+                );
+                let scale = if metric { 1.0 } else { 25.4 };
+                let ij = arc_center_offset(line, int_digits, dec_digits, leading_zero_omitted)
+                    .map(|(i, j)| (i * scale, j * scale));
+                if let (Some((nx, ny)), Some(dia), true, Some(sx), Some(sy), Some((i, j))) =
+                    (moved, current, tool_down && !current_is_npth, px, py, ij)
+                {
+                    for (ax, ay, bx, by) in tessellate_arc(sx, sy, nx, ny, i, j, clockwise) {
+                        holes.push(Hole {
+                            x: ax,
+                            y: ay,
+                            diameter: dia,
+                            to: Some((bx, by)),
+                        });
+                    }
+                }
+                continue;
+            }
         }
 
         // ── G85 canned slot: `X<a>Y<b>G85X<c>Y<d>` cuts from (a,b) to (c,d) ──
@@ -324,6 +384,92 @@ pub fn parse(text: &str) -> DrillFile {
     }
 }
 
+/// Read the `I`/`J` centre offsets of a rout arc, in document units. Both must
+/// be present: an arc missing either has no centre and so no recoverable curve.
+fn arc_center_offset(
+    line: &str,
+    int_digits: usize,
+    dec_digits: usize,
+    leading_zero_omitted: bool,
+) -> Option<(f64, f64)> {
+    let axis = |mark: char| -> Option<f64> {
+        let pos = line.find(mark)?;
+        let rest = &line[pos + 1..];
+        let end = rest
+            .find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+'))
+            .unwrap_or(rest.len());
+        parse_coord(
+            rest[..end].trim(),
+            int_digits,
+            dec_digits,
+            leading_zero_omitted,
+        )
+    };
+    Some((axis('I')?, axis('J')?))
+}
+
+/// Longest arc step (radians) before we split. Matches the RS-274X plotter's
+/// 16-segments-per-full-circle resolution, so a routed arc wall and a drawn
+/// copper arc are approximated to the same fidelity and a tangent contact
+/// resolves the same way on both.
+const ARC_STEP_RAD: f64 = std::f64::consts::TAU / 16.0;
+
+/// Break a rout arc into straight cut segments, each returned as
+/// `(start_x, start_y, end_x, end_y)`.
+///
+/// `(i, j)` is the centre offset from the start point, the multi-quadrant
+/// convention Excellon shares with RS-274X. Chaining short stadiums slightly
+/// UNDER-covers the true swept area between their chords, never over-covers it,
+/// so this can miss a hairline tangent but cannot invent a contact. A zero
+/// radius or a non-finite sweep yields nothing at all rather than a guess.
+fn tessellate_arc(
+    sx: f64,
+    sy: f64,
+    ex: f64,
+    ey: f64,
+    i: f64,
+    j: f64,
+    clockwise: bool,
+) -> Vec<(f64, f64, f64, f64)> {
+    let (cx, cy) = (sx + i, sy + j);
+    let r = (sx - cx).hypot(sy - cy);
+    if !r.is_finite() || r <= 0.0 {
+        return Vec::new();
+    }
+    let a0 = (sy - cy).atan2(sx - cx);
+    let a1 = (ey - cy).atan2(ex - cx);
+    let mut sweep = a1 - a0;
+    if clockwise {
+        while sweep > 0.0 {
+            sweep -= std::f64::consts::TAU;
+        }
+        // A start that coincides with the end is a full circle, not a no-op.
+        if sweep > -1e-12 {
+            sweep = -std::f64::consts::TAU;
+        }
+    } else {
+        while sweep < 0.0 {
+            sweep += std::f64::consts::TAU;
+        }
+        if sweep < 1e-12 {
+            sweep = std::f64::consts::TAU;
+        }
+    }
+    if !sweep.is_finite() {
+        return Vec::new();
+    }
+    let steps = ((sweep.abs() / ARC_STEP_RAD).ceil() as usize).max(1);
+    let mut out = Vec::with_capacity(steps);
+    let mut prev = (sx, sy);
+    for k in 1..=steps {
+        let a = a0 + sweep * (k as f64 / steps as f64);
+        let p = (cx + r * a.cos(), cy + r * a.sin());
+        out.push((prev.0, prev.1, p.0, p.1));
+        prev = p;
+    }
+    out
+}
+
 /// Split a `G85` canned-slot line into its start and end coordinate halves.
 /// Returns `None` for any line that is not a two-point G85 record, including a
 /// bare `G85` mode line with no coordinates on either side.
@@ -339,19 +485,31 @@ fn split_g85(line: &str) -> Option<(&str, &str)> {
 /// Pull the copper layer pair out of an already-uppercased `TF.FileFunction`
 /// attribute line, e.g. `; #@! TF.FILEFUNCTION,PLATED,1,2,PTH` -> `1..2`.
 ///
-/// The pair is only accepted when both fields parse as layer numbers and name
-/// distinct layers in increasing order. A malformed or reversed pair yields
-/// `None`, which the caller treats as "this file declared nothing", never as a
-/// through-hole: a span we could not read is exactly the case where guessing
-/// invents a short.
-fn parse_file_function_span(up: &str) -> Option<LayerPair> {
-    let at = up.find("FILEFUNCTION")? + "FILEFUNCTION".len();
+/// The pair is accepted only when both fields parse as layer numbers naming
+/// distinct layers in increasing order. Anything else the attribute offered as a
+/// pair comes back [`DeclaredSpan::Unreadable`] rather than [`DeclaredSpan::Absent`],
+/// because a file that tried to state a span and failed is the LAST file whose
+/// hits should be assumed to reach the whole stack.
+fn parse_file_function_span(up: &str) -> DeclaredSpan {
+    let Some(at) = up.find("FILEFUNCTION").map(|i| i + "FILEFUNCTION".len()) else {
+        return DeclaredSpan::Absent;
+    };
     let rest = up[at..].trim_start_matches([',', ' ']);
     let fields: Vec<&str> = rest.split(',').map(|f| f.trim()).collect();
-    // Field 0 is Plated/NonPlated; fields 1 and 2 are the layer pair.
-    let from: u32 = fields.get(1)?.parse().ok()?;
-    let to: u32 = fields.get(2)?.parse().ok()?;
-    (from >= 1 && to > from).then_some(LayerPair { from, to })
+    // Field 0 is Plated/NonPlated; fields 1 and 2 are the layer pair. A
+    // two-field attribute (`Plated,PTH`) never offered a pair at all.
+    let (Some(a), Some(b)) = (fields.get(1), fields.get(2)) else {
+        return DeclaredSpan::Absent;
+    };
+    match (a.parse::<u32>(), b.parse::<u32>()) {
+        (Ok(from), Ok(to)) if from >= 1 && to > from => DeclaredSpan::Pair(LayerPair { from, to }),
+        // Two numbers that do not make a span (reversed, equal, zero-based) are
+        // a declaration we cannot use.
+        (Ok(_), Ok(_)) => DeclaredSpan::Unreadable,
+        // Not a numeric pair at all: this attribute form carries no span field,
+        // so the file simply did not declare one.
+        _ => DeclaredSpan::Absent,
+    }
 }
 
 fn apply_zero_mode(line: &str, leading_zero_omitted: &mut bool) {
@@ -768,33 +926,199 @@ M30
 
     #[test]
     fn x2_layer_pair_is_read_and_a_malformed_one_is_not_invented() {
+        let span = |t: &str| parse(t).span;
         assert_eq!(
-            parse("M48\n; #@! TF.FileFunction,Plated,1,2,PTH\nMETRIC\n%\nM30\n").span,
-            Some(LayerPair { from: 1, to: 2 })
+            span("M48\n; #@! TF.FileFunction,Plated,1,2,PTH\nMETRIC\n%\nM30\n"),
+            DeclaredSpan::Pair(LayerPair { from: 1, to: 2 })
         );
         assert_eq!(
-            parse("M48\n; #@! TF.FileFunction,Plated,1,4,PTH\nMETRIC\n%\nM30\n").span,
-            Some(LayerPair { from: 1, to: 4 })
-        );
-        // Reversed, equal, or non-numeric pairs are not a span. Silence here is
-        // the caller's cue to refuse, which is safer than a fabricated pair.
-        assert_eq!(
-            parse("M48\n; #@! TF.FileFunction,Plated,4,1,PTH\nMETRIC\n%\nM30\n").span,
-            None
+            span("M48\n; #@! TF.FileFunction,Plated,1,4,PTH\nMETRIC\n%\nM30\n"),
+            DeclaredSpan::Pair(LayerPair { from: 1, to: 4 })
         );
         assert_eq!(
-            parse("M48\n; #@! TF.FileFunction,Plated,2,2,PTH\nMETRIC\n%\nM30\n").span,
-            None
+            span(KICAD_PTH),
+            DeclaredSpan::Pair(LayerPair { from: 1, to: 2 })
+        );
+
+        // A file that tried to state a pair and produced nonsense is NOT the
+        // same as a file that stated nothing. Collapsing the two lets the
+        // caller's "silence means through-hole on a simple job" rule swallow a
+        // broken declaration, which is how a phantom short gets in.
+        assert_eq!(
+            span("M48\n; #@! TF.FileFunction,Plated,4,1,PTH\nMETRIC\n%\nM30\n"),
+            DeclaredSpan::Unreadable
         );
         assert_eq!(
-            parse("M48\n; #@! TF.FileFunction,Plated,PTH\nMETRIC\n%\nM30\n").span,
-            None
+            span("M48\n; #@! TF.FileFunction,Plated,2,2,PTH\nMETRIC\n%\nM30\n"),
+            DeclaredSpan::Unreadable
         );
-        // A file that says nothing declares nothing.
-        assert_eq!(parse(KICAD_PTH).span, Some(LayerPair { from: 1, to: 2 }));
         assert_eq!(
-            parse("M48\nMETRIC\nT1C0.3\n%\nT1\nX1.0Y1.0\nM30\n").span,
-            None
+            span("M48\n; #@! TF.FileFunction,Plated,0,3,PTH\nMETRIC\n%\nM30\n"),
+            DeclaredSpan::Unreadable
+        );
+
+        // An attribute form that carries no pair field, and a file with no
+        // attribute at all, both declare nothing.
+        assert_eq!(
+            span("M48\n; #@! TF.FileFunction,Plated,PTH\nMETRIC\n%\nM30\n"),
+            DeclaredSpan::Absent
+        );
+        assert_eq!(
+            span("M48\nMETRIC\nT1C0.3\n%\nT1\nX1.0Y1.0\nM30\n"),
+            DeclaredSpan::Absent
+        );
+    }
+
+    #[test]
+    fn tz_pads_on_the_left_and_lz_pads_on_the_right() {
+        // Excellon's zero words are the opposite way round from Gerber's `%FSL`.
+        // `TZ` = trailing zeros KEPT, so leading ones are suppressed and the
+        // token is right-justified; `LZ` = leading zeros kept, trailing
+        // suppressed, so it is left-justified. Getting this backwards moves a
+        // coordinate by orders of magnitude, silently.
+        //
+        // The check is pinned to a real board: the LumenPnP vacuum interposer
+        // ships `INCH,TZ` with `X47047`, and its Edge.Cuts outline runs from
+        // x = 119.5 mm to x = 128.5 mm. Only the right-justified reading
+        // (4.7047 inch = 119.50 mm) lands on that board at all; the other gives
+        // 47.047 inch = 1195 mm, ten times the whole board.
+        let d = parse(
+            "\
+M48
+INCH,TZ
+T1C0.0197
+%
+G90
+G05
+T1
+X47047Y-28425
+M30
+",
+        );
+        assert_eq!(d.holes.len(), 1);
+        assert!(
+            (d.holes[0].x - 4.7047 * 25.4).abs() < 1e-3,
+            "TZ must right-justify: got {} mm, the board's left edge is 119.5 mm",
+            d.holes[0].x
+        );
+        // The same digits under LZ are left-justified instead.
+        let d = parse(
+            "\
+M48
+INCH,LZ
+T1C0.0197
+%
+G90
+G05
+T1
+X47047Y28425
+M30
+",
+        );
+        assert!(
+            (d.holes[0].x - 47.047 * 25.4).abs() < 1e-2,
+            "LZ must left-justify: got {} mm",
+            d.holes[0].x
+        );
+    }
+
+    #[test]
+    fn a_g85_slot_with_implicit_decimals_scales_both_ends_the_same_way() {
+        // The inch G85 test above uses explicit decimal points, which would
+        // pass even if the second coordinate pair skipped the zero-suppression
+        // reader entirely. This one has no decimal points at all, so the far
+        // end only lands in the right place if it went through the same
+        // int/dec split and the same justification as the near end.
+        let d = parse(
+            "\
+M48
+INCH,TZ
+T1C0.0236
+%
+G90
+G05
+T1
+X0050000Y0020000G85X0070000Y0020000
+M30
+",
+        );
+        assert_eq!(d.holes.len(), 1);
+        let h = &d.holes[0];
+        // 2:4 inch, right-justified: 0050000 -> 005.0000 -> 5.0 inch.
+        assert!((h.x - 5.0 * 25.4).abs() < 1e-3, "start x was {}", h.x);
+        let (tx, ty) = h.to.expect("a slot end");
+        assert!((tx - 7.0 * 25.4).abs() < 1e-3, "end x was {tx}");
+        assert!((ty - 2.0 * 25.4).abs() < 1e-3, "end y was {ty}");
+    }
+
+    #[test]
+    fn a_routed_arc_is_tessellated_and_never_becomes_a_hole_at_its_endpoint() {
+        // A quarter-circle cut of radius 5 from (5,0) to (0,5) about the
+        // origin. The chord between those points passes 1.46 mm inside the true
+        // arc, so a chord-only reading would miss any copper the arc bulges
+        // towards. Every returned segment must sit on the radius.
+        let d = parse(
+            "\
+M48
+FMAT,2
+METRIC
+T1C0.800
+%
+G90
+T1
+G00X5.0Y0.0
+M15
+G03X0.0Y5.0I-5.0J0.0
+M16
+M30
+",
+        );
+        assert!(
+            d.holes.len() >= 4,
+            "a quarter arc must tessellate, got {} segment(s)",
+            d.holes.len()
+        );
+        for h in &d.holes {
+            let (tx, ty) = h.to.expect("an arc segment is a slot, not a hole");
+            for (x, y) in [(h.x, h.y), (tx, ty)] {
+                assert!(
+                    (x.hypot(y) - 5.0).abs() < 1e-6,
+                    "point ({x}, {y}) is off the arc radius"
+                );
+            }
+        }
+        // The chain runs start to end without a gap.
+        let first = &d.holes[0];
+        assert!((first.x - 5.0).abs() < 1e-9 && first.y.abs() < 1e-9);
+        let last = d.holes.last().unwrap().to.unwrap();
+        assert!(last.0.abs() < 1e-9 && (last.1 - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_rout_arc_without_a_center_yields_no_geometry_rather_than_a_phantom_hole() {
+        // No I/J: there is no arc to build. Falling through to the plain
+        // coordinate reader would plant a round plated hit at the endpoint that
+        // the file never described, which is copper we invented.
+        let d = parse(
+            "\
+M48
+FMAT,2
+METRIC
+T1C0.800
+%
+G90
+T1
+G00X5.0Y0.0
+M15
+G03X0.0Y5.0
+M16
+M30
+",
+        );
+        assert!(
+            d.holes.is_empty(),
+            "an unbuildable arc must produce nothing, got {:?}",
+            d.holes
         );
     }
 
