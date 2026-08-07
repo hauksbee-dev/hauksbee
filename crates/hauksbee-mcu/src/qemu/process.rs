@@ -236,9 +236,12 @@ impl QemuProcess {
     ///
     /// Wiring (all over TCP so nothing native is linked):
     ///   - `-machine <machine>`: the SoC model (esp32 / esp32s3 / esp32c3).
-    ///   - `-drive file=<flash>,if=mtd,format=raw`: the merged 4 MB flash image
-    ///     (2nd-stage bootloader + partition table + app). The 1st-stage ROM
-    ///     bootloader is baked into the QEMU binary.
+    ///   - `-drive file=<flash>,if=mtd,format=raw,snapshot=on`: the merged 4 MB
+    ///     flash image (2nd-stage bootloader + partition table + app), with all
+    ///     guest writes redirected to a private temporary snapshot. The source
+    ///     may be a tracked artifact or shared by concurrent sessions; no QEMU
+    ///     instance may mutate it or share writable flash state with another.
+    ///     The 1st-stage ROM bootloader is baked into the QEMU binary.
     ///   - `-qmp tcp:127.0.0.1:<qmp_port>,server,nowait`: the control channel for
     ///     memory reads/writes (GPIO mailbox) and run/stop stepping.
     ///   - `-serial tcp:127.0.0.1:<uart_port>,server,nowait`: UART0 as a raw
@@ -269,7 +272,7 @@ impl QemuProcess {
             .arg("-machine")
             .arg(machine)
             .arg("-drive")
-            .arg(format!("file={flash},if=mtd,format=raw"))
+            .arg(format!("file={flash},if=mtd,format=raw,snapshot=on"))
             .arg("-qmp")
             .arg(format!("tcp:127.0.0.1:{qmp_port},server,nowait"))
             .arg("-serial")
@@ -339,6 +342,31 @@ impl QemuProcess {
     /// image), so the caller can fail fast instead of waiting for a QMP timeout.
     pub fn has_exited(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(Some(_)))
+    }
+
+    /// Refuse an operation once the emulator child has exited, retaining the
+    /// exit status and QEMU's captured stderr. This is intentionally safe to
+    /// call again on every later chunk: `Child::try_wait` keeps returning the
+    /// same status, so a terminal QEMU failure never degrades into a stream of
+    /// bare QMP BrokenPipe / connection-closed errors.
+    pub fn ensure_running(&mut self, operation: &str) -> Result<()> {
+        match self.child.try_wait() {
+            Ok(None) => Ok(()),
+            Ok(Some(status)) => {
+                let stderr = self.stderr_output();
+                bail!(
+                    "Espressif QEMU exited while {operation} ({status}). QEMU said: {}",
+                    if stderr.is_empty() {
+                        "(nothing on stderr)"
+                    } else {
+                        &stderr
+                    }
+                )
+            }
+            Err(e) => Err(e).with_context(|| {
+                format!("checking whether Espressif QEMU is still running while {operation}")
+            }),
+        }
     }
 
     /// The spawned QEMU's OS process id (diagnostics and the reaping tests).
