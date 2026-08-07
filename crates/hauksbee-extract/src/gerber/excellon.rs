@@ -92,10 +92,9 @@ pub fn parse(text: &str) -> DrillFile {
     // (or `M17`) retracts it. We only enter this mode on a file that actually
     // carries an `M15`: on every other file a `G00`/`G01` line keeps its old
     // meaning (a positioned hit), so no existing job changes behaviour.
-    let rout_capable = text.lines().any(|l| {
-        let t = l.trim().to_ascii_uppercase();
-        t.starts_with("M15") || t.starts_with("M015")
-    });
+    let rout_capable = text
+        .lines()
+        .any(|l| leading_m_code(&l.trim().to_ascii_uppercase()) == Some(15));
     let mut tool_down = false;
     // Whether we are inside a rout section, as opposed to a drill section of
     // the same file. Distinct from `tool_down`: with the cutter up a rout line
@@ -308,12 +307,13 @@ pub fn parse(text: &str) -> DrillFile {
         // ── Routing (slots cut by a moving cutter) ──────────────────────────
         if rout_capable {
             let up = line.to_ascii_uppercase();
-            if up.starts_with("M15") || up.starts_with("M015") {
+            let m = leading_m_code(&up);
+            if m == Some(15) {
                 tool_down = true;
                 rout_mode = true;
                 continue;
             }
-            if up.starts_with("M16") || up.starts_with("M17") || up.starts_with("M016") {
+            if m == Some(16) || m == Some(17) {
                 tool_down = false;
                 continue;
             }
@@ -420,12 +420,23 @@ pub fn parse(text: &str) -> DrillFile {
                 }
                 continue;
             }
-            // Any other G-code carrying coordinates inside a rout-capable file
-            // is a modal setting applied at a position (`G90X..Y..`), not a
-            // drilled point. Letting it fall through to the plain reader turns
-            // a mode change into a plated barrel, which on a multi-layer board
-            // stitches the stack at a spot nothing was drilled.
-            if g.is_some() && (up.contains('X') || up.contains('Y')) {
+        }
+
+        // A G-code that is not a drilling motion, carrying coordinates. `G90`
+        // sets absolute mode, `G05` returns to drill mode, `G02`/`G03` are arcs
+        // on a file that never plunges a cutter: all of them position the head,
+        // none of them drills. Letting these fall through to the plain reader
+        // turns a mode change into a plated barrel, which on a multi-layer
+        // board stitches the stack at a spot nothing was drilled.
+        //
+        // `G00` and `G01` are excluded because on a file with no rout section
+        // they have always meant a positioned hit here, and every board that
+        // relies on that reading would lose its holes. Inside a rout section
+        // the block above has already claimed them.
+        let bare_g = leading_g_code(&line.to_ascii_uppercase());
+        if matches!(bare_g, Some(n) if n != 0 && n != 1) {
+            let up = line.to_ascii_uppercase();
+            if up.contains('X') || up.contains('Y') {
                 let _ = parse_xy_modal(
                     &up,
                     metric,
@@ -437,24 +448,6 @@ pub fn parse(text: &str) -> DrillFile {
                 );
                 continue;
             }
-        } else if matches!(
-            leading_g_code(&line.to_ascii_uppercase()),
-            Some(2) | Some(3)
-        ) {
-            // An arc motion on a file that never plunges a cutter. There is no
-            // cut here to recover, and the endpoint is a position rather than a
-            // drilled point, so the plain coordinate reader below would invent a
-            // plated hole out of a move. Track the position, record nothing.
-            let _ = parse_xy_modal(
-                &line.to_ascii_uppercase(),
-                metric,
-                int_digits,
-                dec_digits,
-                leading_zero_omitted,
-                &mut last_x,
-                &mut last_y,
-            );
-            continue;
         }
 
         // Coordinate line: X..Y.. , or modal X-only / Y-only (keep last axis).
@@ -495,7 +488,18 @@ pub fn parse(text: &str) -> DrillFile {
 /// read as 0, and `G50` reads as 50 rather than as a `G5` with junk after it.
 /// The line must be already uppercased.
 fn leading_g_code(up: &str) -> Option<u32> {
-    let rest = up.strip_prefix('G')?;
+    leading_code(up, 'G')
+}
+
+/// The numeric M-code a line opens with. Same discipline as the G-codes, and
+/// for the same reason: prefix matching made `M150` read as the `M15` that
+/// plunges the cutter, which turns the next move into a plated wall.
+fn leading_m_code(up: &str) -> Option<u32> {
+    leading_code(up, 'M')
+}
+
+fn leading_code(up: &str, letter: char) -> Option<u32> {
+    let rest = up.strip_prefix(letter)?;
     let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
     if digits.is_empty() {
         return None;
@@ -1230,10 +1234,88 @@ M30
     }
 
     #[test]
+    fn a_mode_line_carrying_coordinates_is_not_a_drilled_hole_on_any_file() {
+        // `G90X5Y5` sets absolute mode at a position. It is a move whether or
+        // not the file also routs, and treating it as a hit plants a plated
+        // barrel that stitches the stack where nothing was drilled. The rule
+        // has to be the same on both kinds of file: applying it only inside
+        // rout sections left the identical line inventing a via on the plain
+        // drill file next to it.
+        let d = parse(
+            "\
+M48
+FMAT,2
+METRIC
+T1C0.300
+%
+G90
+T1
+G90X5.0Y5.0
+M30
+",
+        );
+        assert!(
+            d.holes.is_empty(),
+            "a mode line is not a hit: {:?}",
+            d.holes
+        );
+
+        // The position it set is still the modal position, so a following bare
+        // coordinate line resolves against it.
+        let d = parse(
+            "\
+M48
+FMAT,2
+METRIC
+T1C0.300
+%
+G90
+T1
+G90X5.0Y5.0
+Y9.0
+M30
+",
+        );
+        assert_eq!(d.holes.len(), 1);
+        assert!((d.holes[0].x - 5.0).abs() < 1e-9 && (d.holes[0].y - 9.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn an_m150_is_not_an_m15() {
+        // M-codes are parsed as numbers for the same reason G-codes are.
+        // Prefix matching made `M150` plunge the cutter, and the next move
+        // became a plated wall across the board.
+        assert_eq!(leading_m_code("M15"), Some(15));
+        assert_eq!(leading_m_code("M015"), Some(15));
+        assert_eq!(leading_m_code("M150"), Some(150));
+        assert_eq!(leading_m_code("M30"), Some(30));
+        assert_eq!(leading_m_code("G01X1.0"), None);
+
+        let d = parse(
+            "\
+M48
+FMAT,2
+METRIC
+T1C0.800
+%
+G90
+T1
+G00X0.0Y0.0
+M150
+G01X10.0Y0.0
+M30
+",
+        );
+        assert!(
+            d.holes.iter().all(|h| h.to.is_none()),
+            "no cut may be inferred from an M150: {:?}",
+            d.holes
+        );
+    }
+
+    #[test]
     fn a_mode_line_carrying_coordinates_is_not_a_drilled_hole() {
-        // `G90X20Y20` sets absolute mode at a position. In a rout-capable file
-        // that is a move, and treating it as a hit plants a plated barrel that
-        // stitches the stack where nothing was drilled.
+        // The same rule inside a rout section.
         let d = parse(
             "\
 M48
