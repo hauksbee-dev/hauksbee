@@ -81,33 +81,223 @@ pub struct ModelEntry {
     #[serde(default, skip_serializing_if = "crate::logic_spec::Logic::is_empty")]
     pub logic: crate::logic_spec::Logic,
 
-    /// How an external resistor sets this part's operating current, for parts
-    /// whose current the *board* chooses rather than the part.
+    /// How an external resistor sets this part's regulated current or
+    /// protection threshold.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_program: Option<CurrentProgram>,
 }
 
-/// How an external resistor programs a part's operating current.
+/// How an external resistor programs a regulated current or protection limit.
 ///
-/// A charger's PROG pin, a load switch's ILIM/ISET pin: the part's
-/// [`Ratings::max_current_a`] is a *ceiling*, and the board picks a value below
-/// it by fitting one resistor. Charging that ceiling to a rail would invent a
-/// load the design never pushes, which is the same reasoning that already keeps
-/// a FET's drain rating out of the ampacity attribution. A part carrying this
-/// block has its rail current computed from the resistor actually fitted, and is
-/// left unattributed (with the gap recorded) when that resistor cannot be read.
+/// A charger's PROG pin makes the fitted resistor the source of truth for its
+/// regulated-current phase. A load switch's ILIM/ISET resistor instead sets an
+/// overload threshold. [`CurrentProgramSemantics`] keeps those statements from
+/// being conflated; only the former can support steady-state rail attribution.
 ///
-/// Cite the datasheet equation in a comment next to each entry: the constant is
-/// stated per part and is not derivable from anything else in the model.
+/// [`max_operating_current_a`](Self::max_operating_current_a) is deliberately
+/// separate from [`Ratings::max_current_a`]. The former is the largest current
+/// the manufacturer specifies the part can regulate in normal operation; the
+/// latter remains a device-level analysis threshold (normally an absolute
+/// maximum, or a deliberately documented lower operating ceiling). Conflating
+/// the two turns a safety threshold into a promised operating point.
+///
+/// Cite the datasheet equation and operating limit next to each database entry:
+/// neither is derivable from another field in the model.
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct CurrentProgram {
     /// The pin role (a value in [`ModelEntry::pins`]) the programming resistor
     /// sits on. The resistor runs from that pin to ground.
     pub pin: String,
 
-    /// The datasheet's programming constant, in volts: `I(A) = k_volts / R(Ω)`.
-    /// The MCP73833 states `I_REG = 1000 V / R_PROG`, so `k_volts = 1000`.
-    pub k_volts: f64,
+    /// What the programmed value physically means. A regulated current is an
+    /// operating state that may flow continuously and can therefore support a
+    /// steady-state ampacity attribution. A protection limit is only an OCP or
+    /// current-limit threshold; it must never be promoted into a fictional
+    /// load without an independent load/current assertion.
+    pub semantics: CurrentProgramSemantics,
+
+    /// Model pin roles where the regulated current enters the component. These
+    /// are required for `regulated_current`; explicit direction keeps cascaded
+    /// stages from being counted twice and avoids guessing from role spelling.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub current_in_roles: Vec<String>,
+
+    /// Model pin roles where the regulated current leaves the component.
+    /// Required for `regulated_current`; not needed for a protection threshold
+    /// because that threshold is never attributed as steady load.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub current_out_roles: Vec<String>,
+
+    /// Highest current specified for ordinary programmed operation. Evaluation
+    /// is capped here because asking for more with an undersized resistor does
+    /// not make the part capable of exceeding its published operating range.
+    /// Required for `regulated_current`, because an inverse law alone is
+    /// unbounded as the fitted resistance approaches zero. It may be omitted
+    /// for `protection_limit` when the equation itself includes its physical
+    /// full-scale bound. It is never inferred from a device-level rating.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_operating_current_a: Option<f64>,
+
+    /// Manufacturer programming equation, flattened into the TOML block so a
+    /// model reads `equation = "inverse_resistance"` beside its constants.
+    #[serde(flatten)]
+    pub equation: CurrentProgramEquation,
+}
+
+/// Physical meaning of a current-programming equation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CurrentProgramSemantics {
+    /// The device actively regulates this operating current (for example a
+    /// linear charger's constant-current phase).
+    RegulatedCurrent,
+    /// The value is an overload, trip, or limiting threshold rather than proof
+    /// of steady-state current through the board.
+    ProtectionLimit,
+}
+
+/// Supported current-programming equations.
+///
+/// The enum is intentionally data-driven: adding a genuinely different
+/// datasheet shape extends this type and its validator once, rather than adding
+/// part-number conditionals to the engine.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "equation", rename_all = "snake_case")]
+pub enum CurrentProgramEquation {
+    /// `I(A) = k_volts / R(ohms)`.
+    InverseResistance {
+        /// Programming constant in volts. For `I = 1000 / R`, this is 1000.
+        k_volts: f64,
+    },
+
+    /// A continuous two-branch law: use `low_k_volts / R` while that result is
+    /// at or below `transition_current_a`; above it, use
+    /// `high_numerator_a / (R / resistance_scale_ohms + high_offset)`.
+    ///
+    /// Top Power's TP4054 Rev 2.1 is the motivating published equation, but the
+    /// representation names the mathematics rather than the part.
+    PiecewiseInverseResistance {
+        low_k_volts: f64,
+        transition_current_a: f64,
+        high_numerator_a: f64,
+        resistance_scale_ohms: f64,
+        high_offset: f64,
+    },
+
+    /// A programming resistor sets a 0-to-full-scale control voltage, which in
+    /// turn scales the voltage allowed across a separate current-sense shunt:
+    ///
+    /// `Vprogram = min(program_bias_a * Rprogram, program_full_scale_v)`
+    ///
+    /// `I = (Vprogram / program_full_scale_v) * sense_full_scale_v / Rsense`
+    ///
+    /// `sense_roles` names every model pin whose adjacent shunt participates in
+    /// the limit. `sense_far_roles` gives the required opposite side of each
+    /// shunt (`"ground"` or another model pin role), in the same order. The
+    /// engine accepts exactly one shunt on each path and requires their nominal
+    /// resistances to agree; choosing the smallest nearby resistor would
+    /// manufacture a precise result from a mismatched/filter network.
+    SenseScaledResistance {
+        sense_roles: Vec<String>,
+        sense_far_roles: Vec<String>,
+        program_bias_a: f64,
+        program_full_scale_v: f64,
+        sense_full_scale_v: f64,
+    },
+}
+
+impl CurrentProgram {
+    /// Evaluate the published resistor equation without applying the part's
+    /// normal-operating ceiling. Returns `None` for a non-positive/non-finite
+    /// resistance or if malformed data would produce a non-physical result.
+    pub fn equation_current_a(&self, resistance_ohms: f64) -> Option<f64> {
+        if !resistance_ohms.is_finite() || resistance_ohms <= 0.0 {
+            return None;
+        }
+
+        let current_a = match &self.equation {
+            CurrentProgramEquation::InverseResistance { k_volts } => *k_volts / resistance_ohms,
+            CurrentProgramEquation::PiecewiseInverseResistance {
+                low_k_volts,
+                transition_current_a,
+                high_numerator_a,
+                resistance_scale_ohms,
+                high_offset,
+            } => {
+                let low_current_a = *low_k_volts / resistance_ohms;
+                if low_current_a <= *transition_current_a {
+                    low_current_a
+                } else {
+                    *high_numerator_a / (resistance_ohms / *resistance_scale_ohms + *high_offset)
+                }
+            }
+            CurrentProgramEquation::SenseScaledResistance { .. } => {
+                // This law requires the independent current-sense resistance;
+                // callers that have it use `equation_current_with_sense_a`.
+                return None;
+            }
+        };
+
+        (current_a.is_finite() && current_a > 0.0).then_some(current_a)
+    }
+
+    /// Evaluate either a one-resistor law or a two-resistor sense-scaled law.
+    /// For one-resistor equations `sense_resistance_ohms` is intentionally
+    /// ignored; for the sense-scaled form both positive finite resistances are
+    /// required.
+    pub fn equation_current_with_sense_a(
+        &self,
+        program_resistance_ohms: f64,
+        sense_resistance_ohms: f64,
+    ) -> Option<f64> {
+        let CurrentProgramEquation::SenseScaledResistance {
+            program_bias_a,
+            program_full_scale_v,
+            sense_full_scale_v,
+            ..
+        } = &self.equation
+        else {
+            return self.equation_current_a(program_resistance_ohms);
+        };
+        if !program_resistance_ohms.is_finite()
+            || program_resistance_ohms <= 0.0
+            || !sense_resistance_ohms.is_finite()
+            || sense_resistance_ohms <= 0.0
+        {
+            return None;
+        }
+        let program_v = (*program_bias_a * program_resistance_ohms)
+            .min(*program_full_scale_v)
+            .max(0.0);
+        let current_a =
+            (program_v / *program_full_scale_v) * *sense_full_scale_v / sense_resistance_ohms;
+        (current_a.is_finite() && current_a > 0.0).then_some(current_a)
+    }
+
+    /// Evaluate the board's nominal programmed current, applying only the
+    /// explicit normal-operating ceiling from this block—not a device rating.
+    /// Datasheet/resistor tolerances are not implied by a point equation.
+    pub fn operating_current_a(&self, resistance_ohms: f64) -> Option<f64> {
+        let equation_current_a = self.equation_current_a(resistance_ohms)?;
+        Some(match self.max_operating_current_a {
+            Some(limit) if limit.is_finite() && limit > 0.0 => equation_current_a.min(limit),
+            _ => equation_current_a,
+        })
+    }
+
+    /// Sense-aware counterpart to [`Self::operating_current_a`].
+    pub fn operating_current_with_sense_a(
+        &self,
+        program_resistance_ohms: f64,
+        sense_resistance_ohms: f64,
+    ) -> Option<f64> {
+        let equation_current_a =
+            self.equation_current_with_sense_a(program_resistance_ohms, sense_resistance_ohms)?;
+        Some(match self.max_operating_current_a {
+            Some(limit) if limit.is_finite() && limit > 0.0 => equation_current_a.min(limit),
+            _ => equation_current_a,
+        })
+    }
 }
 
 /// One boot strapping pin, straight from the part's reference manual.
@@ -190,9 +380,13 @@ impl StrapLevel {
     }
 }
 
-/// Absolute maximum ratings, straight from the datasheet's table. The
-/// stress monitor compares the live operating point against these and
-/// raises faults (optionally destructive) when exceeded.
+/// Datasheet safety thresholds used by static and live checks.
+///
+/// Most entries are absolute maxima. Some model files deliberately use a
+/// lower recommended-operating ceiling so a check fires before the part leaves
+/// its guaranteed region; those entries must say so beside the value. These
+/// are analysis thresholds, never proof that a board normally draws or drives
+/// the stated amount.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize)]
 pub struct Ratings {
     /// Continuous current through the device (A): diode IF, transistor IC/ID.
@@ -223,9 +417,10 @@ pub struct Ratings {
 
     /// Rated RMS ripple current (A) for a capacitor, at its datasheet reference
     /// frequency / temperature. Drives the input-cap ripple-current check
-    /// (`hauksbee_engine::checks::ripple`). When absent the check applies a
-    /// conservative per-class default keyed on the cap's dielectric; set this to
-    /// override from the datasheet (e.g. the UCC EKYB 3.0 A at 100 kHz / 105 C).
+    /// (`hauksbee_engine::checks::ripple`). Only this part-specific value is
+    /// decision-grade; when absent, any capacitance-band estimate is context in
+    /// an info note and cannot support pass/fail (e.g. the UCC EKYB 3.0 A at
+    /// 100 kHz / 105 C belongs here).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_ripple_current_a: Option<f64>,
 

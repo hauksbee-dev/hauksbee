@@ -30,6 +30,120 @@ fn run_si(board: &ExtractedBoard, text: &str) -> SiReport {
     report
 }
 
+fn run_si_with_library(board: &ExtractedBoard, text: &str, lib: &ModelLibrary) -> SiReport {
+    let mut report = board.si_checks(Some(text));
+    ampacity::append_ampacity(board, lib, Some(text), &mut report);
+    ripple::append_ripple(board, lib, &mut report);
+    report
+}
+
+fn test_programmed_load_library() -> ModelLibrary {
+    let models = tempfile::tempdir().expect("temporary model directory");
+    std::fs::write(
+        models.path().join("programmed-load.toml"),
+        r#"
+[[models]]
+id = "test_programmed_load"
+kind = "vreg"
+description = "Test-only 10 A regulated load"
+
+[models.match]
+value_re = "^TEST_PROGRAMMED_LOAD$"
+
+[models.params]
+vout = 2.5
+dropout_v = 0.1
+iq_a = 0.001
+
+[models.pins]
+"1" = "in"
+"2" = "ground"
+"3" = "prog"
+"4" = "out"
+
+[models.current_program]
+pin = "prog"
+semantics = "regulated_current"
+current_in_roles = ["in"]
+current_out_roles = ["out"]
+max_operating_current_a = 10.0
+equation = "inverse_resistance"
+k_volts = 10000.0
+"#,
+    )
+    .expect("write test model");
+    ModelLibrary::builtin_with_user_dirs(&[models.path()])
+}
+
+fn exact_rated_ripple_fixture(extra_input_caps: &str) -> (ExtractedBoard, String) {
+    board_and_text(&format!(
+        r#"
+  (net 1 "VIN_5V")
+  (net 2 "SW_NODE")
+  (net 3 "VOUT_2V5")
+  (net 4 "GND")
+  (net 5 "PROG")
+  (net 6 "LOAD_OUT")
+  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 0 0)
+    (property "Reference" "Q1") (property "Value" "PSMN5R2-60YLX")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VIN_5V"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE")))
+  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 5 0)
+    (property "Reference" "Q2") (property "Value" "PSMN5R2-60YLX")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND")))
+  (footprint "Inductor_SMD:L_12x12mm" (layer "F.Cu") (at 10 0)
+    (property "Reference" "L1") (property "Value" "47uH")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 3 "VOUT_2V5")))
+  (footprint "Capacitor_SMD:CP_Elec_16x31.5" (layer "F.Cu") (at 0 5)
+    (property "Reference" "C1") (property "Value" "1200uF")
+    (property "MPN" "EKYB630ELL122MLN3S")
+    (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 1 "VIN_5V"))
+    (pad "2" smd rect (at 2 0) (size 2 2) (layers "F.Cu") (net 4 "GND")))
+  {extra_input_caps}
+  (footprint "Package_QFN:QFN-4" (layer "F.Cu") (at 20 0)
+    (property "Reference" "U1") (property "Value" "TEST_PROGRAMMED_LOAD")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 3 "VOUT_2V5"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND"))
+    (pad "3" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 5 "PROG"))
+    (pad "4" smd rect (at 3 0) (size 1 1) (layers "F.Cu") (net 6 "LOAD_OUT")))
+  (footprint "Resistor_SMD:R_0603" (layer "F.Cu") (at 25 0)
+    (property "Reference" "R1") (property "Value" "1k")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 5 "PROG"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND")))
+"#,
+    ))
+}
+
+/// A TP4054 in its 400 mA constant-current operating phase, programmed by the
+/// published 1.66 kOhm application value. Unlike a regulator rating or current
+/// limit, this is an explicit operating-current assertion.
+fn programmed_charger_and_text(copper: &str) -> (ExtractedBoard, String) {
+    board_and_text(&format!(
+        r#"
+  (net 1 "VBAT")
+  (net 2 "VIN")
+  (net 3 "GND")
+  (net 4 "PROG")
+  (footprint "Package_TO_SOT_SMD:SOT-23-5" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U1")
+    (property "Value" "TP4054")
+    (pad "1" smd rect (at 0 3) (size 1 1) (layers "F.Cu"))
+    (pad "2" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 3 "GND"))
+    (pad "3" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VBAT"))
+    (pad "4" smd rect (at 0 -2) (size 1 1) (layers "F.Cu") (net 2 "VIN"))
+    (pad "5" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 4 "PROG")))
+  (footprint "Resistor_SMD:R_0603" (layer "F.Cu") (at 4 0)
+    (property "Reference" "R1")
+    (property "Value" "1.66k")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 4 "PROG"))
+    (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 3 "GND")))
+  {copper}
+"#,
+    ))
+}
+
 fn findings_of<'a>(report: &'a SiReport, check: SiCheck) -> Vec<&'a hauksbee_extract::SiFinding> {
     report
         .findings
@@ -42,25 +156,13 @@ fn findings_of<'a>(report: &'a SiReport, check: SiCheck) -> Vec<&'a hauksbee_ext
 // Trace ampacity (item 2).
 // ===========================================================================
 
-/// An AMS1117-3.3 LDO (DB-modelled, rated 1.0 A) whose output rail `+3V3` is
-/// routed as a single hair-thin 0.15 mm discrete trace (~0.46 A at 10 C):
-/// undersized for the regulator's cited 1.0 A. `--si` must now surface the
-/// ampacity finding automatically, citing the part's datasheet current.
+/// A TP4054 charger explicitly regulating 400 mA whose VBAT rail is routed as
+/// a hair-thin discrete trace. `--si` must surface the finding from the fitted
+/// resistor and datasheet equation—not from a capability/limit rating.
 #[test]
 fn si_surfaces_ampacity_on_undersized_routed_rail() {
-    let (board, text) = board_and_text(
-        r#"
-  (net 1 "+3V3")
-  (net 2 "VIN")
-  (net 3 "GND")
-  (footprint "Package_TO_SOT_SMD:SOT-223-3_TabPin2" (layer "F.Cu") (at 0 0)
-    (property "Reference" "U1")
-    (property "Value" "AMS1117-3.3")
-    (pad "1" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 3 "GND"))
-    (pad "2" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "+3V3"))
-    (pad "3" smd rect (at 0 -2) (size 1 1) (layers "F.Cu") (net 2 "VIN")))
-  (segment (start 0 0) (end 10 0) (width 0.15) (layer "F.Cu") (net 1))
-"#,
+    let (board, text) = programmed_charger_and_text(
+        r#"(segment (start 0 0) (end 10 0) (width 0.05) (layer "F.Cu") (net 1))"#,
     );
     let report = run_si(&board, &text);
     let amp = findings_of(&report, SiCheck::TraceAmpacity);
@@ -71,10 +173,10 @@ fn si_surfaces_ampacity_on_undersized_routed_rail() {
         report.findings
     );
     let f = &amp[0];
-    assert!(f.nets.contains(&"+3V3".to_string()), "fires on +3V3");
+    assert!(f.nets.contains(&"VBAT".to_string()), "fires on VBAT");
     assert!(
-        f.message.contains("AMS1117") || f.message.contains("1.00 A"),
-        "cites the regulator current: {}",
+        f.message.contains("TP4054") || f.message.contains("0.40 A"),
+        "cites the regulated charge current: {}",
         f.message
     );
 }
@@ -87,19 +189,8 @@ fn si_surfaces_ampacity_on_undersized_routed_rail() {
 /// under-width power trace that `--si` flags.
 #[test]
 fn engine_si_chokepoint_adds_ampacity_missing_from_bare_si_checks() {
-    let (board, text) = board_and_text(
-        r#"
-  (net 1 "+3V3")
-  (net 2 "VIN")
-  (net 3 "GND")
-  (footprint "Package_TO_SOT_SMD:SOT-223-3_TabPin2" (layer "F.Cu") (at 0 0)
-    (property "Reference" "U1")
-    (property "Value" "AMS1117-3.3")
-    (pad "1" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 3 "GND"))
-    (pad "2" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "+3V3"))
-    (pad "3" smd rect (at 0 -2) (size 1 1) (layers "F.Cu") (net 2 "VIN")))
-  (segment (start 0 0) (end 10 0) (width 0.15) (layer "F.Cu") (net 1))
-"#,
+    let (board, text) = programmed_charger_and_text(
+        r#"(segment (start 0 0) (end 10 0) (width 0.05) (layer "F.Cu") (net 1))"#,
     );
     let lib = ModelLibrary::builtin();
     // The bare extractor call cannot attribute the regulator's current, so it has
@@ -119,24 +210,15 @@ fn engine_si_chokepoint_adds_ampacity_missing_from_bare_si_checks() {
     );
 }
 
-/// The same regulator + rail, but the rail is poured (a copper zone) with only a
+/// The same programmed charger + rail, but the rail is poured with only a
 /// thin pad-entry stub: the trace-current engine's Poured exemption must hold, so
-/// `--si` stays silent on it even though the part cites 1.0 A.
+/// `--si` stays silent on it even though the part cites 0.4 A.
 #[test]
 fn si_is_silent_on_poured_rail_with_thin_stub() {
-    let (board, text) = board_and_text(
+    let (board, text) = programmed_charger_and_text(
         r#"
-  (net 1 "+3V3")
-  (net 2 "VIN")
-  (net 3 "GND")
-  (footprint "Package_TO_SOT_SMD:SOT-223-3_TabPin2" (layer "F.Cu") (at 0 0)
-    (property "Reference" "U1")
-    (property "Value" "AMS1117-3.3")
-    (pad "1" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 3 "GND"))
-    (pad "2" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "+3V3"))
-    (pad "3" smd rect (at 0 -2) (size 1 1) (layers "F.Cu") (net 2 "VIN")))
-  (segment (start 0 0) (end 1 0) (width 0.15) (layer "F.Cu") (net 1))
-  (zone (net 1) (net_name "+3V3") (layers "F.Cu")
+  (segment (start 0 0) (end 1 0) (width 0.05) (layer "F.Cu") (net 1))
+  (zone (net 1) (net_name "VBAT") (layers "F.Cu")
     (filled_polygon (layer "F.Cu") (pts (xy 0 0) (xy 30 0) (xy 30 30) (xy 0 30))))
 "#,
     );
@@ -149,10 +231,11 @@ fn si_is_silent_on_poured_rail_with_thin_stub() {
     );
 }
 
-/// A board with no part carrying a DB current rating: no current is attributed,
-/// so the ampacity check fires nothing no matter how thin the trace.
+/// A board with no explicit operating-current source: no current is attributed,
+/// so the ampacity check fires nothing no matter how thin the trace. A component
+/// capability or protection threshold would not change that conclusion.
 #[test]
-fn si_attributes_no_current_without_a_rated_part() {
+fn si_attributes_no_current_without_an_operating_source() {
     let (board, text) = board_and_text(
         r#"
   (net 1 "SIG")
@@ -211,28 +294,29 @@ fn converter_topology_recovered_from_discrete_buck() {
     assert_eq!(s.input_rail.1, "VIN");
     assert_eq!(s.output_rail.1, "VOUT");
     assert_eq!(s.inductor_ref, "L1");
-    let cap = s.input_bulk_cap.as_ref().expect("input bulk cap C1 found");
+    let [cap] = s.input_bulk_caps.as_slice() else {
+        panic!("exactly one input bulk cap C1 expected: {s:?}");
+    };
     assert_eq!(cap.reference, "C1");
 }
 
-/// End-to-end ripple path on a resolved buck whose output current IS
-/// attributable (an AMS1117, DB-rated 1.0 A, on the output rail). Worst-case
-/// input ripple is 0.5 * 1.0 = 0.5 A; the 120 uF input cap's conservative
-/// per-class default rating is 1.0 A, so 0.5 A is comfortably under and the
-/// check correctly produces an *info* note, not a false finding. This pins the
-/// full attribution -> compute -> compare path end-to-end without fabricating an
-/// overstress; the genuine over-ripple FIRE is locked by the hand-checked
-/// mppt-1210 C1 unit test (`ripple::tests::mppt_1210_c1_overstress_is_1_66x`),
-/// since no synthetic board can cite a 10 A charge current from a single part
-/// rating honestly.
+/// End-to-end contract for the shared operating-current attribution. The
+/// AMS1117's 1 A capability must contribute nothing, while the TP4054's fitted
+/// programming resistor establishes 0.4 A on VOUT. C1 has no exact fitted-part
+/// rating, so the check records the attributable current in an *info* note and
+/// refuses to invent one from capacitance class. The genuine
+/// over-ripple arithmetic is locked by the hand-checked mppt-1210 C1 unit test
+/// (`ripple::tests::mppt_1210_c1_overstress_is_1_66x`).
 #[test]
-fn si_ripple_attributes_and_compares_without_false_firing() {
+fn si_ripple_uses_programmed_load_but_not_capability_or_invented_rating() {
     let (board, text) = board_and_text(
         r#"
   (net 1 "VIN")
   (net 2 "SW_NODE")
   (net 3 "VOUT")
   (net 4 "GND")
+  (net 5 "VBAT")
+  (net 6 "PROG")
   (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 0 0)
     (property "Reference" "Q1")
     (property "Value" "PSMN5R2-60YLX")
@@ -259,27 +343,192 @@ fn si_ripple_attributes_and_compares_without_false_firing() {
     (pad "1" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 4 "GND"))
     (pad "2" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 3 "VOUT"))
     (pad "3" smd rect (at 0 -2) (size 1 1) (layers "F.Cu") (net 1 "VIN")))
+  (footprint "Package_TO_SOT_SMD:SOT-23-5" (layer "F.Cu") (at 20 0)
+    (property "Reference" "U3")
+    (property "Value" "TP4054")
+    (pad "1" smd rect (at 0 3) (size 1 1) (layers "F.Cu"))
+    (pad "2" smd rect (at 0 2) (size 1 1) (layers "F.Cu") (net 4 "GND"))
+    (pad "3" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 5 "VBAT"))
+    (pad "4" smd rect (at 0 -2) (size 1 1) (layers "F.Cu") (net 3 "VOUT"))
+    (pad "5" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 6 "PROG")))
+  (footprint "Resistor_SMD:R_0603" (layer "F.Cu") (at 24 0)
+    (property "Reference" "R1")
+    (property "Value" "1.66k")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 6 "PROG"))
+    (pad "2" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 4 "GND")))
 "#,
     );
     let report = run_si(&board, &text);
-    // I_out attributes to the AMS1117's 1.0 A on VOUT; worst-case ripple 0.5 A.
-    // A 120 uF input cap defaults to 1.0 A ripple rating, so 0.5 A is UNDER:
-    // the check correctly produces an info note, not a finding (no false fire).
+    // The AMS1117's 1.0 A rating is capability, not output draw. U3 contributes
+    // only its programmed 0.4 A, and C1 has no decision-grade fitted-part rating.
     let fires = findings_of(&report, SiCheck::InputCapRipple);
     assert!(
         fires.is_empty(),
-        "0.5 A ripple under the 1.0 A default must not fire: {:?}",
+        "a missing exact rating must never support a finding: {:?}",
         report.findings
     );
-    // But the topology + computation must be on the record as an info note.
+    // The topology + citeable operating current must still be on the record.
     let info = report
         .findings
         .iter()
-        .any(|f| f.check == SiCheck::InputCapRipple && f.severity == SiSeverity::Info);
+        .find(|f| f.check == SiCheck::InputCapRipple && f.severity == SiSeverity::Info)
+        .expect("the resolved buck must leave an input-cap ripple info note");
     assert!(
-        info,
-        "an input-cap ripple info note must be recorded for the resolved buck"
+        info.message.contains("I_out 0.40 A")
+            && info.message.to_ascii_lowercase().contains("tp4054")
+            && info
+                .message
+                .contains("has no part-specific datasheet ripple rating"),
+        "the note must cite only the programmed 0.4 A load, not the AMS1117 rating: {}",
+        info.message
     );
+}
+
+/// Production-path proof: a shipped exact-MPN capacitor rating, an explicitly
+/// programmed operating load, structurally recovered buck topology, and named
+/// nominal rail voltages must combine into one decision-grade finding. This is
+/// intentionally end-to-end rather than another arithmetic-only unit test.
+#[test]
+fn si_ripple_fires_from_shipped_exact_cap_rating_and_named_nominal_duty() {
+    let lib = test_programmed_load_library();
+    let (board, text) = board_and_text(
+        r#"
+  (net 1 "VIN_5V")
+  (net 2 "SW_NODE")
+  (net 3 "VOUT_2V5")
+  (net 4 "GND")
+  (net 5 "PROG")
+  (net 6 "LOAD_OUT")
+  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 0 0)
+    (property "Reference" "Q1")
+    (property "Value" "PSMN5R2-60YLX")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VIN_5V"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE")))
+  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 5 0)
+    (property "Reference" "Q2")
+    (property "Value" "PSMN5R2-60YLX")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND")))
+  (footprint "Inductor_SMD:L_12x12mm" (layer "F.Cu") (at 10 0)
+    (property "Reference" "L1")
+    (property "Value" "47uH")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 3 "VOUT_2V5")))
+  (footprint "Capacitor_SMD:CP_Elec_16x31.5" (layer "F.Cu") (at 0 5)
+    (property "Reference" "C1")
+    (property "Value" "1200uF")
+    (property "MPN" "EKYB630ELL122MLN3S")
+    (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 1 "VIN_5V"))
+    (pad "2" smd rect (at 2 0) (size 2 2) (layers "F.Cu") (net 4 "GND")))
+  (footprint "Package_QFN:QFN-4" (layer "F.Cu") (at 20 0)
+    (property "Reference" "U1")
+    (property "Value" "TEST_PROGRAMMED_LOAD")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 3 "VOUT_2V5"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND"))
+    (pad "3" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 5 "PROG"))
+    (pad "4" smd rect (at 3 0) (size 1 1) (layers "F.Cu") (net 6 "LOAD_OUT")))
+  (footprint "Resistor_SMD:R_0603" (layer "F.Cu") (at 25 0)
+    (property "Reference" "R1")
+    (property "Value" "1k")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 5 "PROG"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND")))
+"#,
+    );
+
+    let report = run_si_with_library(&board, &text, &lib);
+    let findings = findings_of(&report, SiCheck::InputCapRipple);
+    assert_eq!(
+        findings.len(),
+        1,
+        "expected exact-rated ripple finding: {:?}",
+        report.findings
+    );
+    let finding = findings[0];
+    assert!(finding.message.contains("C1"));
+    assert!(finding.message.contains("3.00 A_rms"));
+    assert!(finding.message.contains("D=0.500"));
+    assert!(finding.message.contains("VIN_5V") && finding.message.contains("VOUT_2V5"));
+    assert!(finding.message.contains("~1.67x"));
+}
+
+/// A precise capacitor MPN and load current are still insufficient without an
+/// operating duty/range. The old unconditional D=0.5 path could false-flag a
+/// 48 V to 3.3 V converter; absence of named voltage evidence must now abstain.
+#[test]
+fn si_ripple_does_not_assume_half_duty_when_rail_voltages_are_unknown() {
+    let lib = test_programmed_load_library();
+    let (board, text) = board_and_text(
+        r#"
+  (net 1 "VIN")
+  (net 2 "SW_NODE")
+  (net 3 "VOUT")
+  (net 4 "GND")
+  (net 5 "PROG")
+  (net 6 "LOAD_OUT")
+  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 0 0)
+    (property "Reference" "Q1") (property "Value" "PSMN5R2-60YLX")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "VIN"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE")))
+  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 5 0)
+    (property "Reference" "Q2") (property "Value" "PSMN5R2-60YLX")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND")))
+  (footprint "Inductor_SMD:L_12x12mm" (layer "F.Cu") (at 10 0)
+    (property "Reference" "L1") (property "Value" "47uH")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 2 "SW_NODE"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 3 "VOUT")))
+  (footprint "Capacitor_SMD:CP_Elec_16x31.5" (layer "F.Cu") (at 0 5)
+    (property "Reference" "C1") (property "Value" "1200uF")
+    (property "MPN" "EKYB630ELL122MLN3S")
+    (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 1 "VIN"))
+    (pad "2" smd rect (at 2 0) (size 2 2) (layers "F.Cu") (net 4 "GND")))
+  (footprint "Package_QFN:QFN-4" (layer "F.Cu") (at 20 0)
+    (property "Reference" "U1") (property "Value" "TEST_PROGRAMMED_LOAD")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 3 "VOUT"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND"))
+    (pad "3" smd rect (at 2 0) (size 1 1) (layers "F.Cu") (net 5 "PROG"))
+    (pad "4" smd rect (at 3 0) (size 1 1) (layers "F.Cu") (net 6 "LOAD_OUT")))
+  (footprint "Resistor_SMD:R_0603" (layer "F.Cu") (at 25 0)
+    (property "Reference" "R1") (property "Value" "1k")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 5 "PROG"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND")))
+"#,
+    );
+    let report = run_si_with_library(&board, &text, &lib);
+    assert!(findings_of(&report, SiCheck::InputCapRipple).is_empty());
+    let note = report
+        .findings
+        .iter()
+        .find(|finding| finding.check == SiCheck::InputCapRipple)
+        .expect("the evidence-complete stage records why it abstained");
+    assert!(note.message.contains("duty") && note.message.contains("unknown"));
+    assert!(note.message.contains("10.00 A") && note.message.contains("3.00 A_rms"));
+}
+
+/// Parallel input capacitors divide ripple according to their frequency-
+/// dependent impedance, not nominal capacitance alone. Charging the full stage
+/// ripple to whichever capacitor happens to sort first is a false positive.
+#[test]
+fn si_ripple_abstains_when_parallel_input_caps_make_current_sharing_unknown() {
+    let lib = test_programmed_load_library();
+    let (board, text) = exact_rated_ripple_fixture(
+        r#"
+  (footprint "Capacitor_SMD:CP_Elec_10x10" (layer "F.Cu") (at 4 5)
+    (property "Reference" "C2") (property "Value" "470uF")
+    (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 1 "VIN_5V"))
+    (pad "2" smd rect (at 2 0) (size 2 2) (layers "F.Cu") (net 4 "GND")))
+"#,
+    );
+
+    let report = run_si_with_library(&board, &text, &lib);
+    assert!(findings_of(&report, SiCheck::InputCapRipple).is_empty());
+    let note = report
+        .findings
+        .iter()
+        .find(|finding| finding.check == SiCheck::InputCapRipple)
+        .expect("parallel bank must leave an explicit abstention");
+    assert!(note.message.contains("2 parallel input bulk capacitors"));
+    assert!(note.message.contains("sharing") && note.message.contains("unknown"));
 }
 
 // ===========================================================================

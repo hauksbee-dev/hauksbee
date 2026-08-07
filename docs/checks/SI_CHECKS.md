@@ -507,33 +507,52 @@ by hand.
 
 ### Attribution (the zero-false-positive boundary)
 
-A current is only attributed to a net from an explicit, citeable source, and the
-finding carries that citation:
+A current is attributed only from an explicit, citeable operating-current
+source. Today that means a `[models.current_program]` equation tagged
+`semantics = "regulated_current"`, such as a linear charger's constant-current
+phase, evaluated from the parts actually fitted. The schema supports a simple
+`I = k_volts / R` law, a continuous two-branch inverse-resistance law, and a
+program-voltage-scaled sense-resistor law. Independent loads on the same side of
+a rail are summed. When one regulated stage sources a rail and another consumes
+it, the check takes the larger directional total instead of counting the same
+through-current twice; every contributor stays in the citation. Direction comes
+only from the model's required `current_in_roles` / `current_out_roles`; control
+and sense roles are never selected by name heuristics.
 
-1. a DB-modelled converter's output-current limit (`iout_limit_a`) on its
-   output net, or
-2. a **regulator** or **connector** continuous-current rating (`max_current_a`)
-   on its non-ground power nets, or
-3. for a part whose current the **board** programs with one resistor (a charger's
-   PROG, a load switch's ILIM/ISET), the current computed from the resistor
-   actually fitted, through the model's `[models.current_program]` equation
-   (`I = k_volts / R`), bounded above by the part's own rating.
+Converter output-current limits, regulator/connector/FET ratings, and equations
+tagged `protection_limit` are capabilities or trip thresholds—not proof of board
+draw—so they never seed steady-state ampacity. Generic/placeholder models never
+seed it either. Everything else is left unattributed and the IPC engine skips it.
 
-FETs are deliberately excluded (a high Id switch rating is not proof that the
-load flows through that part on the board), and a **generic / placeholder
-fallback model never seeds an attribution** (its rating is representative, not a
-datasheet figure). Everything else is left un-attributed and the IPC engine then
-skips it.
+For a programmable part, `ratings.max_current_a` remains a **device-level
+analysis threshold**—normally an absolute limit, or a deliberately documented
+lower operating ceiling—not a load or a promise of normal operation. The separate
+`current_program.max_operating_current_a` is the declared operating ceiling.
+The populated DC-equivalent resistance is read from the layout with a bounded
+nodal-conductance solve from the programming pin to ground. Every simultaneously
+populated series, parallel, or bridge branch participates; a closed solder link
+is a short and a capacitor/open link is open. An unclassified numeric fuse,
+thermistor, multi-terminal branch, conflicting identity, incomplete terminal,
+or network beyond the explicit hop/node/edge bounds refuses the calculation.
+Repeated physical pad records collapse only for this electrical-terminal
+topology. When the network cannot be read, the part attributes nothing and an
+info finding names which part, which pin, and what would close the gap: the
+alternative, falling back on either ceiling, reports a number nobody measured.
 
-For a programmable part, `max_current_a` is a **capability, not a load**, and is
-never charged to a rail. The resistance is read off the layout by walking from
-the programming pin to ground through two-terminal parts, taking the lowest
-resistance the network can select (the largest current, so a trace that survives
-it survives every jumper setting); a closed solder link counts as a short, an
-open one blocks the path, and anything the walk cannot classify stops it. When
-the resistor cannot be read the part attributes nothing and an info finding names
-which part, which pin, and what would close the gap: the alternative, falling
-back on the ceiling, reports a number nobody measured.
+Every `regulated_current` model must supply a sourced
+`max_operating_current_a`; validation refuses an unbounded inverse law. The
+programming transfer within that domain is still a point estimate unless its
+model supplies separately sourced tolerances. Hauksbee does not promote a
+typical-only datasheet row to a guaranteed maximum, so the citation says nominal
+rather than claiming unprovided component or resistor tolerances.
+
+For a sense-scaled regulated law, every sense role is paired with a required
+far-side role. Exactly one adjacent shunt must connect each declared pair and all
+shunts must have equal nominal resistance; a mismatch, extra branch, or wrong
+net is undetermined. Full branch current is attributed only to the model's main
+power terminals, never to Kelvin-sense or ground-reference stubs. The checked-in
+LTC4020 equation is instead tagged `protection_limit`, so it does not seed
+steady-state ampacity at all.
 
 ### The honest reach
 
@@ -549,10 +568,10 @@ back on the ceiling, reports a number nobody measured.
 
 ### Calibration evidence
 
-- Integration: `--si` surfaces an ampacity finding on a synthetic board with an
-  AMS1117 (rated 1.0 A) whose `+3V3` output is a single 0.15 mm trace
-  (~0.46 A). It stays silent on the same board when the rail is poured, and
-  when no rated part attributes a current
+- Integration: `--si` surfaces an ampacity finding on a synthetic programmed
+  charger whose regulated output is routed on an undersized discrete trace. It
+  stays silent when the rail is poured, when only a regulator rating is known,
+  and when no operating-current source is attributable
   (`crates/hauksbee-engine/tests/si_ampacity_ripple.rs`).
 - Zero-FP corpus sweep across the famous boards (gated by
   `HAUKSBEE_REQUIRE_CORPUS=1`) raises no ampacity findings. That sweep caught,
@@ -567,9 +586,11 @@ back on the ceiling, reports a number nobody measured.
   (`PROG -> 4.99k -> closed link -> GND`) yields the equation's own answer and a
   citation naming the resistor; an open link yields no attribution and a recorded
   gap; a filter cap on PROG is not read as the programming element; the equation
-  cannot exceed the part's rating; and a plain regulator with no programming pin
-  still carries its full rating, so the fix did not trade a false positive for a
-  missed real one.
+  cannot exceed the part's declared operating domain. Unitless capacitors,
+  numeric fuses, thermistors, populated parallel branches, repeated physical
+  pads, simultaneous chargers, and mismatched Kelvin paths each have a direct
+  regression. A plain regulator rating is explicitly proven *not* to become a
+  load.
 - The LumenPnP motor-driver sweep (`trace_current_corpus.rs`) pins the poured-
   rail / adequately-sized-coil-trace honest negative at the TMC2226 datasheet
   maximum.
@@ -597,35 +618,53 @@ way an engineer reads it off the schematic.
 
 ### Cap ripple rating
 
-Datasheet first (`Ratings.max_ripple_current_a`, a per-part DB override), else a
-conservative per-class default keyed on capacitance (the LOW end of typical
-aluminium-electrolytic ripple ratings, so the default under-states the part and
-the check only fires on a clear overstress). A cap whose value will not parse,
-or a sub-100 uF cap (likely MLCC, where ripple is rarely the limit), gets no
-default and is left alone.
+Only a part-specific datasheet value (`Ratings.max_ripple_current_a`) is
+decision-grade. Hauksbee does not estimate ripple capability from capacitance:
+dielectric, construction, can size, ESR, temperature, and frequency all matter,
+so a guessed class number would be precision without evidence. The built-in
+production example is the exact United Chemi-Con `EKYB630ELL122MLN3S` ordering
+code: 63 V, 1200 uF and 3.0 A_rms at 100 kHz / 105 C. The rule is anchored to
+that MPN, not to every 1200 uF capacitor. Put the ordering code in an `MPN`,
+`Manufacturer Part`, or `Part Number` property (or use it as the component
+value) for that evidence to bind. Source: [United Chemi-Con product
+page](https://www.chemi-con.co.jp/en/products/detail-condenser.php?part_number=EKYB630ELL122MLN3S).
 
 ### The zero-false-positive boundary
 
-The check fires **only when the topology, the cap ripple rating, and an
-attributable `I_out` are all known**. When the topology resolves but the rating
-or `I_out` is unknown it emits an info note (the negative is on the record) and
-does not fire. It never invents a current or a rating. `I_out` is attributed
-from the same citeable sources as the ampacity check (a converter limit, or a
-regulator/connector rating on the output rail). A FET rating and the generic
-fallback are excluded.
+The check fires **only when topology, an exact cap ripple rating, an attributable
+`I_out`, and nominal duty are all known**. Duty is computed as `Vout/Vin` only
+when both directional rail names contain exactly one conventional voltage token
+(`12V`, `3V3`, or `3.3V`, for example `PWR_IN_12V` and `CORE_OUT_3V3`). Missing,
+ambiguous, zero, or non-step-down voltage pairs abstain; the old unconditional
+`D=0.5` assumption is not used for findings. When any input is absent the check
+emits an info note (the negative is on the record) and does not fire. It never
+invents a rating, current, duty, or decision threshold. `I_out` comes from the same operating-
+current contract as ampacity: simultaneous `regulated_current` loads are summed;
+converter/OCP limits and regulator/connector/FET ratings are capabilities and
+excluded. A parallel input-capacitor bank also abstains: sharing depends on each
+part's frequency-dependent impedance, so assigning the full ripple to one
+arbitrarily selected capacitor would be a false positive.
 
 ### Calibration evidence (the hunt's mppt-1210-hus C1)
 
 - Hand-checked unit test: `C1` (1200 uF, rated 3.0 A_rms at 100 kHz / 105 C)
   across a 10 A buck input at `D ~ 0.5` carries `0.5 * 10 = 5.0 A_rms`,
   ~1.66x its rating (`ripple::tests::mppt_1210_c1_overstress_is_1_66x`).
+- End-to-end integration resolves the shipped exact MPN, a 10 A programmed
+  operating load, discrete buck topology, and `VIN_5V -> VOUT_2V5`; it raises
+  one 5.0 A_rms versus 3.0 A_rms finding. The paired `VIN -> VOUT` fixture has
+  the same exact rating and current but no voltage evidence, and must abstain. A
+  second paired fixture adds a parallel input bulk cap and pins the impedance-
+  sharing abstention.
 - On the real mppt-1210 board, `--si` recovers the buck stage (input rail
-  SOLAR+, switch node SW_NODE, inductor L1, input bulk cap C1 1200uF) and
-  honestly reports that `I_out` is not attributable from a single part rating
-  (the 10 A charge current is a system spec, not a datasheet pin rating), so it
-  emits an info note rather than a fabricated finding. The over-ripple physics
-  is the unit test's job. The board path proves the topology recovery and the
-  honest abstention.
+  SOLAR+, switch node SW_NODE, inductor L1, and the input capacitor bank) and
+  honestly records that its parallel-cap impedance sharing is unknown. The
+  layout also does not establish `I_out` or nominal duty (the 10 A charge
+  current is a system spec, not a part rating), so it emits an info note rather
+  than a fabricated finding. The over-ripple physics is the hand-checked unit
+  test's job. The board path proves topology recovery and honest abstention; the
+  synthetic integration proves the automated positive path without importing
+  the private hunt board into the model database.
 - Corpus sweep raises no ripple findings on the known-good famous boards.
 
 ---
