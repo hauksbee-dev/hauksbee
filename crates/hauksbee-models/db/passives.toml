@@ -12,6 +12,7 @@
 [[models]]
 id = "ucc_ekyb630ell122mln3s"
 kind = "passive"
+passive_class = "capacitor"
 description = "United Chemi-Con EKYB 63 V 1200 uF electrolytic, exact MPN"
 
 [models.match]
@@ -36,6 +37,7 @@ polarized = true
 [[models]]
 id = "generic_r"
 kind = "passive"
+passive_class = "resistor"
 description = "Generic resistor, value parsed from component Value field"
 
 [models.match]
@@ -50,6 +52,7 @@ lib_id = "Device:R"
 [[models]]
 id = "generic_r_small"
 kind = "passive"
+passive_class = "resistor"
 description = "Generic resistor, small package (R_Small)"
 
 [models.match]
@@ -64,6 +67,7 @@ lib_id = "Device:R_Small"
 [[models]]
 id = "generic_c"
 kind = "passive"
+passive_class = "capacitor"
 description = "Generic capacitor, value parsed from component Value field"
 
 [models.match]
@@ -78,6 +82,7 @@ lib_id = "Device:C"
 [[models]]
 id = "generic_c_small"
 kind = "passive"
+passive_class = "capacitor"
 description = "Generic capacitor, small package (C_Small)"
 
 [models.match]
@@ -92,6 +97,7 @@ lib_id = "Device:C_Small"
 [[models]]
 id = "generic_cp"
 kind = "passive"
+passive_class = "capacitor"
 description = "Generic polarised capacitor (electrolytic / tantalum)"
 
 [models.match]
@@ -109,6 +115,7 @@ polarized = true
 [[models]]
 id = "generic_cp1"
 kind = "passive"
+passive_class = "capacitor"
 description = "Generic polarised capacitor variant"
 
 [models.match]
@@ -126,6 +133,7 @@ polarized = true
 [[models]]
 id = "generic_l"
 kind = "passive"
+passive_class = "inductor"
 description = "Generic inductor, value parsed from component Value field"
 
 [models.match]
@@ -140,6 +148,7 @@ lib_id = "Device:L"
 [[models]]
 id = "generic_l_small"
 kind = "passive"
+passive_class = "inductor"
 description = "Generic inductor, small package"
 
 [models.match]
@@ -179,6 +188,7 @@ lib_id = "Device:L_Small"
 [[models]]
 id = "ferrite_bead"
 kind = "passive"
+passive_class = "ferrite_bead"
 description = "Ferrite bead, DC resistance only (representative 0.35 Ohm; see note)"
 
 [models.match]
@@ -198,6 +208,7 @@ ohms = 0.35
 [[models]]
 id = "crystal"
 kind = "passive"
+passive_class = "crystal"
 description = "Quartz crystal, series resonant LC model"
 
 [models.match]
@@ -226,6 +237,7 @@ lib_id = "Device:Crystal"
 [[models]]
 id = "ferrite_bead_220r_1a4"
 kind = "passive"
+passive_class = "ferrite_bead"
 description = "Ferrite bead 220 Ohm @ 100 MHz, 1.4 A, 0603 (Murata BLM18PG221SH1D)"
 
 [models.match]
@@ -250,6 +262,7 @@ ohms = 0.10   # DCR max, initial. Murata publishes no typical; see the note abov
 [[models]]
 id = "ferrite_bead_100r_3a"
 kind = "passive"
+passive_class = "ferrite_bead"
 description = "Ferrite bead 100 Ohm @ 100 MHz, 3 A, 0603 (Murata BLM18SP101SH1D)"
 
 [models.match]
@@ -273,6 +286,7 @@ ohms = 0.022  # DCR max, initial
 [[models]]
 id = "ferrite_bead_600r_2a"
 kind = "passive"
+passive_class = "ferrite_bead"
 description = "Ferrite bead 600 Ohm @ 100 MHz, 2 A, 0805 (Murata BLM21SP601SH1D)"
 
 [models.match]
@@ -298,6 +312,7 @@ ohms = 0.060  # DCR max, initial
 [[models]]
 id = "ferrite_bead_generic_rated"
 kind = "passive"
+passive_class = "ferrite_bead"
 description = "Ferrite bead named only by a rating this file has not traced (representative DCR)"
 
 [models.match]
@@ -324,6 +339,7 @@ ohms = 0.35   # representative only; see the note on `ferrite_bead` above
 [[models]]
 id = "ferrite_bead_footprint"
 kind = "passive"
+passive_class = "ferrite_bead"
 description = "Ferrite bead / small inductor on an Inductor_SMD footprint, DC resistance only"
 
 [models.match]
@@ -358,6 +374,7 @@ ohms = 0.35   # representative only; see the note on `ferrite_bead` above
 [[models]]
 id = "fuse"
 kind = "passive"
+passive_class = "fuse"
 description = "Fuse, low-ohm wire (pre-fault; cannot open, see note)"
 
 [models.match]
@@ -376,6 +393,7 @@ ohms = 0.01
 [[models]]
 id = "resistor_tht"
 kind = "passive"
+passive_class = "resistor"
 description = "Through-hole resistor (footprint-matched)"
 
 [models.match]
@@ -390,6 +408,7 @@ footprint_re = "^Resistor_THT:"
 [[models]]
 id = "capacitor_tht"
 kind = "passive"
+passive_class = "capacitor"
 description = "Through-hole capacitor (footprint-matched)"
 
 [models.match]
@@ -404,6 +423,7 @@ footprint_re = "^Capacitor_THT:"
 [[models]]
 id = "inductor_tht"
 kind = "passive"
+passive_class = "inductor"
 description = "Through-hole inductor (footprint-matched)"
 
 [models.match]
@@ -429,6 +449,7 @@ footprint_re = "^Inductor_THT:"
 [[models]]
 id = "polyfuse_0805l050"
 kind = "passive"
+passive_class = "fuse"
 description = "0.5 A / 6 V resettable PTC, 0805 (Littelfuse 0805L050), 0.15 Ohm"
 
 [models.match]
@@ -460,6 +481,7 @@ ohms = 0.150
 [[models]]
 id = "fuse_nano2_157"
 kind = "passive"
+passive_class = "fuse"
 description = "Littelfuse 157 series Nano2 fuse, 4 A / 125 V, 0.0163 Ohm"
 
 [models.match]
@@ -483,6 +505,7 @@ ohms = 0.0163   # nominal cold resistance; the datasheet gives no min/max
 [[models]]
 id = "ptc_0zcj0075"
 kind = "passive"
+passive_class = "fuse"
 description = "Bel Fuse 0ZCJ 0.75 A resettable PTC, 1206, 0.09 Ohm"
 
 [models.match]
@@ -506,6 +529,7 @@ ohms = 0.090
 [[models]]
 id = "fuse_rated"
 kind = "passive"
+passive_class = "fuse"
 description = "Fuse named only by a rating this file has not traced (low-ohm wire, cannot open)"
 
 [models.match]
@@ -532,6 +556,7 @@ ohms = 0.01
 [[models]]
 id = "inductor_imc1210"
 kind = "passive"
+passive_class = "inductor"
 description = "Vishay Dale IMC-1210 wirewound molded inductor, 10 uH, DCR 2.1 Ohm"
 
 [models.match]
@@ -572,6 +597,7 @@ ohms = 2.1    # DCR max; Vishay publishes no typical
 [[models]]
 id = "crystal_footprint"
 kind = "passive"
+passive_class = "crystal"
 description = "Quartz crystal or crystal oscillator, matched by footprint (skipped in simulation)"
 
 [models.match]
@@ -586,6 +612,7 @@ footprint_re = "(?ix) (^Crystal:) | (^Oscillator[_A-Za-z]*:) | Crystal[_-]?SMD |
 [[models]]
 id = "crystal_value"
 kind = "passive"
+passive_class = "crystal"
 description = "Quartz crystal named by its frequency spec (skipped in simulation)"
 
 [models.match]
@@ -624,6 +651,7 @@ value_re = '''(?ix) ^(
 [[models]]
 id = "net_tie"
 kind = "passive"
+passive_class = "net_tie"
 description = "Net tie: a deliberate copper short between two nets (1 mOhm)"
 
 [models.match]

@@ -768,6 +768,7 @@ impl ModelLibrary {
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            passive_class: None,
         };
 
         Resolution {
