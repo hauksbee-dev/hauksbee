@@ -128,6 +128,8 @@ backend = "renode:stm32f103"
 "1"  = "pc13"      # onboard LED (blue pill), active-low to 3V3 in HW
 "2"  = "pc14"
 "3"  = "pc15"
+"5"  = "osc_in"    # HSE crystal / external-clock input
+"6"  = "osc_out"   # HSE crystal oscillator output
 "8"  = "vss"
 "9"  = "vdd"
 "10" = "pa0_adc0"  # LQFP-48 pin 10 = PA0 (PA0-WKUP / ADC1_IN0) per ST DS5319; matches the
