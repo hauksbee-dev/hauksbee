@@ -259,6 +259,111 @@ fn firmware_pwm_duty_that_keeps_the_part_cool_stays_silent() {
     );
 }
 
+/// Overpower is the same thermal physics as Tj (a continuous wattage rating
+/// is a heating limit), so it must judge the time-weighted average, not the
+/// endpoint sample. Two-sided at a 1.5 W peak against a 1.0 W rating, both
+/// phases adversarial: 90% duty averages 1.35 W (fires, though the pulse
+/// ends before every endpoint and a sampler reads 0 W); 50% duty with the
+/// pulse covering every endpoint averages 0.75 W (silent, though a sampler
+/// reads a sustained 1.5 W and would false-fault).
+#[test]
+fn overpower_judges_time_weighted_power_not_the_endpoint() {
+    let build = || {
+        let mut circuit = Circuit::new();
+        let load = circuit.add(Device::Resistor {
+            name: "Q1".into(),
+            a: NodeId(1),
+            b: NodeId::GROUND,
+            ohms: 1.0,
+            tc1: None,
+        });
+        let meta = DeviceMeta {
+            reference: "Q1".into(),
+            device: load,
+            kind: ComponentKind::Nmos,
+            footprint: "Package_TO_SOT_SMD:SOT-23".into(),
+            ratings: Ratings {
+                max_power_w: Some(1.0),
+                theta_ja_c_per_w: Some(1.0), // Tj stays cold; only power is under test
+                max_junction_temp_c: Some(500.0),
+                ..Default::default()
+            },
+        };
+        let mut mon = StressMonitor::new(vec![meta]);
+        mon.ambient_c = 25.0;
+        (circuit, mon)
+    };
+    let no_branch = |_: hauksbee_ir::DeviceId| None;
+    // 1.5 W peak: sqrt(1.5) volts across the 1 ohm load.
+    let on_v = |n: NodeId| if n == NodeId(1) { 1.5f64.sqrt() } else { 0.0 };
+    let off_v = |_: NodeId| 0.0;
+
+    // HOT: 90% duty, pulse ends before the endpoint. Average 1.35 W > 1.0 W.
+    let (mut c, mut m) = build();
+    let mut overpower = Vec::new();
+    for k in 0..8 {
+        m.accumulate_step(&c, &on_v, &no_branch, 0.9e-3);
+        m.accumulate_step(&c, &off_v, &no_branch, 0.1e-3);
+        overpower.extend(
+            m.evaluate(&mut c, &off_v, &no_branch, k as f64 * 1e-3)
+                .into_iter()
+                .filter(|f| f.kind == FaultKind::Overpower),
+        );
+    }
+    assert_eq!(
+        overpower.len(),
+        1,
+        "1.35 W average against a 1.0 W rating must fault once; an endpoint \
+         sampler reads 0 W here and never fires"
+    );
+    assert!(
+        (overpower[0].value - 1.35).abs() < 1e-9,
+        "fault carries the duty-average wattage, got {}",
+        overpower[0].value
+    );
+
+    // COOL: 50% duty, pulse covers the endpoint. Average 0.75 W < 1.0 W.
+    let (mut c, mut m) = build();
+    let mut all = Vec::new();
+    for k in 0..8 {
+        m.accumulate_step(&c, &off_v, &no_branch, 0.5e-3);
+        m.accumulate_step(&c, &on_v, &no_branch, 0.5e-3);
+        all.extend(m.evaluate(&mut c, &on_v, &no_branch, k as f64 * 1e-3));
+    }
+    assert!(
+        all.iter().all(|f| f.kind != FaultKind::Overpower),
+        "0.75 W average is inside the 1.0 W rating; an endpoint sampler reads \
+         a sustained 1.5 W and would false-fault, got {all:?}"
+    );
+}
+
+/// A package that stops dissipating settles back to ambient in the
+/// steady-state model: the reported temperature must not freeze at the last
+/// hot reading once the deposit (or endpoint power) goes to zero.
+#[test]
+fn reported_temperature_cools_to_ambient_when_dissipation_stops() {
+    let (mut circuit, mut monitor) = pwm_fixture(500.0); // limit high: no faults
+    let no_branch = |_: hauksbee_ir::DeviceId| None;
+    let on_v = |n: NodeId| if n == NodeId(1) { 1.0 } else { 0.0 };
+    let off_v = |_: NodeId| 0.0;
+
+    // Hot chunk: always-on 1 W, Tj = 125 C.
+    monitor.accumulate_step(&circuit, &on_v, &no_branch, 1e-3);
+    monitor.evaluate(&mut circuit, &on_v, &no_branch, 1e-3);
+    let hot = monitor.temp_by_ref().get("Q1").copied().expect("hot Tj");
+    assert!((hot - 125.0).abs() < 1e-9, "1 W through 100 C/W: {hot}");
+
+    // Cold chunk: zero deposit, endpoint off. The stale 125 C must relax to
+    // ambient, not persist.
+    monitor.accumulate_step(&circuit, &off_v, &no_branch, 1e-3);
+    monitor.evaluate(&mut circuit, &off_v, &no_branch, 2e-3);
+    let cold = monitor.temp_by_ref().get("Q1").copied().expect("cold Tj");
+    assert!(
+        (cold - 25.0).abs() < 1e-9,
+        "an idle package reads ambient, not the frozen 125 C: {cold}"
+    );
+}
+
 /// Two-sided: the same 0.5 W SOT-23 part is within limits at 25 C ambient
 /// (Tj = 150, limit 175) but pushed over when the ambient rises to 60 C
 /// (Tj = 60 + 125 = 185 > 175). Demonstrates the ambient knob and the fault.

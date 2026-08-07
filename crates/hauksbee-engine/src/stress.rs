@@ -27,11 +27,13 @@
 //! those accepted steps ([`StressMonitor::step_powers`] per step, trapezoid
 //! between steps) and deposits the chunk's energy via
 //! [`StressMonitor::deposit_chunk_energy`]; [`StressMonitor::evaluate`] then
-//! uses `energy / elapsed` — the time-weighted average power — as the
-//! temperature-driving dissipation. A 25%-duty PWM therefore deposits 25% of
-//! the always-on energy whatever the chunk width or pulse phase. When no
-//! energy was deposited for the chunk (direct unit-test drives, legacy
-//! callers), the endpoint's instantaneous power is the fallback.
+//! uses `energy / elapsed` — the time-weighted average power — for BOTH heat
+//! checks: the junction-temperature estimate (pooled per package) and the
+//! per-unit continuous Overpower rating, which is the same thermal physics.
+//! A 25%-duty PWM therefore deposits 25% of the always-on energy whatever
+//! the chunk width or pulse phase. When no energy was deposited for the
+//! chunk (direct unit-test drives, legacy callers), the endpoint's
+//! instantaneous power is the fallback.
 //!
 //! ## Destructive mode
 //!
@@ -397,8 +399,15 @@ impl StressMonitor {
     /// drains it. Additive so a subdivided chunk (fallback ladder rung 4)
     /// deposits each quarter's energy in turn. Non-finite or non-positive
     /// `elapsed_s` deposits nothing.
+    /// A slice that does not cover every meta deposits nothing: advancing
+    /// `elapsed` while some device's energy silently stays zero would report
+    /// a fabricated 0 W average for it instead of falling back to the
+    /// endpoint operating point.
     pub fn deposit_chunk_energy(&mut self, energy_j: &[f64], elapsed_s: f64) {
         if !(elapsed_s > 0.0) || !elapsed_s.is_finite() {
+            return;
+        }
+        if energy_j.len() != self.chunk_energy_j.len() {
             return;
         }
         for (slot, e) in self.chunk_energy_j.iter_mut().zip(energy_j) {
@@ -491,30 +500,37 @@ impl StressMonitor {
                 }
             })
             .collect();
-        // Temperature-driving power per package. When the scheduler deposited
-        // accepted-step energy for this chunk, the physical figure is the
-        // TIME-WEIGHTED average `energy / elapsed`: a firmware PWM waveform
-        // switches inside the chunk, so the endpoint's instantaneous power
-        // reads peak or zero depending on phase, while the junction heats on
-        // the duty-cycle average. Pooling still happens per package (the
-        // siblings' energies each integrate, then sum). Without a deposit
-        // (direct unit-test drives), the endpoint operating point is the
-        // fallback, which is exact for waveforms constant over the chunk.
+        // Heating power per device. When the scheduler deposited accepted-step
+        // energy for this chunk, the physical figure is the TIME-WEIGHTED
+        // average `energy / elapsed`: a firmware PWM waveform switches inside
+        // the chunk, so the endpoint's instantaneous power reads peak or zero
+        // depending on phase, while the junction (and a resistor's continuous
+        // wattage rating, which is the same thermal physics) responds to the
+        // duty-cycle average. This average feeds BOTH the per-unit Overpower
+        // check and, pooled per package, the junction-temperature check.
+        // Without a deposit (direct unit-test drives), the endpoint operating
+        // point is the fallback, exact for waveforms constant over the chunk.
         let thermal_elapsed = self.chunk_elapsed_s;
+        let unit_avg_w: Vec<f64> = self
+            .metas
+            .iter()
+            .enumerate()
+            .map(|(i, _)| {
+                if ops[i].is_none() {
+                    0.0 // destroyed: dissipates nothing
+                } else if thermal_elapsed > 0.0 {
+                    self.chunk_energy_j.get(i).copied().unwrap_or(0.0) / thermal_elapsed
+                } else {
+                    ops[i].as_ref().map_or(0.0, |op| op.power_w)
+                }
+            })
+            .collect();
         let mut package_power: HashMap<String, f64> = HashMap::new();
         for (i, meta) in self.metas.iter().enumerate() {
-            if ops[i].is_none() {
-                continue; // destroyed: dissipates nothing
-            }
-            let p = if thermal_elapsed > 0.0 {
-                self.chunk_energy_j.get(i).copied().unwrap_or(0.0) / thermal_elapsed
-            } else {
-                ops[i].as_ref().map_or(0.0, |op| op.power_w)
-            };
-            if p > 0.0 {
+            if unit_avg_w[i] > 0.0 {
                 *package_power
                     .entry(strip_unit_suffix(&meta.reference).to_string())
-                    .or_insert(0.0) += p;
+                    .or_insert(0.0) += unit_avg_w[i];
             }
         }
         // The deposit covers exactly the chunk this evaluate closes; drain it
@@ -527,9 +543,26 @@ impl StressMonitor {
             let meta = self.metas[i].clone();
             let Some(op) = &ops[i] else {
                 // Destroyed devices stay at full stress and raise nothing more.
+                // Their junction stops dissipating, so a previously-reported
+                // temperature cools to ambient rather than freezing at the
+                // last hot reading.
                 self.stress_by_ref.insert(meta.reference.clone(), 1.0);
+                if let Some(t) = self.temp_by_ref.get_mut(&meta.reference) {
+                    *t = self.ambient_c;
+                }
                 continue;
             };
+            // Checks judge the endpoint operating point, EXCEPT power: a
+            // continuous wattage rating is thermal, so it compares the same
+            // time-weighted average the junction estimate uses (endpoint
+            // fallback when no deposit exists). Endpoint power would make a
+            // sub-chunk PWM part's Overpower verdict depend on pulse phase.
+            let op = OperatingPoint {
+                current_a: op.current_a,
+                voltage_v: op.voltage_v,
+                power_w: unit_avg_w[i],
+            };
+            let op = &op;
             let mut checks = build_checks(&meta, op);
 
             // Thermal: turn the package's pooled dissipation into a
@@ -570,6 +603,11 @@ impl StressMonitor {
                     limit: meta.tj_max_c(),
                     surge: false,
                 });
+            } else if let Some(t) = self.temp_by_ref.get_mut(&meta.reference) {
+                // A package that stopped dissipating settles back to ambient
+                // in the steady-state model; freezing the last hot reading
+                // would report a temperature no longer supported by any power.
+                *t = self.ambient_c;
             }
 
             let mut worst_stress = 0.0f64;
