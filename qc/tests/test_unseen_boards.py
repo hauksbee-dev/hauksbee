@@ -1648,6 +1648,40 @@ expect = ["board-{number}.kicad_pcb"]
             self.assertNotEqual(0, bad_exit)
             self.assertIn("--manifest", stderr.getvalue())
 
+    def test_module_execution_reports_gate_errors_without_a_traceback(self) -> None:
+        # `python -m qc.unseen_boards` executes this file as `__main__`, while
+        # `qc.release_board_gates` imports it a second time as
+        # `qc.unseen_boards`. The gate functions raise the canonical module's
+        # HistoryError/SelectionError, which are distinct classes from the ones
+        # defined in `__main__`; the CLI's error handler must catch both and
+        # exit 2 rather than let a traceback escape. Calling `main()` directly
+        # (as the other tests here do) cannot reproduce the split, so this test
+        # re-runs the module the way production invokes it.
+        import runpy
+        import sys
+
+        with tempfile.TemporaryDirectory() as raw:
+            history = Path(raw) / "history.jsonl"
+            history.write_text("")
+            evidence = Path(raw) / "runs"
+            evidence.mkdir()
+            stderr = io.StringIO()
+            argv = ["qc.unseen_boards", "audit-history", "--require-completed"]
+            with (
+                patch.object(release_gates, "CANONICAL_HISTORY", history),
+                patch.object(release_gates, "CANONICAL_EVIDENCE_DIR", evidence),
+                patch.object(sys, "argv", argv),
+                redirect_stderr(stderr),
+            ):
+                with self.assertRaises(SystemExit) as caught:
+                    runpy.run_module("qc.unseen_boards", run_name="__main__")
+
+            self.assertEqual(2, caught.exception.code)
+            self.assertIn(
+                "no completed external-five iteration", stderr.getvalue()
+            )
+            self.assertNotIn("Traceback", stderr.getvalue())
+
     def test_show_command_replays_the_existing_planned_iteration(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             history = Path(raw) / "iterations.jsonl"
