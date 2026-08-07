@@ -41,7 +41,7 @@ use std::path::Path;
 
 use crate::{ExtractError, ExtractedBoard};
 
-use connect::{PlatedHole, ReconStats};
+use connect::{LayerSpan, PlatedHole, ReconStats};
 use layers::LayerRole;
 
 /// A reverse extraction, plus the honest accounting that lets callers report
@@ -112,6 +112,7 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
 
     let mut copper: Vec<(LayerRole, std::path::PathBuf)> = Vec::new();
     let mut drills: Vec<std::path::PathBuf> = Vec::new();
+    let mut outlines: Vec<std::path::PathBuf> = Vec::new();
     let mut csvs: Vec<std::path::PathBuf> = Vec::new();
     let mut loc_files: Vec<std::path::PathBuf> = Vec::new();
 
@@ -129,6 +130,7 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         match role {
             r @ LayerRole::Copper { .. } => copper.push((r, path)),
             LayerRole::Drill => drills.push(path),
+            LayerRole::Outline => outlines.push(path),
             _ => {
                 let ext = path
                     .extension()
@@ -193,7 +195,25 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
     // film with the holes drawn as flashes. We sniff: a gerber drill carries
     // RS-274X markers (`%FS`/`%MO`/`G04`), in which case the flash centres are
     // the hole locations; otherwise it is Excellon.
-    let mut holes: Vec<PlatedHole> = Vec::new();
+    let n_copper = ordered.len();
+    let token_to_stack = copper_layer_tokens(&ordered, &copper);
+
+    // Pass one: read every plated drill file and work out what it says about
+    // the copper layers its hits reach. Nothing is stitched yet, because
+    // whether SILENCE means "through-hole" depends on the rest of the job.
+    enum DrillBody {
+        /// An Excellon program, already parsed into hits.
+        Excellon(excellon::DrillFile),
+        /// A gerber film whose flashes are the hole locations. Kept as text
+        /// because the RS-274X plotter is the thing that reads it.
+        Film(String),
+    }
+    struct ParsedDrill {
+        path: std::path::PathBuf,
+        body: DrillBody,
+        claim: SpanClaim,
+    }
+    let mut parsed: Vec<ParsedDrill> = Vec::new();
     for d in &drills {
         let text = std::fs::read_to_string(d)
             .map_err(|e| ExtractError::Xml(format!("read {}: {e}", d.display())))?;
@@ -208,37 +228,126 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         }
         let head: String = text.chars().take(256).collect();
         let is_gerber = drill_is_gerber_format(&head, d.extension().and_then(|s| s.to_str()));
-        if is_gerber {
+        // An X2 attribute in the file body beats the file name; the name is
+        // consulted only when the file itself is silent.
+        let (body, declared) = if is_gerber {
+            (DrillBody::Film(text), None)
+        } else {
+            let drill = excellon::parse(&text);
+            let declared = drill
+                .span
+                .and_then(|p| resolve_pair(p.from, p.to, n_copper));
+            (DrillBody::Excellon(drill), declared)
+        };
+        let claim = match declared {
+            Some((f, t)) => SpanClaim::Resolved(f, t),
+            None => match span_from_filename(&n, &token_to_stack, n_copper) {
+                Some((f, t)) => SpanClaim::Resolved(f, t),
+                None if names_a_partial_span(&n) => SpanClaim::PartialButUnreadable,
+                None => SpanClaim::Silent,
+            },
+        };
+        parsed.push(ParsedDrill {
+            path: d.clone(),
+            body,
+            claim,
+        });
+    }
+
+    // Does this job actually carry a multi-span drill set? Only then is a
+    // silent file ambiguous. A job whose every declaration is the full stack is
+    // a plain through-hole job, and reading a silent sibling as through-hole
+    // there is not a guess, it is the only thing the set can mean.
+    let job_is_multi_span = parsed.iter().any(|p| match p.claim {
+        SpanClaim::Resolved(f, t) => (f, t) != (0, n_copper.saturating_sub(1)),
+        SpanClaim::PartialButUnreadable => true,
+        SpanClaim::Silent => false,
+    });
+
+    // Pass two: turn the hits into plated barrels with their resolved span.
+    let mut holes: Vec<PlatedHole> = Vec::new();
+    let mut notes: Vec<String> = Vec::new();
+    for p in parsed {
+        let d = &p.path;
+        let span = match p.claim {
+            SpanClaim::Resolved(f, t) => LayerSpan::Range { from: f, to: t },
+            SpanClaim::PartialButUnreadable | SpanClaim::Silent if job_is_multi_span => {
+                notes.push(format!(
+                    "{}: this job's drill set spans several layer pairs, and this file does not \
+                     say which pair its hits reach. Its plated hits are recorded but stitch no \
+                     layers, so nets that only meet through them are reported separately. \
+                     Reading them as through-holes would merge nets the stackup keeps apart. \
+                     Supply the X2 TF.FileFunction layer pair, or name the file after its pair \
+                     (for example -L1-L2.drl or -F_Cu-In1_Cu.drl), to recover them.",
+                    d.file_name().and_then(|s| s.to_str()).unwrap_or("drill")
+                ));
+                LayerSpan::Unknown
+            }
+            SpanClaim::PartialButUnreadable | SpanClaim::Silent => LayerSpan::Through,
+        };
+
+        if let DrillBody::Film(text) = &p.body {
             // Gerber-format drill: each flash is a hole; its disc radius is the
-            // drill radius. Tracks/regions on a drill film are legend art.
-            if let Ok(prims) = rs274x::parse_layer(&text) {
-                for p in prims {
-                    if p.kind == rs274x::PrimKind::Flash {
-                        let (x, y) = p.shape.center();
-                        let dia = match &p.shape {
-                            geo::Shape::Capsule(c) => c.r * 2.0,
-                            geo::Shape::Polygon { .. } | geo::Shape::MultiPolygon { .. } => 0.3,
-                        };
-                        holes.push(PlatedHole {
-                            x,
-                            y,
-                            diameter: dia,
-                        });
+            // drill radius. A drawn path is a rout, but only on a film the job
+            // names as a rout/slot layer: on an ordinary drill film the draws
+            // are legend art, and reading those as plated slots would paint
+            // copper across the whole board.
+            let rout_film = d
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map(|s| {
+                    let l = s.to_ascii_lowercase();
+                    l.contains("rout") || l.contains("slot") || l.contains("mill")
+                })
+                .unwrap_or(false);
+            if let Ok(prims) = rs274x::parse_layer(text) {
+                for pr in prims {
+                    match pr.kind {
+                        rs274x::PrimKind::Flash => {
+                            let (x, y) = pr.shape.center();
+                            let dia = match &pr.shape {
+                                geo::Shape::Capsule(c) => c.r * 2.0,
+                                geo::Shape::Polygon { .. } | geo::Shape::MultiPolygon { .. } => 0.3,
+                            };
+                            holes.push(PlatedHole {
+                                x,
+                                y,
+                                diameter: dia,
+                                to: None,
+                                span,
+                            });
+                        }
+                        rs274x::PrimKind::Track if rout_film => {
+                            if let geo::Shape::Capsule(c) = &pr.shape {
+                                holes.push(PlatedHole {
+                                    x: c.ax,
+                                    y: c.ay,
+                                    diameter: c.r * 2.0,
+                                    to: Some((c.bx, c.by)),
+                                    span,
+                                });
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
-        } else {
-            let drill = excellon::parse(&text);
-            let plated = drill.plated.unwrap_or(true);
-            if plated {
+        } else if let DrillBody::Excellon(drill) = p.body {
+            if drill.plated.unwrap_or(true) {
                 holes.extend(drill.holes.into_iter().map(|h| PlatedHole {
                     x: h.x,
                     y: h.y,
                     diameter: h.diameter,
+                    to: h.to,
+                    span,
                 }));
             }
         }
     }
+
+    // The board outline, for the castellation count. Not connectivity: an
+    // outline is a cut, and a cut joins nothing.
+    let outline_prims = read_outline(&outlines);
 
     // Parse P&P + BOM from the CSVs. Any CSV that yields placements is a P&P
     // file, a job with separate top and bottom placement CSVs contributes both,
@@ -282,7 +391,21 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         .unwrap_or("gerber")
         .to_string();
 
-    let (mut board, stats) = connect::reconstruct(&name, layer_prims, holes, placements);
+    let n_castellations = count_castellations(&holes, &outline_prims);
+    let (mut board, mut stats) = connect::reconstruct(&name, layer_prims, holes, placements);
+    stats.n_castellations = n_castellations;
+    if stats.refused_span_holes > 0 {
+        notes.push(format!(
+            "{} plated hit(s) on this job stitch no layers because their copper layer span is \
+             not derivable from the files provided. The net count is therefore an over-estimate: \
+             conductors that meet only through those hits are reported as separate nets.",
+            stats.refused_span_holes
+        ));
+    }
+    for n in &notes {
+        eprintln!("hauksbee: {n}");
+    }
+    stats.notes = notes;
 
     // Enrich components from the BOM (value / part number / do-not-populate).
     if !bom.is_empty() {
@@ -304,6 +427,205 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
 
     warn_if_nets_are_fragmented(&board);
     Ok(GerberExtraction { board, stats })
+}
+
+/// What one drill file told us about the copper layers its hits reach.
+enum SpanClaim {
+    /// A layer pair we resolved to concrete stack indices (inclusive).
+    Resolved(usize, usize),
+    /// The file's name says the hits are blind or buried, so they do NOT reach
+    /// the whole stack, but it does not say which layers they do reach. There
+    /// is no safe reading of this, only a refusal.
+    PartialButUnreadable,
+    /// The file said nothing about a span. Safe as a through-hole on a job with
+    /// no other span in it; ambiguous on a job that has one.
+    Silent,
+}
+
+/// Turn a 1-based X2 layer pair into inclusive 0-based stack indices, rejecting
+/// any pair that names a layer this job does not have. A pair we cannot place
+/// in the stack is unresolved; it is never clamped into one, because clamping
+/// `1,6` on a four-layer job silently produces the through-hole we are trying
+/// not to invent.
+fn resolve_pair(from: u32, to: u32, n_copper: usize) -> Option<(usize, usize)> {
+    if from == 0 || to <= from || n_copper == 0 {
+        return None;
+    }
+    let (f, t) = ((from - 1) as usize, (to - 1) as usize);
+    (t < n_copper).then_some((f, t))
+}
+
+/// Map the copper layer name tokens a drill file might be named after
+/// (`f_cu`, `b_cu`, `in1_cu`, `l1`, `l2`, ...) onto stack indices, using the
+/// copper files this job actually carries. KiCad names a blind/buried drill
+/// file after the two layers it joins (`board-F_Cu-In1_Cu.drl`), so the token
+/// has to resolve against the same stack the copper resolved into rather than
+/// against a fixed table.
+fn copper_layer_tokens(
+    ordered: &[(LayerRole, usize)],
+    copper: &[(LayerRole, std::path::PathBuf)],
+) -> std::collections::HashMap<String, usize> {
+    let mut out: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let n = ordered.len();
+    for (role, orig_idx) in ordered {
+        let LayerRole::Copper { index, .. } = role else {
+            continue;
+        };
+        // `L<n>` is the X2 physical numbering: L1 is the top copper.
+        out.insert(format!("l{}", index + 1), *index);
+        let Some((_, path)) = copper.get(*orig_idx) else {
+            continue;
+        };
+        let fname = path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        if fname.contains("f_cu") || fname.contains("f.cu") {
+            out.insert("f_cu".to_string(), *index);
+        }
+        if fname.contains("b_cu") || fname.contains("b.cu") {
+            out.insert("b_cu".to_string(), *index);
+        }
+        if let Some(k) = inner_layer_number(&fname) {
+            out.insert(format!("in{k}_cu"), *index);
+        }
+    }
+    // A job whose copper files are not KiCad-named still resolves `f_cu`/`b_cu`
+    // to the ends of the stack it does have.
+    if n > 0 {
+        out.entry("f_cu".to_string()).or_insert(0);
+        out.entry("b_cu".to_string()).or_insert(n - 1);
+    }
+    out
+}
+
+/// The `N` in an `in<N>_cu` / `in<N>.cu` token inside a file name.
+fn inner_layer_number(fname: &str) -> Option<u32> {
+    let b: Vec<char> = fname.chars().collect();
+    for i in 0..b.len().saturating_sub(2) {
+        if b[i] != 'i' || b[i + 1] != 'n' || !b[i + 2].is_ascii_digit() {
+            continue;
+        }
+        // Must be a whole token: no letter immediately before the `in`.
+        if i > 0 && b[i - 1].is_ascii_alphabetic() {
+            continue;
+        }
+        let digits: String = b[i + 2..].iter().take_while(|c| c.is_ascii_digit()).collect();
+        let after = i + 2 + digits.len();
+        let tail: String = b[after..].iter().take(3).collect();
+        if tail.starts_with("_cu") || tail.starts_with(".cu") {
+            return digits.parse().ok();
+        }
+    }
+    None
+}
+
+/// Recover a layer pair from a drill file's name: `-L1-L2.drl`,
+/// `-F_Cu-In1_Cu.drl`, `_l2_l3.txt`. Returns inclusive 0-based stack indices.
+///
+/// Only *two* distinct resolvable layer tokens count, and they must be ordered
+/// top-to-bottom after resolution. A name carrying one token, or three, or a
+/// bare number pair with no layer marker, resolves to nothing: a filename is
+/// weak evidence and a wrong pair is a wrong stackup.
+fn span_from_filename(
+    fname: &str,
+    tokens: &std::collections::HashMap<String, usize>,
+    n_copper: usize,
+) -> Option<(usize, usize)> {
+    if n_copper == 0 {
+        return None;
+    }
+    let mut found: Vec<usize> = Vec::new();
+    // Longest tokens first so `in1_cu` is not eaten by a shorter prefix.
+    let mut keys: Vec<&String> = tokens.keys().collect();
+    keys.sort_by_key(|k| std::cmp::Reverse(k.len()));
+    let mut consumed = vec![false; fname.len()];
+    for k in keys {
+        let mut from = 0usize;
+        while let Some(rel) = fname[from..].find(k.as_str()) {
+            let at = from + rel;
+            from = at + 1;
+            if consumed[at..at + k.len()].iter().any(|c| *c) {
+                continue;
+            }
+            // Whole-token match: no digit or letter may run into it.
+            let before_ok = at == 0 || !fname.as_bytes()[at - 1].is_ascii_alphanumeric();
+            let end = at + k.len();
+            let after_ok = end >= fname.len() || !fname.as_bytes()[end].is_ascii_alphanumeric();
+            if !before_ok || !after_ok {
+                continue;
+            }
+            for c in consumed[at..end].iter_mut() {
+                *c = true;
+            }
+            found.push(tokens[k]);
+        }
+    }
+    found.sort_unstable();
+    found.dedup();
+    match found.as_slice() {
+        [a, b] => Some((*a, *b)),
+        _ => None,
+    }
+}
+
+/// The file name says these hits are blind or buried, i.e. definitely not a
+/// through-hole, without saying which layers they reach.
+fn names_a_partial_span(fname: &str) -> bool {
+    fname.contains("blind") || fname.contains("buried")
+}
+
+/// Parse the board outline films into primitives. Purely for the castellation
+/// count: an outline is a cut line, never a conductor, so these primitives are
+/// deliberately kept out of the connectivity graph.
+fn read_outline(outlines: &[std::path::PathBuf]) -> Vec<geo::Shape> {
+    let mut out = Vec::new();
+    for p in outlines {
+        let Ok(text) = std::fs::read_to_string(p) else {
+            continue;
+        };
+        if let Ok(prims) = rs274x::parse_layer(&text) {
+            out.extend(prims.into_iter().map(|p| p.shape));
+        }
+    }
+    out
+}
+
+/// Count plated hits whose barrel the board outline cuts through: castellations
+/// and plated edge slots.
+///
+/// A castellation is a half-hole on the board edge. Its copper ring is sliced
+/// by the outline, so a reader that decides "this pad owns this hole" by
+/// testing whether the hole sits wholly inside a closed pad ring finds no
+/// owner and drops the connection. Hauksbee never asks that question: the
+/// barrel is copper and joins whatever copper it touches, which is what a
+/// castellation physically is. This count exists so the claim can be checked
+/// against the board rather than assumed, and so a job with castellations is
+/// visible as such in the reconstruction stats.
+fn count_castellations(holes: &[PlatedHole], outline: &[geo::Shape]) -> usize {
+    if outline.is_empty() {
+        return 0;
+    }
+    holes
+        .iter()
+        .filter(|h| {
+            let r = (h.diameter / 2.0).max(0.05);
+            let barrel = match h.to {
+                None => geo::Shape::disc(h.x, h.y, r),
+                Some((tx, ty)) => geo::Shape::Capsule(geo::Capsule {
+                    ax: h.x,
+                    ay: h.y,
+                    bx: tx,
+                    by: ty,
+                    r,
+                }),
+            };
+            outline
+                .iter()
+                .any(|o| geo::shape_gap(&barrel, o) <= 0.0)
+        })
+        .count()
 }
 
 /// Say out loud when the reconstructed net count is mostly copper fragments.

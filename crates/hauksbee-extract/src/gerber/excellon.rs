@@ -17,13 +17,31 @@
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-extract/gerber.md.
 
-/// One drilled hole.
+/// One drilled hit: a round hole, or a slot when `to` is set.
 #[derive(Debug, Clone)]
 pub struct Hole {
     pub x: f64,
     pub y: f64,
-    /// Drill diameter in mm.
+    /// Drill diameter in mm. For a slot this is the routed *width*: the cutter
+    /// diameter swept along the path, so the finished slot is a stadium of this
+    /// width, not a rectangle of this height.
     pub diameter: f64,
+    /// Far end of a slot, in the same units as `x`/`y`. `None` is a round hole.
+    /// A G85 canned slot carries one segment; a routed slot (`M15` plunge, a
+    /// run of `G01` cuts, `M16` retract) contributes one `Hole` per cut segment,
+    /// so a multi-segment rout is a chain of overlapping stadiums whose union is
+    /// the real cut.
+    pub to: Option<(f64, f64)>,
+}
+
+/// The copper layer pair an Excellon file declares its hits span, as the 1-based
+/// physical layer numbers the X2 `TF.FileFunction` attribute uses (`1` is the
+/// top copper). `Plated,1,4,PTH` on a four-layer board is a through-hole;
+/// `Plated,1,2,PTH` is a blind via that reaches only the first two layers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LayerPair {
+    pub from: u32,
+    pub to: u32,
 }
 
 /// Parsed drill file.
@@ -32,6 +50,11 @@ pub struct DrillFile {
     pub holes: Vec<Hole>,
     /// True when the file declares itself plated (PTH), or None if unknown.
     pub plated: Option<bool>,
+    /// The declared copper layer span, when the file carries an X2
+    /// `TF.FileFunction` attribute naming one. `None` means the file says
+    /// nothing about which layers its hits reach; the caller decides whether
+    /// that is safely a through-hole or an unknowable span it must refuse.
+    pub span: Option<LayerPair>,
 }
 
 pub fn parse(text: &str) -> DrillFile {
@@ -47,6 +70,15 @@ pub fn parse(text: &str) -> DrillFile {
     let mut current_is_npth = false;
     let mut holes = Vec::new();
     let mut plated: Option<bool> = None;
+    let mut span: Option<LayerPair> = None;
+    // Routed-slot state. `M15` plunges the cutter, `G01` moves cut copper, `M16`
+    // (or `M17`) retracts it. We only enter this mode on a file that actually
+    // carries an `M15`: on every other file a `G00`/`G01` line keeps its old
+    // meaning (a positioned hit), so no existing job changes behaviour.
+    let rout_capable = text
+        .lines()
+        .any(|l| matches!(l.trim(), "M15" | "M15;" | "M015"));
+    let mut tool_down = false;
     // Modal coordinates: an Excellon body line may carry only X (keep the last
     // Y) or only Y (keep the last X), as Altium's exporter does. Track the last
     // value seen so a single-axis line resolves to a full (x, y).
@@ -78,6 +110,7 @@ pub fn parse(text: &str) -> DrillFile {
                 } else if up.contains("PLATED") || up.contains("PTH") {
                     plated = Some(true);
                 }
+                span = span.or_else(|| parse_file_function_span(&up));
             }
             if let Some(eq) = up.find("FILE_FORMAT=").map(|i| i + "FILE_FORMAT=".len()) {
                 // `;FILE_FORMAT=2:5` -> 2 integer, 5 decimal digits.
@@ -169,6 +202,90 @@ pub fn parse(text: &str) -> DrillFile {
             current_is_npth = npth_tools.contains(&idx);
             continue;
         }
+        // ── Routing (slots cut by a moving cutter) ──────────────────────────
+        if rout_capable {
+            let up = line.to_ascii_uppercase();
+            if up.starts_with("M15") || up.starts_with("M015") {
+                tool_down = true;
+                continue;
+            }
+            if up.starts_with("M16") || up.starts_with("M17") || up.starts_with("M016") {
+                tool_down = false;
+                continue;
+            }
+            if up.starts_with("G05") || up.starts_with("G5") {
+                // Back to drill mode: the cutter is up by definition.
+                tool_down = false;
+                continue;
+            }
+            // A `G00` rapid positions the cutter without cutting, so it is a
+            // move and never a hit. A `G01` while the cutter is down cuts a
+            // slot from where it was to where it lands.
+            let is_rapid = up.starts_with("G00") || up.starts_with("G0X") || up.starts_with("G0Y");
+            let is_cut = up.starts_with("G01") || up.starts_with("G1X") || up.starts_with("G1Y");
+            if is_rapid || is_cut {
+                let (px, py) = (last_x, last_y);
+                let moved = parse_xy_modal(
+                    line,
+                    metric,
+                    int_digits,
+                    dec_digits,
+                    leading_zero_omitted,
+                    &mut last_x,
+                    &mut last_y,
+                );
+                if let (Some((nx, ny)), Some(dia), true, Some(sx), Some(sy)) =
+                    (moved, current, is_cut && tool_down && !current_is_npth, px, py)
+                {
+                    holes.push(Hole {
+                        x: sx,
+                        y: sy,
+                        diameter: dia,
+                        to: Some((nx, ny)),
+                    });
+                }
+                continue;
+            }
+        }
+
+        // ── G85 canned slot: `X<a>Y<b>G85X<c>Y<d>` cuts from (a,b) to (c,d) ──
+        // The two coordinate pairs live on one line, so the plain modal parser
+        // (which keys on the FIRST `X` and `Y`) sees only the start point and
+        // would record a round hole where the file describes a slot. Split on
+        // the G85 and parse both halves through the SAME modal reader, so the
+        // units and zero-suppression that apply to the start apply to the end.
+        if let Some((head, tail)) = split_g85(line) {
+            let start = parse_xy_modal(
+                head,
+                metric,
+                int_digits,
+                dec_digits,
+                leading_zero_omitted,
+                &mut last_x,
+                &mut last_y,
+            );
+            let end = parse_xy_modal(
+                tail,
+                metric,
+                int_digits,
+                dec_digits,
+                leading_zero_omitted,
+                &mut last_x,
+                &mut last_y,
+            );
+            if let (Some((sx, sy)), Some((ex, ey)), Some(dia)) = (start, end, current) {
+                if !current_is_npth {
+                    holes.push(Hole {
+                        x: sx,
+                        y: sy,
+                        diameter: dia,
+                        to: Some((ex, ey)),
+                    });
+                }
+            }
+            continue;
+        }
+
         // Coordinate line: X..Y.. , or modal X-only / Y-only (keep last axis).
         if let Some((x, y)) = parse_xy_modal(
             line,
@@ -186,6 +303,7 @@ pub fn parse(text: &str) -> DrillFile {
                         x,
                         y,
                         diameter: dia,
+                        to: None,
                     });
                 }
             }
@@ -195,7 +313,40 @@ pub fn parse(text: &str) -> DrillFile {
         let _ = explicit_units;
     }
 
-    DrillFile { holes, plated }
+    DrillFile {
+        holes,
+        plated,
+        span,
+    }
+}
+
+/// Split a `G85` canned-slot line into its start and end coordinate halves.
+/// Returns `None` for any line that is not a two-point G85 record, including a
+/// bare `G85` mode line with no coordinates on either side.
+fn split_g85(line: &str) -> Option<(&str, &str)> {
+    let at = line.find("G85").or_else(|| line.find("g85"))?;
+    let head = &line[..at];
+    let tail = &line[at + 3..];
+    let has_axis = |s: &str| s.contains('X') || s.contains('Y') || s.contains('x') || s.contains('y');
+    (has_axis(head) && has_axis(tail)).then_some((head, tail))
+}
+
+/// Pull the copper layer pair out of an already-uppercased `TF.FileFunction`
+/// attribute line, e.g. `; #@! TF.FILEFUNCTION,PLATED,1,2,PTH` -> `1..2`.
+///
+/// The pair is only accepted when both fields parse as layer numbers and name
+/// distinct layers in increasing order. A malformed or reversed pair yields
+/// `None`, which the caller treats as "this file declared nothing", never as a
+/// through-hole: a span we could not read is exactly the case where guessing
+/// invents a short.
+fn parse_file_function_span(up: &str) -> Option<LayerPair> {
+    let at = up.find("FILEFUNCTION")? + "FILEFUNCTION".len();
+    let rest = up[at..].trim_start_matches([',', ' ']);
+    let fields: Vec<&str> = rest.split(',').map(|f| f.trim()).collect();
+    // Field 0 is Plated/NonPlated; fields 1 and 2 are the layer pair.
+    let from: u32 = fields.get(1)?.parse().ok()?;
+    let to: u32 = fields.get(2)?.parse().ok()?;
+    (from >= 1 && to > from).then_some(LayerPair { from, to })
 }
 
 fn apply_zero_mode(line: &str, leading_zero_omitted: &mut bool) {
