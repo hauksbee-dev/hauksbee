@@ -210,7 +210,8 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
     // RS-274X markers (`%FS`/`%MO`/`G04`), in which case the flash centres are
     // the hole locations; otherwise it is Excellon.
     let n_copper = ordered.len();
-    let token_to_stack = copper_layer_tokens(&ordered, &copper);
+    let token_to_stack =
+        copper_layer_tokens(&ordered, &copper, &physical_to_stack, declared_physical_max);
     // Reader notes: everything this job made us refuse or could not see, in the
     // order we found it. Surfaced on `ReconStats` and printed, so a refusal is
     // visible instead of looking like a clean extraction.
@@ -346,9 +347,12 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
             excellon::DeclaredSpan::Unreadable => SpanClaim::DeclaredButUnresolvable,
             excellon::DeclaredSpan::Absent => {
                 match span_from_filename(&p.name, &token_to_stack, n_copper) {
-                    Some((f, t)) => SpanClaim::Resolved(f, t),
-                    None if names_a_partial_span(&p.name) => SpanClaim::PartialButUnreadable,
-                    None => SpanClaim::Silent,
+                    NameSpan::Placed(f, t) => SpanClaim::Resolved(f, t),
+                    NameSpan::NamesLayersButUnplaceable => SpanClaim::DeclaredButUnresolvable,
+                    NameSpan::NoLayerNames if names_a_partial_span(&p.name) => {
+                        SpanClaim::PartialButUnreadable
+                    }
+                    NameSpan::NoLayerNames => SpanClaim::Silent,
                 }
             }
         };
@@ -609,15 +613,33 @@ fn resolve_pair(from: u32, to: u32, n_copper: usize) -> Option<(usize, usize)> {
 fn copper_layer_tokens(
     ordered: &[(LayerRole, usize)],
     copper: &[(LayerRole, std::path::PathBuf)],
+    physical_to_stack: &std::collections::HashMap<u32, usize>,
+    declared_physical_max: u32,
 ) -> std::collections::HashMap<String, usize> {
     let mut out: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let n = ordered.len();
+    // `L<n>` is PHYSICAL numbering, so a film that declared its own position
+    // owns that token outright.
+    for (physical, stack) in physical_to_stack {
+        out.insert(format!("l{physical}"), *stack);
+    }
+    // Where no film declared anything, the stack position is the only reading
+    // of `L<n>` available. It is exact when the films ARE the whole stack and
+    // wrong the moment one is missing, so it is only offered when nothing in
+    // the job says the board is deeper than the films we found. Otherwise a
+    // drill named `-L1-L2.drl` on a gapped job would place layer 2 on whatever
+    // film happened to land at index 1, which could be the bottom of the board.
+    if (declared_physical_max as usize) <= n {
+        for (role, _) in ordered {
+            if let LayerRole::Copper { index, .. } = role {
+                out.entry(format!("l{}", index + 1)).or_insert(*index);
+            }
+        }
+    }
     for (role, orig_idx) in ordered {
         let LayerRole::Copper { index, .. } = role else {
             continue;
         };
-        // `L<n>` is the X2 physical numbering: L1 is the top copper.
-        out.insert(format!("l{}", index + 1), *index);
         let Some((_, path)) = copper.get(*orig_idx) else {
             continue;
         };
@@ -669,53 +691,117 @@ fn inner_layer_number(fname: &str) -> Option<u32> {
     None
 }
 
+/// What a drill file's name said about the layers its hits reach.
+#[derive(Debug, PartialEq, Eq)]
+enum NameSpan {
+    /// Exactly two layer names, both placed in this job's stack (inclusive).
+    Placed(usize, usize),
+    /// The name is built out of layer names, but they do not resolve to two
+    /// films this job carries. `-F_Cu-In1_Cu.drl` on a job with no In1 film
+    /// says the hits are blind between two layers, one of which is missing:
+    /// unusable, and certainly not a licence to stitch what IS present.
+    NamesLayersButUnplaceable,
+    /// No layer names in the file name at all.
+    NoLayerNames,
+}
+
 /// Recover a layer pair from a drill file's name: `-L1-L2.drl`,
-/// `-F_Cu-In1_Cu.drl`, `_l2_l3.txt`. Returns inclusive 0-based stack indices.
+/// `-F_Cu-In1_Cu.drl`, `_l2_l3.txt`.
 ///
-/// Only *two* distinct resolvable layer tokens count, and they must be ordered
-/// top-to-bottom after resolution. A name carrying one token, or three, or a
-/// bare number pair with no layer marker, resolves to nothing: a filename is
-/// weak evidence and a wrong pair is a wrong stackup.
+/// The name is read in two steps, and keeping them apart is the point. First,
+/// which layer NAMES does the file carry, purely lexically. Second, do those
+/// name films this job actually has. A name that clears the first step and
+/// fails the second is evidence that these hits are NOT through-holes, so it
+/// must not fall back to being read as one.
 fn span_from_filename(
     fname: &str,
     tokens: &std::collections::HashMap<String, usize>,
     n_copper: usize,
-) -> Option<(usize, usize)> {
+) -> NameSpan {
     if n_copper == 0 {
-        return None;
+        return NameSpan::NoLayerNames;
     }
-    let mut found: Vec<usize> = Vec::new();
-    // Longest tokens first so `in1_cu` is not eaten by a shorter prefix.
-    let mut keys: Vec<&String> = tokens.keys().collect();
-    keys.sort_by_key(|k| std::cmp::Reverse(k.len()));
-    let mut consumed = vec![false; fname.len()];
-    for k in keys {
-        let mut from = 0usize;
-        while let Some(rel) = fname[from..].find(k.as_str()) {
-            let at = from + rel;
-            from = at + 1;
-            if consumed[at..at + k.len()].iter().any(|c| *c) {
-                continue;
-            }
-            // Whole-token match: no digit or letter may run into it.
-            let before_ok = at == 0 || !fname.as_bytes()[at - 1].is_ascii_alphanumeric();
-            let end = at + k.len();
-            let after_ok = end >= fname.len() || !fname.as_bytes()[end].is_ascii_alphanumeric();
-            if !before_ok || !after_ok {
-                continue;
-            }
-            for c in consumed[at..end].iter_mut() {
-                *c = true;
-            }
-            found.push(tokens[k]);
+    let names = layer_names_in(fname);
+    // One layer word on its own is as likely to be part of the board's name as
+    // a span; a span needs two ends.
+    if names.len() < 2 {
+        return NameSpan::NoLayerNames;
+    }
+    let mut placed: Vec<usize> = Vec::new();
+    let mut all_placed = true;
+    for n in &names {
+        match tokens.get(n) {
+            Some(&i) => placed.push(i),
+            None => all_placed = false,
         }
     }
-    found.sort_unstable();
-    found.dedup();
-    match found.as_slice() {
-        [a, b] => Some((*a, *b)),
-        _ => None,
+    placed.sort_unstable();
+    placed.dedup();
+    match placed.as_slice() {
+        [a, b] if all_placed => NameSpan::Placed(*a, *b),
+        _ => NameSpan::NamesLayersButUnplaceable,
     }
+}
+
+/// Every copper layer name appearing as a whole token in `fname`, normalised to
+/// the `f_cu` / `b_cu` / `in<N>_cu` / `l<N>` forms the token table is keyed by.
+///
+/// This is lexical on purpose: it has to notice `l2` in `-L1-L2.drl` even on a
+/// job that carries no layer 2, because that absence is exactly what makes the
+/// name unusable. Resolving first and counting after would read the file as
+/// naming one layer and quietly move on.
+fn layer_names_in(fname: &str) -> Vec<String> {
+    let b = fname.as_bytes();
+    let alnum = |i: usize| i < b.len() && b[i].is_ascii_alphanumeric();
+    let mut out = Vec::new();
+    let mut i = 0usize;
+    while i < b.len() {
+        if i > 0 && alnum(i - 1) {
+            i += 1;
+            continue;
+        }
+        let mut len: Option<usize> = None;
+        // `in<digits>_cu`, longest form first so it is not read as a bare `in`.
+        if b[i] == b'i' && i + 2 < b.len() && b[i + 1] == b'n' && b[i + 2].is_ascii_digit() {
+            let mut j = i + 2;
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            let tail = &fname[j..];
+            if (tail.starts_with("_cu") || tail.starts_with(".cu")) && !alnum(j + 3) {
+                len = Some(j + 3 - i);
+            }
+        }
+        // `f_cu` / `b_cu`, and the dotted spellings.
+        if len.is_none() && (b[i] == b'f' || b[i] == b'b') {
+            let s = &fname[i..];
+            let hit = s.starts_with("f_cu")
+                || s.starts_with("b_cu")
+                || s.starts_with("f.cu")
+                || s.starts_with("b.cu");
+            if hit && !alnum(i + 4) {
+                len = Some(4);
+            }
+        }
+        // `l<digits>`.
+        if len.is_none() && b[i] == b'l' && i + 1 < b.len() && b[i + 1].is_ascii_digit() {
+            let mut j = i + 1;
+            while j < b.len() && b[j].is_ascii_digit() {
+                j += 1;
+            }
+            if !alnum(j) {
+                len = Some(j - i);
+            }
+        }
+        match len {
+            Some(l) => {
+                out.push(fname[i..i + l].replace('.', "_"));
+                i += l;
+            }
+            None => i += 1,
+        }
+    }
+    out
 }
 
 /// The file name says these hits are blind or buried, i.e. definitely not a
@@ -956,6 +1042,34 @@ mod span_tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
+    /// The token table for a job whose two films declare that they are layers
+    /// 1 and 4 of a four-layer board, so the inner two are missing.
+    fn gapped_l1_l4() -> HashMap<String, usize> {
+        let copper: Vec<(LayerRole, PathBuf)> = vec![
+            (
+                LayerRole::Copper {
+                    index: 0,
+                    name: "F".into(),
+                },
+                PathBuf::from("brd-F_Cu.gbr"),
+            ),
+            (
+                LayerRole::Copper {
+                    index: 1,
+                    name: "B".into(),
+                },
+                PathBuf::from("brd-B_Cu.gbr"),
+            ),
+        ];
+        let ordered: Vec<(LayerRole, usize)> = copper
+            .iter()
+            .enumerate()
+            .map(|(i, (r, _))| (r.clone(), i))
+            .collect();
+        let physical: HashMap<u32, usize> = [(1u32, 0usize), (4u32, 1usize)].into_iter().collect();
+        copper_layer_tokens(&ordered, &copper, &physical, 4)
+    }
+
     /// The token table a four-layer KiCad job produces.
     fn kicad4() -> HashMap<String, usize> {
         let copper: Vec<(LayerRole, PathBuf)> = vec![
@@ -993,7 +1107,9 @@ mod span_tests {
             .enumerate()
             .map(|(i, (r, _))| (r.clone(), i))
             .collect();
-        copper_layer_tokens(&ordered, &copper)
+        // No film declares its own layer number, so the stack positions are all
+        // there is, which is exact on a complete four-film job.
+        copper_layer_tokens(&ordered, &copper, &HashMap::new(), 0)
     }
 
     #[test]
@@ -1020,15 +1136,24 @@ mod span_tests {
         assert_eq!(t.get("b_cu"), Some(&3));
         assert_eq!(
             span_from_filename("brd-f_cu-in1_cu.drl", &t, 4),
-            Some((0, 1))
+            NameSpan::Placed(0, 1)
         );
         assert_eq!(
             span_from_filename("brd-in1_cu-in2_cu.drl", &t, 4),
-            Some((1, 2))
+            NameSpan::Placed(1, 2)
         );
-        assert_eq!(span_from_filename("brd-f_cu-b_cu.drl", &t, 4), Some((0, 3)));
-        assert_eq!(span_from_filename("brd-pth-l1-l2.drl", &t, 4), Some((0, 1)));
-        assert_eq!(span_from_filename("brd-pth-l2-l3.drl", &t, 4), Some((1, 2)));
+        assert_eq!(
+            span_from_filename("brd-f_cu-b_cu.drl", &t, 4),
+            NameSpan::Placed(0, 3)
+        );
+        assert_eq!(
+            span_from_filename("brd-pth-l1-l2.drl", &t, 4),
+            NameSpan::Placed(0, 1)
+        );
+        assert_eq!(
+            span_from_filename("brd-pth-l2-l3.drl", &t, 4),
+            NameSpan::Placed(1, 2)
+        );
     }
 
     #[test]
@@ -1043,15 +1168,73 @@ mod span_tests {
             "rp2040-pico-pc-pth.drl",
             "brd-drill.drl",
             "brd-f_cu.drl",
+            "vac-adapter-pth.drl",
+            "reform2-motherboard30-pth.drl",
         ] {
             assert_eq!(
                 span_from_filename(n, &t, 4),
-                None,
+                NameSpan::NoLayerNames,
                 "{n} is not a layer pair"
             );
         }
-        // Three layer tokens is not a pair either.
-        assert_eq!(span_from_filename("brd-f_cu-in1_cu-b_cu.drl", &t, 4), None);
+        // Three layer names is not a pair, and it is not silence either: the
+        // name is clearly about layers and no span can be read out of it.
+        assert_eq!(
+            span_from_filename("brd-f_cu-in1_cu-b_cu.drl", &t, 4),
+            NameSpan::NamesLayersButUnplaceable
+        );
+    }
+
+    #[test]
+    fn a_layer_pair_naming_a_film_this_job_lacks_is_unplaceable_not_silent() {
+        // Two films that say they are layers 1 and 4 of a four-layer board.
+        let t = gapped_l1_l4();
+        assert_eq!(t.get("l1"), Some(&0));
+        assert_eq!(t.get("l4"), Some(&1));
+        // The POSITIONAL reading of `l2` must not be offered here. Stack index
+        // 1 is the board's layer 4, and handing it out under the name `l2` is
+        // how a blind L1-L2 drill ends up shorting the top of the board to the
+        // bottom of it.
+        assert_eq!(t.get("l2"), None);
+
+        // Both these names describe a blind via to a layer this job does not
+        // carry. Neither may fall back to being read as a through-hole.
+        assert_eq!(
+            span_from_filename("brd-pth-l1-l2.drl", &t, 2),
+            NameSpan::NamesLayersButUnplaceable
+        );
+        assert_eq!(
+            span_from_filename("brd-f_cu-in1_cu.drl", &t, 2),
+            NameSpan::NamesLayersButUnplaceable
+        );
+        // Top to bottom of what we do have is still placeable.
+        assert_eq!(
+            span_from_filename("brd-f_cu-b_cu.drl", &t, 2),
+            NameSpan::Placed(0, 1)
+        );
+        assert_eq!(
+            span_from_filename("brd-l1-l4.drl", &t, 2),
+            NameSpan::Placed(0, 1)
+        );
+    }
+
+    #[test]
+    fn layer_names_are_found_lexically_even_when_the_job_lacks_the_layer() {
+        // The scan has to see `l2` in a name whose job has no layer 2, because
+        // that absence is precisely what makes the name unusable. Resolving
+        // first and counting afterwards would read this as naming one layer and
+        // quietly move on to the through-hole default.
+        assert_eq!(layer_names_in("brd-pth-l1-l2.drl"), vec!["l1", "l2"]);
+        assert_eq!(
+            layer_names_in("brd-f_cu-in1_cu.drl"),
+            vec!["f_cu", "in1_cu"]
+        );
+        assert_eq!(layer_names_in("brd-f.cu-b.cu.drl"), vec!["f_cu", "b_cu"]);
+        // Words that merely contain a layer letter are not layer names.
+        assert!(layer_names_in("esp32-evb_rev_f-pth.drl").is_empty());
+        assert!(layer_names_in("reform2-motherboard30-pth.drl").is_empty());
+        assert!(layer_names_in("vac-adapter-pth.drl").is_empty());
+        assert!(layer_names_in("brd-slotholes.txt").is_empty());
     }
 
     #[test]
