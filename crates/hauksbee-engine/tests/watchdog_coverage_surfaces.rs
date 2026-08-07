@@ -164,6 +164,12 @@ fn a_faithful_backend_with_no_reboots_says_nothing_on_any_surface() {
         let out = run_avr(&fw, &extra);
         let both = String::from_utf8_lossy(&out.stdout).to_string()
             + &String::from_utf8_lossy(&out.stderr);
+        // The inputs inventory echoes the firmware artifact path verbatim, and
+        // this fixture lives in testdata/firmware/avr_watchdog/. That echo is
+        // the run describing its INPUT, not a watchdog claim, so it is excised
+        // before the silence assertion; every genuine surface (note, warning,
+        // JSON field, heads-up) still trips the substring check.
+        let both = both.replace(&fw.display().to_string(), "<fw>");
         assert!(
             !both.to_lowercase().contains("watchdog"),
             "simavr with a fed watchdog must be silent on {extra:?}; got:\n{both}"

@@ -32,9 +32,19 @@
 //!   schematic's pin electrical types said. The extract-layer contention check
 //!   reads pin types and treats a `bidirectional` MCU pad as a resolver, so a
 //!   mis-mapped logic model driving an MCU GPIO net slipped past it.
+//! - [`back_power`]: the cross-domain pull lint. A modelled part's signal pin
+//!   tied or pulled up to a rail above the part's own supply conducts through
+//!   the pin's protection clamp into the lower rail: back-powering at
+//!   power-down, abs-max violation powered up.
+//! - [`bus_loading`]: I2C pull-up SIZING (the presence check is the extract
+//!   layer's `MissingI2cPullup`): an effective pull-up demanding more sink
+//!   current than the spec's 3 mA driver rating, or advisorily too weak for
+//!   the estimated bus capacitance to meet the rise-time budget.
 
 pub mod ampacity;
+pub mod back_power;
 pub mod boot;
+pub mod bus_loading;
 pub mod contention;
 pub mod converter;
 pub mod device_decode;
@@ -67,6 +77,12 @@ pub fn engine_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport 
     report
         .findings
         .extend(contention::contention_lint(board, lib).findings);
+    report
+        .findings
+        .extend(back_power::back_power_lint(board, lib).findings);
+    report
+        .findings
+        .extend(bus_loading::bus_loading_lint(board).findings);
     report
 }
 
