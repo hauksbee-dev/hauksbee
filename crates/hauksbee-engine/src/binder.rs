@@ -26,7 +26,7 @@ use hauksbee_ir::{
 use hauksbee_models::value::parse_value;
 use hauksbee_models::{ComponentKind, ComponentQuery, Confidence, ModelEntry, ModelLibrary};
 
-use crate::component_evidence::identity_refusal;
+use hauksbee_extract::assembly::{AssemblyState, FittedComponent};
 use crate::digital::{output_roles, DigitalComponent, SupplyDraw};
 use crate::drivers::{PinDriver, DEFAULT_RO};
 use crate::power_supply::{PowerSupply, SupplyLeg};
@@ -331,11 +331,12 @@ pub fn bind_board_with(
     // vreg is present we let it source its output net rather than overriding
     // with an ideal rail (only the input rail stays ideal).
     let has_vreg = board.components.iter().any(|c| {
-        !c.dnp
-            && matches!(
-                resolve(lib, c).model.as_ref().map(|m| m.kind),
+        AssemblyState::of(c).fitted().is_some_and(|part| {
+            matches!(
+                resolve(lib, part).model.as_ref().map(|m| m.kind),
                 Some(ComponentKind::Vreg)
             )
+        })
     });
 
     // DNP parts the model DB recognises as processors, as (reference, value).
@@ -343,37 +344,67 @@ pub fn bind_board_with(
 
     // ── Pass 2: bind every component ────────────────────────────────────────
     for comp in &board.components {
-        // A DNP part sits on the layout but is not assembled: it is
-        // electrically ABSENT. It must contribute no device and no pin-to-net
-        // wiring, a DNP bridge resistor stamped anyway would join two nets
-        // that are open on the real board. Every checks/* module already
-        // filters `dnp`; the binder must too.
-        if comp.dnp {
-            // A DNP processor is the one skip that can hollow out a whole run:
-            // with no MCU there is no firmware, so every "the firmware must
-            // ..." assertion passes vacuously. Note which ones they were so the
-            // report can say so out loud (patched in below, once it is known
-            // whether any MCU bound at all).
-            if matches!(
-                resolve(lib, comp).model.as_ref().map(|m| m.kind),
-                Some(ComponentKind::Mcu)
-            ) {
-                dnp_mcus.push((comp.reference.clone(), comp.value.clone()));
+        // The three-state assembled-component contract, asked once per part:
+        // only a Present record reaches model resolution; the two absent
+        // states each leave a visible row rather than a silent hole.
+        let part = match AssemblyState::of(comp) {
+            AssemblyState::Present(part) => part,
+            AssemblyState::DnpAbsent(absence) => {
+                // A DNP part sits on the layout but is not assembled: it is
+                // electrically ABSENT. It must contribute no device and no
+                // pin-to-net wiring, a DNP bridge resistor stamped anyway
+                // would join two nets that are open on the real board.
+                //
+                // A DNP processor is the one skip that can hollow out a whole
+                // run: with no MCU there is no firmware, so every "the
+                // firmware must ..." assertion passes vacuously. Note which
+                // ones they were so the report can say so out loud (patched in
+                // below, once it is known whether any MCU bound at all). This
+                // asks what the absent part WOULD be, which is a library
+                // question, not a licence to model it.
+                if matches!(
+                    library_resolution(lib, comp).model.as_ref().map(|m| m.kind),
+                    Some(ComponentKind::Mcu)
+                ) {
+                    dnp_mcus.push((comp.reference.clone(), comp.value.clone()));
+                }
+                report.push(BindRow {
+                    reference: comp.reference.clone(),
+                    value: comp.value.clone(),
+                    model_id: None,
+                    confidence: Confidence::Exact,
+                    outcome: BindOutcome::Skipped {
+                        reason: absence.describe().to_string(),
+                    },
+                    warning: None,
+                    guesses: Vec::new(),
+                });
+                continue;
             }
-            report.push(BindRow {
-                reference: comp.reference.clone(),
-                value: comp.value.clone(),
-                model_id: None,
-                confidence: Confidence::Exact,
-                outcome: BindOutcome::Skipped {
-                    reason: "DNP (not populated)".to_string(),
-                },
-                warning: None,
-                guesses: Vec::new(),
-            });
-            continue;
-        }
-        let res = resolve(lib, comp);
+            AssemblyState::IdentityUnknown(refusal) => {
+                // A refused identity is not a model match: the extractor keeps
+                // the record so connectivity/DRC stay available, but binding it
+                // would turn an unresolved identity choice into precise
+                // simulation. Left open, and said out loud.
+                let reason = format!("{}; left open", refusal.reason());
+                report.push(BindRow {
+                    reference: comp.reference.clone(),
+                    value: comp.value.clone(),
+                    model_id: None,
+                    confidence: Confidence::Unresolved,
+                    outcome: BindOutcome::Unresolved {
+                        reason: reason.clone(),
+                    },
+                    warning: Some(format!(
+                        "cannot bind '{}' ({}): {reason}",
+                        comp.reference, comp.value
+                    )),
+                    guesses: Vec::new(),
+                });
+                continue;
+            }
+        };
+        let res = resolve(lib, part);
         let model = res.model.clone();
         let conf = res.confidence;
         let model_id = model.as_ref().map(|m| m.id.clone());
@@ -561,14 +592,15 @@ fn bind_behavioral(
     // reads R8). Built once.
     let mut resistor_ohms: HashMap<String, Option<f64>> = HashMap::new();
     for comp in &board.components {
+        let state = AssemblyState::of(comp);
         // A DNP resistor is absent from the assembled board. Named converter
         // programs become unsupported; generic `_from_ref` params retain their
         // explicit open-resistance semantics below.
-        if comp.dnp {
+        if matches!(state, AssemblyState::DnpAbsent(_)) {
             continue;
         }
         if comp.reference.starts_with('R') {
-            let observed = if identity_refusal(comp).is_none() {
+            let observed = if state.is_present() {
                 parse_value(&comp.value)
                     .map(|parsed| parsed.si)
                     .filter(|ohms| ohms.is_finite() && *ohms > 0.0)
@@ -589,17 +621,14 @@ fn bind_behavioral(
 
     let mut out = Vec::new();
     for comp in &board.components {
-        // Not assembled -> no behavioural device (same rule as pass 2).
-        if comp.dnp {
+        // Not assembled, or identity refused -> no behavioural device (same
+        // three-state rule as pass 2). Custom factories may match raw value
+        // strings even when normal model resolution refuses the component, so
+        // they sit behind the same witness as declarative binding.
+        let Some(part) = AssemblyState::of(comp).fitted() else {
             continue;
-        }
-        // Custom factories may match raw value strings even when normal model
-        // resolution refuses the component. Keep them behind the same physical
-        // identity boundary as declarative and ordinary model binding.
-        if identity_refusal(comp).is_some() {
-            continue;
-        }
-        let res = resolve(lib, comp);
+        };
+        let res = resolve(lib, part);
         let model = res.model;
 
         // Escape-hatch keys: the resolved model id, the component value, and the
@@ -718,7 +747,13 @@ fn gather_device_meta(
     }
     let mut by_ref: HashMap<String, CompInfo> = HashMap::new();
     for comp in &board.components {
-        let res = resolve(lib, comp);
+        // Only a present part's ratings may describe a monitored device: a DNP
+        // or identity-refused record sharing the reference designator must not
+        // supply the ratings for a device another record stamped.
+        let Some(part) = AssemblyState::of(comp).fitted() else {
+            continue;
+        };
+        let res = resolve(lib, part);
         if let Some(m) = res.model {
             by_ref.insert(
                 comp.reference.clone(),
@@ -852,19 +887,45 @@ fn gather_device_meta(
     metas
 }
 
-/// Resolve one component into a model entry.
-pub(crate) fn resolve(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::Resolution {
+/// Resolve one assembled component into a model entry.
+///
+/// This is the only door to a component's electrical model: it takes the
+/// [`FittedComponent`] witness, which only [`AssemblyState::of`] hands out, so
+/// a caller cannot reach a model without having answered the three-state
+/// assembled-component question. DNP-absent and identity-unknown parts have no
+/// witness and therefore no model.
+pub(crate) fn resolve(
+    lib: &ModelLibrary,
+    part: FittedComponent<'_>,
+) -> hauksbee_models::Resolution {
+    library_resolution(lib, part.component())
+}
+
+/// What the model library would say about one component RECORD, assembled or
+/// not.
+///
+/// This is the identity-machinery and diagnostics view, deliberately narrow:
+/// [`apply_identity`] compares layout records against BOM/placement probes
+/// before any assembly state is meaningful (a DNP part's identity is still
+/// improvable), the DNP-processor warning asks what an absent part would have
+/// been, and the `models resolve` pack-author table reports what each record
+/// WOULD resolve to. None of them may stamp a device from the answer.
+/// Everything that models an assembled part goes through [`resolve`] and its
+/// [`FittedComponent`] witness.
+pub(crate) fn library_resolution(
+    lib: &ModelLibrary,
+    comp: &Component,
+) -> hauksbee_models::Resolution {
     let mut q = ComponentQuery::new(
         non_empty(&comp.lib_id),
         non_empty(&comp.value),
         non_empty(&comp.footprint),
     );
     q.reference = Some(comp.reference.clone());
-    // Ambiguous component identity is not a model match. The extractor keeps
-    // the electrical records so connectivity/DRC remain available, but binding
-    // one would turn an unresolved identity choice into precise simulation.
-    // The shared gate also protects checks that resolve through the binder.
-    if identity_refusal(comp).is_some() {
+    // A refused identity is not a model match even here: the record cannot say
+    // WHICH part it is, so no identity string in it is evidence. The extractor
+    // keeps the record so connectivity/DRC remain available.
+    if matches!(AssemblyState::of(comp), AssemblyState::IdentityUnknown(_)) {
         return hauksbee_models::Resolution {
             model: None,
             confidence: Confidence::Unresolved,
@@ -1572,25 +1633,12 @@ fn non_empty(s: &str) -> Option<String> {
     }
 }
 
-/// Build the outcome for a component with no resolved model.
+/// Build the outcome for a PRESENT component with no resolved model. The two
+/// absent assembly states never reach here: pass 2 rows them before resolving.
 fn unresolved_outcome(
     comp: &Component,
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
 ) -> (Option<String>, BindOutcome, Option<String>) {
-    if let Some(refusal) = identity_refusal(comp) {
-        let reason = format!("{}; left open", refusal.reason());
-        let warning = format!(
-            "cannot bind '{}' ({}): {reason}",
-            comp.reference, comp.value
-        );
-        return (
-            None,
-            BindOutcome::Unresolved {
-                reason: reason.clone(),
-            },
-            Some(warning),
-        );
-    }
     if let Some(McuFamilyRoute::NoPlatform { family }) = route_mcu_family(comp) {
         let msg = format!(
             "[auto-bind] {} \"{}\" recognized {family} but no co-sim platform; leaving UNRESOLVED. Override with a --models-dir entry.",
@@ -4070,8 +4118,9 @@ fn negative_rail_fallback(n: &str) -> Option<f64> {
 fn power_out_net_voltages(board: &ExtractedBoard) -> HashMap<i64, f64> {
     let mut out: HashMap<i64, f64> = HashMap::new();
     for comp in &board.components {
-        // A DNP part's power_out pin drives nothing on the real board.
-        if comp.dnp || identity_refusal(comp).is_some() {
+        // A DNP part's power_out pin drives nothing on the real board, and a
+        // refused identity is not evidence of a rail either.
+        if !AssemblyState::of(comp).is_present() {
             continue;
         }
         for pin in &comp.pins {
@@ -4503,10 +4552,10 @@ pub fn apply_identity(
         };
 
         if let Some(mpn) = hint.mpn.as_ref() {
-            let before = resolve(lib, &board.components[idx]);
+            let before = library_resolution(lib, &board.components[idx]);
             let probe = probe_with_mpn(&board.components[idx], mpn);
             let substituted = probe.value != board.components[idx].value;
-            let after = resolve(lib, &probe);
+            let after = library_resolution(lib, &probe);
             if identity_improves(&before, &after) {
                 let comp = &mut board.components[idx];
                 let layout_value = comp.value.clone();
@@ -4983,8 +5032,8 @@ fn contradiction_between(
     // a magnitude. A magnitude is a parameter, not a name.
     if let Some(mpn) = &hint.mpn {
         if layout_names_a_part(comp) {
-            let layout = resolve(lib, comp);
-            let artifact = resolve(lib, &probe_with_mpn(comp, mpn));
+            let layout = library_resolution(lib, comp);
+            let artifact = library_resolution(lib, &probe_with_mpn(comp, mpn));
             let decisive = matches!(artifact.confidence, Confidence::Exact | Confidence::Family);
             if let (Some(l), Some(a)) = (&layout.model, &artifact.model) {
                 // Different models are not automatically different parts: the
@@ -5088,7 +5137,7 @@ fn contradiction_between(
     // bare magnitude IS a passive value by convention, and a transistor's value
     // is never one, so the pair is decisive.
     if !artifact_value.is_empty() && parse_value(artifact_value).is_some() {
-        let layout_kind = resolve(lib, comp).model.map(|m| m.kind);
+        let layout_kind = library_resolution(lib, comp).model.map(|m| m.kind);
         let semiconductor = matches!(
             layout_kind,
             Some(
@@ -5280,8 +5329,12 @@ mod duplicate_identity_refusal_tests {
         );
         let ambiguous = inferred_altium_resistor(vec![marker.clone()]);
         assert!(
-            resolve(&lib, &ambiguous).model.is_none(),
-            "an inferred ambiguous identity must not choose a precise model"
+            AssemblyState::of(&ambiguous).fitted().is_none(),
+            "an inferred ambiguous identity must not yield the model-resolution witness"
+        );
+        assert!(
+            library_resolution(&lib, &ambiguous).model.is_none(),
+            "even the identity-machinery view must not choose a precise model"
         );
 
         let authoritative = inferred_altium_resistor(vec![
@@ -5291,9 +5344,12 @@ mod duplicate_identity_refusal_tests {
                 "ABC-123".into(),
             ),
         ]);
+        let part = AssemblyState::of(&authoritative)
+            .fitted()
+            .expect("the source UID makes the component identity authoritative");
         assert!(
-            resolve(&lib, &authoritative).model.is_some(),
-            "the source UID makes the component identity authoritative"
+            resolve(&lib, part).model.is_some(),
+            "an authoritative identity resolves to a model"
         );
     }
 

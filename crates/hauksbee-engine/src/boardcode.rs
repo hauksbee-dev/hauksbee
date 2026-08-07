@@ -156,19 +156,26 @@ pub fn program_from_extracted(board: &ExtractedBoard) -> anyhow::Result<Program>
 }
 
 fn ensure_boardcode_serializable(board: &ExtractedBoard) -> anyhow::Result<()> {
+    // The three-state assembled-component contract: the Board-as-Code DSL can
+    // only express Present, so the two absent states must refuse loudly here.
+    // Silently emitting either one would let recompilation turn an unknown or
+    // unpopulated part into an ordinary fitted component.
     for c in &board.components {
-        if c.dnp {
-            anyhow::bail!(
-                "cannot convert {} to Board-as-Code: its DNP state is not representable and recompilation would fit the part",
-                c.reference
-            );
-        }
-        if let Some(refusal) = crate::component_evidence::identity_refusal(c) {
-            anyhow::bail!(
-                "cannot convert {} to Board-as-Code without losing ambiguous identity evidence: {}",
-                c.reference,
-                refusal.reason()
-            );
+        match hauksbee_extract::assembly::AssemblyState::of(c) {
+            hauksbee_extract::assembly::AssemblyState::Present(_) => {}
+            hauksbee_extract::assembly::AssemblyState::DnpAbsent(_) => {
+                anyhow::bail!(
+                    "cannot convert {} to Board-as-Code: its DNP state is not representable and recompilation would fit the part",
+                    c.reference
+                );
+            }
+            hauksbee_extract::assembly::AssemblyState::IdentityUnknown(refusal) => {
+                anyhow::bail!(
+                    "cannot convert {} to Board-as-Code without losing ambiguous identity evidence: {}",
+                    c.reference,
+                    refusal.reason()
+                );
+            }
         }
     }
     Ok(())

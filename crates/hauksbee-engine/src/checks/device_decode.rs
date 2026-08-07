@@ -72,6 +72,7 @@ use hauksbee_extract::{
 };
 use hauksbee_models::value::parse_value;
 use hauksbee_models::ModelLibrary;
+use hauksbee_extract::assembly::AssemblyState;
 
 /// Reference rail for the CYPD3177 config dividers (VDDD = 3.3 V).
 const VDDD: f64 = 3.3;
@@ -155,7 +156,7 @@ fn is_cypd3177(c: &Component) -> bool {
 /// A plain two-terminal, assembled resistor (ref R*, not RV/RT/RN/RP/RM), with a
 /// parseable ohm value. Mirrors the strap-lint resistor test plus a value parse.
 fn resistor_ohms(c: &Component) -> Option<f64> {
-    if c.dnp {
+    if !AssemblyState::of(c).is_present() {
         return None;
     }
     let r = c.reference.to_ascii_uppercase();

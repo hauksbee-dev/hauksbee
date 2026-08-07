@@ -40,13 +40,18 @@ use hauksbee_models::value::parse_value;
 use hauksbee_models::{ModelLibrary, StrapInternalPull, StrapLevel};
 
 use crate::binder::resolve;
+use hauksbee_extract::assembly::AssemblyState;
 
 /// Run the strap-pin lint over an extracted board, resolving each component
 /// against `lib` to find MCUs that carry a strap table.
 pub fn strap_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
     for comp in &board.components {
-        let res = resolve(lib, comp);
+        // The three-state contract: only a present part's strap table runs.
+        let Some(part) = AssemblyState::of(comp).fitted() else {
+            continue;
+        };
+        let res = resolve(lib, part);
         let Some(model) = res.model.as_ref() else {
             continue;
         };
@@ -194,7 +199,7 @@ fn examine_strap(
 /// predicate, a varistor (RV) or thermistor (RT) to ground sets no DC level
 /// and must never be credited as a bias.
 pub(crate) fn is_assembled_resistor(c: &Component) -> bool {
-    if c.dnp {
+    if !AssemblyState::of(c).is_present() {
         return false;
     }
     let r = c.reference.to_ascii_uppercase();
@@ -215,7 +220,7 @@ pub(crate) fn is_assembled_resistor(c: &Component) -> bool {
 /// reference / value / lib_id, and require it to NOT be a plain 2-terminal
 /// crystal. DNP oscillators are not assembled, so they do not drive.
 fn is_clock_oscillator(c: &Component) -> bool {
-    if c.dnp {
+    if !AssemblyState::of(c).is_present() {
         return false;
     }
     let r = c.reference.to_ascii_uppercase();
