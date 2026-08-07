@@ -42,6 +42,7 @@ mod netlint;
 mod netlist;
 pub mod netname;
 pub mod odbpp;
+mod part_class;
 mod pcb;
 pub mod placement;
 mod protel_ascii;

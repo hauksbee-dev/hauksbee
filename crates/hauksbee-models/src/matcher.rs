@@ -425,6 +425,7 @@ mod tests {
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            passive_class: None,
         };
         let compiled = CompiledEntry::compile(entry).expect("compiles");
         let q = ComponentQuery {

@@ -16,6 +16,7 @@
 //! pull-ups, LED current) work even on pin-function-less inputs.
 
 use crate::assembly::AssemblyState;
+use crate::part_class::{self, connected_pads, ref_designator};
 use crate::{Component, ExtractedBoard, Pin};
 
 /// One lint finding, severity-tagged, with the evidence to reproduce it.
@@ -311,55 +312,16 @@ fn numeric_rail_magnitude(n: &str) -> Option<f64> {
     (mag > 0.0 && mag.is_finite()).then_some(mag)
 }
 
-/// Number of DISTINCT pads that carry a net. Some extraction paths list a pad
-/// more than once (a through-hole pad accessed from both sides, the Eagle `.brd`
-/// per-contact listing, IPC-356 top+bottom access records), so counting raw
-/// net-carrying pin ENTRIES over-counts and makes a genuine two-terminal part
-/// look like it has 3+ terminals. Dedup by pad number, matching si.rs's
-/// `connected_pads`.
-fn connected_pads(c: &Component) -> usize {
-    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    for p in &c.pins {
-        if p.net.is_some() {
-            seen.insert(p.number.as_str());
-        }
-    }
-    seen.len()
-}
-
-/// The reference designator with a single split-keyboard mirror prefix stripped,
-/// uppercased. Split layouts (Corne / crkbd, Lily58) duplicate the right half
-/// with a lowercase `r` prefix (`rC2`, `rY1`, `rR3`, `rU1`), so the type
-/// classifiers must see `C2`/`Y1`/`R3`/`U1` underneath, otherwise `rC2` reads
-/// as an `R`-prefixed part and a mirrored decoupling cap is both misclassified
-/// and falsely flagged as a designator/footprint mismatch. Only a lowercase `r`
-/// immediately before an uppercase designator letter counts, so a genuine `R5`
-/// is untouched. Mirrors si.rs's `ref_designator`.
-fn ref_designator(reference: &str) -> String {
-    let r = reference.trim();
-    let bytes = r.as_bytes();
-    if bytes.len() >= 2 && bytes[0] == b'r' && bytes[1].is_ascii_uppercase() {
-        return r[1..].to_ascii_uppercase();
-    }
-    r.to_ascii_uppercase()
-}
-
 /// Is this component a plain two-terminal resistor (the kind that can be a
-/// pull-up)? Identified by ref designator + a chip-resistor footprint, and by
-/// having exactly two *connected* pads (extra net-less pads in the footprint are
-/// ignored; counting them as terminals hides 0201 pull-ups).
+/// pull-up)?
+///
+/// Delegates to [`crate::part_class::classify_two_terminal`], which answers from
+/// the model DB's declared passive class through the assembly witness and only
+/// falls back to the designator / `lib_id` strings when no better evidence
+/// exists. Keeping the answer in one place also ends the drift between this and
+/// si.rs's copy, which had already diverged twice.
 fn is_resistor(c: &Component) -> bool {
-    let r = ref_designator(&c.reference);
-    let lib = c.lib_id.to_ascii_lowercase();
-    // Exclude varistors (RV), thermistors (RT), and resistor networks (RN/RP/RM)
-    // which are not plain two-terminal pulls.
-    let is_r_ref = r.starts_with('R')
-        && !r.starts_with("RV")
-        && !r.starts_with("RT")
-        && !r.starts_with("RN")
-        && !r.starts_with("RP")
-        && !r.starts_with("RM");
-    is_r_ref && connected_pads(c) == 2 && !lib.contains("ferrite") && !lib.contains("inductor")
+    part_class::classify_two_terminal(c).is_resistor()
 }
 
 /// A resistor NETWORK / array (RN/RP/RM): several resistor elements in one

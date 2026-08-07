@@ -575,6 +575,7 @@ mod tests {
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            passive_class: None,
         }
     }
 
@@ -1004,6 +1005,7 @@ high_offset = 1.3333333333333333
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            passive_class: None,
         };
         let errs = validate(&entry).unwrap_err();
         assert!(errs.iter().any(|e| e.message.contains("'n'")));
@@ -1029,6 +1031,7 @@ high_offset = 1.3333333333333333
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            passive_class: None,
         };
         let errs = validate(&entry).unwrap_err();
         assert!(errs.iter().any(|e| e.message.contains("bf")));
@@ -1055,6 +1058,7 @@ high_offset = 1.3333333333333333
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            passive_class: None,
         };
         let errs = validate(&entry).unwrap_err();
         assert!(
@@ -1080,6 +1084,7 @@ high_offset = 1.3333333333333333
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            passive_class: None,
         };
         assert!(validate(&good).is_ok(), "a well-ordered opamp must pass");
     }
@@ -1106,6 +1111,7 @@ high_offset = 1.3333333333333333
                 behavioral: Default::default(),
                 logic: Default::default(),
                 current_program: None,
+                passive_class: None,
             };
             assert!(
                 validate(&entry).is_ok(),
@@ -1129,6 +1135,7 @@ high_offset = 1.3333333333333333
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            passive_class: None,
         };
         assert!(
             validate(&entry)
@@ -1160,6 +1167,7 @@ high_offset = 1.3333333333333333
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            passive_class: None,
         };
         let errs = validate(&entry).unwrap_err();
         assert!(
@@ -1188,6 +1196,7 @@ high_offset = 1.3333333333333333
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            passive_class: None,
         };
         let errs = validate(&entry).unwrap_err();
         assert!(
@@ -1212,6 +1221,7 @@ high_offset = 1.3333333333333333
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            passive_class: None,
         };
         assert!(
             validate(&good).is_ok(),
@@ -1238,6 +1248,7 @@ high_offset = 1.3333333333333333
             behavioral: Default::default(),
             logic: Default::default(),
             current_program: None,
+            passive_class: None,
         };
         let errs = validate(&entry).unwrap_err();
         assert!(
