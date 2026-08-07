@@ -142,6 +142,7 @@ Every key the loader accepts, in one place. Unknown keys are rejected.
 | `mcu`           | string   | none          | Informational note only, nothing reads it. The MCU comes from the BOARD's part value via `[[models]] kind = "mcu"` routing entries (builtin, user model dirs, `--models-dir`); this field cannot force a backend. Distinct from the `mcu` field inside a `uart` `[[assert]]`, which IS load-bearing (it selects which MCU's UART the assertion reads). |
 | `duration_ms`   | float    | `100`         | Simulated time to run.                                        |
 | `frame_ms`      | float    | `1`           | Sampling cadence (how often nets are read).                   |
+| `[timing]`      | table    | none          | Strict timing contract: `min_pulse_us` and/or `max_edge_error_us`. Poll backends adapt their real chunk or the run is INVALID; every report states measured coverage. |
 | `ambient_c`     | float    | `25`          | Ambient temperature (C) for the steady-state junction-temperature estimate `max_temp` checks against. |
 | `asbuilt`       | path     | none          | `.asbuilt.toml` overlay: the physical rework delta (cut traces, jumpers, lifted pins, fitted values) applied to the bound board before every run. See [the as-built overlay](#the-as-built-overlay-asbuilt). |
 | `fit`           | [string] | `[]`          | DNP part references to simulate as fitted regardless of `dnp`. Unknown references are loud errors. See [DNP.md](../ingest/DNP.md). |
@@ -163,6 +164,43 @@ Every key the loader accepts, in one place. Unknown keys are rejected.
 | `[[assert]]`    | blocks   | at least one  | The assertions, all of which must pass. See [Assertions](#assertions-assert). |
 
 Paths are resolved relative to the spec file's directory.
+
+### Timing coverage (`[timing]`)
+
+Use a timing contract when an assertion depends on a firmware edge or pulse
+being represented, rather than merely on the final settled voltage:
+
+```toml
+[timing]
+min_pulse_us = 20.0
+max_edge_error_us = 4.0
+```
+
+The policy is derived from the live backend. simavr reports each GPIO callback
+at its MCU cycle, so timestamp precision and the guaranteed pulse floor are one
+clock period (`1 / frequency`). Renode and QEMU discover GPIO by polling after
+`run_micros`; Hauksbee therefore shrinks their actual chunk to the tighter of
+`min_pulse_us / 2` and `max_edge_error_us`. Two polls per requested pulse ensure
+one poll lies inside it even when an edge lands on a boundary. The poll bridge
+takes integer microseconds, so a request needing a chunk below 1 µs is refused
+as unrepresentable instead of rounded into false precision. Chunk subdivision
+uses a ceiling, so the slice actually executed never exceeds the negotiated
+maximum when a frame is not an exact multiple of it.
+
+A `toggle` assertion on a poll backend must declare `timing.min_pulse_us`.
+Without a pulse width, polling cannot prove that a rise and fall did not both
+occur between samples. Exact callback backends count the ordered edge log, so a
+pulse that begins and ends inside one analog chunk still contributes both
+toggles to the assertion and activity reports.
+
+An unmet contract, a cycle-stamped pulse proven to have been missed by a
+tick-evaluated sequential part, or a GPIO edge storm that exceeds the bounded
+analog PWL replay budget makes every assertion `INVALID` and exits 3.
+It cannot be waived into green. The terminal, JSON, JUnit, GitHub checks UI and
+web checks panel all publish the actual per-MCU timestamp precision, guaranteed
+pulse floor, chunk, stamp tier, and any explicit refusal. Without `[timing]`,
+those measurements are still reported, but no additional pulse-width claim is
+requested and external backends retain their performance-oriented coarse default.
 
 ### Power supplies: `[[supply]]`
 

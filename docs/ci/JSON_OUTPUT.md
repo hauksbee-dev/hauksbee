@@ -59,6 +59,8 @@ Every key below is ALWAYS present on an `ok: true` line.
 | `coverage` | string or `null` | yes, nullable | the tolerance-ensemble coverage claim; `null` when the run was not an ensemble |
 | `substitutions` | array of string | yes, may be empty | MCUs co-simulated on a substitute core |
 | `coverage_warnings` | array of string | yes, may be empty | co-sim coverage holes (dropped ADC injection, unexercised bus device, a watchdog that cannot bite, a watchdog that did) |
+| `timing_coverage` | array of object | yes, may be empty | per-MCU measured `timestamp_precision_s`, `minimum_guaranteed_pulse_s`, actual `chunk_s`, backend, and whether stamps are cycle-exact |
+| `timing_refusals` | array of string | yes, may be empty | explicit unrepresentable timing claims or replay limits; any entry makes the run INVALID |
 | `dead_rails` | array of string | yes, may be empty | nets that name a supply and that nothing powered |
 | `waiver_notes` | array of string | yes, may be empty | lapsed waivers, active waivers that matched nothing, a malformed waiver file |
 | `inventory` | array of object | yes, may be empty | exact input files consumed (board, spec, firmware, models), with content hashes |
@@ -95,6 +97,12 @@ and `dead_rails` non-empty each mean the verdict covers less than it looks like
 it does, and they are the reason a machine consumer should surface them rather
 than reduce the document to one boolean. `waiver_notes` non-empty means the
 board's waiver file needs attention.
+
+`timing_coverage` is evidence, not a warning list. When the spec declares a
+`[timing]` contract, these are the achieved limits after adaptive chunking. An
+unrepresentable contract never appears as green: every result is `invalid`,
+`run_valid` is false, and `exit_code` is 3 with the refusal in both
+`timing_refusals` and each result's `detail`.
 
 ### `results[]`, one entry per assertion
 
