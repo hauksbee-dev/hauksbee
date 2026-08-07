@@ -9,7 +9,7 @@
 //! Long-form how-and-why: docs/how-and-why/hauksbee-mcu/avr.md.
 
 use crate::ffi;
-use crate::traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
+use crate::traits::{I2cEvent, Mcu, McuState, PinDrive, PinId, SpiEvent};
 use anyhow::{bail, Result};
 use std::ffi::CString;
 use std::path::Path;
@@ -144,6 +144,31 @@ unsafe fn drive_ioport_input(
     }
 }
 
+/// Relinquish one persistent external input drive. Clearing the bit from
+/// simavr's external pull mask restores the port's own DDR/PORT/internal-pull
+/// semantics; no replacement logic level is invented.
+unsafe fn release_ioport_input(
+    avr: *mut ffi::avr_t,
+    ext_drive: &mut std::collections::HashMap<char, (u8, u8)>,
+    pin: PinId,
+) {
+    if avr.is_null() {
+        return;
+    }
+    let (mask, value) = ext_drive.entry(pin.port).or_insert((0, 0));
+    *mask &= !(1 << pin.bit);
+    *value &= !(1 << pin.bit);
+    let mut ext: u64 =
+        ((pin.port as u8 as u64) & 0x7f) | ((*mask as u64) << 7) | ((*value as u64) << 15);
+    unsafe {
+        ffi::avr_ioctl(
+            avr,
+            ioport_set_external(pin.port as u8),
+            &mut ext as *mut u64 as *mut std::os::raw::c_void,
+        );
+    }
+}
+
 // TWI message condition flags (from avr_twi.h)
 const TWI_COND_START: u32 = 1 << 0;
 const TWI_COND_STOP: u32 = 1 << 1;
@@ -170,7 +195,7 @@ type SpiCb = Box<dyn FnMut(SpiEvent) -> u8 + Send>;
 /// the very next `digitalRead(MISO)` sees it. Resolving the readback per output
 /// edge (not once per analog chunk) is the read-direction analogue of the
 /// edge-driven 74HC595 write path.
-type InputResponderCb = Box<dyn FnMut(PinId, bool, u64) -> Vec<(PinId, bool)> + Send>;
+type InputResponderCb = Box<dyn FnMut(PinId, bool, u64) -> Vec<PinDrive> + Send>;
 
 struct Callbacks {
     on_pin_change: Option<PinChangeCb>,
@@ -410,9 +435,16 @@ macro_rules! make_port_hook {
                         // shadow while the responder closure stays borrowed.
                         let st = &mut *s;
                         if let Some(resp) = &mut st.callbacks.input_responder {
-                            for (in_pin, in_high) in resp(pin, high, cycle) {
+                            for update in resp(pin, high, cycle) {
                                 unsafe {
-                                    drive_ioport_input(avr, &mut st.ext_drive, in_pin, in_high);
+                                    match update {
+                                        PinDrive::Drive { pin, high } => {
+                                            drive_ioport_input(avr, &mut st.ext_drive, pin, high)
+                                        }
+                                        PinDrive::Release { pin } => {
+                                            release_ioport_input(avr, &mut st.ext_drive, pin)
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -1234,7 +1266,7 @@ impl Mcu for AvrMcu {
 
     fn on_input_responder(
         &mut self,
-        responder: Box<dyn FnMut(PinId, bool, u64) -> Vec<(PinId, bool)> + Send>,
+        responder: Box<dyn FnMut(PinId, bool, u64) -> Vec<PinDrive> + Send>,
     ) {
         {
             let mut s = self.state.lock().unwrap();
@@ -1352,7 +1384,8 @@ impl Drop for AvrMcu {
 
 #[cfg(test)]
 mod cycle_budget_tests {
-    use super::cycle_budget;
+    use super::{cycle_budget, drive_ioport_input, release_ioport_input, AvrMcu};
+    use crate::traits::PinId;
 
     /// R6: `run_micros` must carry the sub-cycle remainder so a clock that
     /// isn't a multiple of the chunk rate doesn't drift. 3.6864 MHz over
@@ -1380,5 +1413,21 @@ mod cycle_budget_tests {
         let freq = 16_000_000; // 16 MHz -> 1600 cycles / 100 µs, no remainder
         let (cycles, carry) = cycle_budget(100, freq, 0);
         assert_eq!((cycles, carry), (1600, 0));
+    }
+
+    #[test]
+    fn release_clears_simavrs_persistent_external_mask() {
+        let mcu = AvrMcu::atmega328p_16mhz().expect("create live simavr core");
+        let pin = PinId::new('B', 0);
+        let mut state = mcu.state.lock().unwrap();
+        unsafe { drive_ioport_input(mcu.avr, &mut state.ext_drive, pin, false) };
+        assert_eq!(state.ext_drive.get(&'B').unwrap().0 & 1, 1);
+
+        unsafe { release_ioport_input(mcu.avr, &mut state.ext_drive, pin) };
+        assert_eq!(
+            state.ext_drive.get(&'B').unwrap().0 & 1,
+            0,
+            "release removes external ownership so DDR/PORT/pull state resolves the input"
+        );
     }
 }

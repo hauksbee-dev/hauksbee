@@ -37,6 +37,32 @@ impl PinId {
     }
 }
 
+/// One synchronous external-input ownership update.
+///
+/// `Drive` persists until the same responder emits `Release`; release is a
+/// digital high-impedance handoff, not a fabricated HIGH level.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PinDrive {
+    Drive { pin: PinId, high: bool },
+    Release { pin: PinId },
+}
+
+impl PinDrive {
+    pub fn drive(pin: PinId, high: bool) -> Self {
+        Self::Drive { pin, high }
+    }
+
+    pub fn release(pin: PinId) -> Self {
+        Self::Release { pin }
+    }
+
+    pub fn pin(self) -> PinId {
+        match self {
+            Self::Drive { pin, .. } | Self::Release { pin } => pin,
+        }
+    }
+}
+
 /// Snapshot of MCU execution state returned by [`Mcu::state`].
 #[derive(Debug, Clone)]
 pub struct McuState {
@@ -215,7 +241,7 @@ pub trait Mcu {
     #[allow(clippy::type_complexity)]
     fn on_input_responder(
         &mut self,
-        _responder: Box<dyn FnMut(PinId, bool, u64) -> Vec<(PinId, bool)> + Send>,
+        _responder: Box<dyn FnMut(PinId, bool, u64) -> Vec<PinDrive> + Send>,
     ) {
     }
 

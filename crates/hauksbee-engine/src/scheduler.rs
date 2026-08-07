@@ -1154,12 +1154,21 @@ impl Scheduler {
         let reg = Arc::new(Mutex::new(crate::responders::ResponderRegistry::new()));
         let cb = reg.clone();
         self.mcus[mi].core.on_input_responder(Box::new(
-            move |pin: PinId, high: bool, cycle: u64| -> Vec<(PinId, bool)> {
+            move |pin: PinId, high: bool, cycle: u64| -> Vec<hauksbee_mcu::PinDrive> {
                 cb.lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .dispatch_at((pin.port, pin.bit), high, cycle)
                     .into_iter()
-                    .map(|((port, bit), level)| (PinId { port, bit }, level))
+                    .map(|update| {
+                        let pin = PinId {
+                            port: update.pin.0,
+                            bit: update.pin.1,
+                        };
+                        match update.level {
+                            Some(high) => hauksbee_mcu::PinDrive::drive(pin, high),
+                            None => hauksbee_mcu::PinDrive::release(pin),
+                        }
+                    })
                     .collect()
             },
         ));
@@ -1234,7 +1243,9 @@ impl Scheduler {
     /// Nano EEPROM Programmer). The responder owns write timing for installed
     /// parts; ordinary tick/replay paths are disabled for those components.
     fn build_and_install_parallel_memories(&mut self) {
-        use crate::responders::{ParallelMemoryResponder, ParallelMemoryRuntime, ParallelSignal};
+        use crate::responders::{
+            ParallelMemoryResponder, ParallelMemoryRuntime, ParallelMemoryWrite, ParallelSignal,
+        };
 
         struct Pending {
             mcu: usize,
@@ -1317,18 +1328,18 @@ impl Scheduler {
                     else {
                         continue;
                     };
-                    let write = if let Some((role, edge)) = &port.write {
-                        let Some(signal) = role_signal(role) else {
-                            continue;
-                        };
-                        Some((signal, *edge))
-                    } else {
-                        None
-                    };
-                    let Some(write_gates) = port
-                        .write_gates
+                    let Some(writes) = port
+                        .writes
                         .iter()
-                        .map(|(role, active)| role_signal(role).map(|s| (s, *active)))
+                        .map(|write| {
+                            let signal = role_signal(&write.pin)?;
+                            let gates = write
+                                .gates
+                                .iter()
+                                .map(|(role, active)| role_signal(role).map(|s| (s, *active)))
+                                .collect::<Option<Vec<_>>>()?;
+                            Some(ParallelMemoryWrite::new(signal, write.edge, gates))
+                        })
                         .collect::<Option<Vec<_>>>()
                     else {
                         continue;
@@ -1369,8 +1380,7 @@ impl Scheduler {
                         self.mcus[mcu].core.frequency(),
                         self.input_volts.clone(),
                         address,
-                        write,
-                        write_gates,
+                        writes,
                         read_gates,
                         data_in,
                         output_pins.clone(),
