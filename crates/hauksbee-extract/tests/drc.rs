@@ -330,11 +330,13 @@ fn ordinary_same_footprint_pads_still_short() {
 }
 
 #[test]
-fn explicit_net_tie_exemption_is_local() {
+fn native_net_tie_groups_work_with_house_footprint_names_and_stay_local() {
     let items = r#"
-  (footprint "NetTie:NetTie-2_SMD_Pad0.5mm" (layer "F.Cu") (at 20 20)
+  (footprint "Acme:KelvinBridge" (layer "F.Cu") (at 20 20)
     (property "Reference" "NT1" (at 0 0))
-    (property "Value" "NET_TIE" (at 0 1))
+    (property "Value" "HOUSE_PART_42" (at 0 1))
+    (attr net_tie)
+    (net_tie_pad_groups "1, 2")
     (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1))
     (pad "2" smd rect (at 0.9 0) (size 1 1) (layers "F.Cu") (net 2))
   )
@@ -348,6 +350,86 @@ fn explicit_net_tie_exemption_is_local() {
         "only the remote A/B collision fires"
     );
     assert_short(&report, "A", "B");
+}
+
+#[test]
+fn native_net_tie_does_not_hide_ordinary_copper_crossing_over_its_pads() {
+    // The ordinary A/B tracks cross exactly on NT1's overlapping copper.
+    // Sharing the tie's net pair and location is still not enough: neither
+    // track belongs to the explicitly identified link footprint.
+    let items = r#"
+  (footprint "Acme:KelvinBridge" (layer "F.Cu") (at 5 5)
+    (property "Reference" "NT1" (at 0 0))
+    (attr net_tie)
+    (net_tie_pad_groups "1, 2")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1))
+    (pad "2" smd rect (at 0.9 0) (size 1 1) (layers "F.Cu") (net 2))
+  )
+  (segment (start 0 5) (end 10 5) (width 0.2) (layer "F.Cu") (net 1))
+  (segment (start 5.45 0) (end 5.45 10) (width 0.2) (layer "F.Cu") (net 2))
+"#;
+    assert_short(&drc(items), "A", "B");
+}
+
+#[test]
+fn native_net_tie_pad_groups_never_exempt_cross_group_contacts() {
+    // KiCad permits several independent ties in one footprint. Pads 1/2 and
+    // 3/4 are legal contacts, but the B/GND contact between pads 2 and 3 is a
+    // real cross-group short and must remain visible.
+    let items = r#"
+  (net 4 "D")
+  (footprint "Acme:FourTerminalBridge" (layer "F.Cu") (at 20 20)
+    (property "Reference" "NT1" (at 0 0))
+    (attr net_tie)
+    (net_tie_pad_groups "1, 2" "3, 4")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1))
+    (pad "2" smd rect (at 0.9 0) (size 1 1) (layers "F.Cu") (net 2))
+    (pad "3" smd rect (at 1.8 0) (size 1 1) (layers "F.Cu") (net 3))
+    (pad "4" smd rect (at 2.7 0) (size 1 1) (layers "F.Cu") (net 4))
+  )
+"#;
+    let report = drc(items);
+    assert_eq!(
+        report.short_count(),
+        1,
+        "only the cross-group B/GND contact is illegal: {:?}",
+        report.findings
+    );
+    assert_short(&report, "B", "GND");
+}
+
+#[test]
+fn legacy_closed_pair_metadata_keeps_other_jumper_pads_separate() {
+    // Older EAGLE-to-KiCad conversions can retain a structured closed-pair
+    // declaration but no native net_tie attr. Both fields are required, and
+    // only the declared 1/2 pair is legal; the 2/3 contact still fires.
+    let items = r#"
+  (footprint "Vendor:SJ_2_SMALL_12_TIED" (layer "F.Cu") (at 20 20)
+    (property "Reference" "JP1" (at 0 0))
+    (property "Value" "Closed(1-2)/Opened(2-3)" (at 0 1))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1))
+    (pad "2" smd rect (at 0.9 0) (size 1 1) (layers "F.Cu") (net 2))
+    (pad "3" smd rect (at 1.8 0) (size 1 1) (layers "F.Cu") (net 3))
+  )
+"#;
+    let report = drc(items);
+    assert_eq!(report.short_count(), 1, "only 2/3 is illegal");
+    assert_short(&report, "B", "GND");
+}
+
+#[test]
+fn jumper_like_names_without_native_semantics_do_not_exempt_copper() {
+    // A library/package/value name is descriptive text, not a KiCad DRC
+    // declaration. Without attr/groups this ordinary part is checked.
+    let items = r#"
+  (footprint "Jumper:SolderJumper_2_Open" (layer "F.Cu") (at 5 5)
+    (property "Reference" "JP1" (at 0 0))
+    (property "Value" "SOLDER_JUMPER" (at 0 1))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1))
+    (pad "2" smd rect (at 0.9 0) (size 1 1) (layers "F.Cu") (net 2))
+  )
+"#;
+    assert_short(&drc(items), "A", "B");
 }
 
 #[test]
@@ -373,6 +455,23 @@ fn explicit_zero_ohm_copper_link_exemption_is_local() {
         "the explicit link is local; the remote collision still fires"
     );
     assert_short(&report, "A", "B");
+}
+
+#[test]
+fn zero_ohm_drc_exception_requires_value_and_dedicated_footprint() {
+    for (footprint, value) in [("Device:R_0603", "0R"), ("Vendor:0R_0603", "10k")] {
+        let items = format!(
+            r#"
+  (footprint "{footprint}" (layer "F.Cu") (at 5 5)
+    (property "Reference" "R1" (at 0 0))
+    (property "Value" "{value}" (at 0 1))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1))
+    (pad "2" smd rect (at 0.9 0) (size 1 1) (layers "F.Cu") (net 2))
+  )
+"#
+        );
+        assert_short(&drc(&items), "A", "B");
+    }
 }
 
 #[test]
