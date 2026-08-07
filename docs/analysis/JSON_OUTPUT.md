@@ -164,6 +164,12 @@ Beyond that, activity (`total_toggles`, `uart_seen`, `activity_summary[]`) and
 `analog_valid` (+ `failed_windows[]`), the co-sim block surfaces every coverage
 degradation so a run that silently lost fidelity never reads as healthy:
 
+- `timing_coverage[]`, per live MCU `{mcu_ref, backend, cycle_exact,
+  timestamp_precision_s, minimum_guaranteed_pulse_s, chunk_s}` measured at the
+  actual chunk. Push callbacks report one-cycle precision; poll backends report
+  their real slice, never an inferred silicon limit.
+- `timing_refusals[]`, any runtime edge/PWL limit reached; under `--strict` a
+  non-empty list exits INVALID rather than trusting a collapsed waveform.
 - `substituted`: the firmware ran on a substitute core (also in `notes`).
 - `adc_dropped[]`, ADC channels whose modelled voltage the platform could not
   inject (the firmware read nothing on that pin).
@@ -190,7 +196,8 @@ degradation so a run that silently lost fidelity never reads as healthy:
   reboot was measuring a rebooted core. Read it with `watchdog_limitations[]`,
   since a backend that cannot reboot at all reports nothing here.
 
-Every array above (`activity_summary[]`, `failed_windows[]`, `spi_framing[]`,
+Every array above (`activity_summary[]`, `timing_coverage[]`,
+`timing_refusals[]`, `failed_windows[]`, `spi_framing[]`,
 `adc_dropped[]`, `unexercised_buses[]`, `short_pulses[]`,
 `driver_contention[]`, `watchdog_limitations[]`, `watchdog_resets[]`) is omitted
 when empty; the scalars are always present.

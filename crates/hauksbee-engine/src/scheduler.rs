@@ -43,6 +43,38 @@ use crate::stress::{FaultEvent, StressMonitor};
 /// Default co-sim chunk size (seconds).
 pub const DEFAULT_CHUNK_S: f64 = 100e-6;
 
+/// Smallest useful poll slice supported by the MCU bridge. `Mcu::run_micros`
+/// accepts an integer microsecond count; asking Renode/QEMU (which observe GPIO
+/// only after that call) to poll more finely would execute zero guest time and
+/// manufacture precision the bridge does not have.
+pub const POLL_BACKEND_QUANTUM_S: f64 = 1e-6;
+
+/// A timing claim requested by a CI spec or another strict caller.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct TimingRequirement {
+    /// Narrowest pulse the caller needs guaranteed observable, in seconds.
+    pub min_pulse_s: Option<f64>,
+    /// Largest acceptable edge timestamp uncertainty, in seconds.
+    pub max_edge_error_s: Option<f64>,
+}
+
+/// Measured timing capability of one live MCU backend at the configured chunk.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, schemars::JsonSchema)]
+pub struct TimingCoverage {
+    pub mcu_ref: String,
+    pub backend: String,
+    /// Push callbacks carry exact cycles; poll backends carry slice boundaries.
+    pub cycle_exact: bool,
+    /// Worst-case timestamp uncertainty: one MCU cycle or one poll chunk.
+    pub timestamp_precision_s: f64,
+    /// Pulse width guaranteed to include an observable event. Push callbacks
+    /// see a one-cycle pulse. Polling uses two slices so at least one poll lies
+    /// strictly inside the pulse even when an edge coincides with a boundary.
+    pub minimum_guaranteed_pulse_s: f64,
+    /// Actual solver/MCU slice selected for the run.
+    pub chunk_s: f64,
+}
+
 /// Resistance at or above which a resistor leg is too weak to count as
 /// evidence that a net is really driven, for the plain digital-input sync. An
 /// open pushbutton contact ([`crate::peripherals::controls`]' `CONTACT_ROFF`)
@@ -264,6 +296,10 @@ pub struct Scheduler {
     micros_carry: f64,
     /// Per-net toggle counters and min/max, for headless stats.
     pub stats: HashMap<String, NetStat>,
+    /// Firmware-output transitions observed by the MCU bridge, keyed by the
+    /// bound net. Unlike `stats`, this consumes the ordered edge log and cannot
+    /// lose a pulse that returns to its starting level within one analog chunk.
+    firmware_edge_toggles: HashMap<String, u64>,
     /// Net-attached / output peripherals (controls, VCD sinks), ticked each
     /// chunk around the analog solve.
     pub peripherals: PeripheralSet,
@@ -433,6 +469,10 @@ pub struct Scheduler {
     /// Nets already warned about by `detect_short_pulses`, so a pulse train
     /// warns once per net per run, not once per chunk.
     short_pulse_nets: std::collections::HashSet<u32>,
+    /// Hard timing/replay limits reached during this run. A strict caller must
+    /// invalidate its verdict rather than silently use the chunk-end DC level.
+    timing_refusals: Vec<String>,
+    timing_refusal_nets: std::collections::HashSet<u32>,
     /// Runtime driver-contention findings raised this run (the model-vs-MCU
     /// half of the field failure the static lint documents as out of reach in
     /// `checks/contention.rs`), one per offending net. See [`DriverContention`].
@@ -905,6 +945,7 @@ impl Scheduler {
             sim_time: 0.0,
             micros_carry: 0.0,
             stats: HashMap::new(),
+            firmware_edge_toggles: HashMap::new(),
             peripherals: PeripheralSet::new(),
             i2c_buses: Vec::new(),
             spi_buses: Vec::new(),
@@ -936,6 +977,8 @@ impl Scheduler {
             tick_sequential_nets: HashMap::new(),
             short_pulses: Vec::new(),
             short_pulse_nets: std::collections::HashSet::new(),
+            timing_refusals: Vec::new(),
+            timing_refusal_nets: std::collections::HashSet::new(),
             contentions: Vec::new(),
             contention_nets: std::collections::HashSet::new(),
         };
@@ -2089,6 +2132,129 @@ impl Scheduler {
             .any(|m| backend_is_external(&m.binding.backend))
     }
 
+    /// Report the timing accuracy actually available at the current chunk.
+    /// Values come from the live core's frequency/callback tier and the chunk
+    /// the scheduler will really execute; no part-family limits are guessed.
+    pub fn timing_coverage(&self) -> Vec<TimingCoverage> {
+        self.mcus
+            .iter()
+            .map(|m| {
+                let cycle_exact = m.core.cycle_exact();
+                let cycle_s = 1.0 / m.core.frequency().max(1) as f64;
+                let timestamp_precision_s = if cycle_exact { cycle_s } else { self.chunk_s };
+                TimingCoverage {
+                    mcu_ref: m.binding.reference.clone(),
+                    backend: m.binding.backend.clone(),
+                    cycle_exact,
+                    timestamp_precision_s,
+                    minimum_guaranteed_pulse_s: if cycle_exact {
+                        cycle_s
+                    } else {
+                        2.0 * self.chunk_s
+                    },
+                    chunk_s: self.chunk_s,
+                }
+            })
+            .collect()
+    }
+
+    /// Per-net toggle counts suitable for assertions and reports.
+    ///
+    /// Firmware-driven nets use at least the ordered MCU edge count, preserving
+    /// sub-chunk pulses. Analog-only nets retain the settled-voltage count. The
+    /// maximum avoids double-counting an edge also seen at a chunk boundary.
+    pub fn toggle_counts(&self) -> HashMap<String, u64> {
+        let mut counts: HashMap<String, u64> = self
+            .stats
+            .iter()
+            .map(|(net, stat)| (net.clone(), stat.toggles))
+            .collect();
+        for (net, edge_count) in &self.firmware_edge_toggles {
+            let count = counts.entry(net.clone()).or_default();
+            *count = (*count).max(*edge_count);
+        }
+        counts
+    }
+
+    /// Runtime timing/replay limits reached by this scheduler run.
+    pub fn timing_refusals(&self) -> &[String] {
+        &self.timing_refusals
+    }
+
+    /// Negotiate a strict timing request against the live backends.
+    ///
+    /// Exact push backends need no smaller analog chunk to preserve GPIO edges:
+    /// their callback records every transition and the PWL/replay paths consume
+    /// the cycle stamps. Poll backends can only improve by shrinking the real
+    /// poll slice, so this adaptively does so. A request below the integer-
+    /// microsecond MCU bridge quantum is refused before mutating the scheduler.
+    pub fn configure_timing(&mut self, req: TimingRequirement) -> anyhow::Result<()> {
+        for (label, value) in [
+            ("minimum pulse", req.min_pulse_s),
+            ("maximum edge error", req.max_edge_error_s),
+        ] {
+            if let Some(v) = value {
+                anyhow::ensure!(
+                    v.is_finite() && v > 0.0,
+                    "{label} must be positive and finite"
+                );
+            }
+        }
+
+        // Exact cores have a measured one-cycle floor. Check it before changing
+        // a shared chunk for any coarse core, so a mixed-backend refusal is
+        // transactional.
+        for m in &self.mcus {
+            if !m.core.cycle_exact() {
+                continue;
+            }
+            let cycle_s = 1.0 / m.core.frequency().max(1) as f64;
+            if let Some(pulse) = req.min_pulse_s {
+                anyhow::ensure!(
+                    pulse + f64::EPSILON >= cycle_s,
+                    "timing request refused for {} ({}): minimum pulse {:.3} us is below its measured one-cycle resolution {:.3} us",
+                    m.binding.reference,
+                    m.binding.backend,
+                    pulse * 1e6,
+                    cycle_s * 1e6,
+                );
+            }
+            if let Some(error) = req.max_edge_error_s {
+                anyhow::ensure!(
+                    error + f64::EPSILON >= cycle_s,
+                    "timing request refused for {} ({}): maximum edge error {:.3} us is below its measured one-cycle resolution {:.3} us",
+                    m.binding.reference,
+                    m.binding.backend,
+                    error * 1e6,
+                    cycle_s * 1e6,
+                );
+            }
+        }
+
+        if self.mcus.iter().any(|m| !m.core.cycle_exact()) {
+            let mut requested_chunk = self.chunk_s;
+            if let Some(pulse) = req.min_pulse_s {
+                requested_chunk = requested_chunk.min(pulse / 2.0);
+            }
+            if let Some(error) = req.max_edge_error_s {
+                requested_chunk = requested_chunk.min(error);
+            }
+            anyhow::ensure!(
+                requested_chunk + f64::EPSILON >= POLL_BACKEND_QUANTUM_S,
+                "timing request refused for poll backend(s): {} requires a {:.3} us slice, below the measured 1.000 us run_micros bridge quantum",
+                match (req.min_pulse_s, req.max_edge_error_s) {
+                    (Some(p), Some(e)) => format!("minimum pulse {:.3} us / maximum edge error {:.3} us", p * 1e6, e * 1e6),
+                    (Some(p), None) => format!("minimum pulse {:.3} us", p * 1e6),
+                    (None, Some(e)) => format!("maximum edge error {:.3} us", e * 1e6),
+                    (None, None) => "empty requirement".to_string(),
+                },
+                requested_chunk * 1e6,
+            );
+            self.chunk_s = requested_chunk;
+        }
+        Ok(())
+    }
+
     /// True when EVERY live MCU core can observe pin drive direction
     /// ([`Mcu::drive_direction_observable`]): the in-process AVR core (DDR
     /// hooks), and any Renode core whose SoC descriptor carries a verified
@@ -2107,7 +2273,10 @@ impl Scheduler {
     /// Advance the co-sim by `dt` seconds in fixed chunks.
     pub fn step(&mut self, dt: f64) -> StepResult {
         let mut uart: HashMap<String, Vec<u8>> = HashMap::new();
-        let mut chunks = (dt / self.chunk_s).round() as u64;
+        // `chunk_s` is a maximum cadence, not a rounded target: strict timing
+        // negotiation may have chosen it as the largest acceptable poll error.
+        // Ceiling guarantees the actual `dt / chunks` slice never exceeds it.
+        let mut chunks = (dt / self.chunk_s).ceil() as u64;
         if chunks == 0 {
             chunks = 1;
         }
@@ -2337,6 +2506,7 @@ impl Scheduler {
                 chunk_s: chunk,
                 cycle_exact,
             });
+            self.record_firmware_edge_toggles(mi, &edge_log);
             // 1b. Generalized digital replay (05 §1.2): drain THIS MCU's ordered,
             // cycle-stamped log and replay it in cycle order through every
             // edge-driven digital element on one path; the 595 chains it owns AND
@@ -3251,6 +3421,7 @@ impl Scheduler {
         for st in self.stats.values_mut() {
             *st = Default::default();
         }
+        self.firmware_edge_toggles.clear();
         self.frame_peak_current.clear();
         self.frame_v_extremes.clear();
         self.faults_pending.clear();
@@ -3258,6 +3429,8 @@ impl Scheduler {
         // stale once-per-net guard would silently swallow a real re-fire).
         self.short_pulses.clear();
         self.short_pulse_nets.clear();
+        self.timing_refusals.clear();
+        self.timing_refusal_nets.clear();
         self.contentions.clear();
         self.contention_nets.clear();
         // The stress monitor accumulates across a run (consecutive-over-limit
@@ -3968,6 +4141,25 @@ impl Scheduler {
         }
     }
 
+    /// Fold every callback edge into the assertion/report count for its bound
+    /// net before the chunk-end analog sample can collapse a pulse.
+    fn record_firmware_edge_toggles(&mut self, mi: usize, edge_log: &[PinEdge]) {
+        for edge in edge_log {
+            let Some(driver) = self.mcus[mi]
+                .binding
+                .gpio_drivers
+                .get(&(edge.port, edge.bit))
+            else {
+                continue;
+            };
+            let net = self.circuit.node_name(driver.net);
+            *self
+                .firmware_edge_toggles
+                .entry(net.to_string())
+                .or_default() += 1;
+        }
+    }
+
     /// The cycle-stamped GPIO edges each MCU produced in the most recent chunk,
     /// one entry per MCU that ran. The analog PWL side consumes this to translate
     /// each pin's ordered `(cycle, level)` series into a `SourceKind::Pwl`
@@ -3985,9 +4177,10 @@ impl Scheduler {
     /// their per-poll ordering is preserved even though intra-poll spacing is
     /// approximate, and an approximately-timed pulse train integrates far
     /// closer to the truth than a collapsed level. The per-pin point cap
-    /// guards against a pathological chunk (an edge storm beyond what any
-    /// real bit-bang produces) blowing up the solve; beyond it the pin falls
-    /// back to the DC level for this chunk, which is the pre-PWL behavior.
+    /// bounds a pathological edge storm before it can blow up the solve. If it
+    /// is exceeded the scheduler records a hard timing refusal; strict/CI
+    /// callers invalidate the result instead of silently trusting the DC
+    /// fallback.
     fn apply_pwl_drives(&mut self, chunk: f64) -> Vec<(usize, f64)> {
         use hauksbee_ir::{PwlPoint, SourceKind};
         // Two PWL corners per transition plus the anchors; 10k transitions
@@ -4008,7 +4201,7 @@ impl Scheduler {
             }
             let span = (c1 - c0) as f64;
             for (pin, transitions) in &ce.edges {
-                if transitions.len() < 2 || transitions.len() > MAX_TRANSITIONS_PER_PIN {
+                if transitions.len() < 2 {
                     continue;
                 }
                 let Some(drv) = self.mcus[mi].binding.gpio_drivers.get(pin) else {
@@ -4030,6 +4223,16 @@ impl Scheduler {
                 // The driver's own resistor touches the net once; anything
                 // more means real circuitry hangs off this pin.
                 if counts.get(&net.0).copied().unwrap_or(0) <= 1 {
+                    continue;
+                }
+                if transitions.len() > MAX_TRANSITIONS_PER_PIN {
+                    if self.timing_refusal_nets.insert(net.0) {
+                        let net_name = self.circuit.node_name(net);
+                        self.timing_refusals.push(format!(
+                            "PWL replay refused on net {net_name}: {} GPIO transitions in one chunk exceed the implementation budget of {MAX_TRANSITIONS_PER_PIN}; the analog path retained only the final DC level",
+                            transitions.len()
+                        ));
+                    }
                     continue;
                 }
 
@@ -7381,6 +7584,45 @@ mod pulse_and_contention_tests {
         assert_eq!(sched.short_pulses().len(), 1, "once per net per run");
     }
 
+    /// A pulse that rises and falls inside one analog chunk is still two real
+    /// firmware transitions. Assertion/report toggle counts must come from the
+    /// cycle-stamped edge log on an exact backend, not only the chunk-end
+    /// analog level (which has returned LOW and would otherwise count zero).
+    #[test]
+    fn exact_edge_log_counts_subchunk_pulses_for_assertions() {
+        let mut sched = pulse_scheduler(&[(('B', 1), "STROBE")]);
+        preload_edges(&sched, ('B', 1), &[(100, true), (132, false)]);
+
+        sched.step(DEFAULT_CHUNK_S);
+
+        assert_eq!(sched.toggle_counts().get("STROBE"), Some(&2));
+    }
+
+    #[test]
+    fn pwl_transition_budget_is_an_explicit_timing_refusal() {
+        let mut sched = pulse_scheduler(&[(('B', 1), "STROBE")]);
+        let strobe = sched.net_nodes["STROBE"];
+        sched.circuit.add(Device::Resistor {
+            name: "Rload".into(),
+            a: strobe,
+            b: NodeId::GROUND,
+            ohms: 10_000.0,
+            tc1: None,
+        });
+        sched.relayout();
+        let transitions: Vec<(u64, bool)> =
+            (0..=10_000).map(|cycle| (cycle, cycle % 2 == 0)).collect();
+        preload_edges(&sched, ('B', 1), &transitions);
+
+        sched.step(DEFAULT_CHUNK_S);
+
+        let refusals = sched.timing_refusals();
+        assert_eq!(refusals.len(), 1, "one refusal per affected net");
+        assert!(refusals[0].contains("STROBE"));
+        assert!(refusals[0].contains("10000"));
+        assert!(refusals[0].contains("PWL"));
+    }
+
     /// The same pulse stretched to ~1 ms (rise in one chunk, fall ten chunks
     /// later) is OBSERVED by the chunk-boundary sample, so it must NOT warn;
     /// and a sub-chunk pulse on a net that clocks nothing sequential must not
@@ -7413,6 +7655,137 @@ mod pulse_and_contention_tests {
             "a pulse on a net clocking nothing must not warn: {:?}",
             sched.short_pulses()
         );
+    }
+
+    #[test]
+    fn timing_policy_uses_measured_backend_resolution_and_adapts_poll_chunks() {
+        let mut exact = pulse_scheduler(&[(('B', 1), "STROBE")]);
+        let exact_cov = exact.timing_coverage();
+        assert_eq!(exact_cov.len(), 1);
+        assert!(exact_cov[0].cycle_exact);
+        assert!((exact_cov[0].timestamp_precision_s - 1.0 / 16_000_000.0).abs() < 1e-15);
+        assert!((exact_cov[0].minimum_guaranteed_pulse_s - 1.0 / 16_000_000.0).abs() < 1e-15);
+
+        exact
+            .configure_timing(TimingRequirement {
+                min_pulse_s: Some(2e-6),
+                max_edge_error_s: Some(100e-9),
+            })
+            .expect("a 16 MHz push backend resolves both budgets without chunking");
+        assert_eq!(exact.chunk_s, DEFAULT_CHUNK_S);
+
+        let mut coarse = pulse_scheduler(&[(('B', 1), "STROBE")]);
+        coarse.mcus[0].core = Box::new(CoarseCycleCore {
+            cycles: 0,
+            calls: 0,
+        });
+        coarse
+            .configure_timing(TimingRequirement {
+                min_pulse_s: Some(20e-6),
+                max_edge_error_s: Some(4e-6),
+            })
+            .expect("poll chunk can be refined to the requested measured budget");
+        assert!((coarse.chunk_s - 4e-6).abs() < 1e-15);
+        let coarse_cov = coarse.timing_coverage();
+        assert!(!coarse_cov[0].cycle_exact);
+        assert!((coarse_cov[0].timestamp_precision_s - 4e-6).abs() < 1e-15);
+        assert!((coarse_cov[0].minimum_guaranteed_pulse_s - 8e-6).abs() < 1e-15);
+    }
+
+    #[test]
+    fn timing_policy_refuses_poll_precision_below_the_bridge_quantum() {
+        let mut coarse = pulse_scheduler(&[(('B', 1), "STROBE")]);
+        coarse.mcus[0].core = Box::new(CoarseCycleCore {
+            cycles: 0,
+            calls: 0,
+        });
+        let err = coarse
+            .configure_timing(TimingRequirement {
+                min_pulse_s: Some(1e-6),
+                max_edge_error_s: None,
+            })
+            .expect_err("a 0.5 us poll slice cannot be represented by run_micros(u64)");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("1.000 us"),
+            "must name the measured bridge quantum: {msg}"
+        );
+        assert!(
+            msg.contains("minimum pulse 1.000 us"),
+            "must name the refused claim: {msg}"
+        );
+        assert_eq!(
+            coarse.chunk_s, DEFAULT_CHUNK_S,
+            "refusal must not half-apply policy"
+        );
+    }
+
+    #[test]
+    fn adaptive_chunk_is_a_ceiling_not_a_rounded_target() {
+        let mut coarse = pulse_scheduler(&[(('B', 1), "STROBE")]);
+        coarse.mcus[0].core = Box::new(CoarseCycleCore {
+            cycles: 0,
+            calls: 0,
+        });
+        coarse
+            .configure_timing(TimingRequirement {
+                min_pulse_s: None,
+                max_edge_error_s: Some(3e-6),
+            })
+            .expect("3 us polls are representable");
+
+        coarse.step(10e-6);
+
+        assert_eq!(
+            coarse.mcus[0].core.state().pc,
+            4,
+            "10 us must use ceil(10/3)=4 slices so no actual slice exceeds 3 us"
+        );
+    }
+
+    struct CoarseCycleCore {
+        cycles: u64,
+        calls: u32,
+    }
+
+    impl Mcu for CoarseCycleCore {
+        fn load_firmware(&mut self, _path: &std::path::Path) -> anyhow::Result<()> {
+            Ok(())
+        }
+        fn run_cycles(&mut self, n: u64) -> anyhow::Result<u64> {
+            self.cycles += n;
+            Ok(n)
+        }
+        fn run_micros(&mut self, us: u64) -> anyhow::Result<()> {
+            self.cycles += 16 * us;
+            self.calls += 1;
+            Ok(())
+        }
+        fn frequency(&self) -> u64 {
+            16_000_000
+        }
+        fn current_cycle(&self) -> u64 {
+            self.cycles
+        }
+        fn cycle_exact(&self) -> bool {
+            false
+        }
+        fn set_digital_in(&mut self, _pin: PinId, _high: bool) {}
+        fn set_analog_in(&mut self, _channel: u8, _volts: f64) {}
+        fn on_pin_change(&mut self, _cb: Box<dyn FnMut(PinId, bool, u64) + Send>) {}
+        fn uart_write(&mut self, _bytes: &[u8]) {}
+        fn on_uart(&mut self, _cb: Box<dyn FnMut(u8) + Send>) {}
+        fn on_i2c(&mut self, _cb: Box<dyn FnMut(hauksbee_mcu::I2cEvent) -> Option<u8> + Send>) {}
+        fn on_spi(&mut self, _cb: Box<dyn FnMut(hauksbee_mcu::SpiEvent) -> u8 + Send>) {}
+        fn state(&self) -> hauksbee_mcu::McuState {
+            hauksbee_mcu::McuState {
+                pc: self.calls,
+                cycles: self.cycles,
+                sleeping: false,
+                done: false,
+                crashed: false,
+            }
+        }
     }
 
     /// THE FIELD CASE, runtime half: a 74HC08 output (pad 3 = `y1`) on net

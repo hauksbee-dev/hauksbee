@@ -102,6 +102,15 @@ interface RunResponse {
   inventory?: ArtifactProvenance[]
   assumptions?: EvidenceAssumption[]
   evidence?: EvidenceMap[]
+  timing_coverage?: Array<{
+    mcu_ref: string
+    backend: string
+    cycle_exact: boolean
+    timestamp_precision_s: number
+    minimum_guaranteed_pulse_s: number
+    chunk_s: number
+  }>
+  timing_refusals?: string[]
   results?: CheckResult[]
 }
 
@@ -1250,6 +1259,18 @@ export function ChecksView({
                       ))}
                       {(result.coverage_warnings ?? []).map((s, i) => (
                         <div key={`c${i}`} className="mt-1 text-[12px]" style={{ color: 'var(--warn)' }}>coverage: {s}</div>
+                      ))}
+                      {(result.timing_coverage ?? []).map((t, i) => (
+                        <div key={`t${i}`} className="mt-1 text-[12px]" style={{ color: 'var(--silk-dim)' }}>
+                          timing {t.mcu_ref} ({t.backend}): edge ±{(t.timestamp_precision_s * 1e6).toFixed(3)} µs;
+                          {' '}pulses ≥ {(t.minimum_guaranteed_pulse_s * 1e6).toFixed(3)} µs guaranteed;
+                          {' '}{t.cycle_exact ? 'cycle-exact' : 'poll-boundary'}
+                        </div>
+                      ))}
+                      {(result.timing_refusals ?? []).map((s, i) => (
+                        <div key={`tr${i}`} className="mt-1 text-[12px]" style={{ color: 'var(--err)' }}>
+                          timing invalid: {s}
+                        </div>
                       ))}
                     </>
                   )}

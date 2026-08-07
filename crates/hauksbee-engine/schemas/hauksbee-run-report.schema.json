@@ -725,6 +725,20 @@
           "description": "True when the requested part != the modelled core.",
           "type": "boolean"
         },
+        "timing_coverage": {
+          "description": "Measured edge timestamp precision and guaranteed pulse floor for every\nlive MCU backend at the actual chunk used by this run.",
+          "items": {
+            "$ref": "#/definitions/TimingCoverage"
+          },
+          "type": "array"
+        },
+        "timing_refusals": {
+          "description": "Runtime timing/replay limits reached. A strict run exits INVALID when\nthis is non-empty instead of silently trusting a collapsed waveform.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "total_toggles": {
           "description": "Total net toggles seen during the run. `0` => stalled/quiet.",
           "format": "uint64",
@@ -2058,6 +2072,45 @@
       "required": [
         "start_s",
         "end_s"
+      ],
+      "type": "object"
+    },
+    "TimingCoverage": {
+      "description": "Measured timing capability of one live MCU backend at the configured chunk.",
+      "properties": {
+        "backend": {
+          "type": "string"
+        },
+        "chunk_s": {
+          "description": "Actual solver/MCU slice selected for the run.",
+          "format": "double",
+          "type": "number"
+        },
+        "cycle_exact": {
+          "description": "Push callbacks carry exact cycles; poll backends carry slice boundaries.",
+          "type": "boolean"
+        },
+        "mcu_ref": {
+          "type": "string"
+        },
+        "minimum_guaranteed_pulse_s": {
+          "description": "Pulse width guaranteed to include an observable event. Push callbacks\nsee a one-cycle pulse. Polling uses two slices so at least one poll lies\nstrictly inside the pulse even when an edge coincides with a boundary.",
+          "format": "double",
+          "type": "number"
+        },
+        "timestamp_precision_s": {
+          "description": "Worst-case timestamp uncertainty: one MCU cycle or one poll chunk.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "mcu_ref",
+        "backend",
+        "cycle_exact",
+        "timestamp_precision_s",
+        "minimum_guaranteed_pulse_s",
+        "chunk_s"
       ],
       "type": "object"
     },

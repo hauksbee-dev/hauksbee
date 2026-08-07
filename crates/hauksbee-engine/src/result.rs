@@ -648,6 +648,14 @@ pub struct CosimJson {
     /// Top-N nets by activity: name, toggle count, observed min/max voltage.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub activity_summary: Vec<NetActivity>,
+    /// Measured edge timestamp precision and guaranteed pulse floor for every
+    /// live MCU backend at the actual chunk used by this run.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timing_coverage: Vec<crate::scheduler::TimingCoverage>,
+    /// Runtime timing/replay limits reached. A strict run exits INVALID when
+    /// this is non-empty instead of silently trusting a collapsed waveform.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timing_refusals: Vec<String>,
     /// False once any chunk's analog solve failed to converge: the run held stale
     /// node voltages over `failed_windows` and cannot vouch for analog-derived
     /// findings there (05 §3b, refuse rather than fake). A fully valid run reports
