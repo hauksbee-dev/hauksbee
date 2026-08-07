@@ -358,6 +358,8 @@ fn refusal_and_abort_documents_validate() {
         coverage: None,
         substitutions: Vec::new(),
         coverage_warnings: Vec::new(),
+        timing_coverage: Vec::new(),
+        timing_refusals: Vec::new(),
         dead_rails: Vec::new(),
         waiver_notes: Vec::new(),
     };
@@ -376,6 +378,15 @@ fn refusal_and_abort_documents_validate() {
         }),
         substitutions: vec!["U1: ESP32-S3 requested, ran on ESP32".to_string()],
         coverage_warnings: vec!["co-sim: ADC channel 0 on U1 never received a sample".to_string()],
+        timing_coverage: vec![hauksbee_engine::scheduler::TimingCoverage {
+            mcu_ref: "U1".to_string(),
+            backend: "qemu:esp32".to_string(),
+            cycle_exact: false,
+            timestamp_precision_s: 0.001,
+            minimum_guaranteed_pulse_s: 0.002,
+            chunk_s: 0.001,
+        }],
+        timing_refusals: vec!["PWL replay budget exceeded".to_string()],
         dead_rails: vec!["ANALOG_VDD".to_string()],
         waiver_notes: vec!["waiver for max_temp on R1 lapsed on 2026-01-01".to_string()],
     };
