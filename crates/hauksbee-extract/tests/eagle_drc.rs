@@ -11,7 +11,13 @@ use hauksbee_extract::{ExtractedBoard, ViolationKind};
 /// control the embedded clearance rule; `signals` carries the copper. Eagle is
 /// y-up, millimetres. Two outer copper layers (1 = Top / F.Cu, 16 = Bottom /
 /// B.Cu) are declared, matching the real corpus boards.
-fn board(packages: &str, elements: &str, signals: &str, designrules: &str) -> String {
+fn board_in_library(
+    library: &str,
+    packages: &str,
+    elements: &str,
+    signals: &str,
+    designrules: &str,
+) -> String {
     format!(
         r#"<?xml version="1.0" encoding="utf-8"?>
 <!DOCTYPE eagle SYSTEM "eagle.dtd">
@@ -25,7 +31,7 @@ fn board(packages: &str, elements: &str, signals: &str, designrules: &str) -> St
 <plain>
 </plain>
 <libraries>
-<library name="lib">
+<library name="{library}">
 <packages>
 {packages}
 </packages>
@@ -45,6 +51,10 @@ fn board(packages: &str, elements: &str, signals: &str, designrules: &str) -> St
     )
 }
 
+fn board(packages: &str, elements: &str, signals: &str, designrules: &str) -> String {
+    board_in_library("lib", packages, elements, signals, designrules)
+}
+
 /// The default Eagle design-rule block (6 mil = 0.1524 mm wire-wire clearance).
 fn default_rules() -> &'static str {
     r#"<designrules name="default">
@@ -57,6 +67,16 @@ fn default_rules() -> &'static str {
 
 fn drc(packages: &str, elements: &str, signals: &str) -> hauksbee_extract::DrcReport {
     let text = board(packages, elements, signals, default_rules());
+    ExtractedBoard::drc(&text).expect("eagle drc runs")
+}
+
+fn drc_in_library(
+    library: &str,
+    packages: &str,
+    elements: &str,
+    signals: &str,
+) -> hauksbee_extract::DrcReport {
+    let text = board_in_library(library, packages, elements, signals, default_rules());
     ExtractedBoard::drc(&text).expect("eagle drc runs")
 }
 
@@ -416,29 +436,105 @@ fn smd_smd_overlap_in_different_packages_is_a_short() {
 }
 
 #[test]
-fn explicit_jumper_pads_do_not_short() {
-    // Only an explicitly recognised link footprint may join different nets
-    // without becoming a board-level short.
+fn established_eagle_jumper_library_and_package_pair_is_local() {
+    // EAGLE has no native net-tie flag. The Arduino convention uses two
+    // independent class fields together: library="jumper", package="SJ".
+    let packages = r#"
+<package name="SJ">
+  <smd name="1" x="0" y="0" dx="1" dy="1" layer="1"/>
+  <smd name="2" x="0.9" y="0" dx="1" dy="1" layer="1"/>
+</package>"#;
+    let elements = r#"<element name="JP1" library="jumper" package="SJ" x="20" y="20"/>"#;
+    let signals = r#"
+<signal name="A">
+  <contactref element="JP1" pad="1"/>
+  <wire x1="0" y1="0" x2="10" y2="0" width="0.4" layer="1"/>
+</signal>
+<signal name="B">
+  <contactref element="JP1" pad="2"/>
+  <wire x1="5" y1="-5" x2="5" y2="5" width="0.4" layer="1"/>
+</signal>
+"#;
+    let report = drc_in_library("jumper", packages, elements, signals);
+    assert_eq!(
+        report.short_count(),
+        1,
+        "the conventional SJ contact is local; the remote track short remains"
+    );
+    assert_short(&report, "A", "B");
+}
+
+#[test]
+fn eagle_jumper_does_not_hide_ordinary_copper_crossing_over_its_pads() {
+    let packages = r#"
+<package name="SJ">
+  <smd name="1" x="0" y="0" dx="1" dy="1" layer="1"/>
+  <smd name="2" x="0.9" y="0" dx="1" dy="1" layer="1"/>
+</package>"#;
+    let elements = r#"<element name="JP1" library="jumper" package="SJ" x="5" y="5"/>"#;
+    let signals = r#"
+<signal name="A">
+  <contactref element="JP1" pad="1"/>
+  <wire x1="0" y1="5" x2="10" y2="5" width="0.2" layer="1"/>
+</signal>
+<signal name="B">
+  <contactref element="JP1" pad="2"/>
+  <wire x1="5.45" y1="0" x2="5.45" y2="10" width="0.2" layer="1"/>
+</signal>
+"#;
+
+    assert_short(
+        &drc_in_library("jumper", packages, elements, signals),
+        "A",
+        "B",
+    );
+}
+
+#[test]
+fn eagle_jumper_allows_routes_that_terminate_on_its_declared_pad_pair() {
+    // EAGLE has no native net-tie primitive: the established jumper convention
+    // routes one signal from pad 1 into pad 2 while the other signal terminates
+    // on pad 2. Both route endpoints are anchored to their corresponding
+    // jumper pads, matching the Arduino Uno GROUND tie.
+    let packages = r#"
+<package name="SJ">
+  <smd name="1" x="-0.75" y="0" dx="1" dy="1" layer="1"/>
+  <smd name="2" x="0.75" y="0" dx="1" dy="1" layer="1"/>
+</package>"#;
+    let elements = r#"<element name="JP1" library="jumper" package="SJ" x="5" y="5"/>"#;
+    let signals = r#"
+<signal name="A">
+  <contactref element="JP1" pad="1"/>
+  <wire x1="4.25" y1="5" x2="5.25" y2="5" width="0.2" layer="1"/>
+</signal>
+<signal name="B">
+  <contactref element="JP1" pad="2"/>
+  <wire x1="5.75" y1="5" x2="5.25" y2="5" width="0.2" layer="1"/>
+</signal>
+"#;
+
+    let report = drc_in_library("jumper", packages, elements, signals);
+    assert!(
+        report.is_clean(),
+        "routes anchored to the declared jumper pads are local tie copper: {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn a_jumper_name_in_one_field_does_not_exempt_copper() {
     let packages = r#"
 <package name="JUMPER">
   <smd name="1" x="0" y="0" dx="1" dy="1" layer="1"/>
   <smd name="2" x="0.9" y="0" dx="1" dy="1" layer="1"/>
 </package>"#;
-    let elements = r#"<element name="JP1" library="lib" package="JUMPER" x="5" y="5"/>"#;
+    let elements =
+        r#"<element name="JP1" library="lib" package="JUMPER" value="JUMPER" x="5" y="5"/>"#;
     let signals = r#"
-<signal name="A">
-  <contactref element="JP1" pad="1"/>
-</signal>
-<signal name="B">
-  <contactref element="JP1" pad="2"/>
-</signal>
+<signal name="A"><contactref element="JP1" pad="1"/></signal>
+<signal name="B"><contactref element="JP1" pad="2"/></signal>
 "#;
-    let report = drc(packages, elements, signals);
-    assert_eq!(
-        report.short_count(),
-        0,
-        "an explicitly named jumper may join its own local copper"
-    );
+    assert_short(&drc(packages, elements, signals), "A", "B");
 }
 
 #[test]
@@ -508,13 +604,13 @@ fn shared_component_does_not_exempt_unrelated_copper() {
 }
 
 #[test]
-fn explicit_jumper_exemption_is_local_to_its_copper() {
+fn dual_field_eagle_jumper_exemption_is_local_to_its_copper() {
     let packages = r#"
-<package name="NET_TIE">
+<package name="SMT-JUMPER_2-NC_TRACE">
   <smd name="1" x="0" y="0" dx="1" dy="1" layer="1"/>
   <smd name="2" x="0.9" y="0" dx="1" dy="1" layer="1"/>
 </package>"#;
-    let elements = r#"<element name="NT1" library="lib" package="NET_TIE" x="20" y="20"/>"#;
+    let elements = r#"<element name="NT1" library="SparkFun-Jumpers" package="SMT-JUMPER_2-NC_TRACE" value="JUMPER-SMT" x="20" y="20"/>"#;
     let signals = r#"
 <signal name="A">
   <contactref element="NT1" pad="1"/>
@@ -525,7 +621,7 @@ fn explicit_jumper_exemption_is_local_to_its_copper() {
   <wire x1="5" y1="-5" x2="5" y2="5" width="0.4" layer="1"/>
 </signal>
 "#;
-    let report = drc(packages, elements, signals);
+    let report = drc_in_library("SparkFun-Jumpers", packages, elements, signals);
 
     assert_eq!(
         report.short_count(),
@@ -676,6 +772,48 @@ fn mirror_reflects_x_not_y_for_offset_pads() {
         r2.is_clean(),
         "the pad must be at flip-X (7,4), not flip-Y (13,-4)"
     );
+}
+
+#[test]
+fn mirrored_offset_th_pad_direction_is_reflected_for_mr0_and_mr180() {
+    // A real EAGLE `shape="offset"` through-hole pad is asymmetric: the hole
+    // sits at one end of the capsule. Mirroring must therefore reverse the pad
+    // axis, not just move its centre. With the element origin at x=10:
+    //   MR0   extends toward -X;
+    //   MR180 extends toward +X.
+    // A symmetric round/long pad would not discriminate this sign error.
+    let packages = r#"
+<package name="OFFSET_TH">
+  <pad name="1" x="0" y="0" drill="0.8" diameter="2" shape="offset" rot="R0"/>
+</package>"#;
+
+    for (element_rotation, expected_x, reflected_away_x) in
+        [("MR0", 7.5, 12.5), ("MR180", 12.5, 7.5)]
+    {
+        let elements = format!(
+            r#"<element name="U1" library="lib" package="OFFSET_TH" x="10" y="0" rot="{element_rotation}"/>"#
+        );
+        let at_expected = format!(
+            r#"
+<signal name="A"><contactref element="U1" pad="1"/></signal>
+<signal name="B"><wire x1="{expected_x}" y1="-1" x2="{expected_x}" y2="1" width="0.2" layer="1"/></signal>
+"#
+        );
+        assert_short(&drc(packages, &elements, &at_expected), "A", "B");
+
+        let at_wrong_side = format!(
+            r#"
+<signal name="A"><contactref element="U1" pad="1"/></signal>
+<signal name="B"><wire x1="{reflected_away_x}" y1="-1" x2="{reflected_away_x}" y2="1" width="0.2" layer="1"/></signal>
+"#
+        );
+        let report = drc(packages, &elements, &at_wrong_side);
+        assert!(
+            report.is_clean(),
+            "{element_rotation}: no copper belongs on the unreflected side: {:?}",
+            report.findings
+        );
+    }
 }
 
 #[test]

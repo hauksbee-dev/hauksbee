@@ -48,9 +48,10 @@ carrying no connectivity and are never reported as a short:
 - net 0 (KiCad's empty / "no net" bucket), and
 - `unconnected-(...)` placeholder nets (one per floating pad).
 
-Two pads of the *same* footprint are also skipped: some footprints place
-different-net pads deliberately abutting (fuse clips, jumper bridges,
-edge-connector fingers), which KiCad does not treat as a board short.
+Footprint ownership alone never suppresses a finding. Different-net pads in an
+ordinary fuse, connector, resistor, or IC are checked exactly like copper from
+different footprints. Deliberate contacts are exempted only by the explicit,
+format-specific rules under "Deliberate ties exempted locally" below.
 
 ### Spatial index and the sweep
 
@@ -154,7 +155,10 @@ Package copper is placed with the full element transform: position rotated by th
 element's `rot` (CCW, y-up). A mirrored (`MR`) element negates local X and uses
 the mirrored rotation sense. This is regression-tested for both `MR90` and
 `MR0`; the latter is what keeps the RP2040 Thing Plus micro-SD pads on their
-actual bottom-side coordinates.
+actual bottom-side coordinates. The pad's own axis is reflected through that
+same transform. A real asymmetric `shape="offset"` through-hole fixture checks
+both `MR0` and `MR180`, including the side where copper must *not* appear; a
+round or symmetric long pad cannot detect that direction error.
 
 ### Rule source
 
@@ -191,12 +195,35 @@ Ordinary components do not create DRC exemptions: two different-net pads owned
 by the same resistor, IC, or connector still report, and an A/B component never
 waives an unrelated A/B copper collision elsewhere.
 
-Only explicit copper-link semantics are recognised: named solder-jumper/net-tie
-footprints, plus a dedicated `0R_...` footprint when its value independently
-states `0R`. Even then, the exemption is local. The reported contact point must
-land on copper owned by that specific link footprint on that layer. This covers
-the Uno's `GROUND` SJ connection, including its track-to-track contact, without
-suppressing another GND/UGND collision elsewhere.
+The recogniser is deliberately format-specific; a reference, value, library, or
+footprint name by itself never waives copper:
+
+- **KiCad:** `(net_tie_pad_groups "1, 2" "3, 4")` is authoritative, and each
+  quoted group remains electrically separate. `(attr net_tie)` with no group
+  list forms one all-pad group for the older native form. House footprint names
+  work because names are not the discriminator. Two tightly bounded legacy
+  forms remain: a dedicated `0R_...` footprint *and* an independently zero-ohm
+  value, and old EAGLE imports whose footprint has a `TIED` token *and* whose
+  value explicitly identifies a pair such as `Closed(1-2)`. The latter exempts
+  only that pair, never every pad in the footprint.
+- **EAGLE:** `.brd` has no native net-tie Component Type field. The DRC therefore
+  accepts only exact, real-board library/package conventions: Arduino's
+  `library="jumper"`, `package="SJ"`, and SparkFun's
+  `SparkFun-Jumpers` closed-trace packages. A generic package/value named
+  `JUMPER` is checked even when both fields match. New vendor conventions require
+  a real-board fixture. The two-field dedicated-0R rule is the only zero-ohm
+  exception.
+- **Altium binary `.PcbDoc`:** only the native Components record
+  `COMPONENTTYPE=Net Tie` or `Net Tie (In BOM)` is accepted. `PATTERN`, library,
+  reference, and inferred 0R names are not substitutes. Component ownership
+  uses the same channel-aware canonical reference as extraction, so repeated
+  `NT1` designators in two channels cannot share an exemption. If the native
+  field is absent, the DRC abstains from exempting it. The Protel ASCII reader
+  currently extracts connectivity but has no geometric DRC path.
+
+Every accepted group is still owner-, layer-, net-group-, and contact-local.
+The reported contact point must land on that group's own copper. A legal A/B
+contact at one tie can never suppress another A/B collision elsewhere.
 
 ## Simulation (`hauksbee-engine/src/shorts.rs`)
 
@@ -239,11 +266,11 @@ the CLI.
 | tinytapeout-demo | 4.5 MB | 86,626 | 0 | 347 |
 | pic_programmer | 0.6 MB | 11,087 | 0 | 0 |
 
-A full sweep of the corpus (54 boards, ~50 parse successfully. One,
-RoyalBlue54L-Feather, is malformed at the s-expression level and rejected
-upstream by `forge-sexpr`) reports **zero true shorts**, correct, since these
-are all shipped, working boards. Clearance violations remain on tightly-routed
-boards and are expected.
+The current required-corpus gate scans 64 parseable KiCad boards and 2,300,130
+copper primitives. It reports no unaccounted true shorts; the explicitly
+documented, expiring exceptions remain visible in `tests/drc_corpus.rs` rather
+than being hidden in the detector. Clearance violations remain on tightly
+routed boards and are expected.
 
 ### Eagle famous-board sweep (release build, warm, the board's own rule)
 
@@ -286,10 +313,11 @@ waived. The corpus test (`tests/drc_corpus.rs`) documents this evidence.
 
 ## Tests
 
-- `hauksbee-extract/tests/drc.rs`: 36 synthetic fixtures, one per geometry kind
+- `hauksbee-extract/tests/drc.rs`: 40 synthetic fixtures, one per geometry kind
   (segment-segment, segment-pad, pad-pad, via-zone, via-spans-layers) plus
   clearance-only, cross-layer non-shorts, ordinary same-footprint shorts,
-  locally scoped explicit net-tie and 0R-link exemptions, the
+  native house-name net ties, distinct multi-group and cross-group cases,
+  name-only negatives, locally scoped 0R and legacy closed-pair cases, the
   clearance-override classification, the at-rule / micron-under-rule /
   genuinely-sub-rule boundary cases, the per-netclass and diff-pair clearance
   rules (including `.kicad_pro` assignments and a malformed class), blind and
@@ -297,16 +325,19 @@ waived. The corpus test (`tests/drc_corpus.rs`) documents this evidence.
 - `hauksbee-extract/tests/drc_corpus.rs`: the corpus sweep asserting zero true
   shorts across the parseable boards (skipped gracefully if the corpus is
   absent).
-- `hauksbee-extract/tests/eagle_drc.rs`: 26 synthetic minimal `.brd` fixtures, one
+- `hauksbee-extract/tests/eagle_drc.rs`: 28 synthetic minimal `.brd` fixtures, one
   per Eagle geometry kind (wire-wire short, wire-smd, smd-smd, via-wire,
   via-spans-layers, octagon pad, curved wire) plus the clearance-only, no-rule
   fallback, cross-layer non-short, ordinary same-owner shorts, locally scoped
-  explicit-jumper abutment, remote same-net-pair collisions, board-derived long
-  pad elongation, mirrored
-  package placed on the bottom, mirror handedness on offset pads, via-restring
+  dual-field jumper abutment, the single-field negative, remote same-net-pair
+  collisions, board-derived long pad elongation, mirrored package placement,
+  and asymmetric offset-pad direction under `MR0`/`MR180`, via-restring
   derivation, format dispatch, `POPULATE="no"` mapping to DNP, same-named
   packages in different libraries staying distinct, an element with a missing
   package, and the design-rule clearance respected / overridden cases.
+- `hauksbee-extract/tests/altium.rs`: synthetic binary Components/Pads/Tracks
+  records covering both native net-tie Component Types, PATTERN-only abstention,
+  local scope, and repeated-channel raw-designator isolation.
 - `hauksbee-extract/tests/eagle_drc_corpus.rs`: the famous-Eagle sweep over all
   ten boards (Arduino Uno, five Adafruit, four SparkFun), asserting zero true
   shorts and recording per-board clearance counts, rule, primitive count and

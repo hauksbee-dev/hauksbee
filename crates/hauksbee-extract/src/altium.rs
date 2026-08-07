@@ -591,6 +591,9 @@ struct CompRecord {
     pattern: String,
     library: String,
     description: String,
+    /// Native PCB Component Type. Only the exact Altium values `Net Tie` and
+    /// `Net Tie (In BOM)` carry copper-short semantics; footprint names do not.
+    component_type: String,
     layer_name: String,
     /// Last segment of `SOURCEHIERARCHICALPATH` (the channel name on a
     /// channel-replicated design, e.g. "FLASH2"); used to disambiguate repeated
@@ -629,6 +632,7 @@ fn parse_components(buf: &[u8]) -> Vec<CompRecord> {
             pattern: prop_str(&m, "PATTERN"),
             library: prop_str(&m, "SOURCEFOOTPRINTLIBRARY"),
             description: prop_str(&m, "SOURCEDESCRIPTION"),
+            component_type: prop_str(&m, "COMPONENTTYPE"),
             layer_name: prop_str(&m, "LAYER"),
             channel,
             x_mm,
@@ -637,6 +641,40 @@ fn parse_components(buf: &[u8]) -> Vec<CompRecord> {
         });
     }
     out
+}
+
+/// Canonical component references in component-stream order. Altium repeats a
+/// raw `SOURCEDESIGNATOR` across hierarchical channels; DRC ownership must use
+/// the same channel-aware identity as extraction or one channel's exemption can
+/// leak into another.
+fn canonical_component_references(comps: &[CompRecord]) -> Vec<String> {
+    let mut refdes_count: HashMap<&str, usize> = HashMap::new();
+    for c in comps {
+        *refdes_count.entry(c.refdes.as_str()).or_default() += 1;
+    }
+    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut references = Vec::with_capacity(comps.len());
+
+    for c in comps {
+        let mut reference = c.refdes.clone();
+        if refdes_count.get(c.refdes.as_str()).copied().unwrap_or(0) > 1 {
+            if !c.channel.is_empty() {
+                reference = format!("{}_{}", c.refdes, c.channel);
+            }
+        }
+        // A unique raw designator can itself equal a channel-qualified one
+        // chosen earlier. De-duplicate every candidate, not just repeated raw
+        // designators, so ownership is globally canonical.
+        let mut n = 2;
+        while used.contains(&reference) {
+            reference = format!("{}_{}", c.refdes, n);
+            n += 1;
+        }
+        used.insert(reference.clone());
+        references.push(reference);
+    }
+
+    references
 }
 
 /// Net names in stream order; a primitive's net field is a 0-based index here.
@@ -649,13 +687,28 @@ pub(crate) fn parse_net_names(buf: &[u8]) -> Vec<String> {
     out
 }
 
-/// Component identities needed by the geometric DRC to recognise explicit
-/// net-tie footprints. Tuple fields are `(reference, library, pattern)` in
-/// component-stream order, matching primitive component indices.
-pub(crate) fn parse_drc_component_identities(buf: &[u8]) -> Vec<(String, String, String)> {
-    parse_components(buf)
+/// Native component identity needed by the geometric DRC, in component-stream
+/// order so fixed-binary primitive component indices resolve directly.
+pub(crate) struct DrcComponentIdentity {
+    pub(crate) reference: String,
+    pub(crate) is_net_tie: bool,
+}
+
+pub(crate) fn parse_drc_component_identities(buf: &[u8]) -> Vec<DrcComponentIdentity> {
+    let comps = parse_components(buf);
+    let references = canonical_component_references(&comps);
+    comps
         .into_iter()
-        .map(|c| (c.refdes, c.library, c.pattern))
+        .zip(references)
+        .map(|(component, reference)| {
+            let component_type = component.component_type.trim();
+            let is_net_tie = component_type.eq_ignore_ascii_case("Net Tie")
+                || component_type.eq_ignore_ascii_case("Net Tie (In BOM)");
+            DrcComponentIdentity {
+                reference,
+                is_net_tie,
+            }
+        })
         .collect()
 }
 
@@ -793,34 +846,15 @@ pub fn extract(bytes: &[u8]) -> Result<ExtractedBoard, ExtractError> {
         }
     };
 
-    // A channel-replicated design (e.g. three identical FLASH banks) reuses the
-    // same `SOURCEDESIGNATOR` ("C1") across channels. KiCad disambiguates those
-    // by appending the channel name ("C1_FLASH2"); mirror that so every
-    // component has a unique reference for the binder. Designators that are
-    // already unique are left untouched.
-    let mut refdes_count: HashMap<&str, usize> = HashMap::new();
-    for c in &comps {
-        *refdes_count.entry(c.refdes.as_str()).or_default() += 1;
-    }
-    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    // Use the same channel-aware identity helper as DRC ownership. Keeping one
+    // canonicalisation path prevents a repeated channel's local exemption from
+    // being keyed differently from its extracted component.
+    let references = canonical_component_references(&comps);
 
     let mut components: Vec<Component> = Vec::with_capacity(comps.len());
     for (idx, c) in comps.iter().enumerate() {
         let idx16 = idx as u16;
-        // Build a unique reference.
-        let mut reference = c.refdes.clone();
-        if refdes_count.get(c.refdes.as_str()).copied().unwrap_or(0) > 1 {
-            if !c.channel.is_empty() {
-                reference = format!("{}_{}", c.refdes, c.channel);
-            }
-            // Guarantee uniqueness even if the channel is missing/duplicated.
-            let mut n = 2;
-            while used.contains(&reference) {
-                reference = format!("{}_{}", c.refdes, n);
-                n += 1;
-            }
-        }
-        used.insert(reference.clone());
+        let reference = references[idx].clone();
         // Only copper pads become pins. A footprint may also carry pad records
         // on paste/mask/mechanical layers; counting one of those made every
         // 2-pad passive look like a 3-pad part, which the engine then bound as
