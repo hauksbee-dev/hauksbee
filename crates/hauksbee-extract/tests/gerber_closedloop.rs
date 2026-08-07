@@ -531,7 +531,10 @@ fn advanced_geometry_boards_match_kicad() {
         }
     }
     if require_corpus() {
-        assert!(ran >= 1, "corpus required but no geometry board round-tripped");
+        assert!(
+            ran >= 1,
+            "corpus required but no geometry board round-tripped"
+        );
     } else if ran == 0 {
         eprintln!("skipping advanced-geometry cross-check (no corpus/kicad-cli)");
     }

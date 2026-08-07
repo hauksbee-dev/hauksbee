@@ -32,7 +32,10 @@ fn main() {
         s.total_flashes, s.assigned_flashes, s.unassigned_flashes
     );
     println!("  of which slots:    {}", s.n_slots);
-    println!("  on the outline:    {} (castellations / plated edge slots)", s.n_castellations);
+    println!(
+        "  on the outline:    {} (castellations / plated edge slots)",
+        s.n_castellations
+    );
     println!("spans refused:       {}", s.refused_span_holes);
     println!("GND net detected:    {}", s.gnd_detected);
     println!("extraction time:     {dt:?}");

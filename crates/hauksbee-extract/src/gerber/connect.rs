@@ -9,9 +9,12 @@
 //! Two pieces of copper that touch are the same conductor. We index every
 //! primitive on a layer in an `rstar` R*-tree (the same prune the DRC uses for
 //! its O(n) sweep) and union any pair whose signed copper gap is `<= eps`. A
-//! plated drill at (x, y) is a disc on *every* copper layer and also unions the
-//! layers' primitives that cover it, so vias and through-hole pads stitch the
-//! stack. The connected components of the union-find are the nets; each gets a
+//! plated drill becomes a barrel on each copper layer its [`LayerSpan`] reaches
+//! and unions the primitives that barrel touches, so a through-hole stitches the
+//! whole stack, a blind or buried via stitches only its own pair, and a hit whose
+//! span the files never gave us stitches nothing at all. A slot's barrel is the
+//! stadium swept along its routed path, so it connects copper anywhere along the
+//! wall. The connected components of the union-find are the nets; each gets a
 //! synthetic name `NET_n`, except the largest pour-touching component which is
 //! labelled `GND` as a heuristic (copper pours are overwhelmingly ground).
 //!
@@ -188,8 +191,8 @@ pub fn reconstruct(
     placements: Vec<Placement>,
 ) -> (ExtractedBoard, ReconStats) {
     // ── 1. Flatten every primitive into one global vector, remembering layer ──
-    // Plated holes become a disc primitive on each layer (PrimKind::Flash so a
-    // through-hole pad anchors a component) plus a cross-layer stitch.
+    // Plated hits become a barrel primitive on each layer their span reaches,
+    // tagged `PrimKind::Via`, plus a stitch joining those barrels to each other.
     let n_layers = layers.len().max(1);
     let mut prims: Vec<LayerPrim> = Vec::new();
     // global prim index -> layer
@@ -1014,7 +1017,12 @@ mod tests {
 
         // The same drill as a through-hole is the one net, so the fixture is
         // not passing because the geometry happened not to touch.
-        let (_b, s_thru) = reconstruct("t", layers, vec![PlatedHole::through(0.0, 0.0, 0.3)], vec![]);
+        let (_b, s_thru) = reconstruct(
+            "t",
+            layers,
+            vec![PlatedHole::through(0.0, 0.0, 0.3)],
+            vec![],
+        );
         assert_eq!(s_thru.n_nets, 1);
     }
 
@@ -1098,8 +1106,16 @@ mod tests {
 
         // The same hit read as a round hole at the start point (what the reader
         // did before G85 was understood) leaves the far pad on its own net.
-        let (_b, s2) = reconstruct("t", vec![layer], vec![PlatedHole::through(0.0, 0.0, 0.6)], vec![]);
-        assert_eq!(s2.n_nets, 2, "a round hole at the start reaches only one pad");
+        let (_b, s2) = reconstruct(
+            "t",
+            vec![layer],
+            vec![PlatedHole::through(0.0, 0.0, 0.6)],
+            vec![],
+        );
+        assert_eq!(
+            s2.n_nets, 2,
+            "a round hole at the start reaches only one pad"
+        );
     }
 
     #[test]
