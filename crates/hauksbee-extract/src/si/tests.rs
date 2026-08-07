@@ -1138,3 +1138,155 @@ fn si_rail_voltage_recognises_the_same_tokens_as_netlint() {
     // The loose 5V fallback (with rail context) matches too.
     assert_eq!(super::rail_voltage("VCC_5V_MCU"), Some(5.0));
 }
+
+/// A controlled-impedance USB pair over a B.Cu pour, with the pour's fill given
+/// as `fill` polygons. `(-5,-5)..(25,5)` covers the whole 20 mm run.
+fn impedance_usb_over_plane(fills: &str) -> String {
+    // Same in-band geometry as `impedance_usb_text(0.3, 0.2, 0.2, 4.3)`: W 0.3,
+    // edge-to-edge gap 0.2 (centres 0 and 0.5), 0.2 mm FR4 core, Zdiff ~ 87 ohm
+    // against the 90 ohm USB target.
+    format!(
+        r#"(kicad_pcb (version 20240101)
+        (setup (stackup
+          (layer "F.Cu" (type "copper") (thickness 0.035))
+          (layer "dielectric 1" (type "core") (thickness 0.2) (material "FR4") (epsilon_r 4.3))
+          (layer "B.Cu" (type "copper") (thickness 0.035))
+          (dielectric_constraints yes)))
+        (net 0 "") (net 1 "USB_DP") (net 2 "USB_DM") (net 3 "GND")
+        (segment (start 0 0) (end 20 0) (width 0.3) (layer "F.Cu") (net 1))
+        (segment (start 0 0.5) (end 20 0.5) (width 0.3) (layer "F.Cu") (net 2))
+        (zone (net 3) (net_name "GND") (layer "B.Cu") {fills}))"#
+    )
+}
+
+fn rect_fill(x0: f64, x1: f64) -> String {
+    format!(
+        "(filled_polygon (pts (xy {x0} -5) (xy {x1} -5) (xy {x1} 5) (xy {x0} 5)))",
+    )
+}
+
+#[test]
+fn a_pair_over_a_solid_reference_plane_reports_its_zdiff_silently() {
+    // The two-sided partner of the test below. Same geometry, same declared
+    // controlled-impedance intent, but the B.Cu pour is unbroken under the whole
+    // run: the microstrip formula's H is the height to copper that is really
+    // there, so the estimate stands and the check says nothing about the plane.
+    let text = impedance_usb_over_plane(&rect_fill(-5.0, 25.0));
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    assert_eq!(r.finding_count(), 0, "a solid reference plane must not fire");
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("an impedance note");
+    assert_eq!(f.severity, SiSeverity::Info);
+    assert!(
+        f.message.contains("Zdiff") && f.message.contains("ok"),
+        "the in-band Zdiff must still be reported: {}",
+        f.message
+    );
+    assert!(
+        !f.message.contains("reference"),
+        "a verified plane is discharged silently, not narrated: {}",
+        f.message
+    );
+}
+
+#[test]
+fn a_pair_crossing_a_plane_void_names_the_span_instead_of_a_zdiff() {
+    // The formulas' H is the height to a REFERENCE PLANE, and the module used to
+    // assume one existed under the trace because the stackup declared a second
+    // copper layer. Here the B.Cu pour is split, leaving 6..14 mm with no copper
+    // under either leg. The return current has to detour, the real impedance is
+    // nothing like the closed form's, so the check must abstain and say where.
+    let void = format!("{} {}", rect_fill(-5.0, 6.0), rect_fill(14.0, 25.0));
+    let text = impedance_usb_over_plane(&void);
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("an abstention");
+    assert!(
+        f.message.contains("reference missing under trace"),
+        "the abstention must say what is missing: {}",
+        f.message
+    );
+    assert!(
+        !f.message.contains("Zdiff ~"),
+        "no confident Zdiff may be printed without a reference plane: {}",
+        f.message
+    );
+    // The span is named, so a designer can go and look at it: the sampled points
+    // that lost their reference are the two legs' midpoints at x = 10 mm.
+    assert!(
+        f.message.contains("(10.00, 0.00)") && f.message.contains("(10.00, 0.50)"),
+        "the span must be named in board coordinates: {}",
+        f.message
+    );
+    assert!(
+        f.message.contains("B.Cu"),
+        "the span must name the layer that should carry the plane: {}",
+        f.message
+    );
+    // And it must say what would turn this into a confident answer.
+    assert!(
+        f.message.contains("solid reference-plane copper"),
+        "the abstention must name what would unlock a confident answer: {}",
+        f.message
+    );
+    // The board declares controlled impedance, so this is a real defect class,
+    // not an informational aside.
+    assert_eq!(f.severity, SiSeverity::Medium);
+}
+
+#[test]
+fn a_void_on_a_board_that_does_not_declare_controlled_impedance_stays_info() {
+    // Gate 3 still applies to the abstention: a board that chose not to control
+    // these nets (every full-speed USB keyboard in the corpus) gets the same
+    // named span as an info note, never a fire. This is what keeps the corpus
+    // silent.
+    let void = format!("{} {}", rect_fill(-5.0, 6.0), rect_fill(14.0, 25.0));
+    let text = impedance_usb_over_plane(&void).replace(
+        "(dielectric_constraints yes)",
+        "(dielectric_constraints no)",
+    );
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    assert_eq!(r.finding_count(), 0, "an undeclared board must never fire");
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("an info abstention");
+    assert_eq!(f.severity, SiSeverity::Info);
+    assert!(f.message.contains("reference missing under trace"));
+}
+
+#[test]
+fn a_board_with_no_pour_on_the_reference_layer_says_the_plane_is_unverified() {
+    // The bias is against inventing a void: with nothing to test against, the
+    // estimate keeps its previous treatment, but it says its reference is
+    // unverified so the number never reads as more grounded than it is.
+    let text = impedance_usb_text(0.3, 0.2, 0.2, 4.3);
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("an impedance note");
+    assert_eq!(r.finding_count(), 0);
+    assert!(
+        f.message.contains("reference plane unverified")
+            && f.message.contains("no filled copper pour on B.Cu"),
+        "an unverified reference must be stated, with its reason: {}",
+        f.message
+    );
+}
