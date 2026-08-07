@@ -1172,6 +1172,15 @@ def main(argv: list[str] | None = None) -> int:
         run_external_gate,
     )
 
+    # Under `python -m qc.unseen_boards` this file executes as `__main__`,
+    # while `qc.release_board_gates` imports it a second time as
+    # `qc.unseen_boards`. The two module objects carry distinct exception
+    # classes, so catching only this file's HistoryError/SelectionError lets
+    # every error raised inside the gate functions escape as a traceback.
+    # Catch the canonical module's classes alongside our own.
+    from qc.unseen_boards import HistoryError as _CanonicalHistoryError
+    from qc.unseen_boards import SelectionError as _CanonicalSelectionError
+
     parser = _parser()
     try:
         args = parser.parse_args(argv)
@@ -1241,7 +1250,13 @@ def main(argv: list[str] | None = None) -> int:
                 tool_commit=commit,
                 runner=_playwright_runner,
             )
-    except (HistoryError, SelectionError, OSError) as error:
+    except (
+        HistoryError,
+        SelectionError,
+        _CanonicalHistoryError,
+        _CanonicalSelectionError,
+        OSError,
+    ) as error:
         print(f"unseen-board trial: {error}", file=sys.stderr)
         return 2
 
