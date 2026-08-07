@@ -224,6 +224,44 @@ fn crystal_missing_both_caps_fires() {
     );
 }
 
+/// Two-sided assembly contract: the identical topology that is clean when the
+/// caps are fitted (`crystal_known_cl_within_tolerance_is_info_not_finding`)
+/// must fire missing-load-caps when the caps are DNP or identity-refused,
+/// because an absent or untrusted cap loads nothing.
+#[test]
+fn dnp_or_refused_load_caps_do_not_satisfy_crystal_topology() {
+    let refuse_caps = |b: &mut ExtractedBoard, f: &dyn Fn(&mut crate::Component)| {
+        for c in b
+            .components
+            .iter_mut()
+            .filter(|c| c.reference.starts_with('C'))
+        {
+            f(c);
+        }
+    };
+
+    let mut dnp = xtal_board("ABM8-272-T3", "33p", "33p");
+    refuse_caps(&mut dnp, &|c| c.dnp = true);
+    let mut r = SiReport::default();
+    check_crystal_load_cap(&dnp, &mut r);
+    assert_eq!(r.finding_count(), 1, "DNP caps must read as missing caps");
+
+    let mut refused = xtal_board("ABM8-272-T3", "33p", "33p");
+    refuse_caps(&mut refused, &|c| {
+        c.properties.push((
+            crate::DUPLICATE_REFERENCE_CONFLICT_KEY.to_string(),
+            "two records with different values".to_string(),
+        ));
+    });
+    let mut r = SiReport::default();
+    check_crystal_load_cap(&refused, &mut r);
+    assert_eq!(
+        r.finding_count(),
+        1,
+        "identity-refused caps must read as missing caps"
+    );
+}
+
 #[test]
 fn rtc_with_integrated_caps_no_cap_is_silent() {
     // A 32.768 kHz crystal on a PCF8523 RTC (integrated load caps): no external

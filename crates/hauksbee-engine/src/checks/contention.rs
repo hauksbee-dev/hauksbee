@@ -523,6 +523,22 @@ mod tests {
         assert!(run(&b).findings.is_empty(), "{:?}", run(&b).findings);
     }
 
+    /// The other absent state: an identity-refused record is not trusted as a
+    /// driver either, so it cannot manufacture a contention finding.
+    #[test]
+    fn identity_refused_part_contributes_no_driver() {
+        let mut u2 = comp("U2", "74HC32", &[("3", 3)]);
+        u2.properties.push((
+            hauksbee_extract::DUPLICATE_REFERENCE_CONFLICT_KEY.to_string(),
+            "two records with different values".to_string(),
+        ));
+        let b = board(
+            &[(3, "SHARED")],
+            vec![comp("U1", "74HC08", &[("3", 3)]), u2],
+        );
+        assert!(run(&b).findings.is_empty(), "{:?}", run(&b).findings);
+    }
+
     /// Ground is not a net to contend over (a mis-mapped pad landing on GND is
     /// another check's problem), and neither is KiCad's unconnected placeholder.
     #[test]
