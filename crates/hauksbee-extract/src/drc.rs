@@ -488,20 +488,19 @@ pub struct DrcReport {
     /// Number of copper primitives indexed (diagnostics / perf reporting).
     pub primitive_count: usize,
     /// Set when the board's `.kicad_pcb` format version is newer than the
-    /// newest one hauksbee's copper extraction is validated against (KiCad 10,
-    /// 20260206+). On those, the zone-fill geometry is not yet handled, so a
-    /// ground pour can appear to short every net it surrounds. The shorts below
-    /// are then UNRELIABLE; surfaces print this caveat and CI gates do not fail
-    /// on them. `None` on a validated version (no behaviour change).
+    /// newest one with exact KiCad DRC parity. KiCad 10 name-only nets and
+    /// keyhole antipads are handled, but remaining finding parity is still
+    /// unvalidated; surfaces print this caveat and CI gates do not fail on those
+    /// results. `None` on a validated version (no behaviour change).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version_warning: Option<String>,
 }
 
 /// The newest `.kicad_pcb` format version hauksbee's copper extraction is
-/// validated against. KiCad 9 is `20241229`; KiCad 10 (`20260206`) changed both
-/// the net encoding (name-only, no numeric ids) and the baked zone-fill geometry,
-/// neither of which is handled yet, and the kicad-cli ≤ 9 oracle cannot load it
-/// to cross-check. So `>= 20260000` is treated as unvalidated.
+/// validated against for exact finding parity. KiCad 10 is `20260206`; its
+/// name-only nets and keyhole-antipad fill contours are handled and checked
+/// against kicad-cli 10.0.5, but the complete finding set does not yet match the
+/// native DRC exactly. So `>= 20260000` remains explicitly unvalidated.
 pub const FIRST_UNVALIDATED_PCB_VERSION: u32 = 20260000;
 
 /// The `(version N)` format token from a `.kicad_pcb`, if present.
@@ -524,10 +523,9 @@ pub fn unvalidated_version_warning(text: &str) -> Option<String> {
         return None;
     }
     Some(format!(
-        "board format {v} is newer than hauksbee's validated copper extraction (KiCad 10 changed \
-         the net encoding and the baked zone-fill geometry). A ground pour may read as shorting \
-         every net it surrounds, so the shorts here are UNRELIABLE; cross-check with KiCad's own \
-         DRC. (kicad-cli \u{2264} 9 cannot load this version to cross-check either.)"
+        "board format {v} is newer than hauksbee's exact KiCad DRC parity range. KiCad 10 \
+         name-only nets and keyhole antipads are handled, but remaining findings are UNVALIDATED; \
+         cross-check with KiCad 10's own DRC."
     ))
 }
 
@@ -2231,31 +2229,13 @@ fn sweep_buckets(
         if !zones.is_empty() {
             for p in &prims {
                 // Skip zones (a pour is not "contained" in another) and no-net
-                // copper. Also skip Pads: KiCad always carves an antipad around a
-                // different-net pad, so a pad centre geometrically inside a pour is
-                // the expected fill geometry, not a short. On KiCad-10 (format
-                // 20260206) the antipad is an enclosed keyhole hole in the single
-                // fill contour that the even-odd point-in-polygon does not exclude,
-                // so a correctly-antipadded interior pad read as "inside the pour"
-                // and produced a false-positive epidemic (1668 phantom Zone<->Pad
-                // shorts on one ESC). A real pour incursion shows up as a Track /
-                // Via / Arc crossing the boundary (the BMS REG1_3V3 and FPV-Drone
-                // shorts are Track/Via<->Zone), which this pass still catches; a
-                // correctly-routed track sits in an open channel (a boundary
-                // concavity) the even-odd test handles, so tracks/vias do not
-                // false-fire. (A pad-only short to the wrong-net pour with no
-                // incursion copper is not caught here; it is rare and surfaces in
-                // connectivity.
-                //
-                // TODO(KiCad-10 oracle required): restore a precise pad-containment
-                // test by modelling the keyhole antipad before applying even-odd.
-                // This is deliberately bounded to Zone<->Pad containment. KiCad
-                // 9.0.3 rejects format 20260206 before DRC, so it cannot establish
-                // whether a synthetic keyhole fixture is valid KiCad-10 copper;
-                // do not fabricate that oracle or widen this suppression. Revisit
-                // only with a complete KiCad-10 executable and a cross-checked
-                // real-board regression.
-                if p.kind == ItemKind::Zone || p.kind == ItemKind::Pad || no_net.contains(&p.net) {
+                // copper. Pads participate: the filled contour is the source of
+                // truth, so a pad inside solid different-net fill is a short.
+                // KiCad 10 keyhole antipads encode their void as an inner loop
+                // joined to the outer contour by a doubled-back slit; even-odd
+                // containment excludes that inner loop and keeps the valid pad
+                // silent.
+                if p.kind == ItemKind::Zone || no_net.contains(&p.net) {
                     continue;
                 }
                 let (rx, ry) = representative_point(&p.shape);

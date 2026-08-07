@@ -350,24 +350,20 @@ waived. The corpus test (`tests/drc_corpus.rs`) documents this evidence.
 
 ## Limitations
 
-- **KiCad 10 and newer: shorts are UNRELIABLE, and the tool says so.** Copper
-  extraction is validated up to KiCad 9's `.kicad_pcb` format (version
-  `20241229`). Anything at or above `20260000`, which is KiCad 10 (`20260206`),
-  is treated as unvalidated, because that release changed *two* things this
-  check depends on: nets became name-only with no numeric ids, and the baked
-  zone-fill geometry moved. Neither is handled yet. The practical failure mode
-  is specific and severe: **a ground pour can read as shorting every net it
-  surrounds**, so a KiCad 10 board can report a screenful of shorts that do not
-  exist.
+- **KiCad 10 and newer: exact native-DRC parity remains unvalidated.** The
+  `20260206` name-only net encoding and baked keyhole-antipad contours are now
+  handled. A format-20260206 fixture checked with kicad-cli 10.0.5 keeps the pad
+  inside a real keyhole antipad silent while reporting a pad under solid
+  different-net fill; the same oracle reports no Zone↔Pad violations on the
+  VENDETTA ESC that formerly produced 1,668 phantom shorts.
 
-  What happens instead of silence: `DrcReport::version_warning` is set, every
-  surface prints the caveat with the offending version number and the word
-  UNRELIABLE, and **CI gates do not fail on those shorts**, so a pipeline cannot
-  go red on an artefact. Cross-check with KiCad's own DRC. The kicad-cli oracle
-  cannot help here either, because versions up to 9 cannot load the file at all.
-  The constant is `FIRST_UNVALIDATED_PCB_VERSION` in
-  `crates/hauksbee-extract/src/drc.rs`; the clearance rule and the non-pour
-  geometry are unaffected.
+  The version warning remains because the complete finding set is not yet exact
+  KiCad parity (VENDETTA reports 67 Hauksbee shorts versus 60 native
+  `shorting_items`), and KiCad 10 keeps project clearance rules in the sibling
+  `.kicad_pro` rather than the board text consumed by this API. CI gates
+  therefore still do not fail on a format at or above `20260000`. Cross-check
+  with KiCad 10's own DRC. The constant is
+  `FIRST_UNVALIDATED_PCB_VERSION` in `crates/hauksbee-extract/src/drc.rs`.
 - **Zone fill fidelity.** Detection uses the `filled_polygon` copper KiCad
   computed and stored in the file. Boards with no stored fill (older formats, or
   freshly-edited unfilled zones) fall back to the drawn outline for clearance

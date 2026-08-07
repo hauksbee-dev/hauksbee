@@ -4,6 +4,10 @@
 
 use hauksbee_extract::{ClearanceRules, ExtractedBoard, NetClassRule, ViolationKind};
 
+const KICAD_10_KEYHOLE_ANTIPAD_BOARD: &str =
+    include_str!("fixtures/kicad_10_keyhole_antipad.kicad_pcb");
+const EXPECTED_SOLID_POUR_SHORTS: usize = 1;
+
 /// Wrap copper items in a minimal KiCad 7+ board with two declared signal nets
 /// (`A`, `B`) plus GND, and a default-clearance setup.
 fn board(items: &str) -> String {
@@ -491,6 +495,32 @@ fn via_zone_overlap_is_a_short() {
     assert_short(&report, "A", "GND");
     let f = report.shorts().next().unwrap();
     assert_eq!(f.layer, "B.Cu");
+}
+
+#[test]
+fn kicad_10_keyhole_antipad_keeps_the_isolated_pad_silent() {
+    let report = ExtractedBoard::drc(KICAD_10_KEYHOLE_ANTIPAD_BOARD).expect("drc runs");
+
+    assert!(
+        report.shorts().all(|finding| {
+            finding.net_a_name != "ANTIPAD_OK" && finding.net_b_name != "ANTIPAD_OK"
+        }),
+        "the pad enclosed by a real KiCad-10 keyhole antipad remains isolated: {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn kicad_10_solid_fill_over_a_pad_remains_reportable() {
+    let report = ExtractedBoard::drc(KICAD_10_KEYHOLE_ANTIPAD_BOARD).expect("drc runs");
+
+    assert_eq!(
+        report.short_count(),
+        EXPECTED_SOLID_POUR_SHORTS,
+        "the solid filled polygon over PAD_ONLY_SHORT must not inherit the keyhole exemption: {:?}",
+        report.findings
+    );
+    assert_short(&report, "PAD_ONLY_SHORT", "GND");
 }
 
 #[test]
