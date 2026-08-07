@@ -880,11 +880,7 @@ fn count_castellations(holes: &[PlatedHole], outline: &[geo::Shape]) -> usize {
         .filter(|h| {
             // The drill's own radius, matching `PlatedHole::barrel`, so the
             // shape counted here is the shape the connectivity pass used.
-            let r = if h.diameter > 0.0 {
-                h.diameter / 2.0
-            } else {
-                0.05
-            };
+            let r = (h.diameter / 2.0).max(0.0);
             let barrel = match h.to {
                 None => geo::Shape::disc(h.x, h.y, r),
                 Some((tx, ty)) => geo::Shape::Capsule(geo::Capsule {

@@ -146,12 +146,20 @@ thing whichever mode the file is in.
 A `G02`/`G03` arc cut is tessellated about its `I`/`J` centre. Each chord
 lies inside its arc, so the stadium built on it falls short of the true wall
 on the outside of the curve and reaches past it on the inside. The step is
-therefore chosen per arc, from the radius, to hold that error under half the
-gap tolerance the union itself works to, so a tessellated wall cannot make a
-contact the real cut would not. A fixed segment count does not do this: at a
-50 mm radius it leaves the chords bulging most of a millimetre off their own
-wall, which is enough to sweep in copper the slot never touches. The segment
-count is capped so a hostile radius cannot turn one line into unbounded work.
+therefore chosen per arc, from the radius, to hold that error under a micron
+budget rather than at a fixed segment count: a fixed count leaves a 50 mm arc
+bulging most of a millimetre off its own wall, which is enough to sweep in
+copper the slot never touches. The segment count is capped so a hostile
+radius cannot turn one line into unbounded work.
+
+The residual is stated rather than waved away. No chord approximation has
+zero error, so the effective contact tolerance against an arc wall is the
+union's own epsilon plus the budget, about six microns instead of five.
+Copper in that band, closer than six microns to touching the wall without
+touching it, is joined by the approximation rather than by the board. Six
+microns is a twentieth of the tightest clearance a board is designed to, so
+this cannot bridge a gap anyone drew; it can only disagree about contacts
+that are already too close to call.
 
 An arc with no readable centre produces no geometry at all: planting a round
 hit at the endpoint instead, which is what a fall-through to the plain
