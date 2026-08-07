@@ -131,6 +131,7 @@ hauksbee run my_board.kicad_pcb                      # no flags on a terminal: a
 hauksbee run my_board.kicad_pcb --si --plain         # signal integrity (USB/Ethernet impedance, rise times)
 hauksbee run my_board.kicad_pcb --list-nets          # list net names (for --ac-node / --ac-loop)
 hauksbee run my_board.kicad_pcb --lint --strict      # exit non-zero on a real defect, to gate a pipeline
+hauksbee run my_board.kicad_pcb --check --emit-manifest run.manifest.json # immutable, replayable run identity
 hauksbee-ci init my_board.kicad_pcb                  # scaffold a CI spec into the current directory (prints the path; edit, then run)
 hauksbee serve                                       # web front door (long-running): open the page, drop a board, read the report
 ```
@@ -138,6 +139,12 @@ hauksbee serve                                       # web front door (long-runn
 ![The web front door: drop a board, try a sample, or read where your files live](frontend/screenshots/beauty/web-landing.png)
 
 Reports exit 0 by default even when they find something. `--strict` (alias `--fail-on-findings`) makes them fail a build. `--plain` (alias `--explain`) rewrites any finding as what it is. It states why the finding matters and what to do.
+
+`--emit-manifest <file>` is available on both run binaries. It hashes every
+resolved input and model source, pins tool/component/plugin revisions and parsed
+settings, and writes without clobbering. Re-run it with
+`hauksbee reproduce <file>`. The full stable-JSON and privacy contract is in
+[`docs/analysis/RUN_MANIFESTS.md`](docs/analysis/RUN_MANIFESTS.md).
 
 The exact exit-code contract for `hauksbee run`:
 - **0**: clean, or a report-only run (no `--strict`, whatever it found). A gate-grade finding without `--strict` prints a stderr note saying so.
