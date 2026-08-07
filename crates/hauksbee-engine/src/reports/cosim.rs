@@ -200,6 +200,14 @@ pub fn build_cosim_json(
             .into_iter()
             .map(|(mcu_ref, resets)| crate::result::CosimWatchdogResets { mcu_ref, resets })
             .collect(),
+        timing_limitations: sched
+            .timing_limitations()
+            .into_iter()
+            .map(|(mcu_ref, limitation)| crate::result::CosimTimingLimitation {
+                mcu_ref,
+                limitation,
+            })
+            .collect(),
     }))
 }
 
@@ -624,6 +632,16 @@ pub fn run_headless(
             println!(
                 "\nWARNING: {}",
                 crate::scheduler::watchdog_reset_message(&mcu_ref, resets)
+            );
+        }
+        // Timing coverage: a backend whose virtual time carries a known
+        // systematic bias makes every time-based assertion on that core mean
+        // less than it looks; the same silent-garbage class as the watchdog
+        // gap above, so it rides the same channel.
+        for (mcu_ref, limitation) in sched.timing_limitations() {
+            println!(
+                "\nWARNING: {}",
+                crate::scheduler::timing_limitation_message(&mcu_ref, &limitation)
             );
         }
         // Per-bus SPI transaction-framing tier (05 §2). `heuristic` is the

@@ -309,6 +309,18 @@ pub struct RenodeConfig {
     /// descriptor that leaves it out is asserting one.
     #[serde(default)]
     pub watchdog_limitation: Option<String>,
+    /// How this part's TIMING fidelity falls short of the real part, surfaced
+    /// through [`Mcu::timing_limitation`]. Per-part like the watchdog
+    /// statement: the F103 deliberately clocks its TIMx blocks at the
+    /// post-PLL 72 MHz against an 8 MHz reset-default core (only that rate
+    /// lets a stock CubeMX HAL project boot on a platform with no clock
+    /// tree), while the clock-truth-gated parts have nothing to declare.
+    ///
+    /// `None` claims a firmware delay costs the virtual time it costs on
+    /// silicon. That is a measurement (tests/clock_truth.rs), so a descriptor
+    /// that leaves it out is asserting one.
+    #[serde(default)]
+    pub timing_limitation: Option<String>,
     /// Per-channel ADC injection recipes (05 §5.1). Empty means ADC injection
     /// is a LOUD drop (a once-per-channel stderr warning), never a silent one.
     ///
@@ -2029,6 +2041,13 @@ impl Mcu for RenodeBackend {
         // platforms genuinely differ, and the descriptor is where a measured
         // per-part fact belongs.
         self.config.watchdog_limitation.clone()
+    }
+
+    fn timing_limitation(&self) -> Option<String> {
+        // Per-part descriptor data for the same reason as the watchdog
+        // statement: the F103's TIMx-at-72MHz divergence is that part's, not
+        // the backend's.
+        self.config.timing_limitation.clone()
     }
 
     fn i2c_bus_modeled(&self) -> bool {

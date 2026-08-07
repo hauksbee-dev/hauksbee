@@ -92,7 +92,9 @@ fn qemu_adc_injection_lands_in_guest_ram() {
     let ch3 = mcu
         .debug_read_u32(mailbox::adc_channel_word(3))
         .expect("read ADC slot 3");
-    assert_eq!(ch3, mailbox::ADC_MAX_COUNT, "full-scale channel 3");
+    // 3.3 V (the rail) is above the 3.1 V ATTEN_DB_11 full scale, so it
+    // saturates at the top code exactly like the silicon converter does.
+    assert_eq!(ch3, mailbox::ADC_MAX_COUNT, "over-range channel 3 clamps");
     let mask = mcu.debug_read_u32(mailbox::ADC_MASK).expect("read mask");
     assert_eq!(mask, 0b1001, "mask must carry exactly channels 0 and 3");
 

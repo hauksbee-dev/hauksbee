@@ -192,9 +192,17 @@ pub mod mailbox {
     pub const ADC_CHANNELS: u8 = 8;
     /// Count written at full scale (the ESP32 SAR ADC is a 12-bit converter).
     pub const ADC_MAX_COUNT: u32 = 4095;
-    /// Voltage mapping to `ADC_MAX_COUNT` (11 dB attenuation full scale,
-    /// approximated at the 3V3 rail the demo boards reference).
-    pub const ADC_FULL_SCALE_VOLTS: f64 = 3.3;
+    /// Voltage mapping to `ADC_MAX_COUNT`.
+    ///
+    /// 3.1 V is the ESP32 datasheet's nominal full-scale input at 11 dB
+    /// attenuation (ESP32 datasheet v4.8 §4.1.4.2 / TRM "SAR ADC": at
+    /// ATTEN_DB_11 the measurable input range tops out at ~3.1 V, NOT the
+    /// 3.3 V supply rail). The constraint: this constant must match what the
+    /// converter saturates at, not what the board's rail is, or every
+    /// injected voltage lands ~6% low as a count. The rail was the old,
+    /// wrong choice; readings between 3.1 V and the rail clamp to the top
+    /// code, which is what the silicon does too.
+    pub const ADC_FULL_SCALE_VOLTS: f64 = 3.1;
 
     /// The mailbox word carrying channel `ch`'s injected count.
     pub const fn adc_channel_word(ch: u8) -> u32 {
@@ -878,6 +886,9 @@ impl QemuBackend {
         if !self.firmware_loaded {
             bail!("no firmware image booted in the QEMU machine");
         }
+        // Forget any RESUME/STOP pair from the previous chunk BEFORE resuming,
+        // so this chunk's measurement can never be a stale one.
+        self.qmp.clear_run_events();
         if let Err(e) = self.qmp.cont() {
             return match self.process.ensure_running("servicing QMP cont") {
                 Err(death) => Err(death).context(format!("QMP cont failed: {e:#}")),
@@ -893,15 +904,31 @@ impl QemuBackend {
             };
         }
 
-        // Credit cycles from the window we ACTUALLY ran, not the requested
-        // `seconds`: during boot the floor/cap reshapes the real run, so
-        // crediting `seconds` would systematically skew the guest cycle bracket
-        // the chunk's GPIO-edge timestamps are measured against. Post-boot the
-        // window IS the requested interval, so credit and request agree.
-        // (Honest caveat: the guest also runs during the cont/stop QMP round
-        // trips, so the true advance is `window` plus some control latency;
-        // without icount that slack is unmeasurable and left uncredited.)
-        self.cycles += (window.as_secs_f64() * self.config.frequency_hz as f64).round() as u64;
+        // Credit cycles from the window the guest ACTUALLY ran, not the
+        // requested `seconds` and not even the slept `window`: QEMU stamps its
+        // RESUME and STOP events with the host time of the state transition,
+        // so the cont→stop span is a measurement of the whole run, including
+        // the QMP round-trip slack the guest keeps executing through on each
+        // side of the sleep. That slack used to be uncredited (the old comment
+        // here called it unmeasurable), which is exactly the systematic
+        // 1.35-1.45x-slow bias docs/cosim/MCU.md used to carry for this
+        // backend. Boot chunks are covered by the same measurement: the
+        // floor/cap reshapes the window, and the event pair brackets whatever
+        // window actually ran, so the boot-floor crediting is preserved.
+        //
+        // The measurement is trusted only when it is at least the slept window
+        // (the events bracket the sleep, so a smaller span means a stale or
+        // torn pair); otherwise the slept window is credited, which is the old
+        // behaviour and the conservative side. What no wall measurement can
+        // see is TCG pace itself: virtual time tracks the host clock only
+        // approximately while running, which is why TIMING_LIMITATION below
+        // still reaches every report surface.
+        let credited = self
+            .qmp
+            .measured_run_window(Duration::from_millis(200))
+            .filter(|m| *m >= window)
+            .unwrap_or(window);
+        self.cycles += (credited.as_secs_f64() * self.config.frequency_hz as f64).round() as u64;
 
         // Boot-complete detection (one word read per chunk, only until seen):
         // the demo firmware writes MAGIC_VALUE into the mailbox as the first
@@ -1240,6 +1267,22 @@ pub const WATCHDOG_LIMITATION: &str =
      unserviced task or interrupt watchdog will NOT reboot the firmware here, \
      however long it is starved, so watchdog recovery is untested on this run.";
 
+/// Why ESP32 virtual time is approximate here, stated once.
+///
+/// Backend-wide for the same reason as [`WATCHDOG_LIMITATION`]: the cause is
+/// how this co-simulator drives QEMU (no icount, because it breaks esp32 boot,
+/// measured), not anything a descriptor declares. Each chunk's cont→stop
+/// window is measured from QEMU's own RESUME/STOP event timestamps, so the
+/// control-channel slack that used to be silently dropped is credited; what
+/// remains systematic is TCG pace itself, which tracks the host wall clock
+/// only approximately and degrades under host load. A `const` so `hauksbee
+/// models lint` quotes the same sentence a run reports.
+pub const TIMING_LIMITATION: &str =
+    "ESP32 virtual time is paced by the host wall clock in this co-simulator \
+     (QEMU icount breaks esp32 boot), so simulated time is approximate and \
+     host-load dependent: treat time-based results on this core as correct to \
+     within a few percent on an idle host, not as a clock.";
+
 impl Mcu for QemuBackend {
     fn load_firmware(&mut self, _path: &Path) -> Result<()> {
         // QEMU boots from the flash image given at spawn; there is no separate
@@ -1275,6 +1318,12 @@ impl Mcu for QemuBackend {
     /// green report never sees it.
     fn watchdog_limitation(&self) -> Option<String> {
         Some(WATCHDOG_LIMITATION.to_string())
+    }
+
+    /// Backend-wide like the watchdog statement: wall-clock pacing is how this
+    /// backend drives QEMU, not a per-part property. See [`TIMING_LIMITATION`].
+    fn timing_limitation(&self) -> Option<String> {
+        Some(TIMING_LIMITATION.to_string())
     }
 
     fn set_digital_in(&mut self, pin: PinId, high: bool) {

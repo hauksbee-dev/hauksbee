@@ -1801,6 +1801,14 @@ fn run_one(
                         hauksbee_engine::scheduler::watchdog_reset_message(&mcu_ref, resets)
                     }),
             )
+            // Timing coverage: a known systematic time bias on a core (the
+            // wall-clock-paced QEMU family, the F103's TIMx-at-72MHz trade)
+            // makes a CI timing assertion there mean less than it looks.
+            .chain(engine.scheduler().timing_limitations().into_iter().map(
+                |(mcu_ref, limitation)| {
+                    hauksbee_engine::scheduler::timing_limitation_message(&mcu_ref, &limitation)
+                },
+            ))
             .chain(hollow_warnings.iter().cloned())
             .collect(),
         timing_coverage: engine.scheduler().timing_coverage(),
