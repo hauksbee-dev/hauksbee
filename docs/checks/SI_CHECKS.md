@@ -520,13 +520,13 @@ only from the model's required `current_in_roles` / `current_out_roles`; control
 and sense roles are never selected by name heuristics.
 
 Converter output-current limits, regulator/connector/FET ratings, and equations
-tagged `protection_limit` are capabilities or trip thresholds—not proof of board
-draw—so they never seed steady-state ampacity. Generic/placeholder models never
+tagged `protection_limit` are capabilities or trip thresholds, not proof of board
+draw, so they never seed steady-state ampacity. Generic/placeholder models never
 seed it either. Everything else is left unattributed and the IPC engine skips it.
 
 For a programmable part, `ratings.max_current_a` remains a **device-level
-analysis threshold**—normally an absolute limit, or a deliberately documented
-lower operating ceiling—not a load or a promise of normal operation. The separate
+analysis threshold** (normally an absolute limit, or a deliberately documented
+lower operating ceiling), not a load or a promise of normal operation. The separate
 `current_program.max_operating_current_a` is the declared domain of the sourced
 transfer equation.
 The populated DC-equivalent resistance is read from the layout with a bounded

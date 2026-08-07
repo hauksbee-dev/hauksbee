@@ -135,9 +135,17 @@ What it deliberately does **not** capture:
   A brief power spike on a switching edge does not heat a junction, which is
   exactly why the over-temperature check is treated as a **sustained** rating
   (it must persist across several solver chunks before it trips), the same way
-  the continuous over-current check is. A device that dissipates only in short
-  bursts will read its steady-state-at-peak temperature, which over-estimates.
-  That is the safe direction.
+  the continuous over-current check is.
+- **Duty-cycled dissipation is time-weighted, not sampled.** The
+  temperature-driving power is the device's dissipation integrated over the
+  solver's accepted steps within each chunk, divided by the chunk's simulated
+  time. A firmware PWM waveform that switches inside a chunk therefore heats
+  by its duty-cycle average (a 25% duty deposits 25% of the always-on energy,
+  whatever the chunk width or pulse phase), which is what the junction
+  physically averages when the PWM period is short against the thermal time
+  constant. Sampling the chunk endpoint instead would read the full peak or
+  zero depending on phase. For a multi-unit package the siblings' integrated
+  energies pool before the shared theta_JA is applied.
 
 If you need true board spreading or transient junction response, that is a
 thermal FEM/CFD coupled to the electrical solve, and it is out of scope for this
