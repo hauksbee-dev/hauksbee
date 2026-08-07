@@ -513,7 +513,7 @@ pub fn validate_behavioral(b: &Behavioral) -> Vec<String> {
             }
         }
         if let Some(sp) = &c.iin_program {
-            if sp.rsense_ohms.is_some() == !sp.rsense_refs.is_empty() {
+            if sp.rsense_ohms.is_some() != sp.rsense_refs.is_empty() {
                 errs.push(
                     "converter.iin_program: specify exactly one of rsense_ohms or rsense_refs"
                         .to_string(),
