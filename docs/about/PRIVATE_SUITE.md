@@ -2,7 +2,7 @@
 
 hauksbee was built for a board it cannot publish. That board belongs to
 Tarski, not to this project. So its netlists, as-built overlay, firmware
-images, and synapse map are absent from the public repository, and so is
+images, and synapse map are absent from the release mirror, and so is
 every test that reads them.
 
 This page exists to make the gap visible. A suite that quietly shrinks reads
@@ -12,7 +12,7 @@ misleading test count.
 
 ## What is missing
 
-**60 tests: 50 in the 13 absent files below, plus 10 removed from files that
+**66 tests: 56 in the 15 absent files below, plus 10 removed from files that
 otherwise ship. Also absent: 11 engine examples.**
 
 | Suite | Tests | What it covers |
@@ -21,7 +21,9 @@ otherwise ship. Also absent: 11 engine examples.**
 | `tarski_bind` | 5 | Binder against a board with socketed and do-not-populate parts |
 | `tarski_full` | 4 | Whole-board extract, bind, check, report |
 | `tarski_general_e2e` | 4 | The general decomposition layer carrying a real torn solve |
+| `tarski_private_acceptance` | 4 | Runtime-only release-candidate bind, preparation certificate, firmware transport and decomposed inference acceptance without publishing the input |
 | `tarski_595_chain` | 3 | Shift-register chain decode under firmware |
+| `tarski_revision_identity` | 2 | As-built preparation, cut selection and weight routing surviving KiCad re-annotation |
 | `tarski_stretcher_transient` | 3 | Pulse-stretcher transient against measured hardware |
 | `flagship_brownout` | 3 | The brownout CI scenario, red and repaired |
 | `inhibitory_miswire` | 3 | A miswire found in hardware, then derived from the netlist |

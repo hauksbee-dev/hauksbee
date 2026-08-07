@@ -43,6 +43,19 @@ jobs:
       # [workspace.lints.clippy]. Anything outside it fails here.
       - run: cargo clippy --workspace --all-targets -- -D warnings
 
+  no-default-engine:
+    name: engine without default features
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: Swatinem/rust-cache@v2
+      # Keep the core static-analysis build honest. This catches accidental
+      # simulator-only dependencies and runs the same behavioral tests, including
+      # the real watch-loop contract, in the smallest supported feature shape.
+      - run: cargo check -p hauksbee-engine --no-default-features
+      - run: cargo clippy -p hauksbee-engine --no-default-features --all-targets -- -D warnings
+      - run: cargo test -p hauksbee-engine --no-default-features --all-targets
+
   test:
     name: cargo test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -84,10 +97,29 @@ jobs:
       # pure Python with no pcbnew/wx import, so they run anywhere.
       - run: python3 integrations/kicad-plugin/test_hauksbee_ci_core.py
       - run: python3 integrations/pre-commit/test_hauksbee_ci_precommit.py
+      # Repository privacy is a release invariant: the distribution mirror and
+      # developer tree must never be made public by the launch automation.
+      - run: python3 scripts/test-private-release-policy.py
       # The action's one decision with a wrong answer available: which build of
       # hauksbee-ci a run actually used.
       - run: bash integrations/github-action/test_pick_release_tag.sh
       - run: shellcheck integrations/github-action/*.sh
+      - run: shellcheck --severity=warning scripts/make-public.sh scripts/build-public-mirror.sh
+
+  release-evidence-invariants:
+    name: release evidence invariants (offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Pure stdlib tests: no corpus fetch, browser, server, or network. These
+      # prove that a renamed board cannot become unseen again, ledger prefix
+      # edits are detected, archives stay inside their declared source, and a
+      # browser artifact cannot be attached to a different reservation.
+      - run: python3 -m unittest qc.tests.test_unseen_boards
+      # A repository with no release run is allowed on an ordinary PR. If the
+      # canonical ledger exists, however, every reservation must terminate and
+      # every retained artifact must still match its recorded digest.
+      - run: python3 -m qc.unseen_boards audit-history
 
   docs:
     name: cargo doc (rendered module docs stay valid)

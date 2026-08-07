@@ -68,7 +68,8 @@ export function ExportMenu({
     setOpen(false)
     // The browser's own download shelf is the real confirmation, but it is
     // browser chrome the app cannot see, and on a headless or kiosk profile
-    // there is none. The line under the trigger says what was written.
+    // there is none. The in-flow line under the trigger says what was written
+    // without covering whichever report section follows the export control.
     setDone(`${label} written as ${fileName}`)
   }, [])
 
@@ -191,9 +192,9 @@ export function ExportMenu({
           data-testid="export-done"
           role="status"
           aria-live="polite"
-          className="absolute z-20 px-2.5 py-1.5 rounded-lg text-[11px]"
+          className="mt-1.5 inline-block px-2.5 py-1.5 rounded-lg text-[11px]"
           style={{
-            top: 'calc(100% + 6px)', left: 0, width: 'max-content', maxWidth: '100%',
+            width: 'max-content', maxWidth: '100%',
             background: 'var(--ok-bg)', border: '1px solid var(--ok-border)', color: 'var(--ok)',
           }}
         >

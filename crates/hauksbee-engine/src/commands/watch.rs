@@ -394,19 +394,84 @@ async fn watch_loop(
 
     // notify -> std mpsc -> tokio unbounded, so the async loop can await events.
     let (raw_tx, raw_rx) = std::sync::mpsc::channel::<notify::Result<notify::Event>>();
-    let mut watcher = notify::recommended_watcher(raw_tx)
+    let (scan_tx, scan_rx) = std::sync::mpsc::channel::<notify::Result<PathBuf>>();
+    // A native event backend is allowed to coalesce a same-process rewrite of
+    // a temporary file into no observable event (notably macOS FSEvents). That
+    // made the command's central promise depend on an implementation detail of
+    // the filesystem. The watch sets here are deliberately small and
+    // non-recursive, so a 200 ms PollWatcher is bounded, deterministic, and
+    // still faster than the 250 ms editor debounce.
+    let config = notify::Config::default()
+        .with_poll_interval(Duration::from_millis(200))
+        .with_compare_contents(true);
+    let mut watcher = notify::PollWatcher::with_initial_scan(raw_tx.clone(), config, scan_tx)
         .map_err(|e| anyhow::anyhow!("cannot start the file watcher: {e}"))?;
+    // Missing optional dependencies (most often a sibling .kicad_pro) need a
+    // parent-directory watch so their later creation is observable. Keep that
+    // scan metadata-only: hashing every unrelated file in a project directory
+    // every 200 ms would defeat the bounded-cost argument for polling.
+    let metadata_config = notify::Config::default().with_poll_interval(Duration::from_millis(200));
+    let mut missing_watcher = notify::PollWatcher::new(raw_tx, metadata_config)
+        .map_err(|e| anyhow::anyhow!("cannot start the directory watcher: {e}"))?;
     let mut watched_any = false;
-    for dir in watch_set.dirs() {
-        match watcher.watch(dir, RecursiveMode::NonRecursive) {
+    let mut missing_parents = BTreeSet::new();
+    for file in &watch_set.files {
+        if !file.exists() {
+            if let Some(parent) = file.parent() {
+                missing_parents.insert(parent.to_path_buf());
+            }
+            continue;
+        }
+        match watcher.watch(file, RecursiveMode::NonRecursive) {
             Ok(()) => watched_any = true,
-            Err(e) => eprintln!("note: cannot watch {}: {e}", dir.display()),
+            Err(e) => eprintln!("note: cannot watch {}: {e}", file.display()),
+        }
+    }
+    for parent in missing_parents {
+        match missing_watcher.watch(&parent, RecursiveMode::NonRecursive) {
+            Ok(()) => watched_any = true,
+            Err(e) => eprintln!("note: cannot watch {}: {e}", parent.display()),
         }
     }
     if !watched_any {
         anyhow::bail!(
             "nothing to watch: none of the target's directories could be registered \
              (does the file exist?)"
+        );
+    }
+
+    // Do not print the first run's header until the poller has taken a baseline
+    // of every existing dependency. Otherwise a fast caller can edit while the
+    // startup check is running and have that edit absorbed into the baseline.
+    let mut baseline_pending: BTreeSet<PathBuf> = watch_set
+        .files
+        .iter()
+        .filter(|path| path.exists())
+        .cloned()
+        .collect();
+    let baseline_deadline = Instant::now() + Duration::from_secs(5);
+    while !baseline_pending.is_empty() && Instant::now() < baseline_deadline {
+        match scan_rx.recv_timeout(Duration::from_millis(100)) {
+            Ok(Ok(path)) => {
+                if let Some(path) = normalize(&path) {
+                    baseline_pending.remove(&path);
+                }
+            }
+            Ok(Err(error)) => {
+                eprintln!("note: initial watch scan could not read an entry: {error}");
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    if !baseline_pending.is_empty() {
+        anyhow::bail!(
+            "file watcher did not establish its initial baseline for: {}",
+            baseline_pending
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
         );
     }
 

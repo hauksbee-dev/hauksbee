@@ -28,14 +28,19 @@
 //!   * [`SoftI2cResponder`], firmware bit-bangs SCL/SDA on GPIOs; a small
 //!     I2C protocol engine over pin edges routes the transaction to the
 //!     existing [`I2cBus`] slave models.
+//!   * A declarative parallel-memory bridge, which reconstructs direct and
+//!     74HC595-supplied address bits, captures writes, and answers a
+//!     bidirectional data bus inside the firmware instruction stream.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::digital::{Hc165Chain, LogicLevels};
+use crate::digital::{Hc165Chain, Hc595Chain, LogicLevels};
+use crate::logic::ParallelMemoryPort;
 use crate::peripherals::i2c::I2cBus;
 use crate::peripherals::spi::SpiBus;
 use hauksbee_mcu::I2cEvent;
+use hauksbee_models::logic_spec::{Edge, Level};
 
 /// One bit-banged input protocol instance: consumes MCU GPIO *output* edges
 /// on its watched pins and answers by driving MCU *input* pins.
@@ -54,6 +59,14 @@ pub trait InputResponder: Send {
     /// level). Returns the MCU input pins to drive, applied immediately,
     /// before the firmware's next instruction.
     fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<((char, u8), bool)>;
+
+    /// Cycle-stamped form used by cycle-exact push backends. Most responders
+    /// are purely edge-ordered and use the default; devices with documented
+    /// inter-edge timing windows can override it without coupling their model
+    /// to an MCU implementation.
+    fn on_edge_at(&mut self, pin: (char, u8), high: bool, _cycle: u64) -> Vec<((char, u8), bool)> {
+        self.on_edge(pin, high)
+    }
 }
 
 /// Multiplexes one MCU's single `on_input_responder` slot across many
@@ -100,12 +113,272 @@ impl ResponderRegistry {
         drives
     }
 
+    /// Cycle-stamped dispatch for the MCU callback path.
+    pub fn dispatch_at(
+        &mut self,
+        pin: (char, u8),
+        high: bool,
+        cycle: u64,
+    ) -> Vec<((char, u8), bool)> {
+        let Some(indices) = self.by_pin.get(&pin) else {
+            return Vec::new();
+        };
+        let mut drives = Vec::new();
+        for &i in indices {
+            drives.extend(self.responders[i].on_edge_at(pin, high, cycle));
+        }
+        drives
+    }
+
     pub fn is_empty(&self) -> bool {
         self.responders.is_empty()
     }
 
     pub fn len(&self) -> usize {
         self.responders.len()
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Parallel memory (bidirectional data bus answered synchronously)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Where one parallel-memory input level comes from at firmware-edge time.
+/// A 595 source reads the responder's edge-accurate shadow of the physical
+/// chain; a direct MCU pin reads the latest observed GPIO edge; a node reads
+/// the scheduler's last settled analogue snapshot (appropriate for tied rails
+/// and non-firmware controls, which cannot change inside the current chunk).
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum ParallelSignal {
+    Mcu((char, u8)),
+    Hc595 { chain: usize, chip: usize, bit: u8 },
+    Node(hauksbee_ir::NodeId),
+}
+
+/// Last edge-exact bus state, shared back to the scheduler so the analogue
+/// data-net drivers and UI frame agree with what firmware read synchronously.
+#[derive(Debug, Default)]
+pub(crate) struct ParallelMemoryRuntime {
+    pub address: usize,
+    pub word: u64,
+    pub read_enabled: bool,
+}
+
+/// Edge-synchronous bridge for a declarative parallel memory.
+///
+/// Firmware often changes address/control lines and reads the bidirectional
+/// bus inside one `run_micros` call. A once-per-chunk logic tick therefore
+/// cannot be correct. This responder follows the same rule as the 74HC165
+/// bridge: consume GPIO edges inside the MCU loop and return data-pin levels
+/// before the next firmware instruction. Address bits driven through 74HC595s
+/// are reconstructed with cloned [`Hc595Chain`] controllers—the exact same
+/// state machine used by the scheduler's analogue-output path—and both paths
+/// share the memory evaluator's backing cells.
+pub(crate) struct ParallelMemoryResponder {
+    id: String,
+    port: ParallelMemoryPort,
+    levels: LogicLevels,
+    frequency_hz: u64,
+    volts: Arc<Mutex<Vec<f64>>>,
+    address: Vec<ParallelSignal>,
+    write: Option<(ParallelSignal, Edge)>,
+    write_gates: Vec<(ParallelSignal, Level)>,
+    read_gates: Vec<(ParallelSignal, Level)>,
+    data_in: Vec<ParallelSignal>,
+    data_out: Vec<(char, u8)>,
+    chains: Vec<Hc595Chain>,
+    pin_levels: HashMap<(char, u8), bool>,
+    watched: Vec<(char, u8)>,
+    prev_write: bool,
+    last_write_cycle: Option<u64>,
+    edge_cycle: Option<u64>,
+    runtime: Arc<Mutex<ParallelMemoryRuntime>>,
+}
+
+impl ParallelMemoryResponder {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        id: String,
+        port: ParallelMemoryPort,
+        levels: LogicLevels,
+        frequency_hz: u64,
+        volts: Arc<Mutex<Vec<f64>>>,
+        address: Vec<ParallelSignal>,
+        write: Option<(ParallelSignal, Edge)>,
+        write_gates: Vec<(ParallelSignal, Level)>,
+        read_gates: Vec<(ParallelSignal, Level)>,
+        data_in: Vec<ParallelSignal>,
+        data_out: Vec<(char, u8)>,
+        chains: Vec<Hc595Chain>,
+        runtime: Arc<Mutex<ParallelMemoryRuntime>>,
+    ) -> Self {
+        let mut watched: Vec<(char, u8)> = address
+            .iter()
+            .chain(write.iter().map(|(s, _)| s))
+            .chain(write_gates.iter().map(|(s, _)| s))
+            .chain(read_gates.iter().map(|(s, _)| s))
+            .chain(data_in.iter())
+            .filter_map(|s| match s {
+                ParallelSignal::Mcu(pin) => Some(*pin),
+                _ => None,
+            })
+            .collect();
+        for chain in &chains {
+            watched.extend([chain.ser, chain.srclk, chain.rclk]);
+            watched.extend(chain.srclr_n);
+            watched.extend(chain.oe_n);
+        }
+        watched.sort_unstable();
+        watched.dedup();
+
+        let prev_write = write
+            .map(|(_, edge)| matches!(edge, Edge::Rising))
+            .unwrap_or(false);
+        ParallelMemoryResponder {
+            id,
+            port,
+            levels,
+            frequency_hz,
+            volts,
+            address,
+            write,
+            write_gates,
+            read_gates,
+            data_in,
+            data_out,
+            chains,
+            pin_levels: HashMap::new(),
+            watched,
+            prev_write,
+            last_write_cycle: None,
+            edge_cycle: None,
+            runtime,
+        }
+    }
+
+    fn source_level(&self, source: ParallelSignal, volts: &[f64]) -> bool {
+        match source {
+            ParallelSignal::Mcu(pin) => self.pin_levels.get(&pin).copied().unwrap_or(false),
+            ParallelSignal::Hc595 { chain, chip, bit } => self
+                .chains
+                .get(chain)
+                .and_then(|c| c.latched.get(chip))
+                .map(|byte| byte & (1 << bit) != 0)
+                .unwrap_or(false),
+            ParallelSignal::Node(node) => {
+                let v = volts.get(node.0 as usize).copied().unwrap_or(0.0);
+                self.levels.decide(v, false)
+            }
+        }
+    }
+
+    fn address(&self, volts: &[f64]) -> usize {
+        self.address
+            .iter()
+            .enumerate()
+            .fold(0usize, |value, (bit, &source)| {
+                value | (usize::from(self.source_level(source, volts)) << bit)
+            })
+    }
+
+    fn gates_active(&self, gates: &[(ParallelSignal, Level)], volts: &[f64]) -> bool {
+        gates
+            .iter()
+            .all(|&(source, active)| active.is_active(self.source_level(source, volts)))
+    }
+
+    fn data_value(&self, volts: &[f64]) -> u64 {
+        self.data_in
+            .iter()
+            .enumerate()
+            .fold(0u64, |value, (bit, &source)| {
+                value | (u64::from(self.source_level(source, volts)) << bit)
+            })
+    }
+}
+
+impl InputResponder for ParallelMemoryResponder {
+    fn watched_pins(&self) -> Vec<(char, u8)> {
+        self.watched.clone()
+    }
+
+    fn on_edge(&mut self, pin: (char, u8), high: bool) -> Vec<((char, u8), bool)> {
+        self.pin_levels.insert(pin, high);
+        for chain in &mut self.chains {
+            chain.replay(&[(pin.0, pin.1, high)]);
+        }
+
+        let volts_guard = self.volts.lock().unwrap_or_else(|e| e.into_inner());
+        let volts = volts_guard.as_slice();
+        if let Some((source, edge)) = self.write {
+            let cur = self.source_level(source, volts);
+            let fired = match edge {
+                Edge::Rising => cur && !self.prev_write,
+                Edge::Falling => !cur && self.prev_write,
+            };
+            self.prev_write = cur;
+            if fired && self.gates_active(&self.write_gates, volts) {
+                let address = self.address(volts);
+                let value = self.data_value(volts);
+                let gap_exceeded = match (
+                    self.edge_cycle,
+                    self.last_write_cycle,
+                    self.port.byte_load_timeout_s,
+                ) {
+                    (Some(now), Some(previous), Some(limit_s)) => {
+                        now < previous
+                            || (now - previous) as f64 > limit_s * self.frequency_hz.max(1) as f64
+                    }
+                    _ => false,
+                };
+                if self.edge_cycle.is_some() {
+                    self.last_write_cycle = self.edge_cycle;
+                }
+                if !self.port.write_after_gap(address, value, gap_exceeded) {
+                    eprintln!(
+                        "ERROR: parallel memory '{}': write address {address:#x} is outside {} words",
+                        self.id,
+                        self.port.words()
+                    );
+                }
+            }
+        }
+
+        let read_active = self.gates_active(&self.read_gates, volts);
+        if !read_active {
+            self.runtime
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .read_enabled = false;
+            return Vec::new();
+        }
+        let address = self.address(volts);
+        let Some(word) = self.port.read(address) else {
+            eprintln!(
+                "ERROR: parallel memory '{}': read address {address:#x} is outside {} words",
+                self.id,
+                self.port.words()
+            );
+            return Vec::new();
+        };
+        {
+            let mut runtime = self.runtime.lock().unwrap_or_else(|e| e.into_inner());
+            runtime.address = address;
+            runtime.word = word;
+            runtime.read_enabled = true;
+        }
+        self.data_out
+            .iter()
+            .enumerate()
+            .map(|(bit, &pin)| (pin, word & (1 << bit) != 0))
+            .collect()
+    }
+
+    fn on_edge_at(&mut self, pin: (char, u8), high: bool, cycle: u64) -> Vec<((char, u8), bool)> {
+        self.edge_cycle = Some(cycle);
+        let drives = self.on_edge(pin, high);
+        self.edge_cycle = None;
+        drives
     }
 }
 
@@ -941,6 +1214,106 @@ mod tests {
         assert_eq!(reg.dispatch(('B', 5), true), vec![(('B', 4), true)]);
         assert!(reg.dispatch(('C', 0), true).is_empty());
         assert!(reg.dispatch(('D', 2), false).is_empty());
+    }
+
+    #[test]
+    fn parallel_memory_answers_and_writes_inside_one_firmware_chunk() {
+        const SPEC: &str = r#"
+inputs = ["a0", "a1", "ce_n", "oe_n", "we_n"]
+outputs = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+[[memory]]
+name = "cell"
+words = 4
+bits = 8
+page_words = 4
+init = 0xff
+address = ["a0", "a1"]
+write = { pin = "we_n", edge = "rising" }
+write_gates = [{ pin = "ce_n", active = "low" }]
+read_gates = [
+  { pin = "ce_n", active = "low" },
+  { pin = "oe_n", active = "low" },
+  { pin = "we_n", active = "high" },
+]
+data_in = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+"#;
+        let spec: hauksbee_models::logic_spec::Logic = toml::from_str(SPEC).unwrap();
+        let logic = crate::logic::LogicComponent::compile("eeprom", &spec).unwrap();
+        let port = logic.memory_ports().pop().expect("one memory");
+
+        let a0 = ('B', 0);
+        let a1 = ('B', 1);
+        let ce = ('D', 0);
+        let oe = ('D', 1);
+        let we = ('D', 2);
+        let data: Vec<(char, u8)> = (0..8).map(|bit| ('C', bit)).collect();
+        let mut responder = ParallelMemoryResponder::new(
+            "U1.cell".into(),
+            port,
+            LogicLevels {
+                voh: 4.4,
+                vol: 0.1,
+                vih: 2.0,
+                vil: 0.8,
+                ro: 50.0,
+            },
+            1_000_000,
+            Arc::new(Mutex::new(vec![0.0; 2])),
+            vec![ParallelSignal::Mcu(a0), ParallelSignal::Mcu(a1)],
+            Some((ParallelSignal::Mcu(we), Edge::Rising)),
+            vec![(ParallelSignal::Mcu(ce), Level::Low)],
+            vec![
+                (ParallelSignal::Mcu(ce), Level::Low),
+                (ParallelSignal::Mcu(oe), Level::Low),
+                (ParallelSignal::Mcu(we), Level::High),
+            ],
+            data.iter().copied().map(ParallelSignal::Mcu).collect(),
+            data.clone(),
+            Vec::new(),
+            Arc::new(Mutex::new(ParallelMemoryRuntime::default())),
+        );
+
+        // Idle controls, address 1, and an externally-driven 0x5a bus.
+        responder.on_edge(ce, false);
+        responder.on_edge(oe, true);
+        responder.on_edge(we, true);
+        responder.on_edge(a0, true);
+        responder.on_edge(a1, false);
+        for (bit, &pin) in data.iter().enumerate() {
+            responder.on_edge(pin, 0x5a & (1 << bit) != 0);
+        }
+
+        // A complete 1 us pulse may rise and fall before the analogue chunk
+        // ends; the synchronous responder still commits on the rising edge.
+        responder.on_edge(we, false);
+        responder.on_edge(we, true);
+        let drives = responder.on_edge(oe, false);
+        let got = drives
+            .iter()
+            .enumerate()
+            .fold(0u8, |value, (bit, &(_, high))| {
+                value | (u8::from(high) << bit)
+            });
+        assert_eq!(got, 0x5a);
+
+        // CE inactive suppresses both bus drive and write qualification.
+        assert!(responder.on_edge(ce, true).is_empty());
+        responder.on_edge(oe, true);
+        for &pin in &data {
+            responder.on_edge(pin, false);
+        }
+        responder.on_edge(we, false);
+        responder.on_edge(we, true);
+        responder.on_edge(ce, false);
+        let drives = responder.on_edge(oe, false);
+        let got = drives
+            .iter()
+            .enumerate()
+            .fold(0u8, |value, (bit, &(_, high))| {
+                value | (u8::from(high) << bit)
+            });
+        assert_eq!(got, 0x5a, "CE-high write pulse must not overwrite memory");
     }
 
     // ── Bit-banged SPI ───────────────────────────────────────────────────────

@@ -70,6 +70,7 @@
 //! must tie PL_n low in copper as the real part requires.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use evalexpr::{
     build_operator_tree, ContextWithMutableVariables, DefaultNumericTypes, HashMapContext,
@@ -180,6 +181,207 @@ struct CompTristate {
     active: Level,
 }
 
+/// One compiled addressable memory array. Storage is shared so an
+/// edge-synchronous bus responder can use the same cells as the ordinary
+/// tick evaluator; there is one source of truth even when firmware reads and
+/// writes between analogue solve boundaries.
+#[derive(Debug)]
+struct CompMemory {
+    name: String,
+    mask: u64,
+    address: Vec<usize>,
+    write: Option<(usize, Edge)>,
+    prev_write: bool,
+    write_gates: Vec<(usize, Level)>,
+    read_gates: Vec<(usize, Level)>,
+    data_in_names: Vec<String>,
+    data_in_levels: Vec<bool>,
+    data_out: Vec<usize>,
+    byte_load_timeout_s: Option<f64>,
+    storage: Arc<Mutex<ParallelMemoryStorage>>,
+}
+
+#[derive(Debug)]
+struct SoftwareProtectionState {
+    enabled: bool,
+    enable: Box<[(usize, u64)]>,
+    disable: Box<[(usize, u64)]>,
+    page_words: usize,
+    /// Candidate command writes are held until they either complete a command
+    /// (and are consumed) or diverge. While unprotected, a divergent prefix is
+    /// ordinary data and must be committed; while protected it is ignored.
+    command_buffer: Vec<(usize, u64)>,
+    /// The enable sequence arms one protected byte/page program operation.
+    /// A read, a page crossing, or `page_words` physical writes closes it.
+    write_window: Option<ProtectedWriteWindow>,
+}
+
+#[derive(Debug)]
+struct ProtectedWriteWindow {
+    page: Option<usize>,
+    remaining: usize,
+}
+
+#[derive(Debug)]
+struct ParallelMemoryStorage {
+    cells: Box<[u64]>,
+    protection: Option<SoftwareProtectionState>,
+}
+
+impl ParallelMemoryStorage {
+    fn finish_write_period(&mut self) {
+        if let Some(protection) = &mut self.protection {
+            protection.write_window = None;
+            if !protection.enabled {
+                for (pending_address, pending_value) in
+                    std::mem::take(&mut protection.command_buffer)
+                {
+                    self.cells[pending_address] = pending_value;
+                }
+            } else {
+                protection.command_buffer.clear();
+            }
+        }
+    }
+
+    fn read(&mut self, address: usize, mask: u64) -> Option<u64> {
+        // Reading terminates a page-load period. It also disambiguates an
+        // incomplete command prefix: in the unprotected state those bus
+        // writes were ordinary data; in the protected state they were
+        // rejected attempts and remain uncommitted.
+        self.finish_write_period();
+        self.cells.get(address).copied().map(|v| v & mask)
+    }
+
+    /// Apply one qualified physical write. Returns false only for an address
+    /// outside the array; a write blocked by enabled protection is a valid bus
+    /// transaction and therefore returns true.
+    fn write(&mut self, address: usize, value: u64, mask: u64, gap_exceeded: bool) -> bool {
+        if address >= self.cells.len() {
+            return false;
+        }
+        if gap_exceeded {
+            self.finish_write_period();
+        }
+        let value = value & mask;
+        let Some(protection) = &mut self.protection else {
+            self.cells[address] = value;
+            return true;
+        };
+
+        let write = (address, value);
+
+        // Once armed, the protected program operation accepts one byte or one
+        // same-page load of up to `page_words` writes. The AT28C256's command
+        // bytes are followed by this data phase; treating protection as a
+        // blanket write block here would reject the datasheet's own algorithm.
+        if let Some(window) = &mut protection.write_window {
+            let page = address / protection.page_words;
+            if window.page.is_none() || window.page == Some(page) {
+                window.page = Some(page);
+                self.cells[address] = value;
+                window.remaining -= 1;
+                if window.remaining == 0 {
+                    protection.write_window = None;
+                }
+                return true;
+            }
+            // A new page needs a new enable sequence while protected.
+            protection.write_window = None;
+        }
+
+        protection.command_buffer.push(write);
+        if protection.command_buffer.as_slice() == protection.enable.as_ref() {
+            protection.command_buffer.clear();
+            protection.enabled = true;
+            protection.write_window = Some(ProtectedWriteWindow {
+                page: None,
+                remaining: protection.page_words,
+            });
+            return true;
+        }
+        if protection.command_buffer.as_slice() == protection.disable.as_ref() {
+            protection.command_buffer.clear();
+            protection.enabled = false;
+            protection.write_window = None;
+            return true;
+        }
+        let is_prefix = |candidate: &[(usize, u64)], sequence: &[(usize, u64)]| {
+            candidate.len() < sequence.len() && sequence.starts_with(candidate)
+        };
+        if is_prefix(&protection.command_buffer, &protection.enable)
+            || is_prefix(&protection.command_buffer, &protection.disable)
+        {
+            return true;
+        }
+
+        // The candidate diverged. Preserve a final write that can immediately
+        // start another command; everything before it is either ordinary data
+        // (unprotected) or a rejected protected write.
+        let mut candidate = std::mem::take(&mut protection.command_buffer);
+        let restart = candidate.last().is_some_and(|last| {
+            protection.enable.first() == Some(last) || protection.disable.first() == Some(last)
+        });
+        let held = restart.then(|| candidate.pop().expect("restart has a final write"));
+        if !protection.enabled {
+            for (pending_address, pending_value) in candidate {
+                self.cells[pending_address] = pending_value;
+            }
+        }
+        protection.command_buffer.extend(held);
+        true
+    }
+}
+
+/// Cloneable description and shared storage for one compiled parallel-memory
+/// port. The scheduler combines these role names with the bound board's nets
+/// when it installs an edge-synchronous firmware responder.
+#[derive(Debug, Clone)]
+pub(crate) struct ParallelMemoryPort {
+    pub name: String,
+    pub address: Vec<String>,
+    pub write: Option<(String, Edge)>,
+    pub write_gates: Vec<(String, Level)>,
+    pub read_gates: Vec<(String, Level)>,
+    pub data_in: Vec<String>,
+    pub data_out: Vec<String>,
+    pub byte_load_timeout_s: Option<f64>,
+    storage: Arc<Mutex<ParallelMemoryStorage>>,
+    mask: u64,
+}
+
+impl ParallelMemoryPort {
+    pub fn words(&self) -> usize {
+        self.storage
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .cells
+            .len()
+    }
+
+    pub fn read(&self, address: usize) -> Option<u64> {
+        self.storage
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .read(address, self.mask)
+    }
+
+    #[cfg(test)]
+    pub fn write(&self, address: usize, value: u64) -> bool {
+        self.storage
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .write(address, value, self.mask, false)
+    }
+
+    pub fn write_after_gap(&self, address: usize, value: u64, gap_exceeded: bool) -> bool {
+        self.storage
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .write(address, value, self.mask, gap_exceeded)
+    }
+}
+
 /// One bound, compiled `[models.logic]` part: pin tables, register state,
 /// compiled expressions. Pure logic; it computes LEVELS; the caller owns
 /// voltage thresholds, net wiring, and drivers.
@@ -204,6 +406,7 @@ pub struct LogicComponent {
     comb: Vec<CompComb>,
     plan: Vec<PlanStep>,
     tristates: Vec<CompTristate>,
+    memories: Vec<CompMemory>,
     /// evalexpr variable names, precomputed: `v_<input>` / `v_<output>`.
     input_vars: Vec<String>,
     output_vars: Vec<String>,
@@ -322,7 +525,7 @@ impl LogicComponent {
     /// exhaustively verifies fixpoint convergence for every combinational
     /// cycle. All failures are named.
     pub fn compile(spec_id: &str, logic: &Logic) -> Result<Self, LogicCompileError> {
-        let validated = logic.validate()?;
+        let validated = logic.validate_with_features(&[Logic::FEATURE_MEMORY])?;
 
         let input_names: Vec<String> = logic.inputs.clone();
         let output_names: Vec<String> = logic.outputs.clone();
@@ -342,6 +545,61 @@ impl LogicComponent {
             .enumerate()
             .map(|(i, r)| (r.name.as_str(), i))
             .collect();
+
+        // ── Addressable memories ──
+        let mut memories: Vec<CompMemory> = Vec::with_capacity(validated.memories.len());
+        for m in &validated.memories {
+            let mask = if m.bits == 64 {
+                u64::MAX
+            } else {
+                (1u64 << m.bits) - 1
+            };
+            memories.push(CompMemory {
+                name: m.name.clone(),
+                mask,
+                address: m.address.iter().map(|p| input_idx[p.as_str()]).collect(),
+                write: m
+                    .write
+                    .as_ref()
+                    .map(|w| (input_idx[w.pin.as_str()], w.edge)),
+                prev_write: false,
+                write_gates: m
+                    .write_gates
+                    .iter()
+                    .map(|g| (input_idx[g.pin.as_str()], g.active))
+                    .collect(),
+                read_gates: m
+                    .read_gates
+                    .iter()
+                    .map(|g| (input_idx[g.pin.as_str()], g.active))
+                    .collect(),
+                data_in_names: m.data_in.clone(),
+                data_in_levels: vec![false; m.data_in.len()],
+                data_out: m.data_out.iter().map(|p| output_idx[p.as_str()]).collect(),
+                byte_load_timeout_s: m.byte_load_timeout_s,
+                storage: Arc::new(Mutex::new(ParallelMemoryStorage {
+                    cells: vec![m.init & mask; m.words as usize].into_boxed_slice(),
+                    protection: m.software_data_protection.as_ref().map(|p| {
+                        SoftwareProtectionState {
+                            enabled: p.initial,
+                            enable: p
+                                .enable
+                                .iter()
+                                .map(|w| (w.address as usize, w.value))
+                                .collect(),
+                            disable: p
+                                .disable
+                                .iter()
+                                .map(|w| (w.address as usize, w.value))
+                                .collect(),
+                            page_words: m.page_words.unwrap_or(1) as usize,
+                            command_buffer: Vec::new(),
+                            write_window: None,
+                        }
+                    }),
+                })),
+            });
+        }
 
         // ── Registers ──
         let registers: Vec<CompReg> = logic
@@ -393,11 +651,19 @@ impl LogicComponent {
 
         // ── Comb compilation ──
         let mut comb: Vec<CompComb> = Vec::with_capacity(validated.comb.len());
-        let mut deps: Vec<Vec<usize>> = vec![Vec::new(); output_names.len()];
+        // Plan nodes index `comb`, not the full output vector: memory-backed
+        // outputs can be interleaved with expression-backed outputs.
+        let comb_idx: HashMap<&str, usize> = validated
+            .comb
+            .iter()
+            .enumerate()
+            .map(|(i, (name, _))| (name.as_str(), i))
+            .collect();
+        let mut deps: Vec<Vec<usize>> = vec![Vec::new(); validated.comb.len()];
         let mut reg_bit_vars: Vec<(usize, u32, String)> = Vec::new();
         let mut seen_bits: std::collections::HashSet<(usize, u32)> =
             std::collections::HashSet::new();
-        for (out_name, ast) in &validated.comb {
+        for (comb_i, (out_name, ast)) in validated.comb.iter().enumerate() {
             let out = output_idx[out_name.as_str()];
             let mut src = String::new();
             lower_expr(ast, &mut src);
@@ -411,8 +677,8 @@ impl LogicComponent {
             let mut bits = Vec::new();
             ast.collect_refs(&mut names, &mut bits);
             for n in names {
-                if let Some(&oi) = output_idx.get(n) {
-                    deps[out].push(oi);
+                if let Some(&dependency) = comb_idx.get(n) {
+                    deps[comb_i].push(dependency);
                 }
             }
             for (n, i) in bits {
@@ -423,9 +689,6 @@ impl LogicComponent {
             }
             comb.push(CompComb { out, node });
         }
-        // comb is in outputs-declaration order (validate() guarantees it), so
-        // comb[i].out == i; keep the assumption checked.
-        debug_assert!(comb.iter().enumerate().all(|(i, c)| c.out == i));
 
         // ── Evaluation plan: SCCs in topological order ──
         let plan: Vec<PlanStep> = tarjan_sccs(&deps)
@@ -483,6 +746,27 @@ impl LogicComponent {
                 Level::High => true,
             };
         }
+        for m in &memories {
+            // Unwired memory controls fail safe: selects/enables are inactive,
+            // and the write strobe starts released so the first observed idle
+            // level cannot manufacture a write edge.
+            for &(pin, active) in m.write_gates.iter().chain(&m.read_gates) {
+                input_defaults[pin] = match active {
+                    Level::Low => true,
+                    Level::High => false,
+                };
+            }
+            if let Some((pin, edge)) = m.write {
+                input_defaults[pin] = match edge {
+                    Edge::Rising => true,
+                    Edge::Falling => false,
+                };
+            }
+        }
+
+        for m in &mut memories {
+            m.prev_write = m.write.map(|(pin, _)| input_defaults[pin]).unwrap_or(false);
+        }
 
         // ── Initial output levels (power-on) ──
         let mut output_levels = vec![false; output_names.len()];
@@ -505,6 +789,7 @@ impl LogicComponent {
             comb,
             plan,
             tristates,
+            memories,
             input_vars,
             output_vars,
             reg_bit_vars,
@@ -536,7 +821,10 @@ impl LogicComponent {
             // is not itself a member. Enumerating non-member OUTPUTS as free
             // bits over-approximates reachable states, safe: convergence
             // for a superset of states implies it for the reachable set.
-            let member_set: std::collections::HashSet<usize> = members.iter().copied().collect();
+            let member_outputs: std::collections::HashSet<usize> = members
+                .iter()
+                .map(|&comb_i| self.comb[comb_i].out)
+                .collect();
             let mut externals: Vec<String> = Vec::new();
             let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
             for &mi in &members {
@@ -546,7 +834,7 @@ impl LogicComponent {
                         .output_vars
                         .iter()
                         .enumerate()
-                        .any(|(oi, ov)| ov == var && member_set.contains(&oi));
+                        .any(|(oi, ov)| ov == var && member_outputs.contains(&oi));
                     if !is_member && seen.insert(var.to_string()) {
                         externals.push(var.to_string());
                     }
@@ -556,7 +844,7 @@ impl LogicComponent {
             let k = members.len() as u32;
             let names: Vec<String> = members
                 .iter()
-                .map(|&i| self.output_names[i].clone())
+                .map(|&comb_i| self.output_names[self.comb[comb_i].out].clone())
                 .collect();
             if m + k > CONVERGENCE_ENUM_CAP {
                 return Err(LogicCompileError::TooWideToVerify {
@@ -576,16 +864,18 @@ impl LogicComponent {
                 for seed_bits in 0u64..(1u64 << k) {
                     let mut levels: Vec<bool> =
                         (0..k as usize).map(|i| (seed_bits >> i) & 1 == 1).collect();
-                    for (i, &mi) in members.iter().enumerate() {
+                    for (i, &comb_i) in members.iter().enumerate() {
+                        let out = self.comb[comb_i].out;
                         let _ = self
                             .ctx
-                            .set_value(self.output_vars[mi].clone(), Value::Boolean(levels[i]));
+                            .set_value(self.output_vars[out].clone(), Value::Boolean(levels[i]));
                     }
                     let mut settled = false;
                     for _ in 0..COMB_FIXPOINT_BOUND {
                         let mut changed = false;
-                        for (i, &mi) in members.iter().enumerate() {
-                            let v = self.comb[mi]
+                        for (i, &comb_i) in members.iter().enumerate() {
+                            let out = self.comb[comb_i].out;
+                            let v = self.comb[comb_i]
                                 .node
                                 .eval_boolean_with_context(&self.ctx)
                                 .unwrap_or(false);
@@ -594,7 +884,7 @@ impl LogicComponent {
                                 changed = true;
                                 let _ = self
                                     .ctx
-                                    .set_value(self.output_vars[mi].clone(), Value::Boolean(v));
+                                    .set_value(self.output_vars[out].clone(), Value::Boolean(v));
                             }
                         }
                         if !changed {
@@ -653,36 +943,48 @@ impl LogicComponent {
     /// sub-chunk pulse trains demand edge-granular replay.
     pub fn is_sequential(&self) -> bool {
         self.registers.iter().any(|r| r.clock.is_some())
+            || self.memories.iter().any(|m| m.write.is_some())
     }
 
     /// Input pins that participate in sequential behaviour (register clocks,
     /// resets, loads + load data, enables, serial data): the pins whose edge
     /// timing matters. Used by the scheduler to decide edge-replay membership.
     pub fn sequential_pins(&self) -> Vec<&str> {
-        let mut pins: Vec<usize> = Vec::new();
+        let mut pins: Vec<&str> = Vec::new();
         for r in &self.registers {
             if let Some((p, _)) = r.clock {
-                pins.push(p);
+                pins.push(self.input_names[p].as_str());
             }
             for &(p, _, _) in &r.resets {
-                pins.push(p);
+                pins.push(self.input_names[p].as_str());
             }
             if let Some((p, _, data)) = &r.load {
-                pins.push(*p);
-                pins.extend(data.iter().copied());
+                pins.push(self.input_names[*p].as_str());
+                pins.extend(data.iter().map(|&p| self.input_names[p].as_str()));
             }
             if let Some((p, _)) = r.clock_enable {
-                pins.push(p);
+                pins.push(self.input_names[p].as_str());
             }
             if let Some(DataSrc::Pin(p)) = r.data_in {
-                pins.push(p);
+                pins.push(self.input_names[p].as_str());
             }
+        }
+        for m in &self.memories {
+            pins.extend(m.address.iter().map(|&p| self.input_names[p].as_str()));
+            if let Some((p, _)) = m.write {
+                pins.push(self.input_names[p].as_str());
+            }
+            pins.extend(
+                m.write_gates
+                    .iter()
+                    .chain(&m.read_gates)
+                    .map(|&(p, _)| self.input_names[p].as_str()),
+            );
+            pins.extend(m.data_in_names.iter().map(String::as_str));
         }
         pins.sort_unstable();
         pins.dedup();
-        pins.into_iter()
-            .map(|p| self.input_names[p].as_str())
-            .collect()
+        pins
     }
 
     /// Current level of an input pin (the last decided sample).
@@ -701,6 +1003,42 @@ impl LogicComponent {
     pub fn output_enabled(&self, name: &str) -> Option<bool> {
         let i = self.output_names.iter().position(|n| n == name)?;
         Some(self.output_enabled[i])
+    }
+
+    /// Addressable memories declared by this component, sharing their backing
+    /// cells with the tick evaluator. Empty for ordinary logic parts.
+    pub(crate) fn memory_ports(&self) -> Vec<ParallelMemoryPort> {
+        self.memories
+            .iter()
+            .map(|m| ParallelMemoryPort {
+                name: m.name.clone(),
+                address: m
+                    .address
+                    .iter()
+                    .map(|&p| self.input_names[p].clone())
+                    .collect(),
+                write: m.write.map(|(p, edge)| (self.input_names[p].clone(), edge)),
+                write_gates: m
+                    .write_gates
+                    .iter()
+                    .map(|&(p, active)| (self.input_names[p].clone(), active))
+                    .collect(),
+                read_gates: m
+                    .read_gates
+                    .iter()
+                    .map(|&(p, active)| (self.input_names[p].clone(), active))
+                    .collect(),
+                data_in: m.data_in_names.clone(),
+                data_out: m
+                    .data_out
+                    .iter()
+                    .map(|&p| self.output_names[p].clone())
+                    .collect(),
+                byte_load_timeout_s: m.byte_load_timeout_s,
+                storage: m.storage.clone(),
+                mask: m.mask,
+            })
+            .collect()
     }
 
     /// All outputs: `(name, level, enabled)`.
@@ -759,6 +1097,15 @@ impl LogicComponent {
                 None => self.input_defaults[i],
             };
         }
+        // Bidirectional memory data pins may be declared outputs, so they do
+        // not occur in `input_names`. Sample them explicitly while the memory
+        // is tri-stated; the caller resolves the same physical role/net.
+        for m in &mut self.memories {
+            for i in 0..m.data_in_names.len() {
+                let prev = m.data_in_levels[i];
+                m.data_in_levels[i] = sample(&m.data_in_names[i], prev).unwrap_or(false);
+            }
+        }
 
         // 2. Registers: next values from the PRE-tick state, then commit
         //    simultaneously (tied-clock silicon semantics).
@@ -806,6 +1153,41 @@ impl LogicComponent {
             r.state = next & r.mask;
         }
 
+        // 2b. Parallel memories commit on their declared, fully-qualified
+        // write edge. Address and data are sampled from this exact tick.
+        for m in &mut self.memories {
+            let Some((write_pin, edge)) = m.write else {
+                continue;
+            };
+            let cur = self.input_levels[write_pin];
+            let fired = match edge {
+                Edge::Rising => cur && !m.prev_write,
+                Edge::Falling => !cur && m.prev_write,
+            };
+            m.prev_write = cur;
+            let enabled = m
+                .write_gates
+                .iter()
+                .all(|&(pin, active)| active.is_active(self.input_levels[pin]));
+            if !fired || !enabled {
+                continue;
+            }
+            let address = m.address.iter().enumerate().fold(0usize, |a, (bit, &pin)| {
+                a | (usize::from(self.input_levels[pin]) << bit)
+            });
+            let value = m
+                .data_in_levels
+                .iter()
+                .enumerate()
+                .fold(0u64, |v, (bit, &high)| v | (u64::from(high) << bit))
+                & m.mask;
+            let _ = m
+                .storage
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .write(address, value, m.mask, false);
+        }
+
         // 3+4. Comb evaluation + tri-state.
         self.refresh_outputs();
     }
@@ -850,6 +1232,30 @@ impl LogicComponent {
                 Value::Boolean(self.input_levels[i]),
             );
         }
+
+        // Memory reads are combinational with address. Publish them before
+        // binding output variables so ordinary expressions can consume a
+        // memory-backed output in the same refresh. Do not touch storage while
+        // the bus is tri-stated: besides avoiding meaningless work, this lets
+        // a command protocol retain a candidate prefix across several writes;
+        // an actual enabled read is what terminates a lone, incomplete prefix.
+        for m in &self.memories {
+            let read_enabled = m
+                .read_gates
+                .iter()
+                .all(|&(pin, active)| active.is_active(self.input_levels[pin]));
+            if !read_enabled {
+                continue;
+            }
+            let address = m.address.iter().enumerate().fold(0usize, |a, (bit, &pin)| {
+                a | (usize::from(self.input_levels[pin]) << bit)
+            });
+            let mut storage = m.storage.lock().unwrap_or_else(|e| e.into_inner());
+            let word = storage.read(address, m.mask).unwrap_or(0);
+            for (bit, &out) in m.data_out.iter().enumerate() {
+                self.output_levels[out] = word & (1u64 << bit) != 0;
+            }
+        }
         for i in 0..self.output_names.len() {
             let _ = self.ctx.set_value(
                 self.output_vars[i].clone(),
@@ -863,15 +1269,16 @@ impl LogicComponent {
 
         for step in &self.plan {
             match step {
-                PlanStep::Single(i) => {
-                    let v = self.comb[*i]
+                PlanStep::Single(comb_i) => {
+                    let out = self.comb[*comb_i].out;
+                    let v = self.comb[*comb_i]
                         .node
                         .eval_boolean_with_context(&self.ctx)
                         .unwrap_or(false);
-                    self.output_levels[*i] = v;
+                    self.output_levels[out] = v;
                     let _ = self
                         .ctx
-                        .set_value(self.output_vars[*i].clone(), Value::Boolean(v));
+                        .set_value(self.output_vars[out].clone(), Value::Boolean(v));
                 }
                 PlanStep::Scc(members) => {
                     // Gauss–Seidel sweeps in declaration order, seeded from
@@ -881,17 +1288,18 @@ impl LogicComponent {
                     let mut settled = false;
                     for _ in 0..COMB_FIXPOINT_BOUND {
                         let mut changed = false;
-                        for &mi in members {
-                            let v = self.comb[mi]
+                        for &comb_i in members {
+                            let out = self.comb[comb_i].out;
+                            let v = self.comb[comb_i]
                                 .node
                                 .eval_boolean_with_context(&self.ctx)
                                 .unwrap_or(false);
-                            if v != self.output_levels[mi] {
-                                self.output_levels[mi] = v;
+                            if v != self.output_levels[out] {
+                                self.output_levels[out] = v;
                                 changed = true;
                                 let _ = self
                                     .ctx
-                                    .set_value(self.output_vars[mi].clone(), Value::Boolean(v));
+                                    .set_value(self.output_vars[out].clone(), Value::Boolean(v));
                             }
                         }
                         if !changed {
@@ -920,6 +1328,17 @@ impl LogicComponent {
             let en = ts.active.is_active(self.input_levels[ts.enable]);
             if !en {
                 for &oi in &ts.outputs {
+                    self.output_enabled[oi] = false;
+                }
+            }
+        }
+        for m in &self.memories {
+            let enabled = m
+                .read_gates
+                .iter()
+                .all(|&(pin, active)| active.is_active(self.input_levels[pin]));
+            if !enabled {
+                for &oi in &m.data_out {
                     self.output_enabled[oi] = false;
                 }
             }
@@ -974,6 +1393,46 @@ data_in = "shift"
 
 [tristate]
 "qa..qh" = { enable = "oe_n", active = "low" }
+"#;
+
+    /// Small parallel EEPROM with the same bus/control semantics as a 28C256.
+    /// Four words keep the evaluator test cheap while exercising address,
+    /// bidirectional data, qualified WE edges, and exact read gating.
+    const PARALLEL_EEPROM: &str = r#"
+inputs  = ["a0", "a1", "ce_n", "oe_n", "we_n"]
+outputs = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+
+[[memory]]
+name = "cell"
+words = 4
+bits = 8
+page_words = 4
+init = 0xff
+address = ["a0", "a1"]
+write = { pin = "we_n", edge = "rising" }
+write_gates = [{ pin = "ce_n", active = "low" }]
+read_gates = [
+  { pin = "ce_n", active = "low" },
+  { pin = "oe_n", active = "low" },
+  { pin = "we_n", active = "high" },
+]
+data_in = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+[memory.software_data_protection]
+initial = false
+enable = [
+    { address = 3, value = 0xAA },
+    { address = 2, value = 0x55 },
+    { address = 3, value = 0xA0 },
+]
+disable = [
+    { address = 3, value = 0xAA },
+    { address = 2, value = 0x55 },
+    { address = 3, value = 0x80 },
+    { address = 3, value = 0xAA },
+    { address = 2, value = 0x55 },
+    { address = 3, value = 0x20 },
+]
 "#;
 
     /// shiftOut(MSBFIRST) of `byte`: per bit, set SER then pulse SRCLK.
@@ -1518,5 +1977,244 @@ outputs = ["nand_y", "xor_y"]
         }
         assert!(!pins.contains(&"oe_n"), "OE is not sequential");
         assert!(lc.is_sequential());
+    }
+
+    #[test]
+    fn parallel_memory_reads_erased_words_and_honors_all_read_gates() {
+        let mut lc = compile(PARALLEL_EEPROM);
+
+        tick_with(
+            &mut lc,
+            &[
+                ("a0", true),
+                ("a1", false),
+                ("ce_n", false),
+                ("oe_n", false),
+                ("we_n", true),
+            ],
+        );
+        for bit in 0..8 {
+            let io = format!("io{bit}");
+            assert_eq!(lc.output_level(&io), Some(true), "erased bit {bit}");
+            assert_eq!(lc.output_enabled(&io), Some(true), "read bit {bit} drives");
+        }
+
+        // Each gate independently suppresses drive; a memory must never fight
+        // the bus master while WE is active.
+        for (ce_n, oe_n, we_n) in [
+            (true, false, true),
+            (false, true, true),
+            (false, false, false),
+        ] {
+            tick_with(&mut lc, &[("ce_n", ce_n), ("oe_n", oe_n), ("we_n", we_n)]);
+            for bit in 0..8 {
+                assert_eq!(
+                    lc.output_enabled(&format!("io{bit}")),
+                    Some(false),
+                    "CE={ce_n} OE={oe_n} WE={we_n} must tri-state bit {bit}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn comb_output_can_follow_an_interleaved_memory_output_in_the_same_tick() {
+        let mut lc = compile(
+            r#"
+inputs = ["a0", "ce_n"]
+outputs = ["io0", "copy"]
+
+[[memory]]
+name = "cell"
+words = 2
+bits = 1
+init = 1
+address = ["a0"]
+read_gates = [{ pin = "ce_n", active = "low" }]
+data_out = ["io0"]
+
+[comb]
+copy = "io0"
+"#,
+        );
+        tick_with(&mut lc, &[("a0", true), ("ce_n", false)]);
+        assert_eq!(lc.output_level("io0"), Some(true));
+        assert_eq!(
+            lc.output_level("copy"),
+            Some(true),
+            "comb must see the current addressed word, not a prior-tick value"
+        );
+    }
+
+    #[test]
+    fn parallel_memory_commits_bus_on_qualified_write_edge_only() {
+        let mut lc = compile(PARALLEL_EEPROM);
+        let byte = 0x5a_u8;
+        let mut levels = vec![
+            ("a0", true),
+            ("a1", true),
+            ("ce_n", false),
+            ("oe_n", true),
+            ("we_n", false),
+        ];
+        for bit in 0..8 {
+            levels.push((
+                match bit {
+                    0 => "io0",
+                    1 => "io1",
+                    2 => "io2",
+                    3 => "io3",
+                    4 => "io4",
+                    5 => "io5",
+                    6 => "io6",
+                    _ => "io7",
+                },
+                byte & (1 << bit) != 0,
+            ));
+        }
+
+        // WE low alone is not a commit. The rising edge captures address 3 and
+        // the externally-driven bidirectional bus.
+        tick_with(&mut lc, &levels);
+        levels[4].1 = true;
+        tick_with(&mut lc, &levels);
+
+        tick_with(
+            &mut lc,
+            &[
+                ("a0", true),
+                ("a1", true),
+                ("ce_n", false),
+                ("oe_n", false),
+                ("we_n", true),
+            ],
+        );
+        for bit in 0..8 {
+            assert_eq!(
+                lc.output_level(&format!("io{bit}")),
+                Some(byte & (1 << bit) != 0),
+                "stored bit {bit}"
+            );
+        }
+
+        // A second rising edge while CE is inactive must not overwrite it.
+        tick_with(
+            &mut lc,
+            &[
+                ("a0", true),
+                ("a1", true),
+                ("ce_n", true),
+                ("oe_n", true),
+                ("we_n", false),
+                ("io0", true),
+            ],
+        );
+        tick_with(
+            &mut lc,
+            &[
+                ("a0", true),
+                ("a1", true),
+                ("ce_n", true),
+                ("oe_n", true),
+                ("we_n", true),
+                ("io0", true),
+            ],
+        );
+        tick_with(
+            &mut lc,
+            &[
+                ("a0", true),
+                ("a1", true),
+                ("ce_n", false),
+                ("oe_n", false),
+                ("we_n", true),
+            ],
+        );
+        let got = (0..8).fold(0u8, |acc, bit| {
+            acc | (u8::from(lc.output_level(&format!("io{bit}")).unwrap()) << bit)
+        });
+        assert_eq!(got, byte, "CE-inactive edge must not write");
+    }
+
+    #[test]
+    fn parallel_memory_software_protection_consumes_commands_and_blocks_writes() {
+        let mut lc = compile(PARALLEL_EEPROM);
+
+        fn write_byte(lc: &mut LogicComponent, address: usize, byte: u8) {
+            let names = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"];
+            let mut low = vec![
+                ("a0", address & 1 != 0),
+                ("a1", address & 2 != 0),
+                ("ce_n", false),
+                ("oe_n", true),
+                ("we_n", false),
+            ];
+            for (bit, name) in names.iter().enumerate() {
+                low.push((*name, byte & (1 << bit) != 0));
+            }
+            tick_with(lc, &low);
+            low[4].1 = true;
+            tick_with(lc, &low);
+        }
+
+        let port = lc.memory_ports().remove(0);
+        write_byte(&mut lc, 0, 0x11);
+        assert_eq!(port.read(0), Some(0x11));
+
+        for (address, value) in [(3, 0xAA), (2, 0x55), (3, 0xA0)] {
+            write_byte(&mut lc, address, value);
+        }
+        write_byte(&mut lc, 1, 0x42);
+        assert_eq!(
+            port.read(1),
+            Some(0x42),
+            "the enable sequence arms the following protected program cycle"
+        );
+        assert_eq!(port.read(2), Some(0xFF), "enable commands are not data");
+        assert_eq!(port.read(3), Some(0xFF), "enable commands are not data");
+
+        write_byte(&mut lc, 0, 0x22);
+        assert_eq!(port.read(0), Some(0x11), "protected writes are ignored");
+
+        // A near miss must neither disable protection nor leak command bytes
+        // into storage.
+        for (address, value) in [(3, 0xAA), (2, 0x55), (3, 0x81)] {
+            write_byte(&mut lc, address, value);
+        }
+        write_byte(&mut lc, 0, 0x22);
+        assert_eq!(port.read(0), Some(0x11));
+
+        for (address, value) in [
+            (3, 0xAA),
+            (2, 0x55),
+            (3, 0x80),
+            (3, 0xAA),
+            (2, 0x55),
+            (3, 0x20),
+        ] {
+            write_byte(&mut lc, address, value);
+        }
+        write_byte(&mut lc, 0, 0x33);
+        assert_eq!(port.read(0), Some(0x33), "exact disable restores writes");
+        assert_eq!(port.read(2), Some(0xFF), "disable commands are not data");
+        assert_eq!(port.read(3), Some(0xFF), "disable commands are not data");
+    }
+
+    #[test]
+    fn protected_program_window_expires_after_the_declared_byte_load_gap() {
+        let lc = compile(PARALLEL_EEPROM);
+        let port = lc.memory_ports().remove(0);
+        for (address, value) in [(3, 0xAA), (2, 0x55), (3, 0xA0)] {
+            assert!(port.write(address, value));
+        }
+
+        assert!(port.write_after_gap(1, 0x42, true));
+        assert_eq!(
+            port.read(1),
+            Some(0xFF),
+            "a data write after the page-load timeout is protected"
+        );
+        assert_eq!(port.read(2), Some(0xFF), "command bytes remain consumed");
+        assert_eq!(port.read(3), Some(0xFF), "command bytes remain consumed");
     }
 }
