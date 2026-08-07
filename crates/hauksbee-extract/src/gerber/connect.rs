@@ -149,8 +149,19 @@ impl PlatedHole {
 
     /// The barrel's copper footprint: a disc for a round hole, a stadium of the
     /// routed width for a slot.
+    ///
+    /// The radius is the drill's own, not a floored version of it. A floor
+    /// inflates a small barrel until it reaches copper the real one does not,
+    /// which is copper invented out of a rounding convenience. The 0.05 mm
+    /// fallback applies only where there is no diameter at all to use, so a
+    /// hit with a missing tool size still anchors somewhere instead of
+    /// collapsing to a point.
     fn barrel(&self) -> Shape {
-        let r = (self.diameter / 2.0).max(0.05);
+        let r = if self.diameter > 0.0 {
+            self.diameter / 2.0
+        } else {
+            0.05
+        };
         match self.to {
             None => Shape::disc(self.x, self.y, r),
             Some((tx, ty)) => Shape::Capsule(super::geo::Capsule {

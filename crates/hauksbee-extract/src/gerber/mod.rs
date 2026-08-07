@@ -210,8 +210,6 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
     // RS-274X markers (`%FS`/`%MO`/`G04`), in which case the flash centres are
     // the hole locations; otherwise it is Excellon.
     let n_copper = ordered.len();
-    let token_to_stack =
-        copper_layer_tokens(&ordered, &copper, &physical_to_stack, declared_physical_max);
     // Reader notes: everything this job made us refuse or could not see, in the
     // order we found it. Surfaced on `ReconStats` and printed, so a refusal is
     // visible instead of looking like a clean extraction.
@@ -257,13 +255,14 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         } else {
             let drill = excellon::parse(&text);
             // A body that declares itself non-plated contributes no hits, so it
-            // must not contribute a span claim either: a mechanical file's
-            // layer pair is not evidence about how the plated ones are drilled.
-            let declared = if drill.plated == Some(false) {
-                excellon::DeclaredSpan::Absent
-            } else {
-                drill.span
-            };
+            // must not reach the span analysis at all. Leaving it in let a
+            // mechanical file's layer-pair name mark the job multi-span and
+            // force its plated siblings into a refusal, losing real stitching
+            // on the strength of a file that drills no copper.
+            if drill.plated == Some(false) {
+                continue;
+            }
+            let declared = drill.span;
             (DrillBody::Excellon(drill), declared)
         };
         parsed.push(ParsedDrill {
@@ -310,6 +309,12 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
              recover them."
         ));
     }
+
+    // The layer-name table is built HERE, not before the drills were read,
+    // because whether a positional `L<n>` reading is safe depends on whether
+    // anything in the job says the board is deeper than the films we found, and
+    // a drill declaration is one of the things that can say so.
+    let token_to_stack = copper_layer_tokens(&ordered, &copper, &physical_to_stack, implied_layers);
 
     for p in parsed.iter_mut() {
         p.claim = match p.declared {
@@ -614,7 +619,7 @@ fn copper_layer_tokens(
     ordered: &[(LayerRole, usize)],
     copper: &[(LayerRole, std::path::PathBuf)],
     physical_to_stack: &std::collections::HashMap<u32, usize>,
-    declared_physical_max: u32,
+    implied_layers: usize,
 ) -> std::collections::HashMap<String, usize> {
     let mut out: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
     let n = ordered.len();
@@ -625,11 +630,12 @@ fn copper_layer_tokens(
     }
     // Where no film declared anything, the stack position is the only reading
     // of `L<n>` available. It is exact when the films ARE the whole stack and
-    // wrong the moment one is missing, so it is only offered when nothing in
-    // the job says the board is deeper than the films we found. Otherwise a
-    // drill named `-L1-L2.drl` on a gapped job would place layer 2 on whatever
-    // film happened to land at index 1, which could be the bottom of the board.
-    if (declared_physical_max as usize) <= n {
+    // wrong the moment one is missing, so it is only offered when NOTHING in
+    // the job, film attribute or drill declaration alike, says the board is
+    // deeper than the films we found. Otherwise a drill named `-L1-L2.drl` on a
+    // gapped job would place layer 2 on whatever film happened to land at index
+    // 1, which could be the bottom of the board.
+    if implied_layers <= n {
         for (role, _) in ordered {
             if let LayerRole::Copper { index, .. } = role {
                 out.entry(format!("l{}", index + 1)).or_insert(*index);
@@ -872,7 +878,13 @@ fn count_castellations(holes: &[PlatedHole], outline: &[geo::Shape]) -> usize {
     holes
         .iter()
         .filter(|h| {
-            let r = (h.diameter / 2.0).max(0.05);
+            // The drill's own radius, matching `PlatedHole::barrel`, so the
+            // shape counted here is the shape the connectivity pass used.
+            let r = if h.diameter > 0.0 {
+                h.diameter / 2.0
+            } else {
+                0.05
+            };
             let barrel = match h.to {
                 None => geo::Shape::disc(h.x, h.y, r),
                 Some((tx, ty)) => geo::Shape::Capsule(geo::Capsule {
