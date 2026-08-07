@@ -235,6 +235,17 @@ one is a case where a reading exists that would look fine and be wrong.
   a through-hole only where nothing else in the job says otherwise. Once a
   sibling declares a partial span, silence is ambiguous and the silent
   file's hits stitch nothing.
+- **A name built out of layer names that do not resolve.** A file called
+  `-F_Cu-In1_Cu.drl` on a job with no In1 film is telling us its hits are
+  blind between two layers, one of which is missing. The layer words are
+  found lexically, before any attempt to place them, precisely so that the
+  missing one is noticed: resolving first and counting afterwards would read
+  the name as mentioning a single layer and fall through to the through-hole
+  default. For the same reason a positional reading of `L2` is only offered
+  when nothing says the board is deeper than the films we have; on a gapped
+  job the film at index 1 may be the board's layer 4, and handing it out
+  under the name `L2` is how a blind via ends up joining the two outer
+  layers.
 - **A name that says blind or buried without saying which layers.** There is
   no reading of that, only a refusal.
 
