@@ -145,7 +145,9 @@ What it deliberately does **not** capture:
   physically averages when the PWM period is short against the thermal time
   constant. Sampling the chunk endpoint instead would read the full peak or
   zero depending on phase. For a multi-unit package the siblings' integrated
-  energies pool before the shared theta_JA is applied.
+  energies pool before the shared theta_JA is applied. The continuous
+  Overpower rating consumes the same per-unit time-weighted average, since a
+  wattage rating is the same heating physics under another name.
 
 If you need true board spreading or transient junction response, that is a
 thermal FEM/CFD coupled to the electrical solve, and it is out of scope for this

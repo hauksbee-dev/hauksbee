@@ -61,8 +61,15 @@ use hauksbee_models::ModelLibrary;
 use crate::binder::{power_rail_voltage, resolve};
 
 /// Margin (V) a rail must exceed the part's supply by before the finding
-/// fires: one clamp-diode drop, so a rail inside the pin's VCC + 0.5 V input
-/// abs-max window (and ordinary rail-tolerance noise) never trips it.
+/// fires: one clamp-diode drop, the threshold at which the protection clamp
+/// actually CONDUCTS and the back-powering current path exists. This is
+/// deliberately keyed off conduction, not the tighter VCC + 0.3..0.5 V
+/// abs-max window: rails 0.3..0.6 V above the supply may violate a
+/// datasheet's abs-max without conducting meaningfully, and firing there on
+/// name-derived nominal rail voltages would trade the check's silence
+/// calibration for a band no field failure in the corpus occupies. The
+/// finding therefore claims conduction, and the under-reported band is
+/// documented here rather than hidden.
 const CLAMP_MARGIN_V: f64 = 0.6;
 
 /// Roles that define the part's supply domain (mirrors the scheduler's
@@ -308,6 +315,26 @@ mod tests {
             r.of_check(LintCheck::BackPower).count(),
             0,
             "same-domain pull-up is the normal idiom, got {:?}",
+            r.findings
+        );
+    }
+
+    /// The clamp margin is pinned from the silent side too: a rail 0.3 V
+    /// above the 3.3 V supply (+3V6) sits below one diode drop, the clamp
+    /// does not conduct, and the check must stay silent. Together with the
+    /// +5V case (1.7 V over) this bounds the margin inside (0.3, 1.7) V, so
+    /// a margin of zero (fires on every mixed-nominal board) or of several
+    /// volts (never fires) both fail.
+    #[test]
+    fn sub_clamp_margin_rail_is_silent() {
+        // Rename net 2 from +5V to +3V6 everywhere (declaration + pads), so
+        // the pull-up lands on a rail only 0.3 V above the supply.
+        let board = esp32_pull_board("+5V").replace("(net 2 \"+5V\")", "(net 2 \"+3V6\")");
+        let r = run(&board);
+        assert_eq!(
+            r.of_check(LintCheck::BackPower).count(),
+            0,
+            "+3V6 is 0.3 V over the 3.3 V supply, under the clamp drop, got {:?}",
             r.findings
         );
     }
