@@ -793,11 +793,28 @@ pub struct CosimJson {
     /// (and omitted) when nothing rebooted.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub watchdog_resets: Vec<CosimWatchdogResets>,
+    /// Per-MCU statements of how this backend's TIMING fidelity falls short of
+    /// the part. Non-empty means simulated time on these cores carries a known
+    /// systematic bias (wall-clock-paced virtual time on the QEMU family, the
+    /// F103's deliberate TIMx-at-72MHz divergence), so time-based assertions
+    /// there mean less than they look. Empty (and omitted) on cores whose
+    /// timing is clock-truth gated.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub timing_limitations: Vec<CosimTimingLimitation>,
 }
 
 /// One backend watchdog-fidelity gap (see [`CosimJson::watchdog_limitations`]).
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct CosimWatchdogLimitation {
+    pub mcu_ref: String,
+    /// The backend's whole sentence, for verbatim display. Prose for a human:
+    /// do not parse it or match on it exactly.
+    pub limitation: String,
+}
+
+/// One backend timing-fidelity gap (see [`CosimJson::timing_limitations`]).
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct CosimTimingLimitation {
     pub mcu_ref: String,
     /// The backend's whole sentence, for verbatim display. Prose for a human:
     /// do not parse it or match on it exactly.

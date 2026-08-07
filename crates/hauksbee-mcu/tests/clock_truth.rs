@@ -54,8 +54,15 @@ use std::sync::{Arc, Mutex};
 /// aliasing rules in the module docs before changing it.
 const CHUNK_US: u64 = 1_000;
 
-/// The firmware's real-silicon half-period, from `tick.c`'s `HALF_PERIOD_MS`.
+/// The SysTick firmwares' real-silicon half-period, from `tick.c`'s
+/// `HALF_PERIOD_MS`.
 const HALF_PERIOD_MS: f64 = 100.0;
+
+/// The FE310 mtime oracle's real-silicon half-period: `fe310_tick.rs` toggles
+/// every 3277 mtime ticks and the part counts mtime at 32.768 kHz, so this is
+/// 3277 / 32.768 ms. Kept as the exact expression so the tick constant is
+/// auditable against the firmware source.
+const FE310_HALF_PERIOD_MS: f64 = 3277.0 / 32.768;
 
 /// How many edges to wait for. Five puts the deadline at 500 ms of silicon
 /// time, far enough out that the 1 ms poll quantization is 0.2% of the answer.
@@ -76,11 +83,12 @@ fn firmware(name: &str) -> Option<PathBuf> {
     p.exists().then(|| p.canonicalize().unwrap_or(p))
 }
 
-/// Boot `elf` on `cfg` and return the sim rate divided by the silicon rate.
+/// Boot `elf` on `cfg` and return the sim rate divided by the silicon rate,
+/// for a firmware whose real-silicon half-period is `half_period_ms`.
 ///
 /// `None` means "could not measure", never "measured fine": a spawn or load
 /// failure is reported by the caller as a SKIP, not swallowed into a pass.
-fn measure(cfg: RenodeConfig, elf: &Path, pin: PinId) -> Option<f64> {
+fn measure(cfg: RenodeConfig, elf: &Path, pin: PinId, half_period_ms: f64) -> Option<f64> {
     let mut mcu = RenodeBackend::new(cfg).ok()?;
     mcu.load_firmware(elf).ok()?;
     // Poll only the port the firmware drives. Every chunk costs one Monitor
@@ -122,25 +130,41 @@ fn measure(cfg: RenodeConfig, elf: &Path, pin: PinId) -> Option<f64> {
         return Some(0.0);
     }
     let sim_ms = seen[EDGES as usize - 1] as f64 * CHUNK_US as f64 / 1000.0;
-    let silicon_ms = EDGES as f64 * HALF_PERIOD_MS;
+    let silicon_ms = EDGES as f64 * half_period_ms;
     println!("clock_truth: edges at chunks {seen:?}; {EDGES}th edge at {sim_ms} ms sim, {silicon_ms} ms on silicon");
     Some(silicon_ms / sim_ms)
 }
 
-fn gate(part: &str, cfg: RenodeConfig, elf_name: &str, pin: PinId) {
+/// Measure `elf` on `cfg`, or explain (as a SKIP) why it could not be
+/// measured. The two gates below share this so PASS and FAIL are judged from
+/// the identical measurement path.
+fn measured_ratio(
+    part: &str,
+    cfg: RenodeConfig,
+    elf_name: &str,
+    pin: PinId,
+    half_period_ms: f64,
+) -> Option<f64> {
     if !is_available() {
         eprintln!("SKIP: Renode not installed");
-        return;
+        return None;
     }
     let Some(elf) = firmware(elf_name) else {
         eprintln!(
             "SKIP: testdata/firmware/clock_truth/{elf_name} not built \
              (run make in testdata/firmware/clock_truth)"
         );
-        return;
+        return None;
     };
-    let Some(ratio) = measure(cfg, &elf, pin) else {
+    let ratio = measure(cfg, &elf, pin, half_period_ms);
+    if ratio.is_none() {
         eprintln!("SKIP: could not bring up {part} under Renode");
+    }
+    ratio
+}
+
+fn gate(part: &str, cfg: RenodeConfig, elf_name: &str, pin: PinId) {
+    let Some(ratio) = measured_ratio(part, cfg, elf_name, pin, HALF_PERIOD_MS) else {
         return;
     };
     assert!(
@@ -186,5 +210,69 @@ fn nrf52840_runs_at_the_parts_clock() {
         RenodeConfig::nrf52840(),
         "nrf52840_tick.elf",
         PinId { port: '0', bit: 13 },
+    );
+}
+
+/// The FE310 oracle drives GPIO 19 (the HiFive1 green LED) on port '0'.
+const FE310_PIN: PinId = PinId { port: '0', bit: 19 };
+
+/// FE310 `mtime` at the part's 32.768 kHz RTC tick. Was declared 62 MHz by
+/// the stock platform, a 1892x error nothing could measure until the
+/// `fe310_tick.rs` oracle existed; the descriptor now overrides
+/// `clint frequency` to 32768 and this gate holds it there. The core-clock
+/// gate (`PerformanceInMips`) does not police the CLINT because mtime is a
+/// separate clock domain on the part, which is exactly why it needs its own
+/// oracle.
+#[test]
+fn fe310_mtime_counts_at_the_parts_rtc_rate() {
+    let Some(ratio) = measured_ratio(
+        "renode:sifive_fe310",
+        RenodeConfig::sifive_fe310(),
+        "fe310_tick.elf",
+        FE310_PIN,
+        FE310_HALF_PERIOD_MS,
+    ) else {
+        return;
+    };
+    assert!(
+        (ratio - 1.0).abs() <= TOLERANCE,
+        "renode:sifive_fe310: mtime-timed simulated time runs at {ratio:.3}x \
+         the part's real rate. The platform's `clint frequency` disagrees with \
+         the FE310's 32.768 kHz RTC tick: check the clint override in \
+         db/mcu/sifive_fe310.soc.toml's platform_repl."
+    );
+}
+
+/// The other side of the same gate: a deliberately WRONG declared mtime rate
+/// must FAIL the measurement, or the PASS above proves only that the gate
+/// cannot tell right from wrong. The stock platform's 62 MHz is used as the
+/// wrong value because it is the exact defect the descriptor's override
+/// corrects: if this measurement ever reads within tolerance, the gate has
+/// gone blind (aliasing, a dead pin, a stuck measurement) and the green
+/// `fe310_mtime_counts_at_the_parts_rtc_rate` means nothing.
+#[test]
+fn fe310_gate_fails_a_deliberately_wrong_mtime_rate() {
+    let canonical = include_str!("../db/mcu/sifive_fe310.soc.toml");
+    let wrong = canonical.replace("frequency: 32768", "frequency: 62000000");
+    assert_ne!(
+        canonical, wrong,
+        "the descriptor no longer declares `clint frequency: 32768`; \
+         update this test's substitution alongside it"
+    );
+    let cfg = RenodeConfig::from_soc_toml(&wrong).expect("wrong-clint descriptor still parses");
+    let Some(ratio) = measured_ratio(
+        "renode:sifive_fe310 (deliberately wrong CLINT)",
+        cfg,
+        "fe310_tick.elf",
+        FE310_PIN,
+        FE310_HALF_PERIOD_MS,
+    ) else {
+        return;
+    };
+    assert!(
+        (ratio - 1.0).abs() > TOLERANCE,
+        "a 62 MHz mtime measured {ratio:.3}x, INSIDE the {TOLERANCE} tolerance: \
+         the gate can no longer distinguish a 1892x-wrong timer from a correct \
+         one, so its passing sibling test is vacuous"
     );
 }

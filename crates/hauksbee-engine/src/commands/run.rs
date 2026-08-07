@@ -1145,6 +1145,15 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                     message: crate::scheduler::watchdog_reset_message(&mcu_ref, resets),
                 });
             }
+            // Timing coverage: a known systematic time bias on a core makes a
+            // time-based assertion there mean less than it looks, and a
+            // consumer that only filters notes must still learn it.
+            for (mcu_ref, limitation) in engine.scheduler().timing_limitations() {
+                jr.notes.push(JsonNote {
+                    kind: JsonNoteKind::Coverage,
+                    message: crate::scheduler::timing_limitation_message(&mcu_ref, &limitation),
+                });
+            }
             for w in crate::reports::cosim::heuristic_framing_warnings(
                 &engine.scheduler().spi_framing_modes(),
             ) {
@@ -1270,6 +1279,13 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             for (mcu_ref, resets) in engine.scheduler().watchdog_resets() {
                 report.heads_up.push(crate::plain::HeadsUp::note(
                     crate::scheduler::watchdog_reset_message(&mcu_ref, resets),
+                ));
+            }
+            // Timing coverage, worded identically to the JSON notes and the
+            // default text summary.
+            for (mcu_ref, limitation) in engine.scheduler().timing_limitations() {
+                report.heads_up.push(crate::plain::HeadsUp::note(
+                    crate::scheduler::timing_limitation_message(&mcu_ref, &limitation),
                 ));
             }
             for w in crate::reports::cosim::heuristic_framing_warnings(

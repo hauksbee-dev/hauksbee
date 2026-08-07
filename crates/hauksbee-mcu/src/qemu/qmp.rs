@@ -27,6 +27,14 @@ pub struct Qmp {
     /// Bytes read past the end of the last framed JSON object.
     carry: Vec<u8>,
     timeout: Duration,
+    /// Host timestamp (epoch seconds) of the newest `RESUME` event seen since
+    /// [`Qmp::clear_run_events`]. QEMU stamps every asynchronous event with
+    /// the host time at which the state transition actually happened, which is
+    /// what makes the cont→stop window measurable instead of assumed.
+    event_resume: Option<f64>,
+    /// Host timestamp (epoch seconds) of the newest `STOP` event seen since
+    /// [`Qmp::clear_run_events`].
+    event_stop: Option<f64>,
 }
 
 impl Qmp {
@@ -59,6 +67,8 @@ impl Qmp {
             stream,
             carry: Vec::new(),
             timeout: Duration::from_secs(30),
+            event_resume: None,
+            event_stop: None,
         };
         // Read the greeting, then negotiate out of capabilities mode.
         let _greeting = q.read_message(Duration::from_secs(10))?;
@@ -156,6 +166,7 @@ impl Qmp {
                 bail!("QMP command timed out: {}", req.trim());
             }
             let msg = self.read_message(remaining)?;
+            self.note_event(&msg);
             if let Some(ret) = extract_field(&msg, "return") {
                 return Ok(ret);
             }
@@ -164,6 +175,64 @@ impl Qmp {
             }
             // Otherwise it was an async event; keep reading for the reply.
         }
+    }
+
+    /// Record the host timestamp of a `RESUME`/`STOP` event message; a no-op
+    /// for command replies and other events. Called on every framed message so
+    /// an event is captured whether it arrives before its command's `return`
+    /// or is drained afterwards by [`Qmp::measured_run_window`].
+    fn note_event(&mut self, msg: &str) {
+        let Some(event) = extract_field(msg, "event") else {
+            return;
+        };
+        let slot = match event.as_str() {
+            "RESUME" => &mut self.event_resume,
+            "STOP" => &mut self.event_stop,
+            _ => return,
+        };
+        let Some(ts) = extract_field(msg, "timestamp") else {
+            return;
+        };
+        let (Some(secs), Some(micros)) = (
+            extract_field(&ts, "seconds").and_then(|v| v.parse::<f64>().ok()),
+            extract_field(&ts, "microseconds").and_then(|v| v.parse::<f64>().ok()),
+        ) else {
+            return;
+        };
+        *slot = Some(secs + micros / 1e6);
+    }
+
+    /// Forget any recorded `RESUME`/`STOP` event timestamps. Call immediately
+    /// before the `cont` that opens a run window, so a stale pair from an
+    /// earlier chunk can never masquerade as this chunk's measurement.
+    pub fn clear_run_events(&mut self) {
+        self.event_resume = None;
+        self.event_stop = None;
+    }
+
+    /// The wall-clock window the guest ACTUALLY ran between the last
+    /// `cont` and `stop`, measured from QEMU's own RESUME/STOP event
+    /// timestamps, or `None` when it cannot be measured (an event never
+    /// arrived, or the pair is inconsistent).
+    ///
+    /// The STOP event races the `stop` command's `return`, so this drains the
+    /// socket for up to `grace` waiting for a missing event before giving up.
+    /// `None` must be treated as "unmeasured", never as "zero".
+    pub fn measured_run_window(&mut self, grace: Duration) -> Option<Duration> {
+        let deadline = Instant::now() + grace;
+        while (self.event_resume.is_none() || self.event_stop.is_none())
+            && Instant::now() < deadline
+        {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            // A read timeout just means no more messages are in flight.
+            let Ok(msg) = self.read_message(remaining) else {
+                break;
+            };
+            self.note_event(&msg);
+        }
+        let (resume, stop) = (self.event_resume?, self.event_stop?);
+        let span = stop - resume;
+        (span > 0.0).then(|| Duration::from_secs_f64(span))
     }
 
     /// Read one complete brace-balanced JSON object (one QMP message) as a

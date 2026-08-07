@@ -611,6 +611,14 @@ pub fn watchdog_limitation_message(mcu_ref: &str, limitation: &str) -> String {
     format!("MCU {mcu_ref}: {limitation}")
 }
 
+/// The one-line warning every surface emits for an entry of
+/// [`Scheduler::timing_limitations`]. Same verbatim-passthrough discipline as
+/// [`watchdog_limitation_message`]: the backend's whole sentence, unchanged,
+/// prefixed only with which MCU it is about.
+pub fn timing_limitation_message(mcu_ref: &str, limitation: &str) -> String {
+    format!("MCU {mcu_ref}: {limitation}")
+}
+
 /// The one-line finding every surface emits for an entry of
 /// [`Scheduler::watchdog_resets`]. Same shared-wording discipline as
 /// [`watchdog_limitation_message`] and [`AdcDrop::message`].
@@ -1645,6 +1653,31 @@ impl Scheduler {
             .filter_map(|m| {
                 m.core
                     .watchdog_limitation()
+                    .map(|l| (m.binding.reference.clone(), l))
+            })
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// Per-MCU statements of how the backend's TIMING fidelity falls short of
+    /// the part, keyed by MCU reference. Same coverage class as
+    /// [`Scheduler::watchdog_limitations`]: the run happened, but time-based
+    /// results on these cores carry a known systematic bias (wall-clock-paced
+    /// virtual time on the QEMU family, the F103's deliberate TIMx-at-72MHz
+    /// divergence), so a green time-based assertion means less than it looks.
+    ///
+    /// The value is the backend's whole sentence, rendered verbatim through
+    /// [`timing_limitation_message`] on every surface. Clock-truth-gated
+    /// backends report nothing and are absent: the silence is the claim the
+    /// gate measures. Ordered by MCU reference.
+    pub fn timing_limitations(&self) -> Vec<(String, String)> {
+        let mut out: Vec<(String, String)> = self
+            .mcus
+            .iter()
+            .filter_map(|m| {
+                m.core
+                    .timing_limitation()
                     .map(|l| (m.binding.reference.clone(), l))
             })
             .collect();
@@ -6315,6 +6348,16 @@ mod tests {
         fn watchdog_resets(&self) -> u64 {
             0
         }
+        /// The qemu:esp32 shape: virtual time is wall-clock paced, so it is
+        /// approximate and host-load dependent. A whole sentence, rendered
+        /// verbatim, exactly like the watchdog one.
+        fn timing_limitation(&self) -> Option<String> {
+            Some(
+                "ESP32 virtual time is paced by the host wall clock in this co-simulator, \
+                 so simulated time is approximate and host-load dependent."
+                    .to_string(),
+            )
+        }
     }
 
     /// A mock core with the opposite watchdog shape: it DOES reboot (the simavr
@@ -6399,6 +6442,20 @@ mod tests {
         assert!(sched.watchdog_resets().is_empty());
     }
 
+    // The timing twin of the test above: a backend whose virtual time carries a
+    // known systematic bias must expose it keyed to its MCU, sentence unchanged.
+    #[test]
+    fn a_backend_with_biased_time_reports_its_timing_limitation_verbatim() {
+        let sched = sched_with_bus_blind_core("TEMP_SENSE");
+        let limits = sched.timing_limitations();
+        assert_eq!(limits.len(), 1, "{limits:?}");
+        assert_eq!(limits[0].0, "U1");
+        let sentence = BusBlindCore.timing_limitation().expect("mock has one");
+        assert_eq!(limits[0].1, sentence, "the sentence must not be rewritten");
+        let msg = timing_limitation_message(&limits[0].0, &limits[0].1);
+        assert_eq!(msg, format!("MCU U1: {sentence}"));
+    }
+
     // The counter side: reboots that DID happen are a finding, because an
     // assertion that passed across one was not measuring the run it claimed.
     #[test]
@@ -6425,6 +6482,7 @@ mod tests {
         let (sched, _h) = sched_with_capturing_core(&[]);
         assert!(sched.watchdog_limitations().is_empty());
         assert!(sched.watchdog_resets().is_empty());
+        assert!(sched.timing_limitations().is_empty());
     }
 
     /// A scheduler whose single live MCU is a [`BusBlindCore`], with ADC
