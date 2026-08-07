@@ -151,11 +151,10 @@ face, swapping its side-specific copper 1↔16.
 | Signal polygon / pour (`<polygon>`) | **excluded from the short test** | see the honesty caveat below |
 
 Package copper is placed with the full element transform: position rotated by the
-element's `rot` (CCW, y-up), and a mirrored (`MR`) element reflected across its
-local X axis (flip Y) before the rotation. (Verified against the QT Py's
-SOIC8: only flip-Y puts `MR90`-placed pad 1 at its real coordinate. The older
-flip-X convention scrambled every mirrored package and manufactured
-thousands of false shorts.)
+element's `rot` (CCW, y-up). A mirrored (`MR`) element negates local X and uses
+the mirrored rotation sense. This is regression-tested for both `MR90` and
+`MR0`; the latter is what keeps the RP2040 Thing Plus micro-SD pads on their
+actual bottom-side coordinates.
 
 ### Rule source
 
@@ -166,6 +165,11 @@ assumed: the tightest of the copper-to-copper spacing rules (`mdWireWire`,
 `inch`). The `0.2 mm` default is used only when no design rules are present.
 Reporting against the board's own (often tighter) rule avoids manufacturing
 clearance noise on densely-routed boards.
+
+The same rules block supplies `psElongationLong` and `psElongationOffset`.
+EAGLE defines these as the percentage of pad diameter added along the pad axis;
+using the 100% default unconditionally overstated the Arduino Uno's 50%-elongated
+header pads and manufactured an SDA/SCL collision.
 
 ### Honest polygon (copper pour) fidelity caveat
 
@@ -181,17 +185,18 @@ limitation is explicit, not silent. Checking pour-to-copper shorts honestly woul
 need the board re-poured in Eagle and the computed polygons (with antipads)
 exported. That data is not in the source `.brd`.
 
-### Deliberate ties exempted
+### Deliberate ties exempted locally
 
-Two nets that both land a pad in the *same* component are deliberately tied there
-(a solder jumper `SJ` / `SMT-JUMPER`, a star-ground point, a 0-ohm / ferrite
-bridge). The component places their pads a hair apart by design and the traces
-feeding it abut, which the EDA does not flag. So copper of two nets sharing a
-footprint is exempt. This generalizes the KiCad pad-vs-pad same-owner rule to the
-track-vs-pad and track-vs-track forms Eagle's jumpers produce (Eagle traces carry
-no owner of their own, so the exemption keys on shared net membership in a
-footprint). On the Uno this correctly clears `GND`↔`UGND`, joined through the
-`GROUND` SJ jumper.
+Ordinary components do not create DRC exemptions: two different-net pads owned
+by the same resistor, IC, or connector still report, and an A/B component never
+waives an unrelated A/B copper collision elsewhere.
+
+Only explicit copper-link semantics are recognised: named solder-jumper/net-tie
+footprints, plus a dedicated `0R_...` footprint when its value independently
+states `0R`. Even then, the exemption is local. The reported contact point must
+land on copper owned by that specific link footprint on that layer. This covers
+the Uno's `GROUND` SJ connection, including its track-to-track contact, without
+suppressing another GND/UGND collision elsewhere.
 
 ## Simulation (`hauksbee-engine/src/shorts.rs`)
 
@@ -263,28 +268,28 @@ The RP2040 Thing Plus is the regression guard for the Eagle mirror transform in
 J6 lands ~23 mm off, dropping pads onto the V_USB/EN bottom traces and reporting
 5 false shorts. It must stay short-clean.
 
-The single residual clearance violation, `3.3V` against `N$3` on `F.Cu` of the
-Circuit Playground Express (tightest gap 0.113 mm against that board's 0.1778 mm
-rule), is a genuine sub-rule near-miss on densely-routed copper, not a short.
-Every board here sweeps in a fraction of a second, dominated by the XML parse
+The two residual clearance violations in the current sweep (one each on the
+Circuit Playground Express and Metro M4 Express) are genuine sub-rule near-miss
+reports on densely routed copper, not shorts. Every board here sweeps in a
+fraction of a second, dominated by the XML parse
 (the Eagle reader streams the file twice: once for copper geometry, once for the
 `contactref` net map).
 
 ### A documented corpus finding
 
-An earlier sweep surfaced 2 "shorts" on several Olimex ESP32-EVB revisions
-(REV-A..D, L). Investigated: they were different-net pads placed deliberately
-*abutting inside one footprint* (a fuse-clip footprint and a capacitor
-footprint). That is the footprint author's intent, not a board short, and KiCad
-does not flag intra-footprint copper. The detector handles it with a principled
-rule (pads sharing a footprint owner are skipped) rather than a per-board
-allowlist. The corpus test (`tests/drc_corpus.rs`) documents this.
+An earlier sweep hid contacts on several Olimex ESP32-EVB revisions behind a
+blanket same-owner waiver. Re-investigation found the surviving case in a
+dedicated `0R_0603` footprint: an auxiliary same-number copper pad locally
+touches the opposite terminal. It is now handled by the explicit, owner- and
+location-scoped copper-link rule above. Ordinary same-footprint pads are never
+waived. The corpus test (`tests/drc_corpus.rs`) documents this evidence.
 
 ## Tests
 
-- `hauksbee-extract/tests/drc.rs`: 26 synthetic fixtures, one per geometry kind
+- `hauksbee-extract/tests/drc.rs`: 36 synthetic fixtures, one per geometry kind
   (segment-segment, segment-pad, pad-pad, via-zone, via-spans-layers) plus
-  clearance-only, cross-layer non-shorts, same-footprint abutment, the
+  clearance-only, cross-layer non-shorts, ordinary same-footprint shorts,
+  locally scoped explicit net-tie and 0R-link exemptions, the
   clearance-override classification, the at-rule / micron-under-rule /
   genuinely-sub-rule boundary cases, the per-netclass and diff-pair clearance
   rules (including `.kicad_pro` assignments and a malformed class), blind and
@@ -292,10 +297,12 @@ allowlist. The corpus test (`tests/drc_corpus.rs`) documents this.
 - `hauksbee-extract/tests/drc_corpus.rs`: the corpus sweep asserting zero true
   shorts across the parseable boards (skipped gracefully if the corpus is
   absent).
-- `hauksbee-extract/tests/eagle_drc.rs`: 22 synthetic minimal `.brd` fixtures, one
+- `hauksbee-extract/tests/eagle_drc.rs`: 26 synthetic minimal `.brd` fixtures, one
   per Eagle geometry kind (wire-wire short, wire-smd, smd-smd, via-wire,
   via-spans-layers, octagon pad, curved wire) plus the clearance-only, no-rule
-  fallback, cross-layer non-short, shared-footprint (jumper) abutment, mirrored
+  fallback, cross-layer non-short, ordinary same-owner shorts, locally scoped
+  explicit-jumper abutment, remote same-net-pair collisions, board-derived long
+  pad elongation, mirrored
   package placed on the bottom, mirror handedness on offset pads, via-restring
   derivation, format dispatch, `POPULATE="no"` mapping to DNP, same-named
   packages in different libraries staying distinct, an element with a missing

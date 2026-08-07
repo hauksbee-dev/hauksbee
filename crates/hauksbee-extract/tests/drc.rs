@@ -315,9 +315,9 @@ fn pad_pad_overlap_is_a_short() {
 }
 
 #[test]
-fn same_footprint_pads_do_not_short() {
-    // Two abutting different-net pads inside ONE footprint (a fuse-clip style
-    // placement): the footprint author's intent, not a board short.
+fn ordinary_same_footprint_pads_still_short() {
+    // Sharing an ordinary component owner is not evidence that two different
+    // nets are intentionally tied.
     let items = r#"
   (footprint "lib:fuse" (layer "F.Cu") (at 5 5)
     (property "Reference" "F1" (at 0 0))
@@ -326,11 +326,53 @@ fn same_footprint_pads_do_not_short() {
   )
 "#;
     let report = drc(items);
+    assert_short(&report, "A", "B");
+}
+
+#[test]
+fn explicit_net_tie_exemption_is_local() {
+    let items = r#"
+  (footprint "NetTie:NetTie-2_SMD_Pad0.5mm" (layer "F.Cu") (at 20 20)
+    (property "Reference" "NT1" (at 0 0))
+    (property "Value" "NET_TIE" (at 0 1))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1))
+    (pad "2" smd rect (at 0.9 0) (size 1 1) (layers "F.Cu") (net 2))
+  )
+  (segment (start 0 0) (end 10 0) (width 0.4) (layer "F.Cu") (net 1))
+  (segment (start 5 -5) (end 5 5) (width 0.4) (layer "F.Cu") (net 2))
+"#;
+    let report = drc(items);
     assert_eq!(
         report.short_count(),
-        0,
-        "intra-footprint abutment is not a short"
+        1,
+        "only the remote A/B collision fires"
     );
+    assert_short(&report, "A", "B");
+}
+
+#[test]
+fn explicit_zero_ohm_copper_link_exemption_is_local() {
+    // Some legacy footprints state their copper-link semantics explicitly in
+    // both footprint and value, and include an auxiliary same-number copper pad
+    // that reaches the opposite terminal. Only that local geometry is waived.
+    let items = r#"
+  (footprint "Vendor:0R_0603" (layer "F.Cu") (at 20 20)
+    (property "Reference" "R25" (at 0 0))
+    (fp_text value "0R(board_mounted)" (at 0 1) (layer "F.Fab"))
+    (pad "1" smd rect (at -0.889 0) (size 1.016 1.016) (layers "F.Cu") (net 1))
+    (pad "2" smd rect (at 0.889 0) (size 1.016 1.016) (layers "F.Cu") (net 2))
+    (pad "1" smd rect (at 0 0) (size 0.78 0.5) (layers "F.Cu") (net 1))
+  )
+  (segment (start 0 0) (end 10 0) (width 0.4) (layer "F.Cu") (net 1))
+  (segment (start 5 -5) (end 5 5) (width 0.4) (layer "F.Cu") (net 2))
+"#;
+    let report = drc(items);
+    assert_eq!(
+        report.short_count(),
+        1,
+        "the explicit link is local; the remote collision still fires"
+    );
+    assert_short(&report, "A", "B");
 }
 
 #[test]
