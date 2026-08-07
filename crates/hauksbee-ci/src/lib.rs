@@ -157,6 +157,21 @@ pub fn waiver_notes(waivers: &hauksbee_engine::waiver::WaiverSet) -> Vec<String>
     notes
 }
 
+fn refuse_timing_claims(results: &mut [assertions::AssertResult], refusals: &[String]) {
+    if refusals.is_empty() {
+        return;
+    }
+    let refusal = refusals.join("; ");
+    for result in results {
+        result.passed = false;
+        result.invalid = true;
+        result.detail = format!("INVALID: timing coverage refusal: {refusal}");
+        // A capability refusal is not a board finding and cannot be waived into
+        // a verdict: the requested measurement simply did not happen.
+        result.waived = None;
+    }
+}
+
 /// Load the spec, run the co-sim across its seeds, and evaluate its assertions.
 pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     let started = Instant::now();
@@ -165,6 +180,33 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
     let lib = hauksbee_models::ModelLibrary::builtin_with_user_dirs(&extra);
     let outcomes = runner::run_spec_with_lib(&spec, cfg.seed, &lib)?;
     let mut results = assertions::evaluate(&spec, &outcomes);
+
+    // Timing coverage is a validity contract, not an advisory note. One
+    // unrepresentable request or one pulse the tick path demonstrably missed
+    // makes every assertion INVALID, preventing a plausible false green.
+    let mut timing_refusals: Vec<String> = {
+        let mut seen = std::collections::BTreeSet::new();
+        outcomes
+            .iter()
+            .flat_map(|o| o.timing_refusals.iter().cloned())
+            .filter(|m| seen.insert(m.clone()))
+            .collect()
+    };
+    let timing_coverage = outcomes
+        .first()
+        .map(|o| o.timing_coverage.clone())
+        .unwrap_or_default();
+    if outcomes
+        .iter()
+        .skip(1)
+        .any(|o| o.timing_coverage != timing_coverage)
+    {
+        timing_refusals.push(
+            "timing coverage changed between deterministic ensemble members; no single timing claim describes this run"
+                .into(),
+        );
+    }
+    refuse_timing_claims(&mut results, &timing_refusals);
 
     // Waivers: hauksbee-waivers.toml beside the BOARD (the same file and the
     // same discovery `hauksbee run --check` uses), so one staged-rollout
@@ -272,6 +314,39 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
                 .collect()
         },
         coverage_warnings,
+        timing_coverage,
+        timing_refusals,
         waiver_notes: notes,
     })
+}
+
+#[cfg(test)]
+mod timing_validity_tests {
+    use super::*;
+
+    #[test]
+    fn unmet_timing_contract_cannot_green_or_be_waived() {
+        let mut results = vec![assertions::AssertResult {
+            label: "short strobe captured".into(),
+            kind: "toggle".into(),
+            passed: true,
+            invalid: false,
+            detail: "observed 2 toggles".into(),
+            failing_seed: None,
+            failing_seeds: Vec::new(),
+            seeds_total: 1,
+            why: None,
+            waived: Some("legacy waiver".into()),
+            subject_nets: vec!["STROBE".into()],
+            subject_refs: Vec::new(),
+        }];
+        refuse_timing_claims(
+            &mut results,
+            &["minimum pulse 1.000 us is unrepresentable".into()],
+        );
+        assert!(!results[0].passed);
+        assert!(results[0].invalid);
+        assert!(results[0].waived.is_none());
+        assert!(results[0].detail.contains("minimum pulse 1.000 us"));
+    }
 }

@@ -38,6 +38,13 @@ pub struct CiResult {
     /// like `substitutions`, a GREEN over an un-run co-sim path must be
     /// qualified everywhere a pipeline reads.
     pub coverage_warnings: Vec<String>,
+    /// Per-MCU measured edge timestamp and guaranteed-pulse limits at the
+    /// actual negotiated chunk. Present even when no strict timing request was
+    /// declared, so a green report states what timing it covered.
+    pub timing_coverage: Vec<hauksbee_engine::scheduler::TimingCoverage>,
+    /// Timing claims that could not be honored. Non-empty makes every
+    /// assertion INVALID and cannot be waived.
+    pub timing_refusals: Vec<String>,
     /// Nets that name themselves a supply, carry a rail's worth of parts, and
     /// nothing powers (see `runner::dead_rails`). Surfaced FIRST in every
     /// format, ahead of the assertion list: with a rail dead the operating
@@ -187,6 +194,10 @@ pub struct CiJsonReport {
     /// Co-sim coverage holes: dropped ADC injections, never-exercised bus
     /// peripherals. Non-empty means part of the co-sim path never ran.
     pub coverage_warnings: Vec<String>,
+    /// Measured timing coverage per live MCU backend.
+    pub timing_coverage: Vec<hauksbee_engine::scheduler::TimingCoverage>,
+    /// Explicit reasons timing evidence was invalidated.
+    pub timing_refusals: Vec<String>,
     /// Nets that name themselves a supply but that nothing powered. Non-empty
     /// means the operating point every result below was solved around is
     /// fiction.
@@ -296,6 +307,8 @@ impl CiResult {
             coverage: self.coverage.as_ref().map(|c| c.describe()),
             substitutions: self.substitutions.clone(),
             coverage_warnings: self.coverage_warnings.clone(),
+            timing_coverage: self.timing_coverage.clone(),
+            timing_refusals: self.timing_refusals.clone(),
             dead_rails: self.dead_rails.clone(),
             waiver_notes: self.waiver_notes.clone(),
             results: self.results.clone(),
@@ -424,6 +437,20 @@ impl CiResult {
         // ADC injection, unexercised bus device) must be qualified plainly.
         for msg in &self.coverage_warnings {
             out.push_str(&format!("  co-sim COVERAGE HOLE: {msg}\n"));
+        }
+        for timing in &self.timing_coverage {
+            out.push_str(&format!(
+                "  TIMING COVERAGE {} ({}): edge timestamps ±{:.3} us; pulses >= {:.3} us guaranteed; {:.3} us chunk; {} stamps\n",
+                timing.mcu_ref,
+                timing.backend,
+                timing.timestamp_precision_s * 1e6,
+                timing.minimum_guaranteed_pulse_s * 1e6,
+                timing.chunk_s * 1e6,
+                if timing.cycle_exact { "cycle-exact" } else { "poll-boundary" },
+            ));
+        }
+        for refusal in &self.timing_refusals {
+            out.push_str(&format!("  TIMING INVALID: {refusal}\n"));
         }
         // Waiver housekeeping: lapsed / stale / malformed waiver-file notes.
         for msg in &self.waiver_notes {
@@ -585,6 +612,23 @@ impl CiResult {
                 xml_escape(msg)
             ));
         }
+        for timing in &self.timing_coverage {
+            out.push_str(&format!(
+                "    <system-out>TIMING COVERAGE {} ({}): edge timestamps +/−{:.3} us; pulses &gt;= {:.3} us guaranteed; {:.3} us chunk; {} stamps</system-out>\n",
+                xml_escape(&timing.mcu_ref),
+                xml_escape(&timing.backend),
+                timing.timestamp_precision_s * 1e6,
+                timing.minimum_guaranteed_pulse_s * 1e6,
+                timing.chunk_s * 1e6,
+                if timing.cycle_exact { "cycle-exact" } else { "poll-boundary" },
+            ));
+        }
+        for refusal in &self.timing_refusals {
+            out.push_str(&format!(
+                "    <system-out>TIMING INVALID: {}</system-out>\n",
+                xml_escape(refusal)
+            ));
+        }
         // Waiver housekeeping notes ride along so a dashboard-only reader sees
         // a lapsed or stale waiver too.
         for msg in &self.waiver_notes {
@@ -611,7 +655,8 @@ impl CiResult {
     /// step and silently drops the rest, so this surface spends them on
     /// verdicts only. Passing assertions get NO per-assertion `::notice` (the
     /// log and JUnit carry them; a 12-assertion green spec must not burn the
-    /// whole notice budget), failures/INVALIDs get at most
+    /// whole notice budget). Timing coverage gets one aggregated notice;
+    /// failures/INVALIDs get at most
     /// [`Self::MAX_ERROR_ANNOTATIONS`] `::error`s plus one overflow line and
     /// the rollup, and warnings are capped at
     /// [`Self::MAX_WARNING_ANNOTATIONS`] plus one overflow line.
@@ -673,6 +718,32 @@ impl CiResult {
             out.push_str(&format!(
                 "::warning title=hauksbee-ci::...and {} more warning(s); see the job log for the full list\n",
                 warnings.len() - Self::MAX_WARNING_ANNOTATIONS
+            ));
+        }
+
+        if !self.timing_coverage.is_empty() {
+            let coverage = self
+                .timing_coverage
+                .iter()
+                .map(|t| {
+                    format!(
+                        "{} {} edge +/−{:.3} us, pulse >= {:.3} us ({})",
+                        t.mcu_ref,
+                        t.backend,
+                        t.timestamp_precision_s * 1e6,
+                        t.minimum_guaranteed_pulse_s * 1e6,
+                        if t.cycle_exact {
+                            "cycle-exact"
+                        } else {
+                            "poll-boundary"
+                        }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            out.push_str(&format!(
+                "::notice title=hauksbee-ci TIMING COVERAGE::{}\n",
+                gh_escape(&coverage)
             ));
         }
 
@@ -1058,6 +1129,8 @@ mod why_line_tests {
             coverage: None,
             substitutions: Vec::new(),
             coverage_warnings: Vec::new(),
+            timing_coverage: Vec::new(),
+            timing_refusals: Vec::new(),
             dead_rails: Vec::new(),
             waiver_notes: Vec::new(),
         }
@@ -1175,6 +1248,8 @@ mod substitution_tests {
                     .to_string(),
             ],
             coverage_warnings: Vec::new(),
+            timing_coverage: Vec::new(),
+            timing_refusals: Vec::new(),
             dead_rails: Vec::new(),
             waiver_notes: Vec::new(),
         };
@@ -1219,6 +1294,8 @@ mod substitution_tests {
                  analog solve but this platform has no ADC injection map"
                     .to_string(),
             ],
+            timing_coverage: Vec::new(),
+            timing_refusals: Vec::new(),
             dead_rails: Vec::new(),
             waiver_notes: Vec::new(),
         };
@@ -1246,5 +1323,45 @@ mod substitution_tests {
         assert!(!clean.render_human().contains("COVERAGE HOLE"));
         assert!(!clean.render_junit().contains("COVERAGE HOLE"));
         assert!(!clean.render_github_annotations().contains("COVERAGE HOLE"));
+    }
+
+    #[test]
+    fn measured_timing_coverage_is_structured_and_visible_in_ci_reports() {
+        let result = CiResult {
+            spec_name: "timing".into(),
+            board: "b.kicad_pcb".into(),
+            results: Vec::new(),
+            seeds: 1,
+            elapsed: Duration::ZERO,
+            analog_abort: false,
+            coverage: None,
+            substitutions: Vec::new(),
+            coverage_warnings: Vec::new(),
+            timing_coverage: vec![hauksbee_engine::scheduler::TimingCoverage {
+                mcu_ref: "U1".into(),
+                backend: "renode:stm32f103".into(),
+                cycle_exact: false,
+                timestamp_precision_s: 4e-6,
+                minimum_guaranteed_pulse_s: 8e-6,
+                chunk_s: 4e-6,
+            }],
+            timing_refusals: vec!["poll backend could not represent 0.5 us".into()],
+            dead_rails: Vec::new(),
+            waiver_notes: Vec::new(),
+        };
+        let json: serde_json::Value = serde_json::from_str(&result.render_json()).unwrap();
+        assert_eq!(json["timing_coverage"][0]["timestamp_precision_s"], 4e-6);
+        assert_eq!(
+            json["timing_coverage"][0]["minimum_guaranteed_pulse_s"],
+            8e-6
+        );
+        assert_eq!(json["timing_refusals"].as_array().unwrap().len(), 1);
+        assert!(result.render_human().contains("TIMING COVERAGE"));
+        assert!(result.render_human().contains("TIMING INVALID"));
+        assert!(result.render_junit().contains("TIMING COVERAGE"));
+        assert!(result.render_junit().contains("TIMING INVALID"));
+        assert!(result
+            .render_github_annotations()
+            .contains("TIMING COVERAGE"));
     }
 }
