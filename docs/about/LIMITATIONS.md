@@ -98,12 +98,14 @@ bounded to a small fraction of the chunk, backward Euler at that bounded step,
 backward Euler from a cold start (the warm seed dropped so the operating point
 re-runs the full gmin and source-stepping continuation), and finally the chunk
 subdivided into quarters marched back to back. A chunk a rung carries is a real
-converged solve, and the run says which: the window, the rung that produced it,
-and that rung's accuracy cost are recorded per chunk and surfaced as
+converged solve, and the run says which: the window and the rung that produced
+it are recorded per chunk and surfaced as
 `fallback_windows` in the co-sim JSON and the default text summary. A backward
 Euler window is first order and numerically dissipative, so fast transients and
 ringing inside it are damped relative to the second-order primary solve; the
-record states that rather than letting the span read as first class.
+record states the method without inventing a percentage error. The typed
+[`error_budget`](../analysis/ERROR_BUDGETS.md) partitions solved methods and
+marks unsolved spans invalid.
 
 What remains open is the chunk no rung can carry. Its node voltages are the
 previous chunk's, not a solved answer, so every voltage, current and fault

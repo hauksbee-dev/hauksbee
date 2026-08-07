@@ -34,24 +34,7 @@ pub fn emit(
     // The open active ICs to NAME in the caveat, computed before `summary` is
     // moved into the JSON report.
     let coverage_refs = coverage_open_active_refs(&summary);
-    let failed_windows = engine.scheduler().failed_windows().to_vec();
-    let fallback_owned: Vec<(f64, f64, String)> = engine
-        .scheduler()
-        .fallback_windows()
-        .iter()
-        .map(|&(start, end, method)| (start, end, method.as_str().to_string()))
-        .collect();
-    let fallback: Vec<(f64, f64, &str)> = fallback_owned
-        .iter()
-        .map(|(start, end, method)| (*start, *end, method.as_str()))
-        .collect();
-    let budget = crate::evidence::BoardEvidence::transient_error_budget(
-        0.0,
-        seconds.max(0.05),
-        1.0 / 1000.0,
-        &failed_windows,
-        &fallback,
-    )?;
+    let budget = engine.scheduler().error_budget()?;
     let mut maps = Vec::new();
     for (reference, tj_c, over_limit) in &rows {
         maps.push(evidence.simulation_map(

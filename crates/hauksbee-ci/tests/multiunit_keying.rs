@@ -57,6 +57,7 @@ fn outcome_with(peak_temp_c: HashMap<String, f64>, faults: Vec<RunFault>) -> Run
         analog_valid: true,
         failed_windows: Vec::new(),
         fallback_windows: Vec::new(),
+        error_budget: None,
         analog_abort: false,
         sampled_values: Vec::new(),
         net_series: HashMap::new(),

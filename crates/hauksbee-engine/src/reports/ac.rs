@@ -75,7 +75,8 @@ pub fn emit(
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
     }
 
-    let resp = AcAnalysis::new(SolverOptions::default())
+    let solver_options = SolverOptions::default();
+    let resp = AcAnalysis::new(solver_options)
         .run(circuit, &spec)
         .map_err(|e| anyhow::anyhow!("AC analysis: {e}"))?;
 
@@ -251,7 +252,7 @@ pub fn emit(
     // Causal evidence for the numbers actually emitted. A frequency-domain
     // sweep consumes the board/model path and solver tolerances, but no
     // transient time window or firmware artifact.
-    let ac_budget = crate::evidence::BoardEvidence::solver_error_budget()?;
+    let ac_budget = crate::evidence::BoardEvidence::solver_error_budget(&solver_options)?;
     let mut ac_maps = Vec::new();
     for (net, bode) in &per_net {
         if bode.is_empty() || ac_is_all_sentinel(bode) {

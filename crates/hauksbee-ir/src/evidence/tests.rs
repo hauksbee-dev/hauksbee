@@ -862,10 +862,10 @@ fn evidence_map_json_shape_is_the_published_one() {
                     end_s: 0.05,
                 },
                 method: IntegrationMethod::Trapezoidal,
-                accuracy_cost: 0.0,
             }],
             ..ErrorBudget::new(IntegrationTolerance {
                 reltol: 1e-3,
+                vntol: 1e-6,
                 abstol: 1e-12,
                 chgtol: 1e-14,
             })
@@ -880,6 +880,27 @@ fn evidence_map_json_shape_is_the_published_one() {
     assert!(v["error_budget"].get("residual").is_none());
     assert!(v.get("parameters").is_none());
     assert!(v.get("coverage").is_none());
+}
+
+#[test]
+fn error_budget_plain_summary_distinguishes_settings_measurement_and_unknown() {
+    let budget = ErrorBudget::new(IntegrationTolerance::new(1e-3, 1e-6, 1e-12, 1e-14).unwrap())
+        .with_method(
+            WindowMethod::new(
+                TimeWindow::new(0.0, 0.01).unwrap(),
+                IntegrationMethod::Trapezoidal,
+            )
+            .unwrap(),
+        )
+        .with_failed_window(TimeWindow::new(0.02, 0.03).unwrap());
+    let summary = budget.plain_summary();
+    assert!(summary.contains("reltol=1.000e-3"));
+    assert!(summary.contains("residual=unmeasured"));
+    assert!(summary.contains("failed=1 window"));
+    assert!(
+        !summary.contains('%'),
+        "method order is not a percentage bound"
+    );
 }
 
 #[test]

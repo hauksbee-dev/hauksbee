@@ -53,6 +53,14 @@ pub struct StepSample<'a> {
     pub x: &'a [f64],
 }
 
+/// Numerical diagnostics measured at the final accepted transient point.
+/// `None` means the selected solver path does not currently expose an equation
+/// residual; callers must preserve that absence rather than writing zero.
+#[derive(Debug, Clone, Default)]
+pub struct TransientDiagnostics {
+    pub final_residual: Option<(f64, usize)>,
+}
+
 /// The transient engine.
 pub struct Transient {
     opts: SolverOptions,
@@ -66,6 +74,16 @@ impl Transient {
 
     /// Run to `tstop`, collecting every accepted step into [`Waveforms`].
     pub fn run(&self, circuit: &Circuit, tstop: f64) -> Result<Waveforms, String> {
+        self.run_with_diagnostics(circuit, tstop)
+            .map(|(waveforms, _)| waveforms)
+    }
+
+    /// Collect waveforms and the measured final equation residual.
+    pub fn run_with_diagnostics(
+        &self,
+        circuit: &Circuit,
+        tstop: f64,
+    ) -> Result<(Waveforms, TransientDiagnostics), String> {
         let n_nodes = circuit.node_count();
         let mut wf = Waveforms {
             time: Vec::new(),
@@ -94,7 +112,7 @@ impl Transient {
             }
         }
 
-        self.run_streaming(circuit, tstop, |s| {
+        let diagnostics = self.run_streaming_with_diagnostics(circuit, tstop, |s| {
             wf.time.push(s.time);
             for node in 0..n_nodes {
                 let v = if node == 0 { 0.0 } else { s.x[node - 1] };
@@ -104,7 +122,7 @@ impl Transient {
                 slot.1.push(s.x.get(idx).copied().unwrap_or(0.0));
             }
         })?;
-        Ok(wf)
+        Ok((wf, diagnostics))
     }
 
     /// Run to `tstop`, invoking `sink` with each accepted step. This is what the
@@ -115,7 +133,17 @@ impl Transient {
         tstop: f64,
         sink: F,
     ) -> Result<(), String> {
-        self.run_streaming_seeded(circuit, tstop, None, sink)
+        self.run_streaming_with_diagnostics(circuit, tstop, sink)
+            .map(|_| ())
+    }
+
+    pub fn run_streaming_with_diagnostics<F: FnMut(StepSample)>(
+        &self,
+        circuit: &Circuit,
+        tstop: f64,
+        sink: F,
+    ) -> Result<TransientDiagnostics, String> {
+        self.run_streaming_seeded_with_diagnostics(circuit, tstop, None, sink)
     }
 
     /// Like [`Transient::run_streaming`], but warm-starts the t=0 DC operating
@@ -128,8 +156,19 @@ impl Transient {
         circuit: &Circuit,
         tstop: f64,
         dc_seed: Option<&[f64]>,
-        mut sink: F,
+        sink: F,
     ) -> Result<(), String> {
+        self.run_streaming_seeded_with_diagnostics(circuit, tstop, dc_seed, sink)
+            .map(|_| ())
+    }
+
+    pub fn run_streaming_seeded_with_diagnostics<F: FnMut(StepSample)>(
+        &self,
+        circuit: &Circuit,
+        tstop: f64,
+        dc_seed: Option<&[f64]>,
+        mut sink: F,
+    ) -> Result<TransientDiagnostics, String> {
         let opts = &self.opts;
 
         // Partitioned fast path: only taken when Auto and the topology/step make
@@ -152,7 +191,9 @@ impl Transient {
         if dc_seed.is_none() && opts.dc_init == DcInit::Solve {
             if let Some(mut pt) = crate::partitioned::PartitionedTransient::try_build(circuit, opts)
             {
-                return pt.run_streaming(circuit, tstop, sink);
+                return pt
+                    .run_streaming(circuit, tstop, sink)
+                    .map(|_| TransientDiagnostics::default());
             }
         }
 
@@ -401,6 +442,7 @@ impl Transient {
         // history sample, also read by the census seed-shadow. Maintained only
         // when the predictor or the census wants it.
         let mut x_accepted_prev: Option<Vec<f64>> = None;
+        let mut final_residual = None;
 
         while t < tstop - 1e-18 {
             steps_taken += 1;
@@ -728,6 +770,15 @@ impl Transient {
                 c.hash_sample(t + h, &ws.x);
             }
 
+            // Measure the equation residual only at the final accepted point.
+            // Doing this at every timestep would add a full nonlinear stamp to
+            // the solver's hot loop; at the final point it is exact and costs
+            // one diagnostic stamp per result.
+            if t + h >= tstop - f64::max(1e-18, tstop.abs() * 1e-12) {
+                final_residual =
+                    Some(ws.transient_residual_argmax(circuit, opts, t + h, coeffs, &state));
+            }
+
             // Accept: advance time, update reactive history, emit.
             t += h;
             advance_reactive_state(&mut state, circuit, &ws, &x_accepted, h, opts, first_step);
@@ -752,7 +803,7 @@ impl Transient {
             dt = next_dt;
             sink(StepSample { time: t, x: &ws.x });
         }
-        Ok(())
+        Ok(TransientDiagnostics { final_residual })
     }
 }
 

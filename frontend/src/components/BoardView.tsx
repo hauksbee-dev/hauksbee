@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { WebSection, WebFinding, WebHeadsUp, WebComponent, WebCosimSection } from '../types/report'
+import { summarizeErrorBudget } from '../lib/error-budget'
 import type { BoardSession } from '../hooks/useBoardSession'
 import { CheckIcon, WarningIcon } from './Icons'
 import { BoardViewer, TOOLBAR_CLEARANCE } from './BoardViewer'
@@ -716,6 +717,14 @@ function CosimBlock({ cosim: c, liveAvailable, onDriveLive, simMounted }: {
           <div className="text-sm mb-2" style={{ color: 'var(--silk-dim)' }}>
             Ran the firmware for {(c.seconds_simulated || 0).toFixed(3)}s on the board's microcontroller.
           </div>
+          {c.error_budget && (
+            <details className="rounded-lg px-3 py-2 mb-2 text-xs" style={{ border: '1px solid var(--hairline)', background: 'var(--surface-2)', color: 'var(--silk-dim)' }}>
+              <summary className="cursor-pointer font-semibold" style={{ color: 'var(--silk)' }}>Numerical qualification</summary>
+              <div className="mt-1.5" data-testid="cosim-error-budget">
+                {summarizeErrorBudget(c.error_budget).map(row => <div key={row}>{row}</div>)}
+              </div>
+            </details>
+          )}
           {(!c.findings || c.findings.length === 0) && (
             <div
               className="rounded-lg px-4 py-2.5 mb-2"

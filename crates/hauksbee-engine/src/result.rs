@@ -641,6 +641,10 @@ pub struct CosimJson {
     /// Total net toggles seen during the run. `0` => stalled/quiet.
     pub total_toggles: u64,
     pub uart_seen: bool,
+    /// Numerical qualification for this exact run. Solver tolerances and
+    /// methods are inputs, the residual is measured when available, and failed
+    /// windows are explicitly invalid rather than assigned invented precision.
+    pub error_budget: hauksbee_ir::evidence::ErrorBudget,
     /// Top-N nets by activity: name, toggle count, observed min/max voltage.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub activity_summary: Vec<NetActivity>,
@@ -656,7 +660,7 @@ pub struct CosimJson {
     pub failed_windows: Vec<CosimFailedWindow>,
     /// Sim-time windows solved by a per-chunk FALLBACK integration rung after
     /// the primary solve failed there, each carrying the method that produced
-    /// it and that method's accuracy cost. These windows are solved (they do
+    /// it and that method's qualitative fidelity note. These windows are solved (they do
     /// not make the run analog-invalid) but their numbers are second-class:
     /// a consumer reading a waveform is entitled to know which spans came from
     /// a more dissipative method. Empty (and omitted) when the primary path
@@ -807,16 +811,15 @@ pub struct CosimFailedWindow {
 /// One sim-time window `[start_s, end_s)` whose answer was produced by a
 /// per-chunk fallback integration rung after the primary analog solve failed
 /// there. `method` is the rung's stable name
-/// (`crate::scheduler::ChunkFallbackMethod::as_str`), `accuracy` its stated
-/// cost, so the record travels with the number it qualifies. Minimal on
-/// purpose: shaped so a typed error-budget/provenance spine can absorb it
-/// later as one provenance tag per window.
+/// (`crate::scheduler::ChunkFallbackMethod::as_str`), and `fidelity_note`
+/// names the known algorithmic trade-off without claiming an empirical error
+/// bound. The record travels with the number it qualifies.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct CosimFallbackWindow {
     pub start_s: f64,
     pub end_s: f64,
     pub method: String,
-    pub accuracy: String,
+    pub fidelity_note: String,
 }
 
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]

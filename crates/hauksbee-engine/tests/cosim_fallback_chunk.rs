@@ -8,7 +8,7 @@
 //! the default options) is RESCUED by a fallback rung, and the rescue is
 //! RECORDED: the chunk counts as solved (`analog_valid` stays true, no strict
 //! abort), and the window carries the method that produced it plus that
-//! method's accuracy cost, in the scheduler record and in the co-sim JSON.
+//! method's qualitative fidelity note, in the scheduler record and co-sim JSON.
 //!
 //! Side two: a board no rung can rescue (the impossible two-sources board)
 //! must STILL refuse exactly as before: failed chunks counted, stale windows
@@ -221,8 +221,11 @@ fn failed_primary_is_rescued_by_a_recorded_fallback() {
         "the firing board is carried by the backward-Euler rung"
     );
     assert!(
-        method.accuracy_note().contains("first-order"),
-        "the recorded method states its accuracy cost"
+        method.fidelity_note().contains("first-order")
+            && method
+                .fidelity_note()
+                .contains("no empirical output-error bound"),
+        "the recorded method states the known trade-off without inventing a bound"
     );
 
     // The membrane voltage in the rescued window is a real number, not a

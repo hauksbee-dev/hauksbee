@@ -334,12 +334,9 @@
           "type": "string"
         },
         "evidence": {
-          "anyOf": [
+          "allOf": [
             {
               "$ref": "#/definitions/EvidenceMap"
-            },
-            {
-              "type": "null"
             }
           ],
           "description": "The causal evidence map for this assertion: its assumption ids,\nartifacts, models, parameters and numerical error budget. ABSENT (not\nnull) when the run produced no map for this label."
@@ -425,7 +422,7 @@
       "type": "object"
     },
     "CiJsonReport": {
-      "description": "The machine-readable result of one spec's run: the `--json` document, and\nwhat the web checks panel consumes via `/api/check`.\n\nEvery field below is ALWAYS present, including `coverage`, which is `null`\nrather than absent when the run was not a tolerance ensemble. The only\nconditionally-absent keys in the whole document are `why` and `waived`\ninside each element of `results` (see [`AssertResult`]), which are omitted\nentirely rather than set to `null`.",
+      "description": "The machine-readable result of one spec's run: the `--json` document, and\nwhat the web checks panel consumes via `/api/check`.\n\nEvery field below is ALWAYS present, including `coverage`, which is `null`\nrather than absent when the run was not a tolerance ensemble. The only\nconditionally-absent keys in each result are `why`, `waived`, and\n`evidence`, which are omitted entirely rather than set to `null`.",
       "properties": {
         "analog_abort": {
           "description": "Did the analog co-sim trip the consecutive-failed-chunk abort. Forces\n`exit_code` 3 on its own, even when no single assertion was affected.",
@@ -856,10 +853,16 @@
           "description": "Relative tolerance for Newton convergence and local-truncation-error\ncontrol.",
           "format": "double",
           "type": "number"
+        },
+        "vntol": {
+          "description": "Absolute voltage tolerance, volts.",
+          "format": "double",
+          "type": "number"
         }
       },
       "required": [
         "reltol",
+        "vntol",
         "abstol",
         "chgtol"
       ],
@@ -1164,7 +1167,7 @@
           "type": "string"
         },
         "max_abs": {
-          "description": "`max |f(x)|` over the residual vector at acceptance.",
+          "description": "`max |f(x)|` over node KCL rows at acceptance, amperes.",
           "format": "double",
           "type": "number"
         }
@@ -1415,11 +1418,6 @@
     "WindowMethod": {
       "description": "One window and the integration method that produced it. The primary method\ncovers most runs in a single entry; a per-chunk fallback ladder contributes\none entry per fallback-solved window, using that machinery's own stable\nmethod names verbatim (\"trapezoidal\", \"gear2\", \"backward-euler\",\n\"reduced-step\", \"cold-start-backward-euler\",\n\"subdivided-backward-euler\").",
       "properties": {
-        "accuracy_cost": {
-          "description": "The accuracy cost, stated: empty for the primary method, a sentence for\na more dissipative rung.",
-          "format": "double",
-          "type": "number"
-        },
         "method": {
           "allOf": [
             {
