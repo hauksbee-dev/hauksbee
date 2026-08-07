@@ -1135,6 +1135,71 @@ sense_full_scale_v = 0.05
         );
     }
 
+    /// The same charger with its programming equation retagged as a protection
+    /// threshold. The resistor is present and readable, so the only thing
+    /// standing between the board and an invented 200 mA steady-state load is
+    /// the `protection_limit` semantics gate.
+    const PROTECTION_TOML: &str = r#"
+[[models]]
+id = "test_protected"
+kind = "vreg"
+description = "test part whose PROG pin sets an OCP threshold, not a load"
+
+[models.match]
+value_re = "(?i)^TESTCHARGER$"
+
+[models.params]
+vout = 4.2
+dropout_v = 0.3
+iq_a = 0.001
+
+[models.pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "prog"
+"4" = "out"
+
+[models.ratings]
+max_current_a = 0.8
+
+[models.current_program]
+pin = "prog"
+semantics = "protection_limit"
+equation = "inverse_resistance"
+k_volts = 1000.0
+"#;
+
+    #[test]
+    fn a_protection_limit_program_contributes_no_ampacity_load() {
+        // Fully populated, unambiguous programming network: PROG -> 4.99k ->
+        // GND. Under `regulated_current` semantics this exact topology
+        // attributes ~200 mA to both rails (the test above proves it). Under
+        // `protection_limit` it must attribute nothing, and it must not appear
+        // as an undetermined hole either: a trip threshold is a capability,
+        // not a missing load measurement.
+        let board = charger_board(vec![comp(
+            "R10",
+            "4.99k",
+            "Resistor_SMD:R_0603",
+            vec![pin("1", 3), pin("2", 2)],
+        )]);
+        let lib = lib_from("protection_limit", PROTECTION_TOML);
+        let got = attribute_currents(&board, &lib);
+        assert!(
+            got.cited.is_empty(),
+            "a protection threshold must never seed steady-state ampacity: {:?}",
+            got.cited
+        );
+        assert!(
+            got.undetermined.is_empty(),
+            "a protection threshold is not an undetermined load either: {:?}",
+            got.undetermined
+                .iter()
+                .map(|u| u.reference.clone())
+                .collect::<Vec<_>>()
+        );
+    }
+
     #[test]
     fn an_open_link_in_the_programming_path_attributes_nothing_and_names_the_gap() {
         // Same board with the jumper open: the charger is not programmed at all,
