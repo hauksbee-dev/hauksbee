@@ -273,23 +273,21 @@ What remains open:
   `~/.hauksbee-qemu-esp` first, with the legacy `~/.galvani-qemu-esp` kept as a
   fallback so existing installs keep resolving.)
 
-### KiCad 10 boards: copper-short results are unreliable
+### KiCad 10 boards: exact native-DRC parity remains unvalidated
 
-Copper extraction is validated against KiCad 9's board format (`20241229`) and
-older. KiCad 10 (`20260206`) changed the net encoding to name-only with no
-numeric ids, and moved the baked zone-fill geometry; neither is handled yet, so
-any format version at or above `20260000` is treated as unvalidated. The failure
-mode is not a subtle drift: **a ground pour can read as shorting every net it
-surrounds**, so such a board can report many shorts that are not there.
+KiCad 10's format (`20260206`) uses name-only nets and represents baked antipad
+voids as keyholes in a filled contour. Both are handled. A focused fixture
+checked with kicad-cli 10.0.5 keeps a correctly isolated keyhole-antipad pad
+silent while reporting a pad under solid different-net fill, and the VENDETTA
+ESC oracle has no Zone-Pad findings.
 
-This is bounded rather than hidden. The report carries a `version_warning`, every
-surface prints it with the version number and the word UNRELIABLE, and CI gates
-refuse to fail on shorts from such a board, so nobody's pipeline goes red on an
-artefact. The advice in the message is to cross-check with KiCad's own DRC,
-because our kicad-cli oracle cannot substitute here: versions up to 9 cannot
-load the file. Clearance results and the non-pour geometry are unaffected.
-Closing it means teaching the reader KiCad 10's net encoding and zone-fill
-layout, and re-validating against the corpus. Details in
+The remaining limitation is narrower but still important: the complete finding
+set does not yet match native KiCad DRC exactly (VENDETTA reports 67 Hauksbee
+shorts versus 60 native `shorting_items`), and KiCad 10 project clearance rules
+can live in the sibling `.kicad_pro` rather than the board text consumed by this
+API. Format versions at or above `20260000` therefore retain a
+`version_warning`; their findings are demoted and do not fail strict CI gates.
+Cross-check them with KiCad 10's own DRC. Details and oracle evidence are in
 [`../checks/SHORTS.md`](../checks/SHORTS.md).
 
 ### Eagle copper-pour fidelity in DRC
