@@ -89,6 +89,281 @@ fn hand_checked_half_watt_sot23_reaches_150c() {
     );
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Firmware PWM is a cross-layer thermal input, and it must be integrated over
+// the solver's ACCEPTED STEPS, not sampled at chunk endpoints. A PWM waveform
+// switches inside the chunk, so the endpoint reads either the full peak or
+// zero depending on phase; the junction heats on the duty-cycle average. The
+// monitor's contract: accepted-step energy is deposited per chunk
+// (`accumulate_step` / `deposit_chunk_energy`), and `evaluate` uses
+// energy/elapsed as the temperature-driving power. Both phases below are
+// ADVERSARIAL: the pulse is placed so that endpoint sampling gets the answer
+// maximally wrong in each direction.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Build the single-package PWM fixture: a 1 Ω load "Q1" whose node-1 voltage
+/// the test drives directly (1 V on ⇒ exactly `peak` = 1 W), with an explicit
+/// theta_JA and Tj limit so the arithmetic is hand-checkable.
+fn pwm_fixture(tj_limit_c: f64) -> (Circuit, StressMonitor) {
+    let mut circuit = Circuit::new();
+    let load = circuit.add(Device::Resistor {
+        name: "Q1".into(),
+        a: NodeId(1),
+        b: NodeId::GROUND,
+        ohms: 1.0,
+        tc1: None,
+    });
+    let meta = DeviceMeta {
+        reference: "Q1".into(),
+        device: load,
+        kind: ComponentKind::Nmos,
+        footprint: "Package_TO_SOT_SMD:SOT-23".into(),
+        ratings: Ratings {
+            max_power_w: Some(2.0), // generous: only Overtemperature is under test
+            theta_ja_c_per_w: Some(100.0),
+            max_junction_temp_c: Some(tj_limit_c),
+            ..Default::default()
+        },
+    };
+    let mut monitor = StressMonitor::new(vec![meta]);
+    monitor.ambient_c = 25.0;
+    (circuit, monitor)
+}
+
+/// Feed one chunk of a sub-chunk PWM waveform into the monitor at
+/// accepted-step granularity, then evaluate at the chunk endpoint.
+///
+/// The step widths are deliberately UNEQUAL: the on-time is one wide accepted
+/// step, the off-time is several narrow ones (adaptive solvers do exactly
+/// this around edges). An implementation that averaged per-sample instead of
+/// weighting by dt would get a different (wrong) duty cycle, so the test
+/// pins time-weighting, not step-counting.
+///
+/// `endpoint_on` is the adversarial phase knob: whether the pulse covers the
+/// chunk endpoint (so an endpoint sampler reads full peak) or ends before it
+/// (so an endpoint sampler reads zero).
+fn drive_pwm_chunk(
+    circuit: &mut Circuit,
+    monitor: &mut StressMonitor,
+    duty: f64,
+    chunk_s: f64,
+    endpoint_on: bool,
+    t_end: f64,
+) -> Vec<hauksbee_engine::stress::FaultEvent> {
+    let no_branch = |_: hauksbee_ir::DeviceId| None;
+    let on_v = |n: NodeId| if n == NodeId(1) { 1.0 } else { 0.0 };
+    let off_v = |_: NodeId| 0.0;
+
+    let on_s = duty * chunk_s;
+    let off_s = (1.0 - duty) * chunk_s;
+    if endpoint_on {
+        // Off first (three unequal narrow steps), pulse rides the endpoint.
+        monitor.accumulate_step(circuit, &off_v, &no_branch, off_s * 0.5);
+        monitor.accumulate_step(circuit, &off_v, &no_branch, off_s * 0.3);
+        monitor.accumulate_step(circuit, &off_v, &no_branch, off_s * 0.2);
+        monitor.accumulate_step(circuit, &on_v, &no_branch, on_s);
+        monitor.evaluate(circuit, &on_v, &no_branch, t_end)
+    } else {
+        // Pulse first (one wide step), off at the endpoint.
+        monitor.accumulate_step(circuit, &on_v, &no_branch, on_s);
+        monitor.accumulate_step(circuit, &off_v, &no_branch, off_s * 0.5);
+        monitor.accumulate_step(circuit, &off_v, &no_branch, off_s * 0.3);
+        monitor.accumulate_step(circuit, &off_v, &no_branch, off_s * 0.2);
+        monitor.evaluate(circuit, &off_v, &no_branch, t_end)
+    }
+}
+
+/// HOT SIDE: a 75%-duty 1 W PWM part whose pulse always ENDS before the chunk
+/// endpoint. Endpoint sampling reads 0 W every chunk (the part looks stone
+/// cold — the false NEGATIVE the review flagged); the accepted-step integral
+/// reads 0.75 W, Tj = 25 + 0.75·100 = 100 C > 90 C limit, and the sustained
+/// fault must fire carrying the duty-cycle temperature.
+#[test]
+fn firmware_pwm_thermal_integrates_accepted_steps_not_endpoints() {
+    const CHUNK_S: f64 = 1.0e-3;
+    const DUTY: f64 = 0.75;
+    const TJ_LIMIT_C: f64 = 90.0;
+    let expected_tj = 25.0 + DUTY * 1.0 * 100.0; // 100 C
+
+    let (mut circuit, mut monitor) = pwm_fixture(TJ_LIMIT_C);
+    let mut overtemperature = Vec::new();
+    for chunk in 0..8 {
+        let t = (chunk + 1) as f64 * CHUNK_S;
+        overtemperature.extend(
+            drive_pwm_chunk(&mut circuit, &mut monitor, DUTY, CHUNK_S, false, t)
+                .into_iter()
+                .filter(|f| f.kind == FaultKind::Overtemperature),
+        );
+    }
+
+    let reported_tj = monitor
+        .temp_by_ref()
+        .get("Q1")
+        .copied()
+        .expect("PWM-driven package has a duty-cycle temperature");
+    assert!(
+        (reported_tj - expected_tj).abs() < 1.0e-9,
+        "75% of 1 W through 100 C/W at 25 C must report 100 C, got {reported_tj} \
+         (an endpoint sampler reads the off-phase 0 W and reports nothing)"
+    );
+    assert_eq!(
+        overtemperature.len(),
+        1,
+        "the 100 C duty-cycle temperature exceeds the 90 C limit exactly once"
+    );
+    assert!(
+        (overtemperature[0].value - expected_tj).abs() < 1.0e-9,
+        "fault must carry the duty-cycle temperature, not the 125 C peak"
+    );
+}
+
+/// COOL SIDE: a 10%-duty 1 W PWM part whose pulse always COVERS the chunk
+/// endpoint. Endpoint sampling reads the full 1 W peak every chunk and would
+/// report Tj = 125 C > 90 C — a sustained false POSITIVE. The accepted-step
+/// integral reads 0.1 W, Tj = 35 C, and the monitor must stay silent while
+/// still reporting the true duty-cycle temperature.
+#[test]
+fn firmware_pwm_duty_that_keeps_the_part_cool_stays_silent() {
+    const CHUNK_S: f64 = 1.0e-3;
+    const DUTY: f64 = 0.10;
+    const TJ_LIMIT_C: f64 = 90.0;
+    let expected_tj = 25.0 + DUTY * 1.0 * 100.0; // 35 C
+
+    let (mut circuit, mut monitor) = pwm_fixture(TJ_LIMIT_C);
+    let mut all = Vec::new();
+    for chunk in 0..8 {
+        let t = (chunk + 1) as f64 * CHUNK_S;
+        all.extend(drive_pwm_chunk(
+            &mut circuit,
+            &mut monitor,
+            DUTY,
+            CHUNK_S,
+            true,
+            t,
+        ));
+    }
+
+    assert!(
+        all.iter().all(|f| f.kind != FaultKind::Overtemperature),
+        "10% duty (35 C) is nowhere near the 90 C limit; an endpoint sampler \
+         would false-positive at the 125 C peak, got {all:?}"
+    );
+    let reported_tj = monitor
+        .temp_by_ref()
+        .get("Q1")
+        .copied()
+        .expect("PWM-driven package has a duty-cycle temperature");
+    assert!(
+        (reported_tj - expected_tj).abs() < 1.0e-9,
+        "10% of 1 W through 100 C/W at 25 C must report 35 C, got {reported_tj}"
+    );
+}
+
+/// Overpower is the same thermal physics as Tj (a continuous wattage rating
+/// is a heating limit), so it must judge the time-weighted average, not the
+/// endpoint sample. Two-sided at a 1.5 W peak against a 1.0 W rating, both
+/// phases adversarial: 90% duty averages 1.35 W (fires, though the pulse
+/// ends before every endpoint and a sampler reads 0 W); 50% duty with the
+/// pulse covering every endpoint averages 0.75 W (silent, though a sampler
+/// reads a sustained 1.5 W and would false-fault).
+#[test]
+fn overpower_judges_time_weighted_power_not_the_endpoint() {
+    let build = || {
+        let mut circuit = Circuit::new();
+        let load = circuit.add(Device::Resistor {
+            name: "Q1".into(),
+            a: NodeId(1),
+            b: NodeId::GROUND,
+            ohms: 1.0,
+            tc1: None,
+        });
+        let meta = DeviceMeta {
+            reference: "Q1".into(),
+            device: load,
+            kind: ComponentKind::Nmos,
+            footprint: "Package_TO_SOT_SMD:SOT-23".into(),
+            ratings: Ratings {
+                max_power_w: Some(1.0),
+                theta_ja_c_per_w: Some(1.0), // Tj stays cold; only power is under test
+                max_junction_temp_c: Some(500.0),
+                ..Default::default()
+            },
+        };
+        let mut mon = StressMonitor::new(vec![meta]);
+        mon.ambient_c = 25.0;
+        (circuit, mon)
+    };
+    let no_branch = |_: hauksbee_ir::DeviceId| None;
+    // 1.5 W peak: sqrt(1.5) volts across the 1 ohm load.
+    let on_v = |n: NodeId| if n == NodeId(1) { 1.5f64.sqrt() } else { 0.0 };
+    let off_v = |_: NodeId| 0.0;
+
+    // HOT: 90% duty, pulse ends before the endpoint. Average 1.35 W > 1.0 W.
+    let (mut c, mut m) = build();
+    let mut overpower = Vec::new();
+    for k in 0..8 {
+        m.accumulate_step(&c, &on_v, &no_branch, 0.9e-3);
+        m.accumulate_step(&c, &off_v, &no_branch, 0.1e-3);
+        overpower.extend(
+            m.evaluate(&mut c, &off_v, &no_branch, k as f64 * 1e-3)
+                .into_iter()
+                .filter(|f| f.kind == FaultKind::Overpower),
+        );
+    }
+    assert_eq!(
+        overpower.len(),
+        1,
+        "1.35 W average against a 1.0 W rating must fault once; an endpoint \
+         sampler reads 0 W here and never fires"
+    );
+    assert!(
+        (overpower[0].value - 1.35).abs() < 1e-9,
+        "fault carries the duty-average wattage, got {}",
+        overpower[0].value
+    );
+
+    // COOL: 50% duty, pulse covers the endpoint. Average 0.75 W < 1.0 W.
+    let (mut c, mut m) = build();
+    let mut all = Vec::new();
+    for k in 0..8 {
+        m.accumulate_step(&c, &off_v, &no_branch, 0.5e-3);
+        m.accumulate_step(&c, &on_v, &no_branch, 0.5e-3);
+        all.extend(m.evaluate(&mut c, &on_v, &no_branch, k as f64 * 1e-3));
+    }
+    assert!(
+        all.iter().all(|f| f.kind != FaultKind::Overpower),
+        "0.75 W average is inside the 1.0 W rating; an endpoint sampler reads \
+         a sustained 1.5 W and would false-fault, got {all:?}"
+    );
+}
+
+/// A package that stops dissipating settles back to ambient in the
+/// steady-state model: the reported temperature must not freeze at the last
+/// hot reading once the deposit (or endpoint power) goes to zero.
+#[test]
+fn reported_temperature_cools_to_ambient_when_dissipation_stops() {
+    let (mut circuit, mut monitor) = pwm_fixture(500.0); // limit high: no faults
+    let no_branch = |_: hauksbee_ir::DeviceId| None;
+    let on_v = |n: NodeId| if n == NodeId(1) { 1.0 } else { 0.0 };
+    let off_v = |_: NodeId| 0.0;
+
+    // Hot chunk: always-on 1 W, Tj = 125 C.
+    monitor.accumulate_step(&circuit, &on_v, &no_branch, 1e-3);
+    monitor.evaluate(&mut circuit, &on_v, &no_branch, 1e-3);
+    let hot = monitor.temp_by_ref().get("Q1").copied().expect("hot Tj");
+    assert!((hot - 125.0).abs() < 1e-9, "1 W through 100 C/W: {hot}");
+
+    // Cold chunk: zero deposit, endpoint off. The stale 125 C must relax to
+    // ambient, not persist.
+    monitor.accumulate_step(&circuit, &off_v, &no_branch, 1e-3);
+    monitor.evaluate(&mut circuit, &off_v, &no_branch, 2e-3);
+    let cold = monitor.temp_by_ref().get("Q1").copied().expect("cold Tj");
+    assert!(
+        (cold - 25.0).abs() < 1e-9,
+        "an idle package reads ambient, not the frozen 125 C: {cold}"
+    );
+}
+
 /// Two-sided: the same 0.5 W SOT-23 part is within limits at 25 C ambient
 /// (Tj = 150, limit 175) but pushed over when the ambient rises to 60 C
 /// (Tj = 60 + 125 = 185 > 175). Demonstrates the ambient knob and the fault.
@@ -396,5 +671,119 @@ fn dual_package_single_active_unit_does_not_false_fire() {
     assert!(
         (t1 - 150.0).abs() < 1e-6 && (t2 - 150.0).abs() < 1e-6,
         "both unit rows report the shared package Tj (got {t1:.3}, {t2:.3})"
+    );
+}
+
+/// Drive one chunk of simultaneous sub-chunk PWM through BOTH units of the
+/// dual package at accepted-step granularity (unequal step widths, same
+/// reason as the single-package fixture), then evaluate at the endpoint.
+/// Both 2 Ω units share node 1, so 1 V on means 0.5 W per unit, 1.0 W pooled.
+fn drive_dual_pwm_chunk(
+    circuit: &mut Circuit,
+    monitor: &mut StressMonitor,
+    duty: f64,
+    chunk_s: f64,
+    endpoint_on: bool,
+    t_end: f64,
+) -> Vec<hauksbee_engine::stress::FaultEvent> {
+    let no_branch = |_: hauksbee_ir::DeviceId| None;
+    let on_v = |n: NodeId| if n == NodeId(1) { 1.0 } else { 0.0 };
+    let off_v = |_: NodeId| 0.0;
+    let on_s = duty * chunk_s;
+    let off_s = (1.0 - duty) * chunk_s;
+    if endpoint_on {
+        monitor.accumulate_step(circuit, &off_v, &no_branch, off_s * 0.6);
+        monitor.accumulate_step(circuit, &off_v, &no_branch, off_s * 0.4);
+        monitor.accumulate_step(circuit, &on_v, &no_branch, on_s);
+        monitor.evaluate(circuit, &on_v, &no_branch, t_end)
+    } else {
+        monitor.accumulate_step(circuit, &on_v, &no_branch, on_s);
+        monitor.accumulate_step(circuit, &off_v, &no_branch, off_s * 0.6);
+        monitor.accumulate_step(circuit, &off_v, &no_branch, off_s * 0.4);
+        monitor.evaluate(circuit, &off_v, &no_branch, t_end)
+    }
+}
+
+/// Dual-package + PWM, hot side: both dice switching at 80% duty with the
+/// pulse ending before every chunk endpoint. Pooled time-weighted power is
+/// 0.8 W ⇒ Tj = 25 + 0.8·250 = 225 C > 200 C: both units must fault at the
+/// pooled duty-cycle temperature. Endpoint sampling reads both dice OFF at
+/// every evaluate (pooled 0 W) and would never raise — sibling dissipation
+/// must INTEGRATE through the shared package, not sample.
+#[test]
+fn dual_package_pwm_pools_integrated_not_sampled_dissipation() {
+    const CHUNK_S: f64 = 1.0e-3;
+    const DUTY: f64 = 0.8;
+    let expected_tj = 25.0 + DUTY * 1.0 * 250.0; // 225 C
+
+    let (mut circuit, metas) = dual_package(2.0);
+    let mut mon = StressMonitor::new(metas);
+    mon.ambient_c = 25.0;
+
+    let mut overtemp = Vec::new();
+    for chunk in 0..8 {
+        let t = (chunk + 1) as f64 * CHUNK_S;
+        overtemp.extend(
+            drive_dual_pwm_chunk(&mut circuit, &mut mon, DUTY, CHUNK_S, false, t)
+                .into_iter()
+                .filter(|f| f.kind == FaultKind::Overtemperature),
+        );
+    }
+
+    let mut comps: Vec<&str> = overtemp.iter().map(|f| f.component.as_str()).collect();
+    comps.sort();
+    assert_eq!(
+        comps,
+        vec!["Q1_q1", "Q1_q2"],
+        "both junctions sit at the pooled duty-cycle 225 C > 200 C; endpoint \
+         sampling reads 0 W at every chunk end and misses it"
+    );
+    for f in &overtemp {
+        assert!(
+            (f.value - expected_tj).abs() < 1e-9,
+            "fault Tj {:.3} must be the pooled duty-cycle 225 C, not the \
+             500 C endpoint-peak figure nor a single unit's share",
+            f.value
+        );
+    }
+}
+
+/// Dual-package + PWM, cool side: both dice at 20% duty with the pulse
+/// covering every chunk endpoint. Endpoint sampling pools the full 1.0 W peak
+/// (Tj = 275 C > 200 C) and would false-positive on a package that duty-cycles
+/// at a pooled 0.2 W (Tj = 75 C). The integrated check must stay silent and
+/// report the true 75 C on both unit rows.
+#[test]
+fn dual_package_pwm_cool_duty_does_not_false_fire() {
+    const CHUNK_S: f64 = 1.0e-3;
+    const DUTY: f64 = 0.2;
+    let expected_tj = 25.0 + DUTY * 1.0 * 250.0; // 75 C
+
+    let (mut circuit, metas) = dual_package(2.0);
+    let mut mon = StressMonitor::new(metas);
+    mon.ambient_c = 25.0;
+
+    let mut all = Vec::new();
+    for chunk in 0..8 {
+        let t = (chunk + 1) as f64 * CHUNK_S;
+        all.extend(drive_dual_pwm_chunk(
+            &mut circuit,
+            &mut mon,
+            DUTY,
+            CHUNK_S,
+            true,
+            t,
+        ));
+    }
+    assert!(
+        all.iter().all(|f| f.kind != FaultKind::Overtemperature),
+        "pooled 0.2 W duty (75 C) is far under the 200 C limit; endpoint \
+         sampling would false-positive at the pooled 275 C peak, got {all:?}"
+    );
+    let t1 = mon.temp_by_ref().get("Q1_q1").copied().expect("Q1_q1 Tj");
+    let t2 = mon.temp_by_ref().get("Q1_q2").copied().expect("Q1_q2 Tj");
+    assert!(
+        (t1 - expected_tj).abs() < 1e-9 && (t2 - expected_tj).abs() < 1e-9,
+        "both unit rows report the pooled duty-cycle 75 C (got {t1:.3}, {t2:.3})"
     );
 }

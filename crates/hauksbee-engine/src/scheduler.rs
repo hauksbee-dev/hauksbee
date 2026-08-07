@@ -102,6 +102,31 @@ pub const STRICT_CONSECUTIVE_FAILED_ABORT: u32 = 3;
 /// number, so the rung is RECORDED per window and surfaced with its accuracy
 /// cost rather than the chunk passing as a first-class solve.
 ///
+/// Per-chunk thermal integral over the solver's accepted steps: each monitored
+/// device's dissipated energy (J, index-aligned with the stress monitor's
+/// metas) plus the simulated time it covers. Filled by `march_chunk`'s
+/// streaming sink (trapezoid between accepted steps), deposited into
+/// [`crate::stress::StressMonitor::deposit_chunk_energy`] only for the march
+/// the chunk actually adopts. This is what makes the junction-temperature
+/// check duty-cycle-exact for waveforms that switch inside a chunk: the
+/// endpoint sample reads peak or zero depending on PWM phase, the integral
+/// reads the energy actually deposited.
+#[derive(Debug, Clone, Default)]
+struct ChunkThermalAccum {
+    /// Integrated dissipation per monitored device (J).
+    energy_j: Vec<f64>,
+    /// Simulated seconds the integral covers.
+    elapsed_s: f64,
+}
+
+impl ChunkThermalAccum {
+    /// Discard the partial integral (a failed rung's fiction).
+    fn clear(&mut self) {
+        self.energy_j.clear();
+        self.elapsed_s = 0.0;
+    }
+}
+
 /// Deliberately minimal: a name and a fixed accuracy note per rung, shaped so a
 /// typed error-budget/provenance spine can absorb it later as one provenance
 /// tag per window without changing the semantics recorded here.
@@ -2954,17 +2979,72 @@ impl Scheduler {
     /// unknowns; `Err` carries whatever the streaming sink captured before the
     /// march failed (the t=0 DC point when the DC solve itself succeeded),
     /// which the refusal path uses as a recovery state.
+    ///
+    /// `thermal` accumulates (never clears) each monitored device's dissipated
+    /// energy integrated over THIS march's accepted steps — the time-weighted
+    /// thermal input the stress monitor needs, because a firmware PWM waveform
+    /// switching inside the chunk is invisible to the endpoint sample (the
+    /// endpoint reads peak or zero depending on phase; the junction heats on
+    /// the duty-cycle average). Trapezoid between consecutive accepted steps;
+    /// the caller deposits it into the monitor only for the march it adopts.
+    ///
+    /// Residual: the trapezoid is exact only when dissipation is smooth over
+    /// each accepted interval. Firmware/PWL edges land on solver breakpoints
+    /// (their corners ARE accepted samples), but an event the integrator
+    /// resolves without splitting the interval at the exact corner charges
+    /// that one interval at the average of its two sides. The error is
+    /// bounded by the event-resolution step width, second-order against the
+    /// whole-chunk endpoint sampling this replaced.
     fn march_chunk(
         &self,
         tstop: f64,
         opts: SolverOptions,
         seed: Option<&[f64]>,
+        thermal: &mut ChunkThermalAccum,
     ) -> Result<(Vec<f64>, TransientDiagnostics), (String, Vec<f64>)> {
         let t = Transient::new(opts);
         let mut final_x: Vec<f64> = Vec::new();
+        // Trapezoid state: the previous accepted step's (time, per-device
+        // powers). Local to this march on purpose: a fallback rung or a
+        // subdivided quarter restarts chunk-local time at 0, and an interval
+        // must never straddle two marches.
+        let integrate = self.stress.device_count() > 0;
+        let mut prev: Option<(f64, Vec<f64>)> = None;
+        let layout = &self.layout;
+        let circuit = &self.circuit;
+        let stress = &self.stress;
         let res = t.run_streaming_seeded_with_diagnostics(&self.circuit, tstop, seed, |s| {
             final_x.clear();
             final_x.extend_from_slice(s.x);
+            if !integrate {
+                return;
+            }
+            // Solver unknown vector -> the monitor's view of this step: node k
+            // (non-ground) lives at x[k-1], a device's branch current at
+            // x[layout.branch(id)] (same mapping `adopt_chunk_state` publishes).
+            let node_v = |n: NodeId| {
+                if n.is_ground() {
+                    0.0
+                } else {
+                    s.x.get(n.0 as usize - 1).copied().unwrap_or(0.0)
+                }
+            };
+            let branch_current = |id: DeviceId| layout.branch(id).and_then(|b| s.x.get(b).copied());
+            let powers = stress.step_powers(circuit, &node_v, &branch_current);
+            if let Some((t0, p0)) = prev.take() {
+                let dt = s.time - t0;
+                if dt > 0.0 {
+                    thermal
+                        .energy_j
+                        .resize(powers.len().max(thermal.energy_j.len()), 0.0);
+                    for (slot, (pa, pb)) in thermal.energy_j.iter_mut().zip(p0.iter().zip(&powers))
+                    {
+                        *slot += 0.5 * (pa + pb) * dt;
+                    }
+                    thermal.elapsed_s += dt;
+                }
+            }
+            prev = Some((s.time, powers));
         });
         match res {
             Ok(diagnostics) => Ok((final_x, diagnostics)),
@@ -3003,6 +3083,9 @@ impl Scheduler {
 
     /// The per-chunk FALLBACK LADDER, tried only after the primary march
     /// failed, in order of increasing desperation and decreasing accuracy.
+    /// `thermal` is cleared at the start of every rung so only the adopted
+    /// rung's accepted-step energy survives (a failed rung's partial integral
+    /// is fiction; rung 4's quarters accumulate additively into one chunk).
     /// Returns the rung that produced a converged end state, with that state,
     /// or `None` when no rung could rescue the chunk (the caller then refuses
     /// exactly as before: stale-voltage holding stays the last resort and
@@ -3014,12 +3097,14 @@ impl Scheduler {
     fn fallback_ladder(
         &self,
         chunk: f64,
+        thermal: &mut ChunkThermalAccum,
     ) -> Option<(ChunkFallbackMethod, Vec<f64>, TransientDiagnostics)> {
         let seed = self.last_dc_seed.as_deref();
         let reduced = self.reduced_step_opts(chunk);
 
         // Rung 1: the primary integration at a bounded step.
-        if let Ok((x, diagnostics)) = self.march_chunk(chunk, reduced, seed) {
+        thermal.clear();
+        if let Ok((x, diagnostics)) = self.march_chunk(chunk, reduced, seed, thermal) {
             return Some((ChunkFallbackMethod::ReducedStep, x, diagnostics));
         }
 
@@ -3028,7 +3113,8 @@ impl Scheduler {
         // integration order, which the record discloses.
         let mut be = reduced;
         be.integration = hauksbee_solve::Integration::BackwardEuler;
-        if let Ok((x, diagnostics)) = self.march_chunk(chunk, be, seed) {
+        thermal.clear();
+        if let Ok((x, diagnostics)) = self.march_chunk(chunk, be, seed, thermal) {
             return Some((ChunkFallbackMethod::BackwardEuler, x, diagnostics));
         }
 
@@ -3037,7 +3123,8 @@ impl Scheduler {
         // source stepping, the staged rescue) to re-derive this chunk's
         // operating point from scratch: a warm seed that has drifted onto a
         // bad basin is exactly the state a continuation restart escapes.
-        if let Ok((x, diagnostics)) = self.march_chunk(chunk, be, None) {
+        thermal.clear();
+        if let Ok((x, diagnostics)) = self.march_chunk(chunk, be, None, thermal) {
             return Some((ChunkFallbackMethod::ColdStartBackwardEuler, x, diagnostics));
         }
 
@@ -3047,12 +3134,15 @@ impl Scheduler {
         // chunk is not an answer. (Chunk-local source time restarts per
         // sub-march, which is exact under the co-sim's convention that
         // sources are constant within a chunk: MCU pins and forced nets only
-        // change at chunk boundaries.)
+        // change at chunk boundaries.) The quarters' thermal integrals add up
+        // to the one chunk's energy, so the accumulator is cleared once here
+        // and shared across all four sub-marches.
         let quarter = chunk / 4.0;
         let mut carry: Option<Vec<f64>> = self.last_dc_seed.clone();
         let mut diagnostics = TransientDiagnostics::default();
+        thermal.clear();
         for _ in 0..4 {
-            match self.march_chunk(quarter, be, carry.as_deref()) {
+            match self.march_chunk(quarter, be, carry.as_deref(), thermal) {
                 Ok((x, quarter_diagnostics)) => {
                     if let Some(candidate) = quarter_diagnostics.final_residual {
                         if diagnostics
@@ -3103,12 +3193,16 @@ impl Scheduler {
         // cold-start gmin/source-stepping homotopy on the full nonlinear board
         // every chunk. Exact (same root, fewer iters); a size-mismatched or
         // failing seed falls back to the cold solve inside the solver.
-        let primary = self.march_chunk(chunk, self.opts, self.last_dc_seed.as_deref());
+        let mut thermal = ChunkThermalAccum::default();
+        let primary =
+            self.march_chunk(chunk, self.opts, self.last_dc_seed.as_deref(), &mut thermal);
         let mut failure_reason: Option<String> = None;
         let converged = match primary {
             Ok((x, diagnostics)) => {
                 self.adopt_chunk_state(x);
                 self.record_residual(diagnostics);
+                self.stress
+                    .deposit_chunk_energy(&thermal.energy_j, thermal.elapsed_s);
                 true
             }
             Err((err, recovered)) => {
@@ -3118,9 +3212,13 @@ impl Scheduler {
                 // window. Only when every rung also fails does the refusal
                 // path below run, unchanged: this feature shrinks the set of
                 // windows the run cannot vouch for, it never papers over one.
-                if let Some((method, x, diagnostics)) = self.fallback_ladder(chunk) {
+                if let Some((method, x, diagnostics)) = self.fallback_ladder(chunk, &mut thermal) {
                     self.adopt_chunk_state(x);
                     self.record_residual(diagnostics);
+                    // Only the adopted rung's accepted-step thermal integral is
+                    // real; the ladder cleared every failed attempt's partial.
+                    self.stress
+                        .deposit_chunk_energy(&thermal.energy_j, thermal.elapsed_s);
                     self.record_fallback_chunk(chunk, method);
                     true
                 } else {
@@ -7347,6 +7445,137 @@ mod tests {
             "{clause}"
         );
         assert!(!clause.contains("PASSIVELY"), "{clause}");
+    }
+
+    /// The PRODUCTION thermal path: `march_chunk`'s trapezoid streaming sink,
+    /// the per-chunk energy deposit, and `evaluate`'s time-weighted average
+    /// must reproduce the duty cycle of a PULSE waveform switching INSIDE the
+    /// chunk, with the pulse phase adversarial against the chunk endpoint in
+    /// both directions. This is the same contract the unit-level thermal
+    /// tests pin through `accumulate_step`, exercised here through the real
+    /// solver march so a broken trapezoid pairing, a dropped first interval,
+    /// or a deposit that leaks across chunks cannot hide behind the
+    /// rectangle-API tests.
+    #[test]
+    fn production_thermal_path_integrates_sub_chunk_pwm() {
+        use crate::stress::DeviceMeta;
+        use hauksbee_models::schema::{ComponentKind, Ratings};
+
+        // One 1 Ω load across a chunk-local PULSE source: 1 V on ⇒ 1 W.
+        // theta_JA 100 C/W, ambient 25 C, Tj limit 90 C.
+        let build = |delay: f64, width: f64| -> Scheduler {
+            let mut circuit = Circuit::new();
+            let a = circuit.node("PWM");
+            circuit.add(Device::Vsource {
+                name: "V1".into(),
+                p: a,
+                n: NodeId::GROUND,
+                kind: hauksbee_ir::SourceKind::Pulse {
+                    v1: 0.0,
+                    v2: 1.0,
+                    delay,
+                    rise: 1e-7,
+                    fall: 1e-7,
+                    width,
+                    period: 0.0,
+                },
+            });
+            let q = circuit.add(Device::Resistor {
+                name: "Q1".into(),
+                a,
+                b: NodeId::GROUND,
+                ohms: 1.0,
+                tc1: None,
+            });
+            let meta = DeviceMeta {
+                reference: "Q1".into(),
+                device: q,
+                kind: ComponentKind::Nmos,
+                footprint: "Package_TO_SOT_SMD:SOT-23".into(),
+                ratings: Ratings {
+                    max_power_w: Some(2.0),
+                    theta_ja_c_per_w: Some(100.0),
+                    max_junction_temp_c: Some(90.0),
+                    ..Default::default()
+                },
+            };
+            let mut net_nodes = HashMap::new();
+            net_nodes.insert("PWM".to_string(), a);
+            let bound = crate::binder::BoundBoard {
+                name: "pwm_thermal".into(),
+                circuit,
+                net_nodes,
+                net_names: vec!["PWM".into()],
+                digital: Vec::new(),
+                mcus: Vec::new(),
+                dnp_mcus: Vec::new(),
+                component_kinds: HashMap::new(),
+                input_sources: HashMap::new(),
+                supplies: Vec::new(),
+                behavioral: Vec::new(),
+                device_meta: vec![meta],
+                dacs: Vec::new(),
+                report: crate::report::BindReport::default(),
+            };
+            let mut sched =
+                Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+            sched.chunk_s = 1.0e-3;
+            sched.set_ambient_c(25.0);
+            sched
+        };
+
+        // HOT side, endpoint OFF: 75% duty pulse [0, 0.75 ms] within each
+        // 1 ms chunk. The endpoint solves at 0 W (a sampler reads stone
+        // cold); the integral reads 0.75 W ⇒ Tj ≈ 100 C > 90 C limit.
+        let mut hot = build(0.0, 0.75e-3);
+        hot.step(8.0e-3);
+        let tj = hot
+            .temp_states()
+            .get("Q1")
+            .copied()
+            .expect("PWM part has a temperature through the production path");
+        assert!(
+            (tj - 100.0).abs() < 1.0,
+            "75% duty of 1 W through 100 C/W at 25 C ambient must read ~100 C \
+             through the real march, got {tj:.3}"
+        );
+        let overtemp: Vec<_> = hot
+            .drain_faults()
+            .into_iter()
+            .filter(|f| f.kind == crate::stress::FaultKind::Overtemperature)
+            .collect();
+        assert_eq!(
+            overtemp.len(),
+            1,
+            "the ~100 C duty temperature exceeds the 90 C limit once"
+        );
+        assert!(
+            (overtemp[0].value - 100.0).abs() < 1.0,
+            "fault carries the duty-cycle temperature, got {:.3}",
+            overtemp[0].value
+        );
+
+        // COOL side, endpoint ON: ~10% duty pulse [0.9 ms, past the chunk
+        // end]. The endpoint solves at the full 1 W peak (a sampler reads a
+        // sustained 125 C and false-faults); the integral reads ~0.1 W ⇒
+        // Tj ≈ 35 C, silent.
+        let mut cool = build(0.9e-3, 0.2e-3);
+        cool.step(8.0e-3);
+        let tj = cool
+            .temp_states()
+            .get("Q1")
+            .copied()
+            .expect("PWM part has a temperature through the production path");
+        assert!(
+            (tj - 35.0).abs() < 1.0,
+            "10% duty must read ~35 C, not the 125 C endpoint peak, got {tj:.3}"
+        );
+        assert!(
+            cool.drain_faults()
+                .iter()
+                .all(|f| f.kind != crate::stress::FaultKind::Overtemperature),
+            "35 C is far under the 90 C limit; endpoint sampling would false-fault"
+        );
     }
 }
 

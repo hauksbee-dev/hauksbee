@@ -92,3 +92,5 @@ qc/results/
 # is never committed.
 testdata/ingest-robustness/corpus-harness/ingest-corpus/
 testdata/ingest-robustness/corpus-harness/matrix-results.jsonl
+
+cursor-review.log
