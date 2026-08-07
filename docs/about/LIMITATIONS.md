@@ -319,16 +319,26 @@ legitimately crosses a pour, so pours stay excluded from the Eagle short test
 (wires, vias and pads against each other are fully covered). This is a
 data-availability limit, not a code limit.
 
-### Gerber footprint inference (via-vs-pad ambiguity)
+### Gerber footprint inference on stripped films (via-vs-pad ambiguity)
 
-The reconstruction windows each component's pads from its package-name string,
-with a flat 4 mm fallback. A stitching/thermal via inside that window is hard to
-tell from a real pad without the netlist (the documented "honest weak spot"),
-which inflates component pad counts. The *connectivity* the simulator needs is
-already near-exact over located pads (net-partition agreement runs to about 99%
-on the gated boards), so the residual is a component-match accounting figure,
-not a correctness gap. Improving it robustly needs information the gerber
-alone does not carry.
+An X2 gerber job carries the answer in the files: `%TO.P` names each pad's
+refdes and pin, `%TO.N` names its net, and `%TA.AperFunction,ViaPad` marks a
+via as a via. The reader uses all three, so on an X2 export (KiCad's default)
+pad→refdes→pin→net binding and via-vs-pad classification come from the film
+itself, exactly: no window, no inference.
+
+The limitation is now confined to **stripped films** (exports run with
+`--no-x2 --no-netlist`, or legacy CAM output that never carried attributes).
+There the reconstruction windows each component's pads from its package-name
+string, with a flat 4 mm fallback, and a stitching/thermal via inside that
+window is hard to tell from a real pad, which inflates component pad counts.
+The *connectivity* the simulator needs is already near-exact over located pads
+(net-partition agreement runs to about 99% on the gated boards), so the
+residual is a component-match accounting figure, not a correctness gap. If your
+job hits it, the unlocking upload is one of: re-export the gerbers **with X2
+attributes enabled** (KiCad: don't pass `--no-x2`/`--no-netlist`; Altium:
+tick "Generate X2 attributes"), or supply the native layout file alongside the
+fab folder.
 
 ### Capacitor ESR/ESL parasitics stay opt-in by design
 
