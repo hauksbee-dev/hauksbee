@@ -21,6 +21,7 @@
 use std::collections::HashSet;
 
 use hauksbee_extract::{Component, ExtractedBoard};
+use hauksbee_extract::assembly::AssemblyState;
 
 /// The structured boot-safety advisory for a finished co-sim run. Built by
 /// [`analyze`]; rendered by the CLI (`--plain`/`--json`), the TUI and the web.
@@ -230,7 +231,7 @@ pub fn net_drives_a_switch(board: &ExtractedBoard, net_name: &str) -> bool {
         return false;
     };
     board.net_members(net.id).iter().any(|(c, _)| {
-        !c.dnp
+        AssemblyState::of(c).is_present()
             && matches!(
                 c.reference.chars().next().map(|ch| ch.to_ascii_uppercase()),
                 Some('Q') | Some('K')
@@ -343,7 +344,9 @@ fn is_base_pad_name(s: &str) -> bool {
 pub fn transistor_gate_nets(board: &ExtractedBoard) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for c in &board.components {
-        if c.dnp || c.reference.chars().next().map(|ch| ch.to_ascii_uppercase()) != Some('Q') {
+        if !AssemblyState::of(c).is_present()
+            || c.reference.chars().next().map(|ch| ch.to_ascii_uppercase()) != Some('Q')
+        {
             continue;
         }
         let named = |is: fn(&str) -> bool| {

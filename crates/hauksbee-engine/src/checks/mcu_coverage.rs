@@ -26,6 +26,7 @@ use hauksbee_extract::{
 use hauksbee_models::ModelLibrary;
 
 use crate::binder::resolve;
+use hauksbee_extract::assembly::AssemblyState;
 
 /// Recognised MCU part-number family prefixes (compared case-insensitively
 /// against the value and any property string, which must *start with* the
@@ -107,8 +108,8 @@ fn is_strap_bearing_family(comp: &Component) -> bool {
 /// it must be an active-IC designator AND carry an MCU signature in its value,
 /// a property string, or KiCad's `MCU_*` symbol library id.
 pub(crate) fn is_probable_mcu(comp: &Component) -> bool {
-    if comp.dnp {
-        return false; // not assembled → electrically absent
+    if !AssemblyState::of(comp).is_present() {
+        return false; // not assembled (or identity refused) -> electrically absent
     }
     if !is_active_ic_refdes(&comp.reference) {
         return false;
@@ -172,10 +173,13 @@ pub(crate) fn is_probable_mcu(comp: &Component) -> bool {
 pub fn mcu_coverage_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintReport {
     let mut report = NetLintReport::default();
     for comp in &board.components {
+        let Some(part) = AssemblyState::of(comp).fitted() else {
+            continue;
+        };
         if !is_probable_mcu(comp) || !is_strap_bearing_family(comp) {
             continue;
         }
-        let straps_examined = resolve(lib, comp)
+        let straps_examined = resolve(lib, part)
             .model
             .as_ref()
             .is_some_and(|m| !m.straps.is_empty());
