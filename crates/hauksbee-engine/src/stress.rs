@@ -16,6 +16,23 @@
 //! [`SUSTAIN_CHUNKS`] consecutive chunks. A *surge* rating, when present, is the
 //! instantaneous ceiling: exceeding it raises immediately.
 //!
+//! ## Time-weighted thermal power (accepted-step integration)
+//!
+//! The junction-temperature check must NOT sample the chunk endpoint's
+//! instantaneous power: a firmware PWM waveform switches inside the chunk, so
+//! the endpoint reads either the full peak or zero depending on phase, while
+//! the junction heats on the *duty-cycle average*. The solver already produces
+//! the truth: every accepted step inside the chunk carries a solved operating
+//! point and a `dt`. The scheduler integrates each device's dissipation over
+//! those accepted steps ([`StressMonitor::step_powers`] per step, trapezoid
+//! between steps) and deposits the chunk's energy via
+//! [`StressMonitor::deposit_chunk_energy`]; [`StressMonitor::evaluate`] then
+//! uses `energy / elapsed` — the time-weighted average power — as the
+//! temperature-driving dissipation. A 25%-duty PWM therefore deposits 25% of
+//! the always-on energy whatever the chunk width or pulse phase. When no
+//! energy was deposited for the chunk (direct unit-test drives, legacy
+//! callers), the endpoint's instantaneous power is the fallback.
+//!
 //! ## Destructive mode
 //!
 //! With `destructive` enabled, raising a fault also mutates the bound circuit so
@@ -281,6 +298,13 @@ pub struct StressMonitor {
     /// reference -> live estimated junction temperature (C), for the thermal
     /// view / component-state frames. Only populated for dissipating devices.
     temp_by_ref: HashMap<String, f64>,
+    /// Per-device dissipated energy (J) integrated over the accepted solver
+    /// steps of the chunk about to be evaluated (index-aligned with `metas`).
+    /// Drained by [`Self::evaluate`]; empty means "no deposit, fall back to
+    /// the endpoint's instantaneous power".
+    chunk_energy_j: Vec<f64>,
+    /// Simulated time (s) the deposited energy covers. Zero means no deposit.
+    chunk_elapsed_s: f64,
 }
 
 impl Default for StressMonitor {
@@ -302,6 +326,8 @@ impl StressMonitor {
             ambient_c: crate::thermal::DEFAULT_AMBIENT_C,
             stress_by_ref: HashMap::new(),
             temp_by_ref: HashMap::new(),
+            chunk_energy_j: vec![0.0; n],
+            chunk_elapsed_s: 0.0,
         }
     }
 
@@ -334,6 +360,81 @@ impl StressMonitor {
         }
         self.stress_by_ref.clear();
         self.temp_by_ref.clear();
+        self.clear_chunk_energy();
+    }
+
+    /// Per-device dissipation (W) at one solved operating point, index-aligned
+    /// with the monitored metas (destroyed devices read 0). This is the
+    /// per-accepted-step half of the time-weighted thermal path: the streaming
+    /// sink calls it at each accepted step, integrates the powers over the
+    /// step widths, and hands the chunk's total to
+    /// [`Self::deposit_chunk_energy`]. Split from the deposit so the sink can
+    /// run under a shared borrow of the scheduler while the march owns the
+    /// circuit.
+    pub fn step_powers(
+        &self,
+        circuit: &Circuit,
+        node_v: &dyn Fn(NodeId) -> f64,
+        branch_current: &dyn Fn(DeviceId) -> Option<f64>,
+    ) -> Vec<f64> {
+        self.metas
+            .iter()
+            .enumerate()
+            .map(|(i, meta)| {
+                if self.tracks[i].destroyed {
+                    0.0
+                } else {
+                    operating_point(circuit, meta, node_v, branch_current).power_w
+                }
+            })
+            .collect()
+    }
+
+    /// Add integrated per-device dissipated energy (J, index-aligned with the
+    /// metas) covering `elapsed_s` seconds of accepted solver steps to the
+    /// pending chunk deposit. The next [`Self::evaluate`] turns the deposit
+    /// into time-weighted average power for the junction-temperature check and
+    /// drains it. Additive so a subdivided chunk (fallback ladder rung 4)
+    /// deposits each quarter's energy in turn. Non-finite or non-positive
+    /// `elapsed_s` deposits nothing.
+    pub fn deposit_chunk_energy(&mut self, energy_j: &[f64], elapsed_s: f64) {
+        if !(elapsed_s > 0.0) || !elapsed_s.is_finite() {
+            return;
+        }
+        for (slot, e) in self.chunk_energy_j.iter_mut().zip(energy_j) {
+            *slot += e;
+        }
+        self.chunk_elapsed_s += elapsed_s;
+    }
+
+    /// Convenience for direct drivers (tests, chunk-less callers): integrate
+    /// one accepted step of width `dt` at the given solved state into the
+    /// pending chunk deposit, rectangle rule (`power(now) * dt`). Exact for
+    /// piecewise-constant waveforms whose switches land on accepted steps,
+    /// which is how the co-sim stamps firmware pin edges.
+    pub fn accumulate_step(
+        &mut self,
+        circuit: &Circuit,
+        node_v: &dyn Fn(NodeId) -> f64,
+        branch_current: &dyn Fn(DeviceId) -> Option<f64>,
+        dt: f64,
+    ) {
+        if !(dt > 0.0) || !dt.is_finite() {
+            return;
+        }
+        let powers = self.step_powers(circuit, node_v, branch_current);
+        self.deposit_chunk_energy(
+            &powers.iter().map(|p| p * dt).collect::<Vec<f64>>(),
+            dt,
+        );
+    }
+
+    /// Zero the pending chunk energy deposit.
+    fn clear_chunk_energy(&mut self) {
+        for e in &mut self.chunk_energy_j {
+            *e = 0.0;
+        }
+        self.chunk_elapsed_s = 0.0;
     }
 
     /// Live stress fraction per component reference (0..1).
@@ -393,16 +494,35 @@ impl StressMonitor {
                 }
             })
             .collect();
+        // Temperature-driving power per package. When the scheduler deposited
+        // accepted-step energy for this chunk, the physical figure is the
+        // TIME-WEIGHTED average `energy / elapsed`: a firmware PWM waveform
+        // switches inside the chunk, so the endpoint's instantaneous power
+        // reads peak or zero depending on phase, while the junction heats on
+        // the duty-cycle average. Pooling still happens per package (the
+        // siblings' energies each integrate, then sum). Without a deposit
+        // (direct unit-test drives), the endpoint operating point is the
+        // fallback, which is exact for waveforms constant over the chunk.
+        let thermal_elapsed = self.chunk_elapsed_s;
         let mut package_power: HashMap<String, f64> = HashMap::new();
         for (i, meta) in self.metas.iter().enumerate() {
-            if let Some(op) = &ops[i] {
-                if op.power_w > 0.0 {
-                    *package_power
-                        .entry(strip_unit_suffix(&meta.reference).to_string())
-                        .or_insert(0.0) += op.power_w;
-                }
+            if ops[i].is_none() {
+                continue; // destroyed: dissipates nothing
+            }
+            let p = if thermal_elapsed > 0.0 {
+                self.chunk_energy_j.get(i).copied().unwrap_or(0.0) / thermal_elapsed
+            } else {
+                ops[i].as_ref().map_or(0.0, |op| op.power_w)
+            };
+            if p > 0.0 {
+                *package_power
+                    .entry(strip_unit_suffix(&meta.reference).to_string())
+                    .or_insert(0.0) += p;
             }
         }
+        // The deposit covers exactly the chunk this evaluate closes; drain it
+        // so the next chunk starts from zero (no cross-chunk carry-over).
+        self.clear_chunk_energy();
 
         // ── Pass 2: per-device checks ────────────────────────────────────────
         // Iterate by index so we can borrow tracks mutably alongside metas.
