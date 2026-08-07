@@ -92,9 +92,10 @@ pub fn parse(text: &str) -> DrillFile {
     // (or `M17`) retracts it. We only enter this mode on a file that actually
     // carries an `M15`: on every other file a `G00`/`G01` line keeps its old
     // meaning (a positioned hit), so no existing job changes behaviour.
-    let rout_capable = text
-        .lines()
-        .any(|l| matches!(l.trim(), "M15" | "M15;" | "M015"));
+    let rout_capable = text.lines().any(|l| {
+        let t = l.trim().to_ascii_uppercase();
+        matches!(t.as_str(), "M15" | "M15;" | "M015")
+    });
     let mut tool_down = false;
     // Modal coordinates: an Excellon body line may carry only X (keep the last
     // Y) or only Y (keep the last X), as Altium's exporter does. Track the last
@@ -250,8 +251,11 @@ pub fn parse(text: &str) -> DrillFile {
             let is_cut = g == Some(1);
             if is_rapid || is_cut {
                 let (px, py) = (last_x, last_y);
+                // The uppercased line throughout the rout block, so a file that
+                // writes its axis and centre letters in lower case is read the
+                // same as one that does not.
                 let moved = parse_xy_modal(
-                    line,
+                    &up,
                     metric,
                     int_digits,
                     dec_digits,
@@ -288,7 +292,7 @@ pub fn parse(text: &str) -> DrillFile {
                 let clockwise = g == Some(2);
                 let (px, py) = (last_x, last_y);
                 let moved = parse_xy_modal(
-                    line,
+                    &up,
                     metric,
                     int_digits,
                     dec_digits,
@@ -297,7 +301,10 @@ pub fn parse(text: &str) -> DrillFile {
                     &mut last_y,
                 );
                 let scale = if metric { 1.0 } else { 25.4 };
-                let ij = arc_center_offset(line, int_digits, dec_digits, leading_zero_omitted)
+                // Read the centre off the uppercased line: the G-code already
+                // is, and a file that writes `i`/`j` in lower case would
+                // otherwise lose its arc wall while its `G03` still parsed.
+                let ij = arc_center_offset(&up, int_digits, dec_digits, leading_zero_omitted)
                     .map(|(i, j)| (i * scale, j * scale));
                 if let (Some((nx, ny)), Some(dia), true, Some(sx), Some(sy), Some((i, j))) =
                     (moved, current, tool_down && !current_is_npth, px, py, ij)
@@ -1180,6 +1187,31 @@ M30
         assert!((first.x - 5.0).abs() < 1e-9 && first.y.abs() < 1e-9);
         let last = d.holes.last().unwrap().to.unwrap();
         assert!(last.0.abs() < 1e-9 && (last.1 - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_lower_case_arc_center_is_still_a_center() {
+        // The G-code is matched case-insensitively, so the centre offsets have
+        // to be as well. Reading `I`/`J` off the raw line dropped the wall of
+        // any arc whose exporter wrote them in lower case, silently.
+        let d = parse(
+            "\
+M48
+FMAT,2
+METRIC
+T1C0.800
+%
+G90
+T1
+G00X5.0Y0.0
+M15
+g03x0.0y5.0i-5.0j0.0
+M16
+M30
+",
+        );
+        assert_eq!(d.holes.len(), 4, "got {:?}", d.holes);
+        assert!(d.holes.iter().all(|h| h.to.is_some()));
     }
 
     #[test]
