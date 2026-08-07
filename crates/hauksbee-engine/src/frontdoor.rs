@@ -296,6 +296,12 @@ pub struct WebCosimSection {
     /// swapped for an emulatable stand-in), so its behaviour may not match the
     /// production part. Also demotes the headline. Always serialized.
     pub substituted: bool,
+    /// Numerical qualification for a run that executed. Absent when no
+    /// co-simulation ran or invalid solver settings caused qualification to be
+    /// explicitly refused; a missing residual inside the budget means
+    /// unmeasured, not zero.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_budget: Option<hauksbee_ir::evidence::ErrorBudget>,
 }
 
 /// Evidence inputs captured before the co-sim scheduler is dropped. Keeping
@@ -304,10 +310,8 @@ pub struct WebCosimSection {
 struct WebCosimEvidence {
     faults: Vec<crate::stress::FaultEvent>,
     activity_nets: Vec<String>,
-    failed_windows: Vec<(f64, f64)>,
-    fallback_windows: Vec<(f64, f64, String)>,
     substitutions: Vec<crate::scheduler::McuSubstitution>,
-    seconds_simulated: f64,
+    error_budget: Option<hauksbee_ir::evidence::ErrorBudget>,
 }
 
 /// One row of the web boot-state panel: a transistor gate control net and what
@@ -831,18 +835,7 @@ pub fn analyze_with_firmware(
                 Ok(evidence) => evidence,
                 Err(_) => evidence,
             };
-            let fallback: Vec<(f64, f64, &str)> = captured
-                .fallback_windows
-                .iter()
-                .map(|(start, end, method)| (*start, *end, method.as_str()))
-                .collect();
-            if let Ok(budget) = crate::evidence::BoardEvidence::transient_error_budget(
-                0.0,
-                captured.seconds_simulated,
-                1.0 / 1000.0,
-                &captured.failed_windows,
-                &fallback,
-            ) {
+            if let Some(budget) = captured.error_budget.clone() {
                 let mut maps = report.evidence.clone();
                 for fault in &captured.faults {
                     if let Ok(map) = evidence.simulation_map(
@@ -1030,6 +1023,7 @@ fn cosim_unavailable(reason: impl Into<String>) -> WebCosimSection {
         // neutral, backward-compatible defaults (a not-run co-sim is not a refusal).
         firmware_exercised: true,
         substituted: false,
+        error_budget: None,
     }
 }
 
@@ -1541,17 +1535,29 @@ fn run_web_cosim(
         })
         .collect();
 
+    let error_budget = match sched.error_budget() {
+        Ok(budget) => Some(budget),
+        Err(error) => {
+            findings.insert(
+                0,
+                WebFinding {
+                    level: "serious".to_string(),
+                    what: "Co-sim result has no valid numerical qualification.".to_string(),
+                    why: error.to_string(),
+                    fix: "Use finite, positive solver tolerances and run the co-simulation again."
+                        .to_string(),
+                    x: None,
+                    y: None,
+                },
+            );
+            None
+        }
+    };
     let captured = WebCosimEvidence {
         faults,
         activity_nets: gpio_nets.iter().map(|net| net.name.clone()).collect(),
-        failed_windows: sched.failed_windows().to_vec(),
-        fallback_windows: sched
-            .fallback_windows()
-            .iter()
-            .map(|&(start, end, method)| (start, end, method.as_str().to_string()))
-            .collect(),
         substitutions: sched.substitutions().to_vec(),
-        seconds_simulated,
+        error_budget: error_budget.clone(),
     };
     let substituted = !captured.substitutions.is_empty();
     (
@@ -1567,6 +1573,7 @@ fn run_web_cosim(
             boot_gates,
             firmware_exercised: firmware_ran,
             substituted,
+            error_budget,
         },
         Some(captured),
     )
@@ -2502,6 +2509,7 @@ fn main {
             boot_gates: Vec::new(),
             firmware_exercised: true,
             substituted: false,
+            error_budget: None,
         }
     }
 
@@ -2716,6 +2724,7 @@ fn main {
             boot_gates: Vec::new(),
             firmware_exercised: true,
             substituted: false,
+            error_budget: None,
         };
         let json = serde_json::to_string(&section).unwrap();
         assert!(
@@ -2749,6 +2758,7 @@ fn main {
             }],
             firmware_exercised: true,
             substituted: false,
+            error_budget: None,
         };
         let json = serde_json::to_string(&section).unwrap();
         assert!(

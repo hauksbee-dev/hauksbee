@@ -70,7 +70,7 @@ pub struct AssertResult {
 /// written for the same reason as `report::schema_nullable_string`: schemars'
 /// `required` attribute would drop `null` from the type and promise a number
 /// where a passing assertion really does carry `null`.
-fn schema_nullable_seed(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+pub(crate) fn schema_nullable_seed(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({
         "type": ["integer", "null"],
         "format": "uint32",
@@ -82,7 +82,7 @@ fn schema_nullable_seed(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
 /// (`skip_serializing_if`). The plain `Option<String>` schema would allow
 /// `null`, which this surface never emits; a consumer checking for the key's
 /// presence is doing the right thing, and the schema should say so.
-fn schema_absent_or_string(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+pub(crate) fn schema_absent_or_string(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
     schemars::json_schema!({ "type": "string" })
 }
 
@@ -1971,6 +1971,7 @@ mod tests {
                 analog_valid: true,
                 failed_windows: Vec::new(),
                 fallback_windows: Vec::new(),
+                error_budget: None,
                 analog_abort: false,
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),
@@ -2049,6 +2050,7 @@ mod tests {
                 analog_valid: failed.is_empty(),
                 failed_windows: failed,
                 fallback_windows: Vec::new(),
+                error_budget: None,
                 analog_abort: false,
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),
@@ -2493,6 +2495,7 @@ mod tests {
                 analog_valid: true,
                 failed_windows: Vec::new(),
                 fallback_windows: Vec::new(),
+                error_budget: None,
                 analog_abort: false,
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),
@@ -2574,6 +2577,7 @@ mod tests {
                 analog_valid: true,
                 failed_windows: Vec::new(),
                 fallback_windows: Vec::new(),
+                error_budget: None,
                 analog_abort: false,
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),
@@ -2645,6 +2649,7 @@ mod tests {
                 analog_valid: true,
                 failed_windows: Vec::new(),
                 fallback_windows: Vec::new(),
+                error_budget: None,
                 analog_abort: false,
                 sampled_values: Vec::new(),
                 net_series: HashMap::new(),

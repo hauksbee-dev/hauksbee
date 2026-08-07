@@ -3,6 +3,7 @@ use hauksbee_engine::{bind_board, BoardEvidence};
 use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
 use hauksbee_ir::evidence::{AssumptionKind, EvidenceStatus, RunDate};
 use hauksbee_models::ModelLibrary;
+use hauksbee_solve::{Integration, SolverOptions};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -171,8 +172,21 @@ fn numeric_simulation_assertions_carry_budget_and_semantic_substitution_only() {
                 modelled_core: "stand-in-core".into(),
             }])
             .unwrap();
-    let budget =
-        BoardEvidence::transient_error_budget(0.0, 0.01, 0.001, &[(0.004, 0.005)], &[]).unwrap();
+    let mut options = SolverOptions::default();
+    options.integration = Integration::Gear2;
+    options.reltol = 2e-4;
+    options.vntol = 7e-7;
+    options.abstol = 3e-13;
+    options.chgtol = 9e-15;
+    let budget = BoardEvidence::transient_error_budget(
+        &options,
+        0.0,
+        0.01,
+        0.001,
+        &[(0.004, 0.005)],
+        &[(0.006, 0.007, "backward-euler")],
+    )
+    .unwrap();
     let map = evidence
         .simulation_map(
             "VBUS peak stays below 5.5 V",
@@ -184,7 +198,16 @@ fn numeric_simulation_assertions_carry_budget_and_semantic_substitution_only() {
 
     assert_eq!(map.status(), EvidenceStatus::Undermined);
     assert!(map.error_budget().is_some());
-    assert_eq!(map.error_budget().unwrap().failed_windows().len(), 1);
+    let budget = map.error_budget().unwrap();
+    assert_eq!(budget.failed_windows().len(), 1);
+    assert_eq!(budget.tolerance().reltol(), options.reltol);
+    assert_eq!(budget.tolerance().vntol(), options.vntol);
+    assert_eq!(
+        budget.methods()[0].method(),
+        hauksbee_ir::evidence::IntegrationMethod::Gear2
+    );
+    let json = serde_json::to_value(budget).unwrap();
+    assert!(json.to_string().find("accuracy_cost").is_none());
     assert_eq!(
         map.artifacts().len(),
         2,
@@ -194,6 +217,58 @@ fn numeric_simulation_assertions_carry_budget_and_semantic_substitution_only() {
         .assumptions()
         .iter()
         .any(|a| a.kind() == hauksbee_ir::evidence::AssumptionKind::SubstituteModel));
+}
+
+#[test]
+fn transient_budget_partitions_solved_and_invalid_windows_without_overlap() {
+    let options = SolverOptions::default();
+    let budget = BoardEvidence::transient_error_budget(
+        &options,
+        0.0,
+        1.0,
+        0.01,
+        &[(0.2, 0.3)],
+        &[(0.5, 0.6, "backward-euler")],
+    )
+    .unwrap();
+    let windows: Vec<_> = budget
+        .methods()
+        .iter()
+        .map(|method| {
+            (
+                method.window().start_s(),
+                method.window().end_s(),
+                method.method(),
+            )
+        })
+        .collect();
+    assert_eq!(windows.len(), 4, "three primary spans plus one fallback");
+    assert_eq!(windows[0].0, 0.0);
+    assert_eq!(windows[0].1, 0.2);
+    assert_eq!(windows[1].0, 0.3);
+    assert_eq!(windows[1].1, 0.5);
+    assert_eq!(windows[2].0, 0.6);
+    assert_eq!(windows[2].1, 1.0);
+    assert_eq!(windows[3].0, 0.5);
+    assert_eq!(windows[3].1, 0.6);
+    assert!(BoardEvidence::transient_error_budget(
+        &options,
+        0.0,
+        1.0,
+        0.01,
+        &[(0.2, 0.4)],
+        &[(0.3, 0.5, "backward-euler")],
+    )
+    .is_err());
+    assert!(BoardEvidence::transient_error_budget(
+        &options,
+        0.0,
+        1.0,
+        0.01,
+        &[],
+        &[(0.3, 0.5, "mystery-method")],
+    )
+    .is_err());
 }
 
 #[test]

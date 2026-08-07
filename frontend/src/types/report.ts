@@ -80,6 +80,7 @@ export interface WebCosimSection {
   analog_valid: boolean
   failed_windows?: WebFailedWindow[]
   spi_framing?: WebSpiFraming[]
+  error_budget?: ErrorBudget
 }
 
 export interface WebComponent {
@@ -110,6 +111,30 @@ export interface EvidenceAssumption {
   expires?: string
 }
 
+export interface ErrorBudgetWindow {
+  start_s: number
+  end_s: number
+}
+
+export interface ErrorBudget {
+  tolerance: {
+    reltol: number
+    vntol: number
+    abstol: number
+    chgtol: number
+  }
+  methods?: Array<{
+    window: ErrorBudgetWindow
+    method: 'trapezoidal' | 'gear2' | 'backward-euler' | 'reduced-step' | 'cold-start-backward-euler' | 'subdivided-backward-euler'
+  }>
+  residual?: { max_abs: number; at: string }
+  failed_windows?: ErrorBudgetWindow[]
+  event_time_error_s?: number
+  /** Model intervals are additive and producer-specific; the UI currently
+   * reports their count rather than interpreting unlike physical quantities. */
+  model_uncertainty?: Array<Record<string, unknown>>
+}
+
 /** The evidence attached to one reported assertion. Provenance fields are kept
  * structurally open here because their tagged IR variants remain additive; the
  * web needs the stable assertion/status/assumption contract to render trust. */
@@ -119,7 +144,7 @@ export interface EvidenceMap {
   models?: ModelOnPath[]
   parameters?: unknown[]
   assumptions?: string[]
-  error_budget?: unknown
+  error_budget?: ErrorBudget
   coverage?: string
   status: 'clean' | 'qualified' | 'undermined'
 }

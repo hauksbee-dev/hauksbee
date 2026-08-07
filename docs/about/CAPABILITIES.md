@@ -158,6 +158,13 @@ MCU simulator backends (Renode, Espressif QEMU) follow the same
 detect-do-not-bundle pattern. Full rationale and install instructions:
 [`docs/cosim/ORACLES.md`](../cosim/ORACLES.md).
 
+Every production numeric result also carries a typed
+[numerical error budget](../analysis/ERROR_BUDGETS.md): actual solver
+tolerances, integration method by solved window, measured residual where the
+path exposes one, explicit invalid spans, event timestamp precision, and only
+model intervals with a supportable basis. Unknown is reported as unknown,
+never as zero or guessed percentage accuracy.
+
 ---
 
 ## Layer 3: Firmware co-simulation, the differentiator

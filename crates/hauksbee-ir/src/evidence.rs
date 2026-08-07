@@ -82,6 +82,26 @@ pub enum EvidenceError {
     /// A time interval ends before it starts.
     #[error("time window is inverted: [{start_s}, {end_s})")]
     InvertedWindow { start_s: f64, end_s: f64 },
+    /// A reported window lies outside the result span it qualifies.
+    #[error(
+        "{kind} window [{start_s}, {end_s}) lies outside result [{result_start_s}, {result_end_s})"
+    )]
+    WindowOutsideResult {
+        kind: &'static str,
+        start_s: f64,
+        end_s: f64,
+        result_start_s: f64,
+        result_end_s: f64,
+    },
+    /// Two windows that cannot both describe the same span overlap.
+    #[error("{first_kind} window overlaps {second_kind} window")]
+    OverlappingWindows {
+        first_kind: &'static str,
+        second_kind: &'static str,
+    },
+    /// A method name crossed a crate boundary without a typed mapping.
+    #[error("unknown integration method {method:?}")]
+    UnknownIntegrationMethod { method: String },
     /// An uncertainty interval has its bounds reversed.
     #[error("uncertainty interval for {parameter} is inverted: [{low}, {high}]")]
     InvertedInterval {
@@ -1760,8 +1780,7 @@ impl TimeWindow {
         Ok(Self { start_s, end_s })
     }
 
-    /// Whether both bounds are real numbers. See [`ErrorBudget::sanitized`] for
-    /// why a budget checks this before it is published.
+    /// Whether both bounds are real numbers.
     pub fn is_finite(&self) -> bool {
         self.start_s.is_finite() && self.end_s.is_finite()
     }
@@ -1787,10 +1806,6 @@ pub struct WindowMethod {
     window: TimeWindow,
     /// The method's stable name.
     method: IntegrationMethod,
-    /// The accuracy cost, stated: empty for the primary method, a sentence for
-    /// a more dissipative rung.
-    #[serde(default, skip_serializing_if = "is_zero")]
-    accuracy_cost: f64,
 }
 
 /// The integration algorithm used for a solved window.
@@ -1812,19 +1827,14 @@ pub enum IntegrationMethod {
 }
 
 impl WindowMethod {
-    /// Construct one method record. `accuracy_cost` is a non-negative relative
-    /// error bound; invalid costs reject the whole producing budget.
-    pub fn new(
-        window: TimeWindow,
-        method: IntegrationMethod,
-        accuracy_cost: f64,
-    ) -> Result<Self, EvidenceError> {
-        non_negative("window_method.accuracy_cost", accuracy_cost)?;
-        Ok(Self {
-            window,
-            method,
-            accuracy_cost,
-        })
+    /// Construct one method record.
+    ///
+    /// The record deliberately carries no made-up percentage "accuracy cost".
+    /// An integration algorithm and timestep are provenance, not an empirical
+    /// error bound. A producer may report a measured comparison elsewhere, but
+    /// it must not translate "first order" into an unsupported relative error.
+    pub fn new(window: TimeWindow, method: IntegrationMethod) -> Result<Self, EvidenceError> {
+        Ok(Self { window, method })
     }
 
     pub fn window(&self) -> TimeWindow {
@@ -1834,10 +1844,6 @@ impl WindowMethod {
     pub fn method(&self) -> IntegrationMethod {
         self.method
     }
-
-    pub fn accuracy_cost(&self) -> f64 {
-        self.accuracy_cost
-    }
 }
 
 /// The solver's convergence and truncation-error settings for this result.
@@ -1846,6 +1852,8 @@ pub struct IntegrationTolerance {
     /// Relative tolerance for Newton convergence and local-truncation-error
     /// control.
     reltol: f64,
+    /// Absolute voltage tolerance, volts.
+    vntol: f64,
     /// Absolute current tolerance, amps.
     abstol: f64,
     /// Charge tolerance, coulombs (capacitor local truncation error).
@@ -1854,12 +1862,14 @@ pub struct IntegrationTolerance {
 
 impl IntegrationTolerance {
     /// Construct strictly-positive, finite solver tolerances.
-    pub fn new(reltol: f64, abstol: f64, chgtol: f64) -> Result<Self, EvidenceError> {
+    pub fn new(reltol: f64, vntol: f64, abstol: f64, chgtol: f64) -> Result<Self, EvidenceError> {
         positive("integration_tolerance.reltol", reltol)?;
+        positive("integration_tolerance.vntol", vntol)?;
         positive("integration_tolerance.abstol", abstol)?;
         positive("integration_tolerance.chgtol", chgtol)?;
         Ok(Self {
             reltol,
+            vntol,
             abstol,
             chgtol,
         })
@@ -1867,6 +1877,10 @@ impl IntegrationTolerance {
 
     pub fn reltol(self) -> f64 {
         self.reltol
+    }
+
+    pub fn vntol(self) -> f64 {
+        self.vntol
     }
 
     pub fn abstol(self) -> f64 {
@@ -1881,7 +1895,7 @@ impl IntegrationTolerance {
 /// The final accepted Newton residual, worst node.
 #[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
 pub struct Residual {
-    /// `max |f(x)|` over the residual vector at acceptance.
+    /// `max |f(x)|` over node KCL rows at acceptance, amperes.
     max_abs: f64,
     /// The node or branch carrying it, for the "who" question.
     at: String,
@@ -2199,10 +2213,6 @@ fn non_negative(field: &'static str, value: f64) -> Result<(), EvidenceError> {
     }
 }
 
-fn is_zero(value: &f64) -> bool {
-    *value == 0.0
-}
-
 /// Everything a consumer needs to know about how good a number is.
 ///
 /// Rides on the things that carry numbers: one per transient/co-sim run at run
@@ -2213,7 +2223,7 @@ fn is_zero(value: &f64) -> bool {
 /// ```
 /// use hauksbee_ir::evidence::{ErrorBudget, IntegrationTolerance};
 ///
-/// let tolerance = IntegrationTolerance::new(1e-3, 1e-12, 1e-14).unwrap();
+/// let tolerance = IntegrationTolerance::new(1e-3, 1e-6, 1e-12, 1e-14).unwrap();
 /// let b = ErrorBudget::new(tolerance);
 /// assert!(b.methods().is_empty());
 /// assert!(b.failed_windows().is_empty());
@@ -2251,6 +2261,52 @@ pub struct ErrorBudget {
 }
 
 impl ErrorBudget {
+    /// Compact human rendering of the same typed data carried in JSON. This
+    /// deliberately labels tolerances as solver settings and an absent
+    /// residual as unmeasured; it never turns method order into a percentage.
+    pub fn plain_summary(&self) -> String {
+        let tolerance = self.tolerance;
+        let residual = self
+            .residual
+            .as_ref()
+            .map(|residual| format!("{:.3e}A at {}", residual.max_abs, residual.at))
+            .unwrap_or_else(|| "unmeasured".to_string());
+        let failed = match self.failed_windows.len() {
+            1 => "1 window".to_string(),
+            count => format!("{count} windows"),
+        };
+        let methods = self
+            .methods
+            .iter()
+            .map(|entry| match entry.method {
+                IntegrationMethod::Trapezoidal => "trapezoidal",
+                IntegrationMethod::Gear2 => "gear2",
+                IntegrationMethod::BackwardEuler => "backward-euler",
+                IntegrationMethod::ReducedStep => "reduced-step",
+                IntegrationMethod::ColdStartBackwardEuler => "cold-start-backward-euler",
+                IntegrationMethod::SubdividedBackwardEuler => "subdivided-backward-euler",
+            })
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>()
+            .join(",");
+        let event_time = self
+            .event_time_error_s
+            .map(|seconds| format!("<={seconds:.3e}s"))
+            .unwrap_or_else(|| "unmeasured".to_string());
+        format!(
+            "settings reltol={:.3e} vntol={:.3e}V abstol={:.3e}A chgtol={:.3e}C; \
+             residual={residual}; methods={}; failed={failed}; event_time_error={event_time}; \
+             model_intervals={}",
+            tolerance.reltol,
+            tolerance.vntol,
+            tolerance.abstol,
+            tolerance.chgtol,
+            if methods.is_empty() { "none" } else { &methods },
+            self.model_uncertainty.len(),
+        )
+    }
+
     pub fn with_method(mut self, method: WindowMethod) -> Self {
         self.methods.push(method);
         self
@@ -2289,6 +2345,10 @@ impl ErrorBudget {
 
     pub fn model_uncertainty(&self) -> &[ModelUncertainty] {
         &self.model_uncertainty
+    }
+
+    pub fn event_time_error_s(&self) -> Option<f64> {
+        self.event_time_error_s
     }
 
     /// Attach a finite, non-negative event timestamp error. Invalid values are

@@ -166,6 +166,10 @@ pub struct RunOutcome {
     /// name. These are valid numbers, but their error budget must say which
     /// lower-fidelity method produced each span.
     pub fallback_windows: Vec<(f64, f64, String)>,
+    /// Numerical qualification measured by this seed's actual scheduler run.
+    /// `None` exists for synthetic unit-test outcomes that did not execute a
+    /// solver, not as a zero-error claim.
+    pub error_budget: Option<hauksbee_ir::evidence::ErrorBudget>,
     /// True once the analog solve failed `STRICT_CONSECUTIVE_FAILED_ABORT` chunks
     /// in a row at any point (the strict/CI hard-refusal condition). Drives exit 3
     /// on its own, even if no single assertion's window happened to overlap.
@@ -1594,6 +1598,12 @@ fn run_one(
         .iter()
         .map(|&(start, end, method)| (start, end, method.as_str().to_string()))
         .collect();
+    let error_budget = Some(
+        engine
+            .scheduler()
+            .error_budget()
+            .map_err(|error| SpecError::Invalid(format!("building run error budget: {error}")))?,
+    );
     let mut production_assumptions = hollow_assumptions;
     for drop in engine.scheduler().adc_dropped() {
         let scope = hauksbee_ir::evidence::Scope::Nets(
@@ -1710,6 +1720,7 @@ fn run_one(
         analog_valid,
         failed_windows,
         fallback_windows,
+        error_budget,
         analog_abort,
         sampled_values: plan.values.clone(),
         net_series,

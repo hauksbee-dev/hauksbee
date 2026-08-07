@@ -19,6 +19,15 @@ Schema generated from the Rust types at
 keeps the file and the types identical (regenerate with
 `UPDATE_RUN_SCHEMA=1 cargo test -p hauksbee-engine --test run_report_schema_drift`).
 
+## Numeric `error_budget`
+
+Numeric evidence and firmware co-simulation results include an `error_budget`
+with the solver settings actually used, solved method windows, a measured
+residual when supported, failed intervals, and event timestamp precision. A
+missing residual or model interval is an explicit unmeasured quantity, not
+zero. Values inside `failed_windows` are invalid. See
+[Numerical error budgets](ERROR_BUDGETS.md) for units and refusal semantics.
+
 ## Net names are the real KiCad names
 
 Net names in every field (`nets`, `bind` lists, `--list-nets`, DRC shorts)

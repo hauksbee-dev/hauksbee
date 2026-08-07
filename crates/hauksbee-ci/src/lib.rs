@@ -354,7 +354,8 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         .iter()
         .map(|outcome| outcome.sim_ms / 1000.0)
         .fold(0.0_f64, f64::max);
-    let transient_budget = hauksbee_engine::BoardEvidence::transient_error_budget(
+    let mut transient_budget = hauksbee_engine::BoardEvidence::transient_error_budget(
+        &hauksbee_solve::SolverOptions::default(),
         0.0,
         sim_end_s,
         spec.frame_ms / 1000.0,
@@ -362,12 +363,22 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
         &fallback_windows,
     )
     .map_err(|error| SpecError::Invalid(format!("building CI error budget: {error}")))?;
+    if let Some(residual) = outcomes
+        .iter()
+        .filter_map(|outcome| outcome.error_budget.as_ref()?.residual())
+        .max_by(|left, right| left.max_abs().total_cmp(&right.max_abs()))
+    {
+        transient_budget = transient_budget.with_residual(residual.clone());
+    }
     let coverage_description = coverage.as_ref().map(report::EnsembleCoverage::describe);
     let mut maps = Vec::with_capacity(results.len());
     for result in &results {
         let budget = if matches!(result.kind.as_str(), "phase_margin" | "ac_gain") {
             Some(
-                hauksbee_engine::BoardEvidence::solver_error_budget().map_err(|error| {
+                hauksbee_engine::BoardEvidence::solver_error_budget(
+                    &hauksbee_solve::SolverOptions::default(),
+                )
+                .map_err(|error| {
                     SpecError::Invalid(format!("building AC assertion budget: {error}"))
                 })?,
             )

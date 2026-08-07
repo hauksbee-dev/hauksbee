@@ -635,7 +635,9 @@ is nothing to excuse them from.
 - **JSON** with `--json`: one typed run object containing the exact
   `inventory`, canonical `assumptions`, and one causal `evidence` map per
   result as well as the verdict fields. Numeric assertions carry their solver
-  error budget. An evidence map whose derived status is `undermined` makes the
+  error budget; human, JUnit, and GitHub output summarize the same object. See
+  [Numerical error budgets](../analysis/ERROR_BUDGETS.md) for units, unknowns,
+  and refusal semantics. An evidence map whose derived status is `undermined` makes the
   assertion INVALID (exit 3), never green; a live waiver is a visible,
   assertion-scoped `waived` assumption. The checked-in contract is
   `crates/hauksbee-ci/schemas/hauksbee-ci-report.schema.json` and its drift

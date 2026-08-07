@@ -12,14 +12,24 @@ fn today() -> RunDate {
 }
 
 fn tolerance() -> IntegrationTolerance {
-    IntegrationTolerance::new(1e-3, 1e-12, 1e-14).expect("valid solver tolerances")
+    IntegrationTolerance::new(1e-3, 1e-6, 1e-12, 1e-14).expect("valid solver tolerances")
+}
+
+#[test]
+fn integration_tolerance_carries_the_voltage_floor_too() {
+    let tolerance = IntegrationTolerance::new(2e-4, 7e-7, 3e-13, 9e-15).unwrap();
+    let json = serde_json::to_value(tolerance).unwrap();
+    assert_eq!(json["reltol"], 2e-4);
+    assert_eq!(json["vntol"], 7e-7);
+    assert_eq!(json["abstol"], 3e-13);
+    assert_eq!(json["chgtol"], 9e-15);
 }
 
 #[test]
 fn invalid_numeric_evidence_returns_typed_errors_instead_of_disappearing() {
     for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
         assert!(matches!(
-            IntegrationTolerance::new(value, 1e-12, 1e-14),
+            IntegrationTolerance::new(value, 1e-6, 1e-12, 1e-14),
             Err(EvidenceError::NonFinite { .. } | EvidenceError::NonPositive { .. })
         ));
     }
@@ -33,15 +43,14 @@ fn invalid_numeric_evidence_returns_typed_errors_instead_of_disappearing() {
         Err(EvidenceError::InvertedInterval { .. })
     ));
 
-    let invalid_method = WindowMethod::new(
+    let method = WindowMethod::new(
         TimeWindow::new(0.0, 1.0).unwrap(),
-        IntegrationMethod::Trapezoidal,
-        -0.1,
-    );
-    assert!(matches!(
-        invalid_method,
-        Err(EvidenceError::Negative { .. })
-    ));
+        IntegrationMethod::BackwardEuler,
+    )
+    .unwrap();
+    let json = serde_json::to_value(method).unwrap();
+    assert!(json.get("accuracy_cost").is_none());
+    assert_eq!(json["method"], "backward-euler");
 
     let invalid_budget = ErrorBudget::new(tolerance()).with_event_time_error(f64::NAN);
     assert!(matches!(
@@ -196,7 +205,6 @@ fn invalid_budget_members_cannot_be_constructed_or_silently_omitted() {
             WindowMethod::new(
                 TimeWindow::new(0.0, 0.1).unwrap(),
                 IntegrationMethod::Trapezoidal,
-                0.0,
             )
             .unwrap(),
         )

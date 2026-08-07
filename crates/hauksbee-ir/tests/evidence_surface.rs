@@ -201,7 +201,7 @@ fn a_consumer_can_render_the_rests_on_block_but_cannot_reword_it() {
         )
         .unwrap()
         .with_error_budget(ErrorBudget::new(
-            IntegrationTolerance::new(1e-3, 1e-12, 1e-14).unwrap(),
+            IntegrationTolerance::new(1e-3, 1e-6, 1e-12, 1e-14).unwrap(),
         ))
         .with_coverage("Monte Carlo, 32 members");
 

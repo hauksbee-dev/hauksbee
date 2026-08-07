@@ -76,6 +76,12 @@ fn production_numeric_assertion_carries_inventory_causal_map_and_error_budget() 
         "every production numeric result carries its numerical budget: {evidence:?}"
     );
     assert!(
+        evidence["error_budget"]["residual"]["max_abs"]
+            .as_f64()
+            .is_some_and(f64::is_finite),
+        "the production transient runner propagates its measured residual: {evidence:?}"
+    );
+    assert!(
         evidence["artifacts"]
             .as_array()
             .is_some_and(|a| a.len() >= 2),
@@ -95,6 +101,10 @@ fn production_numeric_assertion_carries_inventory_causal_map_and_error_budget() 
     let human = result.render_human();
     assert!(human.contains("source=curated-library"), "{human}");
     assert!(human.contains("uncertainty unknown"), "{human}");
+    assert!(
+        human.contains("error budget:") && human.contains("residual="),
+        "human CI output renders the same numerical qualification as JSON: {human}"
+    );
 }
 
 #[test]

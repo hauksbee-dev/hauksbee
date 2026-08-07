@@ -526,6 +526,9 @@ mod tests {
             columns: vec!["V(out,ref)".to_string(), "I(V1)".to_string()],
             time: Some(vec![1.0e-3]),
             rows: vec![vec![2.5, 1.0e-4]],
+            error_budget: hauksbee_ir::evidence::ErrorBudget::new(
+                hauksbee_ir::evidence::IntegrationTolerance::new(1e-3, 1e-6, 1e-12, 1e-14).unwrap(),
+            ),
         };
         let csv = sim_output_to_csv(&out);
         let mut lines = csv.lines();
