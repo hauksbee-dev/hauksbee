@@ -945,8 +945,7 @@ fn drc_repeated_channel_designators_keep_net_tie_ownership_separate() {
     );
     let finding = report.shorts().next().expect("CH2 short");
     assert!(
-        [finding.item_a.owner.as_str(), finding.item_b.owner.as_str()]
-            .contains(&"NT1@ROOT/CH2"),
+        [finding.item_a.owner.as_str(), finding.item_b.owner.as_str()].contains(&"NT1@ROOT/CH2"),
         "the reported owner uses the canonical channel-aware identity: {finding:?}"
     );
 }

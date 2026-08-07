@@ -6,8 +6,8 @@
 use crate::engine::HauksbeeEngine;
 use crate::result::{
     coverage_open_active_refs, thermal_coverage, thermal_validity, BindSummary, CheckCoverage,
-    JsonInputEvidence, JsonNote, JsonNoteKind, JsonReport, Refusal, ThermalDeviceJson,
-    ThermalJson, Validity, EXIT_INVALID_FOR_ANALYSIS,
+    JsonInputEvidence, JsonNote, JsonNoteKind, JsonReport, Refusal, ThermalDeviceJson, ThermalJson,
+    Validity, EXIT_INVALID_FOR_ANALYSIS,
 };
 
 /// Run the thermal estimate and print it (`json` selects JSON over the text
