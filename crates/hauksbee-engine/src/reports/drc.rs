@@ -21,6 +21,7 @@ pub fn emit(
     board: &ExtractedBoard,
     text: &str,
     raw: &[u8],
+    input_kind: crate::board_input::InputKind,
     altium_present: bool,
     lib: &ModelLibrary,
     reader_notes: &[String],
@@ -70,17 +71,13 @@ pub fn emit(
         reader_notes,
         hauksbee_ir::evidence::RunDate::from_system_clock(),
     )?
-    .with_input_artifact(
-        board_path,
-        raw,
-        if altium_present {
-            crate::board_input::InputKind::Altium
-        } else {
-            crate::board_input::InputKind::Text
-        },
-    )?;
+    .with_input_artifact(board_path, raw, input_kind)?;
     let structured = DrcStructured::from_report(&report);
-    let maps = evidence.maps_for_drc(&structured)?;
+    let mut maps = evidence.maps_for_drc(&structured)?;
+    let coverage = evidence.check_coverage_map("drc", "DRC input coverage")?;
+    if coverage.status() != hauksbee_ir::evidence::EvidenceStatus::Clean {
+        maps.push(coverage);
+    }
     let evidence = evidence.with_maps(maps);
     match mode {
         OutputMode::Json => {

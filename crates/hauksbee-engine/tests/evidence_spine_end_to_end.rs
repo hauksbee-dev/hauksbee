@@ -1,7 +1,7 @@
 use hauksbee_engine::result::{BindSummary, DrcShort, DrcStructured, JsonFinding, JsonReport};
 use hauksbee_engine::{bind_board, BoardEvidence};
 use hauksbee_extract::{Component, ExtractedBoard, Net, Pin};
-use hauksbee_ir::evidence::{EvidenceStatus, RunDate};
+use hauksbee_ir::evidence::{AssumptionKind, EvidenceStatus, RunDate};
 use hauksbee_models::ModelLibrary;
 use std::path::PathBuf;
 use std::process::Command;
@@ -223,6 +223,116 @@ fn one_evidence_object_renders_reader_notes_in_json_and_plain() {
 }
 
 #[test]
+fn reader_accounting_is_decomposed_into_typed_facts_not_one_generic_caveat() {
+    let board = board();
+    let bound = bind_board(&board, &ModelLibrary::builtin());
+    let notes = vec![
+        "IPC-2581 input: the netlist was read from the document's LogicalNet section, not reverse-engineered from copper. Clearance DRC and trace-geometry SI need the original layout file and were not run.".to_string(),
+        "This document carries no BOM, so no component has a value and no populate/do-not-populate flag could be read: every placed part has been treated as fitted.".to_string(),
+        "CAD netlist and package connectivity disagree on U3 pin 2.".to_string(),
+    ];
+    let evidence = BoardEvidence::from_bound(
+        &board,
+        &bound.report,
+        &notes,
+        RunDate::from_epoch_days(20_666),
+    )
+    .unwrap()
+    .with_input_artifact(
+        "fixture.ipc2581.xml",
+        b"<IPC-2581 revision=\"C\"/>",
+        hauksbee_engine::board_input::InputKind::Ipc2581,
+    )
+    .unwrap();
+
+    let kinds: Vec<_> = evidence.assumptions().iter().map(|a| a.kind()).collect();
+    assert!(kinds.contains(&AssumptionKind::NotChecked), "{kinds:?}");
+    assert!(
+        kinds.contains(&AssumptionKind::FittedByDefault),
+        "{kinds:?}"
+    );
+    assert!(
+        kinds.contains(&AssumptionKind::ParserLimitation),
+        "{kinds:?}"
+    );
+    assert_eq!(
+        kinds
+            .iter()
+            .filter(|&&kind| kind == AssumptionKind::ReducedFidelity)
+            .count(),
+        0,
+        "positive connectivity provenance is not itself a caveat"
+    );
+
+    let artifact = serde_json::to_value(&evidence.inventory()[0]).unwrap();
+    assert!(
+        artifact["contributed"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["what"] == "connectivity"
+                && c["detail"].as_str().unwrap().contains("LogicalNet")),
+        "the reader's own accounting belongs on the artifact: {artifact:?}"
+    );
+    assert!(
+        artifact["cross_checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["agreed"] == false),
+        "reader disagreements are inventory cross-checks as well as assumptions"
+    );
+}
+
+#[test]
+fn a_bind_default_warning_becomes_parameter_provenance_and_a_typed_assumption() {
+    use hauksbee_engine::report::{BindOutcome, BindReport, BindRow};
+    use hauksbee_models::Confidence;
+
+    let mut report = BindReport::default();
+    report.push(BindRow {
+        reference: "U9".into(),
+        value: "GENERIC-LDO".into(),
+        model_id: Some("generic_ldo".into()),
+        confidence: Confidence::Exact,
+        outcome: BindOutcome::Behavioral {
+            device: "vreg 5.0V source".into(),
+        },
+        warning: Some(
+            "U9 (GENERIC-LDO): vreg model has no `vout` param; regulating its output net to an assumed 5.0 V; verify the regulator's actual output voltage".into(),
+        ),
+        guesses: Vec::new(),
+    });
+    let mut input = board();
+    input.components.push(part("U9", "GENERIC-LDO", &[1, 3]));
+    let evidence =
+        BoardEvidence::from_bound(&input, &report, &[], RunDate::from_epoch_days(20_666)).unwrap();
+
+    let assumption = evidence
+        .assumptions()
+        .iter()
+        .find(|a| a.kind() == AssumptionKind::DefaultParameter)
+        .expect("the binder's documented default reaches the registry");
+    assert_eq!(assumption.id().as_str(), "default-parameter:U9.vout");
+    let map = evidence
+        .maps()
+        .iter()
+        .find(|map| map.assertion().ends_with("3V3"))
+        .expect("map for U9's fixture net");
+    assert!(
+        map.parameters().iter().any(|p| {
+            p.parameter() == "U9.vout"
+                && matches!(
+                    p.origin(),
+                    hauksbee_ir::evidence::ValueOrigin::Default { assumption: id }
+                        if id == assumption.id()
+                )
+        }),
+        "the number and the assumption are cross-referenced: {map:?}"
+    );
+}
+
+#[test]
 fn reader_assumption_identity_survives_note_reordering_and_deduplicates_repeats() {
     let board = board();
     let bound = bind_board(&board, &ModelLibrary::builtin());
@@ -291,8 +401,8 @@ fn ipc2581_reader_coverage_reaches_cli_json_and_plain_end_to_end() {
             String::from_utf8_lossy(&output.stderr)
         );
         let text = String::from_utf8_lossy(&output.stdout);
-        assert!(text.contains("IPC-2581 input"), "{mode}: {text}");
-        assert!(text.contains("reader-note/"), "{mode}: {text}");
+        assert!(text.contains("not-checked:drc"), "{mode}: {text}");
+        assert!(text.contains("The drc check did not run"), "{mode}: {text}");
         assert!(
             text.contains("Binding completeness for net"),
             "{mode}: {text}"
@@ -328,8 +438,11 @@ fn specialist_report_surfaces_reuse_the_reader_assumption() {
             String::from_utf8_lossy(&output.stderr)
         );
         let text = String::from_utf8_lossy(&output.stdout);
-        assert!(text.contains("IPC-2581 input"), "{args:?}: {text}");
-        assert!(text.contains("reader-note/"), "{args:?}: {text}");
+        assert!(text.contains("not-checked:drc"), "{args:?}: {text}");
+        assert!(
+            text.contains("The drc check did not run"),
+            "{args:?}: {text}"
+        );
     }
 }
 
@@ -343,7 +456,11 @@ fn web_report_serializes_evidence_and_does_not_call_qualified_evidence_healthy()
     assert!(!report.evidence.is_empty());
     let serialized = serde_json::to_string(&report).unwrap();
     assert!(serialized.contains("IPC-2581 input"), "{serialized}");
-    assert!(serialized.contains("reader-note/"), "{serialized}");
+    assert!(serialized.contains("not-checked:drc"), "{serialized}");
+    assert!(
+        serialized.contains("The drc check did not run"),
+        "{serialized}"
+    );
     assert!(
         !report.headline.contains("Looks healthy"),
         "qualified evidence must not sit below an unqualified web verdict: {}",

@@ -1152,6 +1152,45 @@ fn a_saturating_traversal_and_a_vacuous_one_each_fail_a_half() {
 }
 
 #[test]
+fn assertion_traversal_selects_the_exact_check_scoped_fact_without_saturating_siblings() {
+    let rail_a = Assumption::not_checked(
+        AssumptionSource::Check,
+        "ci",
+        Some("RAIL A stays up"),
+        "fixture",
+        "fix A",
+    );
+    let rail_b = Assumption::not_checked(
+        AssumptionSource::Check,
+        "ci",
+        Some("RAIL B stays up"),
+        "fixture",
+        "fix B",
+    );
+    let registry = EvidenceRegistry::new(vec![rail_a, rail_b]).unwrap();
+    let graph = CausalPathIndex::from_net_parts([
+        ("RAIL_A", ["R1"].as_slice()),
+        ("RAIL_B", ["R2"].as_slice()),
+    ])
+    .unwrap();
+    let scope = NetScope::new(["RAIL_A"], None).unwrap();
+    let traversal = graph
+        .traverse_assertion(&scope, "ci", "RAIL A stays up", &registry)
+        .unwrap();
+    let map = EvidenceMap::from_traversal(
+        "RAIL A stays up",
+        traversal,
+        &registry,
+        RunDate::from_epoch_days(20_666),
+    )
+    .unwrap();
+
+    assert_eq!(map.assumptions().len(), 1, "{map:?}");
+    assert!(map.assumptions()[0].as_str().contains("RAIL%20A"));
+    assert_eq!(map.status(), EvidenceStatus::Undermined);
+}
+
+#[test]
 fn the_ideal_source_wording_is_composed_here_too() {
     // `held_by_ideal_source` is the second `ReducedFidelity` constructor, so
     // the kind table above exercises the generic one and this covers the

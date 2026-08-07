@@ -10,6 +10,8 @@
 //! disagree about what "today" was. Calendar parsing is strict (`YYYY-MM-DD`,
 //! real dates only) and converts through the standard civil-days algorithm,
 //! with no timezone: expiry is end-of-day in epoch days, everywhere.
+//!
+//! Long-form how-and-why: docs/how-and-why/hauksbee-ir/evidence.md
 
 use serde::{Deserialize, Serialize};
 
