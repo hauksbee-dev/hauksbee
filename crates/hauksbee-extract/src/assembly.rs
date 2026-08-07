@@ -96,7 +96,7 @@ impl DnpAbsence {
 /// its role-net reader) take this instead of a bare [`Component`], which makes
 /// "you answered the three-state question" a compile-time fact rather than a
 /// per-call-site discipline.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy)]
 pub struct FittedComponent<'c> {
     part: &'c Component,
 }
@@ -118,7 +118,7 @@ impl std::ops::Deref for FittedComponent<'_> {
 
 /// One component record, classified: present, DNP-absent, or
 /// identity-unknown. See the module doc for why exactly these three.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum AssemblyState<'c> {
     /// Assembled and identity-trusted; carries the model-resolution witness.
     Present(FittedComponent<'c>),
@@ -259,10 +259,10 @@ mod tests {
     #[test]
     fn inferred_ambiguous_identity_requires_a_nonempty_authoritative_uid() {
         let ambiguous = component(false, &[(REFERENCE_AMBIGUOUS_KEY, "true")]);
-        assert_eq!(
+        assert!(matches!(
             AssemblyState::of(&ambiguous),
             AssemblyState::IdentityUnknown(IdentityRefusal::AmbiguousReferenceWithoutUid)
-        );
+        ));
         let empty_uid = component(
             false,
             &[
@@ -290,12 +290,12 @@ mod tests {
                 (SOURCE_UNIQUE_ID_KEY, "ABC-123"),
             ],
         );
-        assert_eq!(
-            AssemblyState::of(&c),
+        match AssemblyState::of(&c) {
             AssemblyState::IdentityUnknown(IdentityRefusal::DuplicateReferenceConflict(
-                "different values".into()
-            ))
-        );
+                detail,
+            )) => assert_eq!(detail, "different values"),
+            other => panic!("a duplicate conflict must refuse identity, got {other:?}"),
+        }
     }
 
     #[test]
