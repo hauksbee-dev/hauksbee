@@ -566,9 +566,10 @@ pub fn thermal_validity(dissipating_rows: usize, summary: &BindSummary) -> Valid
 /// Coverage is distinct from [`Validity`]. `Validity` stays BINARY and drives
 /// exit 3. `CheckCoverage` is the honest "N of M active parts actually entered
 /// this check" metric: it is ALWAYS emittable and NEVER changes the exit code on
-/// its own (the partial-coverage thermal escalation is opt-in behind
-/// `--strict-thermal`). `partial == true` means a renderer should print a
-/// coverage caveat even though the check itself produced rows.
+/// its own (the partial-coverage thermal escalation is applied by the thermal
+/// report, by default; `--no-strict-thermal` opts out). `partial == true` means
+/// a renderer should print a coverage caveat even though the check itself
+/// produced rows.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct CheckCoverage {
     /// Covered active ICs / total active ICs, clamped to `[0, 1]`: how much of the
@@ -644,6 +645,72 @@ pub fn coverage_open_active_refs(summary: &BindSummary) -> Vec<String> {
         )
         .map(|u| u.reference.clone())
         .collect()
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The INCONCLUSIVE verdict vocabulary (one dialect for every static surface)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// The current-carrying / active parts whose absence of a model makes a clean
+/// static verdict vacuous: the [`coverage_open_active_refs`] set (active ICs
+/// that are unresolved or resolved-but-open on the live circuit) plus
+/// unresolved discrete transistors (`Q` prefix) on the live circuit, the power
+/// FETs on a protection path. A clean `--lint`/`--si` result over these parts
+/// is not a clean bill, and the verdict line must say so instead of "Looks
+/// healthy" (PROCESS_AND_UX_LOG item 4: a vacuous pass on a BMS protection
+/// path is the most dangerous UX failure here).
+///
+/// Passives are deliberately excluded: an unbound connector or resistor does
+/// not blind these checks the way an open driver or FET does, and flagging
+/// every unresolved part would cry wolf on healthy boards.
+pub fn unmodelled_critical_refs(summary: &BindSummary) -> Vec<String> {
+    let mut refs: Vec<String> = summary
+        .active_path_unresolved
+        .iter()
+        .filter(|u| u.active_ic || is_transistor_ref(&u.reference))
+        .chain(
+            summary
+                .resolved_but_open_active
+                .iter()
+                .filter(|u| u.active_ic),
+        )
+        .map(|u| u.reference.clone())
+        .collect();
+    refs.sort_by_key(|r| crate::report::natural_ref_key(r));
+    refs.dedup();
+    refs
+}
+
+/// The one INCONCLUSIVE verdict sentence every static surface shares: the
+/// count, the named parts, and the input that unlocks a conclusive verdict.
+/// `--plain` verdict lines, the default text summaries, the `--check` closing
+/// verdict and the JSON coverage notes all render THIS string, so the
+/// vocabulary cannot fork per surface. It never changes an exit code on its
+/// own; the exit-code contract is documented in docs/ci/CI.md.
+pub fn inconclusive_verdict(refs: &[String]) -> String {
+    let list = refs.join(", ");
+    format!(
+        "INCONCLUSIVE: {} current-carrying / active part(s) have no model ({list}), \
+         so a clean result here is not a clean bill. Supply device models \
+         (--models-dir; scaffold one with `hauksbee models new`) or BOM identity \
+         (--bom) for {list} to make this verdict conclusive.",
+        refs.len(),
+    )
+}
+
+/// Whether a reference designator names a discrete transistor (prefix `Q`),
+/// the current-carrying part class whose unbound absence blinds the static
+/// checks without being an active IC.
+fn is_transistor_ref(reference: &str) -> bool {
+    if is_tool_generated_ref(reference) {
+        return false;
+    }
+    let prefix: String = reference
+        .chars()
+        .take_while(|c| c.is_ascii_alphabetic())
+        .map(|c| c.to_ascii_uppercase())
+        .collect();
+    prefix == "Q"
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

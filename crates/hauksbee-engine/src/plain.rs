@@ -124,6 +124,14 @@ pub struct PlainReport {
     /// of trust we refuse to ship. Each note carries a what / why / what-to-do
     /// gloss so it translates the jargon rather than dumping it.
     pub heads_up: Vec<HeadsUp>,
+    /// Current-carrying / active parts with no model
+    /// ([`crate::result::unmodelled_critical_refs`]). Non-empty forces the
+    /// verdict off "Looks healthy": a clean check over an unmodelled power FET
+    /// or main IC is vacuous, and the verdict must read INCONCLUSIVE, naming
+    /// the parts and the unlocking input, instead of a clean bill. The emit
+    /// sites that hold a bind report set this; renderers with no bind context
+    /// leave it empty and are unchanged.
+    pub unmodelled_critical: Vec<String>,
 }
 
 /// De-escape KiCad's label escapes so a plain sentence names the net the way
@@ -148,6 +156,7 @@ impl PlainReport {
             verdict_noun: None,
             findings: Vec::new(),
             heads_up: Vec::new(),
+            unmodelled_critical: Vec::new(),
         }
     }
 
@@ -218,6 +227,13 @@ impl PlainReport {
             }
         };
         if n == 0 {
+            // A clean check over unmodelled current-carrying / active parts is
+            // vacuous, not healthy. Refuse the clean bill and name what unlocks
+            // a conclusive verdict. This does NOT change any exit code; it is
+            // verdict prose only (the exit contract lives in docs/ci/CI.md).
+            if !self.unmodelled_critical.is_empty() {
+                return crate::result::inconclusive_verdict(&self.unmodelled_critical);
+            }
             // No failures, but if there are actionable heads-up notes (e.g. a USB
             // pair off its impedance target), don't claim "no problems found",
             // that buries the one thing the user may have come to check. Point at
@@ -243,6 +259,16 @@ impl PlainReport {
     pub fn render(&self) -> String {
         let mut s = String::new();
         let _ = writeln!(s, "{}", self.verdict());
+        // With real findings, the verdict line counts them (not a clean bill),
+        // but the coverage hole must still be said out loud: fixing the listed
+        // findings would otherwise flip the verdict straight to a vacuous pass.
+        if !self.findings.is_empty() && !self.unmodelled_critical.is_empty() {
+            let _ = writeln!(
+                s,
+                "{}",
+                crate::result::inconclusive_verdict(&self.unmodelled_critical)
+            );
+        }
         if !self.findings.is_empty() {
             let _ = writeln!(s);
             for (i, f) in self.sorted().iter().enumerate() {
