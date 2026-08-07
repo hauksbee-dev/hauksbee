@@ -58,6 +58,12 @@ const hostile: WebReport = {
     }],
   },
   notes: [{ kind: 'other', message: 'a note <script>alert(4)</script>' }],
+  refusal: {
+    claim: 'a trustworthy <overall> conclusion',
+    missing_prerequisite: 'a converged analog solve & real samples',
+    valid_partial_conclusions: ['static copper findings remain <valid>'],
+    next_action: 'fix the named net, then rerun <exactly>',
+  },
   cosim: {
     ran: true,
     seconds_simulated: 0.5,
@@ -133,6 +139,10 @@ test('it still carries the report it is an export of', () => {
   expect(html).toContain('[[assert]]')
   expect(html).toContain('0.1.0')
   expect(html).toContain('3 parts, 4 nets')
+  expect(html).toContain('Refused claim')
+  expect(html).toContain('a trustworthy &lt;overall&gt; conclusion')
+  expect(html).toContain('static copper findings remain &lt;valid&gt;')
+  expect(html).toContain('fix the named net, then rerun &lt;exactly&gt;')
   // A note that duplicates the bind section is dropped, as it is on screen.
   expect(html).toContain('a note &lt;script&gt;')
 })

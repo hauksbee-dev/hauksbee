@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use crate::result::JsonFinding;
+use crate::result::{JsonFinding, Refusal};
 
 /// Convert non-clean evidence statuses into the same finding vocabulary CI
 /// writers already consume. Undermined evidence is gate-grade; qualified
@@ -92,6 +92,16 @@ fn xml_escape(s: &str) -> String {
 /// `<failure>`), and a synthetic passing "no findings" case for a clean check
 /// so an empty suite is distinguishable from a suite that never ran.
 pub fn junit_xml(board_name: &str, findings: &[JsonFinding]) -> String {
+    junit_xml_with_refusal(board_name, findings, None)
+}
+
+/// JUnit with an optional exit-3 testcase. A refusal is `<error>`, never
+/// `<failure>`: the analysis did not reach a hardware verdict.
+pub fn junit_xml_with_refusal(
+    board_name: &str,
+    findings: &[JsonFinding],
+    refusal: Option<&Refusal>,
+) -> String {
     use std::fmt::Write;
     // Group by check family, preserving first-seen order (deterministic:
     // findings arrive in report order).
@@ -108,14 +118,25 @@ pub fn junit_xml(board_name: &str, findings: &[JsonFinding]) -> String {
         }
     }
     let mut s = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
-    let total: usize = findings.len().max(1);
+    let total: usize = order
+        .iter()
+        .map(|check| {
+            findings
+                .iter()
+                .filter(|f| f.check == **check)
+                .count()
+                .max(1)
+        })
+        .sum::<usize>()
+        + usize::from(refusal.is_some());
     let failures = findings.iter().filter(|f| is_failure(f)).count();
     let _ = writeln!(
         s,
-        "<testsuites name=\"hauksbee {}\" tests=\"{}\" failures=\"{}\">",
+        "<testsuites name=\"hauksbee {}\" tests=\"{}\" failures=\"{}\" errors=\"{}\">",
         xml_escape(board_name),
         total,
-        failures
+        failures,
+        usize::from(refusal.is_some()),
     );
     for check in order {
         let of_check: Vec<&JsonFinding> = findings.iter().filter(|f| f.check == check).collect();
@@ -162,6 +183,15 @@ pub fn junit_xml(board_name: &str, findings: &[JsonFinding]) -> String {
         }
         let _ = writeln!(s, "  </testsuite>");
     }
+    if let Some(refusal) = refusal {
+        let body = refusal.render_text();
+        let _ = writeln!(
+            s,
+            "  <testsuite name=\"refusal\" tests=\"1\" failures=\"0\" errors=\"1\">\n    <testcase name=\"requested claim is answerable\" classname=\"hauksbee\">\n      <error message=\"{}\">{}</error>\n    </testcase>\n  </testsuite>",
+            xml_escape(&refusal.missing_prerequisite),
+            xml_escape(&body),
+        );
+    }
     s.push_str("</testsuites>\n");
     s
 }
@@ -171,6 +201,16 @@ pub fn junit_xml(board_name: &str, findings: &[JsonFinding]) -> String {
 /// error, everything else -> warning, located at the board file (hauksbee
 /// findings are electrical, not line-addressed).
 pub fn sarif_json(board_path: &Path, findings: &[JsonFinding]) -> String {
+    sarif_json_with_refusal(board_path, findings, None)
+}
+
+/// SARIF with a structured exit-3 result. The properties retain the complete
+/// refusal object so code-scanning consumers need not parse prose.
+pub fn sarif_json_with_refusal(
+    board_path: &Path,
+    findings: &[JsonFinding],
+    refusal: Option<&Refusal>,
+) -> String {
     let mut rule_ids: Vec<String> = Vec::new();
     for f in findings {
         let id = format!("{}/{}", f.check, f.kind);
@@ -178,12 +218,12 @@ pub fn sarif_json(board_path: &Path, findings: &[JsonFinding]) -> String {
             rule_ids.push(id);
         }
     }
-    let rules: Vec<serde_json::Value> = rule_ids
+    let mut rules: Vec<serde_json::Value> = rule_ids
         .iter()
         .map(|id| serde_json::json!({ "id": id }))
         .collect();
     let uri = board_path.to_string_lossy();
-    let results: Vec<serde_json::Value> = findings
+    let mut results: Vec<serde_json::Value> = findings
         .iter()
         .map(|f| {
             let mut message = f.message.clone();
@@ -203,6 +243,22 @@ pub fn sarif_json(board_path: &Path, findings: &[JsonFinding]) -> String {
             })
         })
         .collect();
+    if let Some(refusal) = refusal {
+        rules.push(serde_json::json!({ "id": "hauksbee/invalid-for-analysis" }));
+        results.push(serde_json::json!({
+            "ruleId": "hauksbee/invalid-for-analysis",
+            "level": "error",
+            "message": { "text": refusal.render_text() },
+            "locations": [{
+                "physicalLocation": { "artifactLocation": { "uri": uri } }
+            }],
+            "properties": {
+                "status": "invalid_for_analysis",
+                "exit_code": 3,
+                "refusal": refusal,
+            }
+        }));
+    }
     let doc = serde_json::json!({
         "$schema": SARIF_SCHEMA_URL,
         "version": SARIF_VERSION,
@@ -338,5 +394,36 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("INVALID evidence"));
+    }
+
+    #[test]
+    fn invalid_for_analysis_is_an_error_in_junit_and_a_refusal_result_in_sarif() {
+        let refusal = crate::result::Refusal::new(
+            "strict co-sim verdict",
+            "a converged analog solve",
+            vec!["static copper findings remain valid"],
+            "fix the named floating net, then rerun",
+        );
+        let junit = junit_xml_with_refusal("b", &[], Some(&refusal));
+        assert!(
+            junit.contains("tests=\"5\""),
+            "root count includes four clean families plus refusal: {junit}"
+        );
+        assert!(junit.contains("errors=\"1\""), "{junit}");
+        for value in [
+            &refusal.claim,
+            &refusal.missing_prerequisite,
+            &refusal.valid_partial_conclusions[0],
+            &refusal.next_action,
+        ] {
+            assert!(junit.contains(value), "JUnit lost {value:?}: {junit}");
+        }
+
+        let sarif = sarif_json_with_refusal(Path::new("b.kicad_pcb"), &[], Some(&refusal));
+        let value: serde_json::Value = serde_json::from_str(&sarif).expect("SARIF JSON");
+        let result = &value["runs"][0]["results"][0];
+        assert_eq!(result["ruleId"], "hauksbee/invalid-for-analysis");
+        assert_eq!(result["properties"]["exit_code"], 3);
+        assert_eq!(result["properties"]["refusal"]["claim"], refusal.claim);
     }
 }

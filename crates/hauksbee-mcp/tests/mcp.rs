@@ -266,6 +266,21 @@ fn firmware_on_a_processorless_board_returns_the_refusal_shape() {
     assert_eq!(v["status"], "invalid_for_analysis", "refusal status: {v}");
     let reason = v["reason"].as_str().expect("refusal carries a reason");
     assert!(!reason.is_empty());
+    for key in [
+        "claim",
+        "missing_prerequisite",
+        "valid_partial_conclusions",
+        "next_action",
+    ] {
+        assert!(
+            v["refusal"].get(key).is_some(),
+            "MCP refusal lost {key}: {v}"
+        );
+    }
+    assert_eq!(
+        v["refusal"], v["report"]["refusal"],
+        "MCP must pass through the engine's one typed refusal contract"
+    );
     // The static report still rides along: refusing the firmware question
     // must not withhold the answerable static findings.
     assert_eq!(v["report"]["ok"], true);

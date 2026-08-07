@@ -25,7 +25,7 @@ use crate::engine::HauksbeeEngine;
 use crate::plain::{
     plain_drc_structured, plain_netlint, plain_si, HeadsUp, PlainFinding, PlainLevel, PlainReport,
 };
-use crate::result::{BindSummary, JsonNote, JsonNoteKind};
+use crate::result::{BindSummary, JsonNote, JsonNoteKind, Refusal};
 
 /// A finding, in the shape the browser renders.
 #[derive(Debug, Clone, Serialize)]
@@ -421,6 +421,12 @@ pub struct WebReport {
     /// byte unchanged for existing consumers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cosim: Option<WebCosimSection>,
+    /// Present when a requested analysis could not support its intended claim.
+    /// The static report remains available; this names the narrower refused
+    /// claim, its prerequisite, the surviving conclusions, and the cheapest
+    /// next action in the same shape as terminal and CI output.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<Refusal>,
 }
 
 /// A binder-detected power supply, as the checks builder consumes it.
@@ -454,6 +460,7 @@ fn unreadable(file_name: &str, error: String) -> WebReport {
         component_kinds: std::collections::BTreeMap::new(),
         supplies: Vec::new(),
         cosim: None,
+        refusal: None,
     }
 }
 
@@ -764,6 +771,7 @@ fn analyze_normalized(
             .collect(),
         supplies,
         cosim: None,
+        refusal: None,
     };
     (report, drc)
 }
@@ -808,7 +816,9 @@ pub fn analyze_with_firmware(
     let resolved = match crate::firmware_input::resolve_firmware_bytes(fw_name, fw_bytes) {
         Ok(r) => r,
         Err(msg) => {
-            report.cosim = Some(cosim_unavailable(msg));
+            let cosim = cosim_unavailable(msg);
+            report.refusal = refusal_for_cosim(&cosim);
+            report.cosim = Some(cosim);
             return report;
         }
     };
@@ -927,8 +937,64 @@ pub fn analyze_with_firmware(
             report.headline = demoted;
         }
     }
+    report.refusal = refusal_for_cosim(&cosim);
     report.cosim = Some(cosim);
     report
+}
+
+/// Translate a co-sim validity failure into the shared C5.3 refusal contract.
+/// A firmware run that merely carries a substitute/exercise caveat is not an
+/// exit-3-class refusal: only an unavailable run or invalid analog solve lands
+/// here, matching the MCP and strict CLI semantics.
+fn refusal_for_cosim(cosim: &WebCosimSection) -> Option<Refusal> {
+    if !cosim.ran {
+        let finding = cosim.findings.first();
+        let missing = finding
+            .map(|f| f.why.clone())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "the firmware co-simulation did not run".to_string());
+        let next = finding
+            .map(|f| f.fix.clone())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                "provide a supported board and matching firmware, then rerun".to_string()
+            });
+        return Some(Refusal::new(
+            "firmware and board co-simulation conclusions",
+            missing,
+            vec!["Static board analysis and its reported findings remain valid."],
+            next,
+        ));
+    }
+
+    if !cosim.analog_valid {
+        let diagnosis = cosim
+            .failed_windows
+            .iter()
+            .map(|window| window.reason.as_str())
+            .find(|reason| !reason.is_empty())
+            .unwrap_or("the analog solver did not converge in one or more simulation windows");
+        let next = cosim
+            .findings
+            .iter()
+            .find(|finding| finding.what.starts_with("Analog co-sim did not converge"))
+            .map(|finding| finding.fix.clone())
+            .unwrap_or_else(|| {
+                "fix the first failed analog window, then rerun the same firmware co-simulation"
+                    .to_string()
+            });
+        return Some(Refusal::new(
+            "electrical conclusions across the complete firmware co-simulation",
+            diagnosis,
+            vec![
+                "Static board analysis and its reported findings remain valid.",
+                "Firmware loading and reported digital observations outside failed analog windows remain available.",
+            ],
+            next,
+        ));
+    }
+
+    None
 }
 
 /// Fold co-sim electrical FAULTS into the static verdict counts. A destructive
@@ -1019,8 +1085,9 @@ fn cosim_unavailable(reason: impl Into<String>) -> WebCosimSection {
         failed_windows: Vec::new(),
         spi_framing: Vec::new(),
         boot_gates: Vec::new(),
-        // ran == false: the headline demotion is gated on `ran`, so these are the
-        // neutral, backward-compatible defaults (a not-run co-sim is not a refusal).
+        // ran == false: the headline demotion is gated on `ran`, so these remain
+        // neutral defaults inside the co-sim section. The containing WebReport's
+        // refusal field, not these compatibility booleans, carries the refusal.
         firmware_exercised: true,
         substituted: false,
         error_budget: None,
@@ -2370,6 +2437,22 @@ fn main {
             "should name the missing MCU as the reason: {:?}",
             cosim.findings
         );
+        let refusal = r
+            .refusal
+            .expect("unavailable co-sim must carry a refusal contract");
+        assert!(!refusal.claim.is_empty());
+        assert!(refusal
+            .missing_prerequisite
+            .to_lowercase()
+            .contains("microcontroller"));
+        assert!(
+            refusal
+                .valid_partial_conclusions
+                .iter()
+                .any(|line| line.to_lowercase().contains("static")),
+            "static conclusions remain useful: {refusal:?}"
+        );
+        assert!(!refusal.next_action.is_empty());
     }
 
     #[test]
@@ -2393,6 +2476,13 @@ fn main {
             "cosim object must be present: {json:.200}"
         );
         assert_eq!(v["cosim"]["ran"], false);
+        assert_eq!(
+            v["refusal"]["claim"],
+            "firmware and board co-simulation conclusions"
+        );
+        assert!(v["refusal"]["missing_prerequisite"].is_string());
+        assert!(v["refusal"]["valid_partial_conclusions"].is_array());
+        assert!(v["refusal"]["next_action"].is_string());
     }
 
     #[test]
@@ -2734,6 +2824,20 @@ fn main {
         assert!(
             json.contains("\"failed_windows\""),
             "invalid run lists failed_windows: {json}"
+        );
+        let refusal = refusal_for_cosim(&section).expect("invalid analog run refuses");
+        assert!(
+            refusal
+                .missing_prerequisite
+                .contains("DC Newton did not converge"),
+            "refusal keeps the solver's specific diagnosis: {refusal:?}"
+        );
+        assert!(
+            refusal
+                .valid_partial_conclusions
+                .iter()
+                .any(|line| line.contains("Static board analysis")),
+            "refusal preserves static partial conclusions: {refusal:?}"
         );
     }
 

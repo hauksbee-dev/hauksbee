@@ -16,6 +16,7 @@
 import type { WebReport, WebSection } from '../types/report'
 import { groupFindings } from './findings'
 import { summarizeEvidence } from './evidence'
+import { refusalLines } from './refusal-contract'
 
 export interface ReportExportInput {
   report: WebReport
@@ -292,6 +293,19 @@ function cosimHtml(report: WebReport): string {
   </section>`
 }
 
+function refusalHtml(report: WebReport): string {
+  if (!report.refusal) return ''
+  const rows = refusalLines(report.refusal)
+    .map(([label, value]) => `<div class="gloss"><b>${esc(label)}:</b> ${esc(value)}</div>`)
+    .join('\n      ')
+  return `<section>
+    <h2>Analysis refusal</h2>
+    <div class="card" style="border-left-color:var(--warn)">
+      ${rows}
+    </div>
+  </section>`
+}
+
 /** One self-contained HTML document. No external request of any kind: the
  *  styles are inline, there is no script, and no image is referenced. */
 export function buildReportHtml(input: ReportExportInput): string {
@@ -447,6 +461,8 @@ footer code{font-family:var(--font-mono)}
     ${meta.map(([k, v]) => `<dt>${esc(k)}</dt><dd>${esc(v)}</dd>`).join('\n    ')}
   </dl>
 </header>
+
+${refusalHtml(r)}
 
 ${(r.notes ?? [])
   // The bind-role note restates what the Model binding section below says in
