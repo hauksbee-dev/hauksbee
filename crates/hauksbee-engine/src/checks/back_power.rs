@@ -53,7 +53,9 @@
 
 use std::collections::BTreeSet;
 
-use hauksbee_extract::{Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};
+use hauksbee_extract::{
+    Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
+};
 use hauksbee_models::ModelLibrary;
 
 use crate::binder::{power_rail_voltage, resolve};
@@ -66,7 +68,10 @@ const CLAMP_MARGIN_V: f64 = 0.6;
 /// Roles that define the part's supply domain (mirrors the scheduler's
 /// direct-supply role list for its rail watches).
 fn is_supply_role(role: &str) -> bool {
-    matches!(role, "vcc" | "avcc" | "vdd" | "vdda" | "vddio" | "vio" | "5v")
+    matches!(
+        role,
+        "vcc" | "avcc" | "vdd" | "vdda" | "vddio" | "vio" | "5v"
+    )
 }
 
 /// Roles never judged as signal pins: supplies, grounds, and inputs that are
