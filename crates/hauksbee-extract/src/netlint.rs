@@ -649,7 +649,9 @@ fn mlcc_ceiling_uf(package: &str) -> Option<f64> {
 
 fn check_design_file_qc(board: &ExtractedBoard, report: &mut NetLintReport) {
     for c in &board.components {
-        if c.dnp {
+        // The three-state contract: an unassembled part has no value to QC,
+        // and an identity-refused record's value is not evidence of one.
+        if !crate::assembly::AssemblyState::of(c).is_present() {
             continue;
         }
         let Some(prefix) = passive_prefix(&c.reference) else {
