@@ -460,6 +460,86 @@ fn rp2040_minimal_exact_nets() {
     );
 }
 
+/// The two corpus boards that actually carry the C1.4 geometry, cross-checked
+/// against KiCad's own view of the same design.
+///
+/// Synthesized fixtures prove the rules; these prove the rules survive a real
+/// export. The LumenPnP vacuum interposer is a genuinely castellated board: six
+/// plated half-holes, three per edge, whose barrels the outline cuts. The Olimex
+/// ESP32-EVB carries seven G85 slots in its plated drill. Both are round-tripped
+/// through `kicad-cli` and scored on net partition exactly like the sweep below,
+/// so a slot or castellation read wrongly shows up as a partition breach against
+/// ground truth rather than only against a fixture we wrote ourselves.
+#[test]
+fn advanced_geometry_boards_match_kicad() {
+    // (paths, tag, partition floor %, located-pad floor, net count must be exact)
+    let boards: [(&[&str], &str, f64, f64, bool); 2] = [
+        (
+            &["famous/lumenpnp/vac-interposer/vac-adapter.kicad_pcb"],
+            "vac_interposer_castellated",
+            99.0,
+            // Measured 4/12. This board is six two-pad castellated pass-throughs
+            // and almost nothing else, so pad LOCATION is limited by the
+            // package-name window (see GERBER.md Limitations), not by the
+            // geometry: the net partition and the exact net count are what
+            // carry the castellation claim.
+            0.30,
+            // Six nets, one per castellation. Reading the half-holes as
+            // mechanical would give twelve (each side's pad on its own net),
+            // so this equality IS the castellation claim, checked against
+            // KiCad's own netlist rather than against our own fixture.
+            true,
+        ),
+        (
+            &["famous/olimex_esp32/HARDWARE/REV-F/ESP32-EVB_Rev_F.kicad_pcb"],
+            "olimex_esp32_slots",
+            99.0,
+            // Measured 525/553 = 95%.
+            0.90,
+            // A fully routed board reconstructs more nets than it has, because
+            // unrouted copper fragments do not merge (see GERBER.md); the
+            // partition over located pads is the meaningful number here.
+            false,
+        ),
+    ];
+    let mut ran = 0;
+    for (rels, tag, part_floor, loc_floor, exact_nets) in boards {
+        match run_board_any(rels, tag) {
+            Some(a) => {
+                ran += 1;
+                if exact_nets {
+                    assert_eq!(
+                        a.recon_nets, a.native_nets,
+                        "{tag}: reconstructed {} nets against KiCad's {}",
+                        a.recon_nets, a.native_nets
+                    );
+                }
+                assert!(
+                    pct(&a) >= part_floor,
+                    "net partition {:.2}% < floor {part_floor}% on {tag}",
+                    pct(&a)
+                );
+                let loc = a.pads_located as f64 / a.native_pads.max(1) as f64;
+                assert!(
+                    loc >= loc_floor,
+                    "located only {:.0}% of native pads (< {:.0}% floor) on {tag}",
+                    loc * 100.0,
+                    loc_floor * 100.0
+                );
+            }
+            None => eprintln!("skipping {tag} (kicad-cli could not round-trip it)"),
+        }
+    }
+    if require_corpus() {
+        assert!(
+            ran >= 1,
+            "corpus required but no geometry board round-tripped"
+        );
+    } else if ran == 0 {
+        eprintln!("skipping advanced-geometry cross-check (no corpus/kicad-cli)");
+    }
+}
+
 /// The full sweep of boards that `kicad-cli` can round-trip, small to large.
 /// Every board listed in `docs/ingest/GERBER.md`'s accuracy table is gated here, so
 /// the documented numbers are reproducible (run `HAUKSBEE_REQUIRE_CORPUS=1

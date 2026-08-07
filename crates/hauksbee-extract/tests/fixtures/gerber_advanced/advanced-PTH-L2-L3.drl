@@ -1,0 +1,11 @@
+M48
+; #@! TF.FileFunction,Plated,2,3,PTH
+FMAT,2
+METRIC
+T1C0.400
+%
+G90
+G05
+T1
+X7.0Y3.0
+M30
