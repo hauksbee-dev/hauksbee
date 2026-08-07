@@ -262,12 +262,21 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         });
     }
 
-    // How many copper layers the drill set says the finished board has. This is
-    // the deepest layer any declaration names, and it is the board's own
-    // statement, independent of how many copper FILMS we managed to classify.
-    // The two differ in practice: KiCad names an inner layer's film after the
-    // user's label ("GND_Cu", "Power_Cu"), and a job whose inner films are named
-    // that way classifies fewer copper layers than the board has.
+    // How many copper layers the finished board has, as the files describe it.
+    //
+    // Two sources, and the answer is the DEEPER of them. The copper films we
+    // classified are one lower bound. The deepest layer any drill declaration
+    // names is the other, and it can exceed the film count: KiCad names an
+    // inner layer's film after the user's label ("GND_Cu", "Power_Cu"), so a
+    // six-layer job can classify only its two outer films while its drill still
+    // says `1,6`.
+    //
+    // Taking the drill maximum ALONE would be a fabrication engine. A four-layer
+    // job whose only drill is a blind `Plated,1,2,PTH` would imply a two-layer
+    // board, make that pair look full-depth, and stitch all four layers: a
+    // phantom short built out of a correct declaration. The film count is
+    // evidence too, and it is the evidence that says this board has more layers
+    // than that drill reaches.
     let implied_layers = parsed
         .iter()
         .filter_map(|p| match p.declared {
@@ -275,7 +284,8 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
             _ => None,
         })
         .max()
-        .unwrap_or(n_copper);
+        .unwrap_or(0)
+        .max(n_copper);
     if implied_layers > n_copper {
         notes.push(format!(
             "the drill files describe a {implied_layers}-layer board but only {n_copper} copper \

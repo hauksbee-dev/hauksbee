@@ -134,6 +134,60 @@ fn a_drill_file_with_no_readable_span_in_a_multi_span_job_refuses() {
 }
 
 #[test]
+fn a_lone_blind_via_declaration_does_not_widen_to_the_whole_stack() {
+    // Four copper layers, a pad on each at one point, and a SINGLE plated drill
+    // declaring `Plated,1,2,PTH`. That is a blind via reaching the top two
+    // layers, so the answer is three nets: {L1, L2}, {L3}, {L4}.
+    //
+    // The trap this catches is a reader that works out the board's layer count
+    // from the drill declarations alone. With only this file to go on, the
+    // deepest layer any drill names is 2, so `1,2` looks like the full depth of
+    // the board and the hit gets stitched through every film: one net, built
+    // out of a declaration that said the opposite. The copper films are
+    // evidence about the stack too, and here they are the evidence that says
+    // this board has four layers.
+    let e = from_gerber_dir(&job("gerber_lone_blind")).expect("lone blind via fixture");
+    assert_eq!(e.stats.n_layers, 4);
+    assert_eq!(e.stats.n_holes, 1);
+    assert_eq!(
+        e.stats.refused_span_holes, 0,
+        "the span is perfectly readable"
+    );
+    assert_eq!(
+        e.stats.n_nets, 3,
+        "a lone L1-L2 declaration is a blind via, not a through-hole"
+    );
+    assert!(
+        e.stats.notes.is_empty(),
+        "nothing is missing or ambiguous here: {:?}",
+        e.stats.notes
+    );
+}
+
+#[test]
+fn a_routed_arc_wall_connects_what_the_curve_touches_and_not_what_its_chord_does() {
+    // A quarter-circle routed slot of radius 5 mm, cut counter-clockwise from
+    // (5, 0) to (0, 5) with a 0.8 mm cutter. Four pads on the top copper:
+    //
+    //   A (5, 0) and B (0, 5)   at the two ends of the cut
+    //   C at radius 5.6 on the 45-degree ray, just outside the arc's outer wall
+    //   D at (2.5, 2.5), the midpoint of the CHORD, 1.46 mm inside the arc
+    //
+    // C and D are the whole test. C touches the real curved wall and must join
+    // the net; it is 1.35 mm clear of the chord, so a reader that straightens
+    // the arc loses it. D sits on the chord and must NOT join; it is 0.38 mm
+    // clear of the true wall, so a reader that straightens the arc invents a
+    // connection to it. Getting the arc wrong in either direction changes the
+    // answer here, which a fixture that only checked the endpoints would not.
+    let e = from_gerber_dir(&job("gerber_rout_arc")).expect("rout arc fixture");
+    assert_eq!(e.stats.n_slots, 4, "a quarter arc is four cut segments");
+    assert_eq!(
+        e.stats.n_nets, 2,
+        "A, B and C are one conductor through the arc wall; D is on its own"
+    );
+}
+
+#[test]
 fn a_declared_span_naming_a_layer_this_job_lacks_refuses_end_to_end() {
     // Two copper layers, a pad on each at the same point, and ONE plated drill
     // file whose X2 attribute says `Plated,3,6,PTH`: a buried via running from
