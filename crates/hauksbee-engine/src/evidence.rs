@@ -1,4 +1,12 @@
 //! Production adapter from a bound board to the shared IR evidence spine.
+//!
+//! [`BoardEvidence`] is built once per run from the extracted board and its
+//! [`BindReport`]: it registers the input/firmware artifacts with their
+//! hashes, records bind-time assumptions (unresolved parts, substitutions,
+//! guessed roles), and derives per-assertion [`EvidenceMap`]s from the board's
+//! net-part incidence, so every reported finding can say which artifacts,
+//! models and assumptions its claim actually rests on, and an undermined
+//! input makes the dependent claims invalid rather than silently green.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
