@@ -983,3 +983,128 @@ fn pad_without_layers_list_still_gets_all_copper() {
 "#;
     assert_short(&drc(items), "A", "B");
 }
+
+// ---------------------------------------------------------------------------
+// Trapezoid pads. `(rect_delta dx dy)` makes one parallel edge size + delta
+// long and the other size - delta: the true outline both extends BEYOND the
+// size box (the wide edge) and recedes inside it (the narrow edge), so neither
+// direction survives a bounding-rectangle approximation.
+// ---------------------------------------------------------------------------
+
+/// A trapezoid pad at the origin: size 4 x 2, rect_delta (0 2). True corners
+/// (pad-local, y-down): (-3, 1), (-1, -1), (1, -1), (3, 1) — the y = +1 edge
+/// is 6 mm wide, the y = -1 edge 2 mm.
+const TRAPEZOID_PAD: &str = r#"
+  (footprint "lib:trap" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U1")
+    (pad "1" smd trapezoid (at 0 0) (size 4 2) (rect_delta 0 2) (layers "F.Cu") (net 2))
+  )
+"#;
+
+#[test]
+fn trapezoid_wing_beyond_the_size_box_is_a_short() {
+    // A vertical track at x = -2.7 crosses the trapezoid's wide-edge wing,
+    // which extends to x = -3 — 0.7 mm OUTSIDE the (size 4 2) box. The old
+    // bounding-rectangle model cleared this by 0.6 mm and stayed silent.
+    let track = r#"
+  (segment (start -2.7 -3) (end -2.7 3) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    let items = format!("{track}{TRAPEZOID_PAD}");
+    assert_short(&drc(&items), "A", "B");
+}
+
+#[test]
+fn copper_past_the_trapezoid_narrow_edge_is_not_a_short() {
+    // A short track at (1.9..2.0, -0.5): inside the (size 4 2) box (the old
+    // model read a full overlap short), but 0.23 mm clear of the true slanted
+    // edge (the line through (1, -1) and (3, 1)) — over the 0.2 mm rule, so
+    // fully silent.
+    let track = r#"
+  (segment (start 1.9 -0.5) (end 2.0 -0.5) (width 0.1) (layer "F.Cu") (net 1))
+"#;
+    let items = format!("{track}{TRAPEZOID_PAD}");
+    let report = drc(&items);
+    assert!(
+        report.findings.is_empty(),
+        "copper past the narrow edge is clear of the true trapezoid: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.gap_mm))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn track_through_trapezoid_body_is_still_a_short() {
+    // Control: through the body, so the exact-outline fix cannot pass by
+    // under-sizing the pad.
+    let track = r#"
+  (segment (start -5 0) (end 5 0) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    let items = format!("{track}{TRAPEZOID_PAD}");
+    assert_short(&drc(&items), "A", "B");
+}
+
+// ---------------------------------------------------------------------------
+// Custom pads: the copper is the anchor shape plus EVERY primitive. The old
+// code kept only the first gr_poly, silently un-checking the anchor disc and
+// all further primitives.
+// ---------------------------------------------------------------------------
+
+/// A custom pad: 1 mm circle anchor at the origin plus two 1 x 1 polygon
+/// lobes at x in [2, 3] and x in [-3, -2] (y in [-0.5, 0.5]).
+const CUSTOM_TWO_LOBE_PAD: &str = r#"
+  (footprint "lib:cust" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U2")
+    (pad "1" smd custom (at 0 0) (size 1 1) (layers "F.Cu") (net 2)
+      (options (clearance outline) (anchor circle))
+      (primitives
+        (gr_poly (pts (xy 2 -0.5) (xy 3 -0.5) (xy 3 0.5) (xy 2 0.5)) (width 0))
+        (gr_poly (pts (xy -3 -0.5) (xy -2 -0.5) (xy -2 0.5) (xy -3 0.5)) (width 0))
+      ))
+  )
+"#;
+
+#[test]
+fn custom_pad_second_polygon_is_copper() {
+    // A track through the SECOND gr_poly lobe: the old first-poly-only model
+    // never stamped it.
+    let track = r#"
+  (segment (start -2.5 -2) (end -2.5 2) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    let items = format!("{track}{CUSTOM_TWO_LOBE_PAD}");
+    assert_short(&drc(&items), "A", "B");
+}
+
+#[test]
+fn custom_pad_anchor_is_copper() {
+    // A track through the anchor disc at the pad origin: the old model dropped
+    // the anchor whenever a polygon primitive existed.
+    let track = r#"
+  (segment (start 0 -2) (end 0 2) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    let items = format!("{track}{CUSTOM_TWO_LOBE_PAD}");
+    assert_short(&drc(&items), "A", "B");
+}
+
+#[test]
+fn gap_between_custom_pad_primitives_is_not_copper() {
+    // A track threading the bare gap between the anchor (radius 0.5) and the
+    // left lobe (nearest edge x = -2): clear of both by well over the rule, so
+    // stamping any merged hull would be over-claiming copper.
+    let track = r#"
+  (segment (start -1.35 -2) (end -1.35 2) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    let items = format!("{track}{CUSTOM_TWO_LOBE_PAD}");
+    let report = drc(&items);
+    assert!(
+        report.findings.is_empty(),
+        "the gap between primitives is bare board: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.gap_mm))
+            .collect::<Vec<_>>()
+    );
+}
