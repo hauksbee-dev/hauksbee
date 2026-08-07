@@ -222,6 +222,51 @@ pub fn parse(text: &str) -> DrillFile {
             current_is_npth = npth_tools.contains(&idx);
             continue;
         }
+        // ── G85 canned slot: `X<a>Y<b>G85X<c>Y<d>` cuts from (a,b) to (c,d) ──
+        // Read before the rout block, because a G85 record is self-describing:
+        // it carries both of its own endpoints and means the same thing whether
+        // or not a cutter happens to be down. Letting the rout block see it
+        // first read the line as a bare modal continuation, which cut a
+        // fabricated stadium from wherever the tool last was to the G85's START
+        // and then dropped the real slot entirely.
+        //
+        // The two coordinate pairs live on one line, so the plain modal parser
+        // (which keys on the FIRST `X` and `Y`) sees only the start point and
+        // would record a round hole where the file describes a slot. Split on
+        // the G85 and parse both halves through the SAME modal reader, so the
+        // units and zero-suppression that apply to the start apply to the end.
+        if let Some((head, tail)) = split_g85(line) {
+            let start = parse_xy_modal(
+                head,
+                metric,
+                int_digits,
+                dec_digits,
+                leading_zero_omitted,
+                &mut last_x,
+                &mut last_y,
+            );
+            let end = parse_xy_modal(
+                tail,
+                metric,
+                int_digits,
+                dec_digits,
+                leading_zero_omitted,
+                &mut last_x,
+                &mut last_y,
+            );
+            if let (Some((sx, sy)), Some((ex, ey)), Some(dia)) = (start, end, current) {
+                if !current_is_npth {
+                    holes.push(Hole {
+                        x: sx,
+                        y: sy,
+                        diameter: dia,
+                        to: Some((ex, ey)),
+                    });
+                }
+            }
+            continue;
+        }
+
         // ── Routing (slots cut by a moving cutter) ──────────────────────────
         if rout_capable {
             let up = line.to_ascii_uppercase();
@@ -346,44 +391,6 @@ pub fn parse(text: &str) -> DrillFile {
             continue;
         }
 
-        // ── G85 canned slot: `X<a>Y<b>G85X<c>Y<d>` cuts from (a,b) to (c,d) ──
-        // The two coordinate pairs live on one line, so the plain modal parser
-        // (which keys on the FIRST `X` and `Y`) sees only the start point and
-        // would record a round hole where the file describes a slot. Split on
-        // the G85 and parse both halves through the SAME modal reader, so the
-        // units and zero-suppression that apply to the start apply to the end.
-        if let Some((head, tail)) = split_g85(line) {
-            let start = parse_xy_modal(
-                head,
-                metric,
-                int_digits,
-                dec_digits,
-                leading_zero_omitted,
-                &mut last_x,
-                &mut last_y,
-            );
-            let end = parse_xy_modal(
-                tail,
-                metric,
-                int_digits,
-                dec_digits,
-                leading_zero_omitted,
-                &mut last_x,
-                &mut last_y,
-            );
-            if let (Some((sx, sy)), Some((ex, ey)), Some(dia)) = (start, end, current) {
-                if !current_is_npth {
-                    holes.push(Hole {
-                        x: sx,
-                        y: sy,
-                        diameter: dia,
-                        to: Some((ex, ey)),
-                    });
-                }
-            }
-            continue;
-        }
-
         // Coordinate line: X..Y.. , or modal X-only / Y-only (keep last axis).
         if let Some((x, y)) = parse_xy_modal(
             line,
@@ -454,11 +461,24 @@ fn arc_center_offset(
     Some((axis('I')?, axis('J')?))
 }
 
-/// Longest arc step (radians) before we split. Matches the RS-274X plotter's
-/// 16-segments-per-full-circle resolution, so a routed arc wall and a drawn
-/// copper arc are approximated to the same fidelity and a tangent contact
-/// resolves the same way on both.
+/// Longest arc step (radians) before we split, whatever the radius.
 const ARC_STEP_RAD: f64 = std::f64::consts::TAU / 16.0;
+
+/// How far a tessellated arc wall may sit from the true one (mm).
+///
+/// A chord lies inside its arc, so the stadium built on it reaches further
+/// towards the centre than the real cut does, by the step's sagitta. Copper in
+/// that sliver would be joined to the slot by an approximation rather than by
+/// the board. Holding the sagitta below half the union epsilon
+/// (`connect::TOUCH_EPS`) keeps that error smaller than the tolerance the
+/// union already works to, so the tessellation cannot make a contact the true
+/// arc would not, within the precision the whole module operates at.
+const ARC_SAGITTA_TOL_MM: f64 = 0.0025;
+
+/// Hard cap on the segments one arc may produce, so a hostile radius cannot
+/// turn a single line into unbounded work. At the cap the sagitta budget is no
+/// longer met, which needs an arc metres across: far outside any board.
+const ARC_MAX_STEPS: usize = 4096;
 
 /// Break a rout arc into straight cut segments, each returned as
 /// `(start_x, start_y, end_x, end_y)`.
@@ -508,7 +528,17 @@ fn tessellate_arc(
     if !sweep.is_finite() {
         return Vec::new();
     }
-    let steps = ((sweep.abs() / ARC_STEP_RAD).ceil() as usize).max(1);
+    // Step small enough that the chord's sagitta, r(1 - cos(step/2)), stays
+    // inside the tolerance. Bigger arcs get more segments, which is the point:
+    // a fixed segment count leaves a large-radius arc bulging half a millimetre
+    // away from its own wall.
+    let by_sagitta = if r > ARC_SAGITTA_TOL_MM {
+        2.0 * (1.0 - ARC_SAGITTA_TOL_MM / r).clamp(-1.0, 1.0).acos()
+    } else {
+        ARC_STEP_RAD
+    };
+    let step = by_sagitta.min(ARC_STEP_RAD).max(1e-6);
+    let steps = ((sweep.abs() / step).ceil() as usize).clamp(1, ARC_MAX_STEPS);
     let mut out = Vec::with_capacity(steps);
     let mut prev = (sx, sy);
     for k in 1..=steps {
@@ -1235,19 +1265,11 @@ M16
 M30
 ",
         );
-        // A quarter turn at 16 steps per full circle is exactly 4 segments.
-        // Asserting the COUNT is what catches a direction swap: read clockwise,
-        // the same two endpoints describe the 270-degree way round, which is 12
-        // segments that still all sit on the radius and still start and end in
-        // the right places.
-        assert_eq!(
-            d.holes.len(),
-            4,
-            "a quarter arc is 4 steps; {} means the sweep went the long way",
-            d.holes.len()
-        );
-        // Every segment stays in the first quadrant, which the long way round
-        // does not.
+        // Every segment stays in the first quadrant. This is what catches a
+        // direction swap: read clockwise, the same two endpoints describe the
+        // 270-degree way round, whose segments still all sit on the radius and
+        // still start and end in the right places, but sweep through the other
+        // three quadrants to get there.
         for h in &d.holes {
             let (tx, ty) = h.to.expect("an arc segment is a slot");
             assert!(
@@ -1255,6 +1277,19 @@ M30
                 "segment ({}, {}) -> ({tx}, {ty}) left the first quadrant",
                 h.x,
                 h.y
+            );
+        }
+        // No chord may sag further inside the true arc than the tolerance. A
+        // chord's stadium reaches that much past the real wall towards the
+        // centre, so this bound is what stops the approximation joining copper
+        // the cut does not touch.
+        for h in &d.holes {
+            let (tx, ty) = h.to.unwrap();
+            let mid = ((h.x + tx) / 2.0, (h.y + ty) / 2.0);
+            let sagitta = 5.0 - mid.0.hypot(mid.1);
+            assert!(
+                sagitta <= ARC_SAGITTA_TOL_MM + 1e-12,
+                "chord sags {sagitta} mm inside the arc, over the {ARC_SAGITTA_TOL_MM} budget"
             );
         }
         for h in &d.holes {
@@ -1294,8 +1329,11 @@ M16
 M30
 ",
         );
-        assert_eq!(d.holes.len(), 4, "got {:?}", d.holes);
-        assert!(d.holes.iter().all(|h| h.to.is_some()));
+        assert!(
+            d.holes.len() >= 4 && d.holes.iter().all(|h| h.to.is_some()),
+            "got {:?}",
+            d.holes
+        );
     }
 
     #[test]
