@@ -65,6 +65,12 @@ fn an_unplated_slot_of_the_same_shape_connects_nothing() {
     // ONLY difference is that the file describes the slot as an outline cut
     // rather than a plated one. It must connect nothing, so the two top pads
     // stay separate and the job reports three nets instead of two.
+    //
+    // The drill file is named `slot-mechanical.drl` on purpose. A name carrying
+    // `NPTH` would be caught by the file-name filter before the body was even
+    // read, so the test would pass on a reader that ignores the declaration
+    // entirely. Here the `NonPlated` attribute in the body is the only thing
+    // standing between this slot and a fabricated net.
     let e = from_gerber_dir(&job("gerber_slot_unplated")).expect("unplated slot fixture");
     assert_eq!(e.stats.n_holes, 0, "a mechanical slot has no plated wall");
     assert_eq!(e.stats.n_slots, 0);
@@ -123,6 +129,33 @@ fn a_drill_file_with_no_readable_span_in_a_multi_span_job_refuses() {
             .iter()
             .any(|n| n.contains("refuse-PTH-extra.drl")),
         "the refusal must name the file it applies to: {:?}",
+        e.stats.notes
+    );
+}
+
+#[test]
+fn a_declared_span_naming_a_layer_this_job_lacks_refuses_end_to_end() {
+    // Two copper layers, a pad on each at the same point, and ONE plated drill
+    // file whose X2 attribute says `Plated,1,6,PTH`. Layer 6 does not exist
+    // here.
+    //
+    // This is the case where the tempting shortcut does the damage: treat the
+    // unusable declaration as silence, notice the job has only one drill file,
+    // and read it as a through-hole. That gives one net off a declaration that
+    // explicitly said the hit is not a through-hole. A file that tried to state
+    // a span and failed is the last one whose hits may be assumed to reach the
+    // whole stack, so both pads stay on their own nets and the reader says why.
+    let e = from_gerber_dir(&job("gerber_span_out_of_range")).expect("out-of-range span fixture");
+    assert_eq!(e.stats.n_layers, 2);
+    assert_eq!(e.stats.n_holes, 1);
+    assert_eq!(e.stats.refused_span_holes, 1);
+    assert_eq!(
+        e.stats.n_nets, 2,
+        "an unusable declaration must not be widened into a through-hole"
+    );
+    assert!(
+        e.stats.notes.iter().any(|n| n.contains("oor-PTH.drl")),
+        "the refusal must name the file: {:?}",
         e.stats.notes
     );
 }

@@ -232,21 +232,30 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         // An X2 attribute in the file body beats the file name; the name is
         // consulted only when the file itself is silent.
         let (body, declared) = if is_gerber {
-            (DrillBody::Film(text), None)
+            // A gerber film has no X2 attribute to declare a span with.
+            (DrillBody::Film(text), excellon::DeclaredSpan::Absent)
         } else {
             let drill = excellon::parse(&text);
-            let declared = drill
-                .span
-                .and_then(|p| resolve_pair(p.from, p.to, n_copper));
+            let declared = drill.span;
             (DrillBody::Excellon(drill), declared)
         };
         let claim = match declared {
-            Some((f, t)) => SpanClaim::Resolved(f, t),
-            None => match span_from_filename(&n, &token_to_stack, n_copper) {
+            // The file stated a pair. If it does not resolve against this job's
+            // stack, that is a declaration we could not use, NOT silence: a file
+            // that tried to name its span is the last one whose hits may be
+            // assumed to reach the whole stack.
+            excellon::DeclaredSpan::Pair(p) => match resolve_pair(p.from, p.to, n_copper) {
                 Some((f, t)) => SpanClaim::Resolved(f, t),
-                None if names_a_partial_span(&n) => SpanClaim::PartialButUnreadable,
-                None => SpanClaim::Silent,
+                None => SpanClaim::DeclaredButUnresolvable,
             },
+            excellon::DeclaredSpan::Unreadable => SpanClaim::DeclaredButUnresolvable,
+            excellon::DeclaredSpan::Absent => {
+                match span_from_filename(&n, &token_to_stack, n_copper) {
+                    Some((f, t)) => SpanClaim::Resolved(f, t),
+                    None if names_a_partial_span(&n) => SpanClaim::PartialButUnreadable,
+                    None => SpanClaim::Silent,
+                }
+            }
         };
         parsed.push(ParsedDrill {
             path: d.clone(),
@@ -261,7 +270,9 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
     // there is not a guess, it is the only thing the set can mean.
     let job_is_multi_span = parsed.iter().any(|p| match p.claim {
         SpanClaim::Resolved(f, t) => (f, t) != (0, n_copper.saturating_sub(1)),
-        SpanClaim::PartialButUnreadable => true,
+        // A declaration we could not resolve means our picture of this job's
+        // stack and the file's disagree, so no silent sibling is safe either.
+        SpanClaim::PartialButUnreadable | SpanClaim::DeclaredButUnresolvable => true,
         SpanClaim::Silent => false,
     });
 
@@ -272,6 +283,20 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         let d = &p.path;
         let span = match p.claim {
             SpanClaim::Resolved(f, t) => LayerSpan::Range { from: f, to: t },
+            // A declaration we could not resolve refuses unconditionally: the
+            // rest of the job cannot vouch for a span this file got wrong.
+            SpanClaim::DeclaredButUnresolvable => {
+                notes.push(format!(
+                    "{}: this file declares a copper layer pair that does not resolve against \
+                     the {n_copper} copper layer(s) found in this job. Its plated hits are \
+                     recorded but stitch no layers. Reading them as through-holes would merge \
+                     nets the stackup keeps apart, and the declaration itself says they are not \
+                     through-holes. Check that every copper layer of this job is present and \
+                     classified, then re-run.",
+                    d.file_name().and_then(|s| s.to_str()).unwrap_or("drill")
+                ));
+                LayerSpan::Unknown
+            }
             SpanClaim::PartialButUnreadable | SpanClaim::Silent if job_is_multi_span => {
                 notes.push(format!(
                     "{}: this job's drill set spans several layer pairs, and this file does not \
@@ -434,6 +459,10 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
 enum SpanClaim {
     /// A layer pair we resolved to concrete stack indices (inclusive).
     Resolved(usize, usize),
+    /// The file DID declare a layer pair and we could not use it: malformed,
+    /// reversed, or naming a layer this job does not carry. Distinct from
+    /// silence, and never widened into a through-hole.
+    DeclaredButUnresolvable,
     /// The file's name says the hits are blind or buried, so they do NOT reach
     /// the whole stack, but it does not say which layers they do reach. There
     /// is no safe reading of this, only a refusal.
