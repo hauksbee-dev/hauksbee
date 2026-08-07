@@ -1,4 +1,10 @@
 //! Shared, fail-closed waiver date policy.
+//!
+//! One run date, captured once, gates every waiver expiry and evidence
+//! timestamp. A clock reading from before the tool could plausibly have run
+//! is treated as unknown rather than old, which fails closed: every waiver is
+//! expired, so a zeroed or backdated clock cannot resurrect one that lapsed.
+//! Long-form how-and-why: docs/how-and-why/hauksbee-ir/evidence.md.
 
 use serde::{Deserialize, Serialize};
 
