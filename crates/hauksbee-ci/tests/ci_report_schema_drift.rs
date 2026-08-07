@@ -209,6 +209,8 @@ fn generated_schema_pins_the_optionality() {
         "coverage_warnings",
         "dead_rails",
         "waiver_notes",
+        "timing_coverage",
+        "timing_refusals",
         "inventory",
         "assumptions",
         "evidence",
