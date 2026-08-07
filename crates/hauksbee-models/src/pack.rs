@@ -77,6 +77,11 @@ pub enum PackError {
     #[error("invalid {field} {value:?}: expected x.y.z (digits only, e.g. \"1.2.0\")")]
     InvalidVersion { field: &'static str, value: String },
 
+    /// Vendor material cannot enter the highest source tier without a stated
+    /// redistribution/use licence.
+    #[error("vendor pack has a blank license; vendor models require an explicit license before they can enter the vendor-spice tier")]
+    InvalidLicense,
+
     /// `pack.provenance` is not one of the three declared origins.
     #[error("unknown provenance {0:?}: expected \"hand-written\", \"datasheet-extracted\", or \"vendor\"")]
     UnknownProvenance(String),
@@ -236,6 +241,9 @@ impl PackManifest {
             "vendor" => Provenance::Vendor,
             other => return Err(PackError::UnknownProvenance(other.to_string())),
         };
+        if provenance == Provenance::Vendor && license.trim().is_empty() {
+            return Err(PackError::InvalidLicense);
+        }
         Ok(PackManifest {
             name,
             version,

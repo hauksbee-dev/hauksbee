@@ -63,6 +63,11 @@ that is worse than one with no models in it.
 
 ## Resolution priority
 
+The semantic ladder in [SOURCE_LADDER.md](SOURCE_LADDER.md) is evaluated first.
+Pack provenance maps to `vendor-spice`, `curated-pack`, or
+`datasheet-derived`; this prevents a draft pack from winning merely because its
+storage layer is numerically higher than the builtin layer.
+
 Every model source has an explicit layer (`SourceLayer` in
 `hauksbee-models/src/lib.rs`):
 
@@ -82,8 +87,9 @@ auto-extracted one carrying the same id. Collapsing them into "user model dirs"
 would leave that ordering to load order, which is exactly the accident the
 layering exists to prevent.
 
-The higher layer wins outright. The specificity score only breaks ties within
-a layer. Two packs shipping the same model id is a same-layer conflict:
+Inside one semantic tier, the higher layer wins. The specificity score only
+breaks ties within a layer. Two packs shipping the same model id is a
+same-layer conflict:
 hauksbee reports it loudly at load time, naming both packs, and never
 resolves it silently. `hauksbee models resolve <board>` prints the winning
 entry, layer, and origin per component, the pack author's debugging surface.

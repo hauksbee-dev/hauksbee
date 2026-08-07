@@ -24,14 +24,26 @@
 use hauksbee_ir::evidence::{
     ArtifactKind, ArtifactProvenance, ArtifactRole, Assumption, AssumptionKind, AssumptionSource,
     CausalPathIndex, Contribution, ErrorBudget, EvidenceMap, EvidenceRegistry, EvidenceStatus,
-    IntegrationTolerance, MatchConfidence, ModelLayer, ModelOnPath, NetScope, ParameterProvenance,
-    RunDate, Scope, Subject, ValueOrigin,
+    IntegrationTolerance, MatchConfidence, ModelLayer, ModelOnPath, ModelSource, ModelSourceTier,
+    ModelUncertainty, ModelValidation, NetScope, ParameterProvenance, RunDate, Scope, Subject,
+    ValueOrigin,
 };
 
 /// 2026-08-01. A run builds this from its own clock reading; a fixed value keeps
 /// the test off the wall clock.
 fn today() -> RunDate {
     RunDate::from_epoch_days(20_666)
+}
+
+fn pack_source() -> ModelSource {
+    ModelSource::new(
+        ModelSourceTier::CuratedPack,
+        ModelLayer::Pack,
+        "test-pack",
+        ModelValidation::PhysicalBoundsOnly,
+        vec![ModelUncertainty::unknown("U2.model", "no interval in fixture").unwrap()],
+    )
+    .unwrap()
 }
 
 fn traversed_map(
@@ -170,7 +182,7 @@ fn a_consumer_can_render_the_rests_on_block_but_cannot_reword_it() {
         .with_models(vec![ModelOnPath::new(
             "U2",
             "xc6206",
-            ModelLayer::Pack,
+            pack_source(),
             MatchConfidence::High,
         )
         .unwrap()])

@@ -806,6 +806,31 @@
         "guessed"
       ]
     },
+    "ModelIntervalKind": {
+      "description": "Interval bounds a model places on a derived quantity. This is the socket for\ninterval models: shaped before its producer exists so that work lands in\nthis vocabulary instead of inventing a second one.\n\nBoth bounds are real numbers. A one-sided datasheet limit (\"at least 100\")\nis [`ModelUncertainty::Unknown`] until a defensible other bound exists. A\nproducer must never turn a typical value or an invented physical cap into a\nguaranteed two-sided accuracy interval.",
+      "oneOf": [
+        {
+          "description": "Published finite minimum and maximum specification limits.",
+          "type": "string",
+          "const": "specification-limits"
+        },
+        {
+          "description": "Finite error bounds established by empirical validation.",
+          "type": "string",
+          "const": "empirical-error"
+        },
+        {
+          "description": "A published typical spread; informative, but not guaranteed.",
+          "type": "string",
+          "const": "typical-range"
+        },
+        {
+          "description": "A finite engineering estimate; informative, but not validated.",
+          "type": "string",
+          "const": "estimated-range"
+        }
+      ]
+    },
     "ModelLayer": {
       "description": "One layer of the model-resolution ladder.",
       "oneOf": [
@@ -841,7 +866,7 @@
           ]
         },
         "layer": {
-          "description": "Which layer of the model ladder it came from: \"builtin\", \"pack\",\n\"user-dir\", \"user-config-dir\", \"models-dir\", \"spice\",\n\"engine-fallback\".",
+          "description": "Compatibility projection of [`Self::source`]'s storage layer.",
           "allOf": [
             {
               "$ref": "#/definitions/ModelLayer"
@@ -855,43 +880,141 @@
         "reference": {
           "description": "The part it is bound to.",
           "type": "string"
+        },
+        "source": {
+          "description": "The canonical source, validation and uncertainty record.",
+          "allOf": [
+            {
+              "$ref": "#/definitions/ModelSource"
+            }
+          ]
         }
       },
       "required": [
         "reference",
         "model_id",
         "layer",
+        "source",
         "confidence"
       ]
     },
-    "ModelUncertainty": {
-      "description": "Interval bounds a model places on a derived quantity. This is the socket for\ninterval models: shaped before its producer exists so that work lands in\nthis vocabulary instead of inventing a second one.\n\nBoth bounds are real numbers. A one-sided datasheet interval (\"beta at least\n100\") has to be expressed with a finite other bound, because an infinity is\nnot JSON: it would serialize as `null` against a schema that says `number`\nand no consumer could read it back. Whoever lands the producer picks the\nphysical limit and says so in `basis`.",
+    "ModelSource": {
+      "description": "Canonical provenance and accuracy record for one selected model. Every\nreport surface carries this object verbatim.",
       "type": "object",
       "properties": {
-        "basis": {
-          "description": "Where the interval came from (\"datasheet min/max\", \"pack tolerance\").",
+        "layer": {
+          "$ref": "#/definitions/ModelLayer"
+        },
+        "origin": {
           "type": "string"
         },
-        "high": {
-          "description": "Interval high bound.",
-          "type": "number",
-          "format": "double"
+        "tier": {
+          "$ref": "#/definitions/ModelSourceTier"
         },
-        "low": {
-          "description": "Interval low bound.",
-          "type": "number",
-          "format": "double"
+        "uncertainty": {
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/ModelUncertainty"
+          }
         },
-        "parameter": {
-          "description": "Which parameter carries the interval (\"Q2.beta\", \"D1.vf\").",
-          "type": "string"
+        "validation": {
+          "$ref": "#/definitions/ModelValidation"
         }
       },
       "required": [
-        "parameter",
-        "low",
-        "high",
-        "basis"
+        "tier",
+        "layer",
+        "origin",
+        "validation",
+        "uncertainty"
+      ]
+    },
+    "ModelSourceTier": {
+      "description": "Semantic rung in the model-source policy. This is deliberately distinct\nfrom [`ModelLayer`]: a layer says where bytes were loaded from, while a tier\nsays how authoritative the model is. An explicit user model remains the\noverride escape hatch; otherwise vendor SPICE and curated sources outrank an\nextracted draft, which outranks a deliberately estimated fallback.",
+      "type": "string",
+      "enum": [
+        "open",
+        "estimated-fallback",
+        "interval-model",
+        "datasheet-derived",
+        "curated-library",
+        "curated-pack",
+        "vendor-spice",
+        "user-model"
+      ]
+    },
+    "ModelUncertainty": {
+      "oneOf": [
+        {
+          "description": "A measured or source-published finite interval.",
+          "type": "object",
+          "properties": {
+            "basis": {
+              "type": "string"
+            },
+            "high": {
+              "type": "number",
+              "format": "double"
+            },
+            "kind": {
+              "$ref": "#/definitions/ModelIntervalKind"
+            },
+            "low": {
+              "type": "number",
+              "format": "double"
+            },
+            "parameter": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "const": "interval"
+            },
+            "unit": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "status",
+            "parameter",
+            "low",
+            "high",
+            "unit",
+            "kind",
+            "basis"
+          ]
+        },
+        {
+          "description": "No defensible numeric interval is available. Unknown is data, never an\nomitted field and never a made-up percentage.",
+          "type": "object",
+          "properties": {
+            "parameter": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "status": {
+              "type": "string",
+              "const": "unknown"
+            }
+          },
+          "required": [
+            "status",
+            "parameter",
+            "reason"
+          ]
+        }
+      ]
+    },
+    "ModelValidation": {
+      "description": "What validation the selected model has actually passed. These names say\nnothing about unmeasured accuracy: range checking is not curve validation.",
+      "type": "string",
+      "enum": [
+        "unvalidated",
+        "physical-bounds-only",
+        "datasheet-curves",
+        "vendor-qualified"
       ]
     },
     "NetScope": {

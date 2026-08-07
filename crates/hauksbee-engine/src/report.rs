@@ -4,6 +4,7 @@
 //! unresolved open circuit. [`BindOutcome`] is that per-component verdict; the
 //! surrounding report aggregates them for the CLI and the resolve-rate stats.
 
+use hauksbee_ir::evidence::ModelSource;
 use hauksbee_models::Confidence;
 
 /// What a component turned into during binding.
@@ -56,6 +57,9 @@ pub struct BindRow {
     pub value: String,
     pub model_id: Option<String>,
     pub confidence: Confidence,
+    /// Canonical model source, validation and uncertainty. `None` only for a
+    /// skipped/unresolved row or a synthetic test row that predates evidence.
+    pub source: Option<ModelSource>,
     pub outcome: BindOutcome,
     /// Set when a connected analog part failed to resolve (loud warning).
     pub warning: Option<String>,
@@ -296,6 +300,7 @@ mod resolved_count_tests {
             value: String::new(),
             model_id: None,
             confidence,
+            source: None,
             outcome,
             warning: None,
             guesses: Vec::new(),

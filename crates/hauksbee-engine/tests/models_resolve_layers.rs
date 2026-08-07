@@ -3,7 +3,9 @@
 //! pack-author debugging surface. Asserts the output names layers with their
 //! priorities, using only temp dirs, never the machine's real ~/.hauksbee.
 
-use hauksbee_engine::commands::models::resolve_report;
+use hauksbee_engine::commands::models::{
+    model_requirement_refusals, resolve_report, resolve_report_json, ModelRequirement,
+};
 use hauksbee_extract::{Component, ExtractedBoard};
 use hauksbee_models::{ModelLibrary, SourceLayer};
 
@@ -83,12 +85,62 @@ rs = 0.6
     let d1 = row("D1");
     assert!(d1.contains("builtin(0)"), "D1 row: {d1}");
     assert!(d1.contains("diodes"), "D1 origin is the db file: {d1}");
+    assert!(d1.contains("curated-library"), "D1 source tier: {d1}");
+    assert!(
+        d1.contains("unknown"),
+        "D1 uncertainty must be explicit: {d1}"
+    );
     // D2 resolves from the --models-dir layer, naming the file it came from.
     let d2 = row("D2");
     assert!(d2.contains("my_resolve_diode"), "D2 row: {d2}");
     assert!(d2.contains("models-dir(30)"), "D2 row: {d2}");
     assert!(d2.contains("mine"), "D2 origin is the user file: {d2}");
+    assert!(d2.contains("user-model"), "D2 source tier: {d2}");
     // The unknown part is loudly unresolved, not silently dropped.
     let u99 = row("U99");
     assert!(u99.contains("UNRESOLVED"), "U99 row: {u99}");
+}
+
+#[test]
+fn resolve_json_exposes_the_canonical_source_and_accuracy_record() {
+    let value: serde_json::Value =
+        serde_json::from_str(&resolve_report_json(&ModelLibrary::builtin(), &board())).unwrap();
+    let d1 = value["components"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|row| row["ref"] == "D1")
+        .unwrap();
+    assert_eq!(d1["source"]["tier"], "curated-library");
+    assert_eq!(d1["source"]["layer"], "builtin");
+    assert_eq!(d1["source"]["validation"], "physical-bounds-only");
+    assert_eq!(d1["source"]["uncertainty"][0]["status"], "unknown");
+}
+
+#[test]
+fn accuracy_requirements_refuse_unknown_or_unvalidated_sources_by_reference() {
+    let requirements = ModelRequirement {
+        minimum_tier: Some(hauksbee_ir::evidence::ModelSourceTier::CuratedLibrary),
+        minimum_validation: None,
+        require_intervals: true,
+    };
+    let refusals = model_requirement_refusals(&ModelLibrary::builtin(), &board(), requirements);
+    assert!(refusals
+        .iter()
+        .any(|issue| issue.reference == "D1" && issue.reason.contains("interval")));
+    assert!(refusals
+        .iter()
+        .any(|issue| issue.reference == "U99" && issue.reason.contains("open")));
+    let validation_refusals = model_requirement_refusals(
+        &ModelLibrary::builtin(),
+        &board(),
+        ModelRequirement {
+            minimum_tier: None,
+            minimum_validation: Some(hauksbee_ir::evidence::ModelValidation::DatasheetCurves),
+            require_intervals: false,
+        },
+    );
+    assert!(validation_refusals.iter().any(|issue| {
+        issue.reference == "D1" && issue.reason.contains("validation physical-bounds-only")
+    }));
 }

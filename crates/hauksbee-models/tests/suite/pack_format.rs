@@ -99,6 +99,15 @@ fn bad_name_is_named() {
 }
 
 #[test]
+fn vendor_pack_needs_an_explicit_nonblank_license() {
+    let src = GOOD_MANIFEST
+        .replace("license = \"MIT\"", "license = \"   \"")
+        .replace("provenance = \"hand-written\"", "provenance = \"vendor\"");
+    let e = PackManifest::from_toml(&src, HAUKSBEE_VERSION).unwrap_err();
+    assert!(matches!(e, PackError::InvalidLicense), "got {e:?}");
+}
+
+#[test]
 fn bad_version_syntax_is_named() {
     for bad in ["1.2", "1.2.x", "v1.2.0", "1.2.3.4", ""] {
         let src = GOOD_MANIFEST.replace("version = \"1.2.0\"", &format!("version = \"{bad}\""));

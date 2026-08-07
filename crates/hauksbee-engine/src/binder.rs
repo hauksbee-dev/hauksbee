@@ -364,6 +364,7 @@ pub fn bind_board_with(
                 value: comp.value.clone(),
                 model_id: None,
                 confidence: Confidence::Exact,
+                source: None,
                 outcome: BindOutcome::Skipped {
                     reason: "DNP (not populated)".to_string(),
                 },
@@ -375,6 +376,7 @@ pub fn bind_board_with(
         let res = resolve(lib, comp);
         let model = res.model.clone();
         let conf = res.confidence;
+        let source = res.provenance.clone();
         let model_id = model.as_ref().map(|m| m.id.clone());
 
         let (kind_str, outcome, warning, guesses) = match &model {
@@ -409,6 +411,7 @@ pub fn bind_board_with(
             value: comp.value.clone(),
             model_id,
             confidence: conf,
+            source,
             outcome,
             warning,
             guesses,
@@ -487,6 +490,7 @@ pub fn bind_board_with(
             value: format!("{volts:.2}V"),
             model_id: None,
             confidence: Confidence::Exact,
+            source: None,
             outcome: BindOutcome::PowerRail { volts: *volts },
             warning: None,
             guesses: Vec::new(),
@@ -868,6 +872,7 @@ pub(crate) fn resolve(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::
     // So when the library is stumped, recover R/C/L from the ref prefix +
     // a parseable value, and recover common bare-AVR MCUs by value prefix.
     if let Some(entry) = fallback_entry(comp) {
+        let model_id = entry.id.clone();
         return hauksbee_models::Resolution {
             model: Some(entry),
             confidence: Confidence::Guessed,
@@ -875,6 +880,20 @@ pub(crate) fn resolve(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::
             source: Some("engine-fallback".to_string()),
             layer: None,
             origin: Some("engine-fallback".to_string()),
+            provenance: Some(
+                hauksbee_ir::evidence::ModelSource::new(
+                    hauksbee_ir::evidence::ModelSourceTier::EstimatedFallback,
+                    hauksbee_ir::evidence::ModelLayer::EngineFallback,
+                    "engine-fallback",
+                    hauksbee_ir::evidence::ModelValidation::Unvalidated,
+                    vec![hauksbee_ir::evidence::ModelUncertainty::unknown(
+                        format!("{model_id}.model"),
+                        "the engine fallback is estimated and has no validated numeric error interval",
+                    )
+                    .expect("static fallback uncertainty is valid")],
+                )
+                .expect("static fallback provenance is valid"),
+            ),
         };
     }
     res
