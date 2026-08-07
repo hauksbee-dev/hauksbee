@@ -94,7 +94,7 @@ pub fn parse(text: &str) -> DrillFile {
     // meaning (a positioned hit), so no existing job changes behaviour.
     let rout_capable = text.lines().any(|l| {
         let t = l.trim().to_ascii_uppercase();
-        matches!(t.as_str(), "M15" | "M15;" | "M015")
+        t.starts_with("M15") || t.starts_with("M015")
     });
     let mut tool_down = false;
     // Modal coordinates: an Excellon body line may carry only X (keep the last
@@ -247,8 +247,14 @@ pub fn parse(text: &str) -> DrillFile {
             // A `G00` rapid positions the cutter without cutting, so it is a
             // move and never a hit. A `G01` while the cutter is down cuts a
             // slot from where it was to where it lands.
+            //
+            // Motion codes are modal: a run of cuts is written `G01X..Y..` once
+            // and then bare `X..Y..` lines. With the cutter down those bare
+            // lines are cuts too, and reading them as drilled points instead
+            // both loses the wall and plants a hole the file never described.
             let is_rapid = g == Some(0);
-            let is_cut = g == Some(1);
+            let is_cut = g == Some(1)
+                || (g.is_none() && tool_down && (up.contains('X') || up.contains('Y')));
             if is_rapid || is_cut {
                 let (px, py) = (last_x, last_y);
                 // The uppercased line throughout the rout block, so a file that
@@ -320,6 +326,24 @@ pub fn parse(text: &str) -> DrillFile {
                 }
                 continue;
             }
+        } else if matches!(
+            leading_g_code(&line.to_ascii_uppercase()),
+            Some(2) | Some(3)
+        ) {
+            // An arc motion on a file that never plunges a cutter. There is no
+            // cut here to recover, and the endpoint is a position rather than a
+            // drilled point, so the plain coordinate reader below would invent a
+            // plated hole out of a move. Track the position, record nothing.
+            let _ = parse_xy_modal(
+                &line.to_ascii_uppercase(),
+                metric,
+                int_digits,
+                dec_digits,
+                leading_zero_omitted,
+                &mut last_x,
+                &mut last_y,
+            );
+            continue;
         }
 
         // ── G85 canned slot: `X<a>Y<b>G85X<c>Y<d>` cuts from (a,b) to (c,d) ──
@@ -902,6 +926,66 @@ M30
         assert!((b.x - 8.0).abs() < 1e-9 && (b.y - 2.0).abs() < 1e-9);
         assert_eq!(b.to, Some((8.0, 6.0)));
         assert!((a.diameter - 0.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_modal_run_of_cuts_stays_a_slot_after_the_first_g01() {
+        // Motion codes are modal: an exporter writes `G01` once and then bare
+        // coordinate lines for the rest of the run. With the cutter down those
+        // are cuts. Requiring the code on every line breaks the chain, drops
+        // the second wall, and plants a drilled hole at its far end, so a pad
+        // at (12, 0) is left off the net and a hit appears that the file never
+        // described.
+        let d = parse(
+            "\
+M48
+FMAT,2
+METRIC
+T1C0.600
+%
+G90
+T1
+G00X0.0Y0.0
+M15
+G01X6.0Y0.0
+X12.0Y0.0
+Y4.0
+M16
+M30
+",
+        );
+        assert_eq!(d.holes.len(), 3, "three cuts in the run: {:?}", d.holes);
+        assert!(
+            d.holes.iter().all(|h| h.to.is_some()),
+            "no drilled hole may appear in a cut run: {:?}",
+            d.holes
+        );
+        assert_eq!(d.holes[1].to, Some((12.0, 0.0)));
+        // The modal Y-only line keeps the X and cuts upward from (12, 0).
+        assert_eq!(d.holes[2].to, Some((12.0, 4.0)));
+    }
+
+    #[test]
+    fn an_arc_motion_on_a_file_that_never_cuts_is_not_a_drilled_hole() {
+        // No `M15` anywhere, so nothing here is a cut. The arc line is a move,
+        // and reading its endpoint as a plated hit invents a barrel out of a
+        // positioning command.
+        let d = parse(
+            "\
+M48
+FMAT,2
+METRIC
+T1C0.600
+%
+G90
+T1
+X1.0Y1.0
+G03X5.0Y5.0I4.0J0.0
+M30
+",
+        );
+        assert_eq!(d.holes.len(), 1, "only the drilled point: {:?}", d.holes);
+        assert!((d.holes[0].x - 1.0).abs() < 1e-9);
     }
 
     #[test]
