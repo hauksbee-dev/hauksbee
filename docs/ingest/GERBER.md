@@ -581,11 +581,12 @@ is the all-pairs touch sweep on the densest signal layers.
   as connected within that fill. KiCad emits separate dark regions per
   island, so this is rarely wrong in practice; an exotic single-region
   split-plane could mis-merge.
-- **A gerber-format drill film cannot declare a layer span.** The X2
-  attribute the span comes from is an Excellon feature, so a job whose drill
-  ships as an Allegro `.art` film can only get its span from the file name.
-  A blind or buried via on such a job is either named after its pair or
-  refused; it is never assumed to be a through-hole.
+- **An Allegro-style `drill-1-6.art` name is not read as a layer pair.** A
+  bare number pair in a file name is too easily a revision or a part number,
+  so only an `L`-marked or KiCad layer-named pair counts. A gerber-format
+  drill film that states its span in a `TF.FileFunction` attribute is read
+  like any other; one that only encodes it in a bare-number name falls back
+  to the ordinary silent-drill reading.
 - **Edge contacts are not a recognised class.** Gold fingers and card-edge
   contacts are ordinary copper on the outline, so they reconstruct as
   whatever copper they touch, with no separate treatment and no claim that
@@ -595,12 +596,14 @@ is the all-pairs touch sweep on the densest signal layers.
   `Edge.Cuts` / `.GKO` outline reports zero castellations regardless of what
   it has. Connectivity is unaffected, since the barrel joins its pad without
   reference to the outline; only the count goes quiet.
-- **Gerber-format drill diameter is partly guessed.** When a hole on a
-  gerber drill film is flashed with a non-circular aperture, its barrel
-  diameter falls back to 0.3 mm (a circular flash gives the true size).
+- **Gerber-format drill diameter is approximate for a non-circular flash.**
+  A circular flash gives the barrel exactly. A rectangular or polygonal one
+  gives it the narrow side of its own footprint, the largest round hole that
+  fits inside what the film drew. That under-states a slot-shaped flash
+  rather than over-stating it, which is the safe direction: the barrel can
+  miss copper the real hole touches, but cannot reach copper it does not.
   This feeds via stitching on exactly the multi-layer Allegro boards
-  (uConsole) that have no ground truth, so it is an unverified assumption
-  on that path.
+  (uConsole) that have no ground truth, so it is unverified on that path.
 - **Clear polarity (LPC)** is skipped for connectivity: a thermal relief or
   antipad clearing copper inside a pour does not disconnect a net the way
   it changes a rendered image, so treating the board as additive is correct
