@@ -4988,7 +4988,10 @@ pub fn backend_reports_drive_direction(backend: &str) -> bool {
 }
 
 #[cfg(not(feature = "renode"))]
-fn instantiate_renode(_part: &str) -> anyhow::Result<Box<dyn Mcu + Send>> {
+fn instantiate_renode(
+    _part: &str,
+    _external_clock_present: bool,
+) -> anyhow::Result<Box<dyn Mcu + Send>> {
     anyhow::bail!(
         "this build of hauksbee-engine was compiled without the `renode` feature; \
          rebuild with --features renode to run non-AVR firmware"

@@ -29,14 +29,20 @@
 //! accessors and the shared wording for finding 1 are covered in-crate by
 //! `scheduler.rs`'s `a_backend_that_cannot_reboot_reports_its_watchdog_limitation_verbatim`.
 
-use std::path::{Path, PathBuf};
+#[cfg(feature = "avr")]
+use std::path::Path;
+#[cfg(any(feature = "avr", feature = "renode"))]
+use std::path::PathBuf;
+#[cfg(any(feature = "avr", feature = "renode"))]
 use std::process::Command;
 
 /// The compiled `hauksbee` binary (Cargo sets this for the engine crate's tests).
+#[cfg(any(feature = "avr", feature = "renode"))]
 fn bin() -> &'static str {
     env!("CARGO_BIN_EXE_hauksbee")
 }
 
+#[cfg(any(feature = "avr", feature = "renode"))]
 fn repo(rel: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -44,6 +50,7 @@ fn repo(rel: &str) -> PathBuf {
 }
 
 /// An ATmega328P board; `wdt.elf` drives PB5, which is `D13` here.
+#[cfg(feature = "avr")]
 fn avr_board() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../hauksbee-ci/examples/boards/blinky.kicad_pcb")
@@ -52,6 +59,7 @@ fn avr_board() -> PathBuf {
 /// 5 ms chunks over 200 ms of virtual time: the WDTO_15MS timeout bites in
 /// chunk 3 or 4 of every reboot cycle, so this window holds about a dozen
 /// reboots rather than resting on the first one.
+#[cfg(feature = "avr")]
 fn run_avr(firmware: &Path, extra: &[&str]) -> std::process::Output {
     let mut args = vec![
         "run".to_string(),
@@ -74,6 +82,7 @@ fn run_avr(firmware: &Path, extra: &[&str]) -> std::process::Output {
 /// The exact line every surface must carry, once the count is known. Written out
 /// here rather than imported so a silent re-wording of the shared formatter
 /// fails this test instead of following it.
+#[cfg(feature = "avr")]
 fn expected_reboot_line(resets: u64) -> String {
     let plural = if resets == 1 { "" } else { "s" };
     format!(
