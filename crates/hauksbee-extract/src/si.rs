@@ -622,7 +622,8 @@ fn crystal_signal_nets(board: &ExtractedBoard, xtal: &Component) -> Vec<i64> {
 
 fn check_crystal_load_cap(board: &ExtractedBoard, report: &mut SiReport) {
     for xtal in &board.components {
-        if xtal.dnp || !is_crystal(xtal) {
+        // Unassembled or identity-refused parts are not trusted crystals.
+        if !crate::assembly::AssemblyState::of(xtal).is_present() || !is_crystal(xtal) {
             continue;
         }
         // A ceramic resonator carries its own load caps (the 3-terminal centre
@@ -1154,7 +1155,7 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
     let net_name = |id: i64| board.net(id).map(|n| n.name.clone()).unwrap_or_default();
 
     for ant in &board.components {
-        if ant.dnp {
+        if !crate::assembly::AssemblyState::of(ant).is_present() {
             continue;
         }
         let Some((k, cite)) = antenna_keepout(ant) else {
