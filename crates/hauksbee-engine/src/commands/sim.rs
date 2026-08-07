@@ -3,7 +3,7 @@
 //! CSV, an ngspice ASCII rawfile, or both. A malformed deck exits 2; a well-formed
 //! deck the solver cannot honestly answer exits 3 rather than faking a result.
 
-use crate::result::EXIT_INVALID_FOR_ANALYSIS;
+use crate::result::{Refusal, EXIT_INVALID_FOR_ANALYSIS};
 
 /// `hauksbee run <board> --ac <fstart>:<fstop>:<points> [--ac-node NET ...]
 /// [--ac-csv FILE] [--ac-loop NET]`
@@ -14,6 +14,18 @@ use crate::result::EXIT_INVALID_FOR_ANALYSIS;
 /// Exit code for a malformed deck (the loader rejected it). Distinct from the
 /// exit-3 "cannot honestly answer" (a well-formed deck we refuse to fake).
 pub const EXIT_MALFORMED_DECK: i32 = 2;
+
+fn refuse_sim(claim: &str, missing: impl Into<String>, next_action: &str) -> ! {
+    let refusal = Refusal::new(
+        claim,
+        missing,
+        vec!["the deck parsed and the circuit was assembled"],
+        next_action,
+    );
+    eprintln!("error: {claim} refused: {}", refusal.missing_prerequisite);
+    eprintln!("{}", refusal.render_text());
+    std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum SimFormat {
@@ -258,19 +270,20 @@ pub fn run(
         Analysis::Op => match run_op(&circuit, &opts, &probes) {
             Ok(o) => o,
             Err(msg) => {
-                // Probes were validated above, so this is a genuine solver
-                // failure, not a mistyped probe.
-                eprintln!("error: DC operating point did not converge: {msg}");
-                std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+                refuse_sim(
+                    "DC operating-point analysis",
+                    format!("the DC operating point did not converge: {msg}"),
+                    "inspect the named non-convergent node/device, correct its model or bias path, then rerun --op",
+                );
             }
         },
         Analysis::Tran => {
             let Some(td) = directives.tran else {
-                eprintln!(
-                    "error: --tran requested but the deck has no `.tran` card, so there is no \
-                     stop time or step to run. Add `.tran <tstep> <tstop>` or use --op."
+                refuse_sim(
+                    "transient analysis",
+                    "the deck has no `.tran` card, so there is no stop time or step to run",
+                    "add `.tran <tstep> <tstop>` to the deck, then rerun --tran (or use --op)",
                 );
-                std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
             };
             // Adaptive step bounded by the deck's requested step (its tmax if
             // given, else tstep), the same shape the existing cross-check uses.
@@ -288,39 +301,55 @@ pub fn run(
             match run_tran(&circuit, &opts, td.tstop, &probes) {
                 Ok(o) => o,
                 Err(msg) => {
-                    eprintln!("error: transient solve failed: {msg}");
-                    std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+                    refuse_sim(
+                        "transient analysis",
+                        format!("the transient solve failed: {msg}"),
+                        "inspect the named failed timestep/node, correct its model or timestep constraints, then rerun --tran",
+                    );
                 }
             }
         }
         Analysis::Dc => {
             let Some(dc_card) = &directives.dc else {
-                eprintln!(
-                    "error: --dc requested but the deck has no `.dc` card, so there is no \
-                     source or range to sweep. Add `.dc <src> <start> <stop> <step>` or use --op."
+                refuse_sim(
+                    "DC sweep",
+                    "the deck has no `.dc` card, so there is no source or range to sweep",
+                    "add `.dc <src> <start> <stop> <step>` to the deck, then rerun --dc (or use --op)",
                 );
-                std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
             };
             match run_dc(&circuit, &opts, dc_card, &probes) {
                 Ok(o) => o,
                 Err(msg) => {
-                    eprintln!("error: DC sweep failed (a sweep point did not converge): {msg}");
-                    std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+                    refuse_sim(
+                        "DC sweep",
+                        format!("a DC sweep point did not converge: {msg}"),
+                        "inspect the named failed sweep point/device, correct its model or range, then rerun --dc",
+                    );
                 }
             }
         }
         Analysis::Ac => {
             let Some(ac_card) = &directives.ac else {
-                eprintln!(
-                    "error: --ac requested but the deck has no `.ac` card, so there is no \
-                     frequency sweep to run. Add `.ac <dec|oct|lin> <n> <fstart> <fstop>`."
+                refuse_sim(
+                    "AC analysis",
+                    "the deck has no `.ac` card, so there is no frequency sweep to run",
+                    "add `.ac <dec|oct|lin> <n> <fstart> <fstop>` to the deck, then rerun --ac",
                 );
-                std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
             };
             match run_ac(&circuit, &opts, ac_card, &probes) {
                 Ok(o) => o,
                 Err(msg) => {
-                    eprintln!("error: AC analysis refused: {msg}");
+                    let refusal = Refusal::new(
+                        "AC analysis",
+                        msg,
+                        vec!["the deck parsed and the circuit was assembled"],
+                        "Add `AC 1` to the driving source, then rerun the same --ac command",
+                    );
+                    eprintln!(
+                        "error: AC analysis refused: {}",
+                        refusal.missing_prerequisite
+                    );
+                    eprintln!("{}", refusal.render_text());
                     std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
                 }
             }

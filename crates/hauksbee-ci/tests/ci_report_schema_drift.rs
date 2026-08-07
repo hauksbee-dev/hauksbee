@@ -224,8 +224,9 @@ fn generated_schema_pins_the_optionality() {
         "`coverage` is null on a non-ensemble run, so null must be in its type: {coverage}"
     );
 
-    // Per-assertion: `why` and `waived` carry skip_serializing_if and are the
-    // only two keys in the whole document a consumer may find ABSENT.
+    // Per-assertion: `why` and `waived` carry skip_serializing_if. The report's
+    // top-level `refusal` is independently optional because it exists only on
+    // exit 3.
     let assertion = &schema["definitions"]["AssertResult"];
     let a_required: Vec<&str> = assertion["required"]
         .as_array()

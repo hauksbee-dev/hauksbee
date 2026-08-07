@@ -8,6 +8,7 @@
 use std::time::Duration;
 
 use crate::assertions::AssertResult;
+use hauksbee_engine::result::Refusal;
 
 /// The full result of a CI run: the spec name, per-assertion results, the seed
 /// count, and timing.
@@ -139,10 +140,9 @@ pub enum CiJsonLine {
 /// what the web checks panel consumes via `/api/check`.
 ///
 /// Every field below is ALWAYS present, including `coverage`, which is `null`
-/// rather than absent when the run was not a tolerance ensemble. The only
-/// conditionally-absent keys in the whole document are `why` and `waived`
-/// inside each element of `results` (see [`AssertResult`]), which are omitted
-/// entirely rather than set to `null`.
+/// rather than absent when the run was not a tolerance ensemble, except the
+/// top-level `refusal` (exit 3 only). Inside `results`, `why` and `waived` are
+/// also conditionally absent (see [`AssertResult`]).
 #[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct CiJsonReport {
     /// [`CI_REPORT_SCHEMA_VERSION`]: the shape of this document.
@@ -172,6 +172,9 @@ pub struct CiJsonReport {
     /// Did the analog co-sim trip the consecutive-failed-chunk abort. Forces
     /// `exit_code` 3 on its own, even when no single assertion was affected.
     pub analog_abort: bool,
+    /// Useful-refusal contract, present exactly when `exit_code == 3`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<Refusal>,
     /// How many ensemble members ran (fuzz seeds, or tolerance members).
     pub seeds: u32,
     /// Wall-clock duration of the run, in seconds.
@@ -248,6 +251,57 @@ pub(crate) fn schema_nullable_string(_: &mut schemars::SchemaGenerator) -> schem
 }
 
 impl CiResult {
+    /// One C5.3 refusal shared verbatim by JSON, terminal, JUnit, annotations,
+    /// the web checks panel, and MCP.
+    pub fn refusal(&self) -> Option<Refusal> {
+        if !self.analog_invalid() {
+            return None;
+        }
+        let invalid = self.invalid_count();
+        let missing = if self.analog_abort {
+            format!(
+                "a converged analog solve through the run; the consecutive-failure abort tripped and {invalid} assertion(s) were marked INVALID"
+            )
+        } else {
+            format!(
+                "a converged analog solve across every assertion window; {invalid} assertion(s) overlapped held-stale analog spans"
+            )
+        };
+        let mut partial = vec![
+            "the spec and board loaded; every emitted assertion record remains available"
+                .to_string(),
+        ];
+        for r in &self.results {
+            if !r.invalid && r.kind == "uart" {
+                partial.push(format!(
+                    "UART assertion '{}' retained its {} result",
+                    r.label,
+                    if r.passed { "PASS" } else { "FAIL" }
+                ));
+            }
+        }
+        let next = self
+            .results
+            .iter()
+            .find(|r| r.invalid)
+            .map(|r| {
+                format!(
+                    "inspect INVALID assertion '{}' and its failed-window detail, fix the first named net/device, then rerun the same spec",
+                    r.label
+                )
+            })
+            .unwrap_or_else(|| {
+                "inspect the first analog non-convergence diagnosis in the job log, fix its named net/device, then rerun the same spec"
+                    .to_string()
+            });
+        Some(Refusal::new(
+            "an overall CI verdict for the requested assertions",
+            missing,
+            partial,
+            next,
+        ))
+    }
+
     /// True if every assertion passed or was waived. An INVALID assertion has
     /// `passed == false` and can never be waived, so it is not counted here.
     /// A waived failure is visible-but-not-gating (the whole point of a
@@ -291,6 +345,7 @@ impl CiResult {
             run_valid: !self.analog_invalid(),
             exit_code: self.exit_code(),
             analog_abort: self.analog_abort,
+            refusal: self.refusal(),
             seeds: self.seeds,
             elapsed_s: self.elapsed.as_secs_f64(),
             coverage: self.coverage.as_ref().map(|c| c.describe()),
@@ -414,6 +469,11 @@ impl CiResult {
                 "  analog co-sim aborted (solve failed on too many chunks in a row); \
                  the run is INVALID for analysis (05 §3b)\n",
             );
+        }
+        if let Some(refusal) = self.refusal() {
+            out.push('\n');
+            out.push_str(&refusal.render_text());
+            out.push('\n');
         }
         // Substitution honesty: a GREEN over a substitute MCU core cannot vouch
         // for firmware behaviour on the real silicon. Say so plainly.
@@ -549,15 +609,23 @@ impl CiResult {
             out.push_str("    </testcase>\n");
         }
         if synthetic_abort {
-            let msg = "analog co-sim aborted (solve failed on too many chunks in a row); \
-                       the run is INVALID for analysis (05 §3b)";
+            let msg = self
+                .refusal()
+                .map(|r| r.render_text())
+                .unwrap_or_else(|| "the run is INVALID for analysis".to_string());
             out.push_str("    <testcase classname=\"analog\" name=\"analog co-sim converged\">\n");
             out.push_str(&format!(
                 "      <error message=\"{}\">{}</error>\n",
-                xml_escape(msg),
-                xml_escape(msg)
+                xml_escape(&msg),
+                xml_escape(&msg)
             ));
             out.push_str("    </testcase>\n");
+        }
+        if let Some(refusal) = self.refusal() {
+            out.push_str(&format!(
+                "    <system-out>{}</system-out>\n",
+                xml_escape(&refusal.render_text())
+            ));
         }
         // A dead rail rides the same suite-level channel: a dashboard reader who
         // only ever sees the JUnit tab must not read a fault as a finding when
@@ -678,9 +746,10 @@ impl CiResult {
 
         // The rollup: exactly one summary annotation, always emitted.
         if self.analog_invalid() {
+            let refusal = self.refusal().expect("analog-invalid has refusal");
             out.push_str(&format!(
-                "::error title=hauksbee-ci::analog co-sim did not converge - {} assertion(s) INVALID, run is invalid for analysis\n",
-                self.invalid_count()
+                "::error title=hauksbee-ci refusal::{}\n",
+                gh_escape(&refusal.render_text().replace('\n', "; "))
             ));
         } else if self.passed() {
             out.push_str(&format!(

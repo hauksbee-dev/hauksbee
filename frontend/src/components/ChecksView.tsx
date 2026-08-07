@@ -6,6 +6,7 @@ import { PlusIcon } from './Icons'
 import { specStemFor, workflowYaml } from '../lib/ci-workflow'
 import { downloadText } from '../lib/report-export'
 import { ArriveOnce, EmptyState, StaggerItem, ValueSettle, VerdictBadge, ARRIVE, LEAVE } from '../motion'
+import { refusalLines, type RefusalContract } from '../lib/refusal-contract'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 
 // The Checks view: compose the body of a hauksbee-ci spec with plain
@@ -93,6 +94,7 @@ interface RunResponse {
   passed?: boolean
   exit_code?: number
   analog_abort?: boolean
+  refusal?: RefusalContract
   coverage?: string | null
   substitutions?: string[]
   coverage_warnings?: string[]
@@ -1152,6 +1154,17 @@ export function ChecksView({
                           </div>
                         )}
                       </div>
+                      {overall === 'invalid' && result.refusal && (
+                        <div className="mt-2 rounded-lg px-3 py-2.5 text-[12px]"
+                          data-testid="refusal-contract"
+                          style={{ background: 'var(--warn-bg)', border: '1px solid var(--warn-border)' }}>
+                          {refusalLines(result.refusal).map(([label, value]) => (
+                            <div key={label} className="mt-1 first:mt-0" style={{ color: 'var(--silk)' }}>
+                              <strong style={{ color: 'var(--warn-strong)' }}>{label}:</strong> {value}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                       {/* Raw mode has no rows to annotate; list results here. */}
                       {rawMode && results.map((x, i) => (
                         <div key={i} className="mt-1.5 rounded-lg px-3 py-2 text-[13px] flex gap-2"
