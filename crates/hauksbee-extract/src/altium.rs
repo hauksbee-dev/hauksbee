@@ -612,6 +612,9 @@ struct CompRecord {
     pattern: String,
     library: String,
     description: String,
+    /// Native PCB Component Type. Only the exact Altium values `Net Tie` and
+    /// `Net Tie (In BOM)` carry copper-short semantics; footprint names do not.
+    component_type: String,
     layer_name: String,
     /// Full `SOURCEHIERARCHICALPATH`. Retaining only the final segment makes
     /// `\A\BANK` collide with `\B\BANK`.
@@ -642,6 +645,7 @@ fn parse_components(buf: &[u8]) -> Vec<CompRecord> {
             pattern: prop_str(&m, "PATTERN"),
             library: prop_str(&m, "SOURCEFOOTPRINTLIBRARY"),
             description: prop_str(&m, "SOURCEDESCRIPTION"),
+            component_type: prop_str(&m, "COMPONENTTYPE"),
             layer_name: prop_str(&m, "LAYER"),
             source_hierarchical_path: prop_str(&m, "SOURCEHIERARCHICALPATH"),
             x_mm,
@@ -1316,14 +1320,35 @@ pub(crate) fn parse_net_names(buf: &[u8]) -> Vec<String> {
     out
 }
 
-/// Component reference designators in stream order (index = component field on a
-/// primitive). Used by the DRC geometry path to attach an owner to each pad.
-pub(crate) fn parse_component_refs(buf: &[u8], pads: Option<&[u8]>) -> Vec<String> {
-    let components = parse_components(buf);
+/// Native component identity needed by the geometric DRC, in component-stream
+/// order so fixed-binary primitive component indices resolve directly. The
+/// reference comes from the same canonical identity path as extraction, so a
+/// repeated channel's local net-tie exemption cannot be keyed differently from
+/// its extracted component.
+pub(crate) struct DrcComponentIdentity {
+    pub(crate) reference: String,
+    pub(crate) is_net_tie: bool,
+}
+
+pub(crate) fn parse_drc_component_identities(
+    buf: &[u8],
+    pads: Option<&[u8]>,
+) -> Vec<DrcComponentIdentity> {
+    let comps = parse_components(buf);
     let pads = pads.map(parse_pads).unwrap_or_default();
-    component_identities(&components, &pads)
+    let identities = component_identities(&comps, &pads);
+    comps
         .into_iter()
-        .map(|identity| identity.reference)
+        .zip(identities)
+        .map(|(component, identity)| {
+            let component_type = component.component_type.trim();
+            let is_net_tie = component_type.eq_ignore_ascii_case("Net Tie")
+                || component_type.eq_ignore_ascii_case("Net Tie (In BOM)");
+            DrcComponentIdentity {
+                reference: identity.reference,
+                is_net_tie,
+            }
+        })
         .collect()
 }
 

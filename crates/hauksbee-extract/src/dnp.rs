@@ -155,10 +155,10 @@ fn has_link_token(lower: &str) -> bool {
 /// spell the word out ("OLIMEX_Jumpers-FP:SJ_1_SMALLER"), and the Eagle
 /// solder-jumper package family whose name is just "SJ" (the Arduino Uno's
 /// RESET-EN is library "jumper", package "SJ", value "").
-pub fn is_jumper_or_net_tie(comp: &Component) -> bool {
-    let value = comp.value.to_ascii_lowercase();
-    let lib = comp.lib_id.to_ascii_lowercase();
-    let fp = comp.footprint.to_ascii_lowercase();
+pub(crate) fn is_jumper_or_net_tie_fields(value: &str, lib_id: &str, footprint: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    let lib = lib_id.to_ascii_lowercase();
+    let fp = footprint.to_ascii_lowercase();
     if has_link_token(&value) || has_link_token(&lib) || has_link_token(&fp) {
         return true;
     }
@@ -170,6 +170,60 @@ pub fn is_jumper_or_net_tie(comp: &Component) -> bool {
     // audio jack footprints.
     let leaf = fp.rsplit([':', '/']).next().unwrap_or(fp.as_str());
     leaf == "sj" || leaf.starts_with("sj_")
+}
+
+/// Whether two independent KiCad/EAGLE fields explicitly describe the legacy
+/// zero-ohm copper-link convention used by a small number of board footprints.
+///
+/// A zero-ohm value alone is not enough: ordinary resistor land patterns must
+/// still be checked. The footprint must independently name the 0R class, which
+/// covers layouts that embed auxiliary copper in a dedicated `0R_...` package
+/// without guessing from reference designators.
+pub(crate) fn is_explicit_zero_ohm_copper_link_fields(value: &str, footprint: &str) -> bool {
+    let value = value.trim().to_ascii_lowercase();
+    let value_names_zero = matches!(value.as_str(), "0" | "0r" | "0ohm" | "0ohms")
+        || value.starts_with("0r(")
+        || value.starts_with("0ohm(");
+    let footprint = footprint.to_ascii_lowercase();
+    let leaf = footprint
+        .rsplit([':', '/'])
+        .next()
+        .unwrap_or(footprint.as_str());
+    let footprint_names_zero =
+        leaf == "0r" || leaf.starts_with("0r_") || leaf == "0ohm" || leaf.starts_with("0ohm_");
+    value_names_zero && footprint_names_zero
+}
+
+/// EAGLE does not serialise a native net-tie component type. Recognise only the
+/// exact, corpus-backed library/package conventions whose footprints contain
+/// closed copper; generic `jumper` substring matching is deliberately absent.
+/// A new vendor convention belongs here only with a real-board fixture.
+pub(crate) fn is_eagle_copper_link_fields(value: &str, library: &str, package: &str) -> bool {
+    if is_explicit_zero_ohm_copper_link_fields(value, package) {
+        return true;
+    }
+
+    let library = library.to_ascii_lowercase();
+    let package = package.to_ascii_lowercase();
+    let library_leaf = library
+        .rsplit([':', '/'])
+        .next()
+        .unwrap_or(library.as_str());
+    let package_leaf = package
+        .rsplit([':', '/'])
+        .next()
+        .unwrap_or(package.as_str());
+
+    let arduino_sj = library_leaf == "jumper" && package_leaf == "sj";
+    let sparkfun_closed_trace = library_leaf == "sparkfun-jumpers"
+        && package_leaf.starts_with("smt-jumper_")
+        && package_leaf.contains("_trace");
+
+    arduino_sj || sparkfun_closed_trace
+}
+
+pub fn is_jumper_or_net_tie(comp: &Component) -> bool {
+    is_jumper_or_net_tie_fields(&comp.value, &comp.lib_id, &comp.footprint)
 }
 
 /// A two-terminal part whose value is a near-zero resistance, or a footprint

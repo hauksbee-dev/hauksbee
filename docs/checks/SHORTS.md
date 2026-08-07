@@ -48,9 +48,10 @@ carrying no connectivity and are never reported as a short:
 - net 0 (KiCad's empty / "no net" bucket), and
 - `unconnected-(...)` placeholder nets (one per floating pad).
 
-Two pads of the *same* footprint are also skipped: some footprints place
-different-net pads deliberately abutting (fuse clips, jumper bridges,
-edge-connector fingers), which KiCad does not treat as a board short.
+Footprint ownership alone never suppresses a finding. Different-net pads in an
+ordinary fuse, connector, resistor, or IC are checked exactly like copper from
+different footprints. Deliberate contacts are exempted only by the explicit,
+format-specific rules under "Deliberate ties exempted locally" below.
 
 ### Spatial index and the sweep
 
@@ -151,11 +152,13 @@ face, swapping its side-specific copper 1↔16.
 | Signal polygon / pour (`<polygon>`) | **excluded from the short test** | see the honesty caveat below |
 
 Package copper is placed with the full element transform: position rotated by the
-element's `rot` (CCW, y-up), and a mirrored (`MR`) element reflected across its
-local X axis (flip Y) before the rotation. (Verified against the QT Py's
-SOIC8: only flip-Y puts `MR90`-placed pad 1 at its real coordinate. The older
-flip-X convention scrambled every mirrored package and manufactured
-thousands of false shorts.)
+element's `rot` (CCW, y-up). A mirrored (`MR`) element negates local X and uses
+the mirrored rotation sense. This is regression-tested for both `MR90` and
+`MR0`; the latter is what keeps the RP2040 Thing Plus micro-SD pads on their
+actual bottom-side coordinates. The pad's own axis is reflected through that
+same transform. A real asymmetric `shape="offset"` through-hole fixture checks
+both `MR0` and `MR180`, including the side where copper must *not* appear; a
+round or symmetric long pad cannot detect that direction error.
 
 ### Rule source
 
@@ -166,6 +169,11 @@ assumed: the tightest of the copper-to-copper spacing rules (`mdWireWire`,
 `inch`). The `0.2 mm` default is used only when no design rules are present.
 Reporting against the board's own (often tighter) rule avoids manufacturing
 clearance noise on densely-routed boards.
+
+The same rules block supplies `psElongationLong` and `psElongationOffset`.
+EAGLE defines these as the percentage of pad diameter added along the pad axis;
+using the 100% default unconditionally overstated the Arduino Uno's 50%-elongated
+header pads and manufactured an SDA/SCL collision.
 
 ### Honest polygon (copper pour) fidelity caveat
 
@@ -181,17 +189,41 @@ limitation is explicit, not silent. Checking pour-to-copper shorts honestly woul
 need the board re-poured in Eagle and the computed polygons (with antipads)
 exported. That data is not in the source `.brd`.
 
-### Deliberate ties exempted
+### Deliberate ties exempted locally
 
-Two nets that both land a pad in the *same* component are deliberately tied there
-(a solder jumper `SJ` / `SMT-JUMPER`, a star-ground point, a 0-ohm / ferrite
-bridge). The component places their pads a hair apart by design and the traces
-feeding it abut, which the EDA does not flag. So copper of two nets sharing a
-footprint is exempt. This generalizes the KiCad pad-vs-pad same-owner rule to the
-track-vs-pad and track-vs-track forms Eagle's jumpers produce (Eagle traces carry
-no owner of their own, so the exemption keys on shared net membership in a
-footprint). On the Uno this correctly clears `GND`↔`UGND`, joined through the
-`GROUND` SJ jumper.
+Ordinary components do not create DRC exemptions: two different-net pads owned
+by the same resistor, IC, or connector still report, and an A/B component never
+waives an unrelated A/B copper collision elsewhere.
+
+The recogniser is deliberately format-specific; a reference, value, library, or
+footprint name by itself never waives copper:
+
+- **KiCad:** `(net_tie_pad_groups "1, 2" "3, 4")` is authoritative, and each
+  quoted group remains electrically separate. `(attr net_tie)` with no group
+  list forms one all-pad group for the older native form. House footprint names
+  work because names are not the discriminator. Two tightly bounded legacy
+  forms remain: a dedicated `0R_...` footprint *and* an independently zero-ohm
+  value, and old EAGLE imports whose footprint has a `TIED` token *and* whose
+  value explicitly identifies a pair such as `Closed(1-2)`. The latter exempts
+  only that pair, never every pad in the footprint.
+- **EAGLE:** `.brd` has no native net-tie Component Type field. The DRC therefore
+  accepts only exact, real-board library/package conventions: Arduino's
+  `library="jumper"`, `package="SJ"`, and SparkFun's
+  `SparkFun-Jumpers` closed-trace packages. A generic package/value named
+  `JUMPER` is checked even when both fields match. New vendor conventions require
+  a real-board fixture. The two-field dedicated-0R rule is the only zero-ohm
+  exception.
+- **Altium binary `.PcbDoc`:** only the native Components record
+  `COMPONENTTYPE=Net Tie` or `Net Tie (In BOM)` is accepted. `PATTERN`, library,
+  reference, and inferred 0R names are not substitutes. Component ownership
+  uses the same channel-aware canonical reference as extraction, so repeated
+  `NT1` designators in two channels cannot share an exemption. If the native
+  field is absent, the DRC abstains from exempting it. The Protel ASCII reader
+  currently extracts connectivity but has no geometric DRC path.
+
+Every accepted group is still owner-, layer-, net-group-, and contact-local.
+The reported contact point must land on that group's own copper. A legal A/B
+contact at one tie can never suppress another A/B collision elsewhere.
 
 ## Simulation (`hauksbee-engine/src/shorts.rs`)
 
@@ -234,11 +266,11 @@ the CLI.
 | tinytapeout-demo | 4.5 MB | 86,626 | 0 | 347 |
 | pic_programmer | 0.6 MB | 11,087 | 0 | 0 |
 
-A full sweep of the corpus (54 boards, ~50 parse successfully. One,
-RoyalBlue54L-Feather, is malformed at the s-expression level and rejected
-upstream by `forge-sexpr`) reports **zero true shorts**, correct, since these
-are all shipped, working boards. Clearance violations remain on tightly-routed
-boards and are expected.
+The current required-corpus gate scans 64 parseable KiCad boards and 2,300,130
+copper primitives. It reports no unaccounted true shorts; the explicitly
+documented, expiring exceptions remain visible in `tests/drc_corpus.rs` rather
+than being hidden in the detector. Clearance violations remain on tightly
+routed boards and are expected.
 
 ### Eagle famous-board sweep (release build, warm, the board's own rule)
 
@@ -263,28 +295,29 @@ The RP2040 Thing Plus is the regression guard for the Eagle mirror transform in
 J6 lands ~23 mm off, dropping pads onto the V_USB/EN bottom traces and reporting
 5 false shorts. It must stay short-clean.
 
-The single residual clearance violation, `3.3V` against `N$3` on `F.Cu` of the
-Circuit Playground Express (tightest gap 0.113 mm against that board's 0.1778 mm
-rule), is a genuine sub-rule near-miss on densely-routed copper, not a short.
-Every board here sweeps in a fraction of a second, dominated by the XML parse
+The two residual clearance violations in the current sweep (one each on the
+Circuit Playground Express and Metro M4 Express) are genuine sub-rule near-miss
+reports on densely routed copper, not shorts. Every board here sweeps in a
+fraction of a second, dominated by the XML parse
 (the Eagle reader streams the file twice: once for copper geometry, once for the
 `contactref` net map).
 
 ### A documented corpus finding
 
-An earlier sweep surfaced 2 "shorts" on several Olimex ESP32-EVB revisions
-(REV-A..D, L). Investigated: they were different-net pads placed deliberately
-*abutting inside one footprint* (a fuse-clip footprint and a capacitor
-footprint). That is the footprint author's intent, not a board short, and KiCad
-does not flag intra-footprint copper. The detector handles it with a principled
-rule (pads sharing a footprint owner are skipped) rather than a per-board
-allowlist. The corpus test (`tests/drc_corpus.rs`) documents this.
+An earlier sweep hid contacts on several Olimex ESP32-EVB revisions behind a
+blanket same-owner waiver. Re-investigation found the surviving case in a
+dedicated `0R_0603` footprint: an auxiliary same-number copper pad locally
+touches the opposite terminal. It is now handled by the explicit, owner- and
+location-scoped copper-link rule above. Ordinary same-footprint pads are never
+waived. The corpus test (`tests/drc_corpus.rs`) documents this evidence.
 
 ## Tests
 
-- `hauksbee-extract/tests/drc.rs`: 26 synthetic fixtures, one per geometry kind
+- `hauksbee-extract/tests/drc.rs`: 40 synthetic fixtures, one per geometry kind
   (segment-segment, segment-pad, pad-pad, via-zone, via-spans-layers) plus
-  clearance-only, cross-layer non-shorts, same-footprint abutment, the
+  clearance-only, cross-layer non-shorts, ordinary same-footprint shorts,
+  native house-name net ties, distinct multi-group and cross-group cases,
+  name-only negatives, locally scoped 0R and legacy closed-pair cases, the
   clearance-override classification, the at-rule / micron-under-rule /
   genuinely-sub-rule boundary cases, the per-netclass and diff-pair clearance
   rules (including `.kicad_pro` assignments and a malformed class), blind and
@@ -292,14 +325,19 @@ allowlist. The corpus test (`tests/drc_corpus.rs`) documents this.
 - `hauksbee-extract/tests/drc_corpus.rs`: the corpus sweep asserting zero true
   shorts across the parseable boards (skipped gracefully if the corpus is
   absent).
-- `hauksbee-extract/tests/eagle_drc.rs`: 22 synthetic minimal `.brd` fixtures, one
+- `hauksbee-extract/tests/eagle_drc.rs`: 28 synthetic minimal `.brd` fixtures, one
   per Eagle geometry kind (wire-wire short, wire-smd, smd-smd, via-wire,
   via-spans-layers, octagon pad, curved wire) plus the clearance-only, no-rule
-  fallback, cross-layer non-short, shared-footprint (jumper) abutment, mirrored
-  package placed on the bottom, mirror handedness on offset pads, via-restring
+  fallback, cross-layer non-short, ordinary same-owner shorts, locally scoped
+  dual-field jumper abutment, the single-field negative, remote same-net-pair
+  collisions, board-derived long pad elongation, mirrored package placement,
+  and asymmetric offset-pad direction under `MR0`/`MR180`, via-restring
   derivation, format dispatch, `POPULATE="no"` mapping to DNP, same-named
   packages in different libraries staying distinct, an element with a missing
   package, and the design-rule clearance respected / overridden cases.
+- `hauksbee-extract/tests/altium.rs`: synthetic binary Components/Pads/Tracks
+  records covering both native net-tie Component Types, PATTERN-only abstention,
+  local scope, and repeated-channel raw-designator isolation.
 - `hauksbee-extract/tests/eagle_drc_corpus.rs`: the famous-Eagle sweep over all
   ten boards (Arduino Uno, five Adafruit, four SparkFun), asserting zero true
   shorts and recording per-board clearance counts, rule, primitive count and
@@ -312,24 +350,20 @@ allowlist. The corpus test (`tests/drc_corpus.rs`) documents this.
 
 ## Limitations
 
-- **KiCad 10 and newer: shorts are UNRELIABLE, and the tool says so.** Copper
-  extraction is validated up to KiCad 9's `.kicad_pcb` format (version
-  `20241229`). Anything at or above `20260000`, which is KiCad 10 (`20260206`),
-  is treated as unvalidated, because that release changed *two* things this
-  check depends on: nets became name-only with no numeric ids, and the baked
-  zone-fill geometry moved. Neither is handled yet. The practical failure mode
-  is specific and severe: **a ground pour can read as shorting every net it
-  surrounds**, so a KiCad 10 board can report a screenful of shorts that do not
-  exist.
+- **KiCad 10 and newer: exact native-DRC parity remains unvalidated.** The
+  `20260206` name-only net encoding and baked keyhole-antipad contours are now
+  handled. A format-20260206 fixture checked with kicad-cli 10.0.5 keeps the pad
+  inside a real keyhole antipad silent while reporting a pad under solid
+  different-net fill; the same oracle reports no Zone↔Pad violations on the
+  VENDETTA ESC that formerly produced 1,668 phantom shorts.
 
-  What happens instead of silence: `DrcReport::version_warning` is set, every
-  surface prints the caveat with the offending version number and the word
-  UNRELIABLE, and **CI gates do not fail on those shorts**, so a pipeline cannot
-  go red on an artefact. Cross-check with KiCad's own DRC. The kicad-cli oracle
-  cannot help here either, because versions up to 9 cannot load the file at all.
-  The constant is `FIRST_UNVALIDATED_PCB_VERSION` in
-  `crates/hauksbee-extract/src/drc.rs`; the clearance rule and the non-pour
-  geometry are unaffected.
+  The version warning remains because the complete finding set is not yet exact
+  KiCad parity (VENDETTA reports 67 Hauksbee shorts versus 60 native
+  `shorting_items`), and KiCad 10 keeps project clearance rules in the sibling
+  `.kicad_pro` rather than the board text consumed by this API. CI gates
+  therefore still do not fail on a format at or above `20260000`. Cross-check
+  with KiCad 10's own DRC. The constant is
+  `FIRST_UNVALIDATED_PCB_VERSION` in `crates/hauksbee-extract/src/drc.rs`.
 - **Zone fill fidelity.** Detection uses the `filled_polygon` copper KiCad
   computed and stored in the file. Boards with no stored fill (older formats, or
   freshly-edited unfilled zones) fall back to the drawn outline for clearance
