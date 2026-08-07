@@ -613,7 +613,13 @@ fn tessellate_arc(
     // an arc of a millionth of a radian is a millionth of a radian, and turning
     // it into a full circle wraps a plated wall right round the board and joins
     // everything the circle passes.
-    let closed = (ex - sx).hypot(ey - sy) <= 1e-9;
+    //
+    // "The same" is set below what a drill file can express. The finest
+    // coordinate format in circulation resolves a nanometre (`%FSLAX46`), so
+    // any two points a file describes as distinct are at least that far apart,
+    // and anything closer is one point written twice with rounding on it.
+    const COINCIDENT_MM: f64 = 1e-7;
+    let closed = (ex - sx).hypot(ey - sy) <= COINCIDENT_MM;
     let mut sweep = a1 - a0;
     if clockwise {
         while sweep > 0.0 {
@@ -1166,6 +1172,14 @@ M30
         assert!(
             (ex - 1.0).abs() < 1e-3 && (ey - 0.001).abs() < 1e-9,
             "the hairline arc must stay at its own end, not travel: ({ex}, {ey})"
+        );
+        // The smallest offset the finest coordinate format can express, a
+        // nanometre, is still a distinct point and still not a circle.
+        let nano = tessellate_arc(1.0, 0.0, 1.0, 1e-6, -1.0, 0.0, false);
+        assert_eq!(nano.len(), 1, "got {} segments", nano.len());
+        assert!(
+            nano.iter().all(|(ax, _, bx, _)| *ax > 0.5 && *bx > 0.5),
+            "a nanometre arc must not travel round the circle"
         );
         // Coincident endpoints ARE the full-circle spelling, and still are.
         let circle = tessellate_arc(1.0, 0.0, 1.0, 0.0, -1.0, 0.0, false);

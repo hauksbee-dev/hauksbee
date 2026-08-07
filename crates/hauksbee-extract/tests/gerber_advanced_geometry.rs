@@ -81,6 +81,68 @@ fn an_unplated_slot_of_the_same_shape_connects_nothing() {
 }
 
 #[test]
+fn a_slot_flashed_on_a_drill_film_connects_along_its_whole_length() {
+    // A drill film draws the finished cutout, so this slot arrives as a single
+    // 4 mm by 1 mm obround flash centred at (5, 5). The tool is the narrow
+    // side, 1 mm, and it swept the long axis, so the plated wall spans x from
+    // 3.0 to 7.0.
+    //
+    // The two pads sit at (3.2, 5) and (6.8, 5), reaching in to x = 3.4 and
+    // 6.6. Nothing else on the board connects them. They are on the wall, and
+    // they are 1.1 mm clear of the inscribed circle that a reader taking only
+    // the narrow dimension would place at the flash's centre. So this fixture
+    // separates the two models: one net if the slot is recovered as the
+    // stadium it is, three if it is reduced to a circle in the middle.
+    let e = from_gerber_dir(&job("gerber_film_slot")).expect("film slot fixture");
+    assert_eq!(e.stats.n_holes, 1);
+    assert_eq!(e.stats.n_slots, 1, "an oblong drill flash is a slot");
+    assert_eq!(
+        e.stats.n_nets, 1,
+        "the plated wall runs the length of the slot, so both pads are one conductor"
+    );
+}
+
+#[test]
+fn the_same_flash_declared_mechanical_connects_nothing() {
+    // Identical copper, identical obround flash, identical geometry. The only
+    // difference is that the film declares its drill aperture
+    // `%TA.AperFunction,MechanicalDrill`: a cutout with no plating, so no wall
+    // and no conductor. The two pads stay apart.
+    let e =
+        from_gerber_dir(&job("gerber_film_slot_mechanical")).expect("mechanical film slot fixture");
+    assert_eq!(e.stats.n_holes, 0, "a mechanical cutout is not a conductor");
+    assert_eq!(e.stats.n_slots, 0);
+    assert_eq!(
+        e.stats.n_nets, 2,
+        "the pads are not joined by a mechanical slot"
+    );
+}
+
+#[test]
+fn a_drill_film_that_never_says_whether_it_is_plated_abstains_out_loud() {
+    // The same flash again, on a film with no `TF.FileFunction`, no aperture
+    // function, a name that says nothing, and no NPTH sibling to imply this is
+    // the plated set. Plating is the difference between a conductor and a hole
+    // in the board, and nothing here states it.
+    //
+    // Guessing plated invents a net; guessing mechanical deletes one. So the
+    // hits are dropped, the pads stay apart, and the reader names the file and
+    // says what would settle it.
+    let e = from_gerber_dir(&job("gerber_plating_unknown")).expect("unknown plating fixture");
+    assert_eq!(e.stats.n_holes, 0);
+    assert_eq!(e.stats.refused_plating_files, 1);
+    assert_eq!(e.stats.n_nets, 2, "nothing may be joined on a guess");
+    assert!(
+        e.stats
+            .notes
+            .iter()
+            .any(|n| n.contains("unk-drill.gbr") && n.contains("plated")),
+        "the abstention must name the file: {:?}",
+        e.stats.notes
+    );
+}
+
+#[test]
 fn a_castellation_is_one_node_with_its_pad_and_is_counted() {
     // A plated half-hole on the board edge at (0, 5): the outline runs straight
     // through the barrel, so the copper ring is cut and no closed ring contains

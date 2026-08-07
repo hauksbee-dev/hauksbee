@@ -174,13 +174,33 @@ the same source the round holes use. `gerber_advanced_geometry.rs` carries
 the pair: the same copper and the same slot path in two jobs, plated in one
 and unplated in the other, and the unplated one must report the extra net.
 
-On a gerber-format drill film, a drawn path becomes a slot only when the film
-itself declares a rout, slot or mill role in its own attributes. A suggestive
-file name is not enough, and that distinction is the whole safeguard: any
-board whose project name happens to contain "slot" would otherwise have its
-legend art promoted to conductor. Where the name suggests a rout and the film
-does not declare one, the draws are left as artwork and a reader note says
-what would recover them.
+A gerber-format drill film states its slots differently again: it draws the
+finished **cutout**, so a slot arrives as one oblong or rectangular flash
+rather than as a path. Both facts in that shape are recovered. The narrow
+side is the tool diameter exactly, because a slot is machined by a bit of
+that width, and the long axis is the path the bit swept, so the plated wall
+is the whole stadium. Reducing the flash to one circle at its centre is what
+makes a barrel miss copper the cutout plainly touches: a 4 mm by 1 mm slot
+would reach 0.5 mm from its middle instead of the 2 mm it spans. The narrow
+direction is measured over the outline's own edges rather than an
+axis-aligned box, so a slot drawn at 45 degrees is a slot and not a round
+hole of its diagonal's width.
+
+A drawn path on such a film is a rout only when the film declares a rout,
+slot or mill role in its own attributes. A suggestive file name is not
+enough, and that distinction is the whole safeguard: any board whose project
+name happens to contain "slot" would otherwise have its legend art promoted
+to conductor. Where the name suggests a rout and the film does not declare
+one, the draws are left as artwork and a reader note says what would recover
+them.
+
+Plating on a drill film comes from the film, not from a default. The film's
+`TF.FileFunction`, its `%TA.AperFunction` drill functions
+(`MechanicalDrill` says no copper; `ViaDrill`, `ComponentDrill` and
+`CastellatedDrill` say the opposite), its file name, and the job's
+plated/non-plated split are read in that order. A film that states plating in
+none of them has its hits dropped and its name printed, because guessing
+plated invents a net and guessing mechanical deletes one.
 
 **Castellations.** A castellation is a plated half-hole on the board edge:
 the outline cuts through the barrel, so the copper ring around it is cut
@@ -596,14 +616,16 @@ is the all-pairs touch sweep on the densest signal layers.
   `Edge.Cuts` / `.GKO` outline reports zero castellations regardless of what
   it has. Connectivity is unaffected, since the barrel joins its pad without
   reference to the outline; only the count goes quiet.
-- **Gerber-format drill diameter is approximate for a non-circular flash.**
-  A circular flash gives the barrel exactly. A rectangular or polygonal one
-  gives it the narrow side of its own footprint, the largest round hole that
-  fits inside what the film drew. That under-states a slot-shaped flash
-  rather than over-stating it, which is the safe direction: the barrel can
-  miss copper the real hole touches, but cannot reach copper it does not.
-  This feeds via stitching on exactly the multi-layer Allegro boards
-  (uConsole) that have no ground truth, so it is unverified on that path.
+- **A drill film cannot always say whether its holes are plated.** The
+  geometry on such a film is recovered in full (see the slots section), but
+  plating is the difference between a conductor and a hole in the board and
+  it is not a geometric fact. Four sources are read: the film's
+  `TF.FileFunction`, its `%TA.AperFunction` drill functions, its file name,
+  and the job splitting plated from non-plated across two files. A film with
+  none of those is dropped rather than guessed either way, counted in
+  `ReconStats::refused_plating_files` and named in a note. Guessing plated
+  invents a net; guessing mechanical deletes one; there is no safe default,
+  only a visible refusal.
 - **Clear polarity (LPC)** is skipped for connectivity: a thermal relief or
   antipad clearing copper inside a pour does not disconnect a net the way
   it changes a rendered image, so treating the board as additive is correct
