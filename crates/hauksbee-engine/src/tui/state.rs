@@ -1066,6 +1066,7 @@ mod tests {
             value: String::new(),
             model_id: None,
             confidence: conf,
+            source: None,
             outcome,
             warning: warning.map(|s| s.to_string()),
             guesses: Vec::new(),

@@ -1,4 +1,4 @@
-import type { EvidenceAssumption, EvidenceMap } from '../types/report'
+import type { EvidenceAssumption, EvidenceMap, ModelOnPath } from '../types/report'
 
 export interface EvidenceSummary {
   clean: number
@@ -15,6 +15,18 @@ export function summarizeEvidence(maps: readonly EvidenceMap[] = []): EvidenceSu
     if (map.status !== 'clean') summary.caveated += 1
   }
   return summary
+}
+
+/** Human projection of the canonical source record. Unknown remains the word
+ * unknown; the browser never substitutes a guessed percentage or range. */
+export function describeModelSource(model: ModelOnPath): string {
+  const accuracy = model.source.uncertainty.some(item => item.status === 'unknown')
+    ? 'uncertainty unknown'
+    : model.source.uncertainty.some(item =>
+      item.status === 'interval' && (item.kind === 'typical-range' || item.kind === 'estimated-range'))
+      ? 'non-guaranteed typical/estimated range'
+      : 'validated two-sided bound'
+  return `${model.reference} ${model.model_id}: ${model.source.tier} · ${model.source.validation} · ${accuracy}`
 }
 
 /** Resolve a map's stable assumption ids through the run's canonical registry.

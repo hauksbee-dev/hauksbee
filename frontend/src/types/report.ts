@@ -116,12 +116,31 @@ export interface EvidenceAssumption {
 export interface EvidenceMap {
   assertion: string
   artifacts?: number[]
-  models?: unknown[]
+  models?: ModelOnPath[]
   parameters?: unknown[]
   assumptions?: string[]
   error_budget?: unknown
   coverage?: string
   status: 'clean' | 'qualified' | 'undermined'
+}
+
+export type ModelUncertainty =
+  | { status: 'interval'; parameter: string; low: number; high: number; unit: string; kind: 'specification-limits' | 'empirical-error' | 'typical-range' | 'estimated-range'; basis: string }
+  | { status: 'unknown'; parameter: string; reason: string }
+
+export interface ModelSource {
+  tier: string
+  layer: string
+  origin: string
+  validation: string
+  uncertainty: ModelUncertainty[]
+}
+
+export interface ModelOnPath {
+  reference: string
+  model_id: string
+  source: ModelSource
+  confidence: string
 }
 
 export interface ArtifactProvenance {

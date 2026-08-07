@@ -431,6 +431,20 @@ struct ModelsResolveArgs {
     /// Extra model directory, loaded at the --models-dir layer (priority 30).
     #[arg(long, value_name = "DIR")]
     models_dir: Option<PathBuf>,
+    /// Refuse (exit 3) if any component resolves below this semantic source
+    /// tier. Storage layer is not accuracy: use names such as
+    /// `datasheet-derived`, `curated-library`, or `vendor-spice`.
+    #[arg(long, value_name = "TIER")]
+    min_model_tier: Option<hauksbee_ir::evidence::ModelSourceTier>,
+    /// Refuse (exit 3) if any selected model has passed less validation than
+    /// requested (`physical-bounds-only`, `datasheet-curves`, or
+    /// `vendor-qualified`).
+    #[arg(long, value_name = "LEVEL")]
+    min_model_validation: Option<hauksbee_ir::evidence::ModelValidation>,
+    /// Refuse (exit 3) unless every selected model publishes validated finite
+    /// uncertainty intervals. Unknown accuracy is never converted to a guess.
+    #[arg(long)]
+    require_model_intervals: bool,
     /// Emit the resolution as one JSON object ({"components":[{"ref","value",
     /// "model","layer","origin"}]}) instead of the text table. A component the
     /// binder could not resolve carries model "UNRESOLVED".
@@ -1284,10 +1298,15 @@ fn main() -> anyhow::Result<()> {
             ModelsCommand::Add(args) => hauksbee_engine::commands::models::add(&args.source),
             ModelsCommand::Remove(args) => hauksbee_engine::commands::models::remove(&args.name),
             ModelsCommand::List(args) => hauksbee_engine::commands::models::list(args.builtin),
-            ModelsCommand::Resolve(args) => hauksbee_engine::commands::models::resolve(
+            ModelsCommand::Resolve(args) => hauksbee_engine::commands::models::resolve_checked(
                 &args.board,
                 args.models_dir.as_deref(),
                 args.json,
+                hauksbee_engine::commands::models::ModelRequirement {
+                    minimum_tier: args.min_model_tier,
+                    minimum_validation: args.min_model_validation,
+                    require_intervals: args.require_model_intervals,
+                },
             ),
             ModelsCommand::New(args) => hauksbee_engine::commands::models::new(
                 &args.reference,

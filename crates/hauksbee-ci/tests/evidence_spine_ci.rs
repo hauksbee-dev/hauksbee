@@ -81,6 +81,20 @@ fn production_numeric_assertion_carries_inventory_causal_map_and_error_budget() 
             .is_some_and(|a| a.len() >= 2),
         "the assertion cites board and spec artifacts: {evidence:?}"
     );
+    let models = evidence["models"]
+        .as_array()
+        .expect("the causal model path is machine readable");
+    assert!(
+        models.iter().any(|model| {
+            model["reference"] == "R1"
+                && model["source"]["tier"] == "curated-library"
+                && model["source"]["uncertainty"][0]["status"] == "unknown"
+        }),
+        "the canonical source record reaches CI JSON: {models:?}"
+    );
+    let human = result.render_human();
+    assert!(human.contains("source=curated-library"), "{human}");
+    assert!(human.contains("uncertainty unknown"), "{human}");
 }
 
 #[test]
