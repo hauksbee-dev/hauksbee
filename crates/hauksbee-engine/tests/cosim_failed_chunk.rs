@@ -85,6 +85,8 @@ fn cosim_json_from(sched: &Scheduler) -> CosimJson {
         uart_seen: false,
         error_budget: sched.error_budget().expect("test scheduler budget"),
         activity_summary: Vec::new(),
+        timing_coverage: sched.timing_coverage(),
+        timing_refusals: sched.timing_refusals().to_vec(),
         analog_valid: sched.analog_valid(),
         failed_windows: sched
             .failed_windows()

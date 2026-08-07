@@ -194,6 +194,17 @@
         "type": "string"
       }
     },
+    "timing": {
+      "description": "Optional strict timing contract. Poll backends refine their real MCU\nslice to meet it; an unrepresentable contract makes the run INVALID.",
+      "anyOf": [
+        {
+          "$ref": "#/definitions/TimingSpec"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
     "tolerance": {
       "description": "Component-tolerance rules: sampled per ensemble seed so assertions must\nhold across the tolerance ensemble, not just at nominal values.",
       "type": "array",
@@ -1414,6 +1425,33 @@
         "t_ms",
         "value"
       ]
+    },
+    "TimingSpec": {
+      "description": "Timing coverage a strict check requires from the MCU/co-sim bridge.\nDeclaring this opts the run into adaptive poll chunking and fail-closed\ncapability negotiation; absent means the report still publishes measured\ntiming coverage but makes no extra timing claim.",
+      "type": "object",
+      "properties": {
+        "max_edge_error_us": {
+          "description": "Largest acceptable uncertainty on a firmware GPIO edge timestamp.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null,
+          "exclusiveMinimum": 0
+        },
+        "min_pulse_us": {
+          "description": "Narrowest firmware pulse the check needs guaranteed observable.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "double",
+          "default": null,
+          "exclusiveMinimum": 0
+        }
+      },
+      "additionalProperties": false
     },
     "ToleranceRule": {
       "description": "A component-tolerance rule: every component whose reference matches `ref`\n(a literal reference, or a pattern where `*` matches any run of characters)\nis sampled within ±`percent` of its value on every ensemble seed.\n\n```toml\n[[tolerance]]\nref = \"R*\"                 # every resistor\npercent = 10.0             # ±10%\ndistribution = \"gaussian\"  # optional; default \"uniform\"\n```\n\nRules apply in order and the last matching rule wins per component, so a\nbroad pattern can be followed by a tighter per-part rule. The nominal is\nthe component's board value (after any `[[override]]`).",

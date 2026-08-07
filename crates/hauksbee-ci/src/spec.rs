@@ -111,6 +111,51 @@ impl From<DnpMode> for hauksbee_extract::dnp::DnpPolicy {
     }
 }
 
+/// Timing coverage a strict check requires from the MCU/co-sim bridge.
+/// Declaring this opts the run into adaptive poll chunking and fail-closed
+/// capability negotiation; absent means the report still publishes measured
+/// timing coverage but makes no extra timing claim.
+#[derive(Debug, Clone, Copy, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TimingSpec {
+    /// Narrowest firmware pulse the check needs guaranteed observable.
+    #[serde(default)]
+    #[schemars(extend("exclusiveMinimum" = 0))]
+    pub min_pulse_us: Option<f64>,
+    /// Largest acceptable uncertainty on a firmware GPIO edge timestamp.
+    #[serde(default)]
+    #[schemars(extend("exclusiveMinimum" = 0))]
+    pub max_edge_error_us: Option<f64>,
+}
+
+impl TimingSpec {
+    fn validate(&self) -> Result<(), SpecError> {
+        for (name, value) in [
+            ("min_pulse_us", self.min_pulse_us),
+            ("max_edge_error_us", self.max_edge_error_us),
+        ] {
+            if value.is_some_and(|v| !v.is_finite() || v <= 0.0) {
+                return Err(SpecError::Invalid(format!(
+                    "timing.{name} must be a positive, finite number"
+                )));
+            }
+        }
+        if self.min_pulse_us.is_none() && self.max_edge_error_us.is_none() {
+            return Err(SpecError::Invalid(
+                "timing needs `min_pulse_us` or `max_edge_error_us`".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn requirement(self) -> hauksbee_engine::scheduler::TimingRequirement {
+        hauksbee_engine::scheduler::TimingRequirement {
+            min_pulse_s: self.min_pulse_us.map(|v| v * 1e-6),
+            max_edge_error_s: self.max_edge_error_us.map(|v| v * 1e-6),
+        }
+    }
+}
+
 /// A fully-parsed, validated spec.
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -168,6 +213,10 @@ pub struct Spec {
     #[serde(default = "default_frame_ms")]
     #[schemars(extend("exclusiveMinimum" = 0))]
     pub frame_ms: f64,
+    /// Optional strict timing contract. Poll backends refine their real MCU
+    /// slice to meet it; an unrepresentable contract makes the run INVALID.
+    #[serde(default)]
+    pub timing: Option<TimingSpec>,
     /// Ambient temperature (C) for the steady-state junction-temperature
     /// estimate (`max_temp` assertions). Default 25 C.
     #[serde(default = "default_ambient_c")]
@@ -1346,6 +1395,11 @@ impl Spec {
                 "frame_ms must be a positive, finite number".into(),
             ));
         }
+        if let Some(timing) = &self.timing {
+            if let Err(e) = timing.validate() {
+                errs.push(e);
+            }
+        }
         for s in &self.supplies {
             if let Err(e) = s.validate() {
                 errs.push(e);
@@ -2385,6 +2439,38 @@ mod mcu_field_tests {
         ))
         .expect("table form");
         assert_eq!(spec.mcu_note(), Some("stm32f103"));
+    }
+
+    #[test]
+    fn timing_requirement_parses_and_rejects_non_positive_or_non_finite_budgets() {
+        let good: Spec = toml::from_str(&format!(
+            "{PRELUDE}timing = {{ min_pulse_us = 2.0, max_edge_error_us = 0.25 }}\n\
+             [[assert]]\nkind = \"toggle\"\nnet = \"CLK\"\nmin_toggles = 1\n"
+        ))
+        .expect("timing table");
+        let timing = good.timing.expect("timing request");
+        assert_eq!(timing.min_pulse_us, Some(2.0));
+        assert_eq!(timing.max_edge_error_us, Some(0.25));
+        assert!(good.validate_all().is_empty());
+
+        for body in [
+            "min_pulse_us = 0.0",
+            "min_pulse_us = nan",
+            "max_edge_error_us = -1.0",
+            "max_edge_error_us = inf",
+        ] {
+            let spec: Spec = toml::from_str(&format!(
+                "{PRELUDE}timing = {{ {body} }}\n[[assert]]\nkind = \"toggle\"\nnet = \"CLK\"\nmin_toggles = 1\n"
+            ))
+            .expect("syntactically valid timing table");
+            let errors = spec.validate_all();
+            assert!(
+                errors
+                    .iter()
+                    .any(|e| e.to_string().contains("positive, finite")),
+                "{body}: {errors:?}"
+            );
+        }
     }
 
     #[test]

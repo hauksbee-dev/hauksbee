@@ -46,14 +46,18 @@ pub fn build_cosim_json(
     };
     let substituted = cosim_substituted(sched.substitutions(), &mcu_ref);
 
-    let total_toggles: u64 = sched.stats.values().map(|s| s.toggles).sum();
+    let toggle_counts = sched.toggle_counts();
+    let total_toggles: u64 = toggle_counts.values().sum();
 
     // Top-N nets by activity (toggles, then voltage range), mirroring the text
     // table's ordering so JSON and text agree on "most active".
-    let mut rows: Vec<_> = sched.stats.iter().collect();
+    let mut rows: Vec<_> = sched
+        .stats
+        .iter()
+        .map(|(name, stat)| (name, stat, toggle_counts.get(name).copied().unwrap_or(0)))
+        .collect();
     rows.sort_by(|a, b| {
-        b.1.toggles
-            .cmp(&a.1.toggles)
+        b.2.cmp(&a.2)
             .then(
                 (b.1.max_v - b.1.min_v)
                     .partial_cmp(&(a.1.max_v - a.1.min_v))
@@ -67,10 +71,10 @@ pub fn build_cosim_json(
     let activity_summary: Vec<NetActivity> = rows
         .iter()
         .take(10)
-        .filter(|(_, st)| st.toggles > 0)
-        .map(|(name, st)| NetActivity {
+        .filter(|(_, _, toggles)| *toggles > 0)
+        .map(|(name, st, toggles)| NetActivity {
             net: (*name).clone(),
-            toggles: st.toggles,
+            toggles: *toggles,
             v_min: if st.min_v.is_finite() { st.min_v } else { 0.0 },
             v_max: if st.max_v.is_finite() { st.max_v } else { 0.0 },
         })
@@ -126,6 +130,8 @@ pub fn build_cosim_json(
         uart_seen,
         error_budget: sched.error_budget()?,
         activity_summary,
+        timing_coverage: sched.timing_coverage(),
+        timing_refusals: sched.timing_refusals().to_vec(),
         analog_valid,
         failed_windows,
         fallback_windows,
@@ -468,6 +474,7 @@ pub fn run_headless(
     // it here would corrupt stdout for a machine consumer. Suppress when quiet.
     if !quiet {
         let sched = engine.scheduler();
+        let toggle_counts = sched.toggle_counts();
         // The achieved rate, stated from measurement: sim seconds delivered
         // per wall second. Never print a rate this run did not achieve.
         let factor = if wall_s > 0.0 {
@@ -483,10 +490,13 @@ pub fn run_headless(
             sched.stats.len()
         );
         // Sort nets by activity (toggle count then range).
-        let mut rows: Vec<_> = sched.stats.iter().collect();
+        let mut rows: Vec<_> = sched
+            .stats
+            .iter()
+            .map(|(name, stat)| (name, stat, toggle_counts.get(name).copied().unwrap_or(0)))
+            .collect();
         rows.sort_by(|a, b| {
-            b.1.toggles
-                .cmp(&a.1.toggles)
+            b.2.cmp(&a.2)
                 .then(
                     (b.1.max_v - b.1.min_v)
                         .partial_cmp(&(a.1.max_v - a.1.min_v))
@@ -503,7 +513,7 @@ pub fn run_headless(
              │ Net                        │ min (V)  │ max (V)  │ toggles  │\n\
              ├────────────────────────────┼──────────┼──────────┼──────────┤"
         );
-        for (name, st) in rows.iter().take(15) {
+        for (name, st, toggles) in rows.iter().take(15) {
             let min_v = if st.min_v.is_finite() { st.min_v } else { 0.0 };
             let max_v = if st.max_v.is_finite() { st.max_v } else { 0.0 };
             println!(
@@ -511,7 +521,7 @@ pub fn run_headless(
                 truncate(name, 26),
                 min_v,
                 max_v,
-                st.toggles
+                toggles
             );
         }
         println!("└────────────────────────────┴──────────┴──────────┴──────────┘");
@@ -565,6 +575,28 @@ pub fn run_headless(
         }
         for b in sched.unexercised_buses() {
             println!("\nWARNING: {}", b.message());
+        }
+        if !sched.timing_coverage().is_empty() {
+            println!("\nTiming coverage (measured at the chunk actually run):");
+            for t in sched.timing_coverage() {
+                println!(
+                    "  {} ({}): edge timestamps ±{:.3} us; pulses >= {:.3} us guaranteed; \
+                     {:.3} us chunk; {} stamps",
+                    t.mcu_ref,
+                    t.backend,
+                    t.timestamp_precision_s * 1e6,
+                    t.minimum_guaranteed_pulse_s * 1e6,
+                    t.chunk_s * 1e6,
+                    if t.cycle_exact {
+                        "cycle-exact"
+                    } else {
+                        "poll-boundary"
+                    },
+                );
+            }
+        }
+        for refusal in sched.timing_refusals() {
+            println!("TIMING INVALID: {refusal}");
         }
         // Sub-chunk pulses swallowed by the tick-evaluated digital path
         // (friction 1.16) and runtime driver contention (the model-vs-MCU case

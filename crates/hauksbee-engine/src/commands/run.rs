@@ -926,6 +926,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         // which. Disclosed independently of `analog_valid` for that reason.
         let fallback_chunk_count = engine.scheduler().fallback_chunk_count();
         let analog_abort = engine.scheduler().analog_abort_tripped();
+        let timing_refusals = engine.scheduler().timing_refusals().to_vec();
         // A co-sim that drove no GPIO, produced no net toggles, AND emitted no
         // UART did not exercise the firmware. `any_gpio_driven()` is essential:
         // a firmware that drives a control line high and HOLDS it (boot-gate style)
@@ -1334,6 +1335,18 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                  behaviour (the MCU may have stalled at boot, run no I/O, or the \
                  firmware may not match this board)."
             );
+            if cfg.strict {
+                std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+            }
+        }
+
+        // A waveform that exceeded a concrete replay capability is invalid
+        // evidence. Always disclose it; strict mode fails closed with the same
+        // INVALID code used for other evidence gaps.
+        if !timing_refusals.is_empty() {
+            for refusal in &timing_refusals {
+                eprintln!("WARNING: timing evidence invalid: {refusal}");
+            }
             if cfg.strict {
                 std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
             }
