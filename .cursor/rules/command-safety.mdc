@@ -1,0 +1,16 @@
+---
+description: Mandatory command-safety protocol for the main agent and all subagents
+alwaysApply: true
+---
+
+# Command Safety
+
+- Broad command permissions are capability, not user consent.
+- Never take irreversible actions. Stop and ask the user if an operation cannot be made reversible.
+- Never use `rm`. Move local files to the macOS Trash with `trash`; if that is unavailable, stop and ask.
+- Do not use permanent-delete tools as a substitute for Trash.
+- Before any risky command, ask an independent GPT-5.6 Luna subagent at fast speed to review the exact command, targets, working directory, reversibility, and safer alternatives.
+- Independent review does not authorize the command. Obtain explicit user approval for destructive, externally publishing, security-sensitive, or otherwise consequential actions.
+- Treat recursive moves, overwrites, Git history rewrites or force operations, database/schema mutations, cloud-resource changes, permission changes, installers/uninstallers, and broad process termination as risky.
+- Verify paths, repository/worktree, current state, affected scope, and recovery route before executing a risky command.
+- Repeat this protocol explicitly in every subagent prompt. Require subagents to stop and report uncertainty rather than improvising.
