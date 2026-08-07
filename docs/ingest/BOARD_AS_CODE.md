@@ -76,6 +76,16 @@ byte-exactness: `board -> code -> board` preserves the component set and
 every net's wiring (up to net renaming). On a clean round-trip it also
 preserves placement.
 
+That claim applies only when the DSL can preserve the input's assembly and
+identity evidence. The current component statement has no DNP or ambiguous-
+identity field, so `to-code` refuses a board containing a DNP component or a
+component whose physical identity was refused during extraction. It names the
+component and the lost evidence. This is deliberate: emitting code would make a
+DNP link fitted, or turn an unknown identity into a precise simulated part, on
+the next `from-code`/`check-code` pass. Resolve the source identity or assembly
+variant before converting; Hauksbee never launders either state through the
+editable format.
+
 Two things back that claim. In-repo, `crates/hauksbee-engine/tests/boardcode_run.rs`
 round-trips a board through `to-code` then `from-code` and asserts the
 recompiled text binds the *same* IR device set as the original

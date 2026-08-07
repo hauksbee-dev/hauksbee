@@ -376,7 +376,10 @@ A `[models.behavioral]` block is a bag of optional facts:
    - `[models.behavioral.converter.iin_program]`: a programmable
      input-current limit set by a sense resistor and a programming
      resistor, both read off the board by reference designator
-     (`rsense_ref`, `prog_ref`). The limit is `v_sense / rsense`, where
+     (`rsense_refs`, `prog_ref`). `rsense_refs` lists every matched shunt in a
+     Kelvin topology. Every named resistor must resolve, and all listed shunts
+     must agree, or the limit is unknown; named parts never fall back to a
+     literal. The limit is `v_sense / rsense`, where
      `v_sense` scales linearly with the programming resistor up to
      `v_sense_full`. The runtime regulates the output, folds it back under
      the output limit, and throttles so the reflected input draw never
@@ -407,8 +410,12 @@ A power IC's behaviour is often set by an external resistor (the LTC4020
 ILIMIT pin, the LTC6803 cell-tie network). The binder reads those resistor
 *values* off the actual board:
 
-- A converter's `iin_program` names `rsense_ref` / `prog_ref` (e.g.
-  `"R49"`, `"R8"`); the binder substitutes the on-board value.
+- A converter's `iin_program` names `rsense_refs` / `prog_ref` (e.g.
+  `["R49", "R50"]`, `"R8"`); the binder substitutes the on-board values.
+  Missing, DNP, duplicate, identity-ambiguous, unparsable, or unequal named
+  resistors make the dynamic limit unknown. Literal `rsense_ohms` and
+  `prog_ohms` remain available only for literal-only models; each is mutually
+  exclusive with its named form.
 - Any param `<name>_from_ref = "Rxx"` is rewritten to
   `<name> = ohms(Rxx)`. If the resistor is *absent* (the revision replaced
   it, e.g. the LTC6803 tie R52 replaced by a blocking diode), the binder
@@ -425,24 +432,122 @@ from topology instead and so works on any board:
 
 ```toml
 [models.ratings]
-max_current_a = 1.0        # the part's ceiling
+max_current_a = 1.2        # absolute maximum; stress monitoring only
 
 # I_REG = 1000 V / R_PROG (datasheet section 5.2)
 [models.current_program]
 pin = "prog"               # a role in [models.pins]
+semantics = "regulated_current"
+current_in_roles = ["in"]  # exact main-power roles; no name inference
+current_out_roles = ["out"]
+max_operating_current_a = 1.0
+equation = "inverse_resistance"
 k_volts = 1000.0
 ```
 
-Declare it for any part whose operating current the *board* chooses with one
-resistor: a charger's PROG, a load switch's ILIM or ISET. Two things follow.
-Checks that need a rail current compute it from the resistor actually fitted, by
-walking from that pin to ground through two-terminal parts (a closed solder link
-is a short, an open one blocks the path). And the part's `max_current_a` stops
-being read as a load anywhere, because for these parts it is a capability: the
-Olimex ESP32-EVB programs its MCP73833 at 200 mA, and treating the 1 A ceiling as
-the rail current over-reported it fivefold. A part with a current-programming pin
-and no equation is still excluded from load attribution, so adding the block
-gains coverage and omitting it costs only coverage, never correctness.
+Declare it for any part whose regulated current or protection threshold the
+*board* chooses with a resistor network. `semantics` is mandatory and keeps two
+different physical statements separate:
+
+- `regulated_current` is an operating state that can flow continuously (for
+  example, a charger's constant-current phase). It may support a steady-state
+  ampacity attribution.
+- `protection_limit` is an OCP/trip/current-limit threshold (for example,
+  AP22615 ISET or LTC4020 ILIMIT). The type records and validates that physical
+  meaning, but the generic `current_program` consumer does not simulate
+  protection thresholds or turn them into loads. A model-specific
+  `[models.behavioral]` block must separately declare any dynamic protection
+  behaviour it actually implements.
+
+Every `regulated_current` entry also declares non-empty `current_in_roles` and
+`current_out_roles`. Each item must name a role in `[models.pins]`; duplicates
+and overlap between the two directions fail validation. These are the exact
+main-power terminals to which the computed current may be attributed. Control,
+ground, enable, programming, and Kelvin-sense pins stay out unless the model
+author explicitly—and correctly—declares them. Protection thresholds need no
+power-role lists because they never become steady-state loads.
+
+For a regulated current, checks compute the populated DC-equivalent resistance
+from the programming pin to ground. The bounded nodal-conductance solve includes
+all simultaneous series/parallel/bridge branches; a closed solder link is a
+short and a capacitor/open jumper is open. A numeric fuse, thermistor,
+conflicting identity, unknown two-terminal part, or network beyond the supported
+topology makes the result undetermined rather than assumed. The block's
+`max_operating_current_a` marks the sourced equation domain. Above it, the
+default `above_domain = "abstain"` returns no current; it does not silently clamp
+an undersized programming resistor to a precise ceiling. A model may declare
+`above_domain = "saturate"` only when the source actually says the transfer
+saturates at `max_operating_current_a`. The limit is intentionally not inferred from
+`ratings.max_current_a`, which is a separate device-level analysis threshold and
+may be higher. It is normally an absolute limit; model entries that deliberately
+use a lower recommended-operating ceiling say so beside the value.
+
+The other supported shape is a continuous two-branch inverse-resistance law:
+
+```toml
+[models.current_program]
+pin = "prog"
+semantics = "regulated_current"
+current_in_roles = ["in"]
+current_out_roles = ["out"]
+max_operating_current_a = 0.401
+equation = "piecewise_inverse_resistance"
+low_k_volts = 1000.0
+transition_current_a = 0.15
+high_numerator_a = 1.2
+resistance_scale_ohms = 1000.0
+high_offset = 1.3333333333333333
+```
+
+This evaluates `low_k_volts / R` through the transition, then
+`high_numerator_a / (R / resistance_scale_ohms + high_offset)`. Validation
+rejects non-physical constants, discontinuous branches, a missing pin role, or
+an operating limit above the declared device current threshold. The TP4054 Rev
+2.1 is
+the checked-in example: Watchy's fitted 10 kOhm resistor programs 100 mA, while
+5.1 kOhm correctly uses the high-current branch and yields about 186.5 mA.
+
+A sense-programmed controller uses the third equation shape:
+
+```toml
+[models.current_program]
+pin = "ilimit"
+semantics = "protection_limit"
+equation = "sense_scaled_resistance"
+sense_roles = ["senstop", "sensbot"]
+sense_far_roles = ["sensvin", "sensgnd"]
+program_bias_a = 0.00005
+program_full_scale_v = 1.0
+sense_full_scale_v = 0.05
+```
+
+For a `regulated_current` law, the engine finds the programming network from
+`pin` to ground and exactly one populated shunt beside every named sense role,
+connected to its paired far-side role. All declared shunts must have equal
+nominal resistance; a mismatch, extra/multi-terminal branch, or wrong far-side
+net is undetermined. It then evaluates
+`min(program_bias_a * Rprogram, program_full_scale_v) /
+program_full_scale_v * sense_full_scale_v / Rsense`. Missing roles, duplicate
+roles, non-physical constants, an unreadable programming path, or an unreadable
+shunt leave the value explicitly undetermined. The LTC4020 is the checked-in
+`protection_limit` schema example: its *separate* behavioural converter derives
+1.7875 A from 7.15 kOhm/10 mOhm and 5 A at nominal full scale. The generic
+`current_program` consumer deliberately does not evaluate that protection row,
+and static ampacity does not charge the threshold to power rails or Kelvin
+stubs.
+
+These equations are datasheet point relationships. They do not silently turn a
+typical-only table row into a guaranteed upper bound: unless a model carries a
+separately sourced limit or interval, the result is a nominal programmed-current
+estimate. For example, AP22615 publishes no maximum for its 6.8 kOhm row, so its
+1 A equation result is a nominal OCP threshold and never a 1 A load assertion.
+
+For these parts, the device rating is never read as a load. The Olimex
+ESP32-EVB programs its MCP73833 at 200 mA, and treating the 1 A capability as the
+rail current over-reported it fivefold. A part with a recognizable programming
+pin and no equation is likewise excluded from rating-based attribution: adding
+the block gains coverage, while omitting it costs only coverage, never
+correctness.
 
 ## Adding a custom part without recompiling
 
@@ -492,7 +597,7 @@ vout_setpoint = 8.4        # 2S Li-ion
 efficiency = 0.90
 
 [models.behavioral.converter.iin_program]
-rsense_ref = "R43"         # 0.005 ohm input shunt, read off the board
+rsense_refs = ["R43"]      # every matched input shunt, read off the board
 prog_ref = "R42"           # the ILIMIT resistor, read off the board
 vprog_ref = 0.05           # sense threshold at prog = prog_ref_ohms
 prog_ref_ohms = 50000.0
@@ -597,8 +702,10 @@ the exact pin map, `topology = "buck_boost"`, `out_pin`/`in_pin`,
 `vout_setpoint = 28.8` (8S LiFePO4), `efficiency = 0.92`, and a populated
 `iin_program` block, and honestly left the ILIMIT transfer-function
 constants at zero because the datasheet excerpt did not state the
-programming equation (the hand model calibrated those from the documented
-60 W/88 W revision evidence, which the datasheet alone does not contain).
+programming equation. The checked-in hand model now uses the primary datasheet
+transfer (`VILIMIT = 50 uA * RILIMIT`, effective over 0--1 V, scaling the 50 mV
+input-sense threshold) rather than fitting constants to the reported fault
+wattage.
 The captured output is regression-locked offline in
 `crates/hauksbee-models/tests/suite/codex_behavioral_fixture.rs`; the live run is
 the `#[ignore]`d `extract_ltc4020_charger_live`.

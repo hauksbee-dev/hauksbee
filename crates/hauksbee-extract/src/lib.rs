@@ -71,6 +71,7 @@ pub use trace_current::{
 };
 
 use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 #[derive(Debug, thiserror::Error)]
@@ -514,38 +515,486 @@ pub(crate) fn unescape_kicad_name(s: &str) -> String {
 
 /// Collapse components that share a reference designator into one.
 ///
-/// Two placements under one designator are one electrical part with several
-/// physical instances: a test point placed on both board sides is the ordinary
-/// case (Watchy's TP4/TP5), and a connector split into two footprints is the
-/// other. The KiCad layout reader has always done this (see `pcb.rs`), because
-/// every downstream count — bind rows, `num_components`, resolve-rate
-/// denominators, [`ExtractedBoard::component`] lookups — assumes one part per
-/// designator. The exchange readers ([`odbpp`], [`ipc2581`]) route through this
-/// so a board re-exported to ODB++ or IPC-2581 reads as the same part list it
-/// does natively, rather than growing a phantom `TP4_2`.
+/// Multiple records under one designator may describe one electrical part with
+/// several physical instances (for example, a test point placed on both board
+/// sides). The KiCad layout reader has always reconciled that case (see
+/// `pcb.rs`), because every downstream count — bind rows, `num_components`,
+/// resolve-rate denominators, [`ExtractedBoard::component`] lookups — assumes
+/// one part per designator. The exchange readers ([`odbpp`], [`ipc2581`]) route
+/// through this so a board re-exported to another format keeps the same part
+/// list when its records are actually compatible.
 ///
-/// The first instance keeps its position, value and footprint; later instances
-/// contribute their pads. A part is DNP only when *every* instance is.
+/// Compatible placements reconcile their metadata and contribute all pads. A
+/// part is DNP only when *every* instance is. Conflicting values, footprints,
+/// library ids, properties, or one pin number mapped to different nets are not
+/// silently made first-wins: both records are preserved under collision-safe
+/// identities carrying an explicit `duplicate_reference_conflict` property.
+pub const DUPLICATE_REFERENCE_CONFLICT_KEY: &str = "duplicate_reference_conflict";
+
 pub(crate) fn merge_duplicate_references(components: Vec<Component>) -> Vec<Component> {
-    let mut out: Vec<Component> = Vec::with_capacity(components.len());
-    for c in components {
-        let prev = (!c.reference.is_empty())
-            .then(|| out.iter_mut().find(|p| p.reference == c.reference))
-            .flatten();
-        match prev {
-            Some(prev) => {
-                prev.pins.extend(c.pins);
-                prev.dnp = prev.dnp && c.dnp;
-                // A later instance can carry the value the first one lacked
-                // (KiCad puts the value on one footprint of a split part).
-                if prev.value.is_empty() && !c.value.is_empty() {
-                    prev.value = c.value;
+    fn append_property(component: &mut Component, key: &str, value: String) {
+        if !component
+            .properties
+            .iter()
+            .any(|(existing_key, existing_value)| existing_key == key && existing_value == &value)
+        {
+            component.properties.push((key.to_string(), value));
+        }
+    }
+
+    fn hard_conflicts(previous: &Component, incoming: &Component) -> Vec<String> {
+        let mut conflicts = Vec::new();
+        if !previous.value.is_empty()
+            && !incoming.value.is_empty()
+            && previous.value != incoming.value
+        {
+            conflicts.push(format!(
+                "values differ ('{}' versus '{}')",
+                previous.value, incoming.value
+            ));
+        }
+        if !previous.footprint.is_empty()
+            && !incoming.footprint.is_empty()
+            && previous.footprint != incoming.footprint
+        {
+            conflicts.push(format!(
+                "footprints differ ('{}' versus '{}')",
+                previous.footprint, incoming.footprint
+            ));
+        }
+        if !previous.lib_id.is_empty()
+            && !incoming.lib_id.is_empty()
+            && previous.lib_id != incoming.lib_id
+        {
+            conflicts.push(format!(
+                "library ids differ ('{}' versus '{}')",
+                previous.lib_id, incoming.lib_id
+            ));
+        }
+        for previous_pin in &previous.pins {
+            for incoming_pin in &incoming.pins {
+                if previous_pin.number == incoming_pin.number
+                    && matches!(
+                        (previous_pin.net, incoming_pin.net),
+                        (Some(previous_net), Some(incoming_net)) if previous_net != incoming_net
+                    )
+                {
+                    conflicts.push(format!(
+                        "pin '{}' maps to {:?} versus {:?}",
+                        previous_pin.number, previous_pin.net, incoming_pin.net
+                    ));
                 }
             }
-            None => out.push(c),
+        }
+        for (previous_key, previous_value) in &previous.properties {
+            for (incoming_key, incoming_value) in &incoming.properties {
+                if previous_key == incoming_key && previous_value != incoming_value {
+                    conflicts.push(format!(
+                        "property '{}' differs ('{}' versus '{}')",
+                        previous_key, previous_value, incoming_value
+                    ));
+                }
+            }
+        }
+        conflicts.sort();
+        conflicts.dedup();
+        conflicts
+    }
+
+    // Metadata order in ODB++, IPC-2581, binary Altium and ASCII Protel is not
+    // guaranteed to agree. Pick the unsuffixed representative from content,
+    // not arrival order, so reading the same conflict through another path
+    // cannot silently change what `board.component("J1")` means.
+    fn stable_component_key(component: &Component) -> String {
+        let mut properties: Vec<_> = component
+            .properties
+            .iter()
+            .filter(|(key, _)| key != DUPLICATE_REFERENCE_CONFLICT_KEY)
+            .map(|(key, value)| (key.as_str(), value.as_str()))
+            .collect();
+        properties.sort_unstable();
+        let mut pins: Vec<_> = component
+            .pins
+            .iter()
+            .map(|pin| {
+                (
+                    pin.number.as_str(),
+                    pin.net,
+                    pin.function.as_str(),
+                    pin.kind.as_str(),
+                )
+            })
+            .collect();
+        pins.sort_unstable();
+        format!(
+            "{:?}",
+            (
+                component.value.as_str(),
+                component.footprint.as_str(),
+                component.lib_id.as_str(),
+                component.dnp,
+                properties,
+                pins,
+            )
+        )
+    }
+
+    fn merge_compatible(previous: &mut Component, incoming: Component) {
+        previous.dnp = previous.dnp && incoming.dnp;
+        if previous.value.is_empty() && !incoming.value.is_empty() {
+            previous.value = incoming.value.clone();
+        }
+        if previous.footprint.is_empty() && !incoming.footprint.is_empty() {
+            previous.footprint = incoming.footprint.clone();
+        }
+        if previous.lib_id.is_empty() && !incoming.lib_id.is_empty() {
+            previous.lib_id = incoming.lib_id.clone();
+        }
+        if previous.position.is_none() {
+            previous.position = incoming.position;
+        }
+        if previous.layer.is_empty() && !incoming.layer.is_empty() {
+            previous.layer = incoming.layer.clone();
+        }
+
+        for (key, value) in incoming.properties {
+            if key == altium::VALUE_UNRESOLVED_KEY && !previous.value.is_empty() {
+                continue;
+            }
+            append_property(previous, &key, value);
+        }
+        if !previous.value.is_empty() {
+            previous
+                .properties
+                .retain(|(key, _)| key != altium::VALUE_UNRESOLVED_KEY);
+        }
+        for mut pin in incoming.pins {
+            // Readers can recover connectivity from different streams. The same
+            // physical pad may therefore be unknown in one record and known in
+            // another; enrich that record instead of manufacturing an identity
+            // conflict or two logical pins. Pads at distinct positions remain
+            // distinct physical placements even when they share pin and net.
+            if let Some(existing) = previous
+                .pins
+                .iter_mut()
+                .find(|existing| existing.number == pin.number && existing.position == pin.position)
+            {
+                if existing.net.is_none() {
+                    existing.net = pin.net;
+                } else if pin.net.is_none() {
+                    pin.net = existing.net;
+                }
+                if existing.function.is_empty() {
+                    existing.function = pin.function.clone();
+                } else if pin.function.is_empty() {
+                    pin.function = existing.function.clone();
+                }
+                if existing.kind.is_empty() {
+                    existing.kind = pin.kind.clone();
+                } else if pin.kind.is_empty() {
+                    pin.kind = existing.kind.clone();
+                }
+            }
+            // Do not deduplicate physical pad placements. A real split
+            // footprint can place the same numbered pad at the same coordinate
+            // on opposite layers (Watchy TP4/TP5); downstream electrical walks
+            // deduplicate by pin/net where needed, while geometry consumers need
+            // both records.
+            previous.pins.push(pin);
+        }
+    }
+
+    let mut used_references: HashSet<String> = components
+        .iter()
+        .filter(|component| !component.reference.is_empty())
+        .map(|component| component.reference.clone())
+        .collect();
+    let mut groups: Vec<(String, Vec<Component>)> = Vec::new();
+    let mut group_index: HashMap<String, usize> = HashMap::new();
+    for component in components {
+        if component.reference.is_empty() {
+            groups.push((String::new(), vec![component]));
+            continue;
+        }
+        let reference = component.reference.clone();
+        let index = match group_index.get(&reference).copied() {
+            Some(index) => index,
+            None => {
+                let index = groups.len();
+                groups.push((reference.clone(), Vec::new()));
+                group_index.insert(reference, index);
+                index
+            }
+        };
+        groups[index].1.push(component);
+    }
+
+    let mut out: Vec<Component> = Vec::new();
+    for (reference, mut records) in groups {
+        if reference.is_empty() || records.len() == 1 {
+            out.extend(records);
+            continue;
+        }
+
+        records.sort_by_key(stable_component_key);
+        let mut representatives: Vec<Component> = Vec::new();
+        for incoming in records {
+            if let Some(index) = representatives
+                .iter()
+                .position(|previous| hard_conflicts(previous, &incoming).is_empty())
+            {
+                merge_compatible(&mut representatives[index], incoming);
+            } else {
+                representatives.push(incoming);
+            }
+        }
+
+        if representatives.len() == 1 {
+            out.push(representatives.pop().unwrap());
+            continue;
+        }
+
+        representatives.sort_by_key(stable_component_key);
+        let mut conflicts = Vec::new();
+        for left in 0..representatives.len() {
+            for right in (left + 1)..representatives.len() {
+                conflicts.extend(hard_conflicts(
+                    &representatives[left],
+                    &representatives[right],
+                ));
+            }
+        }
+        conflicts.sort();
+        conflicts.dedup();
+        let note = format!(
+            "records named '{reference}' were kept distinct: {}",
+            conflicts.join("; ")
+        );
+
+        for (index, mut component) in representatives.into_iter().enumerate() {
+            append_property(
+                &mut component,
+                DUPLICATE_REFERENCE_CONFLICT_KEY,
+                note.clone(),
+            );
+            if index > 0 {
+                let ordinal = index + 1;
+                let candidate = format!("{reference}@conflict-{ordinal}");
+                let mut generated = candidate.clone();
+                let mut collision = 1usize;
+                while !used_references.insert(generated.clone()) {
+                    collision += 1;
+                    generated = format!("{candidate}@generated-{collision}");
+                }
+                if generated != candidate {
+                    append_property(
+                        &mut component,
+                        altium::REFERENCE_IDENTITY_NOTE_KEY,
+                        format!(
+                            "generated conflict identity '{candidate}' collided with a genuine source designator; using '{generated}'"
+                        ),
+                    );
+                }
+                component.reference = generated;
+            }
+            out.push(component);
         }
     }
     out
+}
+
+#[cfg(test)]
+mod duplicate_reference_merge_tests {
+    use super::*;
+
+    fn component(
+        reference: &str,
+        value: &str,
+        footprint: &str,
+        properties: Vec<(&str, &str)>,
+        pins: Vec<(&str, Option<i64>)>,
+    ) -> Component {
+        Component {
+            reference: reference.into(),
+            value: value.into(),
+            lib_id: footprint.into(),
+            footprint: footprint.into(),
+            position: None,
+            layer: String::new(),
+            properties: properties
+                .into_iter()
+                .map(|(key, value)| (key.into(), value.into()))
+                .collect(),
+            dnp: false,
+            pins: pins
+                .into_iter()
+                .map(|(number, net)| Pin {
+                    number: number.into(),
+                    net,
+                    function: String::new(),
+                    kind: String::new(),
+                    position: None,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn conflicting_values_or_rating_properties_are_preserved_as_distinct_parts() {
+        let merged = merge_duplicate_references(vec![
+            component(
+                "R1",
+                "10k",
+                "R0603",
+                vec![("voltage_rating", "25V")],
+                vec![("1", Some(1))],
+            ),
+            component(
+                "R1",
+                "22k",
+                "R0603",
+                vec![("voltage_rating", "50V")],
+                vec![("2", Some(2))],
+            ),
+        ]);
+
+        assert_eq!(
+            merged.len(),
+            2,
+            "conflicting metadata must not be first-wins"
+        );
+        assert_eq!(merged[0].reference, "R1");
+        assert!(merged[1].reference.starts_with("R1@conflict-"));
+        for part in &merged {
+            assert!(part
+                .properties
+                .iter()
+                .any(|(key, _)| key == "duplicate_reference_conflict"));
+        }
+    }
+
+    #[test]
+    fn one_pin_number_on_different_nets_is_never_merged() {
+        let merged = merge_duplicate_references(vec![
+            component("U1", "IC", "QFN", vec![], vec![("1", Some(10))]),
+            component("U1", "IC", "QFN", vec![], vec![("1", Some(11))]),
+        ]);
+        assert_eq!(merged.len(), 2);
+        assert_eq!(merged[0].pins[0].net, Some(10));
+        assert_eq!(merged[1].pins[0].net, Some(11));
+    }
+
+    #[test]
+    fn differing_footprints_are_conflicts_in_both_input_orders() {
+        let mut identity_map = None;
+        for reverse in [false, true] {
+            let unresolved = component(
+                "J1",
+                "",
+                "Header_A",
+                vec![(altium::VALUE_UNRESOLVED_KEY, "missing")],
+                vec![("1", Some(1))],
+            );
+            let resolved = component(
+                "J1",
+                "Conn_02x10",
+                "Header_B",
+                vec![("voltage_rating", "50V")],
+                vec![("2", Some(2))],
+            );
+            let input = if reverse {
+                vec![resolved, unresolved]
+            } else {
+                vec![unresolved, resolved]
+            };
+            let merged = merge_duplicate_references(input);
+
+            assert_eq!(merged.len(), 2);
+            assert_eq!(merged[0].reference, "J1");
+            assert!(merged[1].reference.starts_with("J1@conflict-"));
+            assert_eq!(
+                merged
+                    .iter()
+                    .map(|part| part.footprint.as_str())
+                    .collect::<std::collections::BTreeSet<_>>(),
+                std::collections::BTreeSet::from(["Header_A", "Header_B"]),
+                "neither stream order may choose a different primary footprint"
+            );
+            assert!(merged.iter().all(|part| part
+                .properties
+                .iter()
+                .any(|(key, _)| key == "duplicate_reference_conflict")));
+            let this_map: std::collections::BTreeMap<_, _> = merged
+                .iter()
+                .map(|part| (part.reference.clone(), part.footprint.clone()))
+                .collect();
+            if let Some(expected) = &identity_map {
+                assert_eq!(
+                    &this_map, expected,
+                    "the unsuffixed identity and every conflict identity must mean the same thing in either stream order"
+                );
+            } else {
+                identity_map = Some(this_map);
+            }
+        }
+    }
+
+    #[test]
+    fn generated_conflict_names_never_replace_a_genuine_designator() {
+        let merged = merge_duplicate_references(vec![
+            component("J1", "A", "Header_A", vec![], vec![("1", Some(1))]),
+            component("J1", "B", "Header_B", vec![], vec![("1", Some(2))]),
+            component(
+                "J1@conflict-2",
+                "REAL",
+                "Header_REAL",
+                vec![],
+                vec![("1", Some(3))],
+            ),
+        ]);
+
+        assert_eq!(
+            merged
+                .iter()
+                .find(|part| part.reference == "J1@conflict-2")
+                .map(|part| part.value.as_str()),
+            Some("REAL"),
+            "a source designator always wins over a generated candidate"
+        );
+        assert!(merged.iter().any(|part| {
+            part.reference.starts_with("J1@conflict-2@generated-")
+                && part
+                    .properties
+                    .iter()
+                    .any(|(key, _)| key == altium::REFERENCE_IDENTITY_NOTE_KEY)
+        }));
+    }
+
+    #[test]
+    fn repeated_pin_records_preserve_physical_placements() {
+        let merged = merge_duplicate_references(vec![
+            component("R1", "10k", "R0603", vec![], vec![("1", Some(1))]),
+            component("R1", "10k", "R0603", vec![], vec![("1", Some(1))]),
+        ]);
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0].pins.len(), 2);
+    }
+
+    #[test]
+    fn a_missing_pin_net_is_enriched_not_misreported_as_a_conflict() {
+        let merged = merge_duplicate_references(vec![
+            component("J1", "Connector", "Header", vec![], vec![("1", None)]),
+            component("J1", "Connector", "Header", vec![], vec![("1", Some(42))]),
+        ]);
+
+        assert_eq!(merged.len(), 1, "unknown versus known is not contradictory");
+        assert_eq!(merged[0].pins.len(), 2);
+        assert!(merged[0].pins.iter().all(|pin| pin.net == Some(42)));
+        assert!(!merged[0]
+            .properties
+            .iter()
+            .any(|(key, _)| key == DUPLICATE_REFERENCE_CONFLICT_KEY));
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
