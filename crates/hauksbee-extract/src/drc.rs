@@ -488,20 +488,19 @@ pub struct DrcReport {
     /// Number of copper primitives indexed (diagnostics / perf reporting).
     pub primitive_count: usize,
     /// Set when the board's `.kicad_pcb` format version is newer than the
-    /// newest one hauksbee's copper extraction is validated against (KiCad 10,
-    /// 20260206+). On those, the zone-fill geometry is not yet handled, so a
-    /// ground pour can appear to short every net it surrounds. The shorts below
-    /// are then UNRELIABLE; surfaces print this caveat and CI gates do not fail
-    /// on them. `None` on a validated version (no behaviour change).
+    /// newest one with exact KiCad DRC parity. KiCad 10 name-only nets and
+    /// keyhole antipads are handled, but remaining finding parity is still
+    /// unvalidated; surfaces print this caveat and CI gates do not fail on those
+    /// results. `None` on a validated version (no behaviour change).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version_warning: Option<String>,
 }
 
 /// The newest `.kicad_pcb` format version hauksbee's copper extraction is
-/// validated against. KiCad 9 is `20241229`; KiCad 10 (`20260206`) changed both
-/// the net encoding (name-only, no numeric ids) and the baked zone-fill geometry,
-/// neither of which is handled yet, and the kicad-cli ≤ 9 oracle cannot load it
-/// to cross-check. So `>= 20260000` is treated as unvalidated.
+/// validated against for exact finding parity. KiCad 10 is `20260206`; its
+/// name-only nets and keyhole-antipad fill contours are handled and checked
+/// against kicad-cli 10.0.5, but the complete finding set does not yet match the
+/// native DRC exactly. So `>= 20260000` remains explicitly unvalidated.
 pub const FIRST_UNVALIDATED_PCB_VERSION: u32 = 20260000;
 
 /// The `(version N)` format token from a `.kicad_pcb`, if present.
@@ -524,10 +523,9 @@ pub fn unvalidated_version_warning(text: &str) -> Option<String> {
         return None;
     }
     Some(format!(
-        "board format {v} is newer than hauksbee's validated copper extraction (KiCad 10 changed \
-         the net encoding and the baked zone-fill geometry). A ground pour may read as shorting \
-         every net it surrounds, so the shorts here are UNRELIABLE; cross-check with KiCad's own \
-         DRC. (kicad-cli \u{2264} 9 cannot load this version to cross-check either.)"
+        "board format {v} is newer than hauksbee's exact KiCad DRC parity range. KiCad 10 \
+         name-only nets and keyhole antipads are handled, but remaining findings are UNVALIDATED; \
+         cross-check with KiCad 10's own DRC."
     ))
 }
 
@@ -1766,6 +1764,223 @@ fn footprint_reference(fp: &List) -> String {
     String::new()
 }
 
+fn footprint_property(fp: &List, key: &str) -> String {
+    let legacy_key = key.to_ascii_lowercase();
+    fp.find_all("property")
+        .find_map(|prop| {
+            (prop.arg_value(0).as_deref() == Some(key))
+                .then(|| prop.arg_value(1))
+                .flatten()
+        })
+        .or_else(|| {
+            fp.find_all("fp_text").find_map(|text| {
+                (text.arg_value(0).as_deref() == Some(legacy_key.as_str()))
+                    .then(|| text.arg_value(1))
+                    .flatten()
+            })
+        })
+        .unwrap_or_default()
+}
+
+/// One electrically independent net-tie group.
+///
+/// KiCad permits several groups in one footprint. Keeping the group as the
+/// unit of exemption is load-bearing: flattening all nets by owner would waive
+/// a real collision between two otherwise independent groups.
+struct NetTieGroup {
+    owner: String,
+    nets: std::collections::HashSet<i64>,
+    geometry_by_layer: std::collections::HashMap<String, Vec<(i64, Shape)>>,
+}
+
+/// Explicit local copper-link groups. The owner remains part of every group so
+/// a legal A/B contact at NT1 never waives another A/B collision elsewhere.
+#[derive(Default)]
+struct NetTieOwners {
+    groups: Vec<NetTieGroup>,
+}
+
+impl NetTieOwners {
+    fn insert(&mut self, owner: String, nets: impl IntoIterator<Item = i64>) {
+        if owner.is_empty() {
+            return;
+        }
+        let nets: std::collections::HashSet<i64> = nets.into_iter().collect();
+        if nets.len() < 2 {
+            return;
+        }
+        self.groups.push(NetTieGroup {
+            owner,
+            nets,
+            geometry_by_layer: std::collections::HashMap::new(),
+        });
+    }
+
+    fn capture_geometry(&mut self, buckets: &LayerBuckets) {
+        for group in &mut self.groups {
+            for (layer, prims) in &buckets.by_layer {
+                for prim in prims {
+                    if prim.owner == group.owner && group.nets.contains(&prim.net) {
+                        group
+                            .geometry_by_layer
+                            .entry(layer.clone())
+                            .or_default()
+                            .push((prim.net, prim.shape.clone()));
+                    }
+                }
+            }
+        }
+    }
+
+    fn point_shape((x, y): (f64, f64)) -> Shape {
+        Shape::Capsule(Capsule {
+            ax: x,
+            ay: y,
+            bx: x,
+            by: y,
+            r: 0.0,
+        })
+    }
+
+    fn touches_geometry_at(geometry: &[(i64, Shape)], net: Option<i64>, point: (f64, f64)) -> bool {
+        let point = Self::point_shape(point);
+        geometry.iter().any(|(shape_net, shape)| {
+            net.is_none_or(|wanted| wanted == *shape_net) && {
+                let (gap, _) = shape_gap(shape, &point);
+                is_touching(gap)
+            }
+        })
+    }
+
+    fn owned_or_endpoint_attached(
+        group: &NetTieGroup,
+        primitive: &Primitive,
+        geometry: &[(i64, Shape)],
+    ) -> bool {
+        if primitive.owner == group.owner {
+            return true;
+        }
+        let Shape::Capsule(capsule) = &primitive.shape else {
+            return false;
+        };
+        [(capsule.ax, capsule.ay), (capsule.bx, capsule.by)]
+            .into_iter()
+            .any(|point| Self::touches_geometry_at(geometry, Some(primitive.net), point))
+    }
+
+    fn exempts(&self, layer: &str, a: &Primitive, b: &Primitive, contact: (f64, f64)) -> bool {
+        self.groups.iter().any(|group| {
+            group.nets.contains(&a.net)
+                && group.nets.contains(&b.net)
+                && group.geometry_by_layer.get(layer).is_some_and(|geometry| {
+                    Self::owned_or_endpoint_attached(group, a, geometry)
+                        && Self::owned_or_endpoint_attached(group, b, geometry)
+                        && Self::touches_geometry_at(geometry, None, contact)
+                })
+        })
+    }
+}
+
+/// Structured closed-pad pairs retained by older EAGLE-to-KiCad imports.
+/// Requiring both the `TIED` footprint token and `Closed(a-b)` value keeps this
+/// a declared legacy semantic rather than a generic name heuristic.
+fn legacy_kicad_closed_pad_pairs(value: &str, footprint: &str) -> Vec<(String, String)> {
+    let footprint_leaf = footprint.rsplit([':', '/']).next().unwrap_or(footprint);
+    if !footprint_leaf
+        .split(['_', '-'])
+        .any(|token| token.eq_ignore_ascii_case("tied"))
+    {
+        return Vec::new();
+    }
+
+    let lower_value = value.to_ascii_lowercase();
+    let mut pairs = Vec::new();
+    let mut cursor = 0;
+    while let Some(relative_start) = lower_value[cursor..].find("closed(") {
+        let pair_start = cursor + relative_start + "closed(".len();
+        let Some(relative_end) = lower_value[pair_start..].find(')') else {
+            break;
+        };
+        let pair_end = pair_start + relative_end;
+        if let Some((a, b)) = value[pair_start..pair_end].split_once('-') {
+            let (a, b) = (a.trim(), b.trim());
+            if !a.is_empty() && !b.is_empty() {
+                pairs.push((a.to_string(), b.to_string()));
+            }
+        }
+        cursor = pair_end + 1;
+    }
+    pairs
+}
+
+/// Insert the native KiCad net-tie groups for one footprint. Group strings are
+/// comma-separated pad numbers, and separate string arguments are separate
+/// electrical groups. A legacy `(attr net_tie)` with no group list means one
+/// group containing all pads. The narrow two-field 0R convention is retained
+/// only for old boards that predate native metadata.
+fn insert_kicad_net_tie_groups(
+    out: &mut NetTieOwners,
+    fp: &List,
+    owner: String,
+    nets: &mut NetResolver,
+) {
+    let pad_nets: std::collections::HashMap<String, i64> = fp
+        .find_all("pad")
+        .filter_map(|pad| Some((pad.arg_value(0)?, nets.net_ref(pad)?)))
+        .collect();
+
+    let group_specs: Vec<String> = fp
+        .find("net_tie_pad_groups")
+        .into_iter()
+        .flat_map(|groups| (0..).map_while(|i| groups.arg_value(i)))
+        .collect();
+    if !group_specs.is_empty() {
+        for spec in group_specs {
+            out.insert(
+                owner.clone(),
+                spec.split(',')
+                    .filter_map(|pad| pad_nets.get(pad.trim()).copied()),
+            );
+        }
+        return;
+    }
+
+    let native_attr = fp.find_all("attr").any(|attr| {
+        (0..)
+            .map_while(|i| attr.arg_value(i))
+            .any(|value| value == "net_tie")
+    });
+    let value = footprint_property(fp, "Value");
+    let footprint = fp.arg_value(0).unwrap_or_default();
+    if native_attr {
+        out.insert(owner, pad_nets.into_values());
+        return;
+    }
+
+    // Some KiCad boards imported from older EAGLE libraries predate native
+    // net-tie metadata but retain two independent, structured declarations:
+    // a footprint token `TIED` and a value such as
+    // `Closed(1-2)/Opened(2-3)`. Preserve only the explicitly closed pair; in
+    // particular, never flatten pad 3 into the 1/2 tie group.
+    let closed_pairs = legacy_kicad_closed_pad_pairs(&value, &footprint);
+    if !closed_pairs.is_empty() {
+        for (a, b) in closed_pairs {
+            out.insert(
+                owner.clone(),
+                [pad_nets.get(&a).copied(), pad_nets.get(&b).copied()]
+                    .into_iter()
+                    .flatten(),
+            );
+        }
+        return;
+    }
+
+    let legacy_zero_ohm = crate::dnp::is_explicit_zero_ohm_copper_link_fields(&value, &footprint);
+    if legacy_zero_ohm {
+        out.insert(owner, pad_nets.into_values());
+    }
+}
+
 // ── Board clearance rule ─────────────────────────────────────────────────────
 
 /// Read the board's design-rule copper clearance (mm), else the default. KiCad
@@ -1828,8 +2043,12 @@ pub fn run_drc_with_clearance_rules(doc: &Document, rules: Option<ClearanceRules
         .filter(|&id| nets.is_no_net(id))
         .collect();
 
-    let net_owners = std::collections::HashMap::new();
-    sweep_buckets(buckets, &rules, &no_net, &net_owners, |id| nets.name_of(id))
+    let mut net_ties = NetTieOwners::default();
+    for fp in root.find_all("footprint").chain(root.find_all("module")) {
+        insert_kicad_net_tie_groups(&mut net_ties, fp, footprint_reference(fp), &mut nets);
+    }
+    net_ties.capture_geometry(&buckets);
+    sweep_buckets(buckets, &rules, &no_net, &net_ties, |id| nets.name_of(id))
 }
 
 /// The geometry-source-agnostic core of the DRC: take per-layer copper buckets
@@ -1841,19 +2060,15 @@ pub fn run_drc_with_clearance_rules(doc: &Document, rules: Option<ClearanceRules
 /// ([`eagle_drc::run`]) build [`LayerBuckets`] from their own geometry and hand
 /// them here, so there is exactly one detection / classification engine.
 ///
-/// `net_owners` maps a net id to the set of component references (footprints) it
-/// has a pad inside. It feeds the intra-footprint exemption: a *track* of net A
-/// abutting a *pad* of net B that lives in footprint F is not a board short when
-/// net A also has a pad in F. That is the deliberate escape routing of a solder
-/// jumper / star-ground / fuse-clip footprint, which the router did not create
-/// and the EDA does not flag. The KiCad caller passes an empty map (its
-/// pad-vs-pad same-owner rule already covers that ecosystem's footprints); the
-/// Eagle caller fills it because Eagle tracks carry no owner of their own.
+/// `net_ties` contains only explicitly recognised net-tie/jumper footprints,
+/// keyed by owner. An exemption therefore applies only to copper touching that
+/// particular component's geometry. Merely sharing any ordinary component can
+/// never waive a net pair globally.
 fn sweep_buckets(
     buckets: LayerBuckets,
     rules: &ClearanceRules,
     no_net: &std::collections::HashSet<i64>,
-    net_owners: &std::collections::HashMap<i64, std::collections::HashSet<String>>,
+    net_ties: &NetTieOwners,
     name_of: impl Fn(i64) -> String,
 ) -> DrcReport {
     let max_clearance = rules.max_clearance();
@@ -1949,41 +2164,17 @@ fn sweep_buckets(
                 if no_net.contains(&p.net) || no_net.contains(&q.net) {
                     continue;
                 }
-                // Two pads of the *same* footprint are positioned by the
-                // footprint author, not the router. Some footprints place
-                // different-net pads deliberately abutting (fuse clips, jumper
-                // bridges, edge-connector fingers). KiCad does not treat that as
-                // a board short, so neither do we.
-                if p.kind == ItemKind::Pad
-                    && q.kind == ItemKind::Pad
-                    && !p.owner.is_empty()
-                    && p.owner == q.owner
-                {
-                    continue;
-                }
-                // Two nets that both land a pad in the *same* component are
-                // deliberately tied there: a solder jumper (`SJ`, `SMT-JUMPER`),
-                // a star-ground point, a 0-ohm / ferrite bridge (GND↔UGND on the
-                // Uno is exactly this, joined through the `GROUND` SJ jumper). The
-                // component places their pads a hair apart by design and the
-                // traces feeding it abut, which the EDA does not flag as a board
-                // short. So copper of two nets sharing a footprint is exempt:
-                // their abutment is the designer's tie, not a router-made short.
-                // (This generalises the KiCad pad-vs-pad same-owner rule to the
-                // track-vs-pad and track-vs-track forms Eagle's jumpers produce,
-                // since Eagle traces carry no owner of their own.)
-                if net_owners
-                    .get(&p.net)
-                    .zip(net_owners.get(&q.net))
-                    .is_some_and(|(fa, fb)| !fa.is_disjoint(fb))
-                {
-                    continue;
-                }
                 let name_p = name_of(p.net);
                 let name_q = name_of(q.net);
                 let clearance = rules.effective_clearance(&name_p, &name_q);
                 let (gap, (cx, cy)) = shape_gap(&p.shape, &q.shape);
                 if gap >= clearance {
+                    continue;
+                }
+                // A deliberate net tie is a local footprint property, not a
+                // global relationship between its two nets. The collision point
+                // must land on that explicit tie's own copper geometry.
+                if net_ties.exempts(layer, p, q, (cx, cy)) {
                     continue;
                 }
                 // A zone boundary edge "overlapping" a different-net pad (gap <= 0)
@@ -2038,23 +2229,13 @@ fn sweep_buckets(
         if !zones.is_empty() {
             for p in &prims {
                 // Skip zones (a pour is not "contained" in another) and no-net
-                // copper. Also skip Pads: KiCad always carves an antipad around a
-                // different-net pad, so a pad centre geometrically inside a pour is
-                // the expected fill geometry, not a short. On KiCad-10 (format
-                // 20260206) the antipad is an enclosed keyhole hole in the single
-                // fill contour that the even-odd point-in-polygon does not exclude,
-                // so a correctly-antipadded interior pad read as "inside the pour"
-                // and produced a false-positive epidemic (1668 phantom Zone<->Pad
-                // shorts on one ESC). A real pour incursion shows up as a Track /
-                // Via / Arc crossing the boundary (the BMS REG1_3V3 and FPV-Drone
-                // shorts are Track/Via<->Zone), which this pass still catches; a
-                // correctly-routed track sits in an open channel (a boundary
-                // concavity) the even-odd test handles, so tracks/vias do not
-                // false-fire. (A pad-only short to the wrong-net pour with no
-                // incursion copper is not caught here; it is rare and surfaces in
-                // connectivity. TODO: handle KiCad-10 keyhole antipads to restore
-                // a precise pad containment test.)
-                if p.kind == ItemKind::Zone || p.kind == ItemKind::Pad || no_net.contains(&p.net) {
+                // copper. Pads participate: the filled contour is the source of
+                // truth, so a pad inside solid different-net fill is a short.
+                // KiCad 10 keyhole antipads encode their void as an inner loop
+                // joined to the outer contour by a doubled-back slit; even-odd
+                // containment excludes that inner loop and keeps the valid pad
+                // silent.
+                if p.kind == ItemKind::Zone || no_net.contains(&p.net) {
                     continue;
                 }
                 let (rx, ry) = representative_point(&p.shape);
@@ -2160,7 +2341,7 @@ pub fn altium_drc_from_bytes(bytes: &[u8]) -> Result<DrcReport, crate::ExtractEr
 pub mod eagle_drc {
     use super::{
         make_prim, sweep_buckets, Capsule, ClearanceRules, DrcReport, ItemKind, LayerBuckets,
-        Shape, ARC_SEGMENTS, DEFAULT_CLEARANCE_MM,
+        NetTieOwners, Shape, ARC_SEGMENTS, DEFAULT_CLEARANCE_MM,
     };
     use quick_xml::events::Event;
     use quick_xml::Reader;
@@ -2286,6 +2467,7 @@ pub mod eagle_drc {
         name: String,
         library: String,
         package: String,
+        value: String,
         x: f64,
         y: f64,
         rot_deg: f64,
@@ -2336,7 +2518,6 @@ pub mod eagle_drc {
 
     /// Everything parsed from a `.brd`: package defs, placements, per-net copper,
     /// and the board's design-rule clearance.
-    #[derive(Default)]
     struct Parsed {
         // Keyed by (library, package): Eagle namespaces packages per <library>,
         // so same-named packages in different libraries must not merge.
@@ -2346,7 +2527,24 @@ pub mod eagle_drc {
         signals: Vec<(String, Vec<SignalGeom>)>,
         clearance_mm: Option<f64>,
         via_restring: ViaRestring,
+        pad_elongation_long_pct: f64,
+        pad_elongation_offset_pct: f64,
         saw_eagle: bool,
+    }
+
+    impl Default for Parsed {
+        fn default() -> Self {
+            Self {
+                packages: HashMap::new(),
+                elements: Vec::new(),
+                signals: Vec::new(),
+                clearance_mm: None,
+                via_restring: ViaRestring::default(),
+                pad_elongation_long_pct: 100.0,
+                pad_elongation_offset_pct: 100.0,
+                saw_eagle: false,
+            }
+        }
     }
 
     /// Via outer-diameter rule, used when a via gives no explicit `diameter`.
@@ -2483,6 +2681,7 @@ pub mod eagle_drc {
                                 name: a.get("name").cloned().unwrap_or_default(),
                                 library: a.get("library").cloned().unwrap_or_default(),
                                 package: a.get("package").cloned().unwrap_or_default(),
+                                value: a.get("value").cloned().unwrap_or_default(),
                                 x: num(&a, "x").unwrap_or(0.0),
                                 y: num(&a, "y").unwrap_or(0.0),
                                 rot_deg,
@@ -2654,6 +2853,19 @@ pub mod eagle_drc {
         }
         out.via_restring = vr;
 
+        let valid_percent = |key: &str| {
+            params
+                .get(key)
+                .and_then(|s| s.parse::<f64>().ok())
+                .filter(|v| v.is_finite() && *v >= 0.0)
+        };
+        if let Some(v) = valid_percent("psElongationLong") {
+            out.pad_elongation_long_pct = v;
+        }
+        if let Some(v) = valid_percent("psElongationOffset") {
+            out.pad_elongation_offset_pct = v;
+        }
+
         out
     }
 
@@ -2765,6 +2977,8 @@ pub mod eagle_drc {
         el: &Element,
         net: i64,
         copper_layers: &[i64],
+        long_elongation_pct: f64,
+        offset_elongation_pct: f64,
         buckets: &mut LayerBuckets,
     ) {
         // Element transform: local (lx, ly) → world. Eagle is y-up, rotation CCW.
@@ -2807,10 +3021,13 @@ pub mod eagle_drc {
                 } else {
                     drill + 2.0 * 0.2032
                 };
-                // Pad rotation combines the element rotation with the pad's own;
-                // mirroring negates the pad rotation (it is reflected).
+                // Transform the pad's local +X direction through the same
+                // flip-X then rotate(-element) matrix as its position. Under a
+                // mirror, angle p becomes 180-p before the element rotation.
+                // The 180-degree term is invisible for symmetric long pads but
+                // load-bearing for asymmetric `shape="offset"` pads.
                 let pad_rot = if el.mirrored {
-                    (el.rot_deg - rot_deg).to_radians()
+                    (180.0 - el.rot_deg - rot_deg).to_radians()
                 } else {
                     (el.rot_deg + rot_deg).to_radians()
                 };
@@ -2824,9 +3041,10 @@ pub mod eagle_drc {
                         r: 0.0,
                     },
                     "long" => {
-                        // A "long" pad is a stadium: length 2*d along the pad's
-                        // axis, width d. Model as a capsule.
-                        let half = d / 2.0; // segment half-length so total ≈ 2d
+                        // EAGLE's `psElongationLong` is the percentage added to
+                        // the circular diameter. The capsule segment contributes
+                        // that added length; its radius contributes the base `d`.
+                        let half = d * long_elongation_pct / 200.0;
                         let (rs, rc) = pad_rot.sin_cos();
                         let ax = cx - half * rc;
                         let ay = cy - half * rs;
@@ -2844,8 +3062,9 @@ pub mod eagle_drc {
                         // Offset: like "long" but the hole sits at one end, so the
                         // copper extends a full diameter to one side.
                         let (rs, rc) = pad_rot.sin_cos();
-                        let bx = cx + d * rc;
-                        let by = cy + d * rs;
+                        let extension = d * offset_elongation_pct / 100.0;
+                        let bx = cx + extension * rc;
+                        let by = cy + extension * rs;
                         Shape::Capsule(Capsule {
                             ax: cx,
                             ay: cy,
@@ -2892,7 +3111,7 @@ pub mod eagle_drc {
                     return;
                 }
                 let smd_rot = if el.mirrored {
-                    (el.rot_deg - rot_deg).to_radians()
+                    (180.0 - el.rot_deg - rot_deg).to_radians()
                 } else {
                     (el.rot_deg + rot_deg).to_radians()
                 };
@@ -3081,11 +3300,16 @@ pub mod eagle_drc {
         // (element, pad-name) → net, from contactrefs. We re-read those here via
         // the connectivity extractor's mapping so the geometry carries nets.
         let pad_net = pad_net_map(text, &parsed);
-        // net id -> set of element references it has a pad inside. Feeds the
-        // jumper / star-ground escape-routing exemption in the sweep.
-        let mut net_owners: HashMap<i64, std::collections::HashSet<String>> = HashMap::new();
-        for ((el_name, _pad), net) in &pad_net {
-            net_owners.entry(*net).or_default().insert(el_name.clone());
+        let mut net_ties = NetTieOwners::default();
+        for el in &parsed.elements {
+            if crate::dnp::is_eagle_copper_link_fields(&el.value, &el.library, &el.package) {
+                net_ties.insert(
+                    el.name.clone(),
+                    pad_net
+                        .iter()
+                        .filter_map(|((owner, _), net)| (owner == &el.name).then_some(*net)),
+                );
+            }
         }
         for el in &parsed.elements {
             let Some(items) = parsed
@@ -3099,16 +3323,25 @@ pub mod eagle_drc {
                     .get(&(el.name.clone(), item.name().to_string()))
                     .copied()
                     .unwrap_or(0);
-                place_pkg_item(item, el, net, &copper_layers, &mut buckets);
+                place_pkg_item(
+                    item,
+                    el,
+                    net,
+                    &copper_layers,
+                    parsed.pad_elongation_long_pct,
+                    parsed.pad_elongation_offset_pct,
+                    &mut buckets,
+                );
             }
         }
+        net_ties.capture_geometry(&buckets);
 
         // Net 0 (no contactref → unconnected pad) carries no connectivity, so it
         // is never a short, exactly like KiCad's net 0.
         let no_net: std::collections::HashSet<i64> = std::iter::once(0).collect();
 
         let rules = ClearanceRules::new(clearance);
-        sweep_buckets(buckets, &rules, &no_net, &net_owners, name_of)
+        sweep_buckets(buckets, &rules, &no_net, &net_ties, name_of)
     }
 
     /// Flatten a polygon's vertex ring, expanding any per-vertex `curve` (the arc
@@ -3185,7 +3418,7 @@ pub mod eagle_drc {
 pub mod altium_drc {
     use super::{
         make_prim, sweep_buckets, Capsule, ClearanceRules, DrcReport, ItemKind, LayerBuckets,
-        Shape, ARC_SEGMENTS, DEFAULT_CLEARANCE_MM,
+        NetTieOwners, Shape, ARC_SEGMENTS, DEFAULT_CLEARANCE_MM,
     };
     use crate::altium::{self, is_copper_layer, layer_name, parse_pads, MM_PER_UNIT, NONE_U16};
     use crate::ExtractError;
@@ -3233,20 +3466,32 @@ pub mod altium_drc {
             }
         };
 
-        // Component refdes by index, so geometry can carry an owner (feeds the
-        // jumper / star-ground escape-routing exemption in the sweep).
+        // Canonical component identity and native Component Type by index, so
+        // geometry ownership is channel-aware (same identity path as
+        // extraction, split placements included) and only Altium's explicit
+        // `Net Tie` / `Net Tie (In BOM)` types can receive a local exemption.
         let component_data = doc.data("Components");
         let pad_data = doc.data("Pads");
-        let comp_refs: Vec<String> = component_data
-            .map(|components| altium::parse_component_refs(&components, pad_data.as_deref()))
+        let comp_identities: Vec<altium::DrcComponentIdentity> = component_data
+            .map(|components| {
+                altium::parse_drc_component_identities(&components, pad_data.as_deref())
+            })
             .unwrap_or_default();
         let owner_of = |idx: u16| -> String {
             if idx == NONE_U16 {
                 String::new()
             } else {
-                comp_refs.get(idx as usize).cloned().unwrap_or_default()
+                comp_identities
+                    .get(idx as usize)
+                    .map(|identity| identity.reference.clone())
+                    .unwrap_or_default()
             }
         };
+        let explicit_tie_owners: HashSet<String> = comp_identities
+            .iter()
+            .filter(|identity| identity.is_net_tie)
+            .map(|identity| identity.reference.clone())
+            .collect();
 
         let mut buckets = LayerBuckets::default();
         let mut copper: HashSet<String> = HashSet::new();
@@ -3325,8 +3570,8 @@ pub mod altium_drc {
         }
 
         // ── Pads ────────────────────────────────────────────────────────────
-        // net id -> set of component refs it has a pad inside, for the exemption.
-        let mut net_owners: HashMap<i64, HashSet<String>> = HashMap::new();
+        let mut net_ties = NetTieOwners::default();
+        let mut net_tie_nets: HashMap<String, HashSet<i64>> = HashMap::new();
         if let Some(b) = doc.data("Pads") {
             let pads = parse_pads(&b);
             let pad_geo = parse_pad_geometry(&b);
@@ -3334,8 +3579,8 @@ pub mod altium_drc {
             for (p, g) in pads.iter().zip(pad_geo.iter()) {
                 let net = net_id(p.net, n_nets);
                 let owner = owner_of(p.component);
-                if net != 0 && !owner.is_empty() {
-                    net_owners.entry(net).or_default().insert(owner.clone());
+                if net != 0 && explicit_tie_owners.contains(&owner) {
+                    net_tie_nets.entry(owner.clone()).or_default().insert(net);
                 }
                 // Through-hole pads sit on the multi-layer slot; SMD pads on one
                 // copper side.
@@ -3356,6 +3601,10 @@ pub mod altium_drc {
                 }
             }
         }
+        for (owner, nets) in net_tie_nets {
+            net_ties.insert(owner, nets);
+        }
+        net_ties.capture_geometry(&buckets);
 
         // ── Polygon (copper-pour) outlines ──────────────────────────────────
         // Altium stores the requested outline; the filled copper with its
@@ -3378,13 +3627,7 @@ pub mod altium_drc {
         let no_net: HashSet<i64> = std::iter::once(0).collect();
 
         let rules = ClearanceRules::new(clearance);
-        Ok(sweep_buckets(
-            buckets,
-            &rules,
-            &no_net,
-            &net_owners,
-            name_of,
-        ))
+        Ok(sweep_buckets(buckets, &rules, &no_net, &net_ties, name_of))
     }
 
     // ── Binary record parsers (fixed layout, little-endian) ───────────────────
