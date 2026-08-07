@@ -250,7 +250,14 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         // An X2 attribute in the file body beats the file name; the name is
         // consulted only when the file itself is silent.
         let (body, declared) = if is_gerber {
-            // A gerber film has no X2 attribute to declare a span with.
+            // A gerber film carries no layer PAIR, but it can still say it is
+            // non-plated, and that has to be honoured for the same reason the
+            // Excellon side honours it: a mechanical hole drills no copper, and
+            // reading one as plated stitches the stack through a hole that has
+            // no wall. The file name is not the only place this is written.
+            if film_is_non_plated(&text) {
+                continue;
+            }
             (DrillBody::Film(text), excellon::DeclaredSpan::Absent)
         } else {
             let drill = excellon::parse(&text);
@@ -600,6 +607,21 @@ enum SpanClaim {
     Silent,
 }
 
+/// Whether a gerber-format drill film declares its own holes non-plated.
+///
+/// The plated/unplated split decides whether a hole is a conductor at all, so
+/// it has to be read wherever the file states it, not only from the file name.
+/// A film saying `NonPlated` while being called `board-drill.gbr` is exactly
+/// the case a name-only check gets wrong, in the direction that invents a net.
+fn film_is_non_plated(text: &str) -> bool {
+    let head: String = text.chars().take(4096).collect::<String>().to_uppercase();
+    let Some(at) = head.find("FILEFUNCTION").map(|i| i + "FILEFUNCTION".len()) else {
+        return false;
+    };
+    let rest = head[at..].trim_start_matches([',', ' ']);
+    rest.starts_with("NONPLATED") || rest.split(',').any(|f| f.trim().starts_with("NPTH"))
+}
+
 /// The physical layer number a copper film states for itself in its X2
 /// `%TF.FileFunction,Copper,L<n>,<side>*%` attribute, if it carries one.
 ///
@@ -672,6 +694,19 @@ fn copper_layer_tokens(
             }
         }
     }
+    // Name-derived tokens. Two rules keep these honest.
+    //
+    // The scan is by whole token, the same one the drill names go through: a
+    // film called `proj_f_cu_rev.g2l` is an inner Protel layer whose project
+    // name happens to contain the letters, and a substring test handed it the
+    // `f_cu` token, which then placed a drill's F-to-In1 span on the wrong pair.
+    //
+    // And a token claimed by two different films names neither: it is dropped
+    // rather than won by whichever came last. A span built on an ambiguous name
+    // is a span put somewhere nobody said, and there is no way to tell from
+    // here which film was meant.
+    let mut claims: std::collections::HashMap<String, Vec<usize>> =
+        std::collections::HashMap::new();
     for (role, orig_idx) in ordered {
         let LayerRole::Copper { index, .. } = role else {
             continue;
@@ -684,47 +719,39 @@ fn copper_layer_tokens(
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
-        if fname.contains("f_cu") || fname.contains("f.cu") {
-            out.insert("f_cu".to_string(), *index);
-        }
-        if fname.contains("b_cu") || fname.contains("b.cu") {
-            out.insert("b_cu".to_string(), *index);
-        }
-        if let Some(k) = inner_layer_number(&fname) {
-            out.insert(format!("in{k}_cu"), *index);
+        for tok in layer_names_in(&fname) {
+            let e = claims.entry(tok).or_default();
+            if !e.contains(index) {
+                e.push(*index);
+            }
         }
     }
-    // A job whose copper files are not KiCad-named still resolves `f_cu`/`b_cu`
-    // to the ends of the stack it does have.
+    let mut contested: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for (tok, films) in claims {
+        // A physical declaration already settled this token; it outranks a name.
+        match films.as_slice() {
+            [only] => {
+                out.entry(tok).or_insert(*only);
+            }
+            _ => {
+                contested.insert(tok);
+            }
+        }
+    }
+    // A job whose copper films are not KiCad-named still resolves `f_cu`/`b_cu`
+    // to the ends of the stack it does have. Not for a contested token though:
+    // there the trouble is that two films answer to the name, and quietly
+    // handing it to the top or bottom of the stack is the same wrong answer by
+    // a different route.
     if n > 0 {
-        out.entry("f_cu".to_string()).or_insert(0);
-        out.entry("b_cu".to_string()).or_insert(n - 1);
+        if !contested.contains("f_cu") {
+            out.entry("f_cu".to_string()).or_insert(0);
+        }
+        if !contested.contains("b_cu") {
+            out.entry("b_cu".to_string()).or_insert(n - 1);
+        }
     }
     out
-}
-
-/// The `N` in an `in<N>_cu` / `in<N>.cu` token inside a file name.
-fn inner_layer_number(fname: &str) -> Option<u32> {
-    let b: Vec<char> = fname.chars().collect();
-    for i in 0..b.len().saturating_sub(2) {
-        if b[i] != 'i' || b[i + 1] != 'n' || !b[i + 2].is_ascii_digit() {
-            continue;
-        }
-        // Must be a whole token: no letter immediately before the `in`.
-        if i > 0 && b[i - 1].is_ascii_alphabetic() {
-            continue;
-        }
-        let digits: String = b[i + 2..]
-            .iter()
-            .take_while(|c| c.is_ascii_digit())
-            .collect();
-        let after = i + 2 + digits.len();
-        let tail: String = b[after..].iter().take(3).collect();
-        if tail.starts_with("_cu") || tail.starts_with(".cu") {
-            return digits.parse().ok();
-        }
-    }
-    None
 }
 
 /// What a drill file's name said about the layers its hits reach.
@@ -1276,6 +1303,56 @@ mod span_tests {
     }
 
     #[test]
+    fn a_layer_token_two_films_both_claim_names_neither() {
+        // A Protel inner layer whose project name happens to contain "f_cu".
+        // A substring test handed it the `f_cu` token, overwriting the real top
+        // film, and a drill named `-F_Cu-In1_Cu.drl` then placed its span on
+        // the wrong pair. Two claims mean the token identifies nothing, and
+        // there is no way from here to tell which film was meant.
+        let copper: Vec<(LayerRole, PathBuf)> = vec![
+            (
+                LayerRole::Copper {
+                    index: 0,
+                    name: "F".into(),
+                },
+                PathBuf::from("board-F_Cu.gbr"),
+            ),
+            (
+                LayerRole::Copper {
+                    index: 1,
+                    name: "In1".into(),
+                },
+                PathBuf::from("board-In1_Cu.gbr"),
+            ),
+            (
+                LayerRole::Copper {
+                    index: 2,
+                    name: "In2".into(),
+                },
+                PathBuf::from("proj_f_cu_rev.g2l"),
+            ),
+        ];
+        let ordered: Vec<(LayerRole, usize)> = copper
+            .iter()
+            .enumerate()
+            .map(|(i, (r, _))| (r.clone(), i))
+            .collect();
+        let t = copper_layer_tokens(&ordered, &copper, &HashMap::new(), 3);
+        assert_eq!(t.get("f_cu"), None, "an ambiguous token names nothing");
+        assert_eq!(
+            t.get("in1_cu"),
+            Some(&1),
+            "an unambiguous one still resolves"
+        );
+        // So a drill named after the ambiguous token cannot be placed, and is
+        // refused rather than put on whichever film happened to win.
+        assert_eq!(
+            span_from_filename("board-f_cu-in1_cu.drl", &t, 3),
+            NameSpan::NamesLayersButUnplaceable
+        );
+    }
+
+    #[test]
     fn blind_and_buried_names_without_a_pair_are_flagged_unreadable() {
         assert!(names_a_partial_span("brd-blind.drl"));
         assert!(names_a_partial_span("brd-buriedvias.drl"));
@@ -1284,6 +1361,13 @@ mod span_tests {
 
     #[test]
     fn inner_layer_number_reads_only_a_whole_in_n_cu_token() {
+        let inner_layer_number = |f: &str| {
+            layer_names_in(f).into_iter().find_map(|t| {
+                t.strip_prefix("in")
+                    .and_then(|r| r.strip_suffix("_cu"))
+                    .and_then(|d| d.parse::<u32>().ok())
+            })
+        };
         assert_eq!(inner_layer_number("brd-in1_cu.gbr"), Some(1));
         assert_eq!(inner_layer_number("brd-in12_cu.gbr"), Some(12));
         assert_eq!(inner_layer_number("brd-in3.cu.gbr"), Some(3));
