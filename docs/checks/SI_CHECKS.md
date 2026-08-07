@@ -527,7 +527,8 @@ seed it either. Everything else is left unattributed and the IPC engine skips it
 For a programmable part, `ratings.max_current_a` remains a **device-level
 analysis threshold**—normally an absolute limit, or a deliberately documented
 lower operating ceiling—not a load or a promise of normal operation. The separate
-`current_program.max_operating_current_a` is the declared operating ceiling.
+`current_program.max_operating_current_a` is the declared domain of the sourced
+transfer equation.
 The populated DC-equivalent resistance is read from the layout with a bounded
 nodal-conductance solve from the programming pin to ground. Every simultaneously
 populated series, parallel, or bridge branch participates; a closed solder link
@@ -540,9 +541,12 @@ info finding names which part, which pin, and what would close the gap: the
 alternative, falling back on either ceiling, reports a number nobody measured.
 
 Every `regulated_current` model must supply a sourced
-`max_operating_current_a`; validation refuses an unbounded inverse law. The
-programming transfer within that domain is still a point estimate unless its
-model supplies separately sourced tolerances. Hauksbee does not promote a
+`max_operating_current_a`; validation refuses an unbounded inverse law. Above
+that domain the default `above_domain = "abstain"` produces an undetermined
+attribution. It clamps to the domain endpoint only when the model explicitly
+declares `above_domain = "saturate"`, which itself requires the sourced endpoint.
+The programming transfer within that domain is still a point estimate unless
+its model supplies separately sourced tolerances. Hauksbee does not promote a
 typical-only datasheet row to a guaranteed maximum, so the citation says nominal
 rather than claiming unprovided component or resistor tolerances.
 
@@ -586,7 +590,8 @@ steady-state ampacity at all.
   (`PROG -> 4.99k -> closed link -> GND`) yields the equation's own answer and a
   citation naming the resistor; an open link yields no attribution and a recorded
   gap; a filter cap on PROG is not read as the programming element; the equation
-  cannot exceed the part's declared operating domain. Unitless capacitors,
+  abstains beyond the part's declared operating domain unless saturation is an
+  explicit model fact. Unitless capacitors,
   numeric fuses, thermistors, populated parallel branches, repeated physical
   pads, simultaneous chargers, and mismatched Kelvin paths each have a direct
   regression. A plain regulator rating is explicitly proven *not* to become a

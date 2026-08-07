@@ -34,7 +34,7 @@ fn power_ics_resolve_and_carry_behavioral() {
     let conv = m.behavioral.converter.as_ref().expect("converter");
     let sp = conv.iin_program.as_ref().expect("iin_program");
     assert_eq!(sp.prog_ref.as_deref(), Some("R8"));
-    assert_eq!(sp.rsense_ref.as_deref(), Some("R49"));
+    assert_eq!(sp.rsense_refs, ["R49", "R50"]);
     let program = m.current_program.as_ref().expect("protection law");
     match &program.equation {
         hauksbee_models::schema::CurrentProgramEquation::SenseScaledResistance {
@@ -87,7 +87,7 @@ fn tp4054_uses_the_current_datasheets_piecewise_programming_law() {
     assert_eq!(model.id, "tp4054");
     assert_eq!(program.pin, "prog");
     assert_eq!(program.semantics, CurrentProgramSemantics::RegulatedCurrent);
-    assert_eq!(program.max_operating_current_a, Some(0.4));
+    assert_eq!(program.max_operating_current_a, Some(0.401));
     assert_eq!(
         model.ratings.max_current_a,
         Some(0.8),
@@ -117,7 +117,14 @@ fn tp4054_uses_the_current_datasheets_piecewise_programming_law() {
     let nominal_max = program
         .operating_current_a(1_660.0)
         .expect("a positive resistor is evaluable");
-    assert!((nominal_max - 0.4).abs() < 1e-12);
+    let nominal_equation = 1.2 / (1.66 + 4.0 / 3.0);
+    assert!((nominal_max - nominal_equation).abs() < 1e-12);
+
+    assert_eq!(
+        program.operating_current_a(100.0),
+        None,
+        "an undersized RPROG is outside the sourced equation domain; the model must not invent exact 400 mA saturation"
+    );
 }
 
 #[test]
@@ -202,7 +209,7 @@ fn ltc4020_exposes_its_two_resistor_protection_limit_to_simulation() {
         .and_then(|converter| converter.iin_program.as_ref())
         .expect("LTC4020 must retain the board-resolved ILIMIT/RSENSE law");
     assert_eq!(input_limit.prog_ref.as_deref(), Some("R8"));
-    assert_eq!(input_limit.rsense_ref.as_deref(), Some("R49"));
+    assert_eq!(input_limit.rsense_refs, ["R49", "R50"]);
 
     // Datasheet transfer: VILIMIT = 50 uA * RILIMIT, effective over 0..1 V;
     // that voltage scales the 50 mV full-scale sense threshold. Thus 20 kOhm

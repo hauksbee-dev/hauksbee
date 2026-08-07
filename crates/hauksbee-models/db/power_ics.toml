@@ -72,12 +72,11 @@ out_r_ohms = 0.01
 # Therefore the sense threshold is 0.05 * RILIMIT / 20k, capped at 0.05 V:
 #   R8 = 7.15k: 17.875 mV -> 1.7875 A through 10 mOhm
 #   R8 = 100k:  nominal full-scale 50 mV -> 5.0 A through 10 mOhm
-# rsense reads R49 off the board; prog reads R8.
+# Both matched input shunts are read off the board; prog reads R8. Missing,
+# identity-refused, or unequal shunts suppress the unsupported converter leg.
 [models.behavioral.converter.iin_program]
-rsense_ref = "R49"
-rsense_ohms = 0.01         # fallback if R49 is not found on the board
+rsense_refs = ["R49", "R50"]
 prog_ref = "R8"
-prog_ohms = 100000.0       # fallback (the faulty value) if R8 is not found
 vprog_ref = 0.05           # 50 mV full-scale sense threshold
 prog_ref_ohms = 20000.0    # 50 uA * 20 kOhm = 1 V ILIMIT full scale
 v_sense_full = 0.05        # 50 mV maximum input-sense threshold
@@ -421,14 +420,17 @@ max_voltage_v = 8.0          # VCC absolute maximum
 max_junction_temp_c = 150.0  # absolute maximum
 
 # Rev 2.1 section "Charging current setting". The normal operating endpoint is
-# 400 mA; 800 mA above is only the BAT-pin absolute maximum. The two branches
-# meet at 150 mA (RPROG = 6.667 kOhm).
+# 400 mA nominal; 800 mA above is only the BAT-pin absolute maximum. The two
+# branches meet at 150 mA (RPROG = 6.667 kOhm). The 0.401 A domain boundary
+# below is the published equation evaluated at the published 1.66 kOhm nominal
+# endpoint (0.40089 A), rounded upward only enough not to reject that cited
+# application value. It is not a saturation claim: smaller resistors abstain.
 [models.current_program]
 pin = "prog"
 semantics = "regulated_current"
 current_in_roles = ["in"]
 current_out_roles = ["out"]
-max_operating_current_a = 0.4
+max_operating_current_a = 0.401
 equation = "piecewise_inverse_resistance"
 low_k_volts = 1000.0
 transition_current_a = 0.15
