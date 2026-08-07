@@ -67,12 +67,12 @@
 //!     config net are not enumerated; the static (permanent) divider is still
 //!     decoded and the Note-1 check still runs.
 
+use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
 };
 use hauksbee_models::value::parse_value;
 use hauksbee_models::ModelLibrary;
-use hauksbee_extract::assembly::AssemblyState;
 
 /// Reference rail for the CYPD3177 config dividers (VDDD = 3.3 V).
 const VDDD: f64 = 3.3;

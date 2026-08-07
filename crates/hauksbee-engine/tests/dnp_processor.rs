@@ -193,7 +193,8 @@ fn a_left_open_link_contributes_nothing_and_its_absence_is_reported() {
     match &row.outcome {
         hauksbee_engine::report::BindOutcome::Skipped { reason } => {
             assert_eq!(
-                reason, &DnpReason::ZeroOhmLink.describe().to_string(),
+                reason,
+                &DnpReason::ZeroOhmLink.describe().to_string(),
                 "the skip must carry the policy's reason, not a generic DNP line"
             );
         }

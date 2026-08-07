@@ -33,11 +33,11 @@
 //! "e-marked charger refuses to power the Pi" fault from the topology and these
 //! thresholds alone.
 
+use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_models::value::parse_value;
 use hauksbee_solve::{dc_operating_point, SolverOptions, Workspace};
-use hauksbee_extract::assembly::AssemblyState;
 
 /// The Rp termination a source advertises, per USB Type-C spec Table 4-20.
 /// Modelled as a current source into the CC pin (the spec's "Current
