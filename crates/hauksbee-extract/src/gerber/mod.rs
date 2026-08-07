@@ -775,6 +775,121 @@ mod error_message_tests {
 }
 
 #[cfg(test)]
+mod span_tests {
+    use super::*;
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+
+    /// The token table a four-layer KiCad job produces.
+    fn kicad4() -> HashMap<String, usize> {
+        let copper: Vec<(LayerRole, PathBuf)> = vec![
+            (
+                LayerRole::Copper {
+                    index: 0,
+                    name: "F".into(),
+                },
+                PathBuf::from("brd-F_Cu.gbr"),
+            ),
+            (
+                LayerRole::Copper {
+                    index: 1,
+                    name: "In1".into(),
+                },
+                PathBuf::from("brd-In1_Cu.gbr"),
+            ),
+            (
+                LayerRole::Copper {
+                    index: 2,
+                    name: "In2".into(),
+                },
+                PathBuf::from("brd-In2_Cu.gbr"),
+            ),
+            (
+                LayerRole::Copper {
+                    index: 3,
+                    name: "B".into(),
+                },
+                PathBuf::from("brd-B_Cu.gbr"),
+            ),
+        ];
+        let ordered: Vec<(LayerRole, usize)> = copper
+            .iter()
+            .enumerate()
+            .map(|(i, (r, _))| (r.clone(), i))
+            .collect();
+        copper_layer_tokens(&ordered, &copper)
+    }
+
+    #[test]
+    fn x2_pairs_resolve_to_stack_indices_and_out_of_range_ones_do_not() {
+        // `1,4` on a four-layer board is the whole stack; `1,2` is a blind via.
+        assert_eq!(resolve_pair(1, 4, 4), Some((0, 3)));
+        assert_eq!(resolve_pair(1, 2, 4), Some((0, 1)));
+        assert_eq!(resolve_pair(2, 3, 4), Some((1, 2)));
+        // A pair naming a layer the job does not carry must NOT be clamped into
+        // the stack: clamping turns `1,6` into a through-hole, the exact
+        // fabrication the span logic exists to prevent.
+        assert_eq!(resolve_pair(1, 6, 4), None);
+        assert_eq!(resolve_pair(0, 2, 4), None);
+        assert_eq!(resolve_pair(3, 3, 4), None);
+        assert_eq!(resolve_pair(2, 1, 4), None);
+    }
+
+    #[test]
+    fn kicad_layer_named_drill_files_resolve_their_pair() {
+        let t = kicad4();
+        assert_eq!(t.get("f_cu"), Some(&0));
+        assert_eq!(t.get("in1_cu"), Some(&1));
+        assert_eq!(t.get("in2_cu"), Some(&2));
+        assert_eq!(t.get("b_cu"), Some(&3));
+        assert_eq!(span_from_filename("brd-f_cu-in1_cu.drl", &t, 4), Some((0, 1)));
+        assert_eq!(
+            span_from_filename("brd-in1_cu-in2_cu.drl", &t, 4),
+            Some((1, 2))
+        );
+        assert_eq!(span_from_filename("brd-f_cu-b_cu.drl", &t, 4), Some((0, 3)));
+        assert_eq!(span_from_filename("brd-pth-l1-l2.drl", &t, 4), Some((0, 1)));
+        assert_eq!(span_from_filename("brd-pth-l2-l3.drl", &t, 4), Some((1, 2)));
+    }
+
+    #[test]
+    fn a_name_with_no_layer_pair_yields_no_span() {
+        let t = kicad4();
+        // The ordinary drill names. None of these may be read as a pair, and in
+        // particular a project name carrying digits must not become a stackup.
+        for n in [
+            "brd-pth.drl",
+            "brd-npth.drl",
+            "esp32-evb_rev_f-pth.drl",
+            "rp2040-pico-pc-pth.drl",
+            "brd-drill.drl",
+            "brd-f_cu.drl",
+        ] {
+            assert_eq!(span_from_filename(n, &t, 4), None, "{n} is not a layer pair");
+        }
+        // Three layer tokens is not a pair either.
+        assert_eq!(span_from_filename("brd-f_cu-in1_cu-b_cu.drl", &t, 4), None);
+    }
+
+    #[test]
+    fn blind_and_buried_names_without_a_pair_are_flagged_unreadable() {
+        assert!(names_a_partial_span("brd-blind.drl"));
+        assert!(names_a_partial_span("brd-buriedvias.drl"));
+        assert!(!names_a_partial_span("brd-pth.drl"));
+    }
+
+    #[test]
+    fn inner_layer_number_reads_only_a_whole_in_n_cu_token() {
+        assert_eq!(inner_layer_number("brd-in1_cu.gbr"), Some(1));
+        assert_eq!(inner_layer_number("brd-in12_cu.gbr"), Some(12));
+        assert_eq!(inner_layer_number("brd-in3.cu.gbr"), Some(3));
+        // `main1_cu` is a project name, not an inner layer.
+        assert_eq!(inner_layer_number("main1_cu.gbr"), None);
+        assert_eq!(inner_layer_number("brd-in1_mask.gbr"), None);
+    }
+}
+
+#[cfg(test)]
 mod drill_sniff_tests {
     use super::drill_is_gerber_format;
 

@@ -619,6 +619,173 @@ M30
     }
 
     #[test]
+    fn kicad_g85_slot_carries_both_endpoints() {
+        // KiCad's canned slot: start coords, `G85`, end coords, on one line.
+        // Keying on the first X and Y (the plain modal reader) sees only the
+        // start and records a round hole, which loses the whole slot wall.
+        let d = parse(
+            "\
+M48
+; #@! TF.FileFunction,Plated,1,2,PTH
+FMAT,2
+METRIC
+T1C0.600
+%
+G90
+G05
+T1
+X3.0Y4.0G85X9.0Y4.0
+M30
+",
+        );
+        assert_eq!(d.holes.len(), 1);
+        let h = &d.holes[0];
+        assert!((h.x - 3.0).abs() < 1e-9 && (h.y - 4.0).abs() < 1e-9);
+        assert_eq!(h.to.map(|(x, y)| ((x * 1e6) as i64, (y * 1e6) as i64)),
+                   Some((9_000_000, 4_000_000)));
+        assert!((h.diameter - 0.6).abs() < 1e-9, "the routed width is the tool");
+    }
+
+    #[test]
+    fn g85_slot_in_an_inch_file_scales_both_ends() {
+        // The unit factor must reach the SECOND coordinate pair too. Applying
+        // it only to the start puts the far end 25x too close to the origin,
+        // which turns a 3 mm slot into a wall sweeping most of the board.
+        let d = parse(
+            "\
+M48
+FMAT,2
+INCH,TZ
+T4C0.0236
+%
+G90
+G05
+T4
+X5.0945Y-5.3064G85X5.0945Y-5.4667
+M30
+",
+        );
+        assert_eq!(d.holes.len(), 1);
+        let h = &d.holes[0];
+        assert!((h.x - 5.0945 * 25.4).abs() < 1e-6, "start x was {}", h.x);
+        let (tx, ty) = h.to.expect("a slot end");
+        assert!((tx - 5.0945 * 25.4).abs() < 1e-6, "end x was {tx}");
+        assert!((ty - (-5.4667) * 25.4).abs() < 1e-6, "end y was {ty}");
+        assert!((h.diameter - 0.0236 * 25.4).abs() < 1e-6);
+        // The slot is ~0.4 mm long, not the ~130 mm an unscaled end implies.
+        let len = ((tx - h.x).powi(2) + (ty - h.y).powi(2)).sqrt();
+        assert!(len < 5.0, "slot length {len} mm is not a real slot");
+    }
+
+    #[test]
+    fn a_routed_slot_becomes_one_segment_per_cut_and_no_hit_per_rapid() {
+        // Rout mode: G00 positions with the cutter up, M15 plunges, each G01
+        // cuts, M16 retracts. The rapids must NOT become drilled hits, and the
+        // two cuts must come back as two connected segments.
+        let d = parse(
+            "\
+M48
+FMAT,2
+METRIC
+T3C0.800
+%
+G90
+T3
+G00X2.0Y2.0
+M15
+G01X8.0Y2.0
+G01X8.0Y6.0
+M16
+G00X20.0Y20.0
+M30
+",
+        );
+        assert_eq!(d.holes.len(), 2, "two cuts, and neither rapid is a hit");
+        let a = &d.holes[0];
+        assert!((a.x - 2.0).abs() < 1e-9 && (a.y - 2.0).abs() < 1e-9);
+        assert_eq!(a.to, Some((8.0, 2.0)));
+        let b = &d.holes[1];
+        assert!((b.x - 8.0).abs() < 1e-9 && (b.y - 2.0).abs() < 1e-9);
+        assert_eq!(b.to, Some((8.0, 6.0)));
+        assert!((a.diameter - 0.8).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_cut_after_retract_is_not_a_slot() {
+        // A G01 with the cutter UP moves it, it does not cut. Treating every
+        // G01 as a cut paints a plated wall across the board.
+        let d = parse(
+            "\
+M48
+FMAT,2
+METRIC
+T3C0.800
+%
+G90
+T3
+G00X2.0Y2.0
+M15
+G01X8.0Y2.0
+M16
+G01X40.0Y40.0
+M30
+",
+        );
+        assert_eq!(d.holes.len(), 1);
+        assert_eq!(d.holes[0].to, Some((8.0, 2.0)));
+    }
+
+    #[test]
+    fn a_file_without_m15_keeps_its_old_reading_of_g01() {
+        // No rout mode in the file: a coordinate line that happens to carry a
+        // G-code is still a drilled hit, exactly as before.
+        let d = parse(
+            "\
+M48
+FMAT,2
+METRIC
+T1C0.300
+%
+G90
+T1
+X1.0Y1.0
+M30
+",
+        );
+        assert_eq!(d.holes.len(), 1);
+        assert!(d.holes[0].to.is_none());
+    }
+
+    #[test]
+    fn x2_layer_pair_is_read_and_a_malformed_one_is_not_invented() {
+        assert_eq!(
+            parse("M48\n; #@! TF.FileFunction,Plated,1,2,PTH\nMETRIC\n%\nM30\n").span,
+            Some(LayerPair { from: 1, to: 2 })
+        );
+        assert_eq!(
+            parse("M48\n; #@! TF.FileFunction,Plated,1,4,PTH\nMETRIC\n%\nM30\n").span,
+            Some(LayerPair { from: 1, to: 4 })
+        );
+        // Reversed, equal, or non-numeric pairs are not a span. Silence here is
+        // the caller's cue to refuse, which is safer than a fabricated pair.
+        assert_eq!(
+            parse("M48\n; #@! TF.FileFunction,Plated,4,1,PTH\nMETRIC\n%\nM30\n").span,
+            None
+        );
+        assert_eq!(
+            parse("M48\n; #@! TF.FileFunction,Plated,2,2,PTH\nMETRIC\n%\nM30\n").span,
+            None
+        );
+        assert_eq!(
+            parse("M48\n; #@! TF.FileFunction,Plated,PTH\nMETRIC\n%\nM30\n").span,
+            None
+        );
+        // A file that says nothing declares nothing.
+        assert_eq!(parse(KICAD_PTH).span, Some(LayerPair { from: 1, to: 2 }));
+        assert_eq!(parse("M48\nMETRIC\nT1C0.3\n%\nT1\nX1.0Y1.0\nM30\n").span, None);
+    }
+
+    #[test]
     fn tool_def_with_feed_speed_before_c() {
         // `T1F00S00C0.00787`: the index is the leading digits, not everything
         // up to the C.
