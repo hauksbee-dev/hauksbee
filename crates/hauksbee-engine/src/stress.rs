@@ -423,10 +423,7 @@ impl StressMonitor {
             return;
         }
         let powers = self.step_powers(circuit, node_v, branch_current);
-        self.deposit_chunk_energy(
-            &powers.iter().map(|p| p * dt).collect::<Vec<f64>>(),
-            dt,
-        );
+        self.deposit_chunk_energy(&powers.iter().map(|p| p * dt).collect::<Vec<f64>>(), dt);
     }
 
     /// Zero the pending chunk energy deposit.

@@ -2830,13 +2830,14 @@ impl Scheduler {
                     s.x.get(n.0 as usize - 1).copied().unwrap_or(0.0)
                 }
             };
-            let branch_current =
-                |id: DeviceId| layout.branch(id).and_then(|b| s.x.get(b).copied());
+            let branch_current = |id: DeviceId| layout.branch(id).and_then(|b| s.x.get(b).copied());
             let powers = stress.step_powers(circuit, &node_v, &branch_current);
             if let Some((t0, p0)) = prev.take() {
                 let dt = s.time - t0;
                 if dt > 0.0 {
-                    thermal.energy_j.resize(powers.len().max(thermal.energy_j.len()), 0.0);
+                    thermal
+                        .energy_j
+                        .resize(powers.len().max(thermal.energy_j.len()), 0.0);
                     for (slot, (pa, pb)) in thermal.energy_j.iter_mut().zip(p0.iter().zip(&powers))
                     {
                         *slot += 0.5 * (pa + pb) * dt;
@@ -2983,7 +2984,8 @@ impl Scheduler {
         // every chunk. Exact (same root, fewer iters); a size-mismatched or
         // failing seed falls back to the cold solve inside the solver.
         let mut thermal = ChunkThermalAccum::default();
-        let primary = self.march_chunk(chunk, self.opts, self.last_dc_seed.as_deref(), &mut thermal);
+        let primary =
+            self.march_chunk(chunk, self.opts, self.last_dc_seed.as_deref(), &mut thermal);
         let mut failure_reason: Option<String> = None;
         let converged = match primary {
             Ok(x) => {
