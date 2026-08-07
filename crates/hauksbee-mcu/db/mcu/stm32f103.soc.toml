@@ -205,16 +205,6 @@ frequency_hz = 8_000_000
 expected_e_machine = "EM_ARM"
 mcu_label = "STM32F103 (ARM Cortex-M3)"
 
-# Private writes into the descriptor's RCC model. Firmware cannot assert the
-# read-only ready bits through RCC_CR: board presence arrives once before boot,
-# and virtual elapsed time advances the HSE/PLL state machine after each Renode
-# slice. DS5319 rev 20 gives a typical 2 ms HSE startup and a 200 us maximum PLL
-# lock time. Transitions are conservative by at most one co-sim chunk because a
-# tick written after RunFor is visible to firmware on the next slice.
-[soc.clock_control]
-presence_command = "sysbus.rcc WriteDoubleWord 0x3FC {present}"
-tick_command = "sysbus.rcc WriteDoubleWord 0x3F8 {micros}"
-
 # WATCHDOG (measured). The inline platform's IWDG at 40 kHz does time out and
 # does reset: with a 50 ms reload never fed, the firmware's heartbeat stops at
 # the timeout and its boot marker flips a second time. But it resets ONCE, and
@@ -227,6 +217,16 @@ co-simulator, but the core does not resume afterwards: a part that would reboot 
 repeatedly under a starved watchdog goes quiet here instead, so only the FIRST \
 watchdog reset is represented on this run.\
 """
+
+# Private writes into the descriptor's RCC model. Firmware cannot assert the
+# read-only ready bits through RCC_CR: board presence arrives once before boot,
+# and virtual elapsed time advances the HSE/PLL state machine after each Renode
+# slice. DS5319 rev 20 gives a typical 2 ms HSE startup and a 200 us maximum PLL
+# lock time. Transitions are conservative by at most one co-sim chunk because a
+# tick written after RunFor is visible to firmware on the next slice.
+[soc.clock_control]
+presence_command = "sysbus.rcc WriteDoubleWord 0x3FC {present}"
+tick_command = "sysbus.rcc WriteDoubleWord 0x3F8 {micros}"
 
 [[soc.ports]]
 letter = "A"
