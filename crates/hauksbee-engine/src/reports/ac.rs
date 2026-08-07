@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::result::{
     ac_is_all_sentinel, coverage_open_active_refs, no_signal_path_reason, AcJson, AcNetJson,
-    BindSummary, CheckCoverage, JsonReport, Validity, EXIT_INVALID_FOR_ANALYSIS,
+    BindSummary, CheckCoverage, JsonReport, Refusal, Validity, EXIT_INVALID_FOR_ANALYSIS,
 };
 
 pub fn emit(
@@ -49,12 +49,18 @@ pub fn emit(
         let summary = BindSummary::from_report(&bound.report);
         let missing = nodes.join(", ");
         let reason = format!("no requested AC nodes found in the circuit: {missing}");
+        let refusal = Refusal::new(
+            format!("an AC response for requested node(s) {missing}"),
+            reason.clone(),
+            vec!["board extraction and component binding completed"],
+            "run --list-nets, replace the missing --ac-node names, then rerun the same sweep",
+        );
         if json {
             let mut jr = JsonReport::new(&bound.name, summary)
                 .with_inputs(inputs)
                 .with_evidence(evidence);
             jr.ac = Some(AcJson {
-                validity: Validity::invalid(reason),
+                validity: Validity::refused(refusal),
                 nets: Vec::new(),
                 no_signal_path_nets: Vec::new(),
                 not_found_nets: nodes.clone(),
@@ -70,6 +76,7 @@ pub fn emit(
                 }
             }
             eprintln!("  run --list-nets to see every net name, then re-run.");
+            eprintln!("{}", refusal.render_text());
             print!("{}", evidence.render_plain());
         }
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
@@ -123,12 +130,18 @@ pub fn emit(
     if nonempty.is_empty() {
         let missing = nodes.join(", ");
         let reason = format!("no requested AC nodes found in the circuit: {missing}");
+        let refusal = Refusal::new(
+            format!("an AC response for requested node(s) {missing}"),
+            reason.clone(),
+            vec!["deck/board parsing and circuit assembly completed"],
+            "run --list-nets, replace the missing --ac-node names, then rerun the same sweep",
+        );
         if json {
             let mut jr = JsonReport::new(&bound.name, summary)
                 .with_inputs(inputs)
                 .with_evidence(evidence);
             jr.ac = Some(AcJson {
-                validity: Validity::invalid(reason),
+                validity: Validity::refused(refusal),
                 nets: Vec::new(),
                 no_signal_path_nets: Vec::new(),
                 // The requested nets are ALL missing here, surface them in the
@@ -153,6 +166,7 @@ pub fn emit(
                 "  (none of the requested --ac-node nets exist in this circuit; \
                  run `--list-nets` to see every net name, then re-run.)"
             );
+            eprintln!("{}", refusal.render_text());
             print!("{}", evidence.render_plain());
         }
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
@@ -167,12 +181,18 @@ pub fn emit(
             .map(|(n, _)| n.as_str())
             .unwrap_or("the requested node");
         let reason = no_signal_path_reason(net, &summary);
+        let refusal = Refusal::new(
+            format!("an AC transfer response at {net}"),
+            reason.clone(),
+            vec!["deck/board parsing and circuit assembly completed"],
+            "bind the unresolved driving ICs with --models-dir, then rerun the same sweep",
+        );
         if json {
             let mut jr = JsonReport::new(&bound.name, summary)
                 .with_inputs(inputs)
                 .with_evidence(evidence);
             jr.ac = Some(AcJson {
-                validity: Validity::invalid(reason),
+                validity: Validity::refused(refusal.clone()),
                 nets: Vec::new(),
                 no_signal_path_nets: Vec::new(),
                 not_found_nets: Vec::new(),
@@ -186,6 +206,7 @@ pub fn emit(
                  Bind the driving ICs with --models-dir, then re-run.)",
                 crate::result::AC_FLOOR_DB
             );
+            eprintln!("{}", refusal.render_text());
             print!("{}", evidence.render_plain());
         }
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
@@ -205,6 +226,12 @@ pub fn emit(
             } else {
                 no_signal_path_reason(loop_net, &summary)
             };
+            let refusal = Refusal::new(
+                format!("loop-stability margins at {loop_net}"),
+                reason.clone(),
+                vec!["the ordinary AC sweep completed before the loop-specific guard"],
+                "choose an existing driven feedback net (use --list-nets), bind its driving ICs if open, then rerun --ac-loop",
+            );
             if json {
                 // Structured refusal on the JSON surface too, a consumer reading
                 // stdout (not the exit code) must see valid:false, not empty output.
@@ -212,7 +239,7 @@ pub fn emit(
                     .with_inputs(inputs)
                     .with_evidence(evidence);
                 jr.ac = Some(AcJson {
-                    validity: Validity::invalid(reason),
+                    validity: Validity::refused(refusal.clone()),
                     nets: vec![],
                     no_signal_path_nets: vec![loop_net.to_string()],
                     not_found_nets: Vec::new(),
@@ -225,6 +252,7 @@ pub fn emit(
                     "  (no feedback path to measure at '{loop_net}'. Bind the driving \
                      ICs with --models-dir, then re-run.)"
                 );
+                eprintln!("{}", refusal.render_text());
                 print!("{}", evidence.render_plain());
             }
             std::process::exit(EXIT_INVALID_FOR_ANALYSIS);

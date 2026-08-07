@@ -422,7 +422,7 @@
       "type": "object"
     },
     "CiJsonReport": {
-      "description": "The machine-readable result of one spec's run: the `--json` document, and\nwhat the web checks panel consumes via `/api/check`.\n\nEvery field below is ALWAYS present, including `coverage`, which is `null`\nrather than absent when the run was not a tolerance ensemble. The only\nconditionally-absent keys in each result are `why`, `waived`, and\n`evidence`, which are omitted entirely rather than set to `null`.",
+      "description": "The machine-readable result of one spec's run: the `--json` document, and\nwhat the web checks panel consumes via `/api/check`.\n\nEvery field below is ALWAYS present, including `coverage`, which is `null`\nrather than absent when the run was not a tolerance ensemble, except the\ntop-level `refusal` (exit 3 only). Inside each result, `why`, `waived`,\nand `evidence` are also conditionally absent (see [`CiJsonAssertion`]),\nomitted entirely rather than set to `null`.",
       "properties": {
         "analog_abort": {
           "description": "Did the analog co-sim trip the consecutive-failed-chunk abort. Forces\n`exit_code` 3 on its own, even when no single assertion was affected.",
@@ -496,6 +496,17 @@
         "passed": {
           "description": "The OVERALL verdict: `exit_code == 0`. Green only when the run was\ntrustworthy AND every assertion held. Never read this without\n`run_valid`: `assertions_passed` alone can be true over a run whose\nanalog side collapsed.",
           "type": "boolean"
+        },
+        "refusal": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Refusal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Useful-refusal contract, present exactly when `exit_code == 3`."
         },
         "results": {
           "description": "One entry per assertion, in spec order. An `hwtrace` assertion expands\nto one entry per (channel, feature), so this can be longer than the\nspec's `[[assert]]` list.",
@@ -1172,6 +1183,37 @@
       "required": [
         "subject",
         "parameter"
+      ],
+      "type": "object"
+    },
+    "Refusal": {
+      "description": "The C5.3 refusal contract.  Exit 3 means the requested claim could not be\nmade; it is neither a finding nor a malformed-input error.  Every renderer\ncarries these same four answers so a refusal is actionable and does not\ndiscard work that remains valid.",
+      "properties": {
+        "claim": {
+          "description": "The conclusion the run declined to make.",
+          "type": "string"
+        },
+        "missing_prerequisite": {
+          "description": "The concrete absent or invalid prerequisite that blocked that claim.",
+          "type": "string"
+        },
+        "next_action": {
+          "description": "The cheapest concrete action that can make the claim answerable.",
+          "type": "string"
+        },
+        "valid_partial_conclusions": {
+          "description": "Conclusions/artifacts produced by the run that remain trustworthy.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "claim",
+        "missing_prerequisite",
+        "valid_partial_conclusions",
+        "next_action"
       ],
       "type": "object"
     },

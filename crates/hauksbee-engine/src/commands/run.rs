@@ -10,7 +10,7 @@ use crate::binder::bind_board;
 use crate::engine::HauksbeeEngine;
 use crate::result::{
     strict_analog_exit_code, BindSummary, BootGateJson, JsonInputEvidence, JsonNote, JsonNoteKind,
-    JsonReport, EXIT_INVALID_FOR_ANALYSIS,
+    JsonReport, Refusal, EXIT_INVALID_FOR_ANALYSIS,
 };
 
 /// Plain (non-clap) mirror of the binary's `RunArgs`, so the `run` orchestrator
@@ -327,10 +327,20 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
              nothing to check, so a pass would be meaningless",
             cfg.board.display()
         );
+        let refusal = Refusal::new(
+            "a part-level verdict for this board",
+            msg.clone(),
+            vec!["the input format was recognized and parsed"],
+            "export a board revision that contains component placement, or ask only --drc/--ampacity for copper geometry",
+        );
         if cfg.json {
-            println!("{}", serde_json::json!({ "ok": false, "error": msg }));
+            println!(
+                "{}",
+                serde_json::json!({ "ok": true, "verdict": "invalid", "refusal": refusal })
+            );
         } else {
             eprintln!("error: {msg}");
+            eprintln!("{}", refusal.render_text());
         }
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
     }
@@ -780,10 +790,22 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         // That is invalid-for-analysis, not a warning, so it exits 3 like the
         // other unanswerable runs rather than reporting a vacuous success.
         if bound.mcus.is_empty() {
-            eprintln!(
-                "error: {}",
-                crate::binder::no_processor_message(&bound.dnp_mcus, crate::binder::FitRemedy::Cli)
+            let missing =
+                crate::binder::no_processor_message(&bound.dnp_mcus, crate::binder::FitRemedy::Cli);
+            let refusal = Refusal::new(
+                "firmware behavior on this board",
+                missing.clone(),
+                vec!["board extraction, binding, and static copper checks remain available"],
+                "fit/select a supported MCU on the board or remove --firmware and rerun the static analysis",
             );
+            if cfg.json {
+                let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report));
+                jr.refusal = Some(refusal);
+                println!("{}", jr.to_json());
+            } else {
+                eprintln!("error: {missing}");
+                eprintln!("{}", refusal.render_text());
+            }
             std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
         }
         let backends: Vec<String> = bound.mcus.iter().map(|m| m.backend.clone()).collect();
@@ -935,6 +957,25 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         // surface, including --json when no MCU was instantiated (cosim is None).
         let zero_activity =
             total_toggles == 0 && !uart_seen && !engine.scheduler().any_gpio_driven();
+        let strict_refusal = if cfg.strict && analog_abort {
+            Some(Refusal::new(
+                "a trustworthy strict co-sim verdict for the firmware and analog circuit",
+                format!(
+                    "the analog solver failed for {failed_chunk_count} chunk(s), including the consecutive-failure abort; affected windows held stale voltages"
+                ),
+                vec!["static board/copper findings and explicitly non-analog observations remain available"],
+                "inspect the first analog non-convergence diagnosis below, fix its named net/device, then rerun the same strict command",
+            ))
+        } else if cfg.strict && zero_activity {
+            Some(Refusal::new(
+                "firmware behavior during this strict co-simulation",
+                "the run observed no GPIO drive, net toggles, or UART output, so it cannot prove the firmware executed meaningfully",
+                vec!["board extraction, binding, and static copper findings remain valid"],
+                "verify the firmware image/MCU match and boot entry, then rerun with a probe or UART-producing fixture",
+            ))
+        } else {
+            None
+        };
 
         // Boot-safety advisory, derived once (so --json and --plain agree) from
         // the library so the TUI and web get the same advisory from the same call.
@@ -1160,6 +1201,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 jr.findings = Some(fault_findings.clone());
             }
             jr.cosim = cosim;
+            jr.refusal = strict_refusal.clone();
             println!("{}", jr.to_json());
         } else if cfg.plain {
             // A co-sim with no stress faults is NOT plainly "healthy" if it ran on
@@ -1335,7 +1377,15 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                  behaviour (the MCU may have stalled at boot, run no I/O, or the \
                  firmware may not match this board)."
             );
-            if cfg.strict {
+            if cfg.strict && !analog_abort {
+                if let (Some(findings), Some(refusal)) = (&ci_findings, &strict_refusal) {
+                    write_ci_artifacts_with_refusal(&cfg, findings, refusal)?;
+                }
+                if !cfg.json {
+                    if let Some(refusal) = &strict_refusal {
+                        eprintln!("{}", refusal.render_text());
+                    }
+                }
                 std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
             }
         }
@@ -1369,6 +1419,14 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 hauksbee_ir::docs_url("docs/about/LIMITATIONS.md"),
             );
             if let Some(code) = strict_analog_exit_code(cfg.strict && analog_abort) {
+                if let (Some(findings), Some(refusal)) = (&ci_findings, &strict_refusal) {
+                    write_ci_artifacts_with_refusal(&cfg, findings, refusal)?;
+                }
+                if !cfg.json {
+                    if let Some(refusal) = &strict_refusal {
+                        eprintln!("{}", refusal.render_text());
+                    }
+                }
                 std::process::exit(code);
             }
         }
@@ -1800,6 +1858,41 @@ fn write_ci_artifacts(
         )
         .map_err(|e| anyhow::anyhow!("writing --sarif '{}': {e}", p.display()))?;
         eprintln!("wrote SARIF report to {}", p.display());
+    }
+    Ok(())
+}
+
+/// Rewrite requested CI artifacts when the whole run refuses at exit 3. Static
+/// findings remain alongside the refusal; the artifact must not look all-green
+/// merely because the dynamic analysis stopped after it was first written.
+fn write_ci_artifacts_with_refusal(
+    cfg: &RunConfig,
+    findings: &[crate::result::JsonFinding],
+    refusal: &Refusal,
+) -> anyhow::Result<()> {
+    if let Some(p) = &cfg.junit {
+        std::fs::write(
+            p,
+            crate::reports::ci_artifacts::junit_xml_with_refusal(
+                &crate::commands::common::file_name(&cfg.board),
+                findings,
+                Some(refusal),
+            ),
+        )
+        .map_err(|e| anyhow::anyhow!("writing --junit '{}': {e}", p.display()))?;
+        eprintln!("wrote JUnit refusal report to {}", p.display());
+    }
+    if let Some(p) = &cfg.sarif {
+        std::fs::write(
+            p,
+            crate::reports::ci_artifacts::sarif_json_with_refusal(
+                &cfg.board,
+                findings,
+                Some(refusal),
+            ),
+        )
+        .map_err(|e| anyhow::anyhow!("writing --sarif '{}': {e}", p.display()))?;
+        eprintln!("wrote SARIF refusal report to {}", p.display());
     }
     Ok(())
 }

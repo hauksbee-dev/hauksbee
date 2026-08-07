@@ -207,6 +207,51 @@ fn tripped_abort_forces_exit_3_even_when_assertions_pass() {
         3,
         "a tripped analog abort refuses even when assertions pass"
     );
+
+    // C5.3: exit 3 is useful, not just distinct. The exact same structured
+    // contract must feed JSON, terminal and CI artifacts, while preserving the
+    // UART assertion that was evaluated independently of the failed analog side.
+    let refusal = result.refusal().expect("exit 3 always carries a refusal");
+    assert!(refusal.claim.contains("overall CI verdict"), "{refusal:#?}");
+    assert!(
+        refusal
+            .missing_prerequisite
+            .contains("converged analog solve"),
+        "{refusal:#?}"
+    );
+    assert!(
+        refusal
+            .valid_partial_conclusions
+            .iter()
+            .any(|p| p.contains("UART") || p.contains("non-analog")),
+        "the passing non-analog conclusion must be preserved: {refusal:#?}"
+    );
+    assert!(refusal.next_action.contains("rerun"), "{refusal:#?}");
+
+    let json: serde_json::Value =
+        serde_json::from_str(&result.render_json()).expect("CI JSON is valid");
+    assert_eq!(json["exit_code"], 3);
+    assert_eq!(json["refusal"]["claim"], refusal.claim);
+    let junit = result
+        .render_junit()
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">");
+    for rendered in [result.render_human(), junit] {
+        for field in [
+            &refusal.claim,
+            &refusal.missing_prerequisite,
+            &refusal.valid_partial_conclusions.join("; "),
+            &refusal.next_action,
+        ] {
+            assert!(
+                rendered.contains(field),
+                "surface lost {field:?}:\n{rendered}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -235,8 +280,9 @@ fn tripped_abort_with_no_invalid_assertion_errors_in_junit_not_all_green() {
     );
     // 1 real assertion + 1 synthetic abort testcase.
     assert!(xml.contains("tests=\"2\""), "{xml}");
+    let refusal = result.refusal().expect("exit 3 carries a refusal contract");
     assert!(
-        xml.contains("<error") && xml.contains("INVALID for analysis"),
+        xml.contains("<error") && xml.contains(&refusal.claim),
         "the synthetic errored testcase must be present and explain itself: {xml}"
     );
 }

@@ -229,7 +229,8 @@ fn generated_schema_pins_the_optionality() {
     );
 
     // Per-assertion: `why`, `waived`, and `evidence` carry skip_serializing_if
-    // and are the only keys in the whole document a consumer may find ABSENT.
+    // and are, with the report's top-level `refusal` (exit 3 only), the only
+    // keys in the whole document a consumer may find ABSENT.
     let assertion = &schema["definitions"]["CiJsonAssertion"];
     let a_required: Vec<&str> = assertion["required"]
         .as_array()

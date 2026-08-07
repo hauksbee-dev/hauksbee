@@ -150,13 +150,18 @@ The exact exit-code contract for `hauksbee run`:
 - **0**: clean, or a report-only run (no `--strict`, whatever it found). A gate-grade finding without `--strict` prints a stderr note saying so.
 - **1**: the board was never analysed (unreadable or unrecognized file, a Git LFS pointer, a bad path). Your input, not your board.
 - **2**: gate-grade findings under `--strict` (or `--strict-boot`), or a usage error.
-- **3**: invalid for analysis (e.g. an aborted analog solve refuses to pretend).
+- **3**: a well-formed analysis request could not produce a trustworthy answer
+  (for example, an aborted analog solve). Every exit-3 surface carries the same
+  refusal contract: the claim declined, its specific missing prerequisite, the
+  partial conclusions that remain valid, and the cheapest concrete next action.
+  Missing/unreadable input is still 1; bad options and gate findings are still 2.
 
 For `hauksbee-ci run`:
 - **0**: all assertions held.
 - **1**: an assertion failed.
 - **2**: spec/board error.
-- **3**: analog result not trustworthy.
+- **3**: analog result not trustworthy, with the same four-field refusal in
+  terminal, JSON, JUnit, GitHub annotations, and the web checks panel.
 
 **Native for agents, not just humans.** Every surface is machine-readable by design. `hauksbee run --json` and `hauksbee-ci run --json` emit one structured verdict object. Exit codes distinguish green / failed / bad-input / not-trustworthy (an aborted analog solve exits 3 rather than pretending). Honesty qualifiers (substitute MCU cores, coverage holes) come as data fields rather than prose, and the whole analyze/check flow is reachable over localhost HTTP. An AI agent can scaffold a spec with `hauksbee-ci init` and iterate it to green. It can wire the result into CI without ever opening the browser. For MCP-speaking agents, the bundled `hauksbee-mcp` binary is a stdio MCP server that exposes the same flow as structured tools: analyse a board, run a spec, list capabilities, decompile to Board-as-Code, and drive a scripted session. Registering it with Claude Code is one line:
 
