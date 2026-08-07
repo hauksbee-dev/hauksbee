@@ -124,6 +124,12 @@ fn run_at_temp(temp_c: f64, ms: u32) -> f64 {
             last_flag = v;
         }
     }
+    assert!(
+        engine.scheduler().analog_valid(),
+        "QEMU/MCU transport failed during the run; stale FLAG voltage must not \
+         make this integration test green: {:?}",
+        engine.scheduler().failed_window_diagnoses()
+    );
     last_flag
 }
 
@@ -256,5 +262,11 @@ fn esp32_i2c_temperature_change_is_live() {
         last_flag > 2.0,
         "after raising to 40 C, FLAG should go HIGH; got {last_flag:.3} V. \
          This fails if the QEMU I2C bridge does not deliver updated bytes."
+    );
+    assert!(
+        engine.scheduler().analog_valid(),
+        "QEMU/MCU transport failed during the live-temperature run; stale FLAG \
+         voltage must not make this integration test green: {:?}",
+        engine.scheduler().failed_window_diagnoses()
     );
 }
