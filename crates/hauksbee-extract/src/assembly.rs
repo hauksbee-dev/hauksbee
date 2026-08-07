@@ -1,4 +1,5 @@
 //! The shared three-state assembled-component contract.
+//! Long-form how-and-why: docs/how-and-why/hauksbee-extract/assembly.md.
 //!
 //! Every semantic check eventually asks the same question about a component
 //! record: "is this part actually on the assembled board, as the part the
