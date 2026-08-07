@@ -197,6 +197,14 @@ struct RunArgs {
     /// `[[models]] kind = "mcu"` routing entries for user SoC descriptors.
     #[arg(long, value_name = "DIR")]
     models_dir: Option<PathBuf>,
+
+    /// Write a canonical, immutable JSON reproduction manifest. It hashes the
+    /// specs and every resolved board/firmware/overlay/model/trace input,
+    /// records exact seeds/options/tool versions and safe environment selectors,
+    /// and refuses to overwrite an existing file. Replay it with
+    /// `hauksbee reproduce <FILE>`.
+    #[arg(long, value_name = "FILE")]
+    emit_manifest: Option<PathBuf>,
 }
 
 #[derive(Parser)]
@@ -269,6 +277,26 @@ fn main() -> ExitCode {
             }
             Err(e) => {
                 eprintln!("hauksbee-ci: {e}");
+                return ExitCode::from(2);
+            }
+        }
+    }
+
+    if let Some(path) = &args.emit_manifest {
+        match capture_manifest(&args) {
+            Ok(manifest) => {
+                if let Err(e) = manifest.write_new(path) {
+                    eprintln!("hauksbee-ci: {e}");
+                    return ExitCode::from(2);
+                }
+                eprintln!(
+                    "wrote immutable run manifest {} to {}",
+                    manifest.manifest_id,
+                    path.display()
+                );
+            }
+            Err(e) => {
+                eprintln!("hauksbee-ci: could not capture run manifest: {e}");
                 return ExitCode::from(2);
             }
         }
@@ -406,6 +434,143 @@ fn main() -> ExitCode {
     }
 
     ExitCode::from(worst)
+}
+
+fn capture_manifest(args: &RunArgs) -> anyhow::Result<hauksbee_engine::run_manifest::RunManifest> {
+    use std::collections::BTreeMap;
+
+    use hauksbee_engine::run_manifest::{
+        absolutize_argv_paths, board_sidecar_inputs, implicit_model_inputs, ManifestInput,
+        ManifestRequest, RunManifest, ToolIdentity,
+    };
+
+    let mut inputs = Vec::new();
+    for (index, spec_path) in args
+        .specs
+        .iter()
+        .enumerate()
+        .filter(|_| args.example.is_none())
+    {
+        let spec = hauksbee_ci::Spec::load(spec_path)?;
+        inputs.push(ManifestInput::new(format!("spec[{index}]"), spec_path));
+        let board_path = spec.board_path();
+        inputs.push(ManifestInput::new(format!("board[{index}]"), &board_path));
+        inputs.extend(board_sidecar_inputs(
+            &board_path,
+            &format!("board[{index}]"),
+        ));
+        if let Some(path) = spec.firmware_path() {
+            inputs.push(ManifestInput::new(
+                format!("firmware_source[{index}]"),
+                &path,
+            ));
+            if let Some(resolved) = hauksbee_engine::firmware_input::resolve_firmware_cli(&path)? {
+                if resolved.path != path {
+                    inputs.push(ManifestInput::new(
+                        format!("firmware_resolved[{index}]"),
+                        resolved.path,
+                    ));
+                }
+            }
+        }
+        if let Some(path) = spec.asbuilt_path() {
+            inputs.push(ManifestInput::new(format!("asbuilt[{index}]"), path));
+        }
+        if let Some(path) = spec.mcu_descriptor_dir() {
+            inputs.push(ManifestInput::new(
+                format!("mcu_descriptor_dir[{index}]"),
+                path,
+            ));
+        }
+        for (sensor_index, sensor) in spec.sensors.iter().enumerate() {
+            if let Some(path) = &sensor.spec_file {
+                let path = std::path::Path::new(path);
+                let path = if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    spec.base_dir.join(path)
+                };
+                inputs.push(ManifestInput::new(
+                    format!("sensor_spec[{index}][{sensor_index}]"),
+                    path,
+                ));
+            }
+        }
+        for (assert_index, assertion) in spec.asserts.iter().enumerate() {
+            if assertion.kind != "hwtrace" {
+                continue;
+            }
+            let trace_path = hauksbee_ci::hwtrace::trace_path(&spec, assertion)?;
+            let trace = hauksbee_ci::hwtrace::Trace::load(&trace_path)?;
+            inputs.push(ManifestInput::new(
+                format!("hardware_trace[{index}][{assert_index}]"),
+                &trace_path,
+            ));
+            for (channel_index, channel) in trace.channels.iter().enumerate() {
+                let path = std::path::Path::new(&channel.file);
+                let path = if path.is_absolute() {
+                    path.to_path_buf()
+                } else {
+                    trace.base_dir.join(path)
+                };
+                inputs.push(ManifestInput::new(
+                    format!("hardware_trace_data[{index}][{assert_index}][{channel_index}]"),
+                    path,
+                ));
+            }
+        }
+    }
+    if let Some(path) = &args.models_dir {
+        inputs.push(ManifestInput::new("models_dir", path));
+    }
+    inputs.extend(implicit_model_inputs());
+
+    let options = BTreeMap::from([
+        ("example".into(), serde_json::json!(args.example)),
+        ("json".into(), serde_json::json!(args.json)),
+        ("junit".into(), serde_json::json!(args.junit)),
+        ("models_dir".into(), serde_json::json!(args.models_dir)),
+        ("quiet".into(), serde_json::json!(args.quiet)),
+        ("seed".into(), serde_json::json!(args.seed)),
+        (
+            "specs".into(),
+            if args.example.is_some() {
+                serde_json::json!([])
+            } else {
+                serde_json::json!(args.specs)
+            },
+        ),
+    ]);
+    let mut features = Vec::new();
+    if cfg!(feature = "avr") {
+        features.push("avr".to_string());
+    }
+    if cfg!(feature = "qemu") {
+        features.push("qemu".to_string());
+    }
+    if cfg!(feature = "renode") {
+        features.push("renode".to_string());
+    }
+    let replay_paths = args
+        .specs
+        .iter()
+        .filter(|_| args.example.is_none())
+        .cloned()
+        .chain(args.models_dir.iter().cloned())
+        .chain(args.junit.iter().cloned())
+        .collect::<Vec<_>>();
+    let base = std::env::current_dir()?;
+    RunManifest::capture(ManifestRequest {
+        tool: ToolIdentity::workspace("hauksbee-ci"),
+        command: absolutize_argv_paths(
+            hauksbee_engine::run_manifest::replay_argv("hauksbee-ci"),
+            &base,
+            &replay_paths,
+        ),
+        options,
+        inputs,
+        feature_flags: features,
+    })
 }
 
 /// What `hauksbee-ci run` with nothing to run says. Names both ways to give it
