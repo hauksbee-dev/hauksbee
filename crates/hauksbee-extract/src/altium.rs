@@ -649,12 +649,13 @@ pub(crate) fn parse_net_names(buf: &[u8]) -> Vec<String> {
     out
 }
 
-/// Component reference designators in stream order (index = component field on a
-/// primitive). Used by the DRC geometry path to attach an owner to each pad.
-pub(crate) fn parse_component_refs(buf: &[u8]) -> Vec<String> {
+/// Component identities needed by the geometric DRC to recognise explicit
+/// net-tie footprints. Tuple fields are `(reference, library, pattern)` in
+/// component-stream order, matching primitive component indices.
+pub(crate) fn parse_drc_component_identities(buf: &[u8]) -> Vec<(String, String, String)> {
     parse_components(buf)
         .into_iter()
-        .map(|c| c.refdes)
+        .map(|c| (c.refdes, c.library, c.pattern))
         .collect()
 }
 

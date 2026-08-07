@@ -416,10 +416,9 @@ fn smd_smd_overlap_in_different_packages_is_a_short() {
 }
 
 #[test]
-fn shared_footprint_pads_do_not_short() {
-    // Two abutting different-net pads inside ONE element (a solder-jumper style
-    // placement): the footprint author's intent, not a board short. The two nets
-    // share element JP1, so the sweep exempts their copper.
+fn explicit_jumper_pads_do_not_short() {
+    // Only an explicitly recognised link footprint may join different nets
+    // without becoming a board-level short.
     let packages = r#"
 <package name="JUMPER">
   <smd name="1" x="0" y="0" dx="1" dy="1" layer="1"/>
@@ -438,8 +437,102 @@ fn shared_footprint_pads_do_not_short() {
     assert_eq!(
         report.short_count(),
         0,
-        "intra-footprint abutment is not a short"
+        "an explicitly named jumper may join its own local copper"
     );
+}
+
+#[test]
+fn ordinary_component_pads_on_different_nets_still_short() {
+    let packages = r#"
+<package name="QFN">
+  <smd name="1" x="0" y="0" dx="1" dy="1" layer="1"/>
+  <smd name="2" x="0.9" y="0" dx="1" dy="1" layer="1"/>
+</package>"#;
+    let elements = r#"<element name="U1" library="lib" package="QFN" x="5" y="5"/>"#;
+    let signals = r#"
+<signal name="A"><contactref element="U1" pad="1"/></signal>
+<signal name="B"><contactref element="U1" pad="2"/></signal>
+"#;
+
+    assert_short(&drc(packages, elements, signals), "A", "B");
+}
+
+#[test]
+fn long_pad_uses_board_elongation_rule() {
+    let packages = r#"
+<package name="LONG_PAD">
+  <pad name="1" x="0" y="0" drill="0.8" diameter="2" shape="long" rot="R90"/>
+</package>"#;
+    let elements = r#"<element name="J1" library="lib" package="LONG_PAD" x="5" y="5"/>"#;
+    let signals = r#"
+<signal name="A"><contactref element="J1" pad="1"/></signal>
+<signal name="B"><wire x1="0" y1="6.7" x2="10" y2="6.7" width="0.2" layer="1"/></signal>
+"#;
+    let rules = r#"<designrules name="narrow-long-pad">
+<param name="mdWireWire" value="0.1mm"/>
+<param name="mdWirePad" value="0.1mm"/>
+<param name="mdPadPad" value="0.1mm"/>
+<param name="psElongationLong" value="50"/>
+</designrules>"#;
+
+    let report = drc_rules(packages, elements, signals, rules);
+    assert_eq!(
+        report.short_count(),
+        0,
+        "50% elongation makes total pad length 1.5x its diameter"
+    );
+}
+
+#[test]
+fn shared_component_does_not_exempt_unrelated_copper() {
+    // R1 legitimately has one terminal on each net. That connectivity says
+    // nothing about an A/B track collision elsewhere on the board.
+    let packages = r#"
+<package name="R0402">
+  <smd name="1" x="-1" y="0" dx="0.5" dy="0.5" layer="1"/>
+  <smd name="2" x="1" y="0" dx="0.5" dy="0.5" layer="1"/>
+</package>"#;
+    let elements = r#"<element name="R1" library="lib" package="R0402" x="20" y="20"/>"#;
+    let signals = r#"
+<signal name="A">
+  <contactref element="R1" pad="1"/>
+  <wire x1="0" y1="0" x2="10" y2="0" width="0.4" layer="1"/>
+</signal>
+<signal name="B">
+  <contactref element="R1" pad="2"/>
+  <wire x1="5" y1="-5" x2="5" y2="5" width="0.4" layer="1"/>
+</signal>
+"#;
+
+    assert_short(&drc(packages, elements, signals), "A", "B");
+}
+
+#[test]
+fn explicit_jumper_exemption_is_local_to_its_copper() {
+    let packages = r#"
+<package name="NET_TIE">
+  <smd name="1" x="0" y="0" dx="1" dy="1" layer="1"/>
+  <smd name="2" x="0.9" y="0" dx="1" dy="1" layer="1"/>
+</package>"#;
+    let elements = r#"<element name="NT1" library="lib" package="NET_TIE" x="20" y="20"/>"#;
+    let signals = r#"
+<signal name="A">
+  <contactref element="NT1" pad="1"/>
+  <wire x1="0" y1="0" x2="10" y2="0" width="0.4" layer="1"/>
+</signal>
+<signal name="B">
+  <contactref element="NT1" pad="2"/>
+  <wire x1="5" y1="-5" x2="5" y2="5" width="0.4" layer="1"/>
+</signal>
+"#;
+    let report = drc(packages, elements, signals);
+
+    assert_eq!(
+        report.short_count(),
+        1,
+        "only the unrelated track short fires"
+    );
+    assert_short(&report, "A", "B");
 }
 
 #[test]
