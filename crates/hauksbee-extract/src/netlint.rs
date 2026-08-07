@@ -78,6 +78,21 @@ pub enum LintCheck {
     /// grows incrementally; seeded with the CYPD3177 USB-C PD sink. Produced by
     /// the engine-layer `device_decode` check.
     DeviceDecode,
+    /// A part's signal pin sits in a HIGHER voltage domain than the part's own
+    /// supply rail: the pin's net is tied or pulled up to a rail above the
+    /// supply, so current flows through the pin's protection clamp into the
+    /// lower rail (back-powering an unpowered domain at power-down, and
+    /// exceeding the VCC+0.5 V input abs-max whenever the pin is not
+    /// explicitly higher-voltage-tolerant). Produced by the engine-layer
+    /// `back_power` check.
+    BackPower,
+    /// An I2C bus whose pull-ups are mis-sized for its load: too strong (the
+    /// effective pull-up demands more sink current than the I2C spec's 3 mA to
+    /// reach VOL, so devices may never read a valid low) or, advisorily, too
+    /// weak for the estimated bus capacitance to meet the rise-time budget.
+    /// The presence of pull-ups is `MissingI2cPullup`; this is their sizing.
+    /// Produced by the engine-layer `bus_loading` check.
+    I2cBusLoading,
 }
 
 impl LintCheck {
@@ -94,6 +109,8 @@ impl LintCheck {
             LintCheck::PlaceholderValue => "placeholder_value",
             LintCheck::UncheckedMcu => "unchecked_mcu",
             LintCheck::DeviceDecode => "device_decode",
+            LintCheck::BackPower => "back_power",
+            LintCheck::I2cBusLoading => "i2c_bus_loading",
         }
     }
 }

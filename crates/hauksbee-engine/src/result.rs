@@ -1779,6 +1779,12 @@ pub fn lint_fix_hint(check: LintCheck, severity: Severity) -> Option<&'static st
         LintCheck::DeviceDecode => {
             "Re-pick the divider resistors so the config pin lands in the intended datasheet band, per the part's decode table."
         }
+        LintCheck::BackPower => {
+            "Pull the pin up to the part's own supply rail instead, or put a proper level shifter between the domains; if the pin is documented higher-voltage-tolerant, note that in the design."
+        }
+        LintCheck::I2cBusLoading => {
+            "Re-pick the pull-ups so the sink current stays under 3 mA (R > (Vrail - 0.4 V) / 3 mA) and the rise time fits the bus speed; 2.2k-4.7k suits most 3.3 V buses."
+        }
     })
 }
 
