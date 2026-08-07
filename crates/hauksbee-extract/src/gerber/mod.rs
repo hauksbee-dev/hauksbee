@@ -172,7 +172,16 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
     let ordered = layers::assign_inner_indices(role_only);
 
     // Parse each copper layer into primitives, in stack order.
+    //
+    // A film may also state its own PHYSICAL layer number in an X2 attribute
+    // (`%TF.FileFunction,Copper,L4,Bot*%`). That is the only thing in a gerber
+    // job that ties a film to a position in the real stackup, and it is what
+    // makes a drill file's layer pair placeable: without it we only know which
+    // films we found, not which of the board's layers they are.
     let mut layer_prims: Vec<Vec<rs274x::CopperPrim>> = vec![Vec::new(); ordered.len()];
+    let mut physical_to_stack: std::collections::HashMap<u32, usize> =
+        std::collections::HashMap::new();
+    let mut declared_physical_max: u32 = 0;
     for (role, orig_idx) in &ordered {
         let LayerRole::Copper { index, .. } = role else {
             continue;
@@ -180,6 +189,10 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         let path = &copper[*orig_idx].1;
         let text = std::fs::read_to_string(path)
             .map_err(|e| ExtractError::Xml(format!("read {}: {e}", path.display())))?;
+        if let Some(l) = copper_physical_layer(&text) {
+            physical_to_stack.insert(l, *index);
+            declared_physical_max = declared_physical_max.max(l);
+        }
         match rs274x::parse_layer(&text) {
             Ok(prims) => layer_prims[*index] = prims,
             Err(e) => {
@@ -285,7 +298,8 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         })
         .max()
         .unwrap_or(0)
-        .max(n_copper);
+        .max(n_copper)
+        .max(declared_physical_max as usize);
     if implied_layers > n_copper {
         notes.push(format!(
             "the drill files describe a {implied_layers}-layer board but only {n_copper} copper \
@@ -299,19 +313,34 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
     for p in parsed.iter_mut() {
         p.claim = match p.declared {
             excellon::DeclaredSpan::Pair(pair) => {
-                if pair.from == 1 && pair.to as usize == implied_layers {
-                    // Top to bottom of the board the drill set describes: this
+                // (a) Both ends name a film that told us its physical layer:
+                // the placement is exact, whatever else is missing.
+                if let (Some(&f), Some(&t)) = (
+                    physical_to_stack.get(&pair.from),
+                    physical_to_stack.get(&pair.to),
+                ) {
+                    SpanClaim::Resolved(f.min(t), f.max(t))
+                } else if pair.from == 1 && pair.to as usize == implied_layers {
+                    // (b) Top to bottom of the board the files describe: this
                     // hit goes right through, which stays true whatever subset
                     // of the films we classified.
                     SpanClaim::Resolved(0, n_copper.saturating_sub(1))
-                } else {
+                } else if implied_layers == n_copper {
+                    // (c) Nothing says the board has more layers than the films
+                    // we found, so the films ARE the stack and the 1-based pair
+                    // indexes straight into it.
                     match resolve_pair(pair.from, pair.to, n_copper) {
                         Some((f, t)) => SpanClaim::Resolved(f, t),
-                        // A partial span we cannot place. NOT silence: a file
-                        // that named its span is the last one whose hits may be
-                        // assumed to reach everything.
                         None => SpanClaim::DeclaredButUnresolvable,
                     }
+                } else {
+                    // A partial span against a stack we know is incomplete. The
+                    // film at index 1 is only "layer 2" if no layer is missing
+                    // above it, and here one is, so indexing into our densified
+                    // films would place the via somewhere it does not go. NOT
+                    // silence either: a file that named its span is the last one
+                    // whose hits may be assumed to reach everything.
+                    SpanClaim::DeclaredButUnresolvable
                 }
             }
             excellon::DeclaredSpan::Unreadable => SpanClaim::DeclaredButUnresolvable,
@@ -530,6 +559,32 @@ enum SpanClaim {
     /// The file said nothing about a span. Safe as a through-hole on a job with
     /// no other span in it; ambiguous on a job that has one.
     Silent,
+}
+
+/// The physical layer number a copper film states for itself in its X2
+/// `%TF.FileFunction,Copper,L<n>,<side>*%` attribute, if it carries one.
+///
+/// This is the film saying where it sits in the real stackup, which is exactly
+/// what the filename cannot be trusted to say: KiCad writes an inner layer's
+/// film under the user's own label, so `-GND_Cu.gbr` gives no clue that it is
+/// L3 while its `Copper,L3,Inr` attribute says so outright.
+fn copper_physical_layer(text: &str) -> Option<u32> {
+    // The attribute is short and near the top of every file that has one.
+    let head: String = text.chars().take(4096).collect::<String>().to_uppercase();
+    let at = head.find("FILEFUNCTION")? + "FILEFUNCTION".len();
+    let rest = head[at..].trim_start_matches([',', ' ']);
+    let mut fields = rest.split(',').map(|f| f.trim());
+    if fields.next()? != "COPPER" {
+        return None;
+    }
+    let digits: String = fields
+        .next()?
+        .strip_prefix('L')?
+        .chars()
+        .take_while(|c| c.is_ascii_digit())
+        .collect();
+    let n: u32 = digits.parse().ok()?;
+    (n >= 1).then_some(n)
 }
 
 /// Turn a 1-based X2 layer pair into inclusive 0-based stack indices, rejecting
