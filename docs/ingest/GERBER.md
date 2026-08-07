@@ -139,6 +139,15 @@ raised, so it drills nothing, and a `G01` after `M16` is a move rather than
 a cut. A file with no `M15` in it is not in rout mode at all and keeps its
 previous reading, so no existing job changes behaviour.
 
+A `G02`/`G03` arc cut is tessellated about its `I`/`J` centre at the same
+16-segments-per-circle resolution the RS-274X plotter gives a copper arc, so
+a routed arc and a drawn arc resolve a tangent contact the same way. The
+chain of chords under-covers the true swept area rather than over-covering
+it, so this can miss a hairline tangent but cannot invent a contact. An arc
+with no readable centre produces no geometry at all: planting a round hit at
+the endpoint instead, which is what a fall-through to the plain coordinate
+reader would do, invents a hole the file never described.
+
 The refusal is plating. An **unplated** slot is a mechanical cut with no
 copper wall, and it connects nothing, however exactly it overlays two pads.
 Plated-ness comes from the file's `TF.FileFunction` attribute or its name,
@@ -170,18 +179,31 @@ comes from the drill file's X2 `TF.FileFunction` layer pair
 (`Plated,1,2,PTH` is layers 1 to 2, not the whole stack), and failing that
 from a file name that encodes the pair (`-L1-L2.drl`, or KiCad's
 `-F_Cu-In1_Cu.drl`, resolved against the copper layers this job actually
-carries). A pair naming a layer the job does not have is never clamped into
-the stack, because clamping `1,6` on a four-layer job produces exactly the
-through-hole the span logic exists to prevent.
+carries).
 
 The refusal is the important part. Treating every drill as a through-hole
 merges nets the real stackup keeps apart, which is a phantom short: the
-reader inventing a connection nobody designed. So a drill file that says
-nothing about its span is read as a through-hole only on a job where nothing
-else says otherwise. On a job that demonstrably uses more than one span, a
-silent file is ambiguous, its hits stitch no layers at all, and a reader note
-names the file and says what would recover it. `ReconStats::refused_span_holes`
-counts those hits and `ReconStats::notes` carries the text.
+reader inventing a connection nobody designed. Three cases refuse, and each
+one is a case where a reading exists that would look fine and be wrong.
+
+- **A declaration we cannot use.** A pair naming a layer this job does not
+  carry, or a reversed or degenerate one, is never clamped into the stack:
+  clamping `1,6` on a four-layer job produces exactly the through-hole the
+  span logic exists to prevent. It is also not treated as silence, which
+  matters because silence on a single-drill job is safely a through-hole. A
+  file that tried to state its span and failed is the last file whose hits
+  may be assumed to reach everything, precisely because the declaration
+  exists only when the span is not obvious.
+- **Silence on a multi-span job.** A drill file that says nothing is read as
+  a through-hole only where nothing else in the job says otherwise. Once a
+  sibling declares a partial span, silence is ambiguous and the silent
+  file's hits stitch nothing.
+- **A name that says blind or buried without saying which layers.** There is
+  no reading of that, only a refusal.
+
+Each refusal emits a reader note naming the file and saying what would
+recover it. `ReconStats::refused_span_holes` counts the hits and
+`ReconStats::notes` carries the text.
 
 That direction is deliberate. A refused stitch under-reports connectivity:
 conductors that meet only through those hits come back as separate nets, the
