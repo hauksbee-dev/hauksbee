@@ -6,6 +6,9 @@
 
 use std::path::{Path, PathBuf};
 
+use hauksbee_ir::evidence::{
+    ModelLayer, ModelSource, ModelSourceTier, ModelUncertainty, ModelValidation,
+};
 use hauksbee_models::{ModelLibrary, Pack, PackStore};
 
 /// `hauksbee models lint <file>`: standalone validation of model TOML.
@@ -634,6 +637,18 @@ pub fn list(builtin: bool) -> anyhow::Result<()> {
 /// won and from which priority layer: the pack author's debugging surface
 /// (the layer-annotated extension of `run --report`'s bind table).
 pub fn resolve(board_path: &Path, models_dir: Option<&Path>, json: bool) -> anyhow::Result<()> {
+    resolve_checked(board_path, models_dir, json, ModelRequirement::default())
+}
+
+/// Resolve and optionally refuse when selected sources do not meet an explicit
+/// accuracy policy. A refusal is exit 3: the input parsed, but the requested
+/// analysis accuracy cannot be vouched for.
+pub fn resolve_checked(
+    board_path: &Path,
+    models_dir: Option<&Path>,
+    json: bool,
+    requirement: ModelRequirement,
+) -> anyhow::Result<()> {
     // The shared board-input normalizer. A private mini board-code compile +
     // schematic dispatch here would leave `models resolve` accepting a
     // different format set than `run` (no Altium, no gerber, no zipped
@@ -641,12 +656,103 @@ pub fn resolve(board_path: &Path, models_dir: Option<&Path>, json: bool) -> anyh
     let board = crate::board_input::from_path(board_path)?.board;
     let extra: Vec<&Path> = models_dir.into_iter().collect();
     let lib = ModelLibrary::builtin_with_user_dirs(&extra);
+    let refusals = model_requirement_refusals(&lib, &board, requirement);
     if json {
-        println!("{}", resolve_report_json(&lib, &board));
+        let mut value: serde_json::Value =
+            serde_json::from_str(&resolve_report_json(&lib, &board))?;
+        if !refusals.is_empty() {
+            value["ok"] = serde_json::Value::Bool(false);
+            value["status"] = serde_json::Value::String("invalid_for_analysis".to_string());
+            value["reason"] = serde_json::Value::String("model_accuracy_insufficient".to_string());
+            value["refusals"] = serde_json::to_value(&refusals)?;
+        }
+        println!("{value}");
     } else {
         print!("{}", resolve_report(&lib, &board));
+        for refusal in &refusals {
+            eprintln!(
+                "REFUSED {} ({}): {}",
+                refusal.reference, refusal.model, refusal.reason
+            );
+        }
+    }
+    if !refusals.is_empty() {
+        std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())
+}
+
+/// Optional fail-closed policy for the model-resolution validation surface.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ModelRequirement {
+    pub minimum_tier: Option<ModelSourceTier>,
+    pub minimum_validation: Option<ModelValidation>,
+    pub require_intervals: bool,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ModelRequirementRefusal {
+    pub reference: String,
+    pub model: String,
+    pub reason: String,
+}
+
+pub fn model_requirement_refusals(
+    lib: &ModelLibrary,
+    board: &hauksbee_extract::ExtractedBoard,
+    requirement: ModelRequirement,
+) -> Vec<ModelRequirementRefusal> {
+    if requirement.minimum_tier.is_none()
+        && requirement.minimum_validation.is_none()
+        && !requirement.require_intervals
+    {
+        return Vec::new();
+    }
+
+    resolve_rows(lib, board)
+        .into_iter()
+        .filter_map(|row| {
+            let reason = if !row.resolved {
+                Some("component is explicitly open because no model resolved".to_string())
+            } else if requirement
+                .minimum_tier
+                .is_some_and(|minimum| row.source.tier().priority() < minimum.priority())
+            {
+                Some(format!(
+                    "source tier {} is below required {}",
+                    row.source.tier(),
+                    requirement.minimum_tier.expect("checked above")
+                ))
+            } else if requirement
+                .minimum_validation
+                .is_some_and(|minimum| row.source.validation().priority() < minimum.priority())
+            {
+                Some(format!(
+                    "validation {} is below required {}",
+                    row.source.validation(),
+                    requirement.minimum_validation.expect("checked above")
+                ))
+            } else if requirement.require_intervals
+                && row
+                    .source
+                    .uncertainty()
+                    .iter()
+                    .any(|value| !value.is_strict_bound())
+            {
+                Some(
+                    "model has no validated two-sided specification or empirical error interval"
+                        .to_string(),
+                )
+            } else {
+                None
+            }?;
+            Some(ModelRequirementRefusal {
+                reference: row.reference,
+                model: row.model,
+                reason,
+            })
+        })
+        .collect()
 }
 
 /// One resolved (or unresolved) component row: the single source both the text
@@ -657,7 +763,41 @@ struct ResolveRow {
     model: String,
     layer: String,
     origin: String,
+    source: ModelSource,
     resolved: bool,
+}
+
+fn open_source(reference: &str) -> ModelSource {
+    ModelSource::new(
+        ModelSourceTier::Open,
+        ModelLayer::Unspecified,
+        "unresolved",
+        ModelValidation::Unvalidated,
+        vec![ModelUncertainty::unknown(
+            format!("{reference}.model"),
+            "no model resolved; the component is explicitly open",
+        )
+        .expect("static uncertainty is valid")],
+    )
+    .expect("static open source is valid")
+}
+
+fn uncertainty_label(source: &ModelSource) -> String {
+    if source
+        .uncertainty()
+        .iter()
+        .any(|value| matches!(value, ModelUncertainty::Unknown { .. }))
+    {
+        "unknown".to_string()
+    } else {
+        source
+            .uncertainty()
+            .iter()
+            .filter_map(ModelUncertainty::interval_kind)
+            .map(|kind| kind.to_string())
+            .collect::<Vec<_>>()
+            .join(",")
+    }
 }
 
 /// Group rank for the resolve report's reading order: what needs attention
@@ -704,6 +844,10 @@ fn resolve_rows(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoard) ->
         .iter()
         .map(|comp| {
             let res = crate::binder::resolve(lib, comp);
+            let source = res
+                .provenance
+                .clone()
+                .unwrap_or_else(|| open_source(&comp.reference));
             let (model, layer, origin, resolved) = match (&res.model, res.layer) {
                 (Some(m), Some(l)) => (
                     m.id.clone(),
@@ -730,6 +874,7 @@ fn resolve_rows(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoard) ->
                 model,
                 layer,
                 origin,
+                source,
                 resolved,
             }
         })
@@ -797,10 +942,30 @@ pub fn resolve_report(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoa
     );
     let rows: Vec<Vec<String>> = resolve_rows(lib, board)
         .into_iter()
-        .map(|r| vec![r.reference, r.value, r.model, r.layer, r.origin])
+        .map(|r| {
+            vec![
+                r.reference,
+                r.value,
+                r.model,
+                r.layer,
+                r.origin,
+                r.source.tier().to_string(),
+                r.source.validation().to_string(),
+                uncertainty_label(&r.source),
+            ]
+        })
         .collect();
     out.push_str(&box_table(
-        &["Ref", "Value", "Model", "Layer", "Origin"],
+        &[
+            "Ref",
+            "Value",
+            "Model",
+            "Layer",
+            "Origin",
+            "Tier",
+            "Validation",
+            "Uncertainty",
+        ],
         &rows,
     ));
     out
@@ -822,6 +987,7 @@ pub fn resolve_report_json(lib: &ModelLibrary, board: &hauksbee_extract::Extract
                     "model": r.model,
                     "layer": r.layer,
                     "origin": r.origin,
+                    "source": r.source,
                     "resolved": r.resolved,
                 })
             })

@@ -15,6 +15,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use hauksbee_ir::evidence::{ModelSourceTier, ModelUncertainty, ModelValidation};
+
 // ── Top-level file container ──────────────────────────────────────────────────
 
 /// Contents of one `.toml` database file (the `[[models]]` array).
@@ -85,6 +87,22 @@ pub struct ModelEntry {
     /// protection threshold.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_program: Option<CurrentProgram>,
+}
+
+/// Where a model entry's numbers come from, on the source accuracy ladder:
+/// the tier, whether the entry has been validated, and any declared numeric
+/// uncertainty. Feeds the evidence spine's `ModelSource` records.
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct ModelSourceSpec {
+    pub tier: ModelSourceTier,
+    #[serde(default = "unvalidated")]
+    pub validation: ModelValidation,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uncertainty: Vec<ModelUncertainty>,
+}
+
+fn unvalidated() -> ModelValidation {
+    ModelValidation::Unvalidated
 }
 
 /// How an external resistor programs a regulated current or protection limit.

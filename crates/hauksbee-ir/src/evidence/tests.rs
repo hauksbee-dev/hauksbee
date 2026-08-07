@@ -844,7 +844,14 @@ fn evidence_map_json_shape_is_the_published_one() {
         .with_models(vec![ModelOnPath::new(
             "U2",
             "xc6206",
-            ModelLayer::Pack,
+            ModelSource::new(
+                ModelSourceTier::CuratedPack,
+                ModelLayer::Pack,
+                "test-pack",
+                ModelValidation::PhysicalBoundsOnly,
+                vec![ModelUncertainty::unknown("U2.model", "no interval in fixture").unwrap()],
+            )
+            .unwrap(),
             MatchConfidence::High,
         )
         .unwrap()])

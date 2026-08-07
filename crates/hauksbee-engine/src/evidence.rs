@@ -26,8 +26,9 @@ use hauksbee_ir::evidence::{
     ArtifactId, ArtifactKind, ArtifactProvenance, ArtifactRole, Assumption, AssumptionSource,
     CausalPathIndex, Contribution, CrossCheck, EntityKind, EntityRef, ErrorBudget, EvidenceError,
     EvidenceMap, EvidenceRegistry, EvidenceStatus, IgnoredInput, IntegrationMethod,
-    IntegrationTolerance, MatchConfidence, ModelLayer, ModelOnPath, NetScope, ParameterProvenance,
-    RunDate, Scope, Subject, SubjectSet, TimeWindow, ValueOrigin, WindowMethod,
+    IntegrationTolerance, MatchConfidence, ModelLayer, ModelOnPath, ModelSource, ModelSourceTier,
+    ModelUncertainty, ModelValidation, NetScope, ParameterProvenance, RunDate, Scope, Subject,
+    SubjectSet, TimeWindow, ValueOrigin, WindowMethod,
 };
 use hauksbee_models::Confidence;
 use sha2::{Digest, Sha256};
@@ -36,6 +37,7 @@ use sha2::{Digest, Sha256};
 struct ModelFact {
     model_id: String,
     confidence: MatchConfidence,
+    source: hauksbee_ir::evidence::ModelSource,
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +45,21 @@ struct DefaultFact {
     parameter: String,
     value: String,
     assumption: hauksbee_ir::evidence::AssumptionId,
+}
+
+fn unspecified_source(model_id: &str) -> ModelSource {
+    ModelSource::new(
+        ModelSourceTier::EstimatedFallback,
+        ModelLayer::Unspecified,
+        "legacy-bind-row",
+        ModelValidation::Unvalidated,
+        vec![ModelUncertainty::unknown(
+            format!("{model_id}.model"),
+            "the legacy bind producer did not record a numeric error interval",
+        )
+        .expect("static uncertainty is valid")],
+    )
+    .expect("static model source is valid")
 }
 
 /// The evidence registry and one validated map per electrical net in a bound
@@ -181,10 +198,14 @@ impl BoardEvidence {
                                 MatchConfidence::Guessed
                             }
                         };
+                        let source = row
+                            .source
+                            .clone()
+                            .unwrap_or_else(|| unspecified_source(model_id));
                         models.push(ModelOnPath::new(
                             reference,
                             model_id,
-                            ModelLayer::Unspecified,
+                            source.clone(),
                             confidence,
                         )?);
                         parameters.push(ParameterProvenance::new(
@@ -192,7 +213,7 @@ impl BoardEvidence {
                             model_id,
                             ValueOrigin::Model {
                                 model_id: model_id.to_string(),
-                                layer: ModelLayer::Unspecified,
+                                layer: source.layer(),
                                 confidence,
                             },
                         )?);
@@ -224,6 +245,10 @@ impl BoardEvidence {
                     ModelFact {
                         model_id: model_id.clone(),
                         confidence: confidence(row.confidence),
+                        source: row
+                            .source
+                            .clone()
+                            .unwrap_or_else(|| unspecified_source(model_id)),
                     },
                 ))
             })
@@ -706,7 +731,7 @@ impl BoardEvidence {
             models.push(ModelOnPath::new(
                 reference,
                 &fact.model_id,
-                ModelLayer::Unspecified,
+                fact.source.clone(),
                 fact.confidence,
             )?);
             parameters.push(ParameterProvenance::new(
@@ -714,7 +739,7 @@ impl BoardEvidence {
                 &fact.model_id,
                 ValueOrigin::Model {
                     model_id: fact.model_id.clone(),
-                    layer: ModelLayer::Unspecified,
+                    layer: fact.source.layer(),
                     confidence: fact.confidence,
                 },
             )?);
@@ -769,6 +794,43 @@ impl BoardEvidence {
                     format!(" (rests on {ids})")
                 }
             );
+            for model in map.models() {
+                let source = model.source();
+                let accuracy = if source
+                    .uncertainty()
+                    .iter()
+                    .any(|value| matches!(value, ModelUncertainty::Unknown { .. }))
+                {
+                    "uncertainty unknown".to_string()
+                } else {
+                    source
+                        .uncertainty()
+                        .iter()
+                        .filter_map(|value| match value {
+                            ModelUncertainty::Interval {
+                                low,
+                                high,
+                                unit,
+                                kind,
+                                basis,
+                                ..
+                            } => Some(format!("interval [{low}, {high}] {unit} {kind} ({basis})")),
+                            ModelUncertainty::Unknown { .. } => None,
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                let _ = writeln!(
+                    out,
+                    "  model {}={} source={} layer={:?} origin={} validation={} {accuracy}",
+                    model.reference(),
+                    model.model_id(),
+                    source.tier(),
+                    source.layer(),
+                    source.origin(),
+                    source.validation(),
+                );
+            }
         }
         out
     }

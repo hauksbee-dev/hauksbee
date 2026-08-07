@@ -810,6 +810,27 @@ PIN NUMBERING, read this before you fill in [models.pins]:
       `# LOW CONFIDENCE: ...` is useful. A confident wrong map is not.
 
 IMPORTANT RULES:
+0. Emit this machine-readable source block immediately after the model's description:
+     [models.source]
+     tier = "datasheet-derived"
+     validation = "physical-bounds-only"
+   For each parameter with source-published finite min/max bounds, add:
+     [[models.source.uncertainty]]
+     status = "interval"
+     parameter = "<parameter>"
+     low = <finite lower bound>
+     high = <finite upper bound>
+     unit = "<unit>"
+     kind = "specification-limits"
+     basis = "<table/curve citation>"
+   If no defensible interval is published, add one explicit unknown record:
+     [[models.source.uncertainty]]
+     status = "unknown"
+     parameter = "model"
+     reason = "datasheet publishes no validated model error interval"
+   A min/typ row without a finite published max is NOT a two-sided interval:
+   emit unknown. Never invent a percentage, derive a bound from a typical
+   value, or substitute a model clamp for a published guarantee.
 1. Add a comment on each param/rating line citing where in the datasheet you found
    the value, e.g.: `# Source: Table 6.3, typ column`
 2. Use only values explicitly stated in the datasheet; do NOT guess. For SPICE
@@ -2020,6 +2041,11 @@ mod tests {
         let prompt = build_prompt("BC847", "bjt_npn", "...datasheet text...");
         assert!(prompt.contains("is, bf, nf"));
         assert!(prompt.contains("BC847"));
+        assert!(prompt.contains("[models.source]"));
+        assert!(prompt.contains("tier = \"datasheet-derived\""));
+        assert!(prompt.contains("kind = \"specification-limits\""));
+        assert!(prompt.contains("min/typ row without a finite published max"));
+        assert!(prompt.contains("status = \"unknown\""));
     }
 
     #[test]

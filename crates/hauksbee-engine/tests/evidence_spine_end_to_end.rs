@@ -295,6 +295,7 @@ fn a_bind_default_warning_becomes_parameter_provenance_and_a_typed_assumption() 
         value: "GENERIC-LDO".into(),
         model_id: Some("generic_ldo".into()),
         confidence: Confidence::Exact,
+        source: None,
         outcome: BindOutcome::Behavioral {
             device: "vreg 5.0V source".into(),
         },
