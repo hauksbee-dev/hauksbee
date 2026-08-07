@@ -15,6 +15,9 @@
 //! physics; it only routes.
 
 use crate::{dc_operating_point, AcAnalysis, AcSpec, SolverOptions, Sweep, Transient, Workspace};
+use hauksbee_ir::evidence::{
+    ErrorBudget, IntegrationMethod, IntegrationTolerance, Residual, TimeWindow, WindowMethod,
+};
 
 /// The KCL residual a reported operating point must satisfy.
 ///
@@ -108,6 +111,10 @@ pub struct SimOutput {
     pub time: Option<Vec<f64>>,
     /// `rows[i][j]` is probe `j`'s value at sample `i`.
     pub rows: Vec<Vec<f64>>,
+    /// Machine-readable numerical provenance for these values. Solver settings
+    /// are not error estimates; a residual is present only when this path
+    /// measured one, and time-method windows exist only for transient output.
+    pub error_budget: ErrorBudget,
 }
 
 impl SimOutput {
@@ -116,6 +123,34 @@ impl SimOutput {
         let j = self.columns.iter().position(|c| c == label)?;
         Some(self.rows.iter().map(|r| r[j]).collect())
     }
+}
+
+fn integration_method(method: crate::Integration) -> IntegrationMethod {
+    match method {
+        crate::Integration::Trapezoidal => IntegrationMethod::Trapezoidal,
+        crate::Integration::Gear2 => IntegrationMethod::Gear2,
+        crate::Integration::BackwardEuler => IntegrationMethod::BackwardEuler,
+    }
+}
+
+pub(crate) fn error_budget(opts: &SolverOptions) -> Result<ErrorBudget, String> {
+    IntegrationTolerance::new(opts.reltol, opts.vntol, opts.abstol, opts.chgtol)
+        .map(ErrorBudget::new)
+        .map_err(|error| format!("invalid solver error budget: {error}"))
+}
+
+fn residual_label(circuit: &Circuit, ws: &Workspace, unknown: usize) -> String {
+    residual_label_from_layout(circuit, &ws.layout, unknown)
+}
+
+fn residual_label_from_layout(circuit: &Circuit, layout: &crate::Layout, unknown: usize) -> String {
+    for node in 1..circuit.node_count() {
+        let node = NodeId(node as u32);
+        if layout.node(node) == Some(unknown) {
+            return circuit.node_name(node).to_string();
+        }
+    }
+    format!("unknown #{unknown}")
 }
 
 /// Every non-ground node voltage, in node order; the sane default when the
@@ -239,10 +274,19 @@ pub fn run_op(
         };
         row.push(v);
     }
+    let (max_abs, at) = ws.dc_residual_argmax(circuit, opts);
+    let mut budget = error_budget(opts)?;
+    if max_abs.is_finite() {
+        budget = budget.with_residual(
+            Residual::new(max_abs, residual_label(circuit, &ws, at))
+                .map_err(|error| format!("invalid operating-point residual: {error}"))?,
+        );
+    }
     Ok(SimOutput {
         columns,
         time: None,
         rows: vec![row],
+        error_budget: budget,
     })
 }
 
@@ -254,7 +298,8 @@ pub fn run_tran(
     tstop: f64,
     probes: &[Probe],
 ) -> Result<SimOutput, String> {
-    let wf = Transient::new(opts_with_deck_temp(circuit, opts)).run(circuit, tstop)?;
+    let effective = opts_with_deck_temp(circuit, opts);
+    let (wf, diagnostics) = Transient::new(effective).run_with_diagnostics(circuit, tstop)?;
     let n = wf.time.len();
 
     let node_series = |name: &str| -> Result<Vec<f64>, String> {
@@ -297,10 +342,29 @@ pub fn run_tran(
     for i in 0..n {
         rows.push(series.iter().map(|s| s[i]).collect());
     }
+    let mut budget = error_budget(&effective)?.with_method(
+        WindowMethod::new(
+            TimeWindow::new(0.0, tstop)
+                .map_err(|error| format!("invalid transient result window: {error}"))?,
+            integration_method(opts.integration),
+        )
+        .map_err(|error| format!("invalid transient method record: {error}"))?,
+    );
+    if let Some((max_abs, at)) = diagnostics
+        .final_residual
+        .filter(|(value, _)| value.is_finite())
+    {
+        let layout = crate::Layout::new(circuit);
+        budget = budget.with_residual(
+            Residual::new(max_abs, residual_label_from_layout(circuit, &layout, at))
+                .map_err(|error| format!("invalid transient residual: {error}"))?,
+        );
+    }
     Ok(SimOutput {
         columns,
         time: Some(wf.time.clone()),
         rows,
+        error_budget: budget,
     })
 }
 
@@ -363,6 +427,7 @@ pub fn run_dc(
     // A scratch circuit we re-stamp in place, so each point solves a fresh OP.
     let mut scratch = circuit.clone();
     let mut rows = Vec::with_capacity(inner_vals.len() * outer_vals.len());
+    let mut worst_residual: Option<Residual> = None;
     for &ov in &outer_vals {
         if let Some(outer) = &dc.outer {
             set_source_value(&mut scratch, outer.source, ov);
@@ -370,6 +435,14 @@ pub fn run_dc(
         for &iv in &inner_vals {
             set_source_value(&mut scratch, dc.inner.source, iv);
             let point = run_op(&scratch, opts, probes)?;
+            if let Some(residual) = point.error_budget.residual() {
+                if worst_residual
+                    .as_ref()
+                    .is_none_or(|worst| residual.max_abs() > worst.max_abs())
+                {
+                    worst_residual = Some(residual.clone());
+                }
+            }
             let mut row = Vec::with_capacity(probes.len() + 2);
             row.push(iv);
             row.extend_from_slice(&point.rows[0]);
@@ -380,10 +453,15 @@ pub fn run_dc(
         }
     }
 
+    let mut budget = error_budget(&opts_with_deck_temp(circuit, opts))?;
+    if let Some(residual) = worst_residual {
+        budget = budget.with_residual(residual);
+    }
     Ok(SimOutput {
         columns,
         time: None,
         rows,
+        error_budget: budget,
     })
 }
 
@@ -484,6 +562,7 @@ pub fn run_ac(
         columns,
         time: None,
         rows,
+        error_budget: error_budget(&opts_with_deck_temp(circuit, opts))?,
     })
 }
 

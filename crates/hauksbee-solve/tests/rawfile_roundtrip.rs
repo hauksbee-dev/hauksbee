@@ -36,6 +36,9 @@ fn out(columns: &[&str], time: Option<Vec<f64>>, rows: Vec<Vec<f64>>) -> SimOutp
         columns: columns.iter().map(|s| s.to_string()).collect(),
         time,
         rows,
+        error_budget: hauksbee_ir::evidence::ErrorBudget::new(
+            hauksbee_ir::evidence::IntegrationTolerance::new(1e-3, 1e-6, 1e-12, 1e-14).unwrap(),
+        ),
     }
 }
 

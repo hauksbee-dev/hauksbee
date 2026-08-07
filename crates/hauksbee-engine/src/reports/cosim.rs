@@ -34,11 +34,16 @@ fn cosim_substituted(subs: &[crate::scheduler::McuSubstitution], _first_ref: &st
     !subs.is_empty()
 }
 
-pub fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<CosimJson> {
+pub fn build_cosim_json(
+    engine: &HauksbeeEngine,
+    uart_seen: bool,
+) -> Result<Option<CosimJson>, hauksbee_ir::evidence::EvidenceError> {
     let sched = engine.scheduler();
     let identities = sched.mcu_identities();
     // No live MCU => no co-sim ran (e.g. a renode/qemu board with no firmware).
-    let (mcu_ref, backend, requested_part) = identities.into_iter().next()?;
+    let Some((mcu_ref, backend, requested_part)) = identities.into_iter().next() else {
+        return Ok(None);
+    };
     let substituted = cosim_substituted(sched.substitutions(), &mcu_ref);
 
     let total_toggles: u64 = sched.stats.values().map(|s| s.toggles).sum();
@@ -95,8 +100,8 @@ pub fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<Cosi
         .collect();
     // Fallback-solved windows: real converged answers, but produced by a
     // second-class rung after the primary solve failed there; the method and
-    // its accuracy cost travel with each window so the consumer knows which
-    // spans to read with that caveat.
+    // its qualitative fidelity note travel with each window so the consumer
+    // knows which spans to read with that caveat without inventing a bound.
     let fallback_windows: Vec<CosimFallbackWindow> = sched
         .fallback_windows()
         .iter()
@@ -104,11 +109,11 @@ pub fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<Cosi
             start_s,
             end_s,
             method: method.as_str().to_string(),
-            accuracy: method.accuracy_note().to_string(),
+            fidelity_note: method.fidelity_note().to_string(),
         })
         .collect();
 
-    Some(CosimJson {
+    Ok(Some(CosimJson {
         mcu_ref,
         backend,
         requested_part,
@@ -119,6 +124,7 @@ pub fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<Cosi
         realtime_factor: 0.0,
         total_toggles,
         uart_seen,
+        error_budget: sched.error_budget()?,
         activity_summary,
         analog_valid,
         failed_windows,
@@ -188,7 +194,7 @@ pub fn build_cosim_json(engine: &HauksbeeEngine, uart_seen: bool) -> Option<Cosi
             .into_iter()
             .map(|(mcu_ref, resets)| crate::result::CosimWatchdogResets { mcu_ref, resets })
             .collect(),
-    })
+    }))
 }
 
 /// One canonical warning per HEURISTIC-framed SPI bus (05 §2 / U3 finding 3),
@@ -524,10 +530,15 @@ pub fn run_headless(
             }
         }
 
+        match sched.error_budget() {
+            Ok(budget) => println!("\nnumerical qualification: {}", budget.plain_summary()),
+            Err(error) => println!("\nnumerical qualification: INVALID ({error})"),
+        }
+
         // Fallback-solved windows: converged answers whose method is not the
         // primary integration. Disclosed in the default text mode with the
-        // rung name and its accuracy cost, so a second-class span never reads
-        // as a first-class one.
+        // rung name and its known fidelity trade-off, so a second-class span
+        // never reads as a first-class one or acquires an invented bound.
         let fallback = sched.fallback_chunk_count();
         if fallback > 0 {
             println!(
@@ -540,7 +551,7 @@ pub fn run_headless(
                     start_s,
                     end_s,
                     method.as_str(),
-                    method.accuracy_note()
+                    method.fidelity_note()
                 );
             }
         }

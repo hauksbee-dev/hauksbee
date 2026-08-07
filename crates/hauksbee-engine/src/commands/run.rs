@@ -882,7 +882,6 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         )?;
         let achieved_factor = headless.realtime_factor();
         let wall_s = headless.wall_s;
-        let simulated_s = headless.sim_s;
         let faults = headless.faults;
 
         // Co-sim honesty summary (Track B): total net toggles, UART activity, and
@@ -890,7 +889,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         // stats the text table reads, so every surface agrees. The achieved
         // rate is stamped from the run's own wall-clock measurement so the
         // machine surface carries the delivered factor, not an assumed one.
-        let cosim = crate::reports::cosim::build_cosim_json(&engine, uart_seen).map(|mut c| {
+        let cosim = crate::reports::cosim::build_cosim_json(&engine, uart_seen)?.map(|mut c| {
             c.wall_s = wall_s;
             c.realtime_factor = achieved_factor;
             c
@@ -937,24 +936,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         let has_boot_advisory = !held_high_boot_nets.is_empty();
         let gate_rows = &boot_advisory.gate_states;
 
-        let failed_windows = engine.scheduler().failed_windows().to_vec();
-        let fallback_owned: Vec<(f64, f64, String)> = engine
-            .scheduler()
-            .fallback_windows()
-            .iter()
-            .map(|&(start, end, method)| (start, end, method.as_str().to_string()))
-            .collect();
-        let fallback: Vec<(f64, f64, &str)> = fallback_owned
-            .iter()
-            .map(|(start, end, method)| (*start, *end, method.as_str()))
-            .collect();
-        let budget = crate::evidence::BoardEvidence::transient_error_budget(
-            0.0,
-            simulated_s,
-            engine.scheduler().chunk_s,
-            &failed_windows,
-            &fallback,
-        )?;
+        let budget = engine.scheduler().error_budget()?;
         let fault_findings = crate::result::fault_findings_json(&faults);
         let mut cosim_maps = Vec::new();
         for finding in &fault_findings {
@@ -1031,9 +1013,10 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                     kind: JsonNoteKind::Coverage,
                     message: format!(
                         "co-sim analog solve fell back on {fallback_chunk_count} chunk(s); \
-                         those windows are converged but were produced by a more robust, \
-                         lower-accuracy method (see fallback_windows in the co-sim JSON \
-                         for the method and its accuracy cost per window)"
+                         those windows are converged but were produced by a fallback \
+                         integration path (see fallback_windows in the co-sim JSON \
+                         for the method and its known numerical trade-off per window; \
+                         no empirical output-error bound was established)"
                     ),
                 });
             }

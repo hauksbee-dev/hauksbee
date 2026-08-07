@@ -84,6 +84,7 @@ fn outcome_with(
         analog_valid,
         failed_windows,
         fallback_windows: Vec::new(),
+        error_budget: None,
         analog_abort,
         sampled_values: Vec::new(),
         net_series: HashMap::new(),

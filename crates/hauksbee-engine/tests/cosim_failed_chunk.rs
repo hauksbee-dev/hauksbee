@@ -83,6 +83,7 @@ fn cosim_json_from(sched: &Scheduler) -> CosimJson {
         realtime_factor: 0.0,
         total_toggles: 0,
         uart_seen: false,
+        error_budget: sched.error_budget().expect("test scheduler budget"),
         activity_summary: Vec::new(),
         analog_valid: sched.analog_valid(),
         failed_windows: sched
@@ -107,7 +108,7 @@ fn cosim_json_from(sched: &Scheduler) -> CosimJson {
                     start_s,
                     end_s,
                     method: method.as_str().to_string(),
-                    accuracy: method.accuracy_note().to_string(),
+                    fidelity_note: method.fidelity_note().to_string(),
                 },
             )
             .collect(),

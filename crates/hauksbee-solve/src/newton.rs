@@ -393,6 +393,33 @@ impl Workspace {
         }
         worst
     }
+
+    /// Absolute equation residual at an accepted transient point, evaluated
+    /// against the exact companion-model system and history that produced it.
+    /// The caller invokes this only for the final accepted point, so reporting
+    /// does not add a full stamp to every timestep.
+    pub(crate) fn transient_residual_argmax(
+        &mut self,
+        circuit: &Circuit,
+        opts: &SolverOptions,
+        time: f64,
+        coeffs: IntegCoeffs,
+        state: &ReactiveState,
+    ) -> (f64, usize) {
+        residual_argmax_at(
+            self,
+            circuit,
+            opts,
+            time,
+            coeffs,
+            state,
+            false,
+            false,
+            opts.gmin,
+            1.0,
+            self.staged_branch_reg,
+        )
+    }
 }
 
 impl Workspace {
@@ -1512,6 +1539,26 @@ fn residual_inf_norm_at(
     src_scale: f64,
     branch_reg: f64,
 ) -> f64 {
+    residual_argmax_at(
+        ws, circuit, opts, time, coeffs, state, dc, use_ic, gmin, src_scale, branch_reg,
+    )
+    .0
+}
+
+#[allow(clippy::too_many_arguments)]
+fn residual_argmax_at(
+    ws: &mut Workspace,
+    circuit: &Circuit,
+    opts: &SolverOptions,
+    time: f64,
+    coeffs: IntegCoeffs,
+    state: &ReactiveState,
+    dc: bool,
+    use_ic: bool,
+    gmin: f64,
+    src_scale: f64,
+    branch_reg: f64,
+) -> (f64, usize) {
     ws.matrix.clear_values();
     for v in ws.rhs.iter_mut() {
         *v = 0.0;
@@ -1563,9 +1610,10 @@ fn residual_inf_norm_at(
     // point, a fault at a probe point is a reason to shorten the step, not
     // to kill the solve.
     if crate::stamp::take_behavioral_fault().is_some() {
-        return f64::INFINITY;
+        return (f64::INFINITY, 0);
     }
     let mut worst = 0.0f64;
+    let mut argmax = 0usize;
     for i in 0..ws.layout.n_nodes {
         let row = ws.matrix.row(i);
         let mut acc = 0.0;
@@ -1574,13 +1622,14 @@ fn residual_inf_norm_at(
         }
         let f = acc - ws.rhs[i];
         if !f.is_finite() {
-            return f64::INFINITY;
+            return (f64::INFINITY, i);
         }
         if f.abs() > worst {
             worst = f.abs();
+            argmax = i;
         }
     }
-    worst
+    (worst, argmax)
 }
 
 /// The worst node's KCL residual RELATIVE to the currents flowing into that node,

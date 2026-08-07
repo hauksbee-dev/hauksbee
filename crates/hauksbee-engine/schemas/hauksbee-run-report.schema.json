@@ -615,14 +615,14 @@
       "type": "object"
     },
     "CosimFallbackWindow": {
-      "description": "One sim-time window `[start_s, end_s)` whose answer was produced by a\nper-chunk fallback integration rung after the primary analog solve failed\nthere. `method` is the rung's stable name\n(`crate::scheduler::ChunkFallbackMethod::as_str`), `accuracy` its stated\ncost, so the record travels with the number it qualifies. Minimal on\npurpose: shaped so a typed error-budget/provenance spine can absorb it\nlater as one provenance tag per window.",
+      "description": "One sim-time window `[start_s, end_s)` whose answer was produced by a\nper-chunk fallback integration rung after the primary analog solve failed\nthere. `method` is the rung's stable name\n(`crate::scheduler::ChunkFallbackMethod::as_str`), and `fidelity_note`\nnames the known algorithmic trade-off without claiming an empirical error\nbound. The record travels with the number it qualifies.",
       "properties": {
-        "accuracy": {
-          "type": "string"
-        },
         "end_s": {
           "format": "double",
           "type": "number"
+        },
+        "fidelity_note": {
+          "type": "string"
         },
         "method": {
           "type": "string"
@@ -636,7 +636,7 @@
         "start_s",
         "end_s",
         "method",
-        "accuracy"
+        "fidelity_note"
       ],
       "type": "object"
     },
@@ -672,6 +672,14 @@
           },
           "type": "array"
         },
+        "error_budget": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/ErrorBudget"
+            }
+          ],
+          "description": "Numerical qualification for this exact run. Solver tolerances and\nmethods are inputs, the residual is measured when available, and failed\nwindows are explicitly invalid rather than assigned invented precision."
+        },
         "failed_windows": {
           "description": "Sim-time windows `[start_s, end_s)` where the analog solve failed. Empty\n(and omitted from JSON) on a valid run.",
           "items": {
@@ -680,7 +688,7 @@
           "type": "array"
         },
         "fallback_windows": {
-          "description": "Sim-time windows solved by a per-chunk FALLBACK integration rung after\nthe primary solve failed there, each carrying the method that produced\nit and that method's accuracy cost. These windows are solved (they do\nnot make the run analog-invalid) but their numbers are second-class:\na consumer reading a waveform is entitled to know which spans came from\na more dissipative method. Empty (and omitted) when the primary path\ncarried the whole run.",
+          "description": "Sim-time windows solved by a per-chunk FALLBACK integration rung after\nthe primary solve failed there, each carrying the method that produced\nit and that method's qualitative fidelity note. These windows are solved (they do\nnot make the run analog-invalid) but their numbers are second-class:\na consumer reading a waveform is entitled to know which spans came from\na more dissipative method. Empty (and omitted) when the primary path\ncarried the whole run.",
           "items": {
             "$ref": "#/definitions/CosimFallbackWindow"
           },
@@ -761,6 +769,7 @@
         "substituted",
         "total_toggles",
         "uart_seen",
+        "error_budget",
         "analog_valid"
       ],
       "type": "object"
@@ -1323,10 +1332,16 @@
           "description": "Relative tolerance for Newton convergence and local-truncation-error\ncontrol.",
           "format": "double",
           "type": "number"
+        },
+        "vntol": {
+          "description": "Absolute voltage tolerance, volts.",
+          "format": "double",
+          "type": "number"
         }
       },
       "required": [
         "reltol",
+        "vntol",
         "abstol",
         "chgtol"
       ],
@@ -1848,7 +1863,7 @@
           "type": "string"
         },
         "max_abs": {
-          "description": "`max |f(x)|` over the residual vector at acceptance.",
+          "description": "`max |f(x)|` over node KCL rows at acceptance, amperes.",
           "format": "double",
           "type": "number"
         }
@@ -2192,11 +2207,6 @@
     "WindowMethod": {
       "description": "One window and the integration method that produced it. The primary method\ncovers most runs in a single entry; a per-chunk fallback ladder contributes\none entry per fallback-solved window, using that machinery's own stable\nmethod names verbatim (\"trapezoidal\", \"gear2\", \"backward-euler\",\n\"reduced-step\", \"cold-start-backward-euler\",\n\"subdivided-backward-euler\").",
       "properties": {
-        "accuracy_cost": {
-          "description": "The accuracy cost, stated: empty for the primary method, a sentence for\na more dissipative rung.",
-          "format": "double",
-          "type": "number"
-        },
         "method": {
           "allOf": [
             {

@@ -8,6 +8,7 @@ import { downloadText } from '../lib/report-export'
 import { ArriveOnce, EmptyState, StaggerItem, ValueSettle, VerdictBadge, ARRIVE, LEAVE } from '../motion'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
 import { assumptionsForEvidence, describeModelSource } from '../lib/evidence'
+import { summarizeErrorBudget } from '../lib/error-budget'
 
 // The Checks view: compose the body of a hauksbee-ci spec with plain
 // language, run it through the REAL hauksbee-ci binary (`POST /api/check`
@@ -417,8 +418,13 @@ function AssertionEvidence({
       }}
     >
       <div className="font-semibold uppercase tracking-wide" style={{ color: map.status === 'undermined' ? 'var(--warn)' : 'var(--silk-faint)' }}>
-        Evidence {map.status}{map.error_budget ? ' · numeric error budget attached' : ''}
+        Evidence {map.status}{map.error_budget ? ' · numeric qualification' : ''}
       </div>
+      {map.error_budget && (
+        <div className="mt-1.5" data-testid="error-budget-summary">
+          {summarizeErrorBudget(map.error_budget).map(row => <div key={row}>{row}</div>)}
+        </div>
+      )}
       {linked.map(assumption => (
         <div key={assumption.id} className="mt-1.5">
           <code style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}>{assumption.id}</code>

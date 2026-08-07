@@ -29,7 +29,7 @@ use hauksbee_ir::{Circuit, Device, DeviceId, NodeId};
 #[cfg(feature = "avr")]
 use hauksbee_mcu::AvrMcu;
 use hauksbee_mcu::{Mcu, PinId};
-use hauksbee_solve::{Layout, SolverOptions, Transient};
+use hauksbee_solve::{Layout, SolverOptions, Transient, TransientDiagnostics};
 
 use crate::behavioral::BehavioralDevice;
 use crate::binder::{apin_gpio_of_role, gpio_of_role, BoundBoard, McuBinding};
@@ -101,19 +101,24 @@ impl ChunkFallbackMethod {
         }
     }
 
-    /// The accuracy this rung costs, stated for the consumer of the window.
-    pub fn accuracy_note(&self) -> &'static str {
+    /// Qualitative numerical-fidelity context for this rung.
+    ///
+    /// This is deliberately not an error estimate. The solver has not measured
+    /// an output-error bound for either fallback, so the text names only the
+    /// known algorithmic trade-off.
+    pub fn fidelity_note(&self) -> &'static str {
         match self {
             ChunkFallbackMethod::ReducedStep => {
-                "same integration order at a bounded step; accuracy comparable to \
-                 the primary solve, timing resolution unchanged"
+                "primary integration at a smaller maximum step; no empirical \
+                 output-error bound was established"
             }
             ChunkFallbackMethod::BackwardEuler
             | ChunkFallbackMethod::ColdStartBackwardEuler
             | ChunkFallbackMethod::SubdividedBackwardEuler => {
                 "first-order backward Euler: numerically dissipative, so fast \
                  transients and ringing inside this window are damped relative \
-                 to the second-order primary solve"
+                 to the second-order primary solve; no empirical output-error \
+                 bound was established"
             }
         }
     }
@@ -348,11 +353,16 @@ pub struct Scheduler {
     /// subdivided march), and a consumer reading a waveform is entitled to know
     /// which windows those are: the count and windows are surfaced in the
     /// co-sim JSON as `fallback_windows`, each with the method that produced it
-    /// and that method's accuracy cost. An answer carries its provenance.
+    /// and that method's qualitative fidelity note. An answer carries its
+    /// provenance without an invented error bound.
     fallback_chunks: u64,
     /// Sim-time windows `[start_s, end_s)` solved by a fallback rung, with the
     /// rung that produced each, merged where consecutive with the same rung.
     fallback_windows: Vec<(f64, f64, ChunkFallbackMethod)>,
+    /// Largest measured final Newton residual among converged chunks this run.
+    /// `None` means the active solver path did not measure one; it never means
+    /// a zero residual.
+    worst_residual: Option<(f64, usize)>,
     /// Current run of back-to-back failed chunks (reset to 0 by any converged
     /// chunk). Feeds the strict/CI abort threshold.
     consecutive_failed_chunks: u32,
@@ -912,6 +922,7 @@ impl Scheduler {
             failed_window_reasons: Vec::new(),
             fallback_chunks: 0,
             fallback_windows: Vec::new(),
+            worst_residual: None,
             consecutive_failed_chunks: 0,
             max_consecutive_failed_chunks: 0,
             last_solve_error: None,
@@ -2768,15 +2779,15 @@ impl Scheduler {
         tstop: f64,
         opts: SolverOptions,
         seed: Option<&[f64]>,
-    ) -> Result<Vec<f64>, (String, Vec<f64>)> {
+    ) -> Result<(Vec<f64>, TransientDiagnostics), (String, Vec<f64>)> {
         let t = Transient::new(opts);
         let mut final_x: Vec<f64> = Vec::new();
-        let res = t.run_streaming_seeded(&self.circuit, tstop, seed, |s| {
+        let res = t.run_streaming_seeded_with_diagnostics(&self.circuit, tstop, seed, |s| {
             final_x.clear();
             final_x.extend_from_slice(s.x);
         });
         match res {
-            Ok(()) => Ok(final_x),
+            Ok(diagnostics) => Ok((final_x, diagnostics)),
             // The message travels with the recovered state. It carries the
             // solver's blame clause (the net that refused to settle, the devices
             // on it, any near-zero-ohm link poisoning the matrix), which is the
@@ -2820,13 +2831,16 @@ impl Scheduler {
     /// is a real converged solve of the chunk, just by a second-class method,
     /// and the rung is recorded per window so the consumer knows which method
     /// produced which answer.
-    fn fallback_ladder(&self, chunk: f64) -> Option<(ChunkFallbackMethod, Vec<f64>)> {
+    fn fallback_ladder(
+        &self,
+        chunk: f64,
+    ) -> Option<(ChunkFallbackMethod, Vec<f64>, TransientDiagnostics)> {
         let seed = self.last_dc_seed.as_deref();
         let reduced = self.reduced_step_opts(chunk);
 
         // Rung 1: the primary integration at a bounded step.
-        if let Ok(x) = self.march_chunk(chunk, reduced, seed) {
-            return Some((ChunkFallbackMethod::ReducedStep, x));
+        if let Ok((x, diagnostics)) = self.march_chunk(chunk, reduced, seed) {
+            return Some((ChunkFallbackMethod::ReducedStep, x, diagnostics));
         }
 
         // Rung 2: backward Euler at the bounded step. L-stable, so the
@@ -2834,8 +2848,8 @@ impl Scheduler {
         // integration order, which the record discloses.
         let mut be = reduced;
         be.integration = hauksbee_solve::Integration::BackwardEuler;
-        if let Ok(x) = self.march_chunk(chunk, be, seed) {
-            return Some((ChunkFallbackMethod::BackwardEuler, x));
+        if let Ok((x, diagnostics)) = self.march_chunk(chunk, be, seed) {
+            return Some((ChunkFallbackMethod::BackwardEuler, x, diagnostics));
         }
 
         // Rung 3: backward Euler from a COLD start. Dropping the warm seed
@@ -2843,8 +2857,8 @@ impl Scheduler {
         // source stepping, the staged rescue) to re-derive this chunk's
         // operating point from scratch: a warm seed that has drifted onto a
         // bad basin is exactly the state a continuation restart escapes.
-        if let Ok(x) = self.march_chunk(chunk, be, None) {
-            return Some((ChunkFallbackMethod::ColdStartBackwardEuler, x));
+        if let Ok((x, diagnostics)) = self.march_chunk(chunk, be, None) {
+            return Some((ChunkFallbackMethod::ColdStartBackwardEuler, x, diagnostics));
         }
 
         // Rung 4: subdivide the chunk into quarters and march each with
@@ -2856,13 +2870,24 @@ impl Scheduler {
         // change at chunk boundaries.)
         let quarter = chunk / 4.0;
         let mut carry: Option<Vec<f64>> = self.last_dc_seed.clone();
+        let mut diagnostics = TransientDiagnostics::default();
         for _ in 0..4 {
             match self.march_chunk(quarter, be, carry.as_deref()) {
-                Ok(x) => carry = Some(x),
+                Ok((x, quarter_diagnostics)) => {
+                    if let Some(candidate) = quarter_diagnostics.final_residual {
+                        if diagnostics
+                            .final_residual
+                            .is_none_or(|current| candidate.0 > current.0)
+                        {
+                            diagnostics.final_residual = Some(candidate);
+                        }
+                    }
+                    carry = Some(x);
+                }
                 Err(_) => return None,
             }
         }
-        carry.map(|x| (ChunkFallbackMethod::SubdividedBackwardEuler, x))
+        carry.map(|x| (ChunkFallbackMethod::SubdividedBackwardEuler, x, diagnostics))
     }
 
     /// Adopt a converged end state: publish node voltages and branch currents,
@@ -2901,8 +2926,9 @@ impl Scheduler {
         let primary = self.march_chunk(chunk, self.opts, self.last_dc_seed.as_deref());
         let mut failure_reason: Option<String> = None;
         let converged = match primary {
-            Ok(x) => {
+            Ok((x, diagnostics)) => {
                 self.adopt_chunk_state(x);
+                self.record_residual(diagnostics);
                 true
             }
             Err((err, recovered)) => {
@@ -2912,8 +2938,9 @@ impl Scheduler {
                 // window. Only when every rung also fails does the refusal
                 // path below run, unchanged: this feature shrinks the set of
                 // windows the run cannot vouch for, it never papers over one.
-                if let Some((method, x)) = self.fallback_ladder(chunk) {
+                if let Some((method, x, diagnostics)) = self.fallback_ladder(chunk) {
                     self.adopt_chunk_state(x);
+                    self.record_residual(diagnostics);
                     self.record_fallback_chunk(chunk, method);
                     true
                 } else {
@@ -2996,6 +3023,21 @@ impl Scheduler {
                 prev.1 = end;
             }
             _ => self.fallback_windows.push((start, end, method)),
+        }
+    }
+
+    fn record_residual(&mut self, diagnostics: TransientDiagnostics) {
+        let Some(candidate) = diagnostics.final_residual else {
+            return;
+        };
+        if !candidate.0.is_finite() {
+            return;
+        }
+        if self
+            .worst_residual
+            .is_none_or(|current| candidate.0 > current.0)
+        {
+            self.worst_residual = Some(candidate);
         }
     }
 
@@ -3112,8 +3154,8 @@ impl Scheduler {
     /// fallback integration rung produced a converged answer. Zero on a run
     /// the primary path carried whole. These chunks are solved (they count
     /// toward neither `failed_chunk_count` nor the strict abort), but their
-    /// numbers were produced by a second-class method whose accuracy cost is
-    /// recorded per window (`fallback_windows`).
+    /// numbers were produced by a second-class method whose known numerical
+    /// trade-off is recorded per window (`fallback_windows`).
     pub fn fallback_chunk_count(&self) -> u64 {
         self.fallback_chunks
     }
@@ -3123,6 +3165,41 @@ impl Scheduler {
     /// rung. Empty on a run the primary path carried whole.
     pub fn fallback_windows(&self) -> &[(f64, f64, ChunkFallbackMethod)] {
         &self.fallback_windows
+    }
+
+    /// The machine-readable numerical qualification for the run so far.
+    /// Tolerances and methods are the options actually used. Failed spans are
+    /// explicit invalid windows; an absent residual means unmeasured.
+    pub fn error_budget(
+        &self,
+    ) -> Result<hauksbee_ir::evidence::ErrorBudget, hauksbee_ir::evidence::EvidenceError> {
+        let fallback: Vec<(f64, f64, &str)> = self
+            .fallback_windows
+            .iter()
+            .map(|(start, end, method)| (*start, *end, method.as_str()))
+            .collect();
+        let mut budget = crate::evidence::BoardEvidence::transient_error_budget(
+            &self.opts,
+            0.0,
+            self.sim_time,
+            self.chunk_s,
+            &self.failed_windows,
+            &fallback,
+        )?;
+        // A post-solve force changes reported node values without re-solving
+        // the equations. The measured residual belongs to the pre-override
+        // solve and must not be presented as qualification of those values.
+        if self.forced_node_volts.is_empty() {
+            if let Some((max_abs, unknown)) = self.worst_residual {
+                let at = (1..self.circuit.node_count())
+                    .map(|node| NodeId(node as u32))
+                    .find(|node| self.layout.node(*node) == Some(unknown))
+                    .map(|node| self.circuit.node_name(node).to_string())
+                    .unwrap_or_else(|| format!("unknown #{unknown}"));
+                budget = budget.with_residual(hauksbee_ir::evidence::Residual::new(max_abs, at)?);
+            }
+        }
+        Ok(budget)
     }
 
     /// False once any chunk this run failed to solve faithfully: either the
@@ -3165,6 +3242,9 @@ impl Scheduler {
         self.failed_chunks = 0;
         self.failed_windows.clear();
         self.failed_window_reasons.clear();
+        self.fallback_chunks = 0;
+        self.fallback_windows.clear();
+        self.worst_residual = None;
         self.consecutive_failed_chunks = 0;
         self.max_consecutive_failed_chunks = 0;
         self.last_solve_error = None;
@@ -6699,6 +6779,25 @@ mod tests {
             delivered <= 11,
             "min-1 clamp races the firmware clock ahead: got {delivered} µs for {true_us} µs true"
         );
+    }
+
+    #[test]
+    fn scheduler_error_budget_uses_measured_run_not_defaults() {
+        let (mut sched, _micros) = sched_with_micros_core(false);
+        sched.opts.reltol = 2.5e-4;
+        sched.opts.vntol = 7.5e-7;
+        let mut uart = HashMap::new();
+        sched.run_chunk(1e-4, &mut uart);
+
+        let budget = sched.error_budget().expect("valid scheduler budget");
+        assert_eq!(budget.tolerance().reltol(), 2.5e-4);
+        assert_eq!(budget.tolerance().vntol(), 7.5e-7);
+        let residual = budget
+            .residual()
+            .expect("a converged monolithic chunk measures its final residual");
+        assert!(residual.max_abs().is_finite());
+        assert!(!residual.at().is_empty());
+        assert_eq!(budget.failed_windows().len(), 0);
     }
 
     /// Regression for SCHED-2: swallowing a `run_micros` error with

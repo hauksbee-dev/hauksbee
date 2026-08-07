@@ -36,7 +36,7 @@ pub struct CiJsonAssertion {
     /// If it failed, the first seed index that failed (for fuzzed runs).
     /// Always present in the JSON, `null` on a pass, unlike `why` and `waived`
     /// which are omitted.
-    #[schemars(schema_with = "schema_nullable_seed", required)]
+    #[schemars(schema_with = "crate::assertions::schema_nullable_seed", required)]
     pub failing_seed: Option<u32>,
     /// Every ensemble member this assertion failed on (empty on a pass).
     pub failing_seeds: Vec<u32>,
@@ -46,17 +46,18 @@ pub struct CiJsonAssertion {
     /// null) on pass/INVALID and on kinds whose detail already carries the
     /// diagnosis.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(schema_with = "schema_absent_or_string")]
+    #[schemars(schema_with = "crate::assertions::schema_absent_or_string")]
     pub why: Option<String>,
     /// Set when an active waiver covers this failure: the reason + expiry.
     /// ABSENT (not null) when no waiver covers this result.
     #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(schema_with = "schema_absent_or_string")]
+    #[schemars(schema_with = "crate::assertions::schema_absent_or_string")]
     pub waived: Option<String>,
     /// The causal evidence map for this assertion: its assumption ids,
     /// artifacts, models, parameters and numerical error budget. ABSENT (not
     /// null) when the run produced no map for this label.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(schema_with = "schema_absent_evidence")]
     pub evidence: Option<hauksbee_ir::evidence::EvidenceMap>,
 }
 
@@ -197,9 +198,8 @@ pub enum CiJsonLine {
 ///
 /// Every field below is ALWAYS present, including `coverage`, which is `null`
 /// rather than absent when the run was not a tolerance ensemble. The only
-/// conditionally-absent keys in the whole document are `why` and `waived`
-/// inside each element of `results` (see [`AssertResult`]), which are omitted
-/// entirely rather than set to `null`.
+/// conditionally-absent keys in each result are `why`, `waived`, and
+/// `evidence`, which are omitted entirely rather than set to `null`.
 #[derive(Debug, Clone, serde::Serialize, schemars::JsonSchema)]
 pub struct CiJsonReport {
     /// [`CI_REPORT_SCHEMA_VERSION`]: the shape of this document.
@@ -315,24 +315,10 @@ pub(crate) fn schema_nullable_string(_: &mut schemars::SchemaGenerator) -> schem
     schemars::json_schema!({ "type": ["string", "null"] })
 }
 
-/// An ensemble-member index that is ALWAYS emitted and may be `null`. Hand
-/// written for the same reason as [`schema_nullable_string`]: schemars'
-/// `required` attribute would drop `null` from the type and promise a number
-/// where a passing assertion really does carry `null`.
-fn schema_nullable_seed(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    schemars::json_schema!({
-        "type": ["integer", "null"],
-        "format": "uint32",
-        "minimum": 0
-    })
-}
-
-/// A string that is OMITTED rather than set to `null` when it has no value
-/// (`skip_serializing_if`). The plain `Option<String>` schema would allow
-/// `null`, which this surface never emits; a consumer checking for the key's
-/// presence is doing the right thing, and the schema should say so.
-fn schema_absent_or_string(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
-    schemars::json_schema!({ "type": "string" })
+/// An evidence object that is absent when no map was produced, never `null`
+/// when present.
+fn schema_absent_evidence(generator: &mut schemars::SchemaGenerator) -> schemars::Schema {
+    generator.subschema_for::<hauksbee_ir::evidence::EvidenceMap>()
 }
 
 impl CiResult {
@@ -472,8 +458,9 @@ impl CiResult {
                 ));
             }
         }
-        if map.error_budget().is_some() {
-            out.push_str("\nerror budget: attached in JSON");
+        if let Some(budget) = map.error_budget() {
+            out.push_str("\nerror budget: ");
+            out.push_str(&budget.plain_summary());
         }
         for model in map.models() {
             let source = model.source();

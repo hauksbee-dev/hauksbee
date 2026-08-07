@@ -292,6 +292,7 @@ mod tests {
             columns: columns.iter().map(|s| s.to_string()).collect(),
             time,
             rows,
+            error_budget: crate::sim::error_budget(&crate::SolverOptions::default()).unwrap(),
         }
     }
 

@@ -88,6 +88,7 @@ fn dropped_adc_injection_reaches_cosim_json() {
     //    carries the drop, so a JSON consumer cannot read this run as healthy
     //    ADC coverage.
     let cosim = hauksbee_engine::reports::cosim::build_cosim_json(&engine, false)
+        .expect("the run has a valid numerical error budget")
         .expect("an MCU ran, so the co-sim summary exists");
     let v = serde_json::to_value(&cosim).expect("CosimJson serializes");
     let dropped = v
