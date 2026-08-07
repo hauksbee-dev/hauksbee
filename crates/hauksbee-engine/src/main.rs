@@ -94,6 +94,18 @@ enum Command {
     #[command(verbatim_doc_comment)]
     Run(RunArgs),
 
+    /// Verify an immutable run manifest and execute its recorded command.
+    ///
+    /// Reproduction fails before launching if the manifest was edited, any
+    /// input bytes changed, a behavior-changing environment selector differs,
+    /// or this binary is not the recorded tool revision. The manifest may only
+    /// invoke `hauksbee` or its sibling `hauksbee-ci`; it cannot name an
+    /// arbitrary executable.
+    ///
+    /// Example:
+    ///   hauksbee reproduce run.manifest.json
+    Reproduce(ReproduceArgs),
+
     /// Decompile a board into editable Board-as-Code text.
     ///
     /// Example:
@@ -262,6 +274,14 @@ enum Command {
 struct InstallArgs {
     #[command(subcommand)]
     command: InstallCommand,
+}
+
+#[derive(Parser)]
+struct ReproduceArgs {
+    /// Manifest emitted by `hauksbee run --emit-manifest` or
+    /// `hauksbee-ci run --emit-manifest`.
+    #[arg(value_name = "MANIFEST.JSON")]
+    manifest: PathBuf,
 }
 
 #[derive(Subcommand)]
@@ -648,6 +668,13 @@ struct RunArgs {
     /// (GitHub code scanning et al). Serious findings become `error` results.
     #[arg(long, value_name = "FILE", help_heading = "CI output")]
     sarif: Option<PathBuf>,
+
+    /// Write a canonical, immutable JSON reproduction manifest. It hashes all
+    /// run inputs and model sources, records exact options/tool/solver versions
+    /// and safe environment selectors, and refuses to overwrite an existing
+    /// file. Replay it with `hauksbee reproduce <FILE>`.
+    #[arg(long, value_name = "FILE", help_heading = "CI output")]
+    emit_manifest: Option<PathBuf>,
 
     /// Seconds of simulated time to run under --headless.
     #[arg(
@@ -1227,6 +1254,7 @@ fn main() -> anyhow::Result<()> {
             }
             hauksbee_engine::commands::run::run(run_config(args), quiet)
         })(),
+        Command::Reproduce(args) => hauksbee_engine::run_manifest::reproduce(&args.manifest),
         Command::ToCode(args) => {
             hauksbee_engine::commands::boardcode::to_code(&args.board, args.out.as_deref())
         }
@@ -1407,6 +1435,7 @@ fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
         // Present by construction: clap requires BOARD unless --example, and
         // the dispatch materializes the example board before calling here.
         board: a.board.expect("BOARD or --example (enforced by clap)"),
+        example: a.example,
         bom: a.bom,
         bom_columns: a.bom_columns,
         placement: a.placement,
@@ -1414,6 +1443,8 @@ fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
         asbuilt: a.asbuilt,
         junit: a.junit,
         sarif: a.sarif,
+        emit_manifest: a.emit_manifest,
+        manifest_command: hauksbee_engine::run_manifest::replay_argv("hauksbee"),
         seconds: a.seconds,
         headless: a.headless,
         report: a.report,
