@@ -365,6 +365,36 @@ mod identity_tests {
             .to_string();
         assert!(error.contains("R3") && error.contains("DNP"), "{error}");
     }
+
+    /// The other side of the round-trip contract: with the two refusals above,
+    /// "all three states survive" means a Present part passes through code and
+    /// back still classified Present, while DnpAbsent and IdentityUnknown can
+    /// only leave as loud errors, never as a silently fitted part.
+    #[test]
+    fn a_present_part_round_trips_and_stays_present() {
+        let source = r#"(kicad_pcb (version 20240108)
+  (net 0 "")
+  (net 1 "N1")
+  (footprint "Resistor_SMD:R_0603" (layer "F.Cu")
+    (attr smd)
+    (property "Reference" "R4")
+    (property "Value" "10k")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "N1"))
+  )
+)"#;
+        let code = decompile_board_to_code(source).expect("a fitted part decompiles");
+        let rebuilt = code_to_board_text(&code).expect("the code recompiles");
+        let board = ExtractedBoard::from_kicad_pcb(&rebuilt).expect("recompiled board extracts");
+        let r4 = board
+            .components
+            .iter()
+            .find(|c| c.reference == "R4")
+            .expect("R4 survives the round trip");
+        assert!(
+            hauksbee_extract::assembly::AssemblyState::of(r4).is_present(),
+            "a Present part must come back Present, with no DNP flag or refusal invented"
+        );
+    }
 }
 
 /// Recompile Board-as-Code, bind it, run a headless co-sim with the stress
