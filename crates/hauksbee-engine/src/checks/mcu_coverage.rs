@@ -303,6 +303,18 @@ mod tests {
         assert!(!is_probable_mcu(&c));
     }
 
+    /// The other absent state: an identity-refused record's value string is
+    /// not evidence of an MCU either.
+    #[test]
+    fn identity_refused_part_is_not_flagged() {
+        let mut c = comp("U4", "STM32WL55CCU6", "Package:QFN");
+        c.properties.push((
+            hauksbee_extract::DUPLICATE_REFERENCE_CONFLICT_KEY.to_string(),
+            "two records with different values".to_string(),
+        ));
+        assert!(!is_probable_mcu(&c));
+    }
+
     /// End-to-end against the real model DB: an unmodelled strap-bearing MCU
     /// (STM32WL55) yields exactly one UncheckedMcu note naming it; a DB-authored
     /// strap-bearing MCU with a populated strap table (STM32F103C8, straps WERE
