@@ -737,6 +737,16 @@ pub fn plain_netlint(report: &NetLintReport) -> PlainReport {
                 "Some chips read a resistor-divider voltage on a config pin and decode it against a datasheet table to pick a mode (here, the USB-C voltage a PD sink requests). If the chosen resistors land the pin in the wrong band, the chip silently selects the wrong mode: every resistor is in spec and every wire connects, so a normal value/short check cannot see it.".to_string(),
                 "Re-pick the divider resistors so the pin voltage lands in the intended datasheet band, using the single pull-up / single pull-down the datasheet specifies per setting (not a permanent pull-down with an extra switched leg). Check the part's decode table and any min/max override note.".to_string(),
             ),
+            LintCheck::BackPower => (
+                format!("A pin on {parts} (net \"{net}\") sits in a higher voltage domain than the chip's own supply. {}", f.message),
+                "Chip inputs have a small protection diode from the pin to the chip's supply. Pull the pin above that supply and the diode conducts: current flows from the higher rail through the chip into the lower rail. With the chip's supply off, the higher rail keeps the \"off\" domain half-powered (parts misbehave instead of resetting cleanly); powered on, the pin sits past its absolute-maximum rating unless it is specifically rated tolerant.".to_string(),
+                "Pull the signal up to the chip's own supply rail instead, or level-shift between the domains. If the pin is documented as tolerant of the higher rail (some are), record that so the warning is a verified exception.".to_string(),
+            ),
+            LintCheck::I2cBusLoading => (
+                format!("The I2C line \"{net}\" has pull-ups, but they are mis-sized for the bus. {}", f.message),
+                "I2C devices can only pull the line LOW; the resistor pulls it back HIGH. Too strong a pull-up and a device cannot sink enough current to make a valid low (the spec guarantees only 3 mA), so reads fail intermittently. Too weak and the line rises too slowly for the clock rate, corrupting edges as more devices load the bus.".to_string(),
+                "Size the pull-up between the two limits: above (rail voltage - 0.4 V) / 3 mA (so lows work), and low enough that the rise time fits the bus speed at the real bus capacitance. 2.2k to 4.7k suits most 3.3 V buses.".to_string(),
+            ),
         };
         out.push(level, what, why, fix);
     }
