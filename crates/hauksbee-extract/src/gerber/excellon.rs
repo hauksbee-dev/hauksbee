@@ -212,6 +212,26 @@ pub fn parse(text: &str) -> DrillFile {
                 metric = false;
                 explicit_units = true;
             }
+            // The `i:j` is the coordinate split, and reading only the units off
+            // this line left an integer-coordinate file on the wrong default: a
+            // `3:3` hit written `X001000` came out at 0.1 mm instead of 1.0 mm,
+            // which puts the barrel on whatever copper happens to be there.
+            // KiCad writes `{-:-/...}` when it has nothing to say, which parses
+            // as no digits and leaves the defaults alone.
+            let spec: String = up
+                .chars()
+                .skip_while(|c| !c.is_ascii_digit())
+                .take_while(|c| c.is_ascii_digit() || *c == ':')
+                .collect();
+            if let Some((i, d)) = spec.split_once(':') {
+                if let (Ok(i), Ok(d)) = (i.parse::<usize>(), d.parse::<usize>()) {
+                    if i <= 12 && d <= 12 {
+                        int_digits = i;
+                        dec_digits = d;
+                        format_set = true;
+                    }
+                }
+            }
             continue;
         }
         // Tool definition: T<idx>C<dia>  (may have F/S feed-speed suffixes).
@@ -400,6 +420,23 @@ pub fn parse(text: &str) -> DrillFile {
                 }
                 continue;
             }
+            // Any other G-code carrying coordinates inside a rout-capable file
+            // is a modal setting applied at a position (`G90X..Y..`), not a
+            // drilled point. Letting it fall through to the plain reader turns
+            // a mode change into a plated barrel, which on a multi-layer board
+            // stitches the stack at a spot nothing was drilled.
+            if g.is_some() && (up.contains('X') || up.contains('Y')) {
+                let _ = parse_xy_modal(
+                    &up,
+                    metric,
+                    int_digits,
+                    dec_digits,
+                    leading_zero_omitted,
+                    &mut last_x,
+                    &mut last_y,
+                );
+                continue;
+            }
         } else if matches!(
             leading_g_code(&line.to_ascii_uppercase()),
             Some(2) | Some(3)
@@ -512,8 +549,10 @@ const ARC_STEP_RAD: f64 = std::f64::consts::TAU / 16.0;
 const ARC_SAGITTA_TOL_MM: f64 = 0.001;
 
 /// Hard cap on the segments one arc may produce, so a hostile radius cannot
-/// turn a single line into unbounded work. At the cap the sagitta budget is no
-/// longer met, which needs an arc metres across: far outside any board.
+/// turn a single line into unbounded work. An arc needing more than this to
+/// stay inside the sagitta budget is refused rather than approximated coarsely.
+/// Reaching it takes an arc metres across, well outside any board: a full
+/// circle of 500 mm radius, larger than any panel, needs about 1600.
 const ARC_MAX_STEPS: usize = 4096;
 
 /// Break a rout arc into straight cut segments, each returned as
@@ -544,24 +583,29 @@ fn tessellate_arc(
     }
     let a0 = (sy - cy).atan2(sx - cx);
     let a1 = (ey - cy).atan2(ex - cx);
+    // A start that coincides with the end is a full circle. That promotion is
+    // decided on the POINTS being the same, not on the swept angle being small:
+    // an arc of a millionth of a radian is a millionth of a radian, and turning
+    // it into a full circle wraps a plated wall right round the board and joins
+    // everything the circle passes.
+    let closed = (ex - sx).hypot(ey - sy) <= 1e-9;
     let mut sweep = a1 - a0;
     if clockwise {
         while sweep > 0.0 {
             sweep -= std::f64::consts::TAU;
         }
-        // A start that coincides with the end is a full circle, not a no-op.
-        if sweep > -1e-12 {
+        if closed {
             sweep = -std::f64::consts::TAU;
         }
     } else {
         while sweep < 0.0 {
             sweep += std::f64::consts::TAU;
         }
-        if sweep < 1e-12 {
+        if closed {
             sweep = std::f64::consts::TAU;
         }
     }
-    if !sweep.is_finite() {
+    if !sweep.is_finite() || sweep == 0.0 {
         return Vec::new();
     }
     // Step small enough that the chord's sagitta, r(1 - cos(step/2)), stays
@@ -574,7 +618,15 @@ fn tessellate_arc(
         ARC_STEP_RAD
     };
     let step = by_sagitta.min(ARC_STEP_RAD).max(1e-6);
-    let steps = ((sweep.abs() / step).ceil() as usize).clamp(1, ARC_MAX_STEPS);
+    let steps = ((sweep.abs() / step).ceil() as usize).max(1);
+    // An arc that cannot be tessellated within the budget is not tessellated at
+    // all. Emitting it anyway, at whatever resolution the cap allows, hands back
+    // a wall that is knowingly out of position, which is the one thing this
+    // budget exists to prevent. The cap is only reachable by an arc metres
+    // across, so this refuses nothing a board contains.
+    if steps > ARC_MAX_STEPS {
+        return Vec::new();
+    }
     let mut out = Vec::with_capacity(steps);
     let mut prev = (sx, sy);
     for k in 1..=steps {
@@ -616,19 +668,33 @@ fn parse_file_function_span(up: &str) -> DeclaredSpan {
     };
     let rest = up[at..].trim_start_matches([',', ' ']);
     let fields: Vec<&str> = rest.split(',').map(|f| f.trim()).collect();
-    // Field 0 is Plated/NonPlated; fields 1 and 2 are the layer pair. A
-    // two-field attribute (`Plated,PTH`) never offered a pair at all.
+    // Field 0 says which kind of file this is. Only a drill's own attribute
+    // carries a layer pair here, so an attribute of any other kind is simply
+    // not offering one, rather than offering a broken one.
+    let Some(kind) = fields.first() else {
+        return DeclaredSpan::Absent;
+    };
+    if !(kind.contains("PLATED") || kind.contains("PTH")) {
+        return DeclaredSpan::Absent;
+    }
+    // Fields 1 and 2 are the layer pair. A two-field attribute (`Plated,PTH`)
+    // never offered a pair at all.
     let (Some(a), Some(b)) = (fields.get(1), fields.get(2)) else {
         return DeclaredSpan::Absent;
     };
-    match (a.parse::<u32>(), b.parse::<u32>()) {
+    // The spec writes plain integers, but an `L1`/`L2` spelling is naming the
+    // same layers and is read as such. What must never happen is for a pair
+    // this reader cannot parse to look like silence, because silence on a
+    // single-drill job is read as a through-hole.
+    let num = |f: &str| f.strip_prefix('L').unwrap_or(f).parse::<u32>();
+    match (num(a), num(b)) {
         (Ok(from), Ok(to)) if from >= 1 && to > from => DeclaredSpan::Pair(LayerPair { from, to }),
         // Two numbers that do not make a span (reversed, equal, zero-based) are
         // a declaration we cannot use.
         (Ok(_), Ok(_)) => DeclaredSpan::Unreadable,
-        // Not a numeric pair at all: this attribute form carries no span field,
-        // so the file simply did not declare one.
-        _ => DeclaredSpan::Absent,
+        // A drill attribute whose pair fields are neither a layer number nor an
+        // `L`-spelled one. It offered a span and we cannot read it.
+        _ => DeclaredSpan::Unreadable,
     }
 }
 
@@ -1061,6 +1127,132 @@ M30
         );
         assert_eq!(d.holes.len(), 1, "only the drilled point: {:?}", d.holes);
         assert!((d.holes[0].x - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_hairline_arc_stays_hairline_and_a_closed_one_is_a_full_circle() {
+        // A sweep of a thousandth of a radian is a thousandth of a radian. The
+        // full-circle promotion has to key on the endpoints being the same
+        // POINT, not on the angle being small: reading a hairline arc as closed
+        // wraps the wall right round the circle and joins everything it passes.
+        let tiny = tessellate_arc(1.0, 0.0, 1.0, 0.001, -1.0, 0.0, false);
+        assert_eq!(tiny.len(), 1, "a hairline arc is one short segment");
+        let (_, _, ex, ey) = tiny[0];
+        assert!(
+            (ex - 1.0).abs() < 1e-3 && (ey - 0.001).abs() < 1e-9,
+            "the hairline arc must stay at its own end, not travel: ({ex}, {ey})"
+        );
+        // Coincident endpoints ARE the full-circle spelling, and still are.
+        let circle = tessellate_arc(1.0, 0.0, 1.0, 0.0, -1.0, 0.0, false);
+        assert!(
+            circle.len() >= 16,
+            "a closed arc is a full circle, got {} segments",
+            circle.len()
+        );
+        assert!(
+            circle.iter().any(|(ax, _, _, _)| *ax < -0.99),
+            "a full circle reaches the far side of its own circle"
+        );
+    }
+
+    #[test]
+    fn an_arc_too_large_to_tessellate_in_budget_is_refused() {
+        // A ten-metre arc cannot be chorded inside the sagitta budget without
+        // more segments than the cap allows. Emitting it at whatever resolution
+        // fits hands back a wall knowingly out of position; nothing is the
+        // honest answer, and no board contains such an arc anyway.
+        let huge = tessellate_arc(10000.0, 0.0, 10000.0, 0.0, -10000.0, 0.0, false);
+        assert!(huge.is_empty(), "got {} segments", huge.len());
+        // A 200 mm arc, larger than most boards, is still well within budget.
+        let big = tessellate_arc(200.0, 0.0, 0.0, 200.0, -200.0, 0.0, false);
+        assert!(!big.is_empty() && big.len() < ARC_MAX_STEPS);
+    }
+
+    #[test]
+    fn an_l_spelled_layer_pair_is_read_and_an_unreadable_one_is_not_silence() {
+        // `Plated,L1,L2,PTH` names the same layers as `Plated,1,2,PTH`.
+        assert_eq!(
+            parse("M48\n; #@! TF.FileFunction,Plated,L1,L2,PTH\nMETRIC\n%\nM30\n").span,
+            DeclaredSpan::Pair(LayerPair { from: 1, to: 2 })
+        );
+        // A drill attribute whose pair fields say something else entirely
+        // offered a span we cannot read. Returning Absent instead would let the
+        // caller's "silence means through-hole on a simple job" rule stitch the
+        // whole stack off a declaration that said otherwise.
+        assert_eq!(
+            parse("M48\n; #@! TF.FileFunction,Plated,TOP,BOTTOM,PTH\nMETRIC\n%\nM30\n").span,
+            DeclaredSpan::Unreadable
+        );
+        // An attribute that is not a drill's carries no pair to misread.
+        assert_eq!(
+            parse("M48\n; #@! TF.FileFunction,Other,Whatever,Here\nMETRIC\n%\nM30\n").span,
+            DeclaredSpan::Absent
+        );
+    }
+
+    #[test]
+    fn the_format_line_sets_the_coordinate_split_not_just_the_units() {
+        // `FORMAT={3:3/...}` states the integer/decimal split. Reading only the
+        // units off it left `X001000` on the 2.4 default, which is 0.1 mm
+        // instead of 1.0 mm: the barrel lands on whatever copper is at the
+        // wrong place.
+        let d = parse(
+            "\
+M48
+FORMAT={3:3/ absolute / metric / decimal}
+T1C0.200
+%
+T1
+X001000Y001000
+M30
+",
+        );
+        assert_eq!(d.holes.len(), 1);
+        assert!(
+            (d.holes[0].x - 1.0).abs() < 1e-9,
+            "x was {} mm, expected 1.0 under the declared 3:3",
+            d.holes[0].x
+        );
+        // KiCad's `{-:-/...}` states no split and must leave the defaults be.
+        let d = parse(
+            "\
+M48
+FORMAT={-:-/ absolute / metric / decimal}
+METRIC
+T1C0.200
+%
+T1
+X1.5Y2.5
+M30
+",
+        );
+        assert!((d.holes[0].x - 1.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_mode_line_carrying_coordinates_is_not_a_drilled_hole() {
+        // `G90X20Y20` sets absolute mode at a position. In a rout-capable file
+        // that is a move, and treating it as a hit plants a plated barrel that
+        // stitches the stack where nothing was drilled.
+        let d = parse(
+            "\
+M48
+FMAT,2
+METRIC
+T1C0.800
+%
+G90
+T1
+G00X0.0Y0.0
+M15
+G01X5.0Y0.0
+M16
+G90X20.0Y20.0
+M30
+",
+        );
+        assert_eq!(d.holes.len(), 1, "only the cut: {:?}", d.holes);
+        assert_eq!(d.holes[0].to, Some((5.0, 0.0)));
     }
 
     #[test]
