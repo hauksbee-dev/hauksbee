@@ -957,7 +957,9 @@ pub fn append_ampacity(
             check: SiCheck::TraceAmpacity,
             severity: SiSeverity::Info,
             message: format!(
-                "trace-ampacity: {reference} was not attributed any current: {reason}. Its                  rails are unexamined by this check until the identity is resolved (a BOM or                  placement file with an authoritative reference fixes it).",
+                "trace-ampacity: {reference} was not attributed any current: {reason}. Its \
+                 rails are unexamined by this check until the identity is resolved (a BOM \
+                 or placement file with an authoritative reference fixes it).",
             ),
             refs: vec![reference.clone()],
             nets: vec![],
