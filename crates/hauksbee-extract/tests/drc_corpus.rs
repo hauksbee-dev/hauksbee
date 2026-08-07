@@ -7,15 +7,13 @@
 //!
 //! ## Documented corpus finding
 //!
-//! Earlier sweeps surfaced 2 "shorts" on several Olimex ESP32-EVB revisions
-//! (REV-A..D, L) and were investigated: they were different-net pads placed
-//! deliberately *abutting inside a single footprint* (a fuse-clip and a
-//! capacitor footprint). KiCad does not treat intra-footprint pad copper as a
-//! board short, so neither does the detector: pads sharing a footprint owner
-//! are skipped. This is a real geometric fact handled by a principled rule, not
-//! a per-board allowlist. With that rule the entire corpus is short-clean except
-//! for one recorded contact, `SHORT_EXCEPTIONS` below, which carries its evidence
-//! and an expiry.
+//! Earlier sweeps surfaced apparent contacts on several Olimex ESP32-EVB
+//! revisions (REV-A..D, L). Investigation separated real geometry from unsafe
+//! suppression: ordinary same-footprint pads are checked normally; only an
+//! explicitly named local copper-link footprint (`0R_0603`, with a matching 0R
+//! value) can exempt its own geometry. The exemption is owner- and location-
+//! scoped, so another collision between the same nets still fires. The remaining
+//! recorded contacts live in `SHORT_EXCEPTIONS` with evidence and an expiry.
 
 use std::path::{Path, PathBuf};
 

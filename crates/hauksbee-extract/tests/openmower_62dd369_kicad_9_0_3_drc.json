@@ -1,0 +1,57 @@
+{
+    "$schema": "https://schemas.kicad.org/drc.v1.json",
+    "coordinate_units": "mm",
+    "date": "2026-08-07T10:02:56+0100",
+    "kicad_version": "9.0.3",
+    "schematic_parity": [],
+    "source": "hw-openmower-universal.kicad_pcb",
+    "unconnected_items": [],
+    "violations": [
+        {
+            "description": "Copper zones intersect (intersecting zones must have distinct priorities)",
+            "items": [
+                {
+                    "description": "Zone [/5V] on In2.Cu-PWR-SIG, priority 50",
+                    "pos": {
+                        "x": 175.55,
+                        "y": 18.0
+                    },
+                    "uuid": "830a2fd5-5ac5-4c72-a756-eadf91c356c0"
+                },
+                {
+                    "description": "Zone [/5V] on In2.Cu-PWR-SIG, priority 50",
+                    "pos": {
+                        "x": 156.0,
+                        "y": 18.0
+                    },
+                    "uuid": "d9b80176-1606-4afb-a317-5fdf4dcd6db3"
+                }
+            ],
+            "severity": "error",
+            "type": "zones_intersect"
+        },
+        {
+            "description": "Courtyards overlap",
+            "items": [
+                {
+                    "description": "Footprint J32",
+                    "pos": {
+                        "x": 262.8,
+                        "y": 47.425
+                    },
+                    "uuid": "8287ac45-17dd-435a-b31a-d4c75960c039"
+                },
+                {
+                    "description": "Footprint J12",
+                    "pos": {
+                        "x": 203.42,
+                        "y": 74.447
+                    },
+                    "uuid": "d7849d26-ed57-4af6-8f54-3d8c043e2587"
+                }
+            ],
+            "severity": "error",
+            "type": "courtyards_overlap"
+        }
+    ]
+}

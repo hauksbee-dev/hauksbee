@@ -4,6 +4,10 @@
 
 use hauksbee_extract::{ClearanceRules, ExtractedBoard, NetClassRule, ViolationKind};
 
+const KICAD_10_KEYHOLE_ANTIPAD_BOARD: &str =
+    include_str!("fixtures/kicad_10_keyhole_antipad.kicad_pcb");
+const EXPECTED_SOLID_POUR_SHORTS: usize = 1;
+
 /// Wrap copper items in a minimal KiCad 7+ board with two declared signal nets
 /// (`A`, `B`) plus GND, and a default-clearance setup.
 fn board(items: &str) -> String {
@@ -315,9 +319,9 @@ fn pad_pad_overlap_is_a_short() {
 }
 
 #[test]
-fn same_footprint_pads_do_not_short() {
-    // Two abutting different-net pads inside ONE footprint (a fuse-clip style
-    // placement): the footprint author's intent, not a board short.
+fn ordinary_same_footprint_pads_still_short() {
+    // Sharing an ordinary component owner is not evidence that two different
+    // nets are intentionally tied.
     let items = r#"
   (footprint "lib:fuse" (layer "F.Cu") (at 5 5)
     (property "Reference" "F1" (at 0 0))
@@ -326,11 +330,152 @@ fn same_footprint_pads_do_not_short() {
   )
 "#;
     let report = drc(items);
+    assert_short(&report, "A", "B");
+}
+
+#[test]
+fn native_net_tie_groups_work_with_house_footprint_names_and_stay_local() {
+    let items = r#"
+  (footprint "Acme:KelvinBridge" (layer "F.Cu") (at 20 20)
+    (property "Reference" "NT1" (at 0 0))
+    (property "Value" "HOUSE_PART_42" (at 0 1))
+    (attr net_tie)
+    (net_tie_pad_groups "1, 2")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1))
+    (pad "2" smd rect (at 0.9 0) (size 1 1) (layers "F.Cu") (net 2))
+  )
+  (segment (start 0 0) (end 10 0) (width 0.4) (layer "F.Cu") (net 1))
+  (segment (start 5 -5) (end 5 5) (width 0.4) (layer "F.Cu") (net 2))
+"#;
+    let report = drc(items);
     assert_eq!(
         report.short_count(),
-        0,
-        "intra-footprint abutment is not a short"
+        1,
+        "only the remote A/B collision fires"
     );
+    assert_short(&report, "A", "B");
+}
+
+#[test]
+fn native_net_tie_does_not_hide_ordinary_copper_crossing_over_its_pads() {
+    // The ordinary A/B tracks cross exactly on NT1's overlapping copper.
+    // Sharing the tie's net pair and location is still not enough: neither
+    // track belongs to the explicitly identified link footprint.
+    let items = r#"
+  (footprint "Acme:KelvinBridge" (layer "F.Cu") (at 5 5)
+    (property "Reference" "NT1" (at 0 0))
+    (attr net_tie)
+    (net_tie_pad_groups "1, 2")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1))
+    (pad "2" smd rect (at 0.9 0) (size 1 1) (layers "F.Cu") (net 2))
+  )
+  (segment (start 0 5) (end 10 5) (width 0.2) (layer "F.Cu") (net 1))
+  (segment (start 5.45 0) (end 5.45 10) (width 0.2) (layer "F.Cu") (net 2))
+"#;
+    assert_short(&drc(items), "A", "B");
+}
+
+#[test]
+fn native_net_tie_pad_groups_never_exempt_cross_group_contacts() {
+    // KiCad permits several independent ties in one footprint. Pads 1/2 and
+    // 3/4 are legal contacts, but the B/GND contact between pads 2 and 3 is a
+    // real cross-group short and must remain visible.
+    let items = r#"
+  (net 4 "D")
+  (footprint "Acme:FourTerminalBridge" (layer "F.Cu") (at 20 20)
+    (property "Reference" "NT1" (at 0 0))
+    (attr net_tie)
+    (net_tie_pad_groups "1, 2" "3, 4")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1))
+    (pad "2" smd rect (at 0.9 0) (size 1 1) (layers "F.Cu") (net 2))
+    (pad "3" smd rect (at 1.8 0) (size 1 1) (layers "F.Cu") (net 3))
+    (pad "4" smd rect (at 2.7 0) (size 1 1) (layers "F.Cu") (net 4))
+  )
+"#;
+    let report = drc(items);
+    assert_eq!(
+        report.short_count(),
+        1,
+        "only the cross-group B/GND contact is illegal: {:?}",
+        report.findings
+    );
+    assert_short(&report, "B", "GND");
+}
+
+#[test]
+fn legacy_closed_pair_metadata_keeps_other_jumper_pads_separate() {
+    // Older EAGLE-to-KiCad conversions can retain a structured closed-pair
+    // declaration but no native net_tie attr. Both fields are required, and
+    // only the declared 1/2 pair is legal; the 2/3 contact still fires.
+    let items = r#"
+  (footprint "Vendor:SJ_2_SMALL_12_TIED" (layer "F.Cu") (at 20 20)
+    (property "Reference" "JP1" (at 0 0))
+    (property "Value" "Closed(1-2)/Opened(2-3)" (at 0 1))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1))
+    (pad "2" smd rect (at 0.9 0) (size 1 1) (layers "F.Cu") (net 2))
+    (pad "3" smd rect (at 1.8 0) (size 1 1) (layers "F.Cu") (net 3))
+  )
+"#;
+    let report = drc(items);
+    assert_eq!(report.short_count(), 1, "only 2/3 is illegal");
+    assert_short(&report, "B", "GND");
+}
+
+#[test]
+fn jumper_like_names_without_native_semantics_do_not_exempt_copper() {
+    // A library/package/value name is descriptive text, not a KiCad DRC
+    // declaration. Without attr/groups this ordinary part is checked.
+    let items = r#"
+  (footprint "Jumper:SolderJumper_2_Open" (layer "F.Cu") (at 5 5)
+    (property "Reference" "JP1" (at 0 0))
+    (property "Value" "SOLDER_JUMPER" (at 0 1))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1))
+    (pad "2" smd rect (at 0.9 0) (size 1 1) (layers "F.Cu") (net 2))
+  )
+"#;
+    assert_short(&drc(items), "A", "B");
+}
+
+#[test]
+fn explicit_zero_ohm_copper_link_exemption_is_local() {
+    // Some legacy footprints state their copper-link semantics explicitly in
+    // both footprint and value, and include an auxiliary same-number copper pad
+    // that reaches the opposite terminal. Only that local geometry is waived.
+    let items = r#"
+  (footprint "Vendor:0R_0603" (layer "F.Cu") (at 20 20)
+    (property "Reference" "R25" (at 0 0))
+    (fp_text value "0R(board_mounted)" (at 0 1) (layer "F.Fab"))
+    (pad "1" smd rect (at -0.889 0) (size 1.016 1.016) (layers "F.Cu") (net 1))
+    (pad "2" smd rect (at 0.889 0) (size 1.016 1.016) (layers "F.Cu") (net 2))
+    (pad "1" smd rect (at 0 0) (size 0.78 0.5) (layers "F.Cu") (net 1))
+  )
+  (segment (start 0 0) (end 10 0) (width 0.4) (layer "F.Cu") (net 1))
+  (segment (start 5 -5) (end 5 5) (width 0.4) (layer "F.Cu") (net 2))
+"#;
+    let report = drc(items);
+    assert_eq!(
+        report.short_count(),
+        1,
+        "the explicit link is local; the remote collision still fires"
+    );
+    assert_short(&report, "A", "B");
+}
+
+#[test]
+fn zero_ohm_drc_exception_requires_value_and_dedicated_footprint() {
+    for (footprint, value) in [("Device:R_0603", "0R"), ("Vendor:0R_0603", "10k")] {
+        let items = format!(
+            r#"
+  (footprint "{footprint}" (layer "F.Cu") (at 5 5)
+    (property "Reference" "R1" (at 0 0))
+    (property "Value" "{value}" (at 0 1))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1))
+    (pad "2" smd rect (at 0.9 0) (size 1 1) (layers "F.Cu") (net 2))
+  )
+"#
+        );
+        assert_short(&drc(&items), "A", "B");
+    }
 }
 
 #[test]
@@ -350,6 +495,32 @@ fn via_zone_overlap_is_a_short() {
     assert_short(&report, "A", "GND");
     let f = report.shorts().next().unwrap();
     assert_eq!(f.layer, "B.Cu");
+}
+
+#[test]
+fn kicad_10_keyhole_antipad_keeps_the_isolated_pad_silent() {
+    let report = ExtractedBoard::drc(KICAD_10_KEYHOLE_ANTIPAD_BOARD).expect("drc runs");
+
+    assert!(
+        report.shorts().all(|finding| {
+            finding.net_a_name != "ANTIPAD_OK" && finding.net_b_name != "ANTIPAD_OK"
+        }),
+        "the pad enclosed by a real KiCad-10 keyhole antipad remains isolated: {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn kicad_10_solid_fill_over_a_pad_remains_reportable() {
+    let report = ExtractedBoard::drc(KICAD_10_KEYHOLE_ANTIPAD_BOARD).expect("drc runs");
+
+    assert_eq!(
+        report.short_count(),
+        EXPECTED_SOLID_POUR_SHORTS,
+        "the solid filled polygon over PAD_ONLY_SHORT must not inherit the keyhole exemption: {:?}",
+        report.findings
+    );
+    assert_short(&report, "PAD_ONLY_SHORT", "GND");
 }
 
 #[test]
