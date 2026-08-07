@@ -1,0 +1,97 @@
+(kicad_pcb
+	(version 20260206)
+	(generator "pcbnew")
+	(generator_version "10.0")
+	(general
+		(thickness 1.6)
+	)
+	(layers
+		(0 "F.Cu" signal)
+		(2 "B.Cu" signal)
+		(9 "F.Adhes" user "F.Adhesive")
+		(11 "B.Adhes" user "B.Adhesive")
+		(13 "F.Paste" user)
+		(15 "B.Paste" user)
+		(5 "F.SilkS" user "F.Silkscreen")
+		(7 "B.SilkS" user "B.Silkscreen")
+		(1 "F.Mask" user)
+		(3 "B.Mask" user)
+		(17 "Dwgs.User" user "User.Drawings")
+		(19 "Cmts.User" user "User.Comments")
+		(21 "Eco1.User" user "User.Eco1")
+		(23 "Eco2.User" user "User.Eco2")
+		(25 "Edge.Cuts" user)
+		(27 "Margin" user)
+		(31 "F.CrtYd" user "F.Courtyard")
+		(29 "B.CrtYd" user "B.Courtyard")
+		(35 "F.Fab" user)
+		(33 "B.Fab" user)
+	)
+	(setup
+		(pad_to_mask_clearance 0)
+		(allow_soldermask_bridges_in_footprints no)
+	)
+	(footprint "Hauksbee:AntipadPositive"
+		(layer "F.Cu")
+		(at 5 5)
+		(property "Reference" "PAD_OK"
+			(at 0 -2 0)
+			(layer "F.SilkS")
+		(hide yes)
+		)
+		(pad "1" smd rect
+			(at 0 0)
+			(size 1 1)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(net "ANTIPAD_OK")
+		)
+	)
+	(footprint "Hauksbee:PadOnlyShort"
+		(layer "F.Cu")
+		(at 15 5)
+		(property "Reference" "PAD_SHORT"
+			(at 0 -2 0)
+			(layer "F.SilkS")
+		(hide yes)
+		)
+		(pad "1" smd rect
+			(at 0 0)
+			(size 1 1)
+			(layers "F.Cu" "F.Mask" "F.Paste")
+			(net "PAD_ONLY_SHORT")
+		)
+	)
+	(zone
+		(net "GND")
+		(layer "F.Cu")
+		(hatch edge 0.5)
+		(connect_pads
+			(clearance 0.5)
+		)
+		(min_thickness 0.25)
+		(fill yes
+			(thermal_gap 0.3)
+			(thermal_bridge_width 0.3)
+		)
+		(polygon
+			(pts
+				(xy 0 0) (xy 20 0) (xy 20 10) (xy 0 10)
+			)
+		)
+		(filled_polygon
+			(layer "F.Cu")
+			(pts
+				(xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10)
+				(xy 0 5) (xy 4 5)
+				(xy 4 6) (xy 6 6) (xy 6 4) (xy 4 4) (xy 4 5)
+				(xy 0 5)
+			)
+		)
+		(filled_polygon
+			(layer "F.Cu")
+			(pts
+				(xy 10 0) (xy 20 0) (xy 20 10) (xy 10 10)
+			)
+		)
+	)
+)
