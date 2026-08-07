@@ -32,6 +32,8 @@
 //! negative is on the record) and does not fire. It never invents a current,
 //! rating, or duty.
 
+use std::collections::{BTreeMap, HashSet};
+
 use hauksbee_extract::{ExtractedBoard, SiCheck, SiFinding, SiReport, SiSeverity};
 use hauksbee_models::ModelLibrary;
 
@@ -164,10 +166,55 @@ fn nominal_buck_duty(input_rail: &str, output_rail: &str) -> Option<f64> {
 /// report.
 pub fn append_ripple(board: &ExtractedBoard, lib: &ModelLibrary, report: &mut SiReport) {
     let stages = detect_converters(board, lib);
+    let mut suppliers: BTreeMap<i64, Vec<&ConverterStage>> = BTreeMap::new();
+    for stage in &stages {
+        suppliers
+            .entry(stage.output_rail.0)
+            .or_default()
+            .push(stage);
+    }
+    let mut ambiguous_output_nets = HashSet::new();
+    for (output_net, stages) in suppliers.iter().filter(|(_, stages)| stages.len() > 1) {
+        if !stages.iter().any(|stage| stage.topology == Topology::Buck) {
+            continue;
+        }
+        ambiguous_output_nets.insert(*output_net);
+        let mut stage_labels: Vec<_> = stages
+            .iter()
+            .map(|stage| {
+                format!(
+                    "{} (switch '{}', input '{}')",
+                    stage.inductor_ref, stage.switch_node.1, stage.input_rail.1
+                )
+            })
+            .collect();
+        stage_labels.sort();
+        let mut references: Vec<_> = stages
+            .iter()
+            .map(|stage| stage.inductor_ref.clone())
+            .collect();
+        references.sort();
+        references.dedup();
+        report.findings.push(SiFinding {
+            check: SiCheck::InputCapRipple,
+            severity: SiSeverity::Info,
+            message: format!(
+                "input-cap ripple: output rail '{}' has {} detected supplying stages ({}); the net-wide attributable load is known, but its supplier split is unknown - no stage input capacitor is flagged.",
+                stages[0].output_rail.1,
+                stages.len(),
+                stage_labels.join(", "),
+            ),
+            refs: references,
+            nets: vec![stages[0].output_rail.1.clone()],
+        });
+    }
     for stage in &stages {
         // Only buck input caps are modelled here (the input current is the pulsed
         // one). A boost's pulsed current is on the output; left to a future arm.
         if stage.topology != Topology::Buck {
+            continue;
+        }
+        if ambiguous_output_nets.contains(&stage.output_rail.0) {
             continue;
         }
         let cap = match stage.input_bulk_caps.as_slice() {

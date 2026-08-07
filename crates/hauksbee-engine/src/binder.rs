@@ -26,6 +26,7 @@ use hauksbee_ir::{
 use hauksbee_models::value::parse_value;
 use hauksbee_models::{ComponentKind, ComponentQuery, Confidence, ModelEntry, ModelLibrary};
 
+use crate::component_evidence::identity_refusal;
 use crate::digital::{output_roles, DigitalComponent, SupplyDraw};
 use crate::drivers::{PinDriver, DEFAULT_RO};
 use crate::power_supply::{PowerSupply, SupplyLeg};
@@ -558,25 +559,44 @@ fn bind_behavioral(
     // Board resistor lookup: reference designator -> ohms, parsed from the
     // component value. Used by programmable current limits (e.g. LTC4020 ILIMIT
     // reads R8). Built once.
-    let mut resistor_ohms: HashMap<String, f64> = HashMap::new();
+    let mut resistor_ohms: HashMap<String, Option<f64>> = HashMap::new();
     for comp in &board.components {
-        // A DNP resistor is absent from the assembled board: the limit it
-        // would have programmed must fall back to the open-resistance default.
+        // A DNP resistor is absent from the assembled board. Named converter
+        // programs become unsupported; generic `_from_ref` params retain their
+        // explicit open-resistance semantics below.
         if comp.dnp {
             continue;
         }
         if comp.reference.starts_with('R') {
-            if let Some(p) = parse_value(&comp.value) {
-                resistor_ohms.insert(comp.reference.clone(), p.si);
-            }
+            let observed = if identity_refusal(comp).is_none() {
+                parse_value(&comp.value)
+                    .map(|parsed| parsed.si)
+                    .filter(|ohms| ohms.is_finite() && *ohms > 0.0)
+            } else {
+                None
+            };
+            // A second populated physical record with the same designator is
+            // contradictory identity evidence. Never make iteration order a
+            // circuit fact, even if the two values happen to match.
+            resistor_ohms
+                .entry(comp.reference.clone())
+                .and_modify(|value| *value = None)
+                .or_insert(observed);
         }
     }
-    let board_resistor = |refdes: &str| -> Option<f64> { resistor_ohms.get(refdes).copied() };
+    let board_resistor =
+        |refdes: &str| -> Option<f64> { resistor_ohms.get(refdes).copied().flatten() };
 
     let mut out = Vec::new();
     for comp in &board.components {
         // Not assembled -> no behavioural device (same rule as pass 2).
         if comp.dnp {
+            continue;
+        }
+        // Custom factories may match raw value strings even when normal model
+        // resolution refuses the component. Keep them behind the same physical
+        // identity boundary as declarative and ordinary model binding.
+        if identity_refusal(comp).is_some() {
             continue;
         }
         let res = resolve(lib, comp);
@@ -840,12 +860,11 @@ pub(crate) fn resolve(lib: &ModelLibrary, comp: &Component) -> hauksbee_models::
         non_empty(&comp.footprint),
     );
     q.reference = Some(comp.reference.clone());
-    // A duplicate source designator with conflicting metadata is not a model
-    // match. The extractor keeps both electrical records so connectivity/DRC
-    // remain available, but binding either record would turn an unresolved
-    // identity choice into apparently precise simulation. Centralising the
-    // refusal here also protects every check that resolves through the binder.
-    if component_identity_conflict(comp).is_some() {
+    // Ambiguous component identity is not a model match. The extractor keeps
+    // the electrical records so connectivity/DRC remain available, but binding
+    // one would turn an unresolved identity choice into precise simulation.
+    // The shared gate also protects checks that resolve through the binder.
+    if identity_refusal(comp).is_some() {
         return hauksbee_models::Resolution {
             model: None,
             confidence: Confidence::Unresolved,
@@ -1541,20 +1560,13 @@ fn non_empty(s: &str) -> Option<String> {
     }
 }
 
-fn component_identity_conflict(comp: &Component) -> Option<&str> {
-    comp.properties
-        .iter()
-        .find(|(key, _)| key == hauksbee_extract::DUPLICATE_REFERENCE_CONFLICT_KEY)
-        .map(|(_, value)| value.as_str())
-}
-
 /// Build the outcome for a component with no resolved model.
 fn unresolved_outcome(
     comp: &Component,
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
 ) -> (Option<String>, BindOutcome, Option<String>) {
-    if let Some(conflict) = component_identity_conflict(comp) {
-        let reason = format!("ambiguous duplicate designator: {conflict}; left open");
+    if let Some(refusal) = identity_refusal(comp) {
+        let reason = format!("{}; left open", refusal.reason());
         let warning = format!(
             "cannot bind '{}' ({}): {reason}",
             comp.reference, comp.value
@@ -4047,7 +4059,7 @@ fn power_out_net_voltages(board: &ExtractedBoard) -> HashMap<i64, f64> {
     let mut out: HashMap<i64, f64> = HashMap::new();
     for comp in &board.components {
         // A DNP part's power_out pin drives nothing on the real board.
-        if comp.dnp || component_identity_conflict(comp).is_some() {
+        if comp.dnp || identity_refusal(comp).is_some() {
             continue;
         }
         for pin in &comp.pins {
@@ -4122,6 +4134,46 @@ mod canonical_ground_tests {
 #[cfg(test)]
 mod duplicate_identity_refusal_tests {
     use super::*;
+
+    fn inferred_altium_resistor(properties: Vec<(String, String)>) -> Component {
+        Component {
+            reference: "R1".into(),
+            value: "1k".into(),
+            lib_id: "Device:R".into(),
+            footprint: "R_0603".into(),
+            position: None,
+            layer: "F.Cu".into(),
+            properties,
+            dnp: false,
+            pins: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn inferred_ambiguous_altium_identity_binds_only_with_an_authoritative_uid() {
+        let lib = ModelLibrary::builtin();
+        let marker = (
+            hauksbee_extract::altium::REFERENCE_AMBIGUOUS_KEY.into(),
+            "hierarchy could not distinguish repeated source designators".into(),
+        );
+        let ambiguous = inferred_altium_resistor(vec![marker.clone()]);
+        assert!(
+            resolve(&lib, &ambiguous).model.is_none(),
+            "an inferred ambiguous identity must not choose a precise model"
+        );
+
+        let authoritative = inferred_altium_resistor(vec![
+            marker,
+            (
+                hauksbee_extract::altium::SOURCE_UNIQUE_ID_KEY.into(),
+                "ABC-123".into(),
+            ),
+        ]);
+        assert!(
+            resolve(&lib, &authoritative).model.is_some(),
+            "the source UID makes the component identity authoritative"
+        );
+    }
 
     #[test]
     fn conflicting_duplicate_identity_is_left_open_and_reported() {

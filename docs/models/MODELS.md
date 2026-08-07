@@ -376,7 +376,10 @@ A `[models.behavioral]` block is a bag of optional facts:
    - `[models.behavioral.converter.iin_program]`: a programmable
      input-current limit set by a sense resistor and a programming
      resistor, both read off the board by reference designator
-     (`rsense_ref`, `prog_ref`). The limit is `v_sense / rsense`, where
+     (`rsense_refs`, `prog_ref`). `rsense_refs` lists every matched shunt in a
+     Kelvin topology. Every named resistor must resolve, and all listed shunts
+     must agree, or the limit is unknown; named parts never fall back to a
+     literal. The limit is `v_sense / rsense`, where
      `v_sense` scales linearly with the programming resistor up to
      `v_sense_full`. The runtime regulates the output, folds it back under
      the output limit, and throttles so the reflected input draw never
@@ -407,8 +410,12 @@ A power IC's behaviour is often set by an external resistor (the LTC4020
 ILIMIT pin, the LTC6803 cell-tie network). The binder reads those resistor
 *values* off the actual board:
 
-- A converter's `iin_program` names `rsense_ref` / `prog_ref` (e.g.
-  `"R49"`, `"R8"`); the binder substitutes the on-board value.
+- A converter's `iin_program` names `rsense_refs` / `prog_ref` (e.g.
+  `["R49", "R50"]`, `"R8"`); the binder substitutes the on-board values.
+  Missing, DNP, duplicate, identity-ambiguous, unparsable, or unequal named
+  resistors make the dynamic limit unknown. Literal `rsense_ohms` and
+  `prog_ohms` remain available only for literal-only models; each is mutually
+  exclusive with its named form.
 - Any param `<name>_from_ref = "Rxx"` is rewritten to
   `<name> = ohms(Rxx)`. If the resistor is *absent* (the revision replaced
   it, e.g. the LTC6803 tie R52 replaced by a blocking diode), the binder
@@ -466,8 +473,11 @@ all simultaneous series/parallel/bridge branches; a closed solder link is a
 short and a capacitor/open jumper is open. A numeric fuse, thermistor,
 conflicting identity, unknown two-terminal part, or network beyond the supported
 topology makes the result undetermined rather than assumed. The block's
-`max_operating_current_a` bounds the equation in the region the manufacturer
-actually specifies. It is intentionally not inferred from
+`max_operating_current_a` marks the sourced equation domain. Above it, the
+default `above_domain = "abstain"` returns no current; it does not silently clamp
+an undersized programming resistor to a precise ceiling. A model may declare
+`above_domain = "saturate"` only when the source actually says the transfer
+saturates at `max_operating_current_a`. The limit is intentionally not inferred from
 `ratings.max_current_a`, which is a separate device-level analysis threshold and
 may be higher. It is normally an absolute limit; model entries that deliberately
 use a lower recommended-operating ceiling say so beside the value.
@@ -480,7 +490,7 @@ pin = "prog"
 semantics = "regulated_current"
 current_in_roles = ["in"]
 current_out_roles = ["out"]
-max_operating_current_a = 0.4
+max_operating_current_a = 0.401
 equation = "piecewise_inverse_resistance"
 low_k_volts = 1000.0
 transition_current_a = 0.15
@@ -587,7 +597,7 @@ vout_setpoint = 8.4        # 2S Li-ion
 efficiency = 0.90
 
 [models.behavioral.converter.iin_program]
-rsense_ref = "R43"         # 0.005 ohm input shunt, read off the board
+rsense_refs = ["R43"]      # every matched input shunt, read off the board
 prog_ref = "R42"           # the ILIMIT resistor, read off the board
 vprog_ref = 0.05           # sense threshold at prog = prog_ref_ohms
 prog_ref_ohms = 50000.0

@@ -37,7 +37,7 @@ vout_setpoint = 28.8 # Source: Typical Application, 8-cell LiFePO4 pack at 3.6V 
 efficiency = 0.92 # Source: Electrical Characteristics typical, buck-boost conversion efficiency up to 92%
 
 [models.behavioral.converter.iin_program]
-rsense_ref = "RSENSE" # Source: Typical Application, input sense resistor RSENSE = 0.01 ohm across SENSVIN/SENSTOP
+rsense_refs = ["RSENSE"] # Source: Typical Application, input sense resistor RSENSE = 0.01 ohm across SENSVIN/SENSTOP
 prog_ref = "RILIMIT" # Source: Pin Functions, resistor from ILIMIT to GND programs maximum average input current
 vprog_ref = 0.0 # estimated; ILIMIT programming voltage not stated in provided excerpt
 prog_ref_ohms = 0.0 # estimated; ILIMIT resistor equation/value not stated in provided excerpt

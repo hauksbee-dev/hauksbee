@@ -733,6 +733,52 @@ fn structurally_compatible_split(
     )
 }
 
+/// Partition repeated records by positive pairwise identity evidence. A shared
+/// identically-netted pad creates an edge; transitive edges form a candidate
+/// split-placement group. A candidate with any group-wide pin/net conflict is
+/// conservatively split back into individual records.
+fn positive_identity_components(
+    inputs: &[ComponentIdentityInput],
+    indices: &[usize],
+) -> Vec<Vec<usize>> {
+    let mut adjacency: HashMap<usize, Vec<usize>> =
+        indices.iter().map(|&index| (index, Vec::new())).collect();
+    for (offset, &left) in indices.iter().enumerate() {
+        for &right in &indices[offset + 1..] {
+            if structurally_compatible_split(inputs, &[left, right], true) {
+                adjacency.get_mut(&left).unwrap().push(right);
+                adjacency.get_mut(&right).unwrap().push(left);
+            }
+        }
+    }
+
+    let mut seen = HashSet::new();
+    let mut groups = Vec::new();
+    for &start in indices {
+        if !seen.insert(start) {
+            continue;
+        }
+        let mut stack = vec![start];
+        let mut group = Vec::new();
+        while let Some(index) = stack.pop() {
+            group.push(index);
+            for &neighbor in &adjacency[&index] {
+                if seen.insert(neighbor) {
+                    stack.push(neighbor);
+                }
+            }
+        }
+        group.sort_unstable();
+        if group.len() > 1 && pin_net_compatibility(inputs, &group).is_none() {
+            groups.extend(group.into_iter().map(|index| vec![index]));
+        } else {
+            groups.push(group);
+        }
+    }
+    groups.sort_by_key(|group| group[0]);
+    groups
+}
+
 fn identity_token(source_unique_id: &str) -> String {
     let token: String = source_unique_id
         .chars()
@@ -1050,7 +1096,8 @@ pub(crate) fn canonical_component_identities(
             // This stricter rule also keeps DRC ownership conservative: two
             // overlapping different-net pads cannot inherit a same-footprint
             // exemption merely because their pad numbers differ.
-            if structurally_compatible_split(inputs, &indices, true) {
+            let inferred_groups = positive_identity_components(inputs, &indices);
+            if inferred_groups.len() == 1 && inferred_groups[0].len() == indices.len() {
                 for &index in &indices {
                     output[index] = Some(ComponentIdentity {
                         reference: raw_reference.clone(),
@@ -1061,16 +1108,32 @@ pub(crate) fn canonical_component_identities(
                     });
                 }
             } else {
-                for &index in &indices {
-                    let candidate = format!("{raw_reference}@record-{}", inputs[index].record_key);
+                for group in inferred_groups {
+                    let first = group[0];
+                    let (candidate, reason) = if group.len() > 1 {
+                        (
+                            format!(
+                                "{raw_reference}@records-{}",
+                                inputs[first].record_key
+                            ),
+                            "repeated designator has no source hierarchy; only this record group shares identically-netted pads, so it is merged for connectivity but remains identity-ambiguous"
+                                .to_string(),
+                        )
+                    } else {
+                        (
+                            format!(
+                                "{raw_reference}@record-{}",
+                                inputs[first].record_key
+                            ),
+                            "repeated designator has no source hierarchy and no positive pad-identity edge to another record; kept distinct"
+                                .to_string(),
+                        )
+                    };
                     assign_shared_identity(
                         inputs,
-                        &[index],
+                        &group,
                         &candidate,
-                        Some((
-                            REFERENCE_AMBIGUOUS_KEY,
-                            "repeated designator has no source hierarchy and lacks compatible pad evidence; kept distinct".to_string(),
-                        )),
+                        Some((REFERENCE_AMBIGUOUS_KEY, reason)),
                         &hierarchies,
                         &source_unique_ids,
                         &mut used,
@@ -1083,24 +1146,48 @@ pub(crate) fn canonical_component_identities(
 
         if path_groups.len() == 1 && missing_path.is_empty() {
             let path_indices = path_groups.values().next().unwrap();
-            if structurally_compatible_split(inputs, path_indices, true) {
+            let inferred_groups = positive_identity_components(inputs, path_indices);
+            if inferred_groups.len() == 1 && inferred_groups[0].len() == path_indices.len() {
                 for &index in path_indices {
+                    let mut properties =
+                        base_properties(&hierarchies[index], &source_unique_ids[index]);
+                    properties.push((
+                        REFERENCE_AMBIGUOUS_KEY.to_string(),
+                        "records share a source hierarchy and an identically-netted pad, but lack an authoritative unique id; merged for connectivity only"
+                            .to_string(),
+                    ));
                     output[index] = Some(ComponentIdentity {
                         reference: raw_reference.clone(),
-                        properties: base_properties(&hierarchies[index], &source_unique_ids[index]),
+                        properties,
                     });
                 }
             } else {
-                for &index in path_indices {
-                    let candidate = format!("{raw_reference}@record-{}", inputs[index].record_key);
+                for group in inferred_groups {
+                    let first = group[0];
+                    let (candidate, reason) = if group.len() > 1 {
+                        (
+                            format!(
+                                "{raw_reference}@records-{}",
+                                inputs[first].record_key
+                            ),
+                            "records share a source hierarchy and positive pad-identity edges only within this subset; merged for connectivity but left identity-ambiguous without an authoritative unique id"
+                                .to_string(),
+                        )
+                    } else {
+                        (
+                            format!(
+                                "{raw_reference}@record-{}",
+                                inputs[first].record_key
+                            ),
+                            "records share a source hierarchy but this record has no positive pad-identity edge and no authoritative unique id; kept distinct"
+                                .to_string(),
+                        )
+                    };
                     assign_shared_identity(
                         inputs,
-                        &[index],
+                        &group,
                         &candidate,
-                        Some((
-                            REFERENCE_AMBIGUOUS_KEY,
-                            "records share a source hierarchy but lack an authoritative unique id or a shared identically-netted pad; kept distinct".to_string(),
-                        )),
+                        Some((REFERENCE_AMBIGUOUS_KEY, reason)),
                         &hierarchies,
                         &source_unique_ids,
                         &mut used,
@@ -1114,31 +1201,54 @@ pub(crate) fn canonical_component_identities(
         // Multiple named hierarchies prove channel replication. Records within
         // one path may still be split placements, but only with compatible pads.
         for (path, path_indices) in path_groups {
-            let candidate = format!("{raw_reference}@{path}");
-            if structurally_compatible_split(inputs, &path_indices, true) || path_indices.len() == 1
-            {
+            let inferred_groups = positive_identity_components(inputs, &path_indices);
+            if inferred_groups.len() == 1 && inferred_groups[0].len() == path_indices.len() {
+                let group = &inferred_groups[0];
+                let candidate = format!("{raw_reference}@{path}");
+                let inference = (path_indices.len() > 1).then(|| {
+                    (
+                        REFERENCE_AMBIGUOUS_KEY,
+                        "records share a channel hierarchy and an identically-netted pad, but lack an authoritative unique id; merged for connectivity only"
+                            .to_string(),
+                    )
+                });
                 assign_shared_identity(
                     inputs,
-                    &path_indices,
+                    group,
                     &candidate,
-                    None,
+                    inference,
                     &hierarchies,
                     &source_unique_ids,
                     &mut used,
                     &mut output,
                 );
             } else {
-                for &index in &path_indices {
-                    let candidate =
-                        format!("{raw_reference}@{path}@record-{}", inputs[index].record_key);
+                for group in inferred_groups {
+                    let first = group[0];
+                    let (candidate, reason) = if group.len() > 1 {
+                        (
+                            format!(
+                                "{raw_reference}@{path}@records-{}",
+                                inputs[first].record_key
+                            ),
+                            "records share a channel hierarchy and positive pad-identity edges only within this subset; merged for connectivity but left identity-ambiguous without an authoritative unique id"
+                                .to_string(),
+                        )
+                    } else {
+                        (
+                            format!(
+                                "{raw_reference}@{path}@record-{}",
+                                inputs[first].record_key
+                            ),
+                            "records share a channel hierarchy but this record has no positive pad-identity edge and no authoritative unique id; kept distinct"
+                                .to_string(),
+                        )
+                    };
                     assign_shared_identity(
                         inputs,
-                        &[index],
+                        &group,
                         &candidate,
-                        Some((
-                            REFERENCE_AMBIGUOUS_KEY,
-                            "records share a source hierarchy but lack an authoritative unique id or a shared identically-netted pad; kept distinct".to_string(),
-                        )),
+                        Some((REFERENCE_AMBIGUOUS_KEY, reason)),
                         &hierarchies,
                         &source_unique_ids,
                         &mut used,
@@ -1578,6 +1688,75 @@ mod tests {
             .properties
             .iter()
             .any(|(key, _)| key == crate::DUPLICATE_REFERENCE_CONFLICT_KEY)));
+    }
+
+    #[test]
+    fn shared_pad_without_authoritative_identity_remains_ambiguous() {
+        let identities = canonical_component_identities(&[
+            ComponentIdentityInput {
+                source_designator: "J1".into(),
+                source_hierarchical_path: String::new(),
+                source_unique_id: String::new(),
+                record_key: "a".into(),
+                pins: vec![("1".into(), Some(7))],
+            },
+            ComponentIdentityInput {
+                source_designator: "J1".into(),
+                source_hierarchical_path: String::new(),
+                source_unique_id: String::new(),
+                record_key: "b".into(),
+                pins: vec![("1".into(), Some(7)), ("2".into(), Some(9))],
+            },
+        ]);
+
+        assert_eq!(
+            identities[0].reference, identities[1].reference,
+            "positive pad evidence may merge connectivity ownership"
+        );
+        assert!(identities.iter().all(|identity| identity
+            .properties
+            .iter()
+            .any(|(key, _)| key == REFERENCE_AMBIGUOUS_KEY)));
+    }
+
+    #[test]
+    fn one_shared_pair_does_not_absorb_a_disjoint_third_record() {
+        let identities = canonical_component_identities(&[
+            ComponentIdentityInput {
+                source_designator: "J1".into(),
+                source_hierarchical_path: String::new(),
+                source_unique_id: String::new(),
+                record_key: "a".into(),
+                pins: vec![("1".into(), Some(7))],
+            },
+            ComponentIdentityInput {
+                source_designator: "J1".into(),
+                source_hierarchical_path: String::new(),
+                source_unique_id: String::new(),
+                record_key: "b".into(),
+                pins: vec![("1".into(), Some(7))],
+            },
+            ComponentIdentityInput {
+                source_designator: "J1".into(),
+                source_hierarchical_path: String::new(),
+                source_unique_id: String::new(),
+                record_key: "c".into(),
+                pins: vec![("2".into(), Some(9))],
+            },
+        ]);
+
+        assert_eq!(
+            identities[0].reference, identities[1].reference,
+            "the identically-netted pair is one connectivity owner"
+        );
+        assert_ne!(
+            identities[1].reference, identities[2].reference,
+            "a disjoint record has no positive edge into that owner"
+        );
+        assert!(identities.iter().all(|identity| identity
+            .properties
+            .iter()
+            .any(|(key, _)| key == REFERENCE_AMBIGUOUS_KEY)));
     }
 
     #[test]

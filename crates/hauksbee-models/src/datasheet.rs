@@ -888,7 +888,7 @@ captures the part's internal behaviour the SPICE kinds cannot. The schema:
   vout_setpoint = <volts>           # regulated output voltage
   efficiency = <0..1>
   [models.behavioral.converter.iin_program]   # programmable input-current limit
-  rsense_ref = "<board refdes>"     # the input sense resistor on the board
+  rsense_refs = ["<board refdes>"]  # every matched input sense resistor on the board
   prog_ref   = "<board refdes>"     # the limit-programming resistor on the board
   vprog_ref = <volts>               # sense threshold at prog = prog_ref_ohms
   prog_ref_ohms = <ohms>            # programming resistor at the threshold point
@@ -2094,7 +2094,7 @@ in_pin = "pvin"
 vout_setpoint = 28.8
 efficiency = 0.92
 [models.behavioral.converter.iin_program]
-rsense_ref = "R49"
+rsense_refs = ["R49", "R50"]
 prog_ref = "R8"
 vprog_ref = 0.0316
 prog_ref_ohms = 7150.0
