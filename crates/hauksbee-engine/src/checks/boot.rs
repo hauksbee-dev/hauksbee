@@ -20,8 +20,8 @@
 
 use std::collections::HashSet;
 
-use hauksbee_extract::{Component, ExtractedBoard};
 use hauksbee_extract::assembly::AssemblyState;
+use hauksbee_extract::{Component, ExtractedBoard};
 
 /// The structured boot-safety advisory for a finished co-sim run. Built by
 /// [`analyze`]; rendered by the CLI (`--plain`/`--json`), the TUI and the web.

@@ -26,12 +26,12 @@ use hauksbee_ir::{
 use hauksbee_models::value::parse_value;
 use hauksbee_models::{ComponentKind, ComponentQuery, Confidence, ModelEntry, ModelLibrary};
 
-use hauksbee_extract::assembly::{AssemblyState, FittedComponent};
 use crate::digital::{output_roles, DigitalComponent, SupplyDraw};
 use crate::drivers::{PinDriver, DEFAULT_RO};
 use crate::power_supply::{PowerSupply, SupplyLeg};
 use crate::report::{BindOutcome, BindReport, BindRow};
 use crate::stress::DeviceMeta;
+use hauksbee_extract::assembly::{AssemblyState, FittedComponent};
 
 /// Default supply voltage for an ideal +5V rail.
 pub const DEFAULT_VCC: f64 = 5.0;
