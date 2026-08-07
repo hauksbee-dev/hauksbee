@@ -36,6 +36,52 @@ use crate::report::{BindOutcome, BindReport};
 /// any future caller share one source of truth.
 pub const EXIT_INVALID_FOR_ANALYSIS: i32 = 3;
 
+/// The C5.3 refusal contract.  Exit 3 means the requested claim could not be
+/// made; it is neither a finding nor a malformed-input error.  Every renderer
+/// carries these same four answers so a refusal is actionable and does not
+/// discard work that remains valid.
+#[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
+pub struct Refusal {
+    /// The conclusion the run declined to make.
+    pub claim: String,
+    /// The concrete absent or invalid prerequisite that blocked that claim.
+    pub missing_prerequisite: String,
+    /// Conclusions/artifacts produced by the run that remain trustworthy.
+    pub valid_partial_conclusions: Vec<String>,
+    /// The cheapest concrete action that can make the claim answerable.
+    pub next_action: String,
+}
+
+impl Refusal {
+    pub fn new(
+        claim: impl Into<String>,
+        missing_prerequisite: impl Into<String>,
+        valid_partial_conclusions: Vec<impl Into<String>>,
+        next_action: impl Into<String>,
+    ) -> Self {
+        Self {
+            claim: claim.into(),
+            missing_prerequisite: missing_prerequisite.into(),
+            valid_partial_conclusions: valid_partial_conclusions
+                .into_iter()
+                .map(Into::into)
+                .collect(),
+            next_action: next_action.into(),
+        }
+    }
+
+    /// Lossless human rendering used by terminal and CI-native text surfaces.
+    pub fn render_text(&self) -> String {
+        format!(
+            "refused claim: {}\nmissing prerequisite: {}\nvalid partial conclusions: {}\nnext action: {}",
+            self.claim,
+            self.missing_prerequisite,
+            self.valid_partial_conclusions.join("; "),
+            self.next_action,
+        )
+    }
+}
+
 /// Version of the `run --json` document contract (`JsonReport` plus the
 /// `ok`/`verdict`/`serious_count`/`actionable_count` rollup `to_json`
 /// prepends). Bump on a breaking change only; additive fields keep it.
@@ -415,6 +461,10 @@ pub struct Validity {
     /// Set only when `valid` is false: the named reason, listing offending refs.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Present on every exit-3 validity result. `reason` remains as a compact
+    /// compatibility alias for `missing_prerequisite`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<Refusal>,
 }
 
 impl Validity {
@@ -422,12 +472,22 @@ impl Validity {
         Validity {
             valid: true,
             reason: None,
+            refusal: None,
         }
     }
     pub fn invalid(reason: impl Into<String>) -> Self {
         Validity {
             valid: false,
             reason: Some(reason.into()),
+            refusal: None,
+        }
+    }
+
+    pub fn refused(refusal: Refusal) -> Self {
+        Validity {
+            valid: false,
+            reason: Some(refusal.missing_prerequisite.clone()),
+            refusal: Some(refusal),
         }
     }
 }
@@ -481,9 +541,16 @@ pub fn thermal_validity(dissipating_rows: usize, summary: &BindSummary) -> Valid
                 .filter(|u| u.active_ic)
                 .map(|u| u.reference.clone()),
         );
-        Validity::invalid(format!(
-            "thermal table empty: no resolved dissipating devices; driving ICs open on the live circuit: {}",
-            refs.join(", ")
+        let refs = refs.join(", ");
+        Validity::refused(Refusal::new(
+            "a thermal-safety conclusion for the board",
+            format!(
+                "no resolved dissipating devices reached the thermal table; active ICs are open on the live circuit: {refs}"
+            ),
+            vec!["board extraction and component binding completed"],
+            format!(
+                "bind {refs} with --models-dir, then rerun the same --thermal command"
+            ),
         ))
     } else {
         // Genuinely no dissipating devices and nothing unresolved, a valid (if
@@ -1302,6 +1369,11 @@ pub struct JsonReport {
     pub schema_version: u32,
     pub board: String,
     pub bind: BindSummary,
+    /// Top-level refusal for a whole-run exit 3 (for example strict co-sim).
+    /// AC/thermal refusals additionally live in their analysis section so a
+    /// section-only consumer sees the same contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refusal: Option<Refusal>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub findings: Option<Vec<JsonFinding>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1418,6 +1490,7 @@ impl JsonReport {
             schema_version: RUN_REPORT_SCHEMA_VERSION,
             board: board_name.to_string(),
             bind,
+            refusal: None,
             findings: None,
             drc: None,
             ac: None,
@@ -1496,7 +1569,8 @@ impl JsonReport {
             }
             actionable += drc.violations.len();
         }
-        let invalid = self.ac.as_ref().is_some_and(|a| !a.validity.valid)
+        let invalid = self.refusal.is_some()
+            || self.ac.as_ref().is_some_and(|a| !a.validity.valid)
             || self.thermal.as_ref().is_some_and(|t| !t.validity.valid);
         let verdict = if serious > 0 {
             "fail"
@@ -1735,6 +1809,7 @@ mod tests {
             validity: Validity {
                 valid: false,
                 reason: Some("no signal path".into()),
+                refusal: None,
             },
             nets: Vec::new(),
             no_signal_path_nets: Vec::new(),

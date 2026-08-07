@@ -41,7 +41,8 @@ stdout must treat "no lines" as a possible outcome of a nonzero exit.
 
 ## The report line
 
-Every key below is ALWAYS present on an `ok: true` line.
+Every key below is ALWAYS present on an `ok: true` line except `refusal`, which
+is present exactly for exit 3.
 
 | key | type | always | meaning |
 |---|---|---|---|
@@ -54,6 +55,7 @@ Every key below is ALWAYS present on an `ok: true` line.
 | `run_valid` | boolean | yes | was the run trustworthy at all |
 | `exit_code` | integer | yes | this spec's contribution: 0, 1, or 3 (never 2, which produces an error line instead) |
 | `analog_abort` | boolean | yes | did the analog co-sim trip the consecutive-failed-chunk abort |
+| `refusal` | object | exit 3 only | the useful-refusal contract (`claim`, `missing_prerequisite`, `valid_partial_conclusions[]`, `next_action`) |
 | `seeds` | integer | yes | ensemble members run (fuzz seeds, or tolerance members) |
 | `elapsed_s` | number | yes | wall-clock seconds |
 | `coverage` | string or `null` | yes, nullable | the tolerance-ensemble coverage claim; `null` when the run was not an ensemble |
@@ -73,7 +75,7 @@ this field to attribute a verdict to a spec.
 
 `coverage` is the one nullable key: present with the value `null`, not absent.
 The distinction matters, because the two per-assertion optional keys below are
-absent instead.
+absent instead. `refusal` is also absent outside exit 3 (never `null`).
 
 ### Reading the verdict
 
@@ -82,8 +84,9 @@ the field to gate on. The other two exist because they answer different
 questions and can disagree:
 
 - `assertions_passed: true` with `run_valid: false` means nothing failed and
-  nothing can be believed. The analog side collapsed; the assertions were not
-  honestly evaluable. Treat it as a refusal, never as green.
+  no overall verdict can be believed. The analog side collapsed; read
+  `refusal` to see which independently evaluated partial conclusions remain
+  valid and what to fix. Treat it as a refusal, never as green.
 - `assertions_passed: false` with `run_valid: true` is a trustworthy red: a real
   finding about the board.
 
