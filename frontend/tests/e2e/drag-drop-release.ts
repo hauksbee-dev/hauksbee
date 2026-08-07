@@ -31,6 +31,10 @@ interface WebReport {
 }
 
 interface BoardResult {
+  /** The staged input path exactly as the gate supplied it. The release
+   * validator matches this field against its staged board set before it
+   * will accept the run, then redacts it in retained evidence. */
+  path: string
   file: string
   input_sha256: string
   elapsed_ms: number
@@ -416,6 +420,7 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
     fullPage: false,
   })
   return {
+    path: files[index],
     file,
     input_sha256: inputSha256,
     elapsed_ms: elapsed,
@@ -451,6 +456,7 @@ try {
       // One malformed or hung board must not erase the other four journeys.
       // Preserve a complete five-row result artifact and fail at the end.
       result = {
+        path: files[index],
         file: basename(path),
         input_sha256: fileDigests[index],
         elapsed_ms: 0,

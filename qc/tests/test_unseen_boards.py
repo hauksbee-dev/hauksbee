@@ -1648,6 +1648,77 @@ expect = ["board-{number}.kicad_pcb"]
             self.assertNotEqual(0, bad_exit)
             self.assertIn("--manifest", stderr.getvalue())
 
+    def test_real_browser_harness_emits_every_field_the_validator_consumes(
+        self,
+    ) -> None:
+        # The gate tests in this file exercise the validator against stub
+        # runners, so a schema drift between the REAL harness
+        # (frontend/tests/e2e/drag-drop-release.ts) and
+        # `_validate_browser_results` passes every stub test while making the
+        # production gate impossible to complete. That exact drift shipped
+        # once: the harness wrote `file` but never `path`, and every corpus
+        # and external-five run failed after a green browser journey. Pin the
+        # emitted result fields to the ones the validator reads.
+        harness = (
+            Path(unseen_boards.__file__).resolve().parent.parent
+            / "frontend/tests/e2e/drag-drop-release.ts"
+        )
+        source = harness.read_text(encoding="utf-8")
+        interface = source.split("interface BoardResult", 1)[1].split("}", 1)[0]
+        # `path`, `failures`, `report`, `exported`, and `response_status` are
+        # hard requirements of `_validate_browser_results`; the rest feed the
+        # retained-evidence document.
+        for field in (
+            "path",
+            "file",
+            "input_sha256",
+            "report",
+            "failures",
+            "exported",
+            "response_status",
+            "live_started",
+        ):
+            self.assertRegex(
+                interface,
+                rf"\b{field}\b",
+                f"BoardResult must declare {field!r}; the release validator "
+                "refuses results without it",
+            )
+
+    def test_module_execution_reports_gate_errors_without_a_traceback(self) -> None:
+        # `python -m qc.unseen_boards` executes this file as `__main__`, while
+        # `qc.release_board_gates` imports it a second time as
+        # `qc.unseen_boards`. The gate functions raise the canonical module's
+        # HistoryError/SelectionError, which are distinct classes from the ones
+        # defined in `__main__`; the CLI's error handler must catch both and
+        # exit 2 rather than let a traceback escape. Calling `main()` directly
+        # (as the other tests here do) cannot reproduce the split, so this test
+        # re-runs the module the way production invokes it.
+        import runpy
+        import sys
+
+        with tempfile.TemporaryDirectory() as raw:
+            history = Path(raw) / "history.jsonl"
+            history.write_text("")
+            evidence = Path(raw) / "runs"
+            evidence.mkdir()
+            stderr = io.StringIO()
+            argv = ["qc.unseen_boards", "audit-history", "--require-completed"]
+            with (
+                patch.object(release_gates, "CANONICAL_HISTORY", history),
+                patch.object(release_gates, "CANONICAL_EVIDENCE_DIR", evidence),
+                patch.object(sys, "argv", argv),
+                redirect_stderr(stderr),
+            ):
+                with self.assertRaises(SystemExit) as caught:
+                    runpy.run_module("qc.unseen_boards", run_name="__main__")
+
+            self.assertEqual(2, caught.exception.code)
+            self.assertIn(
+                "no completed external-five iteration", stderr.getvalue()
+            )
+            self.assertNotIn("Traceback", stderr.getvalue())
+
     def test_show_command_replays_the_existing_planned_iteration(self) -> None:
         with tempfile.TemporaryDirectory() as raw:
             history = Path(raw) / "iterations.jsonl"
