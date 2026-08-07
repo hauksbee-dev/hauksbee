@@ -1,6 +1,5 @@
-//! Explicit resolution priority layers (06-extensibility-sdk §3):
-//! builtin(0) < pack(10) < user-dir(20) < models-dir(30), tie-broken by the
-//! specificity score only WITHIN a layer. The pack/user entries here are
+//! Semantic source tier first, then explicit storage layers
+//! (06-extensibility-sdk §3). The pack/user entries here are
 //! deliberately LESS specific than the builtin they beat (a footprint-only
 //! match, score 5, vs the builtin's value regex, score 30), so these tests
 //! fail if layering ever silently degrades back to specificity-only.
@@ -80,7 +79,7 @@ fn pack_beats_builtin_despite_lower_specificity() {
 }
 
 #[test]
-fn user_dir_beats_pack() {
+fn vendor_pack_beats_datasheet_extraction_directory() {
     let home = tempfile::tempdir().unwrap();
     let src = tempfile::tempdir().unwrap();
     make_pack(src.path(), "layer-pack", &footprint_diode("pack_diode"));
@@ -99,9 +98,9 @@ fn user_dir_beats_pack() {
     assert!(lib.load_user_dir(user_dir.path()).is_empty());
 
     let r = lib.resolve(&query());
-    assert_eq!(r.model.as_ref().unwrap().id, "user_diode");
-    assert_eq!(r.layer, Some(SourceLayer::UserDir));
-    assert_eq!(r.source.as_deref(), Some("user"));
+    assert_eq!(r.model.as_ref().unwrap().id, "pack_diode");
+    assert_eq!(r.layer, Some(SourceLayer::Pack));
+    assert_eq!(r.source.as_deref(), Some("pack"));
 }
 
 #[test]

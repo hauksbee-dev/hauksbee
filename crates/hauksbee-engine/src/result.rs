@@ -1932,6 +1932,7 @@ mod tests {
             value: String::new(),
             model_id: None,
             confidence: Confidence::Exact,
+            source: None,
             outcome,
             warning: warning.map(|s| s.to_string()),
             guesses: Vec::new(),

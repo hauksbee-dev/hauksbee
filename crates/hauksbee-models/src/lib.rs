@@ -16,8 +16,9 @@
 //! | `--models-dir`                           | 30       |
 //! | user SPICE cards                         | 40       |
 //!
-//! Higher layer wins outright; *within* a layer the specificity score breaks
-//! the tie (see [`matcher`]). Same-layer conflicts between two different
+//! Semantic [`ModelSourceTier`] wins first. Storage layer then breaks a
+//! same-tier tie; *within* a layer the specificity score breaks the tie (see
+//! [`matcher`]). Same-layer conflicts between two different
 //! packs are reported loudly at load, naming both packs.
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-models/README.md (the
@@ -57,6 +58,10 @@ use std::path::{Path, PathBuf};
 use once_cell::sync::Lazy;
 use regex::Error as RegexError;
 use thiserror::Error;
+
+use hauksbee_ir::evidence::{
+    ModelLayer, ModelSource, ModelSourceTier, ModelUncertainty, ModelValidation,
+};
 
 pub use logic_spec::{Logic, LogicExpr, LogicSpecError, ValidatedLogic};
 pub use matcher::ComponentQuery;
@@ -227,6 +232,9 @@ pub struct Resolution {
     /// Where within the layer: the db/pack/file name that shipped the entry
     /// (e.g. `"digital"`, `"acme-sensors@1.2.0"`, a user file stem).
     pub origin: Option<String>,
+    /// Canonical source/validation/uncertainty record consumed by the evidence
+    /// spine. `None` only for an unresolved/open component.
+    pub provenance: Option<ModelSource>,
 }
 
 impl Resolution {
@@ -238,6 +246,7 @@ impl Resolution {
             source: None,
             layer: None,
             origin: None,
+            provenance: None,
         }
     }
 }
@@ -264,6 +273,7 @@ struct LayeredEntry {
     layer: SourceLayer,
     /// The db file stem, pack `name@version`, or user file stem.
     origin: String,
+    provenance: ModelSource,
     compiled: CompiledEntry,
 }
 
@@ -407,7 +417,14 @@ impl ModelLibrary {
                     }
                 };
                 let before = self.entries.len();
-                if let Err(e) = self.load_toml_str(&src, &origin, SourceLayer::Pack) {
+                let pack_tier = match pack.manifest.provenance {
+                    Provenance::Vendor => ModelSourceTier::VendorSpice,
+                    Provenance::HandWritten => ModelSourceTier::CuratedPack,
+                    Provenance::DatasheetExtracted => ModelSourceTier::DatasheetDerived,
+                };
+                if let Err(e) =
+                    self.load_toml_str_with_tier(&src, &origin, SourceLayer::Pack, Some(pack_tier))
+                {
                     warnings.push(format!("pack '{origin}': {e}"));
                     continue;
                 }
@@ -521,10 +538,10 @@ impl ModelLibrary {
 
     /// Resolve a component query to a model entry.
     ///
-    /// The winner is the matching entry with the highest
-    /// ([`SourceLayer::priority`], specificity score) pair; the layer is the
-    /// *first* key of the comparison, so a user-dir entry beats a pack entry
-    /// beats a builtin entry no matter how the specificity scores fall.
+    /// The winner is the matching entry with the highest semantic source tier,
+    /// then ([`SourceLayer::priority`], specificity score). This keeps a new
+    /// datasheet-extracted draft below curated sources while preserving an
+    /// explicit user-model override.
     /// Within a layer the specificity score orders entries; a score tie is
     /// broken by regex constrainedness ([`CompiledEntry::regex_specificity`]),
     /// so an exact-literal override (`^1N4004$`) beats the family pattern
@@ -545,6 +562,7 @@ impl ModelLibrary {
         use std::cmp::Reverse;
         let sort_key = |le: &'_ LayeredEntry, score: u32| {
             (
+                le.provenance.tier().priority(),
                 le.layer.priority(),
                 score,
                 le.compiled.regex_specificity(),
@@ -582,6 +600,7 @@ impl ModelLibrary {
                 source: Some(source.to_string()),
                 layer: Some(le.layer),
                 origin: Some(le.origin.clone()),
+                provenance: Some(le.provenance.clone()),
             };
         }
 
@@ -602,10 +621,41 @@ impl ModelLibrary {
         source_name: &str,
         layer: SourceLayer,
     ) -> Result<(), ModelError> {
+        self.load_toml_str_with_tier(src, source_name, layer, None)
+    }
+
+    fn load_toml_str_with_tier(
+        &mut self,
+        src: &str,
+        source_name: &str,
+        layer: SourceLayer,
+        default_tier: Option<ModelSourceTier>,
+    ) -> Result<(), ModelError> {
         let db_file: schema::DbFile = toml::from_str(src).map_err(|e| ModelError::TomlParse {
             source: source_name.to_string(),
             error: e,
         })?;
+
+        #[derive(serde::Deserialize)]
+        struct SourceFile {
+            #[serde(default)]
+            models: Vec<SourceRow>,
+        }
+        #[derive(serde::Deserialize)]
+        struct SourceRow {
+            id: String,
+            #[serde(default)]
+            source: Option<schema::ModelSourceSpec>,
+        }
+        let declarations: std::collections::HashMap<String, schema::ModelSourceSpec> =
+            toml::from_str::<SourceFile>(src)
+                .map(|file| {
+                    file.models
+                        .into_iter()
+                        .filter_map(|row| row.source.map(|source| (row.id, source)))
+                        .collect()
+                })
+                .unwrap_or_default();
 
         for entry in db_file.models {
             let id = entry.id.clone();
@@ -629,9 +679,40 @@ impl ModelLibrary {
                 id: id.clone(),
                 error: e,
             })?;
+            let declaration = declarations.get(&compiled.entry.id);
+            // Pack-manifest provenance is authoritative. An entry in a
+            // datasheet-derived pack cannot promote itself to a vendor tier.
+            let tier = default_tier
+                .or_else(|| declaration.map(|source| source.tier))
+                .unwrap_or_else(|| default_source_tier(layer));
+            let validation = declaration
+                .map(|source| source.validation)
+                .unwrap_or_else(|| default_validation(layer));
+            let uncertainty = declaration
+                .map(|source| source.uncertainty.clone())
+                .filter(|values| !values.is_empty())
+                .unwrap_or_else(|| {
+                    vec![ModelUncertainty::unknown(
+                        format!("{}.model", compiled.entry.id),
+                        "the source publishes no validated numeric error interval",
+                    )
+                    .expect("static unknown uncertainty is valid")]
+                });
+            let provenance = ModelSource::new(
+                tier,
+                model_layer(layer),
+                source_name,
+                validation,
+                uncertainty,
+            )
+            .map_err(|error| ModelError::ValidationFailed {
+                id: compiled.entry.id.clone(),
+                messages: format!("invalid [models.source]: {error}"),
+            })?;
             self.entries.push(LayeredEntry {
                 layer,
                 origin: source_name.to_string(),
+                provenance,
                 compiled,
             });
         }
@@ -696,6 +777,54 @@ impl ModelLibrary {
             source: Some("spice".to_string()),
             layer: Some(SourceLayer::Spice),
             origin: Some(card.name.clone()),
+            provenance: Some(
+                ModelSource::new(
+                    ModelSourceTier::UserModel,
+                    ModelLayer::Spice,
+                    card.name.clone(),
+                    ModelValidation::Unvalidated,
+                    vec![ModelUncertainty::unknown(
+                        format!("{}.model", card.name),
+                        "the SPICE card declares no validated numeric error interval",
+                    )
+                    .expect("static unknown uncertainty is valid")],
+                )
+                .expect("SPICE card names are non-empty after parsing"),
+            ),
+        }
+    }
+}
+
+fn model_layer(layer: SourceLayer) -> ModelLayer {
+    match layer {
+        SourceLayer::Builtin => ModelLayer::Builtin,
+        SourceLayer::Pack => ModelLayer::Pack,
+        SourceLayer::UserDir => ModelLayer::UserDir,
+        SourceLayer::UserConfigDir => ModelLayer::UserConfigDir,
+        SourceLayer::ModelsDirFlag => ModelLayer::ModelsDir,
+        SourceLayer::Spice => ModelLayer::Spice,
+    }
+}
+
+fn default_source_tier(layer: SourceLayer) -> ModelSourceTier {
+    match layer {
+        SourceLayer::Builtin => ModelSourceTier::CuratedLibrary,
+        SourceLayer::Pack => ModelSourceTier::CuratedPack,
+        SourceLayer::UserDir => ModelSourceTier::DatasheetDerived,
+        SourceLayer::UserConfigDir | SourceLayer::ModelsDirFlag => ModelSourceTier::UserModel,
+        // A loose card is user supplied. Vendor provenance is established
+        // only by a licensed vendor pack manifest.
+        SourceLayer::Spice => ModelSourceTier::UserModel,
+    }
+}
+
+fn default_validation(layer: SourceLayer) -> ModelValidation {
+    match layer {
+        SourceLayer::Builtin | SourceLayer::Pack | SourceLayer::UserDir => {
+            ModelValidation::PhysicalBoundsOnly
+        }
+        SourceLayer::UserConfigDir | SourceLayer::ModelsDirFlag | SourceLayer::Spice => {
+            ModelValidation::Unvalidated
         }
     }
 }
@@ -993,6 +1122,11 @@ mod tests {
         };
         let res = l.resolve(&q);
         assert_eq!(res.source.as_deref(), Some("spice"));
+        assert_eq!(
+            res.provenance.as_ref().unwrap().tier(),
+            ModelSourceTier::UserModel,
+            "a loose SPICE card is a user override, not an unverified vendor claim"
+        );
     }
 
     /// Round-8 #9: `~/.config/hauksbee/models` must sit ABOVE `~/.hauksbee/
@@ -1133,6 +1267,81 @@ mod tests {
         assert!(s.contains("R1"));
         assert!(s.contains("1N4148"));
         assert!(s.contains("UNRESOLVED"));
+    }
+
+    #[test]
+    fn source_policy_places_curated_models_above_extracted_and_estimated_models() {
+        let mut l = ModelLibrary::empty();
+        let entry = |id: &str, tier: &str| {
+            format!(
+                r#"
+[[models]]
+id = "{id}"
+kind = "diode"
+[models.source]
+tier = "{tier}"
+validation = "physical-bounds-only"
+[models.match]
+value_re = "^LADDER$"
+[models.params]
+is = 1e-9
+n = 1.5
+rs = 0.5
+"#
+            )
+        };
+        l.load_toml_str(
+            &entry("estimated", "estimated-fallback"),
+            "fallback",
+            SourceLayer::Builtin,
+        )
+        .unwrap();
+        l.load_toml_str(
+            &entry("extracted", "datasheet-derived"),
+            "extracted",
+            SourceLayer::UserDir,
+        )
+        .unwrap();
+        l.load_toml_str(
+            &entry("curated", "curated-library"),
+            "curated",
+            SourceLayer::Builtin,
+        )
+        .unwrap();
+
+        let resolved = l.resolve(&ComponentQuery::new(None, Some("LADDER".into()), None));
+        assert_eq!(resolved.model.unwrap().id, "curated");
+        assert_eq!(
+            resolved.provenance.unwrap().tier(),
+            hauksbee_ir::evidence::ModelSourceTier::CuratedLibrary
+        );
+    }
+
+    #[test]
+    fn explicit_user_model_can_override_the_accuracy_ladder() {
+        let mut l = ModelLibrary::builtin();
+        l.load_toml_str(
+            r#"
+[[models]]
+id = "user_bat43"
+kind = "diode"
+[models.match]
+value_re = "^BAT43$"
+[models.params]
+is = 1e-9
+n = 1.3
+rs = 0.2
+"#,
+            "user-bat43",
+            SourceLayer::ModelsDirFlag,
+        )
+        .unwrap();
+        let resolved = l.resolve(&ComponentQuery::new(None, Some("BAT43".into()), None));
+        assert_eq!(resolved.model.unwrap().id, "user_bat43");
+        assert_eq!(
+            resolved.provenance.unwrap().tier(),
+            hauksbee_ir::evidence::ModelSourceTier::UserModel
+        );
     }
 
     /// Test resolution against components actually found in the pic_programmer board.

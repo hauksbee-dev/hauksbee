@@ -275,6 +275,10 @@ id = "generic_nmos_power_pkg"
 kind = "nmos"
 description = "Generic N-ch power FET fallback (DPAK/D2PAK/TO-220/TO-252/TO-263/PowerPAK/LFPAK), PLACEHOLDER, not datasheet-sourced"
 
+[models.source]
+tier = "estimated-fallback"
+validation = "unvalidated"
+
 [models.match]
 # Matches common SMD and THT power-FET packages by footprint string.
 # Covers KiCad footprint library names for: DPAK (TO-252), D2PAK (TO-263),
@@ -313,6 +317,10 @@ max_junction_temp_c = 150.0   # standard silicon power-FET junction limit
 id = "generic_pmos_power_pkg"
 kind = "pmos"
 description = "Generic P-ch power FET fallback (DPAK/D2PAK/TO-220/TO-252/TO-263/PowerPAK/LFPAK), PLACEHOLDER, not datasheet-sourced"
+
+[models.source]
+tier = "estimated-fallback"
+validation = "unvalidated"
 
 [models.match]
 # Same package-footprint catch-all as the N-ch entry above; the binder uses

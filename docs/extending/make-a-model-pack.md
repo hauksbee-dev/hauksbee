@@ -116,10 +116,11 @@ Every model source has an explicit layer (`SourceLayer` in
 | `--models-dir` flag | 30 |
 | user SPICE cards | 40 |
 
-The higher layer wins outright. The specificity score only breaks ties
-*within* a layer. So your pack overrides any builtin it names, and a user
-who disagrees with your pack overrides it from their model dir without
-touching your files.
+The semantic source tier is evaluated first; see
+[the source ladder](../models/SOURCE_LADDER.md). Inside one tier the higher
+storage layer wins, and specificity only breaks ties *within* a layer. An
+explicit user model remains the override escape hatch, while an extracted
+draft cannot displace a curated model merely because it lives in `user-dir`.
 
 **Trap, same-layer conflicts.** Two installed packs shipping the same model
 id cannot be ordered by priority (same layer), and would otherwise win by

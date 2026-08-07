@@ -7,7 +7,7 @@ import { specStemFor, workflowYaml } from '../lib/ci-workflow'
 import { downloadText } from '../lib/report-export'
 import { ArriveOnce, EmptyState, StaggerItem, ValueSettle, VerdictBadge, ARRIVE, LEAVE } from '../motion'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
-import { assumptionsForEvidence } from '../lib/evidence'
+import { assumptionsForEvidence, describeModelSource } from '../lib/evidence'
 
 // The Checks view: compose the body of a hauksbee-ci spec with plain
 // language, run it through the REAL hauksbee-ci binary (`POST /api/check`
@@ -430,6 +430,11 @@ function AssertionEvidence({
       {artifacts.length > 0 && (
         <div className="mt-1.5" style={{ color: 'var(--silk-faint)' }}>
           Inputs: {artifacts.map(artifact => artifact.path.split('/').pop() ?? artifact.path).join(', ')}
+        </div>
+      )}
+      {(map.models ?? []).length > 0 && (
+        <div className="mt-1.5" data-testid="model-provenance" style={{ color: 'var(--silk-faint)' }}>
+          Models: {(map.models ?? []).map(describeModelSource).join('; ')}
         </div>
       )}
     </div>
