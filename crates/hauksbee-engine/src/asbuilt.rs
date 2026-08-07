@@ -854,6 +854,7 @@ mod tests {
             reference: "U1".to_string(),
             backend: String::new(),
             requested_part: String::new(),
+            external_clock_present: false,
             pad_roles: HashMap::new(),
             role_nets,
             gpio_drivers,

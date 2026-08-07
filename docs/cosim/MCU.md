@@ -88,14 +88,20 @@ F1-vs-F4 ODR footgun lives here as `odr_offset` data, not scattered logic),
 the UART/I2C/SPI controller names, the expected ISA
 (`expected_e_machine = "EM_ARM"`), and the awkward per-part fixups
 (`post_load_setup` for the FE310 PRCI/`vinit` bring-up, `[soc.spi].extra_repl`
-for the F103 SPI1 fragment, `[[soc.adc]]` injection recipes). The shipped
+for the F103 SPI1 fragment, `[[soc.adc]]` injection recipes). A descriptor can
+also declare `[soc.clock_control]`: board binding renders its `{present}`
+command before boot and each Renode slice renders `{micros}`, while the
+part-specific platform model owns the register layout and startup state
+machine. The STM32F103 uses this to gate and time HSE/PLL readiness from an
+assembled crystal across its semantic `osc_in`/`osc_out` pin roles. The shipped
 descriptors are embedded through `include_str!` (the binary stays
 self-contained, and the file stays the single source of truth), and
 `RenodeConfig::stm32f103()` and friends are thin accessors that load their
 descriptor. Validation refuses rather than fakes: unknown/mismatched
 backend, empty `platform_repl`, zero-width or overlapping ports, duplicate
-controllers, unknown `expected_e_machine`, ambiguous ADC inject, and (through
-`deny_unknown_fields`) any mistyped field are all named load-time errors.
+controllers, unknown `expected_e_machine`, ambiguous ADC inject, missing
+clock-control placeholders, and (through `deny_unknown_fields`) any mistyped
+field are all named load-time errors.
 
 **Add an MCU variant (purely as data, no recompile).** Copy the closest
 `db/mcu/<part>.soc.toml`, edit the fields (platform `.repl`, ODR offsets,

@@ -24,6 +24,107 @@ fn blinky_elf() -> Option<PathBuf> {
     }
 }
 
+/// Firmware whose PA5/PC13 markers rise only after HSERDY/PLLRDY respectively.
+fn clock_ready_elf() -> Option<PathBuf> {
+    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../testdata/firmware/stm32_clock_ready/clock_ready.elf");
+    if p.exists() {
+        Some(p.canonicalize().unwrap_or(p))
+    } else {
+        None
+    }
+}
+
+/// Run the external-clock probe in 50 us slices and return the virtual time at
+/// which its HSERDY (PA5) and PLLRDY (PC13) markers first rose.
+fn clock_ready_markers(
+    config: RenodeConfig,
+    external_clock_present: bool,
+    budget_us: u64,
+) -> Option<(u64, u64)> {
+    if !is_available() {
+        eprintln!("SKIP: Renode not installed");
+        return None;
+    }
+    let Some(elf) = clock_ready_elf() else {
+        eprintln!(
+            "SKIP: clock_ready.elf not built \
+             (run make in testdata/firmware/stm32_clock_ready)"
+        );
+        return None;
+    };
+
+    let config = config.with_external_clock_present(external_clock_present);
+
+    let mut mcu = RenodeBackend::new(config).expect("spawn Renode STM32F103");
+    mcu.load_firmware(&elf).expect("load clock readiness probe");
+    mcu.set_active_ports(&['A', 'C']);
+
+    const CHUNK_US: u64 = 50;
+    let now_us = Arc::new(Mutex::new(0u64));
+    let hse_us = Arc::new(Mutex::new(None));
+    let pll_us = Arc::new(Mutex::new(None));
+    let now = now_us.clone();
+    let hse = hse_us.clone();
+    let pll = pll_us.clone();
+    mcu.on_pin_change(Box::new(move |pin, high, _cycle| {
+        if !high {
+            return;
+        }
+        let t = *now.lock().unwrap();
+        if pin == (PinId { port: 'A', bit: 5 }) {
+            hse.lock().unwrap().get_or_insert(t);
+        }
+        if pin == (PinId { port: 'C', bit: 13 }) {
+            pll.lock().unwrap().get_or_insert(t);
+        }
+    }));
+
+    for t in (CHUNK_US..=budget_us).step_by(CHUNK_US as usize) {
+        *now_us.lock().unwrap() = t;
+        mcu.run_micros(CHUNK_US).expect("run clock readiness slice");
+    }
+
+    let hse = *hse_us.lock().unwrap();
+    let pll = *pll_us.lock().unwrap();
+    Some((hse.unwrap_or(0), pll.unwrap_or(0)))
+}
+
+#[test]
+fn stm32_external_clock_does_not_become_ready_without_board_source() {
+    if !is_available() || clock_ready_elf().is_none() {
+        eprintln!("SKIP: Renode or clock_ready.elf unavailable");
+        return;
+    }
+
+    // Do not assert the private presence control. A real F103 with no crystal
+    // on OSC_IN/OSC_OUT never raises HSERDY, so firmware cannot reach either
+    // marker even after longer than the nominal 2 ms startup time.
+    let config = RenodeConfig::stm32f103();
+    let Some((hse_us, pll_us)) = clock_ready_markers(config, false, 3_000) else {
+        return;
+    };
+    assert_eq!(hse_us, 0, "HSERDY marker falsely rose at {hse_us} us");
+    assert_eq!(pll_us, 0, "PLLRDY marker falsely rose at {pll_us} us");
+}
+
+#[test]
+fn stm32_external_clock_and_pll_observe_startup_delays() {
+    let Some((hse_us, pll_us)) = clock_ready_markers(RenodeConfig::stm32f103(), true, 2_500) else {
+        return;
+    };
+
+    assert!(
+        (2_000..=2_100).contains(&hse_us),
+        "HSERDY marker must follow the 2 ms crystal startup, got {hse_us} us"
+    );
+    assert!(
+        (2_200..=2_300).contains(&pll_us),
+        "PLLRDY marker must follow HSE plus the 200 us PLL lock, got {pll_us} us"
+    );
+    assert!(pll_us > hse_us, "PLL must lock after HSE is ready");
+}
+
 /// Bring up an STM32F103 with the demo firmware loaded, or skip.
 macro_rules! stm32_or_skip {
     ($name:ident) => {
