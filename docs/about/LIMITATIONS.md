@@ -301,10 +301,19 @@ ESC oracle has no Zone-Pad findings.
 
 The remaining limitation is narrower but still important: the complete finding
 set does not yet match native KiCad DRC exactly (VENDETTA reports 67 Hauksbee
-shorts versus 60 native `shorting_items`), and KiCad 10 project clearance rules
-can live in the sibling `.kicad_pro` rather than the board text consumed by this
-API. Format versions at or above `20260000` therefore retain a
-`version_warning`; their findings are demoted and do not fail strict CI gates.
+shorts versus 60 native `shorting_items`). Format versions at or above
+`20260000` therefore retain a `version_warning`; their findings are demoted and
+do not fail strict CI gates.
+
+KiCad 10 project clearance rules, which live in the sibling `.kicad_pro` rather
+than in the board text, are read. The CLI and engine reports resolve them to the
+board's own net names before running DRC
+(`kicad_pro_clearance_rules` in `crates/hauksbee-engine/src/reports/mod.rs`, over
+`clearance_rules_from_kicad_pro` in `crates/hauksbee-extract/src/drc.rs`); a
+missing or malformed project file simply leaves DRC on the board/default rules.
+The narrower gap is at the library boundary: `drc_from_text` takes board text
+alone, so a caller driving that API directly has to read the project file and
+pass the rules through `drc_from_text_with_clearance_rules` itself.
 Cross-check them with KiCad 10's own DRC. Details and oracle evidence are in
 [`../checks/SHORTS.md`](../checks/SHORTS.md).
 
