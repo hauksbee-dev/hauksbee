@@ -248,10 +248,12 @@ newer `hauksbee-ci` still validates against an older copy of the schema, and
 - Exit codes keep the meanings in
   [CI.md](CI.md#exit-codes-the-pipeline-contract).
 
-**Where the next bump goes.** The evidence work adds per-assertion evidence,
-a component inventory, and an assumption registry to this document. Those are
-additive keys and do not bump anything on their own; the semantic change above
-does, once, to `schema_version = 2`. The constant lives in
+**Where the next bump goes.** The evidence work has landed: per-assertion
+evidence, the component inventory, the assumption registry, timing coverage
+and the exit-3 refusal are all in the tables above. They arrived as additive
+keys and correctly did not bump anything. The scheduled semantic change above
+(the undermined-evidence invalid-for-analysis boundary) is what bumps, once,
+to `schema_version = 2`. The constant lives in
 `crates/hauksbee-ci/src/report.rs` as `CI_REPORT_SCHEMA_VERSION`, the
 generated file's description quotes it, and the drift test fails until the
 schema is regenerated with it, so the bump cannot land half-applied.
