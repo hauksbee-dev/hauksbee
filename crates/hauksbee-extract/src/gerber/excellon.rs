@@ -687,7 +687,7 @@ fn split_g85(line: &str) -> Option<(&str, &str)> {
 /// pair comes back [`DeclaredSpan::Unreadable`] rather than [`DeclaredSpan::Absent`],
 /// because a file that tried to state a span and failed is the LAST file whose
 /// hits should be assumed to reach the whole stack.
-fn parse_file_function_span(up: &str) -> DeclaredSpan {
+pub fn parse_file_function_span(up: &str) -> DeclaredSpan {
     let Some(at) = up.find("FILEFUNCTION").map(|i| i + "FILEFUNCTION".len()) else {
         return DeclaredSpan::Absent;
     };
