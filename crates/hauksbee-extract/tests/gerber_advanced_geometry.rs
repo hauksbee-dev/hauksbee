@@ -47,9 +47,16 @@ fn a_plated_slot_connects_what_its_wall_touches() {
     // reader that simply merges everything.
     let e = from_gerber_dir(&job("gerber_slot_plated")).expect("plated slot fixture");
     assert_eq!(e.stats.n_holes, 1);
-    assert_eq!(e.stats.n_slots, 1, "the G85 record is a slot, not a round hole");
+    assert_eq!(
+        e.stats.n_slots, 1,
+        "the G85 record is a slot, not a round hole"
+    );
     assert_eq!(e.stats.n_nets, 2, "the slot wall joins both top pads");
-    assert!(e.stats.notes.is_empty(), "nothing to refuse here: {:?}", e.stats.notes);
+    assert!(
+        e.stats.notes.is_empty(),
+        "nothing to refuse here: {:?}",
+        e.stats.notes
+    );
 }
 
 #[test]
@@ -78,7 +85,10 @@ fn a_castellation_is_one_node_with_its_pad_and_is_counted() {
     // is not a castellation: the two pads it passes through stay on separate
     // nets, and the castellation count stays at one.
     let e = from_gerber_dir(&job("gerber_castellation")).expect("castellation fixture");
-    assert_eq!(e.stats.n_holes, 1, "only the plated edge hit is a conductor");
+    assert_eq!(
+        e.stats.n_holes, 1,
+        "only the plated edge hit is a conductor"
+    );
     assert_eq!(
         e.stats.n_castellations, 1,
         "the plated edge hit is cut by the outline; the mechanical one is not plated"

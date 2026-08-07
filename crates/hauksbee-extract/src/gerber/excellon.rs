@@ -234,9 +234,13 @@ pub fn parse(text: &str) -> DrillFile {
                     &mut last_x,
                     &mut last_y,
                 );
-                if let (Some((nx, ny)), Some(dia), true, Some(sx), Some(sy)) =
-                    (moved, current, is_cut && tool_down && !current_is_npth, px, py)
-                {
+                if let (Some((nx, ny)), Some(dia), true, Some(sx), Some(sy)) = (
+                    moved,
+                    current,
+                    is_cut && tool_down && !current_is_npth,
+                    px,
+                    py,
+                ) {
                     holes.push(Hole {
                         x: sx,
                         y: sy,
@@ -327,7 +331,8 @@ fn split_g85(line: &str) -> Option<(&str, &str)> {
     let at = line.find("G85").or_else(|| line.find("g85"))?;
     let head = &line[..at];
     let tail = &line[at + 3..];
-    let has_axis = |s: &str| s.contains('X') || s.contains('Y') || s.contains('x') || s.contains('y');
+    let has_axis =
+        |s: &str| s.contains('X') || s.contains('Y') || s.contains('x') || s.contains('y');
     (has_axis(head) && has_axis(tail)).then_some((head, tail))
 }
 
@@ -641,9 +646,14 @@ M30
         assert_eq!(d.holes.len(), 1);
         let h = &d.holes[0];
         assert!((h.x - 3.0).abs() < 1e-9 && (h.y - 4.0).abs() < 1e-9);
-        assert_eq!(h.to.map(|(x, y)| ((x * 1e6) as i64, (y * 1e6) as i64)),
-                   Some((9_000_000, 4_000_000)));
-        assert!((h.diameter - 0.6).abs() < 1e-9, "the routed width is the tool");
+        assert_eq!(
+            h.to.map(|(x, y)| ((x * 1e6) as i64, (y * 1e6) as i64)),
+            Some((9_000_000, 4_000_000))
+        );
+        assert!(
+            (h.diameter - 0.6).abs() < 1e-9,
+            "the routed width is the tool"
+        );
     }
 
     #[test]
@@ -782,7 +792,10 @@ M30
         );
         // A file that says nothing declares nothing.
         assert_eq!(parse(KICAD_PTH).span, Some(LayerPair { from: 1, to: 2 }));
-        assert_eq!(parse("M48\nMETRIC\nT1C0.3\n%\nT1\nX1.0Y1.0\nM30\n").span, None);
+        assert_eq!(
+            parse("M48\nMETRIC\nT1C0.3\n%\nT1\nX1.0Y1.0\nM30\n").span,
+            None
+        );
     }
 
     #[test]

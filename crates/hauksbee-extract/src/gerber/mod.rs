@@ -13,8 +13,9 @@
 //! 2. **Parse** copper layers ([`rs274x`]) into solid primitives, the drill
 //!    ([`excellon`]) into plated/unplated holes, the P&P + BOM ([`placement`]).
 //! 3. **Reconstruct** connectivity ([`connect`]): copper that touches is one
-//!    net (R-tree union-find), plated holes stitch layers, placed components
-//!    claim nearby flashes as pads.
+//!    net (R-tree union-find), a plated hit stitches the layers its declared
+//!    span reaches (and refuses to stitch when the files never declared one),
+//!    placed components claim nearby flashes as pads.
 //!
 //! ## What degrades without each input
 //!
@@ -511,7 +512,10 @@ fn inner_layer_number(fname: &str) -> Option<u32> {
         if i > 0 && b[i - 1].is_ascii_alphabetic() {
             continue;
         }
-        let digits: String = b[i + 2..].iter().take_while(|c| c.is_ascii_digit()).collect();
+        let digits: String = b[i + 2..]
+            .iter()
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
         let after = i + 2 + digits.len();
         let tail: String = b[after..].iter().take(3).collect();
         if tail.starts_with("_cu") || tail.starts_with(".cu") {
@@ -621,9 +625,7 @@ fn count_castellations(holes: &[PlatedHole], outline: &[geo::Shape]) -> usize {
                     r,
                 }),
             };
-            outline
-                .iter()
-                .any(|o| geo::shape_gap(&barrel, o) <= 0.0)
+            outline.iter().any(|o| geo::shape_gap(&barrel, o) <= 0.0)
         })
         .count()
 }
@@ -842,7 +844,10 @@ mod span_tests {
         assert_eq!(t.get("in1_cu"), Some(&1));
         assert_eq!(t.get("in2_cu"), Some(&2));
         assert_eq!(t.get("b_cu"), Some(&3));
-        assert_eq!(span_from_filename("brd-f_cu-in1_cu.drl", &t, 4), Some((0, 1)));
+        assert_eq!(
+            span_from_filename("brd-f_cu-in1_cu.drl", &t, 4),
+            Some((0, 1))
+        );
         assert_eq!(
             span_from_filename("brd-in1_cu-in2_cu.drl", &t, 4),
             Some((1, 2))
@@ -865,7 +870,11 @@ mod span_tests {
             "brd-drill.drl",
             "brd-f_cu.drl",
         ] {
-            assert_eq!(span_from_filename(n, &t, 4), None, "{n} is not a layer pair");
+            assert_eq!(
+                span_from_filename(n, &t, 4),
+                None,
+                "{n} is not a layer pair"
+            );
         }
         // Three layer tokens is not a pair either.
         assert_eq!(span_from_filename("brd-f_cu-in1_cu-b_cu.drl", &t, 4), None);
