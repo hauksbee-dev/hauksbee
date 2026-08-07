@@ -1218,6 +1218,7 @@ mod tests {
             value: "STM32".into(),
             model_id: None,
             confidence: Confidence::Exact,
+            source: None,
             outcome: BindOutcome::Mcu {
                 backend: "renode:stm32f103".into(),
             },

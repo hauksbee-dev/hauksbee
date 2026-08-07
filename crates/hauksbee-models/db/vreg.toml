@@ -58,6 +58,19 @@ id = "ams1117_3v3"
 kind = "vreg"
 description = "AMS1117-3.3 / LM1117-3.3 LDO, 1A, 3.3V fixed, SOT-223"
 
+[models.source]
+tier = "curated-library"
+validation = "datasheet-curves"
+
+[[models.source.uncertainty]]
+status = "interval"
+parameter = "vout"
+low = 3.201
+high = 3.399
+unit = "V"
+kind = "specification-limits"
+basis = "AMS1117 datasheet output-voltage limits"
+
 [models.match]
 value_re = "(?i)^(AMS|LM)1117.?3[._]?3"
 

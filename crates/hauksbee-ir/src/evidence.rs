@@ -1341,6 +1341,137 @@ pub enum ModelLayer {
     EngineFallback,
 }
 
+/// Semantic rung in the model-source policy. This is deliberately distinct
+/// from [`ModelLayer`]: a layer says where bytes were loaded from, while a tier
+/// says how authoritative the model is. An explicit user model remains the
+/// override escape hatch; otherwise vendor SPICE and curated sources outrank an
+/// extracted draft, which outranks a deliberately estimated fallback.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "kebab-case")]
+pub enum ModelSourceTier {
+    Open,
+    EstimatedFallback,
+    IntervalModel,
+    DatasheetDerived,
+    CuratedLibrary,
+    CuratedPack,
+    VendorSpice,
+    UserModel,
+}
+
+impl ModelSourceTier {
+    /// Policy precedence. The number is internal ordering, not an accuracy
+    /// percentage: tiers never invent a numeric error bound.
+    pub fn priority(self) -> u8 {
+        match self {
+            Self::Open => 0,
+            Self::EstimatedFallback => 10,
+            Self::IntervalModel => 20,
+            Self::DatasheetDerived => 30,
+            Self::CuratedLibrary => 40,
+            Self::CuratedPack => 50,
+            Self::VendorSpice => 60,
+            Self::UserModel => 70,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::EstimatedFallback => "estimated-fallback",
+            Self::IntervalModel => "interval-model",
+            Self::DatasheetDerived => "datasheet-derived",
+            Self::CuratedLibrary => "curated-library",
+            Self::CuratedPack => "curated-pack",
+            Self::VendorSpice => "vendor-spice",
+            Self::UserModel => "user-model",
+        }
+    }
+}
+
+impl std::fmt::Display for ModelSourceTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for ModelSourceTier {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "open" => Ok(Self::Open),
+            "estimated-fallback" => Ok(Self::EstimatedFallback),
+            "interval-model" => Ok(Self::IntervalModel),
+            "datasheet-derived" => Ok(Self::DatasheetDerived),
+            "curated-library" => Ok(Self::CuratedLibrary),
+            "curated-pack" => Ok(Self::CuratedPack),
+            "vendor-spice" => Ok(Self::VendorSpice),
+            "user-model" => Ok(Self::UserModel),
+            other => Err(format!(
+                "unknown model tier {other:?}; expected open, estimated-fallback, interval-model, \
+                 datasheet-derived, curated-library, curated-pack, vendor-spice, or user-model"
+            )),
+        }
+    }
+}
+
+/// What validation the selected model has actually passed. These names say
+/// nothing about unmeasured accuracy: range checking is not curve validation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ModelValidation {
+    Unvalidated,
+    PhysicalBoundsOnly,
+    DatasheetCurves,
+    VendorQualified,
+}
+
+impl ModelValidation {
+    pub fn priority(self) -> u8 {
+        match self {
+            Self::Unvalidated => 0,
+            Self::PhysicalBoundsOnly => 10,
+            Self::DatasheetCurves => 20,
+            Self::VendorQualified => 30,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Unvalidated => "unvalidated",
+            Self::PhysicalBoundsOnly => "physical-bounds-only",
+            Self::DatasheetCurves => "datasheet-curves",
+            Self::VendorQualified => "vendor-qualified",
+        }
+    }
+}
+
+impl std::str::FromStr for ModelValidation {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "unvalidated" => Ok(Self::Unvalidated),
+            "physical-bounds-only" => Ok(Self::PhysicalBoundsOnly),
+            "datasheet-curves" => Ok(Self::DatasheetCurves),
+            "vendor-qualified" => Ok(Self::VendorQualified),
+            other => Err(format!(
+                "unknown model validation {other:?}; expected unvalidated, \
+                 physical-bounds-only, datasheet-curves, or vendor-qualified"
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for ModelValidation {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// Confidence in a model or parameter match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 #[serde(rename_all = "snake_case")]
@@ -1781,21 +1912,55 @@ impl Residual {
 /// interval models: shaped before its producer exists so that work lands in
 /// this vocabulary instead of inventing a second one.
 ///
-/// Both bounds are real numbers. A one-sided datasheet interval ("beta at least
-/// 100") has to be expressed with a finite other bound, because an infinity is
-/// not JSON: it would serialize as `null` against a schema that says `number`
-/// and no consumer could read it back. Whoever lands the producer picks the
-/// physical limit and says so in `basis`.
-#[derive(Debug, Clone, PartialEq, Serialize, schemars::JsonSchema)]
-pub struct ModelUncertainty {
-    /// Which parameter carries the interval ("Q2.beta", "D1.vf").
-    parameter: String,
-    /// Interval low bound.
-    low: f64,
-    /// Interval high bound.
-    high: f64,
-    /// Where the interval came from ("datasheet min/max", "pack tolerance").
-    basis: String,
+/// Both bounds are real numbers. A one-sided datasheet limit ("at least 100")
+/// is [`ModelUncertainty::Unknown`] until a defensible other bound exists. A
+/// producer must never turn a typical value or an invented physical cap into a
+/// guaranteed two-sided accuracy interval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(rename_all = "kebab-case")]
+pub enum ModelIntervalKind {
+    /// Published finite minimum and maximum specification limits.
+    SpecificationLimits,
+    /// Finite error bounds established by empirical validation.
+    EmpiricalError,
+    /// A published typical spread; informative, but not guaranteed.
+    TypicalRange,
+    /// A finite engineering estimate; informative, but not validated.
+    EstimatedRange,
+}
+
+impl ModelIntervalKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::SpecificationLimits => "specification-limits",
+            Self::EmpiricalError => "empirical-error",
+            Self::TypicalRange => "typical-range",
+            Self::EstimatedRange => "estimated-range",
+        }
+    }
+}
+
+impl std::fmt::Display for ModelIntervalKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ModelUncertainty {
+    /// A measured or source-published finite interval.
+    Interval {
+        parameter: String,
+        low: f64,
+        high: f64,
+        unit: String,
+        kind: ModelIntervalKind,
+        basis: String,
+    },
+    /// No defensible numeric interval is available. Unknown is data, never an
+    /// omitted field and never a made-up percentage.
+    Unknown { parameter: String, reason: String },
 }
 
 impl ModelUncertainty {
@@ -1804,6 +1969,34 @@ impl ModelUncertainty {
         parameter: impl Into<String>,
         low: f64,
         high: f64,
+        basis: impl Into<String>,
+    ) -> Result<Self, EvidenceError> {
+        Self::interval(parameter, low, high, "", basis)
+    }
+
+    pub fn interval(
+        parameter: impl Into<String>,
+        low: f64,
+        high: f64,
+        unit: impl Into<String>,
+        basis: impl Into<String>,
+    ) -> Result<Self, EvidenceError> {
+        Self::interval_with_kind(
+            parameter,
+            low,
+            high,
+            unit,
+            ModelIntervalKind::SpecificationLimits,
+            basis,
+        )
+    }
+
+    pub fn interval_with_kind(
+        parameter: impl Into<String>,
+        low: f64,
+        high: f64,
+        unit: impl Into<String>,
+        kind: ModelIntervalKind,
         basis: impl Into<String>,
     ) -> Result<Self, EvidenceError> {
         finite("model_uncertainty.low", low)?;
@@ -1827,12 +2020,156 @@ impl ModelUncertainty {
                 field: "model_uncertainty.basis",
             });
         }
-        Ok(Self {
+        Ok(Self::Interval {
             parameter,
             low,
             high,
+            unit: unit.into(),
+            kind,
             basis,
         })
+    }
+
+    pub fn unknown(
+        parameter: impl Into<String>,
+        reason: impl Into<String>,
+    ) -> Result<Self, EvidenceError> {
+        let parameter = parameter.into();
+        let reason = reason.into();
+        if parameter.trim().is_empty() {
+            return Err(EvidenceError::Empty {
+                field: "model_uncertainty.parameter",
+            });
+        }
+        if reason.trim().is_empty() {
+            return Err(EvidenceError::Empty {
+                field: "model_uncertainty.reason",
+            });
+        }
+        Ok(Self::Unknown { parameter, reason })
+    }
+
+    pub fn validate(&self) -> Result<(), EvidenceError> {
+        match self {
+            Self::Interval {
+                parameter,
+                low,
+                high,
+                basis,
+                ..
+            } => {
+                finite("model_uncertainty.low", *low)?;
+                finite("model_uncertainty.high", *high)?;
+                if high < low {
+                    return Err(EvidenceError::InvertedInterval {
+                        parameter: parameter.clone(),
+                        low: *low,
+                        high: *high,
+                    });
+                }
+                if parameter.trim().is_empty() {
+                    return Err(EvidenceError::Empty {
+                        field: "model_uncertainty.parameter",
+                    });
+                }
+                if basis.trim().is_empty() {
+                    return Err(EvidenceError::Empty {
+                        field: "model_uncertainty.basis",
+                    });
+                }
+            }
+            Self::Unknown { parameter, reason } => {
+                if parameter.trim().is_empty() {
+                    return Err(EvidenceError::Empty {
+                        field: "model_uncertainty.parameter",
+                    });
+                }
+                if reason.trim().is_empty() {
+                    return Err(EvidenceError::Empty {
+                        field: "model_uncertainty.reason",
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether this interval can satisfy a fail-closed accuracy requirement.
+    /// Typical and estimated ranges stay visible but never become guarantees.
+    pub fn is_strict_bound(&self) -> bool {
+        matches!(
+            self,
+            Self::Interval {
+                kind: ModelIntervalKind::SpecificationLimits | ModelIntervalKind::EmpiricalError,
+                ..
+            }
+        )
+    }
+
+    pub fn interval_kind(&self) -> Option<ModelIntervalKind> {
+        match self {
+            Self::Interval { kind, .. } => Some(*kind),
+            Self::Unknown { .. } => None,
+        }
+    }
+}
+
+/// Canonical provenance and accuracy record for one selected model. Every
+/// report surface carries this object verbatim.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ModelSource {
+    tier: ModelSourceTier,
+    layer: ModelLayer,
+    origin: String,
+    validation: ModelValidation,
+    uncertainty: Vec<ModelUncertainty>,
+}
+
+impl ModelSource {
+    pub fn new(
+        tier: ModelSourceTier,
+        layer: ModelLayer,
+        origin: impl Into<String>,
+        validation: ModelValidation,
+        uncertainty: Vec<ModelUncertainty>,
+    ) -> Result<Self, EvidenceError> {
+        let origin = origin.into();
+        if origin.trim().is_empty() {
+            return Err(EvidenceError::Empty {
+                field: "model_source.origin",
+            });
+        }
+        if uncertainty.is_empty() {
+            return Err(EvidenceError::Empty {
+                field: "model_source.uncertainty",
+            });
+        }
+        for value in &uncertainty {
+            value.validate()?;
+        }
+        Ok(Self {
+            tier,
+            layer,
+            origin,
+            validation,
+            uncertainty,
+        })
+    }
+
+    pub fn tier(&self) -> ModelSourceTier {
+        self.tier
+    }
+    pub fn layer(&self) -> ModelLayer {
+        self.layer
+    }
+    pub fn origin(&self) -> &str {
+        &self.origin
+    }
+    pub fn validation(&self) -> ModelValidation {
+        self.validation
+    }
+    pub fn uncertainty(&self) -> &[ModelUncertainty] {
+        &self.uncertainty
     }
 }
 
@@ -1986,10 +2323,10 @@ pub struct ModelOnPath {
     reference: String,
     /// The model that bound.
     model_id: String,
-    /// Which layer of the model ladder it came from: "builtin", "pack",
-    /// "user-dir", "user-config-dir", "models-dir", "spice",
-    /// "engine-fallback".
+    /// Compatibility projection of [`Self::source`]'s storage layer.
     layer: ModelLayer,
+    /// The canonical source, validation and uncertainty record.
+    source: ModelSource,
     /// How good the match was.
     confidence: MatchConfidence,
 }
@@ -1999,7 +2336,7 @@ impl ModelOnPath {
     pub fn new(
         reference: impl Into<String>,
         model_id: impl Into<String>,
-        layer: ModelLayer,
+        source: ModelSource,
         confidence: MatchConfidence,
     ) -> Result<Self, EvidenceError> {
         let reference = reference.into();
@@ -2017,7 +2354,8 @@ impl ModelOnPath {
         Ok(Self {
             reference,
             model_id,
-            layer,
+            layer: source.layer(),
+            source,
             confidence,
         })
     }
@@ -2032,6 +2370,10 @@ impl ModelOnPath {
 
     pub fn layer(&self) -> ModelLayer {
         self.layer
+    }
+
+    pub fn source(&self) -> &ModelSource {
+        &self.source
     }
 
     pub fn confidence(&self) -> MatchConfidence {

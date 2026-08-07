@@ -15,6 +15,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+use hauksbee_ir::evidence::{ModelSourceTier, ModelUncertainty, ModelValidation};
+
 // ── Top-level file container ──────────────────────────────────────────────────
 
 /// Contents of one `.toml` database file (the `[[models]]` array).
@@ -85,6 +87,19 @@ pub struct ModelEntry {
     /// whose current the *board* chooses rather than the part.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub current_program: Option<CurrentProgram>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
+pub struct ModelSourceSpec {
+    pub tier: ModelSourceTier,
+    #[serde(default = "unvalidated")]
+    pub validation: ModelValidation,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uncertainty: Vec<ModelUncertainty>,
+}
+
+fn unvalidated() -> ModelValidation {
+    ModelValidation::Unvalidated
 }
 
 /// How an external resistor programs a part's operating current.

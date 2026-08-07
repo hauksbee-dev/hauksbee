@@ -298,6 +298,32 @@ impl CiResult {
         if map.error_budget().is_some() {
             out.push_str("\nerror budget: attached in JSON");
         }
+        for model in map.models() {
+            let source = model.source();
+            let accuracy = if source.uncertainty().iter().any(|value| {
+                matches!(
+                    value,
+                    hauksbee_ir::evidence::ModelUncertainty::Unknown { .. }
+                )
+            }) {
+                "uncertainty unknown"
+            } else if source
+                .uncertainty()
+                .iter()
+                .any(|value| !value.is_strict_bound())
+            {
+                "non-guaranteed typical/estimated range"
+            } else {
+                "validated two-sided bound"
+            };
+            out.push_str(&format!(
+                "\nmodel {}={} source={} validation={} {accuracy}",
+                model.reference(),
+                model.model_id(),
+                source.tier(),
+                source.validation(),
+            ));
+        }
         out
     }
 

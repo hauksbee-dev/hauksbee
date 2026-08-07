@@ -1,11 +1,13 @@
 # Device models: built-in, SPICE, and datasheet extraction
 
-Every component the binder meets needs a simulation model. Physics arrives
-by **four** authoring routes, and the resolver sorts whatever they produce into
-**six** priority layers. The routes and the layers are not the same list: the
-codex-extracted models and the hand-written behavioural models are both just
-TOML entries, and where they land depends on which directory you put them in,
-not on how they were written.
+The source-selection, provenance, uncertainty, and fail-closed accuracy policy
+is documented in [SOURCE_LADDER.md](SOURCE_LADDER.md). Source tier and storage
+layer are deliberately separate; inspect both with `hauksbee models resolve`.
+
+Every component the binder meets needs a simulation model. Physics arrives by
+**four** authoring routes. The resolver records both the semantic source tier
+and the six storage layers; semantic tier orders sources first, while layer and
+specificity make selection deterministic inside one tier.
 
 The four authoring routes:
 
@@ -28,8 +30,8 @@ The four authoring routes:
 - **User SPICE**: a `.model` / `.subckt` card you supply always wins, so you
   can override anything with a vendor-provided SPICE deck.
 
-The resolution layers, by priority (higher wins outright; specificity only
-breaks ties *within* a layer):
+The storage layers, used after semantic tier (higher breaks a same-tier tie;
+specificity only breaks ties *within* a layer):
 
 ```
 builtin(0)  <  pack(10)  <  user-dir(20)  <  user-config-dir(25)
@@ -39,17 +41,17 @@ builtin(0)  <  pack(10)  <  user-dir(20)  <  user-config-dir(25)
 `SourceLayer` in `crates/hauksbee-models/src/lib.rs` is the authority for that
 list, and [PACKS.md](PACKS.md#resolution-priority) is the reference page for it.
 Two things about it catch people out. Installed **packs** are a layer of their
-own between the built-ins and your own directories, so a pack overrides a
-built-in and you override a pack. And the two standing user directories are
+own between the built-ins and your own directories. A pack's declared
+provenance decides its semantic tier, so a datasheet-extracted pack does not
+silently displace the curated library. The two standing user directories are
 *distinct* layers: `~/.config/hauksbee/models` (25) beats `~/.hauksbee/models`
 (20), so a model you hand-corrected in your config dir deterministically wins
 over an auto-extracted one of the same id.
 
-`ModelLibrary::resolve` returns a coarser `source` string for report consumers,
-one of `"builtin"`, `"pack"`, `"user"` or `"spice"`. All three user layers
-(user-dir, user-config-dir, `--models-dir`) collapse to `"user"` there. When you
-need the real layer, `hauksbee models resolve <board>` prints it with its
-priority, for example `user-config-dir(25)`.
+`ModelLibrary::resolve` retains the coarse compatibility `source` string and
+also returns the canonical `ModelSource` record. When you need the real tier,
+layer, origin, validation and uncertainty, `hauksbee models resolve <board>`
+prints them and `--json` exposes the same record without collapsing it.
 
 ## Pointing hauksbee at a datasheet
 
