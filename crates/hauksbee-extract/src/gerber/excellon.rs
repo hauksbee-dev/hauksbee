@@ -307,13 +307,33 @@ pub fn parse(text: &str) -> DrillFile {
         // ── Routing (slots cut by a moving cutter) ──────────────────────────
         if rout_capable {
             let up = line.to_ascii_uppercase();
+            // A mode code may carry the position it applies at (`M15X10Y10`
+            // plunges the cutter THERE). Swallowing the line whole leaves the
+            // modal position wherever it last was, and the next cut is then
+            // drawn from the wrong end: a plated wall across ground the file
+            // never routed. Read the coordinates first, then act on the code.
+            let absorb_position = |lx: &mut Option<f64>, ly: &mut Option<f64>| {
+                if up.contains('X') || up.contains('Y') {
+                    let _ = parse_xy_modal(
+                        &up,
+                        metric,
+                        int_digits,
+                        dec_digits,
+                        leading_zero_omitted,
+                        lx,
+                        ly,
+                    );
+                }
+            };
             let m = leading_m_code(&up);
             if m == Some(15) {
+                absorb_position(&mut last_x, &mut last_y);
                 tool_down = true;
                 rout_mode = true;
                 continue;
             }
             if m == Some(16) || m == Some(17) {
+                absorb_position(&mut last_x, &mut last_y);
                 tool_down = false;
                 continue;
             }
@@ -326,6 +346,7 @@ pub fn parse(text: &str) -> DrillFile {
             if g == Some(5) {
                 // Back to drill mode: the cutter is up by definition, and a
                 // bare coordinate line is a drilled point again.
+                absorb_position(&mut last_x, &mut last_y);
                 tool_down = false;
                 rout_mode = false;
                 continue;
@@ -1278,6 +1299,39 @@ M30
         );
         assert_eq!(d.holes.len(), 1);
         assert!((d.holes[0].x - 5.0).abs() < 1e-9 && (d.holes[0].y - 9.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn a_plunge_carrying_its_own_position_cuts_from_there() {
+        // `M15X10Y10` plunges the cutter AT (10, 10). Swallowing the line whole
+        // leaves the modal position back at the last rapid, so the following
+        // cut is drawn from the wrong end: a plated wall right across ground
+        // the file never routed, joining whatever it crosses on the way.
+        let d = parse(
+            "\
+M48
+FMAT,2
+METRIC
+T1C0.800
+%
+G90
+T1
+G00X0.0Y0.0
+M15X10.0Y10.0
+G01X20.0Y10.0
+M16
+M30
+",
+        );
+        assert_eq!(d.holes.len(), 1);
+        let cut = &d.holes[0];
+        assert!(
+            (cut.x - 10.0).abs() < 1e-9 && (cut.y - 10.0).abs() < 1e-9,
+            "the cut starts where the cutter plunged, got ({}, {})",
+            cut.x,
+            cut.y
+        );
+        assert_eq!(cut.to, Some((20.0, 10.0)));
     }
 
     #[test]
