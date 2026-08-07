@@ -16,6 +16,7 @@ use super::{kicad_pro_clearance_rules, OutputMode};
 /// Run geometric short / clearance detection, print it in `mode`, cross-check the
 /// oracle when asked, then (under `strict`) exit non-zero on a true short. Returns
 /// `Ok(())` on the non-gating paths; a strict short calls `std::process::exit(2)`.
+#[allow(clippy::too_many_arguments)]
 pub fn emit(
     board_path: &Path,
     board: &ExtractedBoard,

@@ -57,6 +57,12 @@ impl DnpPolicy {
     }
 }
 
+/// Property key under which [`ExtractedBoard::apply_dnp_policy`] records WHY a
+/// left-open part is absent, so downstream classification
+/// ([`crate::assembly::AssemblyState::of`]) can hand the reason back without a
+/// side channel. The value is [`DnpReason::policy_tag`].
+pub const DNP_REASON_KEY: &str = "hauksbee.dnp_reason";
+
 /// Why one DNP part ended up fitted or open.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DnpReason {
@@ -81,6 +87,32 @@ impl DnpReason {
             DnpReason::NamedOpen => "DNP, left open because you asked for it",
             DnpReason::ZeroOhmLink => "DNP link (near 0 ohm), left open: fitting it merges nets",
             DnpReason::HonouredPolicy => "DNP, left open",
+        }
+    }
+
+    /// The stable tag stored under [`DNP_REASON_KEY`]. Round-trips through
+    /// [`DnpReason::from_policy_tag`].
+    pub fn policy_tag(&self) -> &'static str {
+        match self {
+            DnpReason::Policy => "policy",
+            DnpReason::NamedFit => "named-fit",
+            DnpReason::NamedOpen => "named-open",
+            DnpReason::ZeroOhmLink => "zero-ohm-link",
+            DnpReason::HonouredPolicy => "honoured-policy",
+        }
+    }
+
+    /// Parse a [`DNP_REASON_KEY`] tag back into the reason. `None` for an
+    /// unknown tag: a stale or foreign value must degrade to "the board file
+    /// says DNP", never invent a decision.
+    pub fn from_policy_tag(tag: &str) -> Option<DnpReason> {
+        match tag {
+            "policy" => Some(DnpReason::Policy),
+            "named-fit" => Some(DnpReason::NamedFit),
+            "named-open" => Some(DnpReason::NamedOpen),
+            "zero-ohm-link" => Some(DnpReason::ZeroOhmLink),
+            "honoured-policy" => Some(DnpReason::HonouredPolicy),
+            _ => None,
         }
     }
 }
@@ -331,12 +363,20 @@ impl ExtractedBoard {
                 value: comp.value.clone(),
                 reason: reason.clone(),
             };
+            // Record the decision ON the component: a stale tag from an earlier
+            // policy application is always stripped, and a left-open part keeps
+            // its reason where `assembly::AssemblyState::of` can read it back.
+            comp.properties.retain(|(key, _)| key != DNP_REASON_KEY);
             match reason {
                 DnpReason::Policy | DnpReason::NamedFit => {
                     comp.dnp = false;
                     decision.fitted.push(part);
                 }
-                _ => decision.left_open.push(part),
+                _ => {
+                    comp.properties
+                        .push((DNP_REASON_KEY.to_string(), reason.policy_tag().to_string()));
+                    decision.left_open.push(part);
+                }
             }
         }
         Ok(decision)

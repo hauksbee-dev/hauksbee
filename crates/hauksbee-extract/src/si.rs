@@ -38,6 +38,7 @@ use std::collections::HashMap;
 
 use forge_sexpr::List;
 
+use crate::assembly::AssemblyState;
 use crate::{Component, ExtractedBoard};
 
 // ===========================================================================
@@ -361,7 +362,8 @@ fn net_is_raillike(board: &ExtractedBoard, net_id: i64) -> bool {
         }
     }
     board.net_members(net_id).iter().any(|(c, _)| {
-        is_capacitor(c)
+        AssemblyState::of(c).is_present()
+            && is_capacitor(c)
             && c.pins.iter().any(|op| {
                 op.net
                     .filter(|id| *id != net_id)
@@ -583,7 +585,9 @@ pub fn cl_board_pf(c1_pf: f64, c2_pf: f64, cstray_pf: f64) -> f64 {
 /// pad on `net` and the other on a ground net. Returns its capacitance in pF.
 fn load_cap_on_net(board: &ExtractedBoard, net_id: i64) -> Option<f64> {
     for (c, _p) in board.net_members(net_id) {
-        if !is_capacitor(c) {
+        // A DNP or identity-refused cap loads nothing: crediting it would
+        // silence a genuine missing-load-cap finding.
+        if !AssemblyState::of(c).is_present() || !is_capacitor(c) {
             continue;
         }
         let to_ground = c.pins.iter().any(|op| {
@@ -622,7 +626,8 @@ fn crystal_signal_nets(board: &ExtractedBoard, xtal: &Component) -> Vec<i64> {
 
 fn check_crystal_load_cap(board: &ExtractedBoard, report: &mut SiReport) {
     for xtal in &board.components {
-        if xtal.dnp || !is_crystal(xtal) {
+        // Unassembled or identity-refused parts are not trusted crystals.
+        if !crate::assembly::AssemblyState::of(xtal).is_present() || !is_crystal(xtal) {
             continue;
         }
         // A ceramic resonator carries its own load caps (the 3-terminal centre
@@ -654,7 +659,7 @@ fn check_crystal_load_cap(board: &ExtractedBoard, report: &mut SiReport) {
             .net_members(sig_nets[0])
             .iter()
             .chain(board.net_members(sig_nets[1]).iter())
-            .any(|(c, _)| has_integrated_xtal_caps(&c.value));
+            .any(|(c, _)| AssemblyState::of(c).is_present() && has_integrated_xtal_caps(&c.value));
 
         let net_names: Vec<String> = sig_nets
             .iter()
@@ -756,7 +761,8 @@ fn check_crystal_load_cap(board: &ExtractedBoard, report: &mut SiReport) {
 /// second load cap and the crystal's far pad).
 fn load_cap_through_resistor(board: &ExtractedBoard, net_id: i64) -> Option<f64> {
     for (c, _p) in board.net_members(net_id) {
-        if !is_resistor(c) {
+        // An absent damping resistor bridges to nothing.
+        if !AssemblyState::of(c).is_present() || !is_resistor(c) {
             continue;
         }
         for op in &c.pins {
@@ -867,7 +873,9 @@ fn is_connector_like(c: &Component) -> bool {
 fn pullup_ohms(board: &ExtractedBoard, net_id: i64) -> Option<f64> {
     let mut conductance = 0.0_f64; // Σ 1/Rᵢ (siemens)
     for (c, _p) in board.net_members(net_id) {
-        if !is_resistor(c) {
+        // A DNP option pull-up conducts nothing, and a refused record's value
+        // is not conductance evidence.
+        if !AssemblyState::of(c).is_present() || !is_resistor(c) {
             continue;
         }
         let to_rail = c.pins.iter().any(|op| {
@@ -903,7 +911,9 @@ fn bus_capacitance_pf(
     let mut seen: std::collections::HashSet<(&str, &str)> = std::collections::HashSet::new();
     let mut devices = 0usize;
     for (c, p) in board.net_members(net_id) {
-        if is_resistor(c) || is_connector_like(c) {
+        // An unassembled part's pin is not soldered to the bus, so it adds no
+        // pin capacitance.
+        if !AssemblyState::of(c).is_present() || is_resistor(c) || is_connector_like(c) {
             continue;
         }
         if seen.insert((c.reference.as_str(), p.number.as_str())) {
@@ -1154,7 +1164,7 @@ fn check_antenna_keepout(board: &ExtractedBoard, root: &List, report: &mut SiRep
     let net_name = |id: i64| board.net(id).map(|n| n.name.clone()).unwrap_or_default();
 
     for ant in &board.components {
-        if ant.dnp {
+        if !crate::assembly::AssemblyState::of(ant).is_present() {
             continue;
         }
         let Some((k, cite)) = antenna_keepout(ant) else {
