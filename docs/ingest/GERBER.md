@@ -186,14 +186,26 @@ merges nets the real stackup keeps apart, which is a phantom short: the
 reader inventing a connection nobody designed. Three cases refuse, and each
 one is a case where a reading exists that would look fine and be wrong.
 
-- **A declaration we cannot use.** A pair naming a layer this job does not
-  carry, or a reversed or degenerate one, is never clamped into the stack:
-  clamping `1,6` on a four-layer job produces exactly the through-hole the
-  span logic exists to prevent. It is also not treated as silence, which
-  matters because silence on a single-drill job is safely a through-hole. A
-  file that tried to state its span and failed is the last file whose hits
-  may be assumed to reach everything, precisely because the declaration
-  exists only when the span is not obvious.
+- **A declaration we cannot place.** A pair naming a position in a stack we
+  do not have, such as `3,6` where only two copper films classified, is never
+  clamped onto the films we do have: clamping a buried via that touches
+  neither outer layer onto both of them is exactly the short the span logic
+  exists to prevent. It is also not treated as silence, which matters because
+  silence on a single-drill job is safely a through-hole.
+
+  The exception is exact rather than lenient. A pair running from layer 1 to
+  the deepest layer any drill file in the job names is a hit through the
+  whole board, and that stays true however many of the board's copper films
+  we recognised. This is not a corner case: KiCad names an inner layer's film
+  after the user's label, so a six-layer board whose inner layers are called
+  `GND.Cu` and `Power.Cu` exports films named `-GND_Cu.gbr` and
+  `-Power_Cu.gbr`, which this reader's filename inference does not place in
+  the stack. The MNT Reform motherboard is that board, and refusing its
+  `1,6` through-holes on the grounds that "layer 6 is not in our stack" cost
+  it 2.5 points of net-partition agreement against KiCad before the rule was
+  made exact. A job in that state now says so: a note reports how many layers
+  the drill set describes against how many copper films were classified, so
+  the missing copper is visible rather than silently absent.
 - **Silence on a multi-span job.** A drill file that says nothing is read as
   a through-hole only where nothing else in the job says otherwise. Once a
   sibling declares a partial span, silence is ambiguous and the silent
@@ -545,6 +557,17 @@ is the all-pairs touch sweep on the densest signal layers.
   inner planes ambiguously the layer order, and therefore via stitching
   across the wrong pair, can be wrong. The mapping-file escape hatch
   (`copper:<index>`) overrides this when it matters.
+- **An inner film named only by its user label is not classified as copper
+  at all.** KiCad exports `In1.Cu` renamed to `GND.Cu` as `-GND_Cu.gbr`, and
+  the filename rules do not recognise that as a stack position, so the layer
+  and everything routed on it are missing from the reconstruction. The MNT
+  Reform motherboard is a six-layer board that reconstructs from two films
+  for this reason. It still scores 99.7% net partition, because its routing
+  is dominated by the outer layers and its through-holes stitch what remains,
+  but that number is over the pads we located on the layers we saw. The drill
+  set's declared layer count is now compared against the films classified and
+  the shortfall is reported as a note, so the gap is at least visible; the
+  fix is a `layer_map.txt` naming those films.
 - **GND label is a heuristic** (largest pour-touching net), so the `GND`
   *name* can be wrong on a power-plane-dominant or split-ground board.
   Connectivity is unaffected; only the label is a guess.

@@ -136,15 +136,18 @@ fn a_drill_file_with_no_readable_span_in_a_multi_span_job_refuses() {
 #[test]
 fn a_declared_span_naming_a_layer_this_job_lacks_refuses_end_to_end() {
     // Two copper layers, a pad on each at the same point, and ONE plated drill
-    // file whose X2 attribute says `Plated,1,6,PTH`. Layer 6 does not exist
-    // here.
+    // file whose X2 attribute says `Plated,3,6,PTH`: a buried via running from
+    // layer 3 to layer 6 of a board whose inner films this job does not carry.
     //
-    // This is the case where the tempting shortcut does the damage: treat the
-    // unusable declaration as silence, notice the job has only one drill file,
-    // and read it as a through-hole. That gives one net off a declaration that
-    // explicitly said the hit is not a through-hole. A file that tried to state
-    // a span and failed is the last one whose hits may be assumed to reach the
-    // whole stack, so both pads stay on their own nets and the reader says why.
+    // Two tempting shortcuts both fabricate a net here. Treating the unusable
+    // declaration as silence, then noticing there is only one drill file, reads
+    // it as a through-hole. Clamping `3,6` onto the two layers we have does the
+    // same thing by another route. Either way a buried via that touches neither
+    // outer layer ends up joining both of them.
+    //
+    // Note the contrast with a `1,<deepest>` declaration, which IS a
+    // through-hole and stays one however few films we classified: the
+    // difference is that `3,6` names a position in a stack we cannot locate.
     let e = from_gerber_dir(&job("gerber_span_out_of_range")).expect("out-of-range span fixture");
     assert_eq!(e.stats.n_layers, 2);
     assert_eq!(e.stats.n_holes, 1);
@@ -156,6 +159,49 @@ fn a_declared_span_naming_a_layer_this_job_lacks_refuses_end_to_end() {
     assert!(
         e.stats.notes.iter().any(|n| n.contains("oor-PTH.drl")),
         "the refusal must name the file: {:?}",
+        e.stats.notes
+    );
+    // The job also has to say that it is looking at a 6-layer board through
+    // two films, because that missing copper is the underlying problem and it
+    // costs more than the one refused hit.
+    assert!(
+        e.stats
+            .notes
+            .iter()
+            .any(|n| n.contains("6-layer board") && n.contains("2 copper layer")),
+        "the missing copper layers must be reported: {:?}",
+        e.stats.notes
+    );
+}
+
+#[test]
+fn a_full_depth_span_survives_a_job_whose_inner_films_did_not_classify() {
+    // The counterpart, and the one a real board hits. KiCad names an inner
+    // layer's film after the user's label ("GND_Cu", "Power_Cu"), so a six-layer
+    // job can classify only its two outer films. Its drill still declares
+    // `Plated,1,6,PTH`, and that declaration means the hit goes through the
+    // whole board, which stays true whichever films we recognised.
+    //
+    // Refusing it because "layer 6 is not in our stack" costs every
+    // through-hole on the board. The reform motherboard closed-loop row is
+    // exactly this case and dropped from 99.7% to 97.2% net partition while
+    // this reader got it wrong.
+    let e = from_gerber_dir(&job("gerber_span_full_depth")).expect("full-depth span fixture");
+    assert_eq!(e.stats.n_layers, 2, "only the two outer films classified");
+    assert_eq!(
+        e.stats.refused_span_holes, 0,
+        "a full-depth hit is not refused"
+    );
+    assert_eq!(
+        e.stats.n_nets, 1,
+        "the through-hole joins the two films this job does carry"
+    );
+    assert!(
+        e.stats
+            .notes
+            .iter()
+            .any(|n| n.contains("6-layer board") && n.contains("2 copper layer")),
+        "the missing copper layers must still be reported: {:?}",
         e.stats.notes
     );
 }
