@@ -362,6 +362,377 @@ fn non_copper_pad_records_are_not_pins() {
 }
 
 #[test]
+fn duplicate_placements_without_channels_merge_as_one_electrical_part() {
+    let mut comps = Vec::new();
+    comps.extend(props(
+        "|LAYER=TOP|X=0mil|Y=0mil|PATTERN=TESTPOINT|SOURCEDESIGNATOR=TP1",
+    ));
+    comps.extend(props(
+        "|LAYER=BOTTOM|X=100mil|Y=0mil|PATTERN=TESTPOINT|SOURCEDESIGNATOR=TP1",
+    ));
+    let mut pads = Vec::new();
+    pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 0.5));
+    // The second record repeats pad 1 on the same net, which is the positive
+    // structural anchor required when no hierarchy identifies the placement.
+    pads.extend(pad_record("1", 1, 0, 1, 0.0, 0.0, 0.5));
+    pads.extend(pad_record("2", 1, 1, 1, 1.0, 0.0, 0.5));
+
+    let bytes = build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+    ]);
+    let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
+
+    assert_eq!(
+        board.components.len(),
+        1,
+        "two physical placements with one unchannelled designator are one part"
+    );
+    let tp1 = board.component("TP1").expect("unsuffixed TP1");
+    assert_eq!(
+        tp1.pins.len(),
+        3,
+        "both physical placements contribute their pad records"
+    );
+    assert_eq!(
+        tp1.pins
+            .iter()
+            .map(|pin| pin.number.as_str())
+            .collect::<std::collections::BTreeSet<_>>(),
+        std::collections::BTreeSet::from(["1", "2"]),
+        "the three physical records represent two electrical pin numbers"
+    );
+    assert!(
+        tp1.properties
+            .iter()
+            .any(|(key, _)| key == "reference_ambiguous"),
+        "a hierarchy-free duplicate is merged only by structural evidence, so that inference must remain visible"
+    );
+    assert!(board.component("TP1_2").is_none());
+}
+
+#[test]
+fn repeated_designators_in_distinct_channels_remain_distinct_parts() {
+    let mut comps = Vec::new();
+    comps.extend(props(
+        "|LAYER=TOP|X=0mil|Y=0mil|PATTERN=R0402|SOURCEDESIGNATOR=R1|SOURCEHIERARCHICALPATH=\\FLASH1",
+    ));
+    comps.extend(props(
+        "|LAYER=TOP|X=100mil|Y=0mil|PATTERN=R0402|SOURCEDESIGNATOR=R1|SOURCEHIERARCHICALPATH=\\FLASH2",
+    ));
+    let mut pads = Vec::new();
+    pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 0.5));
+    pads.extend(pad_record("1", 1, 1, 1, 1.0, 0.0, 0.5));
+
+    let bytes = build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+    ]);
+    let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
+
+    assert_eq!(board.components.len(), 2);
+    assert!(board.component("R1@FLASH1").is_some());
+    assert!(board.component("R1@FLASH2").is_some());
+    assert!(board.component("R1_2").is_none());
+}
+
+#[test]
+fn authoritative_unique_ids_distinguish_same_designator_in_one_hierarchy() {
+    // Real Altium files can repeat the compiled source designator and full
+    // hierarchy for several physical component records.  UNIQUEID is the
+    // authoritative record identity in that case (test-padshapes.PcbDoc does
+    // exactly this); ignoring it collapses the whole population into one part.
+    let mut comps = Vec::new();
+    comps.extend(props(
+        "|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=R14|SOURCEHIERARCHICALPATH=\\WMO-sensor|UNIQUEID=YAFHHBJN",
+    ));
+    comps.extend(props(
+        "|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=R14|SOURCEHIERARCHICALPATH=\\WMO-sensor|UNIQUEID=HIIFAIMR",
+    ));
+    let mut pads = Vec::new();
+    pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 0.5));
+    pads.extend(pad_record("2", 1, 1, 1, 2.0, 0.0, 0.5));
+
+    let bytes = build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+    ]);
+    let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
+
+    assert_eq!(board.components.len(), 2);
+    let references: std::collections::BTreeSet<_> = board
+        .components
+        .iter()
+        .map(|component| component.reference.as_str())
+        .collect();
+    assert_eq!(references.len(), 2, "UNIQUEID must prevent a false merge");
+    assert!(board.components.iter().all(|component| component
+        .properties
+        .iter()
+        .any(|(key, value)| key == "source_unique_id" && !value.is_empty())));
+}
+
+#[test]
+fn same_authoritative_unique_id_merges_split_component_records() {
+    // Conversely, two records carrying the same source identity are one
+    // logical part even if each record contributes a disjoint physical pad.
+    let mut comps = Vec::new();
+    for _ in 0..2 {
+        comps.extend(props(
+            "|LAYER=TOP|PATTERN=TESTPOINT|SOURCEDESIGNATOR=TP1|SOURCEHIERARCHICALPATH=\\ROOT|UNIQUEID=ABC123",
+        ));
+    }
+    let mut pads = Vec::new();
+    pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 0.5));
+    pads.extend(pad_record("2", 1, 1, 1, 1.0, 0.0, 0.5));
+
+    let board = ExtractedBoard::from_altium_pcb(&build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+    ]))
+    .expect("extract");
+
+    assert_eq!(board.components.len(), 1);
+    assert_eq!(board.components[0].reference, "TP1");
+    assert_eq!(board.components[0].pins.len(), 2);
+}
+
+#[test]
+fn same_hierarchy_without_unique_id_or_shared_pad_stays_distinct() {
+    // A hierarchy is a channel location, not a physical component identity.
+    // Without UNIQUEID or a shared identically-netted pad, disjoint records in
+    // the same hierarchy must remain separate and explicitly ambiguous.
+    let mut comps = Vec::new();
+    for _ in 0..2 {
+        comps.extend(props(
+            "|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=R14|SOURCEHIERARCHICALPATH=\\WMO-sensor",
+        ));
+    }
+    let mut pads = Vec::new();
+    pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 0.5));
+    pads.extend(pad_record("2", 1, 1, 1, 1.0, 0.0, 0.5));
+
+    let board = ExtractedBoard::from_altium_pcb(&build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+    ]))
+    .expect("extract");
+
+    assert_eq!(board.components.len(), 2);
+    assert!(board.components.iter().all(|component| component
+        .properties
+        .iter()
+        .any(|(key, _)| key == "reference_ambiguous")));
+}
+
+#[test]
+fn full_hierarchical_paths_and_real_reference_collisions_remain_distinct() {
+    let mut comps = Vec::new();
+    comps.extend(props(
+        "|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=R1|SOURCEHIERARCHICALPATH=\\A\\BANK",
+    ));
+    comps.extend(props(
+        "|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=R1|SOURCEHIERARCHICALPATH=\\B\\BANK",
+    ));
+    // This genuine source designator is exactly the first generated candidate.
+    comps.extend(props("|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=R1@A/BANK"));
+    let mut pads = Vec::new();
+    pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 0.5));
+    pads.extend(pad_record("1", 1, 1, 1, 2.0, 0.0, 0.5));
+    pads.extend(pad_record("1", 1, 0, 2, 4.0, 0.0, 0.5));
+
+    let board = ExtractedBoard::from_altium_pcb(&build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+    ]))
+    .expect("extract");
+
+    assert_eq!(board.components.len(), 3);
+    assert!(
+        board.component("R1@A/BANK").is_some(),
+        "the genuine designator must never be overwritten"
+    );
+    assert!(board.component("R1@B/BANK").is_some());
+    let a_channel = board
+        .components
+        .iter()
+        .find(|component| {
+            component
+                .properties
+                .iter()
+                .any(|(key, value)| key == "source_hierarchical_path" && value == "A/BANK")
+        })
+        .expect("A/BANK channel retained");
+    assert_ne!(a_channel.reference, "R1@A/BANK");
+    assert!(a_channel.reference.starts_with("R1@A/BANK@source-"));
+}
+
+#[test]
+fn mixed_missing_channel_metadata_never_collapses_all_replicas() {
+    let mut comps = Vec::new();
+    comps.extend(props(
+        "|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=R1|SOURCEHIERARCHICALPATH=\\FLASH1",
+    ));
+    comps.extend(props(
+        "|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=R1|SOURCEHIERARCHICALPATH=\\FLASH2",
+    ));
+    comps.extend(props("|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=R1"));
+    let mut pads = Vec::new();
+    pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 0.5));
+    pads.extend(pad_record("1", 1, 1, 1, 2.0, 0.0, 0.5));
+    pads.extend(pad_record("1", 1, 0, 2, 4.0, 0.0, 0.5));
+
+    let board = ExtractedBoard::from_altium_pcb(&build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+    ]))
+    .expect("extract");
+
+    assert_eq!(board.components.len(), 3);
+    assert!(board.component("R1@FLASH1").is_some());
+    assert!(board.component("R1@FLASH2").is_some());
+    let missing = board
+        .components
+        .iter()
+        .find(|component| component.reference.starts_with("R1@unknown-"))
+        .expect("missing path kept separate");
+    assert!(missing
+        .properties
+        .iter()
+        .any(|(key, _)| key == "reference_ambiguous"));
+}
+
+#[test]
+fn hierarchy_free_duplicate_pin_numbers_on_different_nets_are_not_merged() {
+    let mut comps = Vec::new();
+    comps.extend(props("|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=R1"));
+    comps.extend(props("|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=R1"));
+    let mut pads = Vec::new();
+    pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 0.5));
+    pads.extend(pad_record("1", 1, 1, 1, 0.0, 0.0, 0.5));
+
+    let bytes = build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+    ]);
+    let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
+
+    assert_eq!(board.components.len(), 2);
+    assert!(board
+        .components
+        .iter()
+        .all(|component| component.reference.starts_with("R1@record-")));
+    assert!(board.components.iter().all(|component| component
+        .properties
+        .iter()
+        .any(|(key, _)| key == "reference_ambiguous")));
+    assert!(board.components.iter().all(|component| component
+        .properties
+        .iter()
+        .any(|(key, _)| key == "duplicate_reference_conflict")));
+    let drc = ExtractedBoard::altium_drc(&bytes).expect("DRC");
+    assert_eq!(
+        drc.short_count(),
+        1,
+        "ambiguous records must also be distinct DRC owners"
+    );
+}
+
+#[test]
+fn hierarchy_free_disjoint_pads_are_distinct_drc_owners() {
+    let mut comps = Vec::new();
+    comps.extend(props("|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=R1"));
+    comps.extend(props("|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=R1"));
+    let mut pads = Vec::new();
+    // Disjoint pad numbers are not proof that these records describe one
+    // physical footprint.  If they overlap on different nets, merging their
+    // owner would invoke the same-footprint exemption and hide a real short.
+    pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 0.5));
+    pads.extend(pad_record("2", 1, 1, 1, 0.0, 0.0, 0.5));
+
+    let bytes = build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+    ]);
+    let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
+
+    assert_eq!(board.components.len(), 2);
+    assert!(board
+        .components
+        .iter()
+        .all(|component| component.reference.starts_with("R1@record-")));
+    let drc = ExtractedBoard::altium_drc(&bytes).expect("DRC");
+    assert_eq!(
+        drc.short_count(),
+        1,
+        "disjoint ambiguous records must not share a same-owner exemption"
+    );
+}
+
+#[test]
+fn channel_qualified_components_are_distinct_owners_for_drc() {
+    let mut comps = Vec::new();
+    comps.extend(props(
+        "|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=R1|SOURCEHIERARCHICALPATH=\\FLASH1",
+    ));
+    comps.extend(props(
+        "|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=R1|SOURCEHIERARCHICALPATH=\\FLASH2",
+    ));
+    let mut pads = Vec::new();
+    // Different nets, exactly overlapping. These are different channel
+    // instances and therefore a real short, not two custom pads owned by one
+    // physical component.
+    pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 1.0));
+    pads.extend(pad_record("1", 1, 1, 1, 0.0, 0.0, 1.0));
+
+    let bytes = build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+    ]);
+    let report = ExtractedBoard::altium_drc(&bytes).expect("DRC runs");
+    assert_eq!(
+        report.short_count(),
+        1,
+        "R1@FLASH1 and R1@FLASH2 must not share a same-owner exemption"
+    );
+}
+
+#[test]
+fn missing_designators_stay_distinct_with_stable_placeholders() {
+    let mut comps = Vec::new();
+    comps.extend(props("|LAYER=TOP|PATTERN=MOUNTINGHOLE"));
+    comps.extend(props("|LAYER=TOP|PATTERN=MOUNTINGHOLE"));
+    let mut pads = Vec::new();
+    pads.extend(pad_record("1", 1, 0, 0, 0.0, 0.0, 1.0));
+    pads.extend(pad_record("1", 1, 1, 1, 5.0, 0.0, 1.0));
+
+    let bytes = build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+    ]);
+    let board = ExtractedBoard::from_altium_pcb(&bytes).expect("extract");
+
+    assert_eq!(board.components.len(), 2);
+    assert!(board.component("UNK0").is_some());
+    assert!(board.component("UNK1").is_some());
+    assert!(board
+        .components
+        .iter()
+        .all(|component| !component.reference.is_empty()));
+}
+
+#[test]
 fn auto_detects_altium_binary() {
     let bytes = two_resistor_board();
     // OLE2 magic present.

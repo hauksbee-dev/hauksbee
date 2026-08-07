@@ -41,6 +41,8 @@ use crate::stress::FaultEvent;
 
 /// Decompile a parsed-or-raw `.kicad_pcb` text into editable Board-as-Code.
 pub fn decompile_board_to_code(kicad_pcb_text: &str) -> anyhow::Result<String> {
+    let extracted = ExtractedBoard::from_kicad_pcb(kicad_pcb_text)?;
+    ensure_boardcode_serializable(&extracted)?;
     let pcb = Pcb::parse(kicad_pcb_text).map_err(|e| anyhow::anyhow!("parsing board: {e:?}"))?;
     Ok(to_code(&pcb))
 }
@@ -68,7 +70,7 @@ pub fn decompile_any_to_code(board_text: &str) -> anyhow::Result<String> {
     }
     // Netlist / IPC / Eagle / schematic: extract, then emit flat code.
     let board = ExtractedBoard::from_auto(board_text)?;
-    Ok(program_from_extracted(&board).emit())
+    Ok(program_from_extracted(&board)?.emit())
 }
 
 /// Build an editable Board-as-Code [`Program`] directly from an
@@ -80,7 +82,8 @@ pub fn decompile_any_to_code(board_text: &str) -> anyhow::Result<String> {
 /// program is flat and every pad-net is explicit and editable. Pad geometry the
 /// extractor does not carry is filled with sane SMD defaults (connectivity, not
 /// geometry, is what matters for the simulate loop).
-pub fn program_from_extracted(board: &ExtractedBoard) -> Program {
+pub fn program_from_extracted(board: &ExtractedBoard) -> anyhow::Result<Program> {
+    ensure_boardcode_serializable(board)?;
     let mut id_to_name = std::collections::HashMap::new();
     for n in &board.nets {
         id_to_name.insert(n.id, n.name.clone());
@@ -144,12 +147,31 @@ pub fn program_from_extracted(board: &ExtractedBoard) -> Program {
         }));
     }
 
-    Program {
+    Ok(Program {
         version: 20241229,
         blocks: Vec::new(),
         body,
         outline: None,
+    })
+}
+
+fn ensure_boardcode_serializable(board: &ExtractedBoard) -> anyhow::Result<()> {
+    for c in &board.components {
+        if c.dnp {
+            anyhow::bail!(
+                "cannot convert {} to Board-as-Code: its DNP state is not representable and recompilation would fit the part",
+                c.reference
+            );
+        }
+        if let Some(refusal) = crate::component_evidence::identity_refusal(c) {
+            anyhow::bail!(
+                "cannot convert {} to Board-as-Code without losing ambiguous identity evidence: {}",
+                c.reference,
+                refusal.reason()
+            );
+        }
     }
+    Ok(())
 }
 
 /// Recompile Board-as-Code text into a `.kicad_pcb` string.
@@ -253,6 +275,88 @@ impl Default for CheckOptions {
             destructive: false,
             ambient_c: crate::thermal::DEFAULT_AMBIENT_C,
         }
+    }
+}
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+    use hauksbee_extract::Component;
+
+    #[test]
+    fn boardcode_refuses_identity_evidence_it_cannot_serialize() {
+        let board = ExtractedBoard {
+            name: "ambiguous".to_string(),
+            nets: Vec::new(),
+            components: vec![Component {
+                reference: "R1".to_string(),
+                value: "1k".to_string(),
+                lib_id: "Device:R".to_string(),
+                footprint: "R_0603".to_string(),
+                position: None,
+                layer: "F.Cu".to_string(),
+                properties: vec![(
+                    hauksbee_extract::altium::REFERENCE_AMBIGUOUS_KEY.to_string(),
+                    "inferred reference without source UID".to_string(),
+                )],
+                dnp: false,
+                pins: Vec::new(),
+            }],
+        };
+
+        let error = program_from_extracted(&board)
+            .expect_err("the current DSL has no field that can preserve identity refusal")
+            .to_string();
+        assert!(
+            error.contains("R1"),
+            "the refusal must name the component: {error}"
+        );
+        assert!(
+            error.contains("ambiguous"),
+            "the refusal must explain the lost evidence: {error}"
+        );
+    }
+
+    #[test]
+    fn boardcode_refuses_dnp_state_it_cannot_serialize() {
+        let board = ExtractedBoard {
+            name: "variant".to_string(),
+            nets: Vec::new(),
+            components: vec![Component {
+                reference: "R2".to_string(),
+                value: "0R".to_string(),
+                lib_id: "Device:R".to_string(),
+                footprint: "R_0603".to_string(),
+                position: None,
+                layer: "F.Cu".to_string(),
+                properties: Vec::new(),
+                dnp: true,
+                pins: Vec::new(),
+            }],
+        };
+
+        let error = program_from_extracted(&board)
+            .expect_err("DNP would be recompiled as a fitted zero-ohm link")
+            .to_string();
+        assert!(error.contains("R2") && error.contains("DNP"), "{error}");
+    }
+
+    #[test]
+    fn native_kicad_decompile_cannot_bypass_the_dnp_refusal() {
+        let source = r#"(kicad_pcb (version 20240108)
+  (net 0 "")
+  (net 1 "N1")
+  (footprint "R_0603" (layer "F.Cu")
+    (attr smd exclude_from_bom dnp)
+    (property "Reference" "R3")
+    (property "Value" "0R")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "N1"))
+  )
+)"#;
+        let error = decompile_board_to_code(source)
+            .expect_err("the geometry-rich path must not turn a DNP link into fitted code")
+            .to_string();
+        assert!(error.contains("R3") && error.contains("DNP"), "{error}");
     }
 }
 

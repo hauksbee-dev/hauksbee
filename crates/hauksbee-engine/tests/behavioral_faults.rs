@@ -47,16 +47,63 @@ fn require_corpus(what: &str) {
 
 /// Load a board, keep only the named components, bind it.
 fn focused(path: &PathBuf, keep: &[&str]) -> Option<hauksbee_engine::BoundBoard> {
+    focused_with_required(path, keep, &[])
+}
+
+/// Load a focused board while requiring named evidence to exist before
+/// filtering. Some other fixtures deliberately keep optional, absent parts to
+/// model an open circuit, so strictness is explicit at the claim site.
+fn focused_with_required(
+    path: &PathBuf,
+    keep: &[&str],
+    required: &[&str],
+) -> Option<hauksbee_engine::BoundBoard> {
     if !path.exists() {
         require_corpus(&path.display().to_string());
         return None;
     }
     let text = std::fs::read_to_string(path).expect("read board");
     let mut board = ExtractedBoard::from_auto(&text).expect("parse board");
+    for reference in required {
+        assert!(
+            board
+                .components
+                .iter()
+                .any(|component| component.reference == *reference),
+            "board '{}' is present but required focused component '{reference}' is missing",
+            path.display()
+        );
+    }
     board
         .components
         .retain(|c| keep.contains(&c.reference.as_str()));
     Some(bind_board(&board, &ModelLibrary::builtin()))
+}
+
+#[test]
+#[should_panic(expected = "required focused component 'R50'")]
+fn focused_refuses_a_missing_required_keep_reference() {
+    const PRESENT_REFERENCE: &str = "U2";
+    const MISSING_REQUIRED_REFERENCE: &str = "R50";
+    const SYNTHETIC_BOARD: &str = r#"(kicad_pcb (version 20240108)
+  (net 0 "")
+  (net 1 "PVIN")
+  (footprint "Package_DFN_QFN:QFN-38" (layer "F.Cu") (at 0 0)
+    (attr smd)
+    (property "Reference" "U2")
+    (property "Value" "LTC4020EUHFPBF")
+    (pad "36" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1 "PVIN")))
+)"#;
+
+    let directory = tempfile::tempdir().expect("create focused-harness fixture directory");
+    let path = directory.path().join("focused.kicad_pcb");
+    std::fs::write(&path, SYNTHETIC_BOARD).expect("write focused-harness fixture");
+
+    let _ = focused_with_required(
+        &path,
+        &[PRESENT_REFERENCE, MISSING_REQUIRED_REFERENCE],
+        &[PRESENT_REFERENCE, MISSING_REQUIRED_REFERENCE],
+    );
 }
 
 /// The net a given component pin sits on, by reference + pad number.
@@ -106,14 +153,22 @@ fn net_members(path: &PathBuf, refdes: &str, pad: &str) -> Vec<String> {
 //
 // Handbook: "Fixed/limited LTC4020 charge current overdraw (resistor R8 replaced
 // with 7.15k)." R8 programs the input-current limit against the input shunt R49.
-// mb2.5 (R8=100k) lets the charger pull ~88 W from a ~19 V / 60 W brick; mb3.0
-// (R8=7.15k) holds it at ~60 W. Both values are read off the real boards.
+// Maintainer evidence reports 75--88 W from a ~19 V / 60 W brick on mb2.5.
+// The model is not calibrated to that observation: it applies the datasheet
+// transfer to R8 and R49 read from each real board. With the corpus values that
+// means a 5 A nominal input-current limit on mb2.5 and 1.7875 A on mb3.0.
 // ───────────────────────────────────────────────────────────────────────────
+
+const LTC4020_INPUT_POWER_COMPONENTS: &[&str] = &["U2", "R8", "R49", "R50"];
 
 /// Run the LTC4020 focused subcircuit with a 19 V brick on VIN and a heavy
 /// system load on the charge output, returning the converter's input power (W).
 fn ltc4020_input_power(path: &PathBuf) -> Option<f64> {
-    let mut bound = focused(path, &["U2", "R8", "R49", "R50"])?;
+    let mut bound = focused_with_required(
+        path,
+        LTC4020_INPUT_POWER_COMPONENTS,
+        LTC4020_INPUT_POWER_COMPONENTS,
+    )?;
     let vin_name = pin_net_name(path, "U2", "36")?; // PVIN
     let bat_name = pin_net_name(path, "U2", "20")?; // BAT
     let vin = *bound.net_nodes.get(&vin_name)?;
@@ -151,28 +206,31 @@ fn ltc4020_overdraws_on_mb25_and_is_clean_on_mb30() {
     };
     let mb25 = root.join("mnt_reform/reform2-motherboard25-pcb/reform2-motherboard25.kicad_pcb");
     let mb30 = root.join("mnt_reform/reform2-motherboard30-pcb/reform2-motherboard30.kicad_pcb");
+    if !mb25.exists() || !mb30.exists() {
+        require_corpus("reform mb2.5/mb3.0 LTC4020 power pair");
+        return;
+    }
 
-    let Some(p25) = ltc4020_input_power(&mb25) else {
-        return;
-    };
-    let Some(p30) = ltc4020_input_power(&mb30) else {
-        return;
-    };
+    let p25 = ltc4020_input_power(&mb25)
+        .expect("present mb2.5 board must produce an LTC4020 input-power result");
+    let p30 = ltc4020_input_power(&mb30)
+        .expect("present mb3.0 board must produce an LTC4020 input-power result");
     eprintln!("LTC4020 input power: mb2.5 = {p25:.1} W (R8=100k), mb3.0 = {p30:.1} W (R8=7.15k)");
 
-    // mb2.5 (faulty): over the 60 W brick budget, in the documented 88 W class.
+    // These windows pin the datasheet-derived transfer through the nonlinear
+    // solve, not an exact bench replay. The external 75--88 W observation is
+    // evidence for the fault; the 95.4/34.1 W predictions are model outputs.
     assert!(
-        p25 > 75.0 && p25 < 100.0,
-        "mb2.5 should over-draw the 60 W brick (75..100 W class), got {p25:.1} W"
+        p25 > 94.0 && p25 < 97.0,
+        "mb2.5 should reach the datasheet-derived ~95 W nominal prediction, got {p25:.1} W"
     );
-    // mb3.0 (fixed): held within the 60 W brick (a small margin for the solve).
     assert!(
-        p30 <= 62.0,
-        "mb3.0's R8=7.15k fix should hold the charger inside the 60 W brick, got {p30:.1} W"
+        p30 > 33.0 && p30 < 35.0,
+        "mb3.0's R8=7.15k fix should produce the datasheet-derived ~34 W nominal prediction, got {p30:.1} W"
     );
     // And the fix must be a real reduction, not a wash.
     assert!(
-        p25 - p30 > 20.0,
+        p25 - p30 > 60.0,
         "the R8 fix must materially cut the input draw, got {p25:.1} -> {p30:.1} W"
     );
 }

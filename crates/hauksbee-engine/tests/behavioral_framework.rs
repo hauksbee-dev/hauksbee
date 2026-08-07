@@ -15,11 +15,11 @@
 
 use std::collections::BTreeMap;
 
-use hauksbee_engine::behavioral::BehavioralDevice;
+use hauksbee_engine::behavioral::{program_iin_limit, BehavioralDevice};
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_ir::{Circuit, Device, DeviceId, NodeId, SourceKind};
 use hauksbee_models::behavioral::Behavioral;
-use hauksbee_models::Params;
+use hauksbee_models::{ComponentQuery, ModelLibrary, Params};
 use hauksbee_solve::{Layout, SolverOptions, StepControl, Transient};
 
 /// A minimal iterate-to-consistency driver over one behavioural device.
@@ -511,6 +511,129 @@ v_sense_full = 0.05
     h
 }
 
+fn converter_limit_from_toml(iin_program_toml: &str, resistors: &[(&str, f64)]) -> Option<f64> {
+    let src = format!(
+        r#"
+[converter]
+topology = "buck_boost"
+out_pin = "bat"
+in_pin = "pvin"
+vout_setpoint = 14.4
+
+[converter.iin_program]
+{iin_program_toml}
+"#
+    );
+    let model: Behavioral = toml::from_str(&src).expect("valid converter fixture");
+    let mut circuit = Circuit::new();
+    let mut roles = BTreeMap::new();
+    roles.insert("pvin".to_string(), circuit.node("PVIN"));
+    roles.insert("bat".to_string(), circuit.node("BAT"));
+    let board_resistor = |reference: &str| {
+        resistors
+            .iter()
+            .find_map(|(candidate, ohms)| (*candidate == reference).then_some(*ohms))
+    };
+    BehavioralDevice::stamp(
+        &mut circuit,
+        "U2",
+        &model,
+        &Params::default(),
+        &roles,
+        &board_resistor,
+    )
+    .and_then(|device| device.converter_iin_limit())
+}
+
+#[test]
+fn referenced_program_resistor_never_falls_back_to_a_literal() {
+    let program = r#"
+rsense_ohms = 0.01
+prog_ref = "R8"
+prog_ohms = 100000.0
+vprog_ref = 0.05
+prog_ref_ohms = 100000.0
+v_sense_full = 0.05
+"#;
+    assert_eq!(
+        converter_limit_from_toml(program, &[]),
+        None,
+        "a missing or identity-refused named resistor is unknown, not the literal fallback"
+    );
+}
+
+#[test]
+fn every_named_sense_shunt_must_resolve_and_agree() {
+    let program = r#"
+rsense_refs = ["R49", "R50"]
+prog_ref = "R8"
+vprog_ref = 0.05
+prog_ref_ohms = 100000.0
+v_sense_full = 0.05
+"#;
+
+    assert_eq!(
+        converter_limit_from_toml(program, &[("R49", 0.02), ("R8", 100000.0)]),
+        None,
+        "one missing Kelvin shunt makes the programmed limit unknown"
+    );
+    assert_eq!(
+        converter_limit_from_toml(program, &[("R49", 0.02), ("R50", 0.01), ("R8", 100000.0)]),
+        None,
+        "unequal paired shunts contradict the model and must not be averaged or selected"
+    );
+    let limit =
+        converter_limit_from_toml(program, &[("R49", 0.02), ("R50", 0.02), ("R8", 100000.0)])
+            .expect("equal, resolved shunts define the limit");
+    assert!(
+        (limit - 2.5).abs() < 1e-12,
+        "50 mV across two matching 20 mOhm shunts must give 2.5 A, got {limit}"
+    );
+}
+
+#[test]
+fn literal_only_sense_program_remains_supported() {
+    let program = r#"
+rsense_ohms = 0.02
+prog_ohms = 50000.0
+vprog_ref = 0.05
+prog_ref_ohms = 100000.0
+v_sense_full = 0.05
+"#;
+    let limit = converter_limit_from_toml(program, &[]).expect("literal program is complete");
+    assert!((limit - 1.25).abs() < 1e-12, "got {limit}");
+}
+
+#[test]
+fn builtin_ltc4020_limit_uses_both_shunts_and_datasheet_endpoints() {
+    let model = ModelLibrary::builtin()
+        .resolve(&ComponentQuery {
+            value: Some("LTC4020EUHFPBF".to_string()),
+            ..Default::default()
+        })
+        .model
+        .expect("builtin LTC4020 model");
+    let program = model
+        .behavioral
+        .converter
+        .as_ref()
+        .and_then(|converter| converter.iin_program.as_ref())
+        .expect("LTC4020 input-current program");
+
+    for (program_ohms, expected_a) in [(7_150.0, 1.7875), (20_000.0, 5.0), (100_000.0, 5.0)] {
+        let resistor = |reference: &str| match reference {
+            "R49" | "R50" => Some(0.01),
+            "R8" => Some(program_ohms),
+            _ => None,
+        };
+        let actual = program_iin_limit(program, &resistor).expect("complete matched shunts");
+        assert!(
+            (actual - expected_a).abs() < 1e-12,
+            "R8={program_ohms} ohm must give {expected_a} A, got {actual} A"
+        );
+    }
+}
+
 #[test]
 fn converter_regulates_output_under_light_load() {
     // A light load (high resistance): the converter holds 14.4 V, input draw is
@@ -687,6 +810,31 @@ fn program_resistor_changes_the_limit_with_no_model_edit() {
     );
 }
 
+#[test]
+fn losing_program_evidence_after_recompute_disables_the_converter() {
+    const PROGRAM_RESISTANCE_OHMS: f64 = 200_000.0;
+    const LOAD_RESISTANCE_OHMS: f64 = 2.0;
+    const UPDATE_CHUNKS: usize = 1;
+    const STEP_SECONDS: f64 = 5e-4;
+
+    let mut harness = converter_harness(PROGRAM_RESISTANCE_OHMS, LOAD_RESISTANCE_OHMS);
+    assert!(
+        harness
+            .dev
+            .converter_iin()
+            .is_some_and(|current| current > 0.0),
+        "the complete program evidence must initially run the converter"
+    );
+
+    assert_eq!(harness.dev.recompute_iin_limit(&|_| None), None);
+    harness.run(UPDATE_CHUNKS, STEP_SECONDS);
+    assert_eq!(
+        harness.dev.converter_iin(),
+        Some(0.0),
+        "losing a named programming part must disable input draw, not create an unlimited converter"
+    );
+}
+
 // ── 5. Escape-hatch custom-behaviour trait ──────────────────────────────────
 
 use hauksbee_engine::{bind_board_with, CustomBehavior, CustomRegistry};
@@ -785,4 +933,15 @@ fn custom_behavior_escape_hatch_binds_and_runs() {
         "the custom CRAZYPART should bind"
     );
     assert_eq!(bound.behavioral[0].state(), "runaway");
+
+    let mut ambiguous_board = board.clone();
+    ambiguous_board.components[0].properties.push((
+        hauksbee_extract::altium::REFERENCE_AMBIGUOUS_KEY.to_string(),
+        "inferred reference without source UID".to_string(),
+    ));
+    let ambiguous = bind_board_with(&ambiguous_board, &lib, &reg);
+    assert!(
+        ambiguous.behavioral.is_empty(),
+        "the custom registry must not bypass the shared physical-identity refusal gate"
+    );
 }

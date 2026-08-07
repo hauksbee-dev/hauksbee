@@ -19,8 +19,9 @@
 //! an ASCII-Protel board gets connectivity checks but no clearance DRC.
 
 use crate::altium::{
-    is_copper_layer, layer_id_from_name, parse_len_mm, side_from_layer_name,
-    value_from_description, VALUE_UNRESOLVED_KEY, VALUE_UNRESOLVED_REASON,
+    canonical_component_identities, is_copper_layer, layer_id_from_name, parse_len_mm,
+    side_from_layer_name, value_from_description, ComponentIdentityInput, VALUE_UNRESOLVED_KEY,
+    VALUE_UNRESOLVED_REASON,
 };
 use crate::{Component, ExtractError, ExtractedBoard, Net, Pin};
 use std::collections::HashMap;
@@ -79,6 +80,8 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
         pattern: String,
         library: String,
         description: String,
+        source_hierarchical_path: String,
+        source_unique_id: String,
         layer_name: String,
         x_mm: f64,
         y_mm: f64,
@@ -117,6 +120,15 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
                     pattern: m.get("PATTERN").cloned().unwrap_or_default(),
                     library: m.get("SOURCEFOOTPRINTLIBRARY").cloned().unwrap_or_default(),
                     description: m.get("SOURCEDESCRIPTION").cloned().unwrap_or_default(),
+                    source_hierarchical_path: m
+                        .get("SOURCEHIERARCHICALPATH")
+                        .cloned()
+                        .unwrap_or_default(),
+                    source_unique_id: m
+                        .get("UNIQUEID")
+                        .or_else(|| m.get("SOURCEUNIQUEID"))
+                        .cloned()
+                        .unwrap_or_default(),
                     layer_name: m.get("LAYER").cloned().unwrap_or_default(),
                     x_mm: m.get("X").and_then(|v| parse_len_mm(v)).unwrap_or(0.0),
                     y_mm: m.get("Y").and_then(|v| parse_len_mm(v)).unwrap_or(0.0),
@@ -192,39 +204,27 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
         }
     }
 
-    // Duplicate designators (or the empty designator on mechanical-only
-    // components) get a numeric suffix so every reference is unique.
-    let mut refdes_count: HashMap<String, usize> = HashMap::new();
-    for c in &comps {
-        *refdes_count.entry(c.refdes.clone()).or_default() += 1;
-    }
-    let mut used: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let identity_inputs: Vec<ComponentIdentityInput> = comps
+        .iter()
+        .map(|component| ComponentIdentityInput {
+            source_designator: component.refdes.clone(),
+            source_hierarchical_path: component.source_hierarchical_path.clone(),
+            source_unique_id: component.source_unique_id.clone(),
+            record_key: component.id.to_string(),
+            pins: pads_by_comp
+                .get(&component.id)
+                .into_iter()
+                .flat_map(|pads| pads.iter())
+                .map(|pad| (pad.name.clone(), pad.net))
+                .collect(),
+        })
+        .collect();
+    let identities = canonical_component_identities(&identity_inputs);
 
     let mut components: Vec<Component> = Vec::with_capacity(comps.len());
-    for c in &comps {
-        let base = if c.refdes.is_empty() || c.refdes.chars().all(|ch| ch.is_ascii_digit()) {
-            // Mirror the binary path's KiCad-compatible normalization of
-            // unusable designators.
-            format!(
-                "UNK{}",
-                if c.refdes.is_empty() {
-                    c.id.to_string()
-                } else {
-                    c.refdes.clone()
-                }
-            )
-        } else {
-            c.refdes.clone()
-        };
-        let mut reference = base.clone();
-        if refdes_count.get(&c.refdes).copied().unwrap_or(0) > 1 {
-            let mut n = 2;
-            while used.contains(&reference) {
-                reference = format!("{base}_{n}");
-                n += 1;
-            }
-        }
-        used.insert(reference.clone());
+    for (index, c) in comps.iter().enumerate() {
+        let identity = &identities[index];
+        let reference = identity.reference.clone();
 
         let pins: Vec<Pin> = pads_by_comp
             .get(&c.id)
@@ -244,6 +244,7 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
         // Value resolution matches the binary path: comment text, else the
         // SOURCEDESCRIPTION parse, else honestly unresolved with the reason.
         let mut properties: Vec<(String, String)> = Vec::new();
+        properties.extend(identity.properties.clone());
         let mut value = comments.get(&c.id).cloned().unwrap_or_default();
         if value.is_empty() && !c.description.is_empty() {
             let d = value_from_description(&c.description);
@@ -287,6 +288,8 @@ pub fn extract(text: &str) -> Result<ExtractedBoard, ExtractError> {
             "ASCII Protel file carries no net or component records".into(),
         ));
     }
+
+    let components = crate::merge_duplicate_references(components);
 
     Ok(ExtractedBoard {
         name: String::new(),
@@ -358,6 +361,121 @@ mod tests {
         let board = extract(&text).expect("extract");
         let r1 = board.component("R1").unwrap();
         assert_eq!(r1.value, "", "designator text must not be read as a value");
+    }
+
+    #[test]
+    fn duplicate_placements_merge_instead_of_inventing_part_references() {
+        let text = [
+            "|RECORD=Board|KIND=Protel_Advanced_PCB|VERSION=5.00",
+            "|RECORD=Net|ID=0|NAME=A",
+            "|RECORD=Net|ID=1|NAME=B",
+            "|RECORD=Component|ID=0|LAYER=TOP|PATTERN=TESTPOINT|SOURCEDESIGNATOR=TP1",
+            "|RECORD=Component|ID=1|LAYER=BOTTOM|PATTERN=TESTPOINT|SOURCEDESIGNATOR=TP1",
+            "|RECORD=Pad|COMPONENT=0|NET=0|LAYER=TOP|NAME=1|X=0mil|Y=0mil",
+            "|RECORD=Pad|COMPONENT=1|NET=0|LAYER=MULTILAYER|NAME=1|X=0mil|Y=0mil",
+            "|RECORD=Pad|COMPONENT=1|NET=1|LAYER=MULTILAYER|NAME=2|X=100mil|Y=0mil",
+        ]
+        .join("\n");
+
+        let board = extract(&text).expect("extract");
+        assert_eq!(board.components.len(), 1);
+        let tp1 = board.component("TP1").expect("unsuffixed TP1");
+        assert_eq!(tp1.pins.len(), 3, "physical pad records are preserved");
+        assert_eq!(
+            tp1.pins
+                .iter()
+                .map(|pin| pin.number.as_str())
+                .collect::<std::collections::BTreeSet<_>>(),
+            std::collections::BTreeSet::from(["1", "2"]),
+            "electrically there are two unique pin numbers"
+        );
+        assert!(tp1
+            .properties
+            .iter()
+            .any(|(key, _)| key == "reference_ambiguous"));
+        assert!(board.component("TP1_2").is_none());
+    }
+
+    #[test]
+    fn ascii_hierarchical_channels_use_the_shared_full_path_identity() {
+        let text = [
+            "|RECORD=Board|KIND=Protel_Advanced_PCB|VERSION=5.00",
+            "|RECORD=Net|ID=0|NAME=A",
+            "|RECORD=Net|ID=1|NAME=B",
+            "|RECORD=Component|ID=7|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=R1|SOURCEHIERARCHICALPATH=\\A\\BANK",
+            "|RECORD=Component|ID=8|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=R1|SOURCEHIERARCHICALPATH=\\B\\BANK",
+            "|RECORD=Pad|COMPONENT=7|NET=0|LAYER=TOP|NAME=1|X=0mil|Y=0mil",
+            "|RECORD=Pad|COMPONENT=8|NET=1|LAYER=TOP|NAME=1|X=100mil|Y=0mil",
+        ]
+        .join("\n");
+
+        let board = extract(&text).expect("extract");
+        assert_eq!(board.components.len(), 2);
+        assert!(board.component("R1@A/BANK").is_some());
+        assert!(board.component("R1@B/BANK").is_some());
+    }
+
+    #[test]
+    fn numeric_designators_get_per_record_identities_without_hitting_real_unk_names() {
+        let text = [
+            "|RECORD=Board|KIND=Protel_Advanced_PCB|VERSION=5.00",
+            "|RECORD=Net|ID=0|NAME=A",
+            "|RECORD=Component|ID=7|LAYER=TOP|PATTERN=PAD|SOURCEDESIGNATOR=123",
+            "|RECORD=Component|ID=8|LAYER=TOP|PATTERN=PAD|SOURCEDESIGNATOR=123",
+            "|RECORD=Component|ID=9|LAYER=TOP|PATTERN=PAD|SOURCEDESIGNATOR=UNK123",
+            "|RECORD=Pad|COMPONENT=7|NET=0|LAYER=TOP|NAME=1|X=0mil|Y=0mil",
+            "|RECORD=Pad|COMPONENT=8|NET=0|LAYER=TOP|NAME=2|X=100mil|Y=0mil",
+            "|RECORD=Pad|COMPONENT=9|NET=0|LAYER=TOP|NAME=3|X=200mil|Y=0mil",
+        ]
+        .join("\n");
+
+        let board = extract(&text).expect("extract");
+        assert_eq!(board.components.len(), 3);
+        assert!(
+            board.component("UNK123").is_some(),
+            "genuine name preserved"
+        );
+        let synthetic: Vec<_> = board
+            .components
+            .iter()
+            .filter(|component| {
+                component
+                    .properties
+                    .iter()
+                    .any(|(key, _)| key == "reference_unresolved")
+            })
+            .collect();
+        assert_eq!(synthetic.len(), 2);
+        assert_ne!(synthetic[0].reference, synthetic[1].reference);
+        assert!(synthetic
+            .iter()
+            .all(|component| component.reference != "UNK123"));
+    }
+
+    #[test]
+    fn a_later_split_placement_value_clears_the_unresolved_marker() {
+        let text = [
+            "|RECORD=Board|KIND=Protel_Advanced_PCB|VERSION=5.00",
+            "|RECORD=Net|ID=0|NAME=A",
+            "|RECORD=Component|ID=0|LAYER=TOP|PATTERN=R0603|SOURCEDESIGNATOR=R1",
+            "|RECORD=Component|ID=1|LAYER=BOTTOM|PATTERN=R0603|SOURCEDESIGNATOR=R1",
+            "|RECORD=Pad|COMPONENT=0|NET=0|LAYER=TOP|NAME=1|X=0mil|Y=0mil",
+            "|RECORD=Pad|COMPONENT=1|NET=0|LAYER=MULTILAYER|NAME=1|X=0mil|Y=0mil",
+            "|RECORD=Pad|COMPONENT=1|NET=0|LAYER=MULTILAYER|NAME=2|X=100mil|Y=0mil",
+            "|RECORD=Text|COMPONENT=1|COMMENT=True|TEXT=10k",
+        ]
+        .join("\n");
+
+        let board = extract(&text).expect("extract");
+        let r1 = board.component("R1").expect("merged R1");
+        assert_eq!(r1.value, "10k");
+        assert!(
+            !r1.properties
+                .iter()
+                .any(|(key, _)| key == VALUE_UNRESOLVED_KEY),
+            "a recovered value and an unresolved marker cannot both be true: {:?}",
+            r1.properties
+        );
     }
 
     #[test]

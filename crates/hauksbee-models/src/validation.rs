@@ -4,7 +4,9 @@
 //! hallucinated part value cannot silently enter the model library. [`validate`]
 //! collects every violation at once rather than stopping at the first.
 
-use crate::schema::{ComponentKind, ModelEntry};
+use crate::schema::{
+    AboveDomainBehavior, ComponentKind, CurrentProgramEquation, CurrentProgramSemantics, ModelEntry,
+};
 use thiserror::Error;
 
 /// A validation error.
@@ -218,6 +220,246 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
         }
     }
 
+    // Board-programmed current is solver-facing physics just like `params`:
+    // malformed constants can silently turn a real rail current into zero/NaN,
+    // while confusing a normal-operating ceiling with a device-level safety
+    // threshold makes the part promise operation in a region the datasheet does
+    // not specify as normal.
+    if let Some(program) = &entry.current_program {
+        let role_exists = !program.pin.trim().is_empty()
+            && entry
+                .pins
+                .values()
+                .any(|role| role.eq_ignore_ascii_case(program.pin.trim()));
+        if !role_exists {
+            errors.push(ValidationError {
+                id: entry.id.clone(),
+                message: format!(
+                    "current_program.pin '{}' is not a role in [models.pins]",
+                    program.pin
+                ),
+            });
+        }
+
+        for (field, roles) in [
+            ("current_in_roles", &program.current_in_roles),
+            ("current_out_roles", &program.current_out_roles),
+        ] {
+            if program.semantics == CurrentProgramSemantics::RegulatedCurrent && roles.is_empty() {
+                errors.push(ValidationError {
+                    id: entry.id.clone(),
+                    message: format!(
+                        "current_program regulated_current requires non-empty {field}"
+                    ),
+                });
+            }
+            let mut seen = std::collections::HashSet::new();
+            for role in roles {
+                let normalized = role.trim().to_ascii_lowercase();
+                if normalized.is_empty()
+                    || !entry
+                        .pins
+                        .values()
+                        .any(|known| known.eq_ignore_ascii_case(role.trim()))
+                {
+                    errors.push(ValidationError {
+                        id: entry.id.clone(),
+                        message: format!(
+                            "current_program.{field} entry '{role}' is not a role in [models.pins]"
+                        ),
+                    });
+                } else if !seen.insert(normalized) {
+                    errors.push(ValidationError {
+                        id: entry.id.clone(),
+                        message: format!("current_program.{field} repeats role '{role}'"),
+                    });
+                }
+            }
+        }
+        for input in &program.current_in_roles {
+            if program
+                .current_out_roles
+                .iter()
+                .any(|output| output.eq_ignore_ascii_case(input))
+            {
+                errors.push(ValidationError {
+                    id: entry.id.clone(),
+                    message: format!(
+                        "current_program role '{input}' appears in both current_in_roles and current_out_roles"
+                    ),
+                });
+            }
+        }
+
+        if program.semantics == CurrentProgramSemantics::RegulatedCurrent
+            && program.max_operating_current_a.is_none()
+        {
+            errors.push(ValidationError {
+                id: entry.id.clone(),
+                message: "current_program regulated_current requires max_operating_current_a so an undersized programming resistor cannot imply operation beyond the sourced domain".into(),
+            });
+        }
+        if program.above_domain == AboveDomainBehavior::Saturate
+            && program.max_operating_current_a.is_none()
+        {
+            errors.push(ValidationError {
+                id: entry.id.clone(),
+                message: "current_program above_domain = saturate requires max_operating_current_a as the sourced saturation value"
+                    .into(),
+            });
+        }
+
+        if let Some(limit) = program.max_operating_current_a {
+            if !limit.is_finite() || limit <= 0.0 {
+                errors.push(ValidationError {
+                    id: entry.id.clone(),
+                    message: format!(
+                        "current_program.max_operating_current_a = {limit} must be a positive finite number"
+                    ),
+                });
+            }
+            // The programmed quantity is the part's rail/load current. A
+            // generic per-pin source/sink limit applies to the PROG/control pin
+            // itself and is not a bound on that independently controlled rail.
+            if let Some(device_limit) = entry
+                .ratings
+                .max_current_a
+                .filter(|value| value.is_finite() && *value > 0.0)
+            {
+                if limit.is_finite() && limit > device_limit {
+                    errors.push(ValidationError {
+                        id: entry.id.clone(),
+                        message: format!(
+                            "current_program.max_operating_current_a = {limit} A exceeds ratings.max_current_a = {device_limit} A"
+                        ),
+                    });
+                }
+            }
+        }
+
+        let mut check_positive = |name: &str, value: f64| {
+            if !value.is_finite() || value <= 0.0 {
+                errors.push(ValidationError {
+                    id: entry.id.clone(),
+                    message: format!(
+                        "current_program.{name} = {value} must be a positive finite number"
+                    ),
+                });
+                false
+            } else {
+                true
+            }
+        };
+
+        match &program.equation {
+            CurrentProgramEquation::InverseResistance { k_volts } => {
+                check_positive("k_volts", *k_volts);
+            }
+            CurrentProgramEquation::PiecewiseInverseResistance {
+                low_k_volts,
+                transition_current_a,
+                high_numerator_a,
+                resistance_scale_ohms,
+                high_offset,
+            } => {
+                let constants_valid = [
+                    ("low_k_volts", *low_k_volts),
+                    ("transition_current_a", *transition_current_a),
+                    ("high_numerator_a", *high_numerator_a),
+                    ("resistance_scale_ohms", *resistance_scale_ohms),
+                    ("high_offset", *high_offset),
+                ]
+                .into_iter()
+                .all(|(name, value)| check_positive(name, value));
+
+                if constants_valid {
+                    let transition_resistance_ohms = *low_k_volts / *transition_current_a;
+                    let high_at_transition = *high_numerator_a
+                        / (transition_resistance_ohms / *resistance_scale_ohms + *high_offset);
+                    let relative_gap =
+                        (high_at_transition - *transition_current_a).abs() / *transition_current_a;
+                    if relative_gap > 0.01 {
+                        errors.push(ValidationError {
+                            id: entry.id.clone(),
+                            message: format!(
+                                "current_program piecewise branches are not continuous at {transition_current_a} A (high branch gives {high_at_transition} A)"
+                            ),
+                        });
+                    }
+                }
+            }
+            CurrentProgramEquation::SenseScaledResistance {
+                sense_roles,
+                sense_far_roles,
+                program_bias_a,
+                program_full_scale_v,
+                sense_full_scale_v,
+            } => {
+                for (name, value) in [
+                    ("program_bias_a", *program_bias_a),
+                    ("program_full_scale_v", *program_full_scale_v),
+                    ("sense_full_scale_v", *sense_full_scale_v),
+                ] {
+                    check_positive(name, value);
+                }
+                if sense_roles.is_empty() {
+                    errors.push(ValidationError {
+                        id: entry.id.clone(),
+                        message: "current_program.sense_roles must name at least one role"
+                            .to_string(),
+                    });
+                }
+                let mut normalized_roles = std::collections::HashSet::new();
+                for role in sense_roles {
+                    if role.trim().is_empty()
+                        || !entry
+                            .pins
+                            .values()
+                            .any(|known| known.eq_ignore_ascii_case(role.trim()))
+                    {
+                        errors.push(ValidationError {
+                            id: entry.id.clone(),
+                            message: format!(
+                                "current_program.sense_roles entry '{role}' is not a role in [models.pins]"
+                            ),
+                        });
+                    }
+                    if !normalized_roles.insert(role.trim().to_ascii_lowercase()) {
+                        errors.push(ValidationError {
+                            id: entry.id.clone(),
+                            message: format!("current_program.sense_roles repeats role '{role}'"),
+                        });
+                    }
+                }
+                if sense_far_roles.len() != sense_roles.len() {
+                    errors.push(ValidationError {
+                        id: entry.id.clone(),
+                        message: format!(
+                            "current_program.sense_far_roles has {} entries but sense_roles has {}",
+                            sense_far_roles.len(),
+                            sense_roles.len()
+                        ),
+                    });
+                }
+                for role in sense_far_roles {
+                    if !role.eq_ignore_ascii_case("ground")
+                        && !entry
+                            .pins
+                            .values()
+                            .any(|known| known.eq_ignore_ascii_case(role.trim()))
+                    {
+                        errors.push(ValidationError {
+                            id: entry.id.clone(),
+                            message: format!(
+                                "current_program.sense_far_roles entry '{role}' is neither 'ground' nor a role in [models.pins]"
+                            ),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     if errors.is_empty() {
         Ok(())
     } else {
@@ -311,7 +553,9 @@ fn check_required_pins(entry: &ModelEntry, errors: &mut Vec<ValidationError>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{ComponentKind, ModelEntry, Params};
+    use crate::schema::{
+        AboveDomainBehavior, ComponentKind, CurrentProgramEquation, ModelEntry, Params,
+    };
     use std::collections::BTreeMap;
 
     fn make_diode(is: f64, n: f64, rs: f64) -> ModelEntry {
@@ -423,6 +667,284 @@ mod tests {
         entry.ratings.max_current_a = Some(1.0);
         entry.ratings.max_voltage_v = Some(75.0);
         assert!(validate(&entry).is_ok(), "valid ratings must pass");
+    }
+
+    fn programmed_vreg() -> ModelEntry {
+        toml::from_str(
+            r#"
+id = "programmed_vreg"
+kind = "vreg"
+description = "validation fixture"
+
+[params]
+vout = 4.2
+dropout_v = 0.3
+iq_a = 0.001
+
+[pins]
+"1" = "in"
+"2" = "gnd"
+"3" = "prog"
+"4" = "out"
+"5" = "sense_a"
+"6" = "sense_b"
+
+[ratings]
+max_current_a = 0.8
+
+[current_program]
+pin = "prog"
+semantics = "regulated_current"
+current_in_roles = ["in"]
+current_out_roles = ["out"]
+max_operating_current_a = 0.4
+equation = "piecewise_inverse_resistance"
+low_k_volts = 1000.0
+transition_current_a = 0.15
+high_numerator_a = 1.2
+resistance_scale_ohms = 1000.0
+high_offset = 1.3333333333333333
+"#,
+        )
+        .expect("valid current-program fixture")
+    }
+
+    #[test]
+    fn current_program_equations_and_operating_limits_are_validated() {
+        let valid = programmed_vreg();
+        assert!(
+            validate(&valid).is_ok(),
+            "the continuous TP4054-shaped fixture must validate: {:?}",
+            validate(&valid)
+        );
+
+        let mut deliberately_bounded_below_transition = programmed_vreg();
+        deliberately_bounded_below_transition
+            .current_program
+            .as_mut()
+            .unwrap()
+            .max_operating_current_a = Some(0.1);
+        assert!(
+            validate(&deliberately_bounded_below_transition).is_ok(),
+            "a deliberately narrower supported operating domain is physical even when it never reaches the equation's second branch"
+        );
+
+        let mut missing_pin = programmed_vreg();
+        missing_pin.current_program.as_mut().unwrap().pin = "not_a_pin".into();
+        assert!(
+            validate(&missing_pin)
+                .unwrap_err()
+                .iter()
+                .any(|e| e.message.contains("current_program.pin")),
+            "the programming role must exist in the model pin map"
+        );
+
+        let mut missing_flow = programmed_vreg();
+        missing_flow
+            .current_program
+            .as_mut()
+            .unwrap()
+            .current_out_roles
+            .clear();
+        assert!(
+            validate(&missing_flow)
+                .unwrap_err()
+                .iter()
+                .any(|e| e.message.contains("current_out_roles")),
+            "regulated current must declare both sides of its path"
+        );
+
+        let mut overlapping_flow = programmed_vreg();
+        overlapping_flow
+            .current_program
+            .as_mut()
+            .unwrap()
+            .current_out_roles = vec!["IN".into()];
+        assert!(
+            validate(&overlapping_flow).unwrap_err().iter().any(|e| e
+                .message
+                .contains("both current_in_roles and current_out_roles")),
+            "one role cannot be both source and sink"
+        );
+
+        let mut zero_limit = programmed_vreg();
+        zero_limit
+            .current_program
+            .as_mut()
+            .unwrap()
+            .max_operating_current_a = Some(0.0);
+        assert!(
+            validate(&zero_limit)
+                .unwrap_err()
+                .iter()
+                .any(|e| e.message.contains("max_operating_current_a")),
+            "a non-positive operating limit must be rejected"
+        );
+
+        let mut missing_regulated_limit = programmed_vreg();
+        missing_regulated_limit
+            .current_program
+            .as_mut()
+            .unwrap()
+            .max_operating_current_a = None;
+        assert!(
+            validate(&missing_regulated_limit)
+                .unwrap_err()
+                .iter()
+                .any(|e| e.message.contains("requires max_operating_current_a")),
+            "a regulated equation needs a sourced operating-domain ceiling"
+        );
+
+        let mut saturation_without_limit = programmed_vreg();
+        let program = saturation_without_limit.current_program.as_mut().unwrap();
+        program.max_operating_current_a = None;
+        program.above_domain = AboveDomainBehavior::Saturate;
+        assert!(
+            validate(&saturation_without_limit)
+                .unwrap_err()
+                .iter()
+                .any(|e| e.message.contains("above_domain = saturate")),
+            "saturation without a sourced saturation value is meaningless"
+        );
+
+        let mut above_absolute = programmed_vreg();
+        above_absolute
+            .current_program
+            .as_mut()
+            .unwrap()
+            .max_operating_current_a = Some(0.9);
+        assert!(
+            validate(&above_absolute)
+                .unwrap_err()
+                .iter()
+                .any(|e| e.message.contains("ratings.max_current_a")),
+            "normal operation cannot be declared above the device current threshold"
+        );
+
+        let mut independent_control_pin_limit = programmed_vreg();
+        independent_control_pin_limit.ratings.max_current_a = None;
+        independent_control_pin_limit.ratings.max_pin_current_a = Some(0.3);
+        assert!(
+            validate(&independent_control_pin_limit).is_ok(),
+            "a PROG/control-pin current limit does not constrain the programmed output current: {:?}",
+            validate(&independent_control_pin_limit)
+        );
+
+        let mut sense_scaled = programmed_vreg();
+        sense_scaled.current_program.as_mut().unwrap().equation =
+            CurrentProgramEquation::SenseScaledResistance {
+                sense_roles: vec!["sense_a".into(), "sense_b".into()],
+                sense_far_roles: vec!["in".into(), "ground".into()],
+                program_bias_a: 50e-6,
+                program_full_scale_v: 1.0,
+                sense_full_scale_v: 0.05,
+            };
+        assert!(
+            validate(&sense_scaled).is_ok(),
+            "a complete two-resistor sense law must validate: {:?}",
+            validate(&sense_scaled)
+        );
+
+        let mut missing_sense_role = sense_scaled.clone();
+        if let CurrentProgramEquation::SenseScaledResistance { sense_roles, .. } =
+            &mut missing_sense_role
+                .current_program
+                .as_mut()
+                .unwrap()
+                .equation
+        {
+            sense_roles[1] = "not_a_pin".into();
+        }
+        assert!(validate(&missing_sense_role)
+            .unwrap_err()
+            .iter()
+            .any(|error| error.message.contains("sense_roles")));
+
+        let mut duplicate_sense_role = sense_scaled.clone();
+        if let CurrentProgramEquation::SenseScaledResistance { sense_roles, .. } =
+            &mut duplicate_sense_role
+                .current_program
+                .as_mut()
+                .unwrap()
+                .equation
+        {
+            sense_roles[1] = "SENSE_A".into();
+        }
+        assert!(validate(&duplicate_sense_role)
+            .unwrap_err()
+            .iter()
+            .any(|error| error.message.contains("repeats role")));
+
+        let mut mismatched_far_roles = sense_scaled.clone();
+        if let CurrentProgramEquation::SenseScaledResistance {
+            sense_far_roles, ..
+        } = &mut mismatched_far_roles
+            .current_program
+            .as_mut()
+            .unwrap()
+            .equation
+        {
+            sense_far_roles.pop();
+        }
+        assert!(validate(&mismatched_far_roles)
+            .unwrap_err()
+            .iter()
+            .any(|error| error.message.contains("sense_far_roles")));
+
+        let mut invalid_far_role = sense_scaled.clone();
+        if let CurrentProgramEquation::SenseScaledResistance {
+            sense_far_roles, ..
+        } = &mut invalid_far_role.current_program.as_mut().unwrap().equation
+        {
+            sense_far_roles[0] = "not_a_pin".into();
+        }
+        assert!(validate(&invalid_far_role)
+            .unwrap_err()
+            .iter()
+            .any(|error| error.message.contains("not_a_pin")));
+
+        let mut invalid_sense_constant = sense_scaled;
+        if let CurrentProgramEquation::SenseScaledResistance { program_bias_a, .. } =
+            &mut invalid_sense_constant
+                .current_program
+                .as_mut()
+                .unwrap()
+                .equation
+        {
+            *program_bias_a = 0.0;
+        }
+        assert!(validate(&invalid_sense_constant)
+            .unwrap_err()
+            .iter()
+            .any(|error| error.message.contains("program_bias_a")));
+
+        let mut discontinuous = programmed_vreg();
+        discontinuous.current_program.as_mut().unwrap().equation =
+            CurrentProgramEquation::PiecewiseInverseResistance {
+                low_k_volts: 1000.0,
+                transition_current_a: 0.15,
+                high_numerator_a: 1.2,
+                resistance_scale_ohms: 1000.0,
+                high_offset: 3.0,
+            };
+        assert!(
+            validate(&discontinuous)
+                .unwrap_err()
+                .iter()
+                .any(|e| e.message.contains("continuous")),
+            "a branch discontinuity is almost certainly a copied equation error"
+        );
+
+        let mut nonfinite = programmed_vreg();
+        nonfinite.current_program.as_mut().unwrap().equation =
+            CurrentProgramEquation::InverseResistance { k_volts: f64::NAN };
+        assert!(
+            validate(&nonfinite)
+                .unwrap_err()
+                .iter()
+                .any(|e| e.message.contains("k_volts")),
+            "non-finite equation constants must be rejected"
+        );
     }
 
     #[test]
