@@ -664,6 +664,7 @@ pub fn reconstruct(
         net_copper,
         n_slots,
         refused_span_holes,
+        refused_plating_files: 0,
         n_castellations: 0,
         notes: Vec::new(),
     };
@@ -697,6 +698,10 @@ pub struct ReconStats {
     /// Plated hits recovered as slots (a routed stadium) rather than round
     /// holes. Counted inside `n_holes`, not on top of it.
     pub n_slots: usize,
+    /// Drill files dropped whole because nothing in the job said whether their
+    /// holes are plated. Their hits are absent from `n_holes` and stitch
+    /// nothing; each is named in `notes`.
+    pub refused_plating_files: usize,
     /// Plated hits whose copper layer span the files did not let us resolve.
     /// These stitch nothing and are named in `notes`. A non-zero value means
     /// the reconstruction is deliberately UNDER-connected on this job.
