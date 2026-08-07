@@ -47,7 +47,9 @@
 //!     `platform_repl` is inline source above rather than the plan's bare stock
 //!     path, because a Renode part must declare its own core clock and be held
 //!     to it: see [`check_clock_declarations`].
-//!   - `watchdog_limitation`, the per-part watchdog coverage statement.
+//!   - `watchdog_limitation`, the per-part watchdog coverage statement, and
+//!     `timing_limitation`, its per-part timing twin (the F103's deliberate
+//!     TIMx-at-72MHz divergence).
 //!   - `extra_setup` / `post_load_setup`; the FE310 bring-up footgun (PRCI
 //!     clock tags + `{cpu} PC vinit`) lives in `post_load_setup`, not code.
 //!   - `[soc.spi].extra_repl`; the STM32F103 SPI1-injection fragment.
@@ -399,6 +401,13 @@ mod renode_schema {
         /// says which part they measured.
         #[serde(default)]
         pub watchdog_limitation: Option<String>,
+        /// How this part's TIMING fidelity falls short, as a whole sentence
+        /// rendered verbatim on the report surfaces. Omitted means "a firmware
+        /// delay costs the virtual time it costs on silicon", which is a
+        /// measured claim (tests/clock_truth.rs), same discipline as the
+        /// watchdog field above.
+        #[serde(default)]
+        pub timing_limitation: Option<String>,
         #[serde(default)]
         pub extra_setup: Vec<String>,
         #[serde(default)]
@@ -647,6 +656,7 @@ mod renode_schema {
                 expected_e_machine,
                 mcu_label: self.mcu_label,
                 watchdog_limitation: self.watchdog_limitation,
+                timing_limitation: self.timing_limitation,
                 adc_channels,
             })
         }
