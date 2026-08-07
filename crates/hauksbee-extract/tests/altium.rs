@@ -426,3 +426,73 @@ fn drc_clean_when_nets_match() {
     let report = ExtractedBoard::altium_drc(&bytes).expect("drc runs");
     assert_eq!(report.short_count(), 0, "same-net crossing is not a short");
 }
+
+#[test]
+fn drc_reports_overlapping_different_net_pads_in_an_ordinary_component() {
+    let nets = two_net_stream();
+    let comps = props("|LAYER=TOP|X=0mil|Y=0mil|PATTERN=QFN|SOURCEDESIGNATOR=U1");
+    let mut pads = Vec::new();
+    pads.extend(pad_record("1", 1, 0, 0, 5.0, 5.0, 1.0));
+    pads.extend(pad_record("2", 1, 1, 0, 5.9, 5.0, 1.0));
+    let bytes = build_pcbdoc(&[("Nets6", nets), ("Components6", comps), ("Pads6", pads)]);
+
+    let report = ExtractedBoard::altium_drc(&bytes).expect("drc runs");
+    assert!(
+        report.shorts().any(|f| {
+            [f.net_a_name.as_str(), f.net_b_name.as_str()].contains(&"A")
+                && [f.net_a_name.as_str(), f.net_b_name.as_str()].contains(&"B")
+        }),
+        "ordinary same-owner pads must not be blanket-exempt: {:?}",
+        report.findings
+    );
+}
+
+#[test]
+fn drc_shared_component_does_not_exempt_remote_track_short() {
+    let nets = two_net_stream();
+    let comps = props("|LAYER=TOP|X=0mil|Y=0mil|PATTERN=R0402|SOURCEDESIGNATOR=R1");
+    let mut pads = Vec::new();
+    pads.extend(pad_record("1", 1, 0, 0, 20.0, 20.0, 0.5));
+    pads.extend(pad_record("2", 1, 1, 0, 22.0, 20.0, 0.5));
+    let mut tracks = Vec::new();
+    tracks.extend(track_record(1, 0, 0xFFFF, 0.0, 0.0, 10.0, 0.0, 0.25));
+    tracks.extend(track_record(1, 1, 0xFFFF, 5.0, -5.0, 5.0, 5.0, 0.25));
+    let bytes = build_pcbdoc(&[
+        ("Nets6", nets),
+        ("Components6", comps),
+        ("Pads6", pads),
+        ("Tracks6", tracks),
+    ]);
+
+    let report = ExtractedBoard::altium_drc(&bytes).expect("drc runs");
+    assert_eq!(
+        report.short_count(),
+        1,
+        "the remote track collision must fire"
+    );
+}
+
+#[test]
+fn drc_explicit_net_tie_exemption_is_local() {
+    let nets = two_net_stream();
+    let comps = props("|LAYER=TOP|X=0mil|Y=0mil|PATTERN=NET_TIE|SOURCEDESIGNATOR=NT1");
+    let mut pads = Vec::new();
+    pads.extend(pad_record("1", 1, 0, 0, 20.0, 20.0, 1.0));
+    pads.extend(pad_record("2", 1, 1, 0, 20.9, 20.0, 1.0));
+    let mut tracks = Vec::new();
+    tracks.extend(track_record(1, 0, 0xFFFF, 0.0, 0.0, 10.0, 0.0, 0.25));
+    tracks.extend(track_record(1, 1, 0xFFFF, 5.0, -5.0, 5.0, 5.0, 0.25));
+    let bytes = build_pcbdoc(&[
+        ("Nets6", nets),
+        ("Components6", comps),
+        ("Pads6", pads),
+        ("Tracks6", tracks),
+    ]);
+
+    let report = ExtractedBoard::altium_drc(&bytes).expect("drc runs");
+    assert_eq!(
+        report.short_count(),
+        1,
+        "the explicit tie pads are local; the remote track collision still fires"
+    );
+}

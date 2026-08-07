@@ -134,13 +134,17 @@ fn famous_eagle_boards_have_no_true_shorts() {
                 .take(4)
                 .map(|f| {
                     format!(
-                        "{}<->{}@{} gap{:.3}[{}/{}]",
+                        "{}<->{}@{} ({:.3},{:.3}) gap{:.3}[{}/{} {}/{}]",
                         f.net_a_name,
                         f.net_b_name,
                         f.layer,
+                        f.x,
+                        f.y,
                         f.gap_mm,
                         f.item_a.kind.as_str(),
-                        f.item_b.kind.as_str()
+                        f.item_a.owner,
+                        f.item_b.kind.as_str(),
+                        f.item_b.owner,
                     )
                 })
                 .collect();

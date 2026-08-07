@@ -1766,6 +1766,83 @@ fn footprint_reference(fp: &List) -> String {
     String::new()
 }
 
+fn footprint_property(fp: &List, key: &str) -> String {
+    let legacy_key = key.to_ascii_lowercase();
+    fp.find_all("property")
+        .find_map(|prop| {
+            (prop.arg_value(0).as_deref() == Some(key))
+                .then(|| prop.arg_value(1))
+                .flatten()
+        })
+        .or_else(|| {
+            fp.find_all("fp_text").find_map(|text| {
+                (text.arg_value(0).as_deref() == Some(legacy_key.as_str()))
+                    .then(|| text.arg_value(1))
+                    .flatten()
+            })
+        })
+        .unwrap_or_default()
+}
+
+/// Explicit net-tie component owners and the nets connected by each one.
+///
+/// The owner is deliberately part of the key: recognising a tie between A/B at
+/// NT1 must never waive another A/B collision elsewhere on the board.
+#[derive(Default)]
+struct NetTieOwners {
+    nets_by_owner: std::collections::HashMap<String, std::collections::HashSet<i64>>,
+    geometry_by_owner_layer:
+        std::collections::HashMap<String, std::collections::HashMap<String, Vec<Shape>>>,
+}
+
+impl NetTieOwners {
+    fn insert(&mut self, owner: String, nets: impl IntoIterator<Item = i64>) {
+        if owner.is_empty() {
+            return;
+        }
+        self.nets_by_owner.entry(owner).or_default().extend(nets);
+    }
+
+    fn capture_geometry(&mut self, buckets: &LayerBuckets) {
+        for (layer, prims) in &buckets.by_layer {
+            for prim in prims {
+                if self.nets_by_owner.contains_key(&prim.owner) {
+                    self.geometry_by_owner_layer
+                        .entry(prim.owner.clone())
+                        .or_default()
+                        .entry(layer.clone())
+                        .or_default()
+                        .push(prim.shape.clone());
+                }
+            }
+        }
+    }
+
+    fn exempts(&self, layer: &str, a: &Primitive, b: &Primitive, contact: (f64, f64)) -> bool {
+        let point = Shape::Capsule(Capsule {
+            ax: contact.0,
+            ay: contact.1,
+            bx: contact.0,
+            by: contact.1,
+            r: 0.0,
+        });
+        self.nets_by_owner.iter().any(|(owner, nets)| {
+            nets.contains(&a.net)
+                && nets.contains(&b.net)
+                && self
+                    .geometry_by_owner_layer
+                    .get(owner)
+                    .and_then(|layers| layers.get(layer))
+                    .is_some_and(|shapes| {
+                        shapes.iter().any(|shape| {
+                            let (gap, _) = shape_gap(shape, &point);
+                            is_touching(gap)
+                        })
+                    })
+        })
+    }
+}
+
 // ── Board clearance rule ─────────────────────────────────────────────────────
 
 /// Read the board's design-rule copper clearance (mm), else the default. KiCad
@@ -1828,8 +1905,20 @@ pub fn run_drc_with_clearance_rules(doc: &Document, rules: Option<ClearanceRules
         .filter(|&id| nets.is_no_net(id))
         .collect();
 
-    let net_owners = std::collections::HashMap::new();
-    sweep_buckets(buckets, &rules, &no_net, &net_owners, |id| nets.name_of(id))
+    let mut net_ties = NetTieOwners::default();
+    for fp in root.find_all("footprint").chain(root.find_all("module")) {
+        let owner = footprint_reference(fp);
+        let value = footprint_property(fp, "Value");
+        let footprint = fp.arg_value(0).unwrap_or_default();
+        if crate::dnp::is_explicit_copper_link_fields(&value, "", &footprint) {
+            net_ties.insert(
+                owner,
+                fp.find_all("pad").filter_map(|pad| nets.net_ref(pad)),
+            );
+        }
+    }
+    net_ties.capture_geometry(&buckets);
+    sweep_buckets(buckets, &rules, &no_net, &net_ties, |id| nets.name_of(id))
 }
 
 /// The geometry-source-agnostic core of the DRC: take per-layer copper buckets
@@ -1841,19 +1930,15 @@ pub fn run_drc_with_clearance_rules(doc: &Document, rules: Option<ClearanceRules
 /// ([`eagle_drc::run`]) build [`LayerBuckets`] from their own geometry and hand
 /// them here, so there is exactly one detection / classification engine.
 ///
-/// `net_owners` maps a net id to the set of component references (footprints) it
-/// has a pad inside. It feeds the intra-footprint exemption: a *track* of net A
-/// abutting a *pad* of net B that lives in footprint F is not a board short when
-/// net A also has a pad in F. That is the deliberate escape routing of a solder
-/// jumper / star-ground / fuse-clip footprint, which the router did not create
-/// and the EDA does not flag. The KiCad caller passes an empty map (its
-/// pad-vs-pad same-owner rule already covers that ecosystem's footprints); the
-/// Eagle caller fills it because Eagle tracks carry no owner of their own.
+/// `net_ties` contains only explicitly recognised net-tie/jumper footprints,
+/// keyed by owner. An exemption therefore applies only to copper touching that
+/// particular component's geometry. Merely sharing any ordinary component can
+/// never waive a net pair globally.
 fn sweep_buckets(
     buckets: LayerBuckets,
     rules: &ClearanceRules,
     no_net: &std::collections::HashSet<i64>,
-    net_owners: &std::collections::HashMap<i64, std::collections::HashSet<String>>,
+    net_ties: &NetTieOwners,
     name_of: impl Fn(i64) -> String,
 ) -> DrcReport {
     let max_clearance = rules.max_clearance();
@@ -1949,41 +2034,17 @@ fn sweep_buckets(
                 if no_net.contains(&p.net) || no_net.contains(&q.net) {
                     continue;
                 }
-                // Two pads of the *same* footprint are positioned by the
-                // footprint author, not the router. Some footprints place
-                // different-net pads deliberately abutting (fuse clips, jumper
-                // bridges, edge-connector fingers). KiCad does not treat that as
-                // a board short, so neither do we.
-                if p.kind == ItemKind::Pad
-                    && q.kind == ItemKind::Pad
-                    && !p.owner.is_empty()
-                    && p.owner == q.owner
-                {
-                    continue;
-                }
-                // Two nets that both land a pad in the *same* component are
-                // deliberately tied there: a solder jumper (`SJ`, `SMT-JUMPER`),
-                // a star-ground point, a 0-ohm / ferrite bridge (GND↔UGND on the
-                // Uno is exactly this, joined through the `GROUND` SJ jumper). The
-                // component places their pads a hair apart by design and the
-                // traces feeding it abut, which the EDA does not flag as a board
-                // short. So copper of two nets sharing a footprint is exempt:
-                // their abutment is the designer's tie, not a router-made short.
-                // (This generalises the KiCad pad-vs-pad same-owner rule to the
-                // track-vs-pad and track-vs-track forms Eagle's jumpers produce,
-                // since Eagle traces carry no owner of their own.)
-                if net_owners
-                    .get(&p.net)
-                    .zip(net_owners.get(&q.net))
-                    .is_some_and(|(fa, fb)| !fa.is_disjoint(fb))
-                {
-                    continue;
-                }
                 let name_p = name_of(p.net);
                 let name_q = name_of(q.net);
                 let clearance = rules.effective_clearance(&name_p, &name_q);
                 let (gap, (cx, cy)) = shape_gap(&p.shape, &q.shape);
                 if gap >= clearance {
+                    continue;
+                }
+                // A deliberate net tie is a local footprint property, not a
+                // global relationship between its two nets. The collision point
+                // must land on that explicit tie's own copper geometry.
+                if net_ties.exempts(layer, p, q, (cx, cy)) {
                     continue;
                 }
                 // A zone boundary edge "overlapping" a different-net pad (gap <= 0)
@@ -2160,7 +2221,7 @@ pub fn altium_drc_from_bytes(bytes: &[u8]) -> Result<DrcReport, crate::ExtractEr
 pub mod eagle_drc {
     use super::{
         make_prim, sweep_buckets, Capsule, ClearanceRules, DrcReport, ItemKind, LayerBuckets,
-        Shape, ARC_SEGMENTS, DEFAULT_CLEARANCE_MM,
+        NetTieOwners, Shape, ARC_SEGMENTS, DEFAULT_CLEARANCE_MM,
     };
     use quick_xml::events::Event;
     use quick_xml::Reader;
@@ -2286,6 +2347,7 @@ pub mod eagle_drc {
         name: String,
         library: String,
         package: String,
+        value: String,
         x: f64,
         y: f64,
         rot_deg: f64,
@@ -2336,7 +2398,6 @@ pub mod eagle_drc {
 
     /// Everything parsed from a `.brd`: package defs, placements, per-net copper,
     /// and the board's design-rule clearance.
-    #[derive(Default)]
     struct Parsed {
         // Keyed by (library, package): Eagle namespaces packages per <library>,
         // so same-named packages in different libraries must not merge.
@@ -2346,7 +2407,24 @@ pub mod eagle_drc {
         signals: Vec<(String, Vec<SignalGeom>)>,
         clearance_mm: Option<f64>,
         via_restring: ViaRestring,
+        pad_elongation_long_pct: f64,
+        pad_elongation_offset_pct: f64,
         saw_eagle: bool,
+    }
+
+    impl Default for Parsed {
+        fn default() -> Self {
+            Self {
+                packages: HashMap::new(),
+                elements: Vec::new(),
+                signals: Vec::new(),
+                clearance_mm: None,
+                via_restring: ViaRestring::default(),
+                pad_elongation_long_pct: 100.0,
+                pad_elongation_offset_pct: 100.0,
+                saw_eagle: false,
+            }
+        }
     }
 
     /// Via outer-diameter rule, used when a via gives no explicit `diameter`.
@@ -2483,6 +2561,7 @@ pub mod eagle_drc {
                                 name: a.get("name").cloned().unwrap_or_default(),
                                 library: a.get("library").cloned().unwrap_or_default(),
                                 package: a.get("package").cloned().unwrap_or_default(),
+                                value: a.get("value").cloned().unwrap_or_default(),
                                 x: num(&a, "x").unwrap_or(0.0),
                                 y: num(&a, "y").unwrap_or(0.0),
                                 rot_deg,
@@ -2654,6 +2733,19 @@ pub mod eagle_drc {
         }
         out.via_restring = vr;
 
+        let valid_percent = |key: &str| {
+            params
+                .get(key)
+                .and_then(|s| s.parse::<f64>().ok())
+                .filter(|v| v.is_finite() && *v >= 0.0)
+        };
+        if let Some(v) = valid_percent("psElongationLong") {
+            out.pad_elongation_long_pct = v;
+        }
+        if let Some(v) = valid_percent("psElongationOffset") {
+            out.pad_elongation_offset_pct = v;
+        }
+
         out
     }
 
@@ -2765,6 +2857,8 @@ pub mod eagle_drc {
         el: &Element,
         net: i64,
         copper_layers: &[i64],
+        long_elongation_pct: f64,
+        offset_elongation_pct: f64,
         buckets: &mut LayerBuckets,
     ) {
         // Element transform: local (lx, ly) → world. Eagle is y-up, rotation CCW.
@@ -2824,9 +2918,10 @@ pub mod eagle_drc {
                         r: 0.0,
                     },
                     "long" => {
-                        // A "long" pad is a stadium: length 2*d along the pad's
-                        // axis, width d. Model as a capsule.
-                        let half = d / 2.0; // segment half-length so total ≈ 2d
+                        // EAGLE's `psElongationLong` is the percentage added to
+                        // the circular diameter. The capsule segment contributes
+                        // that added length; its radius contributes the base `d`.
+                        let half = d * long_elongation_pct / 200.0;
                         let (rs, rc) = pad_rot.sin_cos();
                         let ax = cx - half * rc;
                         let ay = cy - half * rs;
@@ -2844,8 +2939,9 @@ pub mod eagle_drc {
                         // Offset: like "long" but the hole sits at one end, so the
                         // copper extends a full diameter to one side.
                         let (rs, rc) = pad_rot.sin_cos();
-                        let bx = cx + d * rc;
-                        let by = cy + d * rs;
+                        let extension = d * offset_elongation_pct / 100.0;
+                        let bx = cx + extension * rc;
+                        let by = cy + extension * rs;
                         Shape::Capsule(Capsule {
                             ax: cx,
                             ay: cy,
@@ -3081,11 +3177,16 @@ pub mod eagle_drc {
         // (element, pad-name) → net, from contactrefs. We re-read those here via
         // the connectivity extractor's mapping so the geometry carries nets.
         let pad_net = pad_net_map(text, &parsed);
-        // net id -> set of element references it has a pad inside. Feeds the
-        // jumper / star-ground escape-routing exemption in the sweep.
-        let mut net_owners: HashMap<i64, std::collections::HashSet<String>> = HashMap::new();
-        for ((el_name, _pad), net) in &pad_net {
-            net_owners.entry(*net).or_default().insert(el_name.clone());
+        let mut net_ties = NetTieOwners::default();
+        for el in &parsed.elements {
+            if crate::dnp::is_explicit_copper_link_fields(&el.value, &el.library, &el.package) {
+                net_ties.insert(
+                    el.name.clone(),
+                    pad_net
+                        .iter()
+                        .filter_map(|((owner, _), net)| (owner == &el.name).then_some(*net)),
+                );
+            }
         }
         for el in &parsed.elements {
             let Some(items) = parsed
@@ -3099,16 +3200,25 @@ pub mod eagle_drc {
                     .get(&(el.name.clone(), item.name().to_string()))
                     .copied()
                     .unwrap_or(0);
-                place_pkg_item(item, el, net, &copper_layers, &mut buckets);
+                place_pkg_item(
+                    item,
+                    el,
+                    net,
+                    &copper_layers,
+                    parsed.pad_elongation_long_pct,
+                    parsed.pad_elongation_offset_pct,
+                    &mut buckets,
+                );
             }
         }
+        net_ties.capture_geometry(&buckets);
 
         // Net 0 (no contactref → unconnected pad) carries no connectivity, so it
         // is never a short, exactly like KiCad's net 0.
         let no_net: std::collections::HashSet<i64> = std::iter::once(0).collect();
 
         let rules = ClearanceRules::new(clearance);
-        sweep_buckets(buckets, &rules, &no_net, &net_owners, name_of)
+        sweep_buckets(buckets, &rules, &no_net, &net_ties, name_of)
     }
 
     /// Flatten a polygon's vertex ring, expanding any per-vertex `curve` (the arc
@@ -3185,11 +3295,11 @@ pub mod eagle_drc {
 pub mod altium_drc {
     use super::{
         make_prim, sweep_buckets, Capsule, ClearanceRules, DrcReport, ItemKind, LayerBuckets,
-        Shape, ARC_SEGMENTS, DEFAULT_CLEARANCE_MM,
+        NetTieOwners, Shape, ARC_SEGMENTS, DEFAULT_CLEARANCE_MM,
     };
     use crate::altium::{self, is_copper_layer, layer_name, parse_pads, MM_PER_UNIT, NONE_U16};
     use crate::ExtractError;
-    use std::collections::{HashMap, HashSet};
+    use std::collections::HashSet;
 
     /// Map an Altium primitive's net field to the hauksbee net id (index + 1, so
     /// id 0 stays the "no net" bucket), or 0 when unattached / out of range.
@@ -3233,19 +3343,29 @@ pub mod altium_drc {
             }
         };
 
-        // Component refdes by index, so geometry can carry an owner (feeds the
-        // jumper / star-ground escape-routing exemption in the sweep).
-        let comp_refs: Vec<String> = doc
+        // Component identity by index, so geometry can carry an owner and only
+        // explicit net-tie footprints can receive a local exemption.
+        let comp_identities: Vec<(String, String, String)> = doc
             .data("Components")
-            .map(|b| altium::parse_component_refs(&b))
+            .map(|b| altium::parse_drc_component_identities(&b))
             .unwrap_or_default();
         let owner_of = |idx: u16| -> String {
             if idx == NONE_U16 {
                 String::new()
             } else {
-                comp_refs.get(idx as usize).cloned().unwrap_or_default()
+                comp_identities
+                    .get(idx as usize)
+                    .map(|(reference, _, _)| reference.clone())
+                    .unwrap_or_default()
             }
         };
+        let explicit_tie_owners: HashSet<String> = comp_identities
+            .iter()
+            .filter(|(_, library, pattern)| {
+                crate::dnp::is_explicit_copper_link_fields("", library, pattern)
+            })
+            .map(|(reference, _, _)| reference.clone())
+            .collect();
 
         let mut buckets = LayerBuckets::default();
         let mut copper: HashSet<String> = HashSet::new();
@@ -3324,8 +3444,7 @@ pub mod altium_drc {
         }
 
         // ── Pads ────────────────────────────────────────────────────────────
-        // net id -> set of component refs it has a pad inside, for the exemption.
-        let mut net_owners: HashMap<i64, HashSet<String>> = HashMap::new();
+        let mut net_ties = NetTieOwners::default();
         if let Some(b) = doc.data("Pads") {
             let pads = parse_pads(&b);
             let pad_geo = parse_pad_geometry(&b);
@@ -3333,8 +3452,8 @@ pub mod altium_drc {
             for (p, g) in pads.iter().zip(pad_geo.iter()) {
                 let net = net_id(p.net, n_nets);
                 let owner = owner_of(p.component);
-                if net != 0 && !owner.is_empty() {
-                    net_owners.entry(net).or_default().insert(owner.clone());
+                if net != 0 && explicit_tie_owners.contains(&owner) {
+                    net_ties.insert(owner.clone(), std::iter::once(net));
                 }
                 // Through-hole pads sit on the multi-layer slot; SMD pads on one
                 // copper side.
@@ -3355,6 +3474,7 @@ pub mod altium_drc {
                 }
             }
         }
+        net_ties.capture_geometry(&buckets);
 
         // ── Polygon (copper-pour) outlines ──────────────────────────────────
         // Altium stores the requested outline; the filled copper with its
@@ -3377,13 +3497,7 @@ pub mod altium_drc {
         let no_net: HashSet<i64> = std::iter::once(0).collect();
 
         let rules = ClearanceRules::new(clearance);
-        Ok(sweep_buckets(
-            buckets,
-            &rules,
-            &no_net,
-            &net_owners,
-            name_of,
-        ))
+        Ok(sweep_buckets(buckets, &rules, &no_net, &net_ties, name_of))
     }
 
     // ── Binary record parsers (fixed layout, little-endian) ───────────────────

@@ -155,10 +155,10 @@ fn has_link_token(lower: &str) -> bool {
 /// spell the word out ("OLIMEX_Jumpers-FP:SJ_1_SMALLER"), and the Eagle
 /// solder-jumper package family whose name is just "SJ" (the Arduino Uno's
 /// RESET-EN is library "jumper", package "SJ", value "").
-pub fn is_jumper_or_net_tie(comp: &Component) -> bool {
-    let value = comp.value.to_ascii_lowercase();
-    let lib = comp.lib_id.to_ascii_lowercase();
-    let fp = comp.footprint.to_ascii_lowercase();
+pub(crate) fn is_jumper_or_net_tie_fields(value: &str, lib_id: &str, footprint: &str) -> bool {
+    let value = value.to_ascii_lowercase();
+    let lib = lib_id.to_ascii_lowercase();
+    let fp = footprint.to_ascii_lowercase();
     if has_link_token(&value) || has_link_token(&lib) || has_link_token(&fp) {
         return true;
     }
@@ -170,6 +170,35 @@ pub fn is_jumper_or_net_tie(comp: &Component) -> bool {
     // audio jack footprints.
     let leaf = fp.rsplit([':', '/']).next().unwrap_or(fp.as_str());
     leaf == "sj" || leaf.starts_with("sj_")
+}
+
+/// Whether the source explicitly declares component-local copper-link
+/// semantics suitable for a geometric DRC exemption.
+///
+/// A zero-ohm value alone is not enough: ordinary resistor land patterns must
+/// still be checked. The footprint must independently name the 0R class, which
+/// covers legacy layouts that embed auxiliary copper in a dedicated `0R_...`
+/// package while avoiding guesses from reference designators.
+pub(crate) fn is_explicit_copper_link_fields(value: &str, lib_id: &str, footprint: &str) -> bool {
+    if is_jumper_or_net_tie_fields(value, lib_id, footprint) {
+        return true;
+    }
+    let value = value.trim().to_ascii_lowercase();
+    let value_names_zero = matches!(value.as_str(), "0" | "0r" | "0ohm" | "0ohms")
+        || value.starts_with("0r(")
+        || value.starts_with("0ohm(");
+    let footprint = footprint.to_ascii_lowercase();
+    let leaf = footprint
+        .rsplit([':', '/'])
+        .next()
+        .unwrap_or(footprint.as_str());
+    let footprint_names_zero =
+        leaf == "0r" || leaf.starts_with("0r_") || leaf == "0ohm" || leaf.starts_with("0ohm_");
+    value_names_zero && footprint_names_zero
+}
+
+pub fn is_jumper_or_net_tie(comp: &Component) -> bool {
+    is_jumper_or_net_tie_fields(&comp.value, &comp.lib_id, &comp.footprint)
 }
 
 /// A two-terminal part whose value is a near-zero resistance, or a footprint
