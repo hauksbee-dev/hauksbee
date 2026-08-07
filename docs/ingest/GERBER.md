@@ -182,44 +182,55 @@ comes from the drill file's X2 `TF.FileFunction` layer pair
 (`Plated,1,2,PTH` is layers 1 to 2, not the whole stack), and failing that
 from a file name that encodes the pair (`-L1-L2.drl`, or KiCad's
 `-F_Cu-In1_Cu.drl`, resolved against the copper layers this job actually
-carries).
+carries). Where the copper films carry their own X2 attribute they are read
+too, because `%TF.FileFunction,Copper,L4,Bot*%` is the only thing in a gerber
+job that ties a film to a position in the real stackup.
 
 The refusal is the important part. Treating every drill as a through-hole
 merges nets the real stackup keeps apart, which is a phantom short: the
 reader inventing a connection nobody designed. Three cases refuse, and each
 one is a case where a reading exists that would look fine and be wrong.
 
-- **A declaration we cannot place.** A pair naming a position in a stack we
-  do not have, such as `3,6` where only two copper films classified, is never
-  clamped onto the films we do have: clamping a buried via that touches
-  neither outer layer onto both of them is exactly the short the span logic
-  exists to prevent. It is also not treated as silence, which matters because
-  silence on a single-drill job is safely a through-hole.
+- **A declaration we cannot place.** Placing a pair means knowing which of
+  the board's layers each of our copper films is, and that is not the same
+  question as how many films we found. Films are numbered densely as they are
+  classified, so on a job that is missing an inner layer the second film is
+  index 1 while being the board's layer 4. Indexing a `1,2` pair straight
+  into that numbering shorts the top of the board to the bottom of it, off a
+  declaration that said the via stops two layers down.
 
-  The exception is exact rather than lenient. The board's layer count is the
-  larger of two readings: how many copper films classified, and the deepest
-  layer any drill declaration names. A pair running from layer 1 to that
-  depth is a hit through the whole board, and that stays true however many of
-  the board's films we recognised.
+  Three sources are read together, in this order.
 
-  Both readings are needed. Taking the declarations alone is its own
-  fabrication engine: a four-layer job whose only drill is a blind
-  `Plated,1,2,PTH` would imply a two-layer board, that pair would look
-  full-depth, and the hit would stitch all four layers, a phantom short built
-  out of a perfectly correct declaration. The films are the evidence that
-  says the board is deeper than that drill reaches.
+  1. **The film's own X2 attribute.** `%TF.FileFunction,Copper,L4,Bot*%` is
+     the film stating its position in the real stackup. When both ends of a
+     drill's pair name a film that declared itself, the placement is exact
+     whatever else is missing.
+  2. **Full depth.** A pair running from layer 1 to the deepest layer
+     anything in the job names is a hit through the whole board, and that
+     stays true however many films we recognised.
+  3. **A complete stack.** When nothing says the board has more layers than
+     the films we found, the films are the stack and the 1-based pair indexes
+     straight into it.
 
-  Taking the films alone is the failure this exception exists for, and it is
-  not a corner case: KiCad names an inner layer's film
-  after the user's label, so a six-layer board whose inner layers are called
-  `GND.Cu` and `Power.Cu` exports films named `-GND_Cu.gbr` and
-  `-Power_Cu.gbr`, which this reader's filename inference does not place in
-  the stack. The MNT Reform motherboard is that board, and refusing its
-  `1,6` through-holes on the grounds that "layer 6 is not in our stack" cost
-  it 2.5 points of net-partition agreement against KiCad before the rule was
-  made exact. A job in that state now says so: a note reports how many layers
-  the drill set describes against how many copper films were classified, so
-  the missing copper is visible rather than silently absent.
+  Anything else refuses. The board's layer count for step 2 is the largest of
+  the three readings: films classified, deepest layer a film declares, and
+  deepest layer a drill declares. All three are needed. Taking the drill
+  declarations alone is its own fabrication engine: a four-layer job whose
+  only drill is a blind `Plated,1,2,PTH` would imply a two-layer board, that
+  pair would look full-depth, and the hit would stitch all four layers, a
+  phantom short built out of a perfectly correct declaration.
+
+  Taking the films alone is the failure step 2 exists for, and it is not a
+  corner case: KiCad names an inner layer's film after the user's label, so a
+  six-layer board whose inner layers are called `GND.Cu` and `Power.Cu`
+  exports films named `-GND_Cu.gbr` and `-Power_Cu.gbr`, which the filename
+  inference does not place in the stack. The MNT Reform motherboard is that
+  board, and refusing its `1,6` through-holes on the grounds that "layer 6 is
+  not in our stack" cost it 2.5 points of net-partition agreement against
+  KiCad before the rule was made exact. A job in that state now says so: a
+  note reports how many layers the files describe against how many copper
+  films were classified, so the missing copper is visible rather than
+  silently absent.
 - **Silence on a multi-span job.** A drill file that says nothing is read as
   a through-hole only where nothing else in the job says otherwise. Once a
   sibling declares a partial span, silence is ambiguous and the silent
