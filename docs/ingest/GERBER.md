@@ -142,11 +142,14 @@ previous reading, so no existing job changes behaviour.
 A `G02`/`G03` arc cut is tessellated about its `I`/`J` centre at the same
 16-segments-per-circle resolution the RS-274X plotter gives a copper arc, so
 a routed arc and a drawn arc resolve a tangent contact the same way. The
-chain of chords under-covers the true swept area rather than over-covering
-it, so this can miss a hairline tangent but cannot invent a contact. An arc
-with no readable centre produces no geometry at all: planting a round hit at
-the endpoint instead, which is what a fall-through to the plain coordinate
-reader would do, invents a hole the file never described.
+chain of chords falls short of the true wall on the outside of the curve and
+reaches past it on the inside, both by at most the sagitta of one step, which
+is under 2% of the arc radius. That is the same approximation and the same
+error bound a drawn copper arc gets, so a slot wall and a copper arc resolve
+a marginal contact the same way rather than disagreeing about the same curve.
+An arc with no readable centre produces no geometry at all: planting a round
+hit at the endpoint instead, which is what a fall-through to the plain
+coordinate reader would do, invents a hole the file never described.
 
 The refusal is plating. An **unplated** slot is a mechanical cut with no
 copper wall, and it connects nothing, however exactly it overlays two pads.
@@ -193,10 +196,21 @@ one is a case where a reading exists that would look fine and be wrong.
   exists to prevent. It is also not treated as silence, which matters because
   silence on a single-drill job is safely a through-hole.
 
-  The exception is exact rather than lenient. A pair running from layer 1 to
-  the deepest layer any drill file in the job names is a hit through the
-  whole board, and that stays true however many of the board's copper films
-  we recognised. This is not a corner case: KiCad names an inner layer's film
+  The exception is exact rather than lenient. The board's layer count is the
+  larger of two readings: how many copper films classified, and the deepest
+  layer any drill declaration names. A pair running from layer 1 to that
+  depth is a hit through the whole board, and that stays true however many of
+  the board's films we recognised.
+
+  Both readings are needed. Taking the declarations alone is its own
+  fabrication engine: a four-layer job whose only drill is a blind
+  `Plated,1,2,PTH` would imply a two-layer board, that pair would look
+  full-depth, and the hit would stitch all four layers, a phantom short built
+  out of a perfectly correct declaration. The films are the evidence that
+  says the board is deeper than that drill reaches.
+
+  Taking the films alone is the failure this exception exists for, and it is
+  not a corner case: KiCad names an inner layer's film
   after the user's label, so a six-layer board whose inner layers are called
   `GND.Cu` and `Power.Cu` exports films named `-GND_Cu.gbr` and
   `-Power_Cu.gbr`, which this reader's filename inference does not place in
