@@ -59,6 +59,7 @@ use hauksbee_extract::{
 use hauksbee_models::ModelLibrary;
 
 use crate::binder::{power_rail_voltage, resolve};
+use hauksbee_extract::assembly::AssemblyState;
 
 /// Margin (V) a rail must exceed the part's supply by before the finding
 /// fires: one clamp-diode drop, the threshold at which the protection clamp
@@ -94,7 +95,9 @@ fn is_skipped_role(role: &str) -> bool {
 /// Value parse is not needed here: the pull's EXISTENCE and its far rail are
 /// the evidence; its ohms only scale the clamp current.
 fn is_plain_resistor(c: &Component) -> bool {
-    if c.dnp {
+    // Three-state contract: a DNP pull-up is absent and an identity-refused
+    // record is unprovable; neither may count as a rail tie.
+    if !AssemblyState::of(c).is_present() {
         return false;
     }
     let r = c.reference.to_ascii_uppercase();
@@ -169,10 +172,12 @@ pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
     let mut seen: BTreeSet<(String, i64, String)> = BTreeSet::new();
 
     for comp in &board.components {
-        if comp.dnp {
+        // Three-state contract: only a Present record can be a resolvable
+        // part with a supply domain; DNP and identity-refused records abstain.
+        let Some(part) = AssemblyState::of(comp).fitted() else {
             continue;
-        }
-        let Some(model) = resolve(lib, comp).model else {
+        };
+        let Some(model) = resolve(lib, part).model else {
             continue;
         };
         // Deterministic pad order for stable finding order.
@@ -251,6 +256,53 @@ pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
 mod tests {
     use super::*;
     use hauksbee_extract::LintCheck;
+
+    fn bare_resistor() -> Component {
+        Component {
+            reference: "R7".into(),
+            value: "10k".into(),
+            lib_id: "Device:R".into(),
+            footprint: "R_0603".into(),
+            position: None,
+            layer: "F.Cu".into(),
+            properties: Vec::new(),
+            dnp: false,
+            pins: vec![
+                hauksbee_extract::Pin {
+                    number: "1".into(),
+                    net: Some(1),
+                    function: String::new(),
+                    kind: String::new(),
+                    position: None,
+                },
+                hauksbee_extract::Pin {
+                    number: "2".into(),
+                    net: Some(2),
+                    function: String::new(),
+                    kind: String::new(),
+                    position: None,
+                },
+            ],
+        }
+    }
+
+    /// Two-sided three-state contract: a fitted plain resistor counts as a
+    /// rail tie; a DNP or identity-refused record of the same part must not.
+    #[test]
+    fn dnp_or_refused_resistor_is_not_a_rail_tie() {
+        assert!(is_plain_resistor(&bare_resistor()));
+
+        let mut dnp = bare_resistor();
+        dnp.dnp = true;
+        assert!(!is_plain_resistor(&dnp));
+
+        let mut refused = bare_resistor();
+        refused.properties.push((
+            hauksbee_extract::DUPLICATE_REFERENCE_CONFLICT_KEY.into(),
+            "two contradictory R7 records".into(),
+        ));
+        assert!(!is_plain_resistor(&refused));
+    }
 
     /// An ESP-WROOM-32 (3.3 V part: pad 2 = vdd on +3V3) whose GPIO0 net
     /// carries a 10k pull-up. `rail` picks the pull-up's far side: "+5V"

@@ -67,6 +67,7 @@
 //!     config net are not enumerated; the static (permanent) divider is still
 //!     decoded and the Note-1 check still runs.
 
+use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
 };
@@ -155,7 +156,7 @@ fn is_cypd3177(c: &Component) -> bool {
 /// A plain two-terminal, assembled resistor (ref R*, not RV/RT/RN/RP/RM), with a
 /// parseable ohm value. Mirrors the strap-lint resistor test plus a value parse.
 fn resistor_ohms(c: &Component) -> Option<f64> {
-    if c.dnp {
+    if !AssemblyState::of(c).is_present() {
         return None;
     }
     let r = c.reference.to_ascii_uppercase();

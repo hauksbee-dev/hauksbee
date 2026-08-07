@@ -34,6 +34,19 @@ fn count(r: &hauksbee_extract::NetLintReport, c: LintCheck) -> usize {
     r.of_check(c).count()
 }
 
+/// Like [`lint`] but lets the test mutate the extracted board first (set DNP
+/// flags, inject identity-refusal markers) before running the lint.
+fn lint_with(
+    components: &str,
+    nets: &str,
+    mutate: impl Fn(&mut ExtractedBoard),
+) -> hauksbee_extract::NetLintReport {
+    let text = netlist(components, nets);
+    let mut board = ExtractedBoard::from_kicad_netlist(&text).expect("netlist parses");
+    mutate(&mut board);
+    board.net_lint()
+}
+
 // ---------------------------------------------------------------------------
 // Model-free design-file QC checks.
 // ---------------------------------------------------------------------------
@@ -125,6 +138,59 @@ fn i2c_with_named_rail_pullup_is_clean() {
         count(&r, LintCheck::MissingI2cPullup),
         0,
         "named-rail pull-up should be clean"
+    );
+}
+
+/// Two-sided assembly contract: the identical bus that is clean with fitted
+/// pull-ups (`i2c_with_named_rail_pullup_is_clean`) must fire missing-pull-up
+/// when those resistors are DNP or identity-refused. An unpopulated option
+/// pull-up must never clear the finding.
+#[test]
+fn dnp_or_refused_pullups_do_not_clear_the_missing_pullup_finding() {
+    let comps = r#"
+    (comp (ref U1) (value MCU) (footprint Package:QFN))
+    (comp (ref U2) (value SENSOR) (footprint Package:SON))
+    (comp (ref R1) (value 4k7) (footprint Resistor_SMD:R_0402))
+    (comp (ref R2) (value 4k7) (footprint Resistor_SMD:R_0402))"#;
+    let nets = r#"
+    (net (code 1) (name "+3V3")
+      (node (ref R1) (pin 1)) (node (ref R2) (pin 1)))
+    (net (code 2) (name "SDA")
+      (node (ref U1) (pin 1)) (node (ref U2) (pin 1)) (node (ref R1) (pin 2)))
+    (net (code 3) (name "SCL")
+      (node (ref U1) (pin 2)) (node (ref U2) (pin 2)) (node (ref R2) (pin 2)))"#;
+
+    let dnp = lint_with(comps, nets, |b| {
+        for c in b
+            .components
+            .iter_mut()
+            .filter(|c| c.reference.starts_with('R'))
+        {
+            c.dnp = true;
+        }
+    });
+    assert_eq!(
+        count(&dnp, LintCheck::MissingI2cPullup),
+        2,
+        "DNP pull-ups must not clear the finding"
+    );
+
+    let refused = lint_with(comps, nets, |b| {
+        for c in b
+            .components
+            .iter_mut()
+            .filter(|c| c.reference.starts_with('R'))
+        {
+            c.properties.push((
+                hauksbee_extract::DUPLICATE_REFERENCE_CONFLICT_KEY.to_string(),
+                "two records with different values".to_string(),
+            ));
+        }
+    });
+    assert_eq!(
+        count(&refused, LintCheck::MissingI2cPullup),
+        2,
+        "identity-refused pull-ups must not clear the finding"
     );
 }
 

@@ -33,6 +33,7 @@
 //! "e-marked charger refuses to power the Pi" fault from the topology and these
 //! thresholds alone.
 
+use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::ExtractedBoard;
 use hauksbee_ir::{Circuit, Device, NodeId, SourceKind};
 use hauksbee_models::value::parse_value;
@@ -599,7 +600,8 @@ fn net_resistance_to_grounds(
         // A Do-Not-Populate resistor is on the layout but not assembled, so it
         // presents no resistance: skip it (counting it manufactures a phantom
         // termination, the very false-positive shape this audit must avoid).
-        if comp.dnp {
+        // An identity-refused record is no evidence of a termination either.
+        if !AssemblyState::of(comp).is_present() {
             continue;
         }
         // Only resistors (Device:R or a value that parses to ohms with a
@@ -778,7 +780,7 @@ fn audit_one_cc(
     let mut internal_rd_ohms = None;
     let mut controller_ref = None;
     for comp in &board.components {
-        if comp.dnp {
+        if !AssemblyState::of(comp).is_present() {
             continue;
         }
         if let Some(internal) = internal_cc_rd_ohms(&comp.value) {
@@ -814,7 +816,7 @@ fn nets_bridged_to(board: &ExtractedBoard, start: i64) -> std::collections::Hash
     loop {
         let mut grew = false;
         for comp in &board.components {
-            if comp.dnp || !is_dc_bridge(comp) {
+            if !AssemblyState::of(comp).is_present() || !is_dc_bridge(comp) {
                 continue;
             }
             let nets: Vec<i64> = comp.pins.iter().filter_map(|p| p.net).collect();

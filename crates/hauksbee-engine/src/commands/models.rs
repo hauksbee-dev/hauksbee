@@ -843,7 +843,11 @@ fn resolve_rows(lib: &ModelLibrary, board: &hauksbee_extract::ExtractedBoard) ->
         .components
         .iter()
         .map(|comp| {
-            let res = crate::binder::resolve(lib, comp);
+            // The pack author's question is "which model entry would win for
+            // this record", so this deliberately uses the library view: a DNP
+            // part still shows the model it would get when fitted, and a
+            // refused identity still shows UNRESOLVED. Nothing here binds.
+            let res = crate::binder::library_resolution(lib, comp);
             let source = res
                 .provenance
                 .clone()

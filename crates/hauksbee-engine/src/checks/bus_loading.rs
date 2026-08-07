@@ -36,6 +36,7 @@
 
 use std::collections::HashSet;
 
+use hauksbee_extract::assembly::AssemblyState;
 use hauksbee_extract::{
     Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
 };
@@ -81,7 +82,9 @@ fn is_i2c_net(name: &str) -> bool {
 
 /// A plain two-terminal, assembled resistor with a parseable value.
 fn resistor_ohms(c: &Component) -> Option<f64> {
-    if c.dnp {
+    // Three-state contract: a DNP or identity-refused pull-up must not count
+    // toward the bus's effective pull resistance.
+    if !AssemblyState::of(c).is_present() {
         return None;
     }
     let r = c.reference.to_ascii_uppercase();
@@ -145,7 +148,7 @@ fn effective_pullup(board: &ExtractedBoard, net_id: i64) -> Option<(f64, f64, Ve
 fn attached_devices(board: &ExtractedBoard, net_id: i64) -> usize {
     let mut refs: HashSet<&str> = HashSet::new();
     for (c, _p) in board.net_members(net_id) {
-        if c.dnp || resistor_ohms(c).is_some() {
+        if !AssemblyState::of(c).is_present() || resistor_ohms(c).is_some() {
             continue;
         }
         refs.insert(c.reference.as_str());
@@ -224,6 +227,53 @@ pub fn bus_loading_lint(board: &ExtractedBoard) -> NetLintReport {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn bare_pullup() -> Component {
+        Component {
+            reference: "R1".into(),
+            value: "4.7k".into(),
+            lib_id: "Device:R".into(),
+            footprint: "R_0603".into(),
+            position: None,
+            layer: "F.Cu".into(),
+            properties: Vec::new(),
+            dnp: false,
+            pins: vec![
+                hauksbee_extract::Pin {
+                    number: "1".into(),
+                    net: Some(1),
+                    function: String::new(),
+                    kind: String::new(),
+                    position: None,
+                },
+                hauksbee_extract::Pin {
+                    number: "2".into(),
+                    net: Some(2),
+                    function: String::new(),
+                    kind: String::new(),
+                    position: None,
+                },
+            ],
+        }
+    }
+
+    /// Two-sided three-state contract: a fitted pull-up contributes its ohms
+    /// to R_eff; a DNP or identity-refused record of the same part must not.
+    #[test]
+    fn dnp_or_refused_pullup_contributes_no_ohms() {
+        assert_eq!(resistor_ohms(&bare_pullup()), Some(4_700.0));
+
+        let mut dnp = bare_pullup();
+        dnp.dnp = true;
+        assert_eq!(resistor_ohms(&dnp), None);
+
+        let mut refused = bare_pullup();
+        refused.properties.push((
+            hauksbee_extract::DUPLICATE_REFERENCE_CONFLICT_KEY.into(),
+            "two contradictory R1 records".into(),
+        ));
+        assert_eq!(resistor_ohms(&refused), None);
+    }
 
     /// A one-master-one-peripheral bus whose SDA pull-up value is the knob.
     fn i2c_board(pullup: &str) -> String {

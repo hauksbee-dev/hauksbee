@@ -37,10 +37,8 @@ use hauksbee_extract::{
 };
 use hauksbee_models::ModelLibrary;
 
-use crate::{
-    binder::resolve,
-    component_evidence::{identity_refusal, role_net},
-};
+use crate::{binder::resolve, component_evidence::role_net};
+use hauksbee_extract::assembly::{AssemblyState, FittedComponent};
 
 /// Direction of a regulated through-current at one of a component's rail pins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -104,6 +102,10 @@ struct Undetermined {
 struct Attributions {
     cited: HashMap<String, (f64, String)>,
     undetermined: Vec<Undetermined>,
+    /// Parts whose identity is refused, as `(reference, reason)`. They carry
+    /// no attributed current, and the report says so instead of letting the
+    /// skip look like a clean pass.
+    skipped_identity: Vec<(String, String)>,
 }
 
 /// How a two-terminal part on the path from a programming pin to ground behaves.
@@ -226,7 +228,9 @@ fn is_capacitor_component(component: &hauksbee_extract::Component) -> bool {
 }
 
 fn classify_series(comp: &hauksbee_extract::Component) -> Series {
-    if identity_refusal(comp).is_some() {
+    // An identity-refused record cannot be read as a resistor value: Unknown
+    // stops the walk, so the current stays undetermined rather than guessed.
+    if matches!(AssemblyState::of(comp), AssemblyState::IdentityUnknown(_)) {
         return Series::Unknown;
     }
     let v = comp.value.trim().to_ascii_lowercase();
@@ -350,7 +354,12 @@ fn program_resistance_to_ground(
 
     while let Some((net_id, depth)) = queue.pop_front() {
         for (component_index, component) in board.components.iter().enumerate() {
-            if component.dnp || Some(component_index) == excluded_component {
+            // Only a DNP part is skipped as electrically absent; an
+            // identity-refused record must instead poison the walk below
+            // (classify_series says Unknown), never be silently dropped.
+            if matches!(AssemblyState::of(component), AssemblyState::DnpAbsent(_))
+                || Some(component_index) == excluded_component
+            {
                 continue;
             }
             let terminals = match electrical_terminal_net_options(component) {
@@ -564,7 +573,11 @@ fn adjacent_sense_resistor(
 ) -> Option<(f64, String)> {
     let mut candidate = None;
     for (component_index, component) in board.components.iter().enumerate() {
-        if component.dnp || component_index == excluded_component {
+        // Same rule as the programming walk: DNP means absent, while a refused
+        // identity flows into classify_series and refuses the read.
+        if matches!(AssemblyState::of(component), AssemblyState::DnpAbsent(_))
+            || component_index == excluded_component
+        {
             continue;
         }
         let terminals = match electrical_terminal_nets(component) {
@@ -604,6 +617,7 @@ fn adjacent_sense_resistor(
 fn attribute_currents(board: &ExtractedBoard, lib: &ModelLibrary) -> Attributions {
     let mut out: HashMap<String, Attribution> = HashMap::new();
     let mut undetermined: Vec<Undetermined> = Vec::new();
+    let mut skipped_identity: Vec<(String, String)> = Vec::new();
 
     let mut consider = |net_id: Option<i64>, current_a: f64, citation: String, flow: RailFlow| {
         let Some(id) = net_id else { return };
@@ -617,10 +631,19 @@ fn attribute_currents(board: &ExtractedBoard, lib: &ModelLibrary) -> Attribution
     };
 
     for (component_index, comp) in board.components.iter().enumerate() {
-        if comp.dnp {
-            continue;
-        }
-        let res = resolve(lib, comp);
+        // The three-state contract, asked once: a DNP part is absent (its
+        // absence is on the run report already), a refused identity is
+        // recorded so the attribution names the hole, and only a present part
+        // reaches its model.
+        let part = match AssemblyState::of(comp) {
+            AssemblyState::Present(part) => part,
+            AssemblyState::DnpAbsent(_) => continue,
+            AssemblyState::IdentityUnknown(refusal) => {
+                skipped_identity.push((comp.reference.clone(), refusal.reason()));
+                continue;
+            }
+        };
+        let res = resolve(lib, part);
         let Some(model) = res.model.as_ref() else {
             continue;
         };
@@ -645,7 +668,7 @@ fn attribute_currents(board: &ExtractedBoard, lib: &ModelLibrary) -> Attribution
                     continue;
                 }
                 let role = program.pin.clone();
-                let programmed = pin_net_for_role(comp, model, &program.pin).and_then(|net| {
+                let programmed = pin_net_for_role(part, model, &program.pin).and_then(|net| {
                     let (ohms, path) =
                         program_resistance_to_ground(board, net, 4, Some(component_index))?;
                     match &program.equation {
@@ -658,12 +681,12 @@ fn attribute_currents(board: &ExtractedBoard, lib: &ModelLibrary) -> Attribution
                             for (sense_role, far_role) in
                                 sense_roles.iter().zip(sense_far_roles)
                             {
-                                let sense_net = pin_net_for_role(comp, model, sense_role)?;
+                                let sense_net = pin_net_for_role(part, model, sense_role)?;
                                 let expected_far = if far_role.eq_ignore_ascii_case("ground") {
                                     ExpectedSenseFar::Ground
                                 } else {
                                     ExpectedSenseFar::Net(pin_net_for_role(
-                                        comp, model, far_role,
+                                        part, model, far_role,
                                     )?)
                                 };
                                 let (sense_ohms, reference) = adjacent_sense_resistor(
@@ -690,7 +713,7 @@ fn attribute_currents(board: &ExtractedBoard, lib: &ModelLibrary) -> Attribution
                                 operating_current_a,
                                 ohms,
                                 path,
-                                programmed_power_rails(board, comp, model, program)?,
+                                programmed_power_rails(board, part, model, program)?,
                                 Some((sense_ohms, sense_shunts)),
                             ))
                         }
@@ -702,7 +725,7 @@ fn attribute_currents(board: &ExtractedBoard, lib: &ModelLibrary) -> Attribution
                                 operating_current_a,
                                 ohms,
                                 path,
-                                programmed_power_rails(board, comp, model, program)?,
+                                programmed_power_rails(board, part, model, program)?,
                                 None,
                             ))
                         }
@@ -762,6 +785,7 @@ fn attribute_currents(board: &ExtractedBoard, lib: &ModelLibrary) -> Attribution
     Attributions {
         cited: out.into_iter().map(|(k, a)| (k, a.finish())).collect(),
         undetermined,
+        skipped_identity,
     }
 }
 
@@ -779,11 +803,11 @@ pub(super) fn attributed_operating_currents(
 /// Resolve a pin *role* (from the model's behavioural converter) to the board
 /// net id on the footprint instance.
 fn pin_net_for_role(
-    comp: &hauksbee_extract::Component,
+    part: FittedComponent<'_>,
     model: &hauksbee_models::ModelEntry,
     role: &str,
 ) -> Option<i64> {
-    role_net(comp, model, role).ok()
+    role_net(part, model, role).ok()
 }
 
 /// The exact rail path declared by a regulated-current model. Explicit input and
@@ -791,7 +815,7 @@ fn pin_net_for_role(
 /// enable, feedback, sense, and ground pins out of the attribution.
 fn programmed_power_rails(
     board: &ExtractedBoard,
-    comp: &hauksbee_extract::Component,
+    part: FittedComponent<'_>,
     model: &hauksbee_models::ModelEntry,
     program: &hauksbee_models::schema::CurrentProgram,
 ) -> Option<Vec<(i64, RailFlow)>> {
@@ -801,7 +825,7 @@ fn programmed_power_rails(
         }
         let mut collapsed = None;
         for role in roles {
-            let id = role_net(comp, model, role).ok()?;
+            let id = role_net(part, model, role).ok()?;
             if id == 0 {
                 return None;
             }
@@ -838,7 +862,10 @@ fn power_nets_of(
     model: &hauksbee_models::ModelEntry,
     program: &hauksbee_models::schema::CurrentProgram,
 ) -> Vec<i64> {
-    programmed_power_rails(board, comp, model, program)
+    let part = AssemblyState::of(comp)
+        .fitted()
+        .expect("test helper: only present parts have rails");
+    programmed_power_rails(board, part, model, program)
         .unwrap_or_default()
         .into_iter()
         .map(|(id, _)| id)
@@ -864,8 +891,9 @@ pub fn append_ampacity(
     let Attributions {
         cited,
         undetermined,
+        skipped_identity,
     } = attribute_currents(board, lib);
-    if cited.is_empty() && undetermined.is_empty() {
+    if cited.is_empty() && undetermined.is_empty() && skipped_identity.is_empty() {
         return;
     }
 
@@ -918,6 +946,20 @@ pub fn append_ampacity(
                 u.reference, u.model_id, u.role, u.reason, ceiling,
             ),
             refs: vec![u.reference.clone()],
+            nets: vec![],
+        });
+    }
+
+    // A part the attribution refused to read at all: identity unknown. Say so
+    // per part, so the skip is a visible coverage hole, not a silent pass.
+    for (reference, reason) in &skipped_identity {
+        report.findings.push(SiFinding {
+            check: SiCheck::TraceAmpacity,
+            severity: SiSeverity::Info,
+            message: format!(
+                "trace-ampacity: {reference} was not attributed any current: {reason}. Its                  rails are unexamined by this check until the identity is resolved (a BOM or                  placement file with an authoritative reference fixes it).",
+            ),
+            refs: vec![reference.clone()],
             nets: vec![],
         });
     }
@@ -1132,6 +1174,51 @@ sense_full_scale_v = 0.05
         assert!(
             !got.cited.contains_key("PROG"),
             "the programming pin itself carries no rail current"
+        );
+    }
+
+    /// Two-sided IdentityUnknown contract: the same programmed charger with a
+    /// refused identity attributes nothing anywhere (an unknown part must not
+    /// become a fitted 200 mA charger), and the skip is recorded by name so
+    /// the report can say the rails went unexamined.
+    #[test]
+    fn an_identity_refused_part_is_skipped_and_named_not_attributed() {
+        let mut board = charger_board(vec![
+            comp(
+                "R10",
+                "4.99k/1%/R0603",
+                "Resistor_SMD:R_0603",
+                vec![pin("1", 3), pin("2", 5)],
+            ),
+            comp(
+                "E1",
+                "Closed",
+                "OLIMEX_Jumpers-FP:SJ_Closed",
+                vec![pin("1", 5), pin("2", 2)],
+            ),
+        ]);
+        board.components[0].properties.push((
+            hauksbee_extract::DUPLICATE_REFERENCE_CONFLICT_KEY.to_string(),
+            "two populated records with different values".to_string(),
+        ));
+        let lib = lib_from("identity_refused", CHARGER_TOML);
+        let got = attribute_currents(&board, &lib);
+        assert!(
+            got.cited.is_empty(),
+            "a refused identity must attribute nothing: {:?}",
+            got.cited.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            got.skipped_identity.len(),
+            1,
+            "the skip must be on the record: {:?}",
+            got.skipped_identity
+        );
+        let (reference, reason) = &got.skipped_identity[0];
+        assert_eq!(reference, "U1");
+        assert!(
+            reason.contains("duplicate designator"),
+            "the reason must be the refusal itself: {reason}"
         );
     }
 
@@ -1959,11 +2046,12 @@ max_current_a = 1.0
             vec![pin("1", 1), pin("2", 2), pin("3", 3)],
         );
         let lib = lib_from("missing_declared_role", CHARGER_TOML);
-        let model = resolve(&lib, &component).model.unwrap();
+        let part = AssemblyState::of(&component).fitted().unwrap();
+        let model = resolve(&lib, part).model.unwrap();
         let program = model.current_program.as_ref().unwrap();
         let board = charger_board(Vec::new());
         assert!(
-            programmed_power_rails(&board, &component, &model, program).is_none(),
+            programmed_power_rails(&board, part, &model, program).is_none(),
             "missing OUT must refuse the entire current path, not retain VIN"
         );
     }
@@ -1983,11 +2071,12 @@ max_current_a = 1.0
             ],
         );
         let lib = lib_from("conflicting_role_pads", CHARGER_TOML);
-        let model = resolve(&lib, &component).model.unwrap();
+        let part = AssemblyState::of(&component).fitted().unwrap();
+        let model = resolve(&lib, part).model.unwrap();
         let program = model.current_program.as_ref().unwrap();
         let board = charger_board(Vec::new());
         assert!(
-            programmed_power_rails(&board, &component, &model, program).is_none(),
+            programmed_power_rails(&board, part, &model, program).is_none(),
             "one logical input pad cannot be on two non-zero nets"
         );
     }
