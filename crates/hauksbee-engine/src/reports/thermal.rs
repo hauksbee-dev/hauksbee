@@ -1,7 +1,10 @@
 //! `--thermal`: a short headless co-sim, then the steady-state junction
 //! temperature per dissipating device (Tj = Tambient + P * theta_JA). Text or
 //! JSON (there is no plain variant). An empty table because the power ICs are
-//! open/unresolved is flagged invalid (exit 3), not a false "runs cool" pass.
+//! open/unresolved is flagged invalid (exit 3), not a false "runs cool" pass,
+//! and a PARTIAL-coverage table (rows exist while an active power IC on the
+//! live circuit is open/unresolved) escalates to exit 3 BY DEFAULT;
+//! `--no-strict-thermal` opts out of the escalation but never of the caveat.
 
 use crate::engine::HauksbeeEngine;
 use crate::result::{
@@ -11,15 +14,16 @@ use crate::result::{
 };
 
 /// Run the thermal estimate and print it (`json` selects JSON over the text
-/// table). Exits with the invalid-for-analysis code when the table is invalid, or
-/// (under `strict_thermal`) when coverage is only partial.
+/// table). Exits with the invalid-for-analysis code when the table is invalid,
+/// or (under `strict`, the default; `--no-strict-thermal` opts out) when
+/// coverage is only partial.
 pub fn emit(
     engine: &mut HauksbeeEngine,
     evidence: &crate::evidence::BoardEvidence,
     ambient: f64,
     seconds: f64,
     json: bool,
-    strict_thermal: bool,
+    strict: bool,
     inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
     engine.scheduler_mut().set_ambient_c(ambient);
@@ -27,11 +31,13 @@ pub fn emit(
     let board_name = engine.report().board_name.clone();
     let rows = collect_thermal(engine, seconds.max(0.05));
     let validity = thermal_validity(rows.len(), &summary);
-    // Coverage is the honest "N of M" companion to validity. It is NON-gating by
-    // default (the partial case stays exit 0); only --strict-thermal escalates a
-    // partial-coverage table to exit 3. validity stays unchanged.
+    // Coverage is the honest "N of M" companion to validity. A PARTIAL table
+    // escalates to exit 3 BY DEFAULT (a real-but-incomplete table understates
+    // the true load, and a vacuous "runs cool" over an open power IC is the
+    // most dangerous outcome); `--no-strict-thermal` opts out of the exit-code
+    // escalation while keeping the INCONCLUSIVE caveat. validity is unchanged.
     let coverage = thermal_coverage(rows.len(), &summary);
-    let strict_partial_refusal = (coverage.partial && strict_thermal).then(|| {
+    let strict_partial_refusal = (coverage.partial && strict).then(|| {
         Refusal::new(
             "a complete thermal-safety conclusion for every active power IC",
             format!(
@@ -42,7 +48,7 @@ pub fn emit(
                 "the {} dissipating device row(s) shown were solved and remain valid",
                 coverage.dissipating_count
             )],
-            "bind the named open active ICs with --models-dir, then rerun the same --strict-thermal command",
+            "bind the named open active ICs with --models-dir, then rerun the same --thermal command",
         )
     });
     // The open active ICs to NAME in the caveat, computed before `summary` is
@@ -114,8 +120,10 @@ pub fn emit(
         }
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
     }
-    // Opt-in escalation: partial coverage fails only under --strict-thermal.
-    if coverage.partial && strict_thermal {
+    // Default escalation: partial coverage fails (exit 3) unless the caller
+    // opted out with --no-strict-thermal. The opt-out changes ONLY the exit
+    // code; the INCONCLUSIVE coverage caveat above prints either way.
+    if coverage.partial && strict {
         if !json {
             if let Some(refusal) = &strict_partial_refusal {
                 eprintln!("{}", refusal.render_text());
@@ -123,7 +131,7 @@ pub fn emit(
         }
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
     }
-    if report_evidence.is_undermined() && strict_thermal {
+    if report_evidence.is_undermined() && strict {
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())
@@ -197,13 +205,16 @@ fn thermal_coverage_caveat(coverage: &CheckCoverage) -> String {
     )
 }
 
-/// Emit the partial-coverage caveat on the text path, naming the open active ICs.
+/// Emit the partial-coverage caveat on the text path, naming the open active
+/// ICs. Leads with INCONCLUSIVE, the same verdict vocabulary the lint/SI
+/// surfaces use for unmodelled critical parts.
 fn emit_thermal_coverage_caveat(coverage: &CheckCoverage, open_refs: &[String]) {
-    eprintln!("CAVEAT: {}", thermal_coverage_caveat(coverage));
+    eprintln!("INCONCLUSIVE: {}", thermal_coverage_caveat(coverage));
     if !open_refs.is_empty() {
         eprintln!(
-            "  open/unresolved active IC(s): {}. Bind them with --models-dir, then re-run \
-             (or pass --strict-thermal to FAIL on partial coverage).",
+            "  open/unresolved active IC(s): {}. Bind them with --models-dir, then re-run. \
+             (Partial coverage FAILS with exit 3 by default; pass --no-strict-thermal to \
+             keep exit 0 while this caveat still prints.)",
             open_refs.join(", ")
         );
     }
