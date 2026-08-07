@@ -250,15 +250,17 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         // An X2 attribute in the file body beats the file name; the name is
         // consulted only when the file itself is silent.
         let (body, declared) = if is_gerber {
-            // A gerber film carries no layer PAIR, but it can still say it is
-            // non-plated, and that has to be honoured for the same reason the
-            // Excellon side honours it: a mechanical hole drills no copper, and
-            // reading one as plated stitches the stack through a hole that has
-            // no wall. The file name is not the only place this is written.
+            // A gerber-format drill film carries the same `TF.FileFunction`
+            // attribute an Excellon file does, so it is read the same way: for
+            // whether the holes are plated at all, and for the layer pair they
+            // span. Discarding either lets a film that plainly states it drills
+            // a mechanical hole, or a blind one, be read as a plated
+            // through-hole and stitch the whole stack.
             if film_is_non_plated(&text) {
                 continue;
             }
-            (DrillBody::Film(text), excellon::DeclaredSpan::Absent)
+            let declared = film_declared_span(&text);
+            (DrillBody::Film(text), declared)
         } else {
             let drill = excellon::parse(&text);
             // A body that declares itself non-plated contributes no hits, so it
@@ -466,9 +468,25 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
                     match pr.kind {
                         rs274x::PrimKind::Flash => {
                             let (x, y) = pr.shape.center();
+                            // A circular flash gives the barrel exactly. A
+                            // non-circular one gives it the narrow side of its
+                            // own footprint, which is the largest round hole
+                            // that fits inside what the film actually drew.
+                            // The old flat 0.3 mm stand-in was an invention in
+                            // the dangerous direction: on a 0.1 mm flash it
+                            // inflated the barrel threefold and reached copper
+                            // the hole does not.
                             let dia = match &pr.shape {
                                 geo::Shape::Capsule(c) => c.r * 2.0,
-                                geo::Shape::Polygon { .. } | geo::Shape::MultiPolygon { .. } => 0.3,
+                                other => {
+                                    let b = other.bounds();
+                                    let narrow = (b[2] - b[0]).min(b[3] - b[1]);
+                                    if narrow > 0.0 {
+                                        narrow
+                                    } else {
+                                        0.1
+                                    }
+                                }
                             };
                             holes.push(PlatedHole {
                                 x,
@@ -605,6 +623,13 @@ enum SpanClaim {
     /// The file said nothing about a span. Safe as a through-hole on a job with
     /// no other span in it; ambiguous on a job that has one.
     Silent,
+}
+
+/// The copper layer pair a gerber-format drill film declares, read from the
+/// same `TF.FileFunction` attribute an Excellon file carries it in.
+fn film_declared_span(text: &str) -> excellon::DeclaredSpan {
+    let head: String = text.chars().take(4096).collect::<String>().to_uppercase();
+    excellon::parse_file_function_span(&head)
 }
 
 /// Whether a gerber-format drill film declares its own holes non-plated.
