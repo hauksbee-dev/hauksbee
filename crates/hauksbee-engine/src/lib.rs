@@ -44,6 +44,7 @@ pub mod report;
 pub mod reports;
 pub mod responders;
 pub mod result;
+pub mod run_manifest;
 pub mod scheduler;
 pub mod shorts;
 pub mod stress;

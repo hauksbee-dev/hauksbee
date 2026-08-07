@@ -42,6 +42,7 @@ own board, firmware, and spec, and the one local command that runs them, and
 |---|---|
 | [`analysis/AC_ANALYSIS.md`](analysis/AC_ANALYSIS.md) | AC / small-signal sweep: Bode, phase margin, gain crossover |
 | [`analysis/JSON_OUTPUT.md`](analysis/JSON_OUTPUT.md) | The `--json` output schema: top-level verdict + every section |
+| [`analysis/RUN_MANIFESTS.md`](analysis/RUN_MANIFESTS.md) | Immutable input hashes, stable manifest JSON, privacy boundary, and one-command replay |
 
 **"How does firmware co-sim work, and which chips?"**: [`cosim/`](cosim/)
 
