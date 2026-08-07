@@ -232,35 +232,18 @@ fn analyze_board(args: &Value) -> ToolResult {
 /// solve aborted. Returns the structured refusal carrying the report, so the
 /// static findings and every coverage hole still reach the caller as data.
 fn firmware_refusal(report: &Value) -> Option<Value> {
-    let cosim = report.get("cosim");
-    let ran = cosim
-        .and_then(|c| c.get("ran"))
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let analog_valid = cosim
-        .and_then(|c| c.get("analog_valid"))
-        .and_then(Value::as_bool)
-        .unwrap_or(true);
-    let reason = if !ran {
-        // The engine states WHY in the co-sim card's note finding; pass its
-        // words through rather than paraphrasing them.
-        let why = cosim
-            .and_then(|c| c.get("findings"))
-            .and_then(Value::as_array)
-            .and_then(|fs| fs.first())
-            .and_then(|f| f.get("why"))
-            .and_then(Value::as_str)
-            .unwrap_or("the board has no MCU the in-process co-sim can run this firmware on");
-        format!("firmware was provided but the co-sim could not run: {why}")
-    } else if !analog_valid {
-        "the analog solve failed during the firmware co-sim; results are not trustworthy"
-            .to_string()
-    } else {
-        return None;
-    };
+    // The engine owns the typed contract. MCP is a transport: passing the same
+    // object through prevents a second renderer from drifting on claim scope,
+    // surviving conclusions, or remediation.
+    let refusal = report.get("refusal")?.clone();
+    let reason = refusal
+        .get("missing_prerequisite")
+        .and_then(Value::as_str)
+        .unwrap_or("the requested firmware co-simulation could not produce a trustworthy answer");
     Some(json!({
         "status": INVALID_FOR_ANALYSIS,
         "reason": reason,
+        "refusal": refusal,
         "report": report,
     }))
 }
@@ -354,11 +337,11 @@ fn run_checks(args: &Value) -> ToolResult {
         Err(e) => return ToolResult::err(format!("could not parse the run result: {e}")),
     };
     if result.exit_code() == hauksbee_engine::result::EXIT_INVALID_FOR_ANALYSIS {
+        let refusal = result.refusal().expect("exit 3 has a structured refusal");
         return ToolResult::ok(json!({
             "status": INVALID_FOR_ANALYSIS,
-            "reason": "the analog co-sim aborted or an assertion window overlapped a failed \
-                       analog span; per-assertion results are attached but must not be read \
-                       as pass or fail",
+            "reason": refusal.missing_prerequisite.clone(),
+            "refusal": refusal,
             "result": value,
         }));
     }

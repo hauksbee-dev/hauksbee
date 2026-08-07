@@ -43,6 +43,17 @@
             "null"
           ]
         },
+        "refusal": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Refusal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present on every exit-3 validity result. `reason` remains as a compact\ncompatibility alias for `missing_prerequisite`."
+        },
         "valid": {
           "type": "boolean"
         }
@@ -897,6 +908,37 @@
       ],
       "type": "object"
     },
+    "Refusal": {
+      "description": "The C5.3 refusal contract.  Exit 3 means the requested claim could not be\nmade; it is neither a finding nor a malformed-input error.  Every renderer\ncarries these same four answers so a refusal is actionable and does not\ndiscard work that remains valid.",
+      "properties": {
+        "claim": {
+          "description": "The conclusion the run declined to make.",
+          "type": "string"
+        },
+        "missing_prerequisite": {
+          "description": "The concrete absent or invalid prerequisite that blocked that claim.",
+          "type": "string"
+        },
+        "next_action": {
+          "description": "The cheapest concrete action that can make the claim answerable.",
+          "type": "string"
+        },
+        "valid_partial_conclusions": {
+          "description": "Conclusions/artifacts produced by the run that remain trustworthy.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "claim",
+        "missing_prerequisite",
+        "valid_partial_conclusions",
+        "next_action"
+      ],
+      "type": "object"
+    },
     "ThermalDeviceJson": {
       "properties": {
         "over_limit": {
@@ -947,6 +989,17 @@
             "string",
             "null"
           ]
+        },
+        "refusal": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/Refusal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "Present on every exit-3 validity result. `reason` remains as a compact\ncompatibility alias for `missing_prerequisite`."
         },
         "valid": {
           "type": "boolean"
@@ -1062,6 +1115,17 @@
     },
     "ok": {
       "type": "boolean"
+    },
+    "refusal": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/Refusal"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Top-level refusal for a whole-run exit 3 (for example strict co-sim).\nAC/thermal refusals additionally live in their analysis section so a\nsection-only consumer sees the same contract."
     },
     "schema_version": {
       "description": "Version of the `run --json` document contract. Bumped when a field\nchanges meaning or is removed; purely additive fields do not bump it.\nThe generated schema lives in `crates/hauksbee-engine/schemas/`.",

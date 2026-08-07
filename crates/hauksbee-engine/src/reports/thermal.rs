@@ -6,7 +6,7 @@
 use crate::engine::HauksbeeEngine;
 use crate::result::{
     coverage_open_active_refs, thermal_coverage, thermal_validity, BindSummary, CheckCoverage,
-    JsonNote, JsonNoteKind, JsonReport, ThermalDeviceJson, ThermalJson, Validity,
+    JsonNote, JsonNoteKind, JsonReport, Refusal, ThermalDeviceJson, ThermalJson, Validity,
     EXIT_INVALID_FOR_ANALYSIS,
 };
 
@@ -29,6 +29,20 @@ pub fn emit(
     // default (the partial case stays exit 0); only --strict-thermal escalates a
     // partial-coverage table to exit 3. validity stays unchanged.
     let coverage = thermal_coverage(rows.len(), &summary);
+    let strict_partial_refusal = (coverage.partial && strict_thermal).then(|| {
+        Refusal::new(
+            "a complete thermal-safety conclusion for every active power IC",
+            format!(
+                "{} of {} active power IC(s) are open/unresolved and absent from the thermal result",
+                coverage.open_active_on_live_circuit, coverage.total_active_count
+            ),
+            vec![format!(
+                "the {} dissipating device row(s) shown were solved and remain valid",
+                coverage.dissipating_count
+            )],
+            "bind the named open active ICs with --models-dir, then rerun the same --strict-thermal command",
+        )
+    });
     // The open active ICs to NAME in the caveat, computed before `summary` is
     // moved into the JSON report.
     let coverage_refs = coverage_open_active_refs(&summary);
@@ -43,7 +57,10 @@ pub fn emit(
             });
         }
         jr.thermal = Some(ThermalJson {
-            validity: validity.clone(),
+            validity: strict_partial_refusal
+                .clone()
+                .map(Validity::refused)
+                .unwrap_or_else(|| validity.clone()),
             ambient_c: ambient,
             devices: rows
                 .iter()
@@ -67,10 +84,20 @@ pub fn emit(
         }
     }
     if !validity.valid {
+        if !json {
+            if let Some(refusal) = &validity.refusal {
+                eprintln!("{}", refusal.render_text());
+            }
+        }
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
     }
     // Opt-in escalation: partial coverage fails only under --strict-thermal.
     if coverage.partial && strict_thermal {
+        if !json {
+            if let Some(refusal) = &strict_partial_refusal {
+                eprintln!("{}", refusal.render_text());
+            }
+        }
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())
