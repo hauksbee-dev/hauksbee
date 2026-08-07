@@ -1929,15 +1929,34 @@ fn bind_passive(
         .get_str("value_override")
         .unwrap_or(&comp.value);
     let parsed = parse_value(effective_value);
-    // A passive with more than two pads is an ARRAY (a bussed or isolated
-    // R/C network), not one 2-terminal element. Silently taking the first two
-    // pads and stamping ONE device deletes every other element in the pack: a
-    // 4-resistor array becomes a single resistor. Split it into per-element
-    // devices instead.
-    if comp.pins.len() > 2 {
-        return bind_passive_array(comp, parsed.as_ref(), circuit, node_of);
+    // Extractors preserve physical pad records. A scalar chip can therefore
+    // carry repeated records for the same numbered terminals (for example
+    // 1,2,1,2 across copper layers/primitives). Classify and stamp passives by
+    // their logical numbered terminals, while leaving the extraction records
+    // untouched for geometry/provenance consumers.
+    let logical_pins = match logical_passive_pins(comp) {
+        Ok(pins) => pins,
+        Err(reason) => {
+            return (
+                BindOutcome::Unresolved {
+                    reason: reason.clone(),
+                },
+                Some(format!(
+                    "{} ({}): {reason}; left open rather than guessing connectivity",
+                    comp.reference, comp.value
+                )),
+            );
+        }
+    };
+    // A passive with more than two LOGICAL terminals is an ARRAY (a bussed or
+    // isolated R/C network), not one 2-terminal element. Silently taking the
+    // first two terminals and stamping ONE device deletes every other element
+    // in the pack: a 4-resistor array becomes a single resistor. Split it into
+    // per-element devices instead.
+    if logical_pins.len() > 2 {
+        return bind_passive_array(comp, &logical_pins, parsed.as_ref(), circuit, node_of);
     }
-    let (a, b) = two_terminal_nodes(comp, node_of);
+    let (a, b) = two_terminal_nodes(&logical_pins, node_of);
     let (Some(a), Some(b)) = (a, b) else {
         return (
             BindOutcome::Unresolved {
@@ -1964,6 +1983,56 @@ fn bind_passive(
     let label = device_label(&device);
     circuit.add(device);
     (BindOutcome::Analog { device: label }, note)
+}
+
+/// One electrical terminal reconstructed from one or more physical pin
+/// records. Numbered records with the same number are the same terminal when
+/// their known nets agree; an unconnected copy is enriched by a connected
+/// copy. Conflicting known nets are rejected by [`logical_passive_pins`].
+#[derive(Debug)]
+struct LogicalPassivePin {
+    number: String,
+    net: Option<i64>,
+}
+
+/// Collapse repeated physical records into logical passive terminals.
+///
+/// Empty pad numbers carry no identity evidence, so they deliberately remain
+/// separate records. For a numbered terminal, net `0` has the same no-net
+/// meaning as `None`: either may be enriched by a known connected copy. Two
+/// different non-zero nets for one number are contradictory evidence and must
+/// make the passive open rather than selecting a record by input order.
+fn logical_passive_pins(comp: &Component) -> Result<Vec<LogicalPassivePin>, String> {
+    let mut pins: Vec<LogicalPassivePin> = Vec::new();
+    let mut index_by_number: HashMap<String, usize> = HashMap::new();
+
+    for physical in &comp.pins {
+        let number = physical.number.trim().to_string();
+        let net = physical.net.filter(|net| *net != 0);
+        if number.is_empty() {
+            pins.push(LogicalPassivePin { number, net });
+            continue;
+        }
+
+        let Some(&index) = index_by_number.get(&number) else {
+            index_by_number.insert(number.clone(), pins.len());
+            pins.push(LogicalPassivePin { number, net });
+            continue;
+        };
+        let logical = &mut pins[index];
+        match (logical.net, net) {
+            (None, Some(known)) => logical.net = Some(known),
+            (Some(existing), Some(known)) if existing != known => {
+                return Err(format!(
+                    "passive pad {} has conflicting nets {existing} and {known}",
+                    logical.number
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(pins)
 }
 
 /// Resistance a literal 0 Ω resistor is bound at.
@@ -2072,6 +2141,7 @@ fn passive_device(
 /// suffix so the pack's ratings apply to every element.
 fn bind_passive_array(
     comp: &Component,
+    logical_pins: &[LogicalPassivePin],
     parsed: Option<&hauksbee_models::value::ParsedValue>,
     circuit: &mut Circuit,
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
@@ -2089,7 +2159,7 @@ fn bind_passive_array(
     };
     // Natural pad order: numeric pads sort numerically ("2" before "10"), any
     // non-numeric pads after them lexicographically.
-    let mut pads: Vec<&hauksbee_extract::Pin> = comp.pins.iter().collect();
+    let mut pads: Vec<&LogicalPassivePin> = logical_pins.iter().collect();
     pads.sort_by_key(|pin| {
         (
             pin.number.trim().parse::<u64>().unwrap_or(u64::MAX),
@@ -2183,10 +2253,10 @@ fn bind_passive_array(
 }
 
 fn two_terminal_nodes(
-    comp: &Component,
+    pins: &[LogicalPassivePin],
     node_of: &dyn Fn(Option<i64>) -> Option<NodeId>,
 ) -> (Option<NodeId>, Option<NodeId>) {
-    let mut it = comp.pins.iter();
+    let mut it = pins.iter();
     let a = it.next().and_then(|p| node_of(p.net));
     let b = it.next().and_then(|p| node_of(p.net));
     (a, b)
