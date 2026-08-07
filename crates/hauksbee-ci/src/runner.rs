@@ -189,6 +189,11 @@ pub struct RunOutcome {
     /// report surfaces every entry, or a GREEN silently vouches for co-sim
     /// paths that never ran.
     pub coverage_warnings: Vec<String>,
+    /// Measured per-backend edge/pulse capability at the chunk used.
+    pub timing_coverage: Vec<hauksbee_engine::scheduler::TimingCoverage>,
+    /// Timing claims the run could not honor. Any entry invalidates the whole
+    /// strict result; these are not advisory warnings.
+    pub timing_refusals: Vec<String>,
     /// Nets that name themselves a supply, carry a rail's worth of parts, and
     /// nothing powers. See [`dead_rails`]: the operating point around one is
     /// fiction, so every analog number in this outcome has to be read knowing
@@ -213,6 +218,33 @@ pub struct RunOutcome {
     /// in a report, or coverage falls silently the day a new part lands.
     /// `None` only in test-constructed outcomes, never in a real run.
     pub bind: Option<hauksbee_engine::result::BindSummary>,
+}
+
+fn assertion_timing_refusals(
+    spec: &Spec,
+    coverage: &[hauksbee_engine::scheduler::TimingCoverage],
+) -> Vec<String> {
+    let has_toggle_assertion = spec.asserts.iter().any(|a| a.kind == "toggle");
+    let pulse_floor_declared = spec.timing.and_then(|t| t.min_pulse_us).is_some();
+    if !has_toggle_assertion || pulse_floor_declared {
+        return Vec::new();
+    }
+
+    let mut poll_backends: Vec<String> = coverage
+        .iter()
+        .filter(|c| !c.cycle_exact)
+        .map(|c| format!("{} ({})", c.mcu_ref, c.backend))
+        .collect();
+    poll_backends.sort();
+    poll_backends.dedup();
+    if poll_backends.is_empty() {
+        Vec::new()
+    } else {
+        vec![format!(
+            "timing claim refused: toggle assertion(s) run on poll backend(s) {} but no timing.min_pulse_us was declared; a poll can miss a pulse that rises and falls between samples",
+            poll_backends.join(", ")
+        )]
+    }
 }
 
 /// The shared AC analysis outcome attached to every seed's run.
@@ -1259,6 +1291,17 @@ fn run_one(
     if engine.scheduler().has_external_backend() {
         engine.scheduler_mut().chunk_s = frame_dt.clamp(1e-3, 10e-3);
     }
+    // Negotiate only after the external-backend performance default is known,
+    // so the timing contract refines the chunk rather than being overwritten.
+    // Keep running on refusal to produce diagnostics, but carry the refusal as
+    // an INVALID result: no assertion may green over an unmet timing contract.
+    let timing_configuration_refusal = spec.timing.and_then(|timing| {
+        engine
+            .scheduler_mut()
+            .configure_timing(timing.requirement())
+            .err()
+            .map(|e| e.to_string())
+    });
 
     let mut windows: HashMap<(String, u64), NetWindow> = HashMap::new();
     let mut uart: HashMap<String, String> = HashMap::new();
@@ -1533,12 +1576,7 @@ fn run_one(
     // Toggle counts from the scheduler's running stats. The scheduler only folds a
     // converged chunk into its stats (05 §3b), so these already exclude the failed
     // windows without any work here.
-    let toggles: HashMap<String, u64> = engine
-        .scheduler()
-        .stats
-        .iter()
-        .map(|(n, st)| (n.clone(), st.toggles))
-        .collect();
+    let toggles = engine.scheduler().toggle_counts();
 
     // Snapshot peripheral state for assertions, and dump any VCD sinks.
     let peripherals = snapshot_peripherals(spec, &engine, &vcd_targets);
@@ -1626,6 +1664,21 @@ fn run_one(
                     }),
             )
             .chain(hollow_warnings.iter().cloned())
+            .collect(),
+        timing_coverage: engine.scheduler().timing_coverage(),
+        timing_refusals: timing_configuration_refusal
+            .into_iter()
+            .chain(assertion_timing_refusals(
+                spec,
+                &engine.scheduler().timing_coverage(),
+            ))
+            .chain(engine.scheduler().short_pulses().iter().map(|p| {
+                format!(
+                    "timing claim refused because a pulse was missed by a tick-evaluated part: {}",
+                    p.message()
+                )
+            }))
+            .chain(engine.scheduler().timing_refusals().iter().cloned())
             .collect(),
         dead_rails,
         unexercised_bus_ids: engine
@@ -2711,6 +2764,34 @@ fn hash2(seed: u64, s: &str) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn poll_backend_toggle_assertion_requires_a_declared_pulse_floor() {
+        let spec: Spec = toml::from_str(
+            r#"
+board = "board.kicad_pcb"
+[[assert]]
+kind = "toggle"
+net = "CLOCK"
+min_toggles = 2
+"#,
+        )
+        .expect("spec shape");
+        let coverage = vec![hauksbee_engine::scheduler::TimingCoverage {
+            mcu_ref: "U1".into(),
+            backend: "qemu:test".into(),
+            cycle_exact: false,
+            timestamp_precision_s: 1e-3,
+            minimum_guaranteed_pulse_s: 2e-3,
+            chunk_s: 1e-3,
+        }];
+
+        let refusals = assertion_timing_refusals(&spec, &coverage);
+
+        assert_eq!(refusals.len(), 1);
+        assert!(refusals[0].contains("toggle"));
+        assert!(refusals[0].contains("timing.min_pulse_us"));
+    }
 
     /// Serializes the DescriptorDirGuard tests: they mutate the process-global
     /// `HAUKSBEE_MCU_DIR` env var, so parallel test threads must not interleave.
