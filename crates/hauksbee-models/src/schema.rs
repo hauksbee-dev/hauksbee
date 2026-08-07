@@ -37,6 +37,17 @@ pub struct ModelEntry {
     /// Component kind, drives which param fields are required by the solver.
     pub kind: ComponentKind,
 
+    /// For a [`ComponentKind::Passive`] entry, *which* two-terminal element it
+    /// is. [`ComponentKind`] deliberately lumps R, C, L, ferrites, crystals,
+    /// fuses and net ties into one `Passive` arm because they share a solver
+    /// path shape; this field is the DB's own answer to the finer question, so a
+    /// consumer that needs "is this a plain resistor?" reads curated evidence
+    /// instead of guessing from the board file's reference designator (which is
+    /// whatever the CAD user typed). `None` on a non-passive entry, and on a
+    /// pack / user entry that has not declared one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub passive_class: Option<PassiveClass>,
+
     /// Human-readable description for reports.
     #[serde(default)]
     pub description: String,
@@ -570,6 +581,50 @@ impl ComponentKind {
                 | ComponentKind::Adc
                 | ComponentKind::ShiftRegister
         )
+    }
+}
+
+// ── Passive class ─────────────────────────────────────────────────────────────
+
+/// Which two-terminal element a [`ComponentKind::Passive`] entry actually is.
+///
+/// The solver treats every one of these as "a two-node element whose magnitude
+/// comes from the value field", which is why they share one [`ComponentKind`].
+/// Checks that reason about *topology* need the distinction: a pull-up must be a
+/// resistor, a crystal load cap must be a capacitor, and a ferrite bead sitting
+/// between a rail and a net is neither. Before this field the only available
+/// answer was the reference designator's first letter, which is a comment the
+/// CAD user wrote, not evidence: a resistor in an `RN`-numbered slot was read as
+/// a resistor network and a capacitor a designer had labelled `R5` was counted
+/// as a pull-up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PassiveClass {
+    /// Plain resistor: an ohmic two-terminal element.
+    Resistor,
+    /// Capacitor of any dielectric / polarity.
+    Capacitor,
+    /// Inductor (a wound or multilayer choke).
+    Inductor,
+    /// Ferrite bead / chip inductor sold as an impedance at a frequency. Ohmic
+    /// at DC, so its value often *looks* like a resistance; it is not a
+    /// resistor and must never be read as a pull-up.
+    FerriteBead,
+    /// Quartz crystal or ceramic resonator.
+    Crystal,
+    /// Fuse, polyfuse, or PTC resettable protector.
+    Fuse,
+    /// Net tie: a zero-length copper bridge, not a fitted component at all.
+    NetTie,
+}
+
+impl PassiveClass {
+    /// True only for a plain resistor. The one-line spelling every caller that
+    /// asks "can this be a pull-up / pull-down / series termination?" uses, so
+    /// no call site re-derives the answer from the variant list and drifts when
+    /// a variant is added.
+    pub fn is_resistor(self) -> bool {
+        matches!(self, PassiveClass::Resistor)
     }
 }
 

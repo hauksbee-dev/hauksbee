@@ -36,8 +36,10 @@
 //!
 //! ## Honesty / zero-false-positive discipline
 //!
-//! Two gates, both required before a deviation becomes a *finding* (anything
-//! short of both is an *info* note carrying the computed value):
+//! Three gates. A deviation becomes a *finding* only with gates 1 and 3;
+//! anything short of both is an *info* note carrying the computed value. Gate 2
+//! is the veto: when it fails outright there is no impedance to report at all,
+//! only the named span where the reference is absent.
 //!
 //! 1. **A real stackup.** The impedance can only be computed when the stackup is
 //!    known: KiCad stores it in `(setup (stackup ...))` with per-dielectric
@@ -46,7 +48,25 @@
 //!    stated default assumption (1.6 mm 2-layer FR4, Er 4.3, 1 oz copper) as info
 //!    only, never a fire.
 //!
-//! 2. **Declared impedance-control intent.** This is the hard-won corpus lesson.
+//! 2. **A reference plane verified under the trace.** Every formula above takes
+//!    `H`, the height to a reference plane, and so assumes solid copper exists
+//!    at that height directly beneath the trace. The stackup says how far away
+//!    the next copper layer is; it does not say whether that layer has copper
+//!    under *this* trace. A pair that crosses a plane void, a power-domain split,
+//!    or the edge of a partial pour has no reference there, its real impedance
+//!    rises steeply as the return current detours, and the formula's output is
+//!    not an estimate of anything. So for a differential pair the assumption is
+//!    checked against the copper: points along both legs (each segment's
+//!    endpoints and midpoint) are tested against the fill polygons of the pours
+//!    on the adjacent copper layer. Where copper is absent, the check reports
+//!    "reference missing under trace", names the span, and says what would
+//!    unlock a confident answer, instead of printing a Zdiff. Where the
+//!    reference cannot be established either way (no pour on the adjacent layer,
+//!    zones with no stored fill, a pair routed on an inner layer) the estimate
+//!    is reported as before with its reference stated as unverified: the bias is
+//!    against inventing a void.
+//!
+//! 3. **Declared impedance-control intent.** This is the hard-won corpus lesson.
 //!    The closed-form microstrip/differential model is a quasi-static estimate
 //!    with a real error band on dense real boards: it has no co-planar-ground
 //!    term and assumes the trace references the nearest plane at the dielectric
@@ -65,8 +85,10 @@
 //!    class this fires on.
 //!
 //! A finding therefore always carries a real, file-derived stackup AND the
-//! board's own statement that the net should be controlled. This matches checks
-//! 1-4: unknown / unintended -> info, never a confident false positive.
+//! board's own statement that the net should be controlled, and a reported
+//! impedance always carries a reference plane that was either verified under the
+//! trace or explicitly stated as unverified. This matches checks 1-4: unknown /
+//! unintended -> info, never a confident false positive.
 
 use forge_sexpr::List;
 
@@ -543,14 +565,34 @@ fn check_diff_pairs(board: &ExtractedBoard, root: &List, stackup: &Stackup, repo
             continue;
         };
 
+        // The formula's H is the height to a reference plane. Check that the
+        // plane is actually under the pair before reporting the number it
+        // produces; where it is not, name the span instead.
+        let reference = reference_plane_under_pair(root, pid, mid);
+        if let ReferencePlane::Missing(missing) = &reference {
+            emit_reference_missing(
+                &pname, &mname, class, w, s, stackup, missing, report,
+            );
+            continue;
+        }
+        // Solid, or unverifiable: report the Zdiff as before. A verified plane
+        // is not narrated (a check that says "ok" about every assumption it
+        // discharged is unreadable); an unverified one says so, so the estimate
+        // never reads as more grounded than it is.
+        let reference_note = match &reference {
+            ReferencePlane::Solid { .. } => String::new(),
+            ReferencePlane::Unverified(why) => format!(" (reference plane unverified: {why})"),
+            ReferencePlane::Missing(_) => unreachable!("handled above"),
+        };
+
         judge(
             report,
             stackup,
             class,
             zdiff,
             &format!(
-                "{} / {}: W~{:.3} mm, S~{:.3} mm microstrip -> Zdiff ~ {:.0} ohm",
-                pname, mname, w, s, zdiff
+                "{} / {}: W~{:.3} mm, S~{:.3} mm microstrip -> Zdiff ~ {:.0} ohm{}",
+                pname, mname, w, s, zdiff, reference_note
             ),
             vec![pname.clone(), mname.clone()],
         );
@@ -718,6 +760,294 @@ fn judge(
 }
 
 // ===========================================================================
+// Reference-plane verification.
+// ===========================================================================
+//
+// The microstrip and differential-microstrip formulas both take `H`, the height
+// to *the reference plane*, and every one of them assumes there IS solid copper
+// at that height directly beneath the trace. The stackup block says how far away
+// the next copper layer is; it does not say whether that layer has copper under
+// this particular trace. A pair that crosses a plane void, a split between two
+// power domains, or the edge of a partial pour has no reference under it there:
+// its real impedance rises steeply (the return current has to detour) and the
+// number the formula produces is not an estimate of anything. Emitting it as a
+// confident Zdiff is exactly the kind of unearned confidence this codebase
+// refuses, and the fact that the assumption existed only in this module's prose
+// is what made it invisible.
+//
+// So the assumption is now checked against the copper: sample points along both
+// legs of the pair and test each against the fill polygons of the pours on the
+// adjacent copper layer. Where copper is absent, the check names the span and
+// says what would unlock a confident answer instead of printing a Zdiff.
+//
+// The bias is deliberately toward *not* abstaining: a board whose reference
+// layer has no pour at all, or whose zones carry no stored fill, or whose pair
+// routes somewhere the microstrip model does not describe, yields "cannot
+// verify" and the existing behaviour, never a fabricated void.
+
+/// The state of the reference copper under a routed pair.
+#[derive(Debug, Clone, PartialEq)]
+enum ReferencePlane {
+    /// Reference copper found under every sampled point on both legs.
+    Solid {
+        /// The copper layer the plane was found on, for the report line.
+        layer: String,
+    },
+    /// A run of the pair has no reference copper beneath it.
+    Missing(MissingReference),
+    /// Nothing to test against, with the reason. The impedance keeps its
+    /// previous, stackup-gated treatment; the reason is stated so the estimate's
+    /// unverified reference is never silent.
+    Unverified(String),
+}
+
+/// The named span over which the reference plane is absent.
+#[derive(Debug, Clone, PartialEq)]
+struct MissingReference {
+    /// The copper layer that should have carried the reference plane.
+    layer: String,
+    /// Sampled points with no copper beneath them, out of the total sampled.
+    uncovered: usize,
+    total: usize,
+    /// Routed length (mm) of the segments that lost their reference.
+    length_mm: f64,
+    /// The two farthest-apart uncovered sample points, in board mm: the span
+    /// the report names so the designer can go look at it.
+    from: (f64, f64),
+    to: (f64, f64),
+}
+
+impl MissingReference {
+    /// The span, as a report reads it.
+    fn describe_span(&self) -> String {
+        format!(
+            "{:.2} mm of routing between ({:.2}, {:.2}) and ({:.2}, {:.2}) mm, {} of {} sampled \
+             points with no {} copper beneath",
+            self.length_mm,
+            self.from.0,
+            self.from.1,
+            self.to.0,
+            self.to.1,
+            self.uncovered,
+            self.total,
+            self.layer,
+        )
+    }
+}
+
+/// Verify that solid reference copper exists under both legs of a pair.
+///
+/// Sampling pitch: each routed segment's two endpoints plus its midpoint. A void
+/// large enough to matter to a controlled-impedance pair is a plane split or an
+/// anti-pad cluster, i.e. tens of thousandths of an inch across at minimum,
+/// which no plausible segmentation hides between three samples of one segment;
+/// sampling per-mil instead would multiply the polygon tests by a thousand for
+/// no additional finding.
+fn reference_plane_under_pair(root: &List, pid: i64, mid: i64) -> ReferencePlane {
+    let mut segs = net_segments(root, pid);
+    segs.extend(net_segments(root, mid));
+    if segs.is_empty() {
+        return ReferencePlane::Unverified("the pair has no routed copper segments".into());
+    }
+
+    // The routing layer is the one carrying most of the pair's routed length.
+    let mut per_layer: HashMap<&str, f64> = HashMap::new();
+    for s in &segs {
+        *per_layer.entry(s.layer.as_str()).or_insert(0.0) += s.length();
+    }
+    let Some(route_layer) = per_layer
+        .iter()
+        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
+        .map(|(l, _)| (*l).to_string())
+    else {
+        return ReferencePlane::Unverified("the pair's routing layer is unknown".into());
+    };
+
+    let Some(ref_layer) = adjacent_reference_layer(root, &route_layer) else {
+        return ReferencePlane::Unverified(format!(
+            "{route_layer} is not an outer layer of the declared copper stack, so the microstrip \
+             reference layer is not determined"
+        ));
+    };
+
+    let fills = plane_fills(root, &ref_layer);
+    if fills.is_empty() {
+        return ReferencePlane::Unverified(format!(
+            "no filled copper pour on {ref_layer} to reference against"
+        ));
+    }
+
+    // Sample the segments on the routing layer only: a via-dropped stub on
+    // another layer is not the microstrip run being modelled.
+    let mut total = 0usize;
+    let mut uncovered: Vec<(f64, f64)> = Vec::new();
+    let mut uncovered_len = 0.0;
+    for s in segs.iter().filter(|s| s.layer == route_layer) {
+        let samples = [
+            (s.ax, s.ay),
+            ((s.ax + s.bx) / 2.0, (s.ay + s.by) / 2.0),
+            (s.bx, s.by),
+        ];
+        let mut seg_lost = false;
+        for (x, y) in samples {
+            total += 1;
+            if !fills
+                .iter()
+                .any(|poly| crate::gerber::geo::point_in_polygon(x, y, poly))
+            {
+                uncovered.push((x, y));
+                seg_lost = true;
+            }
+        }
+        if seg_lost {
+            uncovered_len += s.length();
+        }
+    }
+
+    if total == 0 {
+        return ReferencePlane::Unverified(format!(
+            "no sampleable {route_layer} routing on the pair"
+        ));
+    }
+    if uncovered.is_empty() {
+        return ReferencePlane::Solid { layer: ref_layer };
+    }
+
+    // Name the span by its two farthest-apart uncovered samples: that is the
+    // extent a designer needs to go and look at.
+    let (mut from, mut to) = (uncovered[0], uncovered[0]);
+    let mut best = 0.0;
+    for (i, a) in uncovered.iter().enumerate() {
+        for b in &uncovered[i..] {
+            let d = (b.0 - a.0).powi(2) + (b.1 - a.1).powi(2);
+            if d > best {
+                best = d;
+                from = *a;
+                to = *b;
+            }
+        }
+    }
+    ReferencePlane::Missing(MissingReference {
+        layer: ref_layer,
+        uncovered: uncovered.len(),
+        total,
+        length_mm: uncovered_len,
+        from,
+        to,
+    })
+}
+
+/// The copper layer a microstrip trace on `route_layer` references: the next
+/// layer inward from the top of the declared stack, or the next one inward from
+/// the bottom. Returns `None` for an inner layer, where the trace is a stripline
+/// between two planes and this module's microstrip model does not apply.
+fn adjacent_reference_layer(root: &List, route_layer: &str) -> Option<String> {
+    let stack = crate::drc::copper_layers_of(root);
+    let idx = stack.iter().position(|l| l == route_layer)?;
+    if stack.len() < 2 {
+        return None;
+    }
+    if idx == 0 {
+        Some(stack[1].clone())
+    } else if idx == stack.len() - 1 {
+        Some(stack[idx - 1].clone())
+    } else {
+        None
+    }
+}
+
+/// The fill polygons of every copper pour on `layer`.
+///
+/// Any pour counts as reference copper, not only a ground one: a solid power
+/// plane is a perfectly good AC return path, and demanding a ground net here
+/// would fabricate a "reference missing" on a board whose second layer is a
+/// power plane. Zones with no stored `filled_polygon` (a board saved without
+/// being refilled) contribute nothing, which lands the caller in `Unverified`
+/// rather than in a false void.
+fn plane_fills(root: &List, layer: &str) -> Vec<Vec<(f64, f64)>> {
+    let mut out = Vec::new();
+    for zone in root.find_all("zone") {
+        let on_layer = zone
+            .find("layers")
+            .map(|l| {
+                (0..)
+                    .map_while(|i| l.arg_value(i))
+                    .any(|n| n == layer || (n.contains('*') && layer.ends_with(".Cu")))
+            })
+            .unwrap_or(false)
+            || zone.find_value("layer").map(|l| l == layer).unwrap_or(false);
+        if !on_layer {
+            continue;
+        }
+        for fp in zone.find_all("filled_polygon") {
+            // A multi-layer zone tags each fill with the layer it belongs to;
+            // a fill so tagged for another layer is not copper here.
+            if let Some(fl) = fp.find_value("layer") {
+                if fl != layer {
+                    continue;
+                }
+            }
+            if let Some(pts) = fp.find("pts") {
+                let poly: Vec<(f64, f64)> = pts
+                    .find_all("xy")
+                    .map(|xy| (xy.arg_f64(0).unwrap_or(0.0), xy.arg_f64(1).unwrap_or(0.0)))
+                    .collect();
+                if poly.len() >= 3 {
+                    out.push(poly);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The abstention: say the reference plane is missing under the named span, and
+/// say what would turn this into a confident answer. No Zdiff is printed,
+/// because there is no reference plane for the number to be the impedance
+/// against.
+fn emit_reference_missing(
+    pname: &str,
+    mname: &str,
+    class: ImpedanceClass,
+    w: f64,
+    s: f64,
+    stackup: &Stackup,
+    missing: &MissingReference,
+    report: &mut SiReport,
+) {
+    // A board that declares controlled impedance and then routes a controlled
+    // pair across a plane void has a real defect, and the declaration is what
+    // makes us confident enough to say so. Without the declaration this is the
+    // same informational note the rest of the module emits.
+    let confident = stackup.source == StackupSource::Board && stackup.impedance_controlled;
+    let severity = if confident {
+        SiSeverity::Medium
+    } else {
+        SiSeverity::Info
+    };
+    report.findings.push(SiFinding {
+        check: SiCheck::ControlledImpedance,
+        severity,
+        message: format!(
+            "{} / {} ({}): reference missing under trace - {}. W~{:.3} mm, S~{:.3} mm; no Zdiff \
+             reported, because the microstrip formula's H is the height to a reference plane that \
+             is not there over that span. A confident answer needs solid reference-plane copper \
+             under the whole pair (route the pair over the plane, or close the void / plane split \
+             it crosses), and a stackup that declares the plane layer it references [{}]",
+            pname,
+            mname,
+            class.label(),
+            missing.describe_span(),
+            w,
+            s,
+            stackup.describe(),
+        ),
+        refs: vec![],
+        nets: vec![pname.to_string(), mname.to_string()],
+    });
+}
+
+// ===========================================================================
 // Pair coupling geometry.
 // ===========================================================================
 
@@ -774,13 +1104,20 @@ fn pair_edge_spacing(root: &List, pid: i64, mid: i64) -> Option<f64> {
     Some(median)
 }
 
-/// A routed segment's endpoints and width.
+/// A routed segment's endpoints, width and copper layer.
 struct Seg {
     ax: f64,
     ay: f64,
     bx: f64,
     by: f64,
     w: f64,
+    layer: String,
+}
+
+impl Seg {
+    fn length(&self) -> f64 {
+        ((self.bx - self.ax).powi(2) + (self.by - self.ay).powi(2)).sqrt()
+    }
 }
 
 /// All copper `(segment ...)` of a net as (endpoints, width). Arcs are not used
@@ -805,6 +1142,7 @@ fn net_segments(root: &List, net_id: i64) -> Vec<Seg> {
             bx: e.arg_f64(0).unwrap_or(0.0),
             by: e.arg_f64(1).unwrap_or(0.0),
             w: seg.find_f64("width").unwrap_or(0.0),
+            layer,
         });
     }
     out

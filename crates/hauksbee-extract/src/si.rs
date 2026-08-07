@@ -39,6 +39,7 @@ use std::collections::HashMap;
 use forge_sexpr::List;
 
 use crate::assembly::AssemblyState;
+use crate::part_class::{self, connected_pads};
 use crate::{Component, ExtractedBoard};
 
 // ===========================================================================
@@ -302,53 +303,22 @@ fn numeric_rail_magnitude(n: &str) -> Option<f64> {
     (mag > 0.0 && mag.is_finite()).then_some(mag)
 }
 
-/// Distinct pad numbers that carry a net. Counts *distinct* pad numbers, not raw
-/// pin entries: footprints add net-less mechanical pads (the round-1 0201 bug),
-/// and the Eagle `.brd` extractor lists each pad once per signal contact, so a
-/// two-terminal part can show four pin entries (pad 1 x2, pad 2 x2). Both must
-/// resolve to "two terminals".
-fn connected_pads(c: &Component) -> usize {
-    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
-    for p in &c.pins {
-        if p.net.is_some() {
-            seen.insert(p.number.as_str());
-        }
-    }
-    seen.len()
-}
-
-/// The reference designator with a single mirror-prefix stripped, uppercased.
-/// Split-keyboard layouts (Corne / crkbd, Lily58) duplicate the right half with
-/// a lowercase `r` prefix (`rC2`, `rY1`, `rR3`, `rU1`), so the type classifiers
-/// must see `C2`/`Y1`/`R3`/`U1` underneath. Only a lowercase `r` immediately
-/// before an uppercase designator letter is treated as the mirror prefix, so a
-/// genuine `R5` / `RV1` is untouched.
-fn ref_designator(c: &Component) -> String {
-    let r = c.reference.trim();
-    let bytes = r.as_bytes();
-    if bytes.len() >= 2 && bytes[0] == b'r' && bytes[1].is_ascii_uppercase() {
-        return r[1..].to_ascii_uppercase();
-    }
-    r.to_ascii_uppercase()
-}
-
 /// A plain two-terminal resistor (the kind that can be a pull-up).
+///
+/// Delegates to [`crate::part_class::classify_two_terminal`], which answers from
+/// the model DB's declared passive class through the assembly witness and only
+/// falls back to the designator/`lib_id` strings when nothing better exists.
+/// This used to be a designator-prefix test with an exclusion list, so a real
+/// resistor numbered into an `RN` range was lost and a capacitor a designer had
+/// labelled `R5` was accepted as a pull-up with farads read as ohms.
 fn is_resistor(c: &Component) -> bool {
-    let r = ref_designator(c);
-    let lib = c.lib_id.to_ascii_lowercase();
-    let is_r_ref = r.starts_with('R')
-        && !r.starts_with("RV")
-        && !r.starts_with("RT")
-        && !r.starts_with("RN")
-        && !r.starts_with("RP")
-        && !r.starts_with("RM");
-    is_r_ref && connected_pads(c) == 2 && !lib.contains("ferrite") && !lib.contains("inductor")
+    part_class::classify_two_terminal(c).is_resistor()
 }
 
 /// A two-terminal capacitor (ref C*, two connected pads), the kind used as a
 /// crystal load cap.
 fn is_capacitor(c: &Component) -> bool {
-    let r = ref_designator(c);
+    let r = part_class::ref_designator(&c.reference);
     r.starts_with('C') && !r.starts_with("CN") && !r.starts_with("CON") && connected_pads(c) == 2
 }
 
@@ -550,7 +520,7 @@ fn known_crystal_cl(value: &str) -> Option<(f64, &'static str)> {
 /// footprint/lib)? Excludes connectors (X is sometimes a connector prefix) by
 /// requiring a crystal footprint or a 2/4-pin shape.
 fn is_crystal(c: &Component) -> bool {
-    let r = ref_designator(c);
+    let r = part_class::ref_designator(&c.reference);
     let lib = c.lib_id.to_ascii_lowercase();
     let fp = c.footprint.to_ascii_lowercase();
     let crystal_fp = lib.contains("crystal") || fp.contains("crystal") || fp.contains("xtal");

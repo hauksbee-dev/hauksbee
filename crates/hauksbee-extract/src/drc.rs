@@ -1145,7 +1145,7 @@ fn via_layer_span(names: &[String], copper_layers: &[String]) -> Vec<String> {
 
 /// Collect the copper layer names the board declares (from `(layers ...)`),
 /// falling back to the canonical two-layer stack.
-fn copper_layers_of(root: &List) -> Vec<String> {
+pub(crate) fn copper_layers_of(root: &List) -> Vec<String> {
     let mut layers = Vec::new();
     if let Some(decl) = root.find("layers") {
         for l in decl.lists() {
