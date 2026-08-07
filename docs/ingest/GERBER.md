@@ -174,10 +174,13 @@ the same source the round holes use. `gerber_advanced_geometry.rs` carries
 the pair: the same copper and the same slot path in two jobs, plated in one
 and unplated in the other, and the unplated one must report the extra net.
 
-On a gerber-format drill film, a drawn path becomes a slot only when the
-film's own name marks it as a rout, slot or mill layer. On an ordinary drill
-film the draws are legend art, and reading those as plated walls would paint
-copper across the board.
+On a gerber-format drill film, a drawn path becomes a slot only when the film
+itself declares a rout, slot or mill role in its own attributes. A suggestive
+file name is not enough, and that distinction is the whole safeguard: any
+board whose project name happens to contain "slot" would otherwise have its
+legend art promoted to conductor. Where the name suggests a rout and the film
+does not declare one, the draws are left as artwork and a reader note says
+what would recover them.
 
 **Castellations.** A castellation is a plated half-hole on the board edge:
 the outline cuts through the barrel, so the copper ring around it is cut
