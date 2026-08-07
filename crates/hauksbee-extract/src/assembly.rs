@@ -248,7 +248,10 @@ mod tests {
         }
         assert!(AssemblyState::of(&bare).fitted().is_none());
 
-        let reasoned = component(true, &[(DNP_REASON_KEY, DnpReason::ZeroOhmLink.policy_tag())]);
+        let reasoned = component(
+            true,
+            &[(DNP_REASON_KEY, DnpReason::ZeroOhmLink.policy_tag())],
+        );
         match AssemblyState::of(&reasoned) {
             AssemblyState::DnpAbsent(absence) => {
                 assert_eq!(absence.reason, Some(DnpReason::ZeroOhmLink));
@@ -292,9 +295,9 @@ mod tests {
             ],
         );
         match AssemblyState::of(&c) {
-            AssemblyState::IdentityUnknown(IdentityRefusal::DuplicateReferenceConflict(
-                detail,
-            )) => assert_eq!(detail, "different values"),
+            AssemblyState::IdentityUnknown(IdentityRefusal::DuplicateReferenceConflict(detail)) => {
+                assert_eq!(detail, "different values")
+            }
             other => panic!("a duplicate conflict must refuse identity, got {other:?}"),
         }
     }

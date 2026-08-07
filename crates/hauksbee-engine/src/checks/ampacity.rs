@@ -357,10 +357,8 @@ fn program_resistance_to_ground(
             // Only a DNP part is skipped as electrically absent; an
             // identity-refused record must instead poison the walk below
             // (classify_series says Unknown), never be silently dropped.
-            if matches!(
-                AssemblyState::of(component),
-                AssemblyState::DnpAbsent(_)
-            ) || Some(component_index) == excluded_component
+            if matches!(AssemblyState::of(component), AssemblyState::DnpAbsent(_))
+                || Some(component_index) == excluded_component
             {
                 continue;
             }
