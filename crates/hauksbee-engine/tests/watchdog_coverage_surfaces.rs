@@ -164,8 +164,12 @@ fn a_faithful_backend_with_no_reboots_says_nothing_on_any_surface() {
         let out = run_avr(&fw, &extra);
         let both = String::from_utf8_lossy(&out.stdout).to_string()
             + &String::from_utf8_lossy(&out.stderr);
+        // Evidence provenance echoes the firmware's own path, and this fixture
+        // lives under `avr_watchdog/`; scrub that echo so the assertion tests
+        // commentary, not the input's directory name.
+        let scrubbed = both.replace(&fw.display().to_string(), "<fw>");
         assert!(
-            !both.to_lowercase().contains("watchdog"),
+            !scrubbed.to_lowercase().contains("watchdog"),
             "simavr with a fed watchdog must be silent on {extra:?}; got:\n{both}"
         );
     }

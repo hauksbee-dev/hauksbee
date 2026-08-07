@@ -1,4 +1,16 @@
 //! Production adapter from a bound board to the shared IR evidence spine.
+//!
+//! The IR crate defines what evidence *is* (assumptions, provenance, error
+//! budgets, one validated [`EvidenceMap`] per claim, with a derived status no
+//! caller can forge). This module is where a real run earns one: it walks the
+//! extracted board's net/component incidence, the bind report's outcomes, and
+//! the reader's coverage notes, and builds a [`BoardEvidence`] holding the
+//! registry plus one map per electrical net. Unresolved parts become open-part
+//! assumptions; every reader limitation becomes a board-scoped
+//! reduced-fidelity assumption keyed by a content hash of its text, so its
+//! identity survives reordering and cannot vanish from one surface while
+//! remaining on another. Both the JSON output and the human summaries render
+//! this same object — there is no second bookkeeping path to drift.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
