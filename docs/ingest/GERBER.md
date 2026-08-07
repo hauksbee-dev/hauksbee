@@ -46,7 +46,7 @@ the format is a simple tool-table plus coordinates).
 |-------|--------|-------|
 | RS-274X copper | `gerber_parser` + `rs274x` plotter | apertures (circle/rect/obround/poly/**macro**), draws (linear + arc), flashes, regions (G36/G37), polarity |
 | Aperture macros (AM) | `macros` | circle / center-line / vector-line / outline / polygon primitives, `$n` variable substitution, a small `+ - x /` arithmetic evaluator; the solid area is the convex hull of the union |
-| Excellon drill | `excellon` | tool table, metric/inch, leading/trailing-zero suppression, plated vs NPTH from the file's `TF.FileFunction` or the file name |
+| Excellon drill | `excellon` | tool table, metric/inch, leading/trailing-zero suppression, plated vs NPTH from the file's `TF.FileFunction` or the file name, `G85` canned slots, routed slots (`M15`/`G01`/`M16`), the X2 copper layer pair |
 | Gerber-format drill | `rs274x` | some tools (Allegro) draw holes as flashes on a gerber film; flash centres become hole locations |
 | Pick-and-place CSV | `placement::parse_pnp` | tolerant column matching: KiCad `Ref,Val,Package,PosX,PosY,Rot,Side`, JLCPCB `Designator,Mid X,Mid Y,Layer,Rotation`, Altium `Center-X(mm)…`; mm / mil / inch units |
 | Allegro location file | `placement::parse_allegro_loc` | `smt_loc.txt`: `!`-delimited, mils, `mirror` flag for bottom side |
@@ -93,8 +93,10 @@ O(n) short sweep), and any pair whose signed copper gap is `<= eps` gets
 unioned (disjoint-set). Connected components become the nets, named
 `NET_n`.
 
-- **Vias / through-holes**: each plated drill becomes a disc on every copper
-  layer and unions those layers' copper, stitching the stack.
+- **Vias / through-holes**: a plated drill becomes a barrel on each copper
+  layer it reaches and unions that layer's copper, stitching the stack. Which
+  layers it reaches is a fact the files have to supply; see [Slots,
+  castellations and layer spans](#slots-castellations-and-layer-spans).
 - **Copper pours (the hard part)**: a pour ships as a *single keyholed
   outline* with antipads and thermal reliefs baked in (no clear-polarity
   cut-outs). Edge proximity to that weaving boundary would falsely short
@@ -114,6 +116,206 @@ unioned (disjoint-set). Connected components become the nets, named
   board with a power plane larger than its ground plane, or a split ground,
   can mislabel. Downstream code should not trust the `GND` *name* as
   ground-truth.
+
+### Slots, castellations and layer spans
+
+Three drilled features carry connectivity that a plain "every hole is a
+round through-hole" reader gets wrong. Each is recovered from what the files
+state, and each has one case where the files do not state enough and the
+reader refuses instead of guessing.
+
+**Plated slots.** A slot is a hit with two endpoints, and its plated wall is
+a conductor along its whole length, not just at the ends. Two forms are
+read: the Excellon canned slot `X<a>Y<b>G85X<c>Y<d>`, and a routed slot,
+where `M15` plunges the cutter, each `G01` cuts, and `M16` retracts. The
+recovered barrel is a stadium of the tool's diameter swept along the path,
+so a pad touching the middle of a slot is connected exactly like a pad at
+its end. Both coordinate pairs of a `G85` record go through the same unit
+and zero-suppression reader, because the file's inch-or-millimetre choice
+applies to the far end as much as the near one.
+
+Rapids matter as much as cuts: a `G00` move positions the cutter with it
+raised, so it drills nothing, and a `G01` after `M16` is a move rather than
+a cut. Motion codes are modal, so a run of cuts is written `G01` once and
+then bare coordinate lines; with the cutter down those are cuts too. A file
+with no `M15` in it is not in rout mode at all and keeps its previous
+reading, so no existing job changes behaviour. A `G85` record is read before
+any of this, because it carries both of its own endpoints and means the same
+thing whichever mode the file is in.
+
+A `G02`/`G03` arc cut is tessellated about its `I`/`J` centre. Each chord
+lies inside its arc, so the stadium built on it falls short of the true wall
+on the outside of the curve and reaches past it on the inside. The step is
+therefore chosen per arc, from the radius, to hold that error under a micron
+budget rather than at a fixed segment count: a fixed count leaves a 50 mm arc
+bulging most of a millimetre off its own wall, which is enough to sweep in
+copper the slot never touches. The segment count is capped so a hostile
+radius cannot turn one line into unbounded work.
+
+The residual is stated rather than waved away. No chord approximation has
+zero error, so the effective contact tolerance against an arc wall is the
+union's own epsilon plus the budget, about six microns instead of five.
+Copper in that band, closer than six microns to touching the wall without
+touching it, is joined by the approximation rather than by the board. Six
+microns is a twentieth of the tightest clearance a board is designed to, so
+this cannot bridge a gap anyone drew; it can only disagree about contacts
+that are already too close to call.
+
+An arc with no readable centre produces no geometry at all: planting a round
+hit at the endpoint instead, which is what a fall-through to the plain
+coordinate reader would do, invents a hole the file never described. On a
+file with no `M15` at all, nothing is being cut, so an arc line moves the
+position and records nothing.
+
+The refusal is plating. An **unplated** slot is a mechanical cut with no
+copper wall, and it connects nothing, however exactly it overlays two pads.
+Plated-ness comes from the file's `TF.FileFunction` attribute or its name,
+the same source the round holes use. `gerber_advanced_geometry.rs` carries
+the pair: the same copper and the same slot path in two jobs, plated in one
+and unplated in the other, and the unplated one must report the extra net.
+
+A gerber-format drill film states its slots differently again: it draws the
+finished **cutout**, so a slot arrives as one oblong or rectangular flash
+rather than as a path. Both facts in that shape are recovered. The narrow
+side is the tool diameter exactly, because a slot is machined by a bit of
+that width, and the long axis is the path the bit swept, so the plated wall
+is the whole stadium. Reducing the flash to one circle at its centre is what
+makes a barrel miss copper the cutout plainly touches: a 4 mm by 1 mm slot
+would reach 0.5 mm from its middle instead of the 2 mm it spans. The narrow
+direction is measured over the outline's own edges rather than an
+axis-aligned box, so a slot drawn at 45 degrees is a slot and not a round
+hole of its diagonal's width.
+
+A drawn path on such a film is a rout only when the film declares a rout,
+slot or mill role in its own attributes. A suggestive file name is not
+enough, and that distinction is the whole safeguard: any board whose project
+name happens to contain "slot" would otherwise have its legend art promoted
+to conductor. Where the name suggests a rout and the film does not declare
+one, the draws are left as artwork and a reader note says what would recover
+them.
+
+Plating on a drill film comes from the film, not from a default. The film's
+`TF.FileFunction`, its `%TA.AperFunction` drill functions
+(`MechanicalDrill` says no copper; `ViaDrill`, `ComponentDrill` and
+`CastellatedDrill` say the opposite), its file name, and the job's
+plated/non-plated split are read in that order. A film that states plating in
+none of them has its hits dropped and its name printed, because guessing
+plated invents a net and guessing mechanical deletes one.
+
+**Castellations.** A castellation is a plated half-hole on the board edge:
+the outline cuts through the barrel, so the copper ring around it is cut
+too. A reader that decides a hole belongs to a pad by testing whether the
+hole sits inside a closed ring finds no owner here and drops the connection.
+Hauksbee never asks that question. The barrel is copper, and it joins
+whatever copper it touches, which is what a castellation physically is, so
+its pad and its plated wall are one node with no special case. The count of
+plated hits the outline cuts is reported as `ReconStats::n_castellations`,
+so the claim is auditable on a real board rather than assumed.
+
+The refusal is again plating: a mechanical edge slot cutting through a pad
+is an outline feature and joins nothing, so it is neither counted nor
+stitched.
+
+**Blind and buried vias.** A via connects only the layers it spans. The span
+comes from the drill file's X2 `TF.FileFunction` layer pair
+(`Plated,1,2,PTH` is layers 1 to 2, not the whole stack), and failing that
+from a file name that encodes the pair (`-L1-L2.drl`, or KiCad's
+`-F_Cu-In1_Cu.drl`, resolved against the copper layers this job actually
+carries). Where the copper films carry their own X2 attribute they are read
+too, because `%TF.FileFunction,Copper,L4,Bot*%` is the only thing in a gerber
+job that ties a film to a position in the real stackup.
+
+The refusal is the important part. Treating every drill as a through-hole
+merges nets the real stackup keeps apart, which is a phantom short: the
+reader inventing a connection nobody designed. Three cases refuse, and each
+one is a case where a reading exists that would look fine and be wrong.
+
+- **A declaration we cannot place.** Placing a pair means knowing which of
+  the board's layers each of our copper films is, and that is not the same
+  question as how many films we found. Films are numbered densely as they are
+  classified, so on a job that is missing an inner layer the second film is
+  index 1 while being the board's layer 4. Indexing a `1,2` pair straight
+  into that numbering shorts the top of the board to the bottom of it, off a
+  declaration that said the via stops two layers down.
+
+  Three sources are read together, in this order.
+
+  1. **The film's own X2 attribute.** `%TF.FileFunction,Copper,L4,Bot*%` is
+     the film stating its position in the real stackup. When both ends of a
+     drill's pair name a film that declared itself, the placement is exact
+     whatever else is missing.
+  2. **Full depth.** A pair running from layer 1 to the deepest layer
+     anything in the job names is a hit through the whole board, and that
+     stays true however many films we recognised.
+  3. **A complete stack.** When nothing says the board has more layers than
+     the films we found, the films are the stack and the 1-based pair indexes
+     straight into it.
+
+  Anything else refuses. The board's layer count for step 2 is the largest of
+  the three readings: films classified, deepest layer a film declares, and
+  deepest layer a drill declares. All three are needed. Taking the drill
+  declarations alone is its own fabrication engine: a four-layer job whose
+  only drill is a blind `Plated,1,2,PTH` would imply a two-layer board, that
+  pair would look full-depth, and the hit would stitch all four layers, a
+  phantom short built out of a perfectly correct declaration.
+
+  Taking the films alone is the failure step 2 exists for, and it is not a
+  corner case: KiCad names an inner layer's film after the user's label, so a
+  six-layer board whose inner layers are called `GND.Cu` and `Power.Cu`
+  exports films named `-GND_Cu.gbr` and `-Power_Cu.gbr`, which the filename
+  inference does not place in the stack. The MNT Reform motherboard is that
+  board, and refusing its `1,6` through-holes on the grounds that "layer 6 is
+  not in our stack" cost it 2.5 points of net-partition agreement against
+  KiCad before the rule was made exact. A job in that state now says so: a
+  note reports how many layers the files describe against how many copper
+  films were classified, so the missing copper is visible rather than
+  silently absent.
+- **Silence on a multi-span job.** A drill file that says nothing is read as
+  a through-hole only where nothing else in the job says otherwise. Once a
+  sibling declares a partial span, silence is ambiguous and the silent
+  file's hits stitch nothing.
+- **A name built out of layer names that do not resolve.** A file called
+  `-F_Cu-In1_Cu.drl` on a job with no In1 film is telling us its hits are
+  blind between two layers, one of which is missing. The layer words are
+  found lexically, before any attempt to place them, precisely so that the
+  missing one is noticed: resolving first and counting afterwards would read
+  the name as mentioning a single layer and fall through to the through-hole
+  default. For the same reason a positional reading of `L2` is only offered
+  when nothing says the board is deeper than the films we have; on a gapped
+  job the film at index 1 may be the board's layer 4, and handing it out
+  under the name `L2` is how a blind via ends up joining the two outer
+  layers.
+- **A name that says blind or buried without saying which layers.** There is
+  no reading of that, only a refusal.
+
+Each refusal emits a reader note naming the file and saying what would
+recover it. `ReconStats::refused_span_holes` counts the hits and
+`ReconStats::notes` carries the text.
+
+That direction is deliberate. A refused stitch under-reports connectivity:
+conductors that meet only through those hits come back as separate nets, the
+net count is an over-estimate, and the shortfall is stated out loud. A
+guessed stitch fabricates connectivity, and nothing downstream can tell it
+from a real one.
+
+Measured across the 22 gerber jobs in the corpus, no real board triggers the
+refusal: every one either carries a single through-hole drill or declares its
+pairs. Slots are recovered on 20 of them (3 to 8 per board) and castellations
+on one, the LumenPnP vacuum interposer, where all 6 plated hits sit on the
+outline.
+
+| Board | Feature | Recovered | Cross-check |
+|-------|---------|-----------|-------------|
+| LumenPnP vac interposer | 6 castellated half-holes | 6 of 6 hits on the outline; 6 nets, one per castellation | 100.0% net partition and an exact net count against the native KiCad board (12 nets without the barrels) |
+| Olimex ESP32-EVB Rev F | 7 `G85` slots, inch units | 7 slots, both endpoints | 99.7% net partition over 525 of 553 located pads against the native KiCad board |
+| Olimex RP2040-PICO-PC | 8 `G85` slots | 8 slots | no ground truth run |
+| Watchy, ZSWatch mainboard | 4 slots each | 4 slots | Watchy already gated at 99.0% partition |
+
+Both cross-checked rows are gated in
+`advanced_geometry_boards_match_kicad` in
+`crates/hauksbee-extract/tests/gerber_closedloop.rs`. The synthesized fixtures,
+positive and lookalike-negative for each class, are in
+`crates/hauksbee-extract/tests/gerber_advanced_geometry.rs`.
 
 ### Component binding
 
@@ -399,12 +601,31 @@ is the all-pairs touch sweep on the densest signal layers.
   as connected within that fill. KiCad emits separate dark regions per
   island, so this is rarely wrong in practice; an exotic single-region
   split-plane could mis-merge.
-- **Gerber-format drill diameter is partly guessed.** When a hole on a
-  gerber drill film is flashed with a non-circular aperture, its barrel
-  diameter falls back to 0.3 mm (a circular flash gives the true size).
-  This feeds via stitching on exactly the multi-layer Allegro boards
-  (uConsole) that have no ground truth, so it is an unverified assumption
-  on that path.
+- **An Allegro-style `drill-1-6.art` name is not read as a layer pair.** A
+  bare number pair in a file name is too easily a revision or a part number,
+  so only an `L`-marked or KiCad layer-named pair counts. A gerber-format
+  drill film that states its span in a `TF.FileFunction` attribute is read
+  like any other; one that only encodes it in a bare-number name falls back
+  to the ordinary silent-drill reading.
+- **Edge contacts are not a recognised class.** Gold fingers and card-edge
+  contacts are ordinary copper on the outline, so they reconstruct as
+  whatever copper they touch, with no separate treatment and no claim that
+  they mate with anything off the board. The corpus carries no board with
+  them, so there is nothing measured here either way.
+- **The castellation count needs an outline film.** A job that ships no
+  `Edge.Cuts` / `.GKO` outline reports zero castellations regardless of what
+  it has. Connectivity is unaffected, since the barrel joins its pad without
+  reference to the outline; only the count goes quiet.
+- **A drill film cannot always say whether its holes are plated.** The
+  geometry on such a film is recovered in full (see the slots section), but
+  plating is the difference between a conductor and a hole in the board and
+  it is not a geometric fact. Four sources are read: the film's
+  `TF.FileFunction`, its `%TA.AperFunction` drill functions, its file name,
+  and the job splitting plated from non-plated across two files. A film with
+  none of those is dropped rather than guessed either way, counted in
+  `ReconStats::refused_plating_files` and named in a note. Guessing plated
+  invents a net; guessing mechanical deletes one; there is no safe default,
+  only a visible refusal.
 - **Clear polarity (LPC)** is skipped for connectivity: a thermal relief or
   antipad clearing copper inside a pour does not disconnect a net the way
   it changes a rendered image, so treating the board as additive is correct
@@ -416,6 +637,17 @@ is the all-pairs touch sweep on the densest signal layers.
   inner planes ambiguously the layer order, and therefore via stitching
   across the wrong pair, can be wrong. The mapping-file escape hatch
   (`copper:<index>`) overrides this when it matters.
+- **An inner film named only by its user label is not classified as copper
+  at all.** KiCad exports `In1.Cu` renamed to `GND.Cu` as `-GND_Cu.gbr`, and
+  the filename rules do not recognise that as a stack position, so the layer
+  and everything routed on it are missing from the reconstruction. The MNT
+  Reform motherboard is a six-layer board that reconstructs from two films
+  for this reason. It still scores 99.7% net partition, because its routing
+  is dominated by the outer layers and its through-holes stitch what remains,
+  but that number is over the pads we located on the layers we saw. The drill
+  set's declared layer count is now compared against the films classified and
+  the shortfall is reported as a note, so the gap is at least visible; the
+  fix is a `layer_map.txt` naming those films.
 - **GND label is a heuristic** (largest pour-touching net), so the `GND`
   *name* can be wrong on a power-plane-dominant or split-ground board.
   Connectivity is unaffected; only the label is a guess.

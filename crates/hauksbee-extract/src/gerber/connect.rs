@@ -9,9 +9,12 @@
 //! Two pieces of copper that touch are the same conductor. We index every
 //! primitive on a layer in an `rstar` R*-tree (the same prune the DRC uses for
 //! its O(n) sweep) and union any pair whose signed copper gap is `<= eps`. A
-//! plated drill at (x, y) is a disc on *every* copper layer and also unions the
-//! layers' primitives that cover it, so vias and through-hole pads stitch the
-//! stack. The connected components of the union-find are the nets; each gets a
+//! plated drill becomes a barrel on each copper layer its [`LayerSpan`] reaches
+//! and unions the primitives that barrel touches, so a through-hole stitches the
+//! whole stack, a blind or buried via stitches only its own pair, and a hit whose
+//! span the files never gave us stitches nothing at all. A slot's barrel is the
+//! stadium swept along its routed path, so it connects copper anywhere along the
+//! wall. The connected components of the union-find are the nets; each gets a
 //! synthetic name `NET_n`, except the largest pour-touching component which is
 //! labelled `GND` as a heuristic (copper pours are overwhelmingly ground).
 //!
@@ -98,11 +101,89 @@ impl Dsu {
     }
 }
 
-/// A drilled, plated hole: a via/PTH that exists on every copper layer.
+/// Which copper layers a plated hit's barrel actually reaches.
+///
+/// A through-hole touches the whole stack. A blind or buried via touches only
+/// the layers its drill file pairs, and treating it as a through-hole merges
+/// nets the real stackup keeps apart: a phantom short, invented by the reader.
+/// [`LayerSpan::Unknown`] is the third, deliberate answer: the files describe a
+/// multi-span drill set but do not say what THIS file's span is, so the barrel
+/// stitches nothing and the reader says so out loud. A refused stitch under-
+/// reports connectivity, which is recoverable; a guessed one fabricates it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LayerSpan {
+    /// Reaches every copper layer in the stack.
+    Through,
+    /// Reaches stack indices `from..=to` inclusive, 0-based from the top.
+    Range { from: usize, to: usize },
+    /// The span is not derivable from the files provided. Stitches nothing.
+    Unknown,
+}
+
+/// A drilled, plated hit: a via, a through-hole pad, or a plated slot.
 pub struct PlatedHole {
     pub x: f64,
     pub y: f64,
+    /// Barrel diameter (round hole) or routed width (slot), in mm.
     pub diameter: f64,
+    /// Far end of a plated slot; `None` for a round hole. The plated wall is
+    /// then the stadium swept from `(x, y)` to here, and it connects every
+    /// piece of copper that wall touches along its whole length, not merely
+    /// what sits over the two endpoints.
+    pub to: Option<(f64, f64)>,
+    /// The copper layers this barrel reaches.
+    pub span: LayerSpan,
+}
+
+impl PlatedHole {
+    /// A round plated hole that reaches the whole stack.
+    pub fn through(x: f64, y: f64, diameter: f64) -> Self {
+        PlatedHole {
+            x,
+            y,
+            diameter,
+            to: None,
+            span: LayerSpan::Through,
+        }
+    }
+
+    /// The barrel's copper footprint: a disc for a round hole, a stadium of the
+    /// routed width for a slot.
+    ///
+    /// The radius is the drill's own, never floored. A floor inflates a small
+    /// barrel until it reaches copper the real one does not, which is copper
+    /// invented out of a rounding convenience, and a tool table can say
+    /// `T1C0.0` outright. A hit whose tool has no size is therefore a point:
+    /// it connects copper that actually covers it and nothing else, which is
+    /// the most the file supports.
+    fn barrel(&self) -> Shape {
+        let r = (self.diameter / 2.0).max(0.0);
+        match self.to {
+            None => Shape::disc(self.x, self.y, r),
+            Some((tx, ty)) => Shape::Capsule(super::geo::Capsule {
+                ax: self.x,
+                ay: self.y,
+                bx: tx,
+                by: ty,
+                r,
+            }),
+        }
+    }
+
+    /// The inclusive stack-index range this barrel occupies, or `None` when the
+    /// span is unknown and the reader refuses to stitch.
+    fn layer_range(&self, n_layers: usize) -> Option<(usize, usize)> {
+        match self.span {
+            LayerSpan::Through => Some((0, n_layers.saturating_sub(1))),
+            LayerSpan::Unknown => None,
+            LayerSpan::Range { from, to } => {
+                let last = n_layers.saturating_sub(1);
+                // A declared span that names a layer this job does not have is
+                // not a through-hole; it is a span we failed to resolve.
+                (from <= last && to <= last && from <= to).then_some((from, to))
+            }
+        }
+    }
 }
 
 /// Build the connectivity graph and emit an [`ExtractedBoard`].
@@ -117,8 +198,8 @@ pub fn reconstruct(
     placements: Vec<Placement>,
 ) -> (ExtractedBoard, ReconStats) {
     // ── 1. Flatten every primitive into one global vector, remembering layer ──
-    // Plated holes become a disc primitive on each layer (PrimKind::Flash so a
-    // through-hole pad anchors a component) plus a cross-layer stitch.
+    // Plated hits become a barrel primitive on each layer their span reaches,
+    // tagged `PrimKind::Via`, plus a stitch joining those barrels to each other.
     let n_layers = layers.len().max(1);
     let mut prims: Vec<LayerPrim> = Vec::new();
     // global prim index -> layer
@@ -136,13 +217,25 @@ pub fn reconstruct(
         }
     }
 
-    // Hole discs: one per layer, recorded so we can stitch them together after.
-    // hole_prims[h] = vector of global prim indices, one per layer.
+    // Barrel primitives: one per copper layer the hit actually reaches, recorded
+    // so we can stitch them together after. `hole_prims[h]` is that hit's global
+    // prim indices. A hit whose span we could not resolve contributes NO barrel
+    // on any layer: it stitches nothing, which is the refusal, not a guess.
     let mut hole_prims: Vec<Vec<usize>> = Vec::with_capacity(holes.len());
+    let mut n_slots = 0usize;
+    let mut refused_span_holes = 0usize;
     for h in &holes {
-        let mut idxs = Vec::with_capacity(n_layers);
-        for li in 0..n_layers {
-            let shape = Shape::disc(h.x, h.y, (h.diameter / 2.0).max(0.05));
+        if h.to.is_some() {
+            n_slots += 1;
+        }
+        let Some((first, last)) = h.layer_range(n_layers) else {
+            refused_span_holes += 1;
+            hole_prims.push(Vec::new());
+            continue;
+        };
+        let mut idxs = Vec::with_capacity(last - first + 1);
+        for li in first..=last {
+            let shape = h.barrel();
             let bounds = shape.bounds();
             let gi = prims.len();
             prims.push(LayerPrim {
@@ -151,7 +244,7 @@ pub fn reconstruct(
                 bounds,
             });
             prim_layer.push(li);
-            // Extend that layer's range to include the hole disc. Holes are
+            // Extend that layer's range to include the barrel. Holes are
             // appended after all layer primitives, so we widen the end marker.
             idxs.push(gi);
         }
@@ -569,6 +662,11 @@ pub fn reconstruct(
         unassigned_flashes: total_flashes.saturating_sub(assigned_flashes),
         gnd_detected: gnd_net.is_some(),
         net_copper,
+        n_slots,
+        refused_span_holes,
+        refused_plating_files: 0,
+        n_castellations: 0,
+        notes: Vec::new(),
     };
 
     (
@@ -597,6 +695,25 @@ pub struct ReconStats {
     /// carries a pour. Feeds the gerber trace-current surface, where copper
     /// width is exact from the manufacturing files.
     pub net_copper: Vec<GerberNetCopper>,
+    /// Plated hits recovered as slots (a routed stadium) rather than round
+    /// holes. Counted inside `n_holes`, not on top of it.
+    pub n_slots: usize,
+    /// Drill files dropped whole because nothing in the job said whether their
+    /// holes are plated. Their hits are absent from `n_holes` and stitch
+    /// nothing; each is named in `notes`.
+    pub refused_plating_files: usize,
+    /// Plated hits whose copper layer span the files did not let us resolve.
+    /// These stitch nothing and are named in `notes`. A non-zero value means
+    /// the reconstruction is deliberately UNDER-connected on this job.
+    pub refused_span_holes: usize,
+    /// Plated hits whose barrel is cut by the board outline: castellations and
+    /// edge slots. The connectivity claim for one is that its pad and its
+    /// plated wall are a single node, which the geometry pass already makes;
+    /// this count exists so that claim is auditable rather than assumed.
+    pub n_castellations: usize,
+    /// Reader notes: what this job made us refuse, and why. Surfaced verbatim
+    /// so a refusal is visible instead of looking like a clean extraction.
+    pub notes: Vec<String>,
 }
 
 /// How a reconstructed net's copper is realised, mirroring
@@ -887,13 +1004,152 @@ mod tests {
         let (_b, s0) = reconstruct("t", vec![top.clone(), bot.clone()], vec![], vec![]);
         assert_eq!(s0.n_nets, 2);
         // With a plated hole at the shared point: 1 net.
-        let hole = PlatedHole {
+        let hole = PlatedHole::through(0.0, 0.0, 0.3);
+        let (_b, s1) = reconstruct("t", vec![top, bot], vec![hole], vec![]);
+        assert_eq!(s1.n_nets, 1, "via stitches top and bottom into one net");
+    }
+
+    #[test]
+    fn blind_via_stitches_only_the_layers_it_spans() {
+        // Four layers, a pad at the same (x, y) on each. A blind via spanning
+        // L1-L2 must join exactly those two pads and leave L3 and L4 alone:
+        // 3 nets (the L1+L2 pair, L3, L4). Treated as a through-hole it would
+        // be 1 net, which is a short the stackup does not contain.
+        let pad = || vec![cap(0.0, 0.0, 0.0, 0.0, 0.5, PrimKind::Flash)];
+        let layers = vec![pad(), pad(), pad(), pad()];
+        let blind = PlatedHole {
             x: 0.0,
             y: 0.0,
             diameter: 0.3,
+            to: None,
+            span: LayerSpan::Range { from: 0, to: 1 },
         };
-        let (_b, s1) = reconstruct("t", vec![top, bot], vec![hole], vec![]);
-        assert_eq!(s1.n_nets, 1, "via stitches top and bottom into one net");
+        let (_b, s) = reconstruct("t", layers.clone(), vec![blind], vec![]);
+        assert_eq!(s.n_nets, 3, "a blind L1-L2 via joins only L1 and L2");
+
+        // The same drill as a through-hole is the one net, so the fixture is
+        // not passing because the geometry happened not to touch.
+        let (_b, s_thru) = reconstruct(
+            "t",
+            layers,
+            vec![PlatedHole::through(0.0, 0.0, 0.3)],
+            vec![],
+        );
+        assert_eq!(s_thru.n_nets, 1);
+    }
+
+    #[test]
+    fn buried_via_leaves_both_outer_layers_out() {
+        // A buried L2-L3 via on a four-layer stack: the two inner pads join,
+        // the two outer pads stay separate. 3 nets.
+        let pad = || vec![cap(0.0, 0.0, 0.0, 0.0, 0.5, PrimKind::Flash)];
+        let buried = PlatedHole {
+            x: 0.0,
+            y: 0.0,
+            diameter: 0.3,
+            to: None,
+            span: LayerSpan::Range { from: 1, to: 2 },
+        };
+        let (_b, s) = reconstruct("t", vec![pad(), pad(), pad(), pad()], vec![buried], vec![]);
+        assert_eq!(s.n_nets, 3);
+    }
+
+    #[test]
+    fn an_unresolvable_span_stitches_nothing_and_is_counted() {
+        // The refusal: four pads stacked at one point, a plated hit whose span
+        // the files did not give us. Every layer stays its own net and the
+        // refusal is counted, rather than four nets being merged on a guess.
+        let pad = || vec![cap(0.0, 0.0, 0.0, 0.0, 0.5, PrimKind::Flash)];
+        let unknown = PlatedHole {
+            x: 0.0,
+            y: 0.0,
+            diameter: 0.3,
+            to: None,
+            span: LayerSpan::Unknown,
+        };
+        let (_b, s) = reconstruct("t", vec![pad(), pad(), pad(), pad()], vec![unknown], vec![]);
+        assert_eq!(s.n_nets, 4, "an unknown span must not stitch anything");
+        assert_eq!(s.refused_span_holes, 1);
+        assert_eq!(s.n_holes, 1, "the hit is still reported, just not stitched");
+    }
+
+    #[test]
+    fn a_declared_span_naming_a_missing_layer_is_refused_not_widened() {
+        // `Plated,1,6,PTH` on a two-layer job names a layer the stack does not
+        // have. Clamping that to the stack would silently turn it into a
+        // through-hole; the honest read is that we could not resolve it.
+        let pad = || vec![cap(0.0, 0.0, 0.0, 0.0, 0.5, PrimKind::Flash)];
+        let bad = PlatedHole {
+            x: 0.0,
+            y: 0.0,
+            diameter: 0.3,
+            to: None,
+            span: LayerSpan::Range { from: 0, to: 5 },
+        };
+        let (_b, s) = reconstruct("t", vec![pad(), pad()], vec![bad], vec![]);
+        assert_eq!(s.n_nets, 2);
+        assert_eq!(s.refused_span_holes, 1);
+    }
+
+    #[test]
+    fn a_plated_slot_connects_copper_along_its_whole_wall() {
+        // Two pads 6 mm apart on one layer, with nothing between them: two
+        // nets. A plated slot routed from one to the other has a wall touching
+        // both, so they become one. Neither pad sits over the slot's start
+        // point alone, so this cannot pass by endpoint coincidence: a slot read
+        // as a round hole at its start leaves the far pad unconnected.
+        let layer = vec![
+            cap(0.0, 0.0, 0.0, 0.0, 0.5, PrimKind::Flash),
+            cap(6.0, 0.0, 6.0, 0.0, 0.5, PrimKind::Flash),
+        ];
+        let (_b, s0) = reconstruct("t", vec![layer.clone()], vec![], vec![]);
+        assert_eq!(s0.n_nets, 2);
+
+        let slot = PlatedHole {
+            x: 0.0,
+            y: 0.0,
+            diameter: 0.6,
+            to: Some((6.0, 0.0)),
+            span: LayerSpan::Through,
+        };
+        let (_b, s1) = reconstruct("t", vec![layer.clone()], vec![slot], vec![]);
+        assert_eq!(s1.n_nets, 1, "the plated wall joins both pads");
+        assert_eq!(s1.n_slots, 1);
+
+        // The same hit read as a round hole at the start point (what the reader
+        // did before G85 was understood) leaves the far pad on its own net.
+        let (_b, s2) = reconstruct(
+            "t",
+            vec![layer],
+            vec![PlatedHole::through(0.0, 0.0, 0.6)],
+            vec![],
+        );
+        assert_eq!(
+            s2.n_nets, 2,
+            "a round hole at the start reaches only one pad"
+        );
+    }
+
+    #[test]
+    fn a_slot_wall_joins_copper_it_only_grazes_mid_span() {
+        // A pad sitting beside the MIDDLE of a slot, touching the wall but
+        // nowhere near either end. Tessellating a slot as two end discs, or as
+        // a chord that cuts the corner, misses this contact.
+        let layer = vec![
+            cap(0.0, 0.0, 0.0, 0.0, 0.2, PrimKind::Flash),
+            // Wall of a 0.6 mm-wide slot along y = 0 reaches y = +-0.3. A 0.2 mm
+            // pad centred at (3.0, 0.5) has its edge at y = 0.3: tangent.
+            cap(3.0, 0.5, 3.0, 0.5, 0.2, PrimKind::Flash),
+        ];
+        let slot = PlatedHole {
+            x: 0.0,
+            y: 0.0,
+            diameter: 0.6,
+            to: Some((6.0, 0.0)),
+            span: LayerSpan::Through,
+        };
+        let (_b, s) = reconstruct("t", vec![layer], vec![slot], vec![]);
+        assert_eq!(s.n_nets, 1, "a mid-span tangent contact is a connection");
     }
 
     #[test]
