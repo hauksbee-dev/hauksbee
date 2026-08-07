@@ -152,6 +152,11 @@ const STIFF_R_OHMS: f64 = 1e-3;
 /// High-impedance "off" resistance for a tri-stated open-drain / drive leg.
 const OFF_OHMS: f64 = 1e12;
 
+/// Numerical tolerance when nominally matched shunts arrive through separate
+/// parsed component records.
+const MATCHED_SHUNT_RELATIVE_TOLERANCE: f64 = 1e-12;
+const MATCHED_SHUNT_MIN_SCALE_OHMS: f64 = 1.0;
+
 /// One pull leg: a resistor from a pin to a rail, stamped once. The device id
 /// is retained so a future extension can retune or tri-state the pull; the pull
 /// itself is static, so the runtime never touches it after stamping.
@@ -198,7 +203,7 @@ struct ConverterLeg {
     in_isource: DeviceId,
     /// Effective input-current limit (A), computed from the sense program at
     /// bind time (or the literal). Recomputable if a board resistor is retuned.
-    iin_limit_a: f64,
+    iin_limit_a: Option<f64>,
     /// Last commanded output voltage (for the CC foldback anchor).
     last_cmd_vout: f64,
     /// Last delivered output current (A).
@@ -501,45 +506,48 @@ impl BehavioralDevice {
 
         // ── Converter ──────────────────────────────────────────────────────
         if let Some(c) = &model.converter {
-            if let (Some(&out_node), Some(&in_node)) =
-                (role_nodes.get(&c.out_pin), role_nodes.get(&c.in_pin))
-            {
-                let out_r = c.out_r_ohms.unwrap_or(STIFF_R_OHMS).max(STIFF_R_OHMS);
-                let drv = circuit.node(&format!("__beh_{reference}_conv_out"));
-                let out_vsource = circuit.add(Device::Vsource {
-                    name: format!("Vbeh_{reference}_conv"),
-                    p: drv,
-                    n: NodeId::GROUND,
-                    kind: SourceKind::Dc(c.vout_setpoint),
-                });
-                circuit.add(Device::Resistor {
-                    name: format!("Rbeh_{reference}_conv_out"),
-                    a: drv,
-                    b: out_node,
-                    ohms: out_r,
-                    tc1: None,
-                });
-                // Reflected input draw: an Isource pulling from in_node to GND.
-                let in_isource = circuit.add(Device::Isource {
-                    name: format!("Ibeh_{reference}_conv_in"),
-                    p: in_node,
-                    n: NodeId::GROUND,
-                    kind: SourceKind::Dc(0.0),
-                });
-                let iin_limit_a = resolve_iin_limit(c, board_resistor).unwrap_or(f64::INFINITY);
-                dev.converter = Some(ConverterLeg {
-                    cfg: c.clone(),
-                    out_vsource,
-                    out_drv_node: drv,
-                    out_r_ohms: out_r,
-                    out_node,
-                    in_node,
-                    in_isource,
-                    iin_limit_a,
-                    last_cmd_vout: c.vout_setpoint,
-                    last_iout_a: 0.0,
-                    last_iin_a: 0.0,
-                });
+            let iin_limit_a = resolve_iin_limit(c, board_resistor);
+            let has_required_program_evidence = c.iin_program.is_none() || iin_limit_a.is_some();
+            if has_required_program_evidence {
+                if let (Some(&out_node), Some(&in_node)) =
+                    (role_nodes.get(&c.out_pin), role_nodes.get(&c.in_pin))
+                {
+                    let out_r = c.out_r_ohms.unwrap_or(STIFF_R_OHMS).max(STIFF_R_OHMS);
+                    let drv = circuit.node(&format!("__beh_{reference}_conv_out"));
+                    let out_vsource = circuit.add(Device::Vsource {
+                        name: format!("Vbeh_{reference}_conv"),
+                        p: drv,
+                        n: NodeId::GROUND,
+                        kind: SourceKind::Dc(c.vout_setpoint),
+                    });
+                    circuit.add(Device::Resistor {
+                        name: format!("Rbeh_{reference}_conv_out"),
+                        a: drv,
+                        b: out_node,
+                        ohms: out_r,
+                        tc1: None,
+                    });
+                    // Reflected input draw: an Isource pulling from in_node to GND.
+                    let in_isource = circuit.add(Device::Isource {
+                        name: format!("Ibeh_{reference}_conv_in"),
+                        p: in_node,
+                        n: NodeId::GROUND,
+                        kind: SourceKind::Dc(0.0),
+                    });
+                    dev.converter = Some(ConverterLeg {
+                        cfg: c.clone(),
+                        out_vsource,
+                        out_drv_node: drv,
+                        out_r_ohms: out_r,
+                        out_node,
+                        in_node,
+                        in_isource,
+                        iin_limit_a,
+                        last_cmd_vout: c.vout_setpoint,
+                        last_iout_a: 0.0,
+                        last_iin_a: 0.0,
+                    });
+                }
             }
         }
 
@@ -613,6 +621,7 @@ impl BehavioralDevice {
             && self.pulls.is_empty()
             && self.open_drains.is_empty()
             && self.drives.is_empty()
+            && self.fsm_states.is_empty()
             && self.converter.is_none()
             && self.laws.is_empty()
     }
@@ -638,7 +647,7 @@ impl BehavioralDevice {
 
     /// The effective input-current limit of the converter (A), or None.
     pub fn converter_iin_limit(&self) -> Option<f64> {
-        self.converter.as_ref().map(|c| c.iin_limit_a)
+        self.converter.as_ref().and_then(|c| c.iin_limit_a)
     }
 
     /// Last delivered output current of the converter (A), or None.
@@ -843,6 +852,13 @@ impl BehavioralDevice {
     /// `power_supply::cc_regulate`, anchored to the previous command.
     fn update_converter(&mut self, circuit: &mut Circuit, node_v: &dyn Fn(NodeId) -> f64) {
         let c = self.converter.as_mut().unwrap();
+        if c.cfg.iin_program.is_some() && c.iin_limit_a.is_none() {
+            c.last_iout_a = 0.0;
+            c.last_iin_a = 0.0;
+            set_source_dc(circuit, c.out_vsource, 0.0);
+            set_source_dc(circuit, c.in_isource, 0.0);
+            return;
+        }
         // Delivered output current = the drop across the output series resistor
         // divided by its resistance. We read this from node voltages (always in
         // the solver's global x) rather than the output Vsource's branch current
@@ -881,8 +897,8 @@ impl BehavioralDevice {
         // so the command that draws exactly the limit is
         // `last_cmd·sqrt(limit/iin)`; a setpoint-scaled (or linear-anchored)
         // law is a period-2 limit cycle that never settles.
-        if c.iin_limit_a.is_finite() && iin > 1e-9 {
-            let v_in_lim = c.last_cmd_vout.max(1e-6) * (c.iin_limit_a / iin).sqrt();
+        if let Some(iin_limit_a) = c.iin_limit_a.filter(|_| iin > 1e-9) {
+            let v_in_lim = c.last_cmd_vout.max(1e-6) * (iin_limit_a / iin).sqrt();
             if v_in_lim < v_cmd {
                 v_cmd = v_in_lim;
                 // The output runs THIS chunk at the throttled command, so the
@@ -911,15 +927,16 @@ impl BehavioralDevice {
     }
 
     /// Re-evaluate the converter's input-current limit from the board (called if
-    /// a programming resistor changes). Returns the new limit.
+    /// a programming resistor changes). Missing required evidence disables the
+    /// converter sources on their next update. Returns the new limit.
     pub fn recompute_iin_limit(
         &mut self,
         board_resistor: &dyn Fn(&str) -> Option<f64>,
     ) -> Option<f64> {
         let c = self.converter.as_mut()?;
-        let lim = resolve_iin_limit(&c.cfg, board_resistor).unwrap_or(f64::INFINITY);
+        let lim = resolve_iin_limit(&c.cfg, board_resistor);
         c.iin_limit_a = lim;
-        Some(lim)
+        lim
     }
 
     /// Raise an input-overdraw fault if the converter is drawing more input
@@ -951,7 +968,7 @@ impl BehavioralDevice {
 /// limit should be used instead (no program present).
 fn resolve_iin_limit(c: &Converter, board_resistor: &dyn Fn(&str) -> Option<f64>) -> Option<f64> {
     if let Some(sp) = &c.iin_program {
-        return Some(program_iin_limit(sp, board_resistor));
+        return program_iin_limit(sp, board_resistor);
     }
     c.iin_limit_a
 }
@@ -974,26 +991,54 @@ fn resolve_iin_limit(c: &Converter, board_resistor: &dyn Fn(&str) -> Option<f64>
 /// uses the published 50 uA * RILIMIT and 50 mV sense-limit relationship;
 /// `rsense` and `prog` are read off the actual board (R49 and R8), so the limit
 /// moves when the board resistor moves, with no model edit.
-pub fn program_iin_limit(sp: &SenseProgram, board_resistor: &dyn Fn(&str) -> Option<f64>) -> f64 {
-    let rsense = sp
-        .rsense_ref
-        .as_ref()
-        .and_then(|r| board_resistor(r))
-        .or(sp.rsense_ohms)
-        .unwrap_or(0.01)
-        .max(1e-6);
-    let prog = sp
-        .prog_ref
-        .as_ref()
-        .and_then(|r| board_resistor(r))
-        .or(sp.prog_ohms)
-        .unwrap_or(sp.prog_ref_ohms)
-        .max(1.0);
-    let prog_ref = sp.prog_ref_ohms.max(1.0);
+pub fn program_iin_limit(
+    sp: &SenseProgram,
+    board_resistor: &dyn Fn(&str) -> Option<f64>,
+) -> Option<f64> {
+    // A named board value is evidence, not a convenience hint. If any named
+    // resistor is absent (including because its component identity was
+    // refused), the programmed limit is unknown. Falling back to a literal in
+    // that case manufactures a precise limit for a circuit we could not bind.
+    let rsense = if sp.rsense_refs.is_empty() {
+        sp.rsense_ohms
+    } else {
+        let mut values = sp
+            .rsense_refs
+            .iter()
+            .map(|reference| board_resistor(reference));
+        let first = values.next().flatten()?;
+        if !first.is_finite() || first <= 0.0 {
+            return None;
+        }
+        for value in values {
+            let value = value?;
+            if !value.is_finite()
+                || value <= 0.0
+                || (value - first).abs()
+                    > first
+                        .abs()
+                        .max(value.abs())
+                        .max(MATCHED_SHUNT_MIN_SCALE_OHMS)
+                        * MATCHED_SHUNT_RELATIVE_TOLERANCE
+            {
+                return None;
+            }
+        }
+        Some(first)
+    }?;
+    let prog = match sp.prog_ref.as_deref() {
+        Some(reference) => board_resistor(reference),
+        None => sp.prog_ohms,
+    }?;
+    if !rsense.is_finite() || rsense <= 0.0 || !prog.is_finite() || prog <= 0.0 {
+        return None;
+    }
+    let prog_ref = sp.prog_ref_ohms;
     let v_sense = (sp.vprog_ref * prog / prog_ref)
         .min(sp.v_sense_full)
         .max(0.0);
-    v_sense / rsense
+    let limit = v_sense / rsense;
+    (limit.is_finite() && limit > 0.0).then_some(limit)
 }
 
 // ── small circuit-mutation helpers (mirror power_supply/drivers) ────────────

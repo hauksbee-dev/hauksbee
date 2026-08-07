@@ -531,6 +531,52 @@ fn si_ripple_abstains_when_parallel_input_caps_make_current_sharing_unknown() {
     assert!(note.message.contains("sharing") && note.message.contains("unknown"));
 }
 
+#[test]
+fn si_ripple_abstains_when_two_stages_supply_the_same_output_load() {
+    let lib = test_programmed_load_library();
+    let (board, text) = exact_rated_ripple_fixture(
+        r#"
+  (net 7 "VIN2_5V")
+  (net 8 "SW_NODE_2")
+  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 30 0)
+    (property "Reference" "Q3") (property "Value" "PSMN5R2-60YLX")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 7 "VIN2_5V"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 8 "SW_NODE_2")))
+  (footprint "Package_TO_SOT_SMD:SOT-23" (layer "F.Cu") (at 35 0)
+    (property "Reference" "Q4") (property "Value" "PSMN5R2-60YLX")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 8 "SW_NODE_2"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 4 "GND")))
+  (footprint "Inductor_SMD:L_12x12mm" (layer "F.Cu") (at 40 0)
+    (property "Reference" "L2") (property "Value" "47uH")
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 8 "SW_NODE_2"))
+    (pad "2" smd rect (at 1 0) (size 1 1) (layers "F.Cu") (net 3 "VOUT_2V5")))
+  (footprint "Capacitor_SMD:CP_Elec_16x31.5" (layer "F.Cu") (at 30 5)
+    (property "Reference" "C2") (property "Value" "1200uF")
+    (property "MPN" "EKYB630ELL122MLN3S")
+    (pad "1" smd rect (at 0 0) (size 2 2) (layers "F.Cu") (net 7 "VIN2_5V"))
+    (pad "2" smd rect (at 2 0) (size 2 2) (layers "F.Cu") (net 4 "GND")))
+"#,
+    );
+
+    let report = run_si_with_library(&board, &text, &lib);
+    assert!(
+        findings_of(&report, SiCheck::InputCapRipple).is_empty(),
+        "a net-wide load cannot be charged in full to both suppliers: {:?}",
+        report.findings
+    );
+    let notes: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|finding| {
+            finding.check == SiCheck::InputCapRipple
+                && !finding.severity.is_finding()
+                && finding.message.contains("supplier split")
+        })
+        .collect();
+    assert_eq!(notes.len(), 1, "emit one stage-group abstention: {notes:?}");
+    assert!(notes[0].message.contains("L1") && notes[0].message.contains("L2"));
+}
+
 // ===========================================================================
 // Corpus sweep: zero false positives on the known-good famous boards.
 // ===========================================================================

@@ -4,7 +4,9 @@
 //! hallucinated part value cannot silently enter the model library. [`validate`]
 //! collects every violation at once rather than stopping at the first.
 
-use crate::schema::{ComponentKind, CurrentProgramEquation, CurrentProgramSemantics, ModelEntry};
+use crate::schema::{
+    AboveDomainBehavior, ComponentKind, CurrentProgramEquation, CurrentProgramSemantics, ModelEntry,
+};
 use thiserror::Error;
 
 /// A validation error.
@@ -297,6 +299,15 @@ pub fn validate(entry: &ModelEntry) -> Result<(), Vec<ValidationError>> {
                 message: "current_program regulated_current requires max_operating_current_a so an undersized programming resistor cannot imply operation beyond the sourced domain".into(),
             });
         }
+        if program.above_domain == AboveDomainBehavior::Saturate
+            && program.max_operating_current_a.is_none()
+        {
+            errors.push(ValidationError {
+                id: entry.id.clone(),
+                message: "current_program above_domain = saturate requires max_operating_current_a as the sourced saturation value"
+                    .into(),
+            });
+        }
 
         if let Some(limit) = program.max_operating_current_a {
             if !limit.is_finite() || limit <= 0.0 {
@@ -542,7 +553,9 @@ fn check_required_pins(entry: &ModelEntry, errors: &mut Vec<ValidationError>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::{ComponentKind, CurrentProgramEquation, ModelEntry, Params};
+    use crate::schema::{
+        AboveDomainBehavior, ComponentKind, CurrentProgramEquation, ModelEntry, Params,
+    };
     use std::collections::BTreeMap;
 
     fn make_diode(is: f64, n: f64, rs: f64) -> ModelEntry {
@@ -780,6 +793,18 @@ high_offset = 1.3333333333333333
                 .iter()
                 .any(|e| e.message.contains("requires max_operating_current_a")),
             "a regulated equation needs a sourced operating-domain ceiling"
+        );
+
+        let mut saturation_without_limit = programmed_vreg();
+        let program = saturation_without_limit.current_program.as_mut().unwrap();
+        program.max_operating_current_a = None;
+        program.above_domain = AboveDomainBehavior::Saturate;
+        assert!(
+            validate(&saturation_without_limit)
+                .unwrap_err()
+                .iter()
+                .any(|e| e.message.contains("above_domain = saturate")),
+            "saturation without a sourced saturation value is meaningless"
         );
 
         let mut above_absolute = programmed_vreg();

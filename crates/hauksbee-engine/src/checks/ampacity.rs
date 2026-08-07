@@ -37,7 +37,10 @@ use hauksbee_extract::{
 };
 use hauksbee_models::ModelLibrary;
 
-use crate::binder::resolve;
+use crate::{
+    binder::resolve,
+    component_evidence::{identity_refusal, role_net},
+};
 
 /// Direction of a regulated through-current at one of a component's rail pins.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,8 +49,6 @@ enum RailFlow {
     IntoComponent,
     /// Current enters the net through a regulated output/battery pin.
     OutOfComponent,
-    /// A bidirectional/unnamed rail terminal whose direction is not declared.
-    Undirected,
 }
 
 /// Per-net directional totals. A current passing through two cascaded stages
@@ -58,7 +59,6 @@ enum RailFlow {
 struct Attribution {
     into_components_a: f64,
     out_of_components_a: f64,
-    undirected_a: f64,
     citations: BTreeSet<String>,
 }
 
@@ -67,13 +67,12 @@ impl Attribution {
         match flow {
             RailFlow::IntoComponent => self.into_components_a += current_a,
             RailFlow::OutOfComponent => self.out_of_components_a += current_a,
-            RailFlow::Undirected => self.undirected_a += current_a,
         }
         self.citations.insert(citation);
     }
 
     fn finish(self) -> (f64, String) {
-        let current_a = self.undirected_a + self.into_components_a.max(self.out_of_components_a);
+        let current_a = self.into_components_a.max(self.out_of_components_a);
         let mut citation = self
             .citations
             .into_iter()
@@ -119,13 +118,6 @@ enum Series {
     /// or an unrecognised part in this position each mean something different,
     /// and guessing which would be guessing the current.
     Unknown,
-}
-
-fn has_duplicate_reference_conflict(component: &hauksbee_extract::Component) -> bool {
-    component
-        .properties
-        .iter()
-        .any(|(key, _)| key == hauksbee_extract::DUPLICATE_REFERENCE_CONFLICT_KEY)
 }
 
 /// The two distinct electrical nets of a two-terminal part.
@@ -234,6 +226,9 @@ fn is_capacitor_component(component: &hauksbee_extract::Component) -> bool {
 }
 
 fn classify_series(comp: &hauksbee_extract::Component) -> Series {
+    if identity_refusal(comp).is_some() {
+        return Series::Unknown;
+    }
     let v = comp.value.trim().to_ascii_lowercase();
     let fp = comp.footprint.to_ascii_lowercase();
     if v == "open" || fp.contains("sj_open") || fp.contains("jumper_open") {
@@ -383,9 +378,6 @@ fn program_resistance_to_ground(
                 _ => continue,
             };
 
-            if has_duplicate_reference_conflict(component) {
-                return None;
-            }
             let (ohms, closed) = match classify_series(component) {
                 Series::Ohms(ohms) if ohms.is_finite() && ohms > 0.0 => (ohms, false),
                 Series::Closed => (0.0, true),
@@ -591,9 +583,6 @@ fn adjacent_sense_resistor(
         } else {
             continue;
         };
-        if has_duplicate_reference_conflict(component) {
-            return None;
-        }
         match classify_series(component) {
             Series::Open => continue,
             Series::Ohms(ohms)
@@ -701,7 +690,7 @@ fn attribute_currents(board: &ExtractedBoard, lib: &ModelLibrary) -> Attribution
                                 operating_current_a,
                                 ohms,
                                 path,
-                                programmed_power_rails(board, comp, model, program),
+                                programmed_power_rails(board, comp, model, program)?,
                                 Some((sense_ohms, sense_shunts)),
                             ))
                         }
@@ -713,7 +702,7 @@ fn attribute_currents(board: &ExtractedBoard, lib: &ModelLibrary) -> Attribution
                                 operating_current_a,
                                 ohms,
                                 path,
-                                programmed_power_rails(board, comp, model, program),
+                                programmed_power_rails(board, comp, model, program)?,
                                 None,
                             ))
                         }
@@ -794,15 +783,7 @@ fn pin_net_for_role(
     model: &hauksbee_models::ModelEntry,
     role: &str,
 ) -> Option<i64> {
-    let pad = model
-        .pins
-        .iter()
-        .find(|(_, r)| r.eq_ignore_ascii_case(role))
-        .map(|(pad, _)| pad.clone())?;
-    comp.pins
-        .iter()
-        .find(|p| p.number == pad)
-        .and_then(|p| p.net)
+    role_net(comp, model, role).ok()
 }
 
 /// The exact rail path declared by a regulated-current model. Explicit input and
@@ -813,50 +794,39 @@ fn programmed_power_rails(
     comp: &hauksbee_extract::Component,
     model: &hauksbee_models::ModelEntry,
     program: &hauksbee_models::schema::CurrentProgram,
-) -> Vec<(i64, RailFlow)> {
-    let mut nets: HashMap<i64, RailFlow> = HashMap::new();
-    for p in &comp.pins {
-        let Some(id) = p.net else { continue };
-        let Some(net) = board.net(id) else { continue };
-        if super::converter::is_ground_net(&net.name) {
-            continue;
+) -> Option<Vec<(i64, RailFlow)>> {
+    let collapse_roles = |roles: &[String]| -> Option<i64> {
+        if roles.is_empty() {
+            return None;
         }
-        let Some(role) = model
-            .pins
-            .iter()
-            .find(|(pad, _)| **pad == p.number)
-            .map(|(_, role)| role.as_str())
-        else {
-            continue;
-        };
-        let flow = if program
-            .current_in_roles
-            .iter()
-            .any(|declared| declared.eq_ignore_ascii_case(role))
-        {
-            Some(RailFlow::IntoComponent)
-        } else if program
-            .current_out_roles
-            .iter()
-            .any(|declared| declared.eq_ignore_ascii_case(role))
-        {
-            Some(RailFlow::OutOfComponent)
-        } else {
-            None
-        };
-        if let Some(flow) = flow {
-            nets.entry(id)
-                .and_modify(|known| {
-                    if *known != flow {
-                        *known = RailFlow::Undirected;
-                    }
-                })
-                .or_insert(flow);
+        let mut collapsed = None;
+        for role in roles {
+            let id = role_net(comp, model, role).ok()?;
+            if id == 0 {
+                return None;
+            }
+            let net = board.net(id)?;
+            if super::converter::is_ground_net(&net.name) {
+                return None;
+            }
+            match collapsed {
+                None => collapsed = Some(id),
+                Some(known) if known == id => {}
+                Some(_) => return None,
+            }
         }
+        collapsed
+    };
+
+    let input = collapse_roles(&program.current_in_roles)?;
+    let output = collapse_roles(&program.current_out_roles)?;
+    if input == output {
+        return None;
     }
-    let mut nets: Vec<_> = nets.into_iter().collect();
-    nets.sort_unstable_by_key(|(id, _)| *id);
-    nets
+    Some(vec![
+        (input, RailFlow::IntoComponent),
+        (output, RailFlow::OutOfComponent),
+    ])
 }
 
 /// Compatibility/view helper for topology tests and callers that only need the
@@ -869,6 +839,7 @@ fn power_nets_of(
     program: &hauksbee_models::schema::CurrentProgram,
 ) -> Vec<i64> {
     programmed_power_rails(board, comp, model, program)
+        .unwrap_or_default()
         .into_iter()
         .map(|(id, _)| id)
         .collect()
@@ -1329,6 +1300,30 @@ sense_full_scale_v = 0.05
     }
 
     #[test]
+    fn an_inferred_ambiguous_resistor_never_programs_a_precise_current() {
+        let mut resistor = comp(
+            "R10",
+            "4.99k",
+            "Resistor_SMD:R_0603",
+            vec![pin("1", 3), pin("2", 2)],
+        );
+        resistor.properties.push((
+            hauksbee_extract::altium::REFERENCE_AMBIGUOUS_KEY.into(),
+            "same hierarchy, no authoritative source UID".into(),
+        ));
+        let board = charger_board(vec![resistor]);
+        let got = attribute_currents(&board, &lib_from("inferred_program", CHARGER_TOML));
+
+        assert!(
+            got.cited.is_empty(),
+            "inferred physical identity cannot support a datasheet-precise current: {:?}",
+            got.cited
+        );
+        assert_eq!(got.undetermined.len(), 1);
+        assert_eq!(got.undetermined[0].reference, "U1");
+    }
+
+    #[test]
     fn a_capacitor_is_not_read_as_a_programming_resistor() {
         // A filter cap from PROG to ground is not the programming element, and
         // reading it as one would produce a current from a farad value.
@@ -1445,7 +1440,7 @@ sense_full_scale_v = 0.05
     }
 
     #[test]
-    fn the_operating_limit_not_the_absolute_rating_bounds_programmed_current() {
+    fn an_out_of_domain_program_resistor_is_undetermined_not_clamped() {
         // A 100 ohm resistor would put the equation at 10 A. Normal operation
         // is specified only to 400 mA, while 800 mA is an absolute stress limit;
         // the latter must never become a promised output current.
@@ -1455,17 +1450,15 @@ sense_full_scale_v = 0.05
             "Resistor_SMD:R_0603",
             vec![pin("1", 3), pin("2", 2)],
         )]);
-        let lib = lib_from("clamp", CHARGER_TOML);
+        let lib = lib_from("out_of_domain", CHARGER_TOML);
         let got = attribute_currents(&board, &lib);
-        let (current, citation) = got.cited.get("VBAT").expect("VBAT attributed");
         assert!(
-            (*current - 0.4).abs() < 1e-9,
-            "expected the 400 mA operating limit to bound the equation, got {current}"
+            got.cited.is_empty(),
+            "the normal-operating endpoint is a domain boundary, not evidence of saturation: {:?}",
+            got.cited
         );
-        assert!(
-            citation.contains("operating limit") && citation.contains("0.400"),
-            "the clamp must be visible and auditable in the citation: {citation}"
-        );
+        assert_eq!(got.undetermined.len(), 1);
+        assert_eq!(got.undetermined[0].reference, "U1");
     }
 
     #[test]
@@ -1954,6 +1947,48 @@ max_current_a = 1.0
         assert!(
             !nets.contains(&13),
             "bypass must not be charged the rail current"
+        );
+    }
+
+    #[test]
+    fn programmed_power_path_refuses_a_missing_declared_role() {
+        let component = comp(
+            "U1",
+            "TESTCHARGER",
+            "",
+            vec![pin("1", 1), pin("2", 2), pin("3", 3)],
+        );
+        let lib = lib_from("missing_declared_role", CHARGER_TOML);
+        let model = resolve(&lib, &component).model.unwrap();
+        let program = model.current_program.as_ref().unwrap();
+        let board = charger_board(Vec::new());
+        assert!(
+            programmed_power_rails(&board, &component, &model, program).is_none(),
+            "missing OUT must refuse the entire current path, not retain VIN"
+        );
+    }
+
+    #[test]
+    fn programmed_power_path_refuses_conflicting_repeated_role_pads() {
+        let component = comp(
+            "U1",
+            "TESTCHARGER",
+            "",
+            vec![
+                pin("1", 1),
+                pin("1", 5),
+                pin("2", 2),
+                pin("3", 3),
+                pin("4", 4),
+            ],
+        );
+        let lib = lib_from("conflicting_role_pads", CHARGER_TOML);
+        let model = resolve(&lib, &component).model.unwrap();
+        let program = model.current_program.as_ref().unwrap();
+        let board = charger_board(Vec::new());
+        assert!(
+            programmed_power_rails(&board, &component, &model, program).is_none(),
+            "one logical input pad cannot be on two non-zero nets"
         );
     }
 }

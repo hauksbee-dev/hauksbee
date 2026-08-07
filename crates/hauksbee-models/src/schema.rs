@@ -128,15 +128,21 @@ pub struct CurrentProgram {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub current_out_roles: Vec<String>,
 
-    /// Highest current specified for ordinary programmed operation. Evaluation
-    /// is capped here because asking for more with an undersized resistor does
-    /// not make the part capable of exceeding its published operating range.
+    /// Highest current specified for ordinary programmed operation. This is a
+    /// domain boundary, not by itself evidence that the silicon saturates at
+    /// exactly this value when an undersized resistor asks for more.
     /// Required for `regulated_current`, because an inverse law alone is
     /// unbounded as the fitted resistance approaches zero. It may be omitted
     /// for `protection_limit` when the equation itself includes its physical
     /// full-scale bound. It is never inferred from a device-level rating.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_operating_current_a: Option<f64>,
+
+    /// Behavior when the published equation asks for more than the sourced
+    /// normal-operating endpoint. The safe default is to abstain. Saturation
+    /// must be explicit and cited by the model author.
+    #[serde(default, skip_serializing_if = "AboveDomainBehavior::is_default")]
+    pub above_domain: AboveDomainBehavior,
 
     /// Manufacturer programming equation, flattened into the TOML block so a
     /// model reads `equation = "inverse_resistance"` beside its constants.
@@ -154,6 +160,24 @@ pub enum CurrentProgramSemantics {
     /// The value is an overload, trip, or limiting threshold rather than proof
     /// of steady-state current through the board.
     ProtectionLimit,
+}
+
+/// What a current-program model may claim above its sourced operating domain.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AboveDomainBehavior {
+    /// The equation is outside its supported operating domain, so no precise
+    /// current is returned.
+    #[default]
+    Abstain,
+    /// The datasheet explicitly specifies saturation at the operating limit.
+    Saturate,
+}
+
+impl AboveDomainBehavior {
+    fn is_default(&self) -> bool {
+        *self == Self::Abstain
+    }
 }
 
 /// Supported current-programming equations.
@@ -207,6 +231,22 @@ pub enum CurrentProgramEquation {
 }
 
 impl CurrentProgram {
+    fn apply_operating_domain(&self, equation_current_a: f64) -> Option<f64> {
+        let Some(limit) = self
+            .max_operating_current_a
+            .filter(|limit| limit.is_finite() && *limit > 0.0)
+        else {
+            return Some(equation_current_a);
+        };
+        if equation_current_a <= limit {
+            return Some(equation_current_a);
+        }
+        match self.above_domain {
+            AboveDomainBehavior::Abstain => None,
+            AboveDomainBehavior::Saturate => Some(limit),
+        }
+    }
+
     /// Evaluate the published resistor equation without applying the part's
     /// normal-operating ceiling. Returns `None` for a non-positive/non-finite
     /// resistance or if malformed data would produce a non-physical result.
@@ -279,10 +319,7 @@ impl CurrentProgram {
     /// Datasheet/resistor tolerances are not implied by a point equation.
     pub fn operating_current_a(&self, resistance_ohms: f64) -> Option<f64> {
         let equation_current_a = self.equation_current_a(resistance_ohms)?;
-        Some(match self.max_operating_current_a {
-            Some(limit) if limit.is_finite() && limit > 0.0 => equation_current_a.min(limit),
-            _ => equation_current_a,
-        })
+        self.apply_operating_domain(equation_current_a)
     }
 
     /// Sense-aware counterpart to [`Self::operating_current_a`].
@@ -293,10 +330,7 @@ impl CurrentProgram {
     ) -> Option<f64> {
         let equation_current_a =
             self.equation_current_with_sense_a(program_resistance_ohms, sense_resistance_ohms)?;
-        Some(match self.max_operating_current_a {
-            Some(limit) if limit.is_finite() && limit > 0.0 => equation_current_a.min(limit),
-            _ => equation_current_a,
-        })
+        self.apply_operating_domain(equation_current_a)
     }
 }
 
@@ -645,7 +679,7 @@ impl ParamValue {
 
 #[cfg(test)]
 mod tests {
-    use super::Params;
+    use super::{AboveDomainBehavior, CurrentProgram, Params};
 
     #[test]
     fn get_bool_distinguishes_false_from_absent() {
@@ -661,5 +695,26 @@ mod tests {
 
         let t: Params = toml::from_str("module = true").unwrap();
         assert_eq!(t.get_bool("module"), Some(true));
+    }
+
+    #[test]
+    fn current_program_saturates_only_when_the_model_explicitly_says_so() {
+        let base = r#"
+pin = "prog"
+semantics = "regulated_current"
+current_in_roles = ["in"]
+current_out_roles = ["out"]
+max_operating_current_a = 0.4
+equation = "inverse_resistance"
+k_volts = 1000.0
+"#;
+        let abstaining: CurrentProgram = toml::from_str(base).unwrap();
+        assert_eq!(abstaining.above_domain, AboveDomainBehavior::Abstain);
+        assert_eq!(abstaining.operating_current_a(100.0), None);
+
+        let saturating: CurrentProgram =
+            toml::from_str(&format!("{base}\nabove_domain = \"saturate\"\n")).unwrap();
+        assert_eq!(saturating.above_domain, AboveDomainBehavior::Saturate);
+        assert_eq!(saturating.operating_current_a(100.0), Some(0.4));
     }
 }
