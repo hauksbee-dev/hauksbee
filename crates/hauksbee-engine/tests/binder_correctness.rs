@@ -460,6 +460,273 @@ fn cr_designated_diode_is_not_a_capacitor() {
     );
 }
 
+/// Some PCB formats preserve one physical pad record per copper primitive or
+/// layer. A two-terminal resistor can therefore arrive as pads 1,2,1,2 even
+/// though it is one logical component. Repeated records must not turn it into
+/// a two-element resistor array. A missing net on one copy of a numbered pad
+/// is enriched from the connected copy of that same pad.
+#[test]
+fn repeated_physical_pads_bind_one_logical_two_terminal_resistor() {
+    let r = comp(
+        "R7",
+        "10k",
+        "Resistor_SMD:R_1206_3216Metric",
+        vec![
+            Pin {
+                number: "1".to_string(),
+                net: None,
+                function: String::new(),
+                kind: "passive".to_string(),
+                position: None,
+            },
+            pin("2", 2, ""),
+            pin("1", 1, ""),
+            pin("2", 2, ""),
+        ],
+    );
+    let b = board(&[(1, "NET_A"), (2, "NET_B")], vec![r]);
+    let bound = bind_board(&b, &ModelLibrary::builtin());
+
+    let resistors: Vec<_> = bound
+        .circuit
+        .devices
+        .iter()
+        .filter_map(|device| match device {
+            Device::Resistor {
+                name, a, b, ohms, ..
+            } if name == "R7" || name.starts_with("R7_e") => Some((name.as_str(), *a, *b, *ohms)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        resistors.len(),
+        1,
+        "four physical pad records for two numbered terminals are one resistor: {resistors:?}"
+    );
+    let (name, a, b, ohms) = resistors[0];
+    assert_eq!(name, "R7", "a scalar resistor keeps its original reference");
+    assert!(
+        (ohms - 10_000.0).abs() < 1e-9,
+        "the original R is preserved"
+    );
+    let expected = [bound.node("NET_A").unwrap(), bound.node("NET_B").unwrap()]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    let actual = [a, b]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(
+        actual, expected,
+        "the logical terminals span the original nets"
+    );
+}
+
+/// Duplicate physical records only provide evidence when their known nets
+/// agree. If two records claim different nets for the same numbered terminal,
+/// selecting either one would fabricate connectivity; leave the passive open
+/// and report the contradiction.
+#[test]
+fn contradictory_duplicate_passive_pad_nets_are_refused() {
+    let r = comp(
+        "R8",
+        "4k7",
+        "Resistor_SMD:R_0603_1608Metric",
+        vec![
+            pin("1", 1, ""),
+            pin("2", 2, ""),
+            pin("1", 3, ""),
+            pin("2", 2, ""),
+        ],
+    );
+    let b = board(
+        &[(1, "NET_A"), (2, "NET_B"), (3, "CONTRADICTORY_NET")],
+        vec![r],
+    );
+    let bound = bind_board(&b, &ModelLibrary::builtin());
+
+    assert!(
+        !bound
+            .circuit
+            .devices
+            .iter()
+            .any(|device| device.name() == "R8" || device.name().starts_with("R8_e")),
+        "a contradictory logical terminal must not stamp guessed connectivity"
+    );
+    let row = bound
+        .report
+        .rows
+        .iter()
+        .find(|row| row.reference == "R8")
+        .expect("R8 gets a bind row");
+    assert!(
+        matches!(&row.outcome, BindOutcome::Unresolved { reason } if reason.contains("pad 1") && reason.contains("conflicting nets")),
+        "the unresolved reason identifies the contradictory pad: {:?}",
+        row.outcome
+    );
+    assert!(
+        row.warning
+            .as_deref()
+            .is_some_and(|warning| warning.contains("pad 1") && warning.contains("left open")),
+        "the warning must make the refusal visible: {:?}",
+        row.warning
+    );
+}
+
+/// Logical-terminal normalization is shared by all scalar passives, not just
+/// resistors. Repeated physical records must keep a capacitor or inductor a
+/// single device with its original reference as well.
+#[test]
+fn repeated_physical_pads_keep_capacitors_and_inductors_scalar() {
+    let c = comp(
+        "C7",
+        "100nF",
+        "Capacitor_SMD:C_0603_1608Metric",
+        vec![
+            pin("1", 1, ""),
+            pin("2", 2, ""),
+            pin("1", 1, ""),
+            pin("2", 2, ""),
+        ],
+    );
+    let l = comp(
+        "L7",
+        "22uH",
+        "Inductor_SMD:L_1210_3225Metric",
+        vec![
+            pin("1", 3, ""),
+            pin("2", 4, ""),
+            pin("1", 3, ""),
+            pin("2", 4, ""),
+        ],
+    );
+    let b = board(
+        &[(1, "C_A"), (2, "C_B"), (3, "L_A"), (4, "L_B")],
+        vec![c, l],
+    );
+    let bound = bind_board(&b, &ModelLibrary::builtin());
+
+    let capacitors: Vec<_> = bound
+        .circuit
+        .devices
+        .iter()
+        .filter(|device| matches!(device, Device::Capacitor { name, .. } if name.starts_with("C7")))
+        .collect();
+    let inductors: Vec<_> = bound
+        .circuit
+        .devices
+        .iter()
+        .filter(|device| matches!(device, Device::Inductor { name, .. } if name.starts_with("L7")))
+        .collect();
+    assert_eq!(capacitors.len(), 1, "C7 is one logical capacitor");
+    assert_eq!(capacitors[0].name(), "C7", "C7 keeps its scalar reference");
+    assert_eq!(inductors.len(), 1, "L7 is one logical inductor");
+    assert_eq!(inductors[0].name(), "L7", "L7 keeps its scalar reference");
+}
+
+/// Altium can infer that split placement records are one component from a
+/// shared pad/net. That is useful for DRC ownership, but it does not prove one
+/// physical part: two duplicate-reference capacitors can both span VCC/GND.
+/// Without an authoritative source UID, the binder must leave the inferred
+/// identity open rather than stamping one precise capacitor for two possible
+/// parts.
+#[test]
+fn reference_ambiguous_merge_without_source_uid_is_left_open() {
+    let mut c = comp(
+        "C9",
+        "100nF",
+        "Capacitor_SMD:C_0603_1608Metric",
+        vec![
+            pin("1", 1, ""),
+            pin("2", 2, ""),
+            pin("1", 1, ""),
+            pin("2", 2, ""),
+        ],
+    );
+    c.properties.push((
+        "reference_ambiguous".to_string(),
+        "records merged from shared pad/net evidence".to_string(),
+    ));
+    let b = board(&[(1, "VCC"), (2, "GND")], vec![c]);
+    let bound = bind_board(&b, &ModelLibrary::builtin());
+
+    assert!(
+        !bound
+            .circuit
+            .devices
+            .iter()
+            .any(|device| { matches!(device, Device::Capacitor { name, .. } if name == "C9") }),
+        "an inferred identity without a UID must not stamp precise physics"
+    );
+    let row = bound
+        .report
+        .rows
+        .iter()
+        .find(|row| row.reference == "C9")
+        .expect("ambiguous C9 gets a visible bind row");
+    assert!(
+        matches!(&row.outcome, BindOutcome::Unresolved { reason }
+            if reason.contains("ambiguous inferred reference") && reason.contains("UID")),
+        "the unresolved reason must identify the missing identity evidence: {:?}",
+        row.outcome
+    );
+    assert!(
+        row.warning
+            .as_deref()
+            .is_some_and(|warning| warning.contains("left open") && warning.contains("UID")),
+        "the refusal must be prominent to users: {:?}",
+        row.warning
+    );
+}
+
+/// A non-empty Altium UNIQUEID, retained by extraction as source_unique_id,
+/// is authoritative component identity. Repeated physical pad records for that
+/// identity still normalize to one scalar component rather than an array.
+#[test]
+fn reference_ambiguous_merge_with_source_uid_binds_one_scalar() {
+    let mut c = comp(
+        "C10",
+        "100nF",
+        "Capacitor_SMD:C_0603_1608Metric",
+        vec![
+            pin("1", 1, ""),
+            pin("2", 2, ""),
+            pin("1", 1, ""),
+            pin("2", 2, ""),
+        ],
+    );
+    c.properties.extend([
+        (
+            "reference_ambiguous".to_string(),
+            "split placement records".to_string(),
+        ),
+        ("source_unique_id".to_string(), "ABC123".to_string()),
+    ]);
+    let b = board(&[(1, "VCC"), (2, "GND")], vec![c]);
+    let bound = bind_board(&b, &ModelLibrary::builtin());
+
+    let capacitors: Vec<_> = bound
+        .circuit
+        .devices
+        .iter()
+        .filter(
+            |device| matches!(device, Device::Capacitor { name, .. } if name.starts_with("C10")),
+        )
+        .collect();
+    assert_eq!(capacitors.len(), 1, "one UID means one scalar capacitor");
+    assert_eq!(capacitors[0].name(), "C10");
+    let row = bound
+        .report
+        .rows
+        .iter()
+        .find(|row| row.reference == "C10")
+        .expect("C10 gets a bind row");
+    assert!(
+        matches!(row.outcome, BindOutcome::Analog { .. }),
+        "authoritative UID identity should bind normally: {:?}",
+        row.outcome
+    );
+}
+
 /// Bug (binder-r3 #1): a multi-element passive array (a 4-pad isolated
 /// resistor network) used to bind as ONE 2-terminal resistor across its first
 /// two pads; the other elements silently vanished from the circuit. An even
