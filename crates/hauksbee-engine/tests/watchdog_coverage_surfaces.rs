@@ -164,6 +164,11 @@ fn a_faithful_backend_with_no_reboots_says_nothing_on_any_surface() {
         let out = run_avr(&fw, &extra);
         let both = String::from_utf8_lossy(&out.stdout).to_string()
             + &String::from_utf8_lossy(&out.stderr);
+        // The evidence artifacts block cites the firmware's own path, and this
+        // elf lives in a directory NAMED avr_watchdog. That is the file's
+        // identity, not a watchdog claim, so it is masked before the blanket
+        // silence assertion.
+        let both = both.replace("avr_watchdog", "<fw-dir>");
         assert!(
             !both.to_lowercase().contains("watchdog"),
             "simavr with a fed watchdog must be silent on {extra:?}; got:\n{both}"
