@@ -467,13 +467,20 @@ const ARC_STEP_RAD: f64 = std::f64::consts::TAU / 16.0;
 /// How far a tessellated arc wall may sit from the true one (mm).
 ///
 /// A chord lies inside its arc, so the stadium built on it reaches further
-/// towards the centre than the real cut does, by the step's sagitta. Copper in
-/// that sliver would be joined to the slot by an approximation rather than by
-/// the board. Holding the sagitta below half the union epsilon
-/// (`connect::TOUCH_EPS`) keeps that error smaller than the tolerance the
-/// union already works to, so the tessellation cannot make a contact the true
-/// arc would not, within the precision the whole module operates at.
-const ARC_SAGITTA_TOL_MM: f64 = 0.0025;
+/// towards the centre than the real cut does, by the step's sagitta. Be exact
+/// about what this buys: no chord approximation makes that error zero, so the
+/// effective contact tolerance against an arc wall is `connect::TOUCH_EPS`
+/// plus this, about six microns, rather than `TOUCH_EPS` alone. Copper sitting
+/// in that band, closer than six microns to touching the wall but not
+/// touching it, is joined by the approximation rather than by the board.
+///
+/// Six microns is a twentieth of the tightest clearance a board is designed
+/// to, so this cannot bridge a gap anyone drew; it can only disagree about
+/// contacts already too close to call. Keeping the budget here rather than
+/// fixing the segment count is what makes that true at every radius: a fixed
+/// count leaves a 50 mm arc bulging most of a millimetre off its own wall,
+/// which is well inside the range where real copper lives.
+const ARC_SAGITTA_TOL_MM: f64 = 0.001;
 
 /// Hard cap on the segments one arc may produce, so a hostile radius cannot
 /// turn a single line into unbounded work. At the cap the sagitta budget is no
