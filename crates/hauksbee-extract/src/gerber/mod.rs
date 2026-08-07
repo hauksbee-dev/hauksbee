@@ -198,6 +198,10 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
     // the hole locations; otherwise it is Excellon.
     let n_copper = ordered.len();
     let token_to_stack = copper_layer_tokens(&ordered, &copper);
+    // Reader notes: everything this job made us refuse or could not see, in the
+    // order we found it. Surfaced on `ReconStats` and printed, so a refusal is
+    // visible instead of looking like a clean extraction.
+    let mut notes: Vec<String> = Vec::new();
 
     // Pass one: read every plated drill file and work out what it says about
     // the copper layers its hits reach. Nothing is stitched yet, because
@@ -211,7 +215,9 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
     }
     struct ParsedDrill {
         path: std::path::PathBuf,
+        name: String,
         body: DrillBody,
+        declared: excellon::DeclaredSpan,
         claim: SpanClaim,
     }
     let mut parsed: Vec<ParsedDrill> = Vec::new();
@@ -236,32 +242,77 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
             (DrillBody::Film(text), excellon::DeclaredSpan::Absent)
         } else {
             let drill = excellon::parse(&text);
-            let declared = drill.span;
+            // A body that declares itself non-plated contributes no hits, so it
+            // must not contribute a span claim either: a mechanical file's
+            // layer pair is not evidence about how the plated ones are drilled.
+            let declared = if drill.plated == Some(false) {
+                excellon::DeclaredSpan::Absent
+            } else {
+                drill.span
+            };
             (DrillBody::Excellon(drill), declared)
         };
-        let claim = match declared {
-            // The file stated a pair. If it does not resolve against this job's
-            // stack, that is a declaration we could not use, NOT silence: a file
-            // that tried to name its span is the last one whose hits may be
-            // assumed to reach the whole stack.
-            excellon::DeclaredSpan::Pair(p) => match resolve_pair(p.from, p.to, n_copper) {
-                Some((f, t)) => SpanClaim::Resolved(f, t),
-                None => SpanClaim::DeclaredButUnresolvable,
-            },
+        parsed.push(ParsedDrill {
+            path: d.clone(),
+            name: n,
+            body,
+            declared,
+            // Filled in below, once the whole set has been read.
+            claim: SpanClaim::Silent,
+        });
+    }
+
+    // How many copper layers the drill set says the finished board has. This is
+    // the deepest layer any declaration names, and it is the board's own
+    // statement, independent of how many copper FILMS we managed to classify.
+    // The two differ in practice: KiCad names an inner layer's film after the
+    // user's label ("GND_Cu", "Power_Cu"), and a job whose inner films are named
+    // that way classifies fewer copper layers than the board has.
+    let implied_layers = parsed
+        .iter()
+        .filter_map(|p| match p.declared {
+            excellon::DeclaredSpan::Pair(pair) => Some(pair.to as usize),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(n_copper);
+    if implied_layers > n_copper {
+        notes.push(format!(
+            "the drill files describe a {implied_layers}-layer board but only {n_copper} copper \
+             layer(s) were classified in this job. Copper this reader did not recognise carries \
+             no nets, so the reconstruction is missing whatever routing lives on those layers. \
+             Name the missing films with their stack position, or add a layer_map.txt, to \
+             recover them."
+        ));
+    }
+
+    for p in parsed.iter_mut() {
+        p.claim = match p.declared {
+            excellon::DeclaredSpan::Pair(pair) => {
+                if pair.from == 1 && pair.to as usize == implied_layers {
+                    // Top to bottom of the board the drill set describes: this
+                    // hit goes right through, which stays true whatever subset
+                    // of the films we classified.
+                    SpanClaim::Resolved(0, n_copper.saturating_sub(1))
+                } else {
+                    match resolve_pair(pair.from, pair.to, n_copper) {
+                        Some((f, t)) => SpanClaim::Resolved(f, t),
+                        // A partial span we cannot place. NOT silence: a file
+                        // that named its span is the last one whose hits may be
+                        // assumed to reach everything.
+                        None => SpanClaim::DeclaredButUnresolvable,
+                    }
+                }
+            }
             excellon::DeclaredSpan::Unreadable => SpanClaim::DeclaredButUnresolvable,
             excellon::DeclaredSpan::Absent => {
-                match span_from_filename(&n, &token_to_stack, n_copper) {
+                match span_from_filename(&p.name, &token_to_stack, n_copper) {
                     Some((f, t)) => SpanClaim::Resolved(f, t),
-                    None if names_a_partial_span(&n) => SpanClaim::PartialButUnreadable,
+                    None if names_a_partial_span(&p.name) => SpanClaim::PartialButUnreadable,
                     None => SpanClaim::Silent,
                 }
             }
         };
-        parsed.push(ParsedDrill {
-            path: d.clone(),
-            body,
-            claim,
-        });
     }
 
     // Does this job actually carry a multi-span drill set? Only then is a
@@ -270,15 +321,14 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
     // there is not a guess, it is the only thing the set can mean.
     let job_is_multi_span = parsed.iter().any(|p| match p.claim {
         SpanClaim::Resolved(f, t) => (f, t) != (0, n_copper.saturating_sub(1)),
-        // A declaration we could not resolve means our picture of this job's
-        // stack and the file's disagree, so no silent sibling is safe either.
+        // A declaration we could not place means this job has vias that stop
+        // somewhere we cannot locate, so no silent sibling is safe either.
         SpanClaim::PartialButUnreadable | SpanClaim::DeclaredButUnresolvable => true,
         SpanClaim::Silent => false,
     });
 
     // Pass two: turn the hits into plated barrels with their resolved span.
     let mut holes: Vec<PlatedHole> = Vec::new();
-    let mut notes: Vec<String> = Vec::new();
     for p in parsed {
         let d = &p.path;
         let span = match p.claim {
@@ -637,9 +687,37 @@ fn read_outline(outlines: &[std::path::PathBuf]) -> Vec<geo::Shape> {
 /// against the board rather than assumed, and so a job with castellations is
 /// visible as such in the reconstruction stats.
 fn count_castellations(holes: &[PlatedHole], outline: &[geo::Shape]) -> usize {
+    use rstar::{RTree, RTreeObject, AABB};
     if outline.is_empty() {
         return 0;
     }
+    // A board outline is a polyline of hundreds of short segments and a job can
+    // carry thousands of hits, so pairing them off directly is quadratic. Index
+    // the outline the way the rest of the module indexes copper, so each hit
+    // only pays for the segments its own barrel could possibly reach.
+    struct Seg {
+        bounds: [f64; 4],
+        idx: usize,
+    }
+    impl RTreeObject for Seg {
+        type Envelope = AABB<[f64; 2]>;
+        fn envelope(&self) -> Self::Envelope {
+            AABB::from_corners(
+                [self.bounds[0], self.bounds[1]],
+                [self.bounds[2], self.bounds[3]],
+            )
+        }
+    }
+    let tree = RTree::bulk_load(
+        outline
+            .iter()
+            .enumerate()
+            .map(|(idx, s)| Seg {
+                bounds: s.bounds(),
+                idx,
+            })
+            .collect(),
+    );
     holes
         .iter()
         .filter(|h| {
@@ -654,7 +732,9 @@ fn count_castellations(holes: &[PlatedHole], outline: &[geo::Shape]) -> usize {
                     r,
                 }),
             };
-            outline.iter().any(|o| geo::shape_gap(&barrel, o) <= 0.0)
+            let b = barrel.bounds();
+            tree.locate_in_envelope_intersecting(AABB::from_corners([b[0], b[1]], [b[2], b[3]]))
+                .any(|s| geo::shape_gap(&barrel, &outline[s.idx]) <= 0.0)
         })
         .count()
 }

@@ -232,7 +232,13 @@ pub fn parse(text: &str) -> DrillFile {
                 tool_down = false;
                 continue;
             }
-            if up.starts_with("G05") || up.starts_with("G5") {
+            // The G-code is the leading `G` plus its digit run, read as a
+            // number. Matching on text prefixes instead let `G5` swallow `G50`
+            // and made `G2X..` an arc while `G2Y..` was not, so which motions
+            // counted depended on which axis the exporter happened to write
+            // first.
+            let g = leading_g_code(&up);
+            if g == Some(5) {
                 // Back to drill mode: the cutter is up by definition.
                 tool_down = false;
                 continue;
@@ -240,8 +246,8 @@ pub fn parse(text: &str) -> DrillFile {
             // A `G00` rapid positions the cutter without cutting, so it is a
             // move and never a hit. A `G01` while the cutter is down cuts a
             // slot from where it was to where it lands.
-            let is_rapid = up.starts_with("G00") || up.starts_with("G0X") || up.starts_with("G0Y");
-            let is_cut = up.starts_with("G01") || up.starts_with("G1X") || up.starts_with("G1Y");
+            let is_rapid = g == Some(0);
+            let is_cut = g == Some(1);
             if is_rapid || is_cut {
                 let (px, py) = (last_x, last_y);
                 let moved = parse_xy_modal(
@@ -277,12 +283,9 @@ pub fn parse(text: &str) -> DrillFile {
             // geometry at all: planting a round hole at the endpoint (what the
             // fall-through to the plain coordinate reader would do) invents a
             // hit the file never described.
-            let is_arc = up.starts_with("G02")
-                || up.starts_with("G03")
-                || up.starts_with("G2X")
-                || up.starts_with("G3X");
+            let is_arc = g == Some(2) || g == Some(3);
             if is_arc {
-                let clockwise = up.starts_with("G02") || up.starts_with("G2");
+                let clockwise = g == Some(2);
                 let (px, py) = (last_x, last_y);
                 let moved = parse_xy_modal(
                     line,
@@ -384,6 +387,18 @@ pub fn parse(text: &str) -> DrillFile {
     }
 }
 
+/// The numeric G-code a line opens with, if any: `G0`, `G00` and `G000` all
+/// read as 0, and `G50` reads as 50 rather than as a `G5` with junk after it.
+/// The line must be already uppercased.
+fn leading_g_code(up: &str) -> Option<u32> {
+    let rest = up.strip_prefix('G')?;
+    let digits: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse().ok()
+}
+
 /// Read the `I`/`J` centre offsets of a rout arc, in document units. Both must
 /// be present: an arc missing either has no centre and so no recoverable curve.
 fn arc_center_offset(
@@ -418,10 +433,14 @@ const ARC_STEP_RAD: f64 = std::f64::consts::TAU / 16.0;
 /// `(start_x, start_y, end_x, end_y)`.
 ///
 /// `(i, j)` is the centre offset from the start point, the multi-quadrant
-/// convention Excellon shares with RS-274X. Chaining short stadiums slightly
-/// UNDER-covers the true swept area between their chords, never over-covers it,
-/// so this can miss a hairline tangent but cannot invent a contact. A zero
-/// radius or a non-finite sweep yields nothing at all rather than a guess.
+/// convention Excellon shares with RS-274X. Each chord sits inside its arc, so
+/// its stadium falls short of the true wall on the outside and reaches past it
+/// on the inside; both errors are bounded by the sagitta of one step, which at
+/// this resolution is under 2% of the arc radius. That is the same
+/// approximation, and the same error bound, that [`super::rs274x`] gives a drawn
+/// copper arc, so a slot wall and a copper arc resolve a marginal contact
+/// identically instead of disagreeing about the same curve. A zero radius or a
+/// non-finite sweep yields nothing at all rather than a guess.
 fn tessellate_arc(
     sx: f64,
     sy: f64,
@@ -905,8 +924,11 @@ M30
 
     #[test]
     fn a_file_without_m15_keeps_its_old_reading_of_g01() {
-        // No rout mode in the file: a coordinate line that happens to carry a
-        // G-code is still a drilled hit, exactly as before.
+        // No `M15` anywhere, so this file is not in rout mode and its `G01`
+        // lines are positioned hits, the reading every existing job relies on.
+        // The fixture carries real `G01` coordinate lines, so a reader that
+        // treated G01 as a cut regardless of mode would fail here rather than
+        // slip through on a fixture that never exercises the path.
         let d = parse(
             "\
 M48
@@ -917,11 +939,60 @@ T1C0.300
 G90
 T1
 X1.0Y1.0
+G01X2.0Y1.0
+G01X3.0Y1.0
 M30
 ",
         );
-        assert_eq!(d.holes.len(), 1);
-        assert!(d.holes[0].to.is_none());
+        assert_eq!(d.holes.len(), 3, "three positioned hits, no slots");
+        assert!(
+            d.holes.iter().all(|h| h.to.is_none()),
+            "no cut may be inferred without an M15"
+        );
+    }
+
+    #[test]
+    fn a_g_code_is_read_as_a_number_not_a_text_prefix() {
+        // `G5` must not swallow `G50`, and an arc must be an arc whichever axis
+        // the exporter writes first, so the code is parsed rather than prefix
+        // matched.
+        assert_eq!(leading_g_code("G0"), Some(0));
+        assert_eq!(leading_g_code("G00X1.0"), Some(0));
+        assert_eq!(leading_g_code("G000"), Some(0));
+        assert_eq!(leading_g_code("G01X1.0Y2.0"), Some(1));
+        assert_eq!(leading_g_code("G2Y5.0X1.0I0J1"), Some(2));
+        assert_eq!(leading_g_code("G3Y5.0"), Some(3));
+        assert_eq!(leading_g_code("G05"), Some(5));
+        assert_eq!(leading_g_code("G50"), Some(50));
+        assert_eq!(leading_g_code("M30"), None);
+        assert_eq!(leading_g_code("GX1.0"), None);
+    }
+
+    #[test]
+    fn a_y_first_arc_line_is_still_an_arc() {
+        // `G3Y..X..` is the same arc as `G3X..Y..`. Prefix matching on `G3X`
+        // made the axis order decide whether a plated wall existed at all.
+        let d = parse(
+            "\
+M48
+FMAT,2
+METRIC
+T1C0.800
+%
+G90
+T1
+G00X5.0Y0.0
+M15
+G3Y5.0X0.0I-5.0J0.0
+M16
+M30
+",
+        );
+        assert!(
+            d.holes.len() >= 4 && d.holes.iter().all(|h| h.to.is_some()),
+            "a Y-first arc must tessellate into slot segments, got {:?}",
+            d.holes
+        );
     }
 
     #[test]
@@ -1073,11 +1144,28 @@ M16
 M30
 ",
         );
-        assert!(
-            d.holes.len() >= 4,
-            "a quarter arc must tessellate, got {} segment(s)",
+        // A quarter turn at 16 steps per full circle is exactly 4 segments.
+        // Asserting the COUNT is what catches a direction swap: read clockwise,
+        // the same two endpoints describe the 270-degree way round, which is 12
+        // segments that still all sit on the radius and still start and end in
+        // the right places.
+        assert_eq!(
+            d.holes.len(),
+            4,
+            "a quarter arc is 4 steps; {} means the sweep went the long way",
             d.holes.len()
         );
+        // Every segment stays in the first quadrant, which the long way round
+        // does not.
+        for h in &d.holes {
+            let (tx, ty) = h.to.expect("an arc segment is a slot");
+            assert!(
+                h.x >= -1e-9 && h.y >= -1e-9 && tx >= -1e-9 && ty >= -1e-9,
+                "segment ({}, {}) -> ({tx}, {ty}) left the first quadrant",
+                h.x,
+                h.y
+            );
+        }
         for h in &d.holes {
             let (tx, ty) = h.to.expect("an arc segment is a slot, not a hole");
             for (x, y) in [(h.x, h.y), (tx, ty)] {
