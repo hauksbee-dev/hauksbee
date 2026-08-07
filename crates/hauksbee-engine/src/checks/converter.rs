@@ -33,6 +33,7 @@ use hauksbee_models::value::parse_value;
 use hauksbee_models::{ComponentKind, ModelLibrary};
 
 use crate::binder::resolve;
+use hauksbee_extract::assembly::{AssemblyState, FittedComponent};
 
 /// Switching topology recovered from the layout.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -94,8 +95,9 @@ pub(crate) fn is_ground_net(name: &str) -> bool {
 /// footprint. We accept the resolved-kind path first (most reliable) and fall
 /// back to the designator+footprint heuristic so an unmodeled power FET (the
 /// common hunt case: PSMN5R2, unmatched) still participates in topology.
-fn is_power_fet(comp: &Component, lib: &ModelLibrary) -> bool {
-    if let Some(model) = resolve(lib, comp).model {
+fn is_power_fet(part: FittedComponent<'_>, lib: &ModelLibrary) -> bool {
+    let comp: &Component = &part;
+    if let Some(model) = resolve(lib, part).model {
         if matches!(model.kind, ComponentKind::Nmos | ComponentKind::Pmos) {
             return true;
         }
@@ -155,7 +157,7 @@ fn bulk_caps_on_rail(
 ) -> Vec<BulkCap> {
     let mut caps = Vec::new();
     for c in &board.components {
-        if c.dnp {
+        if !AssemblyState::of(c).is_present() {
             continue;
         }
         let r = c.reference.trim().to_ascii_uppercase();
@@ -202,9 +204,10 @@ fn bulk_caps_on_rail(
 /// nets on its pads excluding the one we can identify as the gate. When roles
 /// are unknown we take all pads; the inductor-tie test downstream still pins the
 /// switch node correctly.
-fn fet_power_nets(comp: &Component, lib: &ModelLibrary) -> Vec<i64> {
+fn fet_power_nets(part: FittedComponent<'_>, lib: &ModelLibrary) -> Vec<i64> {
+    let comp: &Component = &part;
     // Try to find the gate pad from the resolved model's pin map.
-    let gate_pad: Option<String> = resolve(lib, comp).model.and_then(|m| {
+    let gate_pad: Option<String> = resolve(lib, part).model.and_then(|m| {
         m.pins
             .iter()
             .find(|(_, role)| role.eq_ignore_ascii_case("gate"))
@@ -250,14 +253,15 @@ pub fn detect_converters(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<Conv
     let fets: Vec<(&Component, Vec<i64>)> = board
         .components
         .iter()
-        .filter(|c| !c.dnp && is_power_fet(c, lib))
-        .map(|c| (c, fet_power_nets(c, lib)))
+        .filter_map(|c| AssemblyState::of(c).fitted())
+        .filter(|part| is_power_fet(*part, lib))
+        .map(|part| (part.component(), fet_power_nets(part, lib)))
         .collect();
 
     let inductors: Vec<(&Component, f64, Vec<i64>)> = board
         .components
         .iter()
-        .filter(|c| !c.dnp)
+        .filter(|c| AssemblyState::of(c).is_present())
         .filter_map(|c| {
             let h = power_inductor_value(c)?;
             let nets: Vec<i64> = c.pins.iter().filter_map(|p| p.net).collect();

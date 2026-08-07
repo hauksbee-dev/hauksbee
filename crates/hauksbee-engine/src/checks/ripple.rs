@@ -39,6 +39,7 @@ use hauksbee_models::ModelLibrary;
 
 use super::converter::{detect_converters, ConverterStage, Topology};
 use crate::binder::resolve;
+use hauksbee_extract::assembly::AssemblyState;
 
 /// Worst-case input-cap RMS ripple current of a buck (A): `I_out*sqrt(D - D^2)`.
 /// `d` is the duty cycle `Vout/Vin` in (0,1). Clamps `d` to the open interval so
@@ -79,7 +80,8 @@ fn input_cap_ripple_rating(
 ) -> Option<f64> {
     board
         .component(cap_ref)
-        .and_then(|comp| resolve(lib, comp).model)
+        .and_then(|comp| AssemblyState::of(comp).fitted())
+        .and_then(|part| resolve(lib, part).model)
         .and_then(|model| model.ratings.max_ripple_current_a)
 }
 

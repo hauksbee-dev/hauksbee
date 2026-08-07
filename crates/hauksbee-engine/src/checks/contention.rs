@@ -88,6 +88,7 @@ use hauksbee_models::{ComponentKind, ModelEntry, ModelLibrary};
 
 use crate::binder::resolve;
 use crate::digital::output_roles;
+use hauksbee_extract::assembly::AssemblyState;
 
 /// One modelled push-pull output pin found on a net.
 struct Driver {
@@ -208,10 +209,11 @@ pub fn scan(board: &ExtractedBoard, lib: &ModelLibrary) -> Scan {
     let mut by_net: BTreeMap<i64, Vec<Driver>> = BTreeMap::new();
 
     for comp in &board.components {
-        if comp.dnp {
-            continue; // not assembled, so electrically absent
-        }
-        let Some(model) = resolve(lib, comp).model else {
+        // Not assembled, or identity refused: no trusted drivers either way.
+        let Some(part) = AssemblyState::of(comp).fitted() else {
+            continue;
+        };
+        let Some(model) = resolve(lib, part).model else {
             continue; // no model, so nothing to say about its pin directions
         };
         if !is_digital_kind(model.kind) {
@@ -514,6 +516,22 @@ mod tests {
     fn dnp_part_contributes_no_driver() {
         let mut u2 = comp("U2", "74HC32", &[("3", 3)]);
         u2.dnp = true;
+        let b = board(
+            &[(3, "SHARED")],
+            vec![comp("U1", "74HC08", &[("3", 3)]), u2],
+        );
+        assert!(run(&b).findings.is_empty(), "{:?}", run(&b).findings);
+    }
+
+    /// The other absent state: an identity-refused record is not trusted as a
+    /// driver either, so it cannot manufacture a contention finding.
+    #[test]
+    fn identity_refused_part_contributes_no_driver() {
+        let mut u2 = comp("U2", "74HC32", &[("3", 3)]);
+        u2.properties.push((
+            hauksbee_extract::DUPLICATE_REFERENCE_CONFLICT_KEY.to_string(),
+            "two records with different values".to_string(),
+        ));
         let b = board(
             &[(3, "SHARED")],
             vec![comp("U1", "74HC08", &[("3", 3)]), u2],

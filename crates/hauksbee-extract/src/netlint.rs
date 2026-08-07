@@ -15,6 +15,7 @@
 //! `.kicad_pcb`, and schematic paths provide; net-name-based checks (I2C
 //! pull-ups, LED current) work even on pin-function-less inputs.
 
+use crate::assembly::AssemblyState;
 use crate::{Component, ExtractedBoard, Pin};
 
 /// One lint finding, severity-tagged, with the evidence to reproduce it.
@@ -666,7 +667,9 @@ fn mlcc_ceiling_uf(package: &str) -> Option<f64> {
 
 fn check_design_file_qc(board: &ExtractedBoard, report: &mut NetLintReport) {
     for c in &board.components {
-        if c.dnp {
+        // The three-state contract: an unassembled part has no value to QC,
+        // and an identity-refused record's value is not evidence of one.
+        if !crate::assembly::AssemblyState::of(c).is_present() {
             continue;
         }
         let Some(prefix) = passive_prefix(&c.reference) else {
@@ -834,6 +837,12 @@ fn check_i2c_pullups(board: &ExtractedBoard, report: &mut NetLintReport) {
         let mut exits_to_connector = false;
 
         for (c, _p) in &mem {
+            // Only assembled, identity-trusted parts count: a DNP option
+            // pull-up (or translator) must not clear a genuinely missing
+            // pull-up, and an absent device must not inflate the bus.
+            if !AssemblyState::of(c).is_present() {
+                continue;
+            }
             // A level translator with integrated pull-ups (NTS010x / TXS010x /
             // TXB010x / PCA9517-class auto-direction parts) supplies the bus
             // pull-up itself: an external resistor is optional, not missing. A
@@ -977,6 +986,11 @@ fn control_role(function: &str) -> Option<&'static str> {
 
 fn check_floating_control_pins(board: &ExtractedBoard, report: &mut NetLintReport) {
     for c in &board.components {
+        // An unassembled IC has no pin to float, and a refused record's pin
+        // functions are not evidence.
+        if !AssemblyState::of(c).is_present() {
+            continue;
+        }
         // Only logic/active parts; skip connectors/passives where "EN" pin
         // names are meaningless.
         if is_connector_like(c) {
@@ -1053,7 +1067,8 @@ const LED_I_MAX_OK: f64 = 0.030; // 30 mA: typical indicator absolute-ish ceilin
 
 fn check_led_current(board: &ExtractedBoard, report: &mut NetLintReport) {
     for led in &board.components {
-        if !is_led(led) || led.pins.len() != 2 {
+        // An unpopulated indicator draws nothing; do not model it.
+        if !AssemblyState::of(led).is_present() || !is_led(led) || led.pins.len() != 2 {
             continue;
         }
         // Find the two nets of the LED.
@@ -1116,7 +1131,8 @@ fn resistor_to_rail(
     _exclude: &str,
 ) -> Option<(String, f64, f64)> {
     for (c, _p) in members(board, net) {
-        if !is_resistor(c) {
+        // An absent or identity-refused resistor bounds no current.
+        if !AssemblyState::of(c).is_present() || !is_resistor(c) {
             continue;
         }
         // Skip an R-ref part whose value does not parse (a DNP/NC option
@@ -1224,6 +1240,12 @@ fn check_output_contention(board: &ExtractedBoard, report: &mut NetLintReport) {
         let mut drivers: Vec<(&Component, &Pin)> = Vec::new();
         let mut any_resolver = false;
         for (c, p) in &mem {
+            // The contract cuts both ways here: an absent part is neither a
+            // driver (no false fight from a DNP option) nor a resolver (a DNP
+            // series R must not excuse a real one).
+            if !AssemblyState::of(c).is_present() {
+                continue;
+            }
             if is_pushpull_output(&p.kind) && !is_connector_like(c) {
                 drivers.push((c, p));
             }

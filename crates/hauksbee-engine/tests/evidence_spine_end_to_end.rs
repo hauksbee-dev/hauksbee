@@ -207,7 +207,7 @@ fn numeric_simulation_assertions_carry_budget_and_semantic_substitution_only() {
         hauksbee_ir::evidence::IntegrationMethod::Gear2
     );
     let json = serde_json::to_value(budget).unwrap();
-    assert!(json.to_string().find("accuracy_cost").is_none());
+    assert!(!json.to_string().contains("accuracy_cost"));
     assert_eq!(
         map.artifacts().len(),
         2,

@@ -181,6 +181,44 @@ fn si_surfaces_ampacity_on_undersized_routed_rail() {
     );
 }
 
+/// Two-sided IdentityUnknown contract on the full `--si` surface: the same
+/// undersized rail with the charger's identity refused fires NO ampacity
+/// finding (no current may be attributed from an unknown part), and an Info
+/// note names the skipped part and the refusal, so the silence reads as a
+/// coverage hole rather than a clean pass.
+#[test]
+fn si_skips_an_identity_unknown_part_and_says_so() {
+    let (mut board, text) = programmed_charger_and_text(
+        r#"(segment (start 0 0) (end 10 0) (width 0.05) (layer "F.Cu") (net 1))"#,
+    );
+    let u1 = board
+        .components
+        .iter_mut()
+        .find(|c| c.reference == "U1")
+        .expect("the charger exists");
+    u1.properties.push((
+        hauksbee_extract::DUPLICATE_REFERENCE_CONFLICT_KEY.to_string(),
+        "two populated records with different values".to_string(),
+    ));
+    let report = run_si(&board, &text);
+    assert!(
+        findings_of(&report, SiCheck::TraceAmpacity).is_empty(),
+        "a refused identity must attribute no current, so nothing fires: {:?}",
+        report.findings
+    );
+    let note = report
+        .findings
+        .iter()
+        .find(|f| f.check == SiCheck::TraceAmpacity && f.refs.contains(&"U1".to_string()))
+        .expect("the skip must be said out loud on the SI report");
+    assert_eq!(note.severity, SiSeverity::Info);
+    assert!(
+        note.message.contains("duplicate designator"),
+        "the note must carry the refusal reason: {}",
+        note.message
+    );
+}
+
 /// R15: the SI chokepoint `engine_si` must carry the engine-layer ampacity +
 /// ripple findings that the bare extractor `si_checks` structurally cannot
 /// produce (it has no ModelLibrary to attribute currents). This is the call the
