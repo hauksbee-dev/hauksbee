@@ -17,10 +17,12 @@
 # MNT Reform motherboard U2. The averaged buck-boost block charges the 8S
 # LiFePO4 pack (BAT) from the laptop brick (PVIN) with an input-current limit
 # programmed by the ILIMIT resistor R8 against the input sense shunt R49. The
-# documented mb2.5->3.0 fault: R8 = 100k programs the input limit too high, so
-# the charger over-draws (~88 W from a 60 W brick); the fix is R8 = 7.15k, which
-# drops the limit to ~60 W. The model reads R8 and R49 off the board, so the two
-# revisions diverge with no model change.
+# documented mb2.5->3.0 fault: R8 = 100k programs the input limit too high; the
+# fix is R8 = 7.15k. The model reads R8 and R49 off the board, so the two
+# revisions diverge with no model change. Its transfer constants below are the
+# LTC4020 datasheet equations, not values calibrated to the known fault.
+# Primary source: Analog Devices LTC4020 Rev E, pin functions pp. 8 and 11:
+# https://www.analog.com/media/en/technical-documentation/data-sheets/ltc4020.pdf
 [[models]]
 id = "ltc4020"
 kind = "vreg"
@@ -40,6 +42,7 @@ iq_a = 0.001
 # Manufacturer pinout (QFN-38), the subset the behaviour needs.
 # Source: LTC4020 datasheet pin functions; cross-checked against the Reform
 # reform2-power schematic symbol pin list.
+"4"  = "sensgnd"   # SENSGND, Kelvin ground reference for SENSBOT
 "5"  = "sensbot"   # SENSBOT, input current sense (bottom)
 "6"  = "senstop"   # SENSTOP, input current sense (top)
 "7"  = "sensvin"   # SENSVIN, input supply sense
@@ -51,7 +54,7 @@ iq_a = 0.001
 "36" = "pvin"      # PVIN, power input
 
 [models.ratings]
-max_voltage_v = 55.0      # VIN abs max (datasheet)
+max_voltage_v = 55.0      # maximum operating input; absolute maximum is 60 V (Rev E datasheet)
 max_junction_temp_c = 125.0
 
 [models.behavioral.converter]
@@ -64,20 +67,34 @@ efficiency = 0.92          # datasheet high-efficiency buck-boost
 out_r_ohms = 0.01
 
 # Input-current limit programmed by the ILIMIT resistor (R8) against the input
-# sense shunt (R49). Linear-in-R8 up to a full-scale ceiling, then i = vsense /
-# rsense. Calibrated so the two real board values straddle a 60 W brick at a
-# ~19 V laptop adapter:
-#   R8 = 7.15k (mb3.0 fix): vsense = 0.0316 V -> 3.16 A -> ~60 W  (in budget)
-#   R8 = 100k  (mb2.5 fault): saturates at 0.0463 V -> 4.63 A -> ~88 W (overdraw)
-# rsense reads R49 (0.01 ohm) off the board; prog reads R8.
+# sense shunt (R49). Datasheet: VILIMIT = 50 uA * RILIMIT over an effective
+# 0..1 V range; VILIMIT scales the 50 mV full-scale input-sense threshold.
+# Therefore the sense threshold is 0.05 * RILIMIT / 20k, capped at 0.05 V:
+#   R8 = 7.15k: 17.875 mV -> 1.7875 A through 10 mOhm
+#   R8 = 100k:  nominal full-scale 50 mV -> 5.0 A through 10 mOhm
+# Both matched input shunts are read off the board; prog reads R8. Missing,
+# identity-refused, or unequal shunts suppress the unsupported converter leg.
 [models.behavioral.converter.iin_program]
-rsense_ref = "R49"
-rsense_ohms = 0.01         # fallback if R49 is not found on the board
+rsense_refs = ["R49", "R50"]
 prog_ref = "R8"
-prog_ohms = 100000.0       # fallback (the faulty value) if R8 is not found
-vprog_ref = 0.0316         # sense threshold at prog = prog_ref_ohms
-prog_ref_ohms = 7150.0     # the resistor that programs the 60 W (~3.16 A) point
-v_sense_full = 0.0463      # full-scale sense voltage (~4.63 A / ~88 W ceiling)
+vprog_ref = 0.05           # 50 mV full-scale sense threshold
+prog_ref_ohms = 20000.0    # 50 uA * 20 kOhm = 1 V ILIMIT full scale
+v_sense_full = 0.05        # 50 mV maximum input-sense threshold
+
+# The declarative threshold law preserves the exact Kelvin topology without
+# turning the threshold into a steady-state ampacity load. Rev E defines the
+# two measured drops as SENSVIN-to-SENSTOP and SENSGND-to-SENSBOT; PVIN and
+# generic board ground are not substitutes for those Kelvin reference pins.
+# Unequal or ambiguous shunts are refused rather than selecting one value.
+[models.current_program]
+pin = "ilimit"
+semantics = "protection_limit"
+equation = "sense_scaled_resistance"
+sense_roles = ["senstop", "sensbot"]
+sense_far_roles = ["sensvin", "sensgnd"]
+program_bias_a = 0.00005
+program_full_scale_v = 1.0
+sense_full_scale_v = 0.05
 
 # RNG/SS dual role (the mb2.0->2.5 fault): when the RNG/SS pin is driven by an
 # external GPIO (mb2.0 wired CHG_RNG to the LPC), toggling it mid-operation
@@ -330,33 +347,36 @@ vil       = 0.8
 max_voltage_v       = 15.0    # VDD abs max (V), datasheet
 max_junction_temp_c = 150.0   # Tj max (C), datasheet
 
-# ── TP4054: 800 mA single-cell Li-ion linear charger, SOT-23-5 ────────────────
+# ── TP4054: 400 mA single-cell Li-ion linear charger, SOT-23-5 ────────────────
 #
 # Watchy U3. A constant-current / constant-voltage linear charger: it drives
 # BAT from VCC at a current the PROG resistor programs, until the cell reaches
 # the fixed 4.2 V float, then holds that voltage while the current tapers.
 #
-# Source: NanJing Top Power ASIC Corp "TP4054, 800mA Standalone Linear Li-Ion
-#   Battery Charger with Thermal Regulation in SOT-23-5", datasheet rev 1.4.
+# Source: NanJing Top Power ASIC Corp "TP4054 (400mA Linear Li-Ion Battery
+#   Charger)", official datasheet Rev 2.1. The board value does not identify an
+#   older die revision, so the current manufacturer document is authoritative.
+# Primary source, pp. 3-6:
+# https://www.toppwr.com/uploadfile/file/20240913/66e3d01d4c944.pdf
 #
 # Datasheet figures used (Electrical Characteristics, VCC = 5 V, TA = 25 C
 # unless noted):
 #   VFLOAT   = 4.2 V +/-1%              the regulated cell voltage
-#   IBAT     = 1000 / RPROG (A)         @ RPROG in ohms, current-mode
-#                                        (RPROG = 10k gives 100 mA; watchy fits
-#                                         a 5k1, which programs ~196 mA)
-#   VCC      = 4.25 V to 6.5 V          recommended operating input
-#   ICC(sd)  = 50 uA typ                @ standby, charge terminated
-#   VUVLO    = 3.8 V typ (rising)       under-voltage lockout
-#   RON      = 0.4 ohm typ              internal pass element, VCC = 5 V
+#   IBAT     = 1000 / RPROG (A)         at or below 150 mA
+#   RPROG    = 1000/IBAT*(1.2-4/3*IBAT) above 150 mA
+#                                        (Watchy's R3 is 10k -> 100 mA)
+#   IBAT     = 400 mA nominal           @ RPROG = 1.66k (340..460 mA)
+#   VCC      = 4.0 V to 8.0 V           electrical-characteristics range
+#   ICC      = 45 uA typ                standby/shutdown
+#   VUVLO    = 3.6 V typ (rising)       under-voltage lockout
 #   ITERM    = 0.1 * IBAT               charge terminates at C/10
 #
-# MODELLED AS a voltage source behind the pass element, which is what the board
-# can observe: the rail the cell sits on, how hard it is driven, and what the
-# charger draws while doing it. The CC-to-CV handover is a current limit on that
-# source, so a discharged cell sees the programmed current and a full one sees
-# the float voltage, which is the behaviour every other part on this board
-# reacts to.
+# MODEL COVERAGE IS SPLIT AND EXPLICIT. Dynamic circuit binding stamps the 4.2 V
+# CV source and its declared headroom only; it does not implement the CC-to-CV
+# state machine or a solver current limit. Static ampacity may use the PROG law
+# as the worst-case regulated charge current because it is tagged
+# `regulated_current`. Do not read that static attribution as dynamic CC/CV
+# behaviour.
 #
 # DELIBERATELY NOT MODELLED, because the datasheet's numbers do not support it
 # and a plausible guess would be worse than the gap: the thermal-regulation loop
@@ -367,7 +387,7 @@ max_junction_temp_c = 150.0   # Tj max (C), datasheet
 [[models]]
 id = "tp4054"
 kind = "vreg"
-description = "TP4054 single-cell Li-ion linear charger (behavioural: CC/CV to a 4.2 V float)"
+description = "TP4054 charger (dynamic model: 4.2 V CV source; static model: PROG-regulated current)"
 
 [models.match]
 value_re = "(?i)TP4054"
@@ -376,11 +396,11 @@ value_re = "(?i)TP4054"
 # The float voltage IS the output rail once the cell is charged, which is the
 # steady state a board check cares about.
 vout = 4.2
-# VCC - VBAT headroom the pass element needs. At the 800 mA ceiling and
-# RON = 0.4 ohm that is 0.32 V; 0.4 V is the honest round number and stays
-# above the measured drop rather than under it.
+# Rev 2.1 does not publish a rated-current dropout curve. Keep the conservative
+# 0.4 V solver headroom rather than infer one from the 30 mV sleep-mode threshold;
+# this can under-predict delivery, but cannot invent headroom the sheet promises.
 dropout_v = 0.4
-iq_a = 0.00005     # 50 uA standby, datasheet typ
+iq_a = 0.000045    # 45 uA standby/shutdown, datasheet typ
 
 [models.pins]
 # SOT-23-5 pinout, datasheet Pin Configuration. The role names are the BINDER's
@@ -388,24 +408,43 @@ iq_a = 0.00005     # 50 uA standby, datasheet typ
 # naming pin 3 "bat" after the datasheet left the model matching the part and
 # then reporting "vreg output not connected", which reads as a board fault
 # rather than a model that named its own pins wrongly.
-"1" = "temp"       # TEMP, battery thermistor sense
+"1" = "chrg_n"     # CHRG, open-drain charging-status output
 "2" = "gnd"
 "3" = "out"        # BAT on the datasheet: charge current out to the cell
 "4" = "in"         # VCC on the datasheet: input supply
 "5" = "prog"       # PROG, charge-current program resistor to ground
 
 [models.ratings]
-# Abs max VCC is 8 V; the recommended ceiling is 6.5 V, and a check should fire
-# on the recommended limit rather than waiting for the destruct limit.
-max_voltage_v = 6.5
-max_junction_temp_c = 125.0
+max_current_a = 0.8          # BAT-pin absolute maximum, not operating capability
+max_voltage_v = 8.0          # VCC absolute maximum
+max_junction_temp_c = 150.0  # absolute maximum
+
+# Rev 2.1 section "Charging current setting". The normal operating endpoint is
+# 400 mA nominal; 800 mA above is only the BAT-pin absolute maximum. The two
+# branches meet at 150 mA (RPROG = 6.667 kOhm). The 0.401 A domain boundary
+# below is the published equation evaluated at the published 1.66 kOhm nominal
+# endpoint (0.40089 A), rounded upward only enough not to reject that cited
+# application value. It is not a saturation claim: smaller resistors abstain.
+[models.current_program]
+pin = "prog"
+semantics = "regulated_current"
+current_in_roles = ["in"]
+current_out_roles = ["out"]
+max_operating_current_a = 0.401
+equation = "piecewise_inverse_resistance"
+low_k_volts = 1000.0
+transition_current_a = 0.15
+high_numerator_a = 1.2
+resistance_scale_ohms = 1000.0
+high_offset = 1.3333333333333333
 
 # ── TP4056: 1 A single-cell Li-ion linear charger, SOP-8 ─────────────────────
 #
 # The charger on every red "TP4056 module" a hobbyist has in a drawer. Same
-# family as the TP4054 above and modelled the same way: a constant-current /
-# constant-voltage linear charger driving BAT from VCC until the cell reaches a
-# fixed 4.2 V float, then holding that voltage while the current tapers.
+# family as the TP4054 above. The physical part is a constant-current /
+# constant-voltage charger; the model deliberately splits that into a 4.2 V
+# dynamic CV source and a static PROG-current attribution. It does not claim a
+# dynamic CC/CV state machine.
 #
 # Source: NanJing Top Power ASIC Corp "TP4056, 1A Standalone Linear Li-Ion
 #   Battery Charger with Thermal Regulation in SOP-8". The copy read carries no
@@ -465,7 +504,7 @@ max_junction_temp_c = 125.0
 [[models]]
 id = "tp4056"
 kind = "vreg"
-description = "TP4056 single-cell Li-ion linear charger (behavioural: CC/CV to a 4.2 V float)"
+description = "TP4056 charger (dynamic model: 4.2 V CV source; static model: PROG-regulated current)"
 
 [models.match]
 # TP4056, TP4056-42-SOP8-PP, TP4056-42-ESOP8. The "42" in the order code is the
@@ -509,6 +548,11 @@ theta_ja_c_per_w = 130.0     # stated with the complete-charge-cycle figure
 # absolute maximum, not a load any board actually draws.
 [models.current_program]
 pin = "prog"
+semantics = "regulated_current"
+current_in_roles = ["in"]
+current_out_roles = ["out"]
+max_operating_current_a = 1.0
+equation = "inverse_resistance"
 k_volts = 1200.0
 
 # ── MCP73831: single-cell Li-Ion linear charger, SOT-23-5 ─────────────────────
@@ -558,7 +602,7 @@ k_volts = 1200.0
 [[models]]
 id = "mcp73831"
 kind = "vreg"
-description = "MCP73831 single-cell Li-Ion linear charger (behavioural: CC/CV to a 4.2 V float)"
+description = "MCP73831 charger (dynamic model: 4.2 V CV source; static model: PROG-regulated current)"
 
 [models.match]
 # A bare MCP73831 (assumed -2, see above), an explicit -2, or the full
@@ -597,6 +641,11 @@ theta_ja_c_per_w = 230.0     # 5-lead SOT-23, 4-layer JC51-7 board
 # unreadable resistor means no attributable rail current rather than 500 mA.
 [models.current_program]
 pin = "prog"
+semantics = "regulated_current"
+current_in_roles = ["in"]
+current_out_roles = ["out"]
+max_operating_current_a = 0.5
+equation = "inverse_resistance"
 k_volts = 1000.0
 
 # ── MCP73833: 1 A single-cell Li-Ion charger, MSOP-10 ─────────────────────────
@@ -633,7 +682,7 @@ k_volts = 1000.0
 [[models]]
 id = "mcp73833"
 kind = "vreg"
-description = "MCP73833 1A single-cell Li-Ion charger, MSOP-10 (behavioural: CC/CV to 4.2 V)"
+description = "MCP73833 charger (dynamic model: 4.2 V CV source; static model: PROG-regulated current)"
 
 [models.match]
 # The Olimex value carries the package in parentheses. The MCP73834 shares this
@@ -671,6 +720,11 @@ theta_ja_c_per_w = 113.0     # MSOP-10, 4-layer JC51-7 board
 # R_PROG (R_PROG = 1 kOhm gives 1 A, 5 kOhm gives 200 mA).
 [models.current_program]
 pin = "prog"
+semantics = "regulated_current"
+current_in_roles = ["in"]
+current_out_roles = ["out"]
+max_operating_current_a = 1.0
+equation = "inverse_resistance"
 k_volts = 1000.0
 
 # ── BL4054B: 800 mA single-cell Li-Ion charger, SOT-23-5 ─────────────────────
@@ -712,7 +766,7 @@ k_volts = 1000.0
 [[models]]
 id = "bl4054b_42"
 kind = "vreg"
-description = "BL4054B-42 single-cell Li-Ion charger (behavioural: CC/CV to a 4.2 V float)"
+description = "BL4054B-42 charger (dynamic model: 4.2 V CV source; static model: PROG-regulated current)"
 
 [models.match]
 # The 42 voltage code is required: -43 and -44 float 100 and 200 mV higher.
@@ -740,6 +794,16 @@ max_voltage_v = 6.5          # recommended operating ceiling. The part's own OVP
 max_junction_temp_c = 125.0
 theta_ja_c_per_w = 250.0     # SOT23-5, ~1 square of 1 oz copper (Note 4)
 theta_jc_c_per_w = 130.0     # SOT23-5
+
+# Datasheet electrical characteristics: ICHG(A) = 1000 V / RPROG(ohms).
+[models.current_program]
+pin = "prog"
+semantics = "regulated_current"
+current_in_roles = ["in"]
+current_out_roles = ["out"]
+max_operating_current_a = 0.8
+equation = "inverse_resistance"
+k_volts = 1000.0
 
 # ═════════════════════════════════════════════════════════════════════════════
 # SUPERVISORS AND THE LED DRIVER DELIBERATELY LEFT UNRESOLVED.
