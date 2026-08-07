@@ -144,8 +144,8 @@ if a board really contains `C1@A/FLASH2`, that name wins and the generated one
 gets a stable `@source-<record>` discriminator.
 
 A hierarchy is a channel location, not by itself a physical component identity.
-When authoritative IDs are absent, repeated records—even in the same
-hierarchy—merge only when they share at least one
+When authoritative IDs are absent, repeated records, even in the same
+hierarchy, merge only when they share at least one
 identically-netted pad and no repeated pad number disagrees on its net. Merely
 having disjoint pad numbers is not proof that they are one part. The merged
 component carries a `reference_ambiguous` property recording the inference.

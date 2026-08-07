@@ -1,4 +1,12 @@
 //! Shared, fail-closed waiver date policy.
+//! Long-form how-and-why: docs/how-and-why/hauksbee-ir/evidence.md.
+//!
+//! [`RunDate`] captures the run's date once and gates every waiver expiry
+//! against it. The policy is fail-closed in both directions: a clock reading
+//! before the earliest credible day is treated as UNKNOWN rather than old, and
+//! an unknown date expires every waiver, so a zeroed, pre-NTP, or backdated
+//! clock can never silently resurrect a waiver that deliberately lapsed. Every
+//! surface that renders or enforces waiver state shares this one policy.
 
 use serde::{Deserialize, Serialize};
 
