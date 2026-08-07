@@ -7,17 +7,31 @@ use hauksbee_extract::ExtractedBoard;
 use hauksbee_models::ModelLibrary;
 
 use crate::binder::bind_board;
-use crate::result::{BindSummary, JsonReport};
+use crate::result::{BindSummary, JsonInputEvidence, JsonReport};
 
 use super::OutputMode;
 
 /// Print the bind report in `mode`, then return.
-pub fn emit(board: &ExtractedBoard, lib: &ModelLibrary, mode: OutputMode) -> anyhow::Result<()> {
+pub fn emit(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+    reader_notes: &[String],
+    mode: OutputMode,
+    inputs: &[JsonInputEvidence],
+) -> anyhow::Result<()> {
     let bound = bind_board(board, lib);
     let summary = BindSummary::from_report(&bound.report);
+    let evidence = crate::evidence::BoardEvidence::from_bound(
+        board,
+        &bound.report,
+        reader_notes,
+        hauksbee_ir::evidence::RunDate::from_system_clock(),
+    )?;
     match mode {
         OutputMode::Json => {
-            let report = JsonReport::new(&bound.name, summary);
+            let report = JsonReport::new(&bound.name, summary)
+                .with_inputs(inputs)
+                .with_evidence(&evidence);
             println!("{}", report.to_json());
         }
         OutputMode::Text | OutputMode::Plain => {
@@ -49,6 +63,7 @@ pub fn emit(board: &ExtractedBoard, lib: &ModelLibrary, mode: OutputMode) -> any
                     println!("Bottom line: no active ICs to model; this is a passive board.");
                 }
             }
+            print!("{}", evidence.render_plain());
         }
     }
     Ok(())

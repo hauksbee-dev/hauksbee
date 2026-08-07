@@ -383,6 +383,7 @@ fn soc_inspection(config: &hauksbee_mcu::SocConfig) -> Vec<String> {
 
 /// A comma-separated controller list, or the word `none`, so an empty list reads
 /// as a deliberate answer rather than a truncated line.
+#[cfg(any(feature = "qemu", feature = "renode"))]
 fn name_list(names: &[String]) -> String {
     if names.is_empty() {
         "none".to_string()
@@ -395,7 +396,10 @@ fn name_list(names: &[String]) -> String {
 /// a common accident, so they are notes and not findings: the point is that the
 /// author sees the consequence before a co-sim run reports it as a coverage hole.
 fn soc_advisories(config: &hauksbee_mcu::SocConfig) -> Vec<String> {
+    #[cfg(any(feature = "renode", feature = "qemu"))]
     let mut out = Vec::new();
+    #[cfg(not(any(feature = "renode", feature = "qemu")))]
+    let out = Vec::new();
     match config {
         #[cfg(feature = "renode")]
         hauksbee_mcu::SocConfig::Renode(c) => {
@@ -1179,6 +1183,7 @@ mod tests {
 
     /// Lint a descriptor source the way `models lint` does, from the parse
     /// onwards, and hand back the printed lines plus the finding count.
+    #[cfg(feature = "renode")]
     fn lint_descriptor(name: &str, src: &str) -> (Vec<String>, usize) {
         let root: toml::Value = toml::from_str(src).expect("the fixture must be TOML");
         super::soc_lint_report(std::path::Path::new(name), src, &root)
@@ -1188,6 +1193,7 @@ mod tests {
     /// arrive broken: the sweep is the gate, not a spot check of the newest file.
     /// The `examples/` descriptor the add-a-microcontroller walkthrough builds is
     /// swept too, because a reader copies it.
+    #[cfg(all(feature = "renode", feature = "qemu"))]
     #[test]
     fn every_shipped_soc_descriptor_lints_clean() {
         let mut swept = 0usize;
@@ -1226,6 +1232,7 @@ mod tests {
     /// the loader checks, because a `@platform` reference that declares neither
     /// is now a hard load error and every case here needs a descriptor that gets
     /// as far as the lint.
+    #[cfg(feature = "renode")]
     fn soc_fixture(extra: &str) -> String {
         format!(
             r#"
@@ -1254,6 +1261,7 @@ mcu_label = "test part"
     /// decodes only its low 16 pins, so pins 16 and up read as inputs and their
     /// edges vanish: strictly worse than no direction map at all, which at least
     /// reports every output-state change. It must be a finding.
+    #[cfg(feature = "renode")]
     #[test]
     fn a_too_narrow_dir_encoding_is_a_finding_and_a_valid_descriptor_is_not() {
         let (lines, findings) = lint_descriptor(
@@ -1293,6 +1301,7 @@ mcu_label = "test part"
     /// The linter's own two checks, the ones the loader leaves to author intent.
     /// Both are findings, because both mean the descriptor runs and reports the
     /// wrong thing.
+    #[cfg(feature = "renode")]
     #[test]
     fn intent_findings_are_errors_and_absent_capabilities_are_only_notes() {
         let blank_label = soc_fixture("").replace("mcu_label = \"test part\"", "mcu_label = \"\"");
@@ -1330,6 +1339,7 @@ mcu_label = "test part"
     /// A descriptor the loader refuses lints as exactly one finding carrying the
     /// loader's own named error, so `models lint` and a co-sim cannot disagree
     /// about whether a file is valid.
+    #[cfg(feature = "renode")]
     #[test]
     fn a_loader_refusal_becomes_one_finding_naming_the_loaders_error() {
         let zero_clock = soc_fixture("").replace("frequency_hz = 8_000_000", "frequency_hz = 0");

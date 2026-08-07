@@ -10,6 +10,19 @@
 //!
 //! A BOM CSV (optional) maps reference designators to a part number / value to
 //! enrich components whose package field alone is uninformative.
+//!
+//! ## Why this is not [`crate::placement`]
+//!
+//! There are two readers for these files on purpose, and they answer different
+//! questions. This one runs on the gerber-only path, where the fab package IS the
+//! whole design: there is no layout to check against, so a guess is the best
+//! answer available and refusing would mean refusing the board. [`crate::placement`]
+//! and [`crate::bom`] run when a layout exists, so they can reconcile rather than
+//! guess, and they refuse a mapping they cannot reach confidently.
+//!
+//! They share the dialect vocabulary, not the code. Folding this one onto the
+//! other belongs with the gerber-recovery work, where the gerber corpus tests
+//! that would catch a behavioural change are the deliverable.
 
 use std::collections::HashMap;
 

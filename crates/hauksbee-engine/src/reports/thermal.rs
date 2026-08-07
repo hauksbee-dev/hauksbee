@@ -6,8 +6,8 @@
 use crate::engine::HauksbeeEngine;
 use crate::result::{
     coverage_open_active_refs, thermal_coverage, thermal_validity, BindSummary, CheckCoverage,
-    JsonNote, JsonNoteKind, JsonReport, ThermalDeviceJson, ThermalJson, Validity,
-    EXIT_INVALID_FOR_ANALYSIS,
+    JsonInputEvidence, JsonNote, JsonNoteKind, JsonReport, ThermalDeviceJson, ThermalJson,
+    Validity, EXIT_INVALID_FOR_ANALYSIS,
 };
 
 /// Run the thermal estimate and print it (`json` selects JSON over the text
@@ -15,10 +15,12 @@ use crate::result::{
 /// (under `strict_thermal`) when coverage is only partial.
 pub fn emit(
     engine: &mut HauksbeeEngine,
+    evidence: &crate::evidence::BoardEvidence,
     ambient: f64,
     seconds: f64,
     json: bool,
     strict_thermal: bool,
+    inputs: &[JsonInputEvidence],
 ) -> anyhow::Result<()> {
     engine.scheduler_mut().set_ambient_c(ambient);
     let summary = BindSummary::from_report(engine.report());
@@ -32,8 +34,45 @@ pub fn emit(
     // The open active ICs to NAME in the caveat, computed before `summary` is
     // moved into the JSON report.
     let coverage_refs = coverage_open_active_refs(&summary);
+    let failed_windows = engine.scheduler().failed_windows().to_vec();
+    let fallback_owned: Vec<(f64, f64, String)> = engine
+        .scheduler()
+        .fallback_windows()
+        .iter()
+        .map(|&(start, end, method)| (start, end, method.as_str().to_string()))
+        .collect();
+    let fallback: Vec<(f64, f64, &str)> = fallback_owned
+        .iter()
+        .map(|(start, end, method)| (*start, *end, method.as_str()))
+        .collect();
+    let budget = crate::evidence::BoardEvidence::transient_error_budget(
+        0.0,
+        seconds.max(0.05),
+        1.0 / 1000.0,
+        &failed_windows,
+        &fallback,
+    )?;
+    let mut maps = Vec::new();
+    for (reference, tj_c, over_limit) in &rows {
+        maps.push(evidence.simulation_map(
+            format!(
+                "{reference} peak junction temperature is {tj_c:.3} C ({})",
+                if *over_limit {
+                    "over limit"
+                } else {
+                    "within limit"
+                }
+            ),
+            &[],
+            std::slice::from_ref(reference),
+            Some(budget.clone()),
+        )?);
+    }
+    let report_evidence = evidence.clone().with_maps(maps);
     if json {
-        let mut jr = JsonReport::new(&board_name, summary);
+        let mut jr = JsonReport::new(&board_name, summary)
+            .with_inputs(inputs)
+            .with_evidence(&report_evidence);
         // Surface the partial-coverage caveat as an info note too, so a JSON
         // consumer that ignores `coverage` still sees the honesty annotation.
         if coverage.partial {
@@ -65,12 +104,16 @@ pub fn emit(
         if coverage.partial {
             emit_thermal_coverage_caveat(&coverage, &coverage_refs);
         }
+        print!("{}", report_evidence.render_plain());
     }
     if !validity.valid {
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
     }
     // Opt-in escalation: partial coverage fails only under --strict-thermal.
     if coverage.partial && strict_thermal {
+        std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
+    }
+    if report_evidence.is_undermined() && strict_thermal {
         std::process::exit(EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())
