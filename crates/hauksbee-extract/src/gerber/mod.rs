@@ -262,6 +262,13 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
             if drill.plated == Some(false) {
                 continue;
             }
+            // A file that drills nothing is evidence about nothing. Left in, an
+            // empty pass declaring a blind pair would mark the job multi-span
+            // and push every silent sibling into a refusal, losing real
+            // stitching on the strength of a file with no hits in it.
+            if drill.holes.is_empty() {
+                continue;
+            }
             let declared = drill.span;
             (DrillBody::Excellon(drill), declared)
         };
@@ -412,11 +419,20 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
 
         if let DrillBody::Film(text) = &p.body {
             // Gerber-format drill: each flash is a hole; its disc radius is the
-            // drill radius. A drawn path is a rout, but only on a film the job
-            // names as a rout/slot layer: on an ordinary drill film the draws
-            // are legend art, and reading those as plated slots would paint
-            // copper across the whole board.
-            let rout_film = d
+            // drill radius. A drawn path on such a film may be a rout, but on
+            // an ordinary drill film the draws are legend art, and reading
+            // those as plated walls paints copper across the board.
+            //
+            // Only the film's OWN attribute settles it. A suggestive file name
+            // is not enough: any board whose project name contains "slot" would
+            // have its legend promoted to conductor, which is the invention
+            // this module exists to avoid. Where the name suggests a rout and
+            // the film does not declare one, the draws are left alone and the
+            // reader says why, so the gap is visible rather than silent.
+            let up: String = text.chars().take(4096).collect::<String>().to_uppercase();
+            let declares_rout = up.contains("FILEFUNCTION")
+                && (up.contains("ROUT") || up.contains("SLOT") || up.contains("MILL"));
+            let name_suggests_rout = d
                 .file_name()
                 .and_then(|s| s.to_str())
                 .map(|s| {
@@ -424,6 +440,20 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
                     l.contains("rout") || l.contains("slot") || l.contains("mill")
                 })
                 .unwrap_or(false);
+            let rout_film = declares_rout;
+            if name_suggests_rout && !declares_rout {
+                notes.push(format!(
+                    "{}: this gerber-format drill film is named as a rout or slot layer but does \
+                     not declare itself one, so the paths drawn on it are left as artwork rather \
+                     than read as plated walls. A drawn path is only a conductor if the film says \
+                     it is; promoting it on the strength of a file name would turn any legend on \
+                     a board whose project name contains \"slot\" into copper. Add a \
+                     TF.FileFunction naming the layer's role to recover them.",
+                    d.file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("drill film")
+                ));
+            }
             if let Ok(prims) = rs274x::parse_layer(text) {
                 for pr in prims {
                     match pr.kind {
