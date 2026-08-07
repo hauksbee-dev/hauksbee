@@ -22,6 +22,8 @@ use super::{lint_fails, OutputMode};
 pub fn emit(
     board_path: &Path,
     board: &ExtractedBoard,
+    raw: &[u8],
+    input_kind: crate::board_input::InputKind,
     lib: &ModelLibrary,
     reader_notes: &[String],
     mode: OutputMode,
@@ -53,7 +55,8 @@ pub fn emit(
         &bound.report,
         reader_notes,
         hauksbee_ir::evidence::RunDate::from_system_clock(),
-    )?;
+    )?
+    .with_input_artifact(board_path, raw, input_kind)?;
     // Pin-role GUESS warnings: roles the binder inferred from the configurable
     // pin-rule table rather than an explicit pin-function. Nothing is silently
     // guessed, so the lint reports each one, but on the correct channel per
@@ -174,6 +177,8 @@ fn lint_json(
 pub fn emit_resources(
     board_path: &Path,
     board: &ExtractedBoard,
+    raw: &[u8],
+    input_kind: crate::board_input::InputKind,
     lib: &ModelLibrary,
     reader_notes: &[String],
     mode: OutputMode,
@@ -201,7 +206,8 @@ pub fn emit_resources(
         &bound.report,
         reader_notes,
         hauksbee_ir::evidence::RunDate::from_system_clock(),
-    )?;
+    )?
+    .with_input_artifact(board_path, raw, input_kind)?;
     match mode {
         OutputMode::Json => {
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))

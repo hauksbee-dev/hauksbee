@@ -1163,6 +1163,37 @@ impl Assumption {
         ))
     }
 
+    /// A waiver applied to one production assertion. The wording and lifecycle
+    /// are identical to [`Self::waived`], while the causal scope uses the
+    /// assertion's stable label so another result of the same kind does not
+    /// inherit this authorization.
+    pub fn waived_assertion(
+        check: &str,
+        kind: &str,
+        assertion: &str,
+        subject: &str,
+        reason: &str,
+        until: &str,
+        today: RunDate,
+    ) -> Result<Self, EvidenceError> {
+        let mut assumption = Self::waived(check, kind, subject, reason, until, today)?;
+        assumption.scope = Scope::Check {
+            check: or_else(check, "an unnamed check"),
+            kind: Some(or_else(assertion, "an unnamed assertion")),
+        };
+        let id_subject = format!(
+            "{}/{}/{}/{}",
+            fragment(check),
+            fragment(kind),
+            hex_bytes(subject.as_bytes()),
+            hex_bytes(assertion.as_bytes())
+        );
+        assumption.id =
+            AssumptionId::disambiguated(AssumptionKind::Waived, &id_subject, &assumption.statement);
+        debug_assert!(assumption.validate().is_ok());
+        Ok(assumption)
+    }
+
     /// Structural well-formedness, which a registry asserts as it collects and
     /// which every constructor's output satisfies. The rules:
     ///
@@ -2159,6 +2190,30 @@ impl CausalPathIndex {
         subject: &NetScope,
         registry: &EvidenceRegistry,
     ) -> Result<TraversalResult, EvidenceError> {
+        self.traverse_inner(subject, None, registry)
+    }
+
+    /// Traverse an assertion and also admit a check-scoped fact only when its
+    /// check and stable assertion key both match. This is the non-saturating
+    /// path for facts such as a live waiver or a peripheral that never ran:
+    /// attaching every `ci` fact to every CI assertion would make the evidence
+    /// registry loud but causally useless.
+    pub fn traverse_assertion(
+        &self,
+        subject: &NetScope,
+        check: &str,
+        assertion_key: &str,
+        registry: &EvidenceRegistry,
+    ) -> Result<TraversalResult, EvidenceError> {
+        self.traverse_inner(subject, Some((check, assertion_key)), registry)
+    }
+
+    fn traverse_inner(
+        &self,
+        subject: &NetScope,
+        check_scope: Option<(&str, &str)>,
+        registry: &EvidenceRegistry,
+    ) -> Result<TraversalResult, EvidenceError> {
         let mut reachable_parts = BTreeSet::new();
         for net in subject.nets() {
             let parts = self
@@ -2188,7 +2243,12 @@ impl CausalPathIndex {
                     };
                     overlaps_net && overlaps_time
                 }
-                Scope::Check { .. } => false,
+                Scope::Check { check, kind } => {
+                    check_scope.is_some_and(|(expected_check, expected_key)| {
+                        check.eq_ignore_ascii_case(expected_check)
+                            && kind.as_deref().is_none_or(|actual| actual == expected_key)
+                    })
+                }
             })
             .cloned()
             .collect();

@@ -61,6 +61,9 @@ Every key below is ALWAYS present on an `ok: true` line.
 | `coverage_warnings` | array of string | yes, may be empty | co-sim coverage holes (dropped ADC injection, unexercised bus device, a watchdog that cannot bite, a watchdog that did) |
 | `dead_rails` | array of string | yes, may be empty | nets that name a supply and that nothing powered |
 | `waiver_notes` | array of string | yes, may be empty | lapsed waivers, active waivers that matched nothing, a malformed waiver file |
+| `inventory` | array of object | yes, may be empty | exact input files consumed (board, spec, firmware, models), with content hashes |
+| `assumptions` | array of object | yes, may be empty | the canonical typed assumption registry; `substitutions`/`coverage_warnings` are compatibility projections of it |
+| `evidence` | array of object | yes, may be empty | one causal evidence map per evaluated assertion (plus board-scoped maps); `assumptions` ids inside resolve in the registry above |
 | `results` | array of object | yes | one entry per assertion, in spec order |
 
 `exit_code` is this line's own verdict, not the process's. The process exits with
@@ -72,8 +75,8 @@ delivered everything asked of it. Branch on the process code for the gate; read
 this field to attribute a verdict to a spec.
 
 `coverage` is the one nullable key: present with the value `null`, not absent.
-The distinction matters, because the two per-assertion optional keys below are
-absent instead.
+The distinction matters, because the three per-assertion optional keys below
+are absent instead.
 
 ### Reading the verdict
 
@@ -110,10 +113,11 @@ An `hwtrace` assertion expands to one entry per channel and feature, so
 | `seeds_total` | integer | yes | members evaluated |
 | `why` | string | **no, absent** | on a real red: the observed shortfall in one sentence |
 | `waived` | string | **no, absent** | the reason and expiry of the active waiver covering this failure |
+| `evidence` | object | **no, absent** | this assertion's causal evidence map: assumption ids, artifacts, models, parameters and numerical error budget |
 
-`why` and `waived` are the only two keys in the whole document that a consumer
-may find MISSING. They are omitted, never `null`, so test for presence rather
-than for null. A waived failure keeps `passed: false` here while lifting
+`why`, `waived`, and the per-result `evidence` are the only keys in the whole
+document that a consumer may find MISSING. They are omitted, never `null`, so
+test for presence rather than for null. A waived failure keeps `passed: false` here while lifting
 `assertions_passed` to `true`: waived is visible, not hidden, and not gating.
 
 Every outcome a `results` entry can express:

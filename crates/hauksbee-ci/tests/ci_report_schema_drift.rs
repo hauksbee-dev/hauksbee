@@ -6,8 +6,8 @@
 //! as `hauksbee-engine/tests/run_report_schema_drift.rs` for the engine's run
 //! report and `hauksbee-ci/tests/schema_drift.rs` for the CI-spec input schema.
 //!
-//! Regenerate after changing `CiJsonReport`, `CiJsonError`, or `AssertResult`
-//! with:
+//! Regenerate after changing `CiJsonReport`, `CiJsonError`, or
+//! `CiJsonAssertion` with:
 //!     UPDATE_CI_REPORT_SCHEMA=1 cargo test -p hauksbee-ci --test ci_report_schema_drift
 //!
 //! Four tests, because a generated schema can be wrong in four different ways:
@@ -68,21 +68,22 @@ fn generated_schema() -> String {
             "One line of `hauksbee-ci run <spec>... --json`: a run report (`ok: true`) or a \
              spec/board error (`ok: false`). A multi-spec invocation prints one line per \
              spec (NDJSON) and may mix the two. schema_version \
-             {CI_REPORT_SCHEMA_VERSION}. GENERATED from `CiJsonLine` in \
-             crates/hauksbee-ci/src/report.rs and `AssertResult` in \
-             crates/hauksbee-ci/src/assertions.rs. Do not hand-edit; regenerate with: {REGEN}"
+             {CI_REPORT_SCHEMA_VERSION}. GENERATED from `CiJsonLine` and \
+             `CiJsonAssertion` in crates/hauksbee-ci/src/report.rs. \
+             Do not hand-edit; regenerate with: {REGEN}"
         )),
     );
-    // `why` and `waived` carry `skip_serializing_if`, so they are absent rather
-    // than null. Pinning their type to a bare string (`schema_absent_or_string`)
-    // says the "never null" half, but it also makes schemars treat them as
-    // non-Option and therefore required, which is the opposite of the truth.
-    // Drop them from `required` here; `generated_schema_pins_the_optionality`
-    // is the assertion that keeps this honest in both directions.
-    let required = obj["definitions"]["AssertResult"]["required"]
+    // `why`, `waived`, and `evidence` carry `skip_serializing_if`, so they are
+    // absent rather than null. Pinning `why`/`waived` to a bare string
+    // (`schema_absent_or_string`) says the "never null" half, but it also makes
+    // schemars treat them as non-Option and therefore required, which is the
+    // opposite of the truth. Drop all three from `required` here;
+    // `generated_schema_pins_the_optionality` is the assertion that keeps this
+    // honest in both directions.
+    let required = obj["definitions"]["CiJsonAssertion"]["required"]
         .as_array_mut()
-        .expect("AssertResult has required fields");
-    required.retain(|f| f != "why" && f != "waived");
+        .expect("CiJsonAssertion has required fields");
+    required.retain(|f| f != "why" && f != "waived" && f != "evidence");
 
     let mut text = serde_json::to_string_pretty(obj).expect("schema serializes");
     text.push('\n');
@@ -208,6 +209,9 @@ fn generated_schema_pins_the_optionality() {
         "coverage_warnings",
         "dead_rails",
         "waiver_notes",
+        "inventory",
+        "assumptions",
+        "evidence",
         "results",
     ] {
         assert!(
@@ -224,12 +228,12 @@ fn generated_schema_pins_the_optionality() {
         "`coverage` is null on a non-ensemble run, so null must be in its type: {coverage}"
     );
 
-    // Per-assertion: `why` and `waived` carry skip_serializing_if and are the
-    // only two keys in the whole document a consumer may find ABSENT.
-    let assertion = &schema["definitions"]["AssertResult"];
+    // Per-assertion: `why`, `waived`, and `evidence` carry skip_serializing_if
+    // and are the only keys in the whole document a consumer may find ABSENT.
+    let assertion = &schema["definitions"]["CiJsonAssertion"];
     let a_required: Vec<&str> = assertion["required"]
         .as_array()
-        .expect("AssertResult required list")
+        .expect("CiJsonAssertion required list")
         .iter()
         .map(|v| v.as_str().unwrap())
         .collect();
@@ -265,12 +269,18 @@ fn generated_schema_pins_the_optionality() {
         json!(["integer", "null"]),
         "`failing_seed` is null on a pass, not absent"
     );
-    // The waiver-matching fields are #[serde(skip)]: not on the wire at all,
-    // and so not in the schema either.
+    // Per-assertion evidence is absent-or-map, never null: it is the published
+    // projection of the run's evidence spine for this one label.
+    assert!(
+        !a_required.contains(&"evidence"),
+        "`evidence` is omitted entirely (skip_serializing_if) rather than set to null"
+    );
+    // The waiver-matching fields live on the runtime `AssertResult`, not on the
+    // published `CiJsonAssertion`: internal keys must not reach the wire.
     for field in ["subject_nets", "subject_refs"] {
         assert!(
             assertion["properties"].get(field).is_none(),
-            "`{field}` is #[serde(skip)] and must not appear in the published shape"
+            "`{field}` is internal and must not appear in the published shape"
         );
     }
 }
@@ -360,6 +370,9 @@ fn refusal_and_abort_documents_validate() {
         coverage_warnings: Vec::new(),
         dead_rails: Vec::new(),
         waiver_notes: Vec::new(),
+        inventory: Vec::new(),
+        assumptions: Vec::new(),
+        evidence: Vec::new(),
     };
     // The abort case doubles as the every-honesty-array-populated document: a
     // consumer's worst case is all five qualifier lists non-empty at once.
@@ -378,6 +391,9 @@ fn refusal_and_abort_documents_validate() {
         coverage_warnings: vec!["co-sim: ADC channel 0 on U1 never received a sample".to_string()],
         dead_rails: vec!["ANALOG_VDD".to_string()],
         waiver_notes: vec!["waiver for max_temp on R1 lapsed on 2026-01-01".to_string()],
+        inventory: Vec::new(),
+        assumptions: Vec::new(),
+        evidence: Vec::new(),
     };
 
     for (shape, result) in [("refusal", &refusal), ("bare abort", &bare_abort)] {

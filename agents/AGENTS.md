@@ -44,10 +44,12 @@ run --json` reports `passed` (the process verdict, false on exit 3),
   compatibility policy. The field table, the five outcome shapes and which keys
   are absent rather than null are in `docs/ci/JSON_OUTPUT.md`; read that rather
   than a list here, which is how this one went stale.
-- Honesty qualifiers are data, not prose. Substitute MCU cores, dropped ADC
-  injections, and coverage holes appear in `substitutions` /
-  `coverage_warnings`. Surface them to the user. A green run with a
-  substitution is not the same claim as a green run on real silicon.
+- Honesty qualifiers are typed data, not prose. `assumptions[]` is the canonical
+  registry and each result's `evidence` lists its causal assumption ids,
+  artifacts, models, parameters and numerical error budget. Legacy
+  `substitutions` / `coverage_warnings` remain compatibility projections.
+  Surface the typed records; qualified evidence is not the same claim as a
+  clean run on real silicon.
 
 ## The spec is the contract
 

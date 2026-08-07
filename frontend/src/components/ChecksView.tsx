@@ -1,12 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { parse as parseToml } from 'smol-toml'
-import type { QueuedCheck, WebReport } from '../types/report'
+import type { ArtifactProvenance, EvidenceAssumption, EvidenceMap, QueuedCheck, WebReport } from '../types/report'
 import type { SelectedComponent } from './SelectionCard'
 import { PlusIcon } from './Icons'
 import { specStemFor, workflowYaml } from '../lib/ci-workflow'
 import { downloadText } from '../lib/report-export'
 import { ArriveOnce, EmptyState, StaggerItem, ValueSettle, VerdictBadge, ARRIVE, LEAVE } from '../motion'
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { assumptionsForEvidence } from '../lib/evidence'
 
 // The Checks view: compose the body of a hauksbee-ci spec with plain
 // language, run it through the REAL hauksbee-ci binary (`POST /api/check`
@@ -85,6 +86,7 @@ interface CheckResult {
   passed: boolean
   invalid: boolean
   detail: string
+  evidence?: EvidenceMap
 }
 
 interface RunResponse {
@@ -96,6 +98,9 @@ interface RunResponse {
   coverage?: string | null
   substitutions?: string[]
   coverage_warnings?: string[]
+  inventory?: ArtifactProvenance[]
+  assumptions?: EvidenceAssumption[]
+  evidence?: EvidenceMap[]
   results?: CheckResult[]
 }
 
@@ -378,6 +383,56 @@ function ResultChip({ result, stale }: { result: CheckResult; stale: boolean }) 
         height: 20, opacity: stale ? 0.45 : 1, flexShrink: 0,
       }}
     />
+  )
+}
+
+/** Canonical assertion evidence from the CI runner. Wording is rendered
+ * verbatim from the shared registry so web, CLI, JSON and CI artifacts cannot
+ * drift into different explanations of the same limitation. */
+function AssertionEvidence({
+  result,
+  assumptions,
+  inventory,
+  stale,
+}: {
+  result: CheckResult
+  assumptions: readonly EvidenceAssumption[]
+  inventory: readonly ArtifactProvenance[]
+  stale: boolean
+}) {
+  const map = result.evidence
+  if (!map) return null
+  const linked = assumptionsForEvidence(map, assumptions)
+  const artifacts = (map.artifacts ?? []).flatMap(index => inventory[index] ? [inventory[index]] : [])
+  if (map.status === 'clean' && linked.length === 0 && !map.error_budget) return null
+  return (
+    <div
+      data-testid="assertion-evidence"
+      className="mt-2 rounded-md px-2.5 py-2 text-[11px]"
+      style={{
+        background: 'var(--surface-2)',
+        border: '1px solid var(--hairline)',
+        color: 'var(--silk-dim)',
+        opacity: stale ? 0.55 : 1,
+      }}
+    >
+      <div className="font-semibold uppercase tracking-wide" style={{ color: map.status === 'undermined' ? 'var(--warn)' : 'var(--silk-faint)' }}>
+        Evidence {map.status}{map.error_budget ? ' · numeric error budget attached' : ''}
+      </div>
+      {linked.map(assumption => (
+        <div key={assumption.id} className="mt-1.5">
+          <code style={{ color: 'var(--copper)', fontFamily: 'var(--font-mono)' }}>{assumption.id}</code>
+          <div style={{ color: 'var(--silk)' }}>{assumption.statement}</div>
+          <div>{assumption.because} {assumption.consequence}</div>
+          <div>To remove it: {assumption.replacement}</div>
+        </div>
+      ))}
+      {artifacts.length > 0 && (
+        <div className="mt-1.5" style={{ color: 'var(--silk-faint)' }}>
+          Inputs: {artifacts.map(artifact => artifact.path.split('/').pop() ?? artifact.path).join(', ')}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -932,6 +987,14 @@ export function ChecksView({
                               {stale ? ' (from the last run; the spec has changed since)' : ''}
                             </div>
                           )}
+                          {rowResult && (
+                            <AssertionEvidence
+                              result={rowResult}
+                              assumptions={run?.response.assumptions ?? []}
+                              inventory={run?.response.inventory ?? []}
+                              stale={stale}
+                            />
+                          )}
                         </motion.div>
                       )
                     })}
@@ -1154,13 +1217,21 @@ export function ChecksView({
                       </div>
                       {/* Raw mode has no rows to annotate; list results here. */}
                       {rawMode && results.map((x, i) => (
-                        <div key={i} className="mt-1.5 rounded-lg px-3 py-2 text-[13px] flex gap-2"
+                        <div key={i} className="mt-1.5 rounded-lg px-3 py-2 text-[13px]"
                           style={{ background: 'var(--surface-2)', border: '1px solid var(--hairline)' }}>
-                          <span style={{ color: x.invalid ? 'var(--warn)' : x.passed ? 'var(--ok)' : 'var(--err)', fontWeight: 700 }}>
-                            {x.invalid ? 'INVALID' : x.passed ? 'PASS' : 'FAIL'}
-                          </span>
-                          <span style={{ color: 'var(--silk)' }}>{x.label}</span>
-                          <span style={{ color: 'var(--silk-faint)' }}>{x.detail}</span>
+                          <div className="flex flex-wrap gap-2">
+                            <span style={{ color: x.invalid ? 'var(--warn)' : x.passed ? 'var(--ok)' : 'var(--err)', fontWeight: 700 }}>
+                              {x.invalid ? 'INVALID' : x.passed ? 'PASS' : 'FAIL'}
+                            </span>
+                            <span style={{ color: 'var(--silk)' }}>{x.label}</span>
+                            <span style={{ color: 'var(--silk-faint)' }}>{x.detail}</span>
+                          </div>
+                          <AssertionEvidence
+                            result={x}
+                            assumptions={result.assumptions ?? []}
+                            inventory={result.inventory ?? []}
+                            stale={stale}
+                          />
                         </div>
                       ))}
                       {(result.substitutions ?? []).map((s, i) => (

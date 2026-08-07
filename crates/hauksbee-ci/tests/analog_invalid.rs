@@ -63,6 +63,7 @@ fn outcome_with(
         seed: 0,
         windows,
         bind: None,
+        evidence: None,
         uart: HashMap::new(),
         faults: Vec::new(),
         toggles: HashMap::new(),
@@ -82,6 +83,7 @@ fn outcome_with(
         ac: None,
         analog_valid,
         failed_windows,
+        fallback_windows: Vec::new(),
         analog_abort,
         sampled_values: Vec::new(),
         net_series: HashMap::new(),
@@ -106,6 +108,9 @@ fn ci_result(results: Vec<hauksbee_ci::assertions::AssertResult>, analog_abort: 
         coverage_warnings: Vec::new(),
         dead_rails: Vec::new(),
         waiver_notes: Vec::new(),
+        inventory: Vec::new(),
+        assumptions: Vec::new(),
+        evidence: Vec::new(),
     }
 }
 
