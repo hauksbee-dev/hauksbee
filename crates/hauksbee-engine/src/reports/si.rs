@@ -20,6 +20,8 @@ pub fn emit(
     board_path: &Path,
     board: &ExtractedBoard,
     text: &str,
+    raw: &[u8],
+    input_kind: crate::board_input::InputKind,
     altium_present: bool,
     lib: &ModelLibrary,
     reader_notes: &[String],
@@ -55,7 +57,14 @@ pub fn emit(
         &bound.report,
         reader_notes,
         hauksbee_ir::evidence::RunDate::from_system_clock(),
-    )?;
+    )?
+    .with_input_artifact(board_path, raw, input_kind)?;
+    let coverage = evidence.check_coverage_map("si", "Signal-integrity input coverage")?;
+    let evidence = if coverage.status() != hauksbee_ir::evidence::EvidenceStatus::Clean {
+        evidence.with_maps(vec![coverage])
+    } else {
+        evidence
+    };
     match mode {
         OutputMode::Json => {
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))

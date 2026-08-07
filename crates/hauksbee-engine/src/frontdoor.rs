@@ -619,6 +619,26 @@ fn analyze_normalized(
             )
         }
     }
+    for (check, assertion) in [
+        ("drc", "DRC input coverage"),
+        ("si", "Signal-integrity input coverage"),
+    ] {
+        match evidence.check_coverage_map(check, assertion) {
+            Ok(map) if map.status() != hauksbee_ir::evidence::EvidenceStatus::Clean => {
+                actual_maps.push(map)
+            }
+            Ok(_) => {}
+            Err(error) => {
+                return (
+                    unreadable(
+                        file_name,
+                        format!("could not build coverage evidence: {error}"),
+                    ),
+                    drc,
+                )
+            }
+        }
+    }
     if actual_maps.is_empty() {
         match evidence.static_coverage_map() {
             Ok(map) => actual_maps.push(map),
@@ -1717,10 +1737,13 @@ mod tests {
             );
             let notes: Vec<&str> = report.notes.iter().map(|n| n.message.as_str()).collect();
             assert!(
-                notes
-                    .iter()
-                    .any(|n| n.contains("not reverse-engineered from copper")),
-                "{label}: the reader's coverage note must reach the report: {notes:?}"
+                notes.iter().any(|n| n.contains("native layout")),
+                "{label}: the typed not-checked reason must reach the report: {notes:?}"
+            );
+            let inventory = serde_json::to_string(&report.inventory).unwrap();
+            assert!(
+                inventory.contains("not reverse-engineered from copper"),
+                "{label}: the reader's positive accounting belongs to the input artifact: {inventory}"
             );
             assert!(
                 !notes

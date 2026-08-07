@@ -141,6 +141,9 @@ fn ci_result(results: Vec<AssertResult>) -> CiResult {
         coverage_warnings: Vec::new(),
         dead_rails: Vec::new(),
         waiver_notes: Vec::new(),
+        inventory: Vec::new(),
+        assumptions: Vec::new(),
+        evidence: Vec::new(),
     }
 }
 
