@@ -42,6 +42,9 @@ contains = [
   "a meaningless all-zeros table",
   # And how to make the question answerable.
   "Add `AC 1` to the driving source",
+  # Refusing the AC claim must not throw away work that did complete.
+  "valid partial conclusions",
+  "deck parsed and the circuit was assembled",
 ]
 # The refusal must not be accompanied by the output it refused to produce.
 not_matches = [

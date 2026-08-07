@@ -12,13 +12,16 @@ worse than no answer, because it looks like data and it plots.
 
 Exit 3, and nothing on stdout that could be mistaken for a result.
 
-The refusal has three jobs:
+The refusal has four jobs:
 
 1. **Name what was refused.** "AC analysis refused".
 2. **Say why the number would have been wrong.** The drive is identically zero,
    so the response would be a meaningless all-zeros table. Without this, the
    user's next move is to argue with the tool.
-3. **Say what to change.** Add `AC 1` to the driving source. A refusal with no
+3. **Preserve valid partial conclusions.** The deck parsed and the circuit was
+   assembled; no AC table was produced. A refusal must not throw that completed
+   work away.
+4. **Say what to change.** Add `AC 1` to the driving source. A refusal with no
    route out of it is a dead end.
 
 ## Why exit 3 and not 1

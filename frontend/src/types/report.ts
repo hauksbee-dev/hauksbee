@@ -1,3 +1,5 @@
+import type { RefusalContract } from '../lib/refusal-contract'
+
 // Analysis-report types, mirrors hauksbee-engine frontdoor.rs (WebReport et al)
 // exactly. This is the JSON `/api/analyze` and `/api/analyze-with-firmware`
 // return, and what `/api/startup` embeds under `report` when a board was
@@ -203,6 +205,8 @@ export interface WebReport {
    *  builder's prefill. */
   supplies?: WebSupply[]
   cosim?: WebCosimSection | null
+  /** Why a requested conclusion could not be made, when co-sim was invalid. */
+  refusal?: RefusalContract | null
 }
 
 export interface WebSupply {

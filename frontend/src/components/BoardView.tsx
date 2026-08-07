@@ -17,6 +17,7 @@ import type { SpecSnapshot } from '../hooks/useSessions'
 import { groupFindings } from '../lib/findings'
 import type { FindingGroup } from '../lib/findings'
 import { summarizeEvidence } from '../lib/evidence'
+import { refusalLines } from '../lib/refusal-contract'
 
 // The Board view with a report in hand: the viewer as the hero surface (with
 // its toolbar and layers panel), the plain-language verdict, and the findings.
@@ -518,6 +519,23 @@ export function BoardView({
             <SectionBlock section={s} onLocate={boardUrl ? locate : undefined} />
           </StaggerItem>
         ))}
+
+        {r.refusal && (
+          <section
+            className="mt-7 rounded-lg px-4 py-3"
+            data-testid="analysis-refusal-contract"
+            style={{ border: '1px solid var(--warn-border)', borderLeft: '4px solid var(--warn)', background: 'var(--warn-bg)' }}
+          >
+            <h2 className="text-[11px] font-bold tracking-widest uppercase mb-2" style={{ color: 'var(--warn-strong)' }}>
+              Analysis could not make this claim
+            </h2>
+            {refusalLines(r.refusal).map(([label, value]) => (
+              <div key={label} className="text-sm mt-1" style={{ color: 'var(--silk)' }}>
+                <b style={{ color: 'var(--silk-dim)', fontWeight: 600 }}>{label}:</b>{' '}{value}
+              </div>
+            ))}
+          </section>
+        )}
 
         {/* Firmware co-sim */}
         {r.cosim && (
