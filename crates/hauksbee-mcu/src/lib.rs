@@ -68,7 +68,7 @@ pub mod qemu;
 pub mod soc;
 
 pub use hostserial::{HostSerial, HostSerialStats, HostSerialTransport, PeerEvent};
-pub use traits::{I2cEvent, Mcu, McuState, PinId, SpiEvent};
+pub use traits::{I2cEvent, Mcu, McuState, PinDrive, PinId, SpiEvent};
 
 use std::path::{Path, PathBuf};
 

@@ -1080,6 +1080,29 @@ mod tests {
     }
 
     #[test]
+    fn at28c256_fast_write_time_requires_explicit_f_identity() {
+        let l = lib();
+        let standard = l
+            .resolve(&ComponentQuery {
+                value: Some("28C256".to_string()),
+                ..Default::default()
+            })
+            .model
+            .expect("generic EEPROM resolves");
+        let fast = l
+            .resolve(&ComponentQuery {
+                value: Some("AT28C256F-15JU".to_string()),
+                ..Default::default()
+            })
+            .model
+            .expect("explicit F EEPROM resolves");
+        assert_eq!(standard.id, "eeprom_28c256");
+        assert_eq!(standard.logic.memories[0].program_time_s, Some(0.010));
+        assert_eq!(fast.id, "eeprom_at28c256f");
+        assert_eq!(fast.logic.memories[0].program_time_s, Some(0.003));
+    }
+
+    #[test]
     fn resolve_mounting_hole_is_ignore() {
         let l = lib();
         let q = ComponentQuery {

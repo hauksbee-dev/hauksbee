@@ -283,6 +283,10 @@ pub struct MemorySpec {
     /// write window after the device's documented inter-byte timeout.
     #[serde(default)]
     pub byte_load_timeout_s: Option<f64>,
+    /// Maximum internal program cycle. Cycle-stamped responders defer cell
+    /// updates for this interval and expose data-polling status meanwhile.
+    #[serde(default)]
+    pub program_time_s: Option<f64>,
     /// Address pins, LSB first (`address[0]` = A0). Declared inputs.
     pub address: Vec<String>,
     /// Write strobe: the edge that commits `data_in` at the sampled address
@@ -294,6 +298,12 @@ pub struct MemorySpec {
     /// low, for a chip-enable-qualified write). Declared inputs.
     #[serde(default)]
     pub write_gates: Vec<EnableSpec>,
+    /// Complete alternative write cycles. Each entry names its own commit
+    /// strobe and level qualifications, allowing parts whose data sheet
+    /// permits either WE- or CE-controlled writes. This is the preferred
+    /// form; `write` plus `write_gates` remains accepted for older models.
+    #[serde(default)]
+    pub write_cycles: Vec<MemoryWriteCycleSpec>,
     /// Level gates that must ALL be active for the memory to drive
     /// `data_out` (for example CE low, OE low, and WE high on a 28C256).
     /// Keeping the complete read condition here prevents a partially-gated
@@ -315,6 +325,18 @@ pub struct MemorySpec {
     /// software-data-protection protocol.
     #[serde(default)]
     pub software_data_protection: Option<SoftwareDataProtectionSpec>,
+}
+
+/// One independently-qualified parallel-memory write cycle.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MemoryWriteCycleSpec {
+    /// Input strobe whose selected edge commits the cycle.
+    pub pin: String,
+    /// Qualifying edge of `pin`.
+    pub edge: Edge,
+    /// Levels which must all be active at that edge.
+    #[serde(default)]
+    pub gates: Vec<EnableSpec>,
 }
 
 /// The `[models.logic]` block.
@@ -789,6 +811,9 @@ pub enum LogicSpecError {
     )]
     MemoryByteLoadTimeoutInvalid { name: String, seconds: f64 },
 
+    #[error("memory '{name}' declares program_time_s={seconds}; it must be finite and positive")]
+    MemoryProgramTimeInvalid { name: String, seconds: f64 },
+
     #[error("memory '{name}' declares byte_load_timeout_s without page_words")]
     MemoryPageTimingWithoutPage { name: String },
 
@@ -1136,6 +1161,14 @@ impl Logic {
                     });
                 }
             }
+            if let Some(seconds) = m.program_time_s {
+                if !seconds.is_finite() || seconds <= 0.0 {
+                    return Err(LogicSpecError::MemoryProgramTimeInvalid {
+                        name: m.name.clone(),
+                        seconds,
+                    });
+                }
+            }
             // Total size cap: 128 Mbit covers every 27C/28C/62xx/39SF-class
             // part by a wide margin while refusing an absurd allocation.
             const MAX_TOTAL_BITS: u128 = 128 * 1024 * 1024;
@@ -1158,8 +1191,17 @@ impl Logic {
             for pin in &m.address {
                 need_input(ctx("address"), pin)?;
             }
+            let has_write = m.write.is_some() || !m.write_cycles.is_empty();
             if let Some(w) = &m.write {
                 need_input(ctx("write strobe"), &w.pin)?;
+            }
+            for w in &m.write_cycles {
+                need_input(ctx("write strobe"), &w.pin)?;
+                for g in &w.gates {
+                    need_input(ctx("write gate"), &g.pin)?;
+                }
+            }
+            if has_write {
                 if m.data_in.len() != m.bits as usize {
                     return Err(LogicSpecError::MemoryDataWidthMismatch {
                         name: m.name.clone(),
@@ -1223,7 +1265,7 @@ impl Logic {
                 });
             }
             if let Some(protection) = &m.software_data_protection {
-                if m.write.is_none() {
+                if !has_write {
                     return Err(LogicSpecError::MemoryProtectionWithoutWrite {
                         name: m.name.clone(),
                     });

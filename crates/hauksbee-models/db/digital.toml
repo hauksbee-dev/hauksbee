@@ -1229,11 +1229,11 @@ theta_ja_c_per_w = 32.0   # multi-layer PCB, exposed pad soldered
 #
 # Source: Microchip AT28C256 Industrial Grade data sheet DS20006386B
 # (September 2022), Tables 4-2, 6-1 through 6-4 and the 28-lead pinout.
-# The logic evaluator models byte reads, WE-controlled writes, and the exact
+# The logic evaluator models byte reads, WE- and CE-controlled writes, and the exact
 # enable/disable software-data-protection command sequences. Page writes are
-# represented by their constituent byte latches, which preserves final memory
-# contents and protection semantics. The optional 12 V chip-erase mode and
-# busy/status waveforms during the internal program interval are outside this
+# represented by their constituent byte latches. The 10 ms maximum standard-
+# grade program cycle defers cell updates and exposes I/O7 data polling plus
+# I/O6 toggle status. The optional 12 V chip-erase mode remains outside this
 # ordinary 5 V digital-bus model.
 [[models]]
 id = "eeprom_28c256"
@@ -1246,7 +1246,10 @@ description = "AT28C256-class 32Kx8 parallel EEPROM"
 value_re = "(?i)^(AT|CAT|X)?28C256([A-Z0-9-]*)$"
 
 [models.params]
-# Guaranteed DC levels at VCC=5 V ±10% (DS20006386B table 4-2).
+# Guaranteed loaded DC limits at VCC=5 V ±10% (DS20006386B table 4-2).
+# VOH=2.4 V is deliberately conservative: it is the guaranteed minimum under
+# the stated load, used here as a Thevenin source level, not a claim that an
+# unloaded EEPROM output physically sits at 2.4 V.
 voh = 2.4
 vol = 0.45
 vih = 2.0
@@ -1298,13 +1301,22 @@ words = 32768
 bits = 8
 page_words = 64
 byte_load_timeout_s = 0.00015
+program_time_s = 0.010
 init = 0xff
 address = [
   "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9",
   "a10", "a11", "a12", "a13", "a14",
 ]
-write = { pin = "we_n", edge = "rising" }
-write_gates = [{ pin = "ce_n", active = "low" }]
+write_cycles = [
+  { pin = "we_n", edge = "rising", gates = [
+    { pin = "ce_n", active = "low" },
+    { pin = "oe_n", active = "high" },
+  ] },
+  { pin = "ce_n", edge = "rising", gates = [
+    { pin = "we_n", active = "low" },
+    { pin = "oe_n", active = "high" },
+  ] },
+]
 read_gates = [
   { pin = "ce_n", active = "low" },
   { pin = "oe_n", active = "low" },
@@ -1328,6 +1340,114 @@ disable = [
   { address = 0x2AAA, value = 0x55 },
   { address = 0x5555, value = 0x20 },
 ]
+
+[[models]]
+id = "eeprom_at28c256f"
+kind = "digital"
+description = "AT28C256F fast-write 32Kx8 parallel EEPROM"
+
+[models.match]
+# The 3 ms cycle belongs only to the explicitly marked Microchip F option.
+# A bare or standard AT28C256 must retain the conservative 10 ms model.
+value_re = "(?i)^AT28C256F(-[A-Z0-9]+)?$"
+
+[models.params]
+# Guaranteed loaded DC limits at VCC=5 V ±10% (DS20006386B table 4-2).
+# VOH=2.4 V is deliberately conservative: it is the guaranteed minimum under
+# the stated load, used here as a Thevenin source level, not a claim that an
+# unloaded EEPROM output physically sits at 2.4 V.
+voh = 2.4
+vol = 0.45
+vih = 2.0
+vil = 0.8
+tpd_s = 1.5e-7
+supply_pin = "28"
+gnd_pin = "14"
+
+[models.pins]
+"1" = "a14"
+"2" = "a12"
+"3" = "a7"
+"4" = "a6"
+"5" = "a5"
+"6" = "a4"
+"7" = "a3"
+"8" = "a2"
+"9" = "a1"
+"10" = "a0"
+"11" = "io0"
+"12" = "io1"
+"13" = "io2"
+"14" = "gnd"
+"15" = "io3"
+"16" = "io4"
+"17" = "io5"
+"18" = "io6"
+"19" = "io7"
+"20" = "ce_n"
+"21" = "a10"
+"22" = "oe_n"
+"23" = "a11"
+"24" = "a9"
+"25" = "a8"
+"26" = "a13"
+"27" = "we_n"
+"28" = "vcc"
+
+[models.logic]
+inputs = [
+  "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9",
+  "a10", "a11", "a12", "a13", "a14", "ce_n", "oe_n", "we_n",
+]
+outputs = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+
+[[models.logic.memory]]
+name = "cell"
+words = 32768
+bits = 8
+page_words = 64
+byte_load_timeout_s = 0.00015
+program_time_s = 0.003
+init = 0xff
+address = [
+  "a0", "a1", "a2", "a3", "a4", "a5", "a6", "a7", "a8", "a9",
+  "a10", "a11", "a12", "a13", "a14",
+]
+write_cycles = [
+  { pin = "we_n", edge = "rising", gates = [
+    { pin = "ce_n", active = "low" },
+    { pin = "oe_n", active = "high" },
+  ] },
+  { pin = "ce_n", edge = "rising", gates = [
+    { pin = "we_n", active = "low" },
+    { pin = "oe_n", active = "high" },
+  ] },
+]
+read_gates = [
+  { pin = "ce_n", active = "low" },
+  { pin = "oe_n", active = "low" },
+  { pin = "we_n", active = "high" },
+]
+data_in = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+data_out = ["io0", "io1", "io2", "io3", "io4", "io5", "io6", "io7"]
+
+[models.logic.memory.software_data_protection]
+initial = false
+enable = [
+  { address = 0x5555, value = 0xAA },
+  { address = 0x2AAA, value = 0x55 },
+  { address = 0x5555, value = 0xA0 },
+]
+disable = [
+  { address = 0x5555, value = 0xAA },
+  { address = 0x2AAA, value = 0x55 },
+  { address = 0x5555, value = 0x80 },
+  { address = 0x5555, value = 0xAA },
+  { address = 0x2AAA, value = 0x55 },
+  { address = 0x5555, value = 0x20 },
+]
+
+# ═════════════════════════════════════════════════════════════════════════════
 
 # ═════════════════════════════════════════════════════════════════════════════
 # ADDRESSABLE RGB LEDs DELIBERATELY LEFT UNRESOLVED. This is the single largest
