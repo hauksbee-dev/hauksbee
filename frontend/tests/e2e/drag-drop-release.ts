@@ -82,7 +82,10 @@ if (!Array.isArray(files)
   )
 }
 if (!files.every(isAbsolute)) throw new Error('every HB_BOARD_FILES entry must be an absolute path')
-const resolvedFiles = files.map(path => realpathSync(path))
+// The guard above proves the shape, but its narrowing does not reach the
+// journey functions below; carry the proven type explicitly.
+const boardFilePaths = files as string[]
+const resolvedFiles = boardFilePaths.map(path => realpathSync(path))
 if (new Set(resolvedFiles).size !== 5) throw new Error('HB_BOARD_FILES must contain five distinct files')
 const fileDigests = await Promise.all(resolvedFiles.map(async path => (
   new Bun.CryptoHasher('sha256').update(await Bun.file(path).arrayBuffer()).digest('hex')
@@ -420,7 +423,7 @@ async function runBoard(page: Page, path: string, index: number): Promise<BoardR
     fullPage: false,
   })
   return {
-    path: files[index],
+    path: boardFilePaths[index],
     file,
     input_sha256: inputSha256,
     elapsed_ms: elapsed,
@@ -456,7 +459,7 @@ try {
       // One malformed or hung board must not erase the other four journeys.
       // Preserve a complete five-row result artifact and fail at the end.
       result = {
-        path: files[index],
+        path: boardFilePaths[index],
         file: basename(path),
         input_sha256: fileDigests[index],
         elapsed_ms: 0,
