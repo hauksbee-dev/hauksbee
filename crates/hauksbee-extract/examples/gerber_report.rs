@@ -31,8 +31,14 @@ fn main() {
         "flashes:             {} total, {} assigned to components, {} unassigned (vias/test)",
         s.total_flashes, s.assigned_flashes, s.unassigned_flashes
     );
+    println!("  of which slots:    {}", s.n_slots);
+    println!("  on the outline:    {} (castellations / plated edge slots)", s.n_castellations);
+    println!("spans refused:       {}", s.refused_span_holes);
     println!("GND net detected:    {}", s.gnd_detected);
     println!("extraction time:     {dt:?}");
+    for n in &s.notes {
+        println!("note: {n}");
+    }
 
     // Bind-rate proxy: fraction of placed components that got >=1 pad with a net.
     let bound = g
