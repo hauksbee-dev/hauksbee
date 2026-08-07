@@ -1,4 +1,15 @@
 //! Shared, fail-closed waiver date policy.
+//!
+//! Waivers expire on a calendar date, which makes the run's own clock part of
+//! the trust chain: a zeroed, pre-NTP, or backdated clock would silently
+//! resurrect waivers that deliberately lapsed. [`RunDate`] closes that hole by
+//! refusing to believe any reading before the day this policy shipped —
+//! an untrustworthy clock reads as *unknown*, and an unknown date expires
+//! every waiver rather than activating any. The same captured date feeds
+//! waiver gating and evidence rendering, so the two surfaces can never
+//! disagree about what "today" was. Calendar parsing is strict (`YYYY-MM-DD`,
+//! real dates only) and converts through the standard civil-days algorithm,
+//! with no timezone: expiry is end-of-day in epoch days, everywhere.
 
 use serde::{Deserialize, Serialize};
 
