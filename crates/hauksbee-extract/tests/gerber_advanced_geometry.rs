@@ -188,6 +188,35 @@ fn a_routed_arc_wall_connects_what_the_curve_touches_and_not_what_its_chord_does
 }
 
 #[test]
+fn a_blind_via_on_a_gapped_stack_is_refused_rather_than_placed_by_position() {
+    // Two copper films, but they say what they are: the top declares
+    // `Copper,L1,Top` and the bottom declares `Copper,L4,Bot`. So this is a
+    // four-layer board whose two inner films did not reach us. The drill
+    // declares `Plated,1,2,PTH`: a blind via from the top to the first inner
+    // layer, which is one of the films we do not have.
+    //
+    // The trap is that our films are numbered densely, 0 and 1, so the bottom
+    // film IS "index 1" in the reader's own numbering. Indexing the pair `1,2`
+    // straight into that shorts the top of the board to the bottom of it, off a
+    // declaration that said the via stops at the second layer. The films'
+    // own layer numbers are what rule that out: layer 2 is not among them, so
+    // the via cannot be placed and is refused.
+    let e = from_gerber_dir(&job("gerber_gapped_blind")).expect("gapped blind fixture");
+    assert_eq!(e.stats.n_layers, 2, "only two films classified");
+    assert_eq!(e.stats.n_holes, 1);
+    assert_eq!(e.stats.refused_span_holes, 1);
+    assert_eq!(
+        e.stats.n_nets, 2,
+        "a blind via to a missing layer must not join the outer films"
+    );
+    assert!(
+        e.stats.notes.iter().any(|n| n.contains("gap-PTH.drl")),
+        "the refusal must name the file: {:?}",
+        e.stats.notes
+    );
+}
+
+#[test]
 fn a_declared_span_naming_a_layer_this_job_lacks_refuses_end_to_end() {
     // Two copper layers, a pad on each at the same point, and ONE plated drill
     // file whose X2 attribute says `Plated,3,6,PTH`: a buried via running from
