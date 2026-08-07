@@ -263,6 +263,43 @@ pub fn bind_board(board: &ExtractedBoard, lib: &ModelLibrary) -> BoundBoard {
     bind_board_with(board, lib, &crate::behavioral::CustomRegistry::new())
 }
 
+/// Refuse a component identity that extraction could not establish strongly
+/// enough for simulation.
+///
+/// `reference_ambiguous` means records were merged from circumstantial
+/// reference/pad/net evidence. That is useful for conservative DRC ownership,
+/// but two real duplicate-reference parts can share every net (two decoupling
+/// capacitors across VCC/GND are the common counterexample). Only a non-empty
+/// Altium `UNIQUEID`, retained as `source_unique_id`, upgrades that inferred
+/// merge to authoritative identity. A `duplicate_reference_conflict` is
+/// contradictory evidence and is always refused, UID or not.
+fn component_identity_refusal(comp: &Component) -> Option<String> {
+    let has_property = |wanted: &str| {
+        comp.properties
+            .iter()
+            .any(|(key, _)| key.eq_ignore_ascii_case(wanted))
+    };
+    let nonempty_property = |wanted: &str| {
+        comp.properties
+            .iter()
+            .any(|(key, value)| key.eq_ignore_ascii_case(wanted) && !value.trim().is_empty())
+    };
+
+    if has_property("duplicate_reference_conflict") {
+        return Some(
+            "duplicate_reference_conflict: extractor records contradict one another; precise component identity is not established"
+                .to_string(),
+        );
+    }
+    if has_property("reference_ambiguous") && !nonempty_property("source_unique_id") {
+        return Some(
+            "reference_ambiguous without authoritative source_unique_id: shared reference/pad/net evidence does not prove one physical component"
+                .to_string(),
+        );
+    }
+    None
+}
+
 /// Bind an extracted board, consulting `custom` for escape-hatch Rust
 /// behaviours. A component whose resolved model id / value / MPN matches a
 /// registered factory is realised by that [`CustomBehavior`](crate::behavioral::CustomBehavior)
@@ -331,6 +368,7 @@ pub fn bind_board_with(
     // with an ideal rail (only the input rail stays ideal).
     let has_vreg = board.components.iter().any(|c| {
         !c.dnp
+            && component_identity_refusal(c).is_none()
             && matches!(
                 resolve(lib, c).model.as_ref().map(|m| m.kind),
                 Some(ComponentKind::Vreg)
@@ -376,6 +414,24 @@ pub fn bind_board_with(
         let model = res.model.clone();
         let conf = res.confidence;
         let model_id = model.as_ref().map(|m| m.id.clone());
+
+        if let Some(reason) = component_identity_refusal(comp) {
+            report.push(BindRow {
+                reference: comp.reference.clone(),
+                value: comp.value.clone(),
+                model_id,
+                confidence: conf,
+                outcome: BindOutcome::Unresolved {
+                    reason: reason.clone(),
+                },
+                warning: Some(format!(
+                    "{} ({}): {reason}; left open because an extractor-inferred identity without an authoritative UID cannot support precise simulation",
+                    comp.reference, comp.value
+                )),
+                guesses: Vec::new(),
+            });
+            continue;
+        }
 
         let (kind_str, outcome, warning, guesses) = match &model {
             None => {
@@ -562,7 +618,7 @@ fn bind_behavioral(
     for comp in &board.components {
         // A DNP resistor is absent from the assembled board: the limit it
         // would have programmed must fall back to the open-resistance default.
-        if comp.dnp {
+        if comp.dnp || component_identity_refusal(comp).is_some() {
             continue;
         }
         if comp.reference.starts_with('R') {
@@ -576,7 +632,7 @@ fn bind_behavioral(
     let mut out = Vec::new();
     for comp in &board.components {
         // Not assembled -> no behavioural device (same rule as pass 2).
-        if comp.dnp {
+        if comp.dnp || component_identity_refusal(comp).is_some() {
             continue;
         }
         let res = resolve(lib, comp);
@@ -698,6 +754,9 @@ fn gather_device_meta(
     }
     let mut by_ref: HashMap<String, CompInfo> = HashMap::new();
     for comp in &board.components {
+        if comp.dnp || component_identity_refusal(comp).is_some() {
+            continue;
+        }
         let res = resolve(lib, comp);
         if let Some(m) = res.model {
             by_ref.insert(
@@ -4081,7 +4140,7 @@ fn power_out_net_voltages(board: &ExtractedBoard) -> HashMap<i64, f64> {
     let mut out: HashMap<i64, f64> = HashMap::new();
     for comp in &board.components {
         // A DNP part's power_out pin drives nothing on the real board.
-        if comp.dnp {
+        if comp.dnp || component_identity_refusal(comp).is_some() {
             continue;
         }
         for pin in &comp.pins {

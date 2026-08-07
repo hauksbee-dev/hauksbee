@@ -490,6 +490,110 @@ fn repeated_physical_pads_keep_capacitors_and_inductors_scalar() {
     assert_eq!(inductors[0].name(), "L7", "L7 keeps its scalar reference");
 }
 
+/// Altium can infer that split placement records are one component from a
+/// shared pad/net. That is useful for DRC ownership, but it does not prove one
+/// physical part: two duplicate-reference capacitors can both span VCC/GND.
+/// Without an authoritative source UID, the binder must leave the inferred
+/// identity open rather than stamping one precise capacitor for two possible
+/// parts.
+#[test]
+fn reference_ambiguous_merge_without_source_uid_is_left_open() {
+    let mut c = comp(
+        "C9",
+        "100nF",
+        "Capacitor_SMD:C_0603_1608Metric",
+        vec![
+            pin("1", 1, ""),
+            pin("2", 2, ""),
+            pin("1", 1, ""),
+            pin("2", 2, ""),
+        ],
+    );
+    c.properties.push((
+        "reference_ambiguous".to_string(),
+        "records merged from shared pad/net evidence".to_string(),
+    ));
+    let b = board(&[(1, "VCC"), (2, "GND")], vec![c]);
+    let bound = bind_board(&b, &ModelLibrary::builtin());
+
+    assert!(
+        !bound
+            .circuit
+            .devices
+            .iter()
+            .any(|device| { matches!(device, Device::Capacitor { name, .. } if name == "C9") }),
+        "an inferred identity without a UID must not stamp precise physics"
+    );
+    let row = bound
+        .report
+        .rows
+        .iter()
+        .find(|row| row.reference == "C9")
+        .expect("ambiguous C9 gets a visible bind row");
+    assert!(
+        matches!(&row.outcome, BindOutcome::Unresolved { reason }
+            if reason.contains("reference_ambiguous") && reason.contains("source_unique_id")),
+        "the unresolved reason must identify the missing identity evidence: {:?}",
+        row.outcome
+    );
+    assert!(
+        row.warning
+            .as_deref()
+            .is_some_and(|warning| warning.contains("left open") && warning.contains("UID")),
+        "the refusal must be prominent to users: {:?}",
+        row.warning
+    );
+}
+
+/// A non-empty Altium UNIQUEID, retained by extraction as source_unique_id,
+/// is authoritative component identity. Repeated physical pad records for that
+/// identity still normalize to one scalar component rather than an array.
+#[test]
+fn reference_ambiguous_merge_with_source_uid_binds_one_scalar() {
+    let mut c = comp(
+        "C10",
+        "100nF",
+        "Capacitor_SMD:C_0603_1608Metric",
+        vec![
+            pin("1", 1, ""),
+            pin("2", 2, ""),
+            pin("1", 1, ""),
+            pin("2", 2, ""),
+        ],
+    );
+    c.properties.extend([
+        (
+            "reference_ambiguous".to_string(),
+            "split placement records".to_string(),
+        ),
+        ("source_unique_id".to_string(), "ABC123".to_string()),
+    ]);
+    let b = board(&[(1, "VCC"), (2, "GND")], vec![c]);
+    let bound = bind_board(&b, &ModelLibrary::builtin());
+
+    let capacitors: Vec<_> = bound
+        .circuit
+        .devices
+        .iter()
+        .filter(
+            |device| matches!(device, Device::Capacitor { name, .. } if name.starts_with("C10")),
+        )
+        .collect();
+    assert_eq!(capacitors.len(), 1, "one UID means one scalar capacitor");
+    assert_eq!(capacitors[0].name(), "C10");
+    let row = bound
+        .report
+        .rows
+        .iter()
+        .find(|row| row.reference == "C10")
+        .expect("C10 gets a bind row");
+    assert!(
+        matches!(row.outcome, BindOutcome::Analog { .. }),
+        "authoritative UID identity should bind normally: {:?}",
+        row.outcome
+    );
+}
+
 /// Bug (binder-r3 #1): a multi-element passive array (a 4-pad isolated
 /// resistor network) used to bind as ONE 2-terminal resistor across its first
 /// two pads; the other elements silently vanished from the circuit. An even
