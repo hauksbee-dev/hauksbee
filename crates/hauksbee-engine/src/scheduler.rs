@@ -2796,6 +2796,14 @@ impl Scheduler {
     /// endpoint reads peak or zero depending on phase; the junction heats on
     /// the duty-cycle average). Trapezoid between consecutive accepted steps;
     /// the caller deposits it into the monitor only for the march it adopts.
+    ///
+    /// Residual: the trapezoid is exact only when dissipation is smooth over
+    /// each accepted interval. Firmware/PWL edges land on solver breakpoints
+    /// (their corners ARE accepted samples), but an event the integrator
+    /// resolves without splitting the interval at the exact corner charges
+    /// that one interval at the average of its two sides. The error is
+    /// bounded by the event-resolution step width, second-order against the
+    /// whole-chunk endpoint sampling this replaced.
     fn march_chunk(
         &self,
         tstop: f64,
@@ -7111,6 +7119,137 @@ mod tests {
             "{clause}"
         );
         assert!(!clause.contains("PASSIVELY"), "{clause}");
+    }
+
+    /// The PRODUCTION thermal path: `march_chunk`'s trapezoid streaming sink,
+    /// the per-chunk energy deposit, and `evaluate`'s time-weighted average
+    /// must reproduce the duty cycle of a PULSE waveform switching INSIDE the
+    /// chunk, with the pulse phase adversarial against the chunk endpoint in
+    /// both directions. This is the same contract the unit-level thermal
+    /// tests pin through `accumulate_step`, exercised here through the real
+    /// solver march so a broken trapezoid pairing, a dropped first interval,
+    /// or a deposit that leaks across chunks cannot hide behind the
+    /// rectangle-API tests.
+    #[test]
+    fn production_thermal_path_integrates_sub_chunk_pwm() {
+        use crate::stress::DeviceMeta;
+        use hauksbee_models::schema::{ComponentKind, Ratings};
+
+        // One 1 Ω load across a chunk-local PULSE source: 1 V on ⇒ 1 W.
+        // theta_JA 100 C/W, ambient 25 C, Tj limit 90 C.
+        let build = |delay: f64, width: f64| -> Scheduler {
+            let mut circuit = Circuit::new();
+            let a = circuit.node("PWM");
+            circuit.add(Device::Vsource {
+                name: "V1".into(),
+                p: a,
+                n: NodeId::GROUND,
+                kind: hauksbee_ir::SourceKind::Pulse {
+                    v1: 0.0,
+                    v2: 1.0,
+                    delay,
+                    rise: 1e-7,
+                    fall: 1e-7,
+                    width,
+                    period: 0.0,
+                },
+            });
+            let q = circuit.add(Device::Resistor {
+                name: "Q1".into(),
+                a,
+                b: NodeId::GROUND,
+                ohms: 1.0,
+                tc1: None,
+            });
+            let meta = DeviceMeta {
+                reference: "Q1".into(),
+                device: q,
+                kind: ComponentKind::Nmos,
+                footprint: "Package_TO_SOT_SMD:SOT-23".into(),
+                ratings: Ratings {
+                    max_power_w: Some(2.0),
+                    theta_ja_c_per_w: Some(100.0),
+                    max_junction_temp_c: Some(90.0),
+                    ..Default::default()
+                },
+            };
+            let mut net_nodes = HashMap::new();
+            net_nodes.insert("PWM".to_string(), a);
+            let bound = crate::binder::BoundBoard {
+                name: "pwm_thermal".into(),
+                circuit,
+                net_nodes,
+                net_names: vec!["PWM".into()],
+                digital: Vec::new(),
+                mcus: Vec::new(),
+                dnp_mcus: Vec::new(),
+                component_kinds: HashMap::new(),
+                input_sources: HashMap::new(),
+                supplies: Vec::new(),
+                behavioral: Vec::new(),
+                device_meta: vec![meta],
+                dacs: Vec::new(),
+                report: crate::report::BindReport::default(),
+            };
+            let mut sched =
+                Scheduler::new(bound, None, SolverOptions::default()).expect("scheduler");
+            sched.chunk_s = 1.0e-3;
+            sched.set_ambient_c(25.0);
+            sched
+        };
+
+        // HOT side, endpoint OFF: 75% duty pulse [0, 0.75 ms] within each
+        // 1 ms chunk. The endpoint solves at 0 W (a sampler reads stone
+        // cold); the integral reads 0.75 W ⇒ Tj ≈ 100 C > 90 C limit.
+        let mut hot = build(0.0, 0.75e-3);
+        hot.step(8.0e-3);
+        let tj = hot
+            .temp_states()
+            .get("Q1")
+            .copied()
+            .expect("PWM part has a temperature through the production path");
+        assert!(
+            (tj - 100.0).abs() < 1.0,
+            "75% duty of 1 W through 100 C/W at 25 C ambient must read ~100 C \
+             through the real march, got {tj:.3}"
+        );
+        let overtemp: Vec<_> = hot
+            .drain_faults()
+            .into_iter()
+            .filter(|f| f.kind == crate::stress::FaultKind::Overtemperature)
+            .collect();
+        assert_eq!(
+            overtemp.len(),
+            1,
+            "the ~100 C duty temperature exceeds the 90 C limit once"
+        );
+        assert!(
+            (overtemp[0].value - 100.0).abs() < 1.0,
+            "fault carries the duty-cycle temperature, got {:.3}",
+            overtemp[0].value
+        );
+
+        // COOL side, endpoint ON: ~10% duty pulse [0.9 ms, past the chunk
+        // end]. The endpoint solves at the full 1 W peak (a sampler reads a
+        // sustained 125 C and false-faults); the integral reads ~0.1 W ⇒
+        // Tj ≈ 35 C, silent.
+        let mut cool = build(0.9e-3, 0.2e-3);
+        cool.step(8.0e-3);
+        let tj = cool
+            .temp_states()
+            .get("Q1")
+            .copied()
+            .expect("PWM part has a temperature through the production path");
+        assert!(
+            (tj - 35.0).abs() < 1.0,
+            "10% duty must read ~35 C, not the 125 C endpoint peak, got {tj:.3}"
+        );
+        assert!(
+            cool.drain_faults()
+                .iter()
+                .all(|f| f.kind != crate::stress::FaultKind::Overtemperature),
+            "35 C is far under the 90 C limit; endpoint sampling would false-fault"
+        );
     }
 }
 

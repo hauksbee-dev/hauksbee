@@ -14,15 +14,14 @@
 //!
 //! An open-drain driver must sink the full pull-up current while holding the
 //! line at VOL. The I2C specification (UM10204) rates a standard driver at
-//! **3 mA** sink at VOL = 0.4 V. With the effective (parallel) pull-up
-//! `R_eff` to a rail `V`, the required sink current is `V / R_eff` (the 0.4 V
-//! residual is inside the spec's own operating point, so this errs a few
-//! percent HIGH, the conservative direction for a "can it reach a low"
-//! check). Every input is known exactly: resistor values parse from the
-//! board, the rail resolves through the binder's one rail table. Above 3 mA
-//! some device on the bus may never pull a valid low, and the failure is
-//! intermittent by part lot, which is why it earns a finding rather than a
-//! note.
+//! **3 mA** sink at VOL = 0.4 V, which is exactly its Rp(min) formula:
+//! `Rp(min) = (VDD - VOL) / 3 mA`. With the effective (parallel) pull-up
+//! `R_eff` to a rail `V`, the sink current while the pin holds the line at
+//! VOL is therefore `(V - VOL) / R_eff`. Every input is known exactly:
+//! resistor values parse from the board, the rail resolves through the
+//! binder's one rail table, VOL is the spec's 0.4 V. Above 3 mA some device
+//! on the bus may never pull a valid low, and the failure is intermittent by
+//! part lot, which is why it earns a finding rather than a note.
 //!
 //! ## Too weak (estimate-based, Low)
 //!
@@ -46,6 +45,11 @@ use crate::binder::power_rail_voltage;
 /// Maximum sink current (A) a standard I2C open-drain driver guarantees at
 /// VOL: 3 mA per UM10204.
 const I2C_MAX_SINK_A: f64 = 3.0e-3;
+
+/// The output-low voltage (V) the 3 mA rating is specified at: the line sits
+/// at VOL while the driver sinks, so the pull-up sees `V_rail - VOL` across
+/// it. This is UM10204's own Rp(min) operating point.
+const I2C_VOL_V: f64 = 0.4;
 
 /// Standard-mode rise-time budget (s): 1000 ns per UM10204. The loosest of
 /// the mode budgets, so the weak-side advisory cannot false-fire on a bus
@@ -165,17 +169,19 @@ pub fn bus_loading_lint(board: &ExtractedBoard) -> NetLintReport {
             continue; // missing pull-up is MissingI2cPullup's finding
         };
 
-        // Too strong: sink current above the spec's 3 mA driver rating.
-        let sink_a = rail_v / r_eff;
+        // Too strong: sink current above the spec's 3 mA driver rating. The
+        // line sits at VOL while the driver sinks, so the pull-up carries
+        // (V_rail - VOL) / R_eff: UM10204's Rp(min) operating point.
+        let sink_a = (rail_v - I2C_VOL_V).max(0.0) / r_eff;
         if sink_a > I2C_MAX_SINK_A {
             report.findings.push(LintFinding {
                 check: LintCheck::I2cBusLoading,
                 severity: Severity::Medium,
                 message: format!(
                     "I2C line \"{}\" is pulled up by {:.0} ohm effective ({}) to a \
-                     {rail_v:.1} V rail: holding the line low takes {:.1} mA, above \
-                     the 3 mA an I2C open-drain driver is specified to sink at VOL, \
-                     so a device on the bus may never produce a valid low.",
+                     {rail_v:.1} V rail: holding the line at the 0.4 V VOL takes \
+                     {:.1} mA, above the 3 mA an I2C open-drain driver is specified \
+                     to sink, so a device on the bus may never produce a valid low.",
                     net.name,
                     r_eff,
                     refs.join("+"),
@@ -259,8 +265,9 @@ mod tests {
         bus_loading_lint(&board)
     }
 
-    /// Faulty side: a 330 ohm pull-up to 3.3 V demands 10 mA of sink current,
-    /// far past the 3 mA spec: one Medium finding on the SDA net.
+    /// Faulty side: a 330 ohm pull-up to 3.3 V demands (3.3 - 0.4)/330 =
+    /// 8.8 mA of sink current at VOL, far past the 3 mA spec: one Medium
+    /// finding on the SDA net.
     #[test]
     fn too_strong_pullup_fires_on_sink_current() {
         let r = run(&i2c_board("330"));
@@ -273,10 +280,30 @@ mod tests {
         assert_eq!(f[0].severity, Severity::Medium);
         assert!(f[0].nets.contains(&"/SDA".to_string()));
         assert!(
-            f[0].message.contains("10.0 mA"),
-            "3.3 V / 330 ohm = 10 mA must appear: {}",
+            f[0].message.contains("8.8 mA"),
+            "(3.3 - 0.4) V / 330 ohm = 8.8 mA must appear: {}",
             f[0].message
         );
+    }
+
+    /// The threshold is pinned from BOTH sides at the spec's own operating
+    /// point: 1.0 k to 3.3 V sinks (3.3 - 0.4)/1000 = 2.90 mA (legal, silent);
+    /// 910 ohm sinks 3.19 mA (fires). A check that forgot the VOL subtraction
+    /// reads 3.3 mA at 1.0 k and false-fails the legal pull-up; a threshold
+    /// looser than 3 mA misses the 910 ohm case.
+    #[test]
+    fn sink_current_threshold_is_pinned_at_the_spec_operating_point() {
+        let legal = run(&i2c_board("1k"));
+        assert_eq!(
+            legal.of_check(LintCheck::I2cBusLoading).count(),
+            0,
+            "2.90 mA at VOL is inside the 3 mA rating, got {:?}",
+            legal.findings
+        );
+        let over = run(&i2c_board("910"));
+        let f: Vec<_> = over.of_check(LintCheck::I2cBusLoading).collect();
+        assert_eq!(f.len(), 1, "3.19 mA at VOL must fire, got {f:?}");
+        assert_eq!(f[0].severity, Severity::Medium);
     }
 
     /// Clean side: the textbook 4.7k pull-up sinks 0.7 mA and rises in ~160 ns
