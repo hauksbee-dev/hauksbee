@@ -27,8 +27,12 @@
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-extract/gerber.md.
 
+use std::collections::HashMap;
 use std::io::BufReader;
 
+use gerber_types::{
+    ApertureAttribute, ApertureFunction, AttributeDeletionCriterion, Net as GNet, ObjectAttribute,
+};
 use gerber_types::{
     Aperture, Command, ExtendedCode, FunctionCode, GCode, Operation, Polarity, StepAndRepeat,
 };
@@ -53,6 +57,61 @@ const MACRO_FALLBACK_DISC_MM: f64 = 0.25;
 pub struct CopperPrim {
     pub shape: Shape,
     pub kind: PrimKind,
+    /// The X2 identity the film attached to this primitive, empty on a film
+    /// with no X2 attributes (the geometry-only fallback path).
+    pub attrs: X2Attrs,
+}
+
+impl CopperPrim {
+    /// A primitive with no X2 identity, exactly what a stripped film yields.
+    pub fn bare(shape: Shape, kind: PrimKind) -> Self {
+        CopperPrim {
+            shape,
+            kind,
+            attrs: X2Attrs::default(),
+        }
+    }
+}
+
+/// X2 attributes (`%TA`/`%TO`) in effect when a primitive was painted.
+///
+/// An X2 film states, per object, which net a piece of copper belongs to
+/// (`%TO.N`), which component pad a flash is (`%TO.P,<refdes>,<pin>`), which
+/// component owns it (`%TO.C`), and what the flashed aperture *is*
+/// (`%TA.AperFunction`: a via pad, an SMD pad, a fiducial, ...). These are the
+/// facts the geometry-only reconstruction has to infer, so when the film
+/// carries them they are read and used; when it does not, every field is `None`
+/// and the geometric fallback is untouched.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct X2Attrs {
+    /// `%TA.AperFunction` of the aperture this primitive was painted with.
+    pub function: Option<ApertureFunction>,
+    /// `%TO.N` net name. Only a *named* net is stored: the empty name (an
+    /// object on no net: logos, tooling) and `N/C` (deliberately unrouted
+    /// single-pad nets) both stay `None`, because unioning either would merge
+    /// copper the film explicitly says is unconnected.
+    pub net: Option<String>,
+    /// `%TO.P`: the (refdes, pin name) this flash is the pad of.
+    pub pin: Option<(String, String)>,
+    /// `%TO.C`: the refdes of the component this object belongs to.
+    pub component: Option<String>,
+}
+
+impl X2Attrs {
+    pub fn is_empty(&self) -> bool {
+        self.function.is_none()
+            && self.net.is_none()
+            && self.pin.is_none()
+            && self.component.is_none()
+    }
+}
+
+/// Whether an X2 aperture function marks a flash as a VIA pad: copper that
+/// stitches layers but is not a component pad. Resolves the via-vs-pad
+/// ambiguity the geometric reconstruction cannot (a stitching via inside a
+/// footprint window looks exactly like a pad).
+pub fn function_is_via(f: &ApertureFunction) -> bool {
+    matches!(f, ApertureFunction::ViaPad)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,6 +260,17 @@ struct Plotter<'a> {
     /// An open step-and-repeat (`%SR%`) block: the primitives emitted while it
     /// is open form the base cell, replicated across the grid when it closes.
     sr: Option<SrBlock>,
+    /// The X2 aperture-attribute dictionary's `.AperFunction` entry: a `%TA`
+    /// applies to every aperture DEFINED while it is in effect (until `%TD`),
+    /// so it is captured here and bound to the aperture code at its `%AD`.
+    cur_aper_function: Option<ApertureFunction>,
+    /// Aperture code -> the `.AperFunction` in effect at its definition.
+    aper_functions: HashMap<i32, ApertureFunction>,
+    /// The X2 object-attribute dictionary (`%TO.N` / `%TO.P` / `%TO.C`): what
+    /// the current objects being painted ARE, until changed or `%TD`-deleted.
+    obj_net: Option<String>,
+    obj_pin: Option<(String, String)>,
+    obj_component: Option<String>,
     out: Vec<CopperPrim>,
 }
 
@@ -233,7 +303,27 @@ impl<'a> Plotter<'a> {
             dark: true,
             single_quadrant: false,
             sr: None,
+            cur_aper_function: None,
+            aper_functions: HashMap::new(),
+            obj_net: None,
+            obj_pin: None,
+            obj_component: None,
             out: Vec::new(),
+        }
+    }
+
+    /// The X2 identity for a primitive painted right now: the object
+    /// attributes in effect, plus the painting aperture's `.AperFunction`.
+    /// Empty (all `None`) on a film that carries no X2 attributes.
+    fn cur_attrs(&self) -> X2Attrs {
+        X2Attrs {
+            function: self
+                .aperture
+                .and_then(|code| self.aper_functions.get(&code))
+                .cloned(),
+            net: self.obj_net.clone(),
+            pin: self.obj_pin.clone(),
+            component: self.obj_component.clone(),
         }
     }
 
@@ -295,6 +385,61 @@ impl<'a> Plotter<'a> {
                 }
                 StepAndRepeat::Close => self.flush_step_repeat(),
             },
+            // ── X2 attributes ────────────────────────────────────────────────
+            // A `%TA.AperFunction` enters the aperture-attribute dictionary and
+            // is attached to every aperture DEFINED while it is in effect.
+            Command::ExtendedCode(ExtendedCode::ApertureAttribute(
+                ApertureAttribute::ApertureFunction(f),
+            )) => {
+                self.cur_aper_function = Some(f.clone());
+            }
+            Command::ExtendedCode(ExtendedCode::ApertureDefinition(def)) => {
+                if let Some(f) = &self.cur_aper_function {
+                    self.aper_functions.insert(def.code, f.clone());
+                }
+            }
+            // `%TO.N` / `%TO.P` / `%TO.C` set the identity of the objects
+            // painted from here on, until changed or deleted by `%TD`.
+            Command::ExtendedCode(ExtendedCode::ObjectAttribute(o)) => match o {
+                ObjectAttribute::Net(n) => {
+                    // Only a NAMED net identifies a conductor. `%TO.N,*%` (no
+                    // net: logos, tooling) and `N/C` (each such pad is its own
+                    // single-pad net) must clear the state, not carry a name,
+                    // or the copper painted under them would be unioned.
+                    self.obj_net = match n {
+                        GNet::Connected(names) if !names.is_empty() => Some(names.join(",")),
+                        _ => None,
+                    };
+                }
+                ObjectAttribute::Pin(p) => {
+                    self.obj_pin = Some((p.refdes.clone(), p.name.clone()));
+                }
+                ObjectAttribute::Component(refdes) => {
+                    self.obj_component = Some(refdes.clone());
+                }
+                _ => {}
+            },
+            Command::ExtendedCode(ExtendedCode::DeleteAttribute(crit)) => match crit {
+                AttributeDeletionCriterion::AllApertureAndObjectAttributes => {
+                    self.cur_aper_function = None;
+                    self.obj_net = None;
+                    self.obj_pin = None;
+                    self.obj_component = None;
+                }
+                AttributeDeletionCriterion::SingleObjectAttribute(name) => {
+                    match name.trim_start_matches("TO") {
+                        ".N" => self.obj_net = None,
+                        ".P" => self.obj_pin = None,
+                        ".C" => self.obj_component = None,
+                        _ => {}
+                    }
+                }
+                AttributeDeletionCriterion::SingleApertureAttribute(name) => {
+                    if name.trim_start_matches("TA") == ".AperFunction" {
+                        self.cur_aper_function = None;
+                    }
+                }
+            },
             _ => {}
         }
     }
@@ -327,6 +472,7 @@ impl<'a> Plotter<'a> {
                     self.out.push(CopperPrim {
                         shape: prim.shape.translated(dx, dy),
                         kind: prim.kind,
+                        attrs: prim.attrs.clone(),
                     });
                 }
             }
@@ -506,16 +652,24 @@ impl<'a> Plotter<'a> {
                 }
             }
         };
-        self.out.push(CopperPrim {
-            shape,
-            kind: PrimKind::Flash,
-        });
+        let attrs = self.cur_attrs();
+        // The film can state outright that this flash is a VIA pad
+        // (`%TA.AperFunction,ViaPad`). A via stitches copper like any flash but
+        // is not a component pad, so it takes `PrimKind::Via` (excluded from
+        // pad assignment) instead of being left for the footprint window to
+        // mistake for one. Absent the attribute, nothing changes.
+        let kind = match &attrs.function {
+            Some(f) if function_is_via(f) => PrimKind::Via,
+            _ => PrimKind::Flash,
+        };
+        self.out.push(CopperPrim { shape, kind, attrs });
     }
 
     fn push_capsule(&mut self, ax: f64, ay: f64, bx: f64, by: f64, r: f64) {
         self.out.push(CopperPrim {
             shape: Shape::Capsule(Capsule { ax, ay, bx, by, r }),
             kind: PrimKind::Track,
+            attrs: self.cur_attrs(),
         });
     }
 
@@ -698,6 +852,7 @@ impl<'a> Plotter<'a> {
             self.out.push(CopperPrim {
                 shape: Shape::Polygon { pts, r: 0.0 },
                 kind: PrimKind::Region,
+                attrs: self.cur_attrs(),
             });
             return;
         }
@@ -759,6 +914,7 @@ impl<'a> Plotter<'a> {
             self.out.push(CopperPrim {
                 shape,
                 kind: PrimKind::Region,
+                attrs: self.cur_attrs(),
             });
         }
     }
@@ -1050,14 +1206,14 @@ M02*
         // the bridged single polygon both pads unioned through the one region
         // primitive onto one net.
         let mut layer: Vec<CopperPrim> = prims.clone();
-        layer.push(CopperPrim {
-            shape: Shape::disc(2.5, 2.5, 0.5),
-            kind: PrimKind::Flash,
-        });
-        layer.push(CopperPrim {
-            shape: Shape::disc(97.5, 2.5, 0.5),
-            kind: PrimKind::Flash,
-        });
+        layer.push(CopperPrim::bare(
+            Shape::disc(2.5, 2.5, 0.5),
+            PrimKind::Flash,
+        ));
+        layer.push(CopperPrim::bare(
+            Shape::disc(97.5, 2.5, 0.5),
+            PrimKind::Flash,
+        ));
         let (_board, stats) = crate::gerber::connect::reconstruct("t", vec![layer], vec![], vec![]);
         assert_eq!(
             stats.n_nets, 2,
@@ -1222,6 +1378,120 @@ M02*
             (r - 0.05).abs() < 1e-9,
             "inch-unit fallback stroke radius must be a fixed 0.05 mm, got {r} mm (0.1*25.4/2 = 1.27 was the bug)"
         );
+    }
+
+    // One film, twice: with its X2 attributes and stripped of them. The
+    // geometry must be identical either way; only the identity differs.
+    const X2_FILM: &str = "\
+%FSLAX46Y46*%
+%MOMM*%
+%TF.FileFunction,Copper,L1,Top*%
+%TA.AperFunction,SMDPad,CuDef*%
+%ADD10C,1.000000*%
+%TD*%
+%TA.AperFunction,ViaPad*%
+%ADD11C,0.600000*%
+%TD*%
+D10*
+%TO.P,R1,1*%
+%TO.N,VCC*%
+X0Y0D03*
+%TO.P,R1,2*%
+%TO.N,SIG*%
+X2000000Y0D03*
+%TD*%
+D11*
+%TO.N,VCC*%
+X5000000Y0D03*
+%TD*%
+M02*
+";
+    const STRIPPED_FILM: &str = "\
+%FSLAX46Y46*%
+%MOMM*%
+%ADD10C,1.000000*%
+%ADD11C,0.600000*%
+D10*
+X0Y0D03*
+X2000000Y0D03*
+D11*
+X5000000Y0D03*
+M02*
+";
+
+    #[test]
+    fn x2_attributes_bind_pin_net_and_function_to_flashes() {
+        let prims = parse_layer(X2_FILM).unwrap();
+        let flashes: Vec<_> = prims.iter().filter(|p| p.kind == PrimKind::Flash).collect();
+        assert_eq!(flashes.len(), 2, "two pad flashes (the via is not a pad)");
+        assert_eq!(
+            flashes[0].attrs.pin,
+            Some(("R1".to_string(), "1".to_string()))
+        );
+        assert_eq!(flashes[0].attrs.net.as_deref(), Some("VCC"));
+        assert!(matches!(
+            flashes[0].attrs.function,
+            Some(ApertureFunction::SmdPad(_))
+        ));
+        assert_eq!(
+            flashes[1].attrs.pin,
+            Some(("R1".to_string(), "2".to_string()))
+        );
+        assert_eq!(flashes[1].attrs.net.as_deref(), Some("SIG"));
+
+        // The `%TA.AperFunction,ViaPad` flash is classified as a via outright:
+        // the film said what it is, so it is not left for a footprint window
+        // to mistake for a component pad.
+        let via = prims
+            .iter()
+            .find(|p| p.kind == PrimKind::Via)
+            .expect("the ViaPad flash becomes PrimKind::Via");
+        assert_eq!(via.attrs.net.as_deref(), Some("VCC"));
+        assert_eq!(via.attrs.pin, None, "a via names no component pin");
+    }
+
+    #[test]
+    fn stripped_film_yields_identical_geometry_and_no_attributes() {
+        // The two-sided guarantee: stripping the X2 attributes changes NOTHING
+        // about the geometry. Every primitive's shape must be bit-for-bit the
+        // shape the attributed film produced, every attrs empty, and the via
+        // honestly degrades to an (ambiguous) plain flash.
+        let with = parse_layer(X2_FILM).unwrap();
+        let without = parse_layer(STRIPPED_FILM).unwrap();
+        assert_eq!(with.len(), without.len(), "same primitive count");
+        for (a, b) in with.iter().zip(without.iter()) {
+            assert_eq!(
+                format!("{:?}", a.shape),
+                format!("{:?}", b.shape),
+                "geometry must not depend on X2 attributes"
+            );
+            assert!(b.attrs.is_empty(), "a stripped film carries no identity");
+        }
+        assert!(
+            without.iter().all(|p| p.kind == PrimKind::Flash),
+            "without the attribute the via is indistinguishable from a pad"
+        );
+    }
+
+    #[test]
+    fn td_clears_the_object_dictionary() {
+        // The via flash after `%TD*%` must NOT inherit R1's pin: a dangling
+        // object dictionary would bind every later object to the last pad.
+        let g = "\
+%FSLAX46Y46*%
+%MOMM*%
+%ADD10C,1.000000*%
+D10*
+%TO.P,R1,1*%
+X0Y0D03*
+%TD*%
+X2000000Y0D03*
+M02*
+";
+        let prims = parse_layer(g).unwrap();
+        let flashes: Vec<_> = prims.iter().filter(|p| p.kind == PrimKind::Flash).collect();
+        assert_eq!(flashes[0].attrs.pin.as_ref().unwrap().0, "R1");
+        assert_eq!(flashes[1].attrs.pin, None, "%TD cleared the dictionary");
     }
 
     #[test]

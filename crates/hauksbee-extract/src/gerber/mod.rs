@@ -651,6 +651,9 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
             stats.refused_span_holes
         ));
     }
+    // The connectivity pass writes its own notes (X2 disagreements); merge
+    // rather than overwrite, with the file-level notes first.
+    notes.append(&mut stats.notes);
     for n in &notes {
         eprintln!("hauksbee: {n}");
     }

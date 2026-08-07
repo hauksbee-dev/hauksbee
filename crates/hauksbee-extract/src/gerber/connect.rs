@@ -36,7 +36,7 @@ use crate::{Component, ExtractedBoard, Net, Pin};
 
 use super::geo::{shape_gap, Shape};
 use super::placement::Placement;
-use super::rs274x::{CopperPrim, PrimKind};
+use super::rs274x::{CopperPrim, PrimKind, X2Attrs};
 
 /// Copper that touches within this gap (mm) is treated as one conductor. Small
 /// positive value absorbs export rounding and the convex-hull over-approx of
@@ -49,6 +49,8 @@ struct LayerPrim {
     shape: Shape,
     kind: PrimKind,
     bounds: [f64; 4],
+    /// X2 identity carried over from the film (empty on stripped films).
+    attrs: X2Attrs,
 }
 
 struct Leaf {
@@ -212,6 +214,7 @@ pub fn reconstruct(
                 shape: cp.shape,
                 kind: cp.kind,
                 bounds,
+                attrs: cp.attrs,
             });
             prim_layer.push(li);
         }
@@ -242,6 +245,7 @@ pub fn reconstruct(
                 shape,
                 kind: PrimKind::Via,
                 bounds,
+                attrs: X2Attrs::default(),
             });
             prim_layer.push(li);
             // Extend that layer's range to include the barrel. Holes are
@@ -252,6 +256,27 @@ pub fn reconstruct(
     }
 
     let mut dsu = Dsu::new(prims.len());
+    let mut notes: Vec<String> = Vec::new();
+
+    // ── 1b. X2 net identity: union copper the film NAMES onto one net ───────
+    // An X2 film states each object's net outright (`%TO.N,<name>`). Two
+    // primitives carrying the same net name are the same conductor by the
+    // film's own declaration, whether or not their copper touches in the films
+    // we classified (the routing may pass through an inner layer this job did
+    // not ship). On a stripped film no primitive carries a name and this pass
+    // does nothing, leaving the geometric reconstruction bit-for-bit alone.
+    let mut x2_net_first: HashMap<&str, usize> = HashMap::new();
+    for gi in 0..prims.len() {
+        if let Some(name) = prims[gi].attrs.net.as_deref() {
+            match x2_net_first.get(name) {
+                Some(&first) => dsu.union(first, gi),
+                None => {
+                    x2_net_first.insert(name, gi);
+                }
+            }
+        }
+    }
+    let x2_nets_present = !x2_net_first.is_empty();
 
     // ── 2. Per-layer R-tree sweep: union touching copper ────────────────────
     // We index per layer. A hole disc must be tested against its layer's
@@ -469,26 +494,69 @@ pub fn reconstruct(
         }
     }
 
+    // Net names. When the film carries X2 net identity, the name comes from
+    // the film: every primitive of a reconstructed net that has a `%TO.N`
+    // agrees on one name in the healthy case (the by-name union above makes
+    // same-name copper one net; a net carrying TWO different film names means
+    // the *geometry* bridged copper the film says is separate, a disagreement
+    // that is NAMED in the notes rather than silently resolved). Without X2,
+    // the GND heuristic labels the biggest pour-touching net and the rest get
+    // synthetic `NET_n` names, exactly as before.
+    let mut net_x2_names: HashMap<i64, std::collections::BTreeSet<&str>> = HashMap::new();
+    for gi in 0..prims.len() {
+        if let Some(name) = prims[gi].attrs.net.as_deref() {
+            net_x2_names
+                .entry(net_of_prim[gi])
+                .or_default()
+                .insert(name);
+        }
+    }
+    let mut x2_named_nets = 0usize;
+
     // GND heuristic: among region-touching nets, the one with the most copper.
     // Break count ties by lowest net id (Reverse) so the GND label is stable,
     // iterating the HashMap keys left it dependent on iteration order when two
-    // pours tied on primitive count.
-    let gnd_net = net_touches_region.keys().copied().max_by_key(|&n| {
-        (
-            net_prim_count.get(&n).copied().unwrap_or(0),
-            std::cmp::Reverse(n),
-        )
-    });
+    // pours tied on primitive count. Only consulted when the film carries no
+    // X2 net names: a film that names its nets outranks any heuristic.
+    let gnd_net = if x2_nets_present {
+        None
+    } else {
+        net_touches_region.keys().copied().max_by_key(|&n| {
+            (
+                net_prim_count.get(&n).copied().unwrap_or(0),
+                std::cmp::Reverse(n),
+            )
+        })
+    };
 
     // Build the Net table with names.
     let mut nets: Vec<Net> = root_to_net
         .values()
         .copied()
         .map(|id| {
-            let name = if Some(id) == gnd_net {
-                "GND".to_string()
-            } else {
-                format!("NET_{id}")
+            let name = match net_x2_names.get(&id) {
+                Some(names) if names.len() == 1 => {
+                    x2_named_nets += 1;
+                    (*names.iter().next().unwrap()).to_string()
+                }
+                Some(names) => {
+                    notes.push(format!(
+                        "the reconstructed copper of net NET_{id} carries {} different X2 net \
+                         names ({}): the geometry connects copper the film assigns to separate \
+                         nets. This is either a real short in the layout or an over-merge in \
+                         the geometric reconstruction; the net keeps its synthetic name so the \
+                         disagreement stays visible.",
+                        names.len(),
+                        names
+                            .iter()
+                            .map(|n| format!("\"{n}\""))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                    ));
+                    format!("NET_{id}")
+                }
+                None if Some(id) == gnd_net => "GND".to_string(),
+                None => format!("NET_{id}"),
             };
             Net { id, name }
         })
@@ -506,6 +574,16 @@ pub fn reconstruct(
         .filter(|&gi| prims[gi].kind == PrimKind::Flash)
         .collect();
     let total_flashes = flash_idxs.len();
+
+    // X2 pin identity: flashes whose film states outright which component pad
+    // they are (`%TO.P,<refdes>,<pin>`). When any exist, pad->refdes->pin
+    // binding comes from the film, not from the footprint-window guess.
+    let x2_pin_flashes: Vec<usize> = flash_idxs
+        .iter()
+        .copied()
+        .filter(|&gi| prims[gi].attrs.pin.is_some())
+        .collect();
+    let x2_pins_present = !x2_pin_flashes.is_empty();
 
     // Index the placed components so each flash can find its nearest one.
     struct CompLeaf {
@@ -545,37 +623,106 @@ pub fn reconstruct(
     let mut comp_cells: Vec<std::collections::HashSet<(i64, i64)>> =
         vec![std::collections::HashSet::new(); placements.len()];
     let mut assigned_flashes = 0usize;
+    // Components the FILM names that the P&P does not place (or there is no
+    // P&P at all): refdes -> (pads, dedupe cells, layer tally). BTreeMap so
+    // film-only components come out in a stable order.
+    let mut film_comps: std::collections::BTreeMap<
+        String,
+        (Vec<Pin>, std::collections::HashSet<(i64, i64)>, Vec<usize>),
+    > = std::collections::BTreeMap::new();
 
-    for &gi in &flash_idxs {
-        let (cx, cy) = prims[gi].shape.center();
-        // Candidate components whose window covers this flash; pick the nearest.
-        let mut best: Option<(f64, usize)> = None;
-        let point_box = AABB::from_corners([cx, cy], [cx, cy]);
-        for leaf in comp_tree.locate_in_envelope_intersecting(point_box) {
-            let pl = &placements[leaf.idx];
-            let d = (pl.x - cx).hypot(pl.y - cy);
-            if best.map(|(bd, _)| d < bd).unwrap_or(true) {
-                best = Some((d, leaf.idx));
+    if x2_pins_present {
+        // ── Film-identity binding ────────────────────────────────────────────
+        // Every pad flash names its component and pin, so binding is exact:
+        // the pin NUMBER is the film's, not an invention from claim order, and
+        // a flash with no `.P` is, by the film's own account, not a component
+        // pad (a via, a fiducial, thermal stitching), so the footprint window
+        // never gets the chance to claim it as one.
+        let refdes_to_placement: HashMap<&str, usize> = placements
+            .iter()
+            .enumerate()
+            .map(|(i, p)| (p.reference.as_str(), i))
+            .collect();
+        for &gi in &x2_pin_flashes {
+            let (refdes, pin_name) = prims[gi]
+                .attrs
+                .pin
+                .clone()
+                .expect("x2_pin_flashes holds only flashes with a pin attribute");
+            let (cx, cy) = prims[gi].shape.center();
+            let cell = ((cx * 20.0).round() as i64, (cy * 20.0).round() as i64);
+            let net = net_of_prim[gi];
+            let pin = Pin {
+                number: pin_name,
+                net: if net == 0 { None } else { Some(net) },
+                function: String::new(),
+                kind: String::new(),
+                position: Some((cx, cy)),
+            };
+            assigned_flashes += 1;
+            match refdes_to_placement.get(refdes.as_str()) {
+                Some(&ci) => {
+                    // The same physical pad flashed on several films (a THT
+                    // pad's top+bottom rings) collapses to one, like before.
+                    if comp_cells[ci].insert(cell) {
+                        comp_pads[ci].push(pin);
+                    }
+                }
+                None => {
+                    let entry = film_comps.entry(refdes).or_default();
+                    if entry.1.insert(cell) {
+                        entry.0.push(pin);
+                        entry.2.push(prim_layer[gi]);
+                    }
+                }
             }
         }
-        let Some((_, ci)) = best else { continue };
-        assigned_flashes += 1;
-        let cell = ((cx * 20.0).round() as i64, (cy * 20.0).round() as i64);
-        if !comp_cells[ci].insert(cell) {
-            continue; // same physical pad already recorded for this component
+        // The film's pin names order the pads (numeric-aware, so "10" follows
+        // "2"); claim order meant nothing once numbers stopped being invented.
+        fn pin_key(p: &Pin) -> (bool, Option<u64>, String) {
+            let n = p.number.parse::<u64>().ok();
+            (n.is_none(), n, p.number.clone())
         }
-        let net = net_of_prim[gi];
-        let n = comp_pads[ci].len() + 1;
-        comp_pads[ci].push(Pin {
-            number: n.to_string(),
-            net: if net == 0 { None } else { Some(net) },
-            function: String::new(),
-            kind: String::new(),
-            position: Some((cx, cy)),
-        });
+        for pads in comp_pads.iter_mut() {
+            pads.sort_by_key(pin_key);
+        }
+        for (pads, _, _) in film_comps.values_mut() {
+            pads.sort_by_key(pin_key);
+        }
+    } else {
+        // ── Geometric fallback: the stripped-film path, unchanged ───────────
+        for &gi in &flash_idxs {
+            let (cx, cy) = prims[gi].shape.center();
+            // Candidate components whose window covers this flash; pick the
+            // nearest.
+            let mut best: Option<(f64, usize)> = None;
+            let point_box = AABB::from_corners([cx, cy], [cx, cy]);
+            for leaf in comp_tree.locate_in_envelope_intersecting(point_box) {
+                let pl = &placements[leaf.idx];
+                let d = (pl.x - cx).hypot(pl.y - cy);
+                if best.map(|(bd, _)| d < bd).unwrap_or(true) {
+                    best = Some((d, leaf.idx));
+                }
+            }
+            let Some((_, ci)) = best else { continue };
+            assigned_flashes += 1;
+            let cell = ((cx * 20.0).round() as i64, (cy * 20.0).round() as i64);
+            if !comp_cells[ci].insert(cell) {
+                continue; // same physical pad already recorded for this component
+            }
+            let net = net_of_prim[gi];
+            let n = comp_pads[ci].len() + 1;
+            comp_pads[ci].push(Pin {
+                number: n.to_string(),
+                net: if net == 0 { None } else { Some(net) },
+                function: String::new(),
+                kind: String::new(),
+                position: Some((cx, cy)),
+            });
+        }
     }
 
-    let mut components: Vec<Component> = Vec::with_capacity(placements.len());
+    let mut components: Vec<Component> = Vec::with_capacity(placements.len() + film_comps.len());
     for (i, pl) in placements.iter().enumerate() {
         components.push(Component {
             reference: pl.reference.clone(),
@@ -587,6 +734,34 @@ pub fn reconstruct(
             properties: Vec::new(),
             dnp: pl.dnp,
             pins: std::mem::take(&mut comp_pads[i]),
+        });
+    }
+    // Components the film binds that no P&P row places. The film knows the
+    // refdes, the pins and their nets; it does not know the value or package,
+    // so those stay empty rather than being invented. Position is the pad
+    // centroid; the layer is the one most of its pads sit on.
+    let x2_film_components = film_comps.len();
+    for (refdes, (pins, _, layers_of)) in film_comps {
+        let n = pins.len().max(1) as f64;
+        let (sx, sy) = pins
+            .iter()
+            .filter_map(|p| p.position)
+            .fold((0.0, 0.0), |(ax, ay), (x, y)| (ax + x, ay + y));
+        let top_pads = layers_of.iter().filter(|&&l| l == 0).count();
+        components.push(Component {
+            reference: refdes,
+            value: String::new(),
+            lib_id: String::new(),
+            footprint: String::new(),
+            position: Some((sx / n, sy / n, 0.0)),
+            layer: if top_pads * 2 >= layers_of.len() {
+                "F.Cu".into()
+            } else {
+                "B.Cu".into()
+            },
+            properties: Vec::new(),
+            dnp: false,
+            pins,
         });
     }
 
@@ -660,13 +835,16 @@ pub fn reconstruct(
         total_flashes,
         assigned_flashes,
         unassigned_flashes: total_flashes.saturating_sub(assigned_flashes),
-        gnd_detected: gnd_net.is_some(),
+        gnd_detected: gnd_net.is_some() || nets.iter().any(|n| n.name == "GND"),
         net_copper,
         n_slots,
         refused_span_holes,
         refused_plating_files: 0,
         n_castellations: 0,
-        notes: Vec::new(),
+        x2_named_nets,
+        x2_bound_pads: if x2_pins_present { assigned_flashes } else { 0 },
+        x2_film_components,
+        notes,
     };
 
     (
@@ -711,6 +889,16 @@ pub struct ReconStats {
     /// plated wall are a single node, which the geometry pass already makes;
     /// this count exists so that claim is auditable rather than assumed.
     pub n_castellations: usize,
+    /// Nets whose name came from the film's own `%TO.N` X2 attribute instead
+    /// of a synthetic `NET_n`. Non-zero means net identity is the exporter's,
+    /// not a geometric inference.
+    pub x2_named_nets: usize,
+    /// Pad flashes bound to their component and pin by the film's `%TO.P`
+    /// attribute. Non-zero means pin numbers are real, not claim-order.
+    pub x2_bound_pads: usize,
+    /// Components created purely from film identity: refdes the X2 attributes
+    /// name that no P&P row places (or the job has no P&P at all).
+    pub x2_film_components: usize,
     /// Reader notes: what this job made us refuse, and why. Surfaced verbatim
     /// so a refusal is visible instead of looking like a clean extraction.
     pub notes: Vec<String>,
@@ -904,10 +1092,7 @@ mod tests {
     use crate::gerber::geo::Capsule;
 
     fn cap(ax: f64, ay: f64, bx: f64, by: f64, r: f64, kind: PrimKind) -> CopperPrim {
-        CopperPrim {
-            shape: Shape::Capsule(Capsule { ax, ay, bx, by, r }),
-            kind,
-        }
+        CopperPrim::bare(Shape::Capsule(Capsule { ax, ay, bx, by, r }), kind)
     }
 
     #[test]
@@ -1150,6 +1335,151 @@ mod tests {
         };
         let (_b, s) = reconstruct("t", vec![layer], vec![slot], vec![]);
         assert_eq!(s.n_nets, 1, "a mid-span tangent contact is a connection");
+    }
+
+    /// A pad flash carrying X2 identity: `%TO.P,<refdes>,<pin>` + `%TO.N,<net>`.
+    fn x2_pad(x: f64, y: f64, refdes: &str, pin: &str, net: &str) -> CopperPrim {
+        CopperPrim {
+            shape: Shape::disc(x, y, 0.3),
+            kind: PrimKind::Flash,
+            attrs: X2Attrs {
+                pin: Some((refdes.to_string(), pin.to_string())),
+                net: Some(net.to_string()),
+                ..Default::default()
+            },
+        }
+    }
+
+    fn placement(reference: &str, x: f64, y: f64) -> Placement {
+        Placement {
+            reference: reference.into(),
+            value: String::new(),
+            package: "R_0402_1005Metric".into(),
+            x,
+            y,
+            rotation: 0.0,
+            top: true,
+            dnp: false,
+        }
+    }
+
+    #[test]
+    fn x2_pin_identity_binds_refdes_pin_and_net_from_the_film() {
+        // Two pads whose film names their refdes, pin and net. The pin numbers
+        // must be the FILM's (here deliberately flashed in reverse order, so
+        // claim-order numbering would swap them), and the nets must carry the
+        // film's names.
+        let layer = vec![
+            x2_pad(1.0, 0.0, "R1", "2", "GND"),
+            x2_pad(0.0, 0.0, "R1", "1", "VCC"),
+        ];
+        let (board, stats) = reconstruct("t", vec![layer], vec![], vec![placement("R1", 0.5, 0.0)]);
+        assert_eq!(stats.x2_bound_pads, 2);
+        assert_eq!(board.components.len(), 1);
+        let pins = &board.components[0].pins;
+        assert_eq!(pins.len(), 2);
+        assert_eq!(pins[0].number, "1", "the film's pin number, not claim order");
+        assert_eq!(pins[1].number, "2");
+        let net_name = |id: Option<i64>| {
+            board
+                .nets
+                .iter()
+                .find(|n| Some(n.id) == id)
+                .map(|n| n.name.clone())
+                .unwrap()
+        };
+        assert_eq!(net_name(pins[0].net), "VCC");
+        assert_eq!(net_name(pins[1].net), "GND");
+        assert_eq!(stats.x2_named_nets, 2);
+    }
+
+    #[test]
+    fn x2_pins_build_components_even_without_a_placement_file() {
+        // No P&P at all: the film alone names the component and its pads.
+        let layer = vec![
+            x2_pad(0.0, 0.0, "U3", "1", "VCC"),
+            x2_pad(1.0, 0.0, "U3", "2", "GND"),
+            x2_pad(5.0, 5.0, "R9", "1", "GND"),
+        ];
+        let (board, stats) = reconstruct("t", vec![layer], vec![], vec![]);
+        assert_eq!(stats.x2_film_components, 2);
+        let refs: Vec<&str> = board
+            .components
+            .iter()
+            .map(|c| c.reference.as_str())
+            .collect();
+        assert_eq!(refs, vec!["R9", "U3"], "stable refdes order");
+        let u3 = board
+            .components
+            .iter()
+            .find(|c| c.reference == "U3")
+            .unwrap();
+        assert_eq!(u3.pins.len(), 2);
+        assert_eq!(u3.pins[0].number, "1");
+        assert!(
+            u3.value.is_empty() && u3.footprint.is_empty(),
+            "the film does not know value/package; they are not invented"
+        );
+    }
+
+    #[test]
+    fn x2_net_names_union_copper_the_film_says_is_one_conductor() {
+        // Two pads 10 mm apart with NO copper joining them, both declared
+        // `%TO.N,SCL`: the film says one net (the routing may live on a film
+        // this job did not ship), so they are one net with the film's name.
+        let layer = vec![
+            x2_pad(0.0, 0.0, "R1", "1", "SCL"),
+            x2_pad(10.0, 0.0, "U1", "14", "SCL"),
+        ];
+        let (board, stats) = reconstruct("t", vec![layer], vec![], vec![]);
+        assert_eq!(stats.n_nets, 1, "same %TO.N name = same conductor");
+        assert_eq!(board.nets[0].name, "SCL");
+    }
+
+    #[test]
+    fn geometry_bridging_two_x2_nets_is_named_not_silently_resolved() {
+        // Two pads whose copper TOUCHES while the film assigns them different
+        // nets: a real short or an over-merge. The net keeps its synthetic
+        // name and the disagreement is a note, never a silent pick.
+        let layer = vec![
+            x2_pad(0.0, 0.0, "R1", "1", "VCC"),
+            x2_pad(0.2, 0.0, "R2", "1", "GND"),
+        ];
+        let (board, stats) = reconstruct("t", vec![layer], vec![], vec![]);
+        assert_eq!(stats.n_nets, 1, "the copper genuinely touches");
+        assert!(
+            board.nets[0].name.starts_with("NET_"),
+            "a conflicted net keeps its synthetic name, got {}",
+            board.nets[0].name
+        );
+        assert!(
+            stats
+                .notes
+                .iter()
+                .any(|n| n.contains("VCC") && n.contains("GND")),
+            "the disagreement names both film nets: {:?}",
+            stats.notes
+        );
+    }
+
+    #[test]
+    fn without_x2_attributes_the_geometric_fallback_is_untouched() {
+        // The stripped-film side of the two-sided guarantee, at the unit
+        // level: bare prims produce claim-order pin numbers and synthetic
+        // net names, exactly as before the X2 reader existed.
+        let layer = vec![
+            cap(0.0, 0.0, 0.0, 0.0, 0.3, PrimKind::Flash),
+            cap(1.0, 0.0, 1.0, 0.0, 0.3, PrimKind::Flash),
+        ];
+        let (board, stats) = reconstruct("t", vec![layer], vec![], vec![placement("R1", 0.5, 0.0)]);
+        assert_eq!(stats.x2_bound_pads, 0);
+        assert_eq!(stats.x2_named_nets, 0);
+        assert_eq!(stats.x2_film_components, 0);
+        let pins = &board.components[0].pins;
+        assert_eq!(pins.len(), 2);
+        assert_eq!(pins[0].number, "1", "invented claim-order numbering stays");
+        assert_eq!(pins[1].number, "2");
+        assert!(board.nets.iter().all(|n| n.name.starts_with("NET_")));
     }
 
     #[test]
