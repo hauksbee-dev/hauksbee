@@ -37,7 +37,9 @@
 
 use std::collections::HashSet;
 
-use hauksbee_extract::{Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity};
+use hauksbee_extract::{
+    Component, ExtractedBoard, LintCheck, LintFinding, NetLintReport, Severity,
+};
 
 use crate::binder::power_rail_voltage;
 
@@ -263,7 +265,11 @@ mod tests {
     fn too_strong_pullup_fires_on_sink_current() {
         let r = run(&i2c_board("330"));
         let f: Vec<_> = r.of_check(LintCheck::I2cBusLoading).collect();
-        assert_eq!(f.len(), 1, "one finding for the 330R SDA pull-up, got {f:?}");
+        assert_eq!(
+            f.len(),
+            1,
+            "one finding for the 330R SDA pull-up, got {f:?}"
+        );
         assert_eq!(f[0].severity, Severity::Medium);
         assert!(f[0].nets.contains(&"/SDA".to_string()));
         assert!(
