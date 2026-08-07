@@ -1179,6 +1179,51 @@ sense_full_scale_v = 0.05
         );
     }
 
+    /// Two-sided IdentityUnknown contract: the same programmed charger with a
+    /// refused identity attributes nothing anywhere (an unknown part must not
+    /// become a fitted 200 mA charger), and the skip is recorded by name so
+    /// the report can say the rails went unexamined.
+    #[test]
+    fn an_identity_refused_part_is_skipped_and_named_not_attributed() {
+        let mut board = charger_board(vec![
+            comp(
+                "R10",
+                "4.99k/1%/R0603",
+                "Resistor_SMD:R_0603",
+                vec![pin("1", 3), pin("2", 5)],
+            ),
+            comp(
+                "E1",
+                "Closed",
+                "OLIMEX_Jumpers-FP:SJ_Closed",
+                vec![pin("1", 5), pin("2", 2)],
+            ),
+        ]);
+        board.components[0].properties.push((
+            hauksbee_extract::DUPLICATE_REFERENCE_CONFLICT_KEY.to_string(),
+            "two populated records with different values".to_string(),
+        ));
+        let lib = lib_from("identity_refused", CHARGER_TOML);
+        let got = attribute_currents(&board, &lib);
+        assert!(
+            got.cited.is_empty(),
+            "a refused identity must attribute nothing: {:?}",
+            got.cited.keys().collect::<Vec<_>>()
+        );
+        assert_eq!(
+            got.skipped_identity.len(),
+            1,
+            "the skip must be on the record: {:?}",
+            got.skipped_identity
+        );
+        let (reference, reason) = &got.skipped_identity[0];
+        assert_eq!(reference, "U1");
+        assert!(
+            reason.contains("duplicate designator"),
+            "the reason must be the refusal itself: {reason}"
+        );
+    }
+
     #[test]
     fn an_open_link_in_the_programming_path_attributes_nothing_and_names_the_gap() {
         // Same board with the jumper open: the charger is not programmed at all,
