@@ -167,23 +167,37 @@ fn a_lone_blind_via_declaration_does_not_widen_to_the_whole_stack() {
 #[test]
 fn a_routed_arc_wall_connects_what_the_curve_touches_and_not_what_its_chord_does() {
     // A quarter-circle routed slot of radius 5 mm, cut counter-clockwise from
-    // (5, 0) to (0, 5) with a 0.8 mm cutter. Four pads on the top copper:
+    // (5, 0) to (0, 5) with a 0.8 mm cutter, so the plated wall occupies the
+    // band from radius 4.6 to 5.4. Five pads on the top copper:
     //
-    //   A (5, 0) and B (0, 5)   at the two ends of the cut
-    //   C at radius 5.6 on the 45-degree ray, just outside the arc's outer wall
-    //   D at (2.5, 2.5), the midpoint of the CHORD, 1.46 mm inside the arc
+    //   A (5, 0) and B (0, 5)  at the two ends of the cut
+    //   C  outside the wall on the 45-degree ray, touching it
+    //   D  at (2.5, 2.5), the midpoint of the CHORD, 1.46 mm inside the arc
+    //   E  on the 33.75-degree ray, reaching out to radius 4.55
     //
-    // C and D are the whole test. C touches the real curved wall and must join
-    // the net; it is 1.35 mm clear of the chord, so a reader that straightens
-    // the arc loses it. D sits on the chord and must NOT join; it is 0.38 mm
-    // clear of the true wall, so a reader that straightens the arc invents a
-    // connection to it. Getting the arc wrong in either direction changes the
-    // answer here, which a fixture that only checked the endpoints would not.
+    // C, D and E are the test, and they fail three different wrong arcs.
+    //
+    // C must join. It is 1.35 mm clear of the straight chord, so a reader that
+    // replaces the arc with its chord loses it.
+    //
+    // D must not join. It sits on the chord and is 0.38 mm clear of the true
+    // wall, so the same straightening invents a connection to it.
+    //
+    // E must not join either, and it is the subtle one. It reaches to radius
+    // 4.55, inside the real wall at 4.6, but a coarse tessellation puts its
+    // chords at radius 4.90 whose 0.4 mm-wide stadiums reach in to 4.50 and
+    // swallow it. Tessellating an arc into chords always over-reaches on the
+    // concave side; E fails unless that over-reach is held under the tolerance
+    // the union itself works to.
     let e = from_gerber_dir(&job("gerber_rout_arc")).expect("rout arc fixture");
-    assert_eq!(e.stats.n_slots, 4, "a quarter arc is four cut segments");
+    assert!(
+        e.stats.n_slots >= 4,
+        "the arc must tessellate: {} segment(s)",
+        e.stats.n_slots
+    );
     assert_eq!(
-        e.stats.n_nets, 2,
-        "A, B and C are one conductor through the arc wall; D is on its own"
+        e.stats.n_nets, 3,
+        "A, B and C are one conductor through the arc wall; D and E are each on their own"
     );
 }
 

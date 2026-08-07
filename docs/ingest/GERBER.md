@@ -136,20 +136,28 @@ applies to the far end as much as the near one.
 
 Rapids matter as much as cuts: a `G00` move positions the cutter with it
 raised, so it drills nothing, and a `G01` after `M16` is a move rather than
-a cut. A file with no `M15` in it is not in rout mode at all and keeps its
-previous reading, so no existing job changes behaviour.
+a cut. Motion codes are modal, so a run of cuts is written `G01` once and
+then bare coordinate lines; with the cutter down those are cuts too. A file
+with no `M15` in it is not in rout mode at all and keeps its previous
+reading, so no existing job changes behaviour. A `G85` record is read before
+any of this, because it carries both of its own endpoints and means the same
+thing whichever mode the file is in.
 
-A `G02`/`G03` arc cut is tessellated about its `I`/`J` centre at the same
-16-segments-per-circle resolution the RS-274X plotter gives a copper arc, so
-a routed arc and a drawn arc resolve a tangent contact the same way. The
-chain of chords falls short of the true wall on the outside of the curve and
-reaches past it on the inside, both by at most the sagitta of one step, which
-is under 2% of the arc radius. That is the same approximation and the same
-error bound a drawn copper arc gets, so a slot wall and a copper arc resolve
-a marginal contact the same way rather than disagreeing about the same curve.
+A `G02`/`G03` arc cut is tessellated about its `I`/`J` centre. Each chord
+lies inside its arc, so the stadium built on it falls short of the true wall
+on the outside of the curve and reaches past it on the inside. The step is
+therefore chosen per arc, from the radius, to hold that error under half the
+gap tolerance the union itself works to, so a tessellated wall cannot make a
+contact the real cut would not. A fixed segment count does not do this: at a
+50 mm radius it leaves the chords bulging most of a millimetre off their own
+wall, which is enough to sweep in copper the slot never touches. The segment
+count is capped so a hostile radius cannot turn one line into unbounded work.
+
 An arc with no readable centre produces no geometry at all: planting a round
 hit at the endpoint instead, which is what a fall-through to the plain
-coordinate reader would do, invents a hole the file never described.
+coordinate reader would do, invents a hole the file never described. On a
+file with no `M15` at all, nothing is being cut, so an arc line moves the
+position and records nothing.
 
 The refusal is plating. An **unplated** slot is a mechanical cut with no
 copper wall, and it connects nothing, however exactly it overlays two pads.
