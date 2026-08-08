@@ -9,6 +9,17 @@
 //! its bounding diamond) but never loses a pad, and the common KiCad macros
 //! (RoundRect, the chamfered/rounded pads) are convex anyway.
 //!
+//! **Exposure-off primitives are subtracted**, per the spec's paint model: a
+//! primitive with exposure 0 erases whatever was painted under it. A clear
+//! primitive whose area sits wholly inside the solid hull, and which no LATER
+//! exposure-on primitive paints back over, becomes a hole contour in the
+//! returned shape (even-odd containment reads its interior as empty). Ignoring
+//! these read a macro's punched-out void as solid copper, so foreign copper
+//! routed through the void was unioned onto the pad's net: a false short. A
+//! clear that a later dark repaints, or one that crosses the hull boundary, is
+//! dropped (the area stays solid), which errs toward the old over-approximation
+//! and never toward inventing emptiness where copper is.
+//!
 //! Variable substitution handles `$1..$n` from the flash's positional
 //! arguments and a small arithmetic evaluator covers the `$1+$1`,
 //! `$2-$3`, `0.5*$4` forms KiCad emits. Anything we cannot evaluate
@@ -19,7 +30,27 @@ use std::collections::HashMap;
 
 use gerber_types::{ApertureMacro, MacroBoolean, MacroContent, MacroDecimal, MacroInteger};
 
-/// Evaluate a macro into the convex-hull polygon of its solid area, centred at
+use super::geo::point_in_polygon;
+
+/// The instantiated solid area of a macro flash: the convex hull of its
+/// exposure-on primitives, minus the voids its exposure-off primitives punch
+/// out of it. `hull` empty means the macro could not be evaluated (the caller
+/// falls back to a disc); `holes` empty means a plain convex polygon.
+#[derive(Debug, Clone, Default)]
+pub struct MacroShape {
+    pub hull: Vec<(f64, f64)>,
+    pub holes: Vec<Vec<(f64, f64)>>,
+}
+
+/// One evaluated primitive, in macro-local coordinates: its closed outline and
+/// whether it paints (exposure on) or erases (exposure off).
+struct EvaledPrim {
+    on: bool,
+    outline: Vec<(f64, f64)>,
+}
+
+/// Evaluate a macro into the polygon of its solid area (convex hull of the
+/// exposure-on primitives, minus fully-interior exposure-off voids), centred at
 /// the flash point `(cx, cy)` and scaled by `s` (inch->mm or 1.0). `args` are
 /// the flash's positional parameters (`$1` = `args[0]`, ...).
 pub fn instantiate_macro(
@@ -28,7 +59,7 @@ pub fn instantiate_macro(
     cx: f64,
     cy: f64,
     s: f64,
-) -> Vec<(f64, f64)> {
+) -> MacroShape {
     let mut vars: HashMap<u32, f64> = HashMap::new();
     for (i, a) in args.iter().enumerate() {
         if let Some(v) = decimal(a, &vars) {
@@ -36,18 +67,19 @@ pub fn instantiate_macro(
         }
     }
 
-    let mut pts: Vec<(f64, f64)> = Vec::new();
+    // Evaluate every primitive to its outline, in paint order, keeping the
+    // exposure flag: the darks build the hull, the clears carve holes, and
+    // ORDER decides whether a clear survives (a later dark repaints it).
+    let mut evaled: Vec<EvaledPrim> = Vec::new();
     for content in &m.content {
-        match content {
-            MacroContent::VariableDefinition(def) => {
-                if let Some(v) = eval_expr(&def.expression, &vars) {
-                    vars.insert(def.number, v);
-                }
+        if let MacroContent::VariableDefinition(def) = content {
+            if let Some(v) = eval_expr(&def.expression, &vars) {
+                vars.insert(def.number, v);
             }
+            continue;
+        }
+        let (on, outline) = match content {
             MacroContent::Circle(c) => {
-                if !exposed(&c.exposure, &vars) {
-                    continue;
-                }
                 let (Some(d), Some(x), Some(y)) = (
                     decimal(&c.diameter, &vars),
                     decimal(&c.center.0, &vars),
@@ -69,16 +101,18 @@ pub fn instantiate_macro(
                     .to_radians()
                     .sin_cos();
                 let (cxr, cyr) = (x * rcos - y * rsin, x * rsin + y * rcos);
-                // Sample the circle as an octagon (hull absorbs the rest).
-                for k in 0..8 {
-                    let a = k as f64 * std::f64::consts::TAU / 8.0;
-                    pts.push((cxr + r * a.cos(), cyr + r * a.sin()));
-                }
+                // Sample the circle as an octagon (the hull absorbs the rest;
+                // for a hole the inscribed octagon under-cuts the void
+                // slightly, erring toward solid, never toward emptiness).
+                let outline: Vec<(f64, f64)> = (0..8)
+                    .map(|k| {
+                        let a = k as f64 * std::f64::consts::TAU / 8.0;
+                        (cxr + r * a.cos(), cyr + r * a.sin())
+                    })
+                    .collect();
+                (exposed(&c.exposure, &vars), outline)
             }
             MacroContent::VectorLine(l) => {
-                if !exposed(&l.exposure, &vars) {
-                    continue;
-                }
                 let (Some(w), Some(x0), Some(y0), Some(x1), Some(y1)) = (
                     decimal(&l.width, &vars),
                     decimal(&l.start.0, &vars),
@@ -99,12 +133,11 @@ pub fn instantiate_macro(
                     .sin_cos();
                 let (rx0, ry0) = (x0 * cos - y0 * sin, x0 * sin + y0 * cos);
                 let (rx1, ry1) = (x1 * cos - y1 * sin, x1 * sin + y1 * cos);
-                push_thick_segment(&mut pts, rx0, ry0, rx1, ry1, w / 2.0);
+                let mut outline = Vec::with_capacity(4);
+                push_thick_segment(&mut outline, rx0, ry0, rx1, ry1, w / 2.0);
+                (exposed(&l.exposure, &vars), outline)
             }
             MacroContent::CenterLine(l) => {
-                if !exposed(&l.exposure, &vars) {
-                    continue;
-                }
                 let (Some(w), Some(h), Some(x), Some(y)) = (
                     decimal(&l.dimensions.0, &vars),
                     decimal(&l.dimensions.1, &vars),
@@ -127,15 +160,16 @@ pub fn instantiate_macro(
                     .unwrap_or(0.0)
                     .to_radians()
                     .sin_cos();
-                for (dx, dy) in [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)] {
-                    let (ax, ay) = (x + dx, y + dy);
-                    pts.push((ax * cos - ay * sin, ax * sin + ay * cos));
-                }
+                let outline: Vec<(f64, f64)> = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
+                    .into_iter()
+                    .map(|(dx, dy)| {
+                        let (ax, ay) = (x + dx, y + dy);
+                        (ax * cos - ay * sin, ax * sin + ay * cos)
+                    })
+                    .collect();
+                (exposed(&l.exposure, &vars), outline)
             }
             MacroContent::Outline(o) => {
-                if !exposed(&o.exposure, &vars) {
-                    continue;
-                }
                 // The outline primitive rotates about the macro origin (0,0);
                 // its points are absolute macro coordinates, so the rotation both
                 // reorients AND (for an off-origin outline) translates the shape.
@@ -145,16 +179,17 @@ pub fn instantiate_macro(
                     .unwrap_or(0.0)
                     .to_radians()
                     .sin_cos();
-                for (px, py) in &o.points {
-                    if let (Some(x), Some(y)) = (decimal(px, &vars), decimal(py, &vars)) {
-                        pts.push((x * cos - y * sin, x * sin + y * cos));
-                    }
-                }
+                let outline: Vec<(f64, f64)> = o
+                    .points
+                    .iter()
+                    .filter_map(|(px, py)| {
+                        let (x, y) = (decimal(px, &vars)?, decimal(py, &vars)?);
+                        Some((x * cos - y * sin, x * sin + y * cos))
+                    })
+                    .collect();
+                (exposed(&o.exposure, &vars), outline)
             }
             MacroContent::Polygon(p) => {
-                if !exposed(&p.exposure, &vars) {
-                    continue;
-                }
                 let (Some(nv), Some(x), Some(y), Some(d)) = (
                     integer(&p.vertices, &vars),
                     decimal(&p.center.0, &vars),
@@ -177,23 +212,91 @@ pub fn instantiate_macro(
                 // centroid at its unrotated (x,y), placing an off-origin rotated
                 // polygon pad ~|center| mm off in the wrong direction.
                 let (cx0, cy0) = (x * rot.cos() - y * rot.sin(), x * rot.sin() + y * rot.cos());
-                for k in 0..n {
-                    let a = rot + k as f64 * std::f64::consts::TAU / n as f64;
-                    pts.push((cx0 + r * a.cos(), cy0 + r * a.sin()));
-                }
+                let outline: Vec<(f64, f64)> = (0..n)
+                    .map(|k| {
+                        let a = rot + k as f64 * std::f64::consts::TAU / n as f64;
+                        (cx0 + r * a.cos(), cy0 + r * a.sin())
+                    })
+                    .collect();
+                (exposed(&p.exposure, &vars), outline)
             }
             // Moire/Thermal are fiducial/relief shapes, not pads we bind to.
-            _ => {}
+            _ => continue,
+        };
+        if outline.len() >= 3 {
+            evaled.push(EvaledPrim { on, outline });
         }
     }
 
+    let pts: Vec<(f64, f64)> = evaled
+        .iter()
+        .filter(|e| e.on)
+        .flat_map(|e| e.outline.iter().copied())
+        .collect();
     if pts.len() < 3 {
-        return Vec::new();
+        return MacroShape::default();
     }
     let hull = convex_hull(pts);
-    hull.into_iter()
-        .map(|(x, y)| (cx + x * s, cy + y * s))
-        .collect()
+
+    // Exposure-off subtraction, per the paint model: a clear primitive erases
+    // what is under it, so its area is a VOID unless a later dark repaints it.
+    // A hole is kept only when it is fully inside the hull (even-odd
+    // containment cannot represent a void poking past the outer boundary) and
+    // no later exposure-on primitive overlaps it. Anything else stays solid:
+    // the old, safe over-approximation.
+    let mut holes: Vec<Vec<(f64, f64)>> = Vec::new();
+    for (i, e) in evaled.iter().enumerate() {
+        if e.on {
+            continue;
+        }
+        let fully_inside = e
+            .outline
+            .iter()
+            .all(|&(x, y)| point_in_polygon(x, y, &hull));
+        if !fully_inside {
+            continue;
+        }
+        let repainted = evaled[i + 1..]
+            .iter()
+            .filter(|later| later.on)
+            .any(|later| outlines_overlap(&e.outline, &later.outline));
+        if !repainted {
+            holes.push(e.outline.clone());
+        }
+    }
+
+    let place = |pts: Vec<(f64, f64)>| -> Vec<(f64, f64)> {
+        pts.into_iter()
+            .map(|(x, y)| (cx + x * s, cy + y * s))
+            .collect()
+    };
+    MacroShape {
+        hull: place(hull),
+        holes: holes.into_iter().map(place).collect(),
+    }
+}
+
+/// Whether two closed convex-ish outlines overlap: any vertex of one inside
+/// the other, or any pair of edges crossing. Used only to decide whether a
+/// later exposure-on primitive repaints (part of) a clear one, in which case
+/// the clear is conservatively kept solid.
+fn outlines_overlap(a: &[(f64, f64)], b: &[(f64, f64)]) -> bool {
+    if a.iter().any(|&(x, y)| point_in_polygon(x, y, b))
+        || b.iter().any(|&(x, y)| point_in_polygon(x, y, a))
+    {
+        return true;
+    }
+    let na = a.len();
+    let nb = b.len();
+    for ia in 0..na {
+        let (a1, a2) = (a[ia], a[(ia + 1) % na]);
+        for ib in 0..nb {
+            if super::geo::segments_intersect(a1, a2, b[ib], b[(ib + 1) % nb]) {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn exposed(e: &MacroBoolean, vars: &HashMap<u32, f64>) -> bool {
@@ -451,6 +554,82 @@ mod tests {
         assert_eq!(eval_expr("1.0/2.0", &vars), Some(0.5));
     }
 
+    fn donut(extra_dark_after: bool, hole_at: (f64, f64)) -> ApertureMacro {
+        use gerber_types::{CenterLinePrimitive, CirclePrimitive};
+        let mut content = vec![
+            MacroContent::CenterLine(CenterLinePrimitive {
+                exposure: MacroBoolean::Value(true),
+                dimensions: (MacroDecimal::Value(4.0), MacroDecimal::Value(4.0)),
+                center: (MacroDecimal::Value(0.0), MacroDecimal::Value(0.0)),
+                angle: MacroDecimal::Value(0.0),
+            }),
+            MacroContent::Circle(CirclePrimitive {
+                exposure: MacroBoolean::Value(false),
+                diameter: MacroDecimal::Value(2.0),
+                center: (MacroDecimal::Value(hole_at.0), MacroDecimal::Value(hole_at.1)),
+                angle: None,
+            }),
+        ];
+        if extra_dark_after {
+            content.push(MacroContent::CenterLine(CenterLinePrimitive {
+                exposure: MacroBoolean::Value(true),
+                dimensions: (MacroDecimal::Value(1.0), MacroDecimal::Value(1.0)),
+                center: (MacroDecimal::Value(0.0), MacroDecimal::Value(0.0)),
+                angle: MacroDecimal::Value(0.0),
+            }));
+        }
+        ApertureMacro {
+            name: "DONUT".to_string(),
+            content,
+        }
+    }
+
+    #[test]
+    fn exposure_off_primitive_punches_a_void() {
+        use crate::gerber::geo::point_in_contours;
+        // A 4x4 dark square with a 2 mm clear circle at its centre. The old
+        // handler `continue`d over the clear and hulled the rest, so the void
+        // read as solid copper and anything routed through it false-shorted.
+        let ms = instantiate_macro(&donut(false, (0.0, 0.0)), &[], 0.0, 0.0, 1.0);
+        assert_eq!(ms.holes.len(), 1, "the clear circle is a hole");
+        let mut contours = vec![ms.hull.clone()];
+        contours.extend(ms.holes.clone());
+        assert!(
+            !point_in_contours(0.0, 0.0, &contours),
+            "the void centre is NOT copper"
+        );
+        assert!(
+            point_in_contours(1.7, 0.0, &contours),
+            "the ring around the void IS copper"
+        );
+        assert!(
+            !point_in_contours(2.5, 0.0, &contours),
+            "outside the pad is not copper"
+        );
+    }
+
+    #[test]
+    fn a_later_dark_repaints_the_void_solid() {
+        // Paint order matters: dark, clear, then dark AGAIN over the void. The
+        // final image is solid there, so no hole may be carved. (This errs the
+        // safe way even for partial repaints: the whole clear stays solid.)
+        let ms = instantiate_macro(&donut(true, (0.0, 0.0)), &[], 0.0, 0.0, 1.0);
+        assert!(
+            ms.holes.is_empty(),
+            "a repainted clear must not survive as a hole"
+        );
+    }
+
+    #[test]
+    fn a_clear_crossing_the_hull_boundary_stays_solid() {
+        // A clear circle centred ON the square's edge pokes outside the hull.
+        // Even-odd contours cannot represent that void without inventing
+        // copper outside the boundary, so it is dropped: the old (solid)
+        // over-approximation, never phantom emptiness or phantom copper.
+        let ms = instantiate_macro(&donut(false, (2.0, 0.0)), &[], 0.0, 0.0, 1.0);
+        assert!(ms.holes.is_empty(), "a boundary-crossing clear is dropped");
+    }
+
     #[test]
     fn hull_of_square_points() {
         let pts = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.5, 0.5)];
@@ -475,7 +654,7 @@ mod tests {
             name: "FOO".to_string(),
             content: vec![MacroContent::Polygon(poly)],
         };
-        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
+        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0).hull;
         assert!(
             pts.len() <= 12,
             "vertex count must be clamped, got {}",
@@ -502,7 +681,7 @@ mod tests {
             name: "HEX".to_string(),
             content: vec![MacroContent::Polygon(poly)],
         };
-        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
+        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0).hull;
         let n = pts.len() as f64;
         let cx: f64 = pts.iter().map(|p| p.0).sum::<f64>() / n;
         let cy: f64 = pts.iter().map(|p| p.1).sum::<f64>() / n;
@@ -530,7 +709,7 @@ mod tests {
             name: "CL".to_string(),
             content: vec![MacroContent::CenterLine(cl)],
         };
-        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
+        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0).hull;
         let (minx, maxx) = pts
             .iter()
             .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
@@ -567,7 +746,7 @@ mod tests {
             name: "CL".to_string(),
             content: vec![MacroContent::CenterLine(cl)],
         };
-        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
+        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0).hull;
         let (minx, maxx) = pts
             .iter()
             .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
@@ -608,7 +787,7 @@ mod tests {
             name: "OUT".to_string(),
             content: vec![MacroContent::Outline(outline)],
         };
-        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
+        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0).hull;
         let (minx, maxx) = pts
             .iter()
             .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
@@ -642,7 +821,7 @@ mod tests {
             name: "VL".to_string(),
             content: vec![MacroContent::VectorLine(vl)],
         };
-        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
+        let pts = instantiate_macro(&m, &[], 0.0, 0.0, 1.0).hull;
         let (minx, maxx) = pts
             .iter()
             .fold((f64::MAX, f64::MIN), |(a, b), p| (a.min(p.0), b.max(p.0)));
