@@ -15,23 +15,38 @@
 //!    24/24 seeds is statistical evidence, not a worst-case bound. The report
 //!    wording says so. Corner mode (`mode = "corners"`) enumerates every
 //!    all-min/all-max combination deterministically, which bounds the worst
-//!    case *only for monotonic responses*, also stated in the report. That
-//!    premise is not left to the reader: every corner run also carries a small
-//!    stratified Latin-hypercube sample of the interior, and an interior point
-//!    that fails an assertion the corners passed fails the assertion. A clean
-//!    probe set is evidence for the monotonicity, never proof of it, and the
-//!    report says which of the two it has.
-//! 2. **Reproducibility is doctrine.** Every sampled value is a pure function
-//!    of `(spec, seed, component reference)`, nothing depends on iteration
-//!    order or on how many other components are toleranced. A failing seed can
-//!    therefore be re-run in isolation (`hauksbee-ci run spec.toml --seed N`)
-//!    and produces byte-identical values. The tolerance stream is
-//!    domain-separated (`"tol:" + ref`) from the net-fuzz stream, so adding a
-//!    tolerance never changes which fuzz levels seed N straps.
+//!    case *only for monotonic responses*, also stated in the report. Rather
+//!    than leave that condition as a caveat with nothing behind it, every corner
+//!    run also carries a small stratified Latin-hypercube sample of the
+//!    interior, and an interior point that FAILS an assertion every corner
+//!    passed fails the assertion: the corners demonstrably did not bound it.
+//!    Note what that is and is not. It searches the interior for a point that
+//!    breaks an assertion; it does not compare interior measurements against the
+//!    corner extrema, so a response worse than every corner still passes while
+//!    it stays inside the assertion's window. A clean probe set is evidence for
+//!    the monotonicity the bound needs, never proof of it, and the report says
+//!    which of the two it has.
+//! 2. **Reproducibility is doctrine.** Re-running a member reproduces it
+//!    byte-identically (`hauksbee-ci run spec.toml --seed N`), which is the
+//!    property that makes a red build investigable. Every Monte-Carlo sampled
+//!    value is a pure function of `(seed, component reference, rule)`, so it
+//!    depends on neither iteration order nor how many other components are
+//!    toleranced, and the tolerance stream is domain-separated (`"tol:" + ref`)
+//!    from the net-fuzz stream, so adding a tolerance never changes which fuzz
+//!    levels seed N straps.
 //!
-//! Seed 0 is always the nominal baseline (all components at nominal, matching
-//! fuzz's all-low seed 0), so "nominal passes but the ensemble fails" is
-//! visible inside a single run.
+//!    The corner and interior members are reproducible for a given spec but are
+//!    NOT stable across edits to it, and do not claim to be: a corner index is a
+//!    bit pattern over the sorted-by-reference tolerance list, and the interior
+//!    probe count and starting index both depend on how many components are
+//!    toleranced. Adding a rule renumbers both. A member index identifies a
+//!    point within one spec revision, which is what replay needs.
+//!
+//! In Monte-Carlo mode seed 0 is always the nominal baseline (all components at
+//! nominal, matching fuzz's all-low seed 0), so "nominal passes but the ensemble
+//! fails" is visible inside a single run. Corner mode has no nominal member:
+//! member 0 is the all-min corner, since a nominal run would tell it nothing it
+//! is looking for.
 
 use crate::error::SpecError;
 use crate::spec::Spec;
@@ -58,9 +73,14 @@ pub const CORNER_CAP: usize = 10;
 ///
 /// The count scales with the dimension and then flattens, so the check costs a
 /// bounded handful of extra sims rather than a multiple of the corner set: 4
-/// probes for one component, 6 for two, 8 from three up. It buys detection, never
-/// proof, which is why a clean interior sweep narrows the disclosure instead of
-/// removing it.
+/// probes for one component, 6 for two, 8 from three up.
+///
+/// What it buys is detection of a non-monotonicity severe enough to break an
+/// assertion, which is the case that matters and the only one observable from a
+/// pass/fail verdict. It is not a monotonicity test: each member is judged
+/// against the assertion's own window, so a response worse than every corner but
+/// still in band passes. That is why a clean sweep narrows the disclosure rather
+/// than removing it.
 pub fn interior_probe_count(n: usize) -> usize {
     (2 * n + 2).min(8)
 }
