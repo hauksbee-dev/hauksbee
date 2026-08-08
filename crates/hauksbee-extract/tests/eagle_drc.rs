@@ -914,3 +914,601 @@ fn octagon_pad_shape_is_detected() {
     let report = drc(packages, elements, signals);
     assert_short(&report, "A", "B");
 }
+
+// ---------------------------------------------------------------------------
+// Copper circles. A stroked <circle> is an annulus of its stroke width; the
+// interior is bare board; only a zero-width circle is Eagle-filled solid.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn copper_inside_a_stroked_circle_is_not_a_short() {
+    // Ring: radius 3, stroke 0.4 → copper only in the 2.8..3.2 band. A wire
+    // through the middle sits 1.7 mm clear of the inner edge; the old
+    // solid-disc model read a full overlap short.
+    let signals = r#"
+<signal name="A">
+  <wire x1="-1" y1="0" x2="1" y2="0" width="0.2" layer="1"/>
+</signal>
+<signal name="B">
+  <circle x="0" y="0" radius="3" width="0.4" layer="1"/>
+</signal>
+"#;
+    let report = drc("", "", signals);
+    assert!(
+        report.findings.is_empty(),
+        "the annulus hole is bare board: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.gap_mm))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn wire_crossing_the_annulus_ring_is_a_short() {
+    // Control: copper crossing the stroked band itself still shorts, so the
+    // annulus fix cannot pass by dropping the circle.
+    let signals = r#"
+<signal name="A">
+  <wire x1="2" y1="0" x2="4" y2="0" width="0.2" layer="1"/>
+</signal>
+<signal name="B">
+  <circle x="0" y="0" radius="3" width="0.4" layer="1"/>
+</signal>
+"#;
+    assert_short(&drc("", "", signals), "A", "B");
+}
+
+#[test]
+fn zero_width_circle_stays_a_filled_disc() {
+    // Eagle renders width-0 circles filled; copper at the centre is a short.
+    let signals = r#"
+<signal name="A">
+  <wire x1="-0.4" y1="0" x2="0.4" y2="0" width="0.2" layer="1"/>
+</signal>
+<signal name="B">
+  <circle x="0" y="0" radius="1" width="0" layer="1"/>
+</signal>
+"#;
+    assert_short(&drc("", "", signals), "A", "B");
+}
+
+// ---------------------------------------------------------------------------
+// Net classes. <classes> is a clearance matrix: class N's own row entry is its
+// same-class rule, an explicit cross-class entry pins that pair (and may relax
+// below the classes' own rules), and a pair with NO entry uses the larger of
+// the two classes' clearances. Everything is floored at the design rules.
+// ---------------------------------------------------------------------------
+
+/// Two parallel wires with 0.3 mm of copper-edge air between them (centres
+/// 0.5 mm apart, both 0.2 mm wide): clear under the 6 mil (0.1524 mm) design
+/// rule, inside a 0.4 mm class rule.
+fn two_wire_signals(class_a: &str, class_b: &str) -> String {
+    format!(
+        r#"
+<signal name="P1" class="{class_a}">
+  <wire x1="0" y1="0" x2="10" y2="0" width="0.2" layer="1"/>
+</signal>
+<signal name="P2" class="{class_b}">
+  <wire x1="0" y1="0.5" x2="10" y2="0.5" width="0.2" layer="1"/>
+</signal>
+"#
+    )
+}
+
+/// Class 0 (default, 0.15 mm) and class 1 (power, 0.4 mm same-class rule).
+const TWO_CLASSES: &str = r#"
+<classes>
+<class number="0" name="default" width="0" drill="0">
+<clearance class="0" value="0.15"/>
+</class>
+<class number="1" name="power" width="0" drill="0">
+<clearance class="1" value="0.4"/>
+</class>
+</classes>"#;
+
+#[test]
+fn same_class_clearance_rule_is_applied() {
+    // Both wires in class 1 (0.4 mm): the 0.3 mm gap violates the class rule
+    // even though the design rules alone would pass it.
+    let rules = format!("{TWO_CLASSES}{}", default_rules());
+    let report = drc_rules("", "", &two_wire_signals("1", "1"), &rules);
+    assert_eq!(report.short_count(), 0, "not touching, so never a short");
+    let f = report
+        .clearance_violations()
+        .next()
+        .expect("0.3 mm gap violates the 0.4 mm class rule");
+    assert!(
+        (f.required_clearance_mm - 0.4).abs() < 1e-9,
+        "class rule drives the requirement, got {}",
+        f.required_clearance_mm
+    );
+}
+
+#[test]
+fn cross_class_pair_without_matrix_entry_uses_the_larger_class_clearance() {
+    // P1 in class 1 (0.4), P2 in class 0 (0.15), no explicit 1-0 matrix cell:
+    // Eagle's rule for nets of different classes is that the larger of the
+    // two class clearances governs, so the 0.3 mm gap violates the 0.4 mm
+    // power-class rule. A design-rules-only fallback (0.1524 mm) would
+    // silently under-report every power-to-signal pair.
+    let rules = format!("{TWO_CLASSES}{}", default_rules());
+    let report = drc_rules("", "", &two_wire_signals("1", "0"), &rules);
+    assert_eq!(report.short_count(), 0, "not touching, so never a short");
+    let f = report
+        .clearance_violations()
+        .next()
+        .expect("0.3 mm gap violates the larger (0.4 mm) class clearance");
+    assert!(
+        (f.required_clearance_mm - 0.4).abs() < 1e-9,
+        "the larger class clearance drives the requirement, got {}",
+        f.required_clearance_mm
+    );
+}
+
+#[test]
+fn explicit_cross_class_matrix_entry_can_relax_below_the_larger_class() {
+    // Same pair, but class 1 explicitly declares a 0.2 mm clearance to
+    // class 0: the matrix cell overrides the larger-class fallback, so the
+    // 0.3 mm gap is legal. This pins that explicit cells WIN (an
+    // always-take-the-max model would still flag 0.4 here).
+    let classes = r#"
+<classes>
+<class number="0" name="default" width="0" drill="0">
+<clearance class="0" value="0.15"/>
+</class>
+<class number="1" name="power" width="0" drill="0">
+<clearance class="0" value="0.2"/>
+<clearance class="1" value="0.4"/>
+</class>
+</classes>"#;
+    let rules = format!("{classes}{}", default_rules());
+    let report = drc_rules("", "", &two_wire_signals("1", "0"), &rules);
+    assert!(
+        report.findings.is_empty(),
+        "the explicit 0.2 mm matrix cell overrides the 0.4 mm class rule: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.gap_mm, f.required_clearance_mm))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn explicit_cross_class_matrix_entry_is_applied() {
+    // Same pair, but class 1 declares a 0.5 mm clearance to class 0: the
+    // 0.3 mm gap now violates it.
+    let classes = r#"
+<classes>
+<class number="0" name="default" width="0" drill="0">
+<clearance class="0" value="0.15"/>
+</class>
+<class number="1" name="power" width="0" drill="0">
+<clearance class="0" value="0.5"/>
+<clearance class="1" value="0.4"/>
+</class>
+</classes>"#;
+    let rules = format!("{classes}{}", default_rules());
+    let report = drc_rules("", "", &two_wire_signals("1", "0"), &rules);
+    let f = report
+        .clearance_violations()
+        .next()
+        .expect("0.3 mm gap violates the explicit 0.5 mm pair entry");
+    assert!(
+        (f.required_clearance_mm - 0.5).abs() < 1e-9,
+        "pair entry drives the requirement, got {}",
+        f.required_clearance_mm
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Copper pours. The .brd stores the requested outline plus its pour settings;
+// the computed fill (with isolate antipads) is derived data. Foreign copper
+// inside an outline is NOT a short (Eagle carves around it), but two
+// overlapping same-rank pours of different signals have no arbitration:
+// Eagle pours both and its own DRC flags the overlap.
+// ---------------------------------------------------------------------------
+
+fn pour(rank_attr: &str, x0: f64, y0: f64, x1: f64, y1: f64) -> String {
+    format!(
+        r#"<polygon width="0.2" layer="1"{rank_attr}>
+<vertex x="{x0}" y="{y0}"/>
+<vertex x="{x1}" y="{y0}"/>
+<vertex x="{x1}" y="{y1}"/>
+<vertex x="{x0}" y="{y1}"/>
+</polygon>"#
+    )
+}
+
+#[test]
+fn overlapping_same_rank_pours_of_different_nets_are_a_short() {
+    let signals = format!(
+        r#"
+<signal name="A">{}</signal>
+<signal name="B">{}</signal>
+"#,
+        pour(
+            r#" rank="1" isolate="0.3" thermals="off" orphans="on""#,
+            0.0,
+            0.0,
+            10.0,
+            10.0
+        ),
+        pour(r#" rank="1""#, 5.0, 5.0, 15.0, 15.0),
+    );
+    let report = drc("", "", &signals);
+    assert_short(&report, "A", "B");
+    let f = report.shorts().next().unwrap();
+    assert_eq!(f.layer, "F.Cu");
+    // The pour settings ride along as finding metadata.
+    assert!(
+        f.item_a.owner.contains("rank 1")
+            && f.item_a.owner.contains("isolate 0.3")
+            && f.item_a.owner.contains("thermals off")
+            && f.item_a.owner.contains("orphans on"),
+        "pour settings are disclosed on the finding, got {:?}",
+        f.item_a.owner
+    );
+}
+
+#[test]
+fn overlapping_pours_with_different_ranks_are_arbitrated_not_shorted() {
+    // rank 1 vs rank 2: the higher-numbered pour carves around the lower, so
+    // the overlap is legal and must stay silent.
+    let signals = format!(
+        r#"
+<signal name="A">{}</signal>
+<signal name="B">{}</signal>
+"#,
+        pour(r#" rank="1""#, 0.0, 0.0, 10.0, 10.0),
+        pour(r#" rank="2""#, 5.0, 5.0, 15.0, 15.0),
+    );
+    let report = drc("", "", &signals);
+    assert!(
+        report.findings.is_empty(),
+        "rank arbitration makes the overlap legal: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.net_a_name.clone(), f.net_b_name.clone()))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn a_cutout_polygon_is_not_copper() {
+    // pour="cutout" carves other pours and pours nothing itself: overlapping a
+    // same-rank foreign pour is not a short.
+    let cutout = r#"<polygon width="0.2" layer="1" rank="1" pour="cutout">
+<vertex x="5" y="5"/>
+<vertex x="15" y="5"/>
+<vertex x="15" y="15"/>
+<vertex x="5" y="15"/>
+</polygon>"#;
+    let signals = format!(
+        r#"
+<signal name="A">{}</signal>
+<signal name="B">{cutout}</signal>
+"#,
+        pour(r#" rank="1""#, 0.0, 0.0, 10.0, 10.0),
+    );
+    let report = drc("", "", &signals);
+    assert!(
+        report.findings.is_empty(),
+        "a cutout pours no copper: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.net_a_name.clone(), f.net_b_name.clone()))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn foreign_copper_inside_a_pour_outline_stays_silent() {
+    // A via and a wire of another net fully inside a pour's outline: Eagle's
+    // fill carves max(isolate, clearance) around them, so treating the drawn
+    // outline as solid copper would manufacture false shorts.
+    let signals = format!(
+        r#"
+<signal name="A">{}</signal>
+<signal name="B">
+  <via x="5" y="5" drill="0.3" diameter="0.6"/>
+  <wire x1="3" y1="3" x2="7" y2="3" width="0.2" layer="1"/>
+</signal>
+"#,
+        pour(r#" rank="1" isolate="0.3""#, 0.0, 0.0, 10.0, 10.0),
+    );
+    let report = drc("", "", &signals);
+    assert!(
+        report.findings.is_empty(),
+        "the pour fill is carved around foreign copper: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.net_a_name.clone(), f.net_b_name.clone()))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn grazing_clearance_at_the_annulus_outer_edge_is_not_lost_to_flattening() {
+    // Ring radius 3, stroke 0.4: true outer copper edge at 3.2. A radial wire
+    // whose copper tip stops 0.19 mm off that edge, aimed at 11.25 degrees —
+    // the mid-chord angle of a coarse 16-segment flattening, where the chord
+    // sags ~0.057 mm inward and would misreport the gap as ~0.25 mm (over the
+    // 0.2 mm rule: silently dropped). The sagitta-bounded chain must report
+    // the true ~0.19 mm clearance violation.
+    let signals = r#"
+<signal name="A">
+  <wire x1="3.37391" y1="0.67110" x2="4.41357" y2="0.87790" width="0.1" layer="1"/>
+</signal>
+<signal name="B">
+  <circle x="0" y="0" radius="3" width="0.4" layer="1"/>
+</signal>
+"#;
+    let rules = r#"<designrules name="wide">
+<param name="mdWireWire" value="0.2mm"/>
+</designrules>"#;
+    let report = drc_rules("", "", signals, rules);
+    assert_eq!(report.short_count(), 0, "0.19 mm off the copper, no short");
+    let f = report
+        .clearance_violations()
+        .next()
+        .expect("a 0.19 mm gap violates the 0.2 mm rule");
+    assert!(
+        (0.178..0.198).contains(&f.gap_mm),
+        "true grazing gap is ~0.19 mm (chord sag would say ~0.25), got {}",
+        f.gap_mm
+    );
+}
+
+#[test]
+fn near_but_disjoint_same_rank_pours_are_not_a_short() {
+    // Two same-rank pours whose vertex rings stop 0.1 mm apart, both drawn
+    // with a 0.2 mm width: inflating the rings by width/2 would fabricate an
+    // overlap short here. Ring overlap is what Eagle's DRC flags; disjoint
+    // rings stay silent.
+    let signals = format!(
+        r#"
+<signal name="A">{}</signal>
+<signal name="B">{}</signal>
+"#,
+        pour(r#" rank="1""#, 0.0, 0.0, 10.0, 10.0),
+        pour(r#" rank="1""#, 10.1, 0.0, 20.0, 10.0),
+    );
+    let report = drc("", "", &signals);
+    assert!(
+        report.findings.is_empty(),
+        "disjoint pour rings are not an overlap: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.net_a_name.clone(), f.net_b_name.clone(), f.gap_mm))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn annulus_covering_inflation_keeps_an_exact_edge_touch_a_short() {
+    // Ring radius 0.1, stroke 0.05: true outer copper edge at 0.125. A wire
+    // whose copper tip reaches 0.1245 (0.5 um INTO the copper) aimed at
+    // 11.25 degrees, the mid-chord angle of the 16-segment floor chain used
+    // at this radius. Without the covering inflation the chord sags ~1.9 um
+    // inward and this overlap would read as a positive 1.4 um gap (a
+    // clearance note, not a short). The covering chain must report the short.
+    let signals = r#"
+<signal name="A">
+  <wire x1="0.131916" y1="0.026240" x2="0.490393" y2="0.097545" width="0.02" layer="1"/>
+</signal>
+<signal name="B">
+  <circle x="0" y="0" radius="0.1" width="0.05" layer="1"/>
+</signal>
+"#;
+    assert_short(&drc("", "", signals), "A", "B");
+}
+
+#[test]
+fn pour_without_rank_attribute_defaults_to_rank_one() {
+    // Eagle board polygons behave as rank 1 when the attribute is elided, so
+    // an attribute-less pour overlapping an explicit rank="1" pour of another
+    // net is a same-rank overlap and must short. Defaulting the absent
+    // attribute to any other value would silently arbitrate it away.
+    let signals = format!(
+        r#"
+<signal name="A">{}</signal>
+<signal name="B">{}</signal>
+"#,
+        pour("", 0.0, 0.0, 10.0, 10.0),
+        pour(r#" rank="1""#, 5.0, 5.0, 15.0, 15.0),
+    );
+    assert_short(&drc("", "", &signals), "A", "B");
+}
+
+// ---------------------------------------------------------------------------
+// Drawn copper (<circle> / <rectangle> in a signal) is exact copper, not a
+// pour fill: a pad landing on it is a real short, and must not be swallowed
+// by the Zone-Pad antipad-carve suppression that guards KiCad pour fills.
+// ---------------------------------------------------------------------------
+
+const ONE_SMD_PACKAGE: &str = r#"
+<package name="P1X1">
+  <smd name="1" x="0" y="0" dx="1" dy="1" layer="1"/>
+</package>"#;
+
+#[test]
+fn pad_on_a_drawn_copper_ring_is_a_short() {
+    // SMD pad at (2, 0) lands on the radius-2 ring band (copper 1.8..2.2).
+    let elements = r#"<element name="U1" library="lib" package="P1X1" x="2" y="0"/>"#;
+    let signals = r#"
+<signal name="A">
+  <contactref element="U1" pad="1"/>
+</signal>
+<signal name="B">
+  <circle x="0" y="0" radius="2" width="0.4" layer="1"/>
+</signal>
+"#;
+    let report = drc(ONE_SMD_PACKAGE, elements, signals);
+    assert_short(&report, "A", "B");
+}
+
+#[test]
+fn pad_inside_a_drawn_ring_hole_stays_silent() {
+    // The same pad at the ring centre: 1.3 mm of air to the band.
+    let elements = r#"<element name="U1" library="lib" package="P1X1" x="0" y="0"/>"#;
+    let signals = r#"
+<signal name="A">
+  <contactref element="U1" pad="1"/>
+</signal>
+<signal name="B">
+  <circle x="0" y="0" radius="2" width="0.4" layer="1"/>
+</signal>
+"#;
+    let report = drc(ONE_SMD_PACKAGE, elements, signals);
+    assert!(
+        report.findings.is_empty(),
+        "the ring hole is bare board: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.gap_mm))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn pad_on_a_drawn_copper_rectangle_is_a_short() {
+    let elements = r#"<element name="U1" library="lib" package="P1X1" x="2" y="0"/>"#;
+    let signals = r#"
+<signal name="A">
+  <contactref element="U1" pad="1"/>
+</signal>
+<signal name="B">
+  <rectangle x1="1" y1="-1" x2="3" y2="1" layer="1"/>
+</signal>
+"#;
+    let report = drc(ONE_SMD_PACKAGE, elements, signals);
+    assert_short(&report, "A", "B");
+}
+
+#[test]
+fn curved_pour_edges_use_dense_flattening_for_the_rank_overlap_test() {
+    // Pour B's closing edge is a 90-degree arc (radius 70.7) bulging toward
+    // pour A. The true arc penetrates A's corner region by ~45-70 um, but the
+    // coarse 8-segment chord chain misses A entirely (its nearest vertex sits
+    // outside A's y-band and the adjacent chord only reaches A's edge line
+    // beyond A's top edge). Only sagitta-bounded flattening finds this
+    // same-rank overlap short.
+    let pour_a = r#"<polygon width="0.2" layer="1" rank="1">
+<vertex x="0" y="40"/>
+<vertex x="99.92" y="40"/>
+<vertex x="99.92" y="47"/>
+<vertex x="0" y="47"/>
+</polygon>"#;
+    let pour_b = r#"<polygon width="0.2" layer="1" rank="1">
+<vertex x="120.5" y="0"/>
+<vertex x="200" y="0"/>
+<vertex x="200" y="100"/>
+<vertex x="120.5" y="100" curve="90"/>
+</polygon>"#;
+    let signals = format!(
+        r#"
+<signal name="A">{pour_a}</signal>
+<signal name="B">{pour_b}</signal>
+"#
+    );
+    assert_short(&drc("", "", &signals), "A", "B");
+}
+
+#[test]
+fn class_clearance_below_the_design_rules_is_floored_at_the_design_rules() {
+    // Class 1 declares a 0.1 mm same-class clearance under a 0.4 mm design
+    // rule: Eagle ignores class values below the rules, so two class-1 wires
+    // 0.3 mm apart still violate the 0.4 mm rule. Without the design-rule
+    // floor the 0.1 mm class value would silently loosen the board.
+    let classes = r#"
+<classes>
+<class number="1" name="loose" width="0" drill="0">
+<clearance class="1" value="0.1"/>
+</class>
+</classes>"#;
+    let rules = format!(
+        "{classes}{}",
+        r#"<designrules name="wide">
+<param name="mdWireWire" value="0.4mm"/>
+</designrules>"#
+    );
+    let report = drc_rules("", "", &two_wire_signals("1", "1"), &rules);
+    let f = report
+        .clearance_violations()
+        .next()
+        .expect("0.3 mm gap violates the floored 0.4 mm rule");
+    assert!(
+        (f.required_clearance_mm - 0.4).abs() < 1e-9,
+        "class values below the design rules are floored, got {}",
+        f.required_clearance_mm
+    );
+}
+
+#[test]
+fn cross_class_matrix_cell_below_the_design_rules_is_floored() {
+    // Class 1 declares a 0.1 mm clearance to class 0 under a 0.4 mm design
+    // rule: the explicit cell may relax below the classes' own rules but
+    // never below the design rules, so cross-class wires 0.3 mm apart still
+    // violate the floored 0.4 mm requirement.
+    let classes = r#"
+<classes>
+<class number="0" name="default" width="0" drill="0">
+<clearance class="0" value="0.15"/>
+</class>
+<class number="1" name="power" width="0" drill="0">
+<clearance class="0" value="0.1"/>
+<clearance class="1" value="0.45"/>
+</class>
+</classes>"#;
+    let rules = format!(
+        "{classes}{}",
+        r#"<designrules name="wide">
+<param name="mdWireWire" value="0.4mm"/>
+</designrules>"#
+    );
+    let report = drc_rules("", "", &two_wire_signals("1", "0"), &rules);
+    let f = report
+        .clearance_violations()
+        .next()
+        .expect("0.3 mm gap violates the floored 0.4 mm pair rule");
+    assert!(
+        (f.required_clearance_mm - 0.4).abs() < 1e-9,
+        "matrix cells below the design rules are floored, got {}",
+        f.required_clearance_mm
+    );
+}
+
+#[test]
+fn divergent_design_rule_values_resolve_to_the_tightest() {
+    // mdWireWire 0.4 mm alongside mdPadPad 0.15 mm: this path models ONE
+    // clearance, the tightest copper-gating rule (0.15 mm), so two wires
+    // 0.3 mm apart stay silent. Taking the loosest (or reading only
+    // mdWireWire) would manufacture a violation here.
+    let rules = r#"<designrules name="mixed">
+<param name="mdWireWire" value="0.4mm"/>
+<param name="mdPadPad" value="0.15mm"/>
+</designrules>"#;
+    let report = drc_rules("", "", &two_wire_signals("0", "0"), rules);
+    assert!(
+        (report.clearance_mm - 0.15).abs() < 1e-9,
+        "the tightest md* rule is the model's single clearance, got {}",
+        report.clearance_mm
+    );
+    assert!(
+        report.findings.is_empty(),
+        "0.3 mm gap clears the tightest (0.15 mm) rule: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.gap_mm, f.required_clearance_mm))
+            .collect::<Vec<_>>()
+    );
+}

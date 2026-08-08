@@ -983,3 +983,400 @@ fn pad_without_layers_list_still_gets_all_copper() {
 "#;
     assert_short(&drc(items), "A", "B");
 }
+
+// ---------------------------------------------------------------------------
+// Trapezoid pads. `(rect_delta dx dy)` makes one parallel edge size + delta
+// long and the other size - delta: the true outline both extends BEYOND the
+// size box (the wide edge) and recedes inside it (the narrow edge), so neither
+// direction survives a bounding-rectangle approximation.
+// ---------------------------------------------------------------------------
+
+/// A trapezoid pad at the origin: size 4 x 2, rect_delta (0 2). True corners
+/// (pad-local, y-down): (-3, 1), (-1, -1), (1, -1), (3, 1): the y = +1 edge
+/// is 6 mm wide, the y = -1 edge 2 mm.
+const TRAPEZOID_PAD: &str = r#"
+  (footprint "lib:trap" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U1")
+    (pad "1" smd trapezoid (at 0 0) (size 4 2) (rect_delta 0 2) (layers "F.Cu") (net 2))
+  )
+"#;
+
+#[test]
+fn trapezoid_wing_beyond_the_size_box_is_a_short() {
+    // A vertical track at x = -2.7 crosses the trapezoid's wide-edge wing,
+    // which extends to x = -3, i.e. 0.7 mm OUTSIDE the (size 4 2) box. The old
+    // bounding-rectangle model cleared this by 0.6 mm and stayed silent.
+    let track = r#"
+  (segment (start -2.7 -3) (end -2.7 3) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    let items = format!("{track}{TRAPEZOID_PAD}");
+    assert_short(&drc(&items), "A", "B");
+}
+
+#[test]
+fn copper_past_the_trapezoid_narrow_edge_is_not_a_short() {
+    // A short track at (1.9..2.0, -0.5): inside the (size 4 2) box (the old
+    // model read a full overlap short), but 0.23 mm clear of the true slanted
+    // edge (the line through (1, -1) and (3, 1)), over the 0.2 mm rule, so
+    // fully silent.
+    let track = r#"
+  (segment (start 1.9 -0.5) (end 2.0 -0.5) (width 0.1) (layer "F.Cu") (net 1))
+"#;
+    let items = format!("{track}{TRAPEZOID_PAD}");
+    let report = drc(&items);
+    assert!(
+        report.findings.is_empty(),
+        "copper past the narrow edge is clear of the true trapezoid: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.gap_mm))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn track_through_trapezoid_body_is_still_a_short() {
+    // Control: through the body, so the exact-outline fix cannot pass by
+    // under-sizing the pad.
+    let track = r#"
+  (segment (start -5 0) (end 5 0) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    let items = format!("{track}{TRAPEZOID_PAD}");
+    assert_short(&drc(&items), "A", "B");
+}
+
+// ---------------------------------------------------------------------------
+// Custom pads: the copper is the anchor shape plus EVERY primitive. The old
+// code kept only the first gr_poly, silently un-checking the anchor disc and
+// all further primitives.
+// ---------------------------------------------------------------------------
+
+/// A custom pad: 1 mm circle anchor at the origin plus two 1 x 1 polygon
+/// lobes at x in [2, 3] and x in [-3, -2] (y in [-0.5, 0.5]).
+const CUSTOM_TWO_LOBE_PAD: &str = r#"
+  (footprint "lib:cust" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U2")
+    (pad "1" smd custom (at 0 0) (size 1 1) (layers "F.Cu") (net 2)
+      (options (clearance outline) (anchor circle))
+      (primitives
+        (gr_poly (pts (xy 2 -0.5) (xy 3 -0.5) (xy 3 0.5) (xy 2 0.5)) (width 0))
+        (gr_poly (pts (xy -3 -0.5) (xy -2 -0.5) (xy -2 0.5) (xy -3 0.5)) (width 0))
+      ))
+  )
+"#;
+
+#[test]
+fn custom_pad_second_polygon_is_copper() {
+    // A track through the SECOND gr_poly lobe: the old first-poly-only model
+    // never stamped it.
+    let track = r#"
+  (segment (start -2.5 -2) (end -2.5 2) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    let items = format!("{track}{CUSTOM_TWO_LOBE_PAD}");
+    assert_short(&drc(&items), "A", "B");
+}
+
+#[test]
+fn custom_pad_anchor_is_copper() {
+    // A track through the anchor disc at the pad origin: the old model dropped
+    // the anchor whenever a polygon primitive existed.
+    let track = r#"
+  (segment (start 0 -2) (end 0 2) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    let items = format!("{track}{CUSTOM_TWO_LOBE_PAD}");
+    assert_short(&drc(&items), "A", "B");
+}
+
+#[test]
+fn gap_between_custom_pad_primitives_is_not_copper() {
+    // A track threading the bare gap between the anchor (radius 0.5) and the
+    // left lobe (nearest edge x = -2): clear of both by well over the rule, so
+    // stamping any merged hull would be over-claiming copper.
+    let track = r#"
+  (segment (start -1.35 -2) (end -1.35 2) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    let items = format!("{track}{CUSTOM_TWO_LOBE_PAD}");
+    let report = drc(&items);
+    assert!(
+        report.findings.is_empty(),
+        "the gap between primitives is bare board: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.gap_mm))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn trapezoid_delta_x_skews_the_side_edges() {
+    // rect_delta (2 0) on a (size 2 4) pad: corners (-1, 3), (-1, -3),
+    // (1, -1), (1, 1) — the LEFT edge is 6 mm long, the right 2 mm. A track
+    // at (-0.9..-0.6, 2.5) sits inside the tall-left region, 0.5 mm OUTSIDE
+    // the size box: only the true dx-skewed outline reads it as a short.
+    let items = r#"
+  (segment (start -0.9 2.5) (end -0.6 2.5) (width 0.2) (layer "F.Cu") (net 1))
+  (footprint "lib:trapx" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U3")
+    (pad "1" smd trapezoid (at 0 0) (size 2 4) (rect_delta 2 0) (layers "F.Cu") (net 2))
+  )
+"#;
+    assert_short(&drc(items), "A", "B");
+}
+
+// ---------------------------------------------------------------------------
+// Custom-pad primitive kinds beyond gr_poly: stroked lines, arcs, unfilled
+// rings and rectangles are copper only along their strokes; filled rects are
+// solid.
+// ---------------------------------------------------------------------------
+
+/// A custom pad exercising every primitive kind: circle anchor at the origin,
+/// a stroked line at x in [3, 5], a stroked (unfilled) ring of radius 2 at
+/// (-5, 0), a filled circle of radius 1 at (0, -5), an unfilled rect at
+/// x in [7, 9], a filled rect at x in [-9, -7], and an arc through
+/// (0, 4) - (2, 6) - (0, 8).
+const CUSTOM_PRIMITIVE_ZOO_PAD: &str = r#"
+  (footprint "lib:zoo" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U4")
+    (pad "1" smd custom (at 0 0) (size 1 1) (layers "F.Cu") (net 2)
+      (options (clearance outline) (anchor circle))
+      (primitives
+        (gr_line (start 3 0) (end 5 0) (stroke (width 0.4)))
+        (gr_circle (center -5 0) (end -3 0) (width 0.4))
+        (gr_circle (center 0 -5) (end 1 -5) (width 0.2) (fill yes))
+        (gr_rect (start 7 -1) (end 9 1) (width 0.2))
+        (gr_rect (start -9 -1) (end -7 1) (width 0.2) (fill yes))
+        (gr_arc (start 0 4) (mid 2 6) (end 0 8) (width 0.4))
+      ))
+  )
+"#;
+
+fn zoo_report(track: &str) -> hauksbee_extract::DrcReport {
+    drc(&format!("{track}{CUSTOM_PRIMITIVE_ZOO_PAD}"))
+}
+
+fn assert_zoo_silent(track: &str, what: &str) {
+    let report = zoo_report(track);
+    assert!(
+        report.findings.is_empty(),
+        "{what}: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.gap_mm, f.x, f.y))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn custom_pad_gr_line_stroke_is_copper() {
+    let track = r#"
+  (segment (start 4 -1) (end 4 1) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    assert_short(&zoo_report(track), "A", "B");
+}
+
+#[test]
+fn custom_pad_unfilled_circle_interior_is_bare() {
+    // A stub at the ring's centre: 1.4 mm clear of the stroke band.
+    let track = r#"
+  (segment (start -5.3 0) (end -4.7 0) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    assert_zoo_silent(track, "inside the unfilled gr_circle ring is bare board");
+}
+
+#[test]
+fn custom_pad_unfilled_circle_stroke_is_copper() {
+    let track = r#"
+  (segment (start -7.5 0) (end -6.5 0) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    assert_short(&zoo_report(track), "A", "B");
+}
+
+#[test]
+fn custom_pad_unfilled_rect_interior_is_bare() {
+    let track = r#"
+  (segment (start 7.8 0) (end 8.2 0) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    assert_zoo_silent(track, "inside the unfilled gr_rect is bare board");
+}
+
+#[test]
+fn custom_pad_unfilled_rect_edge_is_copper() {
+    let track = r#"
+  (segment (start 6.5 0) (end 7.5 0) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    assert_short(&zoo_report(track), "A", "B");
+}
+
+#[test]
+fn custom_pad_filled_rect_body_is_copper() {
+    let track = r#"
+  (segment (start -8.2 0) (end -7.8 0) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    assert_short(&zoo_report(track), "A", "B");
+}
+
+#[test]
+fn custom_pad_gr_arc_stroke_is_copper() {
+    // The arc through (0,4)-(2,6)-(0,8) bulges to (2, 6); a track poking that
+    // apex crosses the stroke.
+    let track = r#"
+  (segment (start 1.5 6) (end 2.5 6) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    assert_short(&zoo_report(track), "A", "B");
+}
+
+#[test]
+fn custom_pad_filled_circle_body_is_copper() {
+    // The filled gr_circle at (0, -5): copper through its middle, not just a
+    // ring.
+    let track = r#"
+  (segment (start -0.2 -5) (end 0.2 -5) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    assert_short(&zoo_report(track), "A", "B");
+}
+
+#[test]
+fn custom_pad_arc_grazing_gap_is_not_lost_to_chord_flattening() {
+    // The zoo arc runs on the circle centred (0, 6), radius 2, stroke 0.4:
+    // true outer stroke edge at 2.2 from the centre. A radial track whose
+    // copper tip stops 0.19 mm off that edge, aimed at -78.75 degrees from
+    // the centre - the mid-chord angle of a coarse 8-segment flattening,
+    // where the chord sags ~0.038 mm inward and would misreport the gap as
+    // ~0.23 mm (over the 0.2 mm rule: silently dropped). The covering chain
+    // must report the true ~0.19 mm clearance violation.
+    let track = r#"
+  (segment (start 0.476020 3.606885) (end 0.585271 3.057645) (width 0.1) (layer "F.Cu") (net 1))
+"#;
+    let report = zoo_report(track);
+    assert_eq!(report.short_count(), 0, "0.19 mm off the copper, no short");
+    let f = report
+        .clearance_violations()
+        .next()
+        .expect("a 0.19 mm gap violates the 0.2 mm rule");
+    assert!(
+        (0.178..0.198).contains(&f.gap_mm),
+        "true grazing gap is ~0.19 mm (chord sag would say ~0.23), got {}",
+        f.gap_mm
+    );
+}
+
+#[test]
+fn oversized_trapezoid_delta_is_clamped_not_a_bowtie() {
+    // rect_delta (0 6) on a (size 4 2) pad: unclamped, the corner formula
+    // yields a self-intersecting bowtie reaching x = +/-5 whose edge
+    // distances are garbage. KiCad clamps |dy| to the pad width, collapsing
+    // the narrow edge to a point: the triangle (-4, 1), (0, -1), (4, 1).
+    let pad = r#"
+  (footprint "lib:trapc" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U5")
+    (pad "1" smd trapezoid (at 0 0) (size 4 2) (rect_delta 0 6) (layers "F.Cu") (net 2))
+  )
+"#;
+    // Control: through the triangle body.
+    let body = format!(
+        "{}{pad}",
+        r#"
+  (segment (start 0 -3) (end 0 3) (width 0.2) (layer "F.Cu") (net 1))
+"#
+    );
+    assert_short(&drc(&body), "A", "B");
+    // Wing pin: copper crossing at x = 3, inside the clamped triangle's wing
+    // (interior band y in (0.5, 1) there) but 0.9 mm outside the plain
+    // (size 4 2) box, so a lazy clamp-to-size-box fallback would miss it.
+    let clamped_wing = format!(
+        "{}{pad}",
+        r#"
+  (segment (start 3 -3) (end 3 3) (width 0.2) (layer "F.Cu") (net 1))
+"#
+    );
+    assert_short(&drc(&clamped_wing), "A", "B");
+    // Clamp pin: copper crossing where only the UNCLAMPED bowtie edge would
+    // reach (the naive corner sits at (5, 1)); the clamped triangle ends at
+    // x = 4, leaving 0.75 mm of air.
+    let wing = format!(
+        "{}{pad}",
+        r#"
+  (segment (start 4.8 0.9) (end 5.5 0.9) (width 0.1) (layer "F.Cu") (net 1))
+"#
+    );
+    let report = drc(&wing);
+    assert!(
+        report.findings.is_empty(),
+        "past the clamped triangle is bare board: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.gap_mm))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn custom_pad_nonsquare_anchor_is_a_stadium_not_a_disc() {
+    // A custom pad whose (size 3 1) anchor is not square: the anchor models
+    // as a stadium along x (radius 0.5), never the circumscribed 1.5-radius
+    // disc. A track running 1.2 mm off the pad axis clears the stadium flat
+    // by 0.6 mm; the disc model would read a -0.4 mm false short.
+    let pad = r#"
+  (footprint "lib:anch" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U6")
+    (pad "1" smd custom (at 0 0) (size 3 1) (layers "F.Cu") (net 2)
+      (options (clearance outline) (anchor circle))
+      (primitives
+        (gr_poly (pts (xy 5 -0.5) (xy 6 -0.5) (xy 6 0.5) (xy 5 0.5)) (width 0))
+      ))
+  )
+"#;
+    let clear = format!(
+        "{}{pad}",
+        r#"
+  (segment (start -1 1.2) (end 1 1.2) (width 0.2) (layer "F.Cu") (net 1))
+"#
+    );
+    let report = drc(&clear);
+    assert!(
+        report.findings.is_empty(),
+        "off the stadium flat is bare board (a disc anchor would short): {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.gap_mm))
+            .collect::<Vec<_>>()
+    );
+    // Control: through the anchor body.
+    let body = format!(
+        "{}{pad}",
+        r#"
+  (segment (start 0 -2) (end 0 2) (width 0.2) (layer "F.Cu") (net 1))
+"#
+    );
+    assert_short(&drc(&body), "A", "B");
+    // End-cap pin: copper crossing at x = 1.2 sits past a min-side DISC
+    // (radius 0.5) but inside the stadium's long axis (copper to x = 1.5),
+    // so only the true stadium model shorts here.
+    let end_cap = format!(
+        "{}{pad}",
+        r#"
+  (segment (start 1.2 -2) (end 1.2 2) (width 0.2) (layer "F.Cu") (net 1))
+"#
+    );
+    assert_short(&drc(&end_cap), "A", "B");
+}
+
+#[test]
+fn custom_pad_arc_covering_inflation_keeps_an_exact_edge_touch_a_short() {
+    // The zoo arc (centre (0, 6), radius 2, stroke 0.4: true outer edge at
+    // 2.2 from the centre). A track whose copper tip reaches 0.5 um INTO
+    // that edge, aimed at +2.8125 degrees from the centre - a mid-chord of
+    // the 32-segment sagitta-bounded chain, where densified-but-uninflated
+    // vertices would still sag ~2.4 um inward and read this overlap as a
+    // positive gap (a clearance note, not a short). The covering inflation
+    // must keep it a short.
+    let track = r#"
+  (segment (start 2.246789 6.110378) (end 2.996385 6.147204) (width 0.1) (layer "F.Cu") (net 1))
+"#;
+    assert_short(&zoo_report(track), "A", "B");
+}

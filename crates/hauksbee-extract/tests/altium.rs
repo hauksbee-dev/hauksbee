@@ -949,3 +949,118 @@ fn drc_repeated_channel_designators_keep_net_tie_ownership_separate() {
         "the reported owner uses the canonical channel-aware identity: {finding:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Octagon pads (shape code 3). The copper is the rectangle with each corner
+// cut at 45 degrees by 25% of the shorter side (the mapping KiCad's Altium
+// importer uses), not the bounding rectangle.
+// ---------------------------------------------------------------------------
+
+/// A PADS6 record like `pad_record`, but with independent sizes and an
+/// explicit shape code (1 = round, 2 = rect, 3 = octagon).
+#[allow(clippy::too_many_arguments)]
+fn shaped_pad_record(
+    name: &str,
+    layer: u8,
+    net: u16,
+    component: u16,
+    x_mm: f64,
+    y_mm: f64,
+    size_x_mm: f64,
+    size_y_mm: f64,
+    shape: u8,
+) -> Vec<u8> {
+    let mut rec = vec![0x02u8];
+    let mut s1 = vec![name.len() as u8];
+    s1.extend_from_slice(name.as_bytes());
+    rec.extend(subrecord(&s1));
+    rec.extend(subrecord(&[]));
+    rec.extend(subrecord(&[]));
+    rec.extend(subrecord(&[]));
+    let mut g = vec![0u8; 110];
+    g[0] = layer;
+    g[3..5].copy_from_slice(&net.to_le_bytes());
+    g[7..9].copy_from_slice(&component.to_le_bytes());
+    g[13..17].copy_from_slice(&unit(x_mm).to_le_bytes());
+    g[17..21].copy_from_slice(&unit(y_mm).to_le_bytes());
+    g[21..25].copy_from_slice(&unit(size_x_mm).to_le_bytes());
+    g[25..29].copy_from_slice(&unit(size_y_mm).to_le_bytes());
+    g[49] = shape;
+    rec.extend(subrecord(&g));
+    rec.extend(subrecord(&[]));
+    rec
+}
+
+#[test]
+fn copper_past_an_octagon_cut_corner_is_not_a_short() {
+    // A 2 x 2 mm octagon pad at the origin: the 45-degree corner cut is
+    // 0.5 mm, so the cut edge is the line x + y = 1.5. A track starting at
+    // (1, 1), exactly the bounding-rect corner the old model stamped,
+    // clears the true cut edge by ~0.30 mm, over the 0.2 mm rule.
+    let comps = props("|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=U1");
+    let pads = shaped_pad_record("1", 1, 0, 0, 0.0, 0.0, 2.0, 2.0, 3);
+    let tracks = track_record(1, 1, 0xFFFF, 1.0, 1.0, 2.0, 2.0, 0.1);
+    let bytes = build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+        ("Tracks6", tracks),
+    ]);
+    let report = ExtractedBoard::altium_drc(&bytes).expect("drc runs");
+    assert!(
+        report.findings.is_empty(),
+        "the cut corner is bare board: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.gap_mm))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn track_through_the_octagon_flat_is_still_a_short() {
+    // Control: through the octagon body, so the exact-outline fix cannot pass
+    // by under-sizing the pad.
+    let comps = props("|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=U1");
+    let pads = shaped_pad_record("1", 1, 0, 0, 0.0, 0.0, 2.0, 2.0, 3);
+    let tracks = track_record(1, 1, 0xFFFF, -2.0, 0.0, 2.0, 0.0, 0.1);
+    let bytes = build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+        ("Tracks6", tracks),
+    ]);
+    let report = ExtractedBoard::altium_drc(&bytes).expect("drc runs");
+    assert_eq!(report.short_count(), 1, "octagon body copper still shorts");
+}
+
+#[test]
+fn octagon_chamfer_constant_is_pinned_by_the_measured_gap() {
+    // Under a deliberately wide 0.5 mm rule the corner track IS reported, and
+    // the measured gap pins the 0.25 chamfer ratio: for the 2 x 2 mm pad the
+    // cut edge is x + y = 1.5, so the track tip at (1, 1) sits
+    // 0.5 / sqrt(2) - 0.05 = 0.3036 mm off the copper. A bounding rectangle
+    // would read gap 0 (touching short); a regular octagon (cut 0.586 mm,
+    // edge x + y = 1.414) would read ~0.364 mm.
+    let comps = props("|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=U1");
+    let pads = shaped_pad_record("1", 1, 0, 0, 0.0, 0.0, 2.0, 2.0, 3);
+    let tracks = track_record(1, 1, 0xFFFF, 1.0, 1.0, 2.0, 2.0, 0.1);
+    let bytes = build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+        ("Tracks6", tracks),
+    ]);
+    let report = hauksbee_extract::drc::altium_drc::run(&bytes, Some(0.5)).expect("drc runs");
+    assert_eq!(report.short_count(), 0, "not touching under any reading");
+    let f = report
+        .clearance_violations()
+        .next()
+        .expect("0.30 mm gap violates the wide 0.5 mm rule");
+    assert!(
+        (f.gap_mm - 0.3036).abs() < 0.005,
+        "gap pins the 0.25 chamfer (expected ~0.3036), got {}",
+        f.gap_mm
+    );
+}
