@@ -241,7 +241,55 @@ fn pin_is_gate_by_name(p: &Pin) -> bool {
 /// to a power inductor and the input rail (the FET power net that is *not* the
 /// switch node) is distinct and not ground. Boards with no discrete switching
 /// stage (or whose topology is ambiguous) return an empty vector.
+/// A switching stage that was found in the graph but whose direction could not
+/// be established, so no buck/boost verdict was reached for it.
+///
+/// This exists because the abstention used to be a bare `continue`. A converter
+/// nobody could classify then produced exactly the same output as a board with
+/// no converter on it: nothing. The two are very different claims, and only one
+/// of them is a pass.
+#[derive(Debug, Clone)]
+pub struct ConverterAbstention {
+    /// The power inductor that anchors the unclassified stage.
+    pub inductor_ref: String,
+    /// The switch-node net name.
+    pub switch_node: String,
+    /// The rail on the FET side of the switch.
+    pub fet_side_rail: String,
+    /// The rail at the far end of the inductor.
+    pub inductor_far_rail: String,
+}
+
+impl ConverterAbstention {
+    /// The canonical user-facing sentence, naming the part and the unlock.
+    pub fn message(&self) -> String {
+        format!(
+            "converter: the switching stage around {} (switch node '{}', rails '{}' and '{}') \
+             was detected but not classified: the connectivity is reversible, so it is equally \
+             consistent with a buck and a boost, and neither rail name says which is the input. \
+             No ripple or duty verdict was reached for this stage. Rename the rails to carry \
+             their role (VIN / VOUT, or a *_IN / *_OUT suffix), or give the controller a model \
+             declaring its topology, to cover it.",
+            self.inductor_ref, self.switch_node, self.fet_side_rail, self.inductor_far_rail,
+        )
+    }
+}
+
+/// Detect the switching stages on a board. Stages whose direction could not be
+/// established are dropped; use [`detect_converters_with_abstentions`] when the
+/// caller reports coverage, so those stages are not silently indistinguishable
+/// from an absence of converters.
 pub fn detect_converters(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<ConverterStage> {
+    detect_converters_with_abstentions(board, lib).0
+}
+
+/// Detect the switching stages on a board, alongside every stage that was found
+/// but could not be given a direction.
+pub fn detect_converters_with_abstentions(
+    board: &ExtractedBoard,
+    lib: &ModelLibrary,
+) -> (Vec<ConverterStage>, Vec<ConverterAbstention>) {
+    let mut abstentions: Vec<ConverterAbstention> = Vec::new();
     let ground_ids: HashSet<i64> = board
         .nets
         .iter()
@@ -341,6 +389,13 @@ pub fn detect_converters(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<Conv
             // and/or output. Numeric voltage ordering alone is not evidence.
             let Some(topology) = classify_topology(&name_of(input_rail_id), &name_of(other_rail))
             else {
+                // Not "no converter here": a converter we could not orient. Say so.
+                abstentions.push(ConverterAbstention {
+                    inductor_ref: ind.reference.clone(),
+                    switch_node: name_of(cand_sw),
+                    fet_side_rail: name_of(input_rail_id),
+                    inductor_far_rail: name_of(other_rail),
+                });
                 continue;
             };
             let (input_rail, output_rail) = match topology {
@@ -370,7 +425,10 @@ pub fn detect_converters(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<Conv
             break; // one stage per inductor
         }
     }
-    stages
+    // An abstention for a stage we DID classify (a second inductor sharing the
+    // switch node, say) is noise, not a coverage hole.
+    abstentions.retain(|a| !stages.iter().any(|s| s.inductor_ref == a.inductor_ref));
+    (stages, abstentions)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -533,9 +591,84 @@ mod tests {
                 component("C1", "100uF", vec![("1", 3), ("2", 4)]),
             ],
         };
+        let (stages, abstentions) =
+            detect_converters_with_abstentions(&board, &ModelLibrary::builtin());
         assert!(
-            detect_converters(&board, &ModelLibrary::builtin()).is_empty(),
+            stages.is_empty(),
             "directionless synchronous connectivity is compatible with boost; abstain"
+        );
+        // The abstention must be visible. A bare skip here reads exactly like a
+        // board with no converter on it, which is a different claim entirely.
+        assert_eq!(abstentions.len(), 1, "the unclassified stage must be named");
+        let m = abstentions[0].message();
+        assert!(m.contains("L1"), "names the part: {m}");
+        assert!(m.contains("SW"), "names the switch node: {m}");
+        assert!(
+            m.contains("VIN") && m.contains("VOUT"),
+            "names the unlock: {m}"
+        );
+    }
+
+    #[test]
+    fn a_classified_stage_leaves_no_abstention() {
+        // The note must not fire on boards whose converters were understood, or
+        // it becomes noise that trains users to ignore it.
+        let component = |reference: &str, value: &str, pins: Vec<(&str, i64)>| -> Component {
+            Component {
+                reference: reference.into(),
+                value: value.into(),
+                lib_id: String::new(),
+                footprint: String::new(),
+                position: None,
+                layer: "F.Cu".into(),
+                properties: vec![],
+                dnp: false,
+                pins: pins
+                    .into_iter()
+                    .map(|(number, net)| Pin {
+                        number: number.into(),
+                        net: Some(net),
+                        function: String::new(),
+                        kind: String::new(),
+                        position: None,
+                    })
+                    .collect(),
+            }
+        };
+        let board = ExtractedBoard {
+            name: "named_sync_stage".into(),
+            nets: vec![
+                hauksbee_extract::Net {
+                    id: 1,
+                    name: "VOUT_3V3".into(),
+                },
+                hauksbee_extract::Net {
+                    id: 2,
+                    name: "SW".into(),
+                },
+                hauksbee_extract::Net {
+                    id: 3,
+                    name: "VIN_12V".into(),
+                },
+                hauksbee_extract::Net {
+                    id: 4,
+                    name: "GND".into(),
+                },
+            ],
+            components: vec![
+                component("L1", "10uH", vec![("1", 1), ("2", 2)]),
+                component("Q1", "NMOS", vec![("1", 2), ("2", 3)]),
+                component("Q2", "NMOS", vec![("1", 2), ("2", 4)]),
+                component("C1", "100uF", vec![("1", 3), ("2", 4)]),
+            ],
+        };
+        let (stages, abstentions) =
+            detect_converters_with_abstentions(&board, &ModelLibrary::builtin());
+        assert_eq!(stages.len(), 1, "named rails must classify");
+        assert_eq!(stages[0].topology, Topology::Buck);
+        assert!(
+            abstentions.is_empty(),
+            "a classified stage must not also be reported as uncovered: {abstentions:?}"
         );
     }
 }
