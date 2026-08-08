@@ -4,7 +4,7 @@
 //! unresolved open circuit. [`BindOutcome`] is that per-component verdict; the
 //! surrounding report aggregates them for the CLI and the resolve-rate stats.
 
-use hauksbee_ir::evidence::ModelSource;
+use hauksbee_ir::evidence::{ModelSource, ModelSourceTier};
 use hauksbee_models::Confidence;
 
 /// What a component turned into during binding.
@@ -24,6 +24,34 @@ pub enum BindOutcome {
     Skipped { reason: String },
     /// Could not be resolved or stamped; left as an open circuit.
     Unresolved { reason: String },
+}
+
+/// Whether a stamped device kind is an ACTIVE part, whose generic fallback
+/// model would carry invented breakdown/current/power ratings that a stress
+/// verdict can cite. Passives (resistor, capacitor, inductor) are excluded: their
+/// fallbacks carry no such ratings and bind on nearly every board.
+fn is_active_fallback_device(device: &str) -> bool {
+    let d = device.to_ascii_lowercase();
+    [
+        "nmos",
+        "pmos",
+        "mosfet",
+        "fet",
+        "jfet",
+        "bjt",
+        "npn",
+        "pnp",
+        "diode",
+        "zener",
+        "led",
+        "vreg",
+        "regulator",
+        "opamp",
+        "comparator",
+        "switch",
+    ]
+    .iter()
+    .any(|k| d.contains(k))
 }
 
 impl BindOutcome {
@@ -80,6 +108,57 @@ pub struct BindReport {
 impl BindReport {
     pub fn push(&mut self, row: BindRow) {
         self.rows.push(row);
+    }
+
+    /// One warning per **active** component whose device parameters and safety
+    /// ratings come from a generic estimated-fallback model rather than a real
+    /// part.
+    ///
+    /// These entries exist so an unmodeled power FET in a recognised package
+    /// binds to something and can be simulated at all, but their numbers are
+    /// invented: the generic power-FET catch-alls carry a nominal 30 V / 20 A /
+    /// 30 W and a 20 mOhm Rds_on that belong to no datasheet. A verdict resting
+    /// on them looked exactly like a verdict resting on a vendor SPICE model,
+    /// with nothing at runtime to tell the two apart. Naming them puts the
+    /// invented basis on the record.
+    ///
+    /// Scoped to active devices ([`is_active_fallback_device`]) on purpose.
+    /// Generic passive fallbacks (`c_fallback`, `r_fallback`) carry no invented
+    /// breakdown ratings for a verdict to rest on, and they bind on nearly every
+    /// board, so warning about them would bury this channel in noise. Their
+    /// provenance is already on the evidence block.
+    ///
+    /// Deduped and order-stable, so this can be chained straight into a CI
+    /// report's `coverage_warnings`. Empty on a board with no fallback binding.
+    pub fn estimated_fallback_warnings(&self) -> Vec<String> {
+        let mut seen = std::collections::BTreeSet::new();
+        self.non_ignored()
+            .filter(|r| {
+                r.source
+                    .as_ref()
+                    .is_some_and(|s| s.tier() == ModelSourceTier::EstimatedFallback)
+            })
+            .filter(|r| match &r.outcome {
+                BindOutcome::Analog { device } | BindOutcome::Behavioral { device } => {
+                    is_active_fallback_device(device)
+                }
+                _ => false,
+            })
+            .map(|r| {
+                format!(
+                    "models: {} ({}) bound to the generic fallback model '{}', whose ratings \
+                     and device parameters are estimates for the package class, not values \
+                     from any datasheet. Any verdict citing {} rests on invented numbers. \
+                     Add a model entry matching the part (value_re or mpn_re), or put the \
+                     manufacturer part number on the component, to replace them.",
+                    r.reference,
+                    r.value,
+                    r.model_id.as_deref().unwrap_or("(unnamed)"),
+                    r.reference,
+                )
+            })
+            .filter(|m| seen.insert(m.clone()))
+            .collect()
     }
 
     /// Components that are not deliberately ignored.
@@ -305,6 +384,95 @@ mod resolved_count_tests {
             warning: None,
             guesses: Vec::new(),
         }
+    }
+
+    /// A bind row carrying a model source at `tier`.
+    fn sourced_row(reference: &str, model_id: &str, tier: ModelSourceTier) -> BindRow {
+        use hauksbee_ir::evidence::{ModelLayer, ModelUncertainty, ModelValidation};
+        BindRow {
+            reference: reference.to_string(),
+            value: "NMOS".to_string(),
+            model_id: Some(model_id.to_string()),
+            confidence: Confidence::Exact,
+            source: Some(
+                ModelSource::new(
+                    tier,
+                    ModelLayer::Builtin,
+                    "mosfet.toml",
+                    ModelValidation::Unvalidated,
+                    vec![ModelUncertainty::Unknown {
+                        parameter: "rds_on".to_string(),
+                        reason: "generic package-class estimate".to_string(),
+                    }],
+                )
+                .expect("valid source"),
+            ),
+            outcome: BindOutcome::Analog {
+                device: "nmos".into(),
+            },
+            warning: None,
+            guesses: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn an_estimated_fallback_binding_raises_a_named_warning() {
+        // The generic power-FET catch-alls carry a 30 V / 20 A / 30 W rating and
+        // a 20 mOhm Rds_on that belong to no datasheet. A verdict resting on
+        // them used to be indistinguishable at runtime from one resting on a
+        // vendor SPICE model.
+        let mut report = BindReport::default();
+        report.push(sourced_row(
+            "Q3",
+            "generic_nmos_power_pkg",
+            ModelSourceTier::EstimatedFallback,
+        ));
+        let warnings = report.estimated_fallback_warnings();
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        let w = &warnings[0];
+        assert!(w.contains("Q3"), "names the part: {w}");
+        assert!(w.contains("generic_nmos_power_pkg"), "names the model: {w}");
+        assert!(
+            w.contains("not") && w.contains("datasheet"),
+            "says the numbers are invented: {w}"
+        );
+        assert!(
+            w.contains("mpn_re") || w.contains("part number"),
+            "names the unlock: {w}"
+        );
+    }
+
+    #[test]
+    fn generic_passive_fallbacks_do_not_flood_the_channel() {
+        // c_fallback / r_fallback bind on nearly every board and carry no
+        // invented breakdown ratings for a verdict to rest on. Warning about
+        // them would bury the FET case this exists for.
+        let mut report = BindReport::default();
+        let mut cap = sourced_row("C1", "c_fallback", ModelSourceTier::EstimatedFallback);
+        cap.outcome = BindOutcome::Analog {
+            device: "capacitor".into(),
+        };
+        report.push(cap);
+        let mut res = sourced_row("R1", "r_fallback", ModelSourceTier::EstimatedFallback);
+        res.outcome = BindOutcome::Analog {
+            device: "resistor".into(),
+        };
+        report.push(res);
+        assert!(report.estimated_fallback_warnings().is_empty());
+    }
+
+    #[test]
+    fn a_real_model_binding_raises_no_warning() {
+        // The warning must stay off boards whose parts resolved properly, or it
+        // is noise on every report.
+        let mut report = BindReport::default();
+        report.push(sourced_row("Q1", "irlml6344", ModelSourceTier::VendorSpice));
+        report.push(sourced_row(
+            "Q2",
+            "bss138",
+            ModelSourceTier::DatasheetDerived,
+        ));
+        assert!(report.estimated_fallback_warnings().is_empty());
     }
 
     #[test]

@@ -376,9 +376,19 @@ fn uncommenting_the_scaffolded_rail_blocks_gates_for_real() {
             "{tag}: the scaffold's own rail checks must be falsifiable, got {:?}\nspec:\n{spec_text}",
             result.coverage_warnings
         );
+        // No co-sim coverage hole: the scaffold must actually exercise what it
+        // asserts. Model-provenance holes are a different class and are expected
+        // here (the hollow_watchy fixture's MBR0530 diodes bind to the generic
+        // signal-diode fallback), so they are excluded rather than silencing the
+        // whole channel.
+        let cosim_holes: Vec<&String> = result
+            .coverage_warnings
+            .iter()
+            .filter(|w| !w.starts_with("models:"))
+            .collect();
         assert!(
-            !human.contains("COVERAGE HOLE"),
-            "{tag}: no coverage hole in the report, got:\n{human}"
+            cosim_holes.is_empty(),
+            "{tag}: no co-sim coverage hole in the report, got {cosim_holes:?}\n{human}"
         );
         // Every scaffolded supply is behavioral, which is what makes the rail
         // checks above capable of failing.
