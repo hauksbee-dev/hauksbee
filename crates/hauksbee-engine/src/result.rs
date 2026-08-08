@@ -1736,10 +1736,13 @@ impl JsonReport {
     ) -> Result<(), hauksbee_ir::evidence::EvidenceError> {
         if let Some(findings) = &self.findings {
             let mut maps = evidence.maps_for_findings(findings)?;
-            if !maps.is_empty() || !run_level.is_empty() {
-                maps.extend(run_level);
-                self.evidence = maps;
-            }
+            maps.extend(run_level);
+            // Always replace, even with an empty result: leaving the per-net
+            // binding-completeness maps in place would let ANY unresolved
+            // passive invalidate a clean specialist report, when binding
+            // completeness enters these verdicts only through the
+            // verdict-critical bind gate.
+            self.evidence = maps;
         }
         Ok(())
     }

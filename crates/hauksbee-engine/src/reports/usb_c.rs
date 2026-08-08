@@ -18,6 +18,7 @@ pub fn emit(
     mode: OutputMode,
     strict: bool,
     inputs: &[JsonInputEvidence],
+    blockers: &[String],
 ) -> anyhow::Result<()> {
     let report = crate::usb_c_report(board);
     match &report {
@@ -58,7 +59,9 @@ pub fn emit(
         let headline = &report.as_ref().expect("serious report exists").headline;
         super::strict_gate_exit(mode, &[format!("usb_c_cc {headline}")]);
     }
-    if strict && evidence.is_undermined() {
+    // Same rule as the other model-dependent surfaces: strict exits 3 for
+    // unbound verdict-critical parts, not for any open passive's per-net map.
+    if strict && !blockers.is_empty() {
         std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())
