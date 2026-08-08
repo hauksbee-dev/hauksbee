@@ -56,9 +56,15 @@
 //!    or the edge of a partial pour has no reference there, its real impedance
 //!    rises steeply as the return current detours, and the formula's output is
 //!    not an estimate of anything. So for a differential pair the assumption is
-//!    checked against the copper: points along both legs (each segment's
-//!    endpoints and midpoint) are tested against the fill polygons of the pours
-//!    on the adjacent copper layer. Where copper is absent, the check reports
+//!    checked against the copper: points along both legs, at a half-millimetre
+//!    pitch, are tested against the fill polygons of the pours on the adjacent
+//!    copper layer. Samples that fall in a via's anti-pad are excused (a plane's
+//!    anti-pads are a designed feature, and a pair's segments terminate at its
+//!    layer-transition vias, so endpoint samples land in one systematically),
+//!    and the criterion is a CONTIGUOUS reference-less run of at least 2 mm along
+//!    one leg, which is wider than any plausible anti-pad, so a scatter of
+//!    designed clearance holes cannot add up to a void. Where copper is genuinely
+//!    absent over such a run, the check reports
 //!    "reference missing under trace", names the span, and says what would
 //!    unlock a confident answer, instead of printing a Zdiff. Where the
 //!    reference cannot be established either way (no pour on the adjacent layer,
@@ -570,9 +576,7 @@ fn check_diff_pairs(board: &ExtractedBoard, root: &List, stackup: &Stackup, repo
         // produces; where it is not, name the span instead.
         let reference = reference_plane_under_pair(root, pid, mid);
         if let ReferencePlane::Missing(missing) = &reference {
-            emit_reference_missing(
-                &pname, &mname, class, w, s, stackup, missing, report,
-            );
+            emit_reference_missing(&pname, &mname, class, w, s, stackup, missing, report);
             continue;
         }
         // Solid, or unverifiable: report the Zdiff as before. A verified plane
@@ -691,15 +695,7 @@ fn judge(
     // control these nets (e.g. a full-speed USB keyboard), so a deviation is not
     // a defect. Report the computed impedance as an auditable info note. Only a
     // board that declares it is impedance-controlled can produce a finding.
-    if stackup.source == StackupSource::Default || !stackup.impedance_controlled {
-        let why = if stackup.source == StackupSource::Default {
-            stackup.describe()
-        } else {
-            format!(
-                "board does not declare controlled impedance (dielectric_constraints no); {}",
-                stackup.describe()
-            )
-        };
+    if let Some(why) = confidence_caveat(stackup) {
         report.findings.push(SiFinding {
             check: SiCheck::ControlledImpedance,
             severity: SiSeverity::Info,
@@ -821,8 +817,8 @@ impl MissingReference {
     /// The span, as a report reads it.
     fn describe_span(&self) -> String {
         format!(
-            "{:.2} mm of routing between ({:.2}, {:.2}) and ({:.2}, {:.2}) mm, {} of {} sampled \
-             points with no {} copper beneath",
+            "~{:.2} mm of the pair's routing, between ({:.2}, {:.2}) and ({:.2}, {:.2}) mm, {} of \
+             {} sampled points with no {} copper beneath",
             self.length_mm,
             self.from.0,
             self.from.1,
@@ -835,14 +831,51 @@ impl MissingReference {
     }
 }
 
+/// Sampling pitch (mm) along a routed segment. Fine enough to locate a void's
+/// extent to a fraction of a millimetre, coarse enough that a 20 mm run costs
+/// forty polygon tests rather than the twenty thousand a per-mil walk would.
+/// Every segment gets at least its endpoints and midpoint regardless.
+const SAMPLE_PITCH_MM: f64 = 0.5;
+
+/// Cap on samples per segment, so one very long segment on a large board cannot
+/// make this quadratic in board size.
+const MAX_SAMPLES_PER_SEG: usize = 64;
+
+/// Extra radius (mm) beyond a via's own barrel added to reach the edge of its
+/// anti-pad in a plane. A plane's anti-pads are a *designed* feature present on
+/// every routed board: the copper is deliberately cleared so the via can pass
+/// through. Sampling into one is not evidence of a missing reference, and
+/// because a differential pair's segments *terminate* at its layer-transition
+/// vias, endpoint samples land in one systematically. Watchy is the board that
+/// proved it: all seven of its "uncovered" samples were within 0.36 mm of a via
+/// centre, four of them exactly on one, and its In2.Cu plane is in fact solid
+/// under the pair. 0.3 mm is a generous but bounded anti-pad clearance.
+const VIA_ANTIPAD_MARGIN_MM: f64 = 0.3;
+
+/// Minimum CONTIGUOUS reference-less run (mm), along one leg, before the check
+/// abstains.
+///
+/// Contiguous, not summed: what degrades a pair's impedance is a stretch with no
+/// return path under it, and a dozen pinholes scattered along a 30 mm route are
+/// not equivalent to one 12 mm gap. Summing was the second false-positive Watchy
+/// produced after the via fix: four samples scattered around a test-point / pad
+/// cluster summed to 1.86 mm and read as a void, when each was an individual
+/// anti-pad in an otherwise continuous plane.
+///
+/// 2 mm is set above the widest plausible anti-pad. Pad clearances in a plane run
+/// to roughly a millimetre and a half across even for a large through-hole pad,
+/// and traces cross anti-pad clusters and thermal-relief spokes routinely with no
+/// impedance consequence worth a report. A plane split, a power-domain boundary,
+/// or the edge of a partial pour, the things that actually force the return
+/// current on a detour, are all far wider than this.
+const MIN_REFERENCE_VOID_MM: f64 = 2.0;
+
 /// Verify that solid reference copper exists under both legs of a pair.
 ///
-/// Sampling pitch: each routed segment's two endpoints plus its midpoint. A void
-/// large enough to matter to a controlled-impedance pair is a plane split or an
-/// anti-pad cluster, i.e. tens of thousandths of an inch across at minimum,
-/// which no plausible segmentation hides between three samples of one segment;
-/// sampling per-mil instead would multiply the polygon tests by a thousand for
-/// no additional finding.
+/// Samples both legs at [`SAMPLE_PITCH_MM`], excuses samples that fall in a via
+/// anti-pad, and abstains only when the reference-less routed length reaches
+/// [`MIN_REFERENCE_VOID_MM`] over a contiguous run. All three guards exist to
+/// keep a designed plane feature from reading as a plane defect.
 fn reference_plane_under_pair(root: &List, pid: i64, mid: i64) -> ReferencePlane {
     let mut segs = net_segments(root, pid);
     segs.extend(net_segments(root, mid));
@@ -879,37 +912,64 @@ fn reference_plane_under_pair(root: &List, pid: i64, mid: i64) -> ReferencePlane
 
     // Sample the segments on the routing layer only: a via-dropped stub on
     // another layer is not the microstrip run being modelled.
+    let antipads = via_antipads(root);
     let mut total = 0usize;
     let mut uncovered: Vec<(f64, f64)> = Vec::new();
-    let mut uncovered_len = 0.0;
+    let mut uncovered_len = 0.0_f64;
     for s in segs.iter().filter(|s| s.layer == route_layer) {
-        let samples = [
-            (s.ax, s.ay),
-            ((s.ax + s.bx) / 2.0, (s.ay + s.by) / 2.0),
-            (s.bx, s.by),
-        ];
-        let mut seg_lost = false;
-        for (x, y) in samples {
+        let len = s.length();
+        // At least the endpoints and the midpoint; more on a long segment, so a
+        // void's extent is located rather than merely detected.
+        let steps = ((len / SAMPLE_PITCH_MM).ceil() as usize)
+            .clamp(2, MAX_SAMPLES_PER_SEG)
+            .max(2);
+        // Length each sample stands for along this segment.
+        let step_mm = len / steps as f64;
+        let mut seg_sampled = 0usize;
+        let mut run = 0usize;
+        let mut best_run = 0usize;
+        for i in 0..=steps {
+            let t = i as f64 / steps as f64;
+            let (x, y) = (s.ax + t * (s.bx - s.ax), s.ay + t * (s.by - s.ay));
+            // A sample inside a via's anti-pad carries no information about the
+            // plane: the copper there is cleared by design.
+            if antipads
+                .iter()
+                .any(|(vx, vy, r)| (x - vx).powi(2) + (y - vy).powi(2) <= r * r)
+            {
+                continue;
+            }
+            seg_sampled += 1;
             total += 1;
-            if !fills
+            if fills
                 .iter()
                 .any(|poly| crate::gerber::geo::point_in_polygon(x, y, poly))
             {
+                run = 0;
+            } else {
                 uncovered.push((x, y));
-                seg_lost = true;
+                run += 1;
+                best_run = best_run.max(run);
             }
         }
-        if seg_lost {
-            uncovered_len += s.length();
+        // The longest unbroken reference-less stretch on this segment. The worst
+        // single stretch anywhere on the pair is what the criterion tests, so a
+        // scatter of pinholes cannot add up to a void.
+        if seg_sampled > 0 {
+            uncovered_len = uncovered_len.max(best_run as f64 * step_mm);
         }
     }
 
     if total == 0 {
         return ReferencePlane::Unverified(format!(
-            "no sampleable {route_layer} routing on the pair"
+            "no sampleable {route_layer} routing on the pair outside its via anti-pads"
         ));
     }
     if uncovered.is_empty() {
+        return ReferencePlane::Solid { layer: ref_layer };
+    }
+    // A scatter of pinholes is not a return-path detour.
+    if uncovered_len < MIN_REFERENCE_VOID_MM {
         return ReferencePlane::Solid { layer: ref_layer };
     }
 
@@ -935,6 +995,23 @@ fn reference_plane_under_pair(root: &List, pid: i64, mid: i64) -> ReferencePlane
         from,
         to,
     })
+}
+
+/// Every via's anti-pad in a plane, as `(x, y, radius)` in board mm: the barrel
+/// radius plus [`VIA_ANTIPAD_MARGIN_MM`]. Buried/blind spans are not
+/// distinguished, which is the conservative direction here (excusing one sample
+/// too many only ever loses an abstention, never invents one).
+fn via_antipads(root: &List) -> Vec<(f64, f64, f64)> {
+    let mut out = Vec::new();
+    for via in root.find_all("via") {
+        let Some(at) = via.find("at") else { continue };
+        let (Some(x), Some(y)) = (at.arg_f64(0), at.arg_f64(1)) else {
+            continue;
+        };
+        let size = via.find_f64("size").unwrap_or(0.0).max(0.0);
+        out.push((x, y, size / 2.0 + VIA_ANTIPAD_MARGIN_MM));
+    }
+    out
 }
 
 /// The copper layer a microstrip trace on `route_layer` references: the next
@@ -975,7 +1052,10 @@ fn plane_fills(root: &List, layer: &str) -> Vec<Vec<(f64, f64)>> {
                     .any(|n| n == layer || (n.contains('*') && layer.ends_with(".Cu")))
             })
             .unwrap_or(false)
-            || zone.find_value("layer").map(|l| l == layer).unwrap_or(false);
+            || zone
+                .find_value("layer")
+                .map(|l| l == layer)
+                .unwrap_or(false);
         if !on_layer {
             continue;
         }
@@ -1018,9 +1098,10 @@ fn emit_reference_missing(
     // A board that declares controlled impedance and then routes a controlled
     // pair across a plane void has a real defect, and the declaration is what
     // makes us confident enough to say so. Without the declaration this is the
-    // same informational note the rest of the module emits.
-    let confident = stackup.source == StackupSource::Board && stackup.impedance_controlled;
-    let severity = if confident {
+    // same informational note the rest of the module emits, carrying the same
+    // explanation of why it is only informational.
+    let caveat = confidence_caveat(stackup);
+    let severity = if caveat.is_none() {
         SiSeverity::Medium
     } else {
         SiSeverity::Info
@@ -1040,11 +1121,31 @@ fn emit_reference_missing(
             missing.describe_span(),
             w,
             s,
-            stackup.describe(),
+            caveat.unwrap_or_else(|| stackup.describe()),
         ),
         refs: vec![],
         nets: vec![pname.to_string(), mname.to_string()],
     });
+}
+
+/// Why an impedance statement about this board can only be informational, or
+/// `None` when both confidence gates are met (a file-derived stackup AND the
+/// board's own declaration that these nets are controlled).
+///
+/// Shared by [`judge`] and [`emit_reference_missing`] so the two never explain
+/// the same gate differently: a reader comparing an out-of-band note with an
+/// abstention on the same board must see the same reason for both.
+fn confidence_caveat(stackup: &Stackup) -> Option<String> {
+    if stackup.source == StackupSource::Default {
+        return Some(stackup.describe());
+    }
+    if !stackup.impedance_controlled {
+        return Some(format!(
+            "board does not declare controlled impedance (dielectric_constraints no); {}",
+            stackup.describe()
+        ));
+    }
+    None
 }
 
 // ===========================================================================
