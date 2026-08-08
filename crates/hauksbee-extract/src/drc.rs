@@ -581,11 +581,19 @@ impl DrcReport {
     /// cannot audit a rule they were never told was applied.
     pub fn suppression_note(&self) -> Option<String> {
         let Some(n) = self.zone_pad_overlaps_suppressed else {
-            // Predates the accounting: whether the class was suppressed is
-            // unknown, which is worth saying and is not the same as "none were".
+            // Never measured. Two ways to get here, and the sentence has to cover
+            // both without asserting either: a payload serialised before this
+            // counter existed, or a report carrying no copper DRC pass at all (a
+            // netlist-only input, or a default-constructed report). Both mean "we
+            // do not know", which is not the claim "none were suppressed".
             return Some(
-                "drc: this report predates the zone-versus-pad suppression accounting, so                  whether that finding class was suppressed on this run is unknown. Re-run to                  find out."
-                    .to_string(),
+                concat!(
+                    "drc: whether the zone-versus-pad finding class was suppressed is not ",
+                    "recorded for this result, so it is unknown rather than known to be none. ",
+                    "Either the report predates the accounting or it carries no copper DRC ",
+                    "pass. Re-run the DRC on the layout to find out."
+                )
+                .to_string(),
             );
         };
         (n > 0).then(|| {

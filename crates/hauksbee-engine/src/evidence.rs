@@ -1147,7 +1147,10 @@ fn classify_reader_note(
             Subject::new(&key, "the binder's model and rating coverage"),
             Scope::Board,
             note,
-            "give the part a model carrying the missing rating, or a footprint / BOM line              naming its package, then re-run",
+            concat!(
+                "give the part a model carrying the missing rating, or a footprint / BOM ",
+                "line naming its package, then re-run"
+            ),
         ));
         return Ok(());
     }

@@ -563,7 +563,7 @@ fn a_suppressed_zone_pad_class_is_disclosed_not_silently_dropped() {
 }
 
 #[test]
-fn a_report_predating_the_accounting_says_so_rather_than_claiming_none() {
+fn an_unmeasured_suppression_count_reads_as_unknown_not_none() {
     // Some(0) means "measured, nothing suppressed". None means the payload predates
     // the counter, and the run behind it DID suppress the class, so defaulting to
     // zero would assert something that run never measured.
@@ -576,7 +576,20 @@ fn a_report_predating_the_accounting_says_so_rather_than_claiming_none() {
         .suppression_note()
         .expect("an unmeasured run must not read as a clean one");
     assert!(note.contains("unknown"), "{note}");
-    assert!(note.contains("predates"), "{note}");
+    // The sentence must cover both ways of getting here (an old payload, or a
+    // result with no copper DRC pass) without asserting either.
+    assert!(
+        note.contains("predates") && note.contains("no copper DRC pass"),
+        "{note}"
+    );
+
+    // A default-constructed report is the "no DRC pass" case, not a clean one.
+    assert!(
+        hauksbee_extract::DrcReport::default()
+            .suppression_note()
+            .is_some_and(|n| n.contains("unknown")),
+        "a report with no DRC pass must not read as measured-and-clean"
+    );
 }
 
 #[test]
