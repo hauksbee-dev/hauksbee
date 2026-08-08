@@ -51,6 +51,19 @@ pub fn evidence_findings_with_gate(
         .collect()
 }
 
+/// GitHub error annotation for unbound verdict-critical parts, so the
+/// annotation surface agrees with the gate-grade JUnit/SARIF entry the same
+/// blockers produce. No-op outside GitHub Actions.
+pub fn github_blocker_annotation(blockers: &[String]) {
+    if blockers.is_empty() || std::env::var_os("GITHUB_ACTIONS").is_none() {
+        return;
+    }
+    eprintln!(
+        "::error title=hauksbee evidence undermined::{}",
+        crate::result::inconclusive_verdict(blockers)
+    );
+}
+
 /// GitHub annotations for evidence that is not entitled to a clean result.
 pub fn github_evidence_annotations(maps: &[hauksbee_ir::evidence::EvidenceMap]) {
     github_evidence_annotations_with_gate(maps, |_| true)
