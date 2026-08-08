@@ -29,6 +29,7 @@
 //! Long-form how-and-why: docs/how-and-why/hauksbee-extract/gerber.md.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use rstar::{RTree, RTreeObject, AABB};
 
@@ -464,11 +465,17 @@ pub fn reconstruct(
     // it would mask exactly the defect a connectivity reader exists to see.
     // On a stripped film no primitive carries a name and this pass does
     // nothing, leaving the geometric reconstruction bit-for-bit alone.
+    // A net-tie object carries SEVERAL names (`%TO.N,A,B*%`); each name is
+    // unioned through the object itself, which is exactly what a net tie is.
+    // The same co-occurrence feeds `tied_names`, so the naming pass below can
+    // tell a film-declared tie from a genuine geometric conflict.
     let mut x2_net_first: HashMap<&str, usize> = HashMap::new();
     let mut x2_fragment_joins: usize = 0;
+    let mut tied_names: Vec<(Arc<str>, Arc<str>)> = Vec::new();
     for gi in 0..prims.len() {
-        if let Some(name) = prims[gi].attrs.net.as_deref() {
-            match x2_net_first.get(name) {
+        let names = prims[gi].attrs.net_names();
+        for name in names {
+            match x2_net_first.get(&**name) {
                 Some(&first) => {
                     if dsu.find(first) != dsu.find(gi) {
                         x2_fragment_joins += 1;
@@ -479,6 +486,9 @@ pub fn reconstruct(
                     x2_net_first.insert(name, gi);
                 }
             }
+        }
+        for pair in names.windows(2) {
+            tied_names.push((pair[0].clone(), pair[1].clone()));
         }
     }
     let x2_nets_present = !x2_net_first.is_empty();
@@ -525,12 +535,24 @@ pub fn reconstruct(
     // synthetic `NET_n` names, exactly as before.
     let mut net_x2_names: HashMap<i64, std::collections::BTreeSet<&str>> = HashMap::new();
     for gi in 0..prims.len() {
-        if let Some(name) = prims[gi].attrs.net.as_deref() {
+        for name in prims[gi].attrs.net_names() {
             net_x2_names
                 .entry(net_of_prim[gi])
                 .or_default()
                 .insert(name);
         }
+    }
+    // Name-level tie groups: names that co-occur on ONE object are declared
+    // one conductor by the film (a net tie), so a reconstructed net carrying
+    // exactly the members of a tie group is film-consistent, not a conflict.
+    let name_ids: HashMap<&str, usize> = x2_net_first
+        .keys()
+        .enumerate()
+        .map(|(i, k)| (*k, i))
+        .collect();
+    let mut name_dsu = Dsu::new(name_ids.len());
+    for (a, b) in &tied_names {
+        name_dsu.union(name_ids[&**a], name_ids[&**b]);
     }
     let mut x2_named_nets = 0usize;
 
@@ -556,25 +578,32 @@ pub fn reconstruct(
         .copied()
         .map(|id| {
             let name = match net_x2_names.get(&id) {
-                Some(names) if names.len() == 1 => {
-                    x2_named_nets += 1;
-                    (*names.iter().next().unwrap()).to_string()
-                }
                 Some(names) => {
-                    notes.push(format!(
-                        "the reconstructed copper of net NET_{id} carries {} different X2 net \
-                         names ({}): the geometry connects copper the film assigns to separate \
-                         nets. This is either a real short in the layout or an over-merge in \
-                         the geometric reconstruction; the net keeps its synthetic name so the \
-                         disagreement stays visible.",
-                        names.len(),
-                        names
-                            .iter()
-                            .map(|n| format!("\"{n}\""))
-                            .collect::<Vec<_>>()
-                            .join(", "),
-                    ));
-                    format!("NET_{id}")
+                    let groups: std::collections::HashSet<usize> =
+                        names.iter().map(|n| name_dsu.find(name_ids[n])).collect();
+                    if groups.len() == 1 {
+                        // Film-consistent: one name, or several names the film
+                        // itself ties on one object. A tie keeps every member
+                        // visible in the label.
+                        x2_named_nets += 1;
+                        names.iter().copied().collect::<Vec<_>>().join("/")
+                    } else {
+                        notes.push(format!(
+                            "the reconstructed copper of net NET_{id} carries {} different X2 \
+                             net names ({}) that no net-tie object declares connected: the \
+                             geometry joins copper the film assigns to separate nets. This is \
+                             either a real short in the layout or an over-merge in the \
+                             geometric reconstruction; the net keeps its synthetic name so the \
+                             disagreement stays visible.",
+                            names.len(),
+                            names
+                                .iter()
+                                .map(|n| format!("\"{n}\""))
+                                .collect::<Vec<_>>()
+                                .join(", "),
+                        ));
+                        format!("NET_{id}")
+                    }
                 }
                 None if Some(id) == gnd_net => "GND".to_string(),
                 None => format!("NET_{id}"),
@@ -605,23 +634,26 @@ pub fn reconstruct(
         .filter(|&gi| prims[gi].attrs.pin.is_some())
         .collect();
     let x2_pins_present = !x2_pin_flashes.is_empty();
-    // X2 attributes are per FILM, not per job: a layer whose film carries pin
-    // identity accounts for every pad on itself (a flash there without `.P`
-    // is, by that film's own word, not a component pad), but a legacy film
-    // mixed into the same job said nothing, so ITS flashes still go through
-    // the geometric window. Gating the whole job on one attributed film would
-    // silently delete every pad the unattributed films carry.
-    let x2_layers: std::collections::HashSet<usize> =
-        x2_pin_flashes.iter().map(|&gi| prim_layer[gi]).collect();
-    let geometric_flashes: Vec<usize> = if x2_pins_present {
-        flash_idxs
-            .iter()
-            .copied()
-            .filter(|&gi| !x2_layers.contains(&prim_layer[gi]))
-            .collect()
-    } else {
-        flash_idxs.clone()
-    };
+    // Every flash the film did not bind by `.P` keeps its geometric fallback,
+    // UNLESS the film stated what the flash is and it is not a component pad
+    // (a fiducial, an antipad, a washer; via flashes were already classified
+    // as vias at parse time). Absence of `.P` is NOT a non-pad assertion: a
+    // partially attributed film (a merged film, an exporter that attributes
+    // only a subset of its pads) must not have its bare pads silently
+    // deleted just because another flash somewhere carried pin identity. On
+    // a stripped job every flash lands here: the pre-X2 path, unchanged.
+    let geometric_flashes: Vec<usize> = flash_idxs
+        .iter()
+        .copied()
+        .filter(|&gi| {
+            prims[gi].attrs.pin.is_none()
+                && !prims[gi]
+                    .attrs
+                    .function
+                    .as_ref()
+                    .is_some_and(super::rs274x::function_is_nonpad)
+        })
+        .collect();
 
     // Index the placed components so each flash can find its nearest one.
     struct CompLeaf {
@@ -1454,7 +1486,7 @@ mod tests {
             kind: PrimKind::Flash,
             attrs: X2Attrs {
                 pin: Some((refdes.into(), pin.into())),
-                net: Some(net.into()),
+                net: Some(Arc::from(vec![Arc::from(net)])),
                 ..Default::default()
             },
         }
@@ -1567,6 +1599,62 @@ mod tests {
             !stats.notes.iter().any(|n| n.contains("X2 net names alone")),
             "geometry-backed joins are not film-only joins"
         );
+    }
+
+    #[test]
+    fn a_net_tie_object_ties_its_nets_without_a_phantom_conflict() {
+        // A net-tie flash carries SEVERAL names (`%TO.N,A,B*%`): copper that
+        // belongs to both nets by design. The tie must union A and B, the
+        // merged net keeps both names visible ("A/B"), and NO conflict note
+        // fires, the film itself declared the join. (Collapsing the names to
+        // one opaque "A,B" string neither unioned them nor read as a tie.)
+        let tie = CopperPrim {
+            shape: Shape::disc(5.0, 0.0, 0.3),
+            kind: PrimKind::Flash,
+            attrs: X2Attrs {
+                net: Some(Arc::from(vec![Arc::from("A"), Arc::from("B")])),
+                ..Default::default()
+            },
+        };
+        let layer = vec![
+            x2_pad(0.0, 0.0, "R1", "1", "A"),
+            x2_pad(10.0, 0.0, "R2", "1", "B"),
+            tie,
+        ];
+        let (board, stats) = reconstruct("t", vec![layer], vec![], vec![]);
+        assert_eq!(stats.n_nets, 1, "the tie object unions A and B");
+        assert_eq!(board.nets[0].name, "A/B", "both tied names stay visible");
+        assert!(
+            !stats.notes.iter().any(|n| n.contains("separate nets")),
+            "a film-declared tie is not a conflict: {:?}",
+            stats.notes
+        );
+    }
+
+    #[test]
+    fn a_partially_attributed_film_keeps_geometric_binding_for_bare_pads() {
+        // One film where SOME pads carry %TO.P and one pad flash does not
+        // (partial X2: merged films, subset-attributing exporters). Absence
+        // of .P is not a non-pad assertion, so the bare flash must still
+        // bind geometrically instead of silently vanishing.
+        let layer = vec![
+            x2_pad(0.0, 0.0, "R1", "1", "VCC"),
+            cap(20.0, 0.0, 20.0, 0.0, 0.3, PrimKind::Flash),
+        ];
+        let (board, stats) = reconstruct(
+            "t",
+            vec![layer],
+            vec![],
+            vec![placement("R1", 0.0, 0.0), placement("R2", 20.0, 0.0)],
+        );
+        assert_eq!(stats.x2_bound_pads, 1);
+        let by_ref: HashMap<&str, usize> = board
+            .components
+            .iter()
+            .map(|c| (c.reference.as_str(), c.pins.len()))
+            .collect();
+        assert_eq!(by_ref["R1"], 1);
+        assert_eq!(by_ref["R2"], 1, "the bare pad on the SAME film still binds");
     }
 
     #[test]
