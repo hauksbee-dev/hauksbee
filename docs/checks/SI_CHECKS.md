@@ -414,13 +414,63 @@ The single-ended set is deliberately narrow (RF feedlines only): an ordinary GPI
 or a bare `CLK` is **not** assumed to be a 50 Ω controlled line, so it is never
 judged.
 
-### The two honesty gates (and what a board that declares control gets)
+### The three honesty gates (and what a board that declares control gets)
 
-A deviation becomes a **finding** only when BOTH hold. Anything short is an
-`info` note carrying the computed impedance and the deviation:
+A deviation becomes a **finding** only when gates 1 and 3 hold. Anything short is
+an `info` note carrying the computed impedance and the deviation. Gate 2 is a
+veto rather than a severity condition: when it fails outright there is no
+impedance to report at all, only the span where the reference plane is absent.
 
 1. **A real file stackup** (not the default assumption).
-2. **Declared impedance-control intent**: KiCad's
+2. **A reference plane verified under the trace.** Every formula above takes `H`,
+   the height to a reference plane, and so assumes solid copper exists at that
+   height directly beneath the trace. The stackup says how far away the next
+   copper layer is; it does not say whether that layer has copper under *this*
+   trace. A pair crossing a plane void, a power-domain split, or the edge of a
+   partial pour has no reference there: the return current detours, the real
+   impedance rises steeply, and the closed form's output is not an estimate of
+   anything.
+
+   For a differential pair the assumption is therefore checked against the
+   copper. Points along both legs, at a 0.5 mm pitch, are tested against the fill
+   polygons of the pours on the adjacent copper layer (via
+   `gerber::geo::point_in_polygon`, the same even-odd ray cast the antenna-keepout
+   check uses, which is correct for the deeply non-convex outlines real pours
+   have). Where the reference is genuinely absent the check reports `reference
+   missing under trace`, names the span in board coordinates, and says what would
+   unlock a confident answer (solid reference-plane copper under the whole pair, a
+   stackup that declares the plane layer it references) **instead of** printing a
+   `Zdiff`. Where the reference cannot be established either way (no pour on the
+   adjacent layer, zones carrying no stored fill, a pair routed on an inner layer
+   where the microstrip model does not apply) the estimate is reported as before
+   with its reference stated as `reference plane unverified`: the bias is against
+   inventing a void.
+
+   Two guards keep *designed* plane features from reading as defects, and both
+   were calibrated on a real board (Watchy), each having produced a false positive
+   first:
+
+   - **Via anti-pads are excused.** A plane's anti-pads are deliberate: the copper
+     is cleared so the via can pass through. Because a pair's segments *terminate*
+     at its layer-transition vias, endpoint samples land in one systematically.
+     The first cut of this check reported a 2.91 mm void on Watchy where all seven
+     uncovered samples were within 0.36 mm of a via centre and four sat exactly on
+     one, on an In2.Cu plane that is in fact continuous. A sample inside a via's
+     barrel radius plus 0.3 mm carries no information about the plane.
+   - **The criterion is a contiguous run, not a sum.** What degrades a pair's
+     impedance is a stretch with no return path under it; a dozen pinholes
+     scattered along a 30 mm route is not one 12 mm gap. Summing was the second
+     Watchy false positive: four samples scattered around a test-point and pad
+     cluster added to 1.86 mm and read as a void when each was an individual
+     anti-pad. The threshold is a contiguous 2 mm along one leg, wider than any
+     plausible anti-pad (pad clearances in a plane run to roughly 1.5 mm across
+     even for a large through-hole pad, and traces cross anti-pad clusters and
+     thermal-relief spokes routinely) and far narrower than a plane split.
+
+   Watchy's corpus test now pins both outcomes: its In2.Cu plane must verify as
+   *positively solid* under the USB pair, neither reported missing nor declared
+   unverifiable, so neither false positive can return.
+3. **Declared impedance-control intent**: KiCad's
    `(stackup (dielectric_constraints yes))`. This is the hard-won corpus lesson.
    The closed-form model is a genuine estimate with a real error band on dense
    real boards: it has **no co-planar-ground term** and assumes the trace

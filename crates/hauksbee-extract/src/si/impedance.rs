@@ -876,6 +876,12 @@ const MIN_REFERENCE_VOID_MM: f64 = 2.0;
 /// anti-pad, and abstains only when the reference-less routed length reaches
 /// [`MIN_REFERENCE_VOID_MM`] over a contiguous run. All three guards exist to
 /// keep a designed plane feature from reading as a plane defect.
+///
+/// Only straight `(segment ...)` copper is sampled, not `(arc ...)`: the same
+/// limitation [`pair_edge_spacing`] already has. A curved stretch is therefore
+/// simply not examined, so an arc over a void is a miss rather than a false
+/// alarm, and a pair routed entirely in arcs yields no samples and reports
+/// `Unverified`. That is the intended direction of failure here.
 fn reference_plane_under_pair(root: &List, pid: i64, mid: i64) -> ReferencePlane {
     let mut segs = net_segments(root, pid);
     segs.extend(net_segments(root, mid));
@@ -973,20 +979,20 @@ fn reference_plane_under_pair(root: &List, pid: i64, mid: i64) -> ReferencePlane
         return ReferencePlane::Solid { layer: ref_layer };
     }
 
-    // Name the span by its two farthest-apart uncovered samples: that is the
-    // extent a designer needs to go and look at.
-    let (mut from, mut to) = (uncovered[0], uncovered[0]);
-    let mut best = 0.0;
-    for (i, a) in uncovered.iter().enumerate() {
-        for b in &uncovered[i..] {
-            let d = (b.0 - a.0).powi(2) + (b.1 - a.1).powi(2);
-            if d > best {
-                best = d;
-                from = *a;
-                to = *b;
-            }
-        }
+    // Name the span by the bounding box of the uncovered samples: the region a
+    // designer needs to go and look at. Computed in one pass rather than by
+    // searching for the farthest-apart pair, which is quadratic in the sample
+    // count and, on a long pair wholly off its plane, would be thousands of
+    // samples squared for the same two corners.
+    let (mut min_x, mut min_y) = uncovered[0];
+    let (mut max_x, mut max_y) = uncovered[0];
+    for &(x, y) in &uncovered {
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
     }
+    let (from, to) = ((min_x, min_y), (max_x, max_y));
     ReferencePlane::Missing(MissingReference {
         layer: ref_layer,
         uncovered: uncovered.len(),
@@ -1041,31 +1047,28 @@ fn adjacent_reference_layer(root: &List, route_layer: &str) -> Option<String> {
 /// power plane. Zones with no stored `filled_polygon` (a board saved without
 /// being refilled) contribute nothing, which lands the caller in `Unverified`
 /// rather than in a false void.
+///
+/// A fill's own `(layer ...)` tag is authoritative when present, and is checked
+/// *before* the zone's layer list. A multi-layer zone stores one fill per layer,
+/// each so tagged, and the zone header may name those layers in a form this code
+/// would not otherwise recognise: Watchy carries a `(layers "F&B.Cu")` zone,
+/// KiCad's shorthand for front-and-back. Reading the tag first means such a zone
+/// contributes its copper correctly instead of being skipped wholesale, which
+/// would have shown up as a spurious "no pour on the reference layer".
 fn plane_fills(root: &List, layer: &str) -> Vec<Vec<(f64, f64)>> {
     let mut out = Vec::new();
     for zone in root.find_all("zone") {
-        let on_layer = zone
-            .find("layers")
-            .map(|l| {
-                (0..)
-                    .map_while(|i| l.arg_value(i))
-                    .any(|n| n == layer || (n.contains('*') && layer.ends_with(".Cu")))
-            })
-            .unwrap_or(false)
-            || zone
-                .find_value("layer")
-                .map(|l| l == layer)
-                .unwrap_or(false);
-        if !on_layer {
-            continue;
-        }
         for fp in zone.find_all("filled_polygon") {
-            // A multi-layer zone tags each fill with the layer it belongs to;
-            // a fill so tagged for another layer is not copper here.
-            if let Some(fl) = fp.find_value("layer") {
-                if fl != layer {
-                    continue;
-                }
+            let belongs = match fp.find_value("layer") {
+                // Tagged: the tag decides, whatever the zone header says.
+                Some(fl) => fl == layer,
+                // Untagged: fall back to the zone's own layer list / single
+                // layer, accepting the `*.Cu` wildcard KiCad writes for
+                // all-copper zones.
+                None => zone_covers_layer(zone, layer),
+            };
+            if !belongs {
+                continue;
             }
             if let Some(pts) = fp.find("pts") {
                 let poly: Vec<(f64, f64)> = pts
@@ -1079,6 +1082,16 @@ fn plane_fills(root: &List, layer: &str) -> Vec<Vec<(f64, f64)>> {
         }
     }
     out
+}
+
+/// Does a zone's own layer declaration name `layer`? Handles the `(layers ...)`
+/// list, the single `(layer ...)` form, and the `*.Cu` all-copper wildcard.
+fn zone_covers_layer(zone: &List, layer: &str) -> bool {
+    let named = |n: &str| n == layer || (n == "*.Cu" && layer.ends_with(".Cu"));
+    zone.find("layers")
+        .map(|l| (0..).map_while(|i| l.arg_value(i)).any(|n| named(&n)))
+        .unwrap_or(false)
+        || zone.find_value("layer").map(|l| named(&l)).unwrap_or(false)
 }
 
 /// The abstention: say the reference plane is missing under the named span, and
