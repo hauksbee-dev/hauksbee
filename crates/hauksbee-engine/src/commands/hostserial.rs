@@ -42,9 +42,15 @@
 //! time. The chunk is delivered only when the sim clock reaches that instant,
 //! and the sim is held at-or-behind the anchor's scaled schedule so an
 //! arrival is never already in the past. Together: the same firmware and host
-//! produce the same simulated byte-arrival schedule whether the sim is
-//! keeping up or starved tenfold; a starved run just takes longer in wall
-//! time to play the identical schedule out.
+//! produce the same simulated byte-arrival schedule, up to observation
+//! granularity, whether the sim is keeping up or starved tenfold; a starved
+//! run just takes longer in wall time to play the schedule out. The
+//! granularity caveat is honest, not decorative: stamps carry the wall time a
+//! chunk was OBSERVED, the endpoint is polled between 5 ms throttle naps, and
+//! a chunk arriving while `engine.step` is executing is stamped when the step
+//! returns — so a slow step under load can late-stamp an arrival by
+//! `scale * step_wall`. That residual is millisecond-scale where the old
+//! free-running injection was unbounded.
 //!
 //! `scale` is 1 for paced sessions (a human at a terminal gets a real-time
 //! board). Unpaced sessions use [`SerialSessionConfig::unpaced_wall_scale`]
@@ -98,11 +104,14 @@ pub struct SerialSessionConfig {
     /// (0, 1].
     pub unpaced_wall_scale: f64,
     /// End the session early once at least one peer has attached, every peer
-    /// has detached, all delivered bytes are drained, and this many WALL
-    /// seconds have passed with nobody re-attaching. Termination only — it
-    /// never changes what any delivered byte did — so scripted sessions (the
-    /// NEP acceptance pair) don't grind out their whole sim budget after the
-    /// host is done. `None` (default) runs the full budget.
+    /// has detached, the session's own inbox holds no undelivered chunks, and
+    /// this many WALL seconds have passed with nobody re-attaching. Bytes
+    /// already handed to the backend may still sit in its metered UART queue:
+    /// the idle window is what gives the firmware time to drain them, so set
+    /// it comfortably above the firmware's worst-case response time (the sim
+    /// free-runs during it). Scripted sessions (the NEP acceptance pair) use
+    /// this so they don't grind out the whole sim budget after the host is
+    /// done. `None` (default) runs the full budget.
     pub end_after_idle_wall: Option<f64>,
     /// Which MCU's UART to bridge. `None`/empty means every MCU on the board,
     /// which is the right default for the single-MCU case and honest for the
