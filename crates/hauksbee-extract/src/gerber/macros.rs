@@ -260,7 +260,12 @@ pub fn instantiate_macro(
             .iter()
             .filter(|later| later.on)
             .any(|later| outlines_overlap(&e.outline, &later.outline));
-        if !repainted {
+        // A hole overlapping an already-kept hole cannot be added: even-odd
+        // parity would flip their INTERSECTION back to copper, although
+        // clearing twice leaves the union clear. The overlapping void stays
+        // solid instead, the same safe direction as every other drop here.
+        let overlaps_kept = holes.iter().any(|h| outlines_overlap(&e.outline, h));
+        if !repainted && !overlaps_kept {
             holes.push(e.outline.clone());
         }
     }
@@ -620,6 +625,50 @@ mod tests {
         assert!(
             ms.holes.is_empty(),
             "a repainted clear must not survive as a hole"
+        );
+    }
+
+    #[test]
+    fn overlapping_clears_do_not_parity_cancel_into_copper() {
+        use crate::gerber::geo::point_in_contours;
+        use gerber_types::{CenterLinePrimitive, CirclePrimitive};
+        // Two OVERLAPPING clear circles inside a 8x8 dark square. Appending
+        // both as even-odd holes flips their intersection back to copper,
+        // although clearing twice leaves the union clear. The second hole is
+        // dropped instead: its region stays (conservatively) solid, and the
+        // first void still reads empty.
+        let clear_at = |x: f64| {
+            MacroContent::Circle(CirclePrimitive {
+                exposure: MacroBoolean::Value(false),
+                diameter: MacroDecimal::Value(2.0),
+                center: (MacroDecimal::Value(x), MacroDecimal::Value(0.0)),
+                angle: None,
+            })
+        };
+        let m = ApertureMacro {
+            name: "TWOVOID".to_string(),
+            content: vec![
+                MacroContent::CenterLine(CenterLinePrimitive {
+                    exposure: MacroBoolean::Value(true),
+                    dimensions: (MacroDecimal::Value(8.0), MacroDecimal::Value(8.0)),
+                    center: (MacroDecimal::Value(0.0), MacroDecimal::Value(0.0)),
+                    angle: MacroDecimal::Value(0.0),
+                }),
+                clear_at(0.0),
+                clear_at(0.8),
+            ],
+        };
+        let ms = instantiate_macro(&m, &[], 0.0, 0.0, 1.0);
+        assert_eq!(ms.holes.len(), 1, "the overlapping second clear is dropped");
+        let mut contours = vec![ms.hull.clone()];
+        contours.extend(ms.holes.clone());
+        assert!(
+            !point_in_contours(0.4, 0.0, &contours),
+            "a point inside the kept void, in the two-clears overlap, is empty"
+        );
+        assert!(
+            point_in_contours(3.0, 0.0, &contours),
+            "solid copper away from the voids stays solid"
         );
     }
 

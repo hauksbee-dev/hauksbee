@@ -398,8 +398,13 @@ pub enum GbrJobRole {
     /// (side, number) and treats the numbers as physical only when they are
     /// contiguous `1..=n`.
     Copper { layer: u32, side: GbrJobSide },
-    /// A drill/rout file (`Plated`/`NonPlated`).
-    Drill,
+    /// A drill/rout file, with the manifest's own plating declaration:
+    /// `Plated,...` is `true`, `NonPlated,...` is `false`. Collapsing both to
+    /// one role would throw the declaration away and leave plating to the
+    /// filename inference, which can promote a manifest-declared mechanical
+    /// file to plated (fabricating stitches) merely because a sibling is
+    /// named NPTH.
+    Drill { plated: bool },
     /// The board outline (`Profile`).
     Outline,
     /// Recognised and electrically irrelevant (mask, silk, paste, ...).
@@ -423,6 +428,13 @@ pub enum GbrJobSide {
 /// manifest degrades to today's behavior instead of dropping the job.
 pub fn parse_gbrjob(text: &str) -> std::collections::HashMap<String, GbrJobRole> {
     let mut out = std::collections::HashMap::new();
+    // Entries are keyed by basename (matching how the job's files are
+    // collected), so two manifest paths that differ only by directory can
+    // collide. If their roles DISAGREE, the name identifies neither file and
+    // is dropped entirely, the same discipline the layer-name tokens follow:
+    // applying either role to both files would reconstruct artwork as copper
+    // or vanish real copper, on nothing better than map insertion order.
+    let mut contested = std::collections::HashSet::new();
     let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
         return out;
     };
@@ -464,7 +476,8 @@ pub fn parse_gbrjob(text: &str) -> std::collections::HashMap<String, GbrJobRole>
                 };
                 GbrJobRole::Copper { layer: n, side }
             }
-            "PLATED" | "NONPLATED" => GbrJobRole::Drill,
+            "PLATED" => GbrJobRole::Drill { plated: true },
+            "NONPLATED" => GbrJobRole::Drill { plated: false },
             "PROFILE" => GbrJobRole::Outline,
             // Everything else the job names is by definition not copper and
             // not drilling: mask, paste, legend, drawings. Marking it Ignored
@@ -472,7 +485,18 @@ pub fn parse_gbrjob(text: &str) -> std::collections::HashMap<String, GbrJobRole>
             // `Top.gbr` assembly drawing as top copper.
             _ => GbrJobRole::Ignored,
         };
-        out.insert(base, role);
+        if contested.contains(&base) {
+            continue;
+        }
+        match out.get(&base) {
+            Some(existing) if *existing != role => {
+                out.remove(&base);
+                contested.insert(base);
+            }
+            _ => {
+                out.insert(base, role);
+            }
+        }
     }
     out
 }
@@ -774,13 +798,40 @@ mod tests {
                 side: GbrJobSide::Bottom
             })
         );
-        assert_eq!(m.get("brd-PTH.drl"), Some(&GbrJobRole::Drill));
-        assert_eq!(m.get("brd-NPTH.drl"), Some(&GbrJobRole::Drill));
+        assert_eq!(
+            m.get("brd-PTH.drl"),
+            Some(&GbrJobRole::Drill { plated: true })
+        );
+        assert_eq!(
+            m.get("brd-NPTH.drl"),
+            Some(&GbrJobRole::Drill { plated: false })
+        );
         assert_eq!(m.get("brd-Edge_Cuts.gbr"), Some(&GbrJobRole::Outline));
         assert_eq!(m.get("brd-F_Mask.gbr"), Some(&GbrJobRole::Ignored));
         // Garbage degrades to an empty map, never a panic or a wrong role.
         assert!(parse_gbrjob("not json").is_empty());
         assert!(parse_gbrjob("{}").is_empty());
+    }
+
+    #[test]
+    fn gbrjob_basename_collisions_with_conflicting_roles_name_neither() {
+        // Entries are keyed by basename; two sub-directory paths that collide
+        // with DIFFERENT roles identify nothing (applying either role to both
+        // files would read artwork as copper or vanish real copper on map
+        // order). Agreeing duplicates keep their shared role.
+        let text = r#"{"FilesAttributes": [
+    {"Path": "copper/layer.gbr", "FileFunction": "Copper,L1,Top"},
+    {"Path": "documentation/layer.gbr", "FileFunction": "AssemblyDrawing,Top"},
+    {"Path": "a/mask.gbr", "FileFunction": "SolderMask,Top"},
+    {"Path": "b/mask.gbr", "FileFunction": "SolderMask,Top"}
+  ]}"#;
+        let m = parse_gbrjob(text);
+        assert_eq!(
+            m.get("layer.gbr"),
+            None,
+            "a contested basename names neither"
+        );
+        assert_eq!(m.get("mask.gbr"), Some(&GbrJobRole::Ignored));
     }
 
     #[test]
