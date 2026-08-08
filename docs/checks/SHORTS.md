@@ -420,6 +420,11 @@ waived. The corpus test (`tests/drc_corpus.rs`) documents this evidence.
   floored at that single rule. A board whose `md*` values diverge is checked
   against the tightest of them everywhere, the long-standing
   no-manufactured-noise choice of this path.
+- **Altium octagonal pads.** Modeled with the 0.25 corner-cut ratio KiCad's
+  Altium importer uses (the reference implementation this module's record
+  layouts are ported from). If Altium's native render were the regular
+  octagon (cut ≈ 0.293), up to ~4% of the shorter pad side of corner copper
+  is overstated; an Altium-generated oracle board would pin the true cut.
 - The bridge model is a fixed small resistance. It does not model the
   bridge's own current-dependent fusing. Destructive-mode faulting still
   applies to the parts the short over-drives.

@@ -102,7 +102,9 @@ pub struct NetClassRule {
     pub diff_pair_gap_mm: Option<f64>,
 }
 
-/// Clearance resolver used by the KiCad DRC path.
+/// Clearance resolver shared by the KiCad and Eagle DRC paths (KiCad fills
+/// classes from the `.kicad_pro`; Eagle fills classes and the pair matrix
+/// from `<classes>`).
 ///
 /// The project file can assign nets to classes explicitly or by wildcard
 /// pattern. Once resolved to concrete net names, the pair rule is KiCad's
@@ -1780,6 +1782,10 @@ fn custom_pad_shapes(
     let Some(prims) = pad.find("primitives") else {
         return out;
     };
+    // KiCad writes an explicit fill token when a circle/rect primitive is
+    // filled (`(fill yes)` classically, `(fill solid)`/`(fill none)` in newer
+    // formats) and omits it or writes `none` for outline-only strokes, so an
+    // absent token means unfilled, exactly as the writer meant it.
     let filled = |l: &List| -> bool {
         matches!(
             l.find_value("fill").as_deref(),
@@ -1901,9 +1907,14 @@ fn ring_capsules(cx: f64, cy: f64, radius: f64, r: f64) -> Vec<Capsule> {
 
 /// Maximum chord sagitta permitted when flattening a circle or covering arc
 /// (mm). The covering scheme in [`covering_arc_capsules`] converts this into a
-/// symmetric copper overstatement of at most the same amount, kept strictly
-/// under [`CLEARANCE_TOLERANCE_MM`] so the overstatement alone can never turn
-/// a routing-to-rule gap into a reported finding.
+/// copper overstatement of at most the same amount, kept strictly under
+/// [`CLEARANCE_TOLERANCE_MM`]. Precisely what that buys: a gap routed AT the
+/// rule (or over it) still measures above `rule - CLEARANCE_TOLERANCE_MM`, so
+/// routing-to-rule copper is never flagged; the overstatement only narrows
+/// the forgiveness band, so a gap already 2.5-5 µm under the rule (a true
+/// sub-rule gap the tolerance would otherwise forgive) can now be reported.
+/// That reports true violations early, never invents one on rule-compliant
+/// copper.
 const RING_SAGITTA_MM: f64 = 0.0025;
 
 /// Flatten the circular arc of `sweep` radians starting at angle `a0` on the
