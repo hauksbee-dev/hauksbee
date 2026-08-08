@@ -1451,3 +1451,42 @@ fn a_void_on_a_minority_routing_layer_is_still_caught() {
         f.message
     );
 }
+
+#[test]
+fn a_hatched_reference_pour_is_not_read_as_one_long_void() {
+    // A review caught this as the worst false positive the check could make. A
+    // hatched / meshed pour is deliberately discontinuous copper, laid down for
+    // copper balance or flex, and is still a perfectly good AC return path. Its
+    // fill is a lattice of strips, so containment against those strips would
+    // report the gaps between them as a void running the whole length of the pair.
+    // There is no honest way to verify such a plane from fill polygons, so the
+    // check must say that rather than guess.
+    //
+    // Three 0.4 mm strips with 0.6 mm gaps, on a zone declaring a hatch fill.
+    let strips = "(filled_polygon (pts (xy -5 -5) (xy 25 -5) (xy 25 -4.6) (xy -5 -4.6))) \
+                  (filled_polygon (pts (xy -5 -0.2) (xy 25 -0.2) (xy 25 0.2) (xy -5 0.2))) \
+                  (filled_polygon (pts (xy -5 4.6) (xy 25 4.6) (xy 25 5) (xy -5 5)))";
+    let text = impedance_usb_over_plane(strips).replace(
+        "(net_name \"GND\")",
+        "(net_name \"GND\") (fill yes (mode hatch))",
+    );
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("an impedance note");
+    assert!(
+        !f.message.contains("reference missing"),
+        "a hatched pour is a return path, not a void: {}",
+        f.message
+    );
+    assert!(
+        f.message.contains("is hatched"),
+        "and the check must say why it could not verify it: {}",
+        f.message
+    );
+    assert_eq!(r.finding_count(), 0, "a hatched pour must never fire");
+}
