@@ -805,8 +805,109 @@ max_operating_current_a = 0.8
 equation = "inverse_resistance"
 k_volts = 1000.0
 
+# ─────────────────────────────────────────────────────────────────────────────
+# SR2: STMicroelectronics 6-pin Smart Reset, UDFN6 1.6 x 1.3 mm.
+#
+# Source: STMicroelectronics "SR2 - 6 pin Smart Reset" datasheet, DocID026047
+#   Rev 2, 13-May-2014 (www.st.com/resource/en/datasheet/sr2.pdf).
+#
+# WHAT THE PART IS. Not a voltage detector: it has NO power-on reset and does
+# not watch the rail. It watches two push-button inputs (SR0, SR1) and asserts
+# its reset output only after BOTH have been held low together for the
+# factory-programmed delay tSRC, which is seconds, not milliseconds. That is the
+# whole point of the family: a short press reaches the MCU as an interrupt, a
+# long press on both buttons is a hard reset, and no dedicated reset button is
+# needed. On a Watchy (U1, value "SR2HARU") the two inputs are the BTN2 and BTN3
+# menu buttons and the output drives the ESP32's EN.
+#
+# Datasheet figures used (Table 4 DC and AC characteristic, TA = -40 to +85 C,
+# VCC = 1.65 to 5.5 V; typical values at 25 C and VCC = 3.3 V):
+#   VCC   = 1.65 to 5.5 V
+#   ICC   = 1.1 typ, 2.5 max uA   at VCC = 3.0 V  (inputs inactive, no tSRC count)
+#   ICC   = 1.5 typ, 3.0 max uA   at VCC = 5.0 V
+#   VOL   = 0.3 V max             at VCC >= 3.3 V sinking 2.5 mA
+#                                 (0.3 V max at >= 4.5 V/3.2 mA and >= 1.65 V/1 mA)
+#   VIL   = VSS - 0.3 to 0.3 V    (SR0, SR1; FIXED volts, not a VCC fraction)
+#   VIH   = 0.85 to 5.5 V         (SR0, SR1)
+#   ILI   = -0.1 to 0.1 uA        (SR0, SR1 input leakage)
+#   ILO   = -0.1 to 0.1 uA        (RST leakage, open-drain option without pull-up)
+#   tSRC  = 0.8x / 1.0x / 1.2x the programmed delay over temperature
+#   tREC  = 240 / 360 / 480 ms    (only on the -B- reset-timeout options)
+#   RPUO  = 65 kOhm               (internal RST pull-up, only on options that have one)
+# Table 2 Absolute maximum ratings: VCC -0.3 to 7 V; input or output voltage
+#   -0.3 to 5.5 V (for a push-pull RST, -0.3 V to VCC + 0.3 V); storage -55 to
+#   +150 C; 2 kV HBM.
+# Section 1: below 1.575 V typ the inputs are ignored and the outputs are
+#   deasserted, with the deasserted level valid down to VCC = 1.0 V.
+#
+# WHY THIS ONE IS MODELLED WHERE THE VOLTAGE DETECTORS BELOW ARE NOT. Their
+# problem is the kind, not the sheet: a detector's job is a threshold with
+# hysteresis, `comparator` needs two DRIVEN output levels, and an open-drain
+# output has no high-side drive to give. This part's inputs are fixed logic
+# levels, which `digital` says exactly, and the open-drain output costs nothing
+# here because the binder stamps a driver only on a role beginning with `y`. No
+# role below does, so RST is left to whatever the board's pull-up makes it, which
+# is the truth about an open-drain pin. Hence NO `voh`: the datasheet's VOH row
+# is explicitly "push-pull output only", and the ordering options in this entry
+# are all open-drain.
+#
+# DELIBERATELY NOT MODELLED: the tSRC counter itself, so a press of both buttons
+# does not assert RST in simulation; the tREC one-shot on the -B- options; the
+# 1.575 V input-ignore threshold; and the SR0 overvoltage test mode (VTEST =
+# VCC + 0.9/1.1/1.4 V, tSRC-INI 42 ms typ, tSRC-SHORT 21 ms typ). A `[models.logic]`
+# spec with a seconds-scale timer is the pathway for the counter; nothing here
+# fakes it in the meantime. No `ro` either: the sheet gives VOL at three sink
+# currents (~120 Ohm implied at the 3.3 V point) but no output impedance, and an
+# unstamped output has nothing to apply it to.
+[[models]]
+id = "sr2"
+kind = "digital"
+description = "ST SR2 dual-push-button Smart Reset supervisor, UDFN6, open-drain active-low RST"
+
+[models.match]
+# The six ordering options Table 7 actually lists, spelled out rather than
+# pattern-matched, because a class like SR2[HLPU]A[RB]U would also claim
+# SR2HABU and SR2PABU, which ST does not build.
+#
+# One entry covers all six because they differ ONLY in things this model does
+# not carry: the Smart Reset delay tSRC (H = 4.0 s, L = 6.0 s, P = 7.5 s,
+# U = 10.0 s, per Table 6) and whether the output pulse is push-button
+# controlled (-R-) or a fixed 360 ms tREC one-shot (-B-). Every one of them is
+# open-drain, active low, with no internal pull-up (the `A` output code), and
+# all share the UDFN6 pinout and the DC table below. The moment a tSRC-aware
+# logic spec exists, this splits into one entry per delay.
+value_re = "(?i)^SR2(HARU|LABU|LARU|PARU|UABU|UARU)$"
+
+[models.params]
+# Table 4. vol/vih/vil are the datasheet numbers verbatim; the SR inputs have
+# FIXED thresholds, so unlike a CMOS part these do not move with the rail.
+vol   = 0.3      # VOL max at VCC >= 3.3 V, sinking 2.5 mA
+vih   = 0.85     # VIH min, SR0/SR1
+vil   = 0.3      # VIL max, SR0/SR1
+supply_static_ua = 1.1   # ICC typ at VCC = 3.0 V (2.5 max); 1.5 typ at 5.0 V
+supply_pin = "6"
+gnd_pin    = "1"
+
+[models.pins]
+# Table 1 Signal names, cross-checked against Figure 2 Pin connections.
+"1" = "vss"
+"2" = "sr1_n"   # secondary push-button input, active low
+"3" = "rst_n"   # reset output, open drain, active low on these options
+"4" = "nc"      # not bonded; the datasheet says to connect it to VSS
+"5" = "sr0_n"   # primary push-button input, active low; also the test-mode pin
+"6" = "vcc"
+
+[models.ratings]
+# Table 2 Absolute maximum ratings. max_voltage_v is the SUPPLY limit; the
+# separate -0.3 to 5.5 V limit on RST/SR0/SR1 has no field on this schema, so a
+# board pulling RST above 5.5 V from a higher rail is not caught here. No
+# max_pin_current_a: the sheet's 1 to 3.2 mA sink figures are VOL test
+# conditions, not an output rating. No junction-temperature or thermal fields;
+# Table 3 gives only the -40 to +85 C ambient range.
+max_voltage_v = 7.0
+
 # ═════════════════════════════════════════════════════════════════════════════
-# SUPERVISORS AND THE LED DRIVER DELIBERATELY LEFT UNRESOLVED.
+# THE VOLTAGE DETECTORS AND THE LED DRIVER DELIBERATELY LEFT UNRESOLVED.
 #
 # NCP303LSN27T1G (onsemi, SOT-23-5) and BD5230G (Rohm, SSOP5) are voltage
 # detectors, and FAN5622SX (onsemi, SuperSOT23-6) is a constant-current LED

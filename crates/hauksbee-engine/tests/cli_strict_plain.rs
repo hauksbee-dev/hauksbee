@@ -394,9 +394,16 @@ fn plain_check_surfaces_open_active_ic_bind_honesty() {
     // a board whose active ICs are unmodelled read "healthy" while
     // firmware/analog/AC/thermal on their nets were never covered. The plain
     // persona must warn about the open active ICs like the sibling --bind plain
-    // mode does. Watchy has active-IC (U-prefix) parts and, run without
-    // --models-dir, they are unresolved.
-    let b = board("../hauksbee-ci/examples/boards/watchy.kicad_pcb");
+    // mode does.
+    //
+    // The fixture is a synthetic board carrying one unmodellable active IC (U1,
+    // value XLOGIC9999) between a 3V3 rail and a divider, so the heads-up has
+    // exactly one part to name. It used to be the Watchy example board, which
+    // stopped being a fixture for this the moment its last two active ICs (the
+    // SR2 supervisor and the BMA423) got db entries: a shipped board is a moving
+    // target for a test that needs something to stay UNbound, and the right
+    // direction for that board is bound.
+    let b = board("tests/fixtures/plain_check_open_active_ic.kicad_pcb");
     let out = run(&["run", b.to_str().unwrap(), "--check", "--plain"]);
     assert!(
         out.status.success(),

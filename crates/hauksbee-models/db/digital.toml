@@ -1622,3 +1622,118 @@ footprint_re = '''(?ix)
 # part that sources current.
 max_pin_current_a = 0.005
 max_voltage_v = 6.5
+
+# ─────────────────────────────────────────────────────────────────────────────
+# BMA423: Bosch Sensortec 12-bit triaxial accelerometer, LGA-12 2 x 2 mm.
+#
+# Source: Bosch Sensortec "BMA423 - Digital, triaxial acceleration sensor" data
+#   sheet, document BST-BMA423-DS000-01, revision 1.1, May 2019. Section 1
+#   Specification, Section 2 Absolute maximum ratings, Section 5.2 Register map,
+#   Section 7.1 Pin description, Section 7.2 Connection diagrams.
+#
+# Datasheet figures used (Section 1, OPERATING CONDITIONS):
+#   VDD    = 1.62 / 1.8 / 3.6 V    (analog + digital domain)
+#   VDDIO  = 1.2 / 1.8 / 3.6 V     (I/O domain, a SEPARATE supply with its own
+#                                   ground; either may be off while the other is
+#                                   within range)
+#   VIL    <= 0.3 x VDDIO          (SPI and I2C)
+#   VIH    >= 0.7 x VDDIO
+#   VOL    <= 0.2 x VDDIO          (VDDIO >= 1.62 V, IOL <= 2 mA)
+#   VOH    >= 0.8 x VDDIO          (VDDIO >= 1.62 V, IOH <= 2 mA)
+#   IDD     = 150 uA typ           (performance mode, nominal VDD/VDDIO, 25 C, +/-4 g)
+#   IDDlp1  = 14 uA typ            (low-power mode, 50 Hz ODR)
+#   IDDsum  = 3.5 uA typ           (suspend mode)
+#   ts_up   = 1 ms max             (power-up time)
+#   TA      = -40 to +85 C
+# Section 2 Absolute maximum ratings: VDD pin and VDDIO pin -0.3 to 4 V; any
+#   non-supply pin -0.3 V to VDDIO + 0.3 V and below 4 V; passive storage -50 to
+#   +150 C; shock 10000 g for <= 200 us, 2000 g for <= 1.0 ms; 2 kV HBM.
+#   The 4 V figure is worth stating twice because 4.25 V is the number people
+#   expect here: it is not what this part's sheet says, in revision 1.1 or in
+#   revision 2.0 (August 2019), both of which carry the same 4 V table.
+#
+# THE LOGIC LEVELS BELOW ARE COMPUTED AT VDDIO = 3.3 V. Every level on this sheet
+# is a FRACTION of VDDIO and the `digital` kind carries one fixed volt figure per
+# level, so a rail has to be picked. 3.3 V is the rail the part is fed on the
+# boards this entry was written for (a Watchy ties both VDD and VDDIO to +3V3),
+# and it is the pessimistic choice for a threshold check against a 3.3 V driver.
+# The datasheet's own nominal is 1.8 V, and a board running VDDIO there has
+# thresholds a little over half these: recompute as vih = 0.7 x VDDIO,
+# vil = 0.3 x VDDIO, voh = 0.8 x VDDIO, vol = 0.2 x VDDIO and override per board
+# with --models-dir. The value string cannot tell the two rails apart, so an
+# explicit note is better than a footprint or supply guess.
+#
+# SUPPLY DRAW IS THE PERFORMANCE-MODE FIGURE, 150 uA. A wearable spends most of
+# its life in the 14 uA low-power mode or the 3.5 uA suspend mode, and which of
+# the three applies is a firmware state this model does not know. 150 uA is the
+# ceiling of the three, so a rail-budget or shunt-metering check reads the
+# worst case rather than an optimistic one.
+#
+# DELIBERATELY NOT MODELLED: everything the part does over the bus. There is no
+# I2C slave here, so a firmware read of CHIP_ID (register 0x00, value 0x13) sees
+# nothing, and no acceleration appears at DATA_8..DATA_13 (0x12..0x17). The
+# pathway for that is the declarative register-map sensor spec
+# (crates/hauksbee-models/src/sensor_spec.rs, `[sensor]` with bus = "i2c" and
+# i2c_address = 0x18), which the engine's generic interpreter realizes as an
+# I2C slave; it needs the register map from Section 5.2, not new engine code.
+# Also not modelled: the on-chip step counter / activity / tap features, the 1 kb
+# FIFO, the interrupt engine behind INT1/INT2, and the auxiliary I2C master on
+# ASDA/ASCL. No `tpd_s`: the sheet publishes bus timing (SPI tSCKL/tSCKH 45 ns,
+# fSCK 10 MHz) but no interrupt or output propagation delay, and inventing one
+# would put a number on the exact thing this entry does not simulate.
+[[models]]
+id = "bma423"
+kind = "digital"
+description = "Bosch BMA423 triaxial accelerometer, LGA-12 (pad map, logic levels and supply draw; no register map)"
+
+[models.match]
+# Anchored on the bare part number, with an optional package/variant suffix after
+# a separator. The BMA400/BMA456 siblings are different parts with different
+# register maps and pinouts, so they resolve to nothing until they get their own
+# entries rather than borrowing this map.
+value_re = "(?i)^BMA423([-_ ].*)?$"
+
+[models.params]
+# Section 1, at VDDIO = 3.3 V. See the note above before trusting these on a
+# board with a different I/O rail.
+voh   = 2.64     # 0.8 x VDDIO min, IOH <= 2 mA
+vol   = 0.66     # 0.2 x VDDIO max, IOL <= 2 mA
+vih   = 2.31     # 0.7 x VDDIO min
+vil   = 0.99     # 0.3 x VDDIO max
+supply_static_ua = 150.0   # IDD typ, performance mode, +/-4 g, 25 C
+supply_pin = "7"           # VDD. The engine's supply leg is one pair of pins, so
+gnd_pin    = "9"           # VDDIO (pin 3) / GNDIO (pin 8) carry no metered draw
+                           # here: of the 150 uA figure the sheet gives no split
+                           # between the two domains, and it is a TOTAL for both.
+
+[models.pins]
+# Section 7.1 Pin description, LGA-12, cross-checked against the Section 7.2
+# connection diagrams.
+#
+# SDX and SCX are named in the BUS vocabulary (`sda`/`scl`) rather than the
+# datasheet's, for the reason crates/hauksbee-models/tests/pin_roles.rs records
+# and the 25xx EEPROM entry above follows: a model that names its pins the way
+# the sheet does matches, loads, and then resolves to nothing. On this part they
+# are I2C SDA/SCL and SPI SDI/SCK on the same pads; the board picks which by
+# where it ties CSB (VDDIO = I2C, driven = SPI).
+"1"  = "sdo"     # SPI serial data out; in I2C, the address select (GND = 0x18,
+                 # VDDIO = 0x19)
+"2"  = "sda"     # SDX: I2C SDA, SPI SDI (4-wire) or SDA (3-wire)
+"3"  = "vddio"   # I/O-domain supply, 1.2 to 3.6 V
+"4"  = "asda"    # auxiliary I2C master data (magnetometer); DNC when unused
+"5"  = "int1"    # interrupt output 1, or a FIFO-sync input when configured so
+"6"  = "int2"    # interrupt output 2, or a FIFO-sync input when configured so
+"7"  = "vdd"     # analog + digital supply, 1.62 to 3.6 V
+"8"  = "gndio"   # I/O-domain ground
+"9"  = "gnd"     # analog + digital ground
+"10" = "csb"     # SPI chip select, active low; tie to VDDIO to select I2C
+"11" = "ascl"    # auxiliary I2C master clock (magnetometer); DNC when unused
+"12" = "scl"     # SCX: I2C SCL, SPI SCK
+
+[models.ratings]
+# Section 2 Absolute maximum ratings. 4 V is the limit on BOTH supply pins, and
+# a non-supply pin is bounded by VDDIO + 0.3 V and by 4 V, so 4 V is the ceiling
+# for every pin on the part. No max_junction_temp_c: the sheet gives an ambient
+# operating range (-40 to +85 C) and a passive storage range, not a junction
+# limit, and no thermal resistance to reach one with.
+max_voltage_v = 4.0

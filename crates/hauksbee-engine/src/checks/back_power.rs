@@ -202,6 +202,20 @@ pub fn back_power_lint(board: &ExtractedBoard, lib: &ModelLibrary) -> NetLintRep
             };
             let Some(net) = board.net(id) else { continue };
 
+            // A signal pin STRAPPED TO GROUND has no clamp path to report, and
+            // the pull-up walk below would misread the board if it looked: a
+            // resistor from ground to a higher rail is a load on that rail (a
+            // VBUS-present divider's lower leg, a bleeder), not a pull-up on
+            // this pin. Judging it as one fires on every strapped-low pin of
+            // every part on a board that has such a divider, which is a
+            // configuration strap reported as a back-powering fault. The pin's
+            // ROLE being a ground role is already skipped above; this is the
+            // other half, a signal role whose NET is ground (an I2C address
+            // select tied low, a mode pin strapped to 0).
+            if crate::checks::converter::is_ground_net(&net.name) {
+                continue;
+            }
+
             // Direct tie: the signal pin's own net IS a higher rail.
             if let Some(rail_v) = power_rail_voltage(&net.name) {
                 if rail_v > supply_v + CLAMP_MARGIN_V
@@ -413,6 +427,45 @@ mod tests {
         let f: Vec<_> = r.of_check(LintCheck::BackPower).collect();
         assert_eq!(f.len(), 1, "direct tie fires, got {f:?}");
         assert_eq!(f[0].severity, Severity::High);
+    }
+
+    /// A signal pin STRAPPED TO GROUND stays silent even when the board hangs a
+    /// resistor from ground to a higher rail. That resistor (a VBUS-present
+    /// divider's lower leg, a bleeder) is a load on the rail, not a pull-up on
+    /// the pin, and reading it as one fires on every strapped-low configuration
+    /// pin of every modelled part on such a board. Watchy is the case: R2 sits
+    /// between VBUS and GND, and the BMA423's SDO address-select pad is tied
+    /// low, which is the part working as designed at address 0x18.
+    #[test]
+    fn grounded_signal_pin_is_silent_even_with_a_resistor_from_ground_to_a_rail() {
+        let text = r#"(kicad_pcb (version 20171130) (host pcbnew 5.1.0)
+  (net 0 "")
+  (net 1 "GND")
+  (net 2 "+5V")
+  (net 5 "+3V3")
+  (module RF_Module:ESP32-WROOM-32 (layer F.Cu)
+    (at 100 100)
+    (fp_text reference U3 (at 0 0) (layer F.SilkS))
+    (fp_text value ESP-WROOM-32 (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 1 "GND"))
+    (pad 2 smd rect (at 0 1) (net 5 "+3V3"))
+    (pad 25 smd rect (at 0 5) (net 1 "GND"))
+  )
+  (module Resistor_SMD:R_0603_1608Metric (layer F.Cu)
+    (at 120 100)
+    (fp_text reference R2 (at 0 0) (layer F.SilkS))
+    (fp_text value 100k (at 0 2) (layer F.Fab))
+    (pad 1 smd rect (at 0 0) (net 2 "+5V"))
+    (pad 2 smd rect (at 2 0) (net 1 "GND"))
+  )
+)"#;
+        let r = run(text);
+        assert_eq!(
+            r.of_check(LintCheck::BackPower).count(),
+            0,
+            "a pin strapped to ground is not pulled up by a bleeder to a rail, got {:?}",
+            r.findings
+        );
     }
 
     /// A part whose supply net the rail table cannot resolve has no domain
