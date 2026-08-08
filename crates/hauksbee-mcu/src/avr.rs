@@ -397,6 +397,20 @@ macro_rules! make_port_hook {
                     .map(|ps| ps.current)
                     .unwrap_or(0);
 
+                // TEMP-DEBUG contention: trace every PORTC hook invocation so a
+                // missed OE (PC3) edge can be told apart from a shadow desync.
+                if $port_char == 'C' && std::env::var_os("HAUKSBEE_OE_DEBUG").is_some() {
+                    let cycle = if s.avr_ptr.is_null() {
+                        0
+                    } else {
+                        unsafe { (*s.avr_ptr).cycle }
+                    };
+                    eprintln!(
+                        "OE-DEBUG portC hook cycle {cycle} new {new_val:#04x} prev {prev_val:#04x}{}",
+                        if new_val == prev_val { " (nochange)" } else { "" }
+                    );
+                }
+
                 if new_val != prev_val {
                     let changed = new_val ^ prev_val;
                     // Snapshot the avr pointer so the synchronous input

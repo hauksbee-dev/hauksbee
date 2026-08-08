@@ -876,6 +876,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             pace: !cfg.serial_no_pace,
             mcu: cfg.serial_mcu.clone(),
             chunk_us: cfg.chunk_us,
+            ..Default::default()
         };
         let mut say = |line: &str| eprintln!("{line}");
         let summary =
