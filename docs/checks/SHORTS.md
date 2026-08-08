@@ -26,8 +26,9 @@ shapes, all in board millimetres:
 | Through-hole pad (`*.Cu`)       | Disc / shape on every copper layer | `*.Cu` / `F&B.Cu` expanded to the declared copper stack |
 | SMD / THT pad, circle          | Disc | radius = half the larger size dimension |
 | SMD / THT pad, oval            | Capsule (stadium) | segment along the long axis, radius = half the short axis |
-| SMD / THT pad, rect / roundrect / trapezoid | Polygon (+ corner radius for roundrect) | roundrect inset by the corner radius, radius carried so the rounded copper is not overstated |
-| SMD / THT pad, custom          | Polygon | first `gr_poly` outline, else the bounding rect |
+| SMD / THT pad, rect / roundrect | Polygon (+ corner radius for roundrect) | roundrect inset by the corner radius, radius carried so the rounded copper is not overstated |
+| SMD / THT pad, trapezoid       | Polygon | `rect_delta` honoured (KiCad corner formula, delta clamped the way KiCad clamps it) |
+| SMD / THT pad, custom          | Anchor shape + every primitive | anchor circle/stadium or rect over `size`, plus all `gr_poly`/`poly` outlines, stroked lines, arcs (covering flattening), circles (filled disc or covering ring) and rects |
 | Filled zone (`zone` → `filled_polygon`) | Polygon (boundary edges + containment) | the actual fill copper, with antipads / thermal reliefs |
 
 Pad outlines are transformed into the board frame correctly for rotated
@@ -148,8 +149,8 @@ face, swapping its side-specific copper 1↔16.
 | Through-hole pad (`<pad>` in a package) | shape on every copper layer | `round`→disc, `square`→rect, `octagon`→octagon polygon, `long`→stadium capsule, `offset`→capsule offset to one end |
 | SMD pad (`<smd>` in a package) | Rect polygon (+ corner radius) | single layer (1 by default, flipped by mirror); `roundness` (0..100 %) carried as a corner-radius inflation on an inset rect, like KiCad roundrect; `rot` honoured |
 | Board rectangle (`<rectangle>` on copper) | Rect polygon | rotated by `rot` |
-| Board circle (`<circle>` on copper) | Disc | conservative solid disc of the outer radius (`radius + width/2`) |
-| Signal polygon / pour (`<polygon>`) | **excluded from the short test** | see the honesty caveat below |
+| Board circle (`<circle>` on copper) | Annulus (covering capsule ring), or a solid disc when `width` is 0 | the stroke band is the copper; the interior is bare board (Eagle fills only zero-width circles) |
+| Signal polygon / pour (`<polygon>`) | settings parsed; same-rank overlaps shorted; fill **excluded from the pour-to-copper test** | see the honesty caveat below |
 
 Package copper is placed with the full element transform: position rotated by the
 element's `rot` (CCW, y-up). A mirrored (`MR`) element negates local X and uses
