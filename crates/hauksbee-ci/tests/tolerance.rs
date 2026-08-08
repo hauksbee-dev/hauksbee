@@ -139,9 +139,16 @@ fn corners_land_on_the_analytic_envelope() {
     let spec = Spec::load(&write_spec("corners_envelope", &body)).expect("spec loads");
     let outcomes = run_spec(&spec).expect("runs");
     // R1, R2, R3 toleranced by the pattern -> 2^3 = 8 corners (R3 is on its own
-    // net and does not move VOUT).
-    assert_eq!(outcomes.len(), 8);
-    let vs: Vec<f64> = outcomes.iter().map(vout).collect();
+    // net and does not move VOUT), plus the interior monotonicity probes.
+    let corners: Vec<_> = outcomes.iter().filter(|o| !o.interior).collect();
+    let probes: Vec<_> = outcomes.iter().filter(|o| o.interior).collect();
+    assert_eq!(corners.len(), 8);
+    assert_eq!(
+        probes.len(),
+        hauksbee_ci::tolerance::interior_probe_count(3)
+    );
+
+    let vs: Vec<f64> = corners.iter().map(|o| vout(o)).collect();
     let lo = vs.iter().cloned().fold(f64::INFINITY, f64::min);
     let hi = vs.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
     assert!(
@@ -156,6 +163,20 @@ fn corners_land_on_the_analytic_envelope() {
         assert!(
             (V_MIN - 1e-6..=V_MAX + 1e-6).contains(v),
             "corner VOUT {v} off envelope"
+        );
+    }
+
+    // The divider is monotonic in each resistor, so every interior probe must
+    // land STRICTLY inside the corner-spanned envelope. This is the monotonic
+    // half of the two-sided check, on a real solve rather than a fixture: the
+    // probes cost extra sims and must not manufacture a finding on a circuit
+    // whose corners genuinely do bound it.
+    for o in &probes {
+        let v = vout(o);
+        assert!(
+            v > V_MIN - 1e-6 && v < V_MAX + 1e-6,
+            "interior probe {} VOUT {v} beat the corners on a monotonic divider",
+            o.seed
         );
     }
 }
