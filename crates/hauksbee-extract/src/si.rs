@@ -1062,13 +1062,12 @@ fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut
             if layers.len() != 1 || !layers.contains("F.Cu") {
                 return None;
             }
-            // A microstrip needs a reference PLANE, which a stackup does not
-            // establish: it lists dielectric thicknesses, not which copper is
-            // poured solid. On a 2-layer board with sparse bottom routing there is
-            // no plane under the trace, its real capacitance is lower, and
-            // computing a microstrip figure would over-report the rise time. Only
-            // proceed where some copper below the top is actually poured.
-            if !has_pour_below_top(r) {
+            // A microstrip needs a reference PLANE under the trace, which a stackup
+            // does not establish: it lists dielectric thicknesses, not which copper
+            // is poured solid. Every routed segment of this net must actually sit
+            // over a filled lower-layer pour; a pour existing SOMEWHERE on the
+            // board says nothing about the copper beneath this bus.
+            if !net_is_over_a_plane(r, net.id) {
                 return None;
             }
             let stack = impedance::read_stackup(r)?;
@@ -1154,20 +1153,36 @@ fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut
             report.findings.push(SiFinding {
                 check: SiCheck::I2cRiseTime,
                 severity: sev,
-                message: format!(
-                    "I2C {role} '{}': pull-up {:.0} ohm x bus {} pF ({}) gives t_r ~ {:.0} ns \
-                     at the LOW end of the plausible trace-capacitance range (up to {:.0} ns at \
-                     the high end), over the {} limit {:.0} ns.{}",
-                    net.name,
-                    r,
-                    range_0dp(c.low_pf, c.high_pf),
-                    basis,
-                    t_r,
-                    t_r_high,
-                    if fast { "fast-mode" } else { "standard-mode" },
-                    limit,
-                    caveat
-                ),
+                message: if c.measured_pf_per_mm.is_some() {
+                    // Computed geometry: there is no range, so no range language.
+                    format!(
+                        "I2C {role} '{}': pull-up {:.0} ohm x bus {:.0} pF ({}) gives \
+                         t_r ~ {:.0} ns, over the {} limit {:.0} ns.{}",
+                        net.name,
+                        r,
+                        c.low_pf,
+                        basis,
+                        t_r,
+                        if fast { "fast-mode" } else { "standard-mode" },
+                        limit,
+                        caveat
+                    )
+                } else {
+                    format!(
+                        "I2C {role} '{}': pull-up {:.0} ohm x bus {} pF ({}) gives t_r ~ {:.0} ns \
+                         at the LOW end of the plausible trace-capacitance range (up to {:.0} ns \
+                         at the high end), over the {} limit {:.0} ns.{}",
+                        net.name,
+                        r,
+                        range_0dp(c.low_pf, c.high_pf),
+                        basis,
+                        t_r,
+                        t_r_high,
+                        if fast { "fast-mode" } else { "standard-mode" },
+                        limit,
+                        caveat
+                    )
+                },
                 refs: mem.iter().map(|(c, _)| c.reference.clone()).collect(),
                 nets: vec![net.name.clone()],
             });
@@ -1737,28 +1752,77 @@ pub fn arc_length_mm(start: (f64, f64), mid: (f64, f64), end: (f64, f64)) -> f64
     r * (sweep(a) + sweep(b))
 }
 
-/// Whether any copper layer below the top carries a filled pour, i.e. whether
-/// there is plausibly a reference plane for a top-layer microstrip at all.
+/// Every filled pour polygon on a copper layer BELOW the top.
+fn lower_layer_pours(root: &List) -> Vec<Vec<(f64, f64)>> {
+    let mut out = Vec::new();
+    for z in root.find_all("zone") {
+        let layer_names = z
+            .find("layers")
+            .map(|l| (0..).map_while(|i| l.arg_value(i)).collect::<Vec<_>>())
+            .or_else(|| z.find_value("layer").map(|l| vec![l]))
+            .unwrap_or_default();
+        let on_lower_copper = layer_names
+            .iter()
+            .any(|n| n.ends_with(".Cu") && !n.eq_ignore_ascii_case("F.Cu"));
+        if !on_lower_copper {
+            continue;
+        }
+        for fill in z.find_all("filled_polygon") {
+            if let Some(pts) = fill.find("pts") {
+                let poly: Vec<(f64, f64)> = pts
+                    .find_all("xy")
+                    .filter_map(|p| Some((p.arg_f64(0)?, p.arg_f64(1)?)))
+                    .collect();
+                if poly.len() >= 3 {
+                    out.push(poly);
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Whether **every** routed segment of a net sits over a filled lower-layer pour,
+/// i.e. whether this bus really has a reference plane beneath it.
 ///
-/// Deliberately coarse: it asks only "does a plane exist below F.Cu", not "is it
-/// solid directly under this trace". That keeps it a necessary condition rather
-/// than a sufficient one, which is the honest direction: it can still decline to
-/// compute where a plane exists, but it will not compute where none does.
-fn has_pour_below_top(root: &List) -> bool {
-    root.find_all("zone").any(|z| {
-        let filled = z.find("filled_polygon").is_some();
-        let on_lower_copper = || {
-            let layer_names = z
-                .find("layers")
-                .map(|l| (0..).map_while(|i| l.arg_value(i)).collect::<Vec<_>>())
-                .or_else(|| z.find_value("layer").map(|l| vec![l]))
-                .unwrap_or_default();
-            layer_names
-                .iter()
-                .any(|n| n.ends_with(".Cu") && !n.eq_ignore_ascii_case("F.Cu"))
-        };
-        filled && on_lower_copper()
-    })
+/// A board-wide "is there a pour anywhere" test is not evidence about this net: a
+/// small polygon in a far corner would turn an unreferenced route into a
+/// supposedly geometry-computed microstrip. Each segment's midpoint is tested
+/// against the pour polygons, so a route that leaves the plane falls back to the
+/// assumed range.
+///
+/// The residual is stated plainly: a segment whose midpoint is covered but whose
+/// ends overhang the pour edge still counts as covered. That is a narrow
+/// over-reach next to the board-wide test it replaces, and shrinking it further
+/// needs real polygon clipping.
+fn net_is_over_a_plane(root: &List, net_id: i64) -> bool {
+    let pours = lower_layer_pours(root);
+    if pours.is_empty() {
+        return false;
+    }
+    let by_name = net_name_index(root);
+    let mut any_segment = false;
+    for kw in ["segment", "arc"] {
+        for elem in root.find_all(kw) {
+            if elem_net_id(elem, &by_name) != Some(net_id) {
+                continue;
+            }
+            let (Some(sp), Some(ep)) = (elem.find("start"), elem.find("end")) else {
+                continue;
+            };
+            let (sx, sy) = (sp.arg_f64(0).unwrap_or(0.0), sp.arg_f64(1).unwrap_or(0.0));
+            let (ex, ey) = (ep.arg_f64(0).unwrap_or(0.0), ep.arg_f64(1).unwrap_or(0.0));
+            let (mx, my) = ((sx + ex) / 2.0, (sy + ey) / 2.0);
+            any_segment = true;
+            if !pours.iter().any(|poly| {
+                let (x0, y0, x1, y1) = poly_bounds(poly);
+                mx >= x0 && mx <= x1 && my >= y0 && my <= y1 && point_in_poly(mx, my, poly)
+            }) {
+                return false;
+            }
+        }
+    }
+    any_segment
 }
 
 /// The distinct copper layers a net's discrete tracks are routed on.

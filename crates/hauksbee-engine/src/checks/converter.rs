@@ -311,16 +311,13 @@ impl ConverterAbstention {
     }
 }
 
-/// Detect the switching stages on a board. Stages whose direction could not be
-/// established are dropped; use [`detect_converters_with_abstentions`] when the
-/// caller reports coverage, so those stages are not silently indistinguishable
-/// from an absence of converters.
-pub fn detect_converters(board: &ExtractedBoard, lib: &ModelLibrary) -> Vec<ConverterStage> {
-    detect_converters_with_abstentions(board, lib).0
-}
-
 /// Detect the switching stages on a board, alongside every stage that was found
 /// but could not be given a direction.
+///
+/// The only entry point, deliberately. A variant returning stages alone cannot
+/// distinguish "no converter here" from "a converter nobody could orient", which
+/// is the exact dishonesty the abstentions exist to remove, so no such variant is
+/// offered for a caller to reach for.
 pub fn detect_converters_with_abstentions(
     board: &ExtractedBoard,
     lib: &ModelLibrary,
