@@ -1326,3 +1326,98 @@ fn pour_without_rank_attribute_defaults_to_rank_one() {
     );
     assert_short(&drc("", "", &signals), "A", "B");
 }
+
+// ---------------------------------------------------------------------------
+// Drawn copper (<circle> / <rectangle> in a signal) is exact copper, not a
+// pour fill: a pad landing on it is a real short, and must not be swallowed
+// by the Zone-Pad antipad-carve suppression that guards KiCad pour fills.
+// ---------------------------------------------------------------------------
+
+const ONE_SMD_PACKAGE: &str = r#"
+<package name="P1X1">
+  <smd name="1" x="0" y="0" dx="1" dy="1" layer="1"/>
+</package>"#;
+
+#[test]
+fn pad_on_a_drawn_copper_ring_is_a_short() {
+    // SMD pad at (2, 0) lands on the radius-2 ring band (copper 1.8..2.2).
+    let elements = r#"<element name="U1" library="lib" package="P1X1" x="2" y="0"/>"#;
+    let signals = r#"
+<signal name="A">
+  <contactref element="U1" pad="1"/>
+</signal>
+<signal name="B">
+  <circle x="0" y="0" radius="2" width="0.4" layer="1"/>
+</signal>
+"#;
+    let report = drc(ONE_SMD_PACKAGE, elements, signals);
+    assert_short(&report, "A", "B");
+}
+
+#[test]
+fn pad_inside_a_drawn_ring_hole_stays_silent() {
+    // The same pad at the ring centre: 1.3 mm of air to the band.
+    let elements = r#"<element name="U1" library="lib" package="P1X1" x="0" y="0"/>"#;
+    let signals = r#"
+<signal name="A">
+  <contactref element="U1" pad="1"/>
+</signal>
+<signal name="B">
+  <circle x="0" y="0" radius="2" width="0.4" layer="1"/>
+</signal>
+"#;
+    let report = drc(ONE_SMD_PACKAGE, elements, signals);
+    assert!(
+        report.findings.is_empty(),
+        "the ring hole is bare board: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.gap_mm))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn pad_on_a_drawn_copper_rectangle_is_a_short() {
+    let elements = r#"<element name="U1" library="lib" package="P1X1" x="2" y="0"/>"#;
+    let signals = r#"
+<signal name="A">
+  <contactref element="U1" pad="1"/>
+</signal>
+<signal name="B">
+  <rectangle x1="1" y1="-1" x2="3" y2="1" layer="1"/>
+</signal>
+"#;
+    let report = drc(ONE_SMD_PACKAGE, elements, signals);
+    assert_short(&report, "A", "B");
+}
+
+#[test]
+fn curved_pour_edges_use_dense_flattening_for_the_rank_overlap_test() {
+    // Pour B's closing edge is a 90-degree arc (radius 70.7) bulging toward
+    // pour A. The true arc penetrates A's corner region by ~45-70 um, but the
+    // coarse 8-segment chord chain misses A entirely (its nearest vertex sits
+    // outside A's y-band and the adjacent chord only reaches A's edge line
+    // beyond A's top edge). Only sagitta-bounded flattening finds this
+    // same-rank overlap short.
+    let pour_a = r#"<polygon width="0.2" layer="1" rank="1">
+<vertex x="0" y="40"/>
+<vertex x="99.92" y="40"/>
+<vertex x="99.92" y="47"/>
+<vertex x="0" y="47"/>
+</polygon>"#;
+    let pour_b = r#"<polygon width="0.2" layer="1" rank="1">
+<vertex x="120.5" y="0"/>
+<vertex x="200" y="0"/>
+<vertex x="200" y="100"/>
+<vertex x="120.5" y="100" curve="90"/>
+</polygon>"#;
+    let signals = format!(
+        r#"
+<signal name="A">{pour_a}</signal>
+<signal name="B">{pour_b}</signal>
+"#
+    );
+    assert_short(&drc("", "", &signals), "A", "B");
+}

@@ -471,6 +471,12 @@ pub enum ItemKind {
     Via,
     Pad,
     Zone,
+    /// Directly drawn copper (an Eagle `<rectangle>` / `<circle>` on a copper
+    /// layer): exact copper like a track, NOT a pour fill. Kept distinct from
+    /// [`ItemKind::Zone`] because the sweep's Zone-Pad overlap suppression
+    /// (the KiCad antipad-carve rule) must not swallow a pad sitting on
+    /// drawn copper.
+    Graphic,
 }
 
 impl ItemKind {
@@ -481,6 +487,7 @@ impl ItemKind {
             ItemKind::Via => "via",
             ItemKind::Pad => "pad",
             ItemKind::Zone => "zone",
+            ItemKind::Graphic => "graphic",
         }
     }
 }
@@ -1738,7 +1745,11 @@ fn custom_pad_shapes(
 ) -> Vec<Shape> {
     let mut out = Vec::new();
 
-    // Anchor: the base pad shape the primitives are unioned onto.
+    // Anchor: the base pad shape the primitives are unioned onto. KiCad only
+    // writes `circle` or `rect`; the non-rect branch models the anchor over
+    // `size` as a stadium along the longer axis, which is exactly the disc
+    // when sx == sy (the circle-anchor case) and never over-claims the
+    // circumscribed disc if a non-square size ever appears.
     let anchor = pad
         .find("options")
         .and_then(|o| o.find_value("anchor"))
@@ -1746,13 +1757,23 @@ fn custom_pad_shapes(
     if anchor == "rect" {
         out.push(rect_polygon(sx, sy, to_world, 0.0));
     } else {
-        let c = to_world(0.0, 0.0);
+        let (long, short, along_x) = if sx >= sy {
+            (sx, sy, true)
+        } else {
+            (sy, sx, false)
+        };
+        let half = (long - short).max(0.0) / 2.0;
+        let (a, b) = if along_x {
+            (to_world(-half, 0.0), to_world(half, 0.0))
+        } else {
+            (to_world(0.0, -half), to_world(0.0, half))
+        };
         out.push(Shape::Capsule(Capsule {
-            ax: c.0,
-            ay: c.1,
-            bx: c.0,
-            by: c.1,
-            r: sx.max(sy) / 2.0,
+            ax: a.0,
+            ay: a.1,
+            bx: b.0,
+            by: b.1,
+            r: short / 2.0,
         }));
     }
 
@@ -1894,6 +1915,10 @@ const RING_SAGITTA_MM: f64 = 0.0025;
 /// mid-chord residue is O(s²/radius), nanometres at this tolerance),
 /// overstating each copper edge by at most `s`, i.e. at most
 /// [`RING_SAGITTA_MM`], under the [`CLEARANCE_TOLERANCE_MM`] finding band.
+/// The bias is deliberately FN-averse: a true air gap smaller than the
+/// overstatement (a couple of microns) can read as a touch and be reported a
+/// short; the alternative (chords under the true circle) silently drops real
+/// grazing shorts, the worse failure.
 fn covering_arc_capsules(
     cx: f64,
     cy: f64,
@@ -3301,8 +3326,24 @@ pub mod eagle_drc {
     }
 
     /// Flatten an Eagle `curve` arc (chord endpoints + signed included angle in
-    /// degrees) into a chain of capsule links of the given radius.
+    /// degrees) into a chain of capsule links of the given radius, using the
+    /// standard [`ARC_SEGMENTS`] board-wire density.
     fn flatten_curve(x1: f64, y1: f64, x2: f64, y2: f64, curve_deg: f64, r: f64) -> Vec<Capsule> {
+        flatten_curve_n(x1, y1, x2, y2, curve_deg, r, ARC_SEGMENTS)
+    }
+
+    /// As [`flatten_curve`], with an explicit segment count. Pour outlines use
+    /// a sagitta-bounded count (see [`super::covering_segments`]) so the
+    /// same-rank overlap test is not fooled by chord sag on curved edges.
+    fn flatten_curve_n(
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+        curve_deg: f64,
+        r: f64,
+        n: usize,
+    ) -> Vec<Capsule> {
         if curve_deg.abs() < 1e-6 {
             return vec![Capsule {
                 ax: x1,
@@ -3355,10 +3396,11 @@ pub mod eagle_drc {
             let best = if plus.0 <= minus.0 { plus } else { minus };
             (best.1, best.2, best.3)
         };
-        let mut caps = Vec::with_capacity(ARC_SEGMENTS);
+        let n = n.max(1);
+        let mut caps = Vec::with_capacity(n);
         let mut prev = (x1, y1);
-        for i in 1..=ARC_SEGMENTS {
-            let t = i as f64 / ARC_SEGMENTS as f64;
+        for i in 1..=n {
+            let t = i as f64 / n as f64;
             let a = a0 + theta * t;
             let p = (cx + radius * a.cos(), cy + radius * a.sin());
             caps.push(Capsule {
@@ -3726,7 +3768,7 @@ pub mod eagle_drc {
                             make_prim(
                                 Shape::Polygon { pts, r: 0.0 },
                                 net,
-                                ItemKind::Zone,
+                                ItemKind::Graphic,
                                 String::new(),
                             ),
                         );
@@ -3755,7 +3797,7 @@ pub mod eagle_drc {
                                     make_prim(
                                         Shape::Capsule(cap),
                                         net,
-                                        ItemKind::Zone,
+                                        ItemKind::Graphic,
                                         String::new(),
                                     ),
                                 );
@@ -3772,7 +3814,7 @@ pub mod eagle_drc {
                                         r: *radius,
                                     }),
                                     net,
-                                    ItemKind::Zone,
+                                    ItemKind::Graphic,
                                     String::new(),
                                 ),
                             );
@@ -3961,7 +4003,12 @@ pub mod eagle_drc {
     }
 
     /// Flatten a polygon's vertex ring, expanding any per-vertex `curve` (the arc
-    /// from this vertex to the next) into intermediate points.
+    /// from this vertex to the next) into intermediate points. Curves are
+    /// expanded at sagitta-bounded density (points ON the true arc, chord sag
+    /// at most [`super::RING_SAGITTA_MM`]) rather than the coarse board-wire
+    /// [`ARC_SEGMENTS`]: the ring feeds the same-rank pour overlap test, where
+    /// a coarse chord sagging inward (or bulging outward, for the opposite
+    /// curve sign) by `~0.02 * radius` would miss or invent an overlap.
     fn flatten_polygon(verts: &[(f64, f64, f64)]) -> Vec<(f64, f64)> {
         let n = verts.len();
         let mut out = Vec::with_capacity(n);
@@ -3970,7 +4017,15 @@ pub mod eagle_drc {
             let (x2, y2, _) = verts[(i + 1) % n];
             out.push((x1, y1));
             if curve.abs() > 1e-6 {
-                for cap in flatten_curve(x1, y1, x2, y2, curve, 0.0) {
+                let theta = curve.to_radians().abs();
+                let chord = (x2 - x1).hypot(y2 - y1);
+                let segments = if (theta / 2.0).sin().abs() > 1e-12 {
+                    let radius = (chord / 2.0) / (theta / 2.0).sin();
+                    super::covering_segments(radius, theta)
+                } else {
+                    ARC_SEGMENTS
+                };
+                for cap in flatten_curve_n(x1, y1, x2, y2, curve, 0.0, segments) {
                     out.push((cap.bx, cap.by));
                 }
                 // The last pushed point coincides with the next vertex; drop it
