@@ -318,7 +318,10 @@ size = 256
 id = "U3"
 type = "spi_mcp3008"
 vref = 5.0
-cs_net = "SPI_CS"          # optional: exact SPI framing off the real CS edges
+ref = "U3"                 # the board component this slave IS; if its model maps a
+                           # `cs` pin, that alone buys exact framing
+cs_net = "SPI_CS"          # optional override: exact SPI framing off the real CS
+                           # edges, and it wins over the model's `cs` pin
 
 [[peripheral]]
 id = "VCD"
@@ -446,23 +449,40 @@ above over a `field`.) Each peripheral's `state()` in
   synchronous input responders above, and not at all on the poll backends
   (Renode, QEMU), where its edges alias at the chunk rate like any GPIO.
 - **SPI transaction framing has three tiers**, reported per slave so a
-  verdict never hides which one it got:
-  - **Exact**: the peripheral's `cs_net` resolved to the MCU GPIO pin that
-    drives it, so `select`/`deselect` fire on the true active-low falling and
-    rising edges, interleaved in cycle order with the byte transfers.
-    Available on push backends (simavr).
+  verdict never hides which one it got. Exact framing is reached two ways;
+  both give the same tier because both give the same electrical fact, and the
+  route is reported alongside it (`cs_provenance` in the `--json` coverage)
+  because the two fail differently:
+  - **Exact, from the spec** (`cs_provenance: "spec"`): the peripheral's
+    `cs_net` resolved to the MCU GPIO pin that drives it, so
+    `select`/`deselect` fire on the true active-low falling and rising edges,
+    interleaved in cycle order with the byte transfers. Available on push
+    backends (simavr).
+  - **Exact, from the model's pin roles** (`cs_provenance: "model-roles"`):
+    no `cs_net` was declared, but the peripheral's `ref` names a board
+    component whose bound model maps a `cs` pin, so the CS net is read off
+    that pad. Nothing to declare: the model DB already knows which pad is
+    chip-select on the parts it covers (the MCP3008 and the 25AA/25LC SPI
+    EEPROM ship with it). The part must be assembled and identity-trusted to
+    supply one, so a DNP or identity-refused slave contributes nothing, and a
+    `ref` naming no board component is a load-time error rather than a quiet
+    drop to the heuristic. A declared `cs_net` always wins, which is how a
+    wrong pad map or a buffered chip-select stays correctable by hand.
   - **Backend**: the emulator surfaces CS itself (Renode hardware NSS
     `FinishTransmission` arriving as a `deselect` event), which frames the
     transaction precisely with no resolved CS pin. Detected dynamically the
     first time such an event lands, and it takes precedence over Exact when
     reported.
-  - **Heuristic**: no `cs_net` and no backend CS event, so the bus treats the
-    co-sim chunk boundary as a CS deassert. Wrong in two documented ways: two
-    transactions inside one chunk merge, and a chunk-spanning transaction is
-    truncated. hauksbee-ci appends the tier to the assertion's own detail
-    text: `[SPI framing: HEURISTIC; transaction boundaries guessed at chunk
-    edges; two transactions in one chunk merge and a boundary-spanning one is
-    truncated. Wire cs_net for exact framing]`.
+  - **Heuristic**: no CS net from either route and no backend CS event, so the
+    bus treats the co-sim chunk boundary as a CS deassert. Wrong in two
+    documented ways: two transactions inside one chunk merge, and a
+    chunk-spanning transaction is truncated. This is the genuine remainder,
+    an unrouted chip-select or a part the model DB does not cover, and it is
+    disclosed rather than papered over. hauksbee-ci appends the tier to the
+    assertion's own detail text: `[SPI framing: HEURISTIC; transaction
+    boundaries guessed at chunk edges; two transactions in one chunk merge and
+    a boundary-spanning one is truncated. Declare cs_net, or point `ref` at a
+    modelled part, for exact framing]`.
 - **One SPI slave per bus.** CS frames a transaction here, it does not select
   among several slaves on one bus.
 - **The declarative write side is I2C-only and untimed** (see the section

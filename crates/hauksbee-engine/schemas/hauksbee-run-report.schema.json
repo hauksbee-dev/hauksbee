@@ -846,6 +846,13 @@
         "bus": {
           "type": "string"
         },
+        "cs_provenance": {
+          "description": "On `mode = \"exact\"`, who supplied the chip-select net: `\"spec\"` (the run\nspec's `cs_net`) or `\"model-roles\"` (the `cs` pin role of the bound\nmodel for the board component the peripheral names). Absent on the\n`backend` and `heuristic` tiers, where no CS net was resolved. The tier\nalone does not say this, and the two routes fail differently, so a\nconsumer reproducing a result needs it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "mode": {
           "type": "string"
         }
