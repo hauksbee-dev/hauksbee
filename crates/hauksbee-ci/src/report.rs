@@ -153,8 +153,13 @@ pub enum EnsembleCoverage {
 
 impl EnsembleCoverage {
     /// The one-line coverage claim, worded so it cannot over-claim: Monte-Carlo
-    /// is sampled coverage (never proof); corners bound the worst case as far as
-    /// the interior probes could confirm the response is monotonic.
+    /// is sampled coverage (never proof); corners bound the worst case only
+    /// where the response is monotonic in each value, and the interior probes
+    /// are evidence for that monotonicity rather than proof of it.
+    ///
+    /// This string is the banner AND the JSON `coverage` field AND what the
+    /// evidence map carries, so it must never claim more than the per-assertion
+    /// detail lines in `assertions::all_green_detail` do.
     pub fn describe(&self) -> String {
         match self {
             EnsembleCoverage::MonteCarlo { seeds, components } => format!(
@@ -177,9 +182,10 @@ impl EnsembleCoverage {
                 components,
             } => format!(
                 "tolerance corners: {corners} deterministic min/max corner(s) + {interior} \
-                 interior probe(s) over {components} component(s): the corners bound the \
-                 worst case where the response is monotonic in each value, and the probes \
-                 sample the interior for a point that breaks an assertion the corners passed"
+                 interior probe(s) over {components} component(s): bounds the worst case \
+                 only where the response is monotonic in each value, and the probes sample \
+                 the interior for a point that breaks an assertion the corners passed \
+                 (evidence for that monotonicity, not proof of it)"
             ),
             EnsembleCoverage::SingleMember {
                 seed,
@@ -1321,6 +1327,49 @@ fn gh_escape(s: &str) -> String {
 #[cfg(test)]
 mod ensemble_coverage_tests {
     use super::EnsembleCoverage;
+
+    /// This banner is also the JSON `coverage` field and what the evidence map
+    /// carries, so it must not out-claim the per-assertion detail lines. It has
+    /// to keep the monotonicity hedge and say the probes are evidence, not proof.
+    #[test]
+    fn corner_coverage_with_probes_keeps_the_monotonicity_hedge() {
+        let d = EnsembleCoverage::Corners {
+            corners: 4,
+            interior: 6,
+            components: 2,
+        }
+        .describe();
+        assert!(d.contains("4 deterministic min/max corner(s)"), "{d}");
+        assert!(d.contains("6 interior probe(s)"), "{d}");
+        assert!(
+            d.contains("only where the response is monotonic in each value"),
+            "the corner bound's condition must survive: {d}"
+        );
+        assert!(
+            d.contains("evidence for that monotonicity, not proof of it"),
+            "the probes must not be sold as proof: {d}"
+        );
+        // The corner count must stay the 2^n a reader computes from the
+        // component count, never 2^n + probes.
+        assert!(!d.contains("10 deterministic"), "{d}");
+    }
+
+    /// A corner run with the probes disabled keeps the original, unqualified
+    /// disclosure: there is no search to report.
+    #[test]
+    fn corner_coverage_without_probes_keeps_the_original_disclosure() {
+        let d = EnsembleCoverage::Corners {
+            corners: 4,
+            interior: 0,
+            components: 2,
+        }
+        .describe();
+        assert!(
+            d.contains("only where the response is monotonic in each value"),
+            "{d}"
+        );
+        assert!(!d.contains("interior"), "no probes ran, so claim none: {d}");
+    }
 
     #[test]
     fn monte_carlo_coverage_excludes_the_nominal_from_the_sampled_count() {

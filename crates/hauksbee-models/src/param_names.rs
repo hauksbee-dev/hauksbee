@@ -4,9 +4,10 @@
 //! [`Params`](crate::schema::Params) is a free-form typed bag, deliberately: a
 //! new device class must be expressible without a schema change, and
 //! `validation.rs` bounds the values it recognises rather than the names. The
-//! cost is that `vf_typ` where the binder reads `vf` is not wrong, it is
+//! cost is that `rs_typ` where the binder reads `rs` is not wrong, it is
 //! *absent*: the entry validates, resolves, binds, and silently runs on the
-//! default. Nothing in the pipeline ever mentions the key again.
+//! default series resistance. Nothing in the pipeline ever mentions the key
+//! again.
 //!
 //! So this is a lint, not a schema. It names the vocabulary each kind's
 //! consumers actually read and reports anything else as a probable typo,
@@ -19,13 +20,18 @@
 //!
 //! Three sources, and a name from any of them passes:
 //!
-//! 1. The per-kind table below, which is the union of the names the binder reads
-//!    ([`hauksbee_engine::binder`]'s `*_model_from` / `bind_*` functions) and the
-//!    names the datasheet-extraction prompt advertises for that kind
-//!    (`datasheet::required_params_for_kind`). The second half matters: several
-//!    shipped params are documentation for a human reader and are read by no
-//!    code at all, and warning about those would train authors to ignore the
-//!    output.
+//! 1. The per-kind table below. It is curated, not derived: the starting point
+//!    is the names the binder reads (`hauksbee-engine`'s `*_model_from` /
+//!    `bind_*` functions), plus the concrete keys the datasheet-extraction
+//!    prompt asks an author for (`datasheet::required_params_for_kind`). The
+//!    second source matters, because several shipped params (`tpd_s`, `bits`,
+//!    `supply_pin`) are read by no code at all and are documentation for the
+//!    next author: warning about those would train people to ignore the lint.
+//!    Where that prompt names a *quantity* rather than a key (it asks a passive
+//!    for "its tolerance" and a self-resonant frequency without fixing a spelling)
+//!    nothing is added here, because inventing a key name would be asserting an
+//!    interface that does not exist. Such a name warns, which is the correct
+//!    outcome: no consumer reads it.
 //! 2. Any identifier the entry's own `[models.behavioral]` block references. A
 //!    `Law::expr` and a `Transition::guard` bind "the param keys verbatim", so a
 //!    model that computes `v_vplus / tie_ohms` has *defined* `tie_ohms` for
@@ -52,10 +58,14 @@ const UNIVERSAL: &[&str] = &[
 ];
 
 /// The SPICE junction params shared by the diode and the MOSFET body diode.
+///
+/// Deliberately only what `diode_model_from` reads. `db/diodes.toml`'s clamp
+/// entries carry `vt_clamp` / `rd_clamp`, but those are referenced by their own
+/// behavioral law expressions and are exempted through that route: listing them
+/// here would let a plain stamp-path diode carry an unread `rd_clamp` in
+/// silence, which is the exact failure this lint exists to catch.
 const DIODE: &[&str] = &[
     "is", "n", "rs", "cjo", "vj", "m", "tt", "bv", "ibv", "xti", "eg",
-    // Numerical guards on the exponential, read by the solver's diode eval.
-    "rd_clamp", "vt_clamp",
 ];
 
 /// Gummel-Poon params, plus `pair_count` for a dual-transistor package.
@@ -231,7 +241,7 @@ pub fn unknown_params(entry: &ModelEntry) -> Vec<UnknownParam> {
 ///
 /// A known name that is a `_`-boundary prefix of what was written is almost
 /// always the answer: the commonest real mistake is a datasheet-column suffix
-/// glued onto the right stem (`vf_typ`, `cjo_max`, `gain_db`), and edit distance
+/// glued onto the right stem (`rs_typ`, `cjo_max`, `gain_db`), and edit distance
 /// handles that badly because each suffix character counts against it. The
 /// longest such prefix wins, so `vref_int_v` suggests `vref_int` and not `vref`.
 ///

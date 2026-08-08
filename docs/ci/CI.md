@@ -360,7 +360,7 @@ so a probe worse than every corner still passes while it stays in band.
 Interior probes are numbered on from the last corner, so `--seed k` isolates
 one exactly like a corner; the report calls them `interior probe k`.
 
-Full enumeration is capped at 2^10 = 1024 components' corners. Above 10
+Full enumeration is capped at 10 toleranced components (2^10 = 1024 corner runs, plus the interior probes). Above 10
 toleranced components, corner mode refuses and points at Monte-Carlo. Corner
 mode does not compose with `[fuzz]` (the corner index enumerates min/max
 combinations, not fuzz seeds). Monte-Carlo does compose with `[fuzz]`.
