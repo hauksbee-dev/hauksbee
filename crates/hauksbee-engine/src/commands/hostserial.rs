@@ -401,14 +401,7 @@ pub fn run_session(
     let scale = if cfg.pace {
         1.0
     } else {
-        // TEMP-DEBUG: allow overriding the unpaced scale from the environment
-        // so heavily instrumented builds (ASan) can compress host gaps enough
-        // to keep the protocol alive at their sim speeds.
-        std::env::var("HAUKSBEE_WALL_SCALE")
-            .ok()
-            .and_then(|v| v.parse::<f64>().ok())
-            .filter(|v| *v > 0.0 && *v <= 1.0)
-            .unwrap_or(cfg.unpaced_wall_scale)
+        cfg.unpaced_wall_scale
     };
 
     let run_started = std::time::Instant::now();
