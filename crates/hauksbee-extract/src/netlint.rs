@@ -493,10 +493,11 @@ fn members<'a>(board: &'a ExtractedBoard, net_id: i64) -> Vec<(&'a Component, &'
     board.net_members(net_id)
 }
 
-/// Is this component a decoupling / bulk capacitor (ref C*, 2 connected pads)?
+/// Is this component a decoupling / bulk capacitor? Delegates to the same
+/// evidence ladder as [`is_resistor`], so the capacitor and resistor questions
+/// stay consistent about any one part.
 fn is_capacitor(c: &Component) -> bool {
-    let r = ref_designator(&c.reference);
-    r.starts_with('C') && !r.starts_with("CN") && !r.starts_with("CON") && connected_pads(c) == 2
+    part_class::classify_two_terminal(c).is_capacitor()
 }
 
 fn passive_prefix(reference: &str) -> Option<char> {

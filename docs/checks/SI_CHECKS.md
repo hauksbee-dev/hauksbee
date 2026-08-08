@@ -431,45 +431,78 @@ impedance to report at all, only the span where the reference plane is absent.
    impedance rises steeply, and the closed form's output is not an estimate of
    anything.
 
-   For a differential pair the assumption is therefore checked against the
-   copper. Points along both legs, at a 0.5 mm pitch, are tested against the fill
-   polygons of the pours on the adjacent copper layer (via
-   `gerber::geo::point_in_polygon`, the same even-odd ray cast the antenna-keepout
-   check uses, which is correct for the deeply non-convex outlines real pours
-   have). Where the reference is genuinely absent the check reports `reference
-   missing under trace`, names the span in board coordinates, and says what would
-   unlock a confident answer (solid reference-plane copper under the whole pair, a
-   stackup that declares the plane layer it references) **instead of** printing a
-   `Zdiff`. Where the reference cannot be established either way (no pour on the
-   adjacent layer, zones carrying no stored fill, a pair routed on an inner layer
-   where the microstrip model does not apply) the estimate is reported as before
-   with its reference stated as `reference plane unverified`: the bias is against
-   inventing a void.
+   For a **differential pair** the assumption is therefore checked against the
+   copper. (The single-ended 50 Ω path still assumes its plane; that is a known
+   gap, not a claim.) Points along both legs, at a 0.5 mm pitch, are tested
+   against the fill polygons of the pours on the adjacent copper layer, on *every*
+   outer layer the pair routes on rather than only the one carrying most of its
+   length. Containment uses `gerber::geo::point_in_polygon`, an even-odd ray cast,
+   against each fill polygon in turn, taking any hit: a real pour writes a hole by
+   weaving its outline in and back out, which the even-odd rule handles, and a
+   separate island is simply another polygon to hit.
 
-   Two guards keep *designed* plane features from reading as defects, and both
-   were calibrated on a real board (Watchy), each having produced a false positive
-   first:
+   Where copper is genuinely absent the check reports `reference missing under
+   trace`, names the void's extent and bounding box in board coordinates, and says
+   what would unlock a confident answer (solid reference-plane copper under the
+   whole pair, a stackup that declares the plane layer it references) **instead of**
+   printing a `Zdiff`. Where the reference cannot be established either way the
+   estimate is reported as before with its reference stated as `reference plane
+   unverified`, and the reason given. That happens when there is no pour on the
+   adjacent layer, when zones carry no stored fill, when the board declares no
+   `(layers)` block (so which layer is adjacent to which is unknown, and assuming
+   a 2-layer stack could point the check at a pour that is not the reference), or
+   when the pair routes on an inner layer where the microstrip model does not
+   apply. `Solid` is a claim about the *whole* pair, so any stretch that could not
+   be checked demotes the verdict to unverified rather than being absorbed into a
+   clean one. The bias throughout is against inventing a void.
 
-   - **Via anti-pads are excused.** A plane's anti-pads are deliberate: the copper
-     is cleared so the via can pass through. Because a pair's segments *terminate*
-     at its layer-transition vias, endpoint samples land in one systematically.
-     The first cut of this check reported a 2.91 mm void on Watchy where all seven
+   Three guards keep *designed* plane features from reading as defects. Each of
+   the first two closes a false positive that was actually observed, the first on a
+   real corpus board and the second in review:
+
+   - **Anti-pads are excused**, for pads as well as vias. Anti-pads are deliberate
+     clearance so a hole can pass through. Because a pair's segments *terminate* at
+     its layer-transition vias, endpoint samples land in one systematically: the
+     first cut of this check reported a 2.91 mm void on **Watchy** where all seven
      uncovered samples were within 0.36 mm of a via centre and four sat exactly on
-     one, on an In2.Cu plane that is in fact continuous. A sample inside a via's
-     barrel radius plus 0.3 mm carries no information about the plane.
-   - **The criterion is a contiguous run, not a sum.** What degrades a pair's
-     impedance is a stretch with no return path under it; a dozen pinholes
-     scattered along a 30 mm route is not one 12 mm gap. Summing was the second
-     Watchy false positive: four samples scattered around a test-point and pad
-     cluster added to 1.86 mm and read as a void when each was an individual
-     anti-pad. The threshold is a contiguous 2 mm along one leg, wider than any
-     plausible anti-pad (pad clearances in a plane run to roughly 1.5 mm across
-     even for a large through-hole pad, and traces cross anti-pad clusters and
-     thermal-relief spokes routinely) and far narrower than a plane split.
+     one, on an In2.Cu plane that is in fact continuous. Pads count because a
+     through-hole connector pad or a mounting hole clears far more copper than a
+     signal via; a pad is recorded with the copper layers it occupies, so an SMD
+     pad on the far side of the board is not credited with piercing an inner plane.
+     The excuse radius is the hole's own extent plus the largest clearance the
+     pours on that layer declare (`(clearance ...)` and the `(connect_pads
+     (clearance ...))` relief gap), floored at 0.3 mm. Reading the board's own
+     clearance matters: a fixed margin smaller than what the filler actually pulled
+     back would leave rings of bare laminate outside the excuse radius, and a via
+     fence flanking a pair would read as a void. Erring high only ever loses an
+     abstention; erring low invents one.
+   - **A void's size is its geometric extent within one cluster**, not a sum and
+     not a per-segment run. Uncovered samples are grouped by single linkage at a
+     fixed 1 mm, and a void is measured by the greatest distance between two of its own
+     samples. Copper between two clearances therefore *separates* them instead of
+     being bridged over, which a contiguous-run counter did not do: skipping an
+     excused via sample without breaking the run let two 1.2 mm clearances either
+     side of a via add up past the threshold. The link distance is deliberately
+     fixed rather than scaled to the sampling pitch: scaling it looked like a fix
+     for coarsely-sampled long runs and was itself a false positive, since a 100 mm
+     segment's 1.56 mm pitch would stretch the link to 2.34 mm and re-merge
+     clearances 2 mm apart. The pitch is instead kept fine enough (up to 512 samples
+     per segment, so 0.5 mm is honoured for any run a real board contains) that
+     consecutive samples always link. Clustering is also route-order independent,
+     so a real void crossed by several short length-matching jogs is one void
+     rather than several sub-threshold runs.
+   - **The extent must reach 2 mm.** This is a conservative floor, not a derived
+     physical limit. What actually matters to a pair is a gap comparable to its
+     trace-to-plane height, a few tenths of a millimetre, so a stricter threshold
+     would be better physics and a much worse check: fill outlines that weave
+     around every aperture, sampled at 0.5 mm, cannot resolve sub-millimetre
+     features reliably. 2 mm is set where a void is unambiguous even after
+     clearances are excused, in the same spirit as the ±15% impedance tolerance:
+     whatever it lets through was never going to be a confident finding.
 
-   Watchy's corpus test now pins both outcomes: its In2.Cu plane must verify as
-   *positively solid* under the USB pair, neither reported missing nor declared
-   unverifiable, so neither false positive can return.
+   Watchy's corpus test pins the outcome from the other side: its In2.Cu plane must
+   verify as *positively solid* under the USB pair, neither reported missing nor
+   declared unverifiable.
 3. **Declared impedance-control intent**: KiCad's
    `(stackup (dielectric_constraints yes))`. This is the hard-won corpus lesson.
    The closed-form model is a genuine estimate with a real error band on dense
