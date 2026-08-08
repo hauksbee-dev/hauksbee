@@ -60,7 +60,7 @@ is present exactly for exit 3.
 | `elapsed_s` | number | yes | wall-clock seconds |
 | `coverage` | string or `null` | yes, nullable | the tolerance-ensemble coverage claim; `null` when the run was not an ensemble |
 | `substitutions` | array of string | yes, may be empty | MCUs co-simulated on a substitute core |
-| `coverage_warnings` | array of string | yes, may be empty | co-sim coverage holes (dropped ADC injection, unexercised bus device, a watchdog that cannot bite, a watchdog that did) |
+| `coverage_warnings` | array of string | yes, may be empty | co-sim coverage holes (dropped ADC injection, unexercised bus device, a watchdog that cannot bite, a watchdog that did, a backend whose simulated time carries a known systematic bias) |
 | `timing_coverage` | array of object | yes, may be empty | per-MCU measured `timestamp_precision_s`, `minimum_guaranteed_pulse_s`, actual `chunk_s`, backend, and whether stamps are cycle-exact |
 | `timing_refusals` | array of string | yes, may be empty | explicit unrepresentable timing claims or replay limits; any entry makes the run INVALID |
 | `dead_rails` | array of string | yes, may be empty | nets that name a supply and that nothing powered |
