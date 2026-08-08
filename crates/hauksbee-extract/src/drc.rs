@@ -178,7 +178,8 @@ impl ClearanceRules {
     /// Record an explicit clearance for a concrete class pair (either order;
     /// `a == b` pins the class's own same-class rule). Pair entries take
     /// precedence over the max-of-two-classes fallback in
-    /// [`Self::effective_clearance`].
+    /// [`Self::effective_clearance`]. A duplicate insert keeps the stricter
+    /// value.
     pub fn add_class_pair_clearance(&mut self, class_a: &str, class_b: &str, clearance_mm: f64) {
         if clearance_mm <= 0.0 {
             return;
@@ -188,7 +189,8 @@ impl ClearanceRules {
         } else {
             (class_b.to_string(), class_a.to_string())
         };
-        self.class_pair_clearances.insert(key, clearance_mm);
+        let entry = self.class_pair_clearances.entry(key).or_insert(0.0);
+        *entry = entry.max(clearance_mm);
     }
 
     pub fn effective_clearance(&self, net_a: &str, net_b: &str) -> f64 {
@@ -1707,6 +1709,11 @@ fn trapezoid_polygon(
             pts.pop();
         }
     }
+    if pts.len() < 3 {
+        // A pathological delta (both edges collapsed) leaves no area to
+        // stamp; fall back to the size box rather than a degenerate polygon.
+        return rect_polygon(sx, sy, to_world, 0.0);
+    }
     let pts = pts.into_iter().map(|(x, y)| to_world(x, y)).collect();
     Shape::Polygon { pts, r: 0.0 }
 }
@@ -1752,6 +1759,10 @@ fn custom_pad_shapes(
         )
     };
     for prim in prims.lists() {
+        // A zero `width` on a stroked primitive stamps its centerline as
+        // zero-width copper: the conservative minimum (KiCad's editor rejects
+        // zero-width strokes, so this only arises in hand-edited files, and
+        // inventing a default stroke width would over-claim copper).
         let width = prim.find_f64("width").unwrap_or(0.0);
         let r = width / 2.0;
         match prim.name() {
@@ -1787,7 +1798,10 @@ fn custom_pad_shapes(
                     let a = to_world(a.0, a.1);
                     let b = to_world(b.0, b.1);
                     let mid = xy_pair(prim, "mid").map(|m| to_world(m.0, m.1));
-                    for cap in flatten_arc(a, mid, b, width) {
+                    // Covering flattening (not the lossy board-arc chain): a
+                    // pad-primitive arc is exact copper, and chord sag would
+                    // hide a grazing short on the stroke.
+                    for cap in covering_arc_from_3(a, mid, b, width) {
                         out.push(Shape::Capsule(cap));
                     }
                 }
@@ -1846,44 +1860,66 @@ fn custom_pad_shapes(
 }
 
 /// Flatten a full circle of the given centre/radius into a chain of capsule
-/// links of radius `r` (an annulus / stroked ring, not a solid disc).
+/// links of radius `r` (an annulus / stroked ring, not a solid disc), covering
+/// the true annulus. See [`covering_arc_capsules`] for the covering scheme.
+fn ring_capsules(cx: f64, cy: f64, radius: f64, r: f64) -> Vec<Capsule> {
+    covering_arc_capsules(cx, cy, radius, 0.0, std::f64::consts::TAU, r)
+}
+
+/// Maximum chord sagitta permitted when flattening a circle or covering arc
+/// (mm). The covering scheme in [`covering_arc_capsules`] converts this into a
+/// symmetric copper overstatement of at most the same amount, kept strictly
+/// under [`CLEARANCE_TOLERANCE_MM`] so the overstatement alone can never turn
+/// a routing-to-rule gap into a reported finding.
+const RING_SAGITTA_MM: f64 = 0.0025;
+
+/// Flatten the circular arc of `sweep` radians starting at angle `a0` on the
+/// circle (`cx`, `cy`, `radius`) into capsule links of stroke radius `r` that
+/// COVER the true arc band.
 ///
 /// Chord flattening alone puts the capsule midlines INSIDE the true circle by
-/// the sagitta, shrinking both copper edges of the ring and hiding grazing
-/// shorts (missing a short is this module's worst failure). So the segment
-/// count is chosen to keep the sagitta at or below [`RING_SAGITTA_MM`] and the
-/// capsule radius is inflated by that bound: the chain then COVERS the true
-/// annulus, overstating it by at most `RING_SAGITTA_MM`, which sits under
-/// [`CLEARANCE_TOLERANCE_MM`] so the overstatement can never manufacture a
-/// finding on its own.
-fn ring_capsules(cx: f64, cy: f64, radius: f64, r: f64) -> Vec<Capsule> {
-    let n = ring_segments(radius);
+/// the sagitta `s`, shrinking both copper edges of the stroke and hiding
+/// grazing shorts (missing a short is this module's worst failure). Instead
+/// the segment count is chosen so `s <= RING_SAGITTA_MM`, the chain vertices
+/// sit at `radius + s/2` (splitting the sag symmetrically about the true
+/// circle), and the capsule radius is inflated by `s/2`. The capsule surface
+/// then spans at least `[radius - r, radius + r]` radially everywhere (a true
+/// cover), overstating each copper edge by at most `s`, i.e. at most
+/// [`RING_SAGITTA_MM`], under the [`CLEARANCE_TOLERANCE_MM`] finding band.
+fn covering_arc_capsules(
+    cx: f64,
+    cy: f64,
+    radius: f64,
+    a0: f64,
+    sweep: f64,
+    r: f64,
+) -> Vec<Capsule> {
+    let n = covering_segments(radius, sweep);
+    let s = radius * (1.0 - (sweep.abs() / (2.0 * n as f64)).cos());
+    let mid_radius = radius + s / 2.0;
+    let at = |ang: f64| (cx + mid_radius * ang.cos(), cy + mid_radius * ang.sin());
     let mut caps = Vec::with_capacity(n);
-    let mut prev = (cx + radius, cy);
+    let mut prev = at(a0);
     for i in 1..=n {
-        let a = std::f64::consts::TAU * i as f64 / n as f64;
-        let p = (cx + radius * a.cos(), cy + radius * a.sin());
+        let p = at(a0 + sweep * i as f64 / n as f64);
         caps.push(Capsule {
             ax: prev.0,
             ay: prev.1,
             bx: p.0,
             by: p.1,
-            r: r + RING_SAGITTA_MM,
+            r: r + s / 2.0,
         });
         prev = p;
     }
     caps
 }
 
-/// Maximum chord sagitta permitted when flattening a full circle (mm). Kept
-/// under [`CLEARANCE_TOLERANCE_MM`] so the covering inflation in
-/// [`ring_capsules`] stays inside the finding tolerance band.
-const RING_SAGITTA_MM: f64 = 0.0025;
-
-/// Segment count that keeps a circle's chord sagitta `radius * (1 - cos(π/n))`
-/// at or below [`RING_SAGITTA_MM`], floored at `2 * ARC_SEGMENTS`.
-fn ring_segments(radius: f64) -> usize {
-    let floor = 2 * ARC_SEGMENTS;
+/// Segment count that keeps the chord sagitta `radius * (1 - cos(sweep/2n))`
+/// at or below [`RING_SAGITTA_MM`], floored at [`ARC_SEGMENTS`] per half-turn
+/// (minimum 1).
+fn covering_segments(radius: f64, sweep: f64) -> usize {
+    let turns = sweep.abs() / std::f64::consts::PI;
+    let floor = ((ARC_SEGMENTS as f64 * turns).ceil() as usize).max(1);
     if radius <= RING_SAGITTA_MM {
         return floor;
     }
@@ -1891,7 +1927,7 @@ fn ring_segments(radius: f64) -> usize {
     if half_angle <= 0.0 {
         return floor;
     }
-    ((std::f64::consts::PI / half_angle).ceil() as usize).max(floor)
+    ((sweep.abs() / (2.0 * half_angle)).ceil() as usize).max(floor)
 }
 
 /// Read a `(pts (xy ..)(xy ..))` child into world-frame coordinates (no
@@ -1939,33 +1975,7 @@ fn flatten_arc(
     let a1 = ang(end);
     // Sweep direction: go start->mid->end the short way through mid.
     // Normalise so the arc passes through mid.
-    let through = |from: f64, to: f64, via: f64| {
-        let norm = |x: f64| {
-            let mut v = x;
-            while v <= -std::f64::consts::PI {
-                v += std::f64::consts::TAU;
-            }
-            while v > std::f64::consts::PI {
-                v -= std::f64::consts::TAU;
-            }
-            v
-        };
-        // Total CCW sweep from->to and whether mid lies on it.
-        let mut s = norm(to - from);
-        if s < 0.0 {
-            s += std::f64::consts::TAU;
-        }
-        let mut m = norm(via - from);
-        if m < 0.0 {
-            m += std::f64::consts::TAU;
-        }
-        if m <= s {
-            s
-        } else {
-            s - std::f64::consts::TAU
-        }
-    };
-    let sweep = through(a0, a1, am);
+    let sweep = arc_sweep_through(a0, a1, am);
     let mut caps = Vec::with_capacity(ARC_SEGMENTS);
     let mut prev = start;
     for i in 1..=ARC_SEGMENTS {
@@ -1982,6 +1992,65 @@ fn flatten_arc(
         prev = p;
     }
     caps
+}
+
+/// As [`flatten_arc`], but the chain COVERS the true stroke band (see
+/// [`covering_arc_capsules`]). Used for pad-primitive arcs, which are exact
+/// copper: the lossy board-arc chain's chord sag (up to `~0.02 * radius`)
+/// could hide a grazing short on the stroke.
+fn covering_arc_from_3(
+    start: (f64, f64),
+    mid: Option<(f64, f64)>,
+    end: (f64, f64),
+    width: f64,
+) -> Vec<Capsule> {
+    let r = width / 2.0;
+    let chord = vec![Capsule {
+        ax: start.0,
+        ay: start.1,
+        bx: end.0,
+        by: end.1,
+        r,
+    }];
+    let Some(mid) = mid else {
+        return chord;
+    };
+    let Some((cx, cy, radius)) = circle_from_3(start, mid, end) else {
+        return chord;
+    };
+    let ang = |p: (f64, f64)| (p.1 - cy).atan2(p.0 - cx);
+    let a0 = ang(start);
+    let sweep = arc_sweep_through(a0, ang(end), ang(mid));
+    covering_arc_capsules(cx, cy, radius, a0, sweep, r)
+}
+
+/// Total signed CCW sweep from angle `from` to angle `to` that passes through
+/// `via` (radians): the positive CCW sweep when `via` lies on it, otherwise
+/// the complementary negative sweep.
+fn arc_sweep_through(from: f64, to: f64, via: f64) -> f64 {
+    let norm = |x: f64| {
+        let mut v = x;
+        while v <= -std::f64::consts::PI {
+            v += std::f64::consts::TAU;
+        }
+        while v > std::f64::consts::PI {
+            v -= std::f64::consts::TAU;
+        }
+        v
+    };
+    let mut s = norm(to - from);
+    if s < 0.0 {
+        s += std::f64::consts::TAU;
+    }
+    let mut m = norm(via - from);
+    if m < 0.0 {
+        m += std::f64::consts::TAU;
+    }
+    if m <= s {
+        s
+    } else {
+        s - std::f64::consts::TAU
+    }
 }
 
 /// Circumcircle (centre, radius) of three points, or None if colinear.
@@ -3598,8 +3667,10 @@ pub mod eagle_drc {
                         // the rules distance is ignored), thermal spokes only
                         // remove same-net copper, and orphan removal only
                         // deletes fill pockets. Every setting keeps or widens
-                        // gaps, so the fill can never short or crowd foreign
-                        // copper in the same file, while treating the drawn
+                        // gaps, so a fill Eagle derives from these settings
+                        // cannot short or crowd foreign copper in the same
+                        // file (pour-to-copper pairs are therefore left
+                        // unchecked, not checked-and-clean), while treating the drawn
                         // outline as solid copper would turn every legitimate
                         // crossing track and every isolated foreign pad into a
                         // false short. The one construct the settings CANNOT
@@ -3741,15 +3812,13 @@ pub mod eagle_drc {
         // ── Net-class clearances ─────────────────────────────────────────────
         // Eagle's `<classes>` block is a clearance matrix: class N declares
         // `<clearance class="M" value="V"/>` rows (its own number included).
-        // The larger of a matrix value and the design-rule clearance wins; a
-        // pair with NO matrix entry falls back to the design rules alone
-        // (Eagle documents an empty/0 class value as "use the design rules"),
-        // so cross-class pairs are pinned explicitly rather than left to the
-        // KiCad-style max-of-two-classes rule. This reading is not yet pinned
-        // by an Eagle-generated oracle board; it is the noise-safe direction
-        // (max-of-classes could only ADD findings on cross-class pairs), so
-        // if a corpus oracle ever shows Eagle using the max rule for omitted
-        // cells, tighten the fallback here.
+        // Eagle's rule set is "the larger value applies" throughout: a class
+        // value below the design-rule clearance is ignored (so every stored
+        // value is floored at the design rules), and when nets of DIFFERENT
+        // classes meet with no explicit matrix cell (absent or 0), the larger
+        // of the two classes' own clearances governs, which is exactly the
+        // max-of-two-classes fallback in `effective_clearance`, so only
+        // explicit non-zero matrix cells are registered as pair overrides.
         let mut rules = ClearanceRules::new(clearance);
         let class_key = |n: i64| format!("class-{n}");
         for (number, class) in &parsed.classes {
@@ -3764,31 +3833,14 @@ pub mod eagle_drc {
                 clearance_mm: self_clearance.max(clearance),
                 diff_pair_gap_mm: None,
             });
-        }
-        let class_numbers: Vec<i64> = parsed.classes.keys().copied().collect();
-        let matrix_entry = |from: i64, to: i64| -> Option<f64> {
-            parsed
-                .classes
-                .get(&from)?
-                .clearances
-                .iter()
-                .find(|(other, _)| *other == to)
-                .map(|(_, v)| *v)
-        };
-        for (i, &n) in class_numbers.iter().enumerate() {
-            for &m in class_numbers.iter().skip(i + 1) {
-                // The matrix is stored one-directional (class N lists its row
-                // toward lower-numbered classes); accept either direction and
-                // take the stricter if a file carries both.
-                let explicit = match (matrix_entry(n, m), matrix_entry(m, n)) {
-                    (Some(a), Some(b)) => Some(a.max(b)),
-                    (a, b) => a.or(b),
-                };
-                rules.add_class_pair_clearance(
-                    &class_key(n),
-                    &class_key(m),
-                    explicit.map_or(clearance, |v| v.max(clearance)),
-                );
+            for (other, value) in &class.clearances {
+                if other != number && *value > 0.0 {
+                    rules.add_class_pair_clearance(
+                        &class_key(*number),
+                        &class_key(*other),
+                        value.max(clearance),
+                    );
+                }
             }
         }
         for (si, (name, _)) in parsed.signals.iter().enumerate() {
@@ -3964,8 +4016,8 @@ pub mod eagle_drc {
 /// `AARC6`, `AVIA6`, `APAD6`); see `altium.rs` for the field-by-field citation.
 pub mod altium_drc {
     use super::{
-        make_prim, sweep_buckets, Capsule, ClearanceRules, DrcReport, ItemKind, LayerBuckets,
-        NetTieOwners, Shape, ARC_SEGMENTS, DEFAULT_CLEARANCE_MM,
+        chamfered_rect_polygon, make_prim, sweep_buckets, Capsule, ClearanceRules, DrcReport,
+        ItemKind, LayerBuckets, NetTieOwners, Shape, ARC_SEGMENTS, DEFAULT_CLEARANCE_MM,
     };
     use crate::altium::{self, is_copper_layer, layer_name, parse_pads, MM_PER_UNIT, NONE_U16};
     use crate::ExtractError;
@@ -4390,16 +4442,20 @@ pub mod altium_drc {
         out
     }
 
+    /// Octagon corner cut, as a fraction of the pad's shorter side. Ported
+    /// from KiCad's Altium importer (`altium_pcb.cpp`,
+    /// `ALTIUM_PAD_SHAPE::OCTAGONAL` → chamfered rect, ratio 0.25, all
+    /// corners), the same reference implementation the record layouts in this
+    /// module are ported from. A regular octagon (ratio ≈ 0.293 on a square
+    /// pad) would cut MORE copper, so 0.25 is the conservative reading if the
+    /// two ever disagree.
+    const OCTAGON_CHAMFER_RATIO: f64 = 0.25;
+
     /// Build the solid copper shape for a pad. Shape codes: 1 = circle/oval,
     /// 2 = rectangle, 3 = octagon (KiCad `ALTIUM_PAD_SHAPE`). Rectangles are
     /// exact; the octagon is the rectangle with each corner cut at 45° by
-    /// 25% of the shorter side, so copper legitimately routed past a cut
-    /// corner is not a phantom short. The 0.25 ratio is ported from KiCad's
-    /// Altium importer (`altium_pcb.cpp`, `ALTIUM_PAD_SHAPE::OCTAGONAL` →
-    /// chamfered rect, ratio 0.25, all corners), the same reference
-    /// implementation the record layouts in this module are ported from; a
-    /// regular octagon (ratio ≈ 0.293 on a square pad) would cut MORE copper,
-    /// so 0.25 is the conservative reading if the two ever disagree.
+    /// [`OCTAGON_CHAMFER_RATIO`] of the shorter side, so copper legitimately
+    /// routed past a cut corner is not a phantom short.
     fn pad_shape(cx: f64, cy: f64, g: &PadGeo) -> Shape {
         let rot = g.rotation.to_radians();
         let (w, h) = (g.size_x, g.size_y);
@@ -4431,25 +4487,12 @@ pub mod altium_drc {
             }
             3 => {
                 // Octagon: the rectangle with 45° corner cuts of
-                // 0.25 * min(w, h).
-                let hw = w / 2.0;
-                let hh = h / 2.0;
-                let c = 0.25 * w.min(h);
+                // OCTAGON_CHAMFER_RATIO * min(w, h), built by the same
+                // chamfered-rect constructor the KiCad path uses.
+                let c = OCTAGON_CHAMFER_RATIO * w.min(h);
                 let (rs, rc) = rot.sin_cos();
-                let pts = [
-                    (-hw + c, -hh),
-                    (hw - c, -hh),
-                    (hw, -hh + c),
-                    (hw, hh - c),
-                    (hw - c, hh),
-                    (-hw + c, hh),
-                    (-hw, hh - c),
-                    (-hw, -hh + c),
-                ]
-                .into_iter()
-                .map(|(lx, ly)| (cx + lx * rc - ly * rs, cy + lx * rs + ly * rc))
-                .collect();
-                Shape::Polygon { pts, r: 0.0 }
+                let to_world = |lx: f64, ly: f64| (cx + lx * rc - ly * rs, cy + lx * rs + ly * rc);
+                chamfered_rect_polygon(w, h, 0.0, c, [true; 4], &to_world)
             }
             _ => {
                 // Rectangle (and unknown codes, conservatively): the rectangle.

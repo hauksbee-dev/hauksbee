@@ -1133,8 +1133,9 @@ fn trapezoid_delta_x_skews_the_side_edges() {
 
 /// A custom pad exercising every primitive kind: circle anchor at the origin,
 /// a stroked line at x in [3, 5], a stroked (unfilled) ring of radius 2 at
-/// (-5, 0), an unfilled rect at x in [7, 9], a filled rect at x in [-9, -7],
-/// and an arc through (0, 4) - (2, 6) - (0, 8).
+/// (-5, 0), a filled circle of radius 1 at (0, -5), an unfilled rect at
+/// x in [7, 9], a filled rect at x in [-9, -7], and an arc through
+/// (0, 4) - (2, 6) - (0, 8).
 const CUSTOM_PRIMITIVE_ZOO_PAD: &str = r#"
   (footprint "lib:zoo" (layer "F.Cu") (at 0 0)
     (property "Reference" "U4")
@@ -1143,6 +1144,7 @@ const CUSTOM_PRIMITIVE_ZOO_PAD: &str = r#"
       (primitives
         (gr_line (start 3 0) (end 5 0) (width 0.4))
         (gr_circle (center -5 0) (end -3 0) (width 0.4))
+        (gr_circle (center 0 -5) (end 1 -5) (width 0.2) (fill yes))
         (gr_rect (start 7 -1) (end 9 1) (width 0.2))
         (gr_rect (start -9 -1) (end -7 1) (width 0.2) (fill yes))
         (gr_arc (start 0 4) (mid 2 6) (end 0 8) (width 0.4))
@@ -1224,4 +1226,39 @@ fn custom_pad_gr_arc_stroke_is_copper() {
   (segment (start 1.5 6) (end 2.5 6) (width 0.2) (layer "F.Cu") (net 1))
 "#;
     assert_short(&zoo_report(track), "A", "B");
+}
+
+#[test]
+fn custom_pad_filled_circle_body_is_copper() {
+    // The filled gr_circle at (0, -5): copper through its middle, not just a
+    // ring.
+    let track = r#"
+  (segment (start -0.2 -5) (end 0.2 -5) (width 0.2) (layer "F.Cu") (net 1))
+"#;
+    assert_short(&zoo_report(track), "A", "B");
+}
+
+#[test]
+fn custom_pad_arc_grazing_gap_is_not_lost_to_chord_flattening() {
+    // The zoo arc runs on the circle centred (0, 6), radius 2, stroke 0.4:
+    // true outer stroke edge at 2.2 from the centre. A radial track whose
+    // copper tip stops 0.19 mm off that edge, aimed at -78.75 degrees from
+    // the centre - the mid-chord angle of a coarse 8-segment flattening,
+    // where the chord sags ~0.038 mm inward and would misreport the gap as
+    // ~0.23 mm (over the 0.2 mm rule: silently dropped). The covering chain
+    // must report the true ~0.19 mm clearance violation.
+    let track = r#"
+  (segment (start 0.476020 3.606885) (end 0.585271 3.057645) (width 0.1) (layer "F.Cu") (net 1))
+"#;
+    let report = zoo_report(track);
+    assert_eq!(report.short_count(), 0, "0.19 mm off the copper, no short");
+    let f = report
+        .clearance_violations()
+        .next()
+        .expect("a 0.19 mm gap violates the 0.2 mm rule");
+    assert!(
+        (0.178..0.198).contains(&f.gap_mm),
+        "true grazing gap is ~0.19 mm (chord sag would say ~0.23), got {}",
+        f.gap_mm
+    );
 }

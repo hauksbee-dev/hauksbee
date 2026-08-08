@@ -1027,15 +1027,47 @@ fn same_class_clearance_rule_is_applied() {
 }
 
 #[test]
-fn cross_class_pair_without_matrix_entry_stays_on_design_rules() {
-    // P1 in class 1 (0.4), P2 in class 0 (0.15), no explicit 1-0 entry: Eagle
-    // resolves the pair to the design rules (0.1524 mm), so the 0.3 mm gap is
-    // silent. A max-of-two-classes rule would falsely flag it.
+fn cross_class_pair_without_matrix_entry_uses_the_larger_class_clearance() {
+    // P1 in class 1 (0.4), P2 in class 0 (0.15), no explicit 1-0 matrix cell:
+    // Eagle's rule for nets of different classes is that the larger of the
+    // two class clearances governs, so the 0.3 mm gap violates the 0.4 mm
+    // power-class rule. A design-rules-only fallback (0.1524 mm) would
+    // silently under-report every power-to-signal pair.
     let rules = format!("{TWO_CLASSES}{}", default_rules());
+    let report = drc_rules("", "", &two_wire_signals("1", "0"), &rules);
+    assert_eq!(report.short_count(), 0, "not touching, so never a short");
+    let f = report
+        .clearance_violations()
+        .next()
+        .expect("0.3 mm gap violates the larger (0.4 mm) class clearance");
+    assert!(
+        (f.required_clearance_mm - 0.4).abs() < 1e-9,
+        "the larger class clearance drives the requirement, got {}",
+        f.required_clearance_mm
+    );
+}
+
+#[test]
+fn explicit_cross_class_matrix_entry_can_relax_below_the_larger_class() {
+    // Same pair, but class 1 explicitly declares a 0.2 mm clearance to
+    // class 0: the matrix cell overrides the larger-class fallback, so the
+    // 0.3 mm gap is legal. This pins that explicit cells WIN (an
+    // always-take-the-max model would still flag 0.4 here).
+    let classes = r#"
+<classes>
+<class number="0" name="default" width="0" drill="0">
+<clearance class="0" value="0.15"/>
+</class>
+<class number="1" name="power" width="0" drill="0">
+<clearance class="0" value="0.2"/>
+<clearance class="1" value="0.4"/>
+</class>
+</classes>"#;
+    let rules = format!("{classes}{}", default_rules());
     let report = drc_rules("", "", &two_wire_signals("1", "0"), &rules);
     assert!(
         report.findings.is_empty(),
-        "cross-class pair with no matrix entry uses the design rules: {:?}",
+        "the explicit 0.2 mm matrix cell overrides the 0.4 mm class rule: {:?}",
         report
             .findings
             .iter()
@@ -1257,4 +1289,23 @@ fn near_but_disjoint_same_rank_pours_are_not_a_short() {
             .map(|f| (f.kind, f.net_a_name.clone(), f.net_b_name.clone(), f.gap_mm))
             .collect::<Vec<_>>()
     );
+}
+
+#[test]
+fn annulus_covering_inflation_keeps_an_exact_edge_touch_a_short() {
+    // Ring radius 0.1, stroke 0.05: true outer copper edge at 0.125. A wire
+    // whose copper tip reaches 0.1245 (0.5 um INTO the copper) aimed at
+    // 11.25 degrees, the mid-chord angle of the 16-segment floor chain used
+    // at this radius. Without the covering inflation the chord sags ~1.9 um
+    // inward and this overlap would read as a positive 1.4 um gap (a
+    // clearance note, not a short). The covering chain must report the short.
+    let signals = r#"
+<signal name="A">
+  <wire x1="0.131916" y1="0.026240" x2="0.490393" y2="0.097545" width="0.02" layer="1"/>
+</signal>
+<signal name="B">
+  <circle x="0" y="0" radius="0.1" width="0.05" layer="1"/>
+</signal>
+"#;
+    assert_short(&drc("", "", signals), "A", "B");
 }
