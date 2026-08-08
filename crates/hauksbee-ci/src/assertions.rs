@@ -187,14 +187,17 @@ fn evaluate_hwtrace(
             // the capture must beat a diverged sibling's INVALID, so we only fall
             // back to INVALID (below) when no converged member fails.
             let mut last_detail = String::new();
-            let mut failures: Vec<(u32, String)> = Vec::new();
+            // Carry the OUTCOME, not just its index: an interior probe and a
+            // corner are numbered from the same sequence, so the label needs the
+            // member itself to tell them apart (see `member_label`).
+            let mut failures: Vec<(&RunOutcome, String)> = Vec::new();
             for out in outcomes {
                 if !out.failed_windows.is_empty() {
                     continue;
                 }
                 let Some(sim) = out.net_series.get(&ch.net) else {
                     failures.push((
-                        out.seed,
+                        out,
                         format!(
                             "net '{}' was never sampled by the run; check the net name in \
                              the trace against the board",
@@ -207,7 +210,7 @@ fn evaluate_hwtrace(
                 if r.pass {
                     last_detail = r.detail;
                 } else {
-                    failures.push((out.seed, r.detail));
+                    failures.push((out, r.detail));
                 }
             }
 
@@ -222,9 +225,14 @@ fn evaluate_hwtrace(
                         passed: false,
                         invalid: true,
                         detail: format!(
-                            "INVALID: the analog solve failed within {:.2}-{:.2} ms of the run; \
-                             the simulated waveform contains held-stale samples, so no feature \
-                             comparison against the capture can be trusted (05 §3b).",
+                            "{}INVALID: the analog solve failed within {:.2}-{:.2} ms of the \
+                             run; the simulated waveform contains held-stale samples, so no \
+                             feature comparison against the capture can be trusted (05 §3b).",
+                            if outcomes.len() > 1 {
+                                format!("{}: ", member_label(member, out))
+                            } else {
+                                String::new()
+                            },
                             fs * 1e3,
                             fe * 1e3
                         ),
@@ -242,13 +250,13 @@ fn evaluate_hwtrace(
 
             let (passed, mut detail, failing_seeds) = match failures.first() {
                 None => (true, last_detail, Vec::new()),
-                Some((seed, d)) => {
+                Some((out, d)) => {
                     let d = if outcomes.len() > 1 {
-                        format!("{member} {seed}: {d}")
+                        format!("{}: {d}", member_label(member, out))
                     } else {
                         d.clone()
                     };
-                    (false, d, failures.iter().map(|(s, _)| *s).collect())
+                    (false, d, failures.iter().map(|(o, _)| o.seed).collect())
                 }
             };
             detail.push_str(provenance);
@@ -269,6 +277,20 @@ fn evaluate_hwtrace(
         }
     }
     results
+}
+
+/// How one ensemble member is named in a detail line: `corner 3`, `seed 3`, or
+/// `interior probe 12` for a corner-mode interior member.
+///
+/// The interior members are numbered on from the corners, so calling one
+/// "corner 12" would send a reader looking for a min/max combination that does
+/// not exist. `member` is the caller's already-resolved corner/seed noun.
+fn member_label(member: &str, out: &RunOutcome) -> String {
+    if out.interior {
+        format!("interior probe {}", out.seed)
+    } else {
+        format!("{member} {}", out.seed)
+    }
 }
 
 fn evaluate_one(
@@ -333,10 +355,33 @@ fn evaluate_one(
         // sampled component values it ran with (the actionable artifact), then
         // the ensemble pass-rate.
         let mut detail = if outcomes.len() > 1 {
-            format!("{member} {}: {first_detail}", first.seed)
+            format!("{}: {first_detail}", member_label(member, first))
         } else {
             first_detail.clone()
         };
+        // Non-monotonicity, caught: an interior probe failed where the corners
+        // did not. The corner set's whole claim is that an extreme of the inputs
+        // produces an extreme of the output, and this is that claim disproved on
+        // this board, for this assertion. Say so at the point of failure, because
+        // the reflex on a corner-mode red is to look at the named corner values,
+        // and here the corner values are exactly what did NOT find it.
+        //
+        // The counterfactual ("a corner-only run would have reported green") is
+        // only true if EVERY corner both ran trustworthily and passed. One
+        // held-stale corner and a corner-only run would have refused as INVALID,
+        // not passed, so the claim needs all corners valid, not merely one.
+        let corners_all_valid_and_passed = outcomes.iter().any(|o| !o.interior)
+            && outcomes
+                .iter()
+                .filter(|o| !o.interior)
+                .all(|o| !member_invalid(o) && !failures.iter().any(|(f, _, _)| f.seed == o.seed));
+        if failures.iter().all(|(o, _, _)| o.interior) && corners_all_valid_and_passed {
+            detail.push_str(
+                " [NON-MONOTONIC: every min/max corner passed and this INTERIOR point \
+                 failed, so the corners do not bound this response and a corner-only \
+                 run would have reported green]",
+            );
+        }
         if !first.sampled_values.is_empty() {
             detail.push_str(&format!(
                 " [{}]",
@@ -362,8 +407,19 @@ fn evaluate_one(
             } else {
                 String::new()
             };
+            // The pass-rate must not fold the interior probes into the corner
+            // count. "passed 7/10 corners" on a 2-component board is a lie a
+            // reader can catch with arithmetic (2 components is 4 corners), and
+            // the corner total is exactly what they check the coverage banner
+            // against.
+            let probes = outcomes.iter().filter(|o| o.interior).count();
+            let noun = if probes > 0 {
+                format!("{member}s + interior probes")
+            } else {
+                format!("{member}s")
+            };
             detail.push_str(&format!(
-                "; passed {}/{} {member}s (failing: {}{more}{invalid_note})",
+                "; passed {}/{} {noun} (failing: {}{more}{invalid_note})",
                 passed,
                 outcomes.len(),
                 failing.join(", "),
@@ -398,7 +454,7 @@ fn evaluate_one(
                 .find(|&&(fs, fe)| ws < fe && fs < we)
             {
                 let per_seed = if outcomes.len() > 1 {
-                    format!("{member} {}: ", out.seed)
+                    format!("{}: ", member_label(member, out))
                 } else {
                     String::new()
                 };
@@ -432,7 +488,12 @@ fn evaluate_one(
     // All members green. State exactly what that means: plain fuzz keeps its
     // wording; a tolerance ensemble claims sampled coverage (never proof), and
     // corners claim boundedness only for monotonic responses.
-    let detail = all_green_detail(outcomes.len(), mode, last_detail);
+    let detail = all_green_detail(
+        outcomes.len(),
+        outcomes.iter().filter(|o| o.interior).count(),
+        mode,
+        last_detail,
+    );
     AssertResult {
         label,
         kind,
@@ -456,6 +517,7 @@ fn evaluate_one(
 /// run banner in `lib.rs`, which also subtracts the nominal).
 fn all_green_detail(
     members: usize,
+    interior: usize,
     mode: Option<crate::tolerance::Mode>,
     last_detail: String,
 ) -> String {
@@ -469,10 +531,40 @@ fn all_green_detail(
                  seed(s) + nominal: statistical coverage, not worst-case proof)"
             )
         }
-        (n, Some(crate::tolerance::Mode::Corners)) => format!(
-            "{last_detail} (held on all {n} min/max tolerance corners: bounds the \
-             worst case only where the response is monotonic in each value)"
-        ),
+        // The corner claim, narrowed to exactly what ran. The old wording made
+        // monotonicity the reader's problem: it disclosed the assumption and gave
+        // them no way to test it. The interior probes give them a way, and the
+        // wording must claim no more than the probes establish.
+        //
+        // What a green probe set establishes is precisely "no interior point I
+        // sampled broke this assertion". It is NOT "the response is monotonic",
+        // and it is not even "no interior point was worse than a corner": each
+        // member is judged against the assertion's own window, so a probe worse
+        // than every corner still passes while it stays in band. Both remaining
+        // gaps are named rather than glossed, because a reader who trusts this
+        // line is deciding whether the corner bound covers their board.
+        (n, Some(crate::tolerance::Mode::Corners)) => {
+            let corners = n.saturating_sub(interior);
+            if interior == 0 {
+                format!(
+                    "{last_detail} (held on all {corners} min/max tolerance corners: bounds the \
+                     worst case only where the response is monotonic in each value)"
+                )
+            } else {
+                // `last_detail` is ONE member's measurement (whichever passed
+                // last), not the ensemble's extremes, and with the probes running
+                // that member is usually an interior probe rather than a corner.
+                // Say so, or the numbers read as the span the corners established.
+                format!(
+                    "{last_detail} <- one member's reading, not the ensemble span (held on all \
+                     {corners} min/max tolerance corners and on {interior} interior \
+                     Latin-hypercube probe(s): no interior point sampled broke this assertion, \
+                     which is evidence for the monotonicity the corner bound needs, not proof \
+                     of it, and a probe inside the window is not compared against the corners' \
+                     own margin)"
+                )
+            }
+        }
     }
 }
 
@@ -1974,6 +2066,7 @@ mod tests {
                 error_budget: None,
                 analog_abort: false,
                 sampled_values: Vec::new(),
+                interior: false,
                 net_series: HashMap::new(),
                 substitutions: Vec::new(),
                 coverage_warnings: Vec::new(),
@@ -2000,6 +2093,215 @@ mod tests {
             ok_empty,
             "explicit empty scenario must equal unset, got: {msg}"
         );
+    }
+
+    /// The non-monotonic case, which is the whole reason the interior probes
+    /// exist: a VOUT that stays in band at both tolerance extremes and sags out
+    /// of it somewhere in between (a regulator dropping out at an interior load,
+    /// a resonance, a threshold crossed mid-range). Before the probes ran, this
+    /// board reported green with a "bounds the worst case" banner over it.
+    ///
+    /// Two things must happen: the assertion must FAIL, and it must say the
+    /// corners were the wrong place to look, because a reader's reflex on a
+    /// corner-mode red is to inspect the named corner values.
+    #[test]
+    fn an_interior_probe_that_beats_every_corner_escalates_to_a_failure() {
+        let a: crate::spec::Assertion =
+            toml::from_str("kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.0\n").unwrap();
+
+        // Corners 0 and 1 in band; the interior probe sags to 2.4 V.
+        let outcomes = vec![
+            vout_member(0, 3.30, false),
+            vout_member(1, 3.28, false),
+            vout_member(2, 2.40, true),
+        ];
+        let r = super::evaluate_one(&a, &outcomes, Some(crate::tolerance::Mode::Corners));
+
+        assert!(!r.passed, "an interior failure must fail: {}", r.detail);
+        assert_eq!(r.failing_seed, Some(2));
+        assert!(
+            r.detail.contains("NON-MONOTONIC"),
+            "the failure must name the disproved assumption: {}",
+            r.detail
+        );
+        assert!(
+            r.detail.contains("interior probe 2"),
+            "an interior member must not be labelled a corner: {}",
+            r.detail
+        );
+        assert!(
+            r.detail
+                .contains("corner-only run would have reported green"),
+            "say what a corner-only run would have done: {}",
+            r.detail
+        );
+    }
+
+    /// The other side: a monotonic response must NOT be escalated. The probes
+    /// find nothing, the assertion still passes, and the disclosure narrows from
+    /// an unchecked assumption to a search that came back empty, without
+    /// claiming proof.
+    #[test]
+    fn a_monotonic_response_still_passes_and_narrows_the_disclosure() {
+        let a: crate::spec::Assertion =
+            toml::from_str("kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.0\n").unwrap();
+
+        // Two corners bracketing three interior points, all in band and ordered:
+        // the response is monotonic in the swept value.
+        let outcomes = vec![
+            vout_member(0, 3.10, false),
+            vout_member(1, 3.50, false),
+            vout_member(2, 3.20, true),
+            vout_member(3, 3.30, true),
+            vout_member(4, 3.40, true),
+        ];
+        let r = super::evaluate_one(&a, &outcomes, Some(crate::tolerance::Mode::Corners));
+
+        assert!(r.passed, "a monotonic response must pass: {}", r.detail);
+        assert!(
+            !r.detail.contains("NON-MONOTONIC"),
+            "nothing to escalate: {}",
+            r.detail
+        );
+        assert!(
+            r.detail.contains("2 min/max tolerance corners")
+                && r.detail.contains("3 interior Latin-hypercube probe(s)"),
+            "the corners and the probes are counted separately: {}",
+            r.detail
+        );
+        assert!(
+            r.detail
+                .contains("no interior point sampled broke this assertion"),
+            "the disclosure reports what was checked, not the assumption: {}",
+            r.detail
+        );
+        // The two things a green probe set does NOT establish. Both must stay in
+        // the wording, and neither may be paraphrased into a stronger claim.
+        assert!(
+            r.detail
+                .contains("evidence for the monotonicity the corner bound needs, not proof"),
+            "sampling is not proof, and the wording must say so: {}",
+            r.detail
+        );
+        assert!(
+            r.detail
+                .contains("not compared against the corners' own margin"),
+            "a probe inside the window is never compared to the corner extrema, \
+             and the wording must not imply it was: {}",
+            r.detail
+        );
+        assert!(
+            !r.detail.contains("is monotonic") && !r.detail.contains("found no non-monotonic"),
+            "must never claim the response IS monotonic: {}",
+            r.detail
+        );
+    }
+
+    /// The counterfactual in the NON-MONOTONIC note ("a corner-only run would
+    /// have reported green") is false when a corner was held-stale: a
+    /// corner-only run would have refused as INVALID, not passed. One valid
+    /// passing corner is not enough to make the claim; every corner has to be
+    /// valid and passing.
+    #[test]
+    fn a_held_stale_corner_suppresses_the_non_monotonic_counterfactual() {
+        let a: crate::spec::Assertion =
+            toml::from_str("kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.0\n").unwrap();
+
+        let mut stale = vout_member(0, 3.30, false);
+        // A failed solve window overlapping this assertion's evaluation span
+        // makes the member's samples held-stale, so it is skipped, not passed.
+        stale.failed_windows = vec![(0.0, 0.100)];
+
+        let outcomes = vec![
+            stale,
+            vout_member(1, 3.28, false),
+            vout_member(2, 2.40, true),
+        ];
+        let r = super::evaluate_one(&a, &outcomes, Some(crate::tolerance::Mode::Corners));
+
+        assert!(!r.passed, "the interior failure still fails: {}", r.detail);
+        assert!(
+            !r.detail.contains("NON-MONOTONIC"),
+            "corner 0 never produced a trustworthy pass, so the corner-only \
+             counterfactual is unknowable: {}",
+            r.detail
+        );
+    }
+
+    /// Pinning a single interior member with `--seed N` must not be reported as
+    /// a corner. The probes are numbered on from the last corner, so the mode
+    /// alone cannot say which kind of member was selected.
+    #[test]
+    fn a_pinned_interior_member_is_not_described_as_a_corner() {
+        let probe = crate::report::EnsembleCoverage::SingleMember {
+            seed: 4,
+            components: 2,
+            corners: true,
+            interior: true,
+        };
+        let d = probe.describe();
+        assert!(d.contains("interior probe 4"), "must name it a probe: {d}");
+        assert!(
+            !d.contains("corner 4"),
+            "must not send the reader looking for corner 4: {d}"
+        );
+
+        // A genuine pinned corner keeps its own wording.
+        let corner = crate::report::EnsembleCoverage::SingleMember {
+            seed: 3,
+            components: 2,
+            corners: true,
+            interior: false,
+        };
+        assert!(corner.describe().contains("corner 3"));
+    }
+
+    /// A corner failure keeps its old wording. The interior probes must not
+    /// relabel an ordinary corner red as a monotonicity discovery.
+    #[test]
+    fn a_corner_failure_is_not_reported_as_non_monotonic() {
+        let a: crate::spec::Assertion =
+            toml::from_str("kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.0\n").unwrap();
+        let outcomes = vec![
+            vout_member(0, 2.50, false),
+            vout_member(1, 3.30, false),
+            vout_member(2, 3.20, true),
+        ];
+        let r = super::evaluate_one(&a, &outcomes, Some(crate::tolerance::Mode::Corners));
+        assert!(!r.passed);
+        assert!(
+            !r.detail.contains("NON-MONOTONIC"),
+            "the corners DID find it: {}",
+            r.detail
+        );
+        assert!(
+            r.detail.contains("corner 0"),
+            "the failing corner is named as a corner: {}",
+            r.detail
+        );
+    }
+
+    /// One ensemble member holding `VOUT` flat at `v` over the whole run.
+    fn vout_member(seed: u32, v: f64, interior: bool) -> crate::runner::RunOutcome {
+        let mut windows = std::collections::HashMap::new();
+        windows.insert(
+            ("VOUT".to_string(), 0.0f64.to_bits()),
+            crate::runner::NetWindow {
+                min_v: v,
+                max_v: v,
+                last_v: v,
+                samples: 10,
+            },
+        );
+        crate::runner::RunOutcome {
+            seed,
+            windows,
+            interior,
+            ambient_c: 25.0,
+            sim_ms: 100.0,
+            analog_valid: true,
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -2055,6 +2357,7 @@ mod tests {
                 error_budget: None,
                 analog_abort: false,
                 sampled_values: Vec::new(),
+                interior: false,
                 net_series: HashMap::new(),
                 substitutions: Vec::new(),
                 coverage_warnings: Vec::new(),
@@ -2090,7 +2393,7 @@ mod tests {
         // (member 0, which draws no random sample) as a sampled seed. It must
         // report n-1 sampled seeds, agreeing with the run banner, rather than
         // over-claiming statistical coverage by one draw.
-        let d = all_green_detail(16, Some(Mode::MonteCarlo), "voltage in range".into());
+        let d = all_green_detail(16, 0, Some(Mode::MonteCarlo), "voltage in range".into());
         assert!(
             d.contains("15 sampled tolerance seed(s) + nominal"),
             "16 members => 15 sampled seeds, not 16: {d}"
@@ -2101,7 +2404,7 @@ mod tests {
         );
         // A single-member run (no ensemble) keeps the bare detail unchanged.
         assert_eq!(
-            all_green_detail(1, Some(Mode::MonteCarlo), "ok".into()),
+            all_green_detail(1, 0, Some(Mode::MonteCarlo), "ok".into()),
             "ok"
         );
     }
@@ -2502,6 +2805,7 @@ mod tests {
                 error_budget: None,
                 analog_abort: false,
                 sampled_values: Vec::new(),
+                interior: false,
                 net_series: HashMap::new(),
                 substitutions: Vec::new(),
                 coverage_warnings: Vec::new(),
@@ -2586,6 +2890,7 @@ mod tests {
                 error_budget: None,
                 analog_abort: false,
                 sampled_values: Vec::new(),
+                interior: false,
                 net_series: HashMap::new(),
                 substitutions: Vec::new(),
                 coverage_warnings: Vec::new(),
@@ -2660,6 +2965,7 @@ mod tests {
                 error_budget: None,
                 analog_abort: false,
                 sampled_values: Vec::new(),
+                interior: false,
                 net_series: HashMap::new(),
                 substitutions: Vec::new(),
                 coverage_warnings: Vec::new(),

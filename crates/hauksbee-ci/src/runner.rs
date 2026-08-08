@@ -179,6 +179,11 @@ pub struct RunOutcome {
     /// failing seed's report names these exact values, and `--seed N`
     /// reproduces them byte-identically.
     pub sampled_values: Vec<crate::tolerance::SampledValue>,
+    /// True when this member is a corner-mode interior probe rather than a
+    /// corner: see [`crate::tolerance::SeedPlan::interior`]. Assertion
+    /// evaluation keeps the two apart, because a failure here disproves the
+    /// corner set's monotonicity assumption instead of adding to its coverage.
+    pub interior: bool,
     /// Full `(t_s, volts)` waveforms for the nets any `hwtrace` assertion
     /// probes, sampled at the frame cadence (held-stale frames excluded, like
     /// every other analog aggregate). Empty when the spec has no hwtrace
@@ -471,6 +476,7 @@ pub fn run_spec_with_lib(
             .map(|seed| crate::tolerance::SeedPlan {
                 seed,
                 values: Vec::new(),
+                interior: false,
             })
             .collect()
     } else {
@@ -1761,6 +1767,7 @@ fn run_one(
         error_budget,
         analog_abort,
         sampled_values: plan.values.clone(),
+        interior: plan.interior,
         net_series,
         substitutions: engine
             .scheduler()

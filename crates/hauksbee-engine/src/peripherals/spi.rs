@@ -8,9 +8,21 @@
 //! [`hauksbee_mcu::SpiEvent`] (MOSI byte) through `Mcu::on_spi`, and the handler
 //! returns the
 //! MISO byte the slave drives back on the same transfer. An [`SpiBus`] owns one
-//! slave (chip-select is not surfaced by the simavr SPI IRQ, so a single
-//! active slave per bus is the supported topology) and threads the byte stream
-//! through the slave's command state machine.
+//! slave and threads the byte stream through the slave's command state machine.
+//! Several buses can share one controller: the simavr SPI IRQ does not carry
+//! chip-select, so each bus tracks its own CS instead. When the binder resolved
+//! the slave's CS net to an MCU pin, a live GPIO hook frames the bus off the real
+//! CS edge and the scheduler's shared `on_spi` handler routes each byte to the
+//! selected bus, so the deselected slaves never see a sibling's traffic.
+//!
+//! A bus whose CS did NOT resolve falls back to the chunk-boundary heuristic and
+//! starts permanently selected, because there is no CS edge to gate it. Nothing
+//! enforces that such a bus is alone on its controller: with two unresolved-CS
+//! slaves the dispatcher hands every byte to the first selected bus it finds, and
+//! the second never sees traffic. That is a coverage gap, not a silent wrong
+//! answer, since `framing_mode` reports `Heuristic` for those buses and the
+//! report surfaces it, but the heuristic is only CORRECT for a lone slave. The
+//! fix for a real multi-slave board is to resolve its CS nets.
 //!
 //! ## Bus-speed honesty (chunk-rate limit)
 //!
@@ -18,9 +30,12 @@
 //! peripheral: a `SPDR` write clocks one byte and raises one IRQ, all inside a
 //! single `run_micros` chunk, so the SPI clock rate is whatever the firmware's
 //! SPR/SPI2X prescaler sets and is not bounded by the analog chunk rate. A
-//! *bit-banged* SPI master (software-toggled SCK/MOSI on GPIO) is bounded by
-//! the chunk poll rate exactly like any GPIO and is out of scope here, matching
-//! the limitation documented for I2C and in docs/cosim/MCU.md. These slaves bind to
+//! *bit-banged* SPI master (software-toggled SCK/MOSI on GPIO) is handled too,
+//! and no longer at the chunk poll rate: the scheduler replays each pin
+//! transition in cycle order from its edge log, so
+//! [`crate::responders::BitBangSpiResponder`] sees sub-chunk SCLK edges as the
+//! firmware produced them. Pinned end to end by
+//! `crates/hauksbee-engine/tests/bitbang_spi_cosim.rs`. These slaves bind to
 //! both the AVR backend (simavr SPI IRQ) and the Renode backend (the C# SPI
 //! bridge in `hauksbee-mcu/src/renode`), routing every reply byte through
 //! `on_spi` either way.
@@ -135,8 +150,9 @@ impl SpiFramingMode {
     }
 }
 
-/// The SPI bus peripheral: a single active slave whose byte stream is fed from
-/// the MCU's `on_spi` callback.
+/// The SPI bus peripheral: one slave whose byte stream is fed from the MCU's
+/// `on_spi` callback, gated by this bus's chip-select so several buses can share
+/// one controller.
 pub struct SpiBus {
     id: String,
     slave: Box<dyn SpiSlave>,
@@ -157,8 +173,11 @@ pub struct SpiBus {
     /// SELECTED bus (only one CS is asserted at a time), so the deselected slaves
     /// never see traffic addressed to a sibling. A bus with a resolved CS pin
     /// starts deselected (its CS edge selects it); a heuristic bus with no CS pin
-    /// is always considered selected (there is no CS to gate it, and it is the
-    /// only slave on the controller). See [`Scheduler::attach_spi_bus`].
+    /// is always considered selected, because there is no CS to gate it. Nothing
+    /// enforces that such a bus is the controller's only slave: two of them and
+    /// the dispatcher gives every byte to the first, which is why the heuristic
+    /// is only correct for a lone slave and why `framing_mode` reports it.
+    /// See [`Scheduler::attach_spi_bus`].
     selected: bool,
 }
 

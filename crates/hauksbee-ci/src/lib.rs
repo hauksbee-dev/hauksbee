@@ -272,10 +272,16 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
             // draw, carry the mode so the banner says "corner N", matching the
             // mode-aware per-assertion INVALID/FAIL wording.
             let corners = matches!(spec.ensemble_mode()?, tolerance::Mode::Corners);
+            // Which member it turned out to be: corner mode numbers the interior
+            // probes on past the last corner, so mode alone cannot say whether
+            // `--seed N` pinned a corner or a probe. Read it off the outcome the
+            // runner actually produced.
+            let interior = outcomes.first().is_some_and(|o| o.interior);
             Some(report::EnsembleCoverage::SingleMember {
                 seed,
                 components,
                 corners,
+                interior,
             })
         } else {
             Some(match spec.ensemble_mode()? {
@@ -287,10 +293,17 @@ pub fn run(cfg: &RunConfig) -> Result<CiResult, SpecError> {
                     seeds: members.saturating_sub(1),
                     components,
                 },
-                tolerance::Mode::Corners => report::EnsembleCoverage::Corners {
-                    corners: members,
-                    components,
-                },
+                // The interior probes ran alongside the corners but are not
+                // corners: counting them in would inflate the "2^n corners"
+                // arithmetic a reader checks against the component count.
+                tolerance::Mode::Corners => {
+                    let interior = outcomes.iter().filter(|o| o.interior).count() as u32;
+                    report::EnsembleCoverage::Corners {
+                        corners: members.saturating_sub(interior),
+                        interior,
+                        components,
+                    }
+                }
             })
         }
     } else {

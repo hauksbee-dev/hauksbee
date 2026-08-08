@@ -15,18 +15,38 @@
 //!    24/24 seeds is statistical evidence, not a worst-case bound. The report
 //!    wording says so. Corner mode (`mode = "corners"`) enumerates every
 //!    all-min/all-max combination deterministically, which bounds the worst
-//!    case *only for monotonic responses*, also stated in the report.
-//! 2. **Reproducibility is doctrine.** Every sampled value is a pure function
-//!    of `(spec, seed, component reference)`, nothing depends on iteration
-//!    order or on how many other components are toleranced. A failing seed can
-//!    therefore be re-run in isolation (`hauksbee-ci run spec.toml --seed N`)
-//!    and produces byte-identical values. The tolerance stream is
-//!    domain-separated (`"tol:" + ref`) from the net-fuzz stream, so adding a
-//!    tolerance never changes which fuzz levels seed N straps.
+//!    case *only for monotonic responses*, also stated in the report. Rather
+//!    than leave that condition as a caveat with nothing behind it, every corner
+//!    run also carries a small stratified Latin-hypercube sample of the
+//!    interior, and an interior point that FAILS an assertion every corner
+//!    passed fails the assertion: the corners demonstrably did not bound it.
+//!    Note what that is and is not. It searches the interior for a point that
+//!    breaks an assertion; it does not compare interior measurements against the
+//!    corner extrema, so a response worse than every corner still passes while
+//!    it stays inside the assertion's window. A clean probe set is evidence for
+//!    the monotonicity the bound needs, never proof of it, and the report says
+//!    which of the two it has.
+//! 2. **Reproducibility is doctrine.** Re-running a member reproduces it
+//!    byte-identically (`hauksbee-ci run spec.toml --seed N`), which is the
+//!    property that makes a red build investigable. Every Monte-Carlo sampled
+//!    value is a pure function of `(seed, component reference, rule)`, so it
+//!    depends on neither iteration order nor how many other components are
+//!    toleranced, and the tolerance stream is domain-separated (`"tol:" + ref`)
+//!    from the net-fuzz stream, so adding a tolerance never changes which fuzz
+//!    levels seed N straps.
 //!
-//! Seed 0 is always the nominal baseline (all components at nominal, matching
-//! fuzz's all-low seed 0), so "nominal passes but the ensemble fails" is
-//! visible inside a single run.
+//!    The corner and interior members are reproducible for a given spec but are
+//!    NOT stable across edits to it, and do not claim to be: a corner index is a
+//!    bit pattern over the sorted-by-reference tolerance list, and the interior
+//!    probe count and starting index both depend on how many components are
+//!    toleranced. Adding a rule renumbers both. A member index identifies a
+//!    point within one spec revision, which is what replay needs.
+//!
+//! In Monte-Carlo mode seed 0 is always the nominal baseline (all components at
+//! nominal, matching fuzz's all-low seed 0), so "nominal passes but the ensemble
+//! fails" is visible inside a single run. Corner mode has no nominal member:
+//! member 0 is the all-min corner, since a nominal run would tell it nothing it
+//! is looking for.
 
 use crate::error::SpecError;
 use crate::spec::Spec;
@@ -37,6 +57,33 @@ use hauksbee_extract::ExtractedBoard;
 /// Monte-Carlo instead, silently truncating the corner set would fake the
 /// bounded claim the mode exists to make.
 pub const CORNER_CAP: usize = 10;
+
+/// How many interior Latin-hypercube probes corner mode runs on top of its
+/// `2^n` corners, for `n` toleranced components.
+///
+/// Corner mode's bounded-worst-case claim rests on the response being monotonic
+/// in every toleranced value: only then does an extreme of the inputs produce an
+/// extreme of the output. A resonance, a comparator threshold crossed mid-range,
+/// or a regulator that drops out at an interior load all break that, and the
+/// corners then bound nothing while still reporting green. Enumerating the
+/// interior is not an option (it is continuous), so this samples it: a stratified
+/// Latin-hypercube design, which by construction puts one probe in every
+/// per-component stratum and is the cheapest design that cannot miss a whole
+/// region of one component's range.
+///
+/// The count scales with the dimension and then flattens, so the check costs a
+/// bounded handful of extra sims rather than a multiple of the corner set: 4
+/// probes for one component, 6 for two, 8 from three up.
+///
+/// What it buys is detection of a non-monotonicity severe enough to break an
+/// assertion, which is the case that matters and the only one observable from a
+/// pass/fail verdict. It is not a monotonicity test: each member is judged
+/// against the assertion's own window, so a response worse than every corner but
+/// still in band passes. That is why a clean sweep narrows the disclosure rather
+/// than removing it.
+pub fn interior_probe_count(n: usize) -> usize {
+    (2 * n + 2).min(8)
+}
 
 /// How a component's per-seed value deviation is distributed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -116,6 +163,15 @@ impl SampledValue {
 pub struct SeedPlan {
     pub seed: u32,
     pub values: Vec<SampledValue>,
+    /// True for a corner-mode INTERIOR probe: a member whose components all sit
+    /// strictly inside their tolerance ranges rather than at an extreme.
+    ///
+    /// It is not part of the corner set and carries none of its bounded claim.
+    /// Its whole job is to disprove monotonicity: a corner sweep that passes
+    /// while an interior probe fails has shown that the extremes do not bound
+    /// the response, and the assertion must report that rather than the corner
+    /// pass. See [`interior_probe_count`].
+    pub interior: bool,
 }
 
 /// The ensemble execution mode.
@@ -284,6 +340,7 @@ pub fn build_plans(
             .map(|seed| SeedPlan {
                 seed,
                 values: tolerances.iter().map(|t| sample(seed, t)).collect(),
+                interior: false,
             })
             .collect()),
         Mode::Corners => {
@@ -309,9 +366,10 @@ pub fn build_plans(
                 )));
             }
             let count = 1u32 << n;
-            Ok((0..count)
+            let mut plans: Vec<SeedPlan> = (0..count)
                 .map(|k| SeedPlan {
                     seed: k,
+                    interior: false,
                     values: tolerances
                         .iter()
                         .enumerate()
@@ -335,9 +393,83 @@ pub fn build_plans(
                         })
                         .collect(),
                 })
-                .collect())
+                .collect();
+            // The interior probes follow the corners, numbered on from the last
+            // corner so a member index still names exactly one run and `--seed k`
+            // isolates a probe the same way it isolates a corner.
+            plans.extend(interior_plans(count, tolerances));
+            Ok(plans)
         }
     }
+}
+
+/// The interior Latin-hypercube probes for a corner run, numbered from
+/// `first_seed`.
+///
+/// One probe per stratum per component: each component's `[-tol, +tol]` range is
+/// cut into `N` equal strata, each probe takes one stratum's midpoint, and the
+/// stratum order is permuted INDEPENDENTLY per component. That independence is
+/// the whole design: with a shared order every probe would sit on the range's
+/// diagonal, and a response that only misbehaves when two components move
+/// oppositely would never be sampled. Independence makes an all-diagonal design
+/// vanishingly unlikely rather than impossible, and nothing rejects one; a
+/// coincidence there costs this run's off-diagonal coverage, not correctness of
+/// anything the run reports.
+///
+/// Midpoints keep every probe strictly interior, so a probe can never coincide
+/// with a corner and re-report it as new information. The permutation comes from
+/// the same domain-tagged [`SplitMix`] the Monte-Carlo sampler uses, keyed on the
+/// component reference, so the design is pure in the resolved tolerances and a
+/// re-run reproduces it exactly.
+///
+/// The design is NOT stable across edits to the spec, and it does not claim to
+/// be: `probes` itself depends on the component count, so adding the third
+/// toleranced component to a two-component spec reshuffles every axis and moves
+/// `first_seed`. An interior member index therefore identifies a point only
+/// within one spec revision, which is all `--seed` replay needs. The corner
+/// indices have the same property (a corner is a bit pattern over a
+/// sorted-by-reference list) and this is the existing contract, not a new
+/// weakening of it.
+fn interior_plans(first_seed: u32, tolerances: &[ResolvedTolerance]) -> Vec<SeedPlan> {
+    let probes = interior_probe_count(tolerances.len());
+
+    // Per component, the stratum index each probe uses.
+    let strata: Vec<Vec<usize>> = tolerances
+        .iter()
+        .map(|t| {
+            let mut order: Vec<usize> = (0..probes).collect();
+            // Fisher-Yates, walking down so the swap partner is always drawn from
+            // the not-yet-placed prefix.
+            let mut rng = SplitMix::for_component(u32::MAX, &format!("lhs:{}", t.reference));
+            for i in (1..probes).rev() {
+                order.swap(i, rng.below(i as u64 + 1) as usize);
+            }
+            order
+        })
+        .collect();
+
+    (0..probes)
+        .map(|p| SeedPlan {
+            seed: first_seed + p as u32,
+            interior: true,
+            values: tolerances
+                .iter()
+                .enumerate()
+                .map(|(i, t)| {
+                    // Stratum midpoint mapped onto [-1, +1]: for probes = 4 the
+                    // fractions are -0.75, -0.25, +0.25, +0.75, all strictly
+                    // inside the range the corners already cover.
+                    let frac = 2.0 * (strata[i][p] as f64 + 0.5) / probes as f64 - 1.0;
+                    SampledValue {
+                        reference: t.reference.clone(),
+                        si: t.nominal_si * (1.0 + frac * t.percent / 100.0),
+                        nominal_si: t.nominal_si,
+                        corner: None,
+                    }
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 /// Sample one component's value for one seed. Pure in `(seed, reference,
@@ -403,6 +535,28 @@ impl SplitMix {
     /// Uniform in [0, 1) with 53 bits of precision.
     fn next_f64(&mut self) -> f64 {
         (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    /// A uniform integer in `[0, n)`, without the modulo bias of `next_u64() % n`.
+    ///
+    /// The Latin-hypercube shuffle calls this with every `n` in `2..=probes`,
+    /// and `probes` is 4, 6 or 8, so it hits 3, 5, 6 and 7: none of them divide
+    /// 2^64, and plain `%` would favour the low residues. The bias is tiny, and
+    /// the shuffle would still be a valid Latin hypercube, but a "uniform
+    /// permutation" that is not uniform is the kind of quiet wrongness that
+    /// later gets cited as a guarantee. Rejection sampling costs an occasional
+    /// extra draw from a private stream and nothing else.
+    fn below(&mut self, n: u64) -> u64 {
+        debug_assert!(n > 0);
+        // The largest multiple of n that fits in u64: draws at or above it are
+        // the ones that would skew the residues, so redraw them.
+        let limit = u64::MAX - (u64::MAX % n);
+        loop {
+            let v = self.next_u64();
+            if v < limit {
+                return v % n;
+            }
+        }
     }
 
     /// Standard normal via Box–Muller.
@@ -579,13 +733,165 @@ mod tests {
             rule("R2", 10_000.0, 10.0, Distribution::Uniform),
         ];
         let plans = build_plans(Mode::Corners, 0, &ts).unwrap();
-        assert_eq!(plans.len(), 4);
+        let corners: Vec<&SeedPlan> = plans.iter().filter(|p| !p.interior).collect();
+        assert_eq!(corners.len(), 4);
         // Member 0 = all-min; member 3 = all-max.
-        assert!(plans[0].values.iter().all(|v| v.si == 9_000.0));
-        assert!(plans[3].values.iter().all(|v| v.si == 11_000.0));
+        assert!(corners[0].values.iter().all(|v| v.si == 9_000.0));
+        assert!(corners[3].values.iter().all(|v| v.si == 11_000.0));
         // Member 1: bit0 set => R1 at max, R2 at min.
-        assert_eq!(plans[1].values[0].si, 11_000.0);
-        assert_eq!(plans[1].values[1].si, 9_000.0);
+        assert_eq!(corners[1].values[0].si, 11_000.0);
+        assert_eq!(corners[1].values[1].si, 9_000.0);
+    }
+
+    /// The interior probes must sit STRICTLY inside the corner box, or they
+    /// re-report a corner as if it were new information about the interior.
+    #[test]
+    fn interior_probes_are_strictly_inside_the_corner_box() {
+        let ts = vec![
+            rule("R1", 10_000.0, 10.0, Distribution::Uniform),
+            rule("R2", 100e-9, 20.0, Distribution::Uniform),
+        ];
+        let plans = build_plans(Mode::Corners, 0, &ts).unwrap();
+        let interior: Vec<&SeedPlan> = plans.iter().filter(|p| p.interior).collect();
+        assert_eq!(
+            interior.len(),
+            interior_probe_count(2),
+            "two components get {} probes",
+            interior_probe_count(2)
+        );
+        for p in &interior {
+            for v in &p.values {
+                assert!(v.corner.is_none(), "an interior value is at no corner");
+                let tol = if v.reference == "R1" { 0.10 } else { 0.20 };
+                let lo = v.nominal_si * (1.0 - tol);
+                let hi = v.nominal_si * (1.0 + tol);
+                assert!(
+                    v.si > lo && v.si < hi,
+                    "{} = {} must be strictly inside ({lo}, {hi})",
+                    v.reference,
+                    v.si
+                );
+            }
+        }
+        // Member indices continue on from the corners, so `--seed k` still names
+        // exactly one run.
+        let seeds: Vec<u32> = plans.iter().map(|p| p.seed).collect();
+        let mut sorted = seeds.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(sorted.len(), seeds.len(), "member indices are unique");
+    }
+
+    /// Latin hypercube, both halves: every stratum of every component is hit
+    /// exactly once (the "Latin" part), and the axes are permuted independently
+    /// rather than sharing one order (the "hypercube" part). The strata property
+    /// is a guarantee. The off-diagonal check is a property of THIS fixture's
+    /// permutations, not of the design: independent permutations can coincide,
+    /// and nothing rejects that. It is asserted here because a regression that
+    /// collapsed the axes onto one shared order would show up as a permanent
+    /// diagonal, which is the failure worth catching.
+    #[test]
+    fn interior_probes_cover_every_stratum_and_are_not_diagonal() {
+        let ts = vec![
+            rule("R1", 1_000.0, 10.0, Distribution::Uniform),
+            rule("R2", 1_000.0, 10.0, Distribution::Uniform),
+        ];
+        let probes = interior_probe_count(2);
+        let plans = build_plans(Mode::Corners, 0, &ts).unwrap();
+        let interior: Vec<&SeedPlan> = plans.iter().filter(|p| p.interior).collect();
+
+        // Which stratum each probe landed in, per component.
+        let stratum = |v: &SampledValue| -> usize {
+            let frac = v.si / v.nominal_si - 1.0; // in (-0.1, +0.1)
+            let unit = frac / 0.10; // in (-1, +1)
+            (((unit + 1.0) / 2.0) * probes as f64).floor() as usize
+        };
+        for i in 0..2 {
+            let mut hit: Vec<usize> = interior.iter().map(|p| stratum(&p.values[i])).collect();
+            hit.sort_unstable();
+            assert_eq!(
+                hit,
+                (0..probes).collect::<Vec<_>>(),
+                "component {i} must hit every stratum exactly once"
+            );
+        }
+        let diagonal = interior
+            .iter()
+            .all(|p| stratum(&p.values[0]) == stratum(&p.values[1]));
+        assert!(!diagonal, "the axes must be permuted independently");
+    }
+
+    /// The extra cost is bounded and small: the probe count flattens at 8 rather
+    /// than scaling with the 2^n corner set, so the monotonicity check never
+    /// becomes the dominant cost of a corner run.
+    #[test]
+    fn the_interior_probe_count_is_bounded() {
+        assert_eq!(interior_probe_count(1), 4);
+        assert_eq!(interior_probe_count(2), 6);
+        for n in 3..=CORNER_CAP {
+            assert_eq!(interior_probe_count(n), 8, "n = {n}");
+        }
+        // At the cap the corners dominate by two orders of magnitude, which is
+        // the point: the check is an addend, not a multiplier.
+        let corners = 1usize << CORNER_CAP;
+        assert!(interior_probe_count(CORNER_CAP) * 100 < corners);
+    }
+
+    /// The design has to be reproducible, or `--seed k` cannot re-run a probe
+    /// and a red build is not investigable.
+    #[test]
+    fn the_interior_design_is_deterministic() {
+        let ts = vec![
+            rule("R1", 4_700.0, 5.0, Distribution::Uniform),
+            rule("C2", 22e-6, 20.0, Distribution::Gaussian),
+            rule("R9", 100.0, 1.0, Distribution::Uniform),
+        ];
+        let a = build_plans(Mode::Corners, 0, &ts).unwrap();
+        let b = build_plans(Mode::Corners, 0, &ts).unwrap();
+        for (pa, pb) in a.iter().zip(b.iter()) {
+            assert_eq!(pa.seed, pb.seed);
+            assert_eq!(pa.interior, pb.interior);
+            for (va, vb) in pa.values.iter().zip(pb.values.iter()) {
+                assert_eq!(va.si.to_bits(), vb.si.to_bits(), "{} moved", va.reference);
+            }
+        }
+    }
+
+    /// `below` must be free of the modulo bias `next_u64() % n` carries, since
+    /// none of the probe counts divide 2^64. A chi-square-free check is enough
+    /// here: over many draws every residue must appear within a few percent of
+    /// its expected share.
+    #[test]
+    fn below_is_uniform_over_its_range() {
+        for n in [3u64, 5, 6, 7, 8] {
+            let mut rng = SplitMix::for_component(1, "uniformity");
+            let draws = 120_000usize;
+            let mut counts = vec![0usize; n as usize];
+            for _ in 0..draws {
+                let v = rng.below(n);
+                assert!(v < n, "below({n}) returned {v}");
+                counts[v as usize] += 1;
+            }
+            let expected = draws as f64 / n as f64;
+            for (r, c) in counts.iter().enumerate() {
+                let dev = (*c as f64 - expected).abs() / expected;
+                assert!(
+                    dev < 0.05,
+                    "n = {n}, residue {r}: {c} draws is {:.1}% off the expected {expected:.0}",
+                    dev * 100.0
+                );
+            }
+        }
+    }
+
+    /// Monte-Carlo is untouched: it never claimed a bound, so it has nothing to
+    /// probe for and must not pay for one.
+    #[test]
+    fn monte_carlo_gets_no_interior_probes() {
+        let ts = vec![rule("R1", 1_000.0, 10.0, Distribution::Uniform)];
+        let plans = build_plans(Mode::MonteCarlo, 5, &ts).unwrap();
+        assert_eq!(plans.len(), 5);
+        assert!(plans.iter().all(|p| !p.interior));
     }
 
     #[test]
