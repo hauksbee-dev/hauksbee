@@ -102,7 +102,9 @@ pub struct NetClassRule {
     pub diff_pair_gap_mm: Option<f64>,
 }
 
-/// Clearance resolver used by the KiCad DRC path.
+/// Clearance resolver shared by the KiCad and Eagle DRC paths (KiCad fills
+/// classes from the `.kicad_pro`; Eagle fills classes and the pair matrix
+/// from `<classes>`).
 ///
 /// The project file can assign nets to classes explicitly or by wildcard
 /// pattern. Once resolved to concrete net names, the pair rule is KiCad's
@@ -114,6 +116,15 @@ pub struct ClearanceRules {
     pub default_clearance_mm: f64,
     classes: HashMap<String, NetClassRule>,
     net_classes: HashMap<String, String>,
+    /// Explicit clearance for a concrete (class, class) pair, keyed with the
+    /// lexically smaller name first. Eagle's net-class model carries a pair
+    /// matrix (class N declares `<clearance class="M" value="V"/>` entries):
+    /// an explicit entry wins over the max-of-two-classes fallback in
+    /// [`Self::effective_clearance`] (it may relax a pair below the classes'
+    /// own rules); pairs WITHOUT an entry fall through to that max rule,
+    /// matching Eagle's larger-value-wins behaviour for nets of different
+    /// classes.
+    class_pair_clearances: HashMap<(String, String), f64>,
 }
 
 impl ClearanceRules {
@@ -127,6 +138,7 @@ impl ClearanceRules {
             default_clearance_mm: default,
             classes: HashMap::new(),
             net_classes: HashMap::new(),
+            class_pair_clearances: HashMap::new(),
         }
     }
 
@@ -167,18 +179,53 @@ impl ClearanceRules {
             .unwrap_or(self.default_clearance_mm)
     }
 
+    /// Record an explicit clearance for a concrete class pair (either order;
+    /// `a == b` pins the class's own same-class rule). Pair entries take
+    /// precedence over the max-of-two-classes fallback in
+    /// [`Self::effective_clearance`]. A duplicate insert keeps the stricter
+    /// value.
+    pub fn add_class_pair_clearance(&mut self, class_a: &str, class_b: &str, clearance_mm: f64) {
+        if clearance_mm <= 0.0 {
+            return;
+        }
+        let key = if class_a <= class_b {
+            (class_a.to_string(), class_b.to_string())
+        } else {
+            (class_b.to_string(), class_a.to_string())
+        };
+        let entry = self.class_pair_clearances.entry(key).or_insert(0.0);
+        *entry = entry.max(clearance_mm);
+    }
+
     pub fn effective_clearance(&self, net_a: &str, net_b: &str) -> f64 {
         if let Some(gap) = self.diff_pair_gap(net_a, net_b) {
             return gap;
         }
+        if let Some(pair) = self.class_pair_clearance(net_a, net_b) {
+            return pair;
+        }
         self.clearance_for_net(net_a)
             .max(self.clearance_for_net(net_b))
+    }
+
+    /// The explicit pair-matrix clearance for the two nets' classes, when both
+    /// nets are class-assigned and the pair has an entry.
+    fn class_pair_clearance(&self, net_a: &str, net_b: &str) -> Option<f64> {
+        let class_a = self.net_classes.get(net_a)?;
+        let class_b = self.net_classes.get(net_b)?;
+        let key = if class_a <= class_b {
+            (class_a.clone(), class_b.clone())
+        } else {
+            (class_b.clone(), class_a.clone())
+        };
+        self.class_pair_clearances.get(&key).copied()
     }
 
     fn max_clearance(&self) -> f64 {
         self.classes
             .values()
             .map(|r| r.clearance_mm)
+            .chain(self.class_pair_clearances.values().copied())
             .fold(self.default_clearance_mm, f64::max)
     }
 
@@ -426,6 +473,12 @@ pub enum ItemKind {
     Via,
     Pad,
     Zone,
+    /// Directly drawn copper (an Eagle `<rectangle>` / `<circle>` on a copper
+    /// layer): exact copper like a track, NOT a pour fill. Kept distinct from
+    /// [`ItemKind::Zone`] because the sweep's Zone-Pad overlap suppression
+    /// (the KiCad antipad-carve rule) must not swallow a pad sitting on
+    /// drawn copper.
+    Graphic,
 }
 
 impl ItemKind {
@@ -436,6 +489,7 @@ impl ItemKind {
             ItemKind::Via => "via",
             ItemKind::Pad => "pad",
             ItemKind::Zone => "zone",
+            ItemKind::Graphic => "graphic",
         }
     }
 }
@@ -1417,8 +1471,8 @@ fn collect_pad(
         None => copper_layers.to_vec(),
     };
 
-    let shape = match shape_tok.as_str() {
-        "circle" => {
+    let shapes: Vec<Shape> = match shape_tok.as_str() {
+        "circle" => vec![{
             let r = sx.max(sy) / 2.0;
             // Through outline_to_world so a drill offset displaces the disc too.
             let c = outline_to_world(0.0, 0.0);
@@ -1429,8 +1483,8 @@ fn collect_pad(
                 by: c.1,
                 r,
             })
-        }
-        "oval" => {
+        }],
+        "oval" => vec![{
             // A stadium: a capsule whose segment runs along the longer axis,
             // radius = half the shorter dimension.
             let (long, short, along_x) = if sx >= sy {
@@ -1451,19 +1505,22 @@ fn collect_pad(
                 by: b.1,
                 r: short / 2.0,
             })
-        }
-        "custom" => {
-            // Custom pad: gather its primitive polygon(s); fall back to the box.
-            if let Some(poly) = custom_pad_polygon(pad, &outline_to_world) {
-                Shape::Polygon { pts: poly, r: 0.0 }
-            } else {
-                rect_polygon(sx, sy, &outline_to_world, 0.0)
-            }
-        }
-        // rect, roundrect, trapezoid and anything else: a rectangle. For
-        // roundrect we keep a corner radius as inflation so the rounded copper
-        // is not overstated.
-        _ => {
+        }],
+        // Trapezoid: `(rect_delta dx dy)` skews the rectangle. KiCad's
+        // outline (legacy `PAD::BuildPadPolygon`): `size` is the average of
+        // the two parallel edges and the delta is the full difference, so the
+        // wide edge extends BEYOND the size box, so a bounding rectangle both
+        // understates the wide edge and overstates the narrow one.
+        "trapezoid" => vec![trapezoid_polygon(pad, sx, sy, &outline_to_world)],
+        // Custom pad: the copper is the anchor pad shape UNION every drawn
+        // primitive. Stamping only the first polygon (the old behaviour)
+        // dropped the anchor disc and every further primitive, silently
+        // un-checking real copper.
+        "custom" => custom_pad_shapes(pad, sx, sy, &outline_to_world),
+        // rect, roundrect and anything else: a rectangle. For roundrect we
+        // keep a corner radius as inflation so the rounded copper is not
+        // overstated.
+        _ => vec![{
             let min_side = sx.min(sy);
             let rr = if shape_tok == "roundrect" {
                 let ratio = pad.find_f64("roundrect_rratio").unwrap_or(0.0);
@@ -1497,14 +1554,16 @@ fn collect_pad(
                     rr,
                 )
             }
-        }
+        }],
     };
 
     for layer in &layers {
-        buckets.push(
-            layer,
-            make_prim(shape.clone(), net, ItemKind::Pad, owner.to_string()),
-        );
+        for shape in &shapes {
+            buckets.push(
+                layer,
+                make_prim(shape.clone(), net, ItemKind::Pad, owner.to_string()),
+            );
+        }
     }
 }
 
@@ -1613,19 +1672,312 @@ fn chamfered_rect_polygon(
     Shape::Polygon { pts, r: rr }
 }
 
-/// Read a custom pad's polygon outline, transformed to world coordinates.
-fn custom_pad_polygon(
+/// A KiCad trapezoid pad outline. `(rect_delta dx dy)` on a `(size sx sy)`
+/// pad gives the four pad-local corners (KiCad's legacy `PAD::BuildPadPolygon`,
+/// with `delta = rect_delta / 2`, y-down pad frame):
+///
+/// ```text
+///   (-sx/2 - dy/2,  sy/2 + dx/2)   (-sx/2 + dy/2, -sy/2 - dx/2)
+///   ( sx/2 - dy/2, -sy/2 + dx/2)   ( sx/2 + dy/2,  sy/2 - dx/2)
+/// ```
+///
+/// so one parallel edge is `size + delta` long and the other `size - delta`.
+/// A maximal delta collapses one edge to a point (a triangle); coincident
+/// consecutive vertices are dropped.
+fn trapezoid_polygon(
     pad: &List,
+    sx: f64,
+    sy: f64,
     to_world: &dyn Fn(f64, f64) -> (f64, f64),
-) -> Option<Vec<(f64, f64)>> {
-    let prim = pad.find("primitives")?;
-    let poly = prim.find("gr_poly").or_else(|| prim.find("poly"))?;
-    let pts = poly.find("pts")?;
-    let out: Vec<(f64, f64)> = pts
-        .find_all("xy")
-        .filter_map(|p| Some(to_world(p.arg_f64(0)?, p.arg_f64(1)?)))
-        .collect();
-    (out.len() >= 3).then_some(out)
+) -> Shape {
+    let (dx, dy) = pad
+        .find("rect_delta")
+        .and_then(|d| Some((d.arg_f64(0)?, d.arg_f64(1)?)))
+        .unwrap_or((0.0, 0.0));
+    let hw = sx / 2.0;
+    let hh = sy / 2.0;
+    // Clamp the delta the way KiCad does (|dx| <= sy, |dy| <= sx): past that
+    // the parallel edge lengths (size ± delta) go negative and the quad turns
+    // into a self-intersecting bowtie, whose edge distances are garbage. At
+    // the clamp boundary one edge collapses to a point (a triangle), which
+    // the vertex dedup below handles.
+    let ddx = (dx / 2.0).clamp(-hh, hh);
+    let ddy = (dy / 2.0).clamp(-hw, hw);
+    let local = [
+        (-hw - ddy, hh + ddx),
+        (-hw + ddy, -hh - ddx),
+        (hw - ddy, -hh + ddx),
+        (hw + ddy, hh - ddx),
+    ];
+    let mut pts: Vec<(f64, f64)> = Vec::with_capacity(4);
+    for (x, y) in local {
+        if pts
+            .last()
+            .is_none_or(|&(px, py)| (px - x).abs() > 1e-9 || (py - y).abs() > 1e-9)
+        {
+            pts.push((x, y));
+        }
+    }
+    if pts.len() > 1 {
+        let first = pts[0];
+        let last = *pts.last().unwrap();
+        if (first.0 - last.0).abs() <= 1e-9 && (first.1 - last.1).abs() <= 1e-9 {
+            pts.pop();
+        }
+    }
+    if pts.len() < 3 {
+        // A pathological delta (both edges collapsed) leaves no area to
+        // stamp; fall back to the size box rather than a degenerate polygon.
+        return rect_polygon(sx, sy, to_world, 0.0);
+    }
+    let pts = pts.into_iter().map(|(x, y)| to_world(x, y)).collect();
+    Shape::Polygon { pts, r: 0.0 }
+}
+
+/// All solid copper shapes of a KiCad custom pad, transformed to world
+/// coordinates: the anchor pad shape (`(options (anchor circle|rect))` over
+/// `(size sx sy)`, circle by default) plus every drawn primitive inside
+/// `(primitives ...)`: all `gr_poly`/`poly` outlines (not just the first),
+/// stroked lines, arcs, circles and rectangles.
+fn custom_pad_shapes(
+    pad: &List,
+    sx: f64,
+    sy: f64,
+    to_world: &dyn Fn(f64, f64) -> (f64, f64),
+) -> Vec<Shape> {
+    let mut out = Vec::new();
+
+    // Anchor: the base pad shape the primitives are unioned onto. KiCad only
+    // writes `circle` or `rect`; the non-rect branch models the anchor over
+    // `size` as a stadium along the longer axis, which is exactly the disc
+    // when sx == sy (the circle-anchor case) and never over-claims the
+    // circumscribed disc if a non-square size ever appears.
+    let anchor = pad
+        .find("options")
+        .and_then(|o| o.find_value("anchor"))
+        .unwrap_or_else(|| "circle".to_string());
+    if anchor == "rect" {
+        out.push(rect_polygon(sx, sy, to_world, 0.0));
+    } else {
+        let (long, short, along_x) = if sx >= sy {
+            (sx, sy, true)
+        } else {
+            (sy, sx, false)
+        };
+        let half = (long - short).max(0.0) / 2.0;
+        let (a, b) = if along_x {
+            (to_world(-half, 0.0), to_world(half, 0.0))
+        } else {
+            (to_world(0.0, -half), to_world(0.0, half))
+        };
+        out.push(Shape::Capsule(Capsule {
+            ax: a.0,
+            ay: a.1,
+            bx: b.0,
+            by: b.1,
+            r: short / 2.0,
+        }));
+    }
+
+    let Some(prims) = pad.find("primitives") else {
+        return out;
+    };
+    // KiCad writes an explicit fill token when a circle/rect primitive is
+    // filled (`(fill yes)` classically, `(fill solid)`/`(fill none)` in newer
+    // formats) and omits it or writes `none` for outline-only strokes, so an
+    // absent token means unfilled, exactly as the writer meant it.
+    let filled = |l: &List| -> bool {
+        matches!(
+            l.find_value("fill").as_deref(),
+            Some("yes") | Some("true") | Some("solid")
+        )
+    };
+    for prim in prims.lists() {
+        // Width comes from the classic bare `(width w)` or the newer
+        // `(stroke (width w))` form KiCad uses on board graphics. A zero
+        // width stamps the centerline as zero-width copper: the conservative
+        // minimum (KiCad's editor rejects zero-width strokes, so this only
+        // arises in hand-edited files, and inventing a default stroke width
+        // would over-claim copper).
+        let width = prim
+            .find_f64("width")
+            .or_else(|| prim.find("stroke").and_then(|s| s.find_f64("width")))
+            .unwrap_or(0.0);
+        let r = width / 2.0;
+        match prim.name() {
+            Some("gr_poly") | Some("poly") => {
+                let Some(pts_list) = prim.find("pts") else {
+                    continue;
+                };
+                let pts: Vec<(f64, f64)> = pts_list
+                    .find_all("xy")
+                    .filter_map(|p| Some(to_world(p.arg_f64(0)?, p.arg_f64(1)?)))
+                    .collect();
+                if pts.len() >= 3 {
+                    // Custom-pad polygon primitives are always filled; a
+                    // nonzero width strokes the outline, inflating it by r.
+                    out.push(Shape::Polygon { pts, r });
+                }
+            }
+            Some("gr_line") => {
+                if let (Some(a), Some(b)) = (xy_pair(prim, "start"), xy_pair(prim, "end")) {
+                    let a = to_world(a.0, a.1);
+                    let b = to_world(b.0, b.1);
+                    out.push(Shape::Capsule(Capsule {
+                        ax: a.0,
+                        ay: a.1,
+                        bx: b.0,
+                        by: b.1,
+                        r,
+                    }));
+                }
+            }
+            Some("gr_arc") => {
+                if let (Some(a), Some(b)) = (xy_pair(prim, "start"), xy_pair(prim, "end")) {
+                    let a = to_world(a.0, a.1);
+                    let b = to_world(b.0, b.1);
+                    let mid = xy_pair(prim, "mid").map(|m| to_world(m.0, m.1));
+                    // Covering flattening (not the lossy board-arc chain): a
+                    // pad-primitive arc is exact copper, and chord sag would
+                    // hide a grazing short on the stroke.
+                    for cap in covering_arc_from_3(a, mid, b, width) {
+                        out.push(Shape::Capsule(cap));
+                    }
+                }
+            }
+            Some("gr_circle") => {
+                let (Some(c), Some(e)) = (xy_pair(prim, "center"), xy_pair(prim, "end")) else {
+                    continue;
+                };
+                let radius = (e.0 - c.0).hypot(e.1 - c.1);
+                let c = to_world(c.0, c.1);
+                if filled(prim) {
+                    out.push(Shape::Capsule(Capsule {
+                        ax: c.0,
+                        ay: c.1,
+                        bx: c.0,
+                        by: c.1,
+                        r: radius + r,
+                    }));
+                } else {
+                    // Stroke-only ring: the interior is NOT copper. Flatten the
+                    // circumference into capsule links of the stroke radius so
+                    // copper legitimately inside the ring stays silent.
+                    out.extend(
+                        ring_capsules(c.0, c.1, radius, r)
+                            .into_iter()
+                            .map(Shape::Capsule),
+                    );
+                }
+            }
+            Some("gr_rect") => {
+                let (Some(a), Some(b)) = (xy_pair(prim, "start"), xy_pair(prim, "end")) else {
+                    continue;
+                };
+                let corners = [(a.0, a.1), (b.0, a.1), (b.0, b.1), (a.0, b.1)];
+                if filled(prim) {
+                    let pts = corners.into_iter().map(|(x, y)| to_world(x, y)).collect();
+                    out.push(Shape::Polygon { pts, r });
+                } else {
+                    for i in 0..4 {
+                        let p = to_world(corners[i].0, corners[i].1);
+                        let q = to_world(corners[(i + 1) % 4].0, corners[(i + 1) % 4].1);
+                        out.push(Shape::Capsule(Capsule {
+                            ax: p.0,
+                            ay: p.1,
+                            bx: q.0,
+                            by: q.1,
+                            r,
+                        }));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Flatten a full circle of the given centre/radius into a chain of capsule
+/// links of radius `r` (an annulus / stroked ring, not a solid disc), covering
+/// the true annulus. See [`covering_arc_capsules`] for the covering scheme.
+fn ring_capsules(cx: f64, cy: f64, radius: f64, r: f64) -> Vec<Capsule> {
+    covering_arc_capsules(cx, cy, radius, 0.0, std::f64::consts::TAU, r)
+}
+
+/// Maximum chord sagitta permitted when flattening a circle or covering arc
+/// (mm). The covering scheme in [`covering_arc_capsules`] converts this into a
+/// copper overstatement of at most the same amount, kept strictly under
+/// [`CLEARANCE_TOLERANCE_MM`]. Precisely what that buys: a gap routed AT the
+/// rule (or over it) still measures above `rule - CLEARANCE_TOLERANCE_MM`, so
+/// routing-to-rule copper is never flagged; the overstatement only narrows
+/// the forgiveness band, so a gap already 2.5-5 µm under the rule (a true
+/// sub-rule gap the tolerance would otherwise forgive) can now be reported.
+/// That reports true violations early, never invents one on rule-compliant
+/// copper.
+const RING_SAGITTA_MM: f64 = 0.0025;
+
+/// Flatten the circular arc of `sweep` radians starting at angle `a0` on the
+/// circle (`cx`, `cy`, `radius`) into capsule links of stroke radius `r` that
+/// COVER the true arc band.
+///
+/// Chord flattening alone puts the capsule midlines INSIDE the true circle by
+/// the sagitta `s`, shrinking both copper edges of the stroke and hiding
+/// grazing shorts (missing a short is this module's worst failure). Instead
+/// the segment count is chosen so `s <= RING_SAGITTA_MM`, the chain vertices
+/// sit at `radius + s/2` (splitting the sag symmetrically about the true
+/// circle), and the capsule radius is inflated by `s/2`. The capsule surface
+/// then tracks the true band `[radius - r, radius + r]` to within `s` on both
+/// edges: overstatement is at most `s` (at vertices), and the only
+/// under-cover is the O(s²/radius) mid-chord residue on the outer edge,
+/// nanometres at this tolerance. `s` is at most [`RING_SAGITTA_MM`], under
+/// the [`CLEARANCE_TOLERANCE_MM`] finding band.
+/// The bias is deliberately FN-averse: a true air gap smaller than the
+/// overstatement (a couple of microns) can read as a touch and be reported a
+/// short; the alternative (chords under the true circle) silently drops real
+/// grazing shorts, the worse failure.
+fn covering_arc_capsules(
+    cx: f64,
+    cy: f64,
+    radius: f64,
+    a0: f64,
+    sweep: f64,
+    r: f64,
+) -> Vec<Capsule> {
+    let n = covering_segments(radius, sweep);
+    let s = radius * (1.0 - (sweep.abs() / (2.0 * n as f64)).cos());
+    let mid_radius = radius + s / 2.0;
+    let at = |ang: f64| (cx + mid_radius * ang.cos(), cy + mid_radius * ang.sin());
+    let mut caps = Vec::with_capacity(n);
+    let mut prev = at(a0);
+    for i in 1..=n {
+        let p = at(a0 + sweep * i as f64 / n as f64);
+        caps.push(Capsule {
+            ax: prev.0,
+            ay: prev.1,
+            bx: p.0,
+            by: p.1,
+            r: r + s / 2.0,
+        });
+        prev = p;
+    }
+    caps
+}
+
+/// Segment count that keeps the chord sagitta `radius * (1 - cos(sweep/2n))`
+/// at or below [`RING_SAGITTA_MM`], floored at [`ARC_SEGMENTS`] per half-turn
+/// (minimum 1).
+fn covering_segments(radius: f64, sweep: f64) -> usize {
+    let turns = sweep.abs() / std::f64::consts::PI;
+    let floor = ((ARC_SEGMENTS as f64 * turns).ceil() as usize).max(1);
+    if radius <= RING_SAGITTA_MM {
+        return floor;
+    }
+    let half_angle = (1.0 - RING_SAGITTA_MM / radius).acos();
+    if half_angle <= 0.0 {
+        return floor;
+    }
+    ((sweep.abs() / (2.0 * half_angle)).ceil() as usize).max(floor)
 }
 
 /// Read a `(pts (xy ..)(xy ..))` child into world-frame coordinates (no
@@ -1673,33 +2025,7 @@ fn flatten_arc(
     let a1 = ang(end);
     // Sweep direction: go start->mid->end the short way through mid.
     // Normalise so the arc passes through mid.
-    let through = |from: f64, to: f64, via: f64| {
-        let norm = |x: f64| {
-            let mut v = x;
-            while v <= -std::f64::consts::PI {
-                v += std::f64::consts::TAU;
-            }
-            while v > std::f64::consts::PI {
-                v -= std::f64::consts::TAU;
-            }
-            v
-        };
-        // Total CCW sweep from->to and whether mid lies on it.
-        let mut s = norm(to - from);
-        if s < 0.0 {
-            s += std::f64::consts::TAU;
-        }
-        let mut m = norm(via - from);
-        if m < 0.0 {
-            m += std::f64::consts::TAU;
-        }
-        if m <= s {
-            s
-        } else {
-            s - std::f64::consts::TAU
-        }
-    };
-    let sweep = through(a0, a1, am);
+    let sweep = arc_sweep_through(a0, a1, am);
     let mut caps = Vec::with_capacity(ARC_SEGMENTS);
     let mut prev = start;
     for i in 1..=ARC_SEGMENTS {
@@ -1716,6 +2042,65 @@ fn flatten_arc(
         prev = p;
     }
     caps
+}
+
+/// As [`flatten_arc`], but the chain COVERS the true stroke band (see
+/// [`covering_arc_capsules`]). Used for pad-primitive arcs, which are exact
+/// copper: the lossy board-arc chain's chord sag (up to `~0.02 * radius`)
+/// could hide a grazing short on the stroke.
+fn covering_arc_from_3(
+    start: (f64, f64),
+    mid: Option<(f64, f64)>,
+    end: (f64, f64),
+    width: f64,
+) -> Vec<Capsule> {
+    let r = width / 2.0;
+    let chord = vec![Capsule {
+        ax: start.0,
+        ay: start.1,
+        bx: end.0,
+        by: end.1,
+        r,
+    }];
+    let Some(mid) = mid else {
+        return chord;
+    };
+    let Some((cx, cy, radius)) = circle_from_3(start, mid, end) else {
+        return chord;
+    };
+    let ang = |p: (f64, f64)| (p.1 - cy).atan2(p.0 - cx);
+    let a0 = ang(start);
+    let sweep = arc_sweep_through(a0, ang(end), ang(mid));
+    covering_arc_capsules(cx, cy, radius, a0, sweep, r)
+}
+
+/// Total signed CCW sweep from angle `from` to angle `to` that passes through
+/// `via` (radians): the positive CCW sweep when `via` lies on it, otherwise
+/// the complementary negative sweep.
+fn arc_sweep_through(from: f64, to: f64, via: f64) -> f64 {
+    let norm = |x: f64| {
+        let mut v = x;
+        while v <= -std::f64::consts::PI {
+            v += std::f64::consts::TAU;
+        }
+        while v > std::f64::consts::PI {
+            v -= std::f64::consts::TAU;
+        }
+        v
+    };
+    let mut s = norm(to - from);
+    if s < 0.0 {
+        s += std::f64::consts::TAU;
+    }
+    let mut m = norm(via - from);
+    if m < 0.0 {
+        m += std::f64::consts::TAU;
+    }
+    if m <= s {
+        s
+    } else {
+        s - std::f64::consts::TAU
+    }
 }
 
 /// Circumcircle (centre, radius) of three points, or None if colinear.
@@ -2340,8 +2725,9 @@ pub fn altium_drc_from_bytes(bytes: &[u8]) -> Result<DrcReport, crate::ExtractEr
 /// so its smds and the side-specific copper swap 1↔16.
 pub mod eagle_drc {
     use super::{
-        make_prim, sweep_buckets, Capsule, ClearanceRules, DrcReport, ItemKind, LayerBuckets,
-        NetTieOwners, Shape, ARC_SEGMENTS, DEFAULT_CLEARANCE_MM,
+        is_touching, make_prim, point_in_polygon, poly_poly_closest, sweep_buckets, Capsule,
+        ClearanceRules, DrcFinding, DrcReport, Item, ItemKind, LayerBuckets, NetClassRule,
+        NetTieOwners, Shape, ViolationKind, ARC_SEGMENTS, DEFAULT_CLEARANCE_MM,
     };
     use quick_xml::events::Event;
     use quick_xml::Reader;
@@ -2349,9 +2735,28 @@ pub mod eagle_drc {
 
     type Attrs = HashMap<String, String>;
 
-    /// A polygon being streamed: (signal index, outline stroke width, copper
-    /// layer number, vertices as (x, y, curve-to-next-degrees)).
-    type PartialPoly = (usize, f64, i64, Vec<(f64, f64, f64)>);
+    /// A `<polygon>` (signal pour) being streamed: which signal owns it, its
+    /// pour settings, and the vertex ring as (x, y, curve-to-next-degrees).
+    struct PartialPoly {
+        signal: usize,
+        width: f64,
+        layer: i64,
+        isolate: f64,
+        rank: i64,
+        thermals: bool,
+        orphans: bool,
+        cutout: bool,
+        verts: Vec<(f64, f64, f64)>,
+    }
+
+    /// One Eagle net class: its clearance matrix rows
+    /// (`<clearance class="M" value="V"/>`, self entry included). Values are
+    /// mm; a 0 / absent entry defers to the class fallback rules (see the
+    /// rules construction in [`run`]).
+    #[derive(Default)]
+    struct EagleClass {
+        clearances: Vec<(i64, f64)>,
+    }
 
     fn attrs_of(e: &quick_xml::events::BytesStart) -> Attrs {
         e.attributes()
@@ -2497,6 +2902,22 @@ pub mod eagle_drc {
         Polygon {
             width: f64,
             layer: i64,
+            /// Antipad gap the pour keeps around foreign copper (mm). Eagle
+            /// applies max(isolate, design-rule / class clearance); 0 means
+            /// "rules only".
+            isolate: f64,
+            /// Pour priority. Overlapping same-rank pours of different
+            /// signals are an Eagle DRC error (both get poured: a real short);
+            /// with differing ranks the higher-numbered pour yields.
+            rank: i64,
+            /// Thermal-relief spokes on same-net pads (copper removal only).
+            thermals: bool,
+            /// Keep unconnected fill pockets (`orphans="on"`); off removes
+            /// copper, never adds it.
+            orphans: bool,
+            /// `pour="cutout"`: the polygon carves other pours and is not
+            /// copper itself.
+            cutout: bool,
             verts: Vec<(f64, f64, f64)>, // (x, y, curve-to-next in deg)
         },
         Rect {
@@ -2525,6 +2946,10 @@ pub mod eagle_drc {
         elements: Vec<Element>,
         /// signal index -> (name, geometry)
         signals: Vec<(String, Vec<SignalGeom>)>,
+        /// signal index -> net-class number (`<signal class="N">`, default 0).
+        signal_classes: Vec<i64>,
+        /// Net classes declared in `<classes>`, by class number.
+        classes: HashMap<i64, EagleClass>,
         clearance_mm: Option<f64>,
         via_restring: ViaRestring,
         pad_elongation_long_pct: f64,
@@ -2538,6 +2963,8 @@ pub mod eagle_drc {
                 packages: HashMap::new(),
                 elements: Vec::new(),
                 signals: Vec::new(),
+                signal_classes: Vec::new(),
+                classes: HashMap::new(),
                 clearance_mm: None,
                 via_restring: ViaRestring::default(),
                 pad_elongation_long_pct: 100.0,
@@ -2595,6 +3022,8 @@ pub mod eagle_drc {
         let mut cur_library = String::new();
         let mut cur_package: Option<String> = None;
         let mut cur_signal: Option<usize> = None;
+        // The net class currently being read (its `<clearance>` rows follow).
+        let mut cur_class: Option<i64> = None;
         // The polygon currently being read (signal index, partial Polygon).
         let mut cur_poly: Option<PartialPoly> = None;
         // Pending raw param values, resolved after the stream.
@@ -2688,9 +3117,31 @@ pub mod eagle_drc {
                                 mirrored,
                             });
                         }
+                        b"class" => {
+                            if let Some(n) = num(&a, "number").map(|v| v as i64) {
+                                cur_class = Some(n);
+                                out.classes.entry(n).or_default();
+                            }
+                        }
+                        b"clearance" => {
+                            if let Some(n) = cur_class {
+                                if let (Some(other), Some(v)) = (
+                                    num(&a, "class").map(|v| v as i64),
+                                    a.get("value").and_then(|s| parse_len_mm(s)),
+                                ) {
+                                    out.classes
+                                        .entry(n)
+                                        .or_default()
+                                        .clearances
+                                        .push((other, v));
+                                }
+                            }
+                        }
                         b"signal" => {
                             out.signals
                                 .push((a.get("name").cloned().unwrap_or_default(), Vec::new()));
+                            out.signal_classes
+                                .push(num(&a, "class").map(|v| v as i64).unwrap_or(0));
                             cur_signal = Some(out.signals.len() - 1);
                         }
                         b"wire" => {
@@ -2733,19 +3184,35 @@ pub mod eagle_drc {
                             if let Some(si) = cur_signal {
                                 let layer = num(&a, "layer").map(|v| v as i64).unwrap_or(0);
                                 if is_copper_layer(layer) {
-                                    cur_poly = Some((
-                                        si,
-                                        num(&a, "width").unwrap_or(0.0),
+                                    cur_poly = Some(PartialPoly {
+                                        signal: si,
+                                        width: num(&a, "width").unwrap_or(0.0),
                                         layer,
-                                        Vec::new(),
-                                    ));
+                                        isolate: num(&a, "isolate").unwrap_or(0.0),
+                                        // Board signal polygons carry rank
+                                        // 1..6 and behave as rank 1 when the
+                                        // attribute is absent (Eagle's editor
+                                        // floor), so an attribute-less pour
+                                        // and an explicit rank="1" pour are
+                                        // the SAME rank; clamp keeps
+                                        // hand-written out-of-range values in
+                                        // the board range too.
+                                        rank: num(&a, "rank")
+                                            .map(|v| (v as i64).clamp(1, 6))
+                                            .unwrap_or(1),
+                                        thermals: a.get("thermals").map(String::as_str)
+                                            != Some("off"),
+                                        orphans: a.get("orphans").map(String::as_str) == Some("on"),
+                                        cutout: a.get("pour").map(String::as_str) == Some("cutout"),
+                                        verts: Vec::new(),
+                                    });
                                 }
                             }
                         }
                         b"vertex" => {
-                            if let Some((_, _, _, verts)) = cur_poly.as_mut() {
+                            if let Some(poly) = cur_poly.as_mut() {
                                 if let (Some(x), Some(y)) = (num(&a, "x"), num(&a, "y")) {
-                                    verts.push((x, y, num(&a, "curve").unwrap_or(0.0)));
+                                    poly.verts.push((x, y, num(&a, "curve").unwrap_or(0.0)));
                                 }
                             }
                         }
@@ -2796,13 +3263,19 @@ pub mod eagle_drc {
                     b"library" => cur_library.clear(),
                     b"package" => cur_package = None,
                     b"signal" => cur_signal = None,
+                    b"class" => cur_class = None,
                     b"polygon" => {
-                        if let Some((si, width, layer, verts)) = cur_poly.take() {
-                            if verts.len() >= 3 {
-                                out.signals[si].1.push(SignalGeom::Polygon {
-                                    width,
-                                    layer,
-                                    verts,
+                        if let Some(poly) = cur_poly.take() {
+                            if poly.verts.len() >= 3 {
+                                out.signals[poly.signal].1.push(SignalGeom::Polygon {
+                                    width: poly.width,
+                                    layer: poly.layer,
+                                    isolate: poly.isolate,
+                                    rank: poly.rank,
+                                    thermals: poly.thermals,
+                                    orphans: poly.orphans,
+                                    cutout: poly.cutout,
+                                    verts: poly.verts,
                                 });
                             }
                         }
@@ -2870,8 +3343,24 @@ pub mod eagle_drc {
     }
 
     /// Flatten an Eagle `curve` arc (chord endpoints + signed included angle in
-    /// degrees) into a chain of capsule links of the given radius.
+    /// degrees) into a chain of capsule links of the given radius, using the
+    /// standard [`ARC_SEGMENTS`] board-wire density.
     fn flatten_curve(x1: f64, y1: f64, x2: f64, y2: f64, curve_deg: f64, r: f64) -> Vec<Capsule> {
+        flatten_curve_n(x1, y1, x2, y2, curve_deg, r, ARC_SEGMENTS)
+    }
+
+    /// As [`flatten_curve`], with an explicit segment count. Pour outlines use
+    /// a sagitta-bounded count (see [`super::covering_segments`]) so the
+    /// same-rank overlap test is not fooled by chord sag on curved edges.
+    fn flatten_curve_n(
+        x1: f64,
+        y1: f64,
+        x2: f64,
+        y2: f64,
+        curve_deg: f64,
+        r: f64,
+        n: usize,
+    ) -> Vec<Capsule> {
         if curve_deg.abs() < 1e-6 {
             return vec![Capsule {
                 ax: x1,
@@ -2924,10 +3413,11 @@ pub mod eagle_drc {
             let best = if plus.0 <= minus.0 { plus } else { minus };
             (best.1, best.2, best.3)
         };
-        let mut caps = Vec::with_capacity(ARC_SEGMENTS);
+        let n = n.max(1);
+        let mut caps = Vec::with_capacity(n);
         let mut prev = (x1, y1);
-        for i in 1..=ARC_SEGMENTS {
-            let t = i as f64 / ARC_SEGMENTS as f64;
+        for i in 1..=n {
+            let t = i as f64 / n as f64;
             let a = a0 + theta * t;
             let p = (cx + radius * a.cos(), cy + radius * a.sin());
             caps.push(Capsule {
@@ -3163,6 +3653,20 @@ pub mod eagle_drc {
 
         let mut buckets = LayerBuckets::default();
 
+        // Signal pours, kept aside for the pour-to-pour rank check (they are
+        // NOT stamped as solid copper; see the Polygon arm below).
+        struct Pour {
+            net: i64,
+            layer: i64,
+            rank: i64,
+            width: f64,
+            isolate: f64,
+            thermals: bool,
+            orphans: bool,
+            pts: Vec<(f64, f64)>,
+        }
+        let mut pours: Vec<Pour> = Vec::new();
+
         // ── Board-level signal geometry ──────────────────────────────────────
         for (si, (_, geoms)) in parsed.signals.iter().enumerate() {
             let net = si as i64 + 1;
@@ -3219,28 +3723,49 @@ pub mod eagle_drc {
                     SignalGeom::Polygon {
                         width,
                         layer,
+                        isolate,
+                        rank,
+                        thermals,
+                        orphans,
+                        cutout,
                         verts,
                     } => {
-                        // Signal polygon (copper pour). HONESTY CAVEAT: a `.brd`
-                        // stores only the pour's *requested outline*, not the
-                        // copper Eagle actually pours. The real fill carves an
-                        // `isolate` antipad gap around every foreign-net wire / pad
-                        // / via that sits inside the outline, and arbitrates
-                        // overlapping pours by `rank`. Neither the antipads nor the
-                        // rank are in the file. So the drawn outline is NOT copper
-                        // we can short against: treating its boundary as solid
-                        // copper turns every track that legitimately crosses into
-                        // the pour (and every foreign pad the pour isolates around)
-                        // into a false short. We therefore EXCLUDE the pour from
-                        // the short / clearance test entirely rather than
-                        // manufacture noise. Re-pouring the board in Eagle and
-                        // exporting the computed polygons (with antipads) would be
-                        // needed to check pour-to-copper shorts honestly; that data
-                        // is not present here. The outline is still flattened (with
-                        // per-vertex curves) so the parse is exercised and the
-                        // limitation is explicit, not silent.
-                        let _ = (width, layer);
-                        let _pour_outline = flatten_polygon(verts);
+                        // Signal polygon (copper pour). The `.brd` stores the
+                        // pour's requested outline and its pour settings
+                        // (`isolate`, `rank`, `thermals`, `orphans`, all
+                        // parsed above); only the COMPUTED fill polygon is
+                        // absent, because Eagle re-derives it on every
+                        // ratsnest / CAM run. That derivation is what makes
+                        // the fill safe to leave un-stamped against ordinary
+                        // copper: Eagle carves max(isolate, applicable
+                        // design-rule / net-class clearance) around every
+                        // foreign-net wire, pad and via (an `isolate` below
+                        // the rules distance is ignored), thermal spokes only
+                        // remove same-net copper, and orphan removal only
+                        // deletes fill pockets. Every setting keeps or widens
+                        // gaps, so a fill Eagle derives from these settings
+                        // cannot short or crowd foreign copper in the same
+                        // file (pour-to-copper pairs are therefore left
+                        // unchecked, not checked-and-clean), while treating the drawn
+                        // outline as solid copper would turn every legitimate
+                        // crossing track and every isolated foreign pad into a
+                        // false short. The one construct the settings CANNOT
+                        // make safe is two overlapping same-rank pours of
+                        // different signals: Eagle pours both and flags the
+                        // overlap as a DRC error, so the rank check below does
+                        // the same.
+                        if !cutout {
+                            pours.push(Pour {
+                                net,
+                                layer: *layer,
+                                rank: *rank,
+                                width: *width,
+                                isolate: *isolate,
+                                thermals: *thermals,
+                                orphans: *orphans,
+                                pts: flatten_polygon(verts),
+                            });
+                        }
                     }
                     SignalGeom::Rect {
                         x1,
@@ -3260,7 +3785,7 @@ pub mod eagle_drc {
                             make_prim(
                                 Shape::Polygon { pts, r: 0.0 },
                                 net,
-                                ItemKind::Zone,
+                                ItemKind::Graphic,
                                 String::new(),
                             ),
                         );
@@ -3272,25 +3797,45 @@ pub mod eagle_drc {
                         width,
                         layer,
                     } => {
-                        // A drawn circle on copper: the copper is the annulus of
-                        // stroke `width` at `radius`, but for short detection the
-                        // conservative solid disc of the outer radius is used.
-                        let r = radius + width / 2.0;
-                        buckets.push(
-                            &layer_name(*layer),
-                            make_prim(
-                                Shape::Capsule(Capsule {
-                                    ax: *x,
-                                    ay: *y,
-                                    bx: *x,
-                                    by: *y,
-                                    r,
-                                }),
-                                net,
-                                ItemKind::Zone,
-                                String::new(),
-                            ),
-                        );
+                        // A drawn circle on copper. With a nonzero stroke width
+                        // the copper is ONLY the annulus of that stroke at
+                        // `radius`; the interior is bare board, and stamping a
+                        // solid disc manufactures phantom shorts against copper
+                        // legitimately routed through the hole. Eagle renders a
+                        // zero-width circle as a filled disc, so only that case
+                        // is solid. The chain is sagitta-bounded and inflated
+                        // to COVER the true annulus (see `ring_capsules`), so
+                        // a grazing short on the ring edge is not lost to
+                        // chord flattening.
+                        if *width > 0.0 {
+                            for cap in super::ring_capsules(*x, *y, *radius, width / 2.0) {
+                                buckets.push(
+                                    &layer_name(*layer),
+                                    make_prim(
+                                        Shape::Capsule(cap),
+                                        net,
+                                        ItemKind::Graphic,
+                                        String::new(),
+                                    ),
+                                );
+                            }
+                        } else {
+                            buckets.push(
+                                &layer_name(*layer),
+                                make_prim(
+                                    Shape::Capsule(Capsule {
+                                        ax: *x,
+                                        ay: *y,
+                                        bx: *x,
+                                        by: *y,
+                                        r: *radius,
+                                    }),
+                                    net,
+                                    ItemKind::Graphic,
+                                    String::new(),
+                                ),
+                            );
+                        }
                     }
                 }
             }
@@ -3340,12 +3885,156 @@ pub mod eagle_drc {
         // is never a short, exactly like KiCad's net 0.
         let no_net: std::collections::HashSet<i64> = std::iter::once(0).collect();
 
-        let rules = ClearanceRules::new(clearance);
-        sweep_buckets(buckets, &rules, &no_net, &net_ties, name_of)
+        // ── Net-class clearances ─────────────────────────────────────────────
+        // Eagle's `<classes>` block is a clearance matrix: class N declares
+        // `<clearance class="M" value="V"/>` rows (its own number included).
+        // Eagle's rule set is "the larger value applies" throughout: a class
+        // value below the design-rule clearance is ignored (so every stored
+        // value is floored at the design rules), and when nets of DIFFERENT
+        // classes meet with no explicit matrix cell (absent or 0), the larger
+        // of the two classes' own clearances governs, which is exactly the
+        // max-of-two-classes fallback in `effective_clearance`, so only
+        // explicit non-zero matrix cells are registered as pair overrides.
+        //
+        // "The design rules" here is this path's single clearance: the
+        // TIGHTEST copper-gating md* value (resolved above). The Eagle engine
+        // deliberately models one clearance rather than the per-item-kind md*
+        // matrix (mdWireWire vs mdPadPad, ...), the documented
+        // no-manufactured-noise choice this DRC has always made; a class or
+        // pair value is therefore floored at that single rule, not at the
+        // item-kind-specific one. Modelling the full md* matrix would be a
+        // separate feature touching every finding, not a net-class concern.
+        let mut rules = ClearanceRules::new(clearance);
+        let class_key = |n: i64| format!("class-{n}");
+        for (number, class) in &parsed.classes {
+            let self_clearance = class
+                .clearances
+                .iter()
+                .find(|(other, _)| other == number)
+                .map(|(_, v)| *v)
+                .unwrap_or(0.0);
+            rules.add_class(NetClassRule {
+                name: class_key(*number),
+                clearance_mm: self_clearance.max(clearance),
+                diff_pair_gap_mm: None,
+            });
+            for (other, value) in &class.clearances {
+                if other != number && *value > 0.0 {
+                    rules.add_class_pair_clearance(
+                        &class_key(*number),
+                        &class_key(*other),
+                        value.max(clearance),
+                    );
+                }
+            }
+        }
+        for (si, (name, _)) in parsed.signals.iter().enumerate() {
+            let class = parsed.signal_classes.get(si).copied().unwrap_or(0);
+            if parsed.classes.contains_key(&class) {
+                rules.assign_net(name, &class_key(class));
+            }
+        }
+
+        let mut report = sweep_buckets(buckets, &rules, &no_net, &net_ties, &name_of);
+
+        // ── Pour-to-pour rank arbitration ────────────────────────────────────
+        // Two overlapping pours of different signals with the SAME rank have no
+        // arbitration: Eagle pours both (a physical short on the fabricated
+        // board) and its own DRC reports the overlap. Differing ranks are
+        // arbitrated (the higher-numbered pour carves around the lower), so
+        // they stay silent.
+        for (i, a) in pours.iter().enumerate() {
+            for b in pours.iter().skip(i + 1) {
+                if a.layer != b.layer
+                    || a.net == b.net
+                    || a.rank != b.rank
+                    || no_net.contains(&a.net)
+                    || no_net.contains(&b.net)
+                {
+                    continue;
+                }
+                // Overlap means the vertex rings themselves cross or one
+                // contains the other. The rings are deliberately NOT inflated
+                // by the pours' `width` strokes: whether Eagle's boundary
+                // stroke extends past the vertex ring is renderer detail, and
+                // inflating would invent shorts for near-but-disjoint pours.
+                // Requiring true ring overlap keeps the short claim airtight
+                // under either reading (Eagle's own DRC flags the polygon
+                // overlap, not a stroke graze).
+                let (gap, qa, _) = poly_poly_closest(&a.pts, &b.pts);
+                let contained = a
+                    .pts
+                    .first()
+                    .is_some_and(|&(x, y)| point_in_polygon(x, y, &b.pts))
+                    || b.pts
+                        .first()
+                        .is_some_and(|&(x, y)| point_in_polygon(x, y, &a.pts));
+                if !contained && !is_touching(gap) {
+                    continue;
+                }
+                let (x, y) = if is_touching(gap) {
+                    qa
+                } else if a
+                    .pts
+                    .first()
+                    .is_some_and(|&(px, py)| point_in_polygon(px, py, &b.pts))
+                {
+                    a.pts[0]
+                } else {
+                    b.pts[0]
+                };
+                let pour_item = |p: &Pour| Item {
+                    kind: ItemKind::Zone,
+                    net: p.net,
+                    owner: format!(
+                        "pour(rank {}, width {} mm, isolate {} mm, thermals {}, orphans {})",
+                        p.rank,
+                        p.width,
+                        p.isolate,
+                        if p.thermals { "on" } else { "off" },
+                        if p.orphans { "on" } else { "off" },
+                    ),
+                };
+                let (na, nb) = (a.net.min(b.net), a.net.max(b.net));
+                let (item_a, item_b) = if a.net <= b.net {
+                    (pour_item(a), pour_item(b))
+                } else {
+                    (pour_item(b), pour_item(a))
+                };
+                report.findings.push(DrcFinding {
+                    kind: ViolationKind::Short,
+                    net_a: na,
+                    net_b: nb,
+                    net_a_name: name_of(na),
+                    net_b_name: name_of(nb),
+                    layer: layer_name(a.layer),
+                    x,
+                    y,
+                    gap_mm: gap.min(0.0),
+                    required_clearance_mm: rules
+                        .effective_clearance(&name_of(a.net), &name_of(b.net)),
+                    item_a,
+                    item_b,
+                });
+            }
+        }
+        report.findings.sort_by(|a, b| {
+            (a.kind == ViolationKind::Clearance)
+                .cmp(&(b.kind == ViolationKind::Clearance))
+                .then(a.net_a.cmp(&b.net_a))
+                .then(a.net_b.cmp(&b.net_b))
+                .then(a.layer.cmp(&b.layer))
+        });
+        report
     }
 
     /// Flatten a polygon's vertex ring, expanding any per-vertex `curve` (the arc
-    /// from this vertex to the next) into intermediate points.
+    /// from this vertex to the next) into intermediate points. Curves are
+    /// expanded at sagitta-bounded density (points ON the true arc, chord sag
+    /// at most [`super::RING_SAGITTA_MM`]) rather than the coarse board-wire
+    /// [`ARC_SEGMENTS`]: the ring feeds the same-rank pour overlap test, where
+    /// a coarse chord sagging inward (or bulging outward, for the opposite
+    /// curve sign) by `~0.02 * radius` would miss or invent an overlap.
     fn flatten_polygon(verts: &[(f64, f64, f64)]) -> Vec<(f64, f64)> {
         let n = verts.len();
         let mut out = Vec::with_capacity(n);
@@ -3354,7 +4043,15 @@ pub mod eagle_drc {
             let (x2, y2, _) = verts[(i + 1) % n];
             out.push((x1, y1));
             if curve.abs() > 1e-6 {
-                for cap in flatten_curve(x1, y1, x2, y2, curve, 0.0) {
+                let theta = curve.to_radians().abs();
+                let chord = (x2 - x1).hypot(y2 - y1);
+                let segments = if (theta / 2.0).sin().abs() > 1e-12 {
+                    let radius = (chord / 2.0) / (theta / 2.0).sin();
+                    super::covering_segments(radius, theta)
+                } else {
+                    ARC_SEGMENTS
+                };
+                for cap in flatten_curve_n(x1, y1, x2, y2, curve, 0.0, segments) {
                     out.push((cap.bx, cap.by));
                 }
                 // The last pushed point coincides with the next vertex; drop it
@@ -3417,8 +4114,8 @@ pub mod eagle_drc {
 /// `AARC6`, `AVIA6`, `APAD6`); see `altium.rs` for the field-by-field citation.
 pub mod altium_drc {
     use super::{
-        make_prim, sweep_buckets, Capsule, ClearanceRules, DrcReport, ItemKind, LayerBuckets,
-        NetTieOwners, Shape, ARC_SEGMENTS, DEFAULT_CLEARANCE_MM,
+        chamfered_rect_polygon, make_prim, sweep_buckets, Capsule, ClearanceRules, DrcReport,
+        ItemKind, LayerBuckets, NetTieOwners, Shape, ARC_SEGMENTS, DEFAULT_CLEARANCE_MM,
     };
     use crate::altium::{self, is_copper_layer, layer_name, parse_pads, MM_PER_UNIT, NONE_U16};
     use crate::ExtractError;
@@ -3843,10 +4540,20 @@ pub mod altium_drc {
         out
     }
 
+    /// Octagon corner cut, as a fraction of the pad's shorter side. Ported
+    /// from KiCad's Altium importer (`altium_pcb.cpp`,
+    /// `ALTIUM_PAD_SHAPE::OCTAGONAL` → chamfered rect, ratio 0.25, all
+    /// corners), the same reference implementation the record layouts in this
+    /// module are ported from. A regular octagon (ratio ≈ 0.293 on a square
+    /// pad) would cut MORE copper, so 0.25 is the conservative reading if the
+    /// two ever disagree.
+    const OCTAGON_CHAMFER_RATIO: f64 = 0.25;
+
     /// Build the solid copper shape for a pad. Shape codes: 1 = circle/oval,
-    /// 2 = rectangle, 3 = octagon (KiCad `ALTIUM_PAD_SHAPE`). Rect / oct are
-    /// modelled as the bounding rectangle (a conservative superset for short
-    /// detection).
+    /// 2 = rectangle, 3 = octagon (KiCad `ALTIUM_PAD_SHAPE`). Rectangles are
+    /// exact; the octagon is the rectangle with each corner cut at 45° by
+    /// [`OCTAGON_CHAMFER_RATIO`] of the shorter side, so copper legitimately
+    /// routed past a cut corner is not a phantom short.
     fn pad_shape(cx: f64, cy: f64, g: &PadGeo) -> Shape {
         let rot = g.rotation.to_radians();
         let (w, h) = (g.size_x, g.size_y);
@@ -3876,8 +4583,17 @@ pub mod altium_drc {
                     r: short / 2.0,
                 })
             }
+            3 => {
+                // Octagon: the rectangle with 45° corner cuts of
+                // OCTAGON_CHAMFER_RATIO * min(w, h), built by the same
+                // chamfered-rect constructor the KiCad path uses.
+                let c = OCTAGON_CHAMFER_RATIO * w.min(h);
+                let (rs, rc) = rot.sin_cos();
+                let to_world = |lx: f64, ly: f64| (cx + lx * rc - ly * rs, cy + lx * rs + ly * rc);
+                chamfered_rect_polygon(w, h, 0.0, c, [true; 4], &to_world)
+            }
             _ => {
-                // Rectangle / octagon: bounding rectangle.
+                // Rectangle (and unknown codes, conservatively): the rectangle.
                 let hw = w / 2.0;
                 let hh = h / 2.0;
                 let (rs, rc) = rot.sin_cos();

@@ -17,8 +17,9 @@
 //! - the wire-`curve` arc flattening picked the wrong circumcircle centre,
 //!   swinging parallel differential-pair arcs across each other;
 //! - signal polygons (copper pours) were treated as solid copper, when a `.brd`
-//!   stores only the requested outline (no `isolate` antipads), so every trace
-//!   crossing into a pour read as a short;
+//!   stores only the requested outline (never the computed fill with its
+//!   `isolate` antipad carves), so every trace crossing into a pour read as a
+//!   short;
 //! - solder jumpers / star-ground ties (two nets meeting at one component, e.g.
 //!   GND↔UGND through the Uno's `GROUND` SJ jumper) read as track shorts.
 //!
