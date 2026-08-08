@@ -385,6 +385,29 @@ pub trait Mcu {
         None
     }
 
+    /// How this backend's TIMING fidelity falls short of the part, or `None`
+    /// when a firmware delay costs the virtual time it costs on silicon (as
+    /// measured by a clock-truth gate, not assumed from a declaration).
+    ///
+    /// Same coverage-honesty contract as [`Mcu::watchdog_limitation`]: the run
+    /// happened, but time-based results on this core carry a known systematic
+    /// bias, and a user reading a green time-based assertion has to be told
+    /// rather than left to find the caveat in a doc. Two shipped cases:
+    ///
+    /// - `qemu:esp32*` paces virtual time by the host wall clock (no icount;
+    ///   it breaks esp32 boot, measured), so virtual time is approximate and
+    ///   host-load dependent even though the cont→stop window itself is now
+    ///   measured from QEMU's RESUME/STOP event timestamps.
+    /// - `renode:stm32f103` deliberately clocks its TIMx blocks at the
+    ///   post-PLL 72 MHz against an 8 MHz reset-default core, so a bare-metal
+    ///   TIMx time base runs 9x fast (stated in the descriptor).
+    ///
+    /// The string is a whole sentence rendered verbatim on every report
+    /// surface, exactly like the watchdog sentence.
+    fn timing_limitation(&self) -> Option<String> {
+        None
+    }
+
     /// Times an unserviced watchdog rebooted the core during this run.
     ///
     /// Nonzero is not an error, it is a FINDING: firmware behaviour observed

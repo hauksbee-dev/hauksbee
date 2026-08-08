@@ -434,10 +434,13 @@ the top-level `mcu` key, which is an informational note nothing reads.
 
 **`toggle`**: a net toggles at an expected frequency (a blink check) or a
 minimum number of times. A COUNT is trustworthy on every backend. A FREQUENCY
-rests on the backend's clock rate matching the part, which is verified on
-`renode:rp2040` and `simavr:atmega328p` and not on the other Renode platforms or
-the ESP32 family; on those, prefer a minimum count. `docs/about/LIMITATIONS.md`
-gives the measured ratios.
+rests on the backend's clock rate matching the part, which is measured on
+`simavr:atmega328p` and every Renode platform (the clock-truth gates: SysTick
+on the STM32/nRF parts, `mtime` on the FE310, stock pico-sdk timing on the
+RP2040). The ESP32 family is the exception: its virtual time is wall-paced
+and host-load dependent, the run says so as a timing coverage warning, and a
+minimum count is the sturdier assertion there. `docs/about/LIMITATIONS.md`
+tells the full clock story.
 
 ```toml
 [[assert]]

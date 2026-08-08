@@ -64,27 +64,34 @@ fn boot_floor_lifts_once_firmware_raises_magic() {
     eprintln!("boot complete after {booted_after} chunks");
 
     // THE REGRESSION: a steady-state 100 µs chunk must advance ~100 µs, not
-    // the 8 ms boot floor. The credited cycles are exactly the run window
-    // times the configured clock, so the assertion is deterministic.
+    // the 8 ms boot floor. The credit is the MEASURED cont→stop window (QMP
+    // RESUME/STOP event timestamps), which is the requested window plus the
+    // QMP round-trip slack the guest runs through, so the assertion is a
+    // bracket: at least the requested window (crediting less would mean the
+    // slack went back to being dropped), and strictly under the boot floor
+    // (crediting 8 ms would mean the floor never lifted).
     let freq = mcu.frequency() as f64;
     let before = mcu.current_cycle();
     mcu.run_micros(100).expect("run steady-state chunk");
     let credited = mcu.current_cycle() - before;
     let expected = (100e-6 * freq).round() as u64;
     let floored = (8e-3 * freq).round() as u64;
-    assert_eq!(
-        credited, expected,
-        "post-boot 100 µs chunk must credit {expected} cycles; got {credited} \
-         (the pre-fix unconditional floor credited {floored})"
+    assert!(
+        credited >= expected && credited < floored,
+        "post-boot 100 µs chunk must credit at least {expected} cycles and \
+         stay under the {floored} the pre-fix unconditional floor credited; \
+         got {credited}"
     );
 
-    // And a long post-boot chunk is no longer truncated by the old 50 ms cap.
+    // And a long post-boot chunk is no longer truncated by the old 50 ms cap:
+    // it must credit at least its full 80 ms (a capped run credits ~50 ms).
     let before = mcu.current_cycle();
     mcu.run_micros(80_000).expect("run long chunk");
     let credited = mcu.current_cycle() - before;
     let expected = (80e-3 * freq).round() as u64;
-    assert_eq!(
-        credited, expected,
-        "post-boot 80 ms chunk must credit its full length (old cap: 50 ms)"
+    assert!(
+        credited >= expected,
+        "post-boot 80 ms chunk must credit at least its full length \
+         (old cap: 50 ms); got {credited} vs expected {expected}"
     );
 }

@@ -183,6 +183,16 @@ fn cosim_json_from(sched: &Scheduler) -> CosimJson {
                 },
             )
             .collect(),
+        timing_limitations: sched
+            .timing_limitations()
+            .into_iter()
+            .map(
+                |(mcu_ref, limitation)| hauksbee_engine::result::CosimTimingLimitation {
+                    mcu_ref,
+                    limitation,
+                },
+            )
+            .collect(),
     }
 }
 
