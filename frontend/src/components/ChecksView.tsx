@@ -1300,11 +1300,13 @@ export function ChecksView({
                     this spec in <code className="hb-inline">ci/</code>.
                   </div>
                   <div className="text-[12px] mb-1" style={{ color: 'var(--silk-dim)' }}>
-                    1. <code className="hb-inline">ci/{specStem}.toml</code>; the Download button above produces it
+                    1. <code className="hb-inline break-all">ci/{specStem}.toml</code>; the Download button above produces it
                     (paths already relative to that layout).
                   </div>
                   <div className="text-[12px] mb-1.5" style={{ color: 'var(--silk-dim)' }}>
-                    2. <code className="hb-inline">.github/workflows/hauksbee-ci.yml</code>:
+                    {/* break-all: the workflow path outgrows the sticky card at
+                        320px wide; a wrapped path beats one clipped mid-word. */}
+                    2. <code className="hb-inline break-all">.github/workflows/hauksbee-ci.yml</code>:
                   </div>
                   {/* pre-wrap: the long `paths:` lines soft-wrap at spaces
                       instead of clipping at the card's right edge (the copied

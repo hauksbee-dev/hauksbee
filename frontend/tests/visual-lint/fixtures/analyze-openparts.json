@@ -1,0 +1,272 @@
+{
+ "ok": true,
+ "error": null,
+ "board_name": "",
+ "file_name": "open_active_ic.kicad_pcb",
+ "num_components": 3,
+ "num_nets": 3,
+ "headline": "No blocking findings, but evidence is undermined; results touching unresolved inputs are invalid for analysis. See the evidence below.",
+ "serious": 0,
+ "total": 0,
+ "sections": [
+  {
+   "title": "Copper spacing (DRC)",
+   "verdict": "Looks healthy: no copper spacing (drc) problems found.",
+   "findings": []
+  },
+  {
+   "title": "Connectivity & wiring",
+   "verdict": "INCONCLUSIVE: 1 current-carrying / active part(s) have no model (U1), so a clean result here is not a clean bill. Supply device models (--models-dir; scaffold one with `hauksbee models new`) or BOM identity (--bom) for them to make this verdict conclusive.",
+   "findings": []
+  },
+  {
+   "title": "Signal integrity",
+   "verdict": "INCONCLUSIVE: 1 current-carrying / active part(s) have no model (U1), so a clean result here is not a clean bill. Supply device models (--models-dir; scaffold one with `hauksbee models new`) or BOM identity (--bom) for them to make this verdict conclusive.",
+   "findings": []
+  }
+ ],
+ "components": [
+  {
+   "reference": "U1",
+   "value": "XLOGIC9999",
+   "x": 110,
+   "y": 100,
+   "rot": 0
+  },
+  {
+   "reference": "R1",
+   "value": "10k",
+   "x": 130,
+   "y": 100,
+   "rot": 0
+  },
+  {
+   "reference": "R2",
+   "value": "1k",
+   "x": 130,
+   "y": 110,
+   "rot": 0
+  }
+ ],
+ "bind": {
+  "critical_parts_bound": "0/1",
+  "active_path_unresolved": [
+   "U1"
+  ],
+  "open_parts": [
+   {
+    "reference": "U1",
+    "value": "XLOGIC9999",
+    "reason": "no model",
+    "consequence": "U1 is an active IC left OPEN; analog/AC/thermal results on its nets are NOT trustworthy",
+    "active_ic": true,
+    "bound": false
+   }
+  ]
+ },
+ "inventory": [
+  {
+   "path": "open_active_ic.kicad_pcb",
+   "kind": "ki_cad_pcb",
+   "role": "layout",
+   "sha256": "f1173a4600ed659a23e9525807884fd30dac55859f61d187664d270ae8adfba0",
+   "contributed": [
+    {
+     "what": "connectivity",
+     "detail": "component and net incidence consumed by binding and electrical checks"
+    },
+    {
+     "what": "copper_geometry",
+     "detail": "layout geometry consumed by geometry-bearing checks"
+    }
+   ]
+  }
+ ],
+ "assumptions": [
+  {
+   "id": "open-part:U1",
+   "kind": "open_part",
+   "source": "binder",
+   "scope": {
+    "type": "subjects",
+    "value": [
+     {
+      "kind": "part",
+      "id": "U1"
+     }
+    ]
+   },
+   "statement": "U1 (XLOGIC9999) is treated as an open circuit.",
+   "because": "No model.",
+   "consequence": "Nets through U1 are isolated in simulation, so any current path across it is missing from every result that depends on it.",
+   "replacement": "Add a model for U1 to your models directory, or mark it DNP if the board does not fit it."
+  }
+ ],
+ "evidence": [
+  {
+   "assertion": "DRC input coverage",
+   "artifacts": [
+    0
+   ],
+   "models": [
+    {
+     "reference": "R1",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R2",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    }
+   ],
+   "parameters": [
+    {
+     "parameter": "R1.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R2.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    }
+   ],
+   "assumptions": [
+    "open-part:U1"
+   ],
+   "status": "undermined"
+  },
+  {
+   "assertion": "Signal-integrity input coverage",
+   "artifacts": [
+    0
+   ],
+   "models": [
+    {
+     "reference": "R1",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    },
+    {
+     "reference": "R2",
+     "model_id": "r_fallback",
+     "layer": "engine-fallback",
+     "source": {
+      "tier": "estimated-fallback",
+      "layer": "engine-fallback",
+      "origin": "engine-fallback",
+      "validation": "unvalidated",
+      "uncertainty": [
+       {
+        "status": "unknown",
+        "parameter": "r_fallback.model",
+        "reason": "the engine fallback is estimated and has no validated numeric error interval"
+       }
+      ]
+     },
+     "confidence": "guessed"
+    }
+   ],
+   "parameters": [
+    {
+     "parameter": "R1.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    },
+    {
+     "parameter": "R2.model",
+     "value": "r_fallback",
+     "origin": {
+      "type": "model",
+      "model_id": "r_fallback",
+      "layer": "engine-fallback",
+      "confidence": "guessed"
+     }
+    }
+   ],
+   "assumptions": [
+    "open-part:U1"
+   ],
+   "status": "undermined"
+  }
+ ],
+ "notes": [
+  {
+   "kind": "bind_role",
+   "message": "Current-carrying / active part(s) left open on the live circuit: U1. Analog/AC/thermal results on their nets are NOT trustworthy."
+  }
+ ],
+ "nets": [
+  "+3V3",
+  "GND",
+  "SENSOR_OUT"
+ ],
+ "component_kinds": {
+  "R1": "passive",
+  "R2": "passive"
+ },
+ "supplies": [
+  {
+   "net": "+3V3",
+   "volts": 3.3
+  }
+ ]
+}

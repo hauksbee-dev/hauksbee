@@ -52,6 +52,21 @@ const analyze = await fetch(`${base}/api/analyze`, {
 })
 write('analyze-watchy.json', await analyze.json())
 
+// A second report fixture for the datasheet-extraction surfaces. The watchy
+// sample no longer has any unbound ACTIVE part (its last two ICs got curated
+// models), so its report correctly renders no "parts with no model" panel; the
+// panel's layout is tested against a synthetic board whose whole point is an
+// open active IC. The board lives with the engine's own tests, which pin the
+// same premise, so both cannot drift apart silently.
+const openBoard = join(here, '../../../crates/hauksbee-engine/tests/fixtures/plain_check_open_active_ic.kicad_pcb')
+const openBytes = await Bun.file(openBoard).arrayBuffer()
+const analyzeOpen = await fetch(`${base}/api/analyze`, {
+  method: 'POST',
+  headers: { 'X-Board-Filename': 'open_active_ic.kicad_pcb', 'Content-Type': 'application/octet-stream' },
+  body: openBytes,
+})
+write('analyze-openparts.json', await analyzeOpen.json())
+
 // One check run: the two assertions the lint's builder surface composes.
 const spec = 'name = "watchy checks"\nduration_ms = 50\n\n'
   + '[[assert]]\nkind = "no_faults"\n\n'

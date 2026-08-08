@@ -7,7 +7,11 @@
 // through it). Keep each `reach` to the clicks a user would make, and never
 // touch the 3D tab: three.js on a headless GPU-less runner wedges the page.
 
+import { dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Page } from 'playwright'
+
+const here = dirname(fileURLToPath(import.meta.url))
 
 export type Viewport = { name: string; width: number; height: number }
 
@@ -83,6 +87,14 @@ export const APP_SURFACES: Surface[] = [
     id: 'datasheet-panel',
     what: 'the "parts with no model" panel: open parts and the drafting jack',
     async reach(page) {
+      // The watchy sample is fully bound (no unbound active part), so its
+      // report correctly renders no datasheet panel. Upload the engine's own
+      // open-active-IC fixture board, whose report is the panel's habitat.
+      await page.goto('/', { waitUntil: 'domcontentloaded' })
+      await page.waitForSelector('[data-testid="drop-zone"]', { timeout: 20_000 })
+      const board = join(here, '../../../crates/hauksbee-engine/tests/fixtures/plain_check_open_active_ic.kicad_pcb')
+      await page.setInputFiles('#board-file', board)
+      await page.waitForSelector('[data-testid="report-verdict"]', { timeout: 30_000 })
       await page.locator('[data-testid="datasheet-extract"]').scrollIntoViewIfNeeded()
       await settle(page)
     },

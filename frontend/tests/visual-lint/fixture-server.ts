@@ -49,8 +49,13 @@ async function api(req: Request, url: URL): Promise<Response | null> {
   if (p === '/api/startup' && method === 'GET') return fixture('startup.json')
   if (p === '/api/live/status' && method === 'GET') return fixture('live-status.json')
   if ((p === '/api/analyze' || p === '/api/analyze-with-firmware') && method === 'POST') {
-    const captured = await file(join(FIXTURES, 'analyze-watchy.json')).json() as Record<string, unknown>
-    return json(withBoardIdentity(captured, await uploadedBoardName(req)))
+    // Two reports: the watchy sample (fully bound; no datasheet panel), and
+    // the synthetic open-active-IC board the datasheet surfaces upload to get
+    // a report that renders the "parts with no model" panel.
+    const name = await uploadedBoardName(req)
+    const which = name?.includes('open_active_ic') ? 'analyze-openparts.json' : 'analyze-watchy.json'
+    const captured = await file(join(FIXTURES, which)).json() as Record<string, unknown>
+    return json(withBoardIdentity(captured, name))
   }
   if (p === '/api/check' && method === 'POST') return fixture('check-run.json')
   if (p === '/api/deps' && method === 'GET') return fixture('deps.json')
