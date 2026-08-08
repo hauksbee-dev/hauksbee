@@ -227,6 +227,13 @@ pub fn emit(
             }
         }
     }
+    // Undermined run-level evidence (an input-coverage claim, never a
+    // finding's own badge) must reach the closing human verdict too: ending
+    // on "VERDICT: clean" under an undermined coverage claim is the same
+    // vacuous clean the JSON verdict refuses.
+    let coverage_undermined = crate::result::run_level_undermined(evidence.maps(), |a| {
+        actual_findings.iter().any(|f| f.message == a)
+    });
     if !matches!(mode, OutputMode::Json) {
         print!("{}", evidence.render_plain());
         print!("{}", render_waivers(&waived, &waivers));
@@ -234,7 +241,10 @@ pub fn emit(
         // the last thing `--check` prints answers "is my board ok" without
         // scrolling back through four sections. --json is unchanged (its
         // consumers read the structured findings).
-        println!("\n{}", verdict_line(serious, worth_a_look, &blockers));
+        println!(
+            "\n{}",
+            verdict_line(serious, worth_a_look, &blockers, coverage_undermined)
+        );
     }
     let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
     // Unvalidated board format (KiCad 10+) → its shorts may be phantom; do not
@@ -249,9 +259,7 @@ pub fn emit(
     // evidence or unbound verdict-critical parts), not on any undermined map:
     // a finding-backed badge must not exit 3 under --strict while the verdict
     // field says pass.
-    let strict_invalid = crate::result::run_level_undermined(evidence.maps(), |a| {
-        actual_findings.iter().any(|f| f.message == a)
-    }) || !blockers.is_empty();
+    let strict_invalid = coverage_undermined || !blockers.is_empty();
     if strict && strict_invalid {
         std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
     }
@@ -304,7 +312,12 @@ fn verdict_counts(
 /// "failing" (real findings are not vacuous), but the closing line still
 /// names the coverage hole: fixing the listed findings must not flip the
 /// board straight to a vacuous clean.
-fn verdict_line(serious: usize, worth_a_look: usize, blockers: &[String]) -> String {
+fn verdict_line(
+    serious: usize,
+    worth_a_look: usize,
+    blockers: &[String],
+    coverage_undermined: bool,
+) -> String {
     // The shared sentence, minus its leading tag where the line carries its
     // own, so the vocabulary stays single-sourced without stuttering
     // "inconclusive ... INCONCLUSIVE".
@@ -312,15 +325,24 @@ fn verdict_line(serious: usize, worth_a_look: usize, blockers: &[String]) -> Str
         let s = crate::result::inconclusive_verdict(blockers);
         s.strip_prefix("INCONCLUSIVE: ").unwrap_or(&s).to_string()
     });
+    const COVERAGE: &str = "an input-coverage claim is undermined, so a clean result here \
+                            is not a clean bill (see the evidence section)";
     if serious == 0 {
         if let Some(sentence) = sentence {
             return format!(
                 "VERDICT: inconclusive: 0 serious, {worth_a_look} worth a look; {sentence}"
             );
         }
+        if coverage_undermined {
+            return format!(
+                "VERDICT: inconclusive: 0 serious, {worth_a_look} worth a look; {COVERAGE}"
+            );
+        }
         format!("VERDICT: clean: 0 serious, {worth_a_look} worth a look")
     } else if let Some(sentence) = sentence {
         format!("VERDICT: failing: {serious} serious, {worth_a_look} worth a look; also {sentence}")
+    } else if coverage_undermined {
+        format!("VERDICT: failing: {serious} serious, {worth_a_look} worth a look; also {COVERAGE}")
     } else {
         format!("VERDICT: failing: {serious} serious, {worth_a_look} worth a look")
     }

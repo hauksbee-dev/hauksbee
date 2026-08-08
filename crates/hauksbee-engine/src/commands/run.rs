@@ -525,7 +525,9 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 fix: Some("supply device models or BOM identity for the named parts".into()),
             });
         }
-        crate::reports::ci_artifacts::github_evidence_annotations(&maps);
+        crate::reports::ci_artifacts::github_evidence_annotations_with_gate(&maps, |m| {
+            !finding_messages.contains(m.assertion())
+        });
         write_ci_artifacts(&cfg, &findings)?;
         ci_findings = Some(findings);
     }
@@ -1092,12 +1094,28 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         if let Some(base) = &ci_findings {
             let mut all = base.clone();
             all.extend(fault_findings.clone());
-            all.extend(crate::reports::ci_artifacts::evidence_findings(
+            // The same run-level split as the static pass: an undermined map
+            // backing one of the findings already in the file is that
+            // finding's badge, not a second gate-grade failure. Co-sim
+            // simulation maps and binding-completeness maps are run-level and
+            // keep gating.
+            let rewrite_messages: std::collections::HashSet<&str> = base
+                .iter()
+                .chain(fault_findings.iter())
+                .map(|f| f.message.as_str())
+                .collect();
+            all.extend(crate::reports::ci_artifacts::evidence_findings_with_gate(
                 run_evidence.maps(),
+                |m| !rewrite_messages.contains(m.assertion()),
             ));
             write_ci_artifacts(&cfg, &all)?;
+            crate::reports::ci_artifacts::github_evidence_annotations_with_gate(
+                run_evidence.maps(),
+                |m| !rewrite_messages.contains(m.assertion()),
+            );
+        } else {
+            crate::reports::ci_artifacts::github_evidence_annotations(run_evidence.maps());
         }
-        crate::reports::ci_artifacts::github_evidence_annotations(run_evidence.maps());
 
         if cfg.json {
             let mut jr = JsonReport::new(&board_name, summary)
