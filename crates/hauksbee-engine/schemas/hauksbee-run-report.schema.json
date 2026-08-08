@@ -860,6 +860,13 @@
         "bus": {
           "type": "string"
         },
+        "cs_provenance": {
+          "description": "On `mode = \"exact\"`, where the chip-select came from: `\"spec\"` (the run\nspec's `cs_net`), `\"model-roles\"` (the `cs` pin role of the bound model for\nthe board component the peripheral names), or `\"bitbang-pins\"` (a\nbit-banged SPI slave, whose CS pin comes from the GPIO wiring the responder\nwas attached with rather than from any net lookup). Absent on the `backend`\nand `heuristic` tiers, where no chip-select was resolved. The tier alone\ndoes not say this, and the routes fail differently, so a consumer\nreproducing a result needs it.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "mode": {
           "type": "string"
         }

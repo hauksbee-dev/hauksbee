@@ -41,3 +41,99 @@ gnd_pin    = "10"         # VSS
 [models.ratings]
 max_pin_current_a = 0.025
 max_voltage_v = 6.5
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+# WHY THIS ENTRY EXISTS, given it stamps no analogue device.
+#
+# The MCP3008 is one of the two SPI slaves the co-sim models behaviourally
+# (`hauksbee_engine::Mcp3008`, driven over the `spi_mcp3008` peripheral kind);
+# its electrical behaviour lives there, not here. What the model DB adds is the
+# PAD MAP, and specifically the `cs` role: with it, a run spec that names this
+# part as its SPI peripheral's `ref` gets exact transaction framing off the real
+# chip-select edges without hand-declaring `cs_net`, because the binder can read
+# which pad is chip-select straight off the part. Without it the bus falls back
+# to the chunk-boundary heuristic, which is documented actively wrong (it merges
+# two transactions inside one chunk and truncates one that spans a boundary).
+# See `SpiFramingMode` in crates/hauksbee-engine/src/peripherals/spi.rs.
+#
+# `kind = "adc"` binds through the generic digital path with no `[models.logic]`
+# block, which stamps NO drivers and synthesises no logic (there are no `a*`/`y*`
+# role pairs here). That is deliberate: the channel inputs are read by the
+# behavioural slave over the bus, and a passthrough buffer on them would be a
+# fabrication. The part contributes its pad map and nothing else.
+#
+# WHAT THIS COSTS, stated rather than hidden: a pad-map-only entry still binds
+# through the generic digital path and so counts as a RESOLVED part in the bind
+# report's coverage fraction, despite modelling no electrical behaviour. This
+# entry DOES add one such part, and a `model_coverage` assertion will count it as
+# covered. What is pre-existing is the binder's inability to tell the two apart:
+# six other logic-less entries (ch340g, cp2102, ltc6803_4, bq76952, lm5107,
+# lm5109) already sit in the same position. The fix is a binder-level distinction
+# between "bound" and "electrically modelled", which is a change to BindOutcome
+# and not to this file.
+[[models]]
+id = "mcp3008"
+kind = "adc"
+description = "MCP3008 8-channel 10-bit SPI ADC, PDIP-16 / SOIC-16 / TSSOP-16"
+
+# `mpn_re` ONLY, deliberately. The matcher ANDs its rules, and the engine's query
+# falls `mpn` back to the Value field when a component carries no MPN property.
+# So an mpn-only rule matches BOTH a part whose Value is "MCP3008..." and one
+# whose Value is something generic ("ADC") with the real part number in its MPN
+# property. Adding `value_re` alongside would AND the two and lose the second case.
+[models.match]
+# The trailing non-digit-or-end stops the rule matching the prefix of a longer
+# number. The FOOTPRINT GATE is the load-bearing half: without it, a value like
+# "MCP3008-breakout" (a carrier module, whose header pad 10 is whatever the module
+# routed there and not the IC's CS) would bind this bare-IC 16-pin map and hand
+# the co-sim a confidently wrong chip-select. Same reasoning, and the same
+# spellings, as the 8-pin gate on the 25xx entry in db/digital.toml.
+mpn_re = "(?i)^MCP3008([^0-9]|$)"
+footprint_re = '''(?ix)
+    (SOIC|SO|SOP|SSOP|TSSOP|MSOP|VSSOP|DFN|WDFN|UDFN|DIP|PDIP|DIL)
+    [-_]? 16 ([^0-9]|$)
+  | [-_] 16N ([^0-9]|$)
+'''
+
+[models.params]
+# Source: Microchip MCP3004/3008 datasheet DS21295D, Section 1.0 Electrical
+# Characteristics and Section 6.1 (packaging).
+bits = 10
+# No supply-draw legs: DS21295D gives IDD = 425 uA typ at VDD = 5 V, 200 ksps,
+# but the part is not stamped as a digital block with drivers, so a supply leg
+# would meter a device that draws nothing else here. Left unstated rather than
+# stamped at a number nothing consumes.
+
+# Pad->role map, Microchip DS21295D Section 6.1, PDIP/SOIC/TSSOP-16 pinout:
+# CH0..CH7 = 1..8, DGND = 9, CS/SHDN = 10, D_IN = 11, D_OUT = 12, CLK = 13,
+# AGND = 14, V_REF = 15, V_DD = 16.
+#
+# `cs` is the load-bearing role (see the note above). The bus roles use the
+# controller-side names the rest of the tree speaks: the part's D_IN is the
+# master's MOSI and its D_OUT is the master's MISO, so naming them `din`/`dout`
+# would be the datasheet's vocabulary rather than the binder's, which is the
+# exact failure crates/hauksbee-models/tests/pin_roles.rs exists to catch.
+[models.pins]
+"1"  = "ch0"
+"2"  = "ch1"
+"3"  = "ch2"
+"4"  = "ch3"
+"5"  = "ch4"
+"6"  = "ch5"
+"7"  = "ch6"
+"8"  = "ch7"
+"9"  = "dgnd"
+"10" = "cs"
+"11" = "mosi"
+"12" = "miso"
+"13" = "sck"
+"14" = "agnd"
+"15" = "vref"
+"16" = "vdd"
+
+[models.ratings]
+# DS21295D Section 1.1 Absolute Maximum Ratings: VDD 7.0 V, and +/-25 mA on any
+# output pin (the same per-pin figure the MCP4728 entry above carries).
+max_pin_current_a = 0.025
+max_voltage_v = 7.0

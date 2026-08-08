@@ -868,6 +868,20 @@ pub(crate) fn component_ref_errors(spec: &Spec, known_refs: &[String]) -> Vec<Sp
             named.push((ov.reference.as_str(), "decoupling override"));
         }
     }
+    // A SPI slave's `ref` names the board component the peripheral IS, and the
+    // chip-select route reads that component's model `cs` pin role when the spec
+    // declares no `cs_net`. A typo there resolves no component, so no model, so no
+    // CS net, and the bus silently drops to the chunk-boundary framing heuristic
+    // with no error: the same silent-degradation hole that `cs_net` itself had
+    // (see the cs_net note in `Spec::referenced_nets`). Validate it like every
+    // other reference so the typo fails at load.
+    for p in &spec.peripherals {
+        if crate::spec::is_spi_slave_kind(&p.kind) {
+            if let Some(r) = &p.reference {
+                named.push((r.as_str(), "SPI peripheral `ref`"));
+            }
+        }
+    }
     let mut errs = Vec::new();
     for (reference, ctx) in named {
         if !set.contains(reference) {
@@ -1293,8 +1307,14 @@ fn run_one(
     // In a multi-member fuzz/tolerance ensemble, make each seed's VCD path
     // distinct so per-seed waveforms are not all overwritten to one fixed file.
     let vcd_seed = (member_count > 1).then_some(seed);
-    let vcd_targets =
-        attach_peripherals(spec, &board, &net_node, engine.scheduler_mut(), vcd_seed)?;
+    let vcd_targets = attach_peripherals(
+        spec,
+        &board,
+        &net_node,
+        engine.scheduler_mut(),
+        lib,
+        vcd_seed,
+    )?;
 
     // Attach declarative sensors (RegisterMapSensor) to their buses.
     attach_sensors(spec, engine.scheduler_mut())?;
@@ -2260,24 +2280,104 @@ fn resolve_net(
     None
 }
 
-/// Resolve a SPI peripheral's `cs_net` to the MCU pin that drives it (05 §2.1),
-/// so the co-sim frames transactions on the real chip-select edges. The net name
-/// is looked up in the bound net map, then traced back to the GPIO driver pin via
-/// the scheduler (the same net-to-driving-pin trace the 74HC595 chain wiring
-/// uses). Returns `None` when `cs_net` is absent or does not resolve to a driven
-/// MCU pin, in which case the bus falls back to the chunk-boundary heuristic and
-/// the coverage reports `heuristic`.
+use hauksbee_engine::{CsProvenance, ResolvedCs};
+
+/// Which CS net a SPI peripheral gets, and who supplied it.
+///
+/// The spec's `cs_net` wins outright: a board whose model pad map is wrong, or
+/// whose CS is buffered through something the model cannot see, must stay
+/// overridable by hand. Only when the spec is silent does the bound model's `cs`
+/// pin role get a say, via `ref` naming the slave's own board component.
+///
+/// `None` means neither route produced a net, so the bus stays on the
+/// chunk-boundary heuristic and the coverage reports `heuristic` — the same
+/// honest answer as before the model-role route existed.
+fn cs_net_name(
+    p: &crate::spec::PeripheralSpec,
+    board: &ExtractedBoard,
+    lib: &hauksbee_models::ModelLibrary,
+) -> Result<Option<(String, CsProvenance)>, SpecError> {
+    if let Some(net) = &p.cs_net {
+        return Ok(Some((net.clone(), CsProvenance::SpecDeclared)));
+    }
+    let Some(reference) = p.reference.as_ref() else {
+        return Ok(None);
+    };
+    let Some(resolved) = hauksbee_engine::binder::model_role_cs(board, reference, lib) else {
+        return Ok(None);
+    };
+    // The `ref` must name the part this peripheral actually IS. Pointing a
+    // `spi_eeprom` at the board's MCP3008 (or its microSD socket) finds a real `cs`
+    // role on a real assembled part, and taking it would frame the EEPROM's
+    // transactions off another device's chip-select while reporting `exact`.
+    //
+    // This is a LOUD refusal, not a quiet drop to the heuristic. The spec says two
+    // contradictory things about one component, and picking either reading for the
+    // user would bury the contradiction under a tier they did not ask about.
+    //
+    // Checked BEFORE the chip-select is consulted, and on the bound model id alone.
+    // Gating it on "we found a cs net" would let the contradiction through in
+    // exactly the cases where the wrongly-named part declares no chip-select, e.g.
+    // a `spi_eeprom` pointed at a 74HC595: still two incompatible statements about
+    // one component, and still worth failing on.
+    //
+    // Judged on the LAYER the model came from rather than a hardcoded id list. The
+    // shipped DB's ids are knowable, so a built-in that is not this kind's part is a
+    // real contradiction; a user pack may legitimately model a SPI slave under an id
+    // no code here can predict, so anything outside the built-in DB is allowed
+    // through. An id list was the earlier shape and it silently stopped firing for
+    // the built-in models it had not been updated with (`microsd_socket` declares a
+    // `cs` role and was missing).
+    if resolved.from_builtin_db
+        && crate::spec::builtin_model_id_for_spi_kind(&p.kind) != Some(resolved.model_id.as_str())
+    {
+        return Err(SpecError::Invalid(format!(
+            "peripheral '{}' is type '{}' but its `ref` names component '{}', which binds \
+             model '{}'. Taking that part's chip-select would frame this slave's \
+             transactions on another device's CS edges and report them as exact. Point \
+             `ref` at the component this peripheral models, or declare `cs_net` explicitly.",
+            p.id, p.kind, reference, resolved.model_id,
+        )));
+    }
+    Ok(resolved.cs_net.map(|net| (net, CsProvenance::ModelRoles)))
+}
+
+/// Resolve a SPI peripheral's chip-select net to the MCU pin that drives it
+/// (05 §2.1), so the co-sim frames transactions on the real chip-select edges.
+///
+/// The net comes from [`cs_net_name`] (spec-declared, else the bound model's
+/// `cs` pin role). It is then looked up in the bound net map and traced back to
+/// the GPIO driver pin via the scheduler (the same net-to-driving-pin trace the
+/// 74HC595 chain wiring uses).
+///
+/// Returns `None` when no CS net was found, or when the net does not resolve to
+/// a driven MCU pin (an unrouted CS, or one driven by something that is not an
+/// MCU GPIO): the bus falls back to the chunk-boundary heuristic and the
+/// coverage reports `heuristic`. The [`CsProvenance`] rides along so the report
+/// can say which route produced the exact tier, because the two fail
+/// differently: a spec typo is caught by net validation, whereas a model pad map
+/// is only as right as the model entry.
 fn resolve_cs_pin(
     p: &crate::spec::PeripheralSpec,
+    board: &ExtractedBoard,
     net_node: &HashMap<String, NodeId>,
     sched: &hauksbee_engine::scheduler::Scheduler,
-) -> Option<((char, u8), NodeId)> {
-    let net = p.cs_net.as_ref()?;
-    let node = net_node.get(net).copied()?;
-    // Return the CS NET NODE alongside the pin so attach_spi_bus can install the
-    // CS frame on the MCU that actually drives this net, not merely the first MCU
+    lib: &hauksbee_models::ModelLibrary,
+) -> Result<Option<ResolvedCs<NodeId>>, SpecError> {
+    let Some((net, provenance)) = cs_net_name(p, board, lib)? else {
+        return Ok(None);
+    };
+    let Some(node) = net_node.get(&net).copied() else {
+        return Ok(None);
+    };
+    // Carry the CS NET NODE alongside the pin so attach_spi_bus installs the CS
+    // frame on the MCU that actually drives this net, not merely the first MCU
     // that owns the identical chip-local (port,bit) tuple.
-    sched.pin_driving_node(node).map(|pin| (pin, node))
+    Ok(sched.pin_driving_node(node).map(|pin| ResolvedCs {
+        pin,
+        net: Some(node),
+        provenance,
+    }))
 }
 
 /// Attach every peripheral in the spec to the scheduler. Returns the list of
@@ -2287,6 +2387,9 @@ fn attach_peripherals(
     board: &ExtractedBoard,
     net_node: &HashMap<String, NodeId>,
     sched: &mut hauksbee_engine::scheduler::Scheduler,
+    // The model library, for the SPI chip-select route that reads a bound model's
+    // `cs` pin role when the spec declares no `cs_net`.
+    lib: &hauksbee_models::ModelLibrary,
     // `Some(seed)` in a multi-member ensemble: the vcd_sink path is made
     // per-seed so N runs do not overwrite one fixed file. `None` for a single run.
     vcd_seed: Option<u32>,
@@ -2412,20 +2515,14 @@ fn attach_peripherals(
                 sched.attach_i2c_bus(Arc::new(Mutex::new(bus)));
             }
             "spi_eeprom" => {
-                let (cs_pin, cs_net) = match resolve_cs_pin(p, net_node, sched) {
-                    Some((pin, node)) => (Some(pin), Some(node)),
-                    None => (None, None),
-                };
+                let cs = resolve_cs_pin(p, board, net_node, sched, lib)?;
                 let bus = SpiBus::new(&p.id, Box::new(Spi25Eeprom::new(p.size.unwrap_or(256))));
-                sched.attach_spi_bus(Arc::new(Mutex::new(bus)), cs_pin, cs_net);
+                sched.attach_spi_bus(Arc::new(Mutex::new(bus)), cs);
             }
             "spi_mcp3008" => {
-                let (cs_pin, cs_net) = match resolve_cs_pin(p, net_node, sched) {
-                    Some((pin, node)) => (Some(pin), Some(node)),
-                    None => (None, None),
-                };
+                let cs = resolve_cs_pin(p, board, net_node, sched, lib)?;
                 let bus = SpiBus::new(&p.id, Box::new(Mcp3008::new(p.vref.unwrap_or(5.0))));
-                sched.attach_spi_bus(Arc::new(Mutex::new(bus)), cs_pin, cs_net);
+                sched.attach_spi_bus(Arc::new(Mutex::new(bus)), cs);
             }
             "vcd_sink" => {
                 let names = p.nets.clone().unwrap_or_default();
@@ -2525,9 +2622,9 @@ fn attach_sensors(
                 // `heuristic`). A resolved CS pin can be threaded here the same way
                 // `attach_peripherals` does once the sensor spec grows a cs_net.
                 if let Some(controller) = &sa.controller {
-                    sched.attach_spi_bus_on(controller, arc, None, None);
+                    sched.attach_spi_bus_on(controller, arc, None);
                 } else {
-                    sched.attach_spi_bus(arc, None, None);
+                    sched.attach_spi_bus(arc, None);
                 }
             }
         }
@@ -3721,5 +3818,264 @@ address = 0x48
         check_trackable_assert_refs(&spec, &bound)
             .expect("a protected battery pack is a checkable guard");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod spi_cs_source_tests {
+    //! Which of the two exact-framing routes a SPI peripheral takes, and the
+    //! precedence between them.
+    //!
+    //! The model-role route exists so a modeled part does not need `cs_net`
+    //! written out by hand. It must never take that decision AWAY from the spec:
+    //! a pad map can be wrong, and a chip select can be buffered through
+    //! something the model cannot see, so a hand-declared `cs_net` has to win.
+
+    use super::*;
+    use hauksbee_extract::{Component, Net, Pin};
+
+    fn peripheral(toml_src: &str) -> crate::spec::PeripheralSpec {
+        toml::from_str(toml_src).expect("peripheral shape")
+    }
+
+    /// One assembled, CS-wired 25xx EEPROM at U5 (pad 1 = `cs` in the model DB),
+    /// with a second net available so precedence is observable.
+    fn board() -> ExtractedBoard {
+        ExtractedBoard {
+            name: "spi-cs-source".to_string(),
+            nets: vec![
+                Net {
+                    id: 1,
+                    name: "EE_CS".to_string(),
+                },
+                Net {
+                    id: 2,
+                    name: "OVERRIDE_CS".to_string(),
+                },
+            ],
+            components: vec![Component {
+                reference: "U5".to_string(),
+                value: "25LC256-I/SN".to_string(),
+                lib_id: String::new(),
+                footprint: "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm".to_string(),
+                position: None,
+                layer: String::new(),
+                properties: Vec::new(),
+                dnp: false,
+                pins: vec![Pin {
+                    number: "1".to_string(),
+                    net: Some(1),
+                    function: String::new(),
+                    kind: String::new(),
+                    position: None,
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn a_ref_with_no_cs_net_takes_the_model_role_route() {
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let p = peripheral("id = \"U5\"\ntype = \"spi_eeprom\"\nref = \"U5\"\n");
+        assert_eq!(
+            cs_net_name(&p, &board(), &lib).expect("no mismatch"),
+            Some(("EE_CS".to_string(), CsProvenance::ModelRoles)),
+            "with no cs_net declared, the bound model's `cs` pad supplies the net"
+        );
+    }
+
+    #[test]
+    fn a_declared_cs_net_wins_over_the_model_role() {
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let p = peripheral(
+            "id = \"U5\"\ntype = \"spi_eeprom\"\nref = \"U5\"\ncs_net = \"OVERRIDE_CS\"\n",
+        );
+        assert_eq!(
+            cs_net_name(&p, &board(), &lib).expect("no mismatch"),
+            Some(("OVERRIDE_CS".to_string(), CsProvenance::SpecDeclared)),
+            "an explicit cs_net must override the model's pad map, which is how a wrong \
+             or incomplete model entry stays correctable from the spec"
+        );
+    }
+
+    #[test]
+    fn a_declared_cs_net_needs_no_ref_at_all() {
+        // The pre-existing route, unchanged: no `ref`, no model, just a net name.
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let p = peripheral("id = \"EE\"\ntype = \"spi_eeprom\"\ncs_net = \"EE_CS\"\n");
+        assert_eq!(
+            cs_net_name(&p, &board(), &lib).expect("no mismatch"),
+            Some(("EE_CS".to_string(), CsProvenance::SpecDeclared))
+        );
+    }
+
+    #[test]
+    fn neither_route_leaves_the_bus_on_the_heuristic() {
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let p = peripheral("id = \"EE\"\ntype = \"spi_eeprom\"\n");
+        assert_eq!(
+            cs_net_name(&p, &board(), &lib).expect("no mismatch"),
+            None,
+            "no cs_net and no ref means no CS net; the bus reports heuristic framing"
+        );
+    }
+
+    /// A `ref` that names a real, assembled, modelled part of the WRONG kind must
+    /// be refused. Pointing a `spi_eeprom` at the board's MCP3008 finds a genuine
+    /// `cs` role on a genuine part, and taking it would frame the EEPROM's
+    /// transactions off the ADC's chip-select while reporting `exact`.
+    #[test]
+    fn a_ref_naming_the_wrong_spi_part_is_refused() {
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let mut b = board();
+        b.components[0].value = "MCP3008-I/SL".to_string();
+        b.components[0].footprint = "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm".to_string();
+        b.components[0].pins[0].number = "10".to_string(); // the MCP3008's cs pad
+
+        // Sanity: as its OWN kind the part does resolve, so the refusal below is
+        // about the mismatch and not about the fixture failing to bind.
+        let matched = peripheral("id = \"U5\"\ntype = \"spi_mcp3008\"\nref = \"U5\"\n");
+        assert_eq!(
+            cs_net_name(&matched, &b, &lib).expect("the matching kind is not a mismatch"),
+            Some(("EE_CS".to_string(), CsProvenance::ModelRoles)),
+            "an MCP3008 under the spi_mcp3008 kind must still resolve its cs pad"
+        );
+
+        let mismatched = peripheral("id = \"U5\"\ntype = \"spi_eeprom\"\nref = \"U5\"\n");
+        let err = cs_net_name(&mismatched, &b, &lib)
+            .expect_err(
+                "a spi_eeprom pointed at an MCP3008 must be refused, not quietly \
+                         downgraded to the known-wrong heuristic",
+            )
+            .to_string();
+        assert!(
+            err.contains("spi_eeprom") && err.contains("mcp3008") && err.contains("U5"),
+            "the error must name the kind, the model it actually bound, and the ref: {err}"
+        );
+    }
+
+    /// The wrongly-named part need NOT declare a chip-select for the contradiction
+    /// to be worth failing on. A `spi_eeprom` pointed at a 74HC595 is still two
+    /// incompatible statements about one component; checking compatibility only
+    /// after a CS net was found would wave exactly this case through.
+    #[test]
+    fn a_ref_naming_a_wrong_part_with_no_cs_role_is_still_refused() {
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let mut b = board();
+        b.components[0].value = "74HC595".to_string();
+        b.components[0].footprint = "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm".to_string();
+        let p = peripheral("id = \"U5\"\ntype = \"spi_eeprom\"\nref = \"U5\"\n");
+        // The shift register declares no `cs` role, so there is nothing to borrow;
+        // the point is that the contradictory pairing is not silently accepted.
+        match cs_net_name(&p, &b, &lib) {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("spi_eeprom") && msg.contains("U5"),
+                    "the error must name the kind and the ref: {msg}"
+                );
+            }
+            Ok(other) => panic!(
+                "a spi_eeprom pointed at a 74HC595 must be refused, got {other:?}; a \
+                 compatibility check that runs only when a cs net was found accepts this"
+            ),
+        }
+    }
+
+    /// The board's microSD socket declares a `cs` role and belongs to no SPI
+    /// peripheral kind. While it was missing from the built-in list, a `spi_eeprom`
+    /// pointed at it passed the compatibility check and framed the EEPROM off the
+    /// SD card's chip-select while reporting exact.
+    #[test]
+    fn a_ref_naming_the_microsd_socket_is_refused() {
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let mut b = board();
+        b.components[0].reference = "J2".to_string();
+        b.components[0].value = "TFC-WXCP11-08-LF".to_string();
+        b.components[0].footprint = String::new();
+        b.components[0].pins[0].number = "2".to_string(); // the socket's cs pad
+
+        // Sanity: the socket really does bind and really does expose a cs net, so
+        // the refusal below is the policy and not a fixture that binds nothing.
+        let resolved = hauksbee_engine::binder::model_role_cs(&b, "J2", &lib)
+            .expect("the microSD socket must bind");
+        assert_eq!(resolved.model_id, "microsd_socket");
+        assert_eq!(resolved.cs_net.as_deref(), Some("EE_CS"));
+
+        let p = peripheral("id = \"EE\"\ntype = \"spi_eeprom\"\nref = \"J2\"\n");
+        let err = cs_net_name(&p, &b, &lib)
+            .expect_err("a spi_eeprom must not take the microSD socket's chip-select")
+            .to_string();
+        assert!(
+            err.contains("microsd_socket"),
+            "the error must name the model it actually bound: {err}"
+        );
+    }
+
+    /// The escape hatch must stay open: a model from outside the shipped DB is
+    /// allowed to supply a chip-select, because a user model pack may legitimately
+    /// model a SPI slave under an id no code in this crate can predict.
+    #[test]
+    fn an_unrecognised_model_id_is_not_treated_as_a_mismatch() {
+        // The judgement is made on the model's LAYER, so there is no id list to
+        // fall out of date. A built-in binds with `from_builtin_db`, which is what
+        // subjects it to the check; anything from a pack or user dir does not.
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let resolved = hauksbee_engine::binder::model_role_cs(&board(), "U5", &lib)
+            .expect("the fixture EEPROM binds");
+        assert!(
+            resolved.from_builtin_db,
+            "a shipped db/*.toml entry must be recognised as built-in, or the mismatch \
+             check never fires"
+        );
+        assert_eq!(
+            crate::spec::builtin_model_id_for_spi_kind("spi_eeprom"),
+            Some("eeprom_25xx_spi")
+        );
+        assert_eq!(
+            crate::spec::builtin_model_id_for_spi_kind("pushbutton"),
+            None,
+            "a non-SPI kind claims no model"
+        );
+    }
+
+    #[test]
+    fn a_ref_naming_an_unknown_component_is_a_loud_error() {
+        // The silent-degradation hole this closes: a typo'd `ref` resolves no
+        // component, so no model, so no CS net, and the bus would quietly drop to
+        // the framing heuristic with nothing said. It must fail at load instead,
+        // exactly as a typo'd `cs_net` already does.
+        let spec: Spec = toml::from_str(
+            r#"
+board = "board.kicad_pcb"
+[[peripheral]]
+id = "EE"
+type = "spi_eeprom"
+ref = "U55"
+"#,
+        )
+        .expect("spec shape");
+        let errs = component_ref_errors(&spec, &["U5".to_string()]);
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        let msg = errs[0].to_string();
+        assert!(
+            msg.contains("U55") && msg.contains("SPI peripheral"),
+            "the error must name the bad ref and say where it came from: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_correct_ref_raises_no_error() {
+        let spec: Spec = toml::from_str(
+            r#"
+board = "board.kicad_pcb"
+[[peripheral]]
+id = "EE"
+type = "spi_eeprom"
+ref = "U5"
+"#,
+        )
+        .expect("spec shape");
+        assert!(component_ref_errors(&spec, &["U5".to_string()]).is_empty());
     }
 }

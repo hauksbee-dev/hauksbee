@@ -926,6 +926,103 @@ pub(crate) fn resolve(
     library_resolution(lib, part.component())
 }
 
+/// What the model bound to `reference` says about that part's chip-select.
+///
+/// This is what promotes SPI transaction framing from the chunk-boundary
+/// heuristic to exact without anyone hand-writing `cs_net` in the run spec: the
+/// model DB already maps pads to binder roles, and `cs` is already one of those
+/// roles, so a modeled SPI slave knows which of its own pads is chip-select.
+///
+/// `None` means the reference produced no usable model at all, for one of the
+/// reasons the rest of the tree already refuses on:
+///
+/// - exactly ONE record must exist under `reference`. Two records sharing a
+///   designator that the extractor did NOT flag as a conflict would otherwise be
+///   resolved by iteration order, so whichever happened to come first would
+///   decide which edge stream the co-sim called exact;
+/// - [`AssemblyState::of`] must classify it `Present`, so a DNP-absent part (not
+///   on the assembled board, its CS net electrically meaningless) and an
+///   identity-refused part (nothing about the record is evidence, including
+///   which pad is CS) both contribute nothing;
+/// - it must bind to a model, through the [`FittedComponent`]-gated [`resolve`]
+///   and no other door.
+///
+/// `Some` always carries the bound model's id, and carries a `cs_net` only when
+/// that model maps a `cs` role landing on exactly one real, non-ground net
+/// ([`crate::component_evidence::role_net`] refuses a role split across two nets
+/// rather than picking one).
+///
+/// The id comes back EVEN WHEN there is no `cs_net`, and that separation is
+/// load-bearing. A caller that knows which part it expected (the CI runner knows
+/// the peripheral kind) has to be able to catch a `ref` pointing at the wrong
+/// device whether or not that device happens to declare a chip-select; folding
+/// the two together would silently accept the contradiction in exactly the cases
+/// where no CS was found. This function reports what answered; the layer that
+/// knows what was asked decides whether the answer is admissible.
+pub struct ModelRoleCs {
+    /// Id of the model the referenced component bound to.
+    pub model_id: String,
+    /// Whether that model came from the embedded `db/*.toml` database, as opposed
+    /// to a user pack or model directory.
+    ///
+    /// A caller judging "is this the part I expected" can be strict about a
+    /// built-in (the shipped DB's ids are knowable, so a mismatch is a real
+    /// contradiction) and permissive about anything else (a user pack may
+    /// legitimately model a SPI slave under an id no code here can predict).
+    pub from_builtin_db: bool,
+    /// The board net on that model's `cs` pin role, when it declares a usable one.
+    pub cs_net: Option<String>,
+}
+
+/// See [`ModelRoleCs`].
+pub fn model_role_cs(
+    board: &ExtractedBoard,
+    reference: &str,
+    lib: &ModelLibrary,
+) -> Option<ModelRoleCs> {
+    // Exactly one match, never the first of several: `find` would let iteration
+    // order pick the record, and two same-designator records can carry different
+    // CS nets. Ambiguity here has to be refused, not resolved by luck.
+    let mut matching = board.components.iter().filter(|c| c.reference == reference);
+    let comp = matching.next()?;
+    if matching.next().is_some() {
+        return None;
+    }
+    let part = AssemblyState::of(comp).fitted()?;
+    let resolution = resolve(lib, part);
+    let from_builtin_db = resolution.layer == Some(hauksbee_models::SourceLayer::Builtin);
+    let model = resolution.model?;
+    let cs_net = model_cs_net(board, part, &model);
+    Some(ModelRoleCs {
+        model_id: model.id.clone(),
+        from_builtin_db,
+        cs_net,
+    })
+}
+
+/// The board net on a bound model's `cs` pin role, or `None` when it declares
+/// none or the one it declares cannot frame anything.
+fn model_cs_net(
+    board: &ExtractedBoard,
+    part: FittedComponent<'_>,
+    model: &hauksbee_models::ModelEntry,
+) -> Option<String> {
+    let net_id = crate::component_evidence::role_net(part, model, "cs").ok()?;
+    // Net id 0 is the extractor's "no net" sentinel, not a real node. A pad on it
+    // is unconnected, so there is no chip-select to frame from.
+    if net_id == 0 {
+        return None;
+    }
+    // A chip-select strapped to ground is a permanently-selected slave, not a
+    // framing signal: installing a CS frame on it would report exact framing off
+    // a net that never edges.
+    let net = board.net(net_id)?;
+    if is_ground(&net.name) {
+        return None;
+    }
+    Some(net.name.clone())
+}
+
 /// What the model library would say about one component RECORD, assembled or
 /// not.
 ///
@@ -6475,5 +6572,236 @@ mod gpio_role_tests {
         assert_eq!(gpio_of_role("ph1", false), Some(('H', 1)));
         assert_eq!(gpio_of_role("pi15", false), Some(('I', 15)));
         assert_eq!(gpio_of_role("pz0", false), None);
+    }
+}
+
+#[cfg(test)]
+mod model_role_cs_tests {
+    //! The route that promotes SPI framing from the chunk-boundary heuristic to
+    //! exact without a hand-written `cs_net`.
+    //!
+    //! Both directions matter, and the wrong direction matters more. A missing
+    //! `cs_net` costs honesty: the bus reports `heuristic` and the run is still
+    //! correct about what it did. A CS net invented from a part that should not
+    //! have supplied one costs correctness *silently*: the framing tier then
+    //! claims `exact` while the boundaries come from a pin that is not chip
+    //! select, which is worse than the guess it replaced. So every refusal below
+    //! is a test, not a comment.
+
+    use super::*;
+    use hauksbee_extract::{Net, Pin};
+
+    fn pin(number: &str, net: Option<i64>) -> Pin {
+        Pin {
+            number: number.to_string(),
+            net,
+            function: String::new(),
+            kind: String::new(),
+            position: None,
+        }
+    }
+
+    /// A board with one 25xx SPI EEPROM at U5. Its pad 1 is `cs` in the model DB,
+    /// so `cs_pad_net` decides what the CS role lands on: `Some(net id)` wires it,
+    /// `None` leaves the pad unconnected.
+    fn eeprom_board(cs_pad_net: Option<i64>) -> ExtractedBoard {
+        let mut ee = Component {
+            reference: "U5".to_string(),
+            value: "25LC256-I/SN".to_string(),
+            lib_id: String::new(),
+            footprint: String::new(),
+            position: None,
+            layer: String::new(),
+            properties: Vec::new(),
+            dnp: false,
+            pins: vec![
+                pin("1", cs_pad_net), // CS
+                pin("2", Some(2)),    // SO  -> MISO
+                pin("4", Some(9)),    // VSS -> GND
+                pin("5", Some(3)),    // SI  -> MOSI
+                pin("6", Some(4)),    // SCK
+                pin("8", Some(8)),    // VCC
+            ],
+        };
+        ee.footprint = "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm".to_string();
+        ExtractedBoard {
+            name: "spi-cs-evidence".to_string(),
+            nets: vec![
+                Net {
+                    id: 1,
+                    name: "EE_CS".to_string(),
+                },
+                Net {
+                    id: 2,
+                    name: "SPI_MISO".to_string(),
+                },
+                Net {
+                    id: 3,
+                    name: "SPI_MOSI".to_string(),
+                },
+                Net {
+                    id: 4,
+                    name: "SPI_SCK".to_string(),
+                },
+                Net {
+                    id: 8,
+                    name: "+3V3".to_string(),
+                },
+                Net {
+                    id: 9,
+                    name: "GND".to_string(),
+                },
+            ],
+            components: vec![ee],
+        }
+    }
+
+    /// The CS net the route would hand the co-sim, flattening "no model bound"
+    /// and "model bound but declares no usable cs" into the one thing the framing
+    /// path cares about: is there a chip-select net or not.
+    fn cs_net(board: &ExtractedBoard, reference: &str, lib: &ModelLibrary) -> Option<String> {
+        model_role_cs(board, reference, lib).and_then(|r| r.cs_net)
+    }
+
+    #[test]
+    fn a_cs_wired_modeled_slave_yields_its_cs_net() {
+        let lib = ModelLibrary::builtin();
+        assert_eq!(
+            model_role_cs(&eeprom_board(Some(1)), "U5", &lib).map(|r| (r.cs_net, r.model_id)),
+            Some((Some("EE_CS".to_string()), "eeprom_25xx_spi".to_string())),
+            "a 25xx EEPROM whose pad 1 is on EE_CS must hand back that net; this is the \
+             whole point of the `cs` pin role"
+        );
+    }
+
+    #[test]
+    fn a_slave_with_no_cs_connection_yields_nothing() {
+        // The genuine heuristic remainder: the part is modeled and assembled, but
+        // its chip select is simply not routed to anything the extractor saw. The
+        // honest answer is no net, so the bus stays on the heuristic and says so.
+        let lib = ModelLibrary::builtin();
+        assert_eq!(
+            cs_net(&eeprom_board(None), "U5", &lib),
+            None,
+            "an unconnected cs pad must not resolve to a net"
+        );
+    }
+
+    #[test]
+    fn a_dnp_slave_yields_nothing() {
+        // Not on the assembled board, so its CS net is not an electrical fact
+        // about the thing being simulated.
+        let lib = ModelLibrary::builtin();
+        let mut board = eeprom_board(Some(1));
+        board.components[0].dnp = true;
+        assert_eq!(
+            cs_net(&board, "U5", &lib),
+            None,
+            "a DNP slave must not contribute a cs_net"
+        );
+    }
+
+    #[test]
+    fn an_identity_refused_slave_yields_nothing() {
+        // The record cannot say WHICH part it is, so it cannot say which of its
+        // pads is chip select either. Nothing about it is evidence, including a
+        // pad map that would otherwise match its value string.
+        let lib = ModelLibrary::builtin();
+        let mut board = eeprom_board(Some(1));
+        board.components[0].properties.push((
+            hauksbee_extract::DUPLICATE_REFERENCE_CONFLICT_KEY.to_string(),
+            "U5 appears twice with different values".to_string(),
+        ));
+        assert!(
+            matches!(
+                AssemblyState::of(&board.components[0]),
+                AssemblyState::IdentityUnknown(_)
+            ),
+            "fixture must actually be identity-refused, or this test proves nothing"
+        );
+        assert_eq!(
+            cs_net(&board, "U5", &lib),
+            None,
+            "an identity-refused slave must not contribute a cs_net"
+        );
+    }
+
+    #[test]
+    fn a_ground_tied_cs_yields_nothing() {
+        // A chip select strapped to ground is a permanently-selected slave, not a
+        // framing signal: there is no edge stream to frame from, and installing a
+        // CS frame on it would report `exact` off a net that never moves.
+        let lib = ModelLibrary::builtin();
+        assert_eq!(
+            cs_net(&eeprom_board(Some(9)), "U5", &lib),
+            None,
+            "a cs pad tied to GND must not resolve to a framing net"
+        );
+    }
+
+    #[test]
+    fn an_unmodeled_slave_yields_nothing() {
+        // No model, no pad map, no way to know which pad is chip select. The part
+        // is present and assembled; the gap is the model library's.
+        let lib = ModelLibrary::builtin();
+        let mut board = eeprom_board(Some(1));
+        board.components[0].value = "SOME-UNLISTED-EEPROM".to_string();
+        assert_eq!(
+            cs_net(&board, "U5", &lib),
+            None,
+            "a part no model matches cannot declare a cs role"
+        );
+    }
+
+    #[test]
+    fn duplicate_references_yield_nothing_rather_than_the_first_one() {
+        // Two records under U5 that the extractor did NOT flag as conflicting, on
+        // different CS nets. `find` would hand back whichever came first, so
+        // iteration order would decide which edge stream the co-sim called exact.
+        // Ambiguity has to be refused, not resolved by luck.
+        let lib = ModelLibrary::builtin();
+        let mut board = eeprom_board(Some(1));
+        let mut twin = board.components[0].clone();
+        twin.pins[0].net = Some(4); // same designator, a different CS net
+        board.components.push(twin);
+        assert!(
+            board.components.iter().all(|c| matches!(
+                AssemblyState::of(c),
+                AssemblyState::Present(_)
+            )),
+            "both records must be individually Present, or this tests the refusal path              instead of the ambiguity path"
+        );
+        assert_eq!(
+            cs_net(&board, "U5", &lib),
+            None,
+            "a duplicated designator must not resolve to either record's cs net"
+        );
+    }
+
+    #[test]
+    fn a_reference_naming_no_component_yields_nothing() {
+        let lib = ModelLibrary::builtin();
+        assert_eq!(
+            cs_net(&eeprom_board(Some(1)), "U99", &lib),
+            None,
+            "a reference that names no board component resolves to nothing"
+        );
+    }
+
+    #[test]
+    fn a_modeled_part_with_no_cs_role_yields_nothing() {
+        // The negative that keeps the lookup honest about being role-driven rather
+        // than position-driven: a 74HC595 is a real, modeled, assembled part with a
+        // full pad map and no `cs` role in it. Its pad 1 must not be mistaken for
+        // one just because the EEPROM's pad 1 was.
+        let lib = ModelLibrary::builtin();
+        let mut board = eeprom_board(Some(1));
+        board.components[0].value = "74HC595".to_string();
+        board.components[0].footprint = "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm".to_string();
+        assert_eq!(
+            cs_net(&board, "U5", &lib),
+            None,
+            "a shift register declares no `cs` pin role, so it supplies no CS net"
+        );
     }
 }

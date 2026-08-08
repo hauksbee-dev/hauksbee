@@ -35,7 +35,8 @@ use crate::behavioral::BehavioralDevice;
 use crate::binder::{apin_gpio_of_role, gpio_of_role, BoundBoard, McuBinding};
 use crate::digital::{DigitalComponent, PinEdge};
 use crate::peripherals::{
-    I2cBus, PeripheralSet, RegisterMapSensor, SpiBus, SpiFramingMode, TickCtx, TimelineEvent,
+    CsProvenance, I2cBus, PeripheralSet, RegisterMapSensor, ResolvedCs, SpiBus, SpiFramingMode,
+    TickCtx, TimelineEvent,
 };
 use crate::power_supply::{PowerSupply, SupplyLeg};
 use crate::stress::{FaultEvent, StressMonitor};
@@ -1852,29 +1853,24 @@ impl Scheduler {
 
     /// Attach a SPI bus and register it as every live MCU's `on_spi` handler.
     ///
-    /// `cs_pin` is the MCU pin `(port, bit)` that drives the slave's chip-select
-    /// net, when the binder resolved it (05 §2.1). `Some` puts the bus on exact
+    /// `cs` is the resolved chip-select (05 §2.1). `Some` puts the bus on exact
     /// CS-edge framing: the CS GPIO edge stream frames each transaction at its
     /// true assert/deassert, so two transactions in one chunk are separated and a
     /// boundary-spanning transaction is not truncated. `None` leaves the bus on
     /// the chunk-boundary heuristic (the pre-05-§2 behaviour), reported honestly
     /// as `heuristic` in the co-sim coverage.
-    pub fn attach_spi_bus(
-        &mut self,
-        bus: Arc<Mutex<SpiBus>>,
-        cs_pin: Option<(char, u8)>,
-        cs_net: Option<NodeId>,
-    ) {
+    pub fn attach_spi_bus(&mut self, bus: Arc<Mutex<SpiBus>>, cs: Option<ResolvedCs<NodeId>>) {
         let id = bus
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .id()
             .to_string();
         self.record_bus_if_unexercised(&id, "SPI", None);
-        bus.lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .set_cs_pin(cs_pin);
-        self.register_cs_frame(&bus, cs_pin, cs_net);
+        bus.lock().unwrap_or_else(|e| e.into_inner()).set_cs_pin(
+            cs.map(|c| c.pin),
+            cs.map_or(CsProvenance::SpecDeclared, |c| c.provenance),
+        );
+        self.register_cs_frame(&bus, cs.map(|c| c.pin), cs.and_then(|c| c.net));
         self.spi_buses.push(bus);
         // Rebuild a MULTIPLEXING `on_spi` across ALL attached buses. `on_spi` is a
         // single-slot replacer on the AVR core, so a per-bus closure meant a second
@@ -1900,14 +1896,13 @@ impl Scheduler {
     /// The bus is also added to `spi_buses` so the chunk-boundary deselect
     /// loop (which is controller-agnostic) can reach it.
     ///
-    /// `cs_pin` behaves exactly as in [`Self::attach_spi_bus`]: `Some` frames from the
+    /// `cs` behaves exactly as in [`Self::attach_spi_bus`]: `Some` frames from the
     /// real CS edge, `None` falls back to the chunk-boundary heuristic.
     pub fn attach_spi_bus_on(
         &mut self,
         controller: &str,
         bus: Arc<Mutex<SpiBus>>,
-        cs_pin: Option<(char, u8)>,
-        cs_net: Option<NodeId>,
+        cs: Option<ResolvedCs<NodeId>>,
     ) {
         let id = bus
             .lock()
@@ -1915,9 +1910,10 @@ impl Scheduler {
             .id()
             .to_string();
         self.record_bus_if_unexercised(&id, "SPI", Some(controller));
-        bus.lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .set_cs_pin(cs_pin);
+        bus.lock().unwrap_or_else(|e| e.into_inner()).set_cs_pin(
+            cs.map(|c| c.pin),
+            cs.map_or(CsProvenance::SpecDeclared, |c| c.provenance),
+        );
         for m in &mut self.mcus {
             let b = bus.clone();
             let ctrl = controller.to_string();
@@ -1936,7 +1932,7 @@ impl Scheduler {
         }
         self.spi_controller_map
             .insert(controller.to_string(), bus.clone());
-        self.register_cs_frame(&bus, cs_pin, cs_net);
+        self.register_cs_frame(&bus, cs.map(|c| c.pin), cs.and_then(|c| c.net));
         self.spi_buses.push(bus);
     }
 
@@ -2034,9 +2030,12 @@ impl Scheduler {
                 );
             }
         }
-        bus.lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .set_cs_pin(Some(pins.cs_n));
+        // This CS came from the bit-bang wiring, not from a spec `cs_net` and not
+        // from a model pad map, and says so.
+        bus.lock().unwrap_or_else(|e| e.into_inner()).set_cs_pin(
+            Some(pins.cs_n),
+            crate::peripherals::CsProvenance::BitBangPins,
+        );
         let responder = crate::responders::BitBangSpiResponder::new(bus.clone(), pins);
         self.responder_registry(mi)
             .lock()
@@ -2929,8 +2928,8 @@ impl Scheduler {
                 eprintln!(
                     "WARN: SPI bus '{}' deselected mid-transaction at chunk boundary \
                      (transfer spans the {:.3} ms chunk); reply may be truncated. \
-                     Resolve the CS net (cs_pin) or use a backend that surfaces \
-                     chip-select for exact framing.",
+                     Declare the CS net, bind a model that maps a `cs` pin, or use \
+                     a backend that surfaces chip-select, for exact framing.",
                     guard.id(),
                     chunk * 1e3,
                 );
@@ -6900,12 +6899,12 @@ mod tests {
             "FLASH1",
             Box::new(crate::Spi25Eeprom::new(256)),
         )));
-        sched.attach_spi_bus(spi, None, None);
+        sched.attach_spi_bus(spi, None);
         let spi2 = Arc::new(Mutex::new(SpiBus::new(
             "IMU1",
             Box::new(crate::Spi25Eeprom::new(256)),
         )));
-        sched.attach_spi_bus_on("spi9", spi2, None, None);
+        sched.attach_spi_bus_on("spi9", spi2, None);
 
         let rec = sched.unexercised_buses();
         assert_eq!(
@@ -6939,7 +6938,7 @@ mod tests {
             "FLASH1",
             Box::new(crate::Spi25Eeprom::new(256)),
         )));
-        sched.attach_spi_bus(spi, None, None);
+        sched.attach_spi_bus(spi, None);
         assert!(
             sched.unexercised_buses().is_empty(),
             "modeled buses must not be flagged"
@@ -7163,8 +7162,15 @@ mod tests {
                 miso: 0xA5,
             }),
         )));
-        sched.attach_spi_bus(bus1, Some(cs1), None);
-        sched.attach_spi_bus(bus2, Some(cs2), None);
+        let resolved = |pin| {
+            Some(ResolvedCs {
+                pin,
+                net: None,
+                provenance: CsProvenance::SpecDeclared,
+            })
+        };
+        sched.attach_spi_bus(bus1, resolved(cs1));
+        sched.attach_spi_bus(bus2, resolved(cs2));
 
         let edge = |pin: (char, u8), high: bool| {
             let mut slot = h.pin_cb.lock().unwrap_or_else(|e| e.into_inner());

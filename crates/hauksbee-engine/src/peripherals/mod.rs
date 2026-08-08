@@ -46,7 +46,7 @@ pub use i2c::{Bme280, Eeprom24c, I2cBus, I2cSlave};
 pub use load::DynamicLoad;
 pub use register_map::RegisterMapSensor;
 pub use sink::VcdSink;
-pub use spi::{Mcp3008, Spi25Eeprom, SpiBus, SpiFramingMode, SpiSlave};
+pub use spi::{CsProvenance, Mcp3008, ResolvedCs, Spi25Eeprom, SpiBus, SpiFramingMode, SpiSlave};
 
 /// Context handed to a peripheral each chunk so it can read the solved circuit
 /// and command its driver. Kept small and borrow-friendly.

@@ -16,7 +16,7 @@
 //! `frames_itself()` and the scheduler SKIPS the chunk-boundary deselect, so a
 //! boundary-spanning transaction is no longer truncated.
 
-use hauksbee_engine::{Mcp3008, Spi25Eeprom, SpiBus, SpiFramingMode, SpiSlave};
+use hauksbee_engine::{CsProvenance, Mcp3008, Spi25Eeprom, SpiBus, SpiFramingMode, SpiSlave};
 
 /// Decode the common 3-byte MCP3008 single-ended read against a bus, framing the
 /// transaction with real CS edges.
@@ -104,12 +104,12 @@ fn transaction_spanning_a_chunk_boundary_is_not_reset() {
     let mut bus = SpiBus::new("U_EE", Box::new(eeprom));
     // Resolve a CS pin: the bus now frames itself, so the scheduler must NOT
     // deselect it at the chunk boundary.
-    bus.set_cs_pin(Some(('B', 2)));
+    bus.set_cs_pin(Some(('B', 2)), CsProvenance::SpecDeclared);
     assert!(
         bus.frames_itself(),
         "a resolved CS pin means the bus frames itself"
     );
-    assert_eq!(bus.framing_mode(), SpiFramingMode::Exact);
+    assert_eq!(bus.framing_mode().as_str(), "exact");
 
     // Begin a READ transaction and clock the first two bytes (instruction + high
     // address). This is the state a chunk boundary can fall into.
@@ -179,8 +179,8 @@ fn framing_mode_reflects_the_cs_source() {
     assert_eq!(bus.framing_mode().as_str(), "heuristic");
 
     // Resolved CS pin: exact.
-    bus.set_cs_pin(Some(('D', 4)));
-    assert_eq!(bus.framing_mode(), SpiFramingMode::Exact);
+    bus.set_cs_pin(Some(('D', 4)), CsProvenance::SpecDeclared);
+    assert_eq!(bus.framing_mode().as_str(), "exact");
     assert!(bus.frames_itself());
     assert_eq!(bus.framing_mode().as_str(), "exact");
 
@@ -190,6 +190,109 @@ fn framing_mode_reflects_the_cs_source() {
     assert_eq!(backend_bus.framing_mode(), SpiFramingMode::Backend);
     assert!(backend_bus.frames_itself());
     assert_eq!(backend_bus.framing_mode().as_str(), "backend");
+}
+
+/// A bus whose CS came off the bound model's `cs` pin role must be
+/// indistinguishable from a spec-declared one in everything except what it says
+/// about its own provenance.
+///
+/// SCOPE, because the boundary matters: this is a `SpiBus`-level test. It drives
+/// `set_cs_pin` directly and does NOT exercise the inference that produces the
+/// argument, so deleting `binder::model_role_cs` or `cs_net_name` would not fail
+/// it. Those are covered where they live, by `binder::model_role_cs_tests` and
+/// `runner::spi_cs_source_tests`. What this
+/// test owns is the consequence: that `CsProvenance::ModelRoles` reaches the same
+/// tier, earns the same chunk-boundary skip, and carries a real transaction
+/// across a boundary.
+///
+/// The skip is the load-bearing part. `frames_itself()` is what the scheduler
+/// gates the chunk-boundary deselect on (step 3c), so a bus that reported `exact`
+/// without earning it would still be truncated at every boundary while claiming
+/// otherwise.
+#[test]
+fn a_model_role_resolved_cs_frames_exactly_and_survives_a_chunk_boundary() {
+    // Seed "OK" at 0x0000, then hand the EEPROM to a bus whose CS came from the
+    // model's pad map rather than the spec.
+    let mut eeprom = Spi25Eeprom::new(256);
+    eeprom.select();
+    eeprom.transfer(0x06); // WREN
+    eeprom.deselect();
+    eeprom.select();
+    eeprom.transfer(0x02); // WRITE
+    eeprom.transfer(0x00);
+    eeprom.transfer(0x00);
+    eeprom.transfer(b'O');
+    eeprom.transfer(b'K');
+    eeprom.deselect();
+
+    let mut bus = SpiBus::new("U5", Box::new(eeprom));
+    bus.set_cs_pin(Some(('B', 2)), CsProvenance::ModelRoles);
+
+    assert_eq!(
+        bus.framing_mode(),
+        SpiFramingMode::Exact(CsProvenance::ModelRoles),
+        "a CS net read off the model's `cs` pin role is the same electrical fact as a          spec-declared one, so it earns the same tier"
+    );
+    assert_eq!(bus.framing_mode().as_str(), "exact");
+    assert_eq!(
+        bus.framing_mode().cs_provenance(),
+        Some(CsProvenance::ModelRoles),
+        "the tier alone must not hide WHICH route produced it"
+    );
+    assert!(
+        bus.frames_itself(),
+        "the tier is worthless unless it also buys the chunk-boundary skip"
+    );
+
+    // A READ split across a chunk boundary: instruction and high address in one
+    // chunk, the rest in the next.
+    bus.cs_assert();
+    bus.transfer(0x03); // READ
+    bus.transfer(0x00); // addr hi
+    assert!(
+        !simulate_chunk_boundary_deselect(&mut bus),
+        "a model-role-framed bus must be skipped by the chunk-boundary heuristic exactly          as a spec-declared one is"
+    );
+    bus.transfer(0x00); // addr lo
+    let o = bus.transfer(0x00);
+    let k = bus.transfer(0x00);
+    bus.cs_deassert();
+    assert_eq!(
+        [o, k],
+        [b'O', b'K'],
+        "the boundary-spanning READ returns 'OK' intact"
+    );
+}
+
+/// The genuine heuristic remainder keeps reporting itself as such, and carries no
+/// provenance to imply otherwise. A slave with no CS wired anywhere has nothing
+/// for either route to find, and that has to stay visible rather than being
+/// dressed up as exact by the new code path.
+#[test]
+fn a_slave_with_no_cs_at_all_still_reports_heuristic() {
+    let bus = SpiBus::new("U6", Box::new(Mcp3008::new(5.0)));
+    assert_eq!(bus.framing_mode(), SpiFramingMode::Heuristic);
+    assert_eq!(bus.framing_mode().as_str(), "heuristic");
+    assert_eq!(
+        bus.framing_mode().cs_provenance(),
+        None,
+        "no CS net was resolved, so there is no provenance to report"
+    );
+    assert!(
+        !bus.frames_itself(),
+        "it must still take the chunk-boundary deselect, which is what makes the \
+         heuristic disclosure true"
+    );
+
+    // Naming a provenance does NOT by itself promote the tier: without a resolved
+    // pin there is no edge stream, whatever the caller says supplied it.
+    let mut claimed = SpiBus::new("U7", Box::new(Mcp3008::new(5.0)));
+    claimed.set_cs_pin(None, CsProvenance::ModelRoles);
+    assert_eq!(
+        claimed.framing_mode(),
+        SpiFramingMode::Heuristic,
+        "provenance annotates a resolved CS pin; it can never substitute for one"
+    );
 }
 
 /// Model the scheduler's step 3c decision for one bus: it deselects (and would
