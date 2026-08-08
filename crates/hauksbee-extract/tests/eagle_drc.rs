@@ -1200,3 +1200,61 @@ fn foreign_copper_inside_a_pour_outline_stays_silent() {
             .collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn grazing_clearance_at_the_annulus_outer_edge_is_not_lost_to_flattening() {
+    // Ring radius 3, stroke 0.4: true outer copper edge at 3.2. A radial wire
+    // whose copper tip stops 0.19 mm off that edge, aimed at 11.25 degrees —
+    // the mid-chord angle of a coarse 16-segment flattening, where the chord
+    // sags ~0.057 mm inward and would misreport the gap as ~0.25 mm (over the
+    // 0.2 mm rule: silently dropped). The sagitta-bounded chain must report
+    // the true ~0.19 mm clearance violation.
+    let signals = r#"
+<signal name="A">
+  <wire x1="3.37391" y1="0.67110" x2="4.41357" y2="0.87790" width="0.1" layer="1"/>
+</signal>
+<signal name="B">
+  <circle x="0" y="0" radius="3" width="0.4" layer="1"/>
+</signal>
+"#;
+    let rules = r#"<designrules name="wide">
+<param name="mdWireWire" value="0.2mm"/>
+</designrules>"#;
+    let report = drc_rules("", "", signals, rules);
+    assert_eq!(report.short_count(), 0, "0.19 mm off the copper, no short");
+    let f = report
+        .clearance_violations()
+        .next()
+        .expect("a 0.19 mm gap violates the 0.2 mm rule");
+    assert!(
+        (0.178..0.198).contains(&f.gap_mm),
+        "true grazing gap is ~0.19 mm (chord sag would say ~0.25), got {}",
+        f.gap_mm
+    );
+}
+
+#[test]
+fn near_but_disjoint_same_rank_pours_are_not_a_short() {
+    // Two same-rank pours whose vertex rings stop 0.1 mm apart, both drawn
+    // with a 0.2 mm width: inflating the rings by width/2 would fabricate an
+    // overlap short here. Ring overlap is what Eagle's DRC flags; disjoint
+    // rings stay silent.
+    let signals = format!(
+        r#"
+<signal name="A">{}</signal>
+<signal name="B">{}</signal>
+"#,
+        pour(r#" rank="1""#, 0.0, 0.0, 10.0, 10.0),
+        pour(r#" rank="1""#, 10.1, 0.0, 20.0, 10.0),
+    );
+    let report = drc("", "", &signals);
+    assert!(
+        report.findings.is_empty(),
+        "disjoint pour rings are not an overlap: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.net_a_name.clone(), f.net_b_name.clone(), f.gap_mm))
+            .collect::<Vec<_>>()
+    );
+}

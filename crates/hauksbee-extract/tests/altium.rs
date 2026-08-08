@@ -1034,3 +1034,33 @@ fn track_through_the_octagon_flat_is_still_a_short() {
     let report = ExtractedBoard::altium_drc(&bytes).expect("drc runs");
     assert_eq!(report.short_count(), 1, "octagon body copper still shorts");
 }
+
+#[test]
+fn octagon_chamfer_constant_is_pinned_by_the_measured_gap() {
+    // Under a deliberately wide 0.5 mm rule the corner track IS reported, and
+    // the measured gap pins the 0.25 chamfer ratio: for the 2 x 2 mm pad the
+    // cut edge is x + y = 1.5, so the track tip at (1, 1) sits
+    // 0.5 / sqrt(2) - 0.05 = 0.3036 mm off the copper. A bounding rectangle
+    // would read gap 0 (touching short); a regular octagon (cut 0.586 mm,
+    // edge x + y = 1.414) would read ~0.364 mm.
+    let comps = props("|LAYER=TOP|PATTERN=R0402|SOURCEDESIGNATOR=U1");
+    let pads = shaped_pad_record("1", 1, 0, 0, 0.0, 0.0, 2.0, 2.0, 3);
+    let tracks = track_record(1, 1, 0xFFFF, 1.0, 1.0, 2.0, 2.0, 0.1);
+    let bytes = build_pcbdoc(&[
+        ("Nets6", two_net_stream()),
+        ("Components6", comps),
+        ("Pads6", pads),
+        ("Tracks6", tracks),
+    ]);
+    let report = hauksbee_extract::drc::altium_drc::run(&bytes, Some(0.5)).expect("drc runs");
+    assert_eq!(report.short_count(), 0, "not touching under any reading");
+    let f = report
+        .clearance_violations()
+        .next()
+        .expect("0.30 mm gap violates the wide 0.5 mm rule");
+    assert!(
+        (f.gap_mm - 0.3036).abs() < 0.005,
+        "gap pins the 0.25 chamfer (expected ~0.3036), got {}",
+        f.gap_mm
+    );
+}

@@ -1847,8 +1847,17 @@ fn custom_pad_shapes(
 
 /// Flatten a full circle of the given centre/radius into a chain of capsule
 /// links of radius `r` (an annulus / stroked ring, not a solid disc).
+///
+/// Chord flattening alone puts the capsule midlines INSIDE the true circle by
+/// the sagitta, shrinking both copper edges of the ring and hiding grazing
+/// shorts (missing a short is this module's worst failure). So the segment
+/// count is chosen to keep the sagitta at or below [`RING_SAGITTA_MM`] and the
+/// capsule radius is inflated by that bound: the chain then COVERS the true
+/// annulus, overstating it by at most `RING_SAGITTA_MM`, which sits under
+/// [`CLEARANCE_TOLERANCE_MM`] so the overstatement can never manufacture a
+/// finding on its own.
 fn ring_capsules(cx: f64, cy: f64, radius: f64, r: f64) -> Vec<Capsule> {
-    let n = 2 * ARC_SEGMENTS;
+    let n = ring_segments(radius);
     let mut caps = Vec::with_capacity(n);
     let mut prev = (cx + radius, cy);
     for i in 1..=n {
@@ -1859,11 +1868,30 @@ fn ring_capsules(cx: f64, cy: f64, radius: f64, r: f64) -> Vec<Capsule> {
             ay: prev.1,
             bx: p.0,
             by: p.1,
-            r,
+            r: r + RING_SAGITTA_MM,
         });
         prev = p;
     }
     caps
+}
+
+/// Maximum chord sagitta permitted when flattening a full circle (mm). Kept
+/// under [`CLEARANCE_TOLERANCE_MM`] so the covering inflation in
+/// [`ring_capsules`] stays inside the finding tolerance band.
+const RING_SAGITTA_MM: f64 = 0.0025;
+
+/// Segment count that keeps a circle's chord sagitta `radius * (1 - cos(π/n))`
+/// at or below [`RING_SAGITTA_MM`], floored at `2 * ARC_SEGMENTS`.
+fn ring_segments(radius: f64) -> usize {
+    let floor = 2 * ARC_SEGMENTS;
+    if radius <= RING_SAGITTA_MM {
+        return floor;
+    }
+    let half_angle = (1.0 - RING_SAGITTA_MM / radius).acos();
+    if half_angle <= 0.0 {
+        return floor;
+    }
+    ((std::f64::consts::PI / half_angle).ceil() as usize).max(floor)
 }
 
 /// Read a `(pts (xy ..)(xy ..))` child into world-frame coordinates (no
@@ -3628,13 +3656,12 @@ pub mod eagle_drc {
                         // solid disc manufactures phantom shorts against copper
                         // legitimately routed through the hole. Eagle renders a
                         // zero-width circle as a filled disc, so only that case
-                        // is solid.
+                        // is solid. The chain is sagitta-bounded and inflated
+                        // to COVER the true annulus (see `ring_capsules`), so
+                        // a grazing short on the ring edge is not lost to
+                        // chord flattening.
                         if *width > 0.0 {
-                            let r = width / 2.0;
-                            for cap in flatten_curve(*x + radius, *y, *x - radius, *y, 180.0, r)
-                                .into_iter()
-                                .chain(flatten_curve(*x - radius, *y, *x + radius, *y, 180.0, r))
-                            {
+                            for cap in super::ring_capsules(*x, *y, *radius, width / 2.0) {
                                 buckets.push(
                                     &layer_name(*layer),
                                     make_prim(
@@ -3715,9 +3742,14 @@ pub mod eagle_drc {
         // Eagle's `<classes>` block is a clearance matrix: class N declares
         // `<clearance class="M" value="V"/>` rows (its own number included).
         // The larger of a matrix value and the design-rule clearance wins; a
-        // pair with NO matrix entry falls back to the design rules alone, so
-        // cross-class pairs are pinned explicitly rather than left to the
-        // KiCad-style max-of-two-classes rule (which would over-flag them).
+        // pair with NO matrix entry falls back to the design rules alone
+        // (Eagle documents an empty/0 class value as "use the design rules"),
+        // so cross-class pairs are pinned explicitly rather than left to the
+        // KiCad-style max-of-two-classes rule. This reading is not yet pinned
+        // by an Eagle-generated oracle board; it is the noise-safe direction
+        // (max-of-classes could only ADD findings on cross-class pairs), so
+        // if a corpus oracle ever shows Eagle using the max rule for omitted
+        // cells, tighten the fallback here.
         let mut rules = ClearanceRules::new(clearance);
         let class_key = |n: i64| format!("class-{n}");
         for (number, class) in &parsed.classes {
@@ -3784,7 +3816,15 @@ pub mod eagle_drc {
                 {
                     continue;
                 }
-                let (d, qa, _) = poly_poly_closest(&a.pts, &b.pts);
+                // Overlap means the vertex rings themselves cross or one
+                // contains the other. The rings are deliberately NOT inflated
+                // by the pours' `width` strokes: whether Eagle's boundary
+                // stroke extends past the vertex ring is renderer detail, and
+                // inflating would invent shorts for near-but-disjoint pours.
+                // Requiring true ring overlap keeps the short claim airtight
+                // under either reading (Eagle's own DRC flags the polygon
+                // overlap, not a stroke graze).
+                let (gap, qa, _) = poly_poly_closest(&a.pts, &b.pts);
                 let contained = a
                     .pts
                     .first()
@@ -3792,7 +3832,6 @@ pub mod eagle_drc {
                     || b.pts
                         .first()
                         .is_some_and(|&(x, y)| point_in_polygon(x, y, &a.pts));
-                let gap = d - a.width / 2.0 - b.width / 2.0;
                 if !contained && !is_touching(gap) {
                     continue;
                 }
@@ -3811,8 +3850,9 @@ pub mod eagle_drc {
                     kind: ItemKind::Zone,
                     net: p.net,
                     owner: format!(
-                        "pour(rank {}, isolate {} mm, thermals {}, orphans {})",
+                        "pour(rank {}, width {} mm, isolate {} mm, thermals {}, orphans {})",
                         p.rank,
+                        p.width,
                         p.isolate,
                         if p.thermals { "on" } else { "off" },
                         if p.orphans { "on" } else { "off" },
@@ -4353,9 +4393,13 @@ pub mod altium_drc {
     /// Build the solid copper shape for a pad. Shape codes: 1 = circle/oval,
     /// 2 = rectangle, 3 = octagon (KiCad `ALTIUM_PAD_SHAPE`). Rectangles are
     /// exact; the octagon is the rectangle with each corner cut at 45° by
-    /// 25% of the shorter side (the same mapping KiCad's Altium importer
-    /// uses: a chamfered rect with ratio 0.25 on all four corners), so copper
-    /// legitimately routed past a cut corner is not a phantom short.
+    /// 25% of the shorter side, so copper legitimately routed past a cut
+    /// corner is not a phantom short. The 0.25 ratio is ported from KiCad's
+    /// Altium importer (`altium_pcb.cpp`, `ALTIUM_PAD_SHAPE::OCTAGONAL` →
+    /// chamfered rect, ratio 0.25, all corners), the same reference
+    /// implementation the record layouts in this module are ported from; a
+    /// regular octagon (ratio ≈ 0.293 on a square pad) would cut MORE copper,
+    /// so 0.25 is the conservative reading if the two ever disagree.
     fn pad_shape(cx: f64, cy: f64, g: &PadGeo) -> Shape {
         let rot = g.rotation.to_radians();
         let (w, h) = (g.size_x, g.size_y);
