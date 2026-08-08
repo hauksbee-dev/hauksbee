@@ -803,6 +803,102 @@ fn without_a_plane_below_the_capacitance_is_not_called_computed() {
 }
 
 #[test]
+fn a_computed_capacitance_finding_uses_no_range_language() {
+    // With the geometry computed there is no low and high end, so the failing
+    // message must not invent them (it previously printed "at the LOW end ... up
+    // to N ns at the high end" with the same number twice). A 25-device bus on a
+    // planed, stackup-declaring board fires and must read as a single figure.
+    let mut body = String::from(
+        r#"
+      (setup (stackup
+        (layer "F.Cu" (type "copper") (thickness 0.035))
+        (layer "dielectric 1" (type "core") (thickness 1.51) (epsilon_r 4.5))
+        (layer "B.Cu" (type "copper") (thickness 0.035))
+      ))
+      (net 1 "SDA") (net 2 "+3V3") (net 3 "GND")
+      (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
+        (property "Reference" "R1") (property "Value" "10k")
+        (pad "1" smd rect (at 0 0) (net 1 "SDA"))
+        (pad "2" smd rect (at 1 0) (net 2 "+3V3")))
+      (segment (start 0 0) (end 60 0) (width 0.25) (layer "F.Cu") (net 1))
+      (zone (net 3) (net_name "GND") (layer "B.Cu")
+        (filled_polygon (layer "B.Cu")
+          (pts (xy -5 -5) (xy 70 -5) (xy 70 20) (xy -5 20))))
+    "#,
+    );
+    for i in 0..25 {
+        body.push_str(&format!(
+            r#"(footprint "Package_SO:SOIC-8" (at {} 8) (layer "F.Cu")
+              (property "Reference" "U{}") (property "Value" "SENSOR")
+              (pad "1" smd rect (at 0 0) (net 1 "SDA")))"#,
+            10 + i,
+            i + 1
+        ));
+    }
+    let text = format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})");
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
+    let f = r
+        .of_check(SiCheck::I2cRiseTime)
+        .find(|f| f.severity.is_finding())
+        .expect("25 device pins on a 10k pull must fire");
+    assert!(
+        f.message.contains("computed from the board stackup"),
+        "this board declares the geometry: {}",
+        f.message
+    );
+    assert!(
+        !f.message.contains("LOW end") && !f.message.contains("high end"),
+        "a computed figure has no range to report: {}",
+        f.message
+    );
+}
+
+#[test]
+fn a_remote_pour_is_not_this_bus_reference_plane() {
+    // The board-wide question "is there a pour anywhere" is not evidence about
+    // THIS net. A small polygon in a far corner must not turn an unreferenced
+    // route into a supposedly geometry-computed microstrip.
+    let body = r#"
+      (setup (stackup
+        (layer "F.Cu" (type "copper") (thickness 0.035))
+        (layer "dielectric 1" (type "prepreg") (thickness 0.1) (epsilon_r 4.5))
+        (layer "B.Cu" (type "copper") (thickness 0.035))
+      ))
+      (net 1 "SDA") (net 2 "+3V3") (net 3 "GND")
+      (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
+        (property "Reference" "R1") (property "Value" "2.2k")
+        (pad "1" smd rect (at 0 0) (net 1 "SDA"))
+        (pad "2" smd rect (at 1 0) (net 2 "+3V3")))
+      (footprint "Package_SO:SOIC-8" (at 10 8) (layer "F.Cu")
+        (property "Reference" "U1") (property "Value" "SENSOR")
+        (pad "1" smd rect (at 0 0) (net 1 "SDA")))
+      (segment (start 0 0) (end 60 0) (width 0.25) (layer "F.Cu") (net 1))
+      (zone (net 3) (net_name "GND") (layer "B.Cu")
+        (filled_polygon (layer "B.Cu")
+          (pts (xy 200 200) (xy 210 200) (xy 210 210) (xy 200 210))))
+    "#;
+    let text = format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})");
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
+    let f = r.of_check(SiCheck::I2cRiseTime).next().expect("a note");
+    assert!(
+        f.message.contains("ASSUMED"),
+        "a pour the bus does not run over is not its reference plane: {}",
+        f.message
+    );
+    assert!(
+        !f.message.contains("computed from the board stackup"),
+        "and must not be called computed: {}",
+        f.message
+    );
+}
+
+#[test]
 fn a_bus_leaving_the_top_layer_is_not_called_computed() {
     // read_stackup describes F.Cu and the dielectric below it, and nothing else.
     // A net that routes on B.Cu or an inner layer is outside what those numbers

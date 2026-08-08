@@ -176,14 +176,20 @@ failure this check is meant not to have:
   and the first dielectric *below F.Cu*, and nothing else, so those numbers
   describe a top-layer microstrip and no other layer. A net routing on B.Cu of an
   asymmetric stackup, or on any inner layer, falls back to the range.
-- **Some copper below the top must be poured.** A microstrip needs a reference
-  plane, and a stackup lists dielectric thicknesses rather than which copper is
-  solid. On a 2-layer board whose bottom is sparse routing there is no plane under
-  the trace, its real capacitance is lower, and a microstrip figure would
-  over-report `t_r`. The test is deliberately coarse (does *a* pour exist below
-  F.Cu, not is it solid directly under this trace), which keeps it a necessary
-  rather than sufficient condition: it may still decline where a plane exists, but
-  it will not compute where none does.
+- **The bus must run over a pour.** A microstrip needs a reference plane, and a
+  stackup lists dielectric thicknesses rather than which copper is solid. On a
+  2-layer board whose bottom is sparse routing there is no plane under the trace,
+  its real capacitance is lower, and a microstrip figure would over-report `t_r`.
+  `net_is_over_a_plane` therefore tests **this net's** segments, not the board:
+  every routed segment's midpoint must fall inside a filled lower-layer pour. A
+  pour somewhere else on the board says nothing about the copper under this bus,
+  and a route that leaves the plane falls back to the range. The residual, stated
+  plainly: a segment whose midpoint is covered but whose ends overhang the pour
+  edge still counts as covered, and narrowing that needs real polygon clipping.
+
+A failing finding computed this way carries no range language, because there is no
+range: the message reports the single figure instead of an invented low and high
+end.
 
 Without a stackup the impedance is unknown, so hauksbee does not pretend to know
 it. It carries the whole range, and **which end is used where** follows this
