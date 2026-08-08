@@ -1579,7 +1579,18 @@ description = "25AA/25LC SPI serial EEPROM, 8-pin PDIP/SOIC/TSSOP/MSOP (pad map 
 # SOT-23 EEPROM stays unresolved (honest) instead of resolved-and-wrong.
 [models.match]
 mpn_re = "(?i)^25(AA|LC)[0-9]{3,4}"
-footprint_re = "(?i)(SOIC-8|SO-8|SOP-8|DIP-8|DIP8|TSSOP-8|MSOP-8|VSSOP-8|PDIP-8)"
+# One 8-pin package family, spelled the several ways real libraries spell it:
+# KiCad ("SOIC-8", "DIP-8", "TSSOP-8"), Eagle/Altium ("SO08", "SOP8", "DIP08"),
+# and the IPC generated names ("SOIC127P600X175-8N"). The `0?8` followed by a
+# non-digit-or-end is what keeps it off the 14- and 16-pin members of the same
+# package families: "SOIC-16" reaches the separator and then sees `1`. Written as
+# a trailing character class rather than a negative lookahead because the `regex`
+# crate has no look-around.
+footprint_re = '''(?ix)
+    (SOIC|SO|SOP|SSOP|TSSOP|MSOP|VSSOP|DFN|WDFN|UDFN|DIP|PDIP)
+    [-_]? 0?8 ([^0-9]|$)
+  | [-_] 8N ([^0-9]|$)
+'''
 
 # Pad->role map, Microchip 25LC256 datasheet DS22065 Section 2.0 (Pin
 # Descriptions) and Figure 2-1; identical across the 25AA/25LC 8-pin packages:

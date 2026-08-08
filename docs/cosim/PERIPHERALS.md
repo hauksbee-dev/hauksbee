@@ -449,10 +449,10 @@ above over a `field`.) Each peripheral's `state()` in
   synchronous input responders above, and not at all on the poll backends
   (Renode, QEMU), where its edges alias at the chunk rate like any GPIO.
 - **SPI transaction framing has three tiers**, reported per slave so a
-  verdict never hides which one it got. Exact framing is reached two ways;
-  both give the same tier because both give the same electrical fact, and the
-  route is reported alongside it (`cs_provenance` in the `--json` coverage)
-  because the two fail differently:
+  verdict never hides which one it got. Exact framing is reached by more than one
+  route; they all give the same tier because they all give the same electrical
+  fact, and the route is reported alongside it (`cs_provenance` in the `--json`
+  coverage) because they fail differently:
   - **Exact, from the spec** (`cs_provenance: "spec"`): the peripheral's
     `cs_net` resolved to the MCU GPIO pin that drives it, so
     `select`/`deselect` fire on the true active-low falling and rising edges,

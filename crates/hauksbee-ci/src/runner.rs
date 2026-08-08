@@ -2281,34 +2281,43 @@ fn cs_net_name(
     let Some(reference) = p.reference.as_ref() else {
         return Ok(None);
     };
-    let Some((net, model_id)) = hauksbee_engine::binder::model_role_cs_net(board, reference, lib)
-    else {
+    let Some(resolved) = hauksbee_engine::binder::model_role_cs(board, reference, lib) else {
         return Ok(None);
     };
     // The `ref` must name the part this peripheral actually IS. Pointing a
-    // `spi_eeprom` at the board's MCP3008 resolves a real `cs` role on a real
-    // assembled part, and taking it would frame the EEPROM's transactions off the
-    // ADC's chip-select while reporting `exact`.
+    // `spi_eeprom` at the board's MCP3008 (or its microSD socket) finds a real `cs`
+    // role on a real assembled part, and taking it would frame the EEPROM's
+    // transactions off another device's chip-select while reporting `exact`.
     //
     // This is a LOUD refusal, not a quiet drop to the heuristic. The spec says two
     // contradictory things about one component, and picking either reading for the
     // user would bury the contradiction under a tier they did not ask about.
     //
-    // Only judged when the bound model is one the built-in DB claims for some SPI
-    // kind. An unrecognised id is allowed through: a user model pack may
-    // legitimately supply the part, and no list here can know its id.
-    if crate::spec::is_builtin_spi_slave_model_id(&model_id)
-        && crate::spec::builtin_model_id_for_spi_kind(&p.kind) != Some(model_id.as_str())
+    // Checked BEFORE the chip-select is consulted, and on the bound model id alone.
+    // Gating it on "we found a cs net" would let the contradiction through in
+    // exactly the cases where the wrongly-named part declares no chip-select, e.g.
+    // a `spi_eeprom` pointed at a 74HC595: still two incompatible statements about
+    // one component, and still worth failing on.
+    //
+    // Judged on the LAYER the model came from rather than a hardcoded id list. The
+    // shipped DB's ids are knowable, so a built-in that is not this kind's part is a
+    // real contradiction; a user pack may legitimately model a SPI slave under an id
+    // no code here can predict, so anything outside the built-in DB is allowed
+    // through. An id list was the earlier shape and it silently stopped firing for
+    // the built-in models it had not been updated with (`microsd_socket` declares a
+    // `cs` role and was missing).
+    if resolved.from_builtin_db
+        && crate::spec::builtin_model_id_for_spi_kind(&p.kind) != Some(resolved.model_id.as_str())
     {
         return Err(SpecError::Invalid(format!(
             "peripheral '{}' is type '{}' but its `ref` names component '{}', which binds \
              model '{}'. Taking that part's chip-select would frame this slave's \
              transactions on another device's CS edges and report them as exact. Point \
              `ref` at the component this peripheral models, or declare `cs_net` explicitly.",
-            p.id, p.kind, reference, model_id,
+            p.id, p.kind, reference, resolved.model_id,
         )));
     }
-    Ok(Some((net, CsProvenance::ModelRoles)))
+    Ok(resolved.cs_net.map(|net| (net, CsProvenance::ModelRoles)))
 }
 
 /// Resolve a SPI peripheral's chip-select net to the MCU pin that drives it
@@ -3924,14 +3933,79 @@ mod spi_cs_source_tests {
         );
     }
 
-    /// The mismatch check must only fire when it can actually judge. A model id no
-    /// built-in kind claims may come from a user model pack, and refusing it would
-    /// break the very extensibility the pin-role route is built on.
+    /// The wrongly-named part need NOT declare a chip-select for the contradiction
+    /// to be worth failing on. A `spi_eeprom` pointed at a 74HC595 is still two
+    /// incompatible statements about one component; checking compatibility only
+    /// after a CS net was found would wave exactly this case through.
+    #[test]
+    fn a_ref_naming_a_wrong_part_with_no_cs_role_is_still_refused() {
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let mut b = board();
+        b.components[0].value = "74HC595".to_string();
+        b.components[0].footprint = "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm".to_string();
+        let p = peripheral("id = \"U5\"\ntype = \"spi_eeprom\"\nref = \"U5\"\n");
+        // The shift register declares no `cs` role, so there is nothing to borrow;
+        // the point is that the contradictory pairing is not silently accepted.
+        match cs_net_name(&p, &b, &lib) {
+            Err(e) => {
+                let msg = e.to_string();
+                assert!(
+                    msg.contains("spi_eeprom") && msg.contains("U5"),
+                    "the error must name the kind and the ref: {msg}"
+                );
+            }
+            Ok(other) => panic!(
+                "a spi_eeprom pointed at a 74HC595 must be refused, got {other:?}; a \
+                 compatibility check that runs only when a cs net was found accepts this"
+            ),
+        }
+    }
+
+    /// The board's microSD socket declares a `cs` role and belongs to no SPI
+    /// peripheral kind. While it was missing from the built-in list, a `spi_eeprom`
+    /// pointed at it passed the compatibility check and framed the EEPROM off the
+    /// SD card's chip-select while reporting exact.
+    #[test]
+    fn a_ref_naming_the_microsd_socket_is_refused() {
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let mut b = board();
+        b.components[0].reference = "J2".to_string();
+        b.components[0].value = "TFC-WXCP11-08-LF".to_string();
+        b.components[0].footprint = String::new();
+        b.components[0].pins[0].number = "2".to_string(); // the socket's cs pad
+
+        // Sanity: the socket really does bind and really does expose a cs net, so
+        // the refusal below is the policy and not a fixture that binds nothing.
+        let resolved = hauksbee_engine::binder::model_role_cs(&b, "J2", &lib)
+            .expect("the microSD socket must bind");
+        assert_eq!(resolved.model_id, "microsd_socket");
+        assert_eq!(resolved.cs_net.as_deref(), Some("EE_CS"));
+
+        let p = peripheral("id = \"EE\"\ntype = \"spi_eeprom\"\nref = \"J2\"\n");
+        let err = cs_net_name(&p, &b, &lib)
+            .expect_err("a spi_eeprom must not take the microSD socket's chip-select")
+            .to_string();
+        assert!(
+            err.contains("microsd_socket"),
+            "the error must name the model it actually bound: {err}"
+        );
+    }
+
+    /// The escape hatch must stay open: a model from outside the shipped DB is
+    /// allowed to supply a chip-select, because a user model pack may legitimately
+    /// model a SPI slave under an id no code in this crate can predict.
     #[test]
     fn an_unrecognised_model_id_is_not_treated_as_a_mismatch() {
+        // The judgement is made on the model's LAYER, so there is no id list to
+        // fall out of date. A built-in binds with `from_builtin_db`, which is what
+        // subjects it to the check; anything from a pack or user dir does not.
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let resolved = hauksbee_engine::binder::model_role_cs(&board(), "U5", &lib)
+            .expect("the fixture EEPROM binds");
         assert!(
-            !crate::spec::is_builtin_spi_slave_model_id("some_user_pack_flash"),
-            "a user pack's id is not a built-in SPI slave id"
+            resolved.from_builtin_db,
+            "a shipped db/*.toml entry must be recognised as built-in, or the mismatch \
+             check never fires"
         );
         assert_eq!(
             crate::spec::builtin_model_id_for_spi_kind("spi_eeprom"),
