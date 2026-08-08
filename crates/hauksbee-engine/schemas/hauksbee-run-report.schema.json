@@ -750,6 +750,13 @@
           },
           "type": "array"
         },
+        "timing_limitations": {
+          "description": "Per-MCU statements of how this backend's TIMING fidelity falls short of\nthe part. Non-empty means simulated time on these cores carries a known\nsystematic bias (wall-clock-paced virtual time on the QEMU family, the\nF103's deliberate TIMx-at-72MHz divergence), so time-based assertions\nthere mean less than they look. Empty (and omitted) on cores whose\ntiming is clock-truth gated.",
+          "items": {
+            "$ref": "#/definitions/CosimTimingLimitation"
+          },
+          "type": "array"
+        },
         "timing_refusals": {
           "description": "Runtime timing/replay limits reached. A strict run exits INVALID when\nthis is non-empty instead of silently trusting a collapsed waveform.",
           "items": {
@@ -860,6 +867,23 @@
       "required": [
         "bus",
         "mode"
+      ],
+      "type": "object"
+    },
+    "CosimTimingLimitation": {
+      "description": "One backend timing-fidelity gap (see [`CosimJson::timing_limitations`]).",
+      "properties": {
+        "limitation": {
+          "description": "The backend's whole sentence, for verbatim display. Prose for a human:\ndo not parse it or match on it exactly.",
+          "type": "string"
+        },
+        "mcu_ref": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "mcu_ref",
+        "limitation"
       ],
       "type": "object"
     },

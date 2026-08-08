@@ -138,6 +138,33 @@ fn soc_inspection_states_the_clock_cross_check_and_the_watchdog_fidelity() {
         ),
         "the part's own sentence, verbatim:\n{out}"
     );
+    // TIMING, the same two-branch discipline as the watchdog. The nRF52840
+    // declares no timing_limitation (its clock is clock-truth gated), so the
+    // silence must print as the claim it is.
+    assert!(
+        out.contains(
+            "timing: this part claims a firmware delay costs the virtual time it costs \
+             on silicon (measured by the clock-truth gate)"
+        ),
+        "an absent timing limitation is a CLAIM and must be printed as one:\n{out}"
+    );
+
+    // And the descriptor that DOES declare one (the F103's deliberate
+    // TIMx-at-72MHz divergence) must have its own sentence quoted verbatim.
+    let f103_path =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hauksbee-mcu/db/mcu/stm32f103.soc.toml");
+    let (code, out) = lint(&f103_path);
+    assert_eq!(
+        code, 0,
+        "the shipped F103 descriptor must lint clean:\n{out}"
+    );
+    assert!(
+        out.contains(
+            "timing: The STM32F103 TIMx timer blocks run at the post-PLL 72 MHz in this \
+             co-simulator while the core and SysTick run at the 8 MHz reset default"
+        ),
+        "the F103's own timing sentence, verbatim:\n{out}"
+    );
 
     // The other branch: a descriptor claiming no limitation says so as a claim,
     // rather than leaving the reader to infer it from a missing line. Drop the

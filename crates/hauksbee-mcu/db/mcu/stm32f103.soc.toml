@@ -218,6 +218,22 @@ repeatedly under a starved watchdog goes quiet here instead, so only the FIRST \
 watchdog reset is represented on this run.\
 """
 
+# TIMING (deliberate, bounded divergence; the long why is on the timer1..4
+# overrides in platform_repl above). SysTick and instruction timing are held to
+# the part's 8 MHz reset default by the clock-truth gate; the TIMx blocks are
+# not, because only the post-PLL rate lets a stock CubeMX HAL project boot on a
+# platform with no clock tree. This sentence is the runtime statement of that
+# trade, surfaced on every report surface of any run that binds this part, so
+# the cost is paid where a user sees it rather than only in this file.
+timing_limitation = """\
+The STM32F103 TIMx timer blocks run at the post-PLL 72 MHz in this \
+co-simulator while the core and SysTick run at the 8 MHz reset default (the \
+rate a stock CubeMX HAL project needs to boot on a platform with no clock \
+tree), so bare-metal firmware that clocks a TIMx time base from the \
+reset-default HSI sees those timers 9x fast on this run; delay loops and \
+SysTick time bases are unaffected and clock-truth gated.\
+"""
+
 # Private writes into the descriptor's RCC model. Firmware cannot assert the
 # read-only ready bits through RCC_CR: board presence arrives once before boot,
 # and virtual elapsed time advances the HSE/PLL state machine after each Renode

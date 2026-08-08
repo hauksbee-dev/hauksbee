@@ -34,15 +34,18 @@ platform_repl = """
 // 16 MHz and is cross-checked against this declaration at descriptor load
 // (soc::check_clock_declarations).
 //
-// NOT FIXED HERE, and measured rather than assumed: the stock file also
-// declares `clint frequency: 62000000` for the machine timer, while the real
-// FE310 drives `mtime` from the 32.768 kHz always-on RTC. That is a separate
-// clock domain from the core, so the cross-check above deliberately does not
-// police it, and it is NOT changed here because the in-tree Zephyr shell image
-// is the only FE310 firmware available to prove either value and it does not
-// exercise `mtime` on a path this repo can observe. Recorded as an open gap in
-// docs/cosim/MCU.md rather than changed on a guess: a 1892x edit to a timer
-// nobody can measure is how the original defect was introduced.
+// MTIME (measured, tests/clock_truth.rs fe310 gates): the stock file declares
+// `clint frequency: 62000000` for the machine timer, while the real FE310
+// drives `mtime` from the 32.768 kHz always-on RTC tick (the same FE310-G002
+// manual cited above: rtcclk is the LFROSC/LFXOSC low-frequency clock, and
+// mtime counts it). The override below declares the part's real rate, and it
+// is a MEASURED edit, not a guess: an mtime-timed oracle firmware
+// (testdata/firmware/clock_truth/fe310_tick) toggles a pin every 3277 mtime
+// ticks, and the gate asserts the sim rate is within 5% of the 32768 Hz the
+// silicon counts at, on this platform AND fails on a platform that keeps the
+// stock 62 MHz (a 1892x error). The mtime domain is separate from the core
+// clock, so the `frequency_hz` cross-check above deliberately does not police
+// it; the two-sided measurement is what holds it instead.
 //
 // A RISC-V part has no NVIC, so there is no `systickFrequency` to declare; the
 // cross-check requires `PerformanceInMips`, which every Renode CPU has.
@@ -51,6 +54,9 @@ using "platforms/cpus/sifive-fe310.repl"
 
 cpu:
     PerformanceInMips: 16
+
+clint:
+    frequency: 32768
 """
 cpu_path = "sysbus.cpu"
 uart = "sysbus.uart0"
@@ -73,9 +79,13 @@ post_load_setup = [
     '{cpu} PC `sysbus GetSymbolAddress "vinit"`',
 ]
 
+# The stock sifive-fe310.repl registers the GPIO port as `gpioInputs` (verified
+# against the installed Renode 1.16.1's `peripherals` listing); the previous
+# `gpio0` here named a peripheral that does not exist on this platform, so
+# every ODR poll failed and no FE310 edge was ever observable.
 [[soc.ports]]
 letter = "0"
-peripheral = "gpio0"
+peripheral = "gpioInputs"
 odr_offset = 0x0C
 width = 32
 

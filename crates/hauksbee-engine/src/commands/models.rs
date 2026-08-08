@@ -346,6 +346,12 @@ fn soc_inspection(config: &hauksbee_mcu::SocConfig) -> Vec<String> {
                          never fed reboots the core the way silicon does"
                     .to_string(),
             });
+            out.push(match &c.timing_limitation {
+                Some(l) => format!("timing: {l}"),
+                None => "timing: this part claims a firmware delay costs the virtual time \
+                         it costs on silicon (measured by the clock-truth gate)"
+                    .to_string(),
+            });
             out.push(match &c.uart {
                 Some(u) => format!("uart bridge: {u}"),
                 None => "uart bridge: none".to_string(),
@@ -413,6 +419,13 @@ fn soc_inspection(config: &hauksbee_mcu::SocConfig) -> Vec<String> {
             out.push(format!(
                 "watchdog: {} (stated per-backend rather than per-descriptor for this family)",
                 hauksbee_mcu::qemu::WATCHDOG_LIMITATION
+            ));
+            // Same per-backend reasoning for timing: wall-clock pacing is how
+            // the backend drives QEMU (no icount), not anything this file
+            // declares, so quote the constant a run reports verbatim.
+            out.push(format!(
+                "timing: {} (stated per-backend rather than per-descriptor for this family)",
+                hauksbee_mcu::qemu::TIMING_LIMITATION
             ));
         }
         #[cfg(not(any(feature = "renode", feature = "qemu")))]
