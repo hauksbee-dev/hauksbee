@@ -91,11 +91,15 @@ impl CopperPrim {
 pub struct X2Attrs {
     /// `%TA.AperFunction` of the aperture this primitive was painted with.
     pub function: Option<ApertureFunction>,
-    /// `%TO.N` net name. Only a *named* net is stored: the empty name (an
-    /// object on no net: logos, tooling) and `N/C` (deliberately unrouted
-    /// single-pad nets) both stay `None`, because unioning either would merge
-    /// copper the film explicitly says is unconnected.
-    pub net: Option<Arc<str>>,
+    /// `%TO.N` net names. Usually one; a net-tie object legitimately carries
+    /// SEVERAL (`%TO.N,A,B*%`: copper that belongs to both nets and ties them
+    /// by design), so all are kept, collapsing them into one opaque joined
+    /// string would neither match either net nor read as the declared tie.
+    /// Only *named* nets are stored: the empty name (an object on no net:
+    /// logos, tooling) and `N/C` (deliberately unrouted single-pad nets) both
+    /// stay `None`, because unioning either would merge copper the film
+    /// explicitly says is unconnected.
+    pub net: Option<Arc<[Arc<str>]>>,
     /// `%TO.P`: the (refdes, pin name) this flash is the pad of.
     pub pin: Option<(Arc<str>, Arc<str>)>,
     /// `%TO.C`: the refdes of the component this object belongs to.
@@ -109,6 +113,12 @@ impl X2Attrs {
             && self.pin.is_none()
             && self.component.is_none()
     }
+
+    /// The film's net names for this primitive (usually one; several on a
+    /// net-tie object). Empty when the film named none.
+    pub fn net_names(&self) -> &[Arc<str>] {
+        self.net.as_deref().unwrap_or(&[])
+    }
 }
 
 /// Whether an X2 aperture function marks a flash as a VIA pad: copper that
@@ -117,6 +127,25 @@ impl X2Attrs {
 /// footprint window looks exactly like a pad).
 pub fn function_is_via(f: &ApertureFunction) -> bool {
     matches!(f, ApertureFunction::ViaPad)
+}
+
+/// Whether an X2 aperture function states outright that a flash is NOT a
+/// component pad (a fiducial, an antipad, a washer, a thermal relief). Such a
+/// flash is real copper, but the footprint window must not claim it as a pin.
+/// Absence of any function says nothing, that flash keeps its geometric
+/// fallback, because a partially attributed film is not a film asserting its
+/// bare flashes are non-pads.
+pub fn function_is_nonpad(f: &ApertureFunction) -> bool {
+    matches!(
+        f,
+        ApertureFunction::FiducialPad(_)
+            | ApertureFunction::AntiPad
+            | ApertureFunction::WasherPad
+            | ApertureFunction::ThermalReliefPad
+            | ApertureFunction::NonConductor
+            | ApertureFunction::CopperBalancing
+            | ApertureFunction::Border
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,7 +302,7 @@ struct Plotter<'a> {
     aper_functions: HashMap<i32, ApertureFunction>,
     /// The X2 object-attribute dictionary (`%TO.N` / `%TO.P` / `%TO.C`): what
     /// the current objects being painted ARE, until changed or `%TD`-deleted.
-    obj_net: Option<Arc<str>>,
+    obj_net: Option<Arc<[Arc<str>]>>,
     obj_pin: Option<(Arc<str>, Arc<str>)>,
     obj_component: Option<Arc<str>>,
     out: Vec<CopperPrim>,
@@ -412,9 +441,12 @@ impl<'a> Plotter<'a> {
                     // single-pad net) must clear the state, not carry a name,
                     // or the copper painted under them would be unioned.
                     self.obj_net = match n {
-                        GNet::Connected(names) if !names.is_empty() => {
-                            Some(Arc::from(names.join(",")))
-                        }
+                        GNet::Connected(names) if !names.is_empty() => Some(
+                            names
+                                .iter()
+                                .map(|s| Arc::from(s.as_str()))
+                                .collect::<Arc<[Arc<str>]>>(),
+                        ),
                         _ => None,
                     };
                 }
@@ -1533,7 +1565,13 @@ M02*
             pin_of(&flashes[0].attrs),
             Some(("R1".to_string(), "1".to_string()))
         );
-        assert_eq!(flashes[0].attrs.net.as_deref(), Some("VCC"));
+        let names_of = |a: &X2Attrs| {
+            a.net_names()
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names_of(&flashes[0].attrs), vec!["VCC"]);
         assert!(matches!(
             flashes[0].attrs.function,
             Some(ApertureFunction::SmdPad(_))
@@ -1542,7 +1580,7 @@ M02*
             pin_of(&flashes[1].attrs),
             Some(("R1".to_string(), "2".to_string()))
         );
-        assert_eq!(flashes[1].attrs.net.as_deref(), Some("SIG"));
+        assert_eq!(names_of(&flashes[1].attrs), vec!["SIG"]);
 
         // The `%TA.AperFunction,ViaPad` flash is classified as a via outright:
         // the film said what it is, so it is not left for a footprint window
@@ -1551,7 +1589,7 @@ M02*
             .iter()
             .find(|p| p.kind == PrimKind::Via)
             .expect("the ViaPad flash becomes PrimKind::Via");
-        assert_eq!(via.attrs.net.as_deref(), Some("VCC"));
+        assert_eq!(names_of(&via.attrs), vec!["VCC"]);
         assert_eq!(via.attrs.pin, None, "a via names no component pin");
     }
 
