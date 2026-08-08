@@ -933,10 +933,17 @@ pub struct ToleranceRule {
 ///
 /// `monte-carlo` runs `seeds` members, each sampling every toleranced
 /// component from its distribution (seed 0 is the nominal baseline). A pass is
-/// **sampled coverage, not worst-case proof**. `corners` deterministically
-/// enumerates every all-min/all-max combination (2^n runs, n ≤ 10), which
-/// bounds the worst case only for monotonic responses. In corner mode `seeds`
-/// is ignored and `[fuzz]` must be absent (the two ensembles do not compose).
+/// **sampled coverage, not worst-case proof**.
+///
+/// `corners` deterministically enumerates every all-min/all-max combination
+/// (2^n runs, n ≤ 10), which bounds the worst case only for monotonic
+/// responses, and then adds a small stratified Latin-hypercube sample of the
+/// INTERIOR to test that premise (4 probes for one toleranced component, 6 for
+/// two, 8 from three up). An interior probe that fails an assertion every
+/// corner passed **fails the assertion** and says the corners did not bound it.
+/// A clean probe set is evidence for the monotonicity, not proof. In corner
+/// mode `seeds` is ignored and `[fuzz]` must be absent (the two ensembles do
+/// not compose).
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct EnsembleSpec {
