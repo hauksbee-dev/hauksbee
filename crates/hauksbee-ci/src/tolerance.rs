@@ -390,9 +390,17 @@ pub fn build_plans(
 /// Midpoints keep every probe strictly interior, so a probe can never coincide
 /// with a corner and re-report it as new information. The permutation comes from
 /// the same domain-tagged [`SplitMix`] the Monte-Carlo sampler uses, keyed on the
-/// component reference, so the design is pure in the resolved tolerances: a
-/// re-run reproduces it exactly, and adding a component reshuffles only its own
-/// axis.
+/// component reference, so the design is pure in the resolved tolerances and a
+/// re-run reproduces it exactly.
+///
+/// The design is NOT stable across edits to the spec, and it does not claim to
+/// be: `probes` itself depends on the component count, so adding the third
+/// toleranced component to a two-component spec reshuffles every axis and moves
+/// `first_seed`. An interior member index therefore identifies a point only
+/// within one spec revision, which is all `--seed` replay needs. The corner
+/// indices have the same property (a corner is a bit pattern over a
+/// sorted-by-reference list) and this is the existing contract, not a new
+/// weakening of it.
 fn interior_plans(first_seed: u32, tolerances: &[ResolvedTolerance]) -> Vec<SeedPlan> {
     let probes = interior_probe_count(tolerances.len());
 
@@ -401,12 +409,11 @@ fn interior_plans(first_seed: u32, tolerances: &[ResolvedTolerance]) -> Vec<Seed
         .iter()
         .map(|t| {
             let mut order: Vec<usize> = (0..probes).collect();
-            // Fisher-Yates, from the low end so the swap partner is always in
-            // the untouched tail (an unbiased shuffle).
+            // Fisher-Yates, walking down so the swap partner is always drawn from
+            // the not-yet-placed prefix.
             let mut rng = SplitMix::for_component(u32::MAX, &format!("lhs:{}", t.reference));
             for i in (1..probes).rev() {
-                let j = (rng.next_u64() % (i as u64 + 1)) as usize;
-                order.swap(i, j);
+                order.swap(i, rng.below(i as u64 + 1) as usize);
             }
             order
         })
@@ -499,6 +506,27 @@ impl SplitMix {
     /// Uniform in [0, 1) with 53 bits of precision.
     fn next_f64(&mut self) -> f64 {
         (self.next_u64() >> 11) as f64 / (1u64 << 53) as f64
+    }
+
+    /// A uniform integer in `[0, n)`, without the modulo bias of `next_u64() % n`.
+    ///
+    /// `n` never divides 2^64 for the probe counts the Latin-hypercube shuffle
+    /// uses (3, 5, 6, 7), so plain `%` would favour the low residues. The bias is
+    /// tiny, and the shuffle would still be a valid Latin hypercube, but a
+    /// "uniform permutation" that is not uniform is the kind of quiet
+    /// wrongness that later gets cited as a guarantee. Rejection sampling costs
+    /// an occasional extra draw from a private stream and nothing else.
+    fn below(&mut self, n: u64) -> u64 {
+        debug_assert!(n > 0);
+        // The largest multiple of n that fits in u64: draws at or above it are
+        // the ones that would skew the residues, so redraw them.
+        let limit = u64::MAX - (u64::MAX % n);
+        loop {
+            let v = self.next_u64();
+            if v < limit {
+                return v % n;
+            }
+        }
     }
 
     /// Standard normal via Box–Muller.
@@ -792,6 +820,33 @@ mod tests {
             assert_eq!(pa.interior, pb.interior);
             for (va, vb) in pa.values.iter().zip(pb.values.iter()) {
                 assert_eq!(va.si.to_bits(), vb.si.to_bits(), "{} moved", va.reference);
+            }
+        }
+    }
+
+    /// `below` must be free of the modulo bias `next_u64() % n` carries, since
+    /// none of the probe counts divide 2^64. A chi-square-free check is enough
+    /// here: over many draws every residue must appear within a few percent of
+    /// its expected share.
+    #[test]
+    fn below_is_uniform_over_its_range() {
+        for n in [3u64, 5, 6, 7, 8] {
+            let mut rng = SplitMix::for_component(1, "uniformity");
+            let draws = 120_000usize;
+            let mut counts = vec![0usize; n as usize];
+            for _ in 0..draws {
+                let v = rng.below(n);
+                assert!(v < n, "below({n}) returned {v}");
+                counts[v as usize] += 1;
+            }
+            let expected = draws as f64 / n as f64;
+            for (r, c) in counts.iter().enumerate() {
+                let dev = (*c as f64 - expected).abs() / expected;
+                assert!(
+                    dev < 0.05,
+                    "n = {n}, residue {r}: {c} draws is {:.1}% off the expected {expected:.0}",
+                    dev * 100.0
+                );
             }
         }
     }

@@ -23,9 +23,12 @@
 //! peripheral: a `SPDR` write clocks one byte and raises one IRQ, all inside a
 //! single `run_micros` chunk, so the SPI clock rate is whatever the firmware's
 //! SPR/SPI2X prescaler sets and is not bounded by the analog chunk rate. A
-//! *bit-banged* SPI master (software-toggled SCK/MOSI on GPIO) is bounded by
-//! the chunk poll rate exactly like any GPIO and is out of scope here, matching
-//! the limitation documented for I2C and in docs/cosim/MCU.md. These slaves bind to
+//! *bit-banged* SPI master (software-toggled SCK/MOSI on GPIO) is handled too,
+//! and no longer at the chunk poll rate: the scheduler replays each pin
+//! transition in cycle order from its edge log, so
+//! [`crate::responders::BitBangSpiResponder`] sees sub-chunk SCLK edges as the
+//! firmware produced them. Pinned end to end by
+//! `crates/hauksbee-engine/tests/bitbang_spi_cosim.rs`. These slaves bind to
 //! both the AVR backend (simavr SPI IRQ) and the Renode backend (the C# SPI
 //! bridge in `hauksbee-mcu/src/renode`), routing every reply byte through
 //! `on_spi` either way.

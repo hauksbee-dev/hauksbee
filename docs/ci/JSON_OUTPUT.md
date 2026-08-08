@@ -183,7 +183,7 @@ A tolerance ensemble fills `coverage` and can fail on several members:
 
 ```json
 {"passed":false,"assertions_passed":false,"run_valid":true,"exit_code":1,"seeds":10,
- "coverage":"tolerance corners: 4 deterministic min/max corner(s) + 6 interior probe(s) over 2 component(s): the probes test the monotonicity the corner bound rests on, and a probe that beats every corner fails the assertion",
+ "coverage":"tolerance corners: 4 deterministic min/max corner(s) + 6 interior probe(s) over 2 component(s): the corners bound the worst case where the response is monotonic in each value, and the probes sample the interior for a point that breaks an assertion the corners passed",
  "results":[{"label":"VOUT within the tight [2.4, 2.6] V window on every corner",
    "kind":"voltage","passed":false,"invalid":false,
    "detail":"corner 1: VOUT: min=2.250V < required 2.4V <- FAILED HERE, ...",
