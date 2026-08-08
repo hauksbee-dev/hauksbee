@@ -192,16 +192,21 @@ pub mod mailbox {
     pub const ADC_CHANNELS: u8 = 8;
     /// Count written at full scale (the ESP32 SAR ADC is a 12-bit converter).
     pub const ADC_MAX_COUNT: u32 = 4095;
-    /// Voltage mapping to `ADC_MAX_COUNT`.
+    /// Voltage mapping to `ADC_MAX_COUNT`, shared by the ESP32 family
+    /// backends this module drives.
     ///
-    /// 3.1 V is the ESP32 datasheet's nominal full-scale input at 11 dB
-    /// attenuation (ESP32 datasheet v4.8 §4.1.4.2 / TRM "SAR ADC": at
-    /// ATTEN_DB_11 the measurable input range tops out at ~3.1 V, NOT the
-    /// 3.3 V supply rail). The constraint: this constant must match what the
-    /// converter saturates at, not what the board's rail is, or every
-    /// injected voltage lands ~6% low as a count. The rail was the old,
-    /// wrong choice; readings between 3.1 V and the rail clamp to the top
-    /// code, which is what the silicon does too.
+    /// The constraint: this constant must match what the converter SATURATES
+    /// at, not what the board's rail is, or every injected voltage scales
+    /// wrong as a count. The old 3.3 V was the rail, which no member of the
+    /// family converts up to. 3.1 V is the datasheet full-scale input at the
+    /// highest attenuation for the ESP32-S2/S3/C3 (e.g. ESP32-C3 datasheet
+    /// §"ADC Characteristics": ATTEN_DB_11 measurable range 0 ~ 3100 mV).
+    /// The classic ESP32 is messier and 3.1 V is the honest single figure
+    /// for it too: its characterized-accurate range at 11 dB ends at
+    /// 2450 mV (ESP32 datasheet, ADC characteristics table) while its
+    /// theoretical 11 dB full scale is 1.1 V x 3.548 = 3.9 V clipped by the
+    /// rail, and real parts saturate near 3.1 V. Injections between 3.1 V
+    /// and the rail clamp to the top code, as the silicon does.
     pub const ADC_FULL_SCALE_VOLTS: f64 = 3.1;
 
     /// The mailbox word carrying channel `ch`'s injected count.

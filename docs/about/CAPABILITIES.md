@@ -311,7 +311,7 @@ and [`docs/cosim/MCU.md`](../cosim/MCU.md)):
 | `RenodeConfig::stm32f103()` | STM32F103C8 (Cortex-M3, "blue pill"), PA-PG, USART1, 8 MHz HSI | **Proven**: UART boot banner, GPIO toggle, solved LED current |
 | `RenodeConfig::stm32f4_discovery()` | STM32F4 Discovery (STM32F407, Cortex-M4), PA-PE, USART2, 16 MHz | Config shipped, not exercised by a named test |
 | `RenodeConfig::nrf52840()` | nRF52840 (Cortex-M4, two 32-bit GPIO ports), gpio0/gpio1, uart0, 64 MHz | **Proven (UART boot)**: Zephyr shell `uart:~$` |
-| `RenodeConfig::sifive_fe310()` | SiFive FE310 / HiFive1 (RISC-V RV32), gpio0, uart0, 16 MHz | **Proven (UART boot)**: Zephyr shell boot with PRCI clock fix |
+| `RenodeConfig::sifive_fe310()` | SiFive FE310 / HiFive1 (RISC-V RV32), one 32-bit GPIO port (`gpioInputs`), uart0, 16 MHz | **Proven (UART boot)**: Zephyr shell boot with PRCI clock fix |
 
 | `RenodeConfig::rp2040()` | RP2040 (dual Cortex-M0+, Raspberry Pi Pico), 30-pin GPIO bank through the SIO, uart0, 125 MHz | **Proven**: stock pico-sdk firmware boots through the real boot ROM into `main`; UART0 banner, GP25 at 3.300 V through the solver, ADC inputs 0..3, I2C on `i2c0`/`i2c1` |
 
