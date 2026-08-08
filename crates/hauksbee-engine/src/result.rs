@@ -664,6 +664,23 @@ pub fn coverage_open_active_refs(summary: &BindSummary) -> Vec<String> {
 /// Passives are deliberately excluded: an unbound connector or resistor does
 /// not blind these checks the way an open driver or FET does, and flagging
 /// every unresolved part would cry wolf on healthy boards.
+/// The single rule for whether undermined evidence invalidates a RUN-LEVEL
+/// claim: an undermined map counts unless it backs an individual finding
+/// (`is_finding_assertion` on its assertion text). Finding-backed maps carry
+/// their own qualified/undermined badges on the report without vetoing a
+/// judgement they never backed; without this split, one unparseable value
+/// field anywhere on the board invalidated the whole run through whichever
+/// informational note touched its net. Used by the JSON verdict and by the
+/// `--strict` exit gates, so the exit code can never disagree with the
+/// verdict field.
+pub fn run_level_undermined(
+    maps: &[hauksbee_ir::evidence::EvidenceMap],
+    is_finding_assertion: impl Fn(&str) -> bool,
+) -> bool {
+    maps.iter()
+        .any(|map| map.is_undermined() && !is_finding_assertion(map.assertion()))
+}
+
 pub fn unmodelled_critical_refs(summary: &BindSummary) -> Vec<String> {
     let mut refs: Vec<String> = summary
         .active_path_unresolved
@@ -1504,6 +1521,16 @@ pub struct JsonReport {
     pub schema_version: u32,
     pub board: String,
     pub bind: BindSummary,
+    /// Whether unbound verdict-critical parts gate THIS report's verdict.
+    /// True on the surfaces that make model-dependent claims (--check, --lint,
+    /// --si and the default machine report), where a clean bill over an
+    /// unbound critical part is vacuous and every text rendering already
+    /// refuses it. False on the copper-only (--drc) and descriptive
+    /// (--report) surfaces, which deliberately do not refuse: copper reads
+    /// the layout, and the bind table is not a pass/fail claim. Not
+    /// serialized: the gate's OUTCOME is the verdict field itself.
+    #[serde(skip)]
+    pub bind_gates_verdict: bool,
     /// Every explicitly supplied input and what it contributed to this run.
     /// Empty on older/internal call paths that have no inventory context.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1656,6 +1683,7 @@ impl JsonReport {
             schema_version: RUN_REPORT_SCHEMA_VERSION,
             board: board_name.to_string(),
             bind,
+            bind_gates_verdict: false,
             inputs: Vec::new(),
             inventory: Vec::new(),
             assumptions: Vec::new(),
@@ -1673,6 +1701,14 @@ impl JsonReport {
     }
 
     /// Attach the CLI's complete, ordered input inventory to a result document.
+    /// Mark this report as a model-dependent-claim surface: unbound
+    /// verdict-critical parts flip its verdict to `invalid` (the machine
+    /// mirror of the INCONCLUSIVE refusal the text surfaces print).
+    pub fn with_bind_verdict_gate(mut self) -> Self {
+        self.bind_gates_verdict = true;
+        self
+    }
+
     pub fn with_inputs(mut self, inputs: &[JsonInputEvidence]) -> Self {
         self.inputs = inputs.to_vec();
         self
@@ -1796,20 +1832,22 @@ impl JsonReport {
             .flatten()
             .map(|f| f.message.as_str())
             .collect();
+        let evidence_undermined =
+            run_level_undermined(&self.evidence, |a| finding_assertions.contains(a));
         // The INCONCLUSIVE bind contract on the machine surface: a clean
-        // result over an unbound verdict-critical part is vacuous, and every
-        // text surface already refuses the clean bill for it, so the JSON
-        // verdict must refuse it too rather than reading "pass" beside an
-        // INCONCLUSIVE coverage note.
-        let bind_blockers = !unmodelled_critical_refs(&self.bind).is_empty();
+        // result over an unbound verdict-critical part is vacuous, and the
+        // model-dependent-claim surfaces' text renderings already refuse the
+        // clean bill for it, so their JSON verdict must refuse it too rather
+        // than reading "pass" beside an INCONCLUSIVE coverage note. Gated by
+        // `bind_gates_verdict`: the copper-only and descriptive surfaces
+        // deliberately do not refuse (see the field's doc).
+        let bind_blockers =
+            self.bind_gates_verdict && !unmodelled_critical_refs(&self.bind).is_empty();
         let invalid = self.refusal.is_some()
             || bind_blockers
             || self.ac.as_ref().is_some_and(|a| !a.validity.valid)
             || self.thermal.as_ref().is_some_and(|t| !t.validity.valid)
-            || self
-                .evidence
-                .iter()
-                .any(|map| map.is_undermined() && !finding_assertions.contains(map.assertion()));
+            || evidence_undermined;
         let verdict = if serious > 0 {
             "fail"
         } else if invalid {
