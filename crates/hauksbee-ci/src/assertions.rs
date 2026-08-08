@@ -351,15 +351,23 @@ fn evaluate_one(
         } else {
             first_detail.clone()
         };
-        // Non-monotonicity, caught: every corner passed and an interior probe
+        // Non-monotonicity, caught: an interior probe failed where the corners
         // did not. The corner set's whole claim is that an extreme of the inputs
         // produces an extreme of the output, and this is that claim disproved on
         // this board, for this assertion. Say so at the point of failure, because
         // the reflex on a corner-mode red is to look at the named corner values,
         // and here the corner values are exactly what did NOT find it.
-        if failures.iter().all(|(o, _, _)| o.interior)
-            && outcomes.iter().any(|o| !o.interior && !member_invalid(o))
-        {
+        //
+        // The counterfactual ("a corner-only run would have reported green") is
+        // only true if EVERY corner both ran trustworthily and passed. One
+        // held-stale corner and a corner-only run would have refused as INVALID,
+        // not passed, so the claim needs all corners valid, not merely one.
+        let corners_all_valid_and_passed = outcomes.iter().any(|o| !o.interior)
+            && outcomes
+                .iter()
+                .filter(|o| !o.interior)
+                .all(|o| !member_invalid(o) && !failures.iter().any(|(f, _, _)| f.seed == o.seed));
+        if failures.iter().all(|(o, _, _)| o.interior) && corners_all_valid_and_passed {
             detail.push_str(
                 " [NON-MONOTONIC: every min/max corner passed and this INTERIOR point \
                  failed, so the corners do not bound this response and a corner-only \
@@ -515,12 +523,18 @@ fn all_green_detail(
                  seed(s) + nominal: statistical coverage, not worst-case proof)"
             )
         }
-        // The corner claim, narrowed to what was actually checked. The old
-        // wording made monotonicity the reader's problem: it disclosed the
-        // assumption and left them no way to test it. The interior probes test
-        // it, so the disclosure now reports a search that came back empty rather
-        // than an assumption nobody looked at, and it still stops short of proof,
-        // because a sampled interior is a sample.
+        // The corner claim, narrowed to exactly what ran. The old wording made
+        // monotonicity the reader's problem: it disclosed the assumption and gave
+        // them no way to test it. The interior probes give them a way, and the
+        // wording must claim no more than the probes establish.
+        //
+        // What a green probe set establishes is precisely "no interior point I
+        // sampled broke this assertion". It is NOT "the response is monotonic",
+        // and it is not even "no interior point was worse than a corner": each
+        // member is judged against the assertion's own window, so a probe worse
+        // than every corner still passes while it stays in band. Both remaining
+        // gaps are named rather than glossed, because a reader who trusts this
+        // line is deciding whether the corner bound covers their board.
         (n, Some(crate::tolerance::Mode::Corners)) => {
             let corners = n.saturating_sub(interior);
             if interior == 0 {
@@ -531,9 +545,10 @@ fn all_green_detail(
             } else {
                 format!(
                     "{last_detail} (held on all {corners} min/max tolerance corners and on \
-                     {interior} interior Latin-hypercube probe(s), which found no \
-                     non-monotonic response: the corners bound the worst case unless a \
-                     non-monotonicity sits between the probes)"
+                     {interior} interior Latin-hypercube probe(s): no interior point sampled \
+                     broke this assertion, which is evidence for the monotonicity the corner \
+                     bound needs, not proof of it, and a probe inside the window is not \
+                     compared against the corners' own margin)"
                 )
             }
         }
@@ -2142,16 +2157,90 @@ mod tests {
             r.detail
         );
         assert!(
-            r.detail.contains("found no non-monotonic response"),
-            "the disclosure reports the search, not the assumption: {}",
+            r.detail
+                .contains("no interior point sampled broke this assertion"),
+            "the disclosure reports what was checked, not the assumption: {}",
+            r.detail
+        );
+        // The two things a green probe set does NOT establish. Both must stay in
+        // the wording, and neither may be paraphrased into a stronger claim.
+        assert!(
+            r.detail
+                .contains("evidence for the monotonicity the corner bound needs, not proof"),
+            "sampling is not proof, and the wording must say so: {}",
             r.detail
         );
         assert!(
             r.detail
-                .contains("unless a non-monotonicity sits between the probes"),
-            "sampling is not proof, and the wording must still say so: {}",
+                .contains("not compared against the corners' own margin"),
+            "a probe inside the window is never compared to the corner extrema, \
+             and the wording must not imply it was: {}",
             r.detail
         );
+        assert!(
+            !r.detail.contains("is monotonic") && !r.detail.contains("found no non-monotonic"),
+            "must never claim the response IS monotonic: {}",
+            r.detail
+        );
+    }
+
+    /// The counterfactual in the NON-MONOTONIC note ("a corner-only run would
+    /// have reported green") is false when a corner was held-stale: a
+    /// corner-only run would have refused as INVALID, not passed. One valid
+    /// passing corner is not enough to make the claim; every corner has to be
+    /// valid and passing.
+    #[test]
+    fn a_held_stale_corner_suppresses_the_non_monotonic_counterfactual() {
+        let a: crate::spec::Assertion =
+            toml::from_str("kind = \"voltage\"\nnet = \"VOUT\"\nmin = 3.0\n").unwrap();
+
+        let mut stale = vout_member(0, 3.30, false);
+        // A failed solve window overlapping this assertion's evaluation span
+        // makes the member's samples held-stale, so it is skipped, not passed.
+        stale.failed_windows = vec![(0.0, 0.100)];
+
+        let outcomes = vec![
+            stale,
+            vout_member(1, 3.28, false),
+            vout_member(2, 2.40, true),
+        ];
+        let r = super::evaluate_one(&a, &outcomes, Some(crate::tolerance::Mode::Corners));
+
+        assert!(!r.passed, "the interior failure still fails: {}", r.detail);
+        assert!(
+            !r.detail.contains("NON-MONOTONIC"),
+            "corner 0 never produced a trustworthy pass, so the corner-only \
+             counterfactual is unknowable: {}",
+            r.detail
+        );
+    }
+
+    /// Pinning a single interior member with `--seed N` must not be reported as
+    /// a corner. The probes are numbered on from the last corner, so the mode
+    /// alone cannot say which kind of member was selected.
+    #[test]
+    fn a_pinned_interior_member_is_not_described_as_a_corner() {
+        let probe = crate::report::EnsembleCoverage::SingleMember {
+            seed: 4,
+            components: 2,
+            corners: true,
+            interior: true,
+        };
+        let d = probe.describe();
+        assert!(d.contains("interior probe 4"), "must name it a probe: {d}");
+        assert!(
+            !d.contains("corner 4"),
+            "must not send the reader looking for corner 4: {d}"
+        );
+
+        // A genuine pinned corner keeps its own wording.
+        let corner = crate::report::EnsembleCoverage::SingleMember {
+            seed: 3,
+            components: 2,
+            corners: true,
+            interior: false,
+        };
+        assert!(corner.describe().contains("corner 3"));
     }
 
     /// A corner failure keeps its old wording. The interior probes must not
