@@ -111,6 +111,66 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         }
     }
 
+    // The exporter's own manifest, when the job ships one: a `.gbrjob` names
+    // every file's role and each copper film's PHYSICAL layer number
+    // (`Copper,L3,Inr`). That answers exactly what filename inference guesses
+    // at: which files are copper and in what stack order, including
+    // Allegro-style planes named without a stack digit and KiCad inner films
+    // exported under the user's own label (`-GND_Cu.gbr`). The explicit
+    // mapping file still outranks it; filename inference is the fallback when
+    // no job file exists.
+    let mut gbrjob: std::collections::HashMap<String, layers::GbrJobRole> =
+        std::collections::HashMap::new();
+    for p in &all_files {
+        let is_job = p
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.eq_ignore_ascii_case("gbrjob"))
+            .unwrap_or(false);
+        if is_job {
+            if let Ok(text) = std::fs::read_to_string(p) {
+                gbrjob.extend(layers::parse_gbrjob(&text));
+            }
+        }
+    }
+    // Rank the manifest's copper films into provisional stack indices. The
+    // declared numbers ORDER the stack (side tags first, then the number:
+    // both hold even on exporters whose numbers are not physical positions;
+    // KiCad 9 writes internal layer IDs, so a four-layer manifest can read
+    // L1, L5, L7, L4). The numbers are fed onward as PHYSICAL positions only
+    // when they are exactly `1..=n` in that rank order, anything else is a
+    // numbering scheme we cannot vouch for, and feeding it to the drill
+    // layer-pair resolver would invent layers the board does not have.
+    let present: std::collections::HashSet<String> = all_files
+        .iter()
+        .filter_map(|p| p.file_name().and_then(|s| s.to_str()).map(String::from))
+        .collect();
+    let mut job_copper: Vec<(String, u32, layers::GbrJobSide)> = gbrjob
+        .iter()
+        .filter_map(|(f, r)| match r {
+            layers::GbrJobRole::Copper { layer, side } if present.contains(f) => {
+                Some((f.clone(), *layer, *side))
+            }
+            _ => None,
+        })
+        .collect();
+    job_copper.sort_by_key(|(_, n, side)| (*side, *n));
+    let gbrjob_numbers_physical = job_copper
+        .iter()
+        .map(|(_, n, _)| *n)
+        .eq(1..=job_copper.len() as u32);
+    let gbrjob_index: std::collections::HashMap<String, usize> = job_copper
+        .iter()
+        .enumerate()
+        .map(|(i, (f, _, side))| {
+            let idx = match side {
+                layers::GbrJobSide::Bottom => usize::MAX,
+                _ => i,
+            };
+            (f.clone(), idx)
+        })
+        .collect();
+
     let mut copper: Vec<(LayerRole, std::path::PathBuf)> = Vec::new();
     let mut drills: Vec<std::path::PathBuf> = Vec::new();
     let mut outlines: Vec<std::path::PathBuf> = Vec::new();
@@ -123,11 +183,31 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
-        // Mapping override first, else name-based classification.
-        let role = mapping
-            .get(&fname)
-            .cloned()
-            .unwrap_or_else(|| layers::classify(&path));
+        // Mapping override first, then the job file's manifest, else
+        // name-based classification.
+        let role = mapping.get(&fname).cloned().unwrap_or_else(|| {
+            match gbrjob.get(&fname) {
+                // The provisional stack index is the film's RANK among the
+                // manifest's copper entries (top first, bottom `usize::MAX`,
+                // exactly the ordering contract `assign_inner_indices`
+                // densifies), never the raw declared number.
+                Some(layers::GbrJobRole::Copper { layer, .. }) => LayerRole::Copper {
+                    index: gbrjob_index
+                        .get(&fname)
+                        .copied()
+                        .unwrap_or((*layer - 1) as usize),
+                    name: path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_string(),
+                },
+                Some(layers::GbrJobRole::Drill { .. }) => LayerRole::Drill,
+                Some(layers::GbrJobRole::Outline) => LayerRole::Outline,
+                Some(layers::GbrJobRole::Ignored) => LayerRole::Ignored,
+                None => layers::classify(&path),
+            }
+        });
         match role {
             r @ LayerRole::Copper { .. } => copper.push((r, path)),
             LayerRole::Drill => drills.push(path),
@@ -193,6 +273,19 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
             physical_to_stack.insert(l, *index);
             declared_physical_max = declared_physical_max.max(l);
         }
+        // The job manifest also states the film's physical layer, but only a
+        // manifest whose copper numbers are exactly 1..=n is believed about
+        // PHYSICAL positions (see the trust note where the manifest is read).
+        // The film's own X2 attribute wins where both exist (it is the file
+        // speaking for itself); the manifest fills in for films that carry no
+        // attribute.
+        if gbrjob_numbers_physical {
+            let base = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+            if let Some(layers::GbrJobRole::Copper { layer, .. }) = gbrjob.get(base) {
+                physical_to_stack.entry(*layer).or_insert(*index);
+                declared_physical_max = declared_physical_max.max(*layer);
+            }
+        }
         match rs274x::parse_layer(&text) {
             Ok(prims) => layer_prims[*index] = prims,
             Err(e) => {
@@ -254,13 +347,29 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
+        // The job manifest's plating declaration for this file, if it made
+        // one. `NonPlated` is the manifest saying these holes carry no
+        // copper; that must not be washed out by the filename inference below
+        // (a sibling named NPTH would otherwise mark the job split and
+        // promote this file to plated, fabricating stitches out of a file
+        // the manifest plainly declared mechanical).
+        let manifest_plated: Option<bool> =
+            match gbrjob.get(d.file_name().and_then(|s| s.to_str()).unwrap_or("")) {
+                Some(layers::GbrJobRole::Drill { plated }) => Some(*plated),
+                _ => None,
+            };
+        if manifest_plated == Some(false) {
+            continue;
+        }
         let plated = !(n.contains("npth") || n.contains("non-plated") || n.contains("nonplated"));
         if !plated {
             continue;
         }
         // Whether the NAME says these hits are plated. Weakest of the sources,
-        // consulted only when the file itself says nothing.
-        let name_says_plated = n.contains("pth") || n.contains("plated");
+        // consulted only when the file itself says nothing. A manifest
+        // `Plated` declaration counts as an explicit statement.
+        let name_says_plated =
+            n.contains("pth") || n.contains("plated") || manifest_plated == Some(true);
         let head: String = text.chars().take(256).collect();
         let is_gerber = drill_is_gerber_format(&head, d.extension().and_then(|s| s.to_str()));
         // An X2 attribute in the file body beats the file name; the name is
@@ -651,6 +760,9 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
             stats.refused_span_holes
         ));
     }
+    // The connectivity pass writes its own notes (X2 disagreements); merge
+    // rather than overwrite, with the file-level notes first.
+    notes.append(&mut stats.notes);
     for n in &notes {
         eprintln!("hauksbee: {n}");
     }

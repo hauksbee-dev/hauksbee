@@ -79,6 +79,10 @@ conventions and fall back to an explicit mapping file:
   drill.
 - **Generic words**: a name containing `top`+`copper`, `bottom`+`cu`,
   `inner`, `signal`, and so on.
+- **Job manifest** (`*.gbrjob`): the exporter's own file list. Each
+  `FilesAttributes` entry names a file's role, and a copper film's
+  `Copper,L<n>` entry is its physical stack position. When present this
+  outranks every name-based rule above (the mapping file still outranks it).
 - **Mapping file** (`layer_map.txt` / `*.map`): `filename = copper:<index>`
   / `copper:bottom` / `drill` / `outline` / `ignore`, one per line.
 
@@ -631,23 +635,27 @@ is the all-pairs touch sweep on the densest signal layers.
   it changes a rendered image, so treating the board as additive is correct
   for connectivity but means a net split *only* by a clear cut-out would be
   missed.
-- **Inner-layer order is inferred from filename digits** (`gnd02` maps to
-  stack index 2). An Allegro-style plane named without a stack number
-  collapses to a single default inner slot, so on a board that names its
-  inner planes ambiguously the layer order, and therefore via stitching
-  across the wrong pair, can be wrong. The mapping-file escape hatch
-  (`copper:<index>`) overrides this when it matters.
-- **An inner film named only by its user label is not classified as copper
-  at all.** KiCad exports `In1.Cu` renamed to `GND.Cu` as `-GND_Cu.gbr`, and
-  the filename rules do not recognise that as a stack position, so the layer
-  and everything routed on it are missing from the reconstruction. The MNT
-  Reform motherboard is a six-layer board that reconstructs from two films
-  for this reason. It still scores 99.7% net partition, because its routing
-  is dominated by the outer layers and its through-holes stitch what remains,
-  but that number is over the pads we located on the layers we saw. The drill
-  set's declared layer count is now compared against the films classified and
-  the shortfall is reported as a note, so the gap is at least visible; the
-  fix is a `layer_map.txt` naming those films.
+- **Inner-layer order: the `.gbrjob` manifest is read when the job ships
+  one**, and it is authoritative: each copper film's `Copper,L<n>` entry
+  places it in the stack, so an Allegro-style plane named without a stack
+  digit and a KiCad inner film exported under the user's own label are both
+  positioned exactly. Only *without* a job file does the order fall back to
+  filename digits (`gnd02` maps to stack index 2), where a plane named
+  without a number collapses to a single default inner slot and via
+  stitching can land on the wrong pair. The mapping-file escape hatch
+  (`copper:<index>`) overrides both when it matters.
+- **An inner film named only by its user label needs the job file (or the
+  mapping file) to be classified as copper.** KiCad exports `In1.Cu` renamed
+  to `GND.Cu` as `-GND_Cu.gbr`; the `.gbrjob`, when present, names it
+  `Copper,L3,Inr` and it classifies and orders exactly. A job that ships
+  neither the manifest nor a mapping file loses the layer: the MNT Reform
+  motherboard is a six-layer board that reconstructs from two films this
+  way. It still scores 99.7% net partition, because its routing is dominated
+  by the outer layers and its through-holes stitch what remains, but that
+  number is over the pads we located on the layers we saw. The drill set's
+  declared layer count is compared against the films classified and the
+  shortfall is reported as a note, so the gap is at least visible; the fix
+  is the exporter's `.gbrjob` or a `layer_map.txt` naming those films.
 - **GND label is a heuristic** (largest pour-touching net), so the `GND`
   *name* can be wrong on a power-plane-dominant or split-ground board.
   Connectivity is unaffected; only the label is a guess.
