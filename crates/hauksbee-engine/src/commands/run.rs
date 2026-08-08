@@ -1084,8 +1084,8 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                         "co-sim analog solve fell back on {fallback_chunk_count} chunk(s); \
                          those windows are converged but were produced by a fallback \
                          integration path (see fallback_windows in the co-sim JSON \
-                         for the method and its known numerical trade-off per window; \
-                         no empirical output-error bound was established)"
+                         for the method, its known numerical trade-off, and the \
+                         measured error_estimate_v per window)"
                     ),
                 });
             }

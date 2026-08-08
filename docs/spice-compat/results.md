@@ -20,12 +20,12 @@ deck here at all.
 | Deck | Analysis | Quantity | Worst-case error | Tolerance | Headroom | Where | Result |
 |------|----------|----------|------------------|-----------|----------|-------|--------|
 | ao3400a_rdson | op | `V(d)` | 1.473e-7 | 5.0e-6 | 34x | op | PASS |
-| bjt_bias | op | `V(coll)` | 9.512e-6 | 1.0e-4 | 11x | op | PASS |
-|  |  | `V(base)` | 1.633e-6 | 5.0e-5 | 31x | op | PASS |
-|  |  | `V(emit)` | 2.253e-6 | 1.0e-4 | 44x | op | PASS |
-| bjt_bias_temp_85 | op | `V(coll)` | 1.179e-5 | 1.0e-4 | 8x | op | PASS |
-|  |  | `V(base)` | 1.797e-6 | 5.0e-5 | 28x | op | PASS |
-|  |  | `V(emit)` | 2.691e-6 | 1.0e-4 | 37x | op | PASS |
+| bjt_bias | op | `V(coll)` | 1.101e-5 | 1.0e-4 | 9x | op | PASS |
+|  |  | `V(base)` | 1.815e-6 | 5.0e-5 | 28x | op | PASS |
+|  |  | `V(emit)` | 2.594e-6 | 1.0e-4 | 39x | op | PASS |
+| bjt_bias_temp_85 | op | `V(coll)` | 1.175e-5 | 1.0e-4 | 9x | op | PASS |
+|  |  | `V(base)` | 1.779e-6 | 5.0e-5 | 28x | op | PASS |
+|  |  | `V(emit)` | 2.682e-6 | 1.0e-4 | 37x | op | PASS |
 | bjt_ce_amp | tran | `V(c)` | 2.071e-4 | 2.0e-3 | 10x | t=6.213e-5s | PASS |
 | bjt_sgp_high_injection | op | `I(VC)` | 7.445e-6 | 2.0e-4 | 27x | op | PASS |
 |  |  | `I(VB)` | 7.212e-6 | 2.0e-4 | 28x | op | PASS |
@@ -82,7 +82,7 @@ deck here at all.
 |  |  | `V(coll)` | 2.964e-7 | 1.0e-5 | 34x | op | PASS |
 | schottky_1n5817_two_points | op | `V(v1a)` | 9.271e-9 | 1.0e-6 | 108x | op | PASS |
 |  |  | `V(v31a)` | 2.887e-8 | 1.0e-6 | 35x | op | PASS |
-| switch_bjt_mirror_membrane | tran | `V(mem0)` | 5.322e-2 | 6.0e-2 | 1x | t=5.148e-5s | PASS |
+| switch_bjt_mirror_membrane | tran | `V(mem0)` | 5.320e-2 | 6.0e-2 | 1x | t=5.148e-5s | PASS |
 |  |  | `V(mem0) vs closed form` | 0.000e0 | 1.0e-9 | exact | t=0.000e0 | PASS |
 |  |  | `V(mem0) vs closed form` | 1.630e-8 | 1.0e-6 | 61x | t=2.000e-5 | PASS |
 |  |  | `V(mem0) vs closed form` | 2.805e-7 | 2.0e-3 | 7129x | t=6.000e-5 | PASS |

@@ -456,10 +456,11 @@ fn series_resistance_toggle_is_honored_for_bjts() {
     // A saturating common-emitter stage (10k base drive, the same shape the
     // junction_caps deck uses): the collector's saturation floor rises by
     // ic·rc and the base path gains rb, a >10 mV waveform contrast. The
-    // drive is deliberately NOT stiffer (e.g. a 2k base): hard saturation
-    // sits on a legacy-Jacobian Newton marginality that predates this arc
-    // (the default-model deck itself fails there at the base commit's
-    // bytes), and the plain leg below must run on those pinned bytes.
+    // 10k drive (rather than a stiffer 2k) is a historical choice: hard
+    // saturation used to sit on a Newton marginality of the since-deleted
+    // legacy approximate Jacobian (B13 promoted the exact tangent, which
+    // converges those edges), and the gentler drive keeps this fixture's
+    // contrast independent of that story.
     let net_r = "q\nVCC vcc 0 DC 5\nVB in 0 PULSE(0 5 1u 50n 50n 4u 10u)\n\
                  RB in b 10k\nRC vcc c 1k\nQ1 c b 0 QR\n\
                  .model QR NPN(IS=1e-15 BF=100 RB=500 RC=50 RE=5)\n.end\n";
