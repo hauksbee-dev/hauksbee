@@ -550,13 +550,21 @@ impl BoardEvidence {
     /// synthetic clean pass: `NotChecked` is check-scoped, so it belongs on an
     /// explicit coverage assertion even when there are no findings to map.
     /// The traversal is the geometry-class one: this map's only callers are
-    /// the DRC and SI coverage claims, and what those analyses covered is a
-    /// fact about copper, stackup and stated values that no missing simulation
-    /// model reduces (DRC inspects the copper of a net whether or not the part
-    /// on it bound). Net-scoped reader/parser limitations and the check's own
-    /// scoped assumptions (`NotChecked`) still attach; only part-scoped model
-    /// assumptions are off this claim's causal path. A future coverage claim
-    /// for a model-consuming analysis must not reuse this builder.
+    /// the DRC and SI coverage claims, and both are INSPECTION claims: they
+    /// assert which nets the pass read, a fact about copper, stackup and
+    /// stated values that no missing simulation model reduces (DRC inspects
+    /// the copper of a net whether or not the part on it bound). Net-scoped
+    /// reader/parser limitations and the check's own scoped assumptions
+    /// (`NotChecked`) still attach; only part-scoped model assumptions are
+    /// off this claim's causal path.
+    ///
+    /// What this deliberately does NOT cover: the model-dependent SI
+    /// CONCLUSIONS (trace ampacity, input-cap ripple). Those are not
+    /// inspection facts, and their evidence rides their own per-finding maps,
+    /// which keep the full model-aware traversal (see the allowlist in
+    /// [`Self::maps_for_findings`]), so an open part on an asserted rail
+    /// undermines the assertion that consumed it. A future coverage claim for
+    /// a model-consuming analysis must not reuse this builder.
     pub fn check_coverage_map(
         &self,
         check: &str,
@@ -586,20 +594,35 @@ impl BoardEvidence {
                 continue;
             }
             let nets: Vec<String> = nets.into_iter().collect();
-            // DRC and SI findings are geometry-and-stated-value claims. The SI
-            // analysis runs in hauksbee-extract, which has no access to bound
-            // models at all: every one of its claims is computed from copper
-            // geometry, the stackup, and value fields, and each check abstains
-            // (says "no judgement") when an input it needs is absent. A part
-            // that is merely OPEN (no simulation model) therefore cannot be a
-            // causal input of what was never simulated: an unmodelled crystal
-            // does not undermine the statement of what load capacitance the
-            // caps around it present, any more than an open op-amp invalidates
-            // two pieces of copper touching. Net-scoped limitations (parser,
-            // reader) still attach and still qualify. If an SI check ever
-            // grows a claim that consumes a bound model, it must not ride
-            // this branch.
-            maps.push(if finding.check == "drc" || finding.check == "si" {
+            // DRC findings and the extract-computed SI kinds are geometry-and-
+            // stated-value claims: hauksbee-extract has no access to bound
+            // models, each of those checks abstains (says "no judgement") when
+            // an input it needs is absent, and a part that is merely OPEN (no
+            // simulation model) cannot be a causal input of what was never
+            // simulated. An unmodelled crystal does not undermine the statement
+            // of what load capacitance the caps around it present, any more
+            // than an open op-amp invalidates two pieces of copper touching.
+            // Net-scoped limitations (parser, reader) still attach and still
+            // qualify.
+            //
+            // The list is an ALLOWLIST because the `si` report is not extract-
+            // only: `engine_si` appends trace_ampacity and input_cap_ripple,
+            // which consume the model library (current programs, ripple
+            // ratings) and whose current attribution skips open-part sources,
+            // so an open part on their nets is exactly the kind of gap that
+            // must undermine them. Any kind not named here, including a future
+            // one, takes the full model-aware traversal (fail closed).
+            let geometry_class = finding.check == "drc"
+                || (finding.check == "si"
+                    && matches!(
+                        finding.kind.as_str(),
+                        "crystal_load_cap"
+                            | "i2c_rise_time"
+                            | "antenna_keepout"
+                            | "usb_diff_pair"
+                            | "controlled_impedance"
+                    ));
+            maps.push(if geometry_class {
                 self.geometry_map_for_check(&finding.check, finding.message.clone(), &nets)?
             } else {
                 self.map_for_nets(finding.message.clone(), nets)?

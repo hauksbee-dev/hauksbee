@@ -1707,8 +1707,12 @@ impl JsonReport {
     /// is `"pass"` | `"fail"` | `"invalid"`:
     ///   - `fail`, at least one serious finding (a DRC short, a co-sim stress
     ///     fault, a serious lint/SI finding);
-    ///   - `invalid`, nothing serious, but an analysis that ran could not be
-    ///     judged (AC or thermal reported `valid:false`);
+    ///   - `invalid`, nothing serious, but the run-level claim could not be
+    ///     judged: a refusal, AC or thermal reported `valid:false`, or a
+    ///     run-level evidence map (input coverage, bind completeness) is
+    ///     undermined. Undermined maps backing individual findings do NOT
+    ///     invalidate the run; the finding stays on the report wearing its own
+    ///     badge;
     ///   - `pass`, otherwise.
     /// Mirrors the run's own exit gate: DRC shorts are ignored when the board is
     /// newer than the validated copper extraction (`version_warning` set), the
@@ -1768,13 +1772,30 @@ impl JsonReport {
             }
             actionable += drc.violations.len();
         }
+        // Which undermined evidence flips the verdict to `invalid`: the maps
+        // the RUN-LEVEL claim rests on (input coverage, bind completeness,
+        // analysis validity), not the maps backing individual findings. A
+        // finding is an observation the report already surfaces with its own
+        // qualified/undermined badge; an undermined heads-up note means THAT
+        // note's magnitude is uncertain, and it stays on the report saying so.
+        // It does not mean the run could not be judged: "0 serious" rests on
+        // the coverage maps and the serious-finding set, both of which keep
+        // their own undermined routes to `invalid`. Without this split, one
+        // unparseable value field anywhere on the board invalidated the whole
+        // run through whichever informational note touched its net.
+        let finding_assertions: std::collections::HashSet<&str> = self
+            .findings
+            .iter()
+            .flatten()
+            .map(|f| f.message.as_str())
+            .collect();
         let invalid = self.refusal.is_some()
             || self.ac.as_ref().is_some_and(|a| !a.validity.valid)
             || self.thermal.as_ref().is_some_and(|t| !t.validity.valid)
             || self
                 .evidence
                 .iter()
-                .any(hauksbee_ir::evidence::EvidenceMap::is_undermined);
+                .any(|map| map.is_undermined() && !finding_assertions.contains(map.assertion()));
         let verdict = if serious > 0 {
             "fail"
         } else if invalid {

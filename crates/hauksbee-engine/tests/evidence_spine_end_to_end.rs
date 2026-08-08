@@ -557,9 +557,13 @@ fn web_report_serializes_evidence_and_does_not_call_qualified_evidence_healthy()
 // ---------------------------------------------------------------------------
 
 fn finding_on_3v3(check: &str) -> JsonFinding {
+    finding_on_3v3_kind(check, "fixture")
+}
+
+fn finding_on_3v3_kind(check: &str, kind: &str) -> JsonFinding {
     JsonFinding {
         check: check.into(),
-        kind: "fixture".into(),
+        kind: kind.into(),
         severity: "info".into(),
         nets: vec!["3V3".into()],
         location_mm: None,
@@ -586,16 +590,34 @@ fn si_findings_are_geometry_causal_and_open_parts_do_not_undermine_them() {
         .unwrap();
     assert_eq!(lint_maps[0].status(), EvidenceStatus::Undermined);
 
-    // The same net, the same open part, an SI claim: not undermined, because
-    // nothing the SI analysis computes consumes a bound model.
-    let si_maps = evidence.maps_for_findings(&[finding_on_3v3("si")]).unwrap();
+    // The same net, the same open part, an extract-computed SI claim: not
+    // undermined, because nothing that check computes consumes a bound model.
+    let si_maps = evidence
+        .maps_for_findings(&[finding_on_3v3_kind("si", "controlled_impedance")])
+        .unwrap();
     assert_eq!(si_maps.len(), 1);
     assert_eq!(
         si_maps[0].status(),
         EvidenceStatus::Clean,
-        "an open part is not on an SI claim's causal path: {:?}",
+        "an open part is not on a geometry-class SI claim's causal path: {:?}",
         si_maps[0].assumptions()
     );
+
+    // The allowlist edge, both directions: the engine-appended SI kinds
+    // (trace ampacity, input-cap ripple) consume the model library and skip
+    // open-part sources in their current attribution, so the same open part
+    // DOES undermine them, and an unknown future kind fails closed the same
+    // way.
+    for kind in ["trace_ampacity", "input_cap_ripple", "some_future_kind"] {
+        let maps = evidence
+            .maps_for_findings(&[finding_on_3v3_kind("si", kind)])
+            .unwrap();
+        assert_eq!(
+            maps[0].status(),
+            EvidenceStatus::Undermined,
+            "model-consuming SI kind {kind} keeps the full traversal"
+        );
+    }
 }
 
 #[test]
@@ -616,11 +638,13 @@ fn si_check_scoped_assumptions_still_attach_to_si_findings() {
                 "a board file whose (setup (stackup ...)) parses",
             )])
             .unwrap();
-    let si_maps = evidence.maps_for_findings(&[finding_on_3v3("si")]).unwrap();
+    let si_maps = evidence
+        .maps_for_findings(&[finding_on_3v3_kind("si", "controlled_impedance")])
+        .unwrap();
     assert_eq!(
         si_maps[0].status(),
         EvidenceStatus::Undermined,
-        "check-scoped assumptions still attach: {:?}",
+        "check-scoped assumptions still attach on the geometry branch: {:?}",
         si_maps[0].assumptions()
     );
 }
