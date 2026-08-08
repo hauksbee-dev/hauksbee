@@ -291,21 +291,26 @@ fn verdict_counts(
 /// current-carrying / active part is unmodelled: over unmodelled critical
 /// parts a zero-serious suite is INCONCLUSIVE, and the closing line says so
 /// with the same shared sentence the sections use. A failing verdict stays
-/// "failing" (real findings are not vacuous), the sections above already
-/// carry the coverage hole.
+/// "failing" (real findings are not vacuous), but the closing line still
+/// names the coverage hole: fixing the listed findings must not flip the
+/// board straight to a vacuous clean.
 fn verdict_line(serious: usize, worth_a_look: usize, blockers: &[String]) -> String {
+    // The shared sentence, minus its leading tag where the line carries its
+    // own, so the vocabulary stays single-sourced without stuttering
+    // "inconclusive ... INCONCLUSIVE".
+    let sentence = (!blockers.is_empty()).then(|| {
+        let s = crate::result::inconclusive_verdict(blockers);
+        s.strip_prefix("INCONCLUSIVE: ").unwrap_or(&s).to_string()
+    });
     if serious == 0 {
-        if !blockers.is_empty() {
-            // The shared sentence, minus its leading tag (the line already
-            // says "inconclusive"), so the vocabulary stays single-sourced
-            // without stuttering "inconclusive ... INCONCLUSIVE".
-            let sentence = crate::result::inconclusive_verdict(blockers);
-            let sentence = sentence.strip_prefix("INCONCLUSIVE: ").unwrap_or(&sentence);
+        if let Some(sentence) = sentence {
             return format!(
                 "VERDICT: inconclusive: 0 serious, {worth_a_look} worth a look; {sentence}"
             );
         }
         format!("VERDICT: clean: 0 serious, {worth_a_look} worth a look")
+    } else if let Some(sentence) = sentence {
+        format!("VERDICT: failing: {serious} serious, {worth_a_look} worth a look; also {sentence}")
     } else {
         format!("VERDICT: failing: {serious} serious, {worth_a_look} worth a look")
     }

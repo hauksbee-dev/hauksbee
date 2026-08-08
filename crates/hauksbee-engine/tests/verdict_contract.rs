@@ -260,8 +260,87 @@ fn lint_with_the_fet_bound_gives_the_normal_verdict() {
         "a bound FET unlocks the conclusive verdict:\n{text}"
     );
     assert!(
-        text.contains("Looks healthy") || text.contains("issue"),
-        "the normal verdict vocabulary returns:\n{text}"
+        text.contains("Looks healthy: no connectivity problems found."),
+        "the healthy dialect returns exactly (this fixture is lint-clean):\n{text}"
+    );
+}
+
+#[test]
+fn the_inconclusive_sentence_is_identical_across_lint_surfaces() {
+    // One dialect: the sentence in the --plain verdict, the default text
+    // summary, and the JSON coverage note must be byte-identical, or the
+    // vocabulary has forked per surface.
+    let b = fixture("verdict_fet_unbound.kicad_pcb");
+    let extract = |text: &str| -> String {
+        text.lines()
+            .find(|l| l.starts_with("INCONCLUSIVE:"))
+            .unwrap_or_else(|| panic!("an INCONCLUSIVE line exists in:\n{text}"))
+            .to_string()
+    };
+    let plain = extract(&stdout(&run(&[
+        "run",
+        b.to_str().unwrap(),
+        "--lint",
+        "--plain",
+    ])));
+    let text = extract(&stdout(&run(&["run", b.to_str().unwrap(), "--lint"])));
+    let json_out = stdout(&run(&["run", b.to_str().unwrap(), "--lint", "--json"]));
+    let v: serde_json::Value = serde_json::from_str(&json_out).expect("one JSON document");
+    let note = v["notes"]
+        .as_array()
+        .expect("notes")
+        .iter()
+        .filter_map(|n| n["message"].as_str())
+        .find(|m| m.starts_with("INCONCLUSIVE:"))
+        .expect("an INCONCLUSIVE coverage note")
+        .to_string();
+    assert_eq!(plain, text, "plain and text sentences must not fork");
+    assert_eq!(text, note, "text and JSON sentences must not fork");
+}
+
+#[test]
+fn check_plain_sections_read_inconclusive_but_drc_stays_exempt() {
+    let b = fixture("verdict_fet_unbound.kicad_pcb");
+    let out = run(&["run", b.to_str().unwrap(), "--check", "--plain"]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    // Both model-dependent sections carry the sentence.
+    assert_eq!(
+        text.matches("INCONCLUSIVE: 1 current-carrying / active part(s) have no model (Q1)")
+            .count(),
+        2,
+        "the lint AND SI sections both refuse the clean bill:\n{text}"
+    );
+    // The copper check reads the layout and owes nothing to device models:
+    // its verdict may still claim health on its own.
+    assert!(
+        text.contains("Looks healthy: no copper spacing (drc) problems found."),
+        "the DRC section stays exempt from the model-coverage refusal:\n{text}"
+    );
+}
+
+#[test]
+fn thermal_json_note_leads_with_the_shared_inconclusive_tag() {
+    let b = fixture("thermal_partial_coverage.kicad_pcb");
+    let out = run(&[
+        "run",
+        b.to_str().unwrap(),
+        "--thermal",
+        "--seconds",
+        "0.05",
+        "--json",
+        "--no-strict-thermal",
+    ]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    assert!(
+        v["notes"]
+            .as_array()
+            .expect("notes")
+            .iter()
+            .filter_map(|n| n["message"].as_str())
+            .any(|m| m.starts_with("INCONCLUSIVE:") && m.contains("PARTIAL")),
+        "the thermal JSON note speaks the same INCONCLUSIVE dialect as the text caveat:\n{v}"
     );
 }
 
@@ -298,6 +377,59 @@ fn si_json_carries_the_inconclusive_note_and_exit_zero() {
             .as_str()
             .is_some_and(|m| m.starts_with("INCONCLUSIVE"))),
         "a bound FET leaves no INCONCLUSIVE note:\n{notes:?}"
+    );
+}
+
+#[test]
+fn web_front_door_refuses_a_clean_bill_over_an_unbound_fet() {
+    // The browser surface must agree with the CLI: an unbound power FET (a
+    // Q-prefix part, NOT an active IC) demotes the headline and the
+    // model-dependent sections. Before this contract the web filtered on
+    // `active_ic` alone, so a Q-only board still read "Looks healthy".
+    let b = fixture("verdict_fet_unbound.kicad_pcb");
+    let bytes = std::fs::read(&b).expect("fixture readable");
+    let report = hauksbee_engine::frontdoor::analyze("verdict_fet_unbound.kicad_pcb", &bytes);
+    assert!(
+        report
+            .bind
+            .as_ref()
+            .is_some_and(|b| b.active_path_unresolved.contains(&"Q1".to_string())),
+        "the web bind summary names the unbound FET: {:?}",
+        report.bind
+    );
+    assert!(
+        !report.headline.contains("Looks healthy"),
+        "the web headline must not bless an unbound protection FET: {}",
+        report.headline
+    );
+    for section in &report.sections {
+        if section.title.starts_with("Connectivity") || section.title.starts_with("Signal") {
+            assert!(
+                section.verdict.starts_with("INCONCLUSIVE") && section.verdict.contains("Q1"),
+                "web section '{}' must read INCONCLUSIVE naming Q1: {}",
+                section.title,
+                section.verdict
+            );
+        }
+    }
+    // The bound twin restores the normal web verdicts.
+    let b = fixture("verdict_fet_bound.kicad_pcb");
+    let bytes = std::fs::read(&b).expect("fixture readable");
+    let report = hauksbee_engine::frontdoor::analyze("verdict_fet_bound.kicad_pcb", &bytes);
+    assert!(
+        report
+            .bind
+            .as_ref()
+            .is_none_or(|b| b.active_path_unresolved.is_empty()),
+        "a bound FET leaves no open critical parts: {:?}",
+        report.bind
+    );
+    assert!(
+        !report
+            .sections
+            .iter()
+            .any(|s| s.verdict.starts_with("INCONCLUSIVE")),
+        "no INCONCLUSIVE section on the bound twin"
     );
 }
 
