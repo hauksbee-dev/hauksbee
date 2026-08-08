@@ -84,6 +84,39 @@ and 01005's metric code *is* 0402 (`R_01005_0402Metric`), so a plain substring
 search would hand the smallest, worst-cooling body the 0402 figure of 600 and
 under-estimate its temperature.
 
+### Chip-resistor power rating (and why the fallback is 1/16 W)
+
+An explicit `ratings.max_power_w` always wins. Otherwise the rating comes from
+the same imperial size token, smallest-body-first for the same metric-collision
+reason: 01005 1/32 W, 0201 1/20 W, 0402 1/16 W, 0603 1/10 W, 0805 1/8 W,
+1206 1/4 W, 1210 1/2 W, 2010 3/4 W, 2512 1 W.
+
+The unrecognised case is split three ways, because a single fallback cannot be
+conservative for both surface-mount and through-hole parts:
+
+| Footprint evidence | Rating | Basis |
+|--------------------|--------|-------|
+| Recognised chip size code | the table above | `ChipPackage` |
+| Through-hole axial body (`THT`, `Axial`, `DIN0…`) | 1/4 W | `ThtAxial` |
+| Surface-mount, size code unrecognised | 1/16 W | `UnknownSmdFloor` |
+| No readable package at all | none derived | `Unknown` |
+
+The old behaviour was a flat 1/4 W for everything unrecognised, described as
+conservative. On an SMD board it is the opposite: 1/4 W **exceeds** a real 0402
+(1/16 W) by 4x and an 0603 (1/10 W) by 2.5x, so a genuinely overstressed chip
+resistor whose footprint string was not recognised had its overpower check
+silently suppressed. The conservative floor for a chip resistor is the smallest
+one anyone ships, 1/16 W. A through-hole axial body genuinely is 1/4 W, so it
+keeps that figure; applying the chip floor there would invent overpower faults
+on correct designs.
+
+When the footprint says neither, nothing is derived. Guessing would be wrong in
+opposite directions, so the device is reported instead: `StressMonitor::
+power_coverage_gaps` names the part and the unlock (a model with
+`ratings.max_power_w`, or a footprint / BOM line naming the package), and the CI
+report carries it in `coverage_warnings` alongside the co-sim coverage holes. An
+overpower check that did not run is a visible gap, not a pass.
+
 `theta_jc_c_per_w` (junction-to-case) can also be carried in the model DB. It
 is informational today. The free-air estimate uses `theta_JA`. A heatsinked
 path (`theta_JC + theta_CS + theta_SA`) is a future extension.
