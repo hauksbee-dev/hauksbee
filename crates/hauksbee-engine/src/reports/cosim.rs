@@ -560,8 +560,8 @@ pub fn run_headless(
             for w in sched.fallback_windows() {
                 let estimate = match w.error_estimate_v {
                     Some(e) => format!("measured chunk-end error estimate {e:.3e} V"),
-                    None => "no error estimate established (refinement companion \
-                             failed to converge)"
+                    None => "no error estimate established (no companion re-solve \
+                             converged)"
                         .to_string(),
                 };
                 println!(

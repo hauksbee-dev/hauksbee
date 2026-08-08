@@ -103,9 +103,14 @@ it are recorded per chunk and surfaced as
 `fallback_windows` in the co-sim JSON and the default text summary. A backward
 Euler window is first order and numerically dissipative, so fast transients and
 ringing inside it are damped relative to the second-order primary solve; the
-record states the method without inventing a percentage error. The typed
-[`error_budget`](../analysis/ERROR_BUDGETS.md) partitions solved methods and
-marks unsolved spans invalid.
+record states the method and carries a measured `error_estimate_v`, a
+conservative step-doubling estimate of the chunk-end voltage error obtained by
+re-solving the window at a shifted accuracy dial and differencing the end
+states (absent, never invented, when no companion re-solve converges). The
+typed [`error_budget`](../analysis/ERROR_BUDGETS.md) partitions solved methods
+and marks unsolved spans invalid; it does not yet carry the per-window
+estimate, which today lives on the window record, the co-sim JSON, the CLI
+text summary, and the CI evidence assumptions.
 
 What remains open is the chunk no rung can carry. Its node voltages are the
 previous chunk's, not a solved answer, so every voltage, current and fault

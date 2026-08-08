@@ -1701,8 +1701,8 @@ fn run_one(
         );
         let accuracy = match w.error_estimate_v {
             Some(e) => format!("measured chunk-end error estimate {e:.3e} V"),
-            None => "no error estimate was established (the refinement companion \
-                     failed to converge)"
+            None => "no error estimate was established (no companion re-solve \
+                     converged)"
                 .to_string(),
         };
         production_assumptions.push(hauksbee_ir::evidence::Assumption::reduced_fidelity(

@@ -222,10 +222,7 @@ fn failed_primary_is_rescued_by_a_recorded_fallback() {
     );
     assert!(
         window.method.fidelity_note().contains("first-order")
-            && window
-                .method
-                .fidelity_note()
-                .contains("step-doubling estimate"),
+            && window.method.fidelity_note().contains("error_estimate_v"),
         "the recorded method states the known trade-off and points at the \
          measured estimate field"
     );
@@ -489,5 +486,83 @@ fn broken_estimator_is_caught_by_the_bracket_check() {
         !estimate_brackets_analytic(reported, est, analytic),
         "the bracket check must CATCH a zeroed estimator: reported={reported:.6} \
          analytic={analytic:.6}"
+    );
+}
+
+/// The COARSE companion leg (the one a stiff board falls to when the tight
+/// companion will not converge) must be sound on its own: skip the refined
+/// leg via the test hook and require the coarse-leg estimate to bracket the
+/// closed form too. This is the leg whose Richardson factor was measured
+/// unsound at the nominal ratio-4 assumption; the worst-case factor is pinned
+/// here against the analytic answer.
+#[test]
+fn coarse_companion_estimate_still_brackets_the_analytic_answer() {
+    let mut sched = Scheduler::new(rlc_ringing_board(), None, SolverOptions::default())
+        .expect("build scheduler for the RLC board");
+    let chunk = 1e-4_f64;
+    sched.chunk_s = chunk;
+    sched.debug_force_fallback_rung = Some(ChunkFallbackMethod::BackwardEuler);
+    sched.debug_skip_refined_companion = true;
+
+    sched.step(chunk);
+
+    let windows = sched.fallback_windows();
+    assert_eq!(
+        windows.len(),
+        1,
+        "one forced chunk, one window: {windows:?}"
+    );
+    let est = windows[0]
+        .error_estimate_v
+        .expect("the coarse companion converges on this board");
+    let reported = sched.net_voltage("vc").expect("vc net exists");
+    let analytic = rlc_analytic_vc(chunk);
+    assert!(
+        estimate_brackets_analytic(reported, est, analytic),
+        "coarse-leg estimate must bracket the analytic answer: reported={reported:.6} \
+         analytic={analytic:.6} |err|={:.3e} estimate={est:.3e}",
+        (reported - analytic).abs()
+    );
+    assert!(
+        est < RLC_V0,
+        "a useful coarse-leg estimate is still tighter than the signal, got {est:.3e}"
+    );
+}
+
+/// Two consecutive chunks rescued by the SAME rung merge into one window, and
+/// the merged record keeps the WORST per-chunk estimate (never silently the
+/// last one, never a sum).
+#[test]
+fn merged_window_keeps_the_worst_per_chunk_estimate() {
+    let mut sched = Scheduler::new(rlc_ringing_board(), None, SolverOptions::default())
+        .expect("build scheduler for the RLC board");
+    let chunk = 1e-4_f64;
+    sched.chunk_s = chunk;
+    sched.debug_force_fallback_rung = Some(ChunkFallbackMethod::BackwardEuler);
+
+    sched.step(chunk);
+    let first = sched.fallback_windows()[0]
+        .error_estimate_v
+        .expect("first chunk carries an estimate");
+
+    sched.step(chunk);
+    let windows = sched.fallback_windows();
+    assert_eq!(
+        windows.len(),
+        1,
+        "same-rung consecutive chunks merge into one window: {windows:?}"
+    );
+    let window = windows[0];
+    assert!(
+        (window.end_s - 2.0 * chunk).abs() < chunk * 1e-6,
+        "the merged window spans both chunks, got {windows:?}"
+    );
+    let merged = window
+        .error_estimate_v
+        .expect("the merged window keeps a measured estimate");
+    assert!(
+        merged >= first,
+        "the merged estimate is the worst of its chunks (max), so it can never \
+         drop below an already-recorded chunk: first={first:.3e} merged={merged:.3e}"
     );
 }
