@@ -21,6 +21,12 @@ pub fn emit(
     blockers: &[String],
 ) -> anyhow::Result<()> {
     let report = crate::usb_c_report(board);
+    // The INCONCLUSIVE refusal on every arm below: a CC verdict rests on part
+    // identity (which resistor is a real Rd), so unbound verdict-critical
+    // parts must be said out loud on this surface too, not only exit-coded
+    // under --strict.
+    let inconclusive =
+        (!blockers.is_empty()).then(|| crate::result::inconclusive_verdict(blockers));
     match &report {
         None => {
             match mode {
@@ -32,10 +38,18 @@ pub fn emit(
                     });
                     let mut value = evidence.enrich_json(value);
                     value["inputs"] = serde_json::to_value(inputs)?;
+                    if let Some(note) = &inconclusive {
+                        value["verdict"] = serde_json::Value::from("invalid");
+                        value["ok"] = serde_json::Value::from(false);
+                        value["coverage_note"] = serde_json::Value::from(note.clone());
+                    }
                     println!("{}", serde_json::to_string(&value)?);
                 }
                 OutputMode::Plain | OutputMode::Text => {
                     println!("USB-C CC compliance: no USB-C receptacle with CC nets found on this board.");
+                    if let Some(note) = &inconclusive {
+                        println!("{note}");
+                    }
                 }
             }
         }
@@ -44,10 +58,25 @@ pub fn emit(
                 let value: serde_json::Value = serde_json::from_str(&report.to_json())?;
                 let mut value = evidence.enrich_json(value);
                 value["inputs"] = serde_json::to_value(inputs)?;
+                if let Some(note) = &inconclusive {
+                    value["verdict"] = serde_json::Value::from("invalid");
+                    value["ok"] = serde_json::Value::from(false);
+                    value["coverage_note"] = serde_json::Value::from(note.clone());
+                }
                 println!("{}", serde_json::to_string(&value)?);
             }
-            OutputMode::Plain => print!("{}", report.render_plain()),
-            OutputMode::Text => print!("{}", report.render()),
+            OutputMode::Plain => {
+                print!("{}", report.render_plain());
+                if let Some(note) = &inconclusive {
+                    println!("{note}");
+                }
+            }
+            OutputMode::Text => {
+                print!("{}", report.render());
+                if let Some(note) = &inconclusive {
+                    println!("{note}");
+                }
+            }
         },
     }
     if !matches!(mode, OutputMode::Json) {
