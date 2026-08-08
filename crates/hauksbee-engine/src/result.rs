@@ -1687,14 +1687,21 @@ impl JsonReport {
     }
 
     /// Replace the board-wide binding maps with maps for the actual findings
-    /// already attached to this report.
+    /// already attached to this report, KEEPING the run-level maps in
+    /// `run_level` (input coverage and its kin). The replacement must not
+    /// silently drop them: the verdict rests on run-level maps, and a
+    /// specialist surface that swapped them out for finding-backed maps alone
+    /// would read `pass` over an undermined coverage claim, because
+    /// finding-backed maps carry their own badges without vetoing the run.
     pub fn attach_finding_evidence(
         &mut self,
         evidence: &crate::evidence::BoardEvidence,
+        run_level: Vec<hauksbee_ir::evidence::EvidenceMap>,
     ) -> Result<(), hauksbee_ir::evidence::EvidenceError> {
         if let Some(findings) = &self.findings {
-            let maps = evidence.maps_for_findings(findings)?;
-            if !maps.is_empty() {
+            let mut maps = evidence.maps_for_findings(findings)?;
+            if !maps.is_empty() || !run_level.is_empty() {
+                maps.extend(run_level);
                 self.evidence = maps;
             }
         }
@@ -1789,7 +1796,14 @@ impl JsonReport {
             .flatten()
             .map(|f| f.message.as_str())
             .collect();
+        // The INCONCLUSIVE bind contract on the machine surface: a clean
+        // result over an unbound verdict-critical part is vacuous, and every
+        // text surface already refuses the clean bill for it, so the JSON
+        // verdict must refuse it too rather than reading "pass" beside an
+        // INCONCLUSIVE coverage note.
+        let bind_blockers = !unmodelled_critical_refs(&self.bind).is_empty();
         let invalid = self.refusal.is_some()
+            || bind_blockers
             || self.ac.as_ref().is_some_and(|a| !a.validity.valid)
             || self.thermal.as_ref().is_some_and(|t| !t.validity.valid)
             || self
