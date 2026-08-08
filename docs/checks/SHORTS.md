@@ -350,6 +350,23 @@ waived. The corpus test (`tests/drc_corpus.rs`) documents this evidence.
 
 ## Limitations
 
+- **Zone-versus-pad overlaps are suppressed as a class, and the run says so.**
+  A pad overlapping a different-net pour is nearly always the antipad carve:
+  KiCad always clears a pad out of a different-net fill, and KiCad 10 draws that
+  carve with keyhole slits whose boundary edges run through the pad interior,
+  producing negative gaps (the 1,668-short epidemic on one ESC). So a
+  Zone↔Pad *overlap* is dropped wholesale. Real pour incursions by a track, via
+  or arc are unaffected, and a positive sub-clearance Zone↔Pad gap is still kept
+  as a normal clearance note.
+
+  Dropping a whole finding class silently would make "no shorts found" and "no
+  shorts found, having declined to look at a category" render identically.
+  `DrcReport::zone_pad_overlaps_suppressed` counts the drops and
+  `DrcReport::suppression_note()` renders the disclosure, which every surface
+  prints ahead of any clean claim (the text report as `NOT CHECKED:`, the plain
+  report as a heads-up, JSON as `suppression_note`). Boards where nothing was
+  suppressed get no note. To audit the suppressed class, run KiCad's own DRC.
+
 - **KiCad 10 and newer: exact native-DRC parity remains unvalidated.** The
   `20260206` name-only net encoding and baked keyhole-antipad contours are now
   handled. A format-20260206 fixture checked with kicad-cli 10.0.5 keeps the pad

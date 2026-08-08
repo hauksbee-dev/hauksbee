@@ -1084,6 +1084,13 @@
           },
           "type": "array"
         },
+        "suppression_note": {
+          "description": "Set when the run suppressed zone-versus-pad overlaps as antipad carves.\n\"No shorts found\" and \"no shorts found, having skipped a whole class\"\nare different claims, so every renderer states this one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
         "version_warning": {
           "description": "Set when the board's format is newer than hauksbee's validated copper\nextraction (KiCad 10+), making the shorts above unreliable. Surfaced by\nevery renderer; CI gates ignore the shorts when it is set.",
           "type": [
