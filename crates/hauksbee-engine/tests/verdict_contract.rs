@@ -239,13 +239,22 @@ fn lint_over_an_unbound_power_fet_says_inconclusive_naming_it() {
         !text.contains("Looks healthy"),
         "an unbound power FET forbids the clean bill:\n{text}"
     );
-    // The expert text surface carries the same sentence.
+    // The expert text surface carries the same sentence, and it LEADS: the
+    // extract body's "net-lint: no findings." must sit under the refusal, or
+    // the first thing a reader sees is a clean bill.
     let out = run(&["run", b.to_str().unwrap(), "--lint"]);
     assert_eq!(out.status.code(), Some(0));
+    let text = stdout(&out);
+    let verdict_at = text.find("INCONCLUSIVE").unwrap_or_else(|| {
+        panic!("the default text summary is not a vacuous pass either:\n{text}")
+    });
+    assert!(text.contains("Q1"), "{text}");
+    let clean_at = text
+        .find("net-lint: no findings.")
+        .expect("the factual body still prints");
     assert!(
-        stdout(&out).contains("INCONCLUSIVE") && stdout(&out).contains("Q1"),
-        "the default text summary is not a vacuous pass either:\n{}",
-        stdout(&out)
+        verdict_at < clean_at,
+        "the INCONCLUSIVE verdict must lead the 'no findings.' body:\n{text}"
     );
 }
 
