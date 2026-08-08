@@ -350,16 +350,26 @@ legitimately crosses a pour, so pours stay excluded from the Eagle short test
 (wires, vias and pads against each other are fully covered). This is a
 data-availability limit, not a code limit.
 
-### Gerber footprint inference (via-vs-pad ambiguity)
+### Gerber footprint inference on stripped films (via-vs-pad ambiguity)
 
-The reconstruction windows each component's pads from its package-name string,
-with a flat 4 mm fallback. A stitching/thermal via inside that window is hard to
-tell from a real pad without the netlist (the documented "honest weak spot"),
-which inflates component pad counts. The *connectivity* the simulator needs is
-already near-exact over located pads (net-partition agreement runs to about 99%
-on the gated boards), so the residual is a component-match accounting figure,
-not a correctness gap. Improving it robustly needs information the gerber
-alone does not carry.
+An X2 gerber job carries the answer in the files: `%TO.P` names each pad's
+refdes and pin, `%TO.N` names its net, and `%TA.AperFunction,ViaPad` marks a
+via as a via. The reader uses all three, so on an X2 export (KiCad's default)
+pad→refdes→pin→net binding and via-vs-pad classification come from the film
+itself, exactly: no window, no inference.
+
+The limitation is now confined to **stripped films** (exports run with
+`--no-x2 --no-netlist`, or legacy CAM output that never carried attributes).
+There the reconstruction windows each component's pads from its package-name
+string, with a flat 4 mm fallback, and a stitching/thermal via inside that
+window is hard to tell from a real pad, which inflates component pad counts.
+The *connectivity* the simulator needs is already near-exact over located pads
+(net-partition agreement runs to about 99% on the gated boards), so the
+residual is a component-match accounting figure, not a correctness gap. If your
+job hits it, the unlocking upload is one of: re-export the gerbers **with X2
+attributes enabled** (KiCad: don't pass `--no-x2`/`--no-netlist`; Altium:
+tick "Generate X2 attributes"), or supply the native layout file alongside the
+fab folder.
 
 ### Capacitor ESR/ESL parasitics stay opt-in by design
 
@@ -374,6 +384,28 @@ the inference quality, not the default-on switch. Intentionally not changed.
 Each of these was chased to ground truth, fixed with two-sided evidence, and is
 pinned by tests. One line each; the tests are the record.
 
+- **Gerber X2 attributes discarded wholesale**: the reader now parses
+  `%TA.AperFunction` / `%TO.P` / `%TO.N` / `%TO.C` / `%TD` and binds
+  pad→refdes→pin→net from the film (via flashes classify as vias, nets take
+  the film's names, geometry-vs-film disagreements are named in notes),
+  proven against the ZSWatch same-batch netlist oracle (405 pads, 100% name
+  and partition agreement) with the stripped-film path pinned unchanged, by
+  `tests/gerber_x2.rs` and the rs274x/connect unit tests.
+- **Exposure-off macro primitives hulled over as solid copper**: a macro's
+  punched-out void is now a real hole contour (paint-order aware; repainted
+  or boundary-crossing clears stay conservatively solid), pinned two-sided by
+  `macro_void_does_not_swallow_foreign_copper` and the macros unit tests.
+- **`.gbrjob` manifest unread while inner-layer order was guessed from
+  filename digits**: the manifest now classifies files and orders copper by
+  the rank of (side, number), trusting numbers as physical positions only
+  when contiguous (KiCad 9 writes internal IDs: L1/L5/L7/L4 on a four-layer
+  board), pinned by `tests/gerber_gbrjob.rs` and the restored watchy
+  closed-loop floor.
+- **Aperture hole diameters read as copper and grid-footprint windows
+  ignoring rotation**: a holed flash now carries its hole contour, and a
+  header's pad window follows the P&P rotation, pinned by
+  `aperture_hole_diameter_is_bare_board_not_copper` and
+  `a_header_window_follows_its_stored_rotation`.
 - **USB-C CC audit under-read on dual-receptacle boards**: the audit now reads
   every distinct receptacle and credits an Rd returning to any recognized
   ground (GNDA/AGND, GNDD/DGND, GNDPWR/PGND, VSS, numbered grounds), proven on

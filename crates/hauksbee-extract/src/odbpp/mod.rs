@@ -48,7 +48,9 @@
 //! The job states the same facts more than once, and a real export can disagree
 //! with itself. Every cross-check that the data supports is run and every
 //! failure is *named* in [`OdbStats::disagreements`] rather than silently
-//! resolved (the same discipline the gerber reader applies to X2 metadata):
+//! resolved (the same discipline the gerber reader applies when its traced
+//! geometry connects copper that X2 `%TO.N` attributes assign to different
+//! nets: the conflict goes into its reader notes, never a silent pick):
 //!
 //! * net names in `netlists/*/netlist` vs `eda/data`'s `NET` sequence;
 //! * netlist points per net vs pads per net (a net with pads but no point, or

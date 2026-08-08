@@ -27,10 +27,15 @@
 //!
 //! Long-form how-and-why: docs/how-and-why/hauksbee-extract/gerber.md.
 
+use std::collections::HashMap;
 use std::io::BufReader;
+use std::sync::Arc;
 
 use gerber_types::{
     Aperture, Command, ExtendedCode, FunctionCode, GCode, Operation, Polarity, StepAndRepeat,
+};
+use gerber_types::{
+    ApertureAttribute, ApertureFunction, AttributeDeletionCriterion, Net as GNet, ObjectAttribute,
 };
 use gerber_types::{Circle, Polygon as GPolygon, Rectangular};
 use gerber_types::{CoordinateNumber, CoordinateOffset, Coordinates, InterpolationMode};
@@ -53,6 +58,94 @@ const MACRO_FALLBACK_DISC_MM: f64 = 0.25;
 pub struct CopperPrim {
     pub shape: Shape,
     pub kind: PrimKind,
+    /// The X2 identity the film attached to this primitive, empty on a film
+    /// with no X2 attributes (the geometry-only fallback path).
+    pub attrs: X2Attrs,
+}
+
+impl CopperPrim {
+    /// A primitive with no X2 identity, exactly what a stripped film yields.
+    pub fn bare(shape: Shape, kind: PrimKind) -> Self {
+        CopperPrim {
+            shape,
+            kind,
+            attrs: X2Attrs::default(),
+        }
+    }
+}
+
+/// X2 attributes (`%TA`/`%TO`) in effect when a primitive was painted.
+///
+/// An X2 film states, per object, which net a piece of copper belongs to
+/// (`%TO.N`), which component pad a flash is (`%TO.P,<refdes>,<pin>`), which
+/// component owns it (`%TO.C`), and what the flashed aperture *is*
+/// (`%TA.AperFunction`: a via pad, an SMD pad, a fiducial, ...). These are the
+/// facts the geometry-only reconstruction has to infer, so when the film
+/// carries them they are read and used; when it does not, every field is `None`
+/// and the geometric fallback is untouched.
+/// Strings are shared (`Arc<str>`): one `%TO.N` covers every primitive
+/// painted while it is in effect, hundreds of thousands on a large film, so
+/// attaching the identity is a pointer clone, not a heap allocation per arc
+/// segment.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct X2Attrs {
+    /// `%TA.AperFunction` of the aperture this primitive was painted with.
+    pub function: Option<ApertureFunction>,
+    /// `%TO.N` net names. Usually one; a net-tie object legitimately carries
+    /// SEVERAL (`%TO.N,A,B*%`: copper that belongs to both nets and ties them
+    /// by design), so all are kept, collapsing them into one opaque joined
+    /// string would neither match either net nor read as the declared tie.
+    /// Only *named* nets are stored: the empty name (an object on no net:
+    /// logos, tooling) and `N/C` (deliberately unrouted single-pad nets) both
+    /// stay `None`, because unioning either would merge copper the film
+    /// explicitly says is unconnected.
+    pub net: Option<Arc<[Arc<str>]>>,
+    /// `%TO.P`: the (refdes, pin name) this flash is the pad of.
+    pub pin: Option<(Arc<str>, Arc<str>)>,
+    /// `%TO.C`: the refdes of the component this object belongs to.
+    pub component: Option<Arc<str>>,
+}
+
+impl X2Attrs {
+    pub fn is_empty(&self) -> bool {
+        self.function.is_none()
+            && self.net.is_none()
+            && self.pin.is_none()
+            && self.component.is_none()
+    }
+
+    /// The film's net names for this primitive (usually one; several on a
+    /// net-tie object). Empty when the film named none.
+    pub fn net_names(&self) -> &[Arc<str>] {
+        self.net.as_deref().unwrap_or(&[])
+    }
+}
+
+/// Whether an X2 aperture function marks a flash as a VIA pad: copper that
+/// stitches layers but is not a component pad. Resolves the via-vs-pad
+/// ambiguity the geometric reconstruction cannot (a stitching via inside a
+/// footprint window looks exactly like a pad).
+pub fn function_is_via(f: &ApertureFunction) -> bool {
+    matches!(f, ApertureFunction::ViaPad)
+}
+
+/// Whether an X2 aperture function states outright that a flash is NOT a
+/// component pad (a fiducial, an antipad, a washer, a thermal relief). Such a
+/// flash is real copper, but the footprint window must not claim it as a pin.
+/// Absence of any function says nothing, that flash keeps its geometric
+/// fallback, because a partially attributed film is not a film asserting its
+/// bare flashes are non-pads.
+pub fn function_is_nonpad(f: &ApertureFunction) -> bool {
+    matches!(
+        f,
+        ApertureFunction::FiducialPad(_)
+            | ApertureFunction::AntiPad
+            | ApertureFunction::WasherPad
+            | ApertureFunction::ThermalReliefPad
+            | ApertureFunction::NonConductor
+            | ApertureFunction::CopperBalancing
+            | ApertureFunction::Border
+    )
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -201,6 +294,17 @@ struct Plotter<'a> {
     /// An open step-and-repeat (`%SR%`) block: the primitives emitted while it
     /// is open form the base cell, replicated across the grid when it closes.
     sr: Option<SrBlock>,
+    /// The X2 aperture-attribute dictionary's `.AperFunction` entry: a `%TA`
+    /// applies to every aperture DEFINED while it is in effect (until `%TD`),
+    /// so it is captured here and bound to the aperture code at its `%AD`.
+    cur_aper_function: Option<ApertureFunction>,
+    /// Aperture code -> the `.AperFunction` in effect at its definition.
+    aper_functions: HashMap<i32, ApertureFunction>,
+    /// The X2 object-attribute dictionary (`%TO.N` / `%TO.P` / `%TO.C`): what
+    /// the current objects being painted ARE, until changed or `%TD`-deleted.
+    obj_net: Option<Arc<[Arc<str>]>>,
+    obj_pin: Option<(Arc<str>, Arc<str>)>,
+    obj_component: Option<Arc<str>>,
     out: Vec<CopperPrim>,
 }
 
@@ -233,7 +337,27 @@ impl<'a> Plotter<'a> {
             dark: true,
             single_quadrant: false,
             sr: None,
+            cur_aper_function: None,
+            aper_functions: HashMap::new(),
+            obj_net: None,
+            obj_pin: None,
+            obj_component: None,
             out: Vec::new(),
+        }
+    }
+
+    /// The X2 identity for a primitive painted right now: the object
+    /// attributes in effect, plus the painting aperture's `.AperFunction`.
+    /// Empty (all `None`) on a film that carries no X2 attributes.
+    fn cur_attrs(&self) -> X2Attrs {
+        X2Attrs {
+            function: self
+                .aperture
+                .and_then(|code| self.aper_functions.get(&code))
+                .cloned(),
+            net: self.obj_net.clone(),
+            pin: self.obj_pin.clone(),
+            component: self.obj_component.clone(),
         }
     }
 
@@ -295,6 +419,66 @@ impl<'a> Plotter<'a> {
                 }
                 StepAndRepeat::Close => self.flush_step_repeat(),
             },
+            // ── X2 attributes ────────────────────────────────────────────────
+            // A `%TA.AperFunction` enters the aperture-attribute dictionary and
+            // is attached to every aperture DEFINED while it is in effect.
+            Command::ExtendedCode(ExtendedCode::ApertureAttribute(
+                ApertureAttribute::ApertureFunction(f),
+            )) => {
+                self.cur_aper_function = Some(f.clone());
+            }
+            Command::ExtendedCode(ExtendedCode::ApertureDefinition(def)) => {
+                if let Some(f) = &self.cur_aper_function {
+                    self.aper_functions.insert(def.code, f.clone());
+                }
+            }
+            // `%TO.N` / `%TO.P` / `%TO.C` set the identity of the objects
+            // painted from here on, until changed or deleted by `%TD`.
+            Command::ExtendedCode(ExtendedCode::ObjectAttribute(o)) => match o {
+                ObjectAttribute::Net(n) => {
+                    // Only a NAMED net identifies a conductor. `%TO.N,*%` (no
+                    // net: logos, tooling) and `N/C` (each such pad is its own
+                    // single-pad net) must clear the state, not carry a name,
+                    // or the copper painted under them would be unioned.
+                    self.obj_net = match n {
+                        GNet::Connected(names) if !names.is_empty() => Some(
+                            names
+                                .iter()
+                                .map(|s| Arc::from(s.as_str()))
+                                .collect::<Arc<[Arc<str>]>>(),
+                        ),
+                        _ => None,
+                    };
+                }
+                ObjectAttribute::Pin(p) => {
+                    self.obj_pin = Some((Arc::from(p.refdes.as_str()), Arc::from(p.name.as_str())));
+                }
+                ObjectAttribute::Component(refdes) => {
+                    self.obj_component = Some(Arc::from(refdes.as_str()));
+                }
+                _ => {}
+            },
+            Command::ExtendedCode(ExtendedCode::DeleteAttribute(crit)) => match crit {
+                AttributeDeletionCriterion::AllApertureAndObjectAttributes => {
+                    self.cur_aper_function = None;
+                    self.obj_net = None;
+                    self.obj_pin = None;
+                    self.obj_component = None;
+                }
+                AttributeDeletionCriterion::SingleObjectAttribute(name) => {
+                    match name.trim_start_matches("TO") {
+                        ".N" => self.obj_net = None,
+                        ".P" => self.obj_pin = None,
+                        ".C" => self.obj_component = None,
+                        _ => {}
+                    }
+                }
+                AttributeDeletionCriterion::SingleApertureAttribute(name) => {
+                    if name.trim_start_matches("TA") == ".AperFunction" {
+                        self.cur_aper_function = None;
+                    }
+                }
+            },
             _ => {}
         }
     }
@@ -327,6 +511,7 @@ impl<'a> Plotter<'a> {
                     self.out.push(CopperPrim {
                         shape: prim.shape.translated(dx, dy),
                         kind: prim.kind,
+                        attrs: prim.attrs.clone(),
                     });
                 }
             }
@@ -439,32 +624,85 @@ impl<'a> Plotter<'a> {
         };
         let (cx, cy) = (self.x, self.y);
         let s = self.to_mm;
+        // A standard aperture's optional hole diameter: the hole is BARE BOARD
+        // (RS-274X 4.4.6: the hole is not part of the aperture image), so a
+        // flash that carries one must not paint copper there. Discarding it
+        // read the hole as solid, and foreign copper passing through a large
+        // hole was unioned onto the pad's net. A holed flash materializes as
+        // an outer contour plus a hole contour (even-odd containment); a flash
+        // with no hole keeps its exact old shape.
+        let hole_mm = match ap {
+            Aperture::Circle(Circle { hole_diameter, .. }) => *hole_diameter,
+            Aperture::Rectangle(Rectangular { hole_diameter, .. })
+            | Aperture::Obround(Rectangular { hole_diameter, .. }) => *hole_diameter,
+            Aperture::Polygon(GPolygon { hole_diameter, .. }) => *hole_diameter,
+            Aperture::Macro(..) => None,
+        }
+        .map(|h| h * s)
+        .filter(|h| *h > 0.0);
+        let with_hole = |outer: Vec<(f64, f64)>, hole: f64| -> Shape {
+            // The hole rim as a 32-gon. Inscribed, so it under-cuts the hole
+            // by <0.5% of its radius: erring toward copper, never toward
+            // inventing emptiness where the annular ring is.
+            let rim: Vec<(f64, f64)> = (0..32)
+                .map(|k| {
+                    let a = k as f64 * std::f64::consts::TAU / 32.0;
+                    (cx + hole / 2.0 * a.cos(), cy + hole / 2.0 * a.sin())
+                })
+                .collect();
+            Shape::MultiPolygon {
+                contours: vec![outer, rim],
+            }
+        };
         let shape = match ap {
-            Aperture::Circle(Circle { diameter, .. }) => Shape::disc(cx, cy, diameter * s / 2.0),
+            Aperture::Circle(Circle { diameter, .. }) => match hole_mm {
+                None => Shape::disc(cx, cy, diameter * s / 2.0),
+                Some(h) => {
+                    // The outer rim as a 64-gon (radius error < 0.13%).
+                    let r = diameter * s / 2.0;
+                    let outer: Vec<(f64, f64)> = (0..64)
+                        .map(|k| {
+                            let a = k as f64 * std::f64::consts::TAU / 64.0;
+                            (cx + r * a.cos(), cy + r * a.sin())
+                        })
+                        .collect();
+                    with_hole(outer, h)
+                }
+            },
             Aperture::Rectangle(Rectangular { x, y, .. }) => {
-                rect_polygon(cx, cy, x * s, y * s, 0.0)
+                let rect = rect_polygon(cx, cy, x * s, y * s, 0.0);
+                match (hole_mm, rect) {
+                    (Some(h), Shape::Polygon { pts, .. }) => with_hole(pts, h),
+                    (_, rect) => rect,
+                }
             }
             Aperture::Obround(Rectangular { x, y, .. }) => {
                 // Obround = stadium; model as a capsule along the long axis.
                 let (w, h) = (x * s, y * s);
-                if w >= h {
+                let capsule = if w >= h {
                     let r = h / 2.0;
-                    Shape::Capsule(Capsule {
+                    Capsule {
                         ax: cx - (w - h) / 2.0,
                         ay: cy,
                         bx: cx + (w - h) / 2.0,
                         by: cy,
                         r,
-                    })
+                    }
                 } else {
                     let r = w / 2.0;
-                    Shape::Capsule(Capsule {
+                    Capsule {
                         ax: cx,
                         ay: cy - (h - w) / 2.0,
                         bx: cx,
                         by: cy + (h - w) / 2.0,
                         r,
-                    })
+                    }
+                };
+                match hole_mm {
+                    None => Shape::Capsule(capsule),
+                    // A holed obround polygonizes its stadium boundary so the
+                    // hole contour can be carried alongside it.
+                    Some(hole) => with_hole(stadium_outline(&capsule), hole),
                 }
             }
             Aperture::Polygon(GPolygon {
@@ -472,13 +710,19 @@ impl<'a> Plotter<'a> {
                 vertices,
                 rotation,
                 ..
-            }) => regular_polygon(
-                cx,
-                cy,
-                diameter * s / 2.0,
-                *vertices,
-                rotation.unwrap_or(0.0),
-            ),
+            }) => {
+                let poly = regular_polygon(
+                    cx,
+                    cy,
+                    diameter * s / 2.0,
+                    *vertices,
+                    rotation.unwrap_or(0.0),
+                );
+                match (hole_mm, poly) {
+                    (Some(h), Shape::Polygon { pts, .. }) => with_hole(pts, h),
+                    (_, poly) => poly,
+                }
+            }
             Aperture::Macro(name, args) => {
                 match self.doc.commands().iter().find_map(|c| match c {
                     Command::ExtendedCode(ExtendedCode::ApertureMacro(m)) if &m.name == name => {
@@ -487,9 +731,22 @@ impl<'a> Plotter<'a> {
                     _ => None,
                 }) {
                     Some(m) => {
-                        let pts = instantiate_macro(m, args.as_deref().unwrap_or(&[]), cx, cy, s);
-                        if pts.len() >= 3 {
-                            Shape::Polygon { pts, r: 0.0 }
+                        let ms = instantiate_macro(m, args.as_deref().unwrap_or(&[]), cx, cy, s);
+                        if ms.hull.len() >= 3 {
+                            if ms.holes.is_empty() {
+                                Shape::Polygon {
+                                    pts: ms.hull,
+                                    r: 0.0,
+                                }
+                            } else {
+                                // Exposure-off primitives punched real voids
+                                // out of the pad: carry them, so foreign
+                                // copper routed through a void is NOT read as
+                                // touching this pad (a false short).
+                                let mut contours = vec![ms.hull];
+                                contours.extend(ms.holes);
+                                Shape::MultiPolygon { contours }
+                            }
                         } else {
                             // Couldn't evaluate (variables/expressions we don't
                             // support): fall back to a small disc so the flash
@@ -506,16 +763,24 @@ impl<'a> Plotter<'a> {
                 }
             }
         };
-        self.out.push(CopperPrim {
-            shape,
-            kind: PrimKind::Flash,
-        });
+        let attrs = self.cur_attrs();
+        // The film can state outright that this flash is a VIA pad
+        // (`%TA.AperFunction,ViaPad`). A via stitches copper like any flash but
+        // is not a component pad, so it takes `PrimKind::Via` (excluded from
+        // pad assignment) instead of being left for the footprint window to
+        // mistake for one. Absent the attribute, nothing changes.
+        let kind = match &attrs.function {
+            Some(f) if function_is_via(f) => PrimKind::Via,
+            _ => PrimKind::Flash,
+        };
+        self.out.push(CopperPrim { shape, kind, attrs });
     }
 
     fn push_capsule(&mut self, ax: f64, ay: f64, bx: f64, by: f64, r: f64) {
         self.out.push(CopperPrim {
             shape: Shape::Capsule(Capsule { ax, ay, bx, by, r }),
             kind: PrimKind::Track,
+            attrs: self.cur_attrs(),
         });
     }
 
@@ -698,6 +963,7 @@ impl<'a> Plotter<'a> {
             self.out.push(CopperPrim {
                 shape: Shape::Polygon { pts, r: 0.0 },
                 kind: PrimKind::Region,
+                attrs: self.cur_attrs(),
             });
             return;
         }
@@ -759,9 +1025,35 @@ impl<'a> Plotter<'a> {
             self.out.push(CopperPrim {
                 shape,
                 kind: PrimKind::Region,
+                attrs: self.cur_attrs(),
             });
         }
     }
+}
+
+/// The boundary of a stadium (capsule) as a polygon: each end cap sampled as
+/// a 16-segment half-circle, joined by the straight flanks. Used only when an
+/// obround aperture carries a hole and must become a contour pair.
+fn stadium_outline(c: &Capsule) -> Vec<(f64, f64)> {
+    let (dx, dy) = (c.bx - c.ax, c.by - c.ay);
+    let len = dx.hypot(dy);
+    let (ux, uy) = if len > f64::EPSILON {
+        (dx / len, dy / len)
+    } else {
+        (1.0, 0.0)
+    };
+    let base_a = uy.atan2(ux) + std::f64::consts::FRAC_PI_2;
+    let mut pts = Vec::with_capacity(34);
+    // Cap around B (from +90° to -90° relative to the axis), then around A.
+    for k in 0..=16 {
+        let a = base_a - k as f64 * std::f64::consts::PI / 16.0;
+        pts.push((c.bx + c.r * a.cos(), c.by + c.r * a.sin()));
+    }
+    for k in 0..=16 {
+        let a = base_a + std::f64::consts::PI - k as f64 * std::f64::consts::PI / 16.0;
+        pts.push((c.ax + c.r * a.cos(), c.ay + c.r * a.sin()));
+    }
+    pts
 }
 
 /// Axis-aligned rectangle polygon centred at (cx, cy).
@@ -1050,14 +1342,14 @@ M02*
         // the bridged single polygon both pads unioned through the one region
         // primitive onto one net.
         let mut layer: Vec<CopperPrim> = prims.clone();
-        layer.push(CopperPrim {
-            shape: Shape::disc(2.5, 2.5, 0.5),
-            kind: PrimKind::Flash,
-        });
-        layer.push(CopperPrim {
-            shape: Shape::disc(97.5, 2.5, 0.5),
-            kind: PrimKind::Flash,
-        });
+        layer.push(CopperPrim::bare(
+            Shape::disc(2.5, 2.5, 0.5),
+            PrimKind::Flash,
+        ));
+        layer.push(CopperPrim::bare(
+            Shape::disc(97.5, 2.5, 0.5),
+            PrimKind::Flash,
+        ));
         let (_board, stats) = crate::gerber::connect::reconstruct("t", vec![layer], vec![], vec![]);
         assert_eq!(
             stats.n_nets, 2,
@@ -1222,6 +1514,196 @@ M02*
             (r - 0.05).abs() < 1e-9,
             "inch-unit fallback stroke radius must be a fixed 0.05 mm, got {r} mm (0.1*25.4/2 = 1.27 was the bug)"
         );
+    }
+
+    // One film, twice: with its X2 attributes and stripped of them. The
+    // geometry must be identical either way; only the identity differs.
+    const X2_FILM: &str = "\
+%FSLAX46Y46*%
+%MOMM*%
+%TF.FileFunction,Copper,L1,Top*%
+%TA.AperFunction,SMDPad,CuDef*%
+%ADD10C,1.000000*%
+%TD*%
+%TA.AperFunction,ViaPad*%
+%ADD11C,0.600000*%
+%TD*%
+D10*
+%TO.P,R1,1*%
+%TO.N,VCC*%
+X0Y0D03*
+%TO.P,R1,2*%
+%TO.N,SIG*%
+X2000000Y0D03*
+%TD*%
+D11*
+%TO.N,VCC*%
+X5000000Y0D03*
+%TD*%
+M02*
+";
+    const STRIPPED_FILM: &str = "\
+%FSLAX46Y46*%
+%MOMM*%
+%ADD10C,1.000000*%
+%ADD11C,0.600000*%
+D10*
+X0Y0D03*
+X2000000Y0D03*
+D11*
+X5000000Y0D03*
+M02*
+";
+
+    #[test]
+    fn x2_attributes_bind_pin_net_and_function_to_flashes() {
+        let prims = parse_layer(X2_FILM).unwrap();
+        let flashes: Vec<_> = prims.iter().filter(|p| p.kind == PrimKind::Flash).collect();
+        assert_eq!(flashes.len(), 2, "two pad flashes (the via is not a pad)");
+        let pin_of = |a: &X2Attrs| a.pin.as_ref().map(|(r, p)| (r.to_string(), p.to_string()));
+        assert_eq!(
+            pin_of(&flashes[0].attrs),
+            Some(("R1".to_string(), "1".to_string()))
+        );
+        let names_of = |a: &X2Attrs| {
+            a.net_names()
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names_of(&flashes[0].attrs), vec!["VCC"]);
+        assert!(matches!(
+            flashes[0].attrs.function,
+            Some(ApertureFunction::SmdPad(_))
+        ));
+        assert_eq!(
+            pin_of(&flashes[1].attrs),
+            Some(("R1".to_string(), "2".to_string()))
+        );
+        assert_eq!(names_of(&flashes[1].attrs), vec!["SIG"]);
+
+        // The `%TA.AperFunction,ViaPad` flash is classified as a via outright:
+        // the film said what it is, so it is not left for a footprint window
+        // to mistake for a component pad.
+        let via = prims
+            .iter()
+            .find(|p| p.kind == PrimKind::Via)
+            .expect("the ViaPad flash becomes PrimKind::Via");
+        assert_eq!(names_of(&via.attrs), vec!["VCC"]);
+        assert_eq!(via.attrs.pin, None, "a via names no component pin");
+    }
+
+    #[test]
+    fn stripped_film_yields_identical_geometry_and_no_attributes() {
+        // The two-sided guarantee: stripping the X2 attributes changes NOTHING
+        // about the geometry. Every primitive's shape must be bit-for-bit the
+        // shape the attributed film produced, every attrs empty, and the via
+        // honestly degrades to an (ambiguous) plain flash.
+        let with = parse_layer(X2_FILM).unwrap();
+        let without = parse_layer(STRIPPED_FILM).unwrap();
+        assert_eq!(with.len(), without.len(), "same primitive count");
+        for (a, b) in with.iter().zip(without.iter()) {
+            assert_eq!(
+                format!("{:?}", a.shape),
+                format!("{:?}", b.shape),
+                "geometry must not depend on X2 attributes"
+            );
+            assert!(b.attrs.is_empty(), "a stripped film carries no identity");
+        }
+        assert!(
+            without.iter().all(|p| p.kind == PrimKind::Flash),
+            "without the attribute the via is indistinguishable from a pad"
+        );
+    }
+
+    #[test]
+    fn td_clears_the_object_dictionary() {
+        // The via flash after `%TD*%` must NOT inherit R1's pin: a dangling
+        // object dictionary would bind every later object to the last pad.
+        let g = "\
+%FSLAX46Y46*%
+%MOMM*%
+%ADD10C,1.000000*%
+D10*
+%TO.P,R1,1*%
+X0Y0D03*
+%TD*%
+X2000000Y0D03*
+M02*
+";
+        let prims = parse_layer(g).unwrap();
+        let flashes: Vec<_> = prims.iter().filter(|p| p.kind == PrimKind::Flash).collect();
+        assert_eq!(&*flashes[0].attrs.pin.as_ref().unwrap().0, "R1");
+        assert_eq!(flashes[1].attrs.pin, None, "%TD cleared the dictionary");
+    }
+
+    // A macro pad with a punched-out void (dark 4x4 square, clear 2 mm circle),
+    // flashed at the origin, plus one small foreign disc whose position the
+    // test chooses. Two-sided: copper in the VOID stays separate; copper on
+    // the RING is a genuine overlap and unions.
+    fn donut_job(foreign_x_mm: f64) -> String {
+        format!(
+            "%FSLAX46Y46*%\n\
+             %MOMM*%\n\
+             %AMDONUT*21,1,4,4,0,0,0*1,0,2,0,0*%\n\
+             %ADD10DONUT*%\n\
+             %ADD11C,0.500000*%\n\
+             D10*\n\
+             X0Y0D03*\n\
+             D11*\n\
+             X{}Y0D03*\n\
+             M02*\n",
+            (foreign_x_mm * 1e6) as i64
+        )
+    }
+
+    #[test]
+    fn macro_void_does_not_swallow_foreign_copper() {
+        // Foreign 0.5 mm disc at the void centre: with the void read as solid
+        // (the old convex-hull-only behavior) this was one net, a false
+        // short. It must be TWO nets.
+        let prims = parse_layer(&donut_job(0.0)).unwrap();
+        assert_eq!(prims.len(), 2, "the macro pad and the foreign disc");
+        assert!(
+            matches!(prims[0].shape, Shape::MultiPolygon { .. }),
+            "a voided macro flash carries its hole contour"
+        );
+        let (_b, s) = crate::gerber::connect::reconstruct("t", vec![prims], vec![], vec![]);
+        assert_eq!(
+            s.n_nets, 2,
+            "copper inside the macro's void is NOT touching the pad"
+        );
+
+        // The same foreign disc moved onto the ring: genuinely touching.
+        let prims = parse_layer(&donut_job(1.6)).unwrap();
+        let (_b, s) = crate::gerber::connect::reconstruct("t", vec![prims], vec![], vec![]);
+        assert_eq!(s.n_nets, 1, "copper on the ring is a genuine overlap");
+    }
+
+    #[test]
+    fn aperture_hole_diameter_is_bare_board_not_copper() {
+        // `%ADD10C,2.0X1.0*%`: a 2 mm disc with a 1 mm hole. The hole is not
+        // part of the aperture image (RS-274X 4.4.6), so foreign copper
+        // passing through it must NOT union with the pad, while copper on the
+        // annular ring must. Discarding the hole diameter (the old behavior)
+        // made the first case a false short.
+        let job = |fx_mm: f64| {
+            format!(
+                "%FSLAX46Y46*%\n%MOMM*%\n%ADD10C,2.000000X1.000000*%\n%ADD11C,0.200000*%\n\
+                 D10*\nX0Y0D03*\nD11*\nX{}Y0D03*\nM02*\n",
+                (fx_mm * 1e6) as i64
+            )
+        };
+        let prims = parse_layer(&job(0.0)).unwrap();
+        assert!(
+            matches!(prims[0].shape, Shape::MultiPolygon { .. }),
+            "a holed flash carries its hole contour"
+        );
+        let (_b, s) = crate::gerber::connect::reconstruct("t", vec![prims], vec![], vec![]);
+        assert_eq!(s.n_nets, 2, "copper in the hole is not on the pad");
+        let prims = parse_layer(&job(0.8)).unwrap();
+        let (_b, s) = crate::gerber::connect::reconstruct("t", vec![prims], vec![], vec![]);
+        assert_eq!(s.n_nets, 1, "copper on the annular ring is");
     }
 
     #[test]
