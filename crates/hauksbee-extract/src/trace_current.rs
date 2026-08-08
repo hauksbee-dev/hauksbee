@@ -100,6 +100,12 @@ impl CopperSource {
 pub struct CopperWeights {
     /// Copper layer name (`F.Cu`, `In1.Cu`, ...) -> (weight in oz, is external).
     by_layer: HashMap<String, (f64, bool)>,
+    /// Whether the layout carried a `(setup (stackup ...))` block at all.
+    ///
+    /// Distinct from `by_layer` being empty: a stackup whose copper entries all
+    /// omit `thickness` declares a stackup and yields no weights, and telling the
+    /// user that board "declares no stackup" would be false.
+    declared: bool,
 }
 
 impl CopperWeights {
@@ -121,7 +127,9 @@ impl CopperWeights {
     /// zero rating.
     pub fn from_root(root: &List) -> Self {
         let mut declared: Vec<(String, f64)> = Vec::new();
+        let mut has_stackup = false;
         if let Some(stackup) = root.find("setup").and_then(|s| s.find("stackup")) {
+            has_stackup = true;
             for layer in stackup.find_all("layer") {
                 let ty = layer.find_value("type").unwrap_or_default();
                 if !ty.eq_ignore_ascii_case("copper") {
@@ -150,12 +158,20 @@ impl CopperWeights {
             };
             by_layer.insert(name.clone(), (thickness / MM_PER_OZ, external));
         }
-        CopperWeights { by_layer }
+        CopperWeights {
+            by_layer,
+            declared: has_stackup,
+        }
     }
 
     /// Whether any per-layer copper weight was declared.
     pub fn is_empty(&self) -> bool {
         self.by_layer.is_empty()
+    }
+
+    /// Whether the layout carried a stackup block, whatever it yielded.
+    pub fn is_declared(&self) -> bool {
+        self.declared
     }
 
     /// The weight (oz) and side for a copper layer, when the stackup declares it.
@@ -437,8 +453,10 @@ fn net_id_of(list: &List, by_name: &HashMap<String, i64>) -> Option<i64> {
 pub struct TraceCurrentFinding {
     pub net_id: i64,
     pub net: String,
-    /// The narrowest segment width found (mm) - the bottleneck.
-    pub min_width_mm: f64,
+    /// Width (mm) of the segment that set the limit: the RATED bottleneck, which
+    /// is not necessarily the net's narrowest segment. A wider inner-layer trace
+    /// out-limits a narrower outer one, and this field is that trace's width.
+    pub bottleneck_width_mm: f64,
     /// IPC-2221 ampacity of that width at the audit's temperature rise.
     pub ampacity_a: f64,
     /// The cited load current the caller attributed to the net (A).
@@ -493,6 +511,10 @@ pub struct TraceCapacityRow {
     pub net_id: i64,
     pub net: String,
     pub kind: CopperKind,
+    /// Width (mm) of the RATED bottleneck, the width `capacity_*_a` is computed
+    /// from. Not necessarily the net's narrowest segment (see
+    /// [`TraceAudit::bottleneck`]); showing the geometric minimum beside a
+    /// capacity derived from a different segment would not add up.
     pub min_width_mm: Option<f64>,
     pub segment_count: usize,
     pub zone_count: usize,
@@ -506,17 +528,18 @@ pub struct TraceCapacityRow {
     pub copper_source: CopperSource,
 }
 
-/// Audit parameters (copper weight, target rise, layer side). The `oz` /
-/// `external` pair is only the **fallback** for a board that declares no
-/// stackup; when `copper` holds a declared per-layer table, each net is rated on
-/// the layer its bottleneck actually sits on.
+/// Audit parameters (copper weight, target rise). `oz` is only the **fallback**
+/// weight for a layer the board declares nothing about; when `copper` holds a
+/// declared per-layer table, each net is rated at its own bottleneck's weight.
+///
+/// There is deliberately no `external` field: which IPC-2221 constant applies is
+/// a property of the LAYER, taken from the stackup or inferred from the layer's
+/// name, never a per-audit choice.
 #[derive(Debug, Clone)]
 pub struct TraceAudit {
     /// Fallback copper weight (oz) when the layer is not in the declared stackup.
     pub oz: f64,
     pub dt_c: f64,
-    /// Fallback layer side when the layer is not in the declared stackup.
-    pub external: bool,
     /// Per-layer copper weights read from the board. Empty means undeclared, and
     /// every rating built from the fallback is then marked ASSUMED.
     pub copper: CopperWeights,
@@ -530,7 +553,6 @@ impl Default for TraceAudit {
         TraceAudit {
             oz: OZ_1,
             dt_c: 10.0,
-            external: true,
             copper: CopperWeights::default(),
             margin: 1.0,
         }
@@ -570,13 +592,22 @@ impl TraceAudit {
     /// default rather than refusing to rate the net, but the source records that
     /// so the message can say ASSUMED.
     pub fn copper_for(&self, layer: Option<&str>) -> (f64, bool, CopperSource) {
-        match layer.and_then(|l| self.copper.get(l)) {
-            Some((oz, external)) => (oz, external, CopperSource::Stackup),
-            None if self.copper.is_empty() => {
-                (self.oz, self.external, CopperSource::AssumedNoStackup)
-            }
-            None => (self.oz, self.external, CopperSource::AssumedLayerMissing),
+        if let Some(found) = layer.and_then(|l| self.copper.get(l)) {
+            return (found.0, found.1, CopperSource::Stackup);
         }
+        // No declared weight for this layer. The weight falls back to the audit
+        // default, but the SIDE is inferred from the layer's name rather than
+        // defaulting to external: assuming external for a trace on `In1.Cu`
+        // doubles its apparent capacity (k 0.048 against 0.024) and would suppress
+        // the very findings per-layer rating exists to recover. An unrecognised
+        // name is treated as internal, the conservative direction.
+        let external = assumed_external_for(layer);
+        let source = if self.copper.is_declared() {
+            CopperSource::AssumedLayerMissing
+        } else {
+            CopperSource::AssumedNoStackup
+        };
+        (self.oz, external, source)
     }
 
     /// The **ampacity** bottleneck of a net: the (layer, width) pair with the
@@ -633,6 +664,19 @@ pub struct Bottleneck {
     pub copper_source: CopperSource,
 }
 
+/// Whether an undeclared layer should be rated as external copper, from its name.
+///
+/// `F.Cu` / `B.Cu` are the outer layers. An `In<N>.Cu` name is inner. Anything
+/// unrecognised, including a net with no layer recorded at all, is treated as
+/// internal: that is the lower rating, so an unknown layer cannot inflate a
+/// net's apparent capacity.
+fn assumed_external_for(layer: Option<&str>) -> bool {
+    match layer {
+        Some(l) => l.eq_ignore_ascii_case("F.Cu") || l.eq_ignore_ascii_case("B.Cu"),
+        None => false,
+    }
+}
+
 /// Render a copper weight the way a fab drawing does: `1 oz`, `0.5 oz`.
 pub fn describe_oz(oz: f64) -> String {
     if (oz - oz.round()).abs() < 0.01 {
@@ -675,7 +719,7 @@ pub fn audit_trace_currents(
             findings.push(TraceCurrentFinding {
                 net_id: nc.net_id,
                 net: nc.name.clone(),
-                min_width_mm: b.width_mm,
+                bottleneck_width_mm: b.width_mm,
                 ampacity_a: b.ampacity_a,
                 cited_current_a: *current,
                 required_width_mm: ipc2221_min_width_mm(*current, b.oz, audit.dt_c, b.external),
@@ -721,7 +765,10 @@ pub fn trace_capacity_report(copper: &[NetCopper], audit: &TraceAudit) -> Vec<Tr
             net_id: nc.net_id,
             net: nc.name.clone(),
             kind: nc.kind,
-            min_width_mm: nc.min_trace_width_mm,
+            min_width_mm: match (&b, nc.kind) {
+                (Some(b), CopperKind::Traces) => Some(b.width_mm),
+                _ => nc.min_trace_width_mm,
+            },
             segment_count: nc.segment_count,
             zone_count: nc.zone_count,
             capacity_10c_a,
@@ -1328,7 +1375,7 @@ mod tests {
         assert_eq!(f.len(), 1, "the undersized motor trace must fire");
         let fd = &f[0];
         assert_eq!(fd.net, "MOTOR");
-        assert!((fd.min_width_mm - 0.25).abs() < 1e-9);
+        assert!((fd.bottleneck_width_mm - 0.25).abs() < 1e-9);
         assert!(
             fd.ampacity_a < 1.0,
             "0.25mm ampacity {} should be <1A",

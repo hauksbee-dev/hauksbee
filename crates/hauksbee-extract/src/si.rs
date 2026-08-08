@@ -817,21 +817,52 @@ pub const T_R_FAST_NS: f64 = 300.0;
 /// Default capacitance per I2C device pin (pF), a common datasheet figure.
 const C_PIN_PF: f64 = 10.0;
 
-/// Trace self-capacitance to the reference plane, pF per mm of routed length.
-///
-/// For a transmission line, `C' = sqrt(Er_eff) / (c0 * Z0)`. On FR4
-/// (`Er_eff ~ 3`) that is 0.116 pF/mm for a 50 ohm line, 0.077 pF/mm at
-/// 75 ohm and 0.057 pF/mm at 100 ohm. An I2C trace is an ordinary
-/// signal-width route, so it usually sits at the high-impedance / low-C end;
-/// the widest, closest-coupled realistic case (`Er_eff 3.2`, `Z0 40 ohm`) gives
-/// 0.149 pF/mm.
-///
-/// 0.15 pF/mm is therefore the conservative (highest-capacitance) end of the
-/// real range, which is the safe direction for a rise-time limit: it
-/// over-estimates `t_r` rather than under-estimating it. Equivalent to
-/// ~3.8 pF/inch, in the same family as the ~1-3 pF/inch figures the usual PCB
-/// references quote.
-const C_TRACE_PF_PER_MM: f64 = 0.15;
+// Trace self-capacitance to the reference plane, pF per mm of routed length.
+//
+// For a transmission line, `C' = sqrt(Er_eff) / (c0 * Z0)`. On FR4
+// (`Er_eff ~ 3`) that is 0.116 pF/mm for a 50 ohm line, 0.077 pF/mm at 75 ohm
+// and 0.057 pF/mm at 100 ohm; the widest, closest-coupled realistic case
+// (`Er_eff 3.2`, `Z0 40 ohm`) gives 0.149 pF/mm.
+//
+// Hauksbee does not know a given I2C route's impedance, so it does not pretend
+// to: it carries the whole real range and reports it. Which end is used where
+// matters, and the split follows the module's standing rule that a check fires
+// only when even the most LENIENT assumption is violated:
+//
+//   - the LOW figure decides whether to fire, so a bus is never failed on an
+//     assumed geometry it may not have;
+//   - the HIGH figure is reported alongside it, so the reader sees the worst
+//     case the geometry permits.
+
+/// Low end of the trace-capacitance range (pF/mm): a 100 ohm route on FR4.
+/// Findings are gated on this, so the check cannot fail a bus that a
+/// high-impedance route would keep in spec.
+const C_TRACE_PF_PER_MM_LOW: f64 = 0.057;
+/// High end of the trace-capacitance range (pF/mm): `Er_eff 3.2` at 40 ohm, the
+/// widest, closest-coupled realistic case. Reported, never used to fire.
+const C_TRACE_PF_PER_MM_HIGH: f64 = 0.15;
+
+/// Render a range to whole numbers, collapsing to one when the ends round equal:
+/// "20" rather than the "20-20" a blind range would print.
+fn range_0dp(low: f64, high: f64) -> String {
+    if low.round() == high.round() {
+        format!("{low:.0}")
+    } else {
+        format!("{low:.0}-{high:.0}")
+    }
+}
+
+/// The bus-capacitance estimate: a range, because trace impedance is unknown.
+#[derive(Debug, Clone, Copy)]
+struct BusCapacitance {
+    /// Pin capacitance plus the low-end trace term (pF). Gates findings.
+    low_pf: f64,
+    /// Pin capacitance plus the high-end trace term (pF). Reported only.
+    high_pf: f64,
+    devices: usize,
+    /// Routed length actually measured (mm), or `None` with no layout.
+    trace_len_mm: Option<f64>,
+}
 
 /// Rise time (ns) for a pull-up R (ohms) charging a bus capacitance C (pF).
 pub fn i2c_rise_time_ns(r_ohm: f64, c_pf: f64) -> f64 {
@@ -924,7 +955,7 @@ fn bus_capacitance_pf(
     board: &ExtractedBoard,
     net_id: i64,
     trace_len_mm: Option<f64>,
-) -> (f64, usize) {
+) -> BusCapacitance {
     // Dedup by (reference, pad number): an IPC-356 both-sided through-hole access
     // record lists the same pad twice, and counting raw net_members double-counts
     // its pin capacitance (8 devices / 80 pF instead of 4 / 40 pF), inflating the
@@ -943,8 +974,13 @@ fn bus_capacitance_pf(
         }
     }
     let c_dev = devices as f64 * C_PIN_PF;
-    let c_trace = trace_len_mm.unwrap_or(0.0) * C_TRACE_PF_PER_MM;
-    (c_dev + c_trace, devices)
+    let len = trace_len_mm.unwrap_or(0.0);
+    BusCapacitance {
+        low_pf: c_dev + len * C_TRACE_PF_PER_MM_LOW,
+        high_pf: c_dev + len * C_TRACE_PF_PER_MM_HIGH,
+        devices,
+        trace_len_mm,
+    }
 }
 
 fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut SiReport) {
@@ -968,11 +1004,15 @@ fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut
         // layout is available. Without a layout the device-count model is all we
         // have; the message says so rather than passing it off as complete.
         let trace_len_mm = root.map(|r| routed_length_mm(r, net.id));
-        let (c_bus, devices) = bus_capacitance_pf(board, net.id, trace_len_mm);
-        if c_bus <= 0.0 {
+        let c = bus_capacitance_pf(board, net.id, trace_len_mm);
+        if c.low_pf <= 0.0 {
             continue;
         }
-        let t_r = i2c_rise_time_ns(r, c_bus);
+        // Fire on the LOW end of the capacitance range: a bus is never failed on
+        // an assumed trace impedance it may not have. The high end is reported so
+        // the reader still sees the worst case the geometry permits.
+        let t_r = i2c_rise_time_ns(r, c.low_pf);
+        let t_r_high = i2c_rise_time_ns(r, c.high_pf);
 
         // Conservative: judge against STANDARD mode unless the name says fast.
         // Whole-token match, not raw `contains`: a bare substring test fires on
@@ -984,9 +1024,14 @@ fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut
         let limit = if fast { T_R_FAST_NS } else { T_R_STANDARD_NS };
 
         // How the capacitance was arrived at, so a reader can tell a
-        // geometry-backed number from a pin-count-only floor.
-        let basis = match trace_len_mm {
-            Some(len) => format!("{devices} devices + {len:.0} mm routing"),
+        // geometry-backed number from a pin-count-only floor, and can see that
+        // the trace term is a range rather than a measurement.
+        let devices = c.devices;
+        let basis = match c.trace_len_mm {
+            Some(len) => format!(
+                "{devices} devices + {len:.0} mm routing at \
+                 {C_TRACE_PF_PER_MM_LOW}-{C_TRACE_PF_PER_MM_HIGH} pF/mm"
+            ),
             None => format!(
                 "{devices} devices, routing capacitance NOT counted - \
                  upload the .kicad_pcb layout to include trace copper"
@@ -1004,9 +1049,15 @@ fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut
                 check: SiCheck::I2cRiseTime,
                 severity: sev,
                 message: format!(
-                    "I2C {role} '{}': pull-up {:.0} ohm x bus ~{:.0} pF ({}) gives t_r ~ {:.0} ns, \
-                     over the {} limit {:.0} ns",
-                    net.name, r, c_bus, basis, t_r,
+                    "I2C {role} '{}': pull-up {:.0} ohm x bus {} pF ({}) gives t_r ~ {:.0} ns \
+                     even at the lowest trace capacitance in range (up to {:.0} ns at the \
+                     highest), over the {} limit {:.0} ns",
+                    net.name,
+                    r,
+                    range_0dp(c.low_pf, c.high_pf),
+                    basis,
+                    t_r,
+                    t_r_high,
                     if fast { "fast-mode" } else { "standard-mode" },
                     limit
                 ),
@@ -1018,8 +1069,13 @@ fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut
                 check: SiCheck::I2cRiseTime,
                 severity: SiSeverity::Info,
                 message: format!(
-                    "I2C {role} '{}': pull-up {:.0} ohm x ~{:.0} pF ({}) -> t_r ~ {:.0} ns (< {:.0} ns) - ok",
-                    net.name, r, c_bus, basis, t_r, limit
+                    "I2C {role} '{}': pull-up {:.0} ohm x {} pF ({}) -> t_r ~ {} ns (< {:.0} ns) - ok",
+                    net.name,
+                    r,
+                    range_0dp(c.low_pf, c.high_pf),
+                    basis,
+                    range_0dp(t_r, t_r_high),
+                    limit
                 ),
                 refs: vec![],
                 nets: vec![net.name.clone()],

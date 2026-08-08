@@ -549,6 +549,10 @@ fn a_suppressed_zone_pad_class_is_disclosed_not_silently_dropped() {
         .expect("a suppressing run must disclose it");
     assert!(note.contains("suppressed"), "{note}");
     assert!(
+        note.contains("upper bound"),
+        "the count is primitive pairs, not distinct overlaps, and must say so: {note}"
+    );
+    assert!(
         note.contains("antipad") && note.contains("KiCad"),
         "the note must say why: {note}"
     );
