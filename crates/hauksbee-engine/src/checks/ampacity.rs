@@ -897,7 +897,9 @@ pub fn append_ampacity(
         return;
     }
 
-    let audit = TraceAudit::default();
+    // Copper weight and layer side come from the board's own stackup when it
+    // declares one; otherwise the 1 oz external default, marked ASSUMED per net.
+    let audit = TraceAudit::from_pcb_text(text);
     let findings = audit_trace_currents(&copper, &cited, &audit);
 
     for f in &findings {
@@ -906,12 +908,13 @@ pub fn append_ampacity(
             severity: SiSeverity::High,
             message: format!(
                 "net '{}' narrowest routed trace {:.2} mm carries a cited {:.2} A but IPC-2221 \
-                 rates that width at only {:.2} A (1 oz, {:.0} C rise); needs >= {:.2} mm. \
+                 rates that width at only {:.2} A ({}, {:.0} C rise); needs >= {:.2} mm. \
                  Attributed from: {}",
                 f.net,
                 f.min_width_mm,
                 f.cited_current_a,
                 f.ampacity_a,
+                f.describe_copper(),
                 audit.dt_c,
                 f.required_width_mm,
                 f.citation,

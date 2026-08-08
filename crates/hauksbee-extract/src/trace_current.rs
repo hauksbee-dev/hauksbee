@@ -54,6 +54,81 @@ const K_INTERNAL: f64 = 0.024;
 const MIL_PER_OZ: f64 = 1.378;
 /// mm per mil.
 const MM_PER_MIL: f64 = 0.0254;
+/// Finished thickness of 1 oz copper in mm (`MIL_PER_OZ * MM_PER_MIL`), used to
+/// convert a stackup's declared per-layer thickness back into copper weight.
+const MM_PER_OZ: f64 = MIL_PER_OZ * MM_PER_MIL;
+
+/// Where a net's copper weight and layer side came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopperSource {
+    /// Read from the board's own `(setup (stackup ...))` copper layers.
+    Stackup,
+    /// No stackup declared (or the bottleneck's layer is not in it): the stated
+    /// 1 oz external default. Every message built from this is marked ASSUMED.
+    Assumed,
+}
+
+/// Per-copper-layer finished weight and side, read from a board's declared
+/// stackup.
+///
+/// Ampacity is not a per-board constant. IPC-2221 halves `k` (0.048 -> 0.024) for
+/// internal copper, and inner layers are routinely half the weight of the outer
+/// ones (0.5 oz inner against 1 oz outer is the common 4-layer build), so a
+/// 0.5 oz inner trace rates at roughly 30% of the 1 oz external figure for the
+/// same width. Rating every net as 1 oz external therefore over-states inner-layer
+/// capacity by about 3x and lets genuinely undersized inner traces pass.
+#[derive(Debug, Clone, Default)]
+pub struct CopperWeights {
+    /// Copper layer name (`F.Cu`, `In1.Cu`, ...) -> (weight in oz, is external).
+    by_layer: HashMap<String, (f64, bool)>,
+}
+
+impl CopperWeights {
+    /// Read the per-layer copper weights from a KiCad `(setup (stackup ...))`
+    /// block. Returns an empty table when the board declares no stackup, which is
+    /// how a caller distinguishes "measured" from "assumed".
+    ///
+    /// The outer layers are the first and last **copper** entries in declared
+    /// top-to-bottom order; everything between them is internal. A stackup that
+    /// declares a copper layer without a thickness contributes nothing, so that
+    /// layer falls back to the assumed default rather than to a zero rating.
+    pub fn from_root(root: &List) -> Self {
+        let mut declared: Vec<(String, f64)> = Vec::new();
+        if let Some(stackup) = root.find("setup").and_then(|s| s.find("stackup")) {
+            for layer in stackup.find_all("layer") {
+                let ty = layer.find_value("type").unwrap_or_default();
+                if !ty.eq_ignore_ascii_case("copper") {
+                    continue;
+                }
+                let Some(name) = layer.arg_value(0) else {
+                    continue;
+                };
+                let thickness = layer.find_f64("thickness").unwrap_or(0.0);
+                declared.push((name, thickness));
+            }
+        }
+        let last = declared.len().saturating_sub(1);
+        let mut by_layer = HashMap::new();
+        for (i, (name, thickness)) in declared.iter().enumerate() {
+            if *thickness <= 0.0 {
+                continue;
+            }
+            let external = i == 0 || i == last;
+            by_layer.insert(name.clone(), (thickness / MM_PER_OZ, external));
+        }
+        CopperWeights { by_layer }
+    }
+
+    /// Whether any per-layer copper weight was declared.
+    pub fn is_empty(&self) -> bool {
+        self.by_layer.is_empty()
+    }
+
+    /// The weight (oz) and side for a copper layer, when the stackup declares it.
+    pub fn get(&self, layer: &str) -> Option<(f64, bool)> {
+        self.by_layer.get(layer).copied()
+    }
+}
 
 /// IPC-2221 current capacity (amps) of a trace of the given finished width
 /// (mm) and copper weight (oz) for a target temperature rise `dt` (degrees C).
@@ -107,6 +182,9 @@ pub struct NetCopper {
     pub kind: CopperKind,
     /// Narrowest discrete track segment on the net (mm), if any tracks exist.
     pub min_trace_width_mm: Option<f64>,
+    /// Copper layer the narrowest segment sits on, which decides its weight and
+    /// whether IPC-2221's internal derating applies.
+    pub min_trace_layer: Option<String>,
     /// Widest discrete track segment on the net (mm).
     pub max_trace_width_mm: Option<f64>,
     /// Number of discrete track segments on the net.
@@ -159,11 +237,8 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
         }
     }
 
-    let mut min_w: HashMap<i64, f64> = HashMap::new();
-    let mut max_w: HashMap<i64, f64> = HashMap::new();
-    let mut seg_count: HashMap<i64, usize> = HashMap::new();
+    let mut tally = WidthTally::default();
     let mut zone_count: HashMap<i64, usize> = HashMap::new();
-    let mut seen: HashSet<i64> = HashSet::new();
 
     // Track segments (straight).
     for seg in root.find_all("segment") {
@@ -178,7 +253,7 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
         if w <= 0.0 {
             continue;
         }
-        accumulate(&mut min_w, &mut max_w, &mut seg_count, &mut seen, id, w);
+        tally.accumulate(id, w, &layer);
     }
     // Arc tracks carry a width too.
     for arc in root.find_all("arc") {
@@ -193,7 +268,7 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
         if w <= 0.0 {
             continue;
         }
-        accumulate(&mut min_w, &mut max_w, &mut seg_count, &mut seen, id, w);
+        tally.accumulate(id, w, &layer);
     }
     // Zones: a net that carries a filled pour has its real cross-section in the
     // pour, not the segments. Record the zone count so the net is marked Poured.
@@ -218,13 +293,14 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
             continue;
         }
         *zone_count.entry(id).or_default() += 1;
-        seen.insert(id);
+        tally.seen.insert(id);
     }
 
     let mut out = Vec::new();
-    for id in seen {
+    for id in &tally.seen {
+        let id = *id;
         let zc = zone_count.get(&id).copied().unwrap_or(0);
-        let sc = seg_count.get(&id).copied().unwrap_or(0);
+        let sc = tally.seg_count.get(&id).copied().unwrap_or(0);
         let kind = if zc > 0 {
             CopperKind::Poured
         } else if sc > 0 {
@@ -236,8 +312,9 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
             net_id: id,
             name: names.get(&id).cloned().unwrap_or_default(),
             kind,
-            min_trace_width_mm: min_w.get(&id).copied(),
-            max_trace_width_mm: max_w.get(&id).copied(),
+            min_trace_width_mm: tally.min_w.get(&id).copied(),
+            min_trace_layer: tally.min_layer.get(&id).cloned(),
+            max_trace_width_mm: tally.max_w.get(&id).copied(),
             segment_count: sc,
             zone_count: zc,
         });
@@ -246,18 +323,33 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
     out
 }
 
-fn accumulate(
-    min_w: &mut HashMap<i64, f64>,
-    max_w: &mut HashMap<i64, f64>,
-    seg_count: &mut HashMap<i64, usize>,
-    seen: &mut HashSet<i64>,
-    id: i64,
-    w: f64,
-) {
-    seen.insert(id);
-    *seg_count.entry(id).or_default() += 1;
-    min_w.entry(id).and_modify(|m| *m = m.min(w)).or_insert(w);
-    max_w.entry(id).and_modify(|m| *m = m.max(w)).or_insert(w);
+#[derive(Default)]
+struct WidthTally {
+    min_w: HashMap<i64, f64>,
+    max_w: HashMap<i64, f64>,
+    /// Layer of the narrowest segment seen so far, kept in step with `min_w`.
+    min_layer: HashMap<i64, String>,
+    seg_count: HashMap<i64, usize>,
+    seen: HashSet<i64>,
+}
+
+impl WidthTally {
+    fn accumulate(&mut self, id: i64, w: f64, layer: &str) {
+        self.seen.insert(id);
+        *self.seg_count.entry(id).or_default() += 1;
+        let is_new_min = self.min_w.get(&id).is_none_or(|m| w < *m);
+        self.min_w
+            .entry(id)
+            .and_modify(|m| *m = m.min(w))
+            .or_insert(w);
+        self.max_w
+            .entry(id)
+            .and_modify(|m| *m = m.max(w))
+            .or_insert(w);
+        if is_new_min {
+            self.min_layer.insert(id, layer.to_string());
+        }
+    }
 }
 
 /// Resolve a primitive's `(net ...)` child to a net id. Handles the numeric
@@ -294,6 +386,38 @@ pub struct TraceCurrentFinding {
     pub required_width_mm: f64,
     /// Free-text citation for the attributed current (datasheet / connector).
     pub citation: String,
+    /// Copper layer the bottleneck sits on, when the layout named one.
+    pub layer: Option<String>,
+    /// Copper weight (oz) the rating used.
+    pub oz: f64,
+    /// Whether the rating used the external (0.048) or internal (0.024) constant.
+    pub external: bool,
+    /// Whether `oz` / `external` were declared by the board or assumed.
+    pub copper_source: CopperSource,
+}
+
+impl TraceCurrentFinding {
+    /// The copper basis in words, marked ASSUMED (and naming the upload that
+    /// would settle it) whenever the board did not declare the layer.
+    pub fn describe_copper(&self) -> String {
+        let side = if self.external {
+            "external"
+        } else {
+            "internal"
+        };
+        match self.copper_source {
+            CopperSource::Stackup => match &self.layer {
+                Some(l) => format!("{} {side} {l}, per the board stackup", describe_oz(self.oz)),
+                None => format!("{} {side}, per the board stackup", describe_oz(self.oz)),
+            },
+            CopperSource::Assumed => format!(
+                "ASSUMED {} {side} - the layout declares no copper weight for {}, so upload a \
+                 stackup declaration or fab drawing to rate the real copper",
+                describe_oz(self.oz),
+                self.layer.as_deref().unwrap_or("this layer"),
+            ),
+        }
+    }
 }
 
 /// Capacity-only row for a power-looking net when no current attribution exists.
@@ -307,15 +431,28 @@ pub struct TraceCapacityRow {
     pub zone_count: usize,
     pub capacity_10c_a: f64,
     pub capacity_20c_a: f64,
+    /// Copper weight (oz) the capacities were computed at.
+    pub oz: f64,
+    /// Whether the internal (0.024) or external (0.048) constant was used.
+    pub external: bool,
+    /// Whether `oz` / `external` came from the board or were assumed.
+    pub copper_source: CopperSource,
 }
 
-/// Audit parameters (copper weight, target rise, layer side). Defaults are the
-/// defensible external-1oz-10C ballpark; callers can tighten them.
-#[derive(Debug, Clone, Copy)]
+/// Audit parameters (copper weight, target rise, layer side). The `oz` /
+/// `external` pair is only the **fallback** for a board that declares no
+/// stackup; when `copper` holds a declared per-layer table, each net is rated on
+/// the layer its bottleneck actually sits on.
+#[derive(Debug, Clone)]
 pub struct TraceAudit {
+    /// Fallback copper weight (oz) when the layer is not in the declared stackup.
     pub oz: f64,
     pub dt_c: f64,
+    /// Fallback layer side when the layer is not in the declared stackup.
     pub external: bool,
+    /// Per-layer copper weights read from the board. Empty means undeclared, and
+    /// every rating built from the fallback is then marked ASSUMED.
+    pub copper: CopperWeights,
     /// A net must miss its rating by more than this factor before it is flagged,
     /// to keep rounding-level near-misses out (1.0 = flag any shortfall).
     pub margin: f64,
@@ -324,11 +461,61 @@ pub struct TraceAudit {
 impl Default for TraceAudit {
     fn default() -> Self {
         TraceAudit {
-            oz: 1.0,
+            oz: OZ_1,
             dt_c: 10.0,
             external: true,
+            copper: CopperWeights::default(),
             margin: 1.0,
         }
+    }
+}
+
+impl TraceAudit {
+    /// The default audit, with per-layer copper weights read from `root`.
+    pub fn from_root(root: &List) -> Self {
+        TraceAudit {
+            copper: CopperWeights::from_root(root),
+            ..Default::default()
+        }
+    }
+
+    /// The default audit, with per-layer copper weights read from raw
+    /// `.kicad_pcb` text. Non-KiCad or unparseable text yields the plain default,
+    /// whose ratings are then marked ASSUMED.
+    pub fn from_pcb_text(text: &str) -> Self {
+        if !text.contains("(kicad_pcb") {
+            return Self::default();
+        }
+        match forge_sexpr::parse(text)
+            .ok()
+            .and_then(|d| d.root().map(CopperWeights::from_root))
+        {
+            Some(copper) => TraceAudit {
+                copper,
+                ..Default::default()
+            },
+            None => Self::default(),
+        }
+    }
+
+    /// The copper weight and side to rate a trace on `layer` against, plus where
+    /// those numbers came from. An undeclared layer falls back to the stated
+    /// default rather than refusing to rate the net, but the source records that
+    /// so the message can say ASSUMED.
+    pub fn copper_for(&self, layer: Option<&str>) -> (f64, bool, CopperSource) {
+        match layer.and_then(|l| self.copper.get(l)) {
+            Some((oz, external)) => (oz, external, CopperSource::Stackup),
+            None => (self.oz, self.external, CopperSource::Assumed),
+        }
+    }
+}
+
+/// Render a copper weight the way a fab drawing does: `1 oz`, `0.5 oz`.
+pub fn describe_oz(oz: f64) -> String {
+    if (oz - oz.round()).abs() < 0.01 {
+        format!("{:.0} oz", oz.round())
+    } else {
+        format!("{oz:.2} oz")
     }
 }
 
@@ -354,7 +541,11 @@ pub fn audit_trace_currents(
         let Some(min_w) = nc.min_trace_width_mm else {
             continue;
         };
-        let ampacity = ipc2221_ampacity(min_w, audit.oz, audit.dt_c, audit.external);
+        // Rate the bottleneck on the copper it is actually built in: an inner
+        // 0.5 oz trace carries roughly a third of what the same width carries as
+        // 1 oz outer copper.
+        let (oz, external, copper_source) = audit.copper_for(nc.min_trace_layer.as_deref());
+        let ampacity = ipc2221_ampacity(min_w, oz, audit.dt_c, external);
         if ampacity <= 0.0 {
             continue;
         }
@@ -365,13 +556,12 @@ pub fn audit_trace_currents(
                 min_width_mm: min_w,
                 ampacity_a: ampacity,
                 cited_current_a: *current,
-                required_width_mm: ipc2221_min_width_mm(
-                    *current,
-                    audit.oz,
-                    audit.dt_c,
-                    audit.external,
-                ),
+                required_width_mm: ipc2221_min_width_mm(*current, oz, audit.dt_c, external),
                 citation: citation.clone(),
+                layer: nc.min_trace_layer.clone(),
+                oz,
+                external,
+                copper_source,
             });
         }
     }
@@ -388,13 +578,14 @@ pub fn trace_capacity_report(copper: &[NetCopper], audit: &TraceAudit) -> Vec<Tr
         if !power_like_net(&nc.name) {
             continue;
         }
+        let (oz, external, copper_source) = audit.copper_for(nc.min_trace_layer.as_deref());
         let (capacity_10c_a, capacity_20c_a) = if nc.kind == CopperKind::Traces {
             (
                 nc.min_trace_width_mm
-                    .map(|w| ipc2221_ampacity(w, audit.oz, 10.0, audit.external))
+                    .map(|w| ipc2221_ampacity(w, oz, 10.0, external))
                     .unwrap_or(f64::NAN),
                 nc.min_trace_width_mm
-                    .map(|w| ipc2221_ampacity(w, audit.oz, 20.0, audit.external))
+                    .map(|w| ipc2221_ampacity(w, oz, 20.0, external))
                     .unwrap_or(f64::NAN),
             )
         } else {
@@ -409,6 +600,9 @@ pub fn trace_capacity_report(copper: &[NetCopper], audit: &TraceAudit) -> Vec<Tr
             zone_count: nc.zone_count,
             capacity_10c_a,
             capacity_20c_a,
+            oz,
+            external,
+            copper_source,
         });
     }
     rows.sort_by(|a, b| a.net_id.cmp(&b.net_id).then(a.net.cmp(&b.net)));
@@ -448,12 +642,37 @@ fn power_like_net(name: &str) -> bool {
         || n.contains("PWR")
 }
 
+/// The copper basis of a capacity row in table-width form: `0.5 oz int`,
+/// `1 oz ext (assumed)`.
+fn compact_copper(r: &TraceCapacityRow) -> String {
+    let side = if r.external { "ext" } else { "int" };
+    let assumed = if r.copper_source == CopperSource::Assumed {
+        " (assumed)"
+    } else {
+        ""
+    };
+    format!("{} {side}{assumed}", describe_oz(r.oz))
+}
+
 pub fn render_trace_capacity_report(rows: &[TraceCapacityRow]) -> String {
     let mut out = String::new();
     out.push_str("ampacity: IPC-2221 capacity only; supply a current for pass/fail.\n");
     if rows.is_empty() {
         out.push_str("no power-like routed nets found.\n");
         return out;
+    }
+    // The copper basis decides every number in the table, so it is stated above
+    // it rather than left for the reader to assume.
+    if rows
+        .iter()
+        .any(|r| r.copper_source == CopperSource::Assumed)
+    {
+        out.push_str(
+            "copper weight ASSUMED 1 oz external: the layout declares no stackup, so upload a \
+             stackup declaration or fab drawing to rate the real copper.\n",
+        );
+    } else {
+        out.push_str("copper weight and layer side read from the board stackup.\n");
     }
     // Column widths follow the content (with sane caps), so headers stay
     // aligned and cells are never chopped mid-word to fit a fixed grid.
@@ -471,7 +690,7 @@ pub fn render_trace_capacity_report(rows: &[TraceCapacityRow]) -> String {
                         "-".to_string()
                     },
                     if r.capacity_20c_a.is_finite() {
-                        format!("20C {:.2} A", r.capacity_20c_a)
+                        format!("20C {:.2} A, {}", r.capacity_20c_a, compact_copper(r))
                     } else {
                         "-".to_string()
                     },
