@@ -1983,7 +1983,6 @@ mod tests {
                 dead_rails: Vec::new(),
                 unexercised_bus_ids: std::collections::HashSet::new(),
                 spi_framing: HashMap::new(),
-                spi_cs_provenance: HashMap::new(),
             }
         }
         let out = outcome_batt_never_tripped();
@@ -2065,7 +2064,6 @@ mod tests {
                 dead_rails: Vec::new(),
                 unexercised_bus_ids: std::collections::HashSet::new(),
                 spi_framing: HashMap::new(),
-                spi_cs_provenance: HashMap::new(),
             }
         }
         // A voltage assertion reads the analog window (0..sim). Corner 3 diverged.
@@ -2513,7 +2511,6 @@ mod tests {
                 dead_rails: Vec::new(),
                 unexercised_bus_ids: std::collections::HashSet::new(),
                 spi_framing: HashMap::new(),
-                spi_cs_provenance: HashMap::new(),
             }
         }
 
@@ -2598,7 +2595,6 @@ mod tests {
                 dead_rails: Vec::new(),
                 unexercised_bus_ids: std::collections::HashSet::new(),
                 spi_framing: HashMap::new(),
-                spi_cs_provenance: HashMap::new(),
             }
         }
 
@@ -2673,7 +2669,6 @@ mod tests {
                 dead_rails: Vec::new(),
                 unexercised_bus_ids: std::collections::HashSet::new(),
                 spi_framing: HashMap::new(),
-                spi_cs_provenance: HashMap::new(),
             }
         }
 

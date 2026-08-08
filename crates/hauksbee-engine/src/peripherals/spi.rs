@@ -32,9 +32,12 @@
 //!    declaring `cs_net`, or using a part the model DB maps a `cs` role for,
 //!    moves the bus off it.
 //!
-//! [`SpiFramingMode::Backend`] sits outside the ladder: the emulator surfaces
-//! CS itself (Renode hardware NSS) with no net resolved at all, and takes
-//! precedence when reported.
+//! Two things sit outside the ladder. [`SpiFramingMode::Backend`]: the emulator
+//! surfaces CS itself (Renode hardware NSS) with no net resolved at all, and it
+//! takes precedence when reported. And a bit-banged slave (05 §1.5), whose CS pin
+//! comes from the GPIO wiring its responder was attached with rather than from any
+//! net lookup, so it reaches the exact tier by a third route and labels itself
+//! [`CsProvenance::BitBangPins`].
 //!
 //! ## Bus-speed honesty (chunk-rate limit)
 //!
@@ -223,6 +226,28 @@ impl SpiFramingMode {
     }
 }
 
+/// A chip-select the caller actually resolved: the MCU pin that drives it, the
+/// net it was traced from (when known), and who supplied that net.
+///
+/// One value rather than three loose arguments, because they are only meaningful
+/// together. Separately, a caller could pass a pin with no net, or a pin with a
+/// provenance describing a different route, and the coverage would report a tier
+/// justified by evidence nobody actually had. `Option<ResolvedCs>` also says the
+/// thing the old `(Option<pin>, Option<net>)` pair could not: either a chip
+/// select was resolved or it was not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedCs<N> {
+    /// The MCU pin `(port, bit)` driving the chip-select net.
+    pub pin: (char, u8),
+    /// The CS net node, so the scheduler installs the frame on the MCU that
+    /// actually drives THIS net rather than the first one owning the same
+    /// chip-local `(port, bit)` tuple. `None` for callers that resolved a pin by
+    /// other means (the bit-banged wiring).
+    pub net: Option<N>,
+    /// Which route produced the net. See [`CsProvenance`].
+    pub provenance: CsProvenance,
+}
+
 /// The SPI bus peripheral: a single active slave whose byte stream is fed from
 /// the MCU's `on_spi` callback.
 pub struct SpiBus {
@@ -235,8 +260,8 @@ pub struct SpiBus {
     /// Who named the CS net that `cs_pin` was traced from. Set by whoever built
     /// the bus (the CI runner), because the scheduler only ever sees the already
     /// resolved pin and cannot tell a spec-declared net from a model-role one.
-    /// Defaults to [`CsProvenance::SpecDeclared`], the only route that existed
-    /// before model roles could supply one.
+    /// Only meaningful when `cs_pin` is `Some`; [`SpiBus::set_cs_pin`] sets the
+    /// two together so a resolved pin can never carry a provenance nobody earned.
     cs_provenance: CsProvenance,
     /// Set once a `deselect` `SpiEvent` from the backend framed this bus (Renode
     /// hardware-NSS `FinishTransmission`). Makes `framing_mode` report `Backend`
@@ -280,28 +305,22 @@ impl SpiBus {
         self.spi_mode
     }
 
-    /// Declare where this bus's CS net came from, for the framing provenance the
-    /// coverage reports. Builder form because the scheduler's `attach_spi_bus`
-    /// receives an already-resolved pin and has no way to know the source.
-    pub fn with_cs_provenance(mut self, provenance: CsProvenance) -> Self {
-        self.cs_provenance = provenance;
-        self
-    }
-
-    /// As [`SpiBus::with_cs_provenance`], for a bus already behind an `Arc<Mutex<_>>`
-    /// by the time its CS source is known (the bit-banged attach path).
-    pub fn set_cs_provenance(&mut self, provenance: CsProvenance) {
-        self.cs_provenance = provenance;
-    }
-
     /// The MCU pin driving this slave's chip-select, if resolved.
     pub fn cs_pin(&self) -> Option<(char, u8)> {
         self.cs_pin
     }
 
-    /// Record the resolved CS pin (called by the scheduler at attach time). A
-    /// resolved pin moves the bus onto exact CS-edge framing.
-    pub fn set_cs_pin(&mut self, pin: Option<(char, u8)>) {
+    /// Record the resolved CS pin and, atomically, where it came from (called by
+    /// the scheduler at attach time). A resolved pin moves the bus onto exact
+    /// CS-edge framing, and the tier is reported with its [`CsProvenance`].
+    ///
+    /// The two arguments travel together on purpose. When provenance was a
+    /// separate setter with a default, any attach path that resolved a pin and
+    /// forgot to set it reported `exact (CS net declared by the spec)` for a bus
+    /// no spec had declared a net for. Making the caller say both means a new
+    /// route onto the exact tier cannot silently inherit someone else's story.
+    pub fn set_cs_pin(&mut self, pin: Option<(char, u8)>, provenance: CsProvenance) {
+        self.cs_provenance = provenance;
         // A resolved CS pin means selection is driven by the CS edge, so start
         // DESELECTED until the firmware asserts it. A bus with no CS pin stays
         // selected (the heuristic single-slave case).
