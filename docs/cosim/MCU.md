@@ -294,13 +294,17 @@ hauksbee-ci format, and `hauksbee models lint` before a run happens).
   running TIMx from the reset-default HSI sees its timers 9x fast. The paths a
   delay loop and a SysTick tick take are gated; a TIMx time base is not, and
   the descriptor's `timing_limitation` says so on every F103 run.
-- **`renode:sifive_fe310` instruction timing is corrected but not
-  silicon-gated.** Its `PerformanceInMips` went from Renode's 100 to the
-  part's 16, and the mtime gate above is exact, but an instruction busy-wait
-  has no silicon-exact reference here (one instruction per cycle is an
-  approximation on any Renode CPU). Instruction-timed delays are roughly right
-  instead of roughly 6x fast; nothing stronger is claimed, and mtime is the
-  timer firmware should be judged by on this part.
+
+**What the gates do NOT cover, on any Renode part.** The clock-truth gates
+measure timer-paced delays: SysTick on the Cortex-M parts, `mtime` on the
+FE310, each part's dominant delay path. Raw instruction busy-waits ride
+`PerformanceInMips` instead, which encodes the one-instruction-per-cycle
+approximation on every Renode CPU and is silicon-gated nowhere: the FE310's
+went from Renode's 100 to the part's 16 (roughly right instead of roughly 6x
+fast), and the M-class parts carry the same identity. This is a bounded
+approximation shared by every part above, not a per-part divergence, which is
+why it is stated here rather than as a per-run `timing_limitation` sentence;
+judge firmware by its timer-paced delays, which are the gated paths.
 
 ### Watchdog fidelity by backend (an unserviced watchdog may not reset)
 
