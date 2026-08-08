@@ -169,19 +169,20 @@ impl ChunkFallbackMethod {
         match self {
             ChunkFallbackMethod::ReducedStep => {
                 "primary integration at a smaller maximum step; \
-                 error_estimate_v carries the measured step-doubling estimate \
-                 of the chunk-end output error (absent when the refinement \
-                 companion failed to converge)"
+                 error_estimate_v carries a measured estimate of the error \
+                 this window's march added to its end state, from a companion \
+                 re-solve at a shifted accuracy dial (absent when no \
+                 companion converged)"
             }
             ChunkFallbackMethod::BackwardEuler
             | ChunkFallbackMethod::ColdStartBackwardEuler
             | ChunkFallbackMethod::SubdividedBackwardEuler => {
                 "first-order backward Euler: numerically dissipative, so fast \
                  transients and ringing inside this window are damped relative \
-                 to the second-order primary solve; error_estimate_v carries \
-                 the measured step-doubling estimate of the chunk-end output \
-                 error (absent when the refinement companion failed to \
-                 converge)"
+                 to the second-order primary solve; error_estimate_v carries a \
+                 measured estimate of the error this window's march added to \
+                 its end state, from a companion re-solve at a shifted \
+                 accuracy dial (absent when no companion converged)"
             }
         }
     }
@@ -198,16 +199,18 @@ pub struct FallbackWindow {
     pub end_s: f64,
     /// The rung that produced this window's answer.
     pub method: ChunkFallbackMethod,
-    /// Measured step-doubling estimate of the CHUNK-END node-voltage error,
-    /// in volts: the adopted rung's end state differenced against a companion
-    /// re-solve of the same window with the step bounds AND the LTE/Newton
-    /// tolerances scaled 4x (tighter first; a 4x-coarser leg when the tight
-    /// companion will not converge), Richardson-scaled, doubled as a safety
-    /// factor, plus the solver's own convergence-tolerance floor
-    /// (reltol·|v| + vntol, below which no march can vouch for a digit).
-    /// Merged windows carry the worst (largest) of their chunks' estimates.
-    /// `None` when neither companion converged: the window is still a real
-    /// converged solve, but no empirical estimate was established for it.
+    /// Measured estimate, in volts, of the CHUNK-END node-voltage error each
+    /// chunk's march ADDED relative to its own chunk-start seed: the adopted
+    /// rung's end state differenced against a companion re-solve of the same
+    /// window with the step bounds AND the LTE/Newton tolerances scaled 4x
+    /// (tighter first; a 4x-coarser leg when the tight companion will not
+    /// converge), scaled by the worst-case Richardson factor (see
+    /// `fallback_error_estimate`), doubled as a safety factor, plus the
+    /// solver's own convergence-tolerance floor (reltol·|v| + vntol, below
+    /// which no march can vouch for a digit). Merged windows carry the worst
+    /// (largest) of their chunks' estimates, not their sum. `None` when
+    /// neither companion converged: the window is still a real converged
+    /// solve, but no empirical estimate was established for it.
     pub error_estimate_v: Option<f64>,
 }
 
@@ -464,6 +467,11 @@ pub struct Scheduler {
     /// catch a broken estimator. Never set outside tests.
     #[doc(hidden)]
     pub debug_zero_fallback_error_estimate: bool,
+    /// TEST-ONLY tamper knob: when true, the error estimator's tight
+    /// (refined) companion leg is skipped so a test can exercise the
+    /// 4x-coarser leg deterministically. Never set outside tests.
+    #[doc(hidden)]
+    pub debug_skip_refined_companion: bool,
     /// Largest measured final Newton residual among converged chunks this run.
     /// `None` means the active solver path did not measure one; it never means
     /// a zero residual.
@@ -1034,6 +1042,7 @@ impl Scheduler {
             fallback_windows: Vec::new(),
             debug_force_fallback_rung: None,
             debug_zero_fallback_error_estimate: false,
+            debug_skip_refined_companion: false,
             worst_residual: None,
             consecutive_failed_chunks: 0,
             max_consecutive_failed_chunks: 0,
@@ -3277,26 +3286,42 @@ impl Scheduler {
         opts
     }
 
-    /// MEASURED per-window error estimate for a fallback rung (B12): the
-    /// classical step-doubling construction. The adopted rung solved the
-    /// chunk with accuracy dial h (step bounds and tolerances together);
+    /// MEASURED per-window error estimate for a fallback rung (B12), by the
+    /// step-doubling family of constructions: the adopted rung solved the
+    /// chunk at accuracy dial h (step bounds and tolerances together);
     /// re-solve the same window (same rung structure, same seed,
-    /// `subdivisions` sub-marches) at h/4 and difference the end states.
-    /// With the error asymptotically linear-or-better in the dial, the
-    /// refined leg carries at most ~1/4 of the adopted error, so
-    /// err ≈ diff · 4/3 (Richardson at ratio 4, effective order >= 1; using
-    /// order 1 is deliberate, it is the conservative choice for the
-    /// second-order reduced-step rung too). When the tighter companion will
-    /// not converge (stiff boards land on the fallback ladder precisely
-    /// because tighter marches struggle), a 4x-COARSER leg is measured
-    /// instead: there the companion carries ~4x the adopted error and
-    /// err ≈ diff / 3. Either way the recorded estimate doubles the
-    /// Richardson value (a documented safety factor: the linear-error model
-    /// is asymptotic) and adds the solver's own convergence-tolerance floor
-    /// reltol·|v| + vntol, below which no march can vouch for a digit anyway.
-    /// Estimates the CHUNK-END node voltages, the state the window publishes
-    /// and the next chunk is seeded from. Returns `None` when neither
-    /// companion converges: no estimate is invented.
+    /// `subdivisions` sub-marches) at dial h/4 and difference the end
+    /// states.
+    ///
+    /// The Richardson factors assume the WORST-CASE error ratio between the
+    /// two legs, not the nominal dial ratio. A 4x tolerance shift moves the
+    /// accepted step only ~2x where the LTE controller dominates (acceptance
+    /// goes as h²/tol, so h ∝ √tol), and moves it the full 4x where the step
+    /// bound dominates; the error ratio r between the legs is therefore
+    /// somewhere in [2, 4] for an effective order >= 1 march. Both factors
+    /// below are computed at r = 2, the conservative end:
+    ///   refined leg: err = diff·r/(r-1)  -> factor 2   (r=4 would give 4/3)
+    ///   coarse leg:  err = diff/(r-1)    -> factor 1   (r=4 would give 1/3)
+    /// so when the dial delivers more than 2x the estimate simply
+    /// over-covers. (Assuming r = 4 was measured UNSOUND: the coarse leg
+    /// under-reported exactly on the stiff path that uses it.) The coarse
+    /// leg exists because stiff boards land on the fallback ladder precisely
+    /// when tighter marches struggle; it is tried only after the refined
+    /// companion fails to converge.
+    ///
+    /// The recorded estimate doubles the Richardson value (a documented
+    /// safety factor: the power-law error model is asymptotic) and adds the
+    /// solver's own convergence-tolerance floor reltol·|v| + vntol, below
+    /// which no march can vouch for a digit anyway.
+    ///
+    /// What it estimates: the error THIS CHUNK'S MARCH ADDED to its end
+    /// state, relative to an exact solve from the same chunk-start seed (the
+    /// state the window publishes and the next chunk is seeded from). Error
+    /// carried into the chunk by an earlier fallback chunk's seed is that
+    /// chunk's estimate, not this one's; across a merged multi-chunk window
+    /// the recorded value is the worst per-chunk estimate, not their sum.
+    /// Returns `None` when neither companion converges: no estimate is
+    /// invented.
     fn fallback_error_estimate(
         &self,
         chunk: f64,
@@ -3328,27 +3353,33 @@ impl Scheduler {
         // The companion's thermal integral is scratch either way: the adopted
         // rung's energy deposit is the real one.
         let mut scratch = ChunkThermalAccum::default();
+        // Worst-case Richardson factors at error ratio r = 2 (see above).
+        const REFINED_FACTOR: f64 = 2.0;
+        const COARSE_FACTOR: f64 = 1.0;
         let refined = Self::companion_opts(opts, 0.25);
-        let companion = self
-            .march_chunk_subdivided(
+        let companion = if self.debug_skip_refined_companion {
+            None
+        } else {
+            self.march_chunk_subdivided(
                 chunk,
                 subdivisions,
                 refined,
                 seed.map(<[f64]>::to_vec),
                 &mut scratch,
             )
-            .map(|(x_ref, _)| (x_ref, 4.0 / 3.0))
-            .or_else(|| {
-                let coarse = Self::companion_opts(opts, 4.0);
-                self.march_chunk_subdivided(
-                    chunk,
-                    subdivisions,
-                    coarse,
-                    seed.map(<[f64]>::to_vec),
-                    &mut scratch,
-                )
-                .map(|(x_ref, _)| (x_ref, 1.0 / 3.0))
-            })?;
+            .map(|(x_ref, _)| (x_ref, REFINED_FACTOR))
+        };
+        let companion = companion.or_else(|| {
+            let coarse = Self::companion_opts(opts, 4.0);
+            self.march_chunk_subdivided(
+                chunk,
+                subdivisions,
+                coarse,
+                seed.map(<[f64]>::to_vec),
+                &mut scratch,
+            )
+            .map(|(x_ref, _)| (x_ref, COARSE_FACTOR))
+        })?;
         let (x_ref, richardson) = companion;
         let (diff, v_max) = end_state_diff(&x_ref);
         if std::env::var("HAUKSBEE_DEBUG_FALLBACK_EST").is_ok() {

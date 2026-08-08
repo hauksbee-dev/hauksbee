@@ -2096,10 +2096,15 @@ fn stamp_bjt<S: StampSink>(
     // (measured: a persistent ~0.1 V two-cycle at the collector, failing the
     // step at dt_min); the exact tangent converges it. Both Jacobians define
     // the same root (the RHS residual brackets are the terminal currents
-    // either way), so promoting the exact tangent moves iterate paths, never
-    // the physics; the ngspice oracle corpus was re-run on both sides of the
-    // promotion and every deck's worst-case error stayed within tolerance
-    // (see docs/spice-compat/results.md).
+    // either way), so the promotion changes Newton iterate paths and the
+    // within-tolerance accepted points, never the defined physics; the
+    // ngspice oracle corpus was re-run on both sides of the promotion and
+    // every deck's worst-case error stayed within tolerance (see
+    // docs/spice-compat/results.md). Scope: this is the LARGE-SIGNAL
+    // (DC/transient Newton) stamp. The AC small-signal stamp (`stamp_bjt_ac`
+    // in ac.rs) still carries its own gm/go admittance form on the
+    // external-node path; aligning it with these partials is separate,
+    // AC-oracle-gated work.
     //
     // `sign` folds out of the matrix entries (sign² = 1) and folds
     // the RHS brackets whole; folding only some terms breaks PNP convergence.
