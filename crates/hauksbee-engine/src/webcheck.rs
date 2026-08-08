@@ -433,12 +433,39 @@ pub fn run_web_check(
         Err(e) => return err_json(&format!("could not run hauksbee-ci: {e}")),
     };
 
+    // Drain both pipes WHILE the child runs, on their own threads. Piped
+    // stdout/stderr hold 64 KiB each; a run report grew past that (the
+    // evidence spine alone can be several hundred KiB of JSON), the child
+    // blocked in write(), try_wait never saw an exit, and every web check
+    // "timed out" against a child that was only waiting for someone to read.
+    let drain = |stream: Option<Box<dyn std::io::Read + Send>>| {
+        std::thread::spawn(move || {
+            let mut buf = Vec::new();
+            if let Some(mut s) = stream {
+                let _ = std::io::Read::read_to_end(&mut s, &mut buf);
+            }
+            buf
+        })
+    };
+    let stdout_thread = drain(
+        child
+            .stdout
+            .take()
+            .map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
+    );
+    let stderr_thread = drain(
+        child
+            .stderr
+            .take()
+            .map(|s| Box::new(s) as Box<dyn std::io::Read + Send>),
+    );
+
     // Poll-wait with a deadline instead of output(): a hung run must produce
     // an error the browser can show, not an eternally pending request.
     let started = std::time::Instant::now();
-    loop {
+    let status = loop {
         match child.try_wait() {
-            Ok(Some(_)) => break,
+            Ok(Some(status)) => break status,
             Ok(None) => {
                 if started.elapsed() > CHECK_TIMEOUT {
                     stop_child(&mut child);
@@ -452,25 +479,24 @@ pub fn run_web_check(
             }
             Err(e) => return err_json(&format!("waiting for hauksbee-ci: {e}")),
         }
-    }
-    let out = match child.wait_with_output() {
-        Ok(o) => o,
-        Err(e) => return err_json(&format!("reading hauksbee-ci output: {e}")),
     };
+    // The child has exited, so both readers see EOF; the joins cannot block.
+    let out_stdout = stdout_thread.join().unwrap_or_default();
+    let out_stderr = stderr_thread.join().unwrap_or_default();
 
     // --json prints one JSON object on stdout for both green and red runs, and
     // {"ok":false,...} for a spec error. Anything else is relayed with the
     // stderr tail so the user sees the real failure.
-    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stdout = String::from_utf8_lossy(&out_stdout);
     if let Some(json_line) = stdout.lines().find(|l| l.trim_start().starts_with('{')) {
         return json_line.to_string();
     }
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    let stderr = String::from_utf8_lossy(&out_stderr);
     let tail: Vec<&str> = stderr.lines().rev().take(12).collect();
     let tail: Vec<&str> = tail.into_iter().rev().collect();
     err_json(&format!(
         "hauksbee-ci produced no result (exit {:?}). {}",
-        out.status.code(),
+        status.code(),
         tail.join(" | ")
     ))
 }
@@ -799,6 +825,48 @@ kind = "no_faults"
             ACTIVE_WEB_CHECKS.load(Ordering::Acquire),
             0,
             "all slots released on drop"
+        );
+    }
+
+    /// Regression: the runner must DRAIN the child's pipes while it runs. A
+    /// stub "hauksbee-ci" floods both stdout and stderr with well over the
+    /// 64 KiB pipe capacity before (stdout) and after (stderr) the JSON line;
+    /// with the old read-after-exit pattern the child blocked in write(), the
+    /// poll loop saw no exit, and a healthy run was reported as a timeout.
+    /// Two-sided: the run returns the child's real JSON (not the timeout
+    /// error), and it does so promptly.
+    #[test]
+    fn chatty_child_output_is_drained_not_deadlocked() {
+        let _serial = serial_guard();
+        let dir = tempfile::tempdir().expect("tempdir");
+        let stub = dir.path().join("hauksbee-ci");
+        // 4000 lines x 50 bytes ~ 200 KiB per stream, far past the pipe buffer.
+        std::fs::write(
+            &stub,
+            "#!/bin/sh\n\
+             i=0; while [ $i -lt 4000 ]; do echo \"stderr filler line $i ................................\" >&2; i=$((i+1)); done\n\
+             i=0; while [ $i -lt 4000 ]; do echo \"stdout filler line $i ................................\"; i=$((i+1)); done\n\
+             echo '{\"ok\":true,\"passed\":true,\"results\":[{\"kind\":\"no_faults\"}]}'\n",
+        )
+        .expect("write stub");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::env::set_var("HAUKSBEE_CI_BIN", &stub);
+        let started = std::time::Instant::now();
+        let json = run_web_check("b.kicad_pcb", b"(kicad_pcb)", None, spec_fragment());
+        std::env::remove_var("HAUKSBEE_CI_BIN");
+        let v: serde_json::Value = serde_json::from_str(&json).expect("valid JSON");
+        assert_eq!(
+            v["ok"], true,
+            "the flood run's real JSON came through: {json}"
+        );
+        assert!(
+            started.elapsed() < CHECK_TIMEOUT / 2,
+            "the run returned promptly instead of riding the timeout ({}s)",
+            started.elapsed().as_secs()
         );
     }
 }
