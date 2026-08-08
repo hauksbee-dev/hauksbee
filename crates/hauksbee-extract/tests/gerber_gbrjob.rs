@@ -114,6 +114,73 @@ fn without_a_gbrjob_the_filename_inference_runs_as_before() {
 }
 
 #[test]
+fn kicad9_internal_layer_ids_order_the_stack_without_inventing_layers() {
+    // KiCad 9 writes its INTERNAL layer IDs into the manifest: a four-layer
+    // board's copper entries read L1(Top), L5(Inr), L7(Inr), L4(Bot). Trusting
+    // those as physical positions sorted B.Cu into stack index 1 (shredding
+    // every via stitch) and implied a 7-layer board. The rank of (side,
+    // number) still orders the stack correctly, and the non-contiguous
+    // numbers must NOT feed the physical-layer table or the layer count.
+    let dir = tmp("kicad9");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    // Names give no order hints: classification must come from the manifest.
+    std::fs::write(dir.join("a.gbr"), film("%TO.N,VBUS*%\nX0Y0D03*\n%TD*%\n")).unwrap();
+    std::fs::write(
+        dir.join("b.gbr"),
+        film("X0Y0D03*\nD11*\nX0Y0D02*\nX10000000Y0D01*\nD10*\nX10000000Y0D03*\n"),
+    )
+    .unwrap();
+    std::fs::write(dir.join("c.gbr"), film("X0Y0D03*\n")).unwrap();
+    std::fs::write(
+        dir.join("d.gbr"),
+        film("%TO.N,BOTNET*%\nX0Y0D03*\n%TD*%\n"),
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("blind-drill.txt"),
+        "M48\n; #@! TF.FileFunction,Plated,1,2,PTH,Blind\nFMAT,2\nMETRIC\nT1C0.300\n%\nG90\nG05\nT1\nX0.0Y0.0\nT0\nM30\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("job.gbrjob"),
+        r#"{"FilesAttributes": [
+    {"Path": "a.gbr", "FileFunction": "Copper,L1,Top"},
+    {"Path": "b.gbr", "FileFunction": "Copper,L5,Inr"},
+    {"Path": "c.gbr", "FileFunction": "Copper,L7,Inr"},
+    {"Path": "d.gbr", "FileFunction": "Copper,L4,Bot"},
+    {"Path": "blind-drill.txt", "FileFunction": "Plated,1,2,PTH,Blind"}
+  ]}"#,
+    )
+    .unwrap();
+    let g = from_gerber_dir(&dir).expect("extract");
+    let _ = std::fs::remove_dir_all(&dir);
+
+    assert_eq!(g.stats.n_layers, 4);
+    assert!(
+        !g.stats.notes.iter().any(|n| n.contains("7-layer")),
+        "non-contiguous manifest numbers must not imply extra layers: {:?}",
+        g.stats.notes
+    );
+    // The blind L1-L2 barrel reaches the film ranked second (b.gbr, which
+    // carries the routed track), NOT the bottom film the raw L-numbers would
+    // have sorted there.
+    let vbus = g.board.nets.iter().find(|n| n.name == "VBUS").unwrap();
+    let row = g
+        .stats
+        .net_copper
+        .iter()
+        .find(|nc| nc.net_id == vbus.id)
+        .unwrap();
+    assert_eq!(row.track_count, 1, "the L5 inner film sits at stack 1");
+    assert!(
+        g.board.nets.iter().any(|n| n.name == "BOTNET"),
+        "the bottom pad stays on its own net; raw-number ordering would have \
+         stitched it to VBUS instead"
+    );
+}
+
+#[test]
 fn a_gbrjob_that_agrees_with_numbered_filenames_changes_nothing() {
     // Two copies of a job whose inner planes DO carry stack digits
     // (`gnd02.art` = L2, `pwr03.art` = L3), one with a manifest saying the
