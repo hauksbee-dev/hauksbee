@@ -1262,3 +1262,44 @@ fn custom_pad_arc_grazing_gap_is_not_lost_to_chord_flattening() {
         f.gap_mm
     );
 }
+
+#[test]
+fn oversized_trapezoid_delta_is_clamped_not_a_bowtie() {
+    // rect_delta (0 6) on a (size 4 2) pad: unclamped, the corner formula
+    // yields a self-intersecting bowtie reaching x = +/-5 whose edge
+    // distances are garbage. KiCad clamps |dy| to the pad width, collapsing
+    // the narrow edge to a point: the triangle (-4, 1), (0, -1), (4, 1).
+    let pad = r#"
+  (footprint "lib:trapc" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U5")
+    (pad "1" smd trapezoid (at 0 0) (size 4 2) (rect_delta 0 6) (layers "F.Cu") (net 2))
+  )
+"#;
+    // Control: through the triangle body.
+    let body = format!(
+        "{}{pad}",
+        r#"
+  (segment (start 0 -3) (end 0 3) (width 0.2) (layer "F.Cu") (net 1))
+"#
+    );
+    assert_short(&drc(&body), "A", "B");
+    // Clamp pin: copper crossing where only the UNCLAMPED bowtie edge would
+    // reach (the naive corner sits at (5, 1)); the clamped triangle ends at
+    // x = 4, leaving 0.75 mm of air.
+    let wing = format!(
+        "{}{pad}",
+        r#"
+  (segment (start 4.8 0.9) (end 5.5 0.9) (width 0.1) (layer "F.Cu") (net 1))
+"#
+    );
+    let report = drc(&wing);
+    assert!(
+        report.findings.is_empty(),
+        "past the clamped triangle is bare board: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.gap_mm))
+            .collect::<Vec<_>>()
+    );
+}
