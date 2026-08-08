@@ -628,6 +628,14 @@ are never confusable. Only the weight is defaulted; the side comes from the laye
 name, which is why the header says so rather than claiming every fallback is
 external.
 
+**The reported bottleneck and the verdict's evidence are separate.** The finding
+always reports the net's true worst point, so the width it names as the fix
+actually settles the net; substituting a declared-but-higher-rated segment would
+name a width that still leaves the real choke undersized.
+`TraceCurrentFinding::declared_shortfall` separately carries the lowest-rated
+segment whose weight the board **declared**, when that segment independently fails,
+and that is what decides severity. When the two differ, the message names both.
+
 **An assumed weight never produces a verdict.** A shortfall computed on assumed
 copper is real under that assumption and false under another: a 0.25 mm trace
 rates 0.88 A as 1 oz and 1.45 A as 2 oz, so a cited 1.2 A would fail the estimate

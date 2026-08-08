@@ -910,7 +910,11 @@ pub fn append_ampacity(
         // rather than a defect. This mirrors the controlled-impedance check,
         // which likewise only raises findings on a declared stackup and keeps a
         // defaulted estimate informational.
-        let assumed = f.copper_source.is_assumed();
+        // A verdict needs a segment whose copper weight the BOARD declared to fail
+        // on its own. The reported bottleneck may be an assumed-weight layer that
+        // rates lower; that is still worth reporting, but it is not a conviction.
+        let verdict = f.declared_shortfall.as_ref();
+        let assumed = verdict.is_none();
         report.findings.push(SiFinding {
             check: SiCheck::TraceAmpacity,
             severity: if assumed {
@@ -936,10 +940,26 @@ pub fn append_ampacity(
                     f.citation,
                 )
             } else {
+                // Name the declared segment the conclusion rests on whenever it is
+                // not the same one the reported bottleneck came from, so the
+                // evidence and the width-to-fix are both visible.
+                let d = verdict.expect("a verdict has a declared shortfall");
+                let evidence = if d.layer == f.layer {
+                    String::new()
+                } else {
+                    format!(
+                        " Its lowest DECLARED-copper trace, {} at {:.2} mm, independently rates \
+                         only {:.2} A, which is what makes this a verdict rather than an \
+                         artefact of an assumed copper weight.",
+                        d.layer.as_deref().unwrap_or("(unnamed layer)"),
+                        d.width_mm,
+                        d.ampacity_a,
+                    )
+                };
                 format!(
                     "net '{}' carries a cited {:.2} A, but its lowest-rated routed trace is \
                      {:.2} mm and IPC-2221 rates that at only {:.2} A ({}, {:.0} C rise); \
-                     needs >= {:.2} mm. Attributed from: {}",
+                     needs >= {:.2} mm.{} Attributed from: {}",
                     f.net,
                     f.cited_current_a,
                     f.bottleneck_width_mm,
@@ -947,6 +967,7 @@ pub fn append_ampacity(
                     f.describe_copper(),
                     audit.dt_c,
                     f.required_width_mm,
+                    evidence,
                     f.citation,
                 )
             },

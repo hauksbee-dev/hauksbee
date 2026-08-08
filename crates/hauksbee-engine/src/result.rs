@@ -2066,7 +2066,7 @@ mod tests {
             findings: vec![short("GND", "+3V3")],
             primitive_count: 2,
             version_warning: Some("unreliable on this version".into()),
-            zone_pad_overlaps_suppressed: 0,
+            zone_pad_overlaps_suppressed: Some(0),
         };
         let st = DrcStructured::from_report(&report);
         assert_eq!(st.shorts.len(), 1);

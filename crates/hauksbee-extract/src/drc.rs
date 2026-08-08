@@ -506,12 +506,12 @@ pub struct DrcReport {
     /// suppression site), but it silences a whole finding class, and a silenced
     /// class the user cannot see is indistinguishable from a clean board.
     /// Surfaces disclose this via [`DrcReport::suppression_note`].
-    #[serde(default, skip_serializing_if = "is_zero_usize")]
-    pub zone_pad_overlaps_suppressed: usize,
-}
-
-fn is_zero_usize(n: &usize) -> bool {
-    *n == 0
+    /// `None` means the payload predates this accounting, which is not the same
+    /// claim as `Some(0)`. A report serialised before the counter existed was
+    /// still produced by a run that suppressed the class, so defaulting it to zero
+    /// would assert "nothing was suppressed" about a run that never measured it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone_pad_overlaps_suppressed: Option<usize>,
 }
 
 /// The newest `.kicad_pcb` format version hauksbee's copper extraction is
@@ -580,7 +580,15 @@ impl DrcReport {
     /// keyhole fills make those carves read as negative gaps), but a reader
     /// cannot audit a rule they were never told was applied.
     pub fn suppression_note(&self) -> Option<String> {
-        (self.zone_pad_overlaps_suppressed > 0).then(|| {
+        let Some(n) = self.zone_pad_overlaps_suppressed else {
+            // Predates the accounting: whether the class was suppressed is
+            // unknown, which is worth saying and is not the same as "none were".
+            return Some(
+                "drc: this report predates the zone-versus-pad suppression accounting, so                  whether that finding class was suppressed on this run is unknown. Re-run to                  find out."
+                    .to_string(),
+            );
+        };
+        (n > 0).then(|| {
             format!(
                 "drc: {} zone-versus-pad primitive pair(s) were suppressed, not evaluated as \
                  shorts (a zone boundary is indexed edge by edge, so one carve around one pad \
@@ -590,7 +598,7 @@ impl DrcReport {
                  interior), so this class is dropped wholesale to avoid a false-positive \
                  epidemic. Real pour incursions by a track, via or arc are still reported. To \
                  audit the suppressed class, run KiCad's own DRC on the board.",
-                self.zone_pad_overlaps_suppressed
+                n
             )
         })
     }
@@ -2120,7 +2128,7 @@ fn sweep_buckets(
         findings: Vec::new(),
         primitive_count: buckets.by_layer.values().map(Vec::len).sum(),
         version_warning: None,
-        zone_pad_overlaps_suppressed: 0,
+        zone_pad_overlaps_suppressed: Some(0),
     };
 
     // De-dup findings on the same net pair + layer + rounded location, so a
@@ -2327,7 +2335,7 @@ fn sweep_buckets(
             .then(a.net_b.cmp(&b.net_b))
             .then(a.layer.cmp(&b.layer))
     });
-    report.zone_pad_overlaps_suppressed = zone_pad_suppressed;
+    report.zone_pad_overlaps_suppressed = Some(zone_pad_suppressed);
     report
 }
 

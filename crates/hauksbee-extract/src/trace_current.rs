@@ -482,6 +482,14 @@ pub struct TraceCurrentFinding {
     pub external: bool,
     /// Whether `oz` / `external` were declared by the board or assumed.
     pub copper_source: CopperSource,
+    /// The lowest-rated segment whose copper weight the board **declared**, when
+    /// that segment independently cannot carry the cited current.
+    ///
+    /// This is what makes a shortfall a verdict rather than a consequence of an
+    /// assumed weight, and it is kept separate from the reported bottleneck above
+    /// so that neither has to stand in for the other: the bottleneck names the
+    /// width that must change, this names the evidence the conclusion rests on.
+    pub declared_shortfall: Option<Bottleneck>,
 }
 
 impl TraceCurrentFinding {
@@ -751,20 +759,24 @@ pub fn audit_trace_currents(
         // An inner 0.5 oz trace carries roughly a third of what the same width
         // carries as 1 oz outer copper, so the lowest-rated layer sets the limit
         // even when a different layer holds the narrowest segment.
-        // A shortfall on DECLARED copper is a verdict and must not be masked by an
-        // assumed-weight layer that happens to rate lower. Judge the declared
-        // candidates first; fall back to the overall bottleneck (whose assumed
-        // basis the caller reports as a non-verdict) only when they are in spec.
-        let overall = audit.bottleneck(nc);
-        let declared = audit
-            .declared_bottleneck(nc)
-            .filter(|d| d.ampacity_a > 0.0 && *current > d.ampacity_a * audit.margin);
-        let Some(b) = declared.or(overall) else {
+        // The REPORTED bottleneck is always the net's true worst point, so the
+        // width and the "needs >= X mm" fix actually settle the net. Substituting
+        // a declared-but-higher-rated segment here would name a width that still
+        // leaves the real choke undersized.
+        let Some(b) = audit.bottleneck(nc) else {
             continue;
         };
         if b.ampacity_a <= 0.0 {
             continue;
         }
+        // Separately: does a segment whose copper weight the board DECLARED fail
+        // on its own? That is what decides whether this is a verdict, and it must
+        // not be masked by an assumed-weight layer that happens to rate lower.
+        // A declared candidate's rating is never below the overall bottleneck's,
+        // so this can only ever be true when the overall test below is.
+        let declared_shortfall = audit
+            .declared_bottleneck(nc)
+            .filter(|d| d.ampacity_a > 0.0 && *current > d.ampacity_a * audit.margin);
         if *current > b.ampacity_a * audit.margin {
             findings.push(TraceCurrentFinding {
                 net_id: nc.net_id,
@@ -778,6 +790,7 @@ pub fn audit_trace_currents(
                 oz: b.oz,
                 external: b.external,
                 copper_source: b.copper_source,
+                declared_shortfall: declared_shortfall.clone(),
             });
         }
     }
@@ -1378,13 +1391,56 @@ mod tests {
         cited.insert("VMOT".to_string(), (2.0, "driver 2 A".to_string()));
         let f = audit_trace_currents(&copper, &cited, &audit);
         assert_eq!(f.len(), 1);
-        assert_eq!(
-            f[0].copper_source,
-            CopperSource::Stackup,
-            "the declared segment's shortfall must keep its declared basis, not              inherit the assumed layer's: {:?}",
-            f[0]
+        let d = f[0]
+            .declared_shortfall
+            .as_ref()
+            .expect("the declared segment fails on its own, so this is a verdict");
+        assert_eq!(d.layer.as_deref(), Some("F.Cu"));
+        assert_eq!(d.copper_source, CopperSource::Stackup);
+    }
+
+    #[test]
+    fn the_reported_bottleneck_stays_the_real_one_even_when_a_declared_layer_convicts() {
+        // Both halves must be true at once. The stackup declares only F.Cu, whose
+        // 0.5 mm segment rates 1.447 A and independently fails a cited 2 A: that is
+        // the verdict's evidence. But the net's true worst point is the undeclared
+        // 1.0 mm In1.Cu segment at ~1.196 A (assumed 1 oz, internal by name).
+        // Reporting F.Cu's width as the bottleneck would name a "needs >= X mm"
+        // that still leaves the inner segment undersized.
+        let partial = r#"
+          (setup (stackup
+            (layer "F.Cu" (type "copper") (thickness 0.035))
+            (layer "dielectric 1" (type "core") (thickness 1.51) (epsilon_r 4.5))
+          ))
+          (net 1 "VMOT")
+          (segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1))
+          (segment (start 10 0) (end 20 0) (width 1.0) (layer "In1.Cu") (net 1))
+        "#;
+        let (copper, audit) = pcb_audited(partial);
+        let nc = copper.iter().find(|n| n.net_id == 1).unwrap();
+        let overall = audit.bottleneck(nc).unwrap();
+        assert_eq!(overall.layer.as_deref(), Some("In1.Cu"));
+        assert!(
+            overall.ampacity_a < 1.3,
+            "the inner segment is the real choke: {}",
+            overall.ampacity_a
         );
-        assert_eq!(f[0].layer.as_deref(), Some("F.Cu"));
+
+        let mut cited = HashMap::new();
+        cited.insert("VMOT".to_string(), (2.0, "driver 2 A".to_string()));
+        let f = audit_trace_currents(&copper, &cited, &audit);
+        assert_eq!(f.len(), 1);
+        // Reported numbers describe the real bottleneck...
+        assert_eq!(f[0].layer.as_deref(), Some("In1.Cu"));
+        assert!((f[0].ampacity_a - overall.ampacity_a).abs() < 1e-9);
+        assert!(
+            f[0].required_width_mm > 1.0,
+            "the fix must widen past the real choke, got {}",
+            f[0].required_width_mm
+        );
+        // ...while the verdict's evidence is the declared F.Cu segment.
+        let d = f[0].declared_shortfall.as_ref().expect("a verdict");
+        assert_eq!(d.layer.as_deref(), Some("F.Cu"));
     }
 
     #[test]

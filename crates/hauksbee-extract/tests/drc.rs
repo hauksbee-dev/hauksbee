@@ -533,7 +533,7 @@ fn a_suppressed_zone_pad_class_is_disclosed_not_silently_dropped() {
 "#;
     let report = drc(items);
     assert!(
-        report.zone_pad_overlaps_suppressed > 0,
+        report.zone_pad_overlaps_suppressed.unwrap_or(0) > 0,
         "this fixture is meant to exercise the antipad suppression"
     );
     assert!(
@@ -563,6 +563,23 @@ fn a_suppressed_zone_pad_class_is_disclosed_not_silently_dropped() {
 }
 
 #[test]
+fn a_report_predating_the_accounting_says_so_rather_than_claiming_none() {
+    // Some(0) means "measured, nothing suppressed". None means the payload predates
+    // the counter, and the run behind it DID suppress the class, so defaulting to
+    // zero would assert something that run never measured.
+    let mut report = ExtractedBoard::drc(&board(
+        r#"(via (at 50 50) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1))"#,
+    ))
+    .expect("drc runs");
+    report.zone_pad_overlaps_suppressed = None;
+    let note = report
+        .suppression_note()
+        .expect("an unmeasured run must not read as a clean one");
+    assert!(note.contains("unknown"), "{note}");
+    assert!(note.contains("predates"), "{note}");
+}
+
+#[test]
 fn a_board_with_no_suppression_gains_no_note() {
     // The disclosure must not appear on boards where nothing was dropped, or it
     // becomes boilerplate everyone learns to skip.
@@ -570,7 +587,7 @@ fn a_board_with_no_suppression_gains_no_note() {
   (via (at 50 50) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1))
 "#;
     let report = ExtractedBoard::drc(&board(items)).expect("drc runs");
-    assert_eq!(report.zone_pad_overlaps_suppressed, 0);
+    assert_eq!(report.zone_pad_overlaps_suppressed, Some(0));
     assert!(report.suppression_note().is_none());
 }
 
