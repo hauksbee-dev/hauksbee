@@ -187,14 +187,17 @@ fn evaluate_hwtrace(
             // the capture must beat a diverged sibling's INVALID, so we only fall
             // back to INVALID (below) when no converged member fails.
             let mut last_detail = String::new();
-            let mut failures: Vec<(u32, String)> = Vec::new();
+            // Carry the OUTCOME, not just its index: an interior probe and a
+            // corner are numbered from the same sequence, so the label needs the
+            // member itself to tell them apart (see `member_label`).
+            let mut failures: Vec<(&RunOutcome, String)> = Vec::new();
             for out in outcomes {
                 if !out.failed_windows.is_empty() {
                     continue;
                 }
                 let Some(sim) = out.net_series.get(&ch.net) else {
                     failures.push((
-                        out.seed,
+                        out,
                         format!(
                             "net '{}' was never sampled by the run; check the net name in \
                              the trace against the board",
@@ -207,7 +210,7 @@ fn evaluate_hwtrace(
                 if r.pass {
                     last_detail = r.detail;
                 } else {
-                    failures.push((out.seed, r.detail));
+                    failures.push((out, r.detail));
                 }
             }
 
@@ -222,9 +225,14 @@ fn evaluate_hwtrace(
                         passed: false,
                         invalid: true,
                         detail: format!(
-                            "INVALID: the analog solve failed within {:.2}-{:.2} ms of the run; \
-                             the simulated waveform contains held-stale samples, so no feature \
-                             comparison against the capture can be trusted (05 §3b).",
+                            "{}INVALID: the analog solve failed within {:.2}-{:.2} ms of the \
+                             run; the simulated waveform contains held-stale samples, so no \
+                             feature comparison against the capture can be trusted (05 §3b).",
+                            if outcomes.len() > 1 {
+                                format!("{}: ", member_label(member, out))
+                            } else {
+                                String::new()
+                            },
                             fs * 1e3,
                             fe * 1e3
                         ),
@@ -242,13 +250,13 @@ fn evaluate_hwtrace(
 
             let (passed, mut detail, failing_seeds) = match failures.first() {
                 None => (true, last_detail, Vec::new()),
-                Some((seed, d)) => {
+                Some((out, d)) => {
                     let d = if outcomes.len() > 1 {
-                        format!("{member} {seed}: {d}")
+                        format!("{}: {d}", member_label(member, out))
                     } else {
                         d.clone()
                     };
-                    (false, d, failures.iter().map(|(s, _)| *s).collect())
+                    (false, d, failures.iter().map(|(o, _)| o.seed).collect())
                 }
             };
             detail.push_str(provenance);

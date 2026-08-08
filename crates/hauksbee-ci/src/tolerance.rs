@@ -15,7 +15,12 @@
 //!    24/24 seeds is statistical evidence, not a worst-case bound. The report
 //!    wording says so. Corner mode (`mode = "corners"`) enumerates every
 //!    all-min/all-max combination deterministically, which bounds the worst
-//!    case *only for monotonic responses*, also stated in the report.
+//!    case *only for monotonic responses*, also stated in the report. That
+//!    premise is not left to the reader: every corner run also carries a small
+//!    stratified Latin-hypercube sample of the interior, and an interior point
+//!    that fails an assertion the corners passed fails the assertion. A clean
+//!    probe set is evidence for the monotonicity, never proof of it, and the
+//!    report says which of the two it has.
 //! 2. **Reproducibility is doctrine.** Every sampled value is a pure function
 //!    of `(spec, seed, component reference)`, nothing depends on iteration
 //!    order or on how many other components are toleranced. A failing seed can
@@ -510,12 +515,13 @@ impl SplitMix {
 
     /// A uniform integer in `[0, n)`, without the modulo bias of `next_u64() % n`.
     ///
-    /// `n` never divides 2^64 for the probe counts the Latin-hypercube shuffle
-    /// uses (3, 5, 6, 7), so plain `%` would favour the low residues. The bias is
-    /// tiny, and the shuffle would still be a valid Latin hypercube, but a
-    /// "uniform permutation" that is not uniform is the kind of quiet
-    /// wrongness that later gets cited as a guarantee. Rejection sampling costs
-    /// an occasional extra draw from a private stream and nothing else.
+    /// The Latin-hypercube shuffle calls this with every `n` in `2..=probes`,
+    /// and `probes` is 4, 6 or 8, so it hits 3, 5, 6 and 7: none of them divide
+    /// 2^64, and plain `%` would favour the low residues. The bias is tiny, and
+    /// the shuffle would still be a valid Latin hypercube, but a "uniform
+    /// permutation" that is not uniform is the kind of quiet wrongness that
+    /// later gets cited as a guarantee. Rejection sampling costs an occasional
+    /// extra draw from a private stream and nothing else.
     fn below(&mut self, n: u64) -> u64 {
         debug_assert!(n > 0);
         // The largest multiple of n that fits in u64: draws at or above it are
