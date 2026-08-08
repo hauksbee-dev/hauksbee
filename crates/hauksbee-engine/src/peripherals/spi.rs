@@ -24,6 +24,33 @@
 //! report surfaces it, but the heuristic is only CORRECT for a lone slave. The
 //! fix for a real multi-slave board is to resolve its CS nets.
 //!
+//! ## Transaction framing: the ladder
+//!
+//! simavr's SPI IRQ carries the data byte and nothing else, so the CS boundary
+//! has to come from somewhere else. There are three rungs, tried in this order,
+//! and [`SpiFramingMode`] reports which one a bus actually got:
+//!
+//! 1. **Exact, spec-declared** ([`CsProvenance::SpecDeclared`]): the run spec
+//!    names the CS net (`cs_net = "..."`), the runner traces it to the MCU pin
+//!    driving it, and the GPIO edge stream frames every transaction.
+//! 2. **Exact, from model pin roles** ([`CsProvenance::ModelRoles`]): the spec
+//!    names no `cs_net`, but the peripheral names a board component whose bound
+//!    model declares a `cs` pin role, so the net is read off that pad. Same
+//!    electrical fact as rung 1, so the same tier; the provenance stays visible
+//!    because "the model told us" and "you told us" fail differently.
+//! 3. **Heuristic**: neither a CS net nor a backend CS event, so the chunk
+//!    boundary stands in for a CS deassert. This rung is *wrong* in two
+//!    recorded directions and says so (see [`SpiFramingMode::Heuristic`]);
+//!    declaring `cs_net`, or using a part the model DB maps a `cs` role for,
+//!    moves the bus off it.
+//!
+//! Two things sit outside the ladder. [`SpiFramingMode::Backend`]: the emulator
+//! surfaces CS itself (Renode hardware NSS) with no net resolved at all, and it
+//! takes precedence when reported. And a bit-banged slave (05 §1.5), whose CS pin
+//! comes from the GPIO wiring its responder was attached with rather than from any
+//! net lookup, so it reaches the exact tier by a third route and labels itself
+//! [`CsProvenance::BitBangPins`].
+//!
 //! ## Bus-speed honesty (chunk-rate limit)
 //!
 //! Like I2C, interception is byte-level through simavr's hardware SPI
@@ -62,9 +89,12 @@ pub trait SpiSlave: Send {
         self.deselect();
     }
 
-    /// Chip-select deasserted: end the current transaction. simavr does not
-    /// surface CS, so the engine calls this between co-sim chunks as a frame
-    /// boundary heuristic; well-formed transfers complete within a chunk.
+    /// Chip-select deasserted: end the current transaction. On a bus whose CS
+    /// net resolved (from the spec or from the bound model's `cs` pin role) this
+    /// fires on the real active-low rising edge. Only on the heuristic rung,
+    /// where no CS net and no backend CS event exist, does the engine call it at
+    /// the co-sim chunk boundary instead, and there it is a guess: well-formed
+    /// transfers complete within a chunk, boundary-spanning ones do not.
     fn deselect(&mut self) {}
 
     /// True if the slave is partway through a multi-byte transaction (i.e. it
@@ -117,6 +147,55 @@ pub trait SpiSlave: Send {
     fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
 }
 
+/// Where the chip-select net that produced exact framing came from.
+///
+/// Both values give the same electrical fact (this net is the slave's CS) and
+/// therefore the same framing tier; they differ in who supplied it, which is
+/// what a reader needs to know to reproduce or override the result. Carried
+/// inside [`SpiFramingMode::Exact`] so it cannot drift away from the tier it
+/// justifies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CsProvenance {
+    /// The run spec named the net (`cs_net = "..."` on the peripheral). Always
+    /// wins over the model-role route, so a board whose model map is wrong or
+    /// incomplete stays overridable from the spec.
+    SpecDeclared,
+    /// No `cs_net` in the spec: the net was read off the bound model's `cs` pin
+    /// role for the board component the peripheral names. Only an assembled,
+    /// identity-trusted part can supply one (the binder's `FittedComponent`
+    /// witness is the only door to a model), so a DNP or identity-refused slave
+    /// contributes nothing and the bus stays on the heuristic.
+    ModelRoles,
+    /// The bus is a bit-banged SPI slave (05 §1.5) whose CS pin came from the
+    /// GPIO wiring the responder was attached with, not from a `cs_net` and not
+    /// from a model pad map. The framing is real (the responder owns the CS
+    /// edges), but neither of the other two labels would be true of it, and a
+    /// report that said `spec` here would be claiming a declaration nobody made.
+    BitBangPins,
+}
+
+impl CsProvenance {
+    /// Lower-case tag for JSON coverage: `"spec"` | `"model-roles"` |
+    /// `"bitbang-pins"`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CsProvenance::SpecDeclared => "spec",
+            CsProvenance::ModelRoles => "model-roles",
+            CsProvenance::BitBangPins => "bitbang-pins",
+        }
+    }
+
+    /// The clause a report appends after the `exact` tier, naming who supplied
+    /// the CS net.
+    pub fn describe(self) -> &'static str {
+        match self {
+            CsProvenance::SpecDeclared => "CS net declared by the spec",
+            CsProvenance::ModelRoles => "CS net resolved from the bound model's pin roles",
+            CsProvenance::BitBangPins => "CS pin taken from the bit-banged SPI wiring",
+        }
+    }
+}
+
 /// How a bus's transactions are being framed, surfaced per-slave in the co-sim
 /// coverage so a consumer knows whether the CS boundaries are real or guessed
 /// (05 §2.1). Precedence when reported: `Backend` (a real backend CS event was
@@ -126,8 +205,10 @@ pub enum SpiFramingMode {
     /// Framed from the real CS-pin GPIO edge stream: the CS net resolved to the
     /// MCU pin that drives it, so `select`/`deselect` fire at the true active-low
     /// falling/rising edges, interleaved in cycle order with the byte transfers.
-    /// Exact on push backends (simavr).
-    Exact,
+    /// Exact on push backends (simavr). The [`CsProvenance`] says which source
+    /// named the net; the tier is the same either way, because the electrical
+    /// fact is the same.
+    Exact(CsProvenance),
     /// The backend surfaces CS itself (Renode hardware-NSS `FinishTransmission`
     /// -> a `deselect` `SpiEvent`), which frames the transaction precisely with no
     /// resolved CS pin. Detected dynamically the first time such an event lands.
@@ -143,11 +224,48 @@ impl SpiFramingMode {
     /// Lower-case tag for JSON coverage: `"exact"` | `"backend"` | `"heuristic"`.
     pub fn as_str(self) -> &'static str {
         match self {
-            SpiFramingMode::Exact => "exact",
+            SpiFramingMode::Exact(_) => "exact",
             SpiFramingMode::Backend => "backend",
             SpiFramingMode::Heuristic => "heuristic",
         }
     }
+
+    /// Where the CS net came from, on the exact tier only. `None` on the backend
+    /// tier (the emulator framed it, no net was resolved) and on the heuristic
+    /// tier (there was no net to resolve).
+    pub fn cs_provenance(self) -> Option<CsProvenance> {
+        match self {
+            SpiFramingMode::Exact(p) => Some(p),
+            SpiFramingMode::Backend | SpiFramingMode::Heuristic => None,
+        }
+    }
+}
+
+/// A chip-select the caller actually resolved: the MCU pin that drives it, the
+/// net it was traced from (when known), and who supplied that net.
+///
+/// One value rather than three loose arguments, because they are only meaningful
+/// together: a pin with no net, or a pin labelled with a route that did not
+/// produce it, would have the coverage report a tier justified by evidence nobody
+/// held. `Option<ResolvedCs>` also says the thing the old
+/// `(Option<pin>, Option<net>)` pair could not: either a chip select was resolved
+/// or it was not.
+///
+/// This groups the evidence, it does not police it. The fields are plain data and
+/// any caller inside the workspace can assert whatever it likes; what stops a
+/// fabricated chip-select reaching a real run is the resolution path in
+/// `hauksbee-ci`'s `resolve_cs_pin`, which is the only production constructor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedCs<N> {
+    /// The MCU pin `(port, bit)` driving the chip-select net.
+    pub pin: (char, u8),
+    /// The CS net node, so the scheduler installs the frame on the MCU that
+    /// actually drives THIS net rather than the first one owning the same
+    /// chip-local `(port, bit)` tuple. `None` for callers that resolved a pin by
+    /// other means (the bit-banged wiring).
+    pub net: Option<N>,
+    /// Which route produced the net. See [`CsProvenance`].
+    pub provenance: CsProvenance,
 }
 
 /// The SPI bus peripheral: one slave whose byte stream is fed from the MCU's
@@ -160,6 +278,12 @@ pub struct SpiBus {
     /// the binder resolved it (05 §2.1). `Some` selects real CS-edge framing;
     /// `None` leaves the bus on the chunk-boundary heuristic.
     cs_pin: Option<(char, u8)>,
+    /// Who named the CS net that `cs_pin` was traced from. Set by whoever built
+    /// the bus (the CI runner), because the scheduler only ever sees the already
+    /// resolved pin and cannot tell a spec-declared net from a model-role one.
+    /// Only meaningful when `cs_pin` is `Some`; [`SpiBus::set_cs_pin`] sets the
+    /// two together so a resolved pin can never carry a provenance nobody earned.
+    cs_provenance: CsProvenance,
     /// Set once a `deselect` `SpiEvent` from the backend framed this bus (Renode
     /// hardware-NSS `FinishTransmission`). Makes `framing_mode` report `Backend`
     /// so the coverage reflects that the backend, not the heuristic, owns framing.
@@ -188,6 +312,7 @@ impl SpiBus {
             id: id.to_string(),
             slave,
             cs_pin: None,
+            cs_provenance: CsProvenance::SpecDeclared,
             backend_deselect_seen: false,
             spi_mode,
             // A fresh bus with no CS pin yet is the single-slave / heuristic case:
@@ -209,9 +334,17 @@ impl SpiBus {
         self.cs_pin
     }
 
-    /// Record the resolved CS pin (called by the scheduler at attach time). A
-    /// resolved pin moves the bus onto exact CS-edge framing.
-    pub fn set_cs_pin(&mut self, pin: Option<(char, u8)>) {
+    /// Record the resolved CS pin and, atomically, where it came from (called by
+    /// the scheduler at attach time). A resolved pin moves the bus onto exact
+    /// CS-edge framing, and the tier is reported with its [`CsProvenance`].
+    ///
+    /// The two arguments travel together on purpose. When provenance was a
+    /// separate setter with a default, any attach path that resolved a pin and
+    /// forgot to set it reported `exact (CS net declared by the spec)` for a bus
+    /// no spec had declared a net for. Making the caller say both means a new
+    /// route onto the exact tier cannot silently inherit someone else's story.
+    pub fn set_cs_pin(&mut self, pin: Option<(char, u8)>, provenance: CsProvenance) {
+        self.cs_provenance = provenance;
         // A resolved CS pin means selection is driven by the CS edge, so start
         // DESELECTED until the firmware asserts it. A bus with no CS pin stays
         // selected (the heuristic single-slave case).
@@ -231,7 +364,7 @@ impl SpiBus {
         if self.backend_deselect_seen {
             SpiFramingMode::Backend
         } else if self.cs_pin.is_some() {
-            SpiFramingMode::Exact
+            SpiFramingMode::Exact(self.cs_provenance)
         } else {
             SpiFramingMode::Heuristic
         }
