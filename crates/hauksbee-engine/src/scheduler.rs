@@ -160,25 +160,55 @@ impl ChunkFallbackMethod {
 
     /// Qualitative numerical-fidelity context for this rung.
     ///
-    /// This is deliberately not an error estimate. The solver has not measured
-    /// an output-error bound for either fallback, so the text names only the
-    /// known algorithmic trade-off.
+    /// The note stays qualitative on purpose: it names the rung's known
+    /// algorithmic trade-off. The MEASURED number lives next to it on the
+    /// window record (`FallbackWindow::error_estimate_v`, a step-doubling
+    /// estimate of the chunk-end output error), so the note points there
+    /// instead of claiming or disclaiming a bound itself.
     pub fn fidelity_note(&self) -> &'static str {
         match self {
             ChunkFallbackMethod::ReducedStep => {
-                "primary integration at a smaller maximum step; no empirical \
-                 output-error bound was established"
+                "primary integration at a smaller maximum step; \
+                 error_estimate_v carries the measured step-doubling estimate \
+                 of the chunk-end output error (absent when the refinement \
+                 companion failed to converge)"
             }
             ChunkFallbackMethod::BackwardEuler
             | ChunkFallbackMethod::ColdStartBackwardEuler
             | ChunkFallbackMethod::SubdividedBackwardEuler => {
                 "first-order backward Euler: numerically dissipative, so fast \
                  transients and ringing inside this window are damped relative \
-                 to the second-order primary solve; no empirical output-error \
-                 bound was established"
+                 to the second-order primary solve; error_estimate_v carries \
+                 the measured step-doubling estimate of the chunk-end output \
+                 error (absent when the refinement companion failed to \
+                 converge)"
             }
         }
     }
+}
+
+/// One sim-time window `[start_s, end_s)` whose answer a fallback rung
+/// produced after the primary analog solve failed there, with the rung and
+/// the MEASURED accuracy record attached (B12: a fallback window used to
+/// disclose "no empirical output-error bound was established"; now it carries
+/// one).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FallbackWindow {
+    pub start_s: f64,
+    pub end_s: f64,
+    /// The rung that produced this window's answer.
+    pub method: ChunkFallbackMethod,
+    /// Measured step-doubling estimate of the CHUNK-END node-voltage error,
+    /// in volts: the adopted rung's end state differenced against a companion
+    /// re-solve of the same window with the step bounds AND the LTE/Newton
+    /// tolerances scaled 4x (tighter first; a 4x-coarser leg when the tight
+    /// companion will not converge), Richardson-scaled, doubled as a safety
+    /// factor, plus the solver's own convergence-tolerance floor
+    /// (reltol·|v| + vntol, below which no march can vouch for a digit).
+    /// Merged windows carry the worst (largest) of their chunks' estimates.
+    /// `None` when neither companion converged: the window is still a real
+    /// converged solve, but no empirical estimate was established for it.
+    pub error_estimate_v: Option<f64>,
 }
 
 /// Live chip-select framing hook installed by [`Scheduler::attach_spi_bus`] when
@@ -413,13 +443,27 @@ pub struct Scheduler {
     /// second-class number (a more dissipative method, a smaller step, or a
     /// subdivided march), and a consumer reading a waveform is entitled to know
     /// which windows those are: the count and windows are surfaced in the
-    /// co-sim JSON as `fallback_windows`, each with the method that produced it
-    /// and that method's qualitative fidelity note. An answer carries its
-    /// provenance without an invented error bound.
+    /// co-sim JSON as `fallback_windows`, each with the method that produced
+    /// it, that method's qualitative fidelity note, and a MEASURED
+    /// step-doubling estimate of the chunk-end output error (B12). An answer
+    /// carries its provenance with a measured estimate, never an invented one.
     fallback_chunks: u64,
     /// Sim-time windows `[start_s, end_s)` solved by a fallback rung, with the
-    /// rung that produced each, merged where consecutive with the same rung.
-    fallback_windows: Vec<(f64, f64, ChunkFallbackMethod)>,
+    /// rung that produced each and its measured error estimate, merged where
+    /// consecutive with the same rung.
+    fallback_windows: Vec<FallbackWindow>,
+    /// TEST-ONLY tamper knob: when set, `solve_chunk` treats the primary march
+    /// as failed and the fallback ladder starts at the named rung, so a test
+    /// can put a board of its choosing on a rung of its choosing. Never set
+    /// outside tests.
+    #[doc(hidden)]
+    pub debug_force_fallback_rung: Option<ChunkFallbackMethod>,
+    /// TEST-ONLY tamper knob: when true, the fallback error estimator is
+    /// deliberately BROKEN (returns 0.0 regardless of the measured
+    /// difference), so the estimator's own two-sided test can prove it would
+    /// catch a broken estimator. Never set outside tests.
+    #[doc(hidden)]
+    pub debug_zero_fallback_error_estimate: bool,
     /// Largest measured final Newton residual among converged chunks this run.
     /// `None` means the active solver path did not measure one; it never means
     /// a zero residual.
@@ -988,6 +1032,8 @@ impl Scheduler {
             failed_window_reasons: Vec::new(),
             fallback_chunks: 0,
             fallback_windows: Vec::new(),
+            debug_force_fallback_rung: None,
+            debug_zero_fallback_error_estimate: false,
             worst_residual: None,
             consecutive_failed_chunks: 0,
             max_consecutive_failed_chunks: 0,
@@ -3092,20 +3138,33 @@ impl Scheduler {
     /// stays loud). This exists to SHRINK the set of windows the run cannot
     /// vouch for, never to manufacture a plausible number for one: every rung
     /// is a real converged solve of the chunk, just by a second-class method,
-    /// and the rung is recorded per window so the consumer knows which method
-    /// produced which answer.
+    /// and the rung is recorded per window, WITH a measured step-doubling
+    /// error estimate (B12), so the consumer knows which method produced
+    /// which answer and how far the chunk-end state can be trusted.
     fn fallback_ladder(
         &self,
         chunk: f64,
         thermal: &mut ChunkThermalAccum,
-    ) -> Option<(ChunkFallbackMethod, Vec<f64>, TransientDiagnostics)> {
+    ) -> Option<(
+        ChunkFallbackMethod,
+        Vec<f64>,
+        TransientDiagnostics,
+        Option<f64>,
+    )> {
         let seed = self.last_dc_seed.as_deref();
         let reduced = self.reduced_step_opts(chunk);
+        // Rungs below the forced one are skipped (test hook; 0 in production,
+        // so every rung runs exactly as before).
+        let min_rung = self.debug_force_fallback_rung.map(|m| m as u8).unwrap_or(0);
 
         // Rung 1: the primary integration at a bounded step.
-        thermal.clear();
-        if let Ok((x, diagnostics)) = self.march_chunk(chunk, reduced, seed, thermal) {
-            return Some((ChunkFallbackMethod::ReducedStep, x, diagnostics));
+        if min_rung <= ChunkFallbackMethod::ReducedStep as u8 {
+            thermal.clear();
+            if let Ok((x, diagnostics)) = self.march_chunk(chunk, reduced, seed, thermal) {
+                let method = ChunkFallbackMethod::ReducedStep;
+                let err = self.fallback_error_estimate(chunk, 1, reduced, seed, &x);
+                return Some((method, x, diagnostics, err));
+            }
         }
 
         // Rung 2: backward Euler at the bounded step. L-stable, so the
@@ -3113,9 +3172,13 @@ impl Scheduler {
         // integration order, which the record discloses.
         let mut be = reduced;
         be.integration = hauksbee_solve::Integration::BackwardEuler;
-        thermal.clear();
-        if let Ok((x, diagnostics)) = self.march_chunk(chunk, be, seed, thermal) {
-            return Some((ChunkFallbackMethod::BackwardEuler, x, diagnostics));
+        if min_rung <= ChunkFallbackMethod::BackwardEuler as u8 {
+            thermal.clear();
+            if let Ok((x, diagnostics)) = self.march_chunk(chunk, be, seed, thermal) {
+                let method = ChunkFallbackMethod::BackwardEuler;
+                let err = self.fallback_error_estimate(chunk, 1, be, seed, &x);
+                return Some((method, x, diagnostics, err));
+            }
         }
 
         // Rung 3: backward Euler from a COLD start. Dropping the warm seed
@@ -3123,9 +3186,13 @@ impl Scheduler {
         // source stepping, the staged rescue) to re-derive this chunk's
         // operating point from scratch: a warm seed that has drifted onto a
         // bad basin is exactly the state a continuation restart escapes.
-        thermal.clear();
-        if let Ok((x, diagnostics)) = self.march_chunk(chunk, be, None, thermal) {
-            return Some((ChunkFallbackMethod::ColdStartBackwardEuler, x, diagnostics));
+        if min_rung <= ChunkFallbackMethod::ColdStartBackwardEuler as u8 {
+            thermal.clear();
+            if let Ok((x, diagnostics)) = self.march_chunk(chunk, be, None, thermal) {
+                let method = ChunkFallbackMethod::ColdStartBackwardEuler;
+                let err = self.fallback_error_estimate(chunk, 1, be, None, &x);
+                return Some((method, x, diagnostics, err));
+            }
         }
 
         // Rung 4: subdivide the chunk into quarters and march each with
@@ -3137,14 +3204,35 @@ impl Scheduler {
         // change at chunk boundaries.) The quarters' thermal integrals add up
         // to the one chunk's energy, so the accumulator is cleared once here
         // and shared across all four sub-marches.
-        let quarter = chunk / 4.0;
-        let mut carry: Option<Vec<f64>> = self.last_dc_seed.clone();
-        let mut diagnostics = TransientDiagnostics::default();
         thermal.clear();
-        for _ in 0..4 {
-            match self.march_chunk(quarter, be, carry.as_deref(), thermal) {
-                Ok((x, quarter_diagnostics)) => {
-                    if let Some(candidate) = quarter_diagnostics.final_residual {
+        let (x, diagnostics) =
+            self.march_chunk_subdivided(chunk, 4, be, self.last_dc_seed.clone(), thermal)?;
+        let method = ChunkFallbackMethod::SubdividedBackwardEuler;
+        let err = self.fallback_error_estimate(chunk, 4, be, self.last_dc_seed.as_deref(), &x);
+        Some((method, x, diagnostics, err))
+    }
+
+    /// March `chunk` as `n` equal back-to-back sub-marches with the given
+    /// options, each seeded from the previous one's end state (the first from
+    /// `seed`). Every sub-march must converge; a partial chunk is not an
+    /// answer, so any failure returns `None`. Diagnostics keep the worst
+    /// sub-march residual; accepted-step thermal energy accumulates additively
+    /// into the one shared accumulator.
+    fn march_chunk_subdivided(
+        &self,
+        chunk: f64,
+        n: usize,
+        opts: SolverOptions,
+        seed: Option<Vec<f64>>,
+        thermal: &mut ChunkThermalAccum,
+    ) -> Option<(Vec<f64>, TransientDiagnostics)> {
+        let sub = chunk / n as f64;
+        let mut carry: Option<Vec<f64>> = seed;
+        let mut diagnostics = TransientDiagnostics::default();
+        for _ in 0..n {
+            match self.march_chunk(sub, opts, carry.as_deref(), thermal) {
+                Ok((x, sub_diagnostics)) => {
+                    if let Some(candidate) = sub_diagnostics.final_residual {
                         if diagnostics
                             .final_residual
                             .is_none_or(|current| candidate.0 > current.0)
@@ -3157,7 +3245,125 @@ impl Scheduler {
                 Err(_) => return None,
             }
         }
-        carry.map(|x| (ChunkFallbackMethod::SubdividedBackwardEuler, x, diagnostics))
+        carry.map(|x| (x, diagnostics))
+    }
+
+    /// The adopted rung's options with the accuracy dial scaled by `factor`
+    /// (< 1 tighter, > 1 coarser), for the step-doubling companion: BOTH the
+    /// step bounds and the LTE/Newton tolerances scale. Scaling only the step
+    /// bound is not enough: on a window whose error the LTE controller (not
+    /// the bound) dominates, a bound-only companion re-walks essentially the
+    /// same grid and the difference measures nothing (found by the RLC
+    /// bracket test, which it failed by 7x).
+    fn companion_opts(mut opts: SolverOptions, factor: f64) -> SolverOptions {
+        opts.step = match opts.step {
+            hauksbee_solve::StepControl::Adaptive {
+                dt_initial,
+                dt_min,
+                dt_max,
+            } => hauksbee_solve::StepControl::Adaptive {
+                dt_initial: (dt_initial * factor).max(dt_min),
+                dt_min,
+                dt_max: (dt_max * factor).max(dt_min),
+            },
+            hauksbee_solve::StepControl::Fixed { dt } => {
+                hauksbee_solve::StepControl::Fixed { dt: dt * factor }
+            }
+        };
+        opts.reltol *= factor;
+        opts.abstol *= factor;
+        opts.vntol *= factor;
+        opts.chgtol *= factor;
+        opts
+    }
+
+    /// MEASURED per-window error estimate for a fallback rung (B12): the
+    /// classical step-doubling construction. The adopted rung solved the
+    /// chunk with accuracy dial h (step bounds and tolerances together);
+    /// re-solve the same window (same rung structure, same seed,
+    /// `subdivisions` sub-marches) at h/4 and difference the end states.
+    /// With the error asymptotically linear-or-better in the dial, the
+    /// refined leg carries at most ~1/4 of the adopted error, so
+    /// err ≈ diff · 4/3 (Richardson at ratio 4, effective order >= 1; using
+    /// order 1 is deliberate, it is the conservative choice for the
+    /// second-order reduced-step rung too). When the tighter companion will
+    /// not converge (stiff boards land on the fallback ladder precisely
+    /// because tighter marches struggle), a 4x-COARSER leg is measured
+    /// instead: there the companion carries ~4x the adopted error and
+    /// err ≈ diff / 3. Either way the recorded estimate doubles the
+    /// Richardson value (a documented safety factor: the linear-error model
+    /// is asymptotic) and adds the solver's own convergence-tolerance floor
+    /// reltol·|v| + vntol, below which no march can vouch for a digit anyway.
+    /// Estimates the CHUNK-END node voltages, the state the window publishes
+    /// and the next chunk is seeded from. Returns `None` when neither
+    /// companion converges: no estimate is invented.
+    fn fallback_error_estimate(
+        &self,
+        chunk: f64,
+        subdivisions: usize,
+        opts: SolverOptions,
+        seed: Option<&[f64]>,
+        x_end: &[f64],
+    ) -> Option<f64> {
+        // Deliberately-broken-estimator test hook: prove the two-sided test
+        // catches an estimator that stops measuring. Never set in production.
+        if self.debug_zero_fallback_error_estimate {
+            return Some(0.0);
+        }
+        // Worst node-voltage disagreement at the chunk end. `layout.n_nodes`
+        // counts the NON-ground node unknowns, which occupy x[0..n_nodes]
+        // (the branch-current block follows, exactly as `adopt_chunk_state`
+        // reads it); branch currents are excluded from the diff, they are
+        // not volts.
+        let n_v = self.layout.n_nodes;
+        let end_state_diff = |x_ref: &[f64]| {
+            let mut diff = 0.0f64;
+            let mut v_max = 0.0f64;
+            for i in 0..n_v.min(x_end.len()).min(x_ref.len()) {
+                diff = diff.max((x_end[i] - x_ref[i]).abs());
+                v_max = v_max.max(x_end[i].abs()).max(x_ref[i].abs());
+            }
+            (diff, v_max)
+        };
+        // The companion's thermal integral is scratch either way: the adopted
+        // rung's energy deposit is the real one.
+        let mut scratch = ChunkThermalAccum::default();
+        let refined = Self::companion_opts(opts, 0.25);
+        let companion = self
+            .march_chunk_subdivided(
+                chunk,
+                subdivisions,
+                refined,
+                seed.map(<[f64]>::to_vec),
+                &mut scratch,
+            )
+            .map(|(x_ref, _)| (x_ref, 4.0 / 3.0))
+            .or_else(|| {
+                let coarse = Self::companion_opts(opts, 4.0);
+                self.march_chunk_subdivided(
+                    chunk,
+                    subdivisions,
+                    coarse,
+                    seed.map(<[f64]>::to_vec),
+                    &mut scratch,
+                )
+                .map(|(x_ref, _)| (x_ref, 1.0 / 3.0))
+            })?;
+        let (x_ref, richardson) = companion;
+        let (diff, v_max) = end_state_diff(&x_ref);
+        if std::env::var("HAUKSBEE_DEBUG_FALLBACK_EST").is_ok() {
+            eprintln!(
+                "[fallback-est] richardson={richardson} diff={diff:.6e} v_max={v_max:.3} \
+                 x_end={:?} x_ref={:?}",
+                &x_end[..n_v.min(x_end.len())],
+                &x_ref[..n_v.min(x_ref.len())]
+            );
+        }
+        if !diff.is_finite() {
+            return None;
+        }
+        let floor = self.opts.reltol * v_max + self.opts.vntol;
+        Some(2.0 * richardson * diff + floor)
     }
 
     /// Adopt a converged end state: publish node voltages and branch currents,
@@ -3194,8 +3400,13 @@ impl Scheduler {
         // every chunk. Exact (same root, fewer iters); a size-mismatched or
         // failing seed falls back to the cold solve inside the solver.
         let mut thermal = ChunkThermalAccum::default();
-        let primary =
-            self.march_chunk(chunk, self.opts, self.last_dc_seed.as_deref(), &mut thermal);
+        let primary = if self.debug_force_fallback_rung.is_some() {
+            // Test hook: pretend the primary failed so the ladder runs on a
+            // board of the test's choosing. Never set in production.
+            Err(("primary march skipped by test hook".to_string(), Vec::new()))
+        } else {
+            self.march_chunk(chunk, self.opts, self.last_dc_seed.as_deref(), &mut thermal)
+        };
         let mut failure_reason: Option<String> = None;
         let converged = match primary {
             Ok((x, diagnostics)) => {
@@ -3212,14 +3423,16 @@ impl Scheduler {
                 // window. Only when every rung also fails does the refusal
                 // path below run, unchanged: this feature shrinks the set of
                 // windows the run cannot vouch for, it never papers over one.
-                if let Some((method, x, diagnostics)) = self.fallback_ladder(chunk, &mut thermal) {
+                if let Some((method, x, diagnostics, error_estimate_v)) =
+                    self.fallback_ladder(chunk, &mut thermal)
+                {
                     self.adopt_chunk_state(x);
                     self.record_residual(diagnostics);
                     // Only the adopted rung's accepted-step thermal integral is
                     // real; the ladder cleared every failed attempt's partial.
                     self.stress
                         .deposit_chunk_energy(&thermal.energy_j, thermal.elapsed_s);
-                    self.record_fallback_chunk(chunk, method);
+                    self.record_fallback_chunk(chunk, method, error_estimate_v);
                     true
                 } else {
                     // Every rung failed. Keep the solver's own refusal message:
@@ -3290,17 +3503,34 @@ impl Scheduler {
     /// Record one FALLBACK-solved chunk: bump the count and extend/append the
     /// fallback window, merging contiguous windows solved by the SAME rung so
     /// a stretch reads as its true extent (a method change starts a new window,
-    /// since the two spans carry different accuracy). Called from `solve_chunk`
-    /// before `sim_time` advances, mirroring `record_failed_chunk`.
-    fn record_fallback_chunk(&mut self, chunk: f64, method: ChunkFallbackMethod) {
+    /// since the two spans carry different accuracy). A merged window keeps the
+    /// WORST (largest) chunk-end error estimate of its chunks; one chunk
+    /// without an estimate makes the whole window's estimate honest-absent.
+    /// Called from `solve_chunk` before `sim_time` advances, mirroring
+    /// `record_failed_chunk`.
+    fn record_fallback_chunk(
+        &mut self,
+        chunk: f64,
+        method: ChunkFallbackMethod,
+        error_estimate_v: Option<f64>,
+    ) {
         self.fallback_chunks += 1;
         let start = self.sim_time;
         let end = self.sim_time + chunk;
         match self.fallback_windows.last_mut() {
-            Some(prev) if prev.2 == method && (start - prev.1).abs() <= chunk * 1e-6 => {
-                prev.1 = end;
+            Some(prev) if prev.method == method && (start - prev.end_s).abs() <= chunk * 1e-6 => {
+                prev.end_s = end;
+                prev.error_estimate_v = match (prev.error_estimate_v, error_estimate_v) {
+                    (Some(a), Some(b)) => Some(a.max(b)),
+                    _ => None,
+                };
             }
-            _ => self.fallback_windows.push((start, end, method)),
+            _ => self.fallback_windows.push(FallbackWindow {
+                start_s: start,
+                end_s: end,
+                method,
+                error_estimate_v,
+            }),
         }
     }
 
@@ -3439,9 +3669,10 @@ impl Scheduler {
     }
 
     /// The sim-time windows `[start_s, end_s)` solved by a fallback rung, with
-    /// the rung that produced each, merged where consecutive with the same
-    /// rung. Empty on a run the primary path carried whole.
-    pub fn fallback_windows(&self) -> &[(f64, f64, ChunkFallbackMethod)] {
+    /// the rung that produced each and its measured chunk-end error estimate,
+    /// merged where consecutive with the same rung. Empty on a run the primary
+    /// path carried whole.
+    pub fn fallback_windows(&self) -> &[FallbackWindow] {
         &self.fallback_windows
     }
 
@@ -3454,7 +3685,7 @@ impl Scheduler {
         let fallback: Vec<(f64, f64, &str)> = self
             .fallback_windows
             .iter()
-            .map(|(start, end, method)| (*start, *end, method.as_str()))
+            .map(|w| (w.start_s, w.end_s, w.method.as_str()))
             .collect();
         let mut budget = crate::evidence::BoardEvidence::transient_error_budget(
             &self.opts,

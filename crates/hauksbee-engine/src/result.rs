@@ -886,15 +886,20 @@ pub struct CosimFailedWindow {
 /// One sim-time window `[start_s, end_s)` whose answer was produced by a
 /// per-chunk fallback integration rung after the primary analog solve failed
 /// there. `method` is the rung's stable name
-/// (`crate::scheduler::ChunkFallbackMethod::as_str`), and `fidelity_note`
-/// names the known algorithmic trade-off without claiming an empirical error
-/// bound. The record travels with the number it qualifies.
+/// (`crate::scheduler::ChunkFallbackMethod::as_str`), `fidelity_note` names
+/// the known algorithmic trade-off, and `error_estimate_v` is the MEASURED
+/// step-doubling estimate of the chunk-end node-voltage error in volts
+/// (worst chunk of a merged window; omitted when the refinement companion
+/// failed to converge, never invented). The record travels with the number it
+/// qualifies.
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]
 pub struct CosimFallbackWindow {
     pub start_s: f64,
     pub end_s: f64,
     pub method: String,
     pub fidelity_note: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_estimate_v: Option<f64>,
 }
 
 #[derive(Debug, Clone, Serialize, schemars::JsonSchema)]

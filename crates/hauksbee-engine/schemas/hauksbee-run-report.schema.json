@@ -626,11 +626,18 @@
       "type": "object"
     },
     "CosimFallbackWindow": {
-      "description": "One sim-time window `[start_s, end_s)` whose answer was produced by a\nper-chunk fallback integration rung after the primary analog solve failed\nthere. `method` is the rung's stable name\n(`crate::scheduler::ChunkFallbackMethod::as_str`), and `fidelity_note`\nnames the known algorithmic trade-off without claiming an empirical error\nbound. The record travels with the number it qualifies.",
+      "description": "One sim-time window `[start_s, end_s)` whose answer was produced by a\nper-chunk fallback integration rung after the primary analog solve failed\nthere. `method` is the rung's stable name\n(`crate::scheduler::ChunkFallbackMethod::as_str`), `fidelity_note` names\nthe known algorithmic trade-off, and `error_estimate_v` is the MEASURED\nstep-doubling estimate of the chunk-end node-voltage error in volts\n(worst chunk of a merged window; omitted when the refinement companion\nfailed to converge, never invented). The record travels with the number it\nqualifies.",
       "properties": {
         "end_s": {
           "format": "double",
           "type": "number"
+        },
+        "error_estimate_v": {
+          "format": "double",
+          "type": [
+            "number",
+            "null"
+          ]
         },
         "fidelity_note": {
           "type": "string"
