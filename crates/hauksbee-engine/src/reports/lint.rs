@@ -113,7 +113,10 @@ pub fn emit(
     if strict && lint_fails(&report) {
         super::strict_gate_exit(mode, &super::lint_gate_items(&report));
     }
-    if strict && evidence.is_undermined() {
+    // Mirror of the JSON verdict's rule: binding completeness gates through
+    // the verdict-critical set only, never through any open passive's per-net
+    // map, so --strict cannot exit 3 where the verdict field says pass.
+    if strict && !blockers.is_empty() {
         std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())
@@ -303,7 +306,10 @@ pub fn emit_resources(
     if strict && lint_fails(&report) {
         super::strict_gate_exit(mode, &super::lint_gate_items(&report));
     }
-    if strict && evidence.is_undermined() {
+    // Mirror of the JSON verdict's rule: binding completeness gates through
+    // the verdict-critical set only, never through any open passive's per-net
+    // map, so --strict cannot exit 3 where the verdict field says pass.
+    if strict && !blockers.is_empty() {
         std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())

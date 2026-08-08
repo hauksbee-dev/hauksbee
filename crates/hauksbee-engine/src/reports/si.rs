@@ -143,7 +143,10 @@ pub fn emit(
     if strict && si_fails(&report) {
         super::strict_gate_exit(mode, &super::si_gate_items(&report));
     }
-    if strict && evidence.is_undermined() {
+    // Mirror of the JSON verdict's rule: the undermined coverage claim and
+    // the verdict-critical bind gate exit 3; an open passive's per-net map or
+    // a finding's own badge never does.
+    if strict && (coverage_undermined || !blockers.is_empty()) {
         std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())
