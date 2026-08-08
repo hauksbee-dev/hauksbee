@@ -562,6 +562,18 @@ subdir = "v2"
 license = "MIT"
 axes = ["altium-binary", "motor-driver", "stm32", "medium"]
 expect = ["v2/Inverter.PcbDoc", "v2/Top.SchDoc", "v2/Inverter.PrjPcb"]
+known_good = false
+known_good_note = """
+Adjudicated, not pending: the repo's v2 directory carries Inverter45attempt.PcbDoc \
+alongside the final Inverter.PcbDoc, and the attempt file has a real GND <-> AGND \
+copper overlap on F.Cu at x=153.2, y=183.9 (gap -1.0 mm). The file's own rule set \
+forbids it: its only ShortCircuit rule is the Altium default (scope All/All, \
+ALLOWED=FALSE), so Altium's DRC would flag the same overlap; no scoped allowance \
+sanctions a deliberate ground join. The finding therefore stays as a true positive \
+on a design attempt that was never shipped, and this entry leaves the silence set \
+because the marker is per-directory and both files share one. Nothing is lost: \
+known_faults.rs carries the explicit two-sided pair (attempt flagged for exactly \
+this short, final Inverter.PcbDoc short-clean)."""
 
 [[board]]
 id = "moco"

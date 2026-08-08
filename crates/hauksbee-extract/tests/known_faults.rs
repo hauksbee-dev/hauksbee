@@ -199,3 +199,59 @@ fn fixed_control_pull_revisions_are_lint_clean() {
     }
     hauksbee_testkit::scanned("fixed-control-pull guard", checked);
 }
+
+// ---------------------------------------------------------------------------
+// ODrive v2 GND <-> AGND overlap gold row. The upstream repo's v2 directory
+// carries two layouts: Inverter45attempt.PcbDoc (an attempt that was never the
+// shipped design) and the final Inverter.PcbDoc. The attempt overlaps its GND
+// and AGND pours on F.Cu at x=153.2, y=183.9 (gap -1.0 mm), and the file's own
+// rule set forbids it: its only ShortCircuit rule is the Altium default (scope
+// All/All, ALLOWED=FALSE), so Altium's DRC would flag the identical overlap and
+// no scoped allowance sanctions a deliberate ground join. The final layout is
+// short-clean, which makes the pair a true discriminator: hauksbee flags the
+// attempt for exactly the defect the final file does not have. The odrive_v2
+// corpus entry is known_good = false for this adjudicated reason (the marker is
+// per-directory and both files share one), so THIS test, not the fetched-sweep
+// silence gate, owns both files' coverage.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn odrive_v2_attempt_ground_short_flagged_and_final_is_clean() {
+    let Some(attempt) = board("odrive/v2/v2/Inverter45attempt.PcbDoc") else {
+        return;
+    };
+    let Some(fixed) = board("odrive/v2/v2/Inverter.PcbDoc") else {
+        return;
+    };
+    hauksbee_testkit::scanned("ODrive v2 ground-short gold row", 2);
+
+    let bytes = std::fs::read(&attempt).expect("read attempt board");
+    let report = hauksbee_extract::ExtractedBoard::altium_drc(&bytes).expect("drc runs");
+    let shorts: Vec<_> = report.shorts().collect();
+    assert_eq!(
+        shorts.len(),
+        1,
+        "the attempt layout carries exactly the one GND/AGND overlap, got: {:?}",
+        shorts
+            .iter()
+            .map(|s| format!("{} <-> {} on {}", s.net_a_name, s.net_b_name, s.layer))
+            .collect::<Vec<_>>()
+    );
+    let s = shorts[0];
+    let mut nets = [s.net_a_name.as_str(), s.net_b_name.as_str()];
+    nets.sort_unstable();
+    assert_eq!(
+        nets,
+        ["AGND", "GND"],
+        "the attempt's short is the analog/digital ground overlap"
+    );
+    assert_eq!(s.layer, "F.Cu");
+
+    let bytes = std::fs::read(&fixed).expect("read final board");
+    let report = hauksbee_extract::ExtractedBoard::altium_drc(&bytes).expect("drc runs");
+    assert_eq!(
+        report.shorts().count(),
+        0,
+        "the final Inverter.PcbDoc is short-clean, so the contrast is real"
+    );
+}
