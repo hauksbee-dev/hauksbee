@@ -409,16 +409,27 @@ turns that into a CI property, replaying the whole assertion set across an
   because silently truncating the corner set would fake the very bounded claim
   the mode exists to make. In corner mode `seeds` is ignored and `[fuzz]` must be
   absent: the two ensembles do not compose.
-- **Determinism**: every sampled value is a pure function of `(seed, reference,
-  rule)`, drawn from a splitmix64 stream domain-separated by a `"tol:"` tag, so a
-  failing member re-runs byte-identical under `--seed N`, and adding a tolerance
-  never changes which fuzz levels a seed straps. Seed 0 is always the nominal
-  baseline, so "nominal passes but the ensemble fails" is visible inside one run.
+- **Determinism**: every Monte-Carlo sampled value is a pure function of
+  `(seed, reference, rule)`, drawn from a splitmix64 stream domain-separated by a
+  `"tol:"` tag, so a failing member re-runs byte-identical under `--seed N`, and
+  adding a tolerance never changes which fuzz levels a seed straps. In
+  Monte-Carlo mode seed 0 is the nominal baseline, so "nominal passes but the
+  ensemble fails" is visible inside one run. Corner mode has no nominal member
+  (member 0 is the all-min corner), and its member indices are renumbered by
+  adding a tolerance rule.
 - **Reporting**: every assertion is re-evaluated per member, and the report names
   the worst member with its component values and words the strength of the claim
   honestly. A passing Monte-Carlo ensemble is statistical evidence, not a
-  worst-case bound; corner mode bounds the worst case *only where the response is
-  monotonic in each value*, and the report says so on every verdict it backs.
+  worst-case bound; corner mode's bound holds where the response is *monotonic in
+  each value*, and the report says so on every verdict it backs.
+- **Interior probes**: corner mode does not take that monotonicity on trust. It
+  runs a small stratified Latin-hypercube sample of the interior alongside the
+  corners (4 probes for one toleranced component, 6 for two, 8 from three up), and
+  an interior point that fails where every corner passed FAILS the assertion and
+  says the corners did not bound it. A clean probe set is evidence for the
+  monotonicity the bound needs, never proof of it, and the wording says so: each
+  member is judged against the assertion's own window, so a probe worse than every
+  corner still passes while it stays in band.
 
 The worked example is `crates/hauksbee-ci/examples/tolerance_divider_corners.toml`:
 a 10k/10k divider off a 5 V rail with ±10% on both resistors, so four corners.
@@ -430,13 +441,13 @@ tight one fails and names the corner that broke it, with the values that did it:
 $ hauksbee-ci run crates/hauksbee-ci/examples/tolerance_divider_corners.toml
 hauksbee-ci: divider tolerance corners
   board: boards/tolerance_divider.kicad_pcb
-  seeds: 4
-  tolerance corners: 4 deterministic min/max corner(s) over 2 component(s): bounds the worst case only where the response is monotonic in each value
+  seeds: 10
+  tolerance corners: 4 deterministic min/max corner(s) + 6 interior probe(s) over 2 component(s): bounds the worst case only where the response is monotonic in each value, and the probes sample the interior for a point that breaks an assertion the corners passed (evidence for that monotonicity, not proof of it)
 
   [PASS] VOUT within the designed [2.2, 2.8] V envelope on every corner
-        VOUT: min=2.500V (>= 2.2V), max=2.500V (<= 2.8V) [settled 2.500V] (held on all 4 min/max tolerance corners: bounds the worst case only where the response is monotonic in each value)
+        VOUT: min=2.460V (>= 2.2V), max=2.460V (<= 2.8V) [settled 2.460V] <- one member's reading, not the ensemble span (held on all 4 min/max tolerance corners and on 6 interior Latin-hypercube probe(s): no interior point sampled broke this assertion, which is evidence for the monotonicity the corner bound needs, not proof of it, and a probe inside the window is not compared against the corners' own margin)
   [FAIL] VOUT within the tight [2.4, 2.6] V window on every corner
-        corner 1: VOUT: min=2.250V < required 2.4V <- FAILED HERE, max=2.250V (<= 2.6V) [settled 2.250V] [R1=11k(max), R2=9k(min)]; passed 2/4 corners (failing: 1, 2)
+        corner 1: VOUT: min=2.250V < required 2.4V <- FAILED HERE, max=2.250V (<= 2.6V) [settled 2.250V] [R1=11k(max), R2=9k(min)]; passed 7/10 corners + interior probes (failing: 1, 2, 5)
         why: VOUT settled 0.150 V below your floor (2.250 V vs min 2.4 V)
 
 1/2 assertions passed in 0.03s - RED

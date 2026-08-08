@@ -125,24 +125,41 @@ pub enum EnsembleCoverage {
     /// is the number of genuinely SAMPLED seeds, excluding the nominal baseline
     /// (member 0, which draws no random sample).
     MonteCarlo { seeds: u32, components: usize },
-    /// Deterministic all-min/all-max enumeration.
-    Corners { corners: u32, components: usize },
+    /// Deterministic all-min/all-max enumeration, plus the `interior` stratified
+    /// probes that test the monotonicity the corner bound rests on. The two are
+    /// counted separately because only the corners carry the bounded claim.
+    Corners {
+        corners: u32,
+        interior: u32,
+        components: usize,
+    },
     /// A single pinned ensemble member (`--seed N`): the runner filtered the
     /// ensemble down to exactly this one, so the nominal-baseline / sampled-count
     /// arithmetic doesn't apply, report the member honestly instead. `corners`
     /// distinguishes a deterministic corner (corners mode) from a random draw
     /// (Monte-Carlo), so the banner matches the mode-aware per-assertion wording.
+    /// `interior` is set when the pinned member turned out to be a corner-mode
+    /// INTERIOR probe rather than a corner: the member numbering runs on past the
+    /// last corner, so mode alone cannot tell which one `--seed N` selected, and
+    /// calling a probe "corner N" sends the reader looking for a min/max
+    /// combination that does not exist.
     SingleMember {
         seed: u32,
         components: usize,
         corners: bool,
+        interior: bool,
     },
 }
 
 impl EnsembleCoverage {
     /// The one-line coverage claim, worded so it cannot over-claim: Monte-Carlo
-    /// is sampled coverage (never proof); corners bound only monotonic
-    /// responses.
+    /// is sampled coverage (never proof); corners bound the worst case only
+    /// where the response is monotonic in each value, and the interior probes
+    /// are evidence for that monotonicity rather than proof of it.
+    ///
+    /// This string is the banner AND the JSON `coverage` field AND what the
+    /// evidence map carries, so it must never claim more than the per-assertion
+    /// detail lines in `assertions::all_green_detail` do.
     pub fn describe(&self) -> String {
         match self {
             EnsembleCoverage::MonteCarlo { seeds, components } => format!(
@@ -152,16 +169,39 @@ impl EnsembleCoverage {
             ),
             EnsembleCoverage::Corners {
                 corners,
+                interior: 0,
                 components,
             } => format!(
                 "tolerance corners: {corners} deterministic min/max corner(s) over \
                  {components} component(s): bounds the worst case only where the \
                  response is monotonic in each value"
             ),
+            EnsembleCoverage::Corners {
+                corners,
+                interior,
+                components,
+            } => format!(
+                "tolerance corners: {corners} deterministic min/max corner(s) + {interior} \
+                 interior probe(s) over {components} component(s): bounds the worst case \
+                 only where the response is monotonic in each value, and the probes sample \
+                 the interior for a point that breaks an assertion the corners passed \
+                 (evidence for that monotonicity, not proof of it)"
+            ),
+            EnsembleCoverage::SingleMember {
+                seed,
+                components,
+                interior: true,
+                ..
+            } => format!(
+                "single interior probe: interior probe {seed} over {components} toleranced \
+                 component(s): one pinned point strictly inside the tolerance ranges, \
+                 carrying none of the corner set's bounded claim"
+            ),
             EnsembleCoverage::SingleMember {
                 seed,
                 components,
                 corners: true,
+                interior: false,
             } => format!(
                 "single corner: corner {seed} over {components} toleranced \
                  component(s): one pinned deterministic corner, not full corner coverage"
@@ -170,6 +210,7 @@ impl EnsembleCoverage {
                 seed,
                 components,
                 corners: false,
+                interior: false,
             } => format!(
                 "single ensemble member: seed {seed} over {components} toleranced \
                  component(s): one pinned draw, not ensemble coverage"
@@ -1287,6 +1328,49 @@ fn gh_escape(s: &str) -> String {
 mod ensemble_coverage_tests {
     use super::EnsembleCoverage;
 
+    /// This banner is also the JSON `coverage` field and what the evidence map
+    /// carries, so it must not out-claim the per-assertion detail lines. It has
+    /// to keep the monotonicity hedge and say the probes are evidence, not proof.
+    #[test]
+    fn corner_coverage_with_probes_keeps_the_monotonicity_hedge() {
+        let d = EnsembleCoverage::Corners {
+            corners: 4,
+            interior: 6,
+            components: 2,
+        }
+        .describe();
+        assert!(d.contains("4 deterministic min/max corner(s)"), "{d}");
+        assert!(d.contains("6 interior probe(s)"), "{d}");
+        assert!(
+            d.contains("only where the response is monotonic in each value"),
+            "the corner bound's condition must survive: {d}"
+        );
+        assert!(
+            d.contains("evidence for that monotonicity, not proof of it"),
+            "the probes must not be sold as proof: {d}"
+        );
+        // The corner count must stay the 2^n a reader computes from the
+        // component count, never 2^n + probes.
+        assert!(!d.contains("10 deterministic"), "{d}");
+    }
+
+    /// A corner run with the probes disabled keeps the original, unqualified
+    /// disclosure: there is no search to report.
+    #[test]
+    fn corner_coverage_without_probes_keeps_the_original_disclosure() {
+        let d = EnsembleCoverage::Corners {
+            corners: 4,
+            interior: 0,
+            components: 2,
+        }
+        .describe();
+        assert!(
+            d.contains("only where the response is monotonic in each value"),
+            "{d}"
+        );
+        assert!(!d.contains("interior"), "no probes ran, so claim none: {d}");
+    }
+
     #[test]
     fn monte_carlo_coverage_excludes_the_nominal_from_the_sampled_count() {
         // `seeds` is the SAMPLED count (nominal baseline excluded). A one-member
@@ -1321,6 +1405,7 @@ mod ensemble_coverage_tests {
             seed: 7,
             components: 3,
             corners: false,
+            interior: false,
         }
         .describe();
         assert!(d.contains("seed 7"), "{d}");
@@ -1340,6 +1425,7 @@ mod ensemble_coverage_tests {
             seed: 2,
             components: 2,
             corners: true,
+            interior: false,
         }
         .describe();
         assert!(
