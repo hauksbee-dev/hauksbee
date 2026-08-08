@@ -31,10 +31,10 @@ use std::collections::HashMap;
 use std::io::BufReader;
 
 use gerber_types::{
-    ApertureAttribute, ApertureFunction, AttributeDeletionCriterion, Net as GNet, ObjectAttribute,
+    Aperture, Command, ExtendedCode, FunctionCode, GCode, Operation, Polarity, StepAndRepeat,
 };
 use gerber_types::{
-    Aperture, Command, ExtendedCode, FunctionCode, GCode, Operation, Polarity, StepAndRepeat,
+    ApertureAttribute, ApertureFunction, AttributeDeletionCriterion, Net as GNet, ObjectAttribute,
 };
 use gerber_types::{Circle, Polygon as GPolygon, Rectangular};
 use gerber_types::{CoordinateNumber, CoordinateOffset, Coordinates, InterpolationMode};

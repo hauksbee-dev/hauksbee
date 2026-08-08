@@ -457,12 +457,7 @@ pub fn parse_gbrjob(text: &str) -> std::collections::HashMap<String, GbrJobRole>
                 if n < 1 {
                     continue;
                 }
-                let side = match fields
-                    .next()
-                    .unwrap_or("")
-                    .to_ascii_uppercase()
-                    .as_str()
-                {
+                let side = match fields.next().unwrap_or("").to_ascii_uppercase().as_str() {
                     "TOP" => GbrJobSide::Top,
                     "BOT" | "BOTTOM" => GbrJobSide::Bottom,
                     _ => GbrJobSide::Inner,
