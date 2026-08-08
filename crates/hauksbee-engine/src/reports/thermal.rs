@@ -78,10 +78,12 @@ pub fn emit(
             .with_evidence(&report_evidence);
         // Surface the partial-coverage caveat as an info note too, so a JSON
         // consumer that ignores `coverage` still sees the honesty annotation.
+        // Same INCONCLUSIVE lead as the text caveat: one vocabulary, no
+        // text-vs-JSON dialect fork.
         if coverage.partial {
             jr.notes.push(JsonNote {
                 kind: JsonNoteKind::Coverage,
-                message: thermal_coverage_caveat(&coverage),
+                message: format!("INCONCLUSIVE: {}", thermal_coverage_caveat(&coverage)),
             });
         }
         jr.thermal = Some(ThermalJson {

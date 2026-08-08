@@ -30,6 +30,9 @@ contains = [
   # so rather than reading healthy.
   "active IC(s) are unresolved/open",
   "INCOMPLETE",
+  # The SI heads-up notes survive underneath the INCONCLUSIVE verdict: the
+  # verdict refusing a clean bill must not swallow the observations.
+  "Heads up (worth knowing, not a failure):",
   # And it must hand the reader the next command rather than stopping at a verdict.
   "hauksbee-ci init <board>",
 ]
@@ -44,7 +47,14 @@ matches = [
   # and two of this board's active ICs have none, so a clean bill there would
   # be vacuous. Each section's verdict must say INCONCLUSIVE, count the
   # unmodelled parts, name them, and say what unlocks a conclusive verdict.
+  # (The harness searches, it cannot count occurrences; the closing-verdict
+  # pin below covers the report-level claim.)
   "^INCONCLUSIVE: [0-9]+ current-carrying / active part\\(s\\) have no model \\(U[0-9]+",
+  # The SI section still points at its heads-up notes from the verdict line:
+  # INCONCLUSIVE must not bury the observations worth a look.
+  "^INCONCLUSIVE: .* Plus [0-9]+ things? worth a look \\(see below\\)\\.$",
+  # And the report's closing line refuses the clean claim too.
+  "^VERDICT: inconclusive: 0 serious, [0-9]+ worth a look; [0-9]+ current-carrying / active part\\(s\\) have no model",
   # The heads-up points at `--report` for the bind table. If it puts a part count
   # in that sentence, the count has to be the size of the table it is pointing
   # at. Watchy binds 67 non-ignored parts into an 82-row table, so the only

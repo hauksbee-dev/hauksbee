@@ -777,10 +777,13 @@ struct RunArgs {
     )]
     strict_thermal: bool,
 
-    /// Opt out of the default strict thermal gate: a PARTIAL-coverage thermal
-    /// result exits 0 instead of 3. The INCONCLUSIVE coverage caveat (text
-    /// stderr + JSON note) still prints; only the exit code changes. An empty
-    /// thermal table over open power ICs stays invalid (exit 3) regardless.
+    /// Opt out of the default strict thermal gate, restoring the old
+    /// non-strict behaviour: a PARTIAL-coverage thermal result exits 0 instead
+    /// of 3, and undermined thermal evidence no longer escalates either (the
+    /// two exits --strict-thermal used to opt in to). The INCONCLUSIVE
+    /// coverage caveat (text stderr + JSON note) still prints; only the exit
+    /// code changes. An empty thermal table over open power ICs stays invalid
+    /// (exit 3) regardless.
     #[arg(long, help_heading = "Advanced / analyses")]
     no_strict_thermal: bool,
 

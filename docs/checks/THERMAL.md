@@ -162,7 +162,8 @@ estimator by design.
   PARTIAL-coverage table (real rows while an active power IC on the live
   circuit is open/unresolved) also exits 3 **by default**, because it
   understates the true load; `--no-strict-thermal` opts out of that
-  escalation while the INCONCLUSIVE coverage caveat still prints
+  escalation (and of the undermined-evidence escalation that shares the same
+  strictness) while the INCONCLUSIVE coverage caveat still prints
   (`--strict-thermal` is accepted as a quiet no-op, it named what is now the
   default). See [Exit codes](../ci/CI.md#exit-codes-the-pipeline-contract).
 - **`hauksbee check-code <code> [--ambient C]`**: the over-temperature fault

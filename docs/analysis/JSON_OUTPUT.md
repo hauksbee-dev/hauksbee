@@ -68,9 +68,11 @@ carve-out the exit gate makes.
 A `"pass"` can be **qualified**. When current-carrying / active parts have no
 model (an open power FET, an unresolved main IC), the lint/SI/check surfaces
 add a `notes` entry (kind `coverage`) whose message begins `INCONCLUSIVE:`,
-naming the count, the parts, and the unlocking input; the same parts are in
-`bind.active_path_unresolved[]` / `bind.resolved_but_open_active[]`, and the
-evidence spine carries `qualified` status. Read `verdict: "pass"` together
+naming the count, the parts, and the unlocking input. The same parts are in
+`bind.active_path_unresolved[]` (an unresolved power FET appears there with
+`active_ic: false`, so do not filter on `active_ic` when looking for them) or
+`bind.resolved_but_open_active[]`, and the evidence spine carries the typed
+`open_part` assumptions on affected claims. Read `verdict: "pass"` together
 with those fields: a pass over unmodelled critical parts is not a clean bill.
 The note is prose honesty only, it never changes `ok`, `verdict`, or the exit
 code (`docs/ci/CI.md` states that boundary).
