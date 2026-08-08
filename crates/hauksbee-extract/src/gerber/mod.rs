@@ -111,6 +111,29 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         }
     }
 
+    // The exporter's own manifest, when the job ships one: a `.gbrjob` names
+    // every file's role and each copper film's PHYSICAL layer number
+    // (`Copper,L3,Inr`). That answers exactly what filename inference guesses
+    // at: which files are copper and in what stack order, including
+    // Allegro-style planes named without a stack digit and KiCad inner films
+    // exported under the user's own label (`-GND_Cu.gbr`). The explicit
+    // mapping file still outranks it; filename inference is the fallback when
+    // no job file exists.
+    let mut gbrjob: std::collections::HashMap<String, layers::GbrJobRole> =
+        std::collections::HashMap::new();
+    for p in &all_files {
+        let is_job = p
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.eq_ignore_ascii_case("gbrjob"))
+            .unwrap_or(false);
+        if is_job {
+            if let Ok(text) = std::fs::read_to_string(p) {
+                gbrjob.extend(layers::parse_gbrjob(&text));
+            }
+        }
+    }
+
     let mut copper: Vec<(LayerRole, std::path::PathBuf)> = Vec::new();
     let mut drills: Vec<std::path::PathBuf> = Vec::new();
     let mut outlines: Vec<std::path::PathBuf> = Vec::new();
@@ -123,11 +146,27 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
-        // Mapping override first, else name-based classification.
-        let role = mapping
-            .get(&fname)
-            .cloned()
-            .unwrap_or_else(|| layers::classify(&path));
+        // Mapping override first, then the job file's manifest, else
+        // name-based classification.
+        let role = mapping.get(&fname).cloned().unwrap_or_else(|| {
+            match gbrjob.get(&fname) {
+                // The physical layer number is the provisional stack index:
+                // L1 = 0 (top) and deeper layers sort after it, exactly the
+                // ordering contract `assign_inner_indices` densifies.
+                Some(layers::GbrJobRole::Copper { layer }) => LayerRole::Copper {
+                    index: (*layer - 1) as usize,
+                    name: path
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("")
+                        .to_string(),
+                },
+                Some(layers::GbrJobRole::Drill) => LayerRole::Drill,
+                Some(layers::GbrJobRole::Outline) => LayerRole::Outline,
+                Some(layers::GbrJobRole::Ignored) => LayerRole::Ignored,
+                None => layers::classify(&path),
+            }
+        });
         match role {
             r @ LayerRole::Copper { .. } => copper.push((r, path)),
             LayerRole::Drill => drills.push(path),
@@ -192,6 +231,14 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
         if let Some(l) = copper_physical_layer(&text) {
             physical_to_stack.insert(l, *index);
             declared_physical_max = declared_physical_max.max(l);
+        }
+        // The job manifest also states the film's physical layer. The film's
+        // own X2 attribute wins where both exist (it is the file speaking for
+        // itself); the manifest fills in for films that carry no attribute.
+        let base = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if let Some(layers::GbrJobRole::Copper { layer }) = gbrjob.get(base) {
+            physical_to_stack.entry(*layer).or_insert(*index);
+            declared_physical_max = declared_physical_max.max(*layer);
         }
         match rs274x::parse_layer(&text) {
             Ok(prims) => layer_prims[*index] = prims,
