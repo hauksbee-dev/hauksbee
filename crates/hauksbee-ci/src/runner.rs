@@ -1791,6 +1791,10 @@ fn run_one(
             // no derived power rating, so its overpower check never ran. Silence
             // there is not a pass.
             .chain(engine.scheduler().stress.power_coverage_gaps())
+            // Model-provenance honesty: a verdict resting on a generic
+            // estimated-fallback model rests on invented ratings, and looked
+            // identical to one resting on a real datasheet until now.
+            .chain(engine.report().estimated_fallback_warnings())
             .chain(engine.scheduler().watchdog_limitations().into_iter().map(
                 |(mcu_ref, limitation)| {
                     hauksbee_engine::scheduler::watchdog_limitation_message(&mcu_ref, &limitation)
