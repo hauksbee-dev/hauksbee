@@ -76,6 +76,8 @@ pub fn emit(
     let structured = DrcStructured::from_report(&report);
     let mut maps = evidence.maps_for_drc(&structured)?;
     let coverage = evidence.check_coverage_map("drc", "DRC input coverage")?;
+    let coverage_undermined =
+        coverage.status() == hauksbee_ir::evidence::EvidenceStatus::Undermined;
     if coverage.status() != hauksbee_ir::evidence::EvidenceStatus::Clean {
         maps.push(coverage);
     }
@@ -138,7 +140,12 @@ pub fn emit(
     if strict && would_gate {
         super::strict_gate_exit(mode, &super::drc_gate_items(&report));
     }
-    if strict && evidence.is_undermined() {
+    // Copper is model-free: only an undermined DRC coverage claim (the input
+    // could not honestly be inspected) or an undermined shorts map exits 3;
+    // the bind state never poisons the copper surface.
+    if strict
+        && (coverage_undermined || crate::result::run_level_undermined(evidence.maps(), |_| false))
+    {
         std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())

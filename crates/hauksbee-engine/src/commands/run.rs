@@ -671,12 +671,16 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             hauksbee_ir::evidence::RunDate::from_system_clock(),
         )?
         .with_input_artifact(&cfg.board, &raw, input_kind)?;
+        let blockers = crate::result::unmodelled_critical_refs(
+            &crate::result::BindSummary::from_report(&bound.report),
+        );
         return crate::reports::usb_c::emit(
             &board,
             &evidence,
             crate::reports::OutputMode::from_flags(cfg.json, cfg.plain),
             cfg.strict,
             &inputs,
+            &blockers,
         );
     }
 
@@ -1114,7 +1118,12 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
                 |m| !rewrite_messages.contains(m.assertion()),
             );
         } else {
-            crate::reports::ci_artifacts::github_evidence_annotations(run_evidence.maps());
+            let fault_messages: std::collections::HashSet<&str> =
+                fault_findings.iter().map(|f| f.message.as_str()).collect();
+            crate::reports::ci_artifacts::github_evidence_annotations_with_gate(
+                run_evidence.maps(),
+                |m| !fault_messages.contains(m.assertion()),
+            );
         }
 
         if cfg.json {
