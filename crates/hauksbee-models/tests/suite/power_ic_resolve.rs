@@ -224,3 +224,82 @@ fn ltc4020_exposes_its_two_resistor_protection_limit_to_simulation() {
     assert!((programmed_limit(7_150.0, 0.01) - 1.7875).abs() < 1e-12);
     assert!((programmed_limit(100_000.0, 0.01) - 5.0).abs() < 1e-12);
 }
+
+/// The ST SR2 Smart Reset (DocID026047 Rev 2): one entry covers the six
+/// ordering options Table 7 lists, because they differ only in the tSRC delay
+/// and the tREC option, neither of which this model carries. What it does carry
+/// is the UDFN6 pin map and the fixed-volt input thresholds, and both are
+/// asserted here because they are what makes a Watchy's U1 bind at all.
+#[test]
+fn the_sr2_family_binds_every_ordering_option_to_one_udfn6_map() {
+    let lib = ModelLibrary::builtin();
+    for value in [
+        "SR2HARU", "SR2LABU", "SR2LARU", "SR2PARU", "SR2UABU", "SR2UARU",
+    ] {
+        let q = ComponentQuery {
+            value: Some(value.into()),
+            ..Default::default()
+        };
+        let m = lib
+            .resolve(&q)
+            .model
+            .unwrap_or_else(|| panic!("{value} did not resolve"));
+        assert_eq!(m.id, "sr2", "{value} resolved to the wrong entry");
+    }
+
+    // Neither the 4-pin SR1 nor an ordering code ST does not build may borrow
+    // this map: the SR1 has a different package and pinout entirely.
+    for value in ["SR1HARU", "SR2HABU", "SR2PABU", "SR2"] {
+        let q = ComponentQuery {
+            value: Some(value.into()),
+            ..Default::default()
+        };
+        assert!(
+            lib.resolve(&q).model.is_none_or(|m| m.id != "sr2"),
+            "{value} must not resolve to the SR2 entry"
+        );
+    }
+
+    let q = ComponentQuery {
+        value: Some("SR2HARU".into()),
+        ..Default::default()
+    };
+    let m = lib.resolve(&q).model.expect("SR2HARU resolves");
+    // Table 1 Signal names. Pad 3 is the reset OUTPUT and pads 2/5 are the two
+    // push-button inputs; swapping them would make the model read the ESP32's
+    // EN net as a button press.
+    for (pad, role) in [
+        ("1", "vss"),
+        ("2", "sr1_n"),
+        ("3", "rst_n"),
+        ("4", "nc"),
+        ("5", "sr0_n"),
+        ("6", "vcc"),
+    ] {
+        assert_eq!(
+            m.pins.get(pad).map(String::as_str),
+            Some(role),
+            "SR2 pad {pad} must be {role}"
+        );
+    }
+    assert_eq!(m.pins.len(), 6, "UDFN6 has six pads");
+
+    // Table 4. The SR inputs have FIXED thresholds, not VCC fractions: 0.85 V
+    // VIH min and 0.3 V VIL max regardless of a 1.65 to 5.5 V rail. Rounding
+    // these up to a CMOS 0.3/0.7 x VCC pair would misjudge every press.
+    assert_eq!(m.params.get_f64("vih"), Some(0.85));
+    assert_eq!(m.params.get_f64("vil"), Some(0.3));
+    assert_eq!(m.params.get_f64("vol"), Some(0.3));
+    assert_eq!(
+        m.params.get_f64("voh"),
+        None,
+        "these options are open-drain with no internal pull-up, and the datasheet's \
+         VOH row is push-pull only; a voh here would invent a high-side driver"
+    );
+    // ICC typ at VCC = 3.0 V, a microamp-class supervisor.
+    assert_eq!(m.params.get_f64("supply_static_ua"), Some(1.1));
+    assert_eq!(m.params.get_str("supply_pin"), Some("6"));
+    assert_eq!(m.params.get_str("gnd_pin"), Some("1"));
+    // Table 2 abs max VCC.
+    assert_eq!(m.ratings.max_voltage_v, Some(7.0));
+}

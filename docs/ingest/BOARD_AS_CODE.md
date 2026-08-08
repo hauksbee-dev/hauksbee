@@ -215,10 +215,10 @@ Board-as-Code check: w
     - C7 (TBD)
     - C9 (TBD)
     - R12 (TBD)
-    - U6 (BMA423)
+    - Y1 (32.768KHz)
+    - Y2 (40MHz)
     - L1 (TBD)
     - M1 (Vibration_Motor)
-    - U1 (SR2HARU)
     - AE1 (Antenna_Chip)
   simulated 0.050s
   no faults: circuit is within ratings.

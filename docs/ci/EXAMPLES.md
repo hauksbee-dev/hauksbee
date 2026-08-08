@@ -172,12 +172,17 @@ hauksbee run crates/hauksbee-ci/examples/boards/watchy.kicad_pcb --serve
 ```
 
 The Watchy is the "point it at a real board" case. hauksbee extracts the
-circuit its copper implements and binds 59 of its 67 simulatable parts from
-the stock model library. It states plainly which active parts it does not
-recognise (the BMA423 IMU, and `U1`, the SR2HARU e-paper panel) instead of
-guessing, and names them again in the bottom line as the reason the analog and
-thermal results on their nets are not to be trusted. Add
-`--report` for the static verdict, or `--serve` for the live 2D/3D viewer.
+circuit its copper implements and binds 61 of its 69 simulatable parts from the
+stock model library, including all six of its active ICs: the ESP32-S3, the
+RT9080 LDO, the TP4054 charger, the USBLC6 ESD array, the BMA423 accelerometer,
+and `U1`, which is an ST SR2HARU Smart Reset supervisor (the two side buttons
+held together reset the MCU). What it does not recognise it says plainly rather
+than guessing: four parts whose value the board leaves unspecified, the chip
+antenna, the vibration motor, and the two crystals, whose frequency values are
+not a two-terminal magnitude it can parse. Those are named again in the bottom line
+as the reason the analog and thermal results on their nets are not to be
+trusted. Add `--report` for the static verdict, or `--serve` for the live 2D/3D
+viewer.
 
 It prints the URL to open (`http://127.0.0.1:3001` by default). Change the
 port with `--port`. If you run it before building the frontend, hauksbee still
