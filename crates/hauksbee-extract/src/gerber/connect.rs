@@ -1290,6 +1290,9 @@ mod tests {
             refused_span_holes: 0,
             n_castellations: 0,
             notes: Vec::new(),
+            x2_bound_pads: 0,
+            x2_film_components: 0,
+            x2_named_nets: 0,
         }
     }
 

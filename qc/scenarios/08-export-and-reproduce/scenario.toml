@@ -62,7 +62,7 @@ xml_required_tags = ["testsuite", "testcase"]
 xml_root_attrs = { failures = "0" }
 file_matches = { "watchy.xml" = [
   "^<\\?xml version=\"1\\.0\" encoding=\"UTF-8\"\\?>",
-  "<testsuites name=\"hauksbee watchy\\.kicad_pcb\" tests=\"[0-9]+\" failures=\"0\">",
+  "<testsuites name=\"hauksbee watchy\\.kicad_pcb\" tests=\"[0-9]+\" failures=\"0\" errors=\"0\">",
 ] }
 
 [[step]]
