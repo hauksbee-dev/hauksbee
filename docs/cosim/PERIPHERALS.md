@@ -468,6 +468,10 @@ above over a `field`.) Each peripheral's `state()` in
     `ref` naming no board component is a load-time error rather than a quiet
     drop to the heuristic. A declared `cs_net` always wins, which is how a
     wrong pad map or a buffered chip-select stays correctable by hand.
+  - **Exact, from bit-bang wiring** (`cs_provenance: "bitbang-pins"`): a
+    bit-banged SPI slave (see "bit-bang is push-backend only" above), whose CS
+    pin comes from the GPIO wiring its responder was attached with rather than
+    from a net lookup. The responder owns the CS edges, so the framing is real.
   - **Backend**: the emulator surfaces CS itself (Renode hardware NSS
     `FinishTransmission` arriving as a `deselect` event), which frames the
     transaction precisely with no resolved CS pin. Detected dynamically the

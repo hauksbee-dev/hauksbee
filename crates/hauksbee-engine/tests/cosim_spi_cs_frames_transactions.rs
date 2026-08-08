@@ -104,7 +104,7 @@ fn transaction_spanning_a_chunk_boundary_is_not_reset() {
     let mut bus = SpiBus::new("U_EE", Box::new(eeprom));
     // Resolve a CS pin: the bus now frames itself, so the scheduler must NOT
     // deselect it at the chunk boundary.
-    bus.set_cs_pin(Some(('B', 2)));
+    bus.set_cs_pin(Some(('B', 2)), CsProvenance::SpecDeclared);
     assert!(
         bus.frames_itself(),
         "a resolved CS pin means the bus frames itself"
@@ -179,7 +179,7 @@ fn framing_mode_reflects_the_cs_source() {
     assert_eq!(bus.framing_mode().as_str(), "heuristic");
 
     // Resolved CS pin: exact.
-    bus.set_cs_pin(Some(('D', 4)));
+    bus.set_cs_pin(Some(('D', 4)), CsProvenance::SpecDeclared);
     assert_eq!(bus.framing_mode().as_str(), "exact");
     assert!(bus.frames_itself());
     assert_eq!(bus.framing_mode().as_str(), "exact");
@@ -192,16 +192,23 @@ fn framing_mode_reflects_the_cs_source() {
     assert_eq!(backend_bus.framing_mode().as_str(), "backend");
 }
 
-/// The SECOND route onto exact framing: nobody wrote `cs_net`, the CS net came
-/// off the bound model's `cs` pin role, and the bus must be indistinguishable
-/// from a spec-declared one in everything except what it says about its own
-/// provenance.
+/// A bus whose CS came off the bound model's `cs` pin role must be
+/// indistinguishable from a spec-declared one in everything except what it says
+/// about its own provenance.
 ///
-/// The tier is the load-bearing part. `frames_itself()` is what the scheduler
+/// SCOPE, because the boundary matters: this is a `SpiBus`-level test. It drives
+/// `set_cs_pin` directly and does NOT exercise the inference that produces the
+/// argument, so deleting `binder::model_role_cs_net` or `cs_net_name` would not
+/// fail it. Those are covered where they live, by
+/// `binder::model_role_cs_net_tests` and `runner::spi_cs_source_tests`. What this
+/// test owns is the consequence: that `CsProvenance::ModelRoles` reaches the same
+/// tier, earns the same chunk-boundary skip, and carries a real transaction
+/// across a boundary.
+///
+/// The skip is the load-bearing part. `frames_itself()` is what the scheduler
 /// gates the chunk-boundary deselect on (step 3c), so a bus that reported `exact`
-/// without earning the skip would still be truncated at every boundary while
-/// claiming otherwise. This pins the whole chain on the model-role route: tier,
-/// skip, and a real boundary-spanning transaction completing intact.
+/// without earning it would still be truncated at every boundary while claiming
+/// otherwise.
 #[test]
 fn a_model_role_resolved_cs_frames_exactly_and_survives_a_chunk_boundary() {
     // Seed "OK" at 0x0000, then hand the EEPROM to a bus whose CS came from the
@@ -218,8 +225,8 @@ fn a_model_role_resolved_cs_frames_exactly_and_survives_a_chunk_boundary() {
     eeprom.transfer(b'K');
     eeprom.deselect();
 
-    let mut bus = SpiBus::new("U5", Box::new(eeprom)).with_cs_provenance(CsProvenance::ModelRoles);
-    bus.set_cs_pin(Some(('B', 2)));
+    let mut bus = SpiBus::new("U5", Box::new(eeprom));
+    bus.set_cs_pin(Some(('B', 2)), CsProvenance::ModelRoles);
 
     assert_eq!(
         bus.framing_mode(),
@@ -273,13 +280,14 @@ fn a_slave_with_no_cs_at_all_still_reports_heuristic() {
     );
     assert!(
         !bus.frames_itself(),
-        "it must still take the chunk-boundary deselect, which is what makes the          heuristic disclosure true"
+        "it must still take the chunk-boundary deselect, which is what makes the \
+         heuristic disclosure true"
     );
 
-    // Declaring the provenance does NOT by itself promote the tier: without a
-    // resolved pin there is no edge stream, whatever the builder was told.
-    let claimed =
-        SpiBus::new("U7", Box::new(Mcp3008::new(5.0))).with_cs_provenance(CsProvenance::ModelRoles);
+    // Naming a provenance does NOT by itself promote the tier: without a resolved
+    // pin there is no edge stream, whatever the caller says supplied it.
+    let mut claimed = SpiBus::new("U7", Box::new(Mcp3008::new(5.0)));
+    claimed.set_cs_pin(None, CsProvenance::ModelRoles);
     assert_eq!(
         claimed.framing_mode(),
         SpiFramingMode::Heuristic,
