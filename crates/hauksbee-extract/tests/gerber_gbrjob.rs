@@ -13,9 +13,7 @@ use hauksbee_extract::gerber::from_gerber_dir;
 
 /// A pad flash (1 mm disc) at (x, y) mm, optionally with an X2 net name.
 fn film(body: &str) -> String {
-    format!(
-        "%FSLAX46Y46*%\n%MOMM*%\n%ADD10C,1.000000*%\n%ADD11C,0.300000*%\nD10*\n{body}M02*\n"
-    )
+    format!("%FSLAX46Y46*%\n%MOMM*%\n%ADD10C,1.000000*%\n%ADD11C,0.300000*%\nD10*\n{body}M02*\n")
 }
 
 /// Four-layer job: top pad at (0,0) named VBUS; the PWR plane (physical L2)
@@ -30,11 +28,7 @@ fn film(body: &str) -> String {
 fn write_job(dir: &PathBuf, with_gbrjob: bool) {
     let _ = std::fs::remove_dir_all(dir);
     std::fs::create_dir_all(dir).unwrap();
-    std::fs::write(
-        dir.join("top.art"),
-        film("%TO.N,VBUS*%\nX0Y0D03*\n%TD*%\n"),
-    )
-    .unwrap();
+    std::fs::write(dir.join("top.art"), film("%TO.N,VBUS*%\nX0Y0D03*\n%TD*%\n")).unwrap();
     std::fs::write(
         dir.join("pwr.art"),
         film("X0Y0D03*\nD11*\nX0Y0D02*\nX10000000Y0D01*\nD10*\nX10000000Y0D03*\n"),
@@ -132,11 +126,7 @@ fn kicad9_internal_layer_ids_order_the_stack_without_inventing_layers() {
     )
     .unwrap();
     std::fs::write(dir.join("c.gbr"), film("X0Y0D03*\n")).unwrap();
-    std::fs::write(
-        dir.join("d.gbr"),
-        film("%TO.N,BOTNET*%\nX0Y0D03*\n%TD*%\n"),
-    )
-    .unwrap();
+    std::fs::write(dir.join("d.gbr"), film("%TO.N,BOTNET*%\nX0Y0D03*\n%TD*%\n")).unwrap();
     std::fs::write(
         dir.join("blind-drill.txt"),
         "M48\n; #@! TF.FileFunction,Plated,1,2,PTH,Blind\nFMAT,2\nMETRIC\nT1C0.300\n%\nG90\nG05\nT1\nX0.0Y0.0\nT0\nM30\n",
@@ -190,11 +180,7 @@ fn a_gbrjob_that_agrees_with_numbered_filenames_changes_nothing() {
         let _ = std::fs::remove_dir_all(dir);
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(dir.join("top.art"), film("X0Y0D03*\n")).unwrap();
-        std::fs::write(
-            dir.join("gnd02.art"),
-            film("X0Y0D03*\nX5000000Y0D03*\n"),
-        )
-        .unwrap();
+        std::fs::write(dir.join("gnd02.art"), film("X0Y0D03*\nX5000000Y0D03*\n")).unwrap();
         std::fs::write(dir.join("pwr03.art"), film("X5000000Y0D03*\n")).unwrap();
         std::fs::write(dir.join("bottom.art"), film("X9000000Y0D03*\n")).unwrap();
         if with_job {
