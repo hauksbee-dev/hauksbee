@@ -741,12 +741,15 @@ impl ReconStats {
                 0.0
             };
             out.push(format!(
-                "gerber reconstruction: {} of {} pad flashes ({:.0}%) were matched to a placed \
-                 component; {} were not. An unmatched flash still joins the copper net it \
-                 touches, but belongs to no component here, so it carries no pin, and every \
-                 component-level figure (including any closed-loop percentage) scores only the \
-                 matched pads. Supply a pick-and-place file (.csv / .pos, or an Allegro \
-                 smt_loc.txt) covering the missing parts to place them.",
+                "gerber reconstruction: {} of {} aperture flashes ({:.0}%) were matched to a \
+                 placed component; {} were not. Not every flash is a component pad (via lands, \
+                 fiducials and test points are flashed too), so the unmatched count is an \
+                 upper bound on missing pads rather than a list of them. An unmatched flash \
+                 still joins the copper net it touches, but belongs to no component here, so \
+                 it carries no pin, and every component-level figure (including any \
+                 closed-loop percentage) scores only the matched ones. Where the missing \
+                 flashes ARE component pads, a pick-and-place file (.csv / .pos, or an Allegro \
+                 smt_loc.txt) covering those parts will place them.",
                 self.assigned_flashes, self.total_flashes, pct, self.unassigned_flashes,
             ));
         }
@@ -968,8 +971,8 @@ mod tests {
         let notes = stats_with_flashes(300, 200).coverage_notes();
         let note = notes
             .iter()
-            .find(|n| n.contains("pad flashes"))
-            .expect("the pad accounting must be reported");
+            .find(|n| n.contains("aperture flashes"))
+            .expect("the flash accounting must be reported");
         assert!(note.contains("200 of 300"), "{note}");
         assert!(note.contains("67%"), "states the located share: {note}");
         assert!(note.contains("100 were not"), "{note}");
@@ -980,6 +983,12 @@ mod tests {
         assert!(
             note.contains("pick-and-place"),
             "names the unlocking upload: {note}"
+        );
+        // Not every flash is a pad (via lands, fiducials and test points are
+        // flashed too), so the count must not be presented as a list of pads.
+        assert!(
+            note.contains("upper bound") && note.contains("fiducials"),
+            "must not claim every unmatched flash is a component pad: {note}"
         );
     }
 

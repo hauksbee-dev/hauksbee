@@ -632,6 +632,28 @@ impl TraceAudit {
     /// Falls back to `min_trace_width_mm` / `min_trace_layer` for a `NetCopper`
     /// built before per-layer widths were recorded.
     pub fn bottleneck(&self, nc: &NetCopper) -> Option<Bottleneck> {
+        self.rated_candidates(nc)
+            .into_iter()
+            .min_by(rank_bottleneck)
+    }
+
+    /// The lowest-rated candidate whose copper weight was **declared** by the
+    /// board, if the net has any such layer.
+    ///
+    /// Needed because severity depends on the selected candidate's evidence: if a
+    /// single global minimum were used, an assumed-weight layer that ties or
+    /// undercuts a declared one would carry its `Assumed` source into the result
+    /// and silently demote a decision-grade failure on declared copper to a note.
+    /// The declared candidates are therefore judged on their own.
+    pub fn declared_bottleneck(&self, nc: &NetCopper) -> Option<Bottleneck> {
+        self.rated_candidates(nc)
+            .into_iter()
+            .filter(|b| !b.copper_source.is_assumed())
+            .min_by(rank_bottleneck)
+    }
+
+    /// Every (layer, narrowest width) pair on the net, rated.
+    fn rated_candidates(&self, nc: &NetCopper) -> Vec<Bottleneck> {
         let rate = |layer: Option<&str>, w: f64| {
             let (oz, external, source) = self.copper_for(layer);
             Bottleneck {
@@ -646,19 +668,30 @@ impl TraceAudit {
         if nc.min_width_by_layer.is_empty() {
             return nc
                 .min_trace_width_mm
-                .map(|w| rate(nc.min_trace_layer.as_deref(), w));
+                .map(|w| vec![rate(nc.min_trace_layer.as_deref(), w)])
+                .unwrap_or_default();
         }
         nc.min_width_by_layer
             .iter()
             .map(|(layer, w)| rate(Some(layer), *w))
-            .min_by(|a, b| {
-                a.ampacity_a
-                    .total_cmp(&b.ampacity_a)
-                    .then(a.external.cmp(&b.external))
-                    .then(a.oz.total_cmp(&b.oz))
-                    .then(a.layer.cmp(&b.layer))
-            })
+            .collect()
     }
+}
+
+/// Order two rated candidates worst-first: lowest ampacity, then declared copper
+/// ahead of assumed (so a tie never hands the result an assumed basis it did not
+/// need), then internal, then lighter, then layer name for determinism.
+fn rank_bottleneck(a: &Bottleneck, b: &Bottleneck) -> std::cmp::Ordering {
+    a.ampacity_a
+        .total_cmp(&b.ampacity_a)
+        .then(
+            a.copper_source
+                .is_assumed()
+                .cmp(&b.copper_source.is_assumed()),
+        )
+        .then(a.external.cmp(&b.external))
+        .then(a.oz.total_cmp(&b.oz))
+        .then(a.layer.cmp(&b.layer))
 }
 
 /// The rated bottleneck of a net: which layer and width set its limit, and the
@@ -718,7 +751,15 @@ pub fn audit_trace_currents(
         // An inner 0.5 oz trace carries roughly a third of what the same width
         // carries as 1 oz outer copper, so the lowest-rated layer sets the limit
         // even when a different layer holds the narrowest segment.
-        let Some(b) = audit.bottleneck(nc) else {
+        // A shortfall on DECLARED copper is a verdict and must not be masked by an
+        // assumed-weight layer that happens to rate lower. Judge the declared
+        // candidates first; fall back to the overall bottleneck (whose assumed
+        // basis the caller reports as a non-verdict) only when they are in spec.
+        let overall = audit.bottleneck(nc);
+        let declared = audit
+            .declared_bottleneck(nc)
+            .filter(|d| d.ampacity_a > 0.0 && *current > d.ampacity_a * audit.margin);
+        let Some(b) = declared.or(overall) else {
             continue;
         };
         if b.ampacity_a <= 0.0 {
@@ -1308,6 +1349,42 @@ mod tests {
         let f = audit_trace_currents(&copper, &cited, &audit);
         assert_eq!(f.len(), 1, "0.8 A over a 0.438 A inner choke must fire");
         assert_eq!(f[0].layer.as_deref(), Some("In1.Cu"));
+    }
+
+    #[test]
+    fn a_declared_failure_is_not_masked_by_an_assumed_layer() {
+        // The hole a single global minimum leaves. This stackup declares only
+        // F.Cu, and the net has equal 0.5 mm segments on F.Cu (declared 1 oz) and
+        // B.Cu (undeclared, so assumed 1 oz external). Both rate 1.447 A, so a tie
+        // resolved by layer name alone hands the result B.Cu's ASSUMED basis and
+        // demotes a real 2 A shortfall on declared copper to a non-verdict.
+        let partial = r#"
+          (setup (stackup
+            (layer "F.Cu" (type "copper") (thickness 0.035))
+            (layer "dielectric 1" (type "core") (thickness 1.51) (epsilon_r 4.5))
+          ))
+          (net 1 "VMOT")
+          (segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1))
+          (segment (start 10 0) (end 20 0) (width 0.5) (layer "B.Cu") (net 1))
+        "#;
+        let (copper, audit) = pcb_audited(partial);
+        let nc = copper.iter().find(|n| n.net_id == 1).unwrap();
+        // Both candidates really do tie on rating, so this is the live case.
+        let all = audit.declared_bottleneck(nc).expect("F.Cu is declared");
+        assert_eq!(all.layer.as_deref(), Some("F.Cu"));
+        assert!((all.ampacity_a - 1.447).abs() < 0.01, "{}", all.ampacity_a);
+
+        let mut cited = HashMap::new();
+        cited.insert("VMOT".to_string(), (2.0, "driver 2 A".to_string()));
+        let f = audit_trace_currents(&copper, &cited, &audit);
+        assert_eq!(f.len(), 1);
+        assert_eq!(
+            f[0].copper_source,
+            CopperSource::Stackup,
+            "the declared segment's shortfall must keep its declared basis, not              inherit the assumed layer's: {:?}",
+            f[0]
+        );
+        assert_eq!(f[0].layer.as_deref(), Some("F.Cu"));
     }
 
     #[test]

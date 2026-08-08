@@ -301,7 +301,7 @@ impl ConverterAbstention {
             "converter: the switching stage around {} (switch node '{}', rails '{}' and '{}') \
              was detected but not classified: {}. No ripple or duty verdict was reached for \
              this stage. Rename the rails to carry their role (VIN / VOUT, or a *_IN / *_OUT \
-             suffix), or give the controller a model declaring its topology, to cover it.",
+             suffix) to cover it.",
             self.inductor_ref,
             self.switch_node,
             self.fet_side_rail,
@@ -662,6 +662,13 @@ mod tests {
         assert!(
             m.contains("VIN") && m.contains("VOUT"),
             "names the unlock: {m}"
+        );
+        // Only remedies the detector actually acts on may be suggested: direction
+        // comes from rail names alone, so promising that a controller model would
+        // fix it would send the user to do work that changes nothing.
+        assert!(
+            !m.contains("model"),
+            "must not suggest a remedy the detector does not consult: {m}"
         );
         assert_eq!(abstentions[0].reason, AbstentionReason::NoDirectionalNames);
         assert!(

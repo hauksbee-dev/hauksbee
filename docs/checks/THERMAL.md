@@ -98,8 +98,15 @@ conservative for both surface-mount and through-hole parts:
 |--------------------|--------|-------|
 | Recognised imperial chip size code | the table above | `ChipPackage` |
 | Metric-only chip code (`R_3216Metric` = imperial 1206) | the imperial equivalent | `ChipPackage` |
-| Recognised small axial body (`Axial`, `DIN0…`) | 1/4 W | `ThtAxial` |
-| Anything else, including an unrecognised SMD size or a `Power` axial | none derived | `Unknown` |
+| Recognised DIN axial body code | per the DIN table below | `ThtAxial` |
+| Anything else, including an unrecognised SMD size, an axial body with no DIN code, or a `Power` axial | none derived | `Unknown` |
+
+The DIN codes are size evidence and are **not** interchangeable, so each carries
+its own rating: DIN0204 0.125 W, DIN0207 0.25 W, DIN0309 0.5 W, DIN0411 1 W,
+DIN0414 2 W, DIN0516 3 W, DIN0617 5 W. A blanket 1/4 W for anything axial
+over-rates a DIN0204 twofold and suppresses its overpower check, and under-rates
+a DIN0411 fourfold. An axial footprint carrying no DIN code has no size evidence
+at all (the codes span 0.125 W to 5 W) and abstains.
 
 A metric-only name is read **before** the imperial pass, and a name carrying a
 separate imperial token is left to it. That ordering is what keeps both cases
