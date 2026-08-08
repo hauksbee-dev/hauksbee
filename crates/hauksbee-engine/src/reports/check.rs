@@ -209,15 +209,17 @@ pub fn emit(
             }
             print!("{}", drc_structured.render());
             println!("\n== Connectivity / lint (incl. MCU resource conflicts, boot strap pins) ==");
+            // Verdict first in each model-dependent section: the extract body's
+            // "no findings." must sit under the refusal, not above it.
+            if !blockers.is_empty() {
+                println!("{}", crate::result::inconclusive_verdict(&blockers));
+            }
             print!("{}", hauksbee_extract::render_netlint(&lint));
-            if !blockers.is_empty() {
-                println!("{}", crate::result::inconclusive_verdict(&blockers));
-            }
             println!("\n== Signal integrity ==");
-            print!("{}", hauksbee_extract::render_si(&si));
             if !blockers.is_empty() {
                 println!("{}", crate::result::inconclusive_verdict(&blockers));
             }
+            print!("{}", hauksbee_extract::render_si(&si));
             if let Some(u) = &usbc {
                 println!("\n== USB-C CC compliance ==");
                 print!("{}", u.render());
