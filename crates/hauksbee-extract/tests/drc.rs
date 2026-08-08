@@ -992,7 +992,7 @@ fn pad_without_layers_list_still_gets_all_copper() {
 // ---------------------------------------------------------------------------
 
 /// A trapezoid pad at the origin: size 4 x 2, rect_delta (0 2). True corners
-/// (pad-local, y-down): (-3, 1), (-1, -1), (1, -1), (3, 1) — the y = +1 edge
+/// (pad-local, y-down): (-3, 1), (-1, -1), (1, -1), (3, 1): the y = +1 edge
 /// is 6 mm wide, the y = -1 edge 2 mm.
 const TRAPEZOID_PAD: &str = r#"
   (footprint "lib:trap" (layer "F.Cu") (at 0 0)
@@ -1004,7 +1004,7 @@ const TRAPEZOID_PAD: &str = r#"
 #[test]
 fn trapezoid_wing_beyond_the_size_box_is_a_short() {
     // A vertical track at x = -2.7 crosses the trapezoid's wide-edge wing,
-    // which extends to x = -3 — 0.7 mm OUTSIDE the (size 4 2) box. The old
+    // which extends to x = -3, i.e. 0.7 mm OUTSIDE the (size 4 2) box. The old
     // bounding-rectangle model cleared this by 0.6 mm and stayed silent.
     let track = r#"
   (segment (start -2.7 -3) (end -2.7 3) (width 0.2) (layer "F.Cu") (net 1))
@@ -1017,7 +1017,7 @@ fn trapezoid_wing_beyond_the_size_box_is_a_short() {
 fn copper_past_the_trapezoid_narrow_edge_is_not_a_short() {
     // A short track at (1.9..2.0, -0.5): inside the (size 4 2) box (the old
     // model read a full overlap short), but 0.23 mm clear of the true slanted
-    // edge (the line through (1, -1) and (3, 1)) — over the 0.2 mm rule, so
+    // edge (the line through (1, -1) and (3, 1)), over the 0.2 mm rule, so
     // fully silent.
     let track = r#"
   (segment (start 1.9 -0.5) (end 2.0 -0.5) (width 0.1) (layer "F.Cu") (net 1))

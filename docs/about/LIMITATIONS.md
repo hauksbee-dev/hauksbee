@@ -310,14 +310,22 @@ Cross-check them with KiCad 10's own DRC. Details and oracle evidence are in
 
 ### Eagle copper-pour fidelity in DRC
 
-An Eagle `.brd` stores only a signal pour's *requested outline*, never the poured
-copper with its `isolate` antipads or `rank` arbitration. Checking pour-to-copper
-shorts honestly would require re-pouring the board in Eagle and exporting the
-computed polygons. That data is simply not in the source file. Treating the
-outline as solid copper would manufacture false shorts on every trace that
-legitimately crosses a pour, so pours stay excluded from the Eagle short test
-(wires, vias and pads against each other are fully covered). This is a
-data-availability limit, not a code limit.
+An Eagle `.brd` stores a signal pour's requested outline and all of its pour
+settings (`isolate`, `rank`, `thermals`, `orphans`, `pour`: all parsed); only
+the *computed* fill polygon is absent, because Eagle re-derives it on every
+ratsnest / CAM run. That derivation is what keeps the fill out of the
+pour-to-copper short test: Eagle carves max(`isolate`, the applicable
+design-rule / net-class clearance) around every foreign-net wire, pad and via
+(an `isolate` below the rules distance is ignored), thermal spokes only remove
+same-net copper, and orphan removal only deletes fill pockets. Every setting
+keeps or widens gaps, so a correctly derived fill cannot short or crowd foreign
+copper in the same file. Treating the drawn outline as solid copper instead
+would manufacture false shorts on every trace the fill legitimately carves
+around. The one construct the settings cannot make safe IS checked: two
+overlapping same-rank pours of different signals have no arbitration (Eagle
+pours both, a physical short, and its own DRC flags the overlap), and the
+Eagle path reports that short with the pour settings disclosed on the finding.
+Wires, vias and pads against each other are fully covered.
 
 ### Gerber footprint inference (via-vs-pad ambiguity)
 
