@@ -25,6 +25,7 @@ mod negative_rail_validation;
 mod pack_format;
 mod pack_layering;
 mod pack_store;
+mod passive_class;
 mod passive_rating_resolve;
 mod power_fet_afe_resolve;
 mod power_ic_resolve;
