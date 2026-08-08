@@ -1559,17 +1559,27 @@ id = "eeprom_25xx_spi"
 kind = "digital"
 description = "25AA/25LC SPI serial EEPROM, 8-pin PDIP/SOIC/TSSOP/MSOP (pad map only)"
 
-# `mpn_re` ONLY, for the reason spelled out on the MCP3008 entry in db/dac_adc.toml:
-# the matcher ANDs its rules and the engine's query falls `mpn` back to Value, so
-# one mpn rule covers both the Value-carries-the-part-number and the
-# MPN-carries-it cases, while adding `value_re` would AND them and lose the second.
+# `mpn_re` for the reason spelled out on the MCP3008 entry in db/dac_adc.toml: the
+# matcher ANDs its rules and the engine's query falls `mpn` back to Value, so one
+# mpn rule covers both the Value-carries-the-part-number and the MPN-carries-it
+# cases, while adding a `value_re` would AND them and lose the second.
 #
 # Left UNANCHORED at the end on purpose: a real MPN carries the temperature and
-# package suffix ("25LC256-I/SN", "25AA010A-I/OT"), so a `$` here would match the
-# bare part number in a test and nothing on an actual board. The {3,4}-digit bound
-# is what keeps the rule from swallowing neighbours.
+# package suffix ("25LC256-I/SN"), so a `$` here would match the bare part number
+# in a test and nothing on an actual board. The {3,4}-digit bound is what keeps
+# the rule from swallowing neighbours.
+#
+# `footprint_re` GATES THE PACKAGE, and it is not optional. The pad map below is
+# the EIGHT-PIN pinout, and the low-density members of this family (25AA010A,
+# 25AA020A, 25LC040A...) are also sold in a SIX-pin SOT-23 that drops WP and HOLD
+# and renumbers everything after CS. Matching on the part number alone would apply
+# an 8-pin map to a 6-pin part: `cs` would happen to survive on pad 1, and every
+# other role would land on a pad that is a different signal or does not exist.
+# Gating on the footprint means the entry binds only where its map is true, and a
+# SOT-23 EEPROM stays unresolved (honest) instead of resolved-and-wrong.
 [models.match]
 mpn_re = "(?i)^25(AA|LC)[0-9]{3,4}"
+footprint_re = "(?i)(SOIC-8|SO-8|SOP-8|DIP-8|DIP8|TSSOP-8|MSOP-8|VSSOP-8|PDIP-8)"
 
 # Pad->role map, Microchip 25LC256 datasheet DS22065 Section 2.0 (Pin
 # Descriptions) and Figure 2-1; identical across the 25AA/25LC 8-pin packages:

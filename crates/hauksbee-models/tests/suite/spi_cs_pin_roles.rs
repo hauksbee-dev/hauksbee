@@ -31,11 +31,12 @@ use hauksbee_models::{ComponentQuery, ModelLibrary};
 /// falls `mpn` back to the value field for a part with no MPN property, so
 /// passing the same string as both is what a component like that looks like by
 /// the time the matcher sees it.
-fn assert_pin_map(value: &str, id: &str, expected: &[(&str, &str)]) {
+fn assert_pin_map(value: &str, footprint: &str, id: &str, expected: &[(&str, &str)]) {
     let lib = ModelLibrary::builtin();
     let q = ComponentQuery {
         value: Some(value.into()),
         mpn: Some(value.into()),
+        footprint: Some(footprint.into()),
         ..Default::default()
     };
     let m = lib
@@ -62,11 +63,12 @@ fn assert_pin_map(value: &str, id: &str, expected: &[(&str, &str)]) {
 
 /// The pad carrying the `cs` role, or `None` when the entry declares no such
 /// role. This is exactly the lookup `binder::model_role_cs_net` performs.
-fn cs_pad(value: &str) -> Option<String> {
+fn cs_pad(value: &str, footprint: &str) -> Option<String> {
     let lib = ModelLibrary::builtin();
     let q = ComponentQuery {
         value: Some(value.into()),
         mpn: Some(value.into()),
+        footprint: Some(footprint.into()),
         ..Default::default()
     };
     let m = lib.resolve(&q).model?;
@@ -81,6 +83,7 @@ fn cs_pad(value: &str) -> Option<String> {
 fn the_mcp3008_map_is_the_ds21295d_pinout() {
     assert_pin_map(
         "MCP3008",
+        "Package_DIP:DIP-16_W7.62mm",
         "mcp3008",
         &[
             ("1", "ch0"),
@@ -109,6 +112,7 @@ fn the_mcp3008_map_is_the_ds21295d_pinout() {
 fn the_25xx_eeprom_map_is_the_ds22065_pinout() {
     assert_pin_map(
         "25LC256",
+        "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
         "eeprom_25xx_spi",
         &[
             ("1", "cs"),
@@ -127,20 +131,49 @@ fn the_25xx_eeprom_map_is_the_ds22065_pinout() {
 /// part numbers a real BOM carries rather than the bare ones above.
 #[test]
 fn every_spi_slave_entry_offers_a_cs_pad_under_real_part_numbers() {
-    for (value, expected_pad) in [
-        ("MCP3008", "10"),
-        ("MCP3008-I/P", "10"),
-        ("MCP3008-I/SL", "10"),
-        ("25LC256", "1"),
-        ("25LC256-I/SN", "1"),
-        ("25AA010A-I/OT", "1"),
-        ("25LC1024-I/SM", "1"),
+    const SOIC8: &str = "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm";
+    const DIP16: &str = "Package_DIP:DIP-16_W7.62mm";
+    const SOIC16: &str = "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm";
+    for (value, footprint, expected_pad) in [
+        ("MCP3008", DIP16, "10"),
+        ("MCP3008-I/P", DIP16, "10"),
+        ("MCP3008-I/SL", SOIC16, "10"),
+        ("25LC256", SOIC8, "1"),
+        ("25LC256-I/SN", SOIC8, "1"),
+        ("25AA010A-I/SN", SOIC8, "1"),
+        ("25LC1024-I/SM", SOIC8, "1"),
     ] {
         assert_eq!(
-            cs_pad(value).as_deref(),
+            cs_pad(value, footprint).as_deref(),
             Some(expected_pad),
             "{value} must expose a `cs` role on pad {expected_pad}; without it the co-sim \
              drops to the chunk-boundary framing heuristic with no error"
+        );
+    }
+}
+
+/// The 25xx family's low-density members are also sold in a SIX-pin SOT-23 that
+/// drops WP and HOLD and renumbers everything after CS. The entry's map is the
+/// eight-pin pinout, so it is gated on the package: a SOT-23 part must stay
+/// UNRESOLVED rather than binding to a map where every role after `cs` names the
+/// wrong pad. Unresolved is a gap; resolved-and-wrong is a lie.
+#[test]
+fn a_six_pin_sot23_eeprom_does_not_bind_the_eight_pin_map() {
+    let lib = ModelLibrary::builtin();
+    for footprint in [
+        "Package_TO_SOT_SMD:SOT-23-6",
+        "Package_TO_SOT_SMD:SOT-23-6_Handsoldering",
+    ] {
+        let q = ComponentQuery {
+            value: Some("25AA010A-I/OT".into()),
+            mpn: Some("25AA010A-I/OT".into()),
+            footprint: Some(footprint.into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            lib.resolve(&q).model.map(|m| m.id.clone()),
+            None,
+            "a SOT-23-6 25AA010A must not bind the 8-pin pad map ({footprint})"
         );
     }
 }
@@ -153,14 +186,24 @@ fn every_spi_slave_entry_offers_a_cs_pad_under_real_part_numbers() {
 #[test]
 fn a_generic_value_with_the_part_number_in_the_mpn_still_resolves() {
     let lib = ModelLibrary::builtin();
-    for (value, mpn, expected) in [
-        ("ADC", "MCP3008-I/SL", "mcp3008"),
-        ("EEPROM", "25LC256-I/SN", "eeprom_25xx_spi"),
-        ("U5", "25AA010A-I/OT", "eeprom_25xx_spi"),
+    for (value, mpn, footprint, expected) in [
+        (
+            "ADC",
+            "MCP3008-I/SL",
+            "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm",
+            "mcp3008",
+        ),
+        (
+            "EEPROM",
+            "25LC256-I/SN",
+            "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm",
+            "eeprom_25xx_spi",
+        ),
     ] {
         let q = ComponentQuery {
             value: Some(value.into()),
             mpn: Some(mpn.into()),
+            footprint: Some(footprint.into()),
             ..Default::default()
         };
         assert_eq!(
@@ -182,6 +225,7 @@ fn the_match_rules_do_not_swallow_neighbouring_part_numbers() {
         let q = ComponentQuery {
             value: Some(value.into()),
             mpn: Some(value.into()),
+            footprint: Some("Package_SO:SOIC-8_3.9x4.9mm_P1.27mm".into()),
             ..Default::default()
         };
         let id = lib.resolve(&q).model.map(|m| m.id.clone());

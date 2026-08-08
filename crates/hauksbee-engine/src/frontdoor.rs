@@ -331,8 +331,9 @@ pub struct WebSpiFraming {
     pub bus: String,
     /// `"exact"` | `"backend"` | `"heuristic"`.
     pub mode: String,
-    /// On the exact tier, who supplied the chip-select net: `"spec"` or
-    /// `"model-roles"`. Absent on the backend and heuristic tiers.
+    /// On the exact tier, where the chip-select came from: `"spec"`,
+    /// `"model-roles"`, or `"bitbang-pins"`. Absent on the backend and heuristic
+    /// tiers, where none was resolved.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cs_provenance: Option<String>,
 }
