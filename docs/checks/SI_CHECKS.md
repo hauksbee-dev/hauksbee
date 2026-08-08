@@ -696,6 +696,17 @@ excluded. A parallel input-capacitor bank also abstains: sharing depends on each
 part's frequency-dependent impedance, so assigning the full ripple to one
 arbitrarily selected capacitor would be a false positive.
 
+Topology itself is the first place the check can abstain, and that abstention is
+now visible. Synchronous switching connectivity is **reversible**: the same
+graph of FETs, inductor and caps is equally consistent with a buck and a boost,
+so a direction is accepted only from explicit rail names (`VIN` / `VOUT`, or a
+`*_IN` / `*_OUT` suffix). Numeric voltage ordering alone is not evidence. A stage
+that cannot be oriented used to be dropped with a bare skip, which produced
+byte-for-byte the same report as a board with no converter on it. It now emits an
+info note naming the inductor, the switch node, both rails, and the unlock
+(rename the rails to carry their role, or give the controller a model declaring
+its topology). Stages that classify normally emit no such note.
+
 ### Calibration evidence (the hunt's mppt-1210-hus C1)
 
 - Hand-checked unit test: `C1` (1200 uF, rated 3.0 A_rms at 100 kHz / 105 C)
