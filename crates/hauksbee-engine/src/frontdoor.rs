@@ -730,7 +730,13 @@ fn analyze_normalized(
     // actionable observation, so the headline must NOT read "Looks healthy".
     let has_heads_up = sections.iter().any(|s| !s.heads_up.is_empty());
     let mut headline = overall_headline(total, serious, has_heads_up, bind_web.active_path_open());
-    if total == 0 && evidence.is_undermined() {
+    // Same run-level split as the JSON verdict: a finding-backed undermined
+    // map is a badge on that finding, not run invalidity, so the headline only
+    // escalates for undermined run-level claims (coverage, bind completeness).
+    let run_level_undermined = crate::result::run_level_undermined(evidence.maps(), |a| {
+        actual_findings.iter().any(|f| f.message == a)
+    });
+    if total == 0 && run_level_undermined {
         headline = "No blocking findings, but evidence is undermined; results touching unresolved inputs are invalid for analysis. See the evidence below.".to_string();
     } else if total == 0 && evidence.has_caveats() {
         headline = "No blocking findings, but some evidence is qualified; see the evidence limitations below.".to_string();

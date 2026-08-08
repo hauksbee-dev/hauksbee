@@ -14,6 +14,12 @@ use crate::result::{si_findings_json, BindSummary, JsonInputEvidence, JsonReport
 
 use super::{si_fails, OutputMode};
 
+/// The human-surface refusal for an undermined SI input-coverage claim; the
+/// same vocabulary as the INCONCLUSIVE bind refusal, single-sourced here so
+/// the plain and text arms cannot drift apart.
+const SI_COVERAGE_REFUSAL: &str = "INCONCLUSIVE: the signal-integrity input-coverage claim is \
+undermined, so a clean result here is not a clean bill (see the evidence section).";
+
 /// Print the SI report in `mode`, then (under `strict`) exit non-zero on a real
 /// finding.
 pub fn emit(
@@ -65,6 +71,9 @@ pub fn emit(
     } else {
         Vec::new()
     };
+    let coverage_undermined = run_level
+        .iter()
+        .any(|m| m.status() == hauksbee_ir::evidence::EvidenceStatus::Undermined);
     let evidence = if run_level.is_empty() {
         evidence
     } else {
@@ -98,12 +107,21 @@ pub fn emit(
             let mut plain = crate::plain_si(&report);
             plain.unmodelled_critical = blockers.clone();
             print!("{}", plain.render());
+            // The coverage refusal on the human surface too: a healthy plain
+            // verdict above an undermined input-coverage claim is the same
+            // vacuous clean the JSON verdict refuses.
+            if coverage_undermined {
+                println!("{SI_COVERAGE_REFUSAL}");
+            }
         }
         OutputMode::Text => {
             // Verdict first: "si-checks: no gating findings." over an unbound
             // FET reads as a clean bill unless the INCONCLUSIVE line leads.
             if !blockers.is_empty() {
                 println!("{}", crate::result::inconclusive_verdict(&blockers));
+            }
+            if coverage_undermined {
+                println!("{SI_COVERAGE_REFUSAL}");
             }
             print!("{}", hauksbee_extract::render_si(&report));
             if !report.is_clean() {

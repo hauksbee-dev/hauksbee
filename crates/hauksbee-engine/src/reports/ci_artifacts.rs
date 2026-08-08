@@ -53,10 +53,21 @@ pub fn evidence_findings_with_gate(
 
 /// GitHub annotations for evidence that is not entitled to a clean result.
 pub fn github_evidence_annotations(maps: &[hauksbee_ir::evidence::EvidenceMap]) {
+    github_evidence_annotations_with_gate(maps, |_| true)
+}
+
+/// As [`github_evidence_annotations`], with the run-level split: an
+/// undermined finding-backed map annotates as a warning, not an `::error`,
+/// so the annotation level can never contradict the JUnit/SARIF entry or the
+/// JSON verdict built from the same maps.
+pub fn github_evidence_annotations_with_gate(
+    maps: &[hauksbee_ir::evidence::EvidenceMap],
+    gates: impl Fn(&hauksbee_ir::evidence::EvidenceMap) -> bool,
+) {
     if std::env::var_os("GITHUB_ACTIONS").is_none() {
         return;
     }
-    for finding in evidence_findings(maps) {
+    for finding in evidence_findings_with_gate(maps, gates) {
         let level = if finding.severity == "serious" {
             "error"
         } else {
