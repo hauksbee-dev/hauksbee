@@ -343,7 +343,20 @@ toleranced components (2^n runs). For a response that is *monotonic* in each
 component value (dividers, ladders, most DC bias networks) the true worst
 case is a corner, so a green corner run bounds it. For non-monotonic responses
 (filters peaking mid-band, matched pairs) the interior can be worse than any
-corner, so the report claims boundedness **only for monotonic responses**.
+corner.
+
+That assumption is checked rather than assumed. Alongside the corners, corner
+mode runs a small stratified **Latin-hypercube sample of the interior**: 4
+probes for one toleranced component, 6 for two, 8 from three up, so the check
+is a bounded handful of extra runs and never a multiple of the corner set. An
+interior probe that fails where every corner passed **fails the assertion**
+and says so, because the corners demonstrably did not bound that response. A
+clean probe set narrows the disclosure to what is left, a non-monotonicity
+sitting between the probes, instead of leaving monotonicity as an unchecked
+premise. Sampling the interior is detection, not proof, and the report keeps
+saying so. Interior probes are numbered on from the last corner, so `--seed k`
+isolates one exactly like a corner; the report calls them `interior probe k`.
+
 Full enumeration is capped at 2^10 = 1024 components' corners. Above 10
 toleranced components, corner mode refuses and points at Monte-Carlo. Corner
 mode does not compose with `[fuzz]` (the corner index enumerates min/max

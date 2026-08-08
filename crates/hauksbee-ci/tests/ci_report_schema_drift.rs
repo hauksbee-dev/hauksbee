@@ -390,6 +390,7 @@ fn refusal_and_abort_documents_validate() {
         analog_abort: true,
         coverage: Some(hauksbee_ci::report::EnsembleCoverage::Corners {
             corners: 4,
+            interior: 6,
             components: 2,
         }),
         substitutions: vec!["U1: ESP32-S3 requested, ran on ESP32".to_string()],

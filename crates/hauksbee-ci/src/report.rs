@@ -125,8 +125,14 @@ pub enum EnsembleCoverage {
     /// is the number of genuinely SAMPLED seeds, excluding the nominal baseline
     /// (member 0, which draws no random sample).
     MonteCarlo { seeds: u32, components: usize },
-    /// Deterministic all-min/all-max enumeration.
-    Corners { corners: u32, components: usize },
+    /// Deterministic all-min/all-max enumeration, plus the `interior` stratified
+    /// probes that test the monotonicity the corner bound rests on. The two are
+    /// counted separately because only the corners carry the bounded claim.
+    Corners {
+        corners: u32,
+        interior: u32,
+        components: usize,
+    },
     /// A single pinned ensemble member (`--seed N`): the runner filtered the
     /// ensemble down to exactly this one, so the nominal-baseline / sampled-count
     /// arithmetic doesn't apply, report the member honestly instead. `corners`
@@ -141,8 +147,8 @@ pub enum EnsembleCoverage {
 
 impl EnsembleCoverage {
     /// The one-line coverage claim, worded so it cannot over-claim: Monte-Carlo
-    /// is sampled coverage (never proof); corners bound only monotonic
-    /// responses.
+    /// is sampled coverage (never proof); corners bound the worst case as far as
+    /// the interior probes could confirm the response is monotonic.
     pub fn describe(&self) -> String {
         match self {
             EnsembleCoverage::MonteCarlo { seeds, components } => format!(
@@ -152,11 +158,22 @@ impl EnsembleCoverage {
             ),
             EnsembleCoverage::Corners {
                 corners,
+                interior: 0,
                 components,
             } => format!(
                 "tolerance corners: {corners} deterministic min/max corner(s) over \
                  {components} component(s): bounds the worst case only where the \
                  response is monotonic in each value"
+            ),
+            EnsembleCoverage::Corners {
+                corners,
+                interior,
+                components,
+            } => format!(
+                "tolerance corners: {corners} deterministic min/max corner(s) + {interior} \
+                 interior probe(s) over {components} component(s): the probes test the \
+                 monotonicity the corner bound rests on, and a probe that beats every \
+                 corner fails the assertion"
             ),
             EnsembleCoverage::SingleMember {
                 seed,
