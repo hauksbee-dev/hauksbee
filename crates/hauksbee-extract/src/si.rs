@@ -1020,6 +1020,11 @@ fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut
         // the reader still sees the worst case the geometry permits.
         let t_r = i2c_rise_time_ns(r, c.low_pf);
         let t_r_high = i2c_rise_time_ns(r, c.high_pf);
+        // Rise time from the DEVICE PINS alone, with no trace term at all. This
+        // one rests on nothing geometric: pin count and pull-up value both come
+        // from the netlist. When it already exceeds the limit the finding needs no
+        // assumption about routing, and only then is it decision-grade.
+        let t_r_pins = i2c_rise_time_ns(r, c.devices as f64 * C_PIN_PF);
 
         // Conservative: judge against STANDARD mode unless the name says fast.
         // Whole-token match, not raw `contains`: a bare substring test fires on
@@ -1046,11 +1051,27 @@ fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut
         };
 
         if t_r > limit {
-            // Even the assumed (lenient) mode fails: a real finding.
-            let sev = if t_r > limit * 1.5 {
+            // Even the assumed (lenient) mode fails. How hard we say it depends on
+            // what the verdict rests on: the pin-only figure needs no geometric
+            // assumption, so it carries full severity, while a shortfall that only
+            // appears once trace capacitance is added is true for the impedance
+            // range we assumed and false above it. That one is capped at Medium
+            // and says so, rather than presenting an assumption as a defect.
+            let rests_on_trace = t_r_pins <= limit;
+            let sev = if rests_on_trace {
+                SiSeverity::Medium
+            } else if t_r > limit * 1.5 {
                 SiSeverity::High
             } else {
                 SiSeverity::Medium
+            };
+            let caveat = if rests_on_trace {
+                " This shortfall depends on the assumed trace capacitance: the device pins \
+                 alone are within the limit, so a higher-impedance route than assumed would \
+                 pass. Declare the stackup and trace width to settle it."
+            } else {
+                " The device pins alone exceed the limit, so this does not depend on any \
+                 routing assumption."
             };
             report.findings.push(SiFinding {
                 check: SiCheck::I2cRiseTime,
@@ -1058,7 +1079,7 @@ fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut
                 message: format!(
                     "I2C {role} '{}': pull-up {:.0} ohm x bus {} pF ({}) gives t_r ~ {:.0} ns \
                      at the LOW end of the plausible trace-capacitance range (up to {:.0} ns at \
-                     the high end), over the {} limit {:.0} ns",
+                     the high end), over the {} limit {:.0} ns.{}",
                     net.name,
                     r,
                     range_0dp(c.low_pf, c.high_pf),
@@ -1066,7 +1087,8 @@ fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut
                     t_r,
                     t_r_high,
                     if fast { "fast-mode" } else { "standard-mode" },
-                    limit
+                    limit,
+                    caveat
                 ),
                 refs: mem.iter().map(|(c, _)| c.reference.clone()).collect(),
                 nets: vec![net.name.clone()],

@@ -189,12 +189,21 @@ fn stage_lint_board(dir: &Path) -> PathBuf {
 /// application value, whose VBAT rail is a 0.05 mm hair of a trace. This is an
 /// operating-current assertion, not a device capability rating. Same recipe as
 /// tests/si_ampacity_ripple.rs.
+///
+/// The stackup is declared on purpose: ampacity only convicts on a copper weight
+/// it read off the board, so a stackup-less version of this fixture would produce
+/// an info note and there would be no gating finding for the waiver to gate.
 fn stage_si_board(dir: &Path) -> PathBuf {
     let p = dir.join("board.kicad_pcb");
     std::fs::write(
         &p,
         r#"(kicad_pcb (version 20240101) (generator pcbnew)
   (net 0 "")
+  (setup (stackup
+    (layer "F.Cu" (type "copper") (thickness 0.035))
+    (layer "dielectric 1" (type "core") (thickness 1.51) (epsilon_r 4.5))
+    (layer "B.Cu" (type "copper") (thickness 0.035))
+  ))
   (net 1 "VBAT")
   (net 2 "VIN")
   (net 3 "GND")

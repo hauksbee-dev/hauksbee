@@ -144,6 +144,21 @@ fn programmed_charger_and_text(copper: &str) -> (ExtractedBoard, String) {
     ))
 }
 
+/// A declared 2-layer stackup: 1 oz outer copper, so the ampacity verdict rests
+/// on the board's own copper weight rather than an assumption.
+const DECLARED_STACKUP: &str = r#"
+  (setup (stackup
+    (layer "F.Cu" (type "copper") (thickness 0.035))
+    (layer "dielectric 1" (type "core") (thickness 1.51) (epsilon_r 4.5))
+    (layer "B.Cu" (type "copper") (thickness 0.035))
+  ))
+"#;
+
+/// The same charger, with the board declaring its copper weight.
+fn programmed_charger_with_stackup(copper: &str) -> (ExtractedBoard, String) {
+    programmed_charger_and_text(&format!("{DECLARED_STACKUP}\n  {copper}"))
+}
+
 fn findings_of<'a>(report: &'a SiReport, check: SiCheck) -> Vec<&'a hauksbee_extract::SiFinding> {
     report
         .findings
@@ -161,7 +176,9 @@ fn findings_of<'a>(report: &'a SiReport, check: SiCheck) -> Vec<&'a hauksbee_ext
 /// resistor and datasheet equation—not from a capability/limit rating.
 #[test]
 fn si_surfaces_ampacity_on_undersized_routed_rail() {
-    let (board, text) = programmed_charger_and_text(
+    // The board declares 1 oz copper, so the shortfall is a verdict about THIS
+    // board rather than about an assumed copper weight.
+    let (board, text) = programmed_charger_with_stackup(
         r#"(segment (start 0 0) (end 10 0) (width 0.05) (layer "F.Cu") (net 1))"#,
     );
     let report = run_si(&board, &text);
@@ -169,7 +186,7 @@ fn si_surfaces_ampacity_on_undersized_routed_rail() {
     assert_eq!(
         amp.len(),
         1,
-        "the undersized +3V3 rail must fire one ampacity finding: {:?}",
+        "the undersized VBAT rail must fire one ampacity finding: {:?}",
         report.findings
     );
     let f = &amp[0];
@@ -178,6 +195,40 @@ fn si_surfaces_ampacity_on_undersized_routed_rail() {
         f.message.contains("TP4054") || f.message.contains("0.40 A"),
         "cites the regulated charge current: {}",
         f.message
+    );
+    assert!(
+        f.message.contains("per the board stackup") && !f.message.contains("NOT a verdict"),
+        "a declared stackup makes this a verdict: {}",
+        f.message
+    );
+}
+
+/// The same rail on a board that declares NO stackup. The shortfall is real under
+/// the assumed 1 oz but false at 2 oz (0.05 mm carries 0.46 A there, above the
+/// cited 0.40 A), so it must be reported as a conditional note naming the upload
+/// that would settle it, and must NOT be a finding.
+#[test]
+fn an_assumed_copper_weight_reports_but_does_not_convict() {
+    let (board, text) = programmed_charger_and_text(
+        r#"(segment (start 0 0) (end 10 0) (width 0.05) (layer "F.Cu") (net 1))"#,
+    );
+    let report = run_si(&board, &text);
+    assert!(
+        findings_of(&report, SiCheck::TraceAmpacity).is_empty(),
+        "an assumed copper weight cannot convict: {:?}",
+        report.findings
+    );
+    let note = report
+        .of_check(SiCheck::TraceAmpacity)
+        .find(|f| f.nets.contains(&"VBAT".to_string()))
+        .expect("the shortfall is still reported");
+    assert_eq!(note.severity, hauksbee_extract::SiSeverity::Info);
+    assert!(
+        note.message.contains("NOT a verdict")
+            && note.message.contains("declares no stackup")
+            && note.message.contains("0.40 A"),
+        "the note must state the shortfall, the assumption and the unlock: {}",
+        note.message
     );
 }
 
@@ -227,7 +278,9 @@ fn si_skips_an_identity_unknown_part_and_says_so() {
 /// under-width power trace that `--si` flags.
 #[test]
 fn engine_si_chokepoint_adds_ampacity_missing_from_bare_si_checks() {
-    let (board, text) = programmed_charger_and_text(
+    // Stackup declared, so the chokepoint's added result is a real finding and
+    // this test measures the plumbing rather than the severity policy.
+    let (board, text) = programmed_charger_with_stackup(
         r#"(segment (start 0 0) (end 10 0) (width 0.05) (layer "F.Cu") (net 1))"#,
     );
     let lib = ModelLibrary::builtin();
