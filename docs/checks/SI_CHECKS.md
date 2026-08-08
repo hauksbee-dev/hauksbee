@@ -511,14 +511,45 @@ the known-good boards never make the declaration.
 
 ### Model
 
-IPC-2221 external-layer ampacity, `I = k * dT^0.44 * A^0.725` (k = 0.048 outer,
-0.024 inner), applied to the **narrowest routed segment** on a net (the series
-bottleneck). The physics, the Poured-net exemption, and the never-invent-a-
+IPC-2221 ampacity, `I = k * dT^0.44 * A^0.725` (k = 0.048 outer, 0.024 inner),
+applied to the **narrowest routed segment** on a net (the series bottleneck), at
+the copper weight and layer side that segment is built in. The physics, the Poured-net exemption, and the never-invent-a-
 current rule all live in `hauksbee-extract`'s `trace_current` module and are
 unit-tested there. What `--si` adds is the *attribution* layer
 (`hauksbee-engine` `checks::ampacity`) that decides which net carries how much
 current, from the bound DB models, so the check runs automatically instead of
 by hand.
+
+### Copper weight and layer side (per layer, from the stackup)
+
+Ampacity is not a per-board constant, so the check does not rate every net the
+same way. `CopperWeights::from_root` reads the same `(setup (stackup ...))` block
+check 5 uses, and takes each **copper** layer's declared `thickness` plus its
+position in the declared top-to-bottom order. Thickness converts back to weight
+at 0.035 mm per oz; the first and last copper entries are the outer layers and
+everything between them is internal, which is what selects IPC-2221's `k`.
+
+Each net is then rated on the layer its **narrowest** segment actually sits on
+(`NetCopper::min_trace_layer`), because that is the bottleneck being rated. A net
+whose choke is on an inner layer is rated as inner copper even when the rest of
+its route is on the top.
+
+This matters by about 3x. On the common 4-layer build (1 oz outer, 0.5 oz inner),
+a 0.5 mm trace rates **~1.45 A as 1 oz external** copper and **~0.44 A as 0.5 oz
+internal** copper: half the `k` and half the cross-section. Rating everything as
+1 oz external therefore let genuinely undersized inner-layer traces pass, which
+is why a cited 1.0 A on that trace now fires on `In1.Cu` and stays silent on
+`F.Cu`.
+
+When the board declares **no stackup**, the 1 oz external default still stands
+(the verdict on such boards is unchanged), but it is no longer printed as a fact
+about the board. The finding says
+`ASSUMED 1 oz external - the layout declares no copper weight for <layer>, so
+upload a stackup declaration or fab drawing to rate the real copper`, and the
+`--ampacity` table carries the same disclosure above it plus a per-row
+`1 oz ext (assumed)` basis. A declared stackup instead reads
+`0.50 oz internal In1.Cu, per the board stackup`, so measured and assumed
+ratings are never confusable.
 
 ### Attribution (the zero-false-positive boundary)
 
