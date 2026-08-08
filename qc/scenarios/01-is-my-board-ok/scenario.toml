@@ -36,10 +36,15 @@ contains = [
 matches = [
   # Per-section verdicts, worded for a person. Watchy ships with its own
   # .kicad_pro (min clearance 0.15 mm), under which the copper is clean, so
-  # the DRC section reads healthy rather than listing warnings.
+  # the DRC section reads healthy rather than listing warnings. The copper
+  # check reads the layout and needs no device model, so it alone may still
+  # claim health while ICs are unmodelled.
   "^Looks healthy: no copper spacing \\(drc\\) problems found\\.$",
-  "^Looks healthy: no connectivity problems found\\.$",
-  "^No signal-integrity failures, but [0-9]+ things worth a look",
+  # The connectivity and signal-integrity sections depend on device models,
+  # and two of this board's active ICs have none, so a clean bill there would
+  # be vacuous. Each section's verdict must say INCONCLUSIVE, count the
+  # unmodelled parts, name them, and say what unlocks a conclusive verdict.
+  "^INCONCLUSIVE: [0-9]+ current-carrying / active part\\(s\\) have no model \\(U[0-9]+",
   # The heads-up points at `--report` for the bind table. If it puts a part count
   # in that sentence, the count has to be the size of the table it is pointing
   # at. Watchy binds 67 non-ignored parts into an 82-row table, so the only
