@@ -198,6 +198,30 @@ impl DeviceMeta {
     /// The coverage gap this device leaves in the overpower check, when its
     /// package could not be read at all. An abstention nobody can see is
     /// indistinguishable from a pass, so the caller surfaces this.
+    /// The unreadable package string behind this device's missing power rating,
+    /// when that is why its overpower check could not run. `None` when the device
+    /// has a rating, is not a resistor, or its package was readable.
+    ///
+    /// The aggregation key: boards commonly carry dozens of resistors from one
+    /// library whose naming this cannot parse, and reporting each separately
+    /// floods the honesty channel to the point where it stops being read.
+    pub fn power_coverage_package(&self) -> Option<&str> {
+        if !matches!(self.kind, ComponentKind::Passive)
+            || self.ratings.max_power_w.is_some()
+            || !self.is_resistor_like()
+        {
+            return None;
+        }
+        if resistor_power_from_footprint(&self.footprint).basis != ResistorPowerBasis::Unknown {
+            return None;
+        }
+        Some(if self.footprint.is_empty() {
+            "(none)"
+        } else {
+            self.footprint.as_str()
+        })
+    }
+
     pub fn power_coverage_gap(&self) -> Option<String> {
         if !matches!(self.kind, ComponentKind::Passive)
             || self.ratings.max_power_w.is_some()
@@ -264,6 +288,53 @@ pub struct ResistorPower {
     /// where deriving anything would be an invention.
     pub watts: Option<f64>,
     pub basis: ResistorPowerBasis,
+}
+
+/// One message per unreadable PACKAGE rather than per part, naming the count and
+/// a few representative references.
+///
+/// A board with fifty resistors from one unparseable library is one coverage hole
+/// with fifty instances, not fifty holes, and rendering it as fifty is how an
+/// honesty channel gets tuned out.
+pub fn aggregate_power_coverage_gaps(metas: &[DeviceMeta]) -> Vec<String> {
+    let mut by_package: std::collections::BTreeMap<&str, Vec<&str>> =
+        std::collections::BTreeMap::new();
+    for m in metas {
+        if let Some(pkg) = m.power_coverage_package() {
+            let refs = by_package.entry(pkg).or_default();
+            if !refs.contains(&m.reference.as_str()) {
+                refs.push(m.reference.as_str());
+            }
+        }
+    }
+    by_package
+        .into_iter()
+        .map(|(pkg, mut refs)| {
+            refs.sort_unstable();
+            const SHOWN: usize = 5;
+            let listed = refs
+                .iter()
+                .take(SHOWN)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(", ");
+            let rest = refs.len().saturating_sub(SHOWN);
+            let named = if rest > 0 {
+                format!("{listed} and {rest} more")
+            } else {
+                listed
+            };
+            format!(
+                "stress: {} resistor(s) have no power rating and no readable package \"{}\" \
+                 ({}), so their overpower checks did not run. Give the parts a model with \
+                 ratings.max_power_w, or a footprint / BOM line naming the package, to cover \
+                 them.",
+                refs.len(),
+                pkg,
+                named,
+            )
+        })
+        .collect()
 }
 
 /// Derive a resistor's power rating from its footprint package size. Standard
@@ -601,12 +672,7 @@ impl StressMonitor {
     /// callers holding a bound board rather than a live monitor; between them the
     /// CI report, the evidence map and the TUI all carry these.
     pub fn power_coverage_gaps(&self) -> Vec<String> {
-        let mut seen = std::collections::BTreeSet::new();
-        self.metas
-            .iter()
-            .filter_map(|m| m.power_coverage_gap())
-            .filter(|m| seen.insert(m.clone()))
-            .collect()
+        aggregate_power_coverage_gaps(&self.metas)
     }
 
     /// Number of monitored devices.
@@ -1814,6 +1880,34 @@ mod monitor_temp_tests {
         );
         let mon = StressMonitor::new(vec![meta]);
         assert_eq!(mon.power_coverage_gaps().len(), 1);
+    }
+
+    #[test]
+    fn many_parts_sharing_one_unreadable_package_make_one_note_not_fifty() {
+        // Real libraries produce names this cannot parse ("R-US_0207/10"), and a
+        // board can carry dozens of them. Fifty near-identical notes is precisely
+        // the volume at which users stop reading the honesty channel, so they
+        // aggregate by package with a count and representative refs.
+        let metas: Vec<DeviceMeta> = (1..=50)
+            .map(|i| passive(&format!("R{i}"), "R-US_0207/10"))
+            .collect();
+        let gaps = aggregate_power_coverage_gaps(&metas);
+        assert_eq!(gaps.len(), 1, "one package, one note: {gaps:?}");
+        let g = &gaps[0];
+        assert!(g.contains("50 resistor(s)"), "states the count: {g}");
+        assert!(g.contains("R-US_0207/10"), "names the package: {g}");
+        assert!(
+            g.contains("and 45 more"),
+            "names some and counts the rest: {g}"
+        );
+        assert!(g.contains("max_power_w"), "names the unlock: {g}");
+
+        // Two distinct unreadable packages are two distinct holes.
+        let mixed = vec![
+            passive("R1", "R-US_0207/10"),
+            passive("R2", "Resistor_SMD:R_CustomHouse"),
+        ];
+        assert_eq!(aggregate_power_coverage_gaps(&mixed).len(), 2);
     }
 
     #[test]

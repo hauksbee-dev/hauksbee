@@ -759,6 +759,49 @@ fn a_declared_stackup_computes_the_trace_capacitance_instead_of_assuming_it() {
 }
 
 #[test]
+fn a_bus_leaving_the_top_layer_is_not_called_computed() {
+    // read_stackup describes F.Cu and the dielectric below it, and nothing else.
+    // A net that routes on B.Cu or an inner layer is outside what those numbers
+    // can honestly be applied to, so it must fall back to the assumed range rather
+    // than compute a figure for geometry the board never stated.
+    let body = r#"
+      (setup (stackup
+        (layer "F.Cu" (type "copper") (thickness 0.035))
+        (layer "dielectric 1" (type "prepreg") (thickness 0.1) (epsilon_r 4.5))
+        (layer "In1.Cu" (type "copper") (thickness 0.0175))
+        (layer "dielectric 2" (type "core") (thickness 1.2) (epsilon_r 4.5))
+        (layer "B.Cu" (type "copper") (thickness 0.035))
+      ))
+      (net 1 "SDA") (net 2 "+3V3")
+      (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
+        (property "Reference" "R1") (property "Value" "2.2k")
+        (pad "1" smd rect (at 0 0) (net 1 "SDA"))
+        (pad "2" smd rect (at 1 0) (net 2 "+3V3")))
+      (footprint "Package_SO:SOIC-8" (at 10 8) (layer "F.Cu")
+        (property "Reference" "U1") (property "Value" "SENSOR")
+        (pad "1" smd rect (at 0 0) (net 1 "SDA")))
+      (segment (start 0 0) (end 30 0) (width 0.25) (layer "F.Cu") (net 1))
+      (segment (start 30 0) (end 60 0) (width 0.25) (layer "B.Cu") (net 1))
+    "#;
+    let text = format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})");
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
+    let f = r.of_check(SiCheck::I2cRiseTime).next().expect("a note");
+    assert!(
+        f.message.contains("ASSUMED"),
+        "a bus off F.Cu must keep the assumed range: {}",
+        f.message
+    );
+    assert!(
+        !f.message.contains("computed from the board stackup"),
+        "and must not claim to have computed it: {}",
+        f.message
+    );
+}
+
+#[test]
 fn i2c_without_layout_says_routing_was_not_counted() {
     // No layout: the pin-count model is a floor, not an answer, and the note must
     // name the upload that would complete it rather than implying completeness.

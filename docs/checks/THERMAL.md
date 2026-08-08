@@ -144,8 +144,12 @@ invent overpower faults on correct designs.
 
 When the footprint says neither, nothing is derived. Guessing would be wrong in
 opposite directions, so the device is reported instead: `StressMonitor::
-power_coverage_gaps` names the part and the unlock (a model with
-`ratings.max_power_w`, or a footprint / BOM line naming the package). The CI
+power_coverage_gaps` names the affected parts and the unlock (a model with
+`ratings.max_power_w`, or a footprint / BOM line naming the package). It reports
+**one note per unreadable package**, with a count and up to five representative
+references, because a board carrying fifty resistors from one unparseable library
+is one coverage hole with fifty instances and fifty near-identical notes is how an
+honesty channel stops being read. The CI
 report carries it in `coverage_warnings` alongside the co-sim coverage holes, and
 `BoundBoard::power_coverage_gaps` feeds the same sentence into the evidence map
 on the `run` / `--plain` / `--json` / TUI surfaces, so the gap is not visible in
