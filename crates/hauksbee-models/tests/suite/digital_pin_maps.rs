@@ -289,3 +289,77 @@ fn hc165_shift_register_pin_map() {
         ],
     );
 }
+
+/// BMA423: Bosch Sensortec BST-BMA423-DS000-01 Rev 1.1, Section 7.1 Pin
+/// description (LGA-12). The two supply domains are the thing a template
+/// corrupts here: VDDIO on 3 with GNDIO on 8, VDD on 7 with GND on 9, and the
+/// two grounds are NOT interchangeable pads. SDX/SCX carry the bus vocabulary
+/// (`sda`/`scl`) rather than the datasheet spelling, per tests/pin_roles.rs.
+#[test]
+fn bma423_accelerometer_pin_map() {
+    assert_pin_map(
+        "BMA423",
+        "bma423",
+        &[
+            ("1", "sdo"),
+            ("2", "sda"),
+            ("3", "vddio"),
+            ("4", "asda"),
+            ("5", "int1"),
+            ("6", "int2"),
+            ("7", "vdd"),
+            ("8", "gndio"),
+            ("9", "gnd"),
+            ("10", "csb"),
+            ("11", "ascl"),
+            ("12", "scl"),
+        ],
+    );
+}
+
+/// The BMA423's numbers, and the fact that its logic levels are the VDDIO
+/// FRACTIONS the datasheet publishes rather than round guesses. Section 1
+/// gives VIH >= 0.7 x VDDIO, VIL <= 0.3 x VDDIO, VOH >= 0.8 x VDDIO,
+/// VOL <= 0.2 x VDDIO; db/digital.toml evaluates them at VDDIO = 3.3 V.
+/// Section 2 caps every pin at 4 V, which is the whole point of carrying a
+/// rating on a 3.3 V part: a 5 V rail reaching this pin is a fault.
+#[test]
+fn bma423_carries_the_ratiometric_levels_and_the_four_volt_ceiling() {
+    let lib = ModelLibrary::builtin();
+    let q = ComponentQuery {
+        value: Some("BMA423".into()),
+        ..Default::default()
+    };
+    let m = lib.resolve(&q).model.expect("BMA423 resolves");
+    let vddio = 3.3_f64;
+    for (key, factor) in [("vih", 0.7), ("vil", 0.3), ("voh", 0.8), ("vol", 0.2)] {
+        let got = m.params.get_f64(key).unwrap_or_else(|| panic!("{key} set"));
+        assert!(
+            (got - factor * vddio).abs() < 5e-3,
+            "{key} must be {factor} x VDDIO at 3.3 V ({:.3} V), got {got}",
+            factor * vddio,
+        );
+    }
+    // IDD in performance mode, the highest of the sheet's three modes, so a
+    // rail budget reads the worst case and not the 3.5 uA suspend figure.
+    assert_eq!(m.params.get_f64("supply_static_ua"), Some(150.0));
+    assert_eq!(m.params.get_str("supply_pin"), Some("7"));
+    assert_eq!(m.params.get_str("gnd_pin"), Some("9"));
+    assert_eq!(
+        m.ratings.max_voltage_v,
+        Some(4.0),
+        "Section 2 abs max is 4 V on the supply pins and on any logic pin"
+    );
+    // A sibling with a different register map and pinout must not borrow this
+    // entry's map.
+    for sibling in ["BMA400", "BMA456", "BMA425"] {
+        let q = ComponentQuery {
+            value: Some(sibling.into()),
+            ..Default::default()
+        };
+        assert!(
+            lib.resolve(&q).model.is_none_or(|m| m.id != "bma423"),
+            "{sibling} must not resolve to the BMA423 entry"
+        );
+    }
+}

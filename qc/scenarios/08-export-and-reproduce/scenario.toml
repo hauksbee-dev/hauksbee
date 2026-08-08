@@ -24,7 +24,7 @@ json_schema = "crates/hauksbee-engine/schemas/hauksbee-run-report.schema.json"
 json_required_keys = [
   "schema_version", "board", "bind", "ok", "verdict", "serious_count", "actionable_count",
 ]
-json_equals = { "schema_version" = 1, "verdict" = "pass", "ok" = true, "serious_count" = 0, "bind.mcu_bound" = true }
+json_equals = { "schema_version" = 2, "verdict" = "pass", "ok" = true, "serious_count" = 0, "bind.mcu_bound" = true }
 # The JSON surface is where the internal names belong, and it must not be
 # polluted with the plain-language rendering.
 not_contains = ["Why it matters:", "What to do:", "== Copper spacing"]
