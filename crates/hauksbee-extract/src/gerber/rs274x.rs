@@ -585,32 +585,85 @@ impl<'a> Plotter<'a> {
         };
         let (cx, cy) = (self.x, self.y);
         let s = self.to_mm;
+        // A standard aperture's optional hole diameter: the hole is BARE BOARD
+        // (RS-274X 4.4.6: the hole is not part of the aperture image), so a
+        // flash that carries one must not paint copper there. Discarding it
+        // read the hole as solid, and foreign copper passing through a large
+        // hole was unioned onto the pad's net. A holed flash materializes as
+        // an outer contour plus a hole contour (even-odd containment); a flash
+        // with no hole keeps its exact old shape.
+        let hole_mm = match ap {
+            Aperture::Circle(Circle { hole_diameter, .. }) => *hole_diameter,
+            Aperture::Rectangle(Rectangular { hole_diameter, .. })
+            | Aperture::Obround(Rectangular { hole_diameter, .. }) => *hole_diameter,
+            Aperture::Polygon(GPolygon { hole_diameter, .. }) => *hole_diameter,
+            Aperture::Macro(..) => None,
+        }
+        .map(|h| h * s)
+        .filter(|h| *h > 0.0);
+        let with_hole = |outer: Vec<(f64, f64)>, hole: f64| -> Shape {
+            // The hole rim as a 32-gon. Inscribed, so it under-cuts the hole
+            // by <0.5% of its radius: erring toward copper, never toward
+            // inventing emptiness where the annular ring is.
+            let rim: Vec<(f64, f64)> = (0..32)
+                .map(|k| {
+                    let a = k as f64 * std::f64::consts::TAU / 32.0;
+                    (cx + hole / 2.0 * a.cos(), cy + hole / 2.0 * a.sin())
+                })
+                .collect();
+            Shape::MultiPolygon {
+                contours: vec![outer, rim],
+            }
+        };
         let shape = match ap {
-            Aperture::Circle(Circle { diameter, .. }) => Shape::disc(cx, cy, diameter * s / 2.0),
+            Aperture::Circle(Circle { diameter, .. }) => match hole_mm {
+                None => Shape::disc(cx, cy, diameter * s / 2.0),
+                Some(h) => {
+                    // The outer rim as a 64-gon (radius error < 0.13%).
+                    let r = diameter * s / 2.0;
+                    let outer: Vec<(f64, f64)> = (0..64)
+                        .map(|k| {
+                            let a = k as f64 * std::f64::consts::TAU / 64.0;
+                            (cx + r * a.cos(), cy + r * a.sin())
+                        })
+                        .collect();
+                    with_hole(outer, h)
+                }
+            },
             Aperture::Rectangle(Rectangular { x, y, .. }) => {
-                rect_polygon(cx, cy, x * s, y * s, 0.0)
+                let rect = rect_polygon(cx, cy, x * s, y * s, 0.0);
+                match (hole_mm, rect) {
+                    (Some(h), Shape::Polygon { pts, .. }) => with_hole(pts, h),
+                    (_, rect) => rect,
+                }
             }
             Aperture::Obround(Rectangular { x, y, .. }) => {
                 // Obround = stadium; model as a capsule along the long axis.
                 let (w, h) = (x * s, y * s);
-                if w >= h {
+                let capsule = if w >= h {
                     let r = h / 2.0;
-                    Shape::Capsule(Capsule {
+                    Capsule {
                         ax: cx - (w - h) / 2.0,
                         ay: cy,
                         bx: cx + (w - h) / 2.0,
                         by: cy,
                         r,
-                    })
+                    }
                 } else {
                     let r = w / 2.0;
-                    Shape::Capsule(Capsule {
+                    Capsule {
                         ax: cx,
                         ay: cy - (h - w) / 2.0,
                         bx: cx,
                         by: cy + (h - w) / 2.0,
                         r,
-                    })
+                    }
+                };
+                match hole_mm {
+                    None => Shape::Capsule(capsule),
+                    // A holed obround polygonizes its stadium boundary so the
+                    // hole contour can be carried alongside it.
+                    Some(hole) => with_hole(stadium_outline(&capsule), hole),
                 }
             }
             Aperture::Polygon(GPolygon {
@@ -618,13 +671,19 @@ impl<'a> Plotter<'a> {
                 vertices,
                 rotation,
                 ..
-            }) => regular_polygon(
-                cx,
-                cy,
-                diameter * s / 2.0,
-                *vertices,
-                rotation.unwrap_or(0.0),
-            ),
+            }) => {
+                let poly = regular_polygon(
+                    cx,
+                    cy,
+                    diameter * s / 2.0,
+                    *vertices,
+                    rotation.unwrap_or(0.0),
+                );
+                match (hole_mm, poly) {
+                    (Some(h), Shape::Polygon { pts, .. }) => with_hole(pts, h),
+                    (_, poly) => poly,
+                }
+            }
             Aperture::Macro(name, args) => {
                 match self.doc.commands().iter().find_map(|c| match c {
                     Command::ExtendedCode(ExtendedCode::ApertureMacro(m)) if &m.name == name => {
@@ -931,6 +990,31 @@ impl<'a> Plotter<'a> {
             });
         }
     }
+}
+
+/// The boundary of a stadium (capsule) as a polygon: each end cap sampled as
+/// a 16-segment half-circle, joined by the straight flanks. Used only when an
+/// obround aperture carries a hole and must become a contour pair.
+fn stadium_outline(c: &Capsule) -> Vec<(f64, f64)> {
+    let (dx, dy) = (c.bx - c.ax, c.by - c.ay);
+    let len = dx.hypot(dy);
+    let (ux, uy) = if len > f64::EPSILON {
+        (dx / len, dy / len)
+    } else {
+        (1.0, 0.0)
+    };
+    let base_a = uy.atan2(ux) + std::f64::consts::FRAC_PI_2;
+    let mut pts = Vec::with_capacity(34);
+    // Cap around B (from +90° to -90° relative to the axis), then around A.
+    for k in 0..=16 {
+        let a = base_a - k as f64 * std::f64::consts::PI / 16.0;
+        pts.push((c.bx + c.r * a.cos(), c.by + c.r * a.sin()));
+    }
+    for k in 0..=16 {
+        let a = base_a + std::f64::consts::PI - k as f64 * std::f64::consts::PI / 16.0;
+        pts.push((c.ax + c.r * a.cos(), c.ay + c.r * a.sin()));
+    }
+    pts
 }
 
 /// Axis-aligned rectangle polygon centred at (cx, cy).
@@ -1548,6 +1632,32 @@ M02*
         let prims = parse_layer(&donut_job(1.6)).unwrap();
         let (_b, s) = crate::gerber::connect::reconstruct("t", vec![prims], vec![], vec![]);
         assert_eq!(s.n_nets, 1, "copper on the ring is a genuine overlap");
+    }
+
+    #[test]
+    fn aperture_hole_diameter_is_bare_board_not_copper() {
+        // `%ADD10C,2.0X1.0*%`: a 2 mm disc with a 1 mm hole. The hole is not
+        // part of the aperture image (RS-274X 4.4.6), so foreign copper
+        // passing through it must NOT union with the pad, while copper on the
+        // annular ring must. Discarding the hole diameter (the old behavior)
+        // made the first case a false short.
+        let job = |fx_mm: f64| {
+            format!(
+                "%FSLAX46Y46*%\n%MOMM*%\n%ADD10C,2.000000X1.000000*%\n%ADD11C,0.200000*%\n\
+                 D10*\nX0Y0D03*\nD11*\nX{}Y0D03*\nM02*\n",
+                (fx_mm * 1e6) as i64
+            )
+        };
+        let prims = parse_layer(&job(0.0)).unwrap();
+        assert!(
+            matches!(prims[0].shape, Shape::MultiPolygon { .. }),
+            "a holed flash carries its hole contour"
+        );
+        let (_b, s) = crate::gerber::connect::reconstruct("t", vec![prims], vec![], vec![]);
+        assert_eq!(s.n_nets, 2, "copper in the hole is not on the pad");
+        let prims = parse_layer(&job(0.8)).unwrap();
+        let (_b, s) = crate::gerber::connect::reconstruct("t", vec![prims], vec![], vec![]);
+        assert_eq!(s.n_nets, 1, "copper on the annular ring is");
     }
 
     #[test]
