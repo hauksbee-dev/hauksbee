@@ -275,24 +275,53 @@ fn nearest(name: &str, vocab: &[&str]) -> Option<String> {
         .map(|(_, k)| k.to_string())
 }
 
-/// Every identifier appearing in the entry's behavioral expressions: the law
-/// expressions and the FSM transition guards, which bind param keys verbatim.
+/// Names the expression runtime binds ITSELF, after the params, so a param of
+/// the same name is silently overwritten and can never be read.
 ///
-/// Deliberately over-inclusive. It collects pin references (`v_vplus`), state
-/// flags (`state_charging`) and builtin names (`min`, `if`) alongside the real
-/// param references, because the only use is to EXEMPT a param name from the
-/// typo warning: a spurious extra entry can suppress a warning, never invent
-/// one, and suppressing is the safe direction for a lint that cannot prove
-/// intent.
+/// Appearing in an expression therefore does NOT make one of these a parameter
+/// read, and exempting them would hide the worst version of the bug this lint
+/// looks for: a param that is not merely unused but actively clobbered.
+/// `state_<name>` is prefix-matched, since the runtime derives one per FSM state.
+const RUNTIME_OWNED: &[&str] = &["t", "t_in_state", "state"];
+
+/// The sandbox's builtin function names. A call in an expression is not a
+/// parameter read either.
+const EXPR_BUILTINS: &[&str] = &["if", "min", "max", "abs", "floor", "ceil", "round"];
+
+/// Every identifier in the entry's behavioral expressions that could plausibly
+/// be a parameter read: the law expressions and the FSM transition guards bind
+/// "the param keys verbatim", so a name used there is defined by the entry
+/// itself.
+///
+/// Two classes are excluded rather than harvested, because a name the runtime
+/// owns is not a param read and exempting it produces a false negative:
+///
+/// * [`RUNTIME_OWNED`] (`t`, `t_in_state`, `state_<name>`) is bound AFTER the
+///   params in `hauksbee-engine`'s expression context, so a param called `t` is
+///   overwritten by simulation time on every evaluation. That is worse than
+///   unused, and it must warn.
+/// * [`EXPR_BUILTINS`] are functions.
+///
+/// Pin references (`v_<role>`) ARE still harvested. They are bound before the
+/// params, so a param sharing a pin's name would shadow the voltage rather than
+/// be lost, which is a different defect from the one this lint reports, and
+/// warning on it here would be guessing at the author's intent.
 fn behavioral_identifiers(entry: &ModelEntry) -> std::collections::BTreeSet<String> {
     let mut out = std::collections::BTreeSet::new();
     let mut harvest = |src: &str| {
         for ident in src.split(|c: char| !(c.is_alphanumeric() || c == '_')) {
             // An identifier cannot start with a digit; that filters the numeric
             // literals out without parsing them.
-            if !ident.is_empty() && !ident.starts_with(|c: char| c.is_ascii_digit()) {
-                out.insert(ident.to_string());
+            if ident.is_empty() || ident.starts_with(|c: char| c.is_ascii_digit()) {
+                continue;
             }
+            if RUNTIME_OWNED.contains(&ident)
+                || ident.starts_with("state_")
+                || EXPR_BUILTINS.contains(&ident)
+            {
+                continue;
+            }
+            out.insert(ident.to_string());
         }
     };
     for law in &entry.behavioral.laws {
@@ -375,6 +404,28 @@ mod tests {
         let found = unknown_params(&entry("diode", "vf = 2.0"));
         assert_eq!(found.len(), 1, "vf is not a param the diode model reads");
         assert_eq!(found[0].suggestion, None, "{found:?}");
+    }
+
+    /// The exemption must not extend to names the expression runtime binds for
+    /// itself. `t` is simulation time and is set AFTER the params, so a param
+    /// called `t` is overwritten on every evaluation: worse than unused, and the
+    /// one case where staying quiet would hide a live bug. Same for a
+    /// `state_<name>` flag and for a builtin function name.
+    #[test]
+    fn a_runtime_owned_name_is_not_exempted_by_appearing_in_an_expression() {
+        let src = "[[models]]\nid = \"t\"\nkind = \"digital\"\ndescription = \"t\"\n\
+                   [models.params]\nt = 1.0\nstate_on = 2.0\nmin = 3.0\n\
+                   [[models.behavioral.laws]]\nname = \"l\"\nkind = \"current\"\n\
+                   a = \"vplus\"\nb = \"gnd\"\nexpr = \"min(t, state_on)\"\n";
+        let db: crate::schema::DbFile = toml::from_str(src).expect("fixture parses");
+        let e = db.models.into_iter().next().unwrap();
+        let names: Vec<String> = unknown_params(&e).into_iter().map(|u| u.name).collect();
+        for expected in ["t", "state_on", "min"] {
+            assert!(
+                names.iter().any(|n| n == expected),
+                "'{expected}' is bound by the runtime, not read as a param: {names:?}"
+            );
+        }
     }
 
     /// The behavioral exemption: a law expression defines its own vocabulary, so

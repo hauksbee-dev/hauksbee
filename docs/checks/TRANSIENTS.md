@@ -409,11 +409,14 @@ turns that into a CI property, replaying the whole assertion set across an
   because silently truncating the corner set would fake the very bounded claim
   the mode exists to make. In corner mode `seeds` is ignored and `[fuzz]` must be
   absent: the two ensembles do not compose.
-- **Determinism**: every sampled value is a pure function of `(seed, reference,
-  rule)`, drawn from a splitmix64 stream domain-separated by a `"tol:"` tag, so a
-  failing member re-runs byte-identical under `--seed N`, and adding a tolerance
-  never changes which fuzz levels a seed straps. Seed 0 is always the nominal
-  baseline, so "nominal passes but the ensemble fails" is visible inside one run.
+- **Determinism**: every Monte-Carlo sampled value is a pure function of
+  `(seed, reference, rule)`, drawn from a splitmix64 stream domain-separated by a
+  `"tol:"` tag, so a failing member re-runs byte-identical under `--seed N`, and
+  adding a tolerance never changes which fuzz levels a seed straps. In
+  Monte-Carlo mode seed 0 is the nominal baseline, so "nominal passes but the
+  ensemble fails" is visible inside one run. Corner mode has no nominal member
+  (member 0 is the all-min corner), and its member indices are renumbered by
+  adding a tolerance rule.
 - **Reporting**: every assertion is re-evaluated per member, and the report names
   the worst member with its component values and words the strength of the claim
   honestly. A passing Monte-Carlo ensemble is statistical evidence, not a
