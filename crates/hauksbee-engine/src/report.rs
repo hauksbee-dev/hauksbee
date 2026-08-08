@@ -497,6 +497,37 @@ mod resolved_count_tests {
     }
 
     #[test]
+    fn a_binder_coverage_note_is_not_attributed_to_the_input_reader() {
+        // These notes travel the reader-notes channel but are the binder's.
+        // Blaming the input reader for "R7's package is unreadable" misstates
+        // which stage hit the limit, on a surface whose job is saying who assumed
+        // what.
+        use hauksbee_extract::ExtractedBoard;
+        let board = ExtractedBoard {
+            name: "gaps".into(),
+            nets: Vec::new(),
+            components: Vec::new(),
+        };
+        let evidence = crate::evidence::BoardEvidence::from_bound(
+            &board,
+            &BindReport::default(),
+            &["stress: R7 has no power rating and no readable package".to_string()],
+            hauksbee_ir::evidence::RunDate::from_epoch_days(20_666),
+        )
+        .expect("evidence builds");
+        let assumption = evidence
+            .assumptions()
+            .iter()
+            .find(|a: &&hauksbee_ir::evidence::Assumption| a.because().contains("R7"))
+            .expect("the note becomes an assumption");
+        assert_eq!(
+            assumption.source(),
+            hauksbee_ir::evidence::AssumptionSource::Binder,
+            "a stress-monitor limit is the binder's, not the reader's"
+        );
+    }
+
+    #[test]
     fn a_real_model_binding_raises_no_warning() {
         // The warning must stay off boards whose parts resolved properly, or it
         // is noise on every report.

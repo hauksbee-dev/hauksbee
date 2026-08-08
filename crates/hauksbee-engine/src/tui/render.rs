@@ -1242,6 +1242,7 @@ mod tests {
             &drc,
             &[],
             &[],
+            &[],
             vec![
                 crate::tui::state::Net {
                     name: "/LED".into(),

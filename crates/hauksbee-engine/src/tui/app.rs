@@ -99,6 +99,16 @@ pub fn build_state(
     // the binder used, so the detail can never disagree with the analysis.
     let (part_nets, net_parts) = connectivity(&board);
 
+    // Coverage holes that are not findings about the board but about what the run
+    // could not examine: parts running on generic estimated-fallback ratings, and
+    // resistors whose package was unreadable so their overpower check never ran.
+    let coverage_notes: Vec<String> = bound
+        .report
+        .estimated_fallback_warnings()
+        .into_iter()
+        .chain(bound.power_coverage_gaps())
+        .collect();
+
     let mut state = AppState::new(
         bound.name.clone(),
         &bound.report,
@@ -106,6 +116,7 @@ pub fn build_state(
         &drc_structured,
         &si_json,
         &lint_json,
+        &coverage_notes,
         nets,
         part_nets,
         net_parts,
