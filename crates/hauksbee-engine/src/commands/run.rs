@@ -87,8 +87,10 @@ pub struct RunConfig {
     pub serial_transport: hauksbee_mcu::hostserial::HostSerialTransport,
     /// Hold the co-sim at t=0 until a host tool attaches, at most this long.
     pub serial_wait: Option<f64>,
-    /// Let the co-sim run as fast as it can instead of pacing it to wall-clock
-    /// time.
+    /// Let the co-sim run as fast as it can while no host tool is attached.
+    /// While a peer is attached, its bytes are delivered on a fixed
+    /// compressed schedule (wall gaps scaled into sim time) rather than
+    /// free-running; see `SerialSessionConfig::pace`.
     pub serial_no_pace: bool,
     /// Which MCU reference to bridge, when a board carries more than one.
     pub serial_mcu: Option<String>,
@@ -884,6 +886,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             pace: !cfg.serial_no_pace,
             mcu: cfg.serial_mcu.clone(),
             chunk_us: cfg.chunk_us,
+            ..Default::default()
         };
         let mut say = |line: &str| eprintln!("{line}");
         let summary =
