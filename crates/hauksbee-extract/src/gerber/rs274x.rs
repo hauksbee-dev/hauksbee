@@ -633,9 +633,22 @@ impl<'a> Plotter<'a> {
                     _ => None,
                 }) {
                     Some(m) => {
-                        let pts = instantiate_macro(m, args.as_deref().unwrap_or(&[]), cx, cy, s);
-                        if pts.len() >= 3 {
-                            Shape::Polygon { pts, r: 0.0 }
+                        let ms = instantiate_macro(m, args.as_deref().unwrap_or(&[]), cx, cy, s);
+                        if ms.hull.len() >= 3 {
+                            if ms.holes.is_empty() {
+                                Shape::Polygon {
+                                    pts: ms.hull,
+                                    r: 0.0,
+                                }
+                            } else {
+                                // Exposure-off primitives punched real voids
+                                // out of the pad: carry them, so foreign
+                                // copper routed through a void is NOT read as
+                                // touching this pad (a false short).
+                                let mut contours = vec![ms.hull];
+                                contours.extend(ms.holes);
+                                Shape::MultiPolygon { contours }
+                            }
                         } else {
                             // Couldn't evaluate (variables/expressions we don't
                             // support): fall back to a small disc so the flash
@@ -1492,6 +1505,49 @@ M02*
         let flashes: Vec<_> = prims.iter().filter(|p| p.kind == PrimKind::Flash).collect();
         assert_eq!(flashes[0].attrs.pin.as_ref().unwrap().0, "R1");
         assert_eq!(flashes[1].attrs.pin, None, "%TD cleared the dictionary");
+    }
+
+    // A macro pad with a punched-out void (dark 4x4 square, clear 2 mm circle),
+    // flashed at the origin, plus one small foreign disc whose position the
+    // test chooses. Two-sided: copper in the VOID stays separate; copper on
+    // the RING is a genuine overlap and unions.
+    fn donut_job(foreign_x_mm: f64) -> String {
+        format!(
+            "%FSLAX46Y46*%\n\
+             %MOMM*%\n\
+             %AMDONUT*21,1,4,4,0,0,0*1,0,2,0,0*%\n\
+             %ADD10DONUT*%\n\
+             %ADD11C,0.500000*%\n\
+             D10*\n\
+             X0Y0D03*\n\
+             D11*\n\
+             X{}Y0D03*\n\
+             M02*\n",
+            (foreign_x_mm * 1e6) as i64
+        )
+    }
+
+    #[test]
+    fn macro_void_does_not_swallow_foreign_copper() {
+        // Foreign 0.5 mm disc at the void centre: with the void read as solid
+        // (the old convex-hull-only behavior) this was one net, a false
+        // short. It must be TWO nets.
+        let prims = parse_layer(&donut_job(0.0)).unwrap();
+        assert_eq!(prims.len(), 2, "the macro pad and the foreign disc");
+        assert!(
+            matches!(prims[0].shape, Shape::MultiPolygon { .. }),
+            "a voided macro flash carries its hole contour"
+        );
+        let (_b, s) = crate::gerber::connect::reconstruct("t", vec![prims], vec![], vec![]);
+        assert_eq!(
+            s.n_nets, 2,
+            "copper inside the macro's void is NOT touching the pad"
+        );
+
+        // The same foreign disc moved onto the ring: genuinely touching.
+        let prims = parse_layer(&donut_job(1.6)).unwrap();
+        let (_b, s) = crate::gerber::connect::reconstruct("t", vec![prims], vec![], vec![]);
+        assert_eq!(s.n_nets, 1, "copper on the ring is a genuine overlap");
     }
 
     #[test]

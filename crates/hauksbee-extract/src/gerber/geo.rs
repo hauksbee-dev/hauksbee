@@ -169,7 +169,12 @@ fn on_seg(p: (f64, f64), q: (f64, f64), r: (f64, f64)) -> bool {
     q.0 <= p.0.max(r.0) && q.0 >= p.0.min(r.0) && q.1 <= p.1.max(r.1) && q.1 >= p.1.min(r.1)
 }
 
-fn segments_intersect(p1: (f64, f64), p2: (f64, f64), p3: (f64, f64), p4: (f64, f64)) -> bool {
+pub(crate) fn segments_intersect(
+    p1: (f64, f64),
+    p2: (f64, f64),
+    p3: (f64, f64),
+    p4: (f64, f64),
+) -> bool {
     let d1 = orient(p3, p4, p1);
     let d2 = orient(p3, p4, p2);
     let d3 = orient(p1, p2, p3);
