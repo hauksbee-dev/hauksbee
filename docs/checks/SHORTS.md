@@ -26,8 +26,9 @@ shapes, all in board millimetres:
 | Through-hole pad (`*.Cu`)       | Disc / shape on every copper layer | `*.Cu` / `F&B.Cu` expanded to the declared copper stack |
 | SMD / THT pad, circle          | Disc | radius = half the larger size dimension |
 | SMD / THT pad, oval            | Capsule (stadium) | segment along the long axis, radius = half the short axis |
-| SMD / THT pad, rect / roundrect / trapezoid | Polygon (+ corner radius for roundrect) | roundrect inset by the corner radius, radius carried so the rounded copper is not overstated |
-| SMD / THT pad, custom          | Polygon | first `gr_poly` outline, else the bounding rect |
+| SMD / THT pad, rect / roundrect | Polygon (+ corner radius for roundrect) | roundrect inset by the corner radius, radius carried so the rounded copper is not overstated |
+| SMD / THT pad, trapezoid       | Polygon | `rect_delta` honoured (KiCad corner formula, delta clamped the way KiCad clamps it) |
+| SMD / THT pad, custom          | Anchor shape + every primitive | anchor circle/stadium or rect over `size`, plus all `gr_poly`/`poly` outlines, stroked lines, arcs (covering flattening), circles (filled disc or covering ring) and rects |
 | Filled zone (`zone` → `filled_polygon`) | Polygon (boundary edges + containment) | the actual fill copper, with antipads / thermal reliefs |
 
 Pad outlines are transformed into the board frame correctly for rotated
@@ -148,8 +149,8 @@ face, swapping its side-specific copper 1↔16.
 | Through-hole pad (`<pad>` in a package) | shape on every copper layer | `round`→disc, `square`→rect, `octagon`→octagon polygon, `long`→stadium capsule, `offset`→capsule offset to one end |
 | SMD pad (`<smd>` in a package) | Rect polygon (+ corner radius) | single layer (1 by default, flipped by mirror); `roundness` (0..100 %) carried as a corner-radius inflation on an inset rect, like KiCad roundrect; `rot` honoured |
 | Board rectangle (`<rectangle>` on copper) | Rect polygon | rotated by `rot` |
-| Board circle (`<circle>` on copper) | Disc | conservative solid disc of the outer radius (`radius + width/2`) |
-| Signal polygon / pour (`<polygon>`) | **excluded from the short test** | see the honesty caveat below |
+| Board circle (`<circle>` on copper) | Annulus (covering capsule ring), or a solid disc when `width` is 0 | the stroke band is the copper; the interior is bare board (Eagle fills only zero-width circles) |
+| Signal polygon / pour (`<polygon>`) | settings parsed; same-rank overlaps shorted; fill **excluded from the pour-to-copper test** | see the honesty caveat below |
 
 Package copper is placed with the full element transform: position rotated by the
 element's `rot` (CCW, y-up). A mirrored (`MR`) element negates local X and uses
@@ -177,17 +178,28 @@ header pads and manufactured an SDA/SCL collision.
 
 ### Honest polygon (copper pour) fidelity caveat
 
-A `.brd` stores only a signal polygon's **requested outline**, not the copper
-Eagle actually pours. The real fill carves an `isolate` antipad gap around every
-foreign-net wire / pad / via inside the outline, and arbitrates overlapping pours
-by `rank`. Neither the antipads nor the rank are in the file. Treating the drawn
-outline as solid copper turns every trace that legitimately crosses into a pour
-(and every foreign pad the pour isolates around) into a false short, so the pour
-is **excluded from the short / clearance test entirely** rather than reported
-dishonestly. The outline is still parsed (with its per-vertex curves) so the
-limitation is explicit, not silent. Checking pour-to-copper shorts honestly would
-need the board re-poured in Eagle and the computed polygons (with antipads)
-exported. That data is not in the source `.brd`.
+A `.brd` stores a signal polygon's **requested outline** plus its pour settings
+(`isolate`, `rank`, `thermals`, `orphans`, `pour`), all of which are parsed;
+only the *computed* fill polygon is absent, because Eagle re-derives it on every
+ratsnest / CAM run. That derivation is what keeps the fill out of the
+pour-to-copper short test: Eagle carves max(`isolate`, the applicable
+design-rule / net-class clearance) around every foreign-net wire, pad and via
+(an `isolate` below the rules distance is ignored), thermal spokes only remove
+same-net copper, and orphan removal only deletes fill pockets. Every setting
+keeps or widens gaps, so a correctly derived fill cannot short or crowd foreign
+copper in the same file, while treating the drawn outline as solid copper would
+turn every trace the fill legitimately carves around into a false short. The
+fill itself is never reconstructed and the isolate distance never numerically
+re-verified; the settings are parsed, drive this reasoning, and are disclosed
+verbatim on pour findings. Pour-to-copper pairs are therefore *not checked*
+(rather than checked and found clean), and same-rank pours that approach
+without ring overlap are not distance-checked either, since the fill extent
+near the boundary depends on those settings. The one
+construct the settings cannot make safe under any derivation **is** checked:
+two overlapping
+same-rank pours of different signals have no arbitration (Eagle pours both, a
+physical short on the fabricated board, and Eagle's own DRC flags the overlap),
+and that short is reported with the pour settings disclosed on the finding.
 
 ### Deliberate ties exempted locally
 
@@ -373,24 +385,47 @@ waived. The corpus test (`tests/drc_corpus.rs`) documents this evidence.
 - **Arc flattening.** Arc tracks are approximated by 8 straight capsule links.
   The chord error is sub-micron for typical track radii, but a pathologically
   large arc could under-report a grazing clearance by a few microns.
-- **Roundrect / custom pads** are approximated (roundrect as an inset
-  rectangle plus a corner radius, custom pads by their first polygon
-  primitive or bounding rect). This is conservative for overlap and tight for
-  clearance to within the corner radius.
-- **Eagle signal pours.** A `.brd` stores only a pour's requested outline,
-  not the poured copper with its `isolate` antipads or `rank` arbitration, so
-  pours are excluded from the Eagle short / clearance test entirely (see the
-  fidelity caveat above). A short *into* a pour is therefore not detected on
-  Eagle boards. Wires, vias and pads against each other are fully covered.
-  KiCad pours, which do carry the computed fill, are covered.
+- **Roundrect pads** are represented as an inset rectangle plus a corner
+  radius. This is conservative for overlap and tight for clearance to within
+  the corner radius. Custom pads stamp their anchor shape and every drawn
+  primitive (all polygons, lines, arcs, circles and rectangles); trapezoid
+  pads honor `rect_delta`.
+- **Eagle signal pours.** The computed fill is not in the `.brd`, so
+  pour-to-copper pairs are not checked (the fidelity caveat above explains
+  why a fill Eagle derives from the stored settings would not violate, and
+  why the outline must not stand in for it); overlapping same-rank pours of
+  different signals ARE reported as shorts. Wires, vias and pads against
+  each other are fully covered. KiCad pours, which do carry the computed
+  fill, are covered.
 - **Eagle multilayer.** The Eagle reader spans through-hole pads and vias
   over a two-layer (`1`/`16`) copper stack, which matches the entire
   famous-board corpus. A genuinely multilayer Eagle `.brd` with inner-layer
   copper would need its inner layers added to that stack.
-- **Eagle curve flattening.** Wire `curve` arcs and per-vertex polygon curves
-  are flattened into 8 capsule links, with the circumcircle centre chosen so
-  the sweep lands on the stated endpoint. The chord error is sub-micron for
-  typical radii.
+- **Eagle curve flattening.** Wire `curve` arcs are flattened into 8 capsule
+  links, with the circumcircle centre chosen so the sweep lands on the stated
+  endpoint. The chord error is sub-micron for typical radii. Drawn copper
+  circles, pad-primitive arcs, and pour-outline curves instead use
+  sagitta-bounded *covering* flattening (error at most 2.5 µm), biased
+  outward so a grazing short is never lost to chord sag; the flip side is
+  that a true air gap smaller than ~2.5 µm can read as touching and be
+  reported a short. That is a deliberate FN-averse trade at a scale no
+  fabricator can produce as intentional spacing.
+- **Eagle pour boundary strokes.** The same-rank pour overlap short keys on
+  the polygons' vertex rings. Two same-rank pours whose rings miss each other
+  by less than their drawn boundary stroke widths are not flagged; pinning
+  whether Eagle's own DRC treats a stroke graze as overlap needs an
+  Eagle-generated oracle board, which the corpus does not yet carry.
+- **Eagle single-clearance model.** The Eagle DRC resolves ONE clearance (the
+  tightest copper-gating `md*` rule) rather than the per-item-kind matrix
+  (`mdWireWire` vs `mdPadPad`, ...); net-class values and matrix cells are
+  floored at that single rule. A board whose `md*` values diverge is checked
+  against the tightest of them everywhere, the long-standing
+  no-manufactured-noise choice of this path.
+- **Altium octagonal pads.** Modeled with the 0.25 corner-cut ratio KiCad's
+  Altium importer uses (the reference implementation this module's record
+  layouts are ported from). If Altium's native render were the regular
+  octagon (cut ≈ 0.293), up to ~4% of the shorter pad side of corner copper
+  is overstated; an Altium-generated oracle board would pin the true cut.
 - The bridge model is a fixed small resistance. It does not model the
   bridge's own current-dependent fusing. Destructive-mode faulting still
   applies to the parts the short over-drives.
