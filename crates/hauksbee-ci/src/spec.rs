@@ -646,7 +646,19 @@ pub struct PeripheralSpec {
     /// a `vcd_sink` reads only `nets = [...]`, never this singular field.
     #[serde(default)]
     pub net: Option<String>,
-    /// Connector reference designator (e.g. "J1") for ref+pin attachment.
+    /// Reference designator of a board component, read two ways depending on the
+    /// peripheral kind.
+    ///
+    /// On a net-attached control it is the CONNECTOR whose `pin` names the
+    /// attachment pad (`ref` + `pin` resolve to a net).
+    ///
+    /// On a SPI slave (`spi_eeprom` / `spi_mcp3008`) there is no `pin`: `ref`
+    /// names the board component the peripheral IS, which is what lets the chip
+    /// select be found without `cs_net`. If the part is assembled,
+    /// identity-trusted, and binds to a model declaring a `cs` pin role, the co-sim
+    /// frames transactions on that net's real edges (exact framing). An explicit
+    /// `cs_net` always wins over it. A `ref` naming no board component is a loud
+    /// error, not a silent fall back to the framing heuristic.
     #[serde(default, rename = "ref")]
     pub reference: Option<String>,
     /// Pin/pad number on the connector for ref+pin attachment.
@@ -698,7 +710,13 @@ pub struct PeripheralSpec {
     /// Chip-select net for a SPI slave (spi_eeprom / spi_mcp3008 / SPI sensor).
     /// When set and the net resolves to an MCU GPIO pin, the co-sim frames the
     /// slave's transactions on the real CS edges (exact framing, 05 §2) instead
-    /// of the chunk-boundary heuristic. Absent = heuristic framing.
+    /// of the chunk-boundary heuristic.
+    ///
+    /// Takes precedence over the `cs` pin role of the model bound to this
+    /// peripheral's `ref`, so a board whose model pad map is wrong, or whose chip
+    /// select is buffered through something the model cannot see, stays
+    /// overridable by hand. Absent AND no model-declared `cs` role reachable
+    /// through `ref` = heuristic framing.
     #[serde(default)]
     pub cs_net: Option<String>,
     /// Stimulus waveform: "dc"|"sine"|"pwl"|"noise".
@@ -1778,6 +1796,17 @@ impl Spec {
             Err(SpecError::UnknownNets(unknown))
         }
     }
+}
+
+/// Whether a peripheral `type` is a SPI slave, i.e. one whose transactions the
+/// co-sim has to frame and which therefore participates in the chip-select
+/// ladder (spec `cs_net`, else the `cs` pin role of the model bound to its
+/// `ref`, else the chunk-boundary heuristic).
+///
+/// One list, so the `ref` validation and the framing path cannot disagree about
+/// which kinds care.
+pub fn is_spi_slave_kind(kind: &str) -> bool {
+    matches!(kind, "spi_eeprom" | "spi_mcp3008")
 }
 
 impl SupplySpec {

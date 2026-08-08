@@ -870,6 +870,20 @@ pub(crate) fn component_ref_errors(spec: &Spec, known_refs: &[String]) -> Vec<Sp
             named.push((ov.reference.as_str(), "decoupling override"));
         }
     }
+    // A SPI slave's `ref` names the board component the peripheral IS, and the
+    // chip-select route reads that component's model `cs` pin role when the spec
+    // declares no `cs_net`. A typo there resolves no component, so no model, so no
+    // CS net, and the bus silently drops to the chunk-boundary framing heuristic
+    // with no error: the same silent-degradation hole that `cs_net` itself had
+    // (see the cs_net note in `Spec::referenced_nets`). Validate it like every
+    // other reference so the typo fails at load.
+    for p in &spec.peripherals {
+        if crate::spec::is_spi_slave_kind(&p.kind) {
+            if let Some(r) = &p.reference {
+                named.push((r.as_str(), "SPI peripheral `ref`"));
+            }
+        }
+    }
     let mut errs = Vec::new();
     for (reference, ctx) in named {
         if !set.contains(reference) {
@@ -3763,5 +3777,145 @@ address = 0x48
         check_trackable_assert_refs(&spec, &bound)
             .expect("a protected battery pack is a checkable guard");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod spi_cs_source_tests {
+    //! Which of the two exact-framing routes a SPI peripheral takes, and the
+    //! precedence between them.
+    //!
+    //! The model-role route exists so a modeled part does not need `cs_net`
+    //! written out by hand. It must never take that decision AWAY from the spec:
+    //! a pad map can be wrong, and a chip select can be buffered through
+    //! something the model cannot see, so a hand-declared `cs_net` has to win.
+
+    use super::*;
+    use hauksbee_extract::{Component, Net, Pin};
+
+    fn peripheral(toml_src: &str) -> crate::spec::PeripheralSpec {
+        toml::from_str(toml_src).expect("peripheral shape")
+    }
+
+    /// One assembled, CS-wired 25xx EEPROM at U5 (pad 1 = `cs` in the model DB),
+    /// with a second net available so precedence is observable.
+    fn board() -> ExtractedBoard {
+        ExtractedBoard {
+            name: "spi-cs-source".to_string(),
+            nets: vec![
+                Net {
+                    id: 1,
+                    name: "EE_CS".to_string(),
+                },
+                Net {
+                    id: 2,
+                    name: "OVERRIDE_CS".to_string(),
+                },
+            ],
+            components: vec![Component {
+                reference: "U5".to_string(),
+                value: "25LC256-I/SN".to_string(),
+                lib_id: String::new(),
+                footprint: "Package_SO:SOIC-8_3.9x4.9mm_P1.27mm".to_string(),
+                position: None,
+                layer: String::new(),
+                properties: Vec::new(),
+                dnp: false,
+                pins: vec![Pin {
+                    number: "1".to_string(),
+                    net: Some(1),
+                    function: String::new(),
+                    kind: String::new(),
+                    position: None,
+                }],
+            }],
+        }
+    }
+
+    #[test]
+    fn a_ref_with_no_cs_net_takes_the_model_role_route() {
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let p = peripheral("id = \"U5\"\ntype = \"spi_eeprom\"\nref = \"U5\"\n");
+        assert_eq!(
+            cs_net_name(&p, &board(), &lib),
+            Some(("EE_CS".to_string(), CsProvenance::ModelRoles)),
+            "with no cs_net declared, the bound model's `cs` pad supplies the net"
+        );
+    }
+
+    #[test]
+    fn a_declared_cs_net_wins_over_the_model_role() {
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let p = peripheral(
+            "id = \"U5\"\ntype = \"spi_eeprom\"\nref = \"U5\"\ncs_net = \"OVERRIDE_CS\"\n",
+        );
+        assert_eq!(
+            cs_net_name(&p, &board(), &lib),
+            Some(("OVERRIDE_CS".to_string(), CsProvenance::SpecDeclared)),
+            "an explicit cs_net must override the model's pad map, which is how a wrong \
+             or incomplete model entry stays correctable from the spec"
+        );
+    }
+
+    #[test]
+    fn a_declared_cs_net_needs_no_ref_at_all() {
+        // The pre-existing route, unchanged: no `ref`, no model, just a net name.
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let p = peripheral("id = \"EE\"\ntype = \"spi_eeprom\"\ncs_net = \"EE_CS\"\n");
+        assert_eq!(
+            cs_net_name(&p, &board(), &lib),
+            Some(("EE_CS".to_string(), CsProvenance::SpecDeclared))
+        );
+    }
+
+    #[test]
+    fn neither_route_leaves_the_bus_on_the_heuristic() {
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let p = peripheral("id = \"EE\"\ntype = \"spi_eeprom\"\n");
+        assert_eq!(
+            cs_net_name(&p, &board(), &lib),
+            None,
+            "no cs_net and no ref means no CS net; the bus reports heuristic framing"
+        );
+    }
+
+    #[test]
+    fn a_ref_naming_an_unknown_component_is_a_loud_error() {
+        // The silent-degradation hole this closes: a typo'd `ref` resolves no
+        // component, so no model, so no CS net, and the bus would quietly drop to
+        // the framing heuristic with nothing said. It must fail at load instead,
+        // exactly as a typo'd `cs_net` already does.
+        let spec: Spec = toml::from_str(
+            r#"
+board = "board.kicad_pcb"
+[[peripheral]]
+id = "EE"
+type = "spi_eeprom"
+ref = "U55"
+"#,
+        )
+        .expect("spec shape");
+        let errs = component_ref_errors(&spec, &["U5".to_string()]);
+        assert_eq!(errs.len(), 1, "{errs:?}");
+        let msg = errs[0].to_string();
+        assert!(
+            msg.contains("U55") && msg.contains("SPI peripheral"),
+            "the error must name the bad ref and say where it came from: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_correct_ref_raises_no_error() {
+        let spec: Spec = toml::from_str(
+            r#"
+board = "board.kicad_pcb"
+[[peripheral]]
+id = "EE"
+type = "spi_eeprom"
+ref = "U5"
+"#,
+        )
+        .expect("spec shape");
+        assert!(component_ref_errors(&spec, &["U5".to_string()]).is_empty());
     }
 }
