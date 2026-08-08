@@ -169,20 +169,21 @@ impl ChunkFallbackMethod {
         match self {
             ChunkFallbackMethod::ReducedStep => {
                 "primary integration at a smaller maximum step; \
-                 error_estimate_v carries a measured estimate of the error \
-                 this window's march added to its end state, from a companion \
-                 re-solve at a shifted accuracy dial (absent when no \
-                 companion converged)"
+                 error_estimate_v carries the worst per-chunk measured \
+                 estimate of the error each chunk's march added to its end \
+                 state, from a companion re-solve at a shifted accuracy dial \
+                 (absent when no companion converged)"
             }
             ChunkFallbackMethod::BackwardEuler
             | ChunkFallbackMethod::ColdStartBackwardEuler
             | ChunkFallbackMethod::SubdividedBackwardEuler => {
                 "first-order backward Euler: numerically dissipative, so fast \
                  transients and ringing inside this window are damped relative \
-                 to the second-order primary solve; error_estimate_v carries a \
-                 measured estimate of the error this window's march added to \
-                 its end state, from a companion re-solve at a shifted \
-                 accuracy dial (absent when no companion converged)"
+                 to the second-order primary solve; error_estimate_v carries \
+                 the worst per-chunk measured estimate of the error each \
+                 chunk's march added to its end state, from a companion \
+                 re-solve at a shifted accuracy dial (absent when no \
+                 companion converged)"
             }
         }
     }
@@ -472,6 +473,13 @@ pub struct Scheduler {
     /// 4x-coarser leg deterministically. Never set outside tests.
     #[doc(hidden)]
     pub debug_skip_refined_companion: bool,
+    /// True while the CURRENT chunk carries cycle-stamped within-chunk PWL
+    /// drives (`apply_pwl_drives` installed at least one). Set around the
+    /// `solve_chunk` call and cleared after; consulted by the fallback
+    /// ladder's subdivision guard, which must not quarter a chunk whose
+    /// forcing varies inside it (each quarter restarts chunk-local source
+    /// time at 0 and would re-play only the waveform's first quarter).
+    chunk_has_pwl_drives: bool,
     /// Largest measured final Newton residual among converged chunks this run.
     /// `None` means the active solver path did not measure one; it never means
     /// a zero residual.
@@ -1043,6 +1051,7 @@ impl Scheduler {
             debug_force_fallback_rung: None,
             debug_zero_fallback_error_estimate: false,
             debug_skip_refined_companion: false,
+            chunk_has_pwl_drives: false,
             worst_residual: None,
             consecutive_failed_chunks: 0,
             max_consecutive_failed_chunks: 0,
@@ -2766,7 +2775,9 @@ impl Scheduler {
         // integrator on every corner. Restored to the settled DC level right
         // after, so the digital tick and the next chunk see the final level.
         let pwl_restores = self.apply_pwl_drives(chunk);
+        self.chunk_has_pwl_drives = !pwl_restores.is_empty();
         let chunk_converged = self.solve_chunk(chunk);
+        self.chunk_has_pwl_drives = false;
         self.restore_pwl_drives(&pwl_restores);
         // An MCU that refused to advance makes this chunk untrustworthy even if
         // the analog march converged. `solve_chunk` records an analog failure but
@@ -3207,18 +3218,47 @@ impl Scheduler {
         // Rung 4: subdivide the chunk into quarters and march each with
         // backward Euler at the bounded step, seeding each quarter from the
         // previous quarter's end. Every quarter must converge; a partial
-        // chunk is not an answer. (Chunk-local source time restarts per
-        // sub-march, which is exact under the co-sim's convention that
-        // sources are constant within a chunk: MCU pins and forced nets only
-        // change at chunk boundaries.) The quarters' thermal integrals add up
+        // chunk is not an answer. The quarters' thermal integrals add up
         // to the one chunk's energy, so the accumulator is cleared once here
         // and shared across all four sub-marches.
+        //
+        // GUARD: chunk-local source time restarts per sub-march, so the
+        // quartering is faithful ONLY when every source the chunk sees is
+        // constant across it. A chunk carrying a cycle-stamped within-chunk
+        // PWL drive, or any time-varying board source (Pulse/Sin/Pwl/Ramped
+        // evaluate against the march's local clock), would have each quarter
+        // re-play only the waveform's first quarter, four times: a converged
+        // solve of the WRONG forcing. The ladder refuses that rung rather
+        // than adopt it; a mis-forced trajectory presented as a rescue is
+        // exactly the manufactured number this ladder promises never to
+        // produce.
+        if !self.chunk_forcing_is_constant() {
+            return None;
+        }
         thermal.clear();
         let (x, diagnostics) =
             self.march_chunk_subdivided(chunk, 4, be, self.last_dc_seed.clone(), thermal)?;
         let method = ChunkFallbackMethod::SubdividedBackwardEuler;
         let err = self.fallback_error_estimate(chunk, 4, be, self.last_dc_seed.as_deref(), &x);
         Some((method, x, diagnostics, err))
+    }
+
+    /// Whether every source the current chunk sees holds a constant value
+    /// across the whole chunk: no within-chunk PWL drive installed and no
+    /// time-varying board source. Only then may the chunk be subdivided into
+    /// sub-marches (each restarts chunk-local source time at 0).
+    fn chunk_forcing_is_constant(&self) -> bool {
+        if self.chunk_has_pwl_drives {
+            return false;
+        }
+        !self.circuit.devices.iter().any(|d| {
+            matches!(
+                d,
+                hauksbee_ir::Device::Vsource { kind, .. }
+                | hauksbee_ir::Device::Isource { kind, .. }
+                    if !matches!(kind, hauksbee_ir::SourceKind::Dc(_))
+            )
+        })
     }
 
     /// March `chunk` as `n` equal back-to-back sub-marches with the given
@@ -3356,7 +3396,9 @@ impl Scheduler {
         // Worst-case Richardson factors at error ratio r = 2 (see above).
         const REFINED_FACTOR: f64 = 2.0;
         const COARSE_FACTOR: f64 = 1.0;
-        let refined = Self::companion_opts(opts, 0.25);
+        const REFINED_TOL_SCALE: f64 = 0.25;
+        const COARSE_TOL_SCALE: f64 = 4.0;
+        let refined = Self::companion_opts(opts, REFINED_TOL_SCALE);
         let companion = if self.debug_skip_refined_companion {
             None
         } else {
@@ -3367,10 +3409,10 @@ impl Scheduler {
                 seed.map(<[f64]>::to_vec),
                 &mut scratch,
             )
-            .map(|(x_ref, _)| (x_ref, REFINED_FACTOR))
+            .map(|(x_ref, _)| (x_ref, REFINED_FACTOR, REFINED_TOL_SCALE))
         };
         let companion = companion.or_else(|| {
-            let coarse = Self::companion_opts(opts, 4.0);
+            let coarse = Self::companion_opts(opts, COARSE_TOL_SCALE);
             self.march_chunk_subdivided(
                 chunk,
                 subdivisions,
@@ -3378,9 +3420,9 @@ impl Scheduler {
                 seed.map(<[f64]>::to_vec),
                 &mut scratch,
             )
-            .map(|(x_ref, _)| (x_ref, COARSE_FACTOR))
+            .map(|(x_ref, _)| (x_ref, COARSE_FACTOR, COARSE_TOL_SCALE))
         })?;
-        let (x_ref, richardson) = companion;
+        let (x_ref, richardson, tol_scale) = companion;
         let (diff, v_max) = end_state_diff(&x_ref);
         if std::env::var("HAUKSBEE_DEBUG_FALLBACK_EST").is_ok() {
             eprintln!(
@@ -3393,7 +3435,11 @@ impl Scheduler {
         if !diff.is_finite() {
             return None;
         }
-        let floor = self.opts.reltol * v_max + self.opts.vntol;
+        // The floor covers BOTH marches' Newton acceptance slack: the adopted
+        // march's at the run tolerances (x1) plus the companion's at its
+        // scaled tolerances (x tol_scale; the 4x-coarser leg admits up to 4x
+        // the slack into `diff`, so it must widen the floor accordingly).
+        let floor = (1.0 + tol_scale) * (self.opts.reltol * v_max + self.opts.vntol);
         Some(2.0 * richardson * diff + floor)
     }
 
