@@ -353,6 +353,28 @@ the inference quality, not the default-on switch. Intentionally not changed.
 Each of these was chased to ground truth, fixed with two-sided evidence, and is
 pinned by tests. One line each; the tests are the record.
 
+- **Gerber X2 attributes discarded wholesale**: the reader now parses
+  `%TA.AperFunction` / `%TO.P` / `%TO.N` / `%TO.C` / `%TD` and binds
+  pad→refdes→pin→net from the film (via flashes classify as vias, nets take
+  the film's names, geometry-vs-film disagreements are named in notes),
+  proven against the ZSWatch same-batch netlist oracle (405 pads, 100% name
+  and partition agreement) with the stripped-film path pinned unchanged, by
+  `tests/gerber_x2.rs` and the rs274x/connect unit tests.
+- **Exposure-off macro primitives hulled over as solid copper**: a macro's
+  punched-out void is now a real hole contour (paint-order aware; repainted
+  or boundary-crossing clears stay conservatively solid), pinned two-sided by
+  `macro_void_does_not_swallow_foreign_copper` and the macros unit tests.
+- **`.gbrjob` manifest unread while inner-layer order was guessed from
+  filename digits**: the manifest now classifies files and orders copper by
+  the rank of (side, number), trusting numbers as physical positions only
+  when contiguous (KiCad 9 writes internal IDs: L1/L5/L7/L4 on a four-layer
+  board), pinned by `tests/gerber_gbrjob.rs` and the restored watchy
+  closed-loop floor.
+- **Aperture hole diameters read as copper and grid-footprint windows
+  ignoring rotation**: a holed flash now carries its hole contour, and a
+  header's pad window follows the P&P rotation, pinned by
+  `aperture_hole_diameter_is_bare_board_not_copper` and
+  `a_header_window_follows_its_stored_rotation`.
 - **USB-C CC audit under-read on dual-receptacle boards**: the audit now reads
   every distinct receptacle and credits an Rd returning to any recognized
   ground (GNDA/AGND, GNDD/DGND, GNDPWR/PGND, VSS, numbered grounds), proven on
