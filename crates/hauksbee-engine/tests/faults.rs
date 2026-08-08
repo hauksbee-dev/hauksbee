@@ -133,7 +133,12 @@ fn resistor_overpower_faults() {
     );
     // Confirm the footprint-derived rating is the 0402 value.
     assert!(
-        (resistor_power_from_footprint("Resistor_SMD:R_0402_1005Metric") - 1.0 / 16.0).abs() < 1e-9
+        (resistor_power_from_footprint("Resistor_SMD:R_0402_1005Metric")
+            .watts
+            .unwrap()
+            - 1.0 / 16.0)
+            .abs()
+            < 1e-9
     );
 
     let mut engine = engine_for(&board, false);

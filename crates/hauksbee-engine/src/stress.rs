@@ -151,9 +151,33 @@ impl DeviceMeta {
             return Some(p);
         }
         if matches!(self.kind, ComponentKind::Passive) {
-            return Some(resistor_power_from_footprint(&self.footprint));
+            return resistor_power_from_footprint(&self.footprint).watts;
         }
         None
+    }
+
+    /// The coverage gap this device leaves in the overpower check, when its
+    /// package could not be read at all. An abstention nobody can see is
+    /// indistinguishable from a pass, so the caller surfaces this.
+    pub fn power_coverage_gap(&self) -> Option<String> {
+        if !matches!(self.kind, ComponentKind::Passive) || self.ratings.max_power_w.is_some() {
+            return None;
+        }
+        let derived = resistor_power_from_footprint(&self.footprint);
+        if derived.basis != ResistorPowerBasis::Unknown {
+            return None;
+        }
+        Some(format!(
+            "stress: {} has no power rating and no readable package \"{}\", so its \
+             overpower check did not run. Give the part a model with ratings.max_power_w, \
+             or a footprint / BOM line naming the package, to cover it.",
+            self.reference,
+            if self.footprint.is_empty() {
+                "(none)"
+            } else {
+                self.footprint.as_str()
+            },
+        ))
     }
 
     /// Effective junction-to-ambient thermal resistance (C/W): explicit
@@ -176,11 +200,58 @@ impl DeviceMeta {
     }
 }
 
+/// What a resistor's power rating was derived from. The rating is only as good
+/// as the package evidence behind it, and an overstress verdict that rests on a
+/// guessed package must say so rather than read as a measurement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResistorPowerBasis {
+    /// A recognised chip-resistor size code (the imperial token in the
+    /// footprint). The rating is the standard figure for that package.
+    ChipPackage,
+    /// A recognised through-hole axial body: the 1/4 W industry default.
+    ThtAxial,
+    /// An SMD footprint whose size code was not recognised. Rated at the
+    /// smallest chip resistor anyone ships (1/16 W), which is a floor, not a
+    /// measurement.
+    UnknownSmdFloor,
+    /// No usable package evidence at all. No rating is derived, and the device
+    /// is reported as an uncovered gap instead of being handed a number.
+    Unknown,
+}
+
+/// A footprint-derived resistor power rating and the evidence behind it.
+#[derive(Debug, Clone, Copy)]
+pub struct ResistorPower {
+    /// The derived rating (W). `None` only for [`ResistorPowerBasis::Unknown`],
+    /// where deriving anything would be an invention.
+    pub watts: Option<f64>,
+    pub basis: ResistorPowerBasis,
+}
+
 /// Derive a resistor's power rating from its footprint package size. Standard
 /// chip-resistor ratings: 01005 1/32 W, 0201 1/20 W, 0402 1/16 W, 0603 1/10 W,
-/// 0805 1/8 W, 1206 1/4 W; through-hole / unknown defaults to 1/4 W.
-pub fn resistor_power_from_footprint(footprint: &str) -> f64 {
+/// 0805 1/8 W, 1206 1/4 W.
+///
+/// ## Why the unknown case is not 1/4 W
+///
+/// The fallback used to be a flat 1/4 W "conservative" default for anything
+/// unrecognised. It is the opposite of conservative on an SMD board: 1/4 W
+/// **exceeds** the real rating of an 0402 (1/16 W) by 4x and an 0603 (1/10 W) by
+/// 2.5x, so a genuinely overstressed chip resistor whose footprint string was
+/// not recognised had its overpower check silently suppressed. The conservative
+/// floor for a chip resistor is the smallest one anyone ships, 1/16 W.
+///
+/// A through-hole axial body really is 1/4 W by default, so it keeps that
+/// rating: applying the 1/16 W chip floor to an axial resistor would invent
+/// overpower faults on correct designs. When the footprint says neither (no
+/// package evidence at all), nothing is derived: the device becomes a named
+/// coverage gap, because guessing in either direction is wrong.
+pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
     let f = footprint.to_ascii_uppercase();
+    let chip = |w: f64| ResistorPower {
+        watts: Some(w),
+        basis: ResistorPowerBasis::ChipPackage,
+    };
     // Match the imperial size token anywhere in the footprint string
     // (e.g. "Resistor_SMD:R_0402_1005Metric"). The imperial code is paired with
     // its metric code, and the metric code of a small part collides with the
@@ -189,27 +260,57 @@ pub fn resistor_power_from_footprint(footprint: &str) -> f64 {
     // packages MUST be matched first, before the larger imperial tokens they
     // embed as a metric suffix, or they are silently over-rated.
     if f.contains("01005") {
-        1.0 / 32.0
+        chip(1.0 / 32.0)
     } else if f.contains("0201") {
-        1.0 / 20.0
+        chip(1.0 / 20.0)
     } else if f.contains("0402") {
-        1.0 / 16.0
+        chip(1.0 / 16.0)
     } else if f.contains("0603") {
-        1.0 / 10.0
+        chip(1.0 / 10.0)
     } else if f.contains("0805") {
-        1.0 / 8.0
+        chip(1.0 / 8.0)
     } else if f.contains("1206") {
-        1.0 / 4.0
+        chip(1.0 / 4.0)
     } else if f.contains("1210") {
-        1.0 / 2.0
+        chip(1.0 / 2.0)
     } else if f.contains("2010") {
-        3.0 / 4.0
+        chip(3.0 / 4.0)
     } else if f.contains("2512") {
-        1.0
+        chip(1.0)
+    } else if is_tht_axial_footprint(&f) {
+        // A real axial body: 1/4 W is the genuine industry default here.
+        ResistorPower {
+            watts: Some(1.0 / 4.0),
+            basis: ResistorPowerBasis::ThtAxial,
+        }
+    } else if is_smd_footprint(&f) {
+        // Known-SMD but unrecognised size: the smallest chip resistor shipped.
+        ResistorPower {
+            watts: Some(1.0 / 16.0),
+            basis: ResistorPowerBasis::UnknownSmdFloor,
+        }
     } else {
-        // THT axial / unknown SMD: conservative 1/4 W.
-        1.0 / 4.0
+        ResistorPower {
+            watts: None,
+            basis: ResistorPowerBasis::Unknown,
+        }
     }
+}
+
+/// Whether an (already uppercased) footprint names a through-hole axial body.
+/// KiCad writes these as `Resistor_THT:R_Axial_DIN0207_...`; the DIN/RM tokens
+/// cover libraries that omit the word "axial".
+fn is_tht_axial_footprint(f: &str) -> bool {
+    f.contains("THT")
+        || f.contains("AXIAL")
+        || f.contains("DIN0")
+        || f.contains("BARE_METAL")
+        || f.contains("RADIAL")
+}
+
+/// Whether an (already uppercased) footprint names a surface-mount body.
+fn is_smd_footprint(f: &str) -> bool {
+    f.contains("SMD") || f.contains("CHIP") || f.contains("SMT")
 }
 
 /// Strip a multi-unit stamping suffix from a device name, yielding the package
@@ -331,6 +432,19 @@ impl StressMonitor {
             chunk_energy_j: vec![0.0; n],
             chunk_elapsed_s: 0.0,
         }
+    }
+
+    /// Every device whose overpower check could not run because its package was
+    /// unreadable, in message form. Deduped and order-stable, the same discipline
+    /// as the scheduler's coverage messages, so a CI report can chain it straight
+    /// into `coverage_warnings`.
+    pub fn power_coverage_gaps(&self) -> Vec<String> {
+        let mut seen = std::collections::BTreeSet::new();
+        self.metas
+            .iter()
+            .filter_map(|m| m.power_coverage_gap())
+            .filter(|m| seen.insert(m.clone()))
+            .collect()
     }
 
     /// Number of monitored devices.
@@ -1255,7 +1369,7 @@ mod monitor_temp_tests {
         // → metric 0603 ("R_0201_0603Metric"), imperial 01005 → metric 0402.
         // A substring match on "0603"/"0402" first therefore over-rated the tiny
         // parts by up to ~2× their real power, hiding genuine over-power faults.
-        let w = |f: &str| resistor_power_from_footprint(f);
+        let w = |f: &str| resistor_power_from_footprint(f).watts.unwrap();
         assert!(
             (w("Resistor_SMD:R_0201_0603Metric") - 1.0 / 20.0).abs() < 1e-12,
             "0201 must rate at 1/20 W, not the 0603's 1/10 W"
@@ -1270,6 +1384,85 @@ mod monitor_temp_tests {
         assert!((w("R_0603_1608Metric") - 1.0 / 10.0).abs() < 1e-12);
         assert!((w("R_0805_2012Metric") - 1.0 / 8.0).abs() < 1e-12);
         assert!((w("R_1206_3216Metric") - 1.0 / 4.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn unknown_smd_package_falls_to_the_real_floor_not_a_quarter_watt() {
+        // An SMD chip resistor whose size code is not in the table. The old 1/4 W
+        // fallback EXCEEDS a real 0402 (1/16 W) by 4x and an 0603 (1/10 W) by
+        // 2.5x, so an overstressed part sailed through. The conservative floor is
+        // the smallest chip resistor anyone ships.
+        let r = resistor_power_from_footprint("Resistor_SMD:R_0475_WeirdMetric");
+        assert_eq!(r.basis, ResistorPowerBasis::UnknownSmdFloor);
+        assert!(
+            (r.watts.unwrap() - 1.0 / 16.0).abs() < 1e-12,
+            "unknown SMD must floor at 1/16 W, got {:?}",
+            r.watts
+        );
+    }
+
+    #[test]
+    fn tht_axial_keeps_its_genuine_quarter_watt() {
+        // A real axial body IS 1/4 W. Applying the chip floor here would invent
+        // overpower faults on correct through-hole designs.
+        for f in [
+            "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal",
+            "Resistor_THT:R_Axial_Power_L11.9mm_W4.5mm_P15.24mm",
+        ] {
+            let r = resistor_power_from_footprint(f);
+            assert_eq!(r.basis, ResistorPowerBasis::ThtAxial, "{f}");
+            assert!((r.watts.unwrap() - 0.25).abs() < 1e-12, "{f}");
+        }
+    }
+
+    #[test]
+    fn no_package_evidence_abstains_instead_of_guessing() {
+        // Nothing to read: deriving either 1/4 W or 1/16 W would be an invention
+        // in opposite directions, so no rating is produced at all.
+        let r = resistor_power_from_footprint("");
+        assert_eq!(r.basis, ResistorPowerBasis::Unknown);
+        assert!(r.watts.is_none(), "an unreadable package rates nothing");
+    }
+
+    #[test]
+    fn an_unreadable_package_is_a_named_coverage_gap() {
+        // And the abstention is loud: it names the part and what would close it.
+        let meta = DeviceMeta {
+            reference: "R7".into(),
+            device: DeviceId(0),
+            kind: ComponentKind::Passive,
+            footprint: String::new(),
+            ratings: Ratings::default(),
+        };
+        assert!(meta.power_rating_w().is_none());
+        let gap = meta.power_coverage_gap().expect("gap must be reported");
+        assert!(gap.contains("R7"), "names the part: {gap}");
+        assert!(
+            gap.contains("max_power_w") && gap.contains("BOM"),
+            "names the unlock: {gap}"
+        );
+        let mon = StressMonitor::new(vec![meta]);
+        assert_eq!(mon.power_coverage_gaps().len(), 1);
+    }
+
+    #[test]
+    fn a_readable_package_leaves_no_coverage_gap() {
+        // The gap list must stay empty on ordinary boards, or it is noise.
+        for f in [
+            "Resistor_SMD:R_0402_1005Metric",
+            "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal",
+            "Resistor_SMD:R_0475_WeirdMetric",
+        ] {
+            let meta = DeviceMeta {
+                reference: "R1".into(),
+                device: DeviceId(0),
+                kind: ComponentKind::Passive,
+                footprint: f.into(),
+                ratings: Ratings::default(),
+            };
+            assert!(meta.power_coverage_gap().is_none(), "{f}");
+            assert!(meta.power_rating_w().is_some(), "{f}");
+        }
     }
 
     #[test]
