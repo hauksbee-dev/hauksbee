@@ -379,7 +379,11 @@ on every report surface, and a hauksbee-ci `peripheral` assertion against it
 **fails** rather than green-passing on the slave's power-on defaults. The
 run summary likewise prints the per-SPI-bus transaction-framing tier (exact /
 backend / heuristic), flags it as a `--plain` heads-up and `--json` note when
-heuristic, and attaches it to each CI peripheral assertion's detail. See
+heuristic, and attaches it to each CI peripheral assertion's detail. Exact
+framing is reached two ways: the spec's `cs_net`, or the `cs` pin role of the
+model bound to the part, so a modelled SPI slave gets real chip-select
+boundaries with nothing declared by hand. The `--json` coverage records which
+route it was. See
 `docs/cosim/MCU.md` ("ADC / bus coverage by platform") for the full matrix.
 
 #### Espressif QEMU, `QemuBackend` (external, ESP32 family)

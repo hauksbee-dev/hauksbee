@@ -913,7 +913,7 @@
           "default": null
         },
         "cs_net": {
-          "description": "Chip-select net for a SPI slave (spi_eeprom / spi_mcp3008 / SPI sensor).\nWhen set and the net resolves to an MCU GPIO pin, the co-sim frames the\nslave's transactions on the real CS edges (exact framing, 05 §2) instead\nof the chunk-boundary heuristic. Absent = heuristic framing.",
+          "description": "Chip-select net for a SPI slave (spi_eeprom / spi_mcp3008 / SPI sensor).\nWhen set and the net resolves to an MCU GPIO pin, the co-sim frames the\nslave's transactions on the real CS edges (exact framing, 05 §2) instead\nof the chunk-boundary heuristic.\n\nTakes precedence over the `cs` pin role of the model bound to this\nperipheral's `ref`, so a board whose model pad map is wrong, or whose chip\nselect is buffered through something the model cannot see, stays\noverridable by hand. Absent AND no model-declared `cs` role reachable\nthrough `ref` = heuristic framing.",
           "type": [
             "string",
             "null"
@@ -1027,7 +1027,7 @@
           "default": null
         },
         "ref": {
-          "description": "Connector reference designator (e.g. \"J1\") for ref+pin attachment.",
+          "description": "Reference designator of a board component, read two ways depending on the\nperipheral kind.\n\nOn a net-attached control it is the CONNECTOR whose `pin` names the\nattachment pad (`ref` + `pin` resolve to a net).\n\nOn a SPI slave (`spi_eeprom` / `spi_mcp3008`) there is no `pin`: `ref`\nnames the board component the peripheral IS, which is what lets the chip\nselect be found without `cs_net`. If the part is assembled,\nidentity-trusted, and binds to a model declaring a `cs` pin role, the co-sim\nframes transactions on that net's real edges (exact framing). An explicit\n`cs_net` always wins over it. A `ref` naming no board component is a loud\nerror, not a silent fall back to the framing heuristic.",
           "type": [
             "string",
             "null"
