@@ -716,6 +716,39 @@ pub struct ReconStats {
     pub notes: Vec<String>,
 }
 
+impl ReconStats {
+    /// Everything about this reconstruction a user must be told, as report
+    /// sentences: the reader's own refusal notes, plus the pad-location
+    /// accounting.
+    ///
+    /// The accounting existed on this struct from the start and reached nothing
+    /// but an example binary, so a job where a third of the pads landed on no
+    /// component produced a report that looked exactly like a complete one. A
+    /// closed-loop percentage computed off this reconstruction only scores the
+    /// pads that WERE located, which is a claim about part of the board being
+    /// presented as a claim about the board.
+    pub fn coverage_notes(&self) -> Vec<String> {
+        let mut out = self.notes.clone();
+        if self.unassigned_flashes > 0 {
+            let pct = if self.total_flashes > 0 {
+                100.0 * self.assigned_flashes as f64 / self.total_flashes as f64
+            } else {
+                0.0
+            };
+            out.push(format!(
+                "gerber reconstruction: {} of {} pad flashes ({:.0}%) were matched to a placed \
+                 component; {} were not. An unmatched flash is copper that belongs to no \
+                 component here, so it has no pin and no net, and every component-level figure \
+                 (including any closed-loop percentage) scores only the matched pads. Supply a \
+                 pick-and-place file (.csv / .pos, or an Allegro smt_loc.txt) covering the \
+                 missing parts to place them.",
+                self.assigned_flashes, self.total_flashes, pct, self.unassigned_flashes,
+            ));
+        }
+        out
+    }
+}
+
 /// How a reconstructed net's copper is realised, mirroring
 /// [`crate::trace_current::CopperKind`] but sourced from gerber primitives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -902,6 +935,62 @@ fn largest_dimension_hint(p: &str) -> Option<f64> {
 mod tests {
     use super::*;
     use crate::gerber::geo::Capsule;
+
+    fn stats_with_flashes(total: usize, assigned: usize) -> ReconStats {
+        ReconStats {
+            n_layers: 2,
+            n_nets: 10,
+            n_components: 5,
+            n_holes: 0,
+            total_flashes: total,
+            assigned_flashes: assigned,
+            unassigned_flashes: total.saturating_sub(assigned),
+            gnd_detected: true,
+            net_copper: Vec::new(),
+            n_slots: 0,
+            refused_plating_files: 0,
+            refused_span_holes: 0,
+            n_castellations: 0,
+            notes: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn unlocated_pads_are_reported_with_the_closed_loop_caveat() {
+        // The accounting existed on ReconStats from the start and reached nothing
+        // but an example binary, so a job where a third of the pads landed on no
+        // component read exactly like a complete reconstruction.
+        let notes = stats_with_flashes(300, 200).coverage_notes();
+        let note = notes
+            .iter()
+            .find(|n| n.contains("pad flashes"))
+            .expect("the pad accounting must be reported");
+        assert!(note.contains("200 of 300"), "{note}");
+        assert!(note.contains("67%"), "states the located share: {note}");
+        assert!(note.contains("100 were not"), "{note}");
+        assert!(
+            note.contains("closed-loop"),
+            "the percentage caveat must reach the user: {note}"
+        );
+        assert!(
+            note.contains("pick-and-place"),
+            "names the unlocking upload: {note}"
+        );
+    }
+
+    #[test]
+    fn a_fully_located_job_gains_no_accounting_note() {
+        // Every pad placed: no note, so the channel stays worth reading.
+        assert!(stats_with_flashes(300, 300).coverage_notes().is_empty());
+    }
+
+    #[test]
+    fn reader_refusal_notes_are_carried_verbatim() {
+        // coverage_notes must not drop the reader's own refusals.
+        let mut stats = stats_with_flashes(10, 10);
+        stats.notes.push("refused a drill file".to_string());
+        assert_eq!(stats.coverage_notes(), vec!["refused a drill file"]);
+    }
 
     fn cap(ax: f64, ay: f64, bx: f64, by: f64, r: f64, kind: PrimKind) -> CopperPrim {
         CopperPrim {

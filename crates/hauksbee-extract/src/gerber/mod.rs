@@ -1316,6 +1316,31 @@ fn unzip_into(bytes: &[u8], out: &Path) -> Result<(), ExtractError> {
 }
 
 impl ExtractedBoard {
+    /// Reverse-extract from a gerber job directory or a gerber `.zip`, keeping
+    /// the reconstruction accounting.
+    ///
+    /// Prefer this over [`from_gerber`](Self::from_gerber) anywhere the result
+    /// reaches a user: the stats carry the reader's refusal notes and the
+    /// pad-location accounting, and dropping them makes a partial
+    /// reconstruction indistinguishable from a complete one.
+    pub fn from_gerber_with_stats(path: &Path) -> Result<GerberExtraction, ExtractError> {
+        if path.is_dir() {
+            from_gerber_dir(path)
+        } else if path
+            .extension()
+            .and_then(|s| s.to_str())
+            .map(|s| s.eq_ignore_ascii_case("zip"))
+            .unwrap_or(false)
+        {
+            from_gerber_zip(path)
+        } else {
+            Err(ExtractError::Gerber(
+                "not a gerber job: expected a directory of gerber files, or a .zip of one"
+                    .to_string(),
+            ))
+        }
+    }
+
     /// Reverse-extract from a gerber job directory or a gerber `.zip`. The
     /// universal "hand us only the fab files" entry point.
     pub fn from_gerber(path: &Path) -> Result<Self, ExtractError> {
