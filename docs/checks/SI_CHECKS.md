@@ -573,9 +573,14 @@ position in the declared top-to-bottom order. Thickness converts back to weight
 at 0.035 mm per oz; the first and last copper entries are the outer layers and
 everything between them is internal, which is what selects IPC-2221's `k`.
 
-Each net is then rated at its **ampacity** bottleneck: the (layer, width) pair
-with the lowest IPC-2221 rating, taken over every layer the net is routed on
-(`NetCopper::min_width_by_layer`, resolved by `TraceAudit::bottleneck`).
+Each **trace-routed** net is then rated at its **ampacity** bottleneck: the
+(layer, width) pair with the lowest IPC-2221 rating, taken over every layer the
+net is routed on (`NetCopper::min_width_by_layer`, resolved by
+`TraceAudit::bottleneck`). A net carrying any copper zone is `Poured` and is not
+rated at all, on any layer, per honest-reach item 1: hauksbee does not rasterise
+a fill, so it cannot tell a pour that genuinely carries the current from one that
+leaves a narrow inner-layer segment in series. That exemption is deliberately
+coarse and is the check's largest remaining reach limit.
 
 That is deliberately *not* the narrowest segment. While every net was rated as
 1 oz external, minimum width and minimum ampacity were the same thing. Once
