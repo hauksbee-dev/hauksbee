@@ -198,9 +198,9 @@ fn framing_mode_reflects_the_cs_source() {
 ///
 /// SCOPE, because the boundary matters: this is a `SpiBus`-level test. It drives
 /// `set_cs_pin` directly and does NOT exercise the inference that produces the
-/// argument, so deleting `binder::model_role_cs_net` or `cs_net_name` would not
-/// fail it. Those are covered where they live, by
-/// `binder::model_role_cs_net_tests` and `runner::spi_cs_source_tests`. What this
+/// argument, so deleting `binder::model_role_cs` or `cs_net_name` would not fail
+/// it. Those are covered where they live, by `binder::model_role_cs_tests` and
+/// `runner::spi_cs_source_tests`. What this
 /// test owns is the consequence: that `CsProvenance::ModelRoles` reaches the same
 /// tier, earns the same chunk-boundary skip, and carries a real transaction
 /// across a boundary.

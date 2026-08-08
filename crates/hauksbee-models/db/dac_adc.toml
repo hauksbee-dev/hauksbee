@@ -65,12 +65,13 @@ max_voltage_v = 6.5
 #
 # WHAT THIS COSTS, stated rather than hidden: a pad-map-only entry still binds
 # through the generic digital path and so counts as a RESOLVED part in the bind
-# report's coverage fraction, despite modelling no electrical behaviour. That is
-# a pre-existing property of the binder shared with six other logic-less entries
-# (ch340g, cp2102, ltc6803_4, bq76952, lm5107, lm5109), not something this entry
-# introduces, but it does mean a `model_coverage` assertion counts this part as
-# covered. The fix is a binder-level distinction between "bound" and
-# "electrically modelled", which is a change to BindOutcome and not to this file.
+# report's coverage fraction, despite modelling no electrical behaviour. This
+# entry DOES add one such part, and a `model_coverage` assertion will count it as
+# covered. What is pre-existing is the binder's inability to tell the two apart:
+# six other logic-less entries (ch340g, cp2102, ltc6803_4, bq76952, lm5107,
+# lm5109) already sit in the same position. The fix is a binder-level distinction
+# between "bound" and "electrically modelled", which is a change to BindOutcome
+# and not to this file.
 [[models]]
 id = "mcp3008"
 kind = "adc"
@@ -82,7 +83,18 @@ description = "MCP3008 8-channel 10-bit SPI ADC, PDIP-16 / SOIC-16 / TSSOP-16"
 # whose Value is something generic ("ADC") with the real part number in its MPN
 # property. Adding `value_re` alongside would AND the two and lose the second case.
 [models.match]
-mpn_re = "(?i)^MCP3008"
+# The trailing non-digit-or-end stops the rule matching the prefix of a longer
+# number. The FOOTPRINT GATE is the load-bearing half: without it, a value like
+# "MCP3008-breakout" (a carrier module, whose header pad 10 is whatever the module
+# routed there and not the IC's CS) would bind this bare-IC 16-pin map and hand
+# the co-sim a confidently wrong chip-select. Same reasoning, and the same
+# spellings, as the 8-pin gate on the 25xx entry in db/digital.toml.
+mpn_re = "(?i)^MCP3008([^0-9]|$)"
+footprint_re = '''(?ix)
+    (SOIC|SO|SOP|SSOP|TSSOP|MSOP|VSSOP|DFN|WDFN|UDFN|DIP|PDIP|DIL)
+    [-_]? 16 ([^0-9]|$)
+  | [-_] 16N ([^0-9]|$)
+'''
 
 [models.params]
 # Source: Microchip MCP3004/3008 datasheet DS21295D, Section 1.0 Electrical

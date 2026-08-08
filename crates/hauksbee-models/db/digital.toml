@@ -1541,12 +1541,13 @@ disable = [
 #
 # WHAT THIS COSTS, stated rather than hidden: a pad-map-only entry still binds
 # through the generic digital path and so counts as a RESOLVED part in the bind
-# report's coverage fraction, despite modelling no electrical behaviour. That is
-# a pre-existing property of the binder shared with six other logic-less entries
-# (ch340g, cp2102, ltc6803_4, bq76952, lm5107, lm5109), not something this entry
-# introduces, but it does mean a `model_coverage` assertion counts this part as
-# covered. The fix is a binder-level distinction between "bound" and
-# "electrically modelled", which is a change to BindOutcome and not to this file.
+# report's coverage fraction, despite modelling no electrical behaviour. This
+# entry DOES add one such part, and a `model_coverage` assertion will count it as
+# covered. What is pre-existing is the binder's inability to tell the two apart:
+# six other logic-less entries (ch340g, cp2102, ltc6803_4, bq76952, lm5107,
+# lm5109) already sit in the same position. The fix is a binder-level distinction
+# between "bound" and "electrically modelled", which is a change to BindOutcome
+# and not to this file.
 #
 # WHY THE MATCH IS NARROW. Restricted to the Microchip 25AA/25LC part numbers,
 # whose 8-pin pinout below is verified. Atmel/Microchip AT25 SPI EEPROM and most
@@ -1566,8 +1567,9 @@ description = "25AA/25LC SPI serial EEPROM, 8-pin PDIP/SOIC/TSSOP/MSOP (pad map 
 #
 # Left UNANCHORED at the end on purpose: a real MPN carries the temperature and
 # package suffix ("25LC256-I/SN"), so a `$` here would match the bare part number
-# in a test and nothing on an actual board. The {3,4}-digit bound is what keeps
-# the rule from swallowing neighbours.
+# in a test and nothing on an actual board. The {3,4}-digit bound plus the trailing
+# non-digit-or-end is what keeps the rule from swallowing neighbours: without the
+# boundary it would also match the prefix of a five-digit number like "25LC25600".
 #
 # `footprint_re` GATES THE PACKAGE, and it is not optional. The pad map below is
 # the EIGHT-PIN pinout, and the low-density members of this family (25AA010A,
@@ -1578,16 +1580,16 @@ description = "25AA/25LC SPI serial EEPROM, 8-pin PDIP/SOIC/TSSOP/MSOP (pad map 
 # Gating on the footprint means the entry binds only where its map is true, and a
 # SOT-23 EEPROM stays unresolved (honest) instead of resolved-and-wrong.
 [models.match]
-mpn_re = "(?i)^25(AA|LC)[0-9]{3,4}"
+mpn_re = "(?i)^25(AA|LC)[0-9]{3,4}([^0-9]|$)"
 # One 8-pin package family, spelled the several ways real libraries spell it:
-# KiCad ("SOIC-8", "DIP-8", "TSSOP-8"), Eagle/Altium ("SO08", "SOP8", "DIP08"),
+# KiCad ("SOIC-8", "DIP-8", "TSSOP-8"), Eagle/Altium ("SO08", "SOP8", "DIL08"),
 # and the IPC generated names ("SOIC127P600X175-8N"). The `0?8` followed by a
 # non-digit-or-end is what keeps it off the 14- and 16-pin members of the same
 # package families: "SOIC-16" reaches the separator and then sees `1`. Written as
 # a trailing character class rather than a negative lookahead because the `regex`
 # crate has no look-around.
 footprint_re = '''(?ix)
-    (SOIC|SO|SOP|SSOP|TSSOP|MSOP|VSSOP|DFN|WDFN|UDFN|DIP|PDIP)
+    (SOIC|SO|SOP|SSOP|TSSOP|MSOP|VSSOP|DFN|WDFN|UDFN|DIP|PDIP|DIL)
     [-_]? 0?8 ([^0-9]|$)
   | [-_] 8N ([^0-9]|$)
 '''
