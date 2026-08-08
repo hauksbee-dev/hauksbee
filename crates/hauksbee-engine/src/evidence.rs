@@ -154,8 +154,10 @@ impl BoardEvidence {
         }
         // A part bound to a generic estimated-fallback model is running on
         // invented ratings. Recorded here rather than only in the CI report's
-        // coverage_warnings, so it reaches every surface that renders evidence
-        // (`run`, `--plain`, `--json`, the TUI) and not just `hauksbee ci`.
+        // coverage_warnings, so it reaches every surface that renders the evidence
+        // map (`--plain`, `--json`, the web front door) and not just `hauksbee ci`.
+        // The TUI does not build a BoardEvidence, so it takes the same warnings
+        // directly through `AppState::new`'s coverage notes.
         for row in report.non_ignored() {
             if row
                 .source
@@ -1122,6 +1124,31 @@ fn classify_reader_note(
             what: "reader-excluded input content".into(),
             why: note.to_string(),
         });
+        return Ok(());
+    }
+
+    // Notes the BINDER and stress monitor raise travel the same channel but are
+    // not the reader's: attributing "R7's package is unreadable" to the input
+    // reader misstates which stage of the pipeline hit the limit, on a surface
+    // whose whole job is saying who assumed what. Keyed on the prefixes those
+    // producers emit.
+    if let Some(source) = note
+        .split_once(':')
+        .and_then(|(prefix, _)| match prefix.trim() {
+            "stress" => Some(AssumptionSource::Binder),
+            "models" => Some(AssumptionSource::Binder),
+            _ => None,
+        })
+    {
+        let digest = Sha256::digest(note.as_bytes());
+        let key = format!("binder-note/{}", hex_digest(&digest));
+        assumptions.push(Assumption::reduced_fidelity(
+            source,
+            Subject::new(&key, "the binder's model and rating coverage"),
+            Scope::Board,
+            note,
+            "give the part a model carrying the missing rating, or a footprint / BOM line              naming its package, then re-run",
+        ));
         return Ok(());
     }
 

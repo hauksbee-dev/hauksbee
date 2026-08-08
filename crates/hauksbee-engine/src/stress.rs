@@ -572,6 +572,10 @@ impl StressMonitor {
     /// unreadable, in message form. Deduped and order-stable, the same discipline
     /// as the scheduler's coverage messages, so a CI report can chain it straight
     /// into `coverage_warnings`.
+    ///
+    /// [`crate::binder::BoundBoard::power_coverage_gaps`] is the same list for
+    /// callers holding a bound board rather than a live monitor; between them the
+    /// CI report, the evidence map and the TUI all carry these.
     pub fn power_coverage_gaps(&self) -> Vec<String> {
         let mut seen = std::collections::BTreeSet::new();
         self.metas
