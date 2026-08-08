@@ -171,6 +171,41 @@ fn kicad9_internal_layer_ids_order_the_stack_without_inventing_layers() {
 }
 
 #[test]
+fn a_manifest_nonplated_drill_is_never_promoted_by_a_sibling_npth_name() {
+    // Two copper layers with a pad stacked at (0,0), a drill file with an
+    // OPAQUE name whose only plating statement is the manifest's `NonPlated`,
+    // and a conventionally named NPTH sibling. The old collapse of
+    // Plated/NonPlated into one Drill role lost the declaration, and the
+    // job's plated/non-plated filename split then promoted the opaque file
+    // to plated: its mechanical hole stitched the layers, a fabricated short.
+    let dir = tmp("nonplated");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("brd-F_Cu.gbr"), film("X0Y0D03*\n")).unwrap();
+    std::fs::write(dir.join("brd-B_Cu.gbr"), film("X0Y0D03*\n")).unwrap();
+    let excellon = "M48\nFMAT,2\nMETRIC\nT1C0.300\n%\nG90\nG05\nT1\nX0.0Y0.0\nT0\nM30\n";
+    std::fs::write(dir.join("holes-a.drl"), excellon).unwrap();
+    std::fs::write(dir.join("brd-NPTH.drl"), excellon).unwrap();
+    std::fs::write(
+        dir.join("job.gbrjob"),
+        r#"{"FilesAttributes": [
+    {"Path": "brd-F_Cu.gbr", "FileFunction": "Copper,L1,Top"},
+    {"Path": "brd-B_Cu.gbr", "FileFunction": "Copper,L2,Bot"},
+    {"Path": "holes-a.drl", "FileFunction": "NonPlated,1,2,NPTH"},
+    {"Path": "brd-NPTH.drl", "FileFunction": "NonPlated,1,2,NPTH"}
+  ]}"#,
+    )
+    .unwrap();
+    let g = from_gerber_dir(&dir).expect("extract");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        g.stats.n_nets, 2,
+        "a manifest-declared mechanical hole must stitch nothing"
+    );
+    assert_eq!(g.stats.n_holes, 0, "no plated hits exist in this job");
+}
+
+#[test]
 fn a_gbrjob_that_agrees_with_numbered_filenames_changes_nothing() {
     // Two copies of a job whose inner planes DO carry stack digits
     // (`gnd02.art` = L2, `pwr03.art` = L3), one with a manifest saying the

@@ -202,7 +202,7 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
                         .unwrap_or("")
                         .to_string(),
                 },
-                Some(layers::GbrJobRole::Drill) => LayerRole::Drill,
+                Some(layers::GbrJobRole::Drill { .. }) => LayerRole::Drill,
                 Some(layers::GbrJobRole::Outline) => LayerRole::Outline,
                 Some(layers::GbrJobRole::Ignored) => LayerRole::Ignored,
                 None => layers::classify(&path),
@@ -347,13 +347,29 @@ pub fn from_gerber_dir(dir: &Path) -> Result<GerberExtraction, ExtractError> {
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_ascii_lowercase();
+        // The job manifest's plating declaration for this file, if it made
+        // one. `NonPlated` is the manifest saying these holes carry no
+        // copper; that must not be washed out by the filename inference below
+        // (a sibling named NPTH would otherwise mark the job split and
+        // promote this file to plated, fabricating stitches out of a file
+        // the manifest plainly declared mechanical).
+        let manifest_plated: Option<bool> =
+            match gbrjob.get(d.file_name().and_then(|s| s.to_str()).unwrap_or("")) {
+                Some(layers::GbrJobRole::Drill { plated }) => Some(*plated),
+                _ => None,
+            };
+        if manifest_plated == Some(false) {
+            continue;
+        }
         let plated = !(n.contains("npth") || n.contains("non-plated") || n.contains("nonplated"));
         if !plated {
             continue;
         }
         // Whether the NAME says these hits are plated. Weakest of the sources,
-        // consulted only when the file itself says nothing.
-        let name_says_plated = n.contains("pth") || n.contains("plated");
+        // consulted only when the file itself says nothing. A manifest
+        // `Plated` declaration counts as an explicit statement.
+        let name_says_plated =
+            n.contains("pth") || n.contains("plated") || manifest_plated == Some(true);
         let head: String = text.chars().take(256).collect();
         let is_gerber = drill_is_gerber_format(&head, d.extension().and_then(|s| s.to_str()));
         // An X2 attribute in the file body beats the file name; the name is

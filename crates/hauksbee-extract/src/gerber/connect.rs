@@ -258,26 +258,6 @@ pub fn reconstruct(
     let mut dsu = Dsu::new(prims.len());
     let mut notes: Vec<String> = Vec::new();
 
-    // ── 1b. X2 net identity: union copper the film NAMES onto one net ───────
-    // An X2 film states each object's net outright (`%TO.N,<name>`). Two
-    // primitives carrying the same net name are the same conductor by the
-    // film's own declaration, whether or not their copper touches in the films
-    // we classified (the routing may pass through an inner layer this job did
-    // not ship). On a stripped film no primitive carries a name and this pass
-    // does nothing, leaving the geometric reconstruction bit-for-bit alone.
-    let mut x2_net_first: HashMap<&str, usize> = HashMap::new();
-    for gi in 0..prims.len() {
-        if let Some(name) = prims[gi].attrs.net.as_deref() {
-            match x2_net_first.get(name) {
-                Some(&first) => dsu.union(first, gi),
-                None => {
-                    x2_net_first.insert(name, gi);
-                }
-            }
-        }
-    }
-    let x2_nets_present = !x2_net_first.is_empty();
-
     // ── 2. Per-layer R-tree sweep: union touching copper ────────────────────
     // We index per layer. A hole disc must be tested against its layer's
     // primitives too, so we add hole discs to the relevant layer's index.
@@ -472,6 +452,47 @@ pub fn reconstruct(
         }
     }
 
+    // ── 3b. X2 net identity: union copper the film NAMES onto one net ───────
+    // An X2 film states each object's net outright (`%TO.N,<name>`), so two
+    // primitives carrying the same name are one conductor by the film's own
+    // declaration, whether or not their copper touches in the films we
+    // classified (the routing may pass through an inner layer this job did
+    // not ship). This runs AFTER the geometric passes so that every join the
+    // film asserts and the copper does not make on its own is COUNTED and
+    // surfaced: that gap is either routing on films we never saw, or a
+    // genuine open the film's intent would otherwise paper over, and hiding
+    // it would mask exactly the defect a connectivity reader exists to see.
+    // On a stripped film no primitive carries a name and this pass does
+    // nothing, leaving the geometric reconstruction bit-for-bit alone.
+    let mut x2_net_first: HashMap<&str, usize> = HashMap::new();
+    let mut x2_fragment_joins: usize = 0;
+    for gi in 0..prims.len() {
+        if let Some(name) = prims[gi].attrs.net.as_deref() {
+            match x2_net_first.get(name) {
+                Some(&first) => {
+                    if dsu.find(first) != dsu.find(gi) {
+                        x2_fragment_joins += 1;
+                    }
+                    dsu.union(first, gi);
+                }
+                None => {
+                    x2_net_first.insert(name, gi);
+                }
+            }
+        }
+    }
+    let x2_nets_present = !x2_net_first.is_empty();
+    if x2_fragment_joins > 0 {
+        notes.push(format!(
+            "{x2_fragment_joins} join(s) in this reconstruction come from the film's X2 net \
+             names alone: copper the traced geometry does NOT connect was united because its \
+             %TO.N attributes name the same net. That usually means routing lives on films this \
+             job did not ship (or did not classify), but it can also hide a genuine open, the \
+             copper as manufactured would not carry these nets. Check the layer count note if \
+             one is present; supply the missing films to make the geometry stand on its own."
+        ));
+    }
+
     // ── 4. Connected components -> nets ─────────────────────────────────────
     let mut root_to_net: HashMap<usize, i64> = HashMap::new();
     let mut next_net: i64 = 1;
@@ -576,7 +597,7 @@ pub fn reconstruct(
     let total_flashes = flash_idxs.len();
 
     // X2 pin identity: flashes whose film states outright which component pad
-    // they are (`%TO.P,<refdes>,<pin>`). When any exist, pad->refdes->pin
+    // they are (`%TO.P,<refdes>,<pin>`). Where it exists, pad->refdes->pin
     // binding comes from the film, not from the footprint-window guess.
     let x2_pin_flashes: Vec<usize> = flash_idxs
         .iter()
@@ -584,6 +605,23 @@ pub fn reconstruct(
         .filter(|&gi| prims[gi].attrs.pin.is_some())
         .collect();
     let x2_pins_present = !x2_pin_flashes.is_empty();
+    // X2 attributes are per FILM, not per job: a layer whose film carries pin
+    // identity accounts for every pad on itself (a flash there without `.P`
+    // is, by that film's own word, not a component pad), but a legacy film
+    // mixed into the same job said nothing, so ITS flashes still go through
+    // the geometric window. Gating the whole job on one attributed film would
+    // silently delete every pad the unattributed films carry.
+    let x2_layers: std::collections::HashSet<usize> =
+        x2_pin_flashes.iter().map(|&gi| prim_layer[gi]).collect();
+    let geometric_flashes: Vec<usize> = if x2_pins_present {
+        flash_idxs
+            .iter()
+            .copied()
+            .filter(|&gi| !x2_layers.contains(&prim_layer[gi]))
+            .collect()
+    } else {
+        flash_idxs.clone()
+    };
 
     // Index the placed components so each flash can find its nearest one.
     struct CompLeaf {
@@ -630,6 +668,7 @@ pub fn reconstruct(
     let mut comp_cells: Vec<std::collections::HashSet<(i64, i64)>> =
         vec![std::collections::HashSet::new(); placements.len()];
     let mut assigned_flashes = 0usize;
+    let mut x2_bound_pads = 0usize;
     // Components the FILM names that the P&P does not place (or there is no
     // P&P at all): refdes -> (pads, dedupe cells, layer tally). BTreeMap so
     // film-only components come out in a stable order.
@@ -660,14 +699,15 @@ pub fn reconstruct(
             let cell = ((cx * 20.0).round() as i64, (cy * 20.0).round() as i64);
             let net = net_of_prim[gi];
             let pin = Pin {
-                number: pin_name,
+                number: pin_name.to_string(),
                 net: if net == 0 { None } else { Some(net) },
                 function: String::new(),
                 kind: String::new(),
                 position: Some((cx, cy)),
             };
             assigned_flashes += 1;
-            match refdes_to_placement.get(refdes.as_str()) {
+            x2_bound_pads += 1;
+            match refdes_to_placement.get(&*refdes) {
                 Some(&ci) => {
                     // The same physical pad flashed on several films (a THT
                     // pad's top+bottom rings) collapses to one, like before.
@@ -676,7 +716,7 @@ pub fn reconstruct(
                     }
                 }
                 None => {
-                    let entry = film_comps.entry(refdes).or_default();
+                    let entry = film_comps.entry(refdes.to_string()).or_default();
                     if entry.1.insert(cell) {
                         entry.0.push(pin);
                         entry.2.push(prim_layer[gi]);
@@ -696,9 +736,15 @@ pub fn reconstruct(
         for (pads, _, _) in film_comps.values_mut() {
             pads.sort_by_key(pin_key);
         }
-    } else {
-        // ── Geometric fallback: the stripped-film path, unchanged ───────────
-        for &gi in &flash_idxs {
+    }
+    {
+        // ── Geometric fallback ───────────────────────────────────────────────
+        // On a stripped job this is every flash: the pre-X2 path, unchanged.
+        // On an X2 job it is only the flashes of layers whose film carries no
+        // pin identity (a legacy film mixed in); attributed layers were fully
+        // accounted for above. Invented claim-order numbers continue after
+        // any film-bound pins the same component already holds.
+        for &gi in &geometric_flashes {
             let (cx, cy) = prims[gi].shape.center();
             // Candidate components whose window covers this flash; pick the
             // nearest.
@@ -857,7 +903,7 @@ pub fn reconstruct(
         refused_plating_files: 0,
         n_castellations: 0,
         x2_named_nets,
-        x2_bound_pads: if x2_pins_present { assigned_flashes } else { 0 },
+        x2_bound_pads,
         x2_film_components,
         notes,
     };
@@ -1407,8 +1453,8 @@ mod tests {
             shape: Shape::disc(x, y, 0.3),
             kind: PrimKind::Flash,
             attrs: X2Attrs {
-                pin: Some((refdes.to_string(), pin.to_string())),
-                net: Some(net.to_string()),
+                pin: Some((refdes.into(), pin.into())),
+                net: Some(net.into()),
                 ..Default::default()
             },
         }
@@ -1501,6 +1547,53 @@ mod tests {
         let (board, stats) = reconstruct("t", vec![layer], vec![], vec![]);
         assert_eq!(stats.n_nets, 1, "same %TO.N name = same conductor");
         assert_eq!(board.nets[0].name, "SCL");
+        // The join came from the film's word, not from traced copper, so it
+        // is disclosed: silently uniting them would mask a genuine open.
+        assert!(
+            stats.notes.iter().any(|n| n.contains("X2 net names alone")),
+            "a film-only join must be named in the notes: {:?}",
+            stats.notes
+        );
+
+        // Two pads whose copper genuinely touches and shares a name: no
+        // film-only join happened, so no note.
+        let touching = vec![
+            x2_pad(0.0, 0.0, "R1", "1", "SCL"),
+            x2_pad(0.4, 0.0, "U1", "14", "SCL"),
+        ];
+        let (_b, stats) = reconstruct("t", vec![touching], vec![], vec![]);
+        assert_eq!(stats.n_nets, 1);
+        assert!(
+            !stats.notes.iter().any(|n| n.contains("X2 net names alone")),
+            "geometry-backed joins are not film-only joins"
+        );
+    }
+
+    #[test]
+    fn a_legacy_film_mixed_into_an_x2_job_keeps_its_geometric_binding() {
+        // Layer 0 is an X2 film (its pads carry %TO.P); layer 1 is a legacy
+        // film with a bare flash sitting under placed component R2. Gating
+        // the whole job on the X2 film's presence silently deleted R2's pad;
+        // the geometric window must still bind flashes of unattributed films.
+        let x2_layer = vec![x2_pad(0.0, 0.0, "R1", "1", "VCC")];
+        let legacy_layer = vec![cap(20.0, 0.0, 20.0, 0.0, 0.3, PrimKind::Flash)];
+        let (board, stats) = reconstruct(
+            "t",
+            vec![x2_layer, legacy_layer],
+            vec![],
+            vec![placement("R1", 0.0, 0.0), placement("R2", 20.0, 0.0)],
+        );
+        assert_eq!(stats.x2_bound_pads, 1);
+        let by_ref: HashMap<&str, usize> = board
+            .components
+            .iter()
+            .map(|c| (c.reference.as_str(), c.pins.len()))
+            .collect();
+        assert_eq!(by_ref["R1"], 1, "the film-bound pad");
+        assert_eq!(
+            by_ref["R2"], 1,
+            "the legacy film's flash still binds geometrically"
+        );
     }
 
     #[test]

@@ -29,6 +29,7 @@
 
 use std::collections::HashMap;
 use std::io::BufReader;
+use std::sync::Arc;
 
 use gerber_types::{
     Aperture, Command, ExtendedCode, FunctionCode, GCode, Operation, Polarity, StepAndRepeat,
@@ -82,6 +83,10 @@ impl CopperPrim {
 /// facts the geometry-only reconstruction has to infer, so when the film
 /// carries them they are read and used; when it does not, every field is `None`
 /// and the geometric fallback is untouched.
+/// Strings are shared (`Arc<str>`): one `%TO.N` covers every primitive
+/// painted while it is in effect, hundreds of thousands on a large film, so
+/// attaching the identity is a pointer clone, not a heap allocation per arc
+/// segment.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct X2Attrs {
     /// `%TA.AperFunction` of the aperture this primitive was painted with.
@@ -90,11 +95,11 @@ pub struct X2Attrs {
     /// object on no net: logos, tooling) and `N/C` (deliberately unrouted
     /// single-pad nets) both stay `None`, because unioning either would merge
     /// copper the film explicitly says is unconnected.
-    pub net: Option<String>,
+    pub net: Option<Arc<str>>,
     /// `%TO.P`: the (refdes, pin name) this flash is the pad of.
-    pub pin: Option<(String, String)>,
+    pub pin: Option<(Arc<str>, Arc<str>)>,
     /// `%TO.C`: the refdes of the component this object belongs to.
-    pub component: Option<String>,
+    pub component: Option<Arc<str>>,
 }
 
 impl X2Attrs {
@@ -268,9 +273,9 @@ struct Plotter<'a> {
     aper_functions: HashMap<i32, ApertureFunction>,
     /// The X2 object-attribute dictionary (`%TO.N` / `%TO.P` / `%TO.C`): what
     /// the current objects being painted ARE, until changed or `%TD`-deleted.
-    obj_net: Option<String>,
-    obj_pin: Option<(String, String)>,
-    obj_component: Option<String>,
+    obj_net: Option<Arc<str>>,
+    obj_pin: Option<(Arc<str>, Arc<str>)>,
+    obj_component: Option<Arc<str>>,
     out: Vec<CopperPrim>,
 }
 
@@ -407,15 +412,17 @@ impl<'a> Plotter<'a> {
                     // single-pad net) must clear the state, not carry a name,
                     // or the copper painted under them would be unioned.
                     self.obj_net = match n {
-                        GNet::Connected(names) if !names.is_empty() => Some(names.join(",")),
+                        GNet::Connected(names) if !names.is_empty() => {
+                            Some(Arc::from(names.join(",")))
+                        }
                         _ => None,
                     };
                 }
                 ObjectAttribute::Pin(p) => {
-                    self.obj_pin = Some((p.refdes.clone(), p.name.clone()));
+                    self.obj_pin = Some((Arc::from(p.refdes.as_str()), Arc::from(p.name.as_str())));
                 }
                 ObjectAttribute::Component(refdes) => {
-                    self.obj_component = Some(refdes.clone());
+                    self.obj_component = Some(Arc::from(refdes.as_str()));
                 }
                 _ => {}
             },
@@ -1521,8 +1528,9 @@ M02*
         let prims = parse_layer(X2_FILM).unwrap();
         let flashes: Vec<_> = prims.iter().filter(|p| p.kind == PrimKind::Flash).collect();
         assert_eq!(flashes.len(), 2, "two pad flashes (the via is not a pad)");
+        let pin_of = |a: &X2Attrs| a.pin.as_ref().map(|(r, p)| (r.to_string(), p.to_string()));
         assert_eq!(
-            flashes[0].attrs.pin,
+            pin_of(&flashes[0].attrs),
             Some(("R1".to_string(), "1".to_string()))
         );
         assert_eq!(flashes[0].attrs.net.as_deref(), Some("VCC"));
@@ -1531,7 +1539,7 @@ M02*
             Some(ApertureFunction::SmdPad(_))
         ));
         assert_eq!(
-            flashes[1].attrs.pin,
+            pin_of(&flashes[1].attrs),
             Some(("R1".to_string(), "2".to_string()))
         );
         assert_eq!(flashes[1].attrs.net.as_deref(), Some("SIG"));
@@ -1587,7 +1595,7 @@ M02*
 ";
         let prims = parse_layer(g).unwrap();
         let flashes: Vec<_> = prims.iter().filter(|p| p.kind == PrimKind::Flash).collect();
-        assert_eq!(flashes[0].attrs.pin.as_ref().unwrap().0, "R1");
+        assert_eq!(&*flashes[0].attrs.pin.as_ref().unwrap().0, "R1");
         assert_eq!(flashes[1].attrs.pin, None, "%TD cleared the dictionary");
     }
 
