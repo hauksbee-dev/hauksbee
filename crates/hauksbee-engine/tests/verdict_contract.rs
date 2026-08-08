@@ -466,3 +466,68 @@ fn check_closing_verdict_is_inconclusive_not_clean() {
         stdout(&out)
     );
 }
+
+// ---------------------------------------------------------------------------
+// The machine verdict's bind gate, both sides and both scopes. On the
+// model-dependent-claim surfaces (--si here; --check/--lint share the flag) an
+// unbound verdict-critical part flips `verdict` to "invalid"/`ok:false`, the
+// machine mirror of the INCONCLUSIVE prose. On the copper-only (--drc) and
+// descriptive (--report) surfaces the same board stays un-gated: DRC reads
+// the layout and needs no device model, and the bind table is not a pass/fail
+// claim, so poisoning their verdicts would refuse answers those surfaces can
+// honestly give.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn bind_gate_flips_the_model_claim_surfaces_and_spares_the_copper_ones() {
+    let unbound = fixture("verdict_fet_unbound.kicad_pcb");
+    let out = run(&["run", unbound.to_str().unwrap(), "--si", "--json"]);
+    assert_eq!(out.status.code(), Some(0), "exit stays 0 without --strict");
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    assert_eq!(
+        v["verdict"], "invalid",
+        "an unbound verdict-critical part invalidates the --si machine verdict:\n{v}"
+    );
+    assert_eq!(v["ok"], false);
+
+    let out = run(&["run", unbound.to_str().unwrap(), "--drc", "--json"]);
+    assert_eq!(out.status.code(), Some(0));
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    assert_ne!(
+        v["verdict"], "invalid",
+        "--drc is copper-only and must not be poisoned by the bind gate:\n{v}"
+    );
+
+    // Bound side: the same surface earns its pass.
+    let bound = fixture("verdict_fet_bound.kicad_pcb");
+    let out = run(&["run", bound.to_str().unwrap(), "--si", "--json"]);
+    let v: serde_json::Value = serde_json::from_str(&stdout(&out)).expect("one JSON document");
+    assert_ne!(v["verdict"], "invalid", "a bound board is not gated:\n{v}");
+}
+
+#[test]
+fn junit_agrees_with_the_json_verdict_about_bind_blockers() {
+    // Scenario 08's inverse: an invalid JSON verdict must show red in the
+    // JUnit file too, not a green test-report tab beside a red dashboard.
+    let unbound = fixture("verdict_fet_unbound.kicad_pcb");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let junit = dir.path().join("out.xml");
+    let out = run(&[
+        "run",
+        unbound.to_str().unwrap(),
+        "--check",
+        "--junit",
+        junit.to_str().unwrap(),
+    ]);
+    assert_eq!(out.status.code(), Some(0), "stderr: {}", stderr(&out));
+    let xml = std::fs::read_to_string(&junit).expect("junit written");
+    assert!(
+        xml.contains("INVALID evidence:"),
+        "the bind blocker reaches the test report as a gate-grade entry:\n{xml}"
+    );
+    let root = xml.lines().nth(1).unwrap_or_default();
+    assert!(
+        !root.contains("failures=\"0\"") || !root.contains("errors=\"0\""),
+        "the JUnit root must not read all-green beside an invalid JSON verdict: {root}"
+    );
+}

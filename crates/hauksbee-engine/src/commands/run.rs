@@ -480,8 +480,51 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
             hauksbee_ir::evidence::RunDate::from_system_clock(),
         )?
         .with_input_artifact(&cfg.board, &raw, input_kind)?;
-        let maps = evidence.maps_for_findings(&findings)?;
-        findings.extend(crate::reports::ci_artifacts::evidence_findings(&maps));
+        let mut maps = evidence.maps_for_findings(&findings)?;
+        // The same run-level/finding-backed split the JSON verdict makes:
+        // finding-backed maps become badges, never gate-grade JUnit failures,
+        // and the run-level claims (input coverage, bind completeness) are
+        // added so an invalid JSON verdict shows red here too instead of a
+        // green test-report tab beside it.
+        let finding_messages: std::collections::HashSet<String> =
+            findings.iter().map(|f| f.message.clone()).collect();
+        for (check, assertion) in [
+            ("drc", "DRC input coverage"),
+            ("si", "Signal-integrity input coverage"),
+        ] {
+            let coverage = evidence.check_coverage_map(check, assertion)?;
+            if coverage.status() != hauksbee_ir::evidence::EvidenceStatus::Clean {
+                maps.push(coverage);
+            }
+        }
+        findings.extend(crate::reports::ci_artifacts::evidence_findings_with_gate(
+            &maps,
+            |m| !finding_messages.contains(m.assertion()),
+        ));
+        let blockers = crate::result::unmodelled_critical_refs(
+            &crate::result::BindSummary::from_report(&bound.report),
+        );
+        if !blockers.is_empty() {
+            findings.push(crate::result::JsonFinding {
+                check: "evidence".into(),
+                kind: "undermined".into(),
+                severity: "serious".into(),
+                nets: Vec::new(),
+                location_mm: None,
+                layer: None,
+                refs: blockers.clone(),
+                actionable: true,
+                message: format!(
+                    "INVALID evidence: {}",
+                    crate::result::inconclusive_verdict(&blockers)
+                ),
+                plain: format!(
+                    "INVALID evidence: {}",
+                    crate::result::inconclusive_verdict(&blockers)
+                ),
+                fix: Some("supply device models or BOM identity for the named parts".into()),
+            });
+        }
         crate::reports::ci_artifacts::github_evidence_annotations(&maps);
         write_ci_artifacts(&cfg, &findings)?;
         ci_findings = Some(findings);

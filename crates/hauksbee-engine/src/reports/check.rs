@@ -137,6 +137,7 @@ pub fn emit(
     match mode {
         OutputMode::Json => {
             let mut jr = JsonReport::new(&bound.name, summary)
+                .with_bind_verdict_gate()
                 .with_inputs(inputs)
                 .with_evidence(&evidence);
             jr.drc = Some(drc_structured);
@@ -244,7 +245,14 @@ pub fn emit(
     if strict && would_gate {
         super::strict_gate_exit(mode, &gate_items(drc_gates, &drc, &lint, &si, &usbc));
     }
-    if strict && evidence.is_undermined() {
+    // Exit 3 on the SAME rule the JSON verdict uses (run-level undermined
+    // evidence or unbound verdict-critical parts), not on any undermined map:
+    // a finding-backed badge must not exit 3 under --strict while the verdict
+    // field says pass.
+    let strict_invalid = crate::result::run_level_undermined(evidence.maps(), |a| {
+        actual_findings.iter().any(|f| f.message == a)
+    }) || !blockers.is_empty();
+    if strict && strict_invalid {
         std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())
@@ -660,6 +668,7 @@ pub fn emit_combined_json(
     // critical parts must carry the same qualification.
     let blockers = crate::result::unmodelled_critical_refs(&combined_summary);
     let mut jr = JsonReport::new(&bound.name, combined_summary)
+        .with_bind_verdict_gate()
         .with_inputs(inputs)
         .with_evidence(&evidence);
     jr.drc = Some(drc_structured);
@@ -684,7 +693,14 @@ pub fn emit_combined_json(
             &gate_items(drc_gates, &drc, &lint, &si, &usbc),
         );
     }
-    if strict && evidence.is_undermined() {
+    let strict_invalid = crate::result::run_level_undermined(evidence.maps(), |a| {
+        jr.findings
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .any(|f| f.message == a)
+    }) || !blockers.is_empty();
+    if strict && strict_invalid {
         std::process::exit(crate::result::EXIT_INVALID_FOR_ANALYSIS);
     }
     Ok(())

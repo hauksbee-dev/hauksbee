@@ -78,6 +78,7 @@ pub fn emit(
     match mode {
         OutputMode::Json => {
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
+                .with_bind_verdict_gate()
                 .with_inputs(inputs)
                 .with_evidence(&evidence);
             jr.findings = Some(si_findings_json(&report));
