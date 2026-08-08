@@ -1916,10 +1916,11 @@ const RING_SAGITTA_MM: f64 = 0.0025;
 /// the segment count is chosen so `s <= RING_SAGITTA_MM`, the chain vertices
 /// sit at `radius + s/2` (splitting the sag symmetrically about the true
 /// circle), and the capsule radius is inflated by `s/2`. The capsule surface
-/// then spans `[radius - r, radius + r]` radially to second order (the
-/// mid-chord residue is O(s²/radius), nanometres at this tolerance),
-/// overstating each copper edge by at most `s`, i.e. at most
-/// [`RING_SAGITTA_MM`], under the [`CLEARANCE_TOLERANCE_MM`] finding band.
+/// then tracks the true band `[radius - r, radius + r]` to within `s` on both
+/// edges: overstatement is at most `s` (at vertices), and the only
+/// under-cover is the O(s²/radius) mid-chord residue on the outer edge,
+/// nanometres at this tolerance. `s` is at most [`RING_SAGITTA_MM`], under
+/// the [`CLEARANCE_TOLERANCE_MM`] finding band.
 /// The bias is deliberately FN-averse: a true air gap smaller than the
 /// overstatement (a couple of microns) can read as a touch and be reported a
 /// short; the alternative (chords under the true circle) silently drops real

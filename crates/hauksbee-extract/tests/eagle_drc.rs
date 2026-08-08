@@ -1451,3 +1451,64 @@ fn class_clearance_below_the_design_rules_is_floored_at_the_design_rules() {
         f.required_clearance_mm
     );
 }
+
+#[test]
+fn cross_class_matrix_cell_below_the_design_rules_is_floored() {
+    // Class 1 declares a 0.1 mm clearance to class 0 under a 0.4 mm design
+    // rule: the explicit cell may relax below the classes' own rules but
+    // never below the design rules, so cross-class wires 0.3 mm apart still
+    // violate the floored 0.4 mm requirement.
+    let classes = r#"
+<classes>
+<class number="0" name="default" width="0" drill="0">
+<clearance class="0" value="0.15"/>
+</class>
+<class number="1" name="power" width="0" drill="0">
+<clearance class="0" value="0.1"/>
+<clearance class="1" value="0.45"/>
+</class>
+</classes>"#;
+    let rules = format!(
+        "{classes}{}",
+        r#"<designrules name="wide">
+<param name="mdWireWire" value="0.4mm"/>
+</designrules>"#
+    );
+    let report = drc_rules("", "", &two_wire_signals("1", "0"), &rules);
+    let f = report
+        .clearance_violations()
+        .next()
+        .expect("0.3 mm gap violates the floored 0.4 mm pair rule");
+    assert!(
+        (f.required_clearance_mm - 0.4).abs() < 1e-9,
+        "matrix cells below the design rules are floored, got {}",
+        f.required_clearance_mm
+    );
+}
+
+#[test]
+fn divergent_design_rule_values_resolve_to_the_tightest() {
+    // mdWireWire 0.4 mm alongside mdPadPad 0.15 mm: this path models ONE
+    // clearance, the tightest copper-gating rule (0.15 mm), so two wires
+    // 0.3 mm apart stay silent. Taking the loosest (or reading only
+    // mdWireWire) would manufacture a violation here.
+    let rules = r#"<designrules name="mixed">
+<param name="mdWireWire" value="0.4mm"/>
+<param name="mdPadPad" value="0.15mm"/>
+</designrules>"#;
+    let report = drc_rules("", "", &two_wire_signals("0", "0"), rules);
+    assert!(
+        (report.clearance_mm - 0.15).abs() < 1e-9,
+        "the tightest md* rule is the model's single clearance, got {}",
+        report.clearance_mm
+    );
+    assert!(
+        report.findings.is_empty(),
+        "0.3 mm gap clears the tightest (0.15 mm) rule: {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.gap_mm, f.required_clearance_mm))
+            .collect::<Vec<_>>()
+    );
+}
