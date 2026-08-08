@@ -1303,3 +1303,45 @@ fn oversized_trapezoid_delta_is_clamped_not_a_bowtie() {
             .collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn custom_pad_nonsquare_anchor_is_a_stadium_not_a_disc() {
+    // A custom pad whose (size 3 1) anchor is not square: the anchor models
+    // as a stadium along x (radius 0.5), never the circumscribed 1.5-radius
+    // disc. A track running 1.2 mm off the pad axis clears the stadium flat
+    // by 0.6 mm; the disc model would read a -0.4 mm false short.
+    let pad = r#"
+  (footprint "lib:anch" (layer "F.Cu") (at 0 0)
+    (property "Reference" "U6")
+    (pad "1" smd custom (at 0 0) (size 3 1) (layers "F.Cu") (net 2)
+      (options (clearance outline) (anchor circle))
+      (primitives
+        (gr_poly (pts (xy 5 -0.5) (xy 6 -0.5) (xy 6 0.5) (xy 5 0.5)) (width 0))
+      ))
+  )
+"#;
+    let clear = format!(
+        "{}{pad}",
+        r#"
+  (segment (start -1 1.2) (end 1 1.2) (width 0.2) (layer "F.Cu") (net 1))
+"#
+    );
+    let report = drc(&clear);
+    assert!(
+        report.findings.is_empty(),
+        "off the stadium flat is bare board (a disc anchor would short): {:?}",
+        report
+            .findings
+            .iter()
+            .map(|f| (f.kind, f.gap_mm))
+            .collect::<Vec<_>>()
+    );
+    // Control: through the anchor body.
+    let body = format!(
+        "{}{pad}",
+        r#"
+  (segment (start 0 -2) (end 0 2) (width 0.2) (layer "F.Cu") (net 1))
+"#
+    );
+    assert_short(&drc(&body), "A", "B");
+}
