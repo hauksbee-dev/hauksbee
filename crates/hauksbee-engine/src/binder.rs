@@ -926,6 +926,53 @@ pub(crate) fn resolve(
     library_resolution(lib, part.component())
 }
 
+/// The board net name carrying a part's model-declared chip-select, or `None`
+/// when the part cannot supply one.
+///
+/// This is what promotes SPI transaction framing from the chunk-boundary
+/// heuristic to exact without anyone hand-writing `cs_net` in the run spec: the
+/// model DB already maps pads to binder roles, and `cs` is already one of those
+/// roles, so a modeled SPI slave knows which of its own pads is chip-select.
+///
+/// Every gate the rest of the tree uses is honoured, and each is a reason a
+/// caller gets `None` rather than a guess:
+///
+/// - the record must exist under `reference`;
+/// - [`AssemblyState::of`] must classify it `Present`, so a DNP-absent part (not
+///   on the assembled board, its CS net electrically meaningless) and an
+///   identity-refused part (nothing about the record is evidence, including
+///   which pad is CS) both contribute nothing;
+/// - it must bind to a model, through the [`FittedComponent`]-gated [`resolve`]
+///   and no other door;
+/// - that model must map a `cs` role, and that role must land on exactly one
+///   real, non-ground net ([`crate::component_evidence::role_net`] refuses a
+///   role split across two nets rather than picking one).
+///
+/// A `None` here is never silently wrong: the bus stays on the heuristic tier
+/// and reports itself as heuristic, which is the same honest answer it gave
+/// before this route existed.
+pub fn model_role_cs_net(
+    board: &ExtractedBoard,
+    reference: &str,
+    lib: &ModelLibrary,
+) -> Option<String> {
+    let comp = board.components.iter().find(|c| c.reference == reference)?;
+    let part = AssemblyState::of(comp).fitted()?;
+    let model = resolve(lib, part).model?;
+    let net_id = crate::component_evidence::role_net(part, &model, "cs").ok()?;
+    // Net id 0 is ground in the extractor's numbering; a chip-select tied to
+    // ground is a permanently-selected slave, not a framing signal, and tracing
+    // it would install a CS frame on a net that never edges.
+    if net_id == 0 {
+        return None;
+    }
+    let net = board.net(net_id)?;
+    if is_ground(&net.name) {
+        return None;
+    }
+    Some(net.name.clone())
+}
+
 /// What the model library would say about one component RECORD, assembled or
 /// not.
 ///
