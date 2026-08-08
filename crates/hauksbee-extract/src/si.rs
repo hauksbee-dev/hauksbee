@@ -315,11 +315,15 @@ fn is_resistor(c: &Component) -> bool {
     part_class::classify_two_terminal(c).is_resistor()
 }
 
-/// A two-terminal capacitor (ref C*, two connected pads), the kind used as a
-/// crystal load cap.
+/// A two-terminal capacitor: the kind used as a crystal load cap, and the kind
+/// whose presence to ground makes a net read as a local supply rail.
+///
+/// Delegates to the same ladder as [`is_resistor`], so the two questions cannot
+/// disagree about one part and neither is decided by the designator alone when
+/// better evidence exists. A `Device:C` in an oddly-named slot now counts, and a
+/// resistor a designer labelled `C5` no longer does.
 fn is_capacitor(c: &Component) -> bool {
-    let r = part_class::ref_designator(&c.reference);
-    r.starts_with('C') && !r.starts_with("CN") && !r.starts_with("CON") && connected_pads(c) == 2
+    part_class::classify_two_terminal(c).is_capacitor()
 }
 
 /// A net is rail-like if its name is a rail, or it structurally behaves like a

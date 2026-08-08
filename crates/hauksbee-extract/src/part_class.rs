@@ -18,11 +18,26 @@
 //!
 //! The fix is to ask the model DB, which is curated in-tree, instead of the
 //! board file. [`hauksbee_models::schema::PassiveClass`] is the DB's own
-//! statement of which two-terminal element an entry is, and model resolution is
-//! reached through the [`AssemblyState`] witness, the same ticket the engine's
-//! binder requires: a record whose identity is refused, or that is not on the
-//! assembled board, cannot vouch for what part it is, so its strings are not
-//! promoted to evidence.
+//! statement of which two-terminal element an entry is.
+//!
+//! What gates that evidence is [`AssemblyState`] *identity trust*, not presence:
+//! a record whose identity is refused (a contradictory duplicate designator, an
+//! inferred reference with no authoritative source UID) cannot vouch for which
+//! part it names, so nothing about it is promoted to evidence and the answer is
+//! [`PartClass::Unknown`] outright. That has to include the designator: falling
+//! through to the string rung would let a conflicting duplicate `R5` be called a
+//! resistor with confidence, which is the opposite of what refusing its identity
+//! meant. A DNP part's identity is perfectly good, though, and it
+//! is deliberately NOT excluded here: whether the part is fitted is a different
+//! question, which each caller answers for itself. Gating on the fitted witness
+//! would reintroduce the bug in miniature, sending a DNP capacitor labelled `R5`
+//! past the rung that reads its farads and back onto the designator string.
+//!
+//! One known limitation: resolution uses the builtin library only
+//! ([`ModelLibrary::builtin_shared`]), because extraction has no plumbing for
+//! `--models-dir` / pack layers. A user model that declares a `passive_class` for
+//! their part therefore informs the engine's binder but not this classifier,
+//! which falls to a lower rung instead of being wrong.
 //!
 //! ## The evidence ladder
 //!
@@ -33,15 +48,19 @@
 //!    is not a two-terminal passive at all ([`PartClass::NotTwoTerminal`]).
 //!    Distinct pad *numbers* are counted, not raw pin entries (see
 //!    [`connected_pads`]).
-//! 2. **The model DB's declared class**, via the witness. When the fitted part
-//!    resolves to an entry carrying a `passive_class`, that is the answer.
+//! 2. **The model DB's declared class.** When an identity-trusted record resolves
+//!    to an entry carrying a `passive_class`, that is the answer.
 //! 3. **The model DB's kind.** A resolved entry that is not
 //!    [`ComponentKind::Passive`] (a diode, a FET, a connector, an ignored
 //!    mechanical part) is decisively not a passive.
 //! 4. **Value dimension**, via the canonical value parser: an explicit farad or
-//!    henry unit settles it regardless of the designator, which is what catches
-//!    the capacitor labelled `R5` whose value is `100nF`. A bare magnitude
-//!    (`10k`) and a rating (`25V`) carry no dimension and are not evidence here.
+//!    henry unit settles it, which is what catches the capacitor labelled `R5`
+//!    whose value is `100nF`, and a bare pico/nano-scale magnitude settles it too,
+//!    which catches the same part valued `100n`. An ohm mark rules a capacitor out
+//!    but rules nothing in (a ferrite bead reads ohmic). An ordinary bare
+//!    magnitude (`10k`) and a rating (`25V`) are not evidence here. When this rung
+//!    CONTRADICTS the model's declared class, the answer is `Unknown` rather than
+//!    either witness: two disagreeing sources are not a confident answer.
 //! 5. **Capacitor-shaped pin roles.** The DB writes `pos`/`neg` for capacitor
 //!    pads and `a`/`b` for everything else; `pos`/`neg` therefore rules a
 //!    resistor out. (`a`/`b` is shared by resistors, inductors, ferrites,
@@ -88,6 +107,13 @@ impl PartClass {
     pub(crate) fn is_resistor(self) -> bool {
         matches!(self, PartClass::Passive(c) if c.is_resistor())
     }
+
+    /// True only for a capacitor: the kind of part that can be a crystal load
+    /// cap, a decoupling cap, or the bypass that makes a net read as a local
+    /// supply rail.
+    pub(crate) fn is_capacitor(self) -> bool {
+        matches!(self, PartClass::Passive(PassiveClass::Capacitor))
+    }
 }
 
 /// Distinct pad numbers that carry a net.
@@ -131,26 +157,74 @@ pub(crate) fn classify_two_terminal(c: &Component) -> PartClass {
         return PartClass::NotTwoTerminal;
     }
 
-    // Rungs 2-5 read the model DB, and model resolution is reachable only
-    // through the assembly witness: an identity-refused record's value and
-    // lib_id say nothing trustworthy about which part is on the board, and an
-    // unfitted one is not on it at all.
-    if let Some(part) = AssemblyState::of(c).fitted() {
-        if let Some(class) = from_model(part.component()) {
-            return class;
-        }
-        // Rung 4: value dimension.
-        if let Some(p) = hauksbee_models::value::parse_value(&part.value) {
-            match p.unit.as_deref() {
-                Some("F") => return PartClass::Passive(PassiveClass::Capacitor),
-                Some("H") => return PartClass::Passive(PassiveClass::Inductor),
-                _ => {}
-            }
-        }
+    // Rungs 2-5 read the model DB, and what gates them is IDENTITY TRUST, not
+    // presence. The question here is "what part does this record name?", which
+    // is answerable for a DNP part (it is a known part that is not fitted) and
+    // unanswerable for an identity-refused one (a contradictory duplicate
+    // designator, an inferred reference with no authoritative UID): there,
+    // nothing about the record, including its value and lib_id, is evidence.
+    //
+    // Gating on the fitted witness instead would have been a subtler version of
+    // the bug this module exists to fix: a DNP capacitor a designer had labelled
+    // `R5` would skip the value-dimension rung that reads its farads and land on
+    // the designator string, classifying as a resistor again.
+    // A refused identity stops here. "Nothing about the record is evidence" has
+    // to include its designator: falling through to the string rung would let a
+    // conflicting duplicate `R5` be called a resistor with confidence, which is
+    // the opposite of what refusing its identity meant.
+    if !identity_is_trusted(c) {
+        return PartClass::Unknown;
+    }
+
+    if let Some(class) = from_model(c) {
+        return class;
+    }
+    // Rung 4: value dimension.
+    if let Some(class) = from_value_dimension(&c.value) {
+        return class;
     }
 
     // Rung 6: the strings, as a last-resort hint.
     from_strings(c)
+}
+
+/// Is this record's *identity* trustworthy, i.e. can it vouch for which physical
+/// part it names?
+///
+/// True for an ordinary record and for a DNP one; false only for
+/// [`AssemblyState::IdentityUnknown`]. Presence is a separate question that each
+/// caller answers for itself (the pull-up paths all reject non-present parts
+/// before they get here, because an unfitted resistor conducts nothing).
+fn identity_is_trusted(c: &Component) -> bool {
+    !matches!(AssemblyState::of(c), AssemblyState::IdentityUnknown(_))
+}
+
+/// Rung 4: what the value's dimension says on its own.
+///
+/// An explicit farad or henry unit is decisive. A *unitless* magnitude is normally
+/// ambiguous ("10k" is a resistance by convention), with one exception worth
+/// taking: a bare pico- or nano-scale magnitude. No resistor is ever specified as
+/// `100n` or `22p`, while capacitors are routinely written exactly that way, so
+/// such a value is evidence of a capacitance even with the unit omitted. Without
+/// this, a capacitor a designer had labelled `R5` and valued `100n` still landed
+/// on the designator rung and read as a resistor, which is the very case this
+/// module exists to stop; only the `100nF` spelling was caught.
+fn from_value_dimension(value: &str) -> Option<PartClass> {
+    let parsed = hauksbee_models::value::parse_value(value)?;
+    match parsed.unit.as_deref() {
+        Some("F") => return Some(PartClass::Passive(PassiveClass::Capacitor)),
+        Some("H") => return Some(PartClass::Passive(PassiveClass::Inductor)),
+        // An explicit ohm mark rules a capacitor out, but does NOT rule a
+        // resistor in: a ferrite bead is sold as an impedance and reads ohmic.
+        Some("\u{03a9}") | Some("V") | Some("A") => return None,
+        _ => {}
+    }
+    // Unitless. Only the sub-microscale case is decisive.
+    let magnitude = parsed.si.abs();
+    if magnitude > 0.0 && magnitude < 1e-6 {
+        return Some(PartClass::Passive(PassiveClass::Capacitor));
+    }
+    None
 }
 
 /// Rungs 2, 3 and 5: whatever the resolved model entry can say.
@@ -158,6 +232,15 @@ fn from_model(c: &Component) -> Option<PartClass> {
     let entry = resolved_shape(c)?;
     // Rung 2: the DB's declared class.
     if let Some(class) = entry.passive_class {
+        // Unless the value's dimension contradicts it. A `Device:R` symbol valued
+        // `100nF` is a schematic error either way, and this codebase would rather
+        // say "I cannot tell" than pick one of two contradicting witnesses and
+        // hand a downstream check a confident wrong answer.
+        if let Some(PartClass::Passive(by_value)) = from_value_dimension(&c.value) {
+            if by_value != class {
+                return Some(PartClass::Unknown);
+            }
+        }
         return Some(PartClass::Passive(class));
     }
     // Rung 3: a resolved non-passive kind.
@@ -255,8 +338,12 @@ fn from_strings(c: &Component) -> PartClass {
         return PartClass::Passive(PassiveClass::Inductor);
     }
     let r = ref_designator(&c.reference);
-    // Capacitors first: `CN`/`CON` are connector conventions, not capacitors.
-    if r.starts_with('C') && !r.starts_with("CN") && !r.starts_with("CON") {
+    // Capacitors first. `CN`/`CON` are connector conventions, and `CR` is the
+    // MIL-STD/ANSI designator for a DIODE, which the engine's binder already
+    // documents ("a `CR1` zener must never reach the C-first-letter capacitor
+    // heuristic"); reading a zener as a bypass cap is the same class of error as
+    // reading a capacitor as a pull-up.
+    if r.starts_with('C') && !r.starts_with("CN") && !r.starts_with("CON") && !r.starts_with("CR") {
         return PartClass::Passive(PassiveClass::Capacitor);
     }
     // Resistors, minus the historical exclusion list: varistors (RV),
@@ -343,6 +430,26 @@ mod tests {
     }
 
     #[test]
+    fn the_capacitor_question_uses_the_same_ladder_as_the_resistor_one() {
+        // The crystal-load-cap and local-rail paths ask "is this a capacitor?",
+        // and leaving that on the designator alone while the resistor question
+        // moved to the ladder would have let the two disagree about one part.
+        // A Device:C in an oddly-named slot counts...
+        let odd = part("X7", "18pF", "Device:C", "");
+        assert!(classify_two_terminal(&odd).is_capacitor());
+        assert!(!classify_two_terminal(&odd).is_resistor());
+        // ...and a resistor a designer labelled C5 does not.
+        let mislabelled = part("C5", "4k7", "Device:R", "");
+        assert!(!classify_two_terminal(&mislabelled).is_capacitor());
+        assert!(classify_two_terminal(&mislabelled).is_resistor());
+        // The historical connector exclusions survive on the string rung.
+        assert!(!classify_two_terminal(&part("CN1", "", "", "")).is_capacitor());
+        assert!(!classify_two_terminal(&part("CON2", "", "", "")).is_capacitor());
+        // And the ordinary case still classifies.
+        assert!(classify_two_terminal(&part("C12", "100nF", "", "")).is_capacitor());
+    }
+
+    #[test]
     fn a_ferrite_bead_is_never_a_resistor_even_with_an_ohmic_value() {
         // A bead is sold as an impedance at a frequency, so its value reads as a
         // resistance. The DB's class is what keeps it out of the pull-up path.
@@ -364,6 +471,59 @@ mod tests {
     }
 
     #[test]
+    fn a_bare_pico_or_nano_magnitude_is_a_capacitance_not_a_resistance() {
+        // No resistor is specified as `100n`; capacitors routinely are. Handling
+        // only the `100nF` spelling left the same CAD error live one character
+        // away.
+        let unlabelled = part("R5", "100n", "", "");
+        assert!(!classify_two_terminal(&unlabelled).is_resistor());
+        assert!(classify_two_terminal(&unlabelled).is_capacitor());
+        assert!(!classify_two_terminal(&part("R6", "22p", "", "")).is_resistor());
+        // An ordinary resistance magnitude is untouched.
+        assert!(classify_two_terminal(&part("R7", "10k", "", "")).is_resistor());
+        assert!(classify_two_terminal(&part("R8", "0", "", "")).is_resistor());
+        assert!(classify_two_terminal(&part("R9", "4k7", "", "")).is_resistor());
+    }
+
+    #[test]
+    fn contradicting_witnesses_produce_no_confident_answer() {
+        // A `Device:R` symbol carrying `100nF` is a schematic error either way.
+        // Picking one of two contradicting witnesses would hand a downstream
+        // check a confident wrong answer, so the ladder abstains.
+        let contradictory = part("R5", "100nF", "Device:R", "");
+        assert_eq!(classify_two_terminal(&contradictory), PartClass::Unknown);
+        assert!(!classify_two_terminal(&contradictory).is_resistor());
+        assert!(!classify_two_terminal(&contradictory).is_capacitor());
+        // Agreement is still a confident answer.
+        assert!(classify_two_terminal(&part("R5", "10k", "Device:R", "")).is_resistor());
+    }
+
+    #[test]
+    fn a_refused_identity_is_never_string_guessed_into_a_resistor() {
+        // "Nothing about the record is evidence" has to include the designator.
+        // The dangerous case is an `R`-prefixed reference, which the string rung
+        // would happily call a resistor.
+        let mut refused = part("R5", "100nF", "Device:C", "");
+        refused
+            .properties
+            .push((crate::DUPLICATE_REFERENCE_CONFLICT_KEY.into(), "two".into()));
+        assert_eq!(classify_two_terminal(&refused), PartClass::Unknown);
+        assert!(!classify_two_terminal(&refused).is_resistor());
+    }
+
+    #[test]
+    fn a_cr_designator_is_a_diode_not_a_capacitor() {
+        // `CR` is the MIL-STD/ANSI diode designator, which the engine's binder
+        // already documents. Reading a zener as a bypass cap is the same class of
+        // error as reading a capacitor as a pull-up.
+        let zener = part("CR1", "5.1V", "", "");
+        assert!(!classify_two_terminal(&zener).is_capacitor());
+        assert!(!classify_two_terminal(&zener).is_resistor());
+        // Ordinary C-prefixed parts are unaffected.
+        assert!(classify_two_terminal(&part("C1", "100nF", "", "")).is_capacitor());
+    }
+
+    #[test]
     fn a_part_without_two_connected_pads_is_not_a_two_terminal_passive() {
         let mut three = part("R1", "10k", "Device:R", "");
         three.pins.push(pad("3", 3));
@@ -372,6 +532,31 @@ mod tests {
         let mut doubled = part("R1", "10k", "Device:R", "");
         doubled.pins.push(pad("1", 1));
         assert!(classify_two_terminal(&doubled).is_resistor());
+    }
+
+    #[test]
+    fn a_dnp_record_still_reaches_model_evidence() {
+        // Presence is not identity. A DNP part is a KNOWN part that happens not
+        // to be fitted, so its value and lib_id are still evidence about what it
+        // is. Gating the model rungs on the fitted witness would have sent this
+        // DNP capacitor past the rung that reads its farads and back onto its
+        // misleading `R5` designator.
+        let mut dnp_cap = part("R5", "100nF", "Device:C", "");
+        dnp_cap.dnp = true;
+        assert_eq!(
+            classify_two_terminal(&dnp_cap),
+            PartClass::Passive(PassiveClass::Capacitor),
+            "a DNP capacitor is still a capacitor"
+        );
+        // Same for the value-dimension rung with no resolvable lib_id.
+        let mut bare = part("R5", "100nF", "", "");
+        bare.dnp = true;
+        assert!(!classify_two_terminal(&bare).is_resistor());
+        // And a DNP resistor is still classified a resistor: callers reject it
+        // on presence, which is their job, not this function's.
+        let mut dnp_r = part("RN1", "4k7", "Device:R", "");
+        dnp_r.dnp = true;
+        assert!(classify_two_terminal(&dnp_r).is_resistor());
     }
 
     #[test]

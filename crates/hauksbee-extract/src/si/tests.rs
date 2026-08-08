@@ -865,6 +865,7 @@ fn impedance_usb_text_intent(w: f64, gap: f64, diel: f64, er: f64, controlled: b
     let dc = if controlled { "yes" } else { "no" };
     format!(
         r#"(kicad_pcb (version 20240101)
+        (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
         (setup (stackup
           (layer "F.Cu" (type "copper") (thickness 0.035))
           (layer "dielectric 1" (type "core") (thickness {diel}) (material "FR4") (epsilon_r {er}))
@@ -995,6 +996,7 @@ fn controlled_impedance_no_stackup_is_info_never_finding() {
 fn controlled_impedance_ethernet_pair_targets_100_ohm() {
     // An Ethernet-named pair (TRD0_P/TRD0_N) is judged against 100 ohm, not 90.
     let text = r#"(kicad_pcb (version 20240101)
+        (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
         (setup (stackup
           (layer "F.Cu" (type "copper") (thickness 0.035))
           (layer "dielectric 1" (type "core") (thickness 0.2) (material "FR4") (epsilon_r 4.3))
@@ -1153,6 +1155,7 @@ fn impedance_usb_over_plane_with(fills: &str, extras: &str) -> String {
     // against the 90 ohm USB target.
     format!(
         r#"(kicad_pcb (version 20240101)
+        (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
         (setup (stackup
           (layer "F.Cu" (type "copper") (thickness 0.035))
           (layer "dielectric 1" (type "core") (thickness 0.2) (material "FR4") (epsilon_r 4.3))
@@ -1245,7 +1248,8 @@ fn a_pair_crossing_a_plane_void_names_the_span_instead_of_a_zdiff() {
     );
     // And it must say what would turn this into a confident answer.
     assert!(
-        f.message.contains("solid reference-plane copper"),
+        f.message
+            .contains("needs reference-plane copper along the pair's routed length"),
         "the abstention must name what would unlock a confident answer: {}",
         f.message
     );
@@ -1336,4 +1340,114 @@ fn a_via_antipad_in_the_plane_is_not_a_missing_reference() {
         f.message
     );
     assert_eq!(r.finding_count(), 0, "an anti-pad must never fire");
+}
+
+#[test]
+fn two_clearances_either_side_of_a_via_are_not_one_void() {
+    // A review caught this: excused anti-pad samples used to be skipped without
+    // breaking the contiguous-run counter, so two sub-threshold clearances lying
+    // either side of a via bridged into one run that cleared the 2 mm bar. Voids
+    // are now sized by the geometric extent of a cluster of mutually-close
+    // uncovered samples, so the copper between two holes separates them.
+    //
+    // Two 1.2 mm-wide bites out of the pour, at x = 7..8.2 and x = 11..12.2, with
+    // a via between them at x = 9.6. Neither bite reaches 2 mm across.
+    let holed = r#"(filled_polygon (pts
+        (xy -5 -5) (xy 25 -5) (xy 25 5)
+        (xy 12.2 5) (xy 12.2 -0.3) (xy 11.0 -0.3) (xy 11.0 5)
+        (xy 8.2 5) (xy 8.2 -0.3) (xy 7.0 -0.3) (xy 7.0 5)
+        (xy -5 5)))"#;
+    let vias = r#"(via (at 9.6 0) (size 0.45) (drill 0.25) (layers "F.Cu" "B.Cu") (net 1))"#;
+    let text = impedance_usb_over_plane_with(holed, vias);
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("an impedance note");
+    assert!(
+        !f.message.contains("reference missing"),
+        "two separate sub-threshold clearances must not bridge into one void: {}",
+        f.message
+    );
+    assert_eq!(r.finding_count(), 0);
+}
+
+#[test]
+fn a_through_hole_pad_clearance_is_not_a_missing_reference() {
+    // The second false-positive class a review caught: only vias were excused, so
+    // a through-hole connector pad or a mounting hole, which clears far more
+    // copper than a signal via, still read as a plane void. The claim that no
+    // plausible anti-pad reaches 2 mm was simply false for those.
+    //
+    // A 2.5 mm mounting-hole pad on all copper layers, with the pour cleared
+    // around it over 2.4 mm of the pair's route.
+    let holed = r#"(filled_polygon (pts
+        (xy -5 -5) (xy 25 -5) (xy 25 5)
+        (xy 11.2 5) (xy 11.2 -0.3) (xy 8.8 -0.3) (xy 8.8 5)
+        (xy -5 5)))"#;
+    let pad = r#"(footprint "MountingHole" (at 10 0)
+        (pad "1" thru_hole circle (at 0 0) (size 2.5 2.5) (drill 2.2)
+             (layers "*.Cu" "*.Mask")))"#;
+    let text = impedance_usb_over_plane_with(holed, pad);
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("an impedance note");
+    assert!(
+        !f.message.contains("reference missing"),
+        "a mounting-hole anti-pad is designed clearance, not a plane void: {}",
+        f.message
+    );
+    assert_eq!(r.finding_count(), 0);
+}
+
+#[test]
+fn a_void_on_a_minority_routing_layer_is_still_caught() {
+    // A review caught this false negative: the check sampled only the layer
+    // carrying most of the pair's routed length, so a pair running mostly over
+    // solid copper and then dropping to the far side over a void went unexamined.
+    // Every outer layer the pair routes on is now checked.
+    //
+    // 20 mm of each leg on F.Cu over a solid B.Cu pour, then a 6 mm stub on B.Cu
+    // whose reference (F.Cu) has no pour at all under it.
+    let text = format!(
+        r#"(kicad_pcb (version 20240101)
+        (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+        (setup (stackup
+          (layer "F.Cu" (type "copper") (thickness 0.035))
+          (layer "dielectric 1" (type "core") (thickness 0.2) (material "FR4") (epsilon_r 4.3))
+          (layer "B.Cu" (type "copper") (thickness 0.035))
+          (dielectric_constraints yes)))
+        (net 0 "") (net 1 "USB_DP") (net 2 "USB_DM") (net 3 "GND")
+        (segment (start 0 0) (end 20 0) (width 0.3) (layer "F.Cu") (net 1))
+        (segment (start 0 0.5) (end 20 0.5) (width 0.3) (layer "F.Cu") (net 2))
+        (segment (start 20 0) (end 26 0) (width 0.3) (layer "B.Cu") (net 1))
+        (segment (start 20 0.5) (end 26 0.5) (width 0.3) (layer "B.Cu") (net 2))
+        (zone (net 3) (net_name "GND") (layer "B.Cu") {}))"#,
+        rect_fill(-5.0, 30.0)
+    );
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("an impedance note");
+    // F.Cu carries no pour, so the B.Cu stub's reference cannot be verified. The
+    // point is that the minority layer is EXAMINED rather than silently skipped:
+    // its unverifiable reference must reach the report.
+    assert!(
+        f.message.contains("reference plane unverified")
+            && f.message.contains("no filled copper pour on F.Cu"),
+        "the minority routing layer must be examined and its reference reported: {}",
+        f.message
+    );
 }
