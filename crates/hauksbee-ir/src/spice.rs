@@ -2448,7 +2448,11 @@ fn did_you_mean(circuit: &Circuit, target: &str) -> String {
 }
 
 /// Iterative Levenshtein edit distance (small strings; node names).
-fn levenshtein(a: &str, b: &str) -> usize {
+///
+/// Public because the "did you mean" suggestion is the same shape wherever a
+/// name is looked up in a fixed vocabulary: the SPICE node hint here, and the
+/// model parameter-name lint in `hauksbee-models::param_names`.
+pub fn levenshtein(a: &str, b: &str) -> usize {
     let a: Vec<char> = a.chars().collect();
     let b: Vec<char> = b.chars().collect();
     let mut prev: Vec<usize> = (0..=b.len()).collect();

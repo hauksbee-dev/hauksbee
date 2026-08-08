@@ -1147,11 +1147,9 @@ fn build_checks(meta: &DeviceMeta, op: &OperatingPoint) -> Vec<Check> {
     checks
 }
 
-/// Approximate diode current from the Shockley equation at terminal voltage
-/// `vd` and temperature `temp_c`. Series resistance is ignored (first-order;
-/// the solver already accounts for it in `vd`), and the result is clamped to a
-/// sane range so a runaway forward bias does not overflow.
-/// Forward current from the diode's TERMINAL voltage.
+/// Forward current from the diode's TERMINAL voltage `vd` at temperature
+/// `temp_c`, clamped to a sane range so a runaway forward bias does not
+/// overflow.
 ///
 /// The terminal voltage is not the junction voltage when the model carries a
 /// series resistance: the junction sits on an intrinsic anode and `rs` bridges

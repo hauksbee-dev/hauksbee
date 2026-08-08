@@ -45,6 +45,7 @@ pub mod datasheet;
 pub mod logic_spec;
 pub mod matcher;
 pub mod pack;
+pub mod param_names;
 pub mod pin_rules;
 pub mod profile;
 pub mod schema;

@@ -343,18 +343,39 @@ toleranced components (2^n runs). For a response that is *monotonic* in each
 component value (dividers, ladders, most DC bias networks) the true worst
 case is a corner, so a green corner run bounds it. For non-monotonic responses
 (filters peaking mid-band, matched pairs) the interior can be worse than any
-corner, so the report claims boundedness **only for monotonic responses**.
-Full enumeration is capped at 2^10 = 1024 components' corners. Above 10
+corner.
+
+That condition is not left as a caveat with nothing behind it. Alongside the corners, corner
+mode runs a small stratified **Latin-hypercube sample of the interior**: 4
+probes for one toleranced component, 6 for two, 8 from three up, so the check
+is a bounded handful of extra runs and never a multiple of the corner set. An
+interior probe that fails where every corner passed **fails the assertion**
+and says so, because the corners demonstrably did not bound that response.
+
+A clean probe set is evidence for the monotonicity the bound needs, not proof
+of it, and the report words it that way. Two limits are stated rather than
+glossed: the probes sample the interior, so a non-monotonicity between them is
+still possible; and each member is judged against the assertion's own window,
+so a probe worse than every corner still passes while it stays in band.
+Interior probes are numbered on from the last corner, so `--seed k` isolates
+one exactly like a corner; the report calls them `interior probe k`.
+
+Full enumeration is capped at 10 toleranced components (2^10 = 1024 corner runs, plus the interior probes). Above 10
 toleranced components, corner mode refuses and points at Monte-Carlo. Corner
 mode does not compose with `[fuzz]` (the corner index enumerates min/max
 combinations, not fuzz seeds). Monte-Carlo does compose with `[fuzz]`.
 
-**Reproducibility is doctrine.** Every sampled value is a pure function of
-(spec, seed, component reference): seed 0 is always the nominal baseline, the
-tolerance stream is domain-separated from the net-fuzz stream (adding a
-tolerance never changes which fuzz levels seed N straps), and when `[fuzz]`
-and `[ensemble]` are both present one shared seed stream drives both (the
-member count is the larger of the two `seeds`). A failure names the seed and
+**Reproducibility is doctrine.** Re-running a member reproduces it
+byte-identically, which is what makes a red build investigable. Every
+Monte-Carlo sampled value is a pure function of (seed, component reference,
+rule): in Monte-Carlo mode seed 0 is the nominal baseline, the tolerance stream
+is domain-separated from the net-fuzz stream (adding a tolerance never changes
+which fuzz levels seed N straps), and when `[fuzz]` and `[ensemble]` are both
+present one shared seed stream drives both (the member count is the larger of
+the two `seeds`). Corner mode has no nominal member (member 0 is the all-min
+corner), and its member indices, corners and interior probes alike, are
+renumbered by adding a tolerance rule: an index names a point within one spec
+revision, which is what `--seed` replay needs. A failure names the seed and
 the exact sampled values:
 
 ```

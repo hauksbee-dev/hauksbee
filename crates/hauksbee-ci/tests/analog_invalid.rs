@@ -87,6 +87,7 @@ fn outcome_with(
         error_budget: None,
         analog_abort,
         sampled_values: Vec::new(),
+        interior: false,
         net_series: HashMap::new(),
         substitutions: Vec::new(),
         coverage_warnings: Vec::new(),
