@@ -13,9 +13,16 @@
 //! chip-select, so each bus tracks its own CS instead. When the binder resolved
 //! the slave's CS net to an MCU pin, a live GPIO hook frames the bus off the real
 //! CS edge and the scheduler's shared `on_spi` handler routes each byte to the
-//! selected bus, so the deselected slaves never see a sibling's traffic. A bus
-//! whose CS did not resolve falls back to the chunk-boundary heuristic, which
-//! only holds when it is the controller's lone slave.
+//! selected bus, so the deselected slaves never see a sibling's traffic.
+//!
+//! A bus whose CS did NOT resolve falls back to the chunk-boundary heuristic and
+//! starts permanently selected, because there is no CS edge to gate it. Nothing
+//! enforces that such a bus is alone on its controller: with two unresolved-CS
+//! slaves the dispatcher hands every byte to the first selected bus it finds, and
+//! the second never sees traffic. That is a coverage gap, not a silent wrong
+//! answer, since `framing_mode` reports `Heuristic` for those buses and the
+//! report surfaces it, but the heuristic is only CORRECT for a lone slave. The
+//! fix for a real multi-slave board is to resolve its CS nets.
 //!
 //! ## Bus-speed honesty (chunk-rate limit)
 //!
@@ -166,8 +173,11 @@ pub struct SpiBus {
     /// SELECTED bus (only one CS is asserted at a time), so the deselected slaves
     /// never see traffic addressed to a sibling. A bus with a resolved CS pin
     /// starts deselected (its CS edge selects it); a heuristic bus with no CS pin
-    /// is always considered selected (there is no CS to gate it, and it is the
-    /// only slave on the controller). See [`Scheduler::attach_spi_bus`].
+    /// is always considered selected, because there is no CS to gate it. Nothing
+    /// enforces that such a bus is the controller's only slave: two of them and
+    /// the dispatcher gives every byte to the first, which is why the heuristic
+    /// is only correct for a lone slave and why `framing_mode` reports it.
+    /// See [`Scheduler::attach_spi_bus`].
     selected: bool,
 }
 

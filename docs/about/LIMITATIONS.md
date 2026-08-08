@@ -243,8 +243,8 @@ scope.
 ### I2C/SPI slave co-sim coverage, and what remains open around it
 
 The working coverage first, because the boundary matters: I2C/SPI slave
-co-simulation is exact on AVR (simavr intercepts the hardware TWI/SPI
-in-process); on Renode it runs through generated C# bridge peripherals on
+co-simulation intercepts the hardware TWI/SPI in-process on AVR, so the byte
+stream itself is exact (no timing model, no reimplemented controller); on Renode it runs through generated C# bridge peripherals on
 every platform whose SoC descriptor names bus controllers (STM32F103 `i2c1`/
 `spi1`, STM32F4 Discovery `i2c1`/`spi2`-`spi3`, nRF52840 `twi0`/`twi1`/`spi2`,
 RP2040 `i2c0`/`i2c1`); and on QEMU-ESP32 it runs through a firmware mailbox
@@ -259,6 +259,17 @@ tests in `crates/hauksbee-engine/tests/`.
 
 What remains open:
 
+- **SPI transaction framing when the chip-select net does not resolve.** The
+  simavr SPI IRQ does not carry CS, so framing comes from the CS pin when the
+  binder resolves the net (exact, off the real GPIO edge stream) or from the
+  backend when it surfaces CS itself (Renode hardware-NSS). Failing both, the
+  chunk boundary is the only frame available, and it is wrong in two ways: two
+  transactions inside one chunk merge, and one spanning a boundary truncates.
+  Each bus reports which of the three it got (`framing_mode`, on every report
+  surface), and a heuristic bus is only correct as its controller's lone slave:
+  nothing stops two of them being attached, and the dispatcher would give every
+  byte to the first. Resolving the CS nets is the fix, and it is what the
+  `--check` co-sim coverage points at.
 - **Default Renode ADC maps.** `set_analog_in` injects for real through a
   per-platform `AdcChannelMap` (validated against a live Renode 1.16.1), but no
   *default* map ships for the stock STM32/nRF52/FE310 configs: those Renode

@@ -445,7 +445,7 @@ hauksbee-ci: divider tolerance corners
   tolerance corners: 4 deterministic min/max corner(s) + 6 interior probe(s) over 2 component(s): bounds the worst case only where the response is monotonic in each value, and the probes sample the interior for a point that breaks an assertion the corners passed (evidence for that monotonicity, not proof of it)
 
   [PASS] VOUT within the designed [2.2, 2.8] V envelope on every corner
-        VOUT: min=2.460V (>= 2.2V), max=2.460V (<= 2.8V) [settled 2.460V] (held on all 4 min/max tolerance corners and on 6 interior Latin-hypercube probe(s): no interior point sampled broke this assertion, which is evidence for the monotonicity the corner bound needs, not proof of it, and a probe inside the window is not compared against the corners' own margin)
+        VOUT: min=2.460V (>= 2.2V), max=2.460V (<= 2.8V) [settled 2.460V] <- one member's reading, not the ensemble span (held on all 4 min/max tolerance corners and on 6 interior Latin-hypercube probe(s): no interior point sampled broke this assertion, which is evidence for the monotonicity the corner bound needs, not proof of it, and a probe inside the window is not compared against the corners' own margin)
   [FAIL] VOUT within the tight [2.4, 2.6] V window on every corner
         corner 1: VOUT: min=2.250V < required 2.4V <- FAILED HERE, max=2.250V (<= 2.6V) [settled 2.250V] [R1=11k(max), R2=9k(min)]; passed 7/10 corners + interior probes (failing: 1, 2, 5)
         why: VOUT settled 0.150 V below your floor (2.250 V vs min 2.4 V)
