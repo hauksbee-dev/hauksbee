@@ -2024,8 +2024,7 @@ fn stamp_bjt<S: StampSink>(
     //
     // With both knees at INFINITY, q2 is 0, the square root is 1, and qbfac is
     // exactly 1.0, so every model that does not set a knee is bit-identical to
-    // before. That matters: the legacy Jacobian path is pinned by a fixture
-    // hash, and this must not move it.
+    // before: the whole factor costs a knee-less deck nothing.
     //
     // Without this term beta never falls with current, which is not a small
     // approximation. The genuine ON Semiconductor 2N3904 card gives beta 164 at
@@ -2074,45 +2073,42 @@ fn stamp_bjt<S: StampSink>(
     let gif = is * ef / nvf; // d cf / d vbe
     let gir = is * er / nvr; // d cr / d vbc
     let gm = (gif * q1_inv).max(ctx.opts.gmin); // forward transconductance
-    let go = (gir * q1_inv).max(ctx.opts.gmin); // reverse / output
 
-    // Terminal currents into c, b, e (NPN reference, then sign-folded).
+    // Terminal currents into c and b (NPN reference, then sign-folded); the
+    // emitter's is minus their sum (KCL), folded directly into the RHS below.
     let ic = ict - ibc;
     let ib = ibe + ibc;
-    let ie = -(ic + ib);
 
-    // Linearized stamp, two variants sharing the residual physics:
-    //
-    // LEGACY (external nodes, every pre-§3.2 deck): conductances among (b,e)
-    // and (b,c) plus the transconductance gm coupling c to vbe, with vce as
-    // the output coordinate. This Jacobian is APPROXIMATE in saturation
-    // (mapping ∂ic/∂vbc through go-between-c-e plus gm-on-vbe mismatches the
-    // true partial by gir), which board-level resistances damp fine, and it
-    // is the byte-for-byte path the fixture hash pins, so it stays.
-    //
-    // EXACT (core relocated onto internal nodes; the §3.2 opt-in honored):
-    // the true partials
+    // Linearized stamp: the EXACT tangent, the true partials
     //   ∂ic/∂vbe = gif·q1_inv
     //   ∂ic/∂vbc = -gir·q1_inv - gmu - (cf-cr)/vaf  (Early term only when the
     //              effect is active and the clamp is not)
     //   ∂ib/∂vbe = gpi,  ∂ib/∂vbc = gmu
-    // stamped directly per junction voltage. The legacy approximation
-    // limit-cycles Newton on a hard-saturated switching edge (measured: a
-    // persistent ~0.1 V two-cycle at the collector, failing the step at
-    // dt_min); the exact tangent converges it. It applies exactly when the
-    // core sits on the internal nodes: every pre-§3.2 deck (and any toggle-
-    // off run) stays on the pinned legacy bytes, and the staged-DC relaxed
-    // pass (which solves with `series_resistance` OFF precisely to get the
-    // easier base-topology system) stays legacy too. Both Jacobians define
-    // the same root; the RHS residual brackets are the terminal currents
-    // either way.
+    // stamped directly per junction voltage, on whichever unknowns (ci, bi,
+    // ei) resolved to above: the intrinsic internal nodes when series
+    // resistance relocated the core inside, the externals otherwise.
     //
-    // (ci, bi, ei) are the EFFECTIVE unknowns resolved above; the intrinsic
-    // internal nodes when series resistance is stamped, the externals
-    // otherwise. `sign` folds out of the matrix entries (sign² = 1) and folds
+    // History (B13): this used to be two variants. A LEGACY approximate
+    // Jacobian (∂ic/∂vbc mapped through a go-between-c-e plus gm-on-vbe,
+    // mismatching the true partial by gir) served the external-node path,
+    // kept only because a golden-fixture hash pinned its bytes. The
+    // approximation limit-cycles Newton on a hard-saturated switching edge
+    // (measured: a persistent ~0.1 V two-cycle at the collector, failing the
+    // step at dt_min); the exact tangent converges it. Both Jacobians define
+    // the same root (the RHS residual brackets are the terminal currents
+    // either way), so the promotion changes Newton iterate paths and the
+    // within-tolerance accepted points, never the defined physics; the
+    // ngspice oracle corpus was re-run on both sides of the promotion and
+    // every deck's worst-case error stayed within tolerance (see
+    // docs/spice-compat/results.md). Scope: this is the LARGE-SIGNAL
+    // (DC/transient Newton) stamp. The AC small-signal stamp (`stamp_bjt_ac`
+    // in ac.rs) still carries its own gm/go admittance form on the
+    // external-node path; aligning it with these partials is separate,
+    // AC-oracle-gated work.
+    //
+    // `sign` folds out of the matrix entries (sign² = 1) and folds
     // the RHS brackets whole; folding only some terms breaks PNP convergence.
-    let exact_tangent = eff != ext;
-    if exact_tangent {
+    {
         // The base-charge factor's own partials (both zero unless the effect
         // is on, the voltage is finite, and the clamp is not engaged):
         // ∂q1_inv/∂vbc = -1/vaf, ∂q1_inv/∂vbe = -1/var, each contributing
@@ -2138,21 +2134,23 @@ fn stamp_bjt<S: StampSink>(
         // stalled Newton, which is the failure mode that looks like a modelling
         // bug and is not. Both terms vanish when the knees are infinite.
         let dqbfac = -4.0 / (sq * (1.0 + sq) * (1.0 + sq));
-        let (dq2_dvbe, dq2_dvbc) = if q2 > 0.0 {
-            (
-                if model.ikf.is_finite() && model.ikf > 0.0 {
-                    gif / model.ikf
-                } else {
-                    0.0
-                },
-                if model.ikr.is_finite() && model.ikr > 0.0 {
-                    gir / model.ikr
-                } else {
-                    0.0
-                },
-            )
+        // Each derivative is gated on ITS OWN term being unclamped, not on
+        // the total q2: q2 sums (cf/IKF).max(0) and (cr/IKR).max(0), and in
+        // forward-active operation cr < 0 clamps the reverse term out while
+        // the forward one stays live. Gating on q2 > 0 alone would keep
+        // gir/IKR in the tangent for a term whose clamped derivative is
+        // exactly zero: a wrong (if usually small) Jacobian entry, the same
+        // class of inexactness this stamp exists to avoid. cf > 0 stands in
+        // for cf/IKF > 0 since the gate already requires IKF > 0.
+        let dq2_dvbe = if model.ikf.is_finite() && model.ikf > 0.0 && cf > 0.0 {
+            gif / model.ikf
         } else {
-            (0.0, 0.0)
+            0.0
+        };
+        let dq2_dvbc = if model.ikr.is_finite() && model.ikr > 0.0 && cr > 0.0 {
+            gir / model.ikr
+        } else {
+            0.0
         };
         let knee_be = (cf - cr) * q1_inv_early * dqbfac * dq2_dvbe;
         let knee_bc = (cf - cr) * q1_inv_early * dqbfac * dq2_dvbc;
@@ -2172,26 +2170,6 @@ fn stamp_bjt<S: StampSink>(
         inject(sink, ci, -ic_eq);
         inject(sink, bi, -ib_eq);
         inject(sink, ei, ic_eq + ib_eq);
-    } else {
-        // gpi between b-e, gmu between b-c.
-        add_pair(sink, bi, ei, gpi);
-        add_pair(sink, bi, ci, gmu);
-        // output conductance go between c-e.
-        add_pair(sink, ci, ei, go);
-        // transconductance: ic depends on vbe = v(b)-v(e).
-        add_transconductance(sink, ci, ei, bi, ei, gm);
-
-        // Equivalent currents: residual = I_terminal - linearized part, both
-        // in folded (NPN-reference) space, then mapped to real space by
-        // `sign` (matrix rows in real space equal sign * folded linear part).
-        let vce_f = sign * (vx(ci) - vx(ei));
-        let ic_eq = sign * (ic - (gm * vbe + go * vce_f - gmu * vbc));
-        let ib_eq = sign * (ib - (gpi * vbe + gmu * vbc));
-        let ie_eq = sign * (ie + (gm + gpi) * vbe + go * vce_f);
-
-        inject(sink, ci, -ic_eq);
-        inject(sink, bi, -ib_eq);
-        inject(sink, ei, -ie_eq);
     }
 
     // Charge storage (dev-plan 04 §3.2): base-emitter and base-collector
