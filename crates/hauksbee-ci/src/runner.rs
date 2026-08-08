@@ -1640,7 +1640,7 @@ fn run_one(
         .scheduler()
         .fallback_windows()
         .iter()
-        .map(|&(start, end, method)| (start, end, method.as_str().to_string()))
+        .map(|w| (w.start_s, w.end_s, w.method.as_str().to_string()))
         .collect();
     let error_budget = Some(
         engine
@@ -1692,18 +1692,25 @@ fn run_one(
         .filter(|net| !net.name.trim().is_empty())
         .map(|net| net.name.as_str())
         .collect();
-    for (start, end, method) in &fallback_windows {
+    for w in engine.scheduler().fallback_windows() {
+        let (start, end, method) = (w.start_s, w.end_s, w.method.as_str());
         let scope = hauksbee_ir::evidence::Scope::Nets(
             hauksbee_ir::evidence::NetScope::new(
                 all_nets.iter().copied(),
                 Some(
-                    hauksbee_ir::evidence::TimeWindow::new(*start, *end).map_err(|e| {
+                    hauksbee_ir::evidence::TimeWindow::new(start, end).map_err(|e| {
                         SpecError::Invalid(format!("building fallback evidence: {e}"))
                     })?,
                 ),
             )
             .map_err(|e| SpecError::Invalid(format!("building fallback evidence: {e}")))?,
         );
+        let accuracy = match w.error_estimate_v {
+            Some(e) => format!("measured chunk-end error estimate {e:.3e} V"),
+            None => "no error estimate was established (no companion re-solve \
+                     converged)"
+                .to_string(),
+        };
         production_assumptions.push(hauksbee_ir::evidence::Assumption::reduced_fidelity(
             hauksbee_ir::evidence::AssumptionSource::Solver,
             hauksbee_ir::evidence::Subject::new(
@@ -1711,7 +1718,7 @@ fn run_one(
                 &format!("the analog solve over {start:.6}-{end:.6} s"),
             ),
             scope,
-            &format!("the primary integration failed and the {method} fallback produced the accepted values"),
+            &format!("the primary integration failed and the {method} fallback produced the accepted values; {accuracy}"),
             "resolve the convergence cause so the primary trapezoidal march carries this window, then re-run",
         ));
     }

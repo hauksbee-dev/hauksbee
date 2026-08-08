@@ -103,17 +103,19 @@ pub fn build_cosim_json(
         })
         .collect();
     // Fallback-solved windows: real converged answers, but produced by a
-    // second-class rung after the primary solve failed there; the method and
-    // its qualitative fidelity note travel with each window so the consumer
-    // knows which spans to read with that caveat without inventing a bound.
+    // second-class rung after the primary solve failed there; the method, its
+    // qualitative fidelity note, and the measured step-doubling error
+    // estimate travel with each window so the consumer knows which spans to
+    // read with that caveat and how far the chunk-end state can be trusted.
     let fallback_windows: Vec<CosimFallbackWindow> = sched
         .fallback_windows()
         .iter()
-        .map(|&(start_s, end_s, method)| CosimFallbackWindow {
-            start_s,
-            end_s,
-            method: method.as_str().to_string(),
-            fidelity_note: method.fidelity_note().to_string(),
+        .map(|w| CosimFallbackWindow {
+            start_s: w.start_s,
+            end_s: w.end_s,
+            method: w.method.as_str().to_string(),
+            fidelity_note: w.method.fidelity_note().to_string(),
+            error_estimate_v: w.error_estimate_v,
         })
         .collect();
 
@@ -555,13 +557,20 @@ pub fn run_headless(
                 "\nfallback integration solved {fallback} chunk(s) after the primary \
                  solve failed; those windows are converged but second-class:"
             );
-            for &(start_s, end_s, method) in sched.fallback_windows() {
+            for w in sched.fallback_windows() {
+                let estimate = match w.error_estimate_v {
+                    Some(e) => format!("measured chunk-end error estimate {e:.3e} V"),
+                    None => "no error estimate established (no companion re-solve \
+                             converged)"
+                        .to_string(),
+                };
                 println!(
-                    "  [{:.6}s .. {:.6}s) via {} ({})",
-                    start_s,
-                    end_s,
-                    method.as_str(),
-                    method.fidelity_note()
+                    "  [{:.6}s .. {:.6}s) via {}; {} ({})",
+                    w.start_s,
+                    w.end_s,
+                    w.method.as_str(),
+                    estimate,
+                    w.method.fidelity_note()
                 );
             }
         }
