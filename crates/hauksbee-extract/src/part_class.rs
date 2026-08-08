@@ -155,6 +155,16 @@ pub(crate) fn ref_designator(reference: &str) -> String {
     r.to_ascii_uppercase()
 }
 
+/// Public rung-ladder answer to "is this record a plain two-terminal
+/// resistor?", for downstream crates that must agree with the lint/SI checks
+/// about what a resistor is. Answers from the model DB's declared passive
+/// class through the assembly witness, falling back to the designator/`lib_id`
+/// strings only when nothing better exists; `Unknown` and identity-refused
+/// records are never resistors.
+pub fn is_plain_resistor(c: &Component) -> bool {
+    classify_two_terminal(c).is_resistor()
+}
+
 /// Classify one component record against the ladder in the module doc.
 pub(crate) fn classify_two_terminal(c: &Component) -> PartClass {
     // Rung 1: terminal count.
