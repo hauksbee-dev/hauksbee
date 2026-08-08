@@ -3899,16 +3899,15 @@ mod spi_cs_source_tests {
     }
 
     /// A `ref` that names a real, assembled, modelled part of the WRONG kind must
-    /// not supply a CS net. Pointing a `spi_eeprom` at the board's MCP3008 finds a
-    /// genuine `cs` role on a genuine part, and taking it would frame the EEPROM's
-    /// transactions off the ADC's chip-select while reporting `exact`. Dropping to
-    /// the heuristic is the conservative answer, and the heuristic disclosure then
-    /// fires on every surface, so the bus is not quietly trusted.
+    /// be refused. Pointing a `spi_eeprom` at the board's MCP3008 finds a genuine
+    /// `cs` role on a genuine part, and taking it would frame the EEPROM's
+    /// transactions off the ADC's chip-select while reporting `exact`.
     #[test]
-    fn a_ref_naming_the_wrong_spi_part_supplies_no_cs_net() {
+    fn a_ref_naming_the_wrong_spi_part_is_refused() {
         let lib = hauksbee_models::ModelLibrary::builtin();
         let mut b = board();
         b.components[0].value = "MCP3008-I/SL".to_string();
+        b.components[0].footprint = "Package_SO:SOIC-16_3.9x9.9mm_P1.27mm".to_string();
         b.components[0].pins[0].number = "10".to_string(); // the MCP3008's cs pad
 
         // Sanity: as its OWN kind the part does resolve, so the refusal below is
