@@ -205,6 +205,13 @@ impl Qmp {
     /// Forget any recorded `RESUME`/`STOP` event timestamps. Call immediately
     /// before the `cont` that opens a run window, so a stale pair from an
     /// earlier chunk can never masquerade as this chunk's measurement.
+    ///
+    /// A previous chunk's STOP can still be sitting unread in the TCP buffer
+    /// when this runs, and it will be noted into the cleared slot as soon as
+    /// something reads the socket. That stale value is NOT drained here (an
+    /// empty-socket probe costs a blocking read timeout on every chunk);
+    /// instead [`Qmp::measured_run_window`] refuses to settle until the pair
+    /// is ordered, which a stale STOP next to this chunk's RESUME never is.
     pub fn clear_run_events(&mut self) {
         self.event_resume = None;
         self.event_stop = None;
@@ -218,11 +225,19 @@ impl Qmp {
     /// The STOP event races the `stop` command's `return`, so this drains the
     /// socket for up to `grace` waiting for a missing event before giving up.
     /// `None` must be treated as "unmeasured", never as "zero".
+    ///
+    /// The drain keeps going until the pair is ORDERED (stop after resume),
+    /// not merely present: a stale STOP that slipped past
+    /// [`Qmp::clear_run_events`]'s buffer drain fills the slot with a
+    /// timestamp older than this chunk's RESUME, and stopping there would
+    /// return `None` while the real STOP sits buffered, silently restoring
+    /// the uncredited-slack bias for this chunk AND arming the next one with
+    /// another stale event. Timestamps are monotone and `note_event` keeps
+    /// the newest, so waiting for order converges on the true pair.
     pub fn measured_run_window(&mut self, grace: Duration) -> Option<Duration> {
         let deadline = Instant::now() + grace;
-        while (self.event_resume.is_none() || self.event_stop.is_none())
-            && Instant::now() < deadline
-        {
+        let ordered = |resume: Option<f64>, stop: Option<f64>| matches!((resume, stop), (Some(r), Some(s)) if s > r);
+        while !ordered(self.event_resume, self.event_stop) && Instant::now() < deadline {
             let remaining = deadline.saturating_duration_since(Instant::now());
             // A read timeout just means no more messages are in flight.
             let Ok(msg) = self.read_message(remaining) else {
@@ -247,10 +262,12 @@ impl Qmp {
                 return Ok(String::from_utf8_lossy(&msg).into_owned());
             }
             if Instant::now() >= deadline {
-                bail!(
-                    "QMP read timed out with no complete message; partial: {:?}",
-                    String::from_utf8_lossy(&buf[..buf.len().min(200)])
-                );
+                // Put the partial message BACK before bailing: timeouts are
+                // routine (event drains use near-zero deadlines), and dropping
+                // a half-read message here would desync every later frame.
+                let partial = String::from_utf8_lossy(&buf[..buf.len().min(200)]).into_owned();
+                self.carry = buf;
+                bail!("QMP read timed out with no complete message; partial: {partial:?}");
             }
             let mut chunk = [0u8; 4096];
             match self.stream.read(&mut chunk) {
@@ -262,7 +279,12 @@ impl Qmp {
                 {
                     std::thread::sleep(Duration::from_millis(3));
                 }
-                Err(e) => return Err(e).context("reading QMP socket"),
+                Err(e) => {
+                    // Same discipline for transient socket errors: whatever was
+                    // read so far stays queued for the next call.
+                    self.carry = buf;
+                    return Err(e).context("reading QMP socket");
+                }
             }
         }
     }
