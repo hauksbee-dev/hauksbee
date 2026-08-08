@@ -150,17 +150,59 @@ impl DeviceMeta {
         if let Some(p) = self.ratings.max_power_w {
             return Some(p);
         }
-        if matches!(self.kind, ComponentKind::Passive) {
+        // Only a RESISTOR has a footprint-derived power rating. `Passive` also
+        // covers capacitors, inductors and ferrite beads, whose limits are
+        // current and voltage, not a chip-resistor wattage: handing an
+        // `Inductor_SMD:L_0805_2012Metric` an 0805 resistor's 1/8 W invents an
+        // overpower fault out of ordinary I^2R heating in a coil.
+        if matches!(self.kind, ComponentKind::Passive) && self.is_resistor_like() {
             return resistor_power_from_footprint(&self.footprint).watts;
         }
         None
+    }
+
+    /// Whether this passive is a resistor, from the footprint library/body name
+    /// with the reference designator as the fallback.
+    ///
+    /// Deliberately narrow: a part that does not look like a resistor gets no
+    /// derived wattage at all, because a wrong power rating fires on correct
+    /// designs and a missing one only declines to check.
+    fn is_resistor_like(&self) -> bool {
+        let f = self.footprint.to_ascii_uppercase();
+        let body = f.rsplit(':').next().unwrap_or(&f);
+        if f.contains("RESISTOR") || body.starts_with("R_") || body.starts_with("R-") {
+            return true;
+        }
+        // Anything that names another passive family is definitely not one.
+        if f.contains("CAPACITOR")
+            || f.contains("INDUCTOR")
+            || f.contains("FERRITE")
+            || f.contains("CHOKE")
+            || body.starts_with("C_")
+            || body.starts_with("L_")
+            || body.starts_with("FB_")
+        {
+            return false;
+        }
+        // Fall back to the reference designator's letter prefix: "R7" is a
+        // resistor, "RN1" a resistor network, "L1"/"C3" are not.
+        let prefix: String = self
+            .reference
+            .chars()
+            .take_while(|c| c.is_ascii_alphabetic())
+            .collect::<String>()
+            .to_ascii_uppercase();
+        matches!(prefix.as_str(), "R" | "RN" | "RA")
     }
 
     /// The coverage gap this device leaves in the overpower check, when its
     /// package could not be read at all. An abstention nobody can see is
     /// indistinguishable from a pass, so the caller surfaces this.
     pub fn power_coverage_gap(&self) -> Option<String> {
-        if !matches!(self.kind, ComponentKind::Passive) || self.ratings.max_power_w.is_some() {
+        if !matches!(self.kind, ComponentKind::Passive)
+            || self.ratings.max_power_w.is_some()
+            || !self.is_resistor_like()
+        {
             return None;
         }
         let derived = resistor_power_from_footprint(&self.footprint);
@@ -277,6 +319,15 @@ pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
         chip(3.0 / 4.0)
     } else if f.contains("2512") {
         chip(1.0)
+    } else if f.contains("1812") {
+        chip(1.0)
+    } else if f.contains("2220") {
+        chip(1.0)
+    } else if let Some(w) = metric_chip_rating(&f) {
+        // A metric-only name ("R_3216Metric" is an imperial 1206). Without this,
+        // a 1/4 W part fell to the 1/16 W unknown-SMD floor, a 4x under-rating
+        // that invents overpower faults on correct designs.
+        chip(w)
     } else if is_tht_axial_footprint(&f) {
         // A real axial body: 1/4 W is the genuine industry default here.
         ResistorPower {
@@ -297,15 +348,44 @@ pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
     }
 }
 
+/// The chip rating for a footprint that carries only the METRIC size code.
+///
+/// Reached only after the imperial pass has failed, which is what keeps the
+/// well-known collisions safe: an imperial 0201 is metric 0603 and an imperial
+/// 01005 is metric 0402, so a metric code must never be consulted while an
+/// imperial token is still available.
+fn metric_chip_rating(f: &str) -> Option<f64> {
+    // (metric code, imperial equivalent, rating W)
+    const TABLE: &[(&str, f64)] = &[
+        ("0402METRIC", 1.0 / 32.0), // imperial 01005
+        ("0603METRIC", 1.0 / 20.0), // imperial 0201
+        ("1005METRIC", 1.0 / 16.0), // imperial 0402
+        ("1608METRIC", 1.0 / 10.0), // imperial 0603
+        ("2012METRIC", 1.0 / 8.0),  // imperial 0805
+        ("3216METRIC", 1.0 / 4.0),  // imperial 1206
+        ("3225METRIC", 1.0 / 2.0),  // imperial 1210
+        ("5025METRIC", 3.0 / 4.0),  // imperial 2010
+        ("6332METRIC", 1.0),        // imperial 2512
+        ("4532METRIC", 1.0),        // imperial 1812
+        ("5750METRIC", 1.0),        // imperial 2220
+    ];
+    let squashed: String = f
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '_')
+        .collect();
+    TABLE
+        .iter()
+        .find(|(code, _)| squashed.contains(code))
+        .map(|(_, w)| *w)
+}
+
 /// Whether an (already uppercased) footprint names a through-hole axial body.
 /// KiCad writes these as `Resistor_THT:R_Axial_DIN0207_...`; the DIN/RM tokens
 /// cover libraries that omit the word "axial".
 fn is_tht_axial_footprint(f: &str) -> bool {
-    f.contains("THT")
-        || f.contains("AXIAL")
-        || f.contains("DIN0")
-        || f.contains("BARE_METAL")
-        || f.contains("RADIAL")
+    // Note: RADIAL is deliberately absent. `CP_Radial_*` is an electrolytic
+    // capacitor body, and this function must not hand it a resistor wattage.
+    f.contains("AXIAL") || f.contains("DIN0") || f.contains("BARE_METAL") || f.contains("THT")
 }
 
 /// Whether an (already uppercased) footprint names a surface-mount body.
@@ -1398,6 +1478,89 @@ mod monitor_temp_tests {
             (r.watts.unwrap() - 1.0 / 16.0).abs() < 1e-12,
             "unknown SMD must floor at 1/16 W, got {:?}",
             r.watts
+        );
+    }
+
+    fn passive(reference: &str, footprint: &str) -> DeviceMeta {
+        DeviceMeta {
+            reference: reference.into(),
+            device: DeviceId(0),
+            kind: ComponentKind::Passive,
+            footprint: footprint.into(),
+            ratings: Ratings::default(),
+        }
+    }
+
+    #[test]
+    fn non_resistor_passives_get_no_footprint_wattage() {
+        // ComponentKind::Passive also covers capacitors, inductors and beads.
+        // Their limits are current and voltage, not a chip-resistor wattage, and
+        // handing an 0805 inductor an 0805 resistor's 1/8 W invents an overpower
+        // fault out of ordinary coil heating. Lowering the unknown-SMD floor to
+        // 1/16 W makes that misfire easier, so the gating matters more, not less.
+        for (r, f) in [
+            ("L1", "Inductor_SMD:L_0805_2012Metric"),
+            ("C3", "Capacitor_SMD:C_0402_1005Metric"),
+            ("FB1", "Inductor_SMD:L_0603_1608Metric"),
+            ("C7", "Capacitor_THT:CP_Radial_D6.3mm_P2.50mm"),
+            ("L2", "Inductor_SMD:L_Bourns-SRN4018"),
+        ] {
+            let meta = passive(r, f);
+            assert!(
+                meta.power_rating_w().is_none(),
+                "{r} ({f}) must get no derived power rating, got {:?}",
+                meta.power_rating_w()
+            );
+            assert!(
+                meta.power_coverage_gap().is_none(),
+                "{r} is not a resistor, so it is not an overpower coverage hole"
+            );
+        }
+    }
+
+    #[test]
+    fn resistors_still_get_their_rating_through_the_gate() {
+        // The gate must not starve real resistors, whatever names them.
+        for (r, f, want) in [
+            ("R1", "Resistor_SMD:R_0402_1005Metric", 1.0 / 16.0),
+            ("R2", "R_0603_1608Metric", 1.0 / 10.0),
+            (
+                "R3",
+                "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal",
+                0.25,
+            ),
+            ("RN1", "Resistor_SMD:R_Array_Concave_4x0603", 1.0 / 10.0),
+        ] {
+            let meta = passive(r, f);
+            let got = meta.power_rating_w();
+            assert!(
+                got.is_some_and(|w| (w - want).abs() < 1e-12),
+                "{r} ({f}) must rate {want} W, got {got:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_metric_only_chip_name_is_not_floored_to_one_sixteenth() {
+        // "R_3216Metric" is an imperial 1206, a 1/4 W part. Falling to the
+        // unknown-SMD floor under-rates it 4x and invents overpower faults.
+        let r = resistor_power_from_footprint("Resistor_SMD:R_3216Metric");
+        assert_eq!(r.basis, ResistorPowerBasis::ChipPackage);
+        assert!(
+            (r.watts.unwrap() - 0.25).abs() < 1e-12,
+            "metric 3216 is a 1206 at 1/4 W, got {:?}",
+            r.watts
+        );
+        // And the imperial pass still wins where both codes are present, so the
+        // 0201-is-metric-0603 collision stays correct.
+        assert!(
+            (resistor_power_from_footprint("Resistor_SMD:R_0201_0603Metric")
+                .watts
+                .unwrap()
+                - 1.0 / 20.0)
+                .abs()
+                < 1e-12,
+            "imperial must still be consulted first"
         );
     }
 

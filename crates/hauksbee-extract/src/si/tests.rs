@@ -43,6 +43,37 @@ fn i2c_rise_time_hand_values() {
 }
 
 #[test]
+fn trace_capacitance_per_mm_matches_transmission_line_physics() {
+    // The constant is the whole trace term, so it is pinned against the closed
+    // form rather than only against tests that use it: C' = sqrt(Er_eff)/(c0*Z0).
+    // A units slip here (pF/inch or pF/cm written as pF/mm) inflates every bus by
+    // an order of magnitude while leaving every other test self-consistent.
+    const C0_MM_PER_S: f64 = 2.998e11; // mm/s
+    let c_per_mm = |er_eff: f64, z0: f64| 1e12 * er_eff.sqrt() / (C0_MM_PER_S * z0);
+
+    // FR4 Er_eff ~ 3: a 50 ohm line is ~0.116 pF/mm, a 100 ohm line ~0.057.
+    let fifty = c_per_mm(3.0, 50.0);
+    assert!(
+        (fifty - 0.116).abs() < 0.005,
+        "50 ohm microstrip is ~0.116 pF/mm, got {fifty}"
+    );
+    // The widest, closest-coupled realistic case bounds the constant from above.
+    let worst = c_per_mm(3.2, 40.0);
+    assert!(
+        (worst - 0.149).abs() < 0.005,
+        "40 ohm worst case is ~0.149 pF/mm, got {worst}"
+    );
+    // The constant must sit at the conservative (high-C) end of that real range,
+    // never above it and never at a different order of magnitude.
+    assert!(
+        super::C_TRACE_PF_PER_MM >= fifty && super::C_TRACE_PF_PER_MM <= worst + 0.005,
+        "C_TRACE_PF_PER_MM {} must lie between the 50 ohm and worst-case figures \
+         [{fifty}, {worst}]",
+        super::C_TRACE_PF_PER_MM
+    );
+}
+
+#[test]
 fn parse_helpers() {
     assert_eq!(super::parse_farads("15p"), Some(15e-12));
     assert_eq!(super::parse_farads("18pF"), Some(18e-12));
@@ -515,10 +546,11 @@ fn i2c_routed_text(devices: usize, track_mm: f64) -> String {
 #[test]
 fn i2c_long_routing_pushes_a_marginal_bus_over() {
     // 10k pull, 10 devices = 100 pF: t_r ~ 0.8473*10000*100e-3 = 847 ns, inside
-    // the 1000 ns standard-mode limit on pin capacitance ALONE. 100 mm of routed
-    // copper adds 100 pF (1 pF/mm), doubling C to 200 pF and t_r to ~1695 ns.
-    // Passing None for the trace length silently rates this in-spec.
-    let text = i2c_routed_text(10, 100.0);
+    // the 1000 ns standard-mode limit on pin capacitance ALONE. A 500 mm bus run
+    // (an I2C link across a backplane, exactly where rise time bites) adds
+    // 500*0.15 = 75 pF, taking C to 175 pF and t_r to ~1483 ns. Passing None for
+    // the trace length silently rates this in-spec.
+    let text = i2c_routed_text(10, 500.0);
     let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
     let doc = forge_sexpr::parse(&text).unwrap();
     let mut r = SiReport::default();
@@ -530,16 +562,16 @@ fn i2c_long_routing_pushes_a_marginal_bus_over() {
     );
     assert!(
         r.of_check(SiCheck::I2cRiseTime)
-            .any(|f| f.message.contains("100 mm routing")),
+            .any(|f| f.message.contains("500 mm routing")),
         "the finding must name the routed length it counted"
     );
 }
 
 #[test]
 fn i2c_short_routing_leaves_the_same_bus_silent() {
-    // The identical bus routed compactly (5 mm) is 105 pF / ~890 ns: in spec.
+    // The identical bus routed compactly (10 mm) is 101.5 pF / ~860 ns: in spec.
     // Counting trace copper must not turn every marginal bus into a finding.
-    let text = i2c_routed_text(10, 5.0);
+    let text = i2c_routed_text(10, 10.0);
     let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
     let doc = forge_sexpr::parse(&text).unwrap();
     let mut r = SiReport::default();
