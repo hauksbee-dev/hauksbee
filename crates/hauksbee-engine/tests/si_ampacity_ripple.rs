@@ -378,8 +378,12 @@ fn converter_topology_recovered_from_discrete_buck() {
 "#,
     );
     let lib = ModelLibrary::builtin();
-    let stages = converter::detect_converters(&board, &lib);
+    let (stages, abstentions) = converter::detect_converters_with_abstentions(&board, &lib);
     assert_eq!(stages.len(), 1, "one buck stage recovered: {stages:?}");
+    assert!(
+        abstentions.is_empty(),
+        "a named-rail buck classifies cleanly: {abstentions:?}"
+    );
     let s = &stages[0];
     assert_eq!(s.switch_node.1, "SW_NODE");
     assert_eq!(s.input_rail.1, "VIN");
