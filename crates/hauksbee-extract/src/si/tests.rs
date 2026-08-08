@@ -1233,12 +1233,19 @@ fn a_pair_crossing_a_plane_void_names_the_span_instead_of_a_zdiff() {
         "no confident Zdiff may be printed without a reference plane: {}",
         f.message
     );
-    // The span is named in board coordinates, and it brackets the real void:
-    // the pour is split over x = 6..14, and the half-millimetre sampling pitch
-    // locates the reference-less run to within one pitch of each edge.
+    // The void is named in board coordinates and brackets the real gap: the pour
+    // is split over x = 6..14, and the half-millimetre sampling pitch locates the
+    // reference-less run to within one pitch of each edge. It is reported for a
+    // single leg (both lose their reference here), because a void's extent along
+    // the leg it undermines is what that leg's impedance responds to.
     assert!(
-        f.message.contains("(6.00, 0.00)") && f.message.contains("(13.50, 0.50)"),
-        "the span must bracket the 6..14 mm void in board coordinates: {}",
+        f.message.contains("(6.00, 0.00)") && f.message.contains("(13.50, 0.00)"),
+        "the void must bracket the 6..14 mm gap in board coordinates: {}",
+        f.message
+    );
+    assert!(
+        f.message.contains("~8.00 mm across"),
+        "and its width must be stated: {}",
         f.message
     );
     assert!(
@@ -1489,4 +1496,78 @@ fn a_hatched_reference_pour_is_not_read_as_one_long_void() {
         f.message
     );
     assert_eq!(r.finding_count(), 0, "a hatched pour must never fire");
+}
+
+#[test]
+fn a_bite_under_each_leg_is_not_one_merged_void() {
+    // A review caught this: the legs of a USB pair sit about half a millimetre
+    // apart, well inside the void-linking distance, so pooling both legs' samples
+    // let a sub-threshold bite under D+ and another under D- merge into a single
+    // "void" whose extent was largely the diagonal between the two legs. Voids are
+    // now measured one leg at a time.
+    //
+    // The pour is two bands split at y = 0.25, one carrying each leg. The lower
+    // band has a 1.2 mm bite under D+ (y = 0) at x = 7.0..8.2; the upper band has
+    // one under D- (y = 0.5) at x = 9.0..10.2. Neither reaches the 2 mm floor on
+    // the leg it undermines, and they are on different legs.
+    let bitten_bands = r#"(filled_polygon (pts
+            (xy -5 -5) (xy 25 -5) (xy 25 0.25)
+            (xy 8.2 0.25) (xy 8.2 -0.2) (xy 7.0 -0.2) (xy 7.0 0.25)
+            (xy -5 0.25)))
+        (filled_polygon (pts
+            (xy -5 0.25) (xy 9.0 0.25) (xy 9.0 0.7) (xy 10.2 0.7) (xy 10.2 0.25)
+            (xy 25 0.25) (xy 25 5) (xy -5 5)))"#;
+    let text = impedance_usb_over_plane(bitten_bands);
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("an impedance note");
+    assert!(
+        !f.message.contains("reference missing"),
+        "two sub-threshold bites on different legs must not merge into one void: {}",
+        f.message
+    );
+    assert_eq!(r.finding_count(), 0);
+}
+
+#[test]
+fn a_solid_pour_is_still_verified_alongside_a_hatched_one() {
+    // The hatch fix must not disqualify the whole layer: a board often carries a
+    // solid GND pour AND a hatched copper-balance zone on the same layer, and the
+    // solid one can still be verified against. Disqualifying the layer would have
+    // turned a real void into a silent Zdiff.
+    // The solid pour is split over x = 6..14, a real void.
+    let split = format!("{} {}", rect_fill(-5.0, 6.0), rect_fill(14.0, 25.0));
+    let text = format!(
+        r#"(kicad_pcb (version 20240101)
+        (layers (0 "F.Cu" signal) (31 "B.Cu" signal))
+        (setup (stackup
+          (layer "F.Cu" (type "copper") (thickness 0.035))
+          (layer "dielectric 1" (type "core") (thickness 0.2) (material "FR4") (epsilon_r 4.3))
+          (layer "B.Cu" (type "copper") (thickness 0.035))
+          (dielectric_constraints yes)))
+        (net 0 "") (net 1 "USB_DP") (net 2 "USB_DM") (net 3 "GND")
+        (segment (start 0 0) (end 20 0) (width 0.3) (layer "F.Cu") (net 1))
+        (segment (start 0 0.5) (end 20 0.5) (width 0.3) (layer "F.Cu") (net 2))
+        (zone (net 3) (net_name "GND") (layer "B.Cu") {split})
+        (zone (net 3) (net_name "GND") (layer "B.Cu") (fill yes (mode hatch))
+          (filled_polygon (pts (xy 40 40) (xy 45 40) (xy 45 45) (xy 40 45)))))"#
+    );
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("an impedance note");
+    assert!(
+        f.message.contains("reference missing"),
+        "the solid pour must still be checked despite a hatched zone sharing the layer: {}",
+        f.message
+    );
 }
