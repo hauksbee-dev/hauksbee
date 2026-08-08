@@ -583,11 +583,13 @@ is the all-pairs touch sweep on the densest signal layers.
 
   This reaches users rather than living only here.
   `ReconStats::coverage_notes()` reports the pad accounting whenever any flash
-  went unmatched ("N of M pad flashes (P%) were matched to a placed component;
-  K were not"), states that an unmatched flash still joins the copper net it
-  touches but carries no pin, so every component-level figure including any
-  closed-loop percentage scores only the matched pads, and names the
-  pick-and-place upload that would place the rest.
+  went unmatched ("N of M aperture flashes (P%) were matched to a placed
+  component; K were not"), notes that not every flash is a component pad (via
+  lands, fiducials and test points are flashed too) so the unmatched count is an
+  upper bound on missing pads, states that an unmatched flash still joins the
+  copper net it touches but carries no pin, so every component-level figure
+  including any closed-loop percentage scores only the matched ones, and names
+  the pick-and-place upload that would place the ones that are pads.
   The gerber readers return it through `ExtractedBoard::from_gerber_with_stats`,
   and `NormalizedBoard::notes` carries it into the evidence map alongside the
   ODB++ and IPC-2581 reader notes, so every surface prints it. A job with every
