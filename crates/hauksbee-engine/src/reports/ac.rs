@@ -411,7 +411,7 @@ pub fn emit(
     let ac_open = coverage_open_active_refs(&summary);
     if !ac_open.is_empty() {
         eprintln!(
-            "\nCAVEAT: this AC result is NOT trustworthy: {} active IC(s) on the live circuit \
+            "\nINCONCLUSIVE: this AC result is NOT trustworthy: {} active IC(s) on the live circuit \
              are unresolved/open ({}), so the response/loop shown is a passive shell, not the real \
              circuit. Bind them with --models-dir, then re-run.",
             ac_open.len(),

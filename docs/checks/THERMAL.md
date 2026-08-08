@@ -157,7 +157,15 @@ estimator by design.
 
 - **`hauksbee run <board> --thermal [--ambient C]`**: runs a short headless
   co-sim and prints a per-device junction-temperature table, marking any part
-  over its limit. Informational (exits 0).
+  over its limit. Exits 0 on a fully-covered table. A table with no usable
+  coverage (every dissipating device unresolved/open) is invalid, exit 3. A
+  PARTIAL-coverage table (real rows while an active power IC on the live
+  circuit is open/unresolved) also exits 3 **by default**, because it
+  understates the true load; `--no-strict-thermal` opts out of that
+  escalation (and of the undermined-evidence escalation that shares the same
+  strictness) while the INCONCLUSIVE coverage caveat still prints
+  (`--strict-thermal` is accepted as a quiet no-op, it named what is now the
+  default). See [Exit codes](../ci/CI.md#exit-codes-the-pipeline-contract).
 - **`hauksbee check-code <code> [--ambient C]`**: the over-temperature fault
   shows up in the fault report alongside the others. A destroyed part fails
   the check.

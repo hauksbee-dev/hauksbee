@@ -765,13 +765,27 @@ struct RunArgs {
     #[arg(long, visible_alias = "fail-on-findings")]
     strict: bool,
 
-    /// Opt-in: escalate a PARTIAL-coverage thermal result to exit 3 (invalid for
-    /// analysis). By default a thermal table that is real but incomplete (rows
-    /// exist while an active power IC on the live circuit is open/unresolved)
-    /// emits a non-gating coverage caveat and still exits 0, so existing CI exit
-    /// codes are unchanged. Pass this only when partial coverage must FAIL.
-    #[arg(long, help_heading = "Advanced / analyses")]
+    /// Accepted for compatibility; this is now the DEFAULT. A PARTIAL-coverage
+    /// thermal result (rows exist while an active power IC on the live circuit
+    /// is open/unresolved) escalates to exit 3 (invalid for analysis) whether
+    /// or not this flag is passed, so existing CI invocations that passed it
+    /// keep their behaviour. Use --no-strict-thermal to opt out.
+    #[arg(
+        long,
+        help_heading = "Advanced / analyses",
+        conflicts_with = "no_strict_thermal"
+    )]
     strict_thermal: bool,
+
+    /// Opt out of the default strict thermal gate, restoring the old
+    /// non-strict behaviour: a PARTIAL-coverage thermal result exits 0 instead
+    /// of 3, and undermined thermal evidence no longer escalates either (the
+    /// two exits --strict-thermal used to opt in to). The INCONCLUSIVE
+    /// coverage caveat (text stderr + JSON note) still prints; only the exit
+    /// code changes. An empty thermal table over open power ICs stays invalid
+    /// (exit 3) regardless.
+    #[arg(long, help_heading = "Advanced / analyses")]
+    no_strict_thermal: bool,
 
     /// Opt-in: escalate the co-sim boot-safety advisories to exit 2. By default,
     /// heads-up notes about MCU control nets driven HIGH at boot, or left
@@ -1461,6 +1475,7 @@ fn run_config(a: RunArgs) -> hauksbee_engine::commands::run::RunConfig {
         json: a.json,
         strict: a.strict,
         strict_thermal: a.strict_thermal,
+        no_strict_thermal: a.no_strict_thermal,
         strict_boot: a.strict_boot,
         list_nets: a.list_nets,
         check: a.check,

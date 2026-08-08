@@ -129,6 +129,11 @@ pub fn emit(
     let unrouted = !altium_present && super::unrouted_kicad_layout(text);
     // Computed before the match: the JSON arm consumes `drc_structured`.
     let (serious, worth_a_look) = verdict_counts(&drc_structured, &lint, &si, &usbc);
+    // The verdict blockers: unmodelled current-carrying / active parts. The
+    // lint/SI sections and the closing verdict must read INCONCLUSIVE over
+    // them, never a clean bill; the copper (DRC) section reads the layout and
+    // is deliberately exempt. Exit codes are unchanged.
+    let blockers = crate::result::unmodelled_critical_refs(&summary);
     match mode {
         OutputMode::Json => {
             let mut jr = JsonReport::new(&bound.name, summary)
@@ -139,6 +144,12 @@ pub fn emit(
                 jr.notes.push(crate::result::JsonNote {
                     kind: crate::result::JsonNoteKind::Coverage,
                     message: super::UNROUTED_COPPER_NOTE.to_string(),
+                });
+            }
+            if !blockers.is_empty() {
+                jr.notes.push(crate::result::JsonNote {
+                    kind: crate::result::JsonNoteKind::Coverage,
+                    message: crate::result::inconclusive_verdict(&blockers),
                 });
             }
             jr.findings = Some(actual_findings.clone());
@@ -173,9 +184,13 @@ pub fn emit(
             }
             print!("{}", crate::render_drc_condensed(&drc_structured, verbose));
             println!("\n== Connectivity / lint (incl. MCU resource conflicts, boot strap pins) ==");
-            print!("{}", crate::plain_netlint(&lint).render());
+            let mut lint_plain = crate::plain_netlint(&lint);
+            lint_plain.unmodelled_critical = blockers.clone();
+            print!("{}", lint_plain.render());
             println!("\n== Signal integrity ==");
-            print!("{}", crate::plain_si(&si).render());
+            let mut si_plain = crate::plain_si(&si);
+            si_plain.unmodelled_critical = blockers.clone();
+            print!("{}", si_plain.render());
             if let Some(u) = &usbc {
                 println!("\n== USB-C CC compliance ==");
                 print!("{}", u.render_plain());
@@ -194,8 +209,16 @@ pub fn emit(
             }
             print!("{}", drc_structured.render());
             println!("\n== Connectivity / lint (incl. MCU resource conflicts, boot strap pins) ==");
+            // Verdict first in each model-dependent section: the extract body's
+            // "no findings." must sit under the refusal, not above it.
+            if !blockers.is_empty() {
+                println!("{}", crate::result::inconclusive_verdict(&blockers));
+            }
             print!("{}", hauksbee_extract::render_netlint(&lint));
             println!("\n== Signal integrity ==");
+            if !blockers.is_empty() {
+                println!("{}", crate::result::inconclusive_verdict(&blockers));
+            }
             print!("{}", hauksbee_extract::render_si(&si));
             if let Some(u) = &usbc {
                 println!("\n== USB-C CC compliance ==");
@@ -210,7 +233,7 @@ pub fn emit(
         // the last thing `--check` prints answers "is my board ok" without
         // scrolling back through four sections. --json is unchanged (its
         // consumers read the structured findings).
-        println!("\n{}", verdict_line(serious, worth_a_look));
+        println!("\n{}", verdict_line(serious, worth_a_look, &blockers));
     }
     let usbc_serious = usbc.as_ref().is_some_and(|u| u.is_serious());
     // Unvalidated board format (KiCad 10+) → its shorts may be phantom; do not
@@ -265,9 +288,31 @@ fn verdict_counts(
 }
 
 /// The single closing verdict line for `--check` (U4).
-fn verdict_line(serious: usize, worth_a_look: usize) -> String {
+///
+/// "clean" is only claimable when nothing serious was found AND no
+/// current-carrying / active part is unmodelled: over unmodelled critical
+/// parts a zero-serious suite is INCONCLUSIVE, and the closing line says so
+/// with the same shared sentence the sections use. A failing verdict stays
+/// "failing" (real findings are not vacuous), but the closing line still
+/// names the coverage hole: fixing the listed findings must not flip the
+/// board straight to a vacuous clean.
+fn verdict_line(serious: usize, worth_a_look: usize, blockers: &[String]) -> String {
+    // The shared sentence, minus its leading tag where the line carries its
+    // own, so the vocabulary stays single-sourced without stuttering
+    // "inconclusive ... INCONCLUSIVE".
+    let sentence = (!blockers.is_empty()).then(|| {
+        let s = crate::result::inconclusive_verdict(blockers);
+        s.strip_prefix("INCONCLUSIVE: ").unwrap_or(&s).to_string()
+    });
     if serious == 0 {
+        if let Some(sentence) = sentence {
+            return format!(
+                "VERDICT: inconclusive: 0 serious, {worth_a_look} worth a look; {sentence}"
+            );
+        }
         format!("VERDICT: clean: 0 serious, {worth_a_look} worth a look")
+    } else if let Some(sentence) = sentence {
+        format!("VERDICT: failing: {serious} serious, {worth_a_look} worth a look; also {sentence}")
     } else {
         format!("VERDICT: failing: {serious} serious, {worth_a_look} worth a look")
     }
@@ -609,11 +654,22 @@ pub fn emit_combined_json(
         }
     }
     let evidence = evidence.with_maps(maps);
-    let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
+    let combined_summary = BindSummary::from_report(&bound.report);
+    // Same INCONCLUSIVE coverage note as `--check --json`: the default machine
+    // command is a lint/SI surface too, and its clean verdict over unmodelled
+    // critical parts must carry the same qualification.
+    let blockers = crate::result::unmodelled_critical_refs(&combined_summary);
+    let mut jr = JsonReport::new(&bound.name, combined_summary)
         .with_inputs(inputs)
         .with_evidence(&evidence);
     jr.drc = Some(drc_structured);
     jr.findings = Some(findings);
+    if !blockers.is_empty() {
+        jr.notes.push(crate::result::JsonNote {
+            kind: crate::result::JsonNoteKind::Coverage,
+            message: crate::result::inconclusive_verdict(&blockers),
+        });
+    }
     println!("{}", jr.to_json());
     // Honour `--strict` on the default machine command: a bare
     // `run <board> --json --strict` must gate a shorted/failing board like the

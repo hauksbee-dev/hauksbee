@@ -65,6 +65,11 @@ pub fn emit(
     } else {
         evidence
     };
+    // The verdict blockers: a clean SI result over an unbound power FET / main
+    // IC is a vacuous pass, so every surface says INCONCLUSIVE (count, named
+    // parts, unlocking input) instead of a clean bill. Exit codes unchanged.
+    let blockers =
+        crate::result::unmodelled_critical_refs(&BindSummary::from_report(&bound.report));
     match mode {
         OutputMode::Json => {
             let mut jr = JsonReport::new(&bound.name, BindSummary::from_report(&bound.report))
@@ -72,13 +77,28 @@ pub fn emit(
                 .with_evidence(&evidence);
             jr.findings = Some(si_findings_json(&report));
             jr.attach_finding_evidence(&evidence)?;
+            if !blockers.is_empty() {
+                jr.notes.push(crate::result::JsonNote {
+                    kind: crate::result::JsonNoteKind::Coverage,
+                    message: crate::result::inconclusive_verdict(&blockers),
+                });
+            }
             // A green verdict that quietly dropped findings would be worse than
             // no waivers at all, so the machine surface carries them too.
             jr.waived = waived.iter().cloned().map(Into::into).collect();
             println!("{}", jr.to_json());
         }
-        OutputMode::Plain => print!("{}", crate::plain_si(&report).render()),
+        OutputMode::Plain => {
+            let mut plain = crate::plain_si(&report);
+            plain.unmodelled_critical = blockers.clone();
+            print!("{}", plain.render());
+        }
         OutputMode::Text => {
+            // Verdict first: "si-checks: no gating findings." over an unbound
+            // FET reads as a clean bill unless the INCONCLUSIVE line leads.
+            if !blockers.is_empty() {
+                println!("{}", crate::result::inconclusive_verdict(&blockers));
+            }
             print!("{}", hauksbee_extract::render_si(&report));
             if !report.is_clean() {
                 eprintln!(

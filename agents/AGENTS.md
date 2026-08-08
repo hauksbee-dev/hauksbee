@@ -28,7 +28,7 @@ finds the built image inside automatically, or builds it with your `pio`.
 | 0 | Green: all checks/assertions held. |
 | 1 | Red: an assertion failed and no active waiver covers it (the JSON says which and on which seed). |
 | 2 | Input error: bad spec, missing board, unreadable file, a usage error, or a requested `--junit`/`--sarif` path that could not be written. |
-| 3 | Invalid for analysis: the analog solve aborted, or an assertion's window overlapped a failed solve span, so results are not trustworthy. Never treat as green OR as an ordinary failure. |
+| 3 | Invalid for analysis: the analog solve aborted, an assertion's window overlapped a failed solve span, or a `--thermal` run had partial coverage (an active power IC open/unresolved; `--no-strict-thermal` opts out), so results are not trustworthy. Never treat as green OR as an ordinary failure. |
 
 Trust the JSON `passed` field only together with `run_valid`. `hauksbee-ci
 run --json` reports `passed` (the process verdict, false on exit 3),
@@ -172,6 +172,10 @@ Response:
 
 - Reports exit 0 by default even with findings. Gate on `--strict` or a spec.
 - Exit 3 means the run refused to vouch for itself. Do not average it away.
+- A `verdict: "pass"` can be INCONCLUSIVE: when current-carrying / active
+  parts have no model, `--lint`/`--si`/`--check` add a `notes` entry (kind
+  `coverage`) starting `INCONCLUSIVE:` naming them. That pass is not a clean
+  bill; the exit code does not change on its own.
 - Treat a finding on a known-good board as a hauksbee bug, not noise. False
   positives are the failure mode this project optimizes against.
 - The plain-language rendering (`--plain`) and the JSON carry the same
