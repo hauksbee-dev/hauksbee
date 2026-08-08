@@ -2134,21 +2134,23 @@ fn stamp_bjt<S: StampSink>(
         // stalled Newton, which is the failure mode that looks like a modelling
         // bug and is not. Both terms vanish when the knees are infinite.
         let dqbfac = -4.0 / (sq * (1.0 + sq) * (1.0 + sq));
-        let (dq2_dvbe, dq2_dvbc) = if q2 > 0.0 {
-            (
-                if model.ikf.is_finite() && model.ikf > 0.0 {
-                    gif / model.ikf
-                } else {
-                    0.0
-                },
-                if model.ikr.is_finite() && model.ikr > 0.0 {
-                    gir / model.ikr
-                } else {
-                    0.0
-                },
-            )
+        // Each derivative is gated on ITS OWN term being unclamped, not on
+        // the total q2: q2 sums (cf/IKF).max(0) and (cr/IKR).max(0), and in
+        // forward-active operation cr < 0 clamps the reverse term out while
+        // the forward one stays live. Gating on q2 > 0 alone would keep
+        // gir/IKR in the tangent for a term whose clamped derivative is
+        // exactly zero: a wrong (if usually small) Jacobian entry, the same
+        // class of inexactness this stamp exists to avoid. cf > 0 stands in
+        // for cf/IKF > 0 since the gate already requires IKF > 0.
+        let dq2_dvbe = if model.ikf.is_finite() && model.ikf > 0.0 && cf > 0.0 {
+            gif / model.ikf
         } else {
-            (0.0, 0.0)
+            0.0
+        };
+        let dq2_dvbc = if model.ikr.is_finite() && model.ikr > 0.0 && cr > 0.0 {
+            gir / model.ikr
+        } else {
+            0.0
         };
         let knee_be = (cf - cr) * q1_inv_early * dqbfac * dq2_dvbe;
         let knee_bc = (cf - cr) * q1_inv_early * dqbfac * dq2_dvbc;
