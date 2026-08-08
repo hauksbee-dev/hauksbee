@@ -453,25 +453,6 @@ impl InputResponder for ParallelMemoryResponder {
         }
 
         let read_active = self.gates_active(&self.read_gates, volts);
-        // TEMP-DEBUG contention: trace every read-gate decision with its inputs.
-        if std::env::var_os("HAUKSBEE_CONTENTION_DEBUG").is_some() {
-            let was = self
-                .runtime
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .read_enabled;
-            if was != read_active {
-                let gates: Vec<String> = self
-                    .read_gates
-                    .iter()
-                    .map(|&(s, a)| format!("{s:?}={} (active={a:?})", self.source_level(s, volts)))
-                    .collect();
-                eprintln!(
-                    "READGATE-DEBUG {}: {} -> {} on edge pin {pin:?}={high} cycle {:?} gates {:?}",
-                    self.id, was, read_active, self.edge_cycle, gates
-                );
-            }
-        }
         if !read_active {
             self.runtime
                 .lock()
