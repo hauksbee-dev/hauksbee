@@ -115,11 +115,13 @@ pub struct ClearanceRules {
     classes: HashMap<String, NetClassRule>,
     net_classes: HashMap<String, String>,
     /// Explicit clearance for a concrete (class, class) pair, keyed with the
-    /// lexically smaller name first. Eagle's net-class model is a pair matrix
-    /// (class N declares `<clearance class="M" value="V"/>` entries), not
-    /// KiCad's max-of-two-classes rule; when a pair entry exists it wins over
-    /// the max rule so an unrelated wide class cannot inflate a cross-class
-    /// requirement Eagle itself resolves to the design-rule value.
+    /// lexically smaller name first. Eagle's net-class model carries a pair
+    /// matrix (class N declares `<clearance class="M" value="V"/>` entries):
+    /// an explicit entry wins over the max-of-two-classes fallback in
+    /// [`Self::effective_clearance`] (it may relax a pair below the classes'
+    /// own rules); pairs WITHOUT an entry fall through to that max rule,
+    /// matching Eagle's larger-value-wins behaviour for nets of different
+    /// classes.
     class_pair_clearances: HashMap<(String, String), f64>,
 }
 
@@ -1685,8 +1687,13 @@ fn trapezoid_polygon(
         .unwrap_or((0.0, 0.0));
     let hw = sx / 2.0;
     let hh = sy / 2.0;
-    let ddx = dx / 2.0;
-    let ddy = dy / 2.0;
+    // Clamp the delta the way KiCad does (|dx| <= sy, |dy| <= sx): past that
+    // the parallel edge lengths (size ± delta) go negative and the quad turns
+    // into a self-intersecting bowtie, whose edge distances are garbage. At
+    // the clamp boundary one edge collapses to a point (a triangle), which
+    // the vertex dedup below handles.
+    let ddx = (dx / 2.0).clamp(-hh, hh);
+    let ddy = (dy / 2.0).clamp(-hw, hw);
     let local = [
         (-hw - ddy, hh + ddx),
         (-hw + ddy, -hh - ddx),
@@ -1883,8 +1890,9 @@ const RING_SAGITTA_MM: f64 = 0.0025;
 /// the segment count is chosen so `s <= RING_SAGITTA_MM`, the chain vertices
 /// sit at `radius + s/2` (splitting the sag symmetrically about the true
 /// circle), and the capsule radius is inflated by `s/2`. The capsule surface
-/// then spans at least `[radius - r, radius + r]` radially everywhere (a true
-/// cover), overstating each copper edge by at most `s`, i.e. at most
+/// then spans `[radius - r, radius + r]` radially to second order (the
+/// mid-chord residue is O(s²/radius), nanometres at this tolerance),
+/// overstating each copper edge by at most `s`, i.e. at most
 /// [`RING_SAGITTA_MM`], under the [`CLEARANCE_TOLERANCE_MM`] finding band.
 fn covering_arc_capsules(
     cx: f64,
@@ -2699,12 +2707,12 @@ pub mod eagle_drc {
         verts: Vec<(f64, f64, f64)>,
     }
 
-    /// One Eagle net class: its name and its clearance matrix rows
+    /// One Eagle net class: its clearance matrix rows
     /// (`<clearance class="M" value="V"/>`, self entry included). Values are
-    /// mm; a 0 / absent entry means "use the design rules".
+    /// mm; a 0 / absent entry defers to the class fallback rules (see the
+    /// rules construction in [`run`]).
     #[derive(Default)]
     struct EagleClass {
-        name: String,
         clearances: Vec<(i64, f64)>,
     }
 
@@ -3070,8 +3078,7 @@ pub mod eagle_drc {
                         b"class" => {
                             if let Some(n) = num(&a, "number").map(|v| v as i64) {
                                 cur_class = Some(n);
-                                out.classes.entry(n).or_default().name =
-                                    a.get("name").cloned().unwrap_or_default();
+                                out.classes.entry(n).or_default();
                             }
                         }
                         b"clearance" => {
@@ -3140,7 +3147,17 @@ pub mod eagle_drc {
                                         width: num(&a, "width").unwrap_or(0.0),
                                         layer,
                                         isolate: num(&a, "isolate").unwrap_or(0.0),
-                                        rank: num(&a, "rank").map(|v| v as i64).unwrap_or(0),
+                                        // Board signal polygons carry rank
+                                        // 1..6 and behave as rank 1 when the
+                                        // attribute is absent (Eagle's editor
+                                        // floor), so an attribute-less pour
+                                        // and an explicit rank="1" pour are
+                                        // the SAME rank; clamp keeps
+                                        // hand-written out-of-range values in
+                                        // the board range too.
+                                        rank: num(&a, "rank")
+                                            .map(|v| (v as i64).clamp(1, 6))
+                                            .unwrap_or(1),
                                         thermals: a.get("thermals").map(String::as_str)
                                             != Some("off"),
                                         orphans: a.get("orphans").map(String::as_str) == Some("on"),

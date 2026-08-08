@@ -976,9 +976,9 @@ fn zero_width_circle_stays_a_filled_disc() {
 
 // ---------------------------------------------------------------------------
 // Net classes. <classes> is a clearance matrix: class N's own row entry is its
-// same-class rule, an explicit cross-class entry pins that pair, and a pair
-// with no entry stays on the design rules (NOT the max of the two classes).
-// The larger of a matrix value and the design-rule clearance wins.
+// same-class rule, an explicit cross-class entry pins that pair (and may relax
+// below the classes' own rules), and a pair with NO entry uses the larger of
+// the two classes' clearances. Everything is floored at the design rules.
 // ---------------------------------------------------------------------------
 
 /// Two parallel wires with 0.3 mm of copper-edge air between them (centres
@@ -1308,4 +1308,21 @@ fn annulus_covering_inflation_keeps_an_exact_edge_touch_a_short() {
 </signal>
 "#;
     assert_short(&drc("", "", signals), "A", "B");
+}
+
+#[test]
+fn pour_without_rank_attribute_defaults_to_rank_one() {
+    // Eagle board polygons behave as rank 1 when the attribute is elided, so
+    // an attribute-less pour overlapping an explicit rank="1" pour of another
+    // net is a same-rank overlap and must short. Defaulting the absent
+    // attribute to any other value would silently arbitrate it away.
+    let signals = format!(
+        r#"
+<signal name="A">{}</signal>
+<signal name="B">{}</signal>
+"#,
+        pour("", 0.0, 0.0, 10.0, 10.0),
+        pour(r#" rank="1""#, 5.0, 5.0, 15.0, 15.0),
+    );
+    assert_short(&drc("", "", &signals), "A", "B");
 }
