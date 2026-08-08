@@ -1109,7 +1109,7 @@ mod tests {
             findings: vec![f],
             primitive_count: 2,
             version_warning: None,
-            zone_pad_overlaps_suppressed: 0,
+            zone_pad_overlaps_suppressed: Some(0),
         };
         let plain = plain_drc(&report);
         assert_eq!(plain.findings[0].level, PlainLevel::Warning);
@@ -1130,7 +1130,7 @@ mod tests {
                  findings are UNVALIDATED"
                     .to_string(),
             ),
-            zone_pad_overlaps_suppressed: 0,
+            zone_pad_overlaps_suppressed: Some(0),
         };
         let plain = plain_drc_structured(&crate::result::DrcStructured::from_report(&report));
         let text = plain.render().to_lowercase();
@@ -1175,7 +1175,7 @@ mod tests {
             findings: vec![at_limit(), at_limit(), at_limit()],
             primitive_count: 6,
             version_warning: None,
-            zone_pad_overlaps_suppressed: 0,
+            zone_pad_overlaps_suppressed: Some(0),
         };
         let st = DrcStructured::from_report(&report);
         let plain = plain_drc_structured(&st);
@@ -1214,7 +1214,7 @@ mod tests {
             findings: vec![below],
             primitive_count: 2,
             version_warning: None,
-            zone_pad_overlaps_suppressed: 0,
+            zone_pad_overlaps_suppressed: Some(0),
         };
         let below_plain = plain_drc_structured(&DrcStructured::from_report(&below_report));
         assert_eq!(below_plain.findings.len(), 1);
@@ -1252,7 +1252,7 @@ mod tests {
             findings,
             primitive_count: 100,
             version_warning: None,
-            zone_pad_overlaps_suppressed: 0,
+            zone_pad_overlaps_suppressed: Some(0),
         };
         let st = DrcStructured::from_report(&report);
 
