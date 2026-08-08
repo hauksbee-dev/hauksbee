@@ -321,4 +321,24 @@ fn watchy_usb_impedance_computed_but_info_uncontrolled() {
         "the intent gate must be explained: {}",
         usb.message
     );
+    // Watchy is the board that calibrated the reference-plane check's anti-pad
+    // handling. Its USB pair routes on B.Cu over a solid In2.Cu GND plane, but
+    // the pair's four layer-transition vias punch anti-pads in that plane, and
+    // sampling the pair's segment endpoints lands in them: the first cut of the
+    // check reported "reference missing under trace" over 2.91 mm here, on a
+    // plane that is in fact continuous. All seven of those samples were within
+    // 0.36 mm of a via centre and four were exactly on one. A designed anti-pad
+    // is not a plane void, so this must read as an ordinary impedance note.
+    assert!(
+        !usb.message.contains("reference missing"),
+        "Watchy's In2.Cu plane is solid under the pair; its via anti-pads must \
+         not read as a missing reference: {}",
+        usb.message
+    );
+    assert!(
+        !usb.message.contains("reference plane unverified"),
+        "Watchy has a real In2.Cu pour, so the reference must be positively \
+         verified rather than declared unverifiable: {}",
+        usb.message
+    );
 }

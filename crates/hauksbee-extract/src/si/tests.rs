@@ -1142,6 +1142,12 @@ fn si_rail_voltage_recognises_the_same_tokens_as_netlint() {
 /// A controlled-impedance USB pair over a B.Cu pour, with the pour's fill given
 /// as `fill` polygons. `(-5,-5)..(25,5)` covers the whole 20 mm run.
 fn impedance_usb_over_plane(fills: &str) -> String {
+    impedance_usb_over_plane_with(fills, "")
+}
+
+/// As above, plus `extras` emitted at top level (outside the zone), which is
+/// where vias belong: `via_antipads` reads them from the board root.
+fn impedance_usb_over_plane_with(fills: &str, extras: &str) -> String {
     // Same in-band geometry as `impedance_usb_text(0.3, 0.2, 0.2, 4.3)`: W 0.3,
     // edge-to-edge gap 0.2 (centres 0 and 0.5), 0.2 mm FR4 core, Zdiff ~ 87 ohm
     // against the 90 ohm USB target.
@@ -1155,14 +1161,13 @@ fn impedance_usb_over_plane(fills: &str) -> String {
         (net 0 "") (net 1 "USB_DP") (net 2 "USB_DM") (net 3 "GND")
         (segment (start 0 0) (end 20 0) (width 0.3) (layer "F.Cu") (net 1))
         (segment (start 0 0.5) (end 20 0.5) (width 0.3) (layer "F.Cu") (net 2))
-        (zone (net 3) (net_name "GND") (layer "B.Cu") {fills}))"#
+        (zone (net 3) (net_name "GND") (layer "B.Cu") {fills})
+        {extras})"#
     )
 }
 
 fn rect_fill(x0: f64, x1: f64) -> String {
-    format!(
-        "(filled_polygon (pts (xy {x0} -5) (xy {x1} -5) (xy {x1} 5) (xy {x0} 5)))",
-    )
+    format!("(filled_polygon (pts (xy {x0} -5) (xy {x1} -5) (xy {x1} 5) (xy {x0} 5)))",)
 }
 
 #[test]
@@ -1176,7 +1181,11 @@ fn a_pair_over_a_solid_reference_plane_reports_its_zdiff_silently() {
     let doc = forge_sexpr::parse(&text).unwrap();
     let mut r = SiReport::default();
     super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
-    assert_eq!(r.finding_count(), 0, "a solid reference plane must not fire");
+    assert_eq!(
+        r.finding_count(),
+        0,
+        "a solid reference plane must not fire"
+    );
     let f = r
         .of_check(SiCheck::ControlledImpedance)
         .next()
@@ -1221,11 +1230,12 @@ fn a_pair_crossing_a_plane_void_names_the_span_instead_of_a_zdiff() {
         "no confident Zdiff may be printed without a reference plane: {}",
         f.message
     );
-    // The span is named, so a designer can go and look at it: the sampled points
-    // that lost their reference are the two legs' midpoints at x = 10 mm.
+    // The span is named in board coordinates, and it brackets the real void:
+    // the pour is split over x = 6..14, and the half-millimetre sampling pitch
+    // locates the reference-less run to within one pitch of each edge.
     assert!(
-        f.message.contains("(10.00, 0.00)") && f.message.contains("(10.00, 0.50)"),
-        "the span must be named in board coordinates: {}",
+        f.message.contains("(6.00, 0.00)") && f.message.contains("(13.50, 0.50)"),
+        "the span must bracket the 6..14 mm void in board coordinates: {}",
         f.message
     );
     assert!(
@@ -1289,4 +1299,41 @@ fn a_board_with_no_pour_on_the_reference_layer_says_the_plane_is_unverified() {
         "an unverified reference must be stated, with its reason: {}",
         f.message
     );
+}
+
+#[test]
+fn a_via_antipad_in_the_plane_is_not_a_missing_reference() {
+    // The Watchy lesson, in unit form. A plane's anti-pads are a DESIGNED hole:
+    // the copper is cleared so the via can pass through. A differential pair's
+    // segments terminate at its layer-transition vias, so endpoint samples land
+    // in an anti-pad systematically. On Watchy that produced "reference missing
+    // under trace" on a board whose In2.Cu plane is in fact solid under the pair:
+    // all seven uncovered samples were within 0.36 mm of a via centre and four
+    // were exactly on one. A pinhole is not a return-path detour.
+    //
+    // Here the pour is solid except for a 0.45 mm anti-pad punched out around the
+    // via the pair drops through at x = 10.
+    // A pour with a square anti-pad bitten out of it around x = 10: the outline
+    // walks in to the hole and back out, which is how a fill with a void in it is
+    // written. The pair drops through vias at (10, 0) and (10, 0.5).
+    let holed_fill = r#"(filled_polygon (pts
+        (xy -5 -5) (xy 25 -5) (xy 25 5) (xy 10.3 5)
+        (xy 10.3 -0.3) (xy 9.7 -0.3) (xy 9.7 5) (xy -5 5)))"#;
+    let vias = r#"(via (at 10 0) (size 0.45) (drill 0.25) (layers "F.Cu" "B.Cu") (net 1))
+        (via (at 10 0.5) (size 0.45) (drill 0.25) (layers "F.Cu" "B.Cu") (net 2))"#;
+    let text = impedance_usb_over_plane_with(holed_fill, vias);
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    super::impedance::check_controlled_impedance(&b, doc.root().unwrap(), &mut r);
+    let f = r
+        .of_check(SiCheck::ControlledImpedance)
+        .next()
+        .expect("an impedance note");
+    assert!(
+        !f.message.contains("reference missing"),
+        "an anti-pad around the pair's own via is not a missing reference plane: {}",
+        f.message
+    );
+    assert_eq!(r.finding_count(), 0, "an anti-pad must never fire");
 }
