@@ -9,7 +9,9 @@ success = """
 The plain report names each check it ran, states a verdict for each one in
 words a non-engineer can act on, says out loud where the analysis is
 incomplete, and closes by naming the next command. No struct field, JSON key,
-or Rust identifier appears anywhere in the text.
+or Rust identifier appears anywhere in the text. Both verdict shapes are
+exercised: a fully-modelled board earns its clean bill, and a board with an
+unmodelled active IC is refused one in the INCONCLUSIVE vocabulary.
 """
 
 [[step]]
@@ -26,12 +28,8 @@ contains = [
   "== What this pass did not check ==",
   "Why it matters:",
   "What to do:",
-  # The honesty banner: two active ICs have no model, and the report has to say
-  # so rather than reading healthy.
-  "active IC(s) are unresolved/open",
-  "INCOMPLETE",
-  # The SI heads-up notes survive underneath the INCONCLUSIVE verdict: the
-  # verdict refusing a clean bill must not swallow the observations.
+  # The SI heads-up notes survive underneath the clean verdict: a clean bill
+  # must not swallow the observations worth a look.
   "Heads up (worth knowing, not a failure):",
   # And it must hand the reader the next command rather than stopping at a verdict.
   "hauksbee-ci init <board>",
@@ -39,33 +37,26 @@ contains = [
 matches = [
   # Per-section verdicts, worded for a person. Watchy ships with its own
   # .kicad_pro (min clearance 0.15 mm), under which the copper is clean, so
-  # the DRC section reads healthy rather than listing warnings. The copper
-  # check reads the layout and needs no device model, so it alone may still
-  # claim health while ICs are unmodelled.
+  # the DRC section reads healthy rather than listing warnings.
   "^Looks healthy: no copper spacing \\(drc\\) problems found\\.$",
-  # The connectivity and signal-integrity sections depend on device models,
-  # and two of this board's active ICs have none, so a clean bill there would
-  # be vacuous. Each section's verdict must say INCONCLUSIVE, count the
-  # unmodelled parts, name them, and say what unlocks a conclusive verdict.
-  # (The harness searches, it cannot count occurrences; the closing-verdict
-  # pin below covers the report-level claim.)
-  "^INCONCLUSIVE: [0-9]+ current-carrying / active part\\(s\\) have no model \\(U[0-9]+",
-  # The SI section still points at its heads-up notes from the verdict line:
-  # INCONCLUSIVE must not bury the observations worth a look.
-  "^INCONCLUSIVE: .* Plus [0-9]+ things? worth a look \\(see below\\)\\.$",
-  # And the report's closing line refuses the clean claim too.
-  "^VERDICT: inconclusive: 0 serious, [0-9]+ worth a look; [0-9]+ current-carrying / active part\\(s\\) have no model",
-  # The heads-up points at `--report` for the bind table. If it puts a part count
-  # in that sentence, the count has to be the size of the table it is pointing
-  # at. Watchy binds 67 non-ignored parts into an 82-row table, so the only
-  # honest forms are no count at all or a count in that range. A much smaller
-  # number sends a first-time user looking for a table that does not exist.
-  "run --report for the (bind table|(6[0-9]|7[0-9]|8[0-9])-part bind table)",
+  # Every active IC on this board is modelled (the last two, the SR2 reset
+  # supervisor and the BMA423, got curated entries), so the model-dependent
+  # sections have EARNED their clean bills: no INCONCLUSIVE hedging where the
+  # evidence is complete would be the opposite failure of a vacuous clean.
+  "^Looks healthy: no connectivity problems found\\.$",
+  "^No signal-integrity failures, but [0-9]+ things? worth a look \\(see below\\)\\.$",
+  # The closing line owns the same claim.
+  "^VERDICT: clean: 0 serious, [0-9]+ worth a look",
 ]
 # The internals must not leak into the persona surface. These are the real
 # identifiers the JSON/struct layer uses; in plain text they are noise a
-# non-engineer cannot act on.
+# non-engineer cannot act on. A fully-bound board must also NOT carry the
+# incomplete-analysis banner: hedging over nothing erodes the same trust a
+# vacuous clean does.
 not_matches = [
+  "INCONCLUSIVE",
+  "INCOMPLETE",
+  "active IC\\(s\\) are unresolved/open",
   "critical_parts_bound",
   "active_path_unresolved",
   "serious_count",
@@ -79,6 +70,45 @@ not_matches = [
   "panicked at",
   "RUST_BACKTRACE",
   # A doubled article is the classic template-assembly tell.
+  "\\ba a\\b",
+  "\\bthe the\\b",
+]
+
+[[step]]
+name = "a board with an unmodelled active IC is refused a clean bill"
+do = "run"
+cmd = ["{bin}/hauksbee", "run", "{repo}/crates/hauksbee-engine/tests/fixtures/plain_check_open_active_ic.kicad_pcb", "--check", "--plain"]
+exit = 0
+max_seconds = 30
+# The honesty vocabulary, on the board that has the condition. This board (the
+# engine's own plain-check fixture) exists to hold one unbound active IC, so
+# the INCONCLUSIVE surface stays under test now that the watchy sample earned
+# a full bind.
+contains = [
+  # The honesty banner: an active IC has no model, and the report says so up
+  # front rather than reading healthy.
+  "active IC(s) are unresolved/open",
+  "INCOMPLETE",
+]
+matches = [
+  # The copper check reads the layout and needs no device model, so it alone
+  # may still claim health while an IC is unmodelled.
+  "^Looks healthy: no copper spacing \\(drc\\) problems found\\.$",
+  # The model-dependent sections must each say INCONCLUSIVE, count the
+  # unmodelled parts, name them, and say what unlocks a conclusive verdict.
+  "^INCONCLUSIVE: [0-9]+ current-carrying / active part\\(s\\) have no model \\(U[0-9]+",
+  # And the report's closing line refuses the clean claim too.
+  "^VERDICT: inconclusive: 0 serious, [0-9]+ worth a look; [0-9]+ current-carrying / active part\\(s\\) have no model",
+  # The banner points at `--report` for the bind table; the pointer must not
+  # invent a count the table cannot honour.
+  "run --report for the (bind table|[0-9]+-part bind table)",
+]
+not_matches = [
+  "critical_parts_bound",
+  "active_path_unresolved",
+  "serious_count",
+  "schema_version",
+  "panicked at",
   "\\ba a\\b",
   "\\bthe the\\b",
 ]

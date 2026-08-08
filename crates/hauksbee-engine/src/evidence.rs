@@ -549,22 +549,21 @@ impl BoardEvidence {
     /// geometry-less input from turning an empty DRC/SI finding list into a
     /// synthetic clean pass: `NotChecked` is check-scoped, so it belongs on an
     /// explicit coverage assertion even when there are no findings to map.
+    /// The traversal is the geometry-class one: this map's only callers are
+    /// the DRC and SI coverage claims, and what those analyses covered is a
+    /// fact about copper, stackup and stated values that no missing simulation
+    /// model reduces (DRC inspects the copper of a net whether or not the part
+    /// on it bound). Net-scoped reader/parser limitations and the check's own
+    /// scoped assumptions (`NotChecked`) still attach; only part-scoped model
+    /// assumptions are off this claim's causal path. A future coverage claim
+    /// for a model-consuming analysis must not reuse this builder.
     pub fn check_coverage_map(
         &self,
         check: &str,
         assertion: impl Into<String>,
     ) -> Result<EvidenceMap, EvidenceError> {
-        let assertion = assertion.into();
         let nets: Vec<String> = self.refs_by_net.keys().cloned().collect();
-        let mut map = self.map_for_nets_with_check(
-            assertion.clone(),
-            nets,
-            Some((check, assertion.as_str())),
-        )?;
-        if let Some(artifact) = self.board_artifact {
-            map = map.with_artifacts(&self.registry, [artifact])?;
-        }
-        Ok(map)
+        self.geometry_map_for_check(check, assertion, &nets)
     }
 
     /// Build maps for the report's actual assertions. Nets are authoritative;
@@ -587,8 +586,21 @@ impl BoardEvidence {
                 continue;
             }
             let nets: Vec<String> = nets.into_iter().collect();
-            maps.push(if finding.check == "drc" {
-                self.geometry_map(finding.message.clone(), &nets)?
+            // DRC and SI findings are geometry-and-stated-value claims. The SI
+            // analysis runs in hauksbee-extract, which has no access to bound
+            // models at all: every one of its claims is computed from copper
+            // geometry, the stackup, and value fields, and each check abstains
+            // (says "no judgement") when an input it needs is absent. A part
+            // that is merely OPEN (no simulation model) therefore cannot be a
+            // causal input of what was never simulated: an unmodelled crystal
+            // does not undermine the statement of what load capacitance the
+            // caps around it present, any more than an open op-amp invalidates
+            // two pieces of copper touching. Net-scoped limitations (parser,
+            // reader) still attach and still qualify. If an SI check ever
+            // grows a claim that consumes a bound model, it must not ride
+            // this branch.
+            maps.push(if finding.check == "drc" || finding.check == "si" {
+                self.geometry_map_for_check(&finding.check, finding.message.clone(), &nets)?
             } else {
                 self.map_for_nets(finding.message.clone(), nets)?
             });
@@ -624,6 +636,17 @@ impl BoardEvidence {
         assertion: impl Into<String>,
         nets: &[String],
     ) -> Result<EvidenceMap, EvidenceError> {
+        self.geometry_map_for_check("drc", assertion, nets)
+    }
+
+    /// As [`Self::geometry_map`], for a named check: the same no-component
+    /// traversal, but check-scoped assumptions for `check` still attach.
+    pub fn geometry_map_for_check(
+        &self,
+        check: &str,
+        assertion: impl Into<String>,
+        nets: &[String],
+    ) -> Result<EvidenceMap, EvidenceError> {
         let assertion = assertion.into();
         let empty: Vec<String> = Vec::new();
         let incidence: Vec<(&str, &[String])> = nets
@@ -632,7 +655,7 @@ impl BoardEvidence {
             .collect();
         let index = CausalPathIndex::from_net_parts(incidence)?;
         let scope = NetScope::new(nets.iter().map(String::as_str), None)?;
-        let traversal = index.traverse_assertion(&scope, "drc", &assertion, &self.registry)?;
+        let traversal = index.traverse_assertion(&scope, check, &assertion, &self.registry)?;
         let mut map =
             EvidenceMap::from_traversal(assertion, traversal, &self.registry, self.today)?;
         if let Some(artifact) = self.board_artifact {

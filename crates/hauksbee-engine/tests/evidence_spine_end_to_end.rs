@@ -544,3 +544,83 @@ fn web_report_serializes_evidence_and_does_not_call_qualified_evidence_healthy()
         report.headline
     );
 }
+
+// ---------------------------------------------------------------------------
+// SI findings are geometry-and-stated-value claims. The SI analysis runs in
+// hauksbee-extract, which has no access to bound models, and each of its
+// checks abstains when an input it needs is absent, so a part that is merely
+// OPEN (no simulation model) is never a causal input of an SI claim: an
+// unmodelled crystal cannot undermine the statement of what load capacitance
+// the caps around it present. This is the same discipline DRC shorts already
+// have. Two-sided: the identical finding under a model-consuming check on the
+// same net IS undermined by the same open part.
+// ---------------------------------------------------------------------------
+
+fn finding_on_3v3(check: &str) -> JsonFinding {
+    JsonFinding {
+        check: check.into(),
+        kind: "fixture".into(),
+        severity: "info".into(),
+        nets: vec!["3V3".into()],
+        location_mm: None,
+        layer: None,
+        refs: Vec::new(),
+        actionable: false,
+        message: format!("{check} assertion on 3V3"),
+        plain: format!("{check} assertion on 3V3"),
+        fix: None,
+    }
+}
+
+#[test]
+fn si_findings_are_geometry_causal_and_open_parts_do_not_undermine_them() {
+    let board = board();
+    let bound = bind_board(&board, &ModelLibrary::builtin());
+    let evidence =
+        BoardEvidence::from_bound(&board, &bound.report, &[], RunDate::from_epoch_days(20_666))
+            .unwrap();
+    // The premise the contrast rests on: R74 on 3V3 is open (no model), and a
+    // model-consuming claim on that net is undermined by it.
+    let lint_maps = evidence
+        .maps_for_findings(&[finding_on_3v3("lint")])
+        .unwrap();
+    assert_eq!(lint_maps[0].status(), EvidenceStatus::Undermined);
+
+    // The same net, the same open part, an SI claim: not undermined, because
+    // nothing the SI analysis computes consumes a bound model.
+    let si_maps = evidence.maps_for_findings(&[finding_on_3v3("si")]).unwrap();
+    assert_eq!(si_maps.len(), 1);
+    assert_eq!(
+        si_maps[0].status(),
+        EvidenceStatus::Clean,
+        "an open part is not on an SI claim's causal path: {:?}",
+        si_maps[0].assumptions()
+    );
+}
+
+#[test]
+fn si_check_scoped_assumptions_still_attach_to_si_findings() {
+    // The geometry-class traversal must not detach the SI check's OWN scoped
+    // assumptions: a "this rule could not run" NotChecked on check `si` still
+    // lands on the SI claim it names, and still undermines it.
+    let board = board();
+    let bound = bind_board(&board, &ModelLibrary::builtin());
+    let evidence =
+        BoardEvidence::from_bound(&board, &bound.report, &[], RunDate::from_epoch_days(20_666))
+            .unwrap()
+            .with_assumptions([hauksbee_ir::evidence::Assumption::not_checked(
+                hauksbee_ir::evidence::AssumptionSource::Reader,
+                "si",
+                None,
+                "the stackup declaration could not be read",
+                "a board file whose (setup (stackup ...)) parses",
+            )])
+            .unwrap();
+    let si_maps = evidence.maps_for_findings(&[finding_on_3v3("si")]).unwrap();
+    assert_eq!(
+        si_maps[0].status(),
+        EvidenceStatus::Undermined,
+        "check-scoped assumptions still attach: {:?}",
+        si_maps[0].assumptions()
+    );
+}
