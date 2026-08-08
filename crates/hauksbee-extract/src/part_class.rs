@@ -55,8 +55,8 @@
 //!    mechanical part) is decisively not a passive.
 //! 4. **Value dimension**, via the canonical value parser: an explicit farad or
 //!    henry unit settles it, which is what catches the capacitor labelled `R5`
-//!    whose value is `100nF`, and a bare pico/nano-scale magnitude settles it too,
-//!    which catches the same part valued `100n`. An ohm mark rules a capacitor out
+//!    whose value is `100nF`, and so does a bare sub-unity SI multiplier, which
+//!    catches the same part valued `100n`, `4u7` or `470u`. An ohm mark rules a capacitor out
 //!    but rules nothing in (a ferrite bead reads ohmic). An ordinary bare
 //!    magnitude (`10k`) and a rating (`25V`) are not evidence here. When this rung
 //!    CONTRADICTS the model's declared class, the answer is `Unknown` rather than
@@ -180,7 +180,7 @@ pub(crate) fn classify_two_terminal(c: &Component) -> PartClass {
         return class;
     }
     // Rung 4: value dimension.
-    if let Some(class) = from_value_dimension(&c.value) {
+    if let Some(class) = from_value_dimension(c) {
         return class;
     }
 
@@ -201,16 +201,21 @@ fn identity_is_trusted(c: &Component) -> bool {
 
 /// Rung 4: what the value's dimension says on its own.
 ///
-/// An explicit farad or henry unit is decisive. A *unitless* magnitude is normally
-/// ambiguous ("10k" is a resistance by convention), with one exception worth
-/// taking: a bare pico- or nano-scale magnitude. No resistor is ever specified as
-/// `100n` or `22p`, while capacitors are routinely written exactly that way, so
-/// such a value is evidence of a capacitance even with the unit omitted. Without
-/// this, a capacitor a designer had labelled `R5` and valued `100n` still landed
-/// on the designator rung and read as a resistor, which is the very case this
-/// module exists to stop; only the `100nF` spelling was caught.
-fn from_value_dimension(value: &str) -> Option<PartClass> {
-    let parsed = hauksbee_models::value::parse_value(value)?;
+/// An explicit farad or henry unit is decisive. So is a *sub-unity SI multiplier*
+/// with the unit left off, which is the common BOM spelling: `100n`, `22p`,
+/// `4u7`, `10u`, `470u`. No discrete resistor is written that way. Milliohm
+/// shunts, the one resistor class with a sub-unity value, are spelled `1m`,
+/// `0.001` or `R001`, so `m` is deliberately NOT in the set; and a magnitude
+/// threshold cannot do this job, because a 470 uF electrolytic (4.7e-4) and a
+/// milliohm shunt (1e-3) are the same order of magnitude while their spellings are
+/// unambiguous.
+///
+/// A sub-unity multiplier says "reactive", not "capacitive": `10u` is also how
+/// some libraries spell 10 uH. Which one it is comes from the string hint, so an
+/// inductor is not recorded as a capacitor. Either way it is not a resistor, which
+/// is the answer that matters most to the callers.
+fn from_value_dimension(c: &Component) -> Option<PartClass> {
+    let parsed = hauksbee_models::value::parse_value(&c.value)?;
     match parsed.unit.as_deref() {
         Some("F") => return Some(PartClass::Passive(PassiveClass::Capacitor)),
         Some("H") => return Some(PartClass::Passive(PassiveClass::Inductor)),
@@ -219,15 +224,54 @@ fn from_value_dimension(value: &str) -> Option<PartClass> {
         Some("\u{03a9}") | Some("V") | Some("A") => return None,
         _ => {}
     }
-    // Unitless. Only the sub-microscale case is decisive.
-    let magnitude = parsed.si.abs();
-    if magnitude > 0.0 && magnitude < 1e-6 {
-        return Some(PartClass::Passive(PassiveClass::Capacitor));
+    if !has_sub_unity_multiplier(&c.value) {
+        return None;
     }
-    None
+    Some(match from_strings(c) {
+        PartClass::Passive(PassiveClass::Inductor)
+        | PartClass::Passive(PassiveClass::FerriteBead) => {
+            PartClass::Passive(PassiveClass::Inductor)
+        }
+        _ => PartClass::Passive(PassiveClass::Capacitor),
+    })
 }
 
-/// Rungs 2, 3 and 5: whatever the resolved model entry can say.
+/// Does this value string carry a pico / nano / micro multiplier, with no unit?
+///
+/// Matches the letter that acts as the multiplier, in either the trailing form
+/// (`100n`) or the RKM decimal-point form (`4u7`), and accepts both micro glyphs
+/// libraries use. `m` (milli) is excluded on purpose: it is how milliohm shunts
+/// are written.
+fn has_sub_unity_multiplier(value: &str) -> bool {
+    // Only the leading magnitude token matters; "/25V" style qualifiers and
+    // trailing tolerance annotations are not part of it.
+    let head = value
+        .split(['/', ',', '@', ' '])
+        .next()
+        .unwrap_or(value)
+        .trim();
+    let mut seen_digit = false;
+    for ch in head.chars() {
+        if ch.is_ascii_digit() {
+            seen_digit = true;
+            continue;
+        }
+        if ch == '.' {
+            continue;
+        }
+        // The first non-numeric character after a digit is the multiplier.
+        if seen_digit {
+            return matches!(
+                ch,
+                'p' | 'P' | 'n' | 'N' | 'u' | 'U' | '\u{00b5}' | '\u{03bc}'
+            );
+        }
+        return false;
+    }
+    false
+}
+
+/// Rungs 2, 3 and 5: whatever the resolved model entry can say./// Rungs 2, 3 and 5: whatever the resolved model entry can say.
 fn from_model(c: &Component) -> Option<PartClass> {
     let entry = resolved_shape(c)?;
     // Rung 2: the DB's declared class.
@@ -236,7 +280,7 @@ fn from_model(c: &Component) -> Option<PartClass> {
         // `100nF` is a schematic error either way, and this codebase would rather
         // say "I cannot tell" than pick one of two contradicting witnesses and
         // hand a downstream check a confident wrong answer.
-        if let Some(PartClass::Passive(by_value)) = from_value_dimension(&c.value) {
+        if let Some(PartClass::Passive(by_value)) = from_value_dimension(c) {
             if by_value != class {
                 return Some(PartClass::Unknown);
             }
@@ -346,12 +390,13 @@ fn from_strings(c: &Component) -> PartClass {
     if r.starts_with('C') && !r.starts_with("CN") && !r.starts_with("CON") && !r.starts_with("CR") {
         return PartClass::Passive(PassiveClass::Capacitor);
     }
-    // Resistors, minus the historical exclusion list: varistors (RV),
-    // thermistors (RT), and resistor networks / arrays (RN/RP/RM), none of
-    // which is a plain two-terminal resistor. A part in one of those ranges
+    // Resistors, minus the exclusion list: varistors (RV), thermistors (RT), and
+    // resistor networks / arrays (RN/RP/RM/RA), none of which is a plain
+    // two-terminal resistor. `RA` belongs with the other array prefixes and was
+    // simply missing from the historical list. A part in one of those ranges
     // that IS a plain resistor is now caught by rung 2 instead of being lost
     // here.
-    let excluded = ["RV", "RT", "RN", "RP", "RM"]
+    let excluded = ["RV", "RT", "RN", "RP", "RM", "RA"]
         .iter()
         .any(|p| r.starts_with(p));
     if r.starts_with('R') && !excluded {
@@ -471,18 +516,35 @@ mod tests {
     }
 
     #[test]
-    fn a_bare_pico_or_nano_magnitude_is_a_capacitance_not_a_resistance() {
-        // No resistor is specified as `100n`; capacitors routinely are. Handling
-        // only the `100nF` spelling left the same CAD error live one character
-        // away.
-        let unlabelled = part("R5", "100n", "", "");
-        assert!(!classify_two_terminal(&unlabelled).is_resistor());
-        assert!(classify_two_terminal(&unlabelled).is_capacitor());
-        assert!(!classify_two_terminal(&part("R6", "22p", "", "")).is_resistor());
-        // An ordinary resistance magnitude is untouched.
-        assert!(classify_two_terminal(&part("R7", "10k", "", "")).is_resistor());
-        assert!(classify_two_terminal(&part("R8", "0", "", "")).is_resistor());
-        assert!(classify_two_terminal(&part("R9", "4k7", "", "")).is_resistor());
+    fn a_bare_sub_unity_multiplier_is_a_reactive_value_not_a_resistance() {
+        // No discrete resistor is written `100n` / `4u7` / `470u`; capacitors
+        // routinely are. Handling only the `100nF` spelling left the same CAD
+        // error live one character away, and a magnitude threshold could not fix
+        // it, since a 470 uF electrolytic and a milliohm shunt are the same order.
+        for value in ["100n", "22p", "4u7", "10u", "470u", "1u", "0.1u"] {
+            let mislabelled = part("R5", value, "", "");
+            assert!(
+                !classify_two_terminal(&mislabelled).is_resistor(),
+                "{value} is not a resistance"
+            );
+            assert!(
+                classify_two_terminal(&mislabelled).is_capacitor(),
+                "{value} reads as a capacitance"
+            );
+        }
+        // An inductor spelled the same way is reactive but NOT a capacitor: the
+        // string hint disambiguates, and either way it is not a resistor.
+        let coil = part("L1", "10u", "Device:L_Small", "");
+        assert!(!classify_two_terminal(&coil).is_resistor());
+        assert!(!classify_two_terminal(&coil).is_capacitor());
+        // Ordinary resistance spellings are untouched, milliohm shunts included:
+        // `m` is deliberately not a sub-unity multiplier for this rule.
+        for value in ["10k", "0", "4k7", "1m", "0.001", "R001", "100"] {
+            assert!(
+                classify_two_terminal(&part("R7", value, "", "")).is_resistor(),
+                "{value} is a resistance"
+            );
+        }
     }
 
     #[test]
@@ -561,9 +623,9 @@ mod tests {
 
     #[test]
     fn an_identity_refused_record_does_not_reach_model_evidence() {
-        // The witness is the ticket into resolution: a record with a duplicate
-        // designator conflict cannot vouch for its own value/lib_id, so it falls
-        // to the string rung rather than being promoted by the DB.
+        // A record with a duplicate designator conflict cannot vouch for its own
+        // value or lib_id, so the ladder stops and answers Unknown rather than
+        // promoting either the DB's class or the designator.
         let mut refused = part("X1", "5.1k", "Device:R", "");
         refused
             .properties
