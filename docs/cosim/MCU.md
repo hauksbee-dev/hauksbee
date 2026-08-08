@@ -1043,8 +1043,8 @@ value_re = "(?i)^(FE310|FE310-G00[0-9]|HiFive1)"
 mpn_re   = "(?i)^FE310"
 
 [models.params]
-# Renode backend: brings up sifive-fe310.repl. One 32-bit gpio0 port; roles
-# "p0<bit>".
+# Renode backend: brings up sifive-fe310.repl. One 32-bit GPIO port (the
+# platform names it gpioInputs); roles "p0<bit>".
 backend = "renode:sifive_fe310"
 
 [models.pins]
@@ -1061,8 +1061,9 @@ max_current_a = 0.1
 max_voltage_v = 3.6
 ```
 
-Backend: `RenodeConfig::sifive_fe310()` (one 32-bit gpio0, output value
-register at 0x0C, uart0). Renode ships `platforms/cpus/sifive-fe310.repl`
+Backend: `RenodeConfig::sifive_fe310()` (one 32-bit GPIO port, registered
+by the stock platform as `gpioInputs`, output value register at 0x0C,
+uart0). Renode ships `platforms/cpus/sifive-fe310.repl`
 and `scripts/single-node/sifive_fe310.resc` with a prebuilt demo ELF
 reference. This exercises the identical Monitor/UART/RunFor path as STM32
 on a RISC-V core, proving the backend stays ISA-agnostic.

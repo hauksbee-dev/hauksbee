@@ -269,10 +269,18 @@ fn fe310_gate_fails_a_deliberately_wrong_mtime_rate() {
     ) else {
         return;
     };
+    // Strictly FAST, not merely out of tolerance: a dead pin or a stuck
+    // measurement reads 0.0 from `measure`'s shortfall path, and 0.0 is
+    // "out of tolerance" too, which would let a broken gate pass this test
+    // without ever demonstrating it can see the 1892x error. A 62 MHz mtime
+    // makes virtual time cheap, so the failure this test guards must present
+    // as fast; anything else is the gate malfunctioning, which is exactly
+    // what this test exists to catch.
     assert!(
-        (ratio - 1.0).abs() > TOLERANCE,
-        "a 62 MHz mtime measured {ratio:.3}x, INSIDE the {TOLERANCE} tolerance: \
-         the gate can no longer distinguish a 1892x-wrong timer from a correct \
-         one, so its passing sibling test is vacuous"
+        ratio > 1.0 + TOLERANCE,
+        "a 62 MHz mtime measured {ratio:.3}x, not clearly FAST: either the gate \
+         can no longer distinguish a 1892x-wrong timer from a correct one \
+         (ratio near 1.0, its passing sibling is vacuous), or the measurement \
+         itself is broken (ratio at or below 1.0, e.g. a dead pin reading 0.0)"
     );
 }
