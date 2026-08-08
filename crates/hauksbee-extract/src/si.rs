@@ -1052,7 +1052,16 @@ fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut
         // With a stackup and a routed track width, the trace capacitance is
         // computable rather than assumed, which is what actually settles the
         // range. Falls back to the range when either is missing.
+        // Only when the net's copper is entirely on F.Cu, because that is the only
+        // layer `read_stackup` describes: it returns F.Cu's thickness and the first
+        // dielectric below it. Applying those to a B.Cu route on an asymmetric
+        // stackup, or to any inner layer, would compute a number for geometry the
+        // board never stated and then call it measured.
         let measured = root.and_then(|r| {
+            let layers = net_copper_layers(r, net.id);
+            if layers.len() != 1 || !layers.contains("F.Cu") {
+                return None;
+            }
             let stack = impedance::read_stackup(r)?;
             let (w_min, _) = track_width_range(r, net.id)?;
             trace_capacitance_pf_per_mm(w_min, &stack)
@@ -1717,6 +1726,27 @@ pub fn arc_length_mm(start: (f64, f64), mid: (f64, f64), end: (f64, f64)) -> f64
     // clamped because floating point can push the ratio a hair past 1.
     let sweep = |l: f64| 2.0 * (l / (2.0 * r)).clamp(-1.0, 1.0).asin();
     r * (sweep(a) + sweep(b))
+}
+
+/// The distinct copper layers a net's discrete tracks are routed on.
+///
+/// Used to decide whether the stackup actually describes this net's geometry: the
+/// microstrip parameters available here are F.Cu's, so a net that leaves F.Cu is
+/// outside what they can honestly be applied to.
+fn net_copper_layers(root: &List, net_id: i64) -> std::collections::BTreeSet<String> {
+    let by_name = net_name_index(root);
+    let mut out = std::collections::BTreeSet::new();
+    for kw in ["segment", "arc"] {
+        for elem in root.find_all(kw) {
+            if elem_net_id(elem, &by_name) != Some(net_id) {
+                continue;
+            }
+            if let Some(l) = elem.find_value("layer") {
+                out.insert(l);
+            }
+        }
+    }
+    out
 }
 
 /// Narrowest and widest discrete-track width on a net (mm), for the width/gap
