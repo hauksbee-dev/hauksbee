@@ -210,22 +210,36 @@ fn failed_primary_is_rescued_by_a_recorded_fallback() {
         1,
         "one rescued chunk, one window: {windows:?}"
     );
-    let (start, end, method) = windows[0];
+    let window = windows[0];
     assert!(
-        start.abs() < 1e-12 && (end - chunk).abs() < chunk * 1e-6,
+        window.start_s.abs() < 1e-12 && (window.end_s - chunk).abs() < chunk * 1e-6,
         "the fallback window covers the rescued chunk, got {windows:?}"
     );
     assert_eq!(
-        method,
+        window.method,
         ChunkFallbackMethod::BackwardEuler,
         "the firing board is carried by the backward-Euler rung"
     );
     assert!(
-        method.fidelity_note().contains("first-order")
-            && method
+        window.method.fidelity_note().contains("first-order")
+            && window
+                .method
                 .fidelity_note()
-                .contains("no empirical output-error bound"),
-        "the recorded method states the known trade-off without inventing a bound"
+                .contains("step-doubling estimate"),
+        "the recorded method states the known trade-off and points at the \
+         measured estimate field"
+    );
+    // B12: the window carries a MEASURED error estimate, not a disclaimer.
+    // The firing board's rescue must produce one (the refinement companion is
+    // the same BE march at a tighter bound, which converges here), and it must
+    // be a sane voltage for a 5 V-scale board: positive (the tolerance floor
+    // alone guarantees that) and far below the signal scale.
+    let est = window
+        .error_estimate_v
+        .expect("the rescued window carries a measured error estimate");
+    assert!(
+        est > 0.0 && est < 1.0,
+        "chunk-end error estimate must be positive and below the signal scale, got {est}"
     );
 
     // The membrane voltage in the rescued window is a real number, not a
@@ -270,5 +284,210 @@ fn unrescuable_board_still_refuses_loudly() {
     assert_eq!(
         strict_analog_exit_code(sched.analog_abort_tripped()),
         Some(EXIT_INVALID_FOR_ANALYSIS)
+    );
+}
+
+// --- B12: the measured per-window error estimate, proven two-sided ----------
+
+/// Series RLC (V -> R -> L -> C -> ground), underdamped, stepped 5 us into
+/// the chunk: R = 20 ohm, L = 1 mH, C = 100 nF gives alpha = 1e4 1/s,
+/// omega_0 = 1e5 rad/s (Q = 5), so the capacitor RINGS through the chunk and
+/// a dissipative fallback rung accumulates a real, analytically checkable
+/// output error.
+fn rlc_ringing_board() -> BoundBoard {
+    let mut c = Circuit::new();
+    let vin = c.node("vin");
+    let mid = c.node("mid");
+    let vc = c.node("vc");
+    c.add(Device::Vsource {
+        name: "V1".into(),
+        p: vin,
+        n: NodeId::GROUND,
+        kind: SourceKind::Pulse {
+            v1: 0.0,
+            v2: RLC_V0,
+            delay: RLC_DELAY_S,
+            rise: 1e-9,
+            fall: 1e-9,
+            width: 1.0,
+            period: 2.0,
+        },
+    });
+    c.add(Device::Resistor {
+        name: "R1".into(),
+        a: vin,
+        b: mid,
+        ohms: RLC_R,
+        tc1: None,
+    });
+    c.add(Device::Inductor {
+        name: "L1".into(),
+        a: mid,
+        b: vc,
+        henries: RLC_L,
+        ic: None,
+    });
+    c.add(Device::Capacitor {
+        name: "C1".into(),
+        a: vc,
+        b: NodeId::GROUND,
+        farads: RLC_C,
+        ic: None,
+    });
+    let vc_id = vc;
+    board_from("rlc-ringing", c, &[("vc", vc_id)])
+}
+
+const RLC_V0: f64 = 5.0;
+const RLC_DELAY_S: f64 = 5e-6;
+const RLC_R: f64 = 20.0;
+const RLC_L: f64 = 1e-3;
+const RLC_C: f64 = 100e-9;
+
+/// The closed-form capacitor voltage of the series RLC step response at
+/// `t` seconds after the chunk start (zero initial state, ideal step at
+/// `RLC_DELAY_S`).
+fn rlc_analytic_vc(t: f64) -> f64 {
+    let tau = t - RLC_DELAY_S;
+    if tau <= 0.0 {
+        return 0.0;
+    }
+    let alpha = RLC_R / (2.0 * RLC_L);
+    let w0 = 1.0 / (RLC_L * RLC_C).sqrt();
+    let wd = (w0 * w0 - alpha * alpha).sqrt();
+    RLC_V0 * (1.0 - (-alpha * tau).exp() * ((wd * tau).cos() + (alpha / wd) * (wd * tau).sin()))
+}
+
+/// Whether a reported chunk-end value with its recorded error estimate
+/// BRACKETS the analytic answer. This is the check the two tests below share:
+/// the honest-estimator test asserts it holds, the broken-estimator test
+/// asserts the same check catches the tampered estimate.
+fn estimate_brackets_analytic(reported: f64, estimate_v: f64, analytic: f64) -> bool {
+    (reported - analytic).abs() <= estimate_v
+}
+
+/// Force the RLC ringing board onto the dissipative backward-Euler rung and
+/// check the recorded window's measured error estimate against the CLOSED
+/// FORM: the estimate must bracket the analytic chunk-end voltage (it is an
+/// error claim about a known-true answer), and it must not be vacuous (a
+/// "bound" wider than the whole signal says nothing).
+#[test]
+fn forced_rlc_fallback_estimate_brackets_the_analytic_answer() {
+    let mut sched = Scheduler::new(rlc_ringing_board(), None, SolverOptions::default())
+        .expect("build scheduler for the RLC board");
+    let chunk = 1e-4_f64;
+    sched.chunk_s = chunk;
+    sched.debug_force_fallback_rung = Some(ChunkFallbackMethod::BackwardEuler);
+
+    sched.step(chunk);
+
+    let windows = sched.fallback_windows();
+    assert_eq!(
+        windows.len(),
+        1,
+        "one forced chunk, one window: {windows:?}"
+    );
+    let window = windows[0];
+    assert_eq!(window.method, ChunkFallbackMethod::BackwardEuler);
+    let est = window
+        .error_estimate_v
+        .expect("the BE rung's refinement companion converges on this board");
+    let reported = sched.net_voltage("vc").expect("vc net exists");
+    let analytic = rlc_analytic_vc(chunk);
+    assert!(
+        estimate_brackets_analytic(reported, est, analytic),
+        "estimate must bracket the analytic answer: reported={reported:.6} \
+         analytic={analytic:.6} |err|={:.3e} estimate={est:.3e}",
+        (reported - analytic).abs()
+    );
+    assert!(
+        est < RLC_V0 / 2.0,
+        "a useful estimate is far tighter than the signal itself, got {est:.3e}"
+    );
+}
+
+/// The same forced rung on a SMOOTH window (a settled RC board: the DC
+/// operating point already sits at the source value, nothing moves inside the
+/// chunk) must report a SMALL estimate: the two-sidedness that stops the
+/// estimator from buying the ringing bracket with a giant blanket number.
+#[test]
+fn forced_smooth_fallback_reports_a_small_estimate() {
+    let mut c = Circuit::new();
+    let vin = c.node("vin");
+    let out = c.node("out");
+    c.add(Device::Vsource {
+        name: "V1".into(),
+        p: vin,
+        n: NodeId::GROUND,
+        kind: SourceKind::Dc(5.0),
+    });
+    c.add(Device::Resistor {
+        name: "R1".into(),
+        a: vin,
+        b: out,
+        ohms: 1e3,
+        tc1: None,
+    });
+    c.add(Device::Capacitor {
+        name: "C1".into(),
+        a: out,
+        b: NodeId::GROUND,
+        farads: 100e-9,
+        ic: None,
+    });
+    let out_id = out;
+    let board = board_from("rc-smooth", c, &[("out", out_id)]);
+
+    let mut sched = Scheduler::new(board, None, SolverOptions::default())
+        .expect("build scheduler for the smooth RC board");
+    let chunk = 1e-4_f64;
+    sched.chunk_s = chunk;
+    sched.debug_force_fallback_rung = Some(ChunkFallbackMethod::BackwardEuler);
+
+    sched.step(chunk);
+
+    let windows = sched.fallback_windows();
+    assert_eq!(
+        windows.len(),
+        1,
+        "one forced chunk, one window: {windows:?}"
+    );
+    let est = windows[0]
+        .error_estimate_v
+        .expect("the refinement companion converges on a settled RC board");
+    assert!(
+        est < 2e-2,
+        "a smooth settled window must report a small estimate, got {est:.3e}"
+    );
+}
+
+/// A deliberately BROKEN estimator (the test-only zero hook) must be CAUGHT
+/// by the same bracket check the honest test uses: the ringing board's real
+/// BE error is nonzero, so a zeroed estimate cannot bracket the analytic
+/// answer. This pins that the bracket test above has teeth: an estimator
+/// that stops measuring fails it, it does not slip through.
+#[test]
+fn broken_estimator_is_caught_by_the_bracket_check() {
+    let mut sched = Scheduler::new(rlc_ringing_board(), None, SolverOptions::default())
+        .expect("build scheduler for the RLC board");
+    let chunk = 1e-4_f64;
+    sched.chunk_s = chunk;
+    sched.debug_force_fallback_rung = Some(ChunkFallbackMethod::BackwardEuler);
+    sched.debug_zero_fallback_error_estimate = true;
+
+    sched.step(chunk);
+
+    let windows = sched.fallback_windows();
+    assert_eq!(windows.len(), 1);
+    let est = windows[0]
+        .error_estimate_v
+        .expect("the broken hook still records an estimate (that is the point)");
+    assert_eq!(est, 0.0, "the tamper hook zeroes the estimate");
+    let reported = sched.net_voltage("vc").expect("vc net exists");
+    let analytic = rlc_analytic_vc(chunk);
+    assert!(
+        !estimate_brackets_analytic(reported, est, analytic),
+        "the bracket check must CATCH a zeroed estimator: reported={reported:.6} \
+         analytic={analytic:.6}"
     );
 }
