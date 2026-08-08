@@ -151,17 +151,28 @@ impl CopperWeights {
                 declared.push((name, thickness));
             }
         }
-        let is_outer_name =
-            |n: &str| n.eq_ignore_ascii_case("F.Cu") || n.eq_ignore_ascii_case("B.Cu");
-        let names_outers = declared.iter().any(|(n, _)| is_outer_name(n));
         let last = declared.len().saturating_sub(1);
         let mut by_layer = HashMap::new();
         for (i, (name, thickness)) in declared.iter().enumerate() {
             if *thickness <= 0.0 {
                 continue;
             }
-            let external = if names_outers {
-                is_outer_name(name)
+            // Three signals, in order of how much they actually tell us:
+            //
+            //   1. A canonical outer name (F.Cu / B.Cu) IS the answer.
+            //   2. A canonical inner name (In<N>.Cu) is likewise decisive, and it
+            //      has to outrank position: a stackup that lists F.Cu and In1.Cu
+            //      but forgets B.Cu makes In1.Cu the LAST entry, and reading that
+            //      positionally would rate inner copper with the external constant
+            //      and double its apparent capacity.
+            //   3. Otherwise position is all there is. A producer mixing
+            //      conventions (F.Cu plus L2.Cu on a 2-layer board) must not have
+            //      its physical bottom layer derated as internal just because the
+            //      name is unfamiliar: that halves k and can fire a false verdict.
+            let external = if is_outer_layer_name(name) {
+                true
+            } else if is_inner_layer_name(name) {
+                false
             } else {
                 i == 0 || i == last
             };
@@ -714,6 +725,23 @@ pub struct Bottleneck {
     pub copper_source: CopperSource,
 }
 
+/// Whether a layer name is one KiCad gives OUTER copper.
+fn is_outer_layer_name(n: &str) -> bool {
+    n.eq_ignore_ascii_case("F.Cu") || n.eq_ignore_ascii_case("B.Cu")
+}
+
+/// Whether a layer name is one KiCad gives INNER copper (`In1.Cu`, `In2.Cu`, ...).
+fn is_inner_layer_name(n: &str) -> bool {
+    let upper = n.to_ascii_uppercase();
+    let Some(body) = upper.strip_suffix(".CU") else {
+        return false;
+    };
+    let Some(digits) = body.strip_prefix("IN") else {
+        return false;
+    };
+    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+}
+
 /// Whether an undeclared layer should be rated as external copper, from its name.
 ///
 /// `F.Cu` / `B.Cu` are the outer layers. An `In<N>.Cu` name is inner. Anything
@@ -721,10 +749,7 @@ pub struct Bottleneck {
 /// internal: that is the lower rating, so an unknown layer cannot inflate a
 /// net's apparent capacity.
 fn assumed_external_for(layer: Option<&str>) -> bool {
-    match layer {
-        Some(l) => l.eq_ignore_ascii_case("F.Cu") || l.eq_ignore_ascii_case("B.Cu"),
-        None => false,
-    }
+    layer.is_some_and(is_outer_layer_name)
 }
 
 /// Render a copper weight the way a fab drawing does: `1 oz`, `0.5 oz`.
@@ -1300,6 +1325,42 @@ mod tests {
         assert!(
             !ext_in,
             "In1.Cu is internal even as the last declared copper layer"
+        );
+    }
+
+    #[test]
+    fn a_mixed_naming_convention_does_not_derate_the_physical_bottom_layer() {
+        // A 2-layer producer writing "F.Cu" and "L2.Cu". L2.Cu is physically the
+        // bottom, so it is external. Classifying every unfamiliar name as internal
+        // halves k and can fire a false verdict on perfectly good outer copper.
+        let mixed = r#"
+          (setup (stackup
+            (layer "F.Cu" (type "copper") (thickness 0.035))
+            (layer "dielectric 1" (type "core") (thickness 1.51) (epsilon_r 4.5))
+            (layer "L2.Cu" (type "copper") (thickness 0.035))
+          ))
+        "#;
+        let (_, audit) = pcb_audited(mixed);
+        assert!(audit.copper.get("F.Cu").expect("F.Cu").1, "canonical outer");
+        assert!(
+            audit.copper.get("L2.Cu").expect("L2.Cu").1,
+            "the physical bottom layer is external even under an unfamiliar name"
+        );
+
+        // And the truncated-declaration case must still hold: a canonical INNER
+        // name outranks position, so an In1.Cu that happens to be last stays
+        // internal rather than being promoted to external.
+        let truncated = r#"
+          (setup (stackup
+            (layer "F.Cu" (type "copper") (thickness 0.035))
+            (layer "dielectric 1" (type "prepreg") (thickness 0.1) (epsilon_r 4.5))
+            (layer "In1.Cu" (type "copper") (thickness 0.0175))
+          ))
+        "#;
+        let (_, audit) = pcb_audited(truncated);
+        assert!(
+            !audit.copper.get("In1.Cu").expect("In1.Cu").1,
+            "a canonical inner name stays internal even as the last entry"
         );
     }
 
