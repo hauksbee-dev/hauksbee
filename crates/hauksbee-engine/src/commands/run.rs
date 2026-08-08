@@ -528,6 +528,7 @@ pub fn run(mut cfg: RunConfig, quiet: bool) -> anyhow::Result<()> {
         crate::reports::ci_artifacts::github_evidence_annotations_with_gate(&maps, |m| {
             !finding_messages.contains(m.assertion())
         });
+        crate::reports::ci_artifacts::github_blocker_annotation(&blockers);
         write_ci_artifacts(&cfg, &findings)?;
         ci_findings = Some(findings);
     }
