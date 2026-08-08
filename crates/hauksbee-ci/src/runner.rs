@@ -2293,7 +2293,18 @@ fn cs_net_name(
         return Some((net.clone(), CsProvenance::SpecDeclared));
     }
     let reference = p.reference.as_ref()?;
-    let net = hauksbee_engine::binder::model_role_cs_net(board, reference, lib)?;
+    let (net, model_id) = hauksbee_engine::binder::model_role_cs_net(board, reference, lib)?;
+    // The `ref` must name the part this peripheral actually IS. Pointing a
+    // `spi_eeprom` at the board's MCP3008 resolves a real `cs` role on a real
+    // assembled part, and would frame the EEPROM's transactions off the ADC's
+    // chip-select while reporting `exact`. An unrecognised model id is allowed
+    // through (a user model pack may supply the part, and no list here can know
+    // its id); the mismatch is only judged when both sides are built-in.
+    if crate::spec::is_builtin_spi_slave_model_id(&model_id)
+        && crate::spec::builtin_model_id_for_spi_kind(&p.kind) != Some(model_id.as_str())
+    {
+        return None;
+    }
     Some((net, CsProvenance::ModelRoles))
 }
 
@@ -3876,6 +3887,56 @@ mod spi_cs_source_tests {
             cs_net_name(&p, &board(), &lib),
             None,
             "no cs_net and no ref means no CS net; the bus reports heuristic framing"
+        );
+    }
+
+    /// A `ref` that names a real, assembled, modelled part of the WRONG kind must
+    /// not supply a CS net. Pointing a `spi_eeprom` at the board's MCP3008 finds a
+    /// genuine `cs` role on a genuine part, and taking it would frame the EEPROM's
+    /// transactions off the ADC's chip-select while reporting `exact`. Dropping to
+    /// the heuristic is the conservative answer, and the heuristic disclosure then
+    /// fires on every surface, so the bus is not quietly trusted.
+    #[test]
+    fn a_ref_naming_the_wrong_spi_part_supplies_no_cs_net() {
+        let lib = hauksbee_models::ModelLibrary::builtin();
+        let mut b = board();
+        b.components[0].value = "MCP3008-I/SL".to_string();
+        b.components[0].pins[0].number = "10".to_string(); // the MCP3008's cs pad
+
+        // Sanity: as its OWN kind the part does resolve, so the refusal below is
+        // about the mismatch and not about the fixture failing to bind.
+        let matched = peripheral("id = \"U5\"\ntype = \"spi_mcp3008\"\nref = \"U5\"\n");
+        assert_eq!(
+            cs_net_name(&matched, &b, &lib),
+            Some(("EE_CS".to_string(), CsProvenance::ModelRoles)),
+            "an MCP3008 under the spi_mcp3008 kind must still resolve its cs pad"
+        );
+
+        let mismatched = peripheral("id = \"U5\"\ntype = \"spi_eeprom\"\nref = \"U5\"\n");
+        assert_eq!(
+            cs_net_name(&mismatched, &b, &lib),
+            None,
+            "a spi_eeprom pointed at an MCP3008 must not borrow that ADC's chip-select"
+        );
+    }
+
+    /// The mismatch check must only fire when it can actually judge. A model id no
+    /// built-in kind claims may come from a user model pack, and refusing it would
+    /// break the very extensibility the pin-role route is built on.
+    #[test]
+    fn an_unrecognised_model_id_is_not_treated_as_a_mismatch() {
+        assert!(
+            !crate::spec::is_builtin_spi_slave_model_id("some_user_pack_flash"),
+            "a user pack's id is not a built-in SPI slave id"
+        );
+        assert_eq!(
+            crate::spec::builtin_model_id_for_spi_kind("spi_eeprom"),
+            Some("eeprom_25xx_spi")
+        );
+        assert_eq!(
+            crate::spec::builtin_model_id_for_spi_kind("pushbutton"),
+            None,
+            "a non-SPI kind claims no model"
         );
     }
 

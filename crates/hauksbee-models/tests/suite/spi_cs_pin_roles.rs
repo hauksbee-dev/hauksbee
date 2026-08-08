@@ -26,10 +26,11 @@ use hauksbee_models::{ComponentQuery, ModelLibrary};
 /// Resolve `value` and assert the entry id plus the exact, complete pad->role
 /// map (no extra pads, no missing pads, no swaps).
 ///
-/// Sets `mpn` as well as `value`, because both entries carry an `mpn_re` and the
-/// matcher ANDs its rules: a value-only query matches neither, while the engine's
-/// real query path falls `mpn` back to the value field. Querying with both is
-/// what the engine actually does.
+/// Sets `mpn` as well as `value`, because both entries match on `mpn_re` and a
+/// bare `ModelLibrary::resolve` does no fallback. The engine's real query path
+/// falls `mpn` back to the value field for a part with no MPN property, so
+/// passing the same string as both is what a component like that looks like by
+/// the time the matcher sees it.
 fn assert_pin_map(value: &str, id: &str, expected: &[(&str, &str)]) {
     let lib = ModelLibrary::builtin();
     let q = ComponentQuery {
@@ -140,6 +141,33 @@ fn every_spi_slave_entry_offers_a_cs_pad_under_real_part_numbers() {
             Some(expected_pad),
             "{value} must expose a `cs` role on pad {expected_pad}; without it the co-sim \
              drops to the chunk-boundary framing heuristic with no error"
+        );
+    }
+}
+
+/// A real board often carries a generic Value ("ADC", "EEPROM") with the actual
+/// part number only in an MPN property. The matcher ANDs its rules, so an entry
+/// declaring both `value_re` and `mpn_re` would silently lose that case; these
+/// entries declare `mpn_re` alone, and the engine's query falls `mpn` back to
+/// Value, so both shapes resolve.
+#[test]
+fn a_generic_value_with_the_part_number_in_the_mpn_still_resolves() {
+    let lib = ModelLibrary::builtin();
+    for (value, mpn, expected) in [
+        ("ADC", "MCP3008-I/SL", "mcp3008"),
+        ("EEPROM", "25LC256-I/SN", "eeprom_25xx_spi"),
+        ("U5", "25AA010A-I/OT", "eeprom_25xx_spi"),
+    ] {
+        let q = ComponentQuery {
+            value: Some(value.into()),
+            mpn: Some(mpn.into()),
+            ..Default::default()
+        };
+        assert_eq!(
+            lib.resolve(&q).model.map(|m| m.id.clone()).as_deref(),
+            Some(expected),
+            "Value={value:?} with MPN={mpn:?} must resolve; a `value_re` ANDed onto \
+             the mpn rule is what breaks this shape"
         );
     }
 }

@@ -1937,9 +1937,15 @@ impl Scheduler {
                 );
             }
         }
-        bus.lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .set_cs_pin(Some(pins.cs_n));
+        {
+            let mut guard = bus.lock().unwrap_or_else(|e| e.into_inner());
+            guard.set_cs_pin(Some(pins.cs_n));
+            // This CS came from the bit-bang wiring, not from a spec `cs_net` and
+            // not from a model pad map. Leaving the default would have the
+            // coverage report `exact (CS net declared by the spec)` for a bus no
+            // spec ever declared a net for.
+            guard.set_cs_provenance(crate::peripherals::CsProvenance::BitBangPins);
+        }
         let responder = crate::responders::BitBangSpiResponder::new(bus.clone(), pins);
         self.responder_registry(mi)
             .lock()

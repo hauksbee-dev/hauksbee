@@ -62,14 +62,27 @@ max_voltage_v = 6.5
 # role pairs here). That is deliberate: the channel inputs are read by the
 # behavioural slave over the bus, and a passthrough buffer on them would be a
 # fabrication. The part contributes its pad map and nothing else.
+#
+# WHAT THIS COSTS, stated rather than hidden: a pad-map-only entry still binds
+# through the generic digital path and so counts as a RESOLVED part in the bind
+# report's coverage fraction, despite modelling no electrical behaviour. That is
+# a pre-existing property of the binder shared with six other logic-less entries
+# (ch340g, cp2102, ltc6803_4, bq76952, lm5107, lm5109), not something this entry
+# introduces, but it does mean a `model_coverage` assertion counts this part as
+# covered. The fix is a binder-level distinction between "bound" and
+# "electrically modelled", which is a change to BindOutcome and not to this file.
 [[models]]
 id = "mcp3008"
 kind = "adc"
 description = "MCP3008 8-channel 10-bit SPI ADC, PDIP-16 / SOIC-16 / TSSOP-16"
 
+# `mpn_re` ONLY, deliberately. The matcher ANDs its rules, and the engine's query
+# falls `mpn` back to the Value field when a component carries no MPN property.
+# So an mpn-only rule matches BOTH a part whose Value is "MCP3008..." and one
+# whose Value is something generic ("ADC") with the real part number in its MPN
+# property. Adding `value_re` alongside would AND the two and lose the second case.
 [models.match]
-value_re = "(?i)^MCP3008"
-mpn_re   = "(?i)MCP3008"
+mpn_re = "(?i)^MCP3008"
 
 [models.params]
 # Source: Microchip MCP3004/3008 datasheet DS21295D, Section 1.0 Electrical
