@@ -3752,13 +3752,15 @@ impl Scheduler {
     ///   the edge loop never enables its driver and the net would float.
     ///   Enable such drivers at the pin's last known level (default low, the
     ///   AVR reset PORT state).
-    /// * **Release**, a pin that dropped OUT of the set (DDR output→input,
-    ///   e.g. an open-drain bus hand-off) gets its driver DISABLED again, so
-    ///   the net is genuinely let go instead of staying clamped at its stale
-    ///   driven level (the latched-bus failure). Only pins the core itself
-    ///   previously reported as outputs are released: an edge-enabled driver
-    ///   on a direction-blind backend (empty set both chunks) is never torn
-    ///   down.
+    /// * **Release**, a pin the report does not list as an output gets its
+    ///   driver DISABLED again, so the net is genuinely let go instead of
+    ///   staying clamped at its stale driven level (the latched-bus failure).
+    ///   On a direction-reporting backend the release covers every enabled
+    ///   driver, not just last chunk's set: a pin that flipped OUTPUT, wrote,
+    ///   and flipped back to INPUT inside one chunk is re-enabled by its PORT
+    ///   edges and appears in neither chunk-end set (see the inline comment).
+    ///   A direction-blind backend (empty set every chunk) keeps the old
+    ///   difference rule so its edge-enabled drivers are never torn down.
     fn sync_configured_outputs(
         &mut self,
         mi: usize,
@@ -3775,10 +3777,36 @@ impl Scheduler {
                 }
             }
         }
-        for &(port, bit) in m.configured_outputs.difference(&configured) {
-            if let Some(drv) = m.binding.gpio_drivers.get_mut(&(port, bit)) {
-                if drv.enabled {
-                    drv.set_enabled(&mut self.circuit, false);
+        if m.core.drive_direction_observable() {
+            // The backend's direction report is authoritative: release EVERY
+            // enabled driver whose pin it does not list as an output, not just
+            // the ones in the previous chunk's set. The difference-based
+            // release below misses a pin that flipped OUTPUT, wrote, and
+            // flipped back to INPUT entirely inside one chunk: the PORT edges
+            // from the write re-enable its driver (step 2 of `run_chunk`),
+            // both chunk-end direction sets say INPUT, and the stale driver
+            // then fights a modelled part that is legitimately driving the
+            // shared bus at the boundary. The NEP EEPROM data bus hit exactly
+            // this: an 87 us write-then-poll cycle fits in a 1 ms chunk, and
+            // whenever the boundary landed inside a poll's /OE-low window the
+            // solver drove MCU and EEPROM against each other and the
+            // driver-contention monitor (correctly) refused the run.
+            for drv in
+                m.binding.gpio_drivers.iter_mut().filter_map(|(pin, drv)| {
+                    (drv.enabled && !configured.contains(pin)).then_some(drv)
+                })
+            {
+                drv.set_enabled(&mut self.circuit, false);
+            }
+        } else {
+            // Direction-blind backend: the edge-driven enable is the only
+            // signal there is, so never tear a driver down on the strength of
+            // an (always empty) direction report.
+            for &(port, bit) in m.configured_outputs.difference(&configured) {
+                if let Some(drv) = m.binding.gpio_drivers.get_mut(&(port, bit)) {
+                    if drv.enabled {
+                        drv.set_enabled(&mut self.circuit, false);
+                    }
                 }
             }
         }
@@ -3948,6 +3976,17 @@ impl Scheduler {
         }
         for c in found {
             eprintln!("WARNING: {}", c.message());
+            // TEMP-DEBUG contention: dump every net voltage at detection.
+            if std::env::var_os("HAUKSBEE_CONTENTION_DEBUG").is_some() {
+                let mut volts: Vec<(String, f64)> = self.net_voltages().into_iter().collect();
+                volts.sort_by(|a, b| a.0.cmp(&b.0));
+                for (net, v) in volts {
+                    eprintln!(
+                        "CONTENTION-DEBUG t={:.9} net {net} = {v:.3} V",
+                        self.sim_time
+                    );
+                }
+            }
             self.contentions.push(c);
         }
     }

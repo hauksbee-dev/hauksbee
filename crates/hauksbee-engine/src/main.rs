@@ -936,10 +936,11 @@ struct RunArgs {
     serial_wait: Option<f64>,
 
     /// Let the co-sim run as fast as it can under --serial-attach until your
-    /// software opens the port. Once a peer attaches, sim time holds to the
-    /// wall clock regardless: byte-arrival timing against a real process is
-    /// only defined in wall time, so a session that free-ran while attached
-    /// would give load-dependent timing verdicts.
+    /// software opens the port. While a peer is attached, its bytes are
+    /// delivered on a fixed compressed schedule (its own wall-clock gaps,
+    /// scaled into sim time) rather than free-running: byte-arrival timing
+    /// against a real process must not depend on machine load, or timing
+    /// verdicts change with load.
     #[arg(long, help_heading = "Host serial")]
     serial_no_pace: bool,
 
