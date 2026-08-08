@@ -1421,3 +1421,33 @@ fn curved_pour_edges_use_dense_flattening_for_the_rank_overlap_test() {
     );
     assert_short(&drc("", "", &signals), "A", "B");
 }
+
+#[test]
+fn class_clearance_below_the_design_rules_is_floored_at_the_design_rules() {
+    // Class 1 declares a 0.1 mm same-class clearance under a 0.4 mm design
+    // rule: Eagle ignores class values below the rules, so two class-1 wires
+    // 0.3 mm apart still violate the 0.4 mm rule. Without the design-rule
+    // floor the 0.1 mm class value would silently loosen the board.
+    let classes = r#"
+<classes>
+<class number="1" name="loose" width="0" drill="0">
+<clearance class="1" value="0.1"/>
+</class>
+</classes>"#;
+    let rules = format!(
+        "{classes}{}",
+        r#"<designrules name="wide">
+<param name="mdWireWire" value="0.4mm"/>
+</designrules>"#
+    );
+    let report = drc_rules("", "", &two_wire_signals("1", "1"), &rules);
+    let f = report
+        .clearance_violations()
+        .next()
+        .expect("0.3 mm gap violates the floored 0.4 mm rule");
+    assert!(
+        (f.required_clearance_mm - 0.4).abs() < 1e-9,
+        "class values below the design rules are floored, got {}",
+        f.required_clearance_mm
+    );
+}

@@ -400,10 +400,26 @@ waived. The corpus test (`tests/drc_corpus.rs`) documents this evidence.
   over a two-layer (`1`/`16`) copper stack, which matches the entire
   famous-board corpus. A genuinely multilayer Eagle `.brd` with inner-layer
   copper would need its inner layers added to that stack.
-- **Eagle curve flattening.** Wire `curve` arcs and per-vertex polygon curves
-  are flattened into 8 capsule links, with the circumcircle centre chosen so
-  the sweep lands on the stated endpoint. The chord error is sub-micron for
-  typical radii.
+- **Eagle curve flattening.** Wire `curve` arcs are flattened into 8 capsule
+  links, with the circumcircle centre chosen so the sweep lands on the stated
+  endpoint. The chord error is sub-micron for typical radii. Drawn copper
+  circles, pad-primitive arcs, and pour-outline curves instead use
+  sagitta-bounded *covering* flattening (error at most 2.5 µm), biased
+  outward so a grazing short is never lost to chord sag; the flip side is
+  that a true air gap smaller than ~2.5 µm can read as touching and be
+  reported a short. That is a deliberate FN-averse trade at a scale no
+  fabricator can produce as intentional spacing.
+- **Eagle pour boundary strokes.** The same-rank pour overlap short keys on
+  the polygons' vertex rings. Two same-rank pours whose rings miss each other
+  by less than their drawn boundary stroke widths are not flagged; pinning
+  whether Eagle's own DRC treats a stroke graze as overlap needs an
+  Eagle-generated oracle board, which the corpus does not yet carry.
+- **Eagle single-clearance model.** The Eagle DRC resolves ONE clearance (the
+  tightest copper-gating `md*` rule) rather than the per-item-kind matrix
+  (`mdWireWire` vs `mdPadPad`, ...); net-class values and matrix cells are
+  floored at that single rule. A board whose `md*` values diverge is checked
+  against the tightest of them everywhere, the long-standing
+  no-manufactured-noise choice of this path.
 - The bridge model is a fixed small resistance. It does not model the
   bridge's own current-dependent fusing. Destructive-mode faulting still
   applies to the parts the short over-drives.

@@ -334,7 +334,11 @@ safe under any derivation IS checked: two
 overlapping same-rank pours of different signals have no arbitration (Eagle
 pours both, a physical short, and its own DRC flags the overlap), and the
 Eagle path reports that short with the pour settings disclosed on the finding.
-Wires, vias and pads against each other are fully covered.
+That overlap keys on the polygons' vertex rings: same-rank pours whose rings
+miss by less than their drawn boundary stroke widths are not flagged, and
+pinning whether Eagle treats a stroke graze as overlap needs an
+Eagle-generated oracle board the corpus does not yet carry. Wires, vias and
+pads against each other are fully covered.
 
 ### Gerber footprint inference (via-vs-pad ambiguity)
 
