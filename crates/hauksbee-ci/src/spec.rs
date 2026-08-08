@@ -1831,12 +1831,6 @@ pub fn builtin_model_id_for_spi_kind(kind: &str) -> Option<&'static str> {
     }
 }
 
-/// Every built-in model id that some SPI peripheral kind claims, so a bound id
-/// can be told apart from "something this list has never heard of".
-pub fn is_builtin_spi_slave_model_id(id: &str) -> bool {
-    ["eeprom_25xx_spi", "mcp3008"].contains(&id)
-}
-
 impl SupplySpec {
     fn validate(&self) -> Result<(), SpecError> {
         const KINDS: [&str; 5] = ["ideal", "bench", "wall", "usb", "battery"];
