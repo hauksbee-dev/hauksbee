@@ -203,10 +203,12 @@ pub fn build_cosim_json(
         timing_limitations: sched
             .timing_limitations()
             .into_iter()
-            .map(|(mcu_ref, limitation)| crate::result::CosimTimingLimitation {
-                mcu_ref,
-                limitation,
-            })
+            .map(
+                |(mcu_ref, limitation)| crate::result::CosimTimingLimitation {
+                    mcu_ref,
+                    limitation,
+                },
+            )
             .collect(),
     }))
 }
