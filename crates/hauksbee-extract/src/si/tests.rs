@@ -731,8 +731,11 @@ fn a_declared_stackup_computes_the_trace_capacitance_instead_of_assuming_it() {
         (property "Reference" "U1") (property "Value" "SENSOR")
         (pad "1" smd rect (at 0 0) (net 1 "SDA")))
       (segment (start 0 0) (end 60 0) (width 0.25) (layer "F.Cu") (net 1))
+      (zone (net 3) (net_name "GND") (layer "B.Cu")
+        (filled_polygon (layer "B.Cu")
+          (pts (xy -5 -5) (xy 70 -5) (xy 70 20) (xy -5 20))))
     "#;
-    let text = format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})");
+    let text = format!("(kicad_pcb (version 20240101) (net 0 \"\") (net 3 \"GND\") {body})");
     let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
     let doc = forge_sexpr::parse(&text).unwrap();
     let mut r = SiReport::default();
@@ -754,6 +757,47 @@ fn a_declared_stackup_computes_the_trace_capacitance_instead_of_assuming_it() {
     assert!(
         f.message.contains("0.044 pF/mm"),
         "the computed figure must be reported: {}",
+        f.message
+    );
+}
+
+#[test]
+fn without_a_plane_below_the_capacitance_is_not_called_computed() {
+    // A microstrip needs a reference PLANE, and a stackup lists dielectric
+    // thicknesses rather than which copper is poured solid. On a 2-layer board
+    // whose bottom is sparse routing there is no plane under the trace, its real
+    // capacitance is lower, and computing a microstrip figure would over-report
+    // the rise time. Same board as the computed test, minus the pour.
+    let body = r#"
+      (setup (stackup
+        (layer "F.Cu" (type "copper") (thickness 0.035))
+        (layer "dielectric 1" (type "core") (thickness 1.51) (epsilon_r 4.5))
+        (layer "B.Cu" (type "copper") (thickness 0.035))
+      ))
+      (net 1 "SDA") (net 2 "+3V3")
+      (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
+        (property "Reference" "R1") (property "Value" "2.2k")
+        (pad "1" smd rect (at 0 0) (net 1 "SDA"))
+        (pad "2" smd rect (at 1 0) (net 2 "+3V3")))
+      (footprint "Package_SO:SOIC-8" (at 10 8) (layer "F.Cu")
+        (property "Reference" "U1") (property "Value" "SENSOR")
+        (pad "1" smd rect (at 0 0) (net 1 "SDA")))
+      (segment (start 0 0) (end 60 0) (width 0.25) (layer "F.Cu") (net 1))
+    "#;
+    let text = format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})");
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
+    let f = r.of_check(SiCheck::I2cRiseTime).next().expect("a note");
+    assert!(
+        f.message.contains("ASSUMED"),
+        "with no plane below, the range is still all there is: {}",
+        f.message
+    );
+    assert!(
+        !f.message.contains("computed from the board stackup"),
+        "and it must not claim otherwise: {}",
         f.message
     );
 }

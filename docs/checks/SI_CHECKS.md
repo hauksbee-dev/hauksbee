@@ -168,12 +168,22 @@ standard Hammerstad approximation. A 0.25 mm trace on 1.51 mm FR4 works out at
 net's track width. There is no range left to bracket, and the remedy for an
 assumed run is therefore a real one: declaring the stackup changes the answer.
 
-The F.Cu restriction is not incidental. `read_stackup` returns F.Cu's copper
-thickness and the first dielectric **below F.Cu**, and nothing else, so those
-numbers describe a top-layer microstrip and no other layer. A net that routes on
-B.Cu of an asymmetric stackup, or on any inner layer, falls back to the assumed
-range: computing a figure from geometry the board never stated and then calling it
-measured would be the exact failure this check is meant not to have.
+Two preconditions guard that, and both exist because computing a figure from
+geometry the board never stated and then calling it measured would be the exact
+failure this check is meant not to have:
+
+- **The bus must stay on F.Cu.** `read_stackup` returns F.Cu's copper thickness
+  and the first dielectric *below F.Cu*, and nothing else, so those numbers
+  describe a top-layer microstrip and no other layer. A net routing on B.Cu of an
+  asymmetric stackup, or on any inner layer, falls back to the range.
+- **Some copper below the top must be poured.** A microstrip needs a reference
+  plane, and a stackup lists dielectric thicknesses rather than which copper is
+  solid. On a 2-layer board whose bottom is sparse routing there is no plane under
+  the trace, its real capacitance is lower, and a microstrip figure would
+  over-report `t_r`. The test is deliberately coarse (does *a* pour exist below
+  F.Cu, not is it solid directly under this trace), which keeps it a necessary
+  rather than sufficient condition: it may still decline where a plane exists, but
+  it will not compute where none does.
 
 Without a stackup the impedance is unknown, so hauksbee does not pretend to know
 it. It carries the whole range, and **which end is used where** follows this

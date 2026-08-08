@@ -1062,6 +1062,15 @@ fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut
             if layers.len() != 1 || !layers.contains("F.Cu") {
                 return None;
             }
+            // A microstrip needs a reference PLANE, which a stackup does not
+            // establish: it lists dielectric thicknesses, not which copper is
+            // poured solid. On a 2-layer board with sparse bottom routing there is
+            // no plane under the trace, its real capacitance is lower, and
+            // computing a microstrip figure would over-report the rise time. Only
+            // proceed where some copper below the top is actually poured.
+            if !has_pour_below_top(r) {
+                return None;
+            }
             let stack = impedance::read_stackup(r)?;
             let (w_min, _) = track_width_range(r, net.id)?;
             trace_capacitance_pf_per_mm(w_min, &stack)
@@ -1726,6 +1735,30 @@ pub fn arc_length_mm(start: (f64, f64), mid: (f64, f64), end: (f64, f64)) -> f64
     // clamped because floating point can push the ratio a hair past 1.
     let sweep = |l: f64| 2.0 * (l / (2.0 * r)).clamp(-1.0, 1.0).asin();
     r * (sweep(a) + sweep(b))
+}
+
+/// Whether any copper layer below the top carries a filled pour, i.e. whether
+/// there is plausibly a reference plane for a top-layer microstrip at all.
+///
+/// Deliberately coarse: it asks only "does a plane exist below F.Cu", not "is it
+/// solid directly under this trace". That keeps it a necessary condition rather
+/// than a sufficient one, which is the honest direction: it can still decline to
+/// compute where a plane exists, but it will not compute where none does.
+fn has_pour_below_top(root: &List) -> bool {
+    root.find_all("zone").any(|z| {
+        let filled = z.find("filled_polygon").is_some();
+        let on_lower_copper = || {
+            let layer_names = z
+                .find("layers")
+                .map(|l| (0..).map_while(|i| l.arg_value(i)).collect::<Vec<_>>())
+                .or_else(|| z.find_value("layer").map(|l| vec![l]))
+                .unwrap_or_default();
+            layer_names
+                .iter()
+                .any(|n| n.ends_with(".Cu") && !n.eq_ignore_ascii_case("F.Cu"))
+        };
+        filled && on_lower_copper()
+    })
 }
 
 /// The distinct copper layers a net's discrete tracks are routed on.
