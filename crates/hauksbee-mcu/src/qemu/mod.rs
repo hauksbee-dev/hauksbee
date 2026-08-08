@@ -1298,8 +1298,14 @@ impl Mcu for QemuBackend {
 
     fn run_cycles(&mut self, n: u64) -> Result<u64> {
         let seconds = n as f64 / self.config.frequency_hz as f64;
+        // Return what was CREDITED, not what was requested: with the
+        // measured RESUME→STOP crediting the two differ by the control
+        // slack (and by the boot floor/cap while booting), and the trait
+        // promises "cycles actually executed". The delta is what keeps this
+        // return consistent with `current_cycle()` after the call.
+        let before = self.cycles;
         self.run_seconds(seconds)?;
-        Ok(n)
+        Ok(self.cycles - before)
     }
 
     fn run_micros(&mut self, us: u64) -> Result<()> {
