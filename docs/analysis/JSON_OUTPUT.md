@@ -207,12 +207,17 @@ degradation so a run that silently lost fidelity never reads as healthy:
   `{mcu_ref, resets}`. Not an error, a finding: an assertion that passed across a
   reboot was measuring a rebooted core. Read it with `watchdog_limitations[]`,
   since a backend that cannot reboot at all reports nothing here.
+- `timing_limitations[]`, MCUs whose backend's simulated time carries a known
+  systematic bias (the wall-clock-paced `qemu:` family, the STM32F103's
+  deliberate TIMx-at-72MHz divergence). Entries carry `{mcu_ref, limitation}`,
+  a whole sentence for a human: time-based assertions on these cores mean less
+  than they look, and this array is where the run says so.
 
 Every array above (`activity_summary[]`, `timing_coverage[]`,
 `timing_refusals[]`, `failed_windows[]`, `spi_framing[]`,
 `adc_dropped[]`, `unexercised_buses[]`, `short_pulses[]`,
-`driver_contention[]`, `watchdog_limitations[]`, `watchdog_resets[]`) is omitted
-when empty; the scalars are always present.
+`driver_contention[]`, `watchdog_limitations[]`, `watchdog_resets[]`,
+`timing_limitations[]`) is omitted when empty; the scalars are always present.
 A clean short run on `blinky.kicad_pcb` with `testdata/firmware/demo/demo.hex`:
 
 ```json

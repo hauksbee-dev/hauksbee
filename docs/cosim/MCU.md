@@ -200,8 +200,8 @@ Every number is measured on this host, not derived from a datasheet.
 | `renode:stm32f103` | **1.00x** (was 9.09x fast) | `tests/clock_truth.rs`, a SysTick-timed 100 ms half-period |
 | `renode:stm32f4_discovery` | **1.00x** (was 4.51x fast) | same gate |
 | `renode:nrf52840` | **1.00x** (was 6.58x fast) | same gate |
-| `renode:sifive_fe310` | core clock corrected, **not gated** | no silicon-exact timing reference exists on this part here; see below |
-| `qemu:esp32` / `-s3` / `-c3` | **1.35x to 1.45x slow, and host-load dependent** | `vTaskDelay(100 ms)` over a 2.000 s window |
+| `renode:sifive_fe310` | **1.00x on `mtime`** (the stock platform declared it 1892x wrong); instruction timing corrected but not silicon-gated, see below | `tests/clock_truth.rs`, an mtime-timed 100 ms half-period, two-sided (the gate is also proven to FAIL a deliberately wrong rate) |
+| `qemu:esp32` / `-s3` / `-c3` | **0.94x measured, host-load dependent** (was 1.35x-1.63x biased when the QMP round-trip slack went uncredited) | `tests/qemu_clock_truth.rs`, `vTaskDelay(100 ms)` toggles priced in credited time; carries a runtime timing caveat, see below |
 
 **What was wrong, and why nothing caught it.** Four Renode platforms ran
 simulated time at the EMULATOR's clock rate instead of the part's. The stock
@@ -249,34 +249,62 @@ half-period a WRONG sim would produce, not merely finer than the right one, and
 the gate measures the sim time at which the Nth edge arrives rather than an edge
 count, so a missed edge can only make the part look slow and never fast.
 
-**What remains open.**
+**What was closed since, and how.**
 
-- **`qemu:esp32*` runs 1.35x to 1.45x slow, and the figure is host-load
-  dependent by construction.** `run_seconds` does QMP `cont`, host sleep, QMP
-  `stop`, and the guest keeps running during the round trips; that slack is
-  unmeasurable from here and left uncredited. Boot is separately distorted: a
-  requested 5 ms chunk runs 8 ms of guest time under the boot-window floor while
-  the engine credits 5 ms. Treat ESP32 virtual time as approximate to within
-  tens of percent, not as a clock.
+- **The FE310's CLINT (`mtime`) was declared at 62 MHz** by the stock platform,
+  while the real FE310 drives `mtime` from the 32.768 kHz always-on RTC tick.
+  It stayed wrong for a while because no in-tree firmware exercised `mtime` on
+  an observable path, and a 1892x edit to a timer nobody can measure is how the
+  original core-clock defect was introduced. The missing oracle was built
+  first: `testdata/firmware/clock_truth/fe310_tick.rs` toggles a pin every 3277
+  mtime ticks (100.006 ms of real time on any FE310), and the descriptor's
+  `clint frequency: 32768` override is held by a TWO-SIDED gate in
+  `tests/clock_truth.rs`: the corrected platform measures 1.00x, and the same
+  measurement against a deliberately restored 62 MHz fails loudly, so the gate
+  is proven able to tell right from wrong. The mtime domain is separate from
+  the core clock, so the loader's `PerformanceInMips` cross-check deliberately
+  does not police it; the measurement is what holds it.
+- **`qemu:esp32*` used to run 1.35x-1.6x biased, with the bias uncredited.**
+  `run_seconds` does QMP `cont`, host sleep, QMP `stop`, and the guest keeps
+  running during the round trips. That slack was called unmeasurable and left
+  uncredited; it is not unmeasurable: QEMU stamps its RESUME/STOP events with
+  the host time of the state transition, and the backend now credits the
+  measured cont→stop window. `tests/qemu_clock_truth.rs` prices the same
+  firmware delays in both currencies from one run: 1.63x biased under the
+  old requested-window crediting, 0.94x under the measured crediting, on this
+  host. The boot-window floor is unchanged and its chunks are credited from
+  the same measurement.
+
+**What remains open, and how a run says so.** These are systematic, so prose
+here is not enough: each one is a `Mcu::timing_limitation` sentence that
+reaches every report surface of an affected run (the same channel and
+discipline as the watchdog section below: default text, `--plain` heads-ups,
+`--json` `CosimJson.timing_limitations` plus `notes[]` coverage entries, every
+hauksbee-ci format, and `hauksbee models lint` before a run happens).
+
+- **ESP32 virtual time is wall-paced.** icount breaks esp32 boot (measured, see
+  `src/qemu/mod.rs`), so even with the cont→stop window measured, TCG pace
+  tracks the host clock only approximately and degrades under host load. The
+  `qemu:` backends state this on every run; treat ESP32 time as correct to
+  within a few percent on an idle host, not as a clock.
 - **The F103's TIMx blocks stay at 72 MHz** while its core and SysTick are at
-  8 MHz. That is deliberate: only the post-PLL timer rate lets a stock CubeMX HAL
-  project boot at all on a platform with no clock tree, and the alternative was a
-  HAL time base landing at 139 Hz. The cost is that bare-metal firmware running
-  TIMx from the reset-default HSI sees its timers 9x fast. The paths a delay loop
-  and a SysTick tick take are gated; a TIMx time base is not.
-- **The FE310's CLINT is declared at 62 MHz** by the stock platform, while the
-  real FE310 drives `mtime` from the 32.768 kHz always-on RTC. That is a
-  different clock domain from the core, so the loader's cross-check deliberately
-  does not police it, and it is left alone rather than changed on a guess: the
-  in-tree Zephyr shell image is the only FE310 firmware available and it does not
-  exercise `mtime` on a path this repo can observe. A 1892x edit to a timer
-  nobody can measure is how the original defect was introduced.
-- **`renode:sifive_fe310` is corrected but not gated.** Its
-  `PerformanceInMips` went from Renode's 100 to the part's 16, which is
-  unambiguous, but a RISC-V part has no SysTick and the CLINT rate above is
-  unverified, so there is no silicon-exact reference on this part to assert
-  against. Instruction-timed delays are now roughly right instead of roughly 6x
-  fast; nothing stronger is claimed.
+  8 MHz. That is deliberate: only the post-PLL timer rate lets a stock CubeMX
+  HAL project boot at all on a platform with no clock tree, and the alternative
+  was a HAL time base landing at 139 Hz. The cost is that bare-metal firmware
+  running TIMx from the reset-default HSI sees its timers 9x fast. The paths a
+  delay loop and a SysTick tick take are gated; a TIMx time base is not, and
+  the descriptor's `timing_limitation` says so on every F103 run.
+
+**What the gates do NOT cover, on any Renode part.** The clock-truth gates
+measure timer-paced delays: SysTick on the Cortex-M parts, `mtime` on the
+FE310, each part's dominant delay path. Raw instruction busy-waits ride
+`PerformanceInMips` instead, which encodes the one-instruction-per-cycle
+approximation on every Renode CPU and is silicon-gated nowhere: the FE310's
+went from Renode's 100 to the part's 16 (roughly right instead of roughly 6x
+fast), and the M-class parts carry the same identity. This is a bounded
+approximation shared by every part above, not a per-part divergence, which is
+why it is stated here rather than as a per-run `timing_limitation` sentence;
+judge firmware by its timer-paced delays, which are the gated paths.
 
 ### Watchdog fidelity by backend (an unserviced watchdog may not reset)
 
@@ -1019,8 +1047,8 @@ value_re = "(?i)^(FE310|FE310-G00[0-9]|HiFive1)"
 mpn_re   = "(?i)^FE310"
 
 [models.params]
-# Renode backend: brings up sifive-fe310.repl. One 32-bit gpio0 port; roles
-# "p0<bit>".
+# Renode backend: brings up sifive-fe310.repl. One 32-bit GPIO port (the
+# platform names it gpioInputs); roles "p0<bit>".
 backend = "renode:sifive_fe310"
 
 [models.pins]
@@ -1037,8 +1065,9 @@ max_current_a = 0.1
 max_voltage_v = 3.6
 ```
 
-Backend: `RenodeConfig::sifive_fe310()` (one 32-bit gpio0, output value
-register at 0x0C, uart0). Renode ships `platforms/cpus/sifive-fe310.repl`
+Backend: `RenodeConfig::sifive_fe310()` (one 32-bit GPIO port, registered
+by the stock platform as `gpioInputs`, output value register at 0x0C,
+uart0). Renode ships `platforms/cpus/sifive-fe310.repl`
 and `scripts/single-node/sifive_fe310.resc` with a prebuilt demo ELF
 reference. This exercises the identical Monitor/UART/RunFor path as STM32
 on a RISC-V core, proving the backend stays ISA-agnostic.

@@ -27,6 +27,14 @@ pub struct Qmp {
     /// Bytes read past the end of the last framed JSON object.
     carry: Vec<u8>,
     timeout: Duration,
+    /// Host timestamp (epoch seconds) of the newest `RESUME` event seen since
+    /// [`Qmp::clear_run_events`]. QEMU stamps every asynchronous event with
+    /// the host time at which the state transition actually happened, which is
+    /// what makes the cont→stop window measurable instead of assumed.
+    event_resume: Option<f64>,
+    /// Host timestamp (epoch seconds) of the newest `STOP` event seen since
+    /// [`Qmp::clear_run_events`].
+    event_stop: Option<f64>,
 }
 
 impl Qmp {
@@ -59,6 +67,8 @@ impl Qmp {
             stream,
             carry: Vec::new(),
             timeout: Duration::from_secs(30),
+            event_resume: None,
+            event_stop: None,
         };
         // Read the greeting, then negotiate out of capabilities mode.
         let _greeting = q.read_message(Duration::from_secs(10))?;
@@ -156,6 +166,7 @@ impl Qmp {
                 bail!("QMP command timed out: {}", req.trim());
             }
             let msg = self.read_message(remaining)?;
+            self.note_event(&msg);
             if let Some(ret) = extract_field(&msg, "return") {
                 return Ok(ret);
             }
@@ -164,6 +175,90 @@ impl Qmp {
             }
             // Otherwise it was an async event; keep reading for the reply.
         }
+    }
+
+    /// Record the host timestamp of a `RESUME`/`STOP` event message; a no-op
+    /// for command replies and other events. Called on every framed message so
+    /// an event is captured whether it arrives before its command's `return`
+    /// or is drained afterwards by [`Qmp::measured_run_window`].
+    fn note_event(&mut self, msg: &str) {
+        let Some(event) = extract_field(msg, "event") else {
+            return;
+        };
+        let slot = match event.as_str() {
+            "RESUME" => &mut self.event_resume,
+            "STOP" => &mut self.event_stop,
+            _ => return,
+        };
+        let Some(ts) = extract_field(msg, "timestamp") else {
+            return;
+        };
+        let (Some(secs), Some(micros)) = (
+            extract_field(&ts, "seconds").and_then(|v| v.parse::<f64>().ok()),
+            extract_field(&ts, "microseconds").and_then(|v| v.parse::<f64>().ok()),
+        ) else {
+            return;
+        };
+        *slot = Some(secs + micros / 1e6);
+    }
+
+    /// Forget any recorded `RESUME`/`STOP` event timestamps. Call immediately
+    /// before the `cont` that opens a run window, so a stale pair from an
+    /// earlier chunk can never masquerade as this chunk's measurement.
+    ///
+    /// A previous chunk's STOP can still be sitting unread in the TCP buffer
+    /// when this runs, and it will be noted into the cleared slot as soon as
+    /// something reads the socket. That stale value is NOT drained here (an
+    /// empty-socket probe costs a blocking read timeout on every chunk);
+    /// instead [`Qmp::measured_run_window`] refuses to settle until the pair
+    /// is ordered, which a stale STOP next to this chunk's RESUME never is.
+    pub fn clear_run_events(&mut self) {
+        self.event_resume = None;
+        self.event_stop = None;
+    }
+
+    /// The wall-clock window the guest ACTUALLY ran between the last
+    /// `cont` and `stop`, measured from QEMU's own RESUME/STOP event
+    /// timestamps, or `None` when it cannot be measured (an event never
+    /// arrived, or the pair is inconsistent).
+    ///
+    /// The STOP event races the `stop` command's `return`, so this drains the
+    /// socket for up to `grace` waiting for a missing event before giving up.
+    /// `None` must be treated as "unmeasured", never as "zero".
+    ///
+    /// The drain keeps going until the pair is ORDERED (stop after resume),
+    /// not merely present: a stale STOP still buffered from an earlier chunk
+    /// (see [`Qmp::clear_run_events`]) fills the slot with a timestamp older
+    /// than this chunk's RESUME, and stopping there would return `None` while
+    /// the real STOP sits buffered, silently restoring the uncredited-slack
+    /// bias for this chunk AND arming the next one with another stale event.
+    /// Timestamps are monotone and `note_event` keeps the newest, so waiting
+    /// for order converges on the true pair.
+    pub fn measured_run_window(&mut self, grace: Duration) -> Option<Duration> {
+        let deadline = Instant::now() + grace;
+        let ordered = |resume: Option<f64>, stop: Option<f64>| matches!((resume, stop), (Some(r), Some(s)) if s > r);
+        while !ordered(self.event_resume, self.event_stop) && Instant::now() < deadline {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            // The socket's standing read timeout is 200 ms, so a read entered
+            // with a few ms of grace left would still block the full 200 ms
+            // and the advertised bound would be fiction: shrink the OS
+            // timeout to the remaining grace for this read, restore after.
+            self.stream
+                .set_read_timeout(Some(remaining.min(Duration::from_millis(200))))
+                .ok();
+            // A read timeout just means no more messages are in flight.
+            let res = self.read_message(remaining);
+            self.stream
+                .set_read_timeout(Some(Duration::from_millis(200)))
+                .ok();
+            let Ok(msg) = res else {
+                break;
+            };
+            self.note_event(&msg);
+        }
+        let (resume, stop) = (self.event_resume?, self.event_stop?);
+        let span = stop - resume;
+        (span > 0.0).then(|| Duration::from_secs_f64(span))
     }
 
     /// Read one complete brace-balanced JSON object (one QMP message) as a
@@ -178,10 +273,12 @@ impl Qmp {
                 return Ok(String::from_utf8_lossy(&msg).into_owned());
             }
             if Instant::now() >= deadline {
-                bail!(
-                    "QMP read timed out with no complete message; partial: {:?}",
-                    String::from_utf8_lossy(&buf[..buf.len().min(200)])
-                );
+                // Put the partial message BACK before bailing: timeouts are
+                // routine (event drains use near-zero deadlines), and dropping
+                // a half-read message here would desync every later frame.
+                let partial = String::from_utf8_lossy(&buf[..buf.len().min(200)]).into_owned();
+                self.carry = buf;
+                bail!("QMP read timed out with no complete message; partial: {partial:?}");
             }
             let mut chunk = [0u8; 4096];
             match self.stream.read(&mut chunk) {
@@ -193,7 +290,12 @@ impl Qmp {
                 {
                     std::thread::sleep(Duration::from_millis(3));
                 }
-                Err(e) => return Err(e).context("reading QMP socket"),
+                Err(e) => {
+                    // Same discipline for transient socket errors: whatever was
+                    // read so far stays queued for the next call.
+                    self.carry = buf;
+                    return Err(e).context("reading QMP socket");
+                }
             }
         }
     }
@@ -391,5 +493,90 @@ mod tests {
             Some(0xdeadbeef)
         );
         assert_eq!(parse_xp_word("no hex here"), None);
+    }
+
+    // ── measured_run_window against a scripted event stream ─────────────────
+    //
+    // The live qemu_clock_truth gate exercises the clean-stream happy path
+    // only; these pin the failure mode the ordered-pair rule exists for,
+    // deterministically, with a local socket standing in for QEMU.
+
+    /// A `Qmp` wired to a local socket that has `events` already in flight,
+    /// with no greeting or capabilities handshake (the tests drive the event
+    /// drain, not the command path). The write end is returned so a test can
+    /// feed more, and must be kept alive or the reader sees EOF.
+    fn qmp_with_pending(events: &str) -> (Qmp, std::net::TcpStream) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let client = TcpStream::connect(addr).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .ok();
+        let (server, _) = listener.accept().unwrap();
+        use std::io::Write as _;
+        (&server).write_all(events.as_bytes()).unwrap();
+        let qmp = Qmp {
+            stream: client,
+            carry: Vec::new(),
+            timeout: Duration::from_secs(1),
+            event_resume: None,
+            event_stop: None,
+        };
+        (qmp, server)
+    }
+
+    fn event(name: &str, seconds: u64, micros: u64) -> String {
+        format!(
+            "{{\"timestamp\": {{\"seconds\": {seconds}, \"microseconds\": {micros}}}, \
+             \"event\": \"{name}\"}}\n"
+        )
+    }
+
+    /// The happy path: RESUME then STOP, span measured from the event
+    /// timestamps, not from anything the host slept.
+    #[test]
+    fn measured_window_reads_the_event_pair() {
+        let stream = format!("{}{}", event("RESUME", 100, 0), event("STOP", 100, 250_000));
+        let (mut qmp, _server) = qmp_with_pending(&stream);
+        let got = qmp.measured_run_window(Duration::from_millis(500));
+        assert_eq!(got, Some(Duration::from_millis(250)));
+    }
+
+    /// THE load-bearing case: a stale STOP from the previous chunk is still
+    /// in flight when the new window's events arrive. A drain that settles on
+    /// "both slots filled" pairs the new RESUME with the STALE stop and
+    /// reports nothing (span negative), silently restoring the uncredited
+    /// bias; the ordered-pair rule must instead wait out the stream and
+    /// return the TRUE span.
+    #[test]
+    fn a_stale_stop_cannot_satisfy_the_window() {
+        let stream = format!(
+            "{}{}{}",
+            event("STOP", 90, 0),        // stale, from the previous chunk
+            event("RESUME", 100, 0),     // this chunk's resume
+            event("STOP", 100, 300_000), // this chunk's stop
+        );
+        let (mut qmp, _server) = qmp_with_pending(&stream);
+        let got = qmp.measured_run_window(Duration::from_millis(500));
+        assert_eq!(got, Some(Duration::from_millis(300)));
+    }
+
+    /// When the real STOP never arrives, the unordered stale pair must
+    /// produce `None` (fall back to the slept window), never a negative or
+    /// stale span, and the drain must respect the grace bound instead of
+    /// hanging on the socket's own read timeout.
+    #[test]
+    fn an_unordered_pair_yields_none_within_the_grace() {
+        let stream = format!("{}{}", event("STOP", 90, 0), event("RESUME", 100, 0));
+        let (mut qmp, _server) = qmp_with_pending(&stream);
+        let started = Instant::now();
+        let got = qmp.measured_run_window(Duration::from_millis(100));
+        assert_eq!(got, None, "an unordered pair is unmeasured, not a window");
+        assert!(
+            started.elapsed() < Duration::from_millis(400),
+            "the drain must give up around the 100 ms grace, not block on the \
+             socket's standing 200 ms timeout per read; took {:?}",
+            started.elapsed()
+        );
     }
 }

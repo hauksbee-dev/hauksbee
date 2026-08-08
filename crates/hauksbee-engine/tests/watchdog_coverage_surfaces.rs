@@ -190,6 +190,9 @@ fn a_faithful_backend_with_no_reboots_says_nothing_on_any_surface() {
         serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("--json object");
     assert!(v["cosim"]["watchdog_limitations"].is_null());
     assert!(v["cosim"]["watchdog_resets"].is_null());
+    // The cycle-exact backend also claims no timing limitation, and the claim
+    // must be absence, not present-and-empty.
+    assert!(v["cosim"]["timing_limitations"].is_null());
 }
 
 /// Finding 1 against a live backend that really does fall short:
@@ -242,6 +245,71 @@ fn a_watchdog_that_cannot_bite_reaches_all_four_surfaces() {
     assert!(
         sentence.contains("watchdog") && sentence.ends_with('.'),
         "the field carries the backend's whole sentence: {sentence}"
+    );
+
+    // The same sentence, unchanged, on the note channel and both text surfaces.
+    let line = format!("MCU U1: {sentence}");
+    let notes: Vec<&str> = v["notes"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|n| n["message"].as_str()).collect())
+        .unwrap_or_default();
+    assert!(notes.contains(&line.as_str()), "{notes:?}");
+
+    let text = String::from_utf8_lossy(&args(&[]).stdout).to_string();
+    assert!(text.contains(&format!("WARNING: {line}")), "{text}");
+    let plain = String::from_utf8_lossy(&args(&["--plain"]).stdout).to_string();
+    assert!(plain.contains(&line), "{plain}");
+}
+
+/// The timing twin of the test above, against the same live backend: the
+/// F103's descriptor declares a `timing_limitation` (its TIMx blocks run at
+/// the post-PLL 72 MHz against the 8 MHz reset-default core), and that
+/// sentence must reach the JSON note, the `CosimJson.timing_limitations`
+/// field, and both text surfaces byte-for-byte identically. Same
+/// skip-without-Renode behaviour as its sibling.
+#[cfg(feature = "renode")]
+#[test]
+fn a_known_timing_bias_reaches_all_four_surfaces() {
+    if !hauksbee_mcu::renode::is_available() {
+        eprintln!("SKIP: Renode not installed");
+        return;
+    }
+    let board = repo("testdata/boards/stm32_bluepill_demo.kicad_pcb");
+    let fw = repo("testdata/firmware/stm32_blinky/blinky.elf");
+    if !fw.exists() {
+        eprintln!("SKIP: blinky.elf not built");
+        return;
+    }
+
+    let args = |extra: &[&str]| {
+        let mut a = vec![
+            "run",
+            board.to_str().unwrap(),
+            "--firmware",
+            fw.to_str().unwrap(),
+            "--headless",
+            "--seconds",
+            "0.05",
+        ];
+        a.extend_from_slice(extra);
+        Command::new(bin()).args(&a).output().expect("binary runs")
+    };
+
+    let out = args(&["--json"]);
+    let v: serde_json::Value =
+        serde_json::from_str(&String::from_utf8_lossy(&out.stdout)).expect("--json object");
+    let limits = v["cosim"]["timing_limitations"]
+        .as_array()
+        .filter(|a| !a.is_empty())
+        .expect("the F103 declares a TIMx timing limitation, so it must be stated");
+    assert_eq!(limits[0]["mcu_ref"], "U1");
+    let sentence = limits[0]["limitation"]
+        .as_str()
+        .expect("a whole sentence")
+        .to_string();
+    assert!(
+        sentence.contains("TIMx") && sentence.ends_with('.'),
+        "the field carries the descriptor's whole sentence: {sentence}"
     );
 
     // The same sentence, unchanged, on the note channel and both text surfaces.
