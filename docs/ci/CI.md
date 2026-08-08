@@ -365,12 +365,17 @@ toleranced components, corner mode refuses and points at Monte-Carlo. Corner
 mode does not compose with `[fuzz]` (the corner index enumerates min/max
 combinations, not fuzz seeds). Monte-Carlo does compose with `[fuzz]`.
 
-**Reproducibility is doctrine.** Every sampled value is a pure function of
-(spec, seed, component reference): seed 0 is always the nominal baseline, the
-tolerance stream is domain-separated from the net-fuzz stream (adding a
-tolerance never changes which fuzz levels seed N straps), and when `[fuzz]`
-and `[ensemble]` are both present one shared seed stream drives both (the
-member count is the larger of the two `seeds`). A failure names the seed and
+**Reproducibility is doctrine.** Re-running a member reproduces it
+byte-identically, which is what makes a red build investigable. Every
+Monte-Carlo sampled value is a pure function of (seed, component reference,
+rule): in Monte-Carlo mode seed 0 is the nominal baseline, the tolerance stream
+is domain-separated from the net-fuzz stream (adding a tolerance never changes
+which fuzz levels seed N straps), and when `[fuzz]` and `[ensemble]` are both
+present one shared seed stream drives both (the member count is the larger of
+the two `seeds`). Corner mode has no nominal member (member 0 is the all-min
+corner), and its member indices, corners and interior probes alike, are
+renumbered by adding a tolerance rule: an index names a point within one spec
+revision, which is what `--seed` replay needs. A failure names the seed and
 the exact sampled values:
 
 ```
