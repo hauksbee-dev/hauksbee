@@ -79,8 +79,13 @@ fn qemu_adc_injection_lands_in_guest_ram() {
     mcu.set_analog_in(3, 3.3);
     mcu.run_micros(5_000).expect("run chunk");
 
-    let expected = ((volts / mailbox::ADC_FULL_SCALE_VOLTS) * f64::from(mailbox::ADC_MAX_COUNT))
-        .round() as u32;
+    // The backend's documented 2^n transfer function (R14), not 2^n-1: the
+    // two coincidentally rounded to the same count at the old 3.3 V full
+    // scale, which is how a 2^n-1 copy of the formula hid here.
+    let expected = ((volts / mailbox::ADC_FULL_SCALE_VOLTS)
+        * (f64::from(mailbox::ADC_MAX_COUNT) + 1.0))
+        .round()
+        .min(f64::from(mailbox::ADC_MAX_COUNT)) as u32;
     let got = mcu
         .debug_read_u32(mailbox::adc_channel_word(0))
         .expect("read ADC slot 0");
@@ -104,8 +109,10 @@ fn qemu_adc_injection_lands_in_guest_ram() {
     let updated = mcu
         .debug_read_u32(mailbox::adc_channel_word(0))
         .expect("re-read ADC slot 0");
-    let expected2 =
-        ((0.4 / mailbox::ADC_FULL_SCALE_VOLTS) * f64::from(mailbox::ADC_MAX_COUNT)).round() as u32;
+    let expected2 = ((0.4 / mailbox::ADC_FULL_SCALE_VOLTS)
+        * (f64::from(mailbox::ADC_MAX_COUNT) + 1.0))
+        .round()
+        .min(f64::from(mailbox::ADC_MAX_COUNT)) as u32;
     assert_eq!(updated, expected2, "count must track the injected voltage");
 }
 
