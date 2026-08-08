@@ -626,7 +626,7 @@ fn i2c_routed_text(devices: usize, track_mm: f64) -> String {
 #[test]
 fn i2c_long_routing_pushes_a_marginal_bus_over() {
     // 10k pull, 10 devices = 100 pF: t_r ~ 0.8473*10000*100e-3 = 847 ns, inside
-    // the 1000 ns standard-mode limit on pin capacitance ALONE. A 500 mm bus run
+    // the 1000 ns standard-mode limit on pin capacitance ALONE. An 800 mm bus run
     // (an I2C link across a backplane, exactly where rise time bites) adds
     // 800*0.038 = 30.4 pF even at the LOW end of the plausible trace-capacitance
     // range, taking C to 130 pF and t_r to ~1105 ns: over the limit on the
@@ -640,7 +640,7 @@ fn i2c_long_routing_pushes_a_marginal_bus_over() {
     assert_eq!(
         r.finding_count(),
         1,
-        "100 mm of trace capacitance must push a marginal bus over the limit"
+        "800 mm of trace capacitance must push a marginal bus over the limit"
     );
     assert!(
         r.of_check(SiCheck::I2cRiseTime)
@@ -665,10 +665,11 @@ fn i2c_long_routing_pushes_a_marginal_bus_over() {
 }
 
 #[test]
-fn a_pin_only_overrun_is_full_severity_and_assumption_free() {
+fn a_pin_only_overrun_is_full_severity_and_routing_independent() {
     // 10k pull with 25 device pins is 250 pF of pin capacitance alone: 2118 ns,
     // over standard mode without counting a single millimetre of copper. That
-    // verdict rests on the netlist only, so it must NOT be softened or hedged.
+    // verdict does not rest on the routing, so it keeps full severity, while
+    // still naming the per-pin figure it does rest on.
     let text = i2c_routed_text(25, 5.0);
     let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
     let doc = forge_sexpr::parse(&text).unwrap();
@@ -681,8 +682,13 @@ fn a_pin_only_overrun_is_full_severity_and_assumption_free() {
     assert_eq!(f.severity, SiSeverity::High, "{}", f.message);
     assert!(
         f.message
-            .contains("does not depend on any routing assumption"),
-        "must say the verdict is assumption-free: {}",
+            .contains("does not rest on any routing assumption"),
+        "must say the verdict is routing-independent: {}",
+        f.message
+    );
+    assert!(
+        f.message.contains("10 pF per I2C pin"),
+        "and must still name the pin-capacitance figure it DOES rest on: {}",
         f.message
     );
 }

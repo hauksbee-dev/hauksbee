@@ -181,9 +181,11 @@ datasheet-typical figure rather than a floor either. The messages say "the low
 end of the plausible range" and never claim it is the lowest possible.
 
 Because of that, **severity depends on what the verdict rests on.** The
-pin-capacitance figure needs no geometry at all: device count and pull-up value
-both come from the netlist. When that alone exceeds the limit, the finding is
-assumption-free and carries full severity, and says so. When the limit is only
+pin-capacitance figure needs no geometry: device count and pull-up value both come
+from the netlist. When that alone exceeds the limit, the finding does not rest on
+the routing and carries full severity. It says exactly that, and no more: the
+10 pF per pin is still a datasheet-typical figure rather than a measurement, so
+the message names it and points at per-part models as the way to tighten it. When the limit is only
 exceeded once the trace term is added, the shortfall is true for the impedance
 range assumed and false above it, so it is capped at `medium` and states that the
 device pins alone are within the limit and a higher-impedance route would pass.

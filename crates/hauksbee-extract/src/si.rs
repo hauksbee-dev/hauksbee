@@ -1020,10 +1020,13 @@ fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut
         // the reader still sees the worst case the geometry permits.
         let t_r = i2c_rise_time_ns(r, c.low_pf);
         let t_r_high = i2c_rise_time_ns(r, c.high_pf);
-        // Rise time from the DEVICE PINS alone, with no trace term at all. This
-        // one rests on nothing geometric: pin count and pull-up value both come
-        // from the netlist. When it already exceeds the limit the finding needs no
-        // assumption about routing, and only then is it decision-grade.
+        // Rise time from the DEVICE PINS alone, with no trace term at all.
+        //
+        // This is NOT an assumption-free number: the pin count and pull-up value
+        // come from the netlist, but C_PIN_PF is a datasheet-typical 10 pF, and a
+        // part with 3 pF pins would sit far below it. What it is free of is the
+        // GEOMETRIC assumption, the trace impedance hauksbee cannot see, which is
+        // the one the trace term rests on and the one the caveat distinguishes.
         let t_r_pins = i2c_rise_time_ns(r, c.devices as f64 * C_PIN_PF);
 
         // Conservative: judge against STANDARD mode unless the name says fast.
@@ -1070,8 +1073,9 @@ fn check_i2c_rise_time(board: &ExtractedBoard, root: Option<&List>, report: &mut
                  alone are within the limit, so a higher-impedance route than assumed would \
                  pass. Declare the stackup and trace width to settle it."
             } else {
-                " The device pins alone exceed the limit, so this does not depend on any \
-                 routing assumption."
+                " The device pins alone exceed the limit, so this does not rest on any routing \
+                 assumption (it does still use the datasheet-typical 10 pF per I2C pin; give \
+                 the parts models carrying their real pin capacitance to tighten it)."
             };
             report.findings.push(SiFinding {
                 check: SiCheck::I2cRiseTime,

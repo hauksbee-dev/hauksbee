@@ -329,13 +329,14 @@ pub fn resistor_power_from_footprint(footprint: &str) -> ResistorPower {
         chip(1.0)
     } else if f.contains("2220") {
         chip(1.0)
-    } else if is_tht_axial_footprint(&f) && !f.contains("POWER") {
-        // A recognised small axial body (DIN0204 / DIN0207 class): 1/4 W is the
-        // genuine industry default. Bodies whose name says POWER are 1 W and up
-        // and fall through to the abstention, because guessing 1/4 W for a 1 W
-        // part invents faults on a correct design.
+    } else if let Some(w) = din_axial_rating(&f) {
+        // A DIN body code IS size evidence, and the codes are not interchangeable:
+        // DIN0204 is a 1/8 W body while DIN0207 is 1/4 W, so treating them alike
+        // over-rates the smaller one twofold and suppresses its overpower check.
+        // An axial footprint with no DIN code carries no size evidence and falls
+        // through to the abstention below.
         ResistorPower {
-            watts: Some(1.0 / 4.0),
+            watts: Some(w),
             basis: ResistorPowerBasis::ThtAxial,
         }
     } else {
@@ -424,17 +425,26 @@ fn metric_only_chip_rating(f: &str) -> Option<f64> {
         .map(|(_, w)| *w)
 }
 
-/// Whether an (already uppercased) footprint names a through-hole axial body.
-/// KiCad writes these as `Resistor_THT:R_Axial_DIN0207_...`; the DIN/RM tokens
-/// cover libraries that omit the word "axial".
-fn is_tht_axial_footprint(f: &str) -> bool {
-    // Only bodies that actually name themselves axial. Notably absent:
-    //
-    //   - a bare "THT" match, which claimed every through-hole resistor footprint
-    //     including `Resistor_THT:R_Vertical` and custom cement bodies, none of
-    //     which the 1/4 W axial default describes;
-    //   - RADIAL, because `CP_Radial_*` is an electrolytic capacitor.
-    f.contains("AXIAL") || f.contains("DIN0") || f.contains("BARE_METAL")
+/// The rating of a recognised DIN axial resistor body, from its DIN code.
+///
+/// The standard IEC/DIN body-to-power mapping. Anything outside it (a bare
+/// `R_Axial` with no code, a vertical or cement body, a `Power` variant) carries
+/// no size evidence and gets no rating: the codes differ by up to 16x, so a
+/// blanket axial default is not a conservative guess in either direction.
+fn din_axial_rating(f: &str) -> Option<f64> {
+    const TABLE: &[(&str, f64)] = &[
+        ("DIN0204", 0.125),
+        ("DIN0207", 0.25),
+        ("DIN0309", 0.5),
+        ("DIN0411", 1.0),
+        ("DIN0414", 2.0),
+        ("DIN0516", 3.0),
+        ("DIN0617", 5.0),
+    ];
+    TABLE
+        .iter()
+        .find(|(code, _)| f.contains(code))
+        .map(|(_, w)| *w)
 }
 
 /// Strip a multi-unit stamping suffix from a device name, yielding the package
@@ -1691,16 +1701,45 @@ mod monitor_temp_tests {
     }
 
     #[test]
-    fn tht_axial_keeps_its_genuine_quarter_watt() {
-        // A real axial body IS 1/4 W. Applying the chip floor here would invent
-        // overpower faults on correct through-hole designs.
-        for f in [
-            "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal",
-            "Resistor_THT:R_Axial_DIN0204_L3.6mm_D1.6mm_P7.62mm_Horizontal",
+    fn din_axial_bodies_rate_per_code_not_alike() {
+        // The DIN codes are size evidence and they are NOT interchangeable:
+        // DIN0204 is a 1/8 W body, DIN0207 a 1/4 W one. Rating them alike
+        // over-rates the smaller twofold and suppresses its overpower check.
+        for (f, want) in [
+            (
+                "Resistor_THT:R_Axial_DIN0204_L3.6mm_D1.6mm_P7.62mm_Horizontal",
+                0.125,
+            ),
+            (
+                "Resistor_THT:R_Axial_DIN0207_L6.3mm_D2.5mm_P10.16mm_Horizontal",
+                0.25,
+            ),
+            (
+                "Resistor_THT:R_Axial_DIN0411_L9.9mm_D3.6mm_P12.70mm_Horizontal",
+                1.0,
+            ),
         ] {
             let r = resistor_power_from_footprint(f);
             assert_eq!(r.basis, ResistorPowerBasis::ThtAxial, "{f}");
-            assert!((r.watts.unwrap() - 0.25).abs() < 1e-12, "{f}");
+            assert!(
+                (r.watts.unwrap() - want).abs() < 1e-12,
+                "{f} must rate {want} W, got {:?}",
+                r.watts
+            );
+        }
+    }
+
+    #[test]
+    fn an_axial_body_without_a_din_code_abstains() {
+        // No code means no size evidence, and the codes span 0.125 W to 5 W, so
+        // there is no defensible blanket axial default.
+        for f in [
+            "Resistor_THT:R_Axial_Power_L11.9mm_W4.5mm_P15.24mm",
+            "Resistor_THT:R_Axial_Custom",
+        ] {
+            let r = resistor_power_from_footprint(f);
+            assert_eq!(r.basis, ResistorPowerBasis::Unknown, "{f}");
+            assert!(r.watts.is_none(), "{f} got {:?}", r.watts);
         }
     }
 
