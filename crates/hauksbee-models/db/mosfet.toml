@@ -269,6 +269,13 @@ max_junction_temp_c = 150.0   # TJ max (C)
 # HOW TO OVERRIDE: add an [[models]] entry with a value_re = "(?i)^<PART>$"
 # in mosfet.toml (or a user TOML directory). The specificity scorer will prefer
 # any value-matched entry over this footprint-only catch-all.
+#
+# RUNTIME DISCLOSURE: binding to one of these raises a coverage warning naming
+# the part and this model, because the ratings above are invented for the
+# package class and a verdict resting on them otherwise looked exactly like a
+# verdict resting on a vendor SPICE model. See
+# BindReport::estimated_fallback_warnings; the CI report carries it in
+# coverage_warnings beside the co-sim and overpower holes.
 
 [[models]]
 id = "generic_nmos_power_pkg"

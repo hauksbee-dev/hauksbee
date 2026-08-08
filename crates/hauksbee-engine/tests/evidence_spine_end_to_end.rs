@@ -135,6 +135,7 @@ fn drc_short_evidence_is_geometry_causal_and_cites_the_layout_artifact() {
         violations: vec![],
         at_limit: vec![],
         version_warning: None,
+        suppression_note: None,
     };
 
     let maps = evidence.maps_for_drc(&drc).unwrap();

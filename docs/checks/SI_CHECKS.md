@@ -147,12 +147,95 @@ t_r = 0.8473 * Rpull * Cbus
 limit is **1000 ns standard mode** (100 kHz) and **300 ns fast mode** (400 kHz).
 Too-weak a pull (R too high) or too much bus capacitance blows it.
 
-Bus capacitance is `Cbus = devices * 10 pF + trace_length * 1.0 pF/mm`:
+Bus capacitance is `Cbus = devices * 10 pF + trace_length * (0.038 to 0.15 pF/mm)`:
 
 - 10 pF per I2C device pin (a common datasheet figure, refinable per part).
-- 1.0 pF/mm of routed trace (a conservative microstrip-over-plane figure. The
-  geometry refinement is a documented future improvement, the device-count
-  term is the floor used today).
+- **0.038 to 0.15 pF/mm** of routed trace, a range rather than a number, summed
+  from the layout's discrete segments and true arc sweeps via `routed_length_mm`,
+  the same geometry the USB skew check reads.
+
+The trace figures are derived, not picked: for a transmission line
+`C' = sqrt(Er_eff) / (c0 * Z0)`, which on FR4 (`Er_eff ~ 3`) is 0.116 pF/mm at
+50 ohm, 0.077 pF/mm at 75 ohm and 0.057 pF/mm at 100 ohm; the widest,
+closest-coupled realistic case (`Er_eff 3.2`, `Z0 40 ohm`) gives 0.149 pF/mm.
+
+**When the board declares a stackup and the bus stays on F.Cu, this is computed
+rather than assumed.** `trace_capacitance_pf_per_mm` takes the net's narrowest
+track width and the declared stackup, gets `Z0` from the same microstrip model
+check 5 uses, and returns `C' = sqrt(Er_eff) / (c0 * Z0)` with `Er_eff` from the
+standard Hammerstad approximation. A 0.25 mm trace on 1.51 mm FR4 works out at
+0.044 pF/mm, and the note says it was computed from the board stackup and the
+net's track width. There is no range left to bracket, and the remedy for an
+assumed run is therefore a real one: declaring the stackup changes the answer.
+
+Two preconditions guard that, and both exist because computing a figure from
+geometry the board never stated and then calling it measured would be the exact
+failure this check is meant not to have:
+
+- **The bus must stay on F.Cu.** `read_stackup` returns F.Cu's copper thickness
+  and the first dielectric *below F.Cu*, and nothing else, so those numbers
+  describe a top-layer microstrip and no other layer. A net routing on B.Cu of an
+  asymmetric stackup, or on any inner layer, falls back to the range.
+- **The bus must run over a pour.** A microstrip needs a reference plane, and a
+  stackup lists dielectric thicknesses rather than which copper is solid. On a
+  2-layer board whose bottom is sparse routing there is no plane under the trace,
+  its real capacitance is lower, and a microstrip figure would over-report `t_r`.
+  `net_is_over_a_plane` therefore tests **this net's** segments, not the board:
+  every routed segment's midpoint must fall inside a filled lower-layer pour. A
+  pour somewhere else on the board says nothing about the copper under this bus,
+  and a route that leaves the plane falls back to the range. The residual, stated
+  plainly: a segment whose midpoint is covered but whose ends overhang the pour
+  edge still counts as covered, and narrowing that needs real polygon clipping.
+
+A failing finding computed this way carries no range language, because there is no
+range: the message reports the single figure instead of an invented low and high
+end.
+
+Without a stackup the impedance is unknown, so hauksbee does not pretend to know
+it. It carries the whole range, and **which end is used where** follows this
+module's standing rule that a check fires only when even the most lenient
+assumption is violated:
+
+| Figure | Value | Used for |
+|--------|-------|----------|
+| `C_TRACE_PF_PER_MM_LOW` | 0.038 pF/mm (thin 2-layer, 150 ohm) | **gating whether a finding is raised at all** |
+| `C_TRACE_PF_PER_MM_HIGH` | 0.15 pF/mm (40 ohm worst case) | reported alongside, so the reader sees the worst case the geometry permits |
+
+Firing on the high end would fail real boards: a 700 mm 150 ohm route on an
+8-device bus behind a 10 kohm pull is ~902 ns at its own impedance (in spec) but
+well over the limit if charged 0.15 pF/mm. Findings therefore quote both numbers
+and are raised only when the low bound is already over the limit.
+
+The low figure is the bottom of the range hauksbee will reason about, **not** a
+proof that no route is lower: impedance rises without bound as a trace narrows
+and its plane recedes, and the 10 pF per device pin beside it is a
+datasheet-typical figure rather than a floor either. The messages say "the low
+end of the plausible range" and never claim it is the lowest possible.
+
+Because of that, **severity depends on what the verdict rests on.** The
+pin-capacitance figure needs no geometry: device count and pull-up value both come
+from the netlist. When that alone exceeds the limit, the finding does not rest on
+the routing and carries full severity. It says exactly that, and no more: the
+10 pF per pin is still a datasheet-typical figure rather than a measurement, so
+the message names it and points at per-part models as the way to tighten it. When the limit is only
+exceeded once the trace term is added, the shortfall is true for the impedance
+range assumed and false above it, so it is capped at `medium` and states that the
+device pins alone are within the limit and a higher-impedance route would pass.
+The check still fires, because a long bus really is the failure mode this exists
+to catch; it just does not dress an assumption as a measurement. Both constants are
+pinned against the closed form by
+`si::tests::trace_capacitance_per_mm_matches_transmission_line_physics`, so a
+units slip (a pF/inch or pF/cm figure written as pF/mm, which would inflate every
+bus by an order of magnitude) fails a test rather than shipping.
+
+The trace term is real either way: on a 10-device bus behind a 10 kohm pull, an
+800 mm run adds 30 pF even at the low end, taking `Cbus` to 130 pF and `t_r` from
+~847 ns (in spec) to ~1105 ns (out). Dropping it under-reports rise time, so
+a `.kicad_pcb` layout is always folded in when one is uploaded. **Without a layout the routing
+term is unavailable**, and the note says so in words (`routing capacitance NOT
+counted - upload the .kicad_pcb layout to include trace copper`): the
+device-count number is a floor, not a verdict. With a layout the note states the
+routed length it counted, so a reader can tell the two apart.
 
 This **upgrades** the existing netlint `missing_i2c_pullup` check from
 "is a pull-up present" to "is the pull-up *sufficient*". No-pull-up is
@@ -167,14 +250,22 @@ otherwise. This is exactly what keeps it silent on the proven-good corpus buses.
 
 ### Calibration evidence
 
-| Board / bus | Pull | Devices | `Cbus` | `t_r` | Verdict |
-|-------------|------|---------|--------|-------|---------|
-| Olimex UEXT (REV-L) | 2.2 kohm | 1 | ~10 pF | ~19 ns | ok |
-| ZSWatch RTC (PCA9306+RV-8263) | 3.3 kohm | 2 | ~20 pF | ~56 ns | ok |
-| ZSWatch Extension bus | 1.8 kohm | 8 | ~80 pF | ~122 ns | ok |
+Measured on the real layouts, with the routed term included:
+
+`Cbus` and `t_r` are given as the reported range (low bound first):
+
+| Board / bus | Pull | Devices | Routing | `Cbus` | `t_r` | Verdict |
+|-------------|------|---------|---------|--------|-------|---------|
+| Olimex UEXT SDA (REV-L) | 2.2 kohm | 1 | 73 mm | 13-21 pF | 24-39 ns | ok |
+| ZSWatch RTC SDA (PCA9306+RV-8263) | 3.3 kohm | 2 | 1 mm | 20 pF | 56 ns | ok |
+| ZSWatch Extension SDA | 1.8 kohm | 8 | 62 mm | 82-89 pF | 126-136 ns | ok |
+
+Routed copper is a real term without being the dominant one: on the Olimex UEXT
+bus, one device pin and 73 mm of track puts a fifth to a half of the capacitance
+in the trace, so a device-count-only model rates it ~19 ns instead of 24-39 ns.
 
 The ZSWatch 8-device Extension bus is the corpus's closest-to-the-limit I2C bus
-and still sits ~8x under standard mode. The designers chose 1.8 kohm precisely
+and still sits ~7x under standard mode. The designers chose 1.8 kohm precisely
 because of the device count. It is the discriminating no-fire (a regression that
 mis-scaled the RC or counted the connector as a device would push it over and the
 corpus test would go red).
@@ -597,14 +688,101 @@ the known-good boards never make the declaration.
 
 ### Model
 
-IPC-2221 external-layer ampacity, `I = k * dT^0.44 * A^0.725` (k = 0.048 outer,
-0.024 inner), applied to the **narrowest routed segment** on a net (the series
-bottleneck). The physics, the Poured-net exemption, and the never-invent-a-
+IPC-2221 ampacity, `I = k * dT^0.44 * A^0.725` (k = 0.048 outer, 0.024 inner),
+applied to the **narrowest routed segment** on a net (the series bottleneck), at
+the copper weight and layer side that segment is built in. The physics, the Poured-net exemption, and the never-invent-a-
 current rule all live in `hauksbee-extract`'s `trace_current` module and are
 unit-tested there. What `--si` adds is the *attribution* layer
 (`hauksbee-engine` `checks::ampacity`) that decides which net carries how much
 current, from the bound DB models, so the check runs automatically instead of
 by hand.
+
+### Copper weight and layer side (per layer, from the stackup)
+
+Ampacity is not a per-board constant, so the check does not rate every net the
+same way. `CopperWeights::from_root` reads the same `(setup (stackup ...))` block
+check 5 uses, and takes each **copper** layer's declared `thickness` plus its
+position in the declared top-to-bottom order. Thickness converts back to weight
+at 0.035 mm per oz; the first and last copper entries are the outer layers and
+everything between them is internal, which is what selects IPC-2221's `k`.
+
+Each **trace-routed** net is then rated at its **ampacity** bottleneck: the
+(layer, width) pair with the lowest IPC-2221 rating, taken over every layer the
+net is routed on (`NetCopper::min_width_by_layer`, resolved by
+`TraceAudit::bottleneck`). A net carrying any copper zone is `Poured` and is not
+rated at all, on any layer, per honest-reach item 1: hauksbee does not rasterise
+a fill, so it cannot tell a pour that genuinely carries the current from one that
+leaves a narrow inner-layer segment in series. That exemption is deliberately
+coarse and is the check's largest remaining reach limit.
+
+That is deliberately *not* the narrowest segment. While every net was rated as
+1 oz external, minimum width and minimum ampacity were the same thing. Once
+weight and the internal/external constant differ per layer they diverge: 0.3 mm
+of 1 oz outer copper carries ~1.0 A, while 0.5 mm of 0.5 oz inner copper carries
+only ~0.44 A. Ranking by width on such a net rates the 0.3 mm outer segment and
+passes a cited 0.8 A while the wider inner segment is the real choke. Ties
+resolve to the lower-ampacity, then internal, then lighter, then
+alphabetically-first layer, so the choice is deterministic.
+
+Which layers count as outer is decided from three signals in order:
+
+1. A canonical outer name (`F.Cu` / `B.Cu`) is the answer.
+2. A canonical inner name (`In<N>.Cu`) is likewise decisive, and outranks
+   position: a stackup listing only `F.Cu` and `In1.Cu` makes `In1.Cu` the last
+   copper entry, and reading that positionally would rate inner copper with the
+   external constant and double its apparent capacity.
+3. Otherwise position (first or last copper entry) is all there is. A producer
+   mixing conventions, `F.Cu` beside `L2.Cu` on a 2-layer board, must not have its
+   physical bottom layer derated as internal for having an unfamiliar name: that
+   halves `k` and can fire a verdict on sound outer copper.
+
+This matters by about 3x. On the common 4-layer build (1 oz outer, 0.5 oz inner),
+a 0.5 mm trace rates **~1.45 A as 1 oz external** copper and **~0.44 A as 0.5 oz
+internal** copper: half the `k` and half the cross-section. Rating everything as
+1 oz external therefore let genuinely undersized inner-layer traces pass, which
+is why a cited 1.0 A on that trace fires on `In1.Cu` and stays silent on `F.Cu`.
+
+When the board declares **no stackup**, the 1 oz external default still stands
+(the verdict on such boards is unchanged), but it is not printed as a fact about
+the board. The two assumed cases are kept apart, because saying "declares no
+stackup" about a board that declares one is itself a false claim:
+
+| Case | `CopperSource` | Message |
+|------|----------------|---------|
+| No stackup in the layout | `AssumedNoStackup` | `ASSUMED 1 oz external - the layout declares no stackup, so upload a stackup declaration or fab drawing ...` |
+| Stackup present, this layer absent or zero-thickness | `AssumedLayerMissing` | `ASSUMED 1 oz internal - the layout declares a stackup but no copper weight for In9.Cu, so upload ... that covers every layer` |
+| Layer declared with a thickness | `Stackup` | `0.50 oz internal In1.Cu, per the board stackup` |
+
+Only the **weight** falls back to 1 oz. The internal/external side is inferred
+from the layer's own name (`F.Cu` / `B.Cu` external, `In<N>.Cu` internal,
+anything unrecognised internal), because defaulting an undeclared `In1.Cu` to
+external doubles its apparent capacity and would suppress the very findings
+per-layer rating exists to recover. `TraceAudit` therefore has no `external`
+field at all: which constant applies is a property of the layer, never a
+per-audit choice.
+
+The `--ampacity` table carries the matching header and a per-row
+`1 oz ext (assumed)` / `1 oz int (assumed)` basis, so measured and assumed ratings
+are never confusable. Only the weight is defaulted; the side comes from the layer
+name, which is why the header says so rather than claiming every fallback is
+external.
+
+**The reported bottleneck and the verdict's evidence are separate.** The finding
+always reports the net's true worst point, so the width it names as the fix
+actually settles the net; substituting a declared-but-higher-rated segment would
+name a width that still leaves the real choke undersized.
+`TraceCurrentFinding::declared_shortfall` separately carries the lowest-rated
+segment whose weight the board **declared**, when that segment independently fails,
+and that is what decides severity. When the two differ, the message names both.
+
+**An assumed weight never produces a verdict.** A shortfall computed on assumed
+copper is real under that assumption and false under another: a 0.25 mm trace
+rates 0.88 A as 1 oz and 1.45 A as 2 oz, so a cited 1.2 A would fail the estimate
+and pass the real board. Those rows are therefore reported at `info` with the
+words "This is NOT a verdict", naming the upload that would make it one. Only a
+bottleneck whose weight was read from a declared stackup raises a `high` finding.
+This is the same rule the controlled-impedance check above already follows, where
+a defaulted stackup is always informational.
 
 ### Attribution (the zero-false-positive boundary)
 
@@ -674,10 +852,17 @@ steady-state ampacity at all.
 ### Calibration evidence
 
 - Integration: `--si` surfaces an ampacity finding on a synthetic programmed
-  charger whose regulated output is routed on an undersized discrete trace. It
-  stays silent when the rail is poured, when only a regulator rating is known,
-  and when no operating-current source is attributable
-  (`crates/hauksbee-engine/tests/si_ampacity_ripple.rs`).
+  charger whose regulated output is routed on an undersized discrete trace **and
+  whose board declares its copper weight**. It stays silent when the rail is
+  poured, when only a regulator rating is known, and when no operating-current
+  source is attributable (`crates/hauksbee-engine/tests/si_ampacity_ripple.rs`).
+- Two-sided on the copper-weight evidence, same file: the identical 0.05 mm rail
+  with **no** declared stackup produces an `info` note saying "NOT a verdict"
+  rather than a finding. The arithmetic is why, not squeamishness: 0.05 mm carries
+  0.27 A as 1 oz but 0.46 A as 2 oz, which is above the cited 0.40 A, so the
+  shortfall is an artefact of the assumed weight and the board may be fine.
+  `tests/waiver_gate.rs` declares a stackup on its fixture for the same reason,
+  since a note is not a thing a waiver can gate.
 - Zero-FP corpus sweep across the famous boards (gated by
   `HAUKSBEE_REQUIRE_CORPUS=1`) raises no ampacity findings. That sweep caught,
   and forced the fix of, two attribution false positives: the generic power-FET
@@ -750,6 +935,17 @@ converter/OCP limits and regulator/connector/FET ratings are capabilities and
 excluded. A parallel input-capacitor bank also abstains: sharing depends on each
 part's frequency-dependent impedance, so assigning the full ripple to one
 arbitrarily selected capacitor would be a false positive.
+
+Topology itself is the first place the check can abstain, and that abstention is
+now visible. Synchronous switching connectivity is **reversible**: the same
+graph of FETs, inductor and caps is equally consistent with a buck and a boost,
+so a direction is accepted only from explicit rail names (`VIN` / `VOUT`, or a
+`*_IN` / `*_OUT` suffix). Numeric voltage ordering alone is not evidence. A stage
+that cannot be oriented emits an info note naming the inductor, the switch node,
+both rails, and the unlock (rename the rails to carry their role, or give the
+controller a model declaring its topology), because dropping it silently would
+produce byte-for-byte the same report as a board with no converter on it. Stages
+that classify normally emit no such note.
 
 ### Calibration evidence (the hunt's mppt-1210-hus C1)
 

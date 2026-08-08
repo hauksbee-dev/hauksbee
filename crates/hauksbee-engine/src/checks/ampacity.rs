@@ -897,25 +897,80 @@ pub fn append_ampacity(
         return;
     }
 
-    let audit = TraceAudit::default();
+    // Copper weight and layer side come from the board's own stackup when it
+    // declares one; otherwise the 1 oz external default, marked ASSUMED per net.
+    let audit = TraceAudit::from_pcb_text(text);
     let findings = audit_trace_currents(&copper, &cited, &audit);
 
     for f in &findings {
+        // A verdict is only decision-grade when the copper weight behind it was
+        // read off the board. Where it was assumed, the shortfall is real under
+        // that assumption and false under another (a 0.25 mm trace rates 0.88 A
+        // as 1 oz and 1.45 A as 2 oz), so it is reported as a conditional note
+        // rather than a defect. This mirrors the controlled-impedance check,
+        // which likewise only raises findings on a declared stackup and keeps a
+        // defaulted estimate informational.
+        // A verdict needs a segment whose copper weight the BOARD declared to fail
+        // on its own. The reported bottleneck may be an assumed-weight layer that
+        // rates lower; that is still worth reporting, but it is not a conviction.
+        let verdict = f.declared_shortfall.as_ref();
+        let assumed = verdict.is_none();
         report.findings.push(SiFinding {
             check: SiCheck::TraceAmpacity,
-            severity: SiSeverity::High,
-            message: format!(
-                "net '{}' narrowest routed trace {:.2} mm carries a cited {:.2} A but IPC-2221 \
-                 rates that width at only {:.2} A (1 oz, {:.0} C rise); needs >= {:.2} mm. \
-                 Attributed from: {}",
-                f.net,
-                f.min_width_mm,
-                f.cited_current_a,
-                f.ampacity_a,
-                audit.dt_c,
-                f.required_width_mm,
-                f.citation,
-            ),
+            severity: if assumed {
+                SiSeverity::Info
+            } else {
+                SiSeverity::High
+            },
+            message: if assumed {
+                format!(
+                    "net '{}' carries a cited {:.2} A, and its lowest-rated routed trace is \
+                     {:.2} mm, which IPC-2221 rates at only {:.2} A ({}, {:.0} C rise); that \
+                     would need >= {:.2} mm. This is NOT a verdict: the copper weight was \
+                     assumed, and the real board may be heavier copper that carries it. \
+                     Declare the stackup (or upload a fab drawing) to turn this into a \
+                     decision. Attributed from: {}",
+                    f.net,
+                    f.cited_current_a,
+                    f.bottleneck_width_mm,
+                    f.ampacity_a,
+                    f.describe_copper(),
+                    audit.dt_c,
+                    f.required_width_mm,
+                    f.citation,
+                )
+            } else {
+                // Name the declared segment the conclusion rests on whenever it is
+                // not the same one the reported bottleneck came from, so the
+                // evidence and the width-to-fix are both visible.
+                let d = verdict.expect("a verdict has a declared shortfall");
+                let evidence = if d.layer == f.layer {
+                    String::new()
+                } else {
+                    format!(
+                        " Its lowest DECLARED-copper trace, {} at {:.2} mm, independently rates \
+                         only {:.2} A, which is what makes this a verdict rather than an \
+                         artefact of an assumed copper weight.",
+                        d.layer.as_deref().unwrap_or("(unnamed layer)"),
+                        d.width_mm,
+                        d.ampacity_a,
+                    )
+                };
+                format!(
+                    "net '{}' carries a cited {:.2} A, but its lowest-rated routed trace is \
+                     {:.2} mm and IPC-2221 rates that at only {:.2} A ({}, {:.0} C rise); \
+                     needs >= {:.2} mm.{} Attributed from: {}",
+                    f.net,
+                    f.cited_current_a,
+                    f.bottleneck_width_mm,
+                    f.ampacity_a,
+                    f.describe_copper(),
+                    audit.dt_c,
+                    f.required_width_mm,
+                    evidence,
+                    f.citation,
+                )
+            },
             refs: vec![],
             nets: vec![f.net.clone()],
         });
@@ -973,8 +1028,9 @@ pub fn append_ampacity(
         severity: SiSeverity::Info,
         message: format!(
             "trace-ampacity: {} net(s) carried an attributed current; {} routed trace(s) under \
-             IPC-2221 width. Poured rails are exempt (their cross-section is the plane, not the \
-             discrete stubs).",
+             IPC-2221 width. Poured nets are not rated: hauksbee does not rasterise a fill, so \
+             the conductor's real cross-section is out of reach rather than known to be \
+             adequate.",
             cited.len(),
             findings.len()
         ),

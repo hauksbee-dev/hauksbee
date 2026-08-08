@@ -43,6 +43,49 @@ fn i2c_rise_time_hand_values() {
 }
 
 #[test]
+fn trace_capacitance_per_mm_matches_transmission_line_physics() {
+    // The constant is the whole trace term, so it is pinned against the closed
+    // form rather than only against tests that use it: C' = sqrt(Er_eff)/(c0*Z0).
+    // A units slip here (pF/inch or pF/cm written as pF/mm) inflates every bus by
+    // an order of magnitude while leaving every other test self-consistent.
+    const C0_MM_PER_S: f64 = 2.998e11; // mm/s
+    let c_per_mm = |er_eff: f64, z0: f64| 1e12 * er_eff.sqrt() / (C0_MM_PER_S * z0);
+
+    // FR4 Er_eff ~ 3: a 50 ohm line is ~0.116 pF/mm, a 100 ohm line ~0.057.
+    let fifty = c_per_mm(3.0, 50.0);
+    assert!(
+        (fifty - 0.116).abs() < 0.005,
+        "50 ohm microstrip is ~0.116 pF/mm, got {fifty}"
+    );
+    // The widest, closest-coupled realistic case bounds the constant from above.
+    let worst = c_per_mm(3.2, 40.0);
+    assert!(
+        (worst - 0.149).abs() < 0.005,
+        "40 ohm worst case is ~0.149 pF/mm, got {worst}"
+    );
+    // The reported range must bracket the real one: the low end at the
+    // high-impedance (100 ohm) figure that gates findings, the high end at the
+    // worst realistic case. Neither may drift an order of magnitude.
+    let thin_two_layer = c_per_mm(2.9, 150.0);
+    assert!(
+        (super::C_TRACE_PF_PER_MM_LOW - thin_two_layer).abs() < 0.005,
+        "the firing bound {} must be the thin 2-layer figure {thin_two_layer}",
+        super::C_TRACE_PF_PER_MM_LOW
+    );
+    assert!(
+        (super::C_TRACE_PF_PER_MM_HIGH - worst).abs() < 0.005,
+        "the reported ceiling {} must be the worst-case figure {worst}",
+        super::C_TRACE_PF_PER_MM_HIGH
+    );
+    // And the 50 ohm nominal must fall inside the reported range, or the range
+    // does not describe real routing at all.
+    assert!(
+        super::C_TRACE_PF_PER_MM_LOW < fifty && fifty < super::C_TRACE_PF_PER_MM_HIGH,
+        "the 50 ohm nominal {fifty} must lie inside the reported range"
+    );
+}
+
+#[test]
 fn parse_helpers() {
     assert_eq!(super::parse_farads("15p"), Some(15e-12));
     assert_eq!(super::parse_farads("18pF"), Some(18e-12));
@@ -117,6 +160,74 @@ fn routed_length_sums_segments() {
     );
     let l = routed_length_mm(doc.root().unwrap(), 1);
     assert!((l - 7.0).abs() < 1e-9, "3 + 4 = 7 mm, got {l}");
+}
+
+#[test]
+fn arc_length_is_the_swept_arc_not_the_chord() {
+    use std::f64::consts::PI;
+    let r = 50.0;
+    // Semicircle from (50,0) through (0,50) to (-50,0): pi*r = 157.08 mm, whose
+    // chord is only 2r = 100 mm, a 36% under-report.
+    let semi = arc_length_mm((r, 0.0), (0.0, r), (-r, 0.0));
+    assert!(
+        (semi - PI * r).abs() < 1e-6,
+        "semicircle is {} mm, got {semi}",
+        PI * r
+    );
+    // Quarter turn: pi*r/2 = 78.54 mm against a 70.71 mm chord.
+    let quarter = arc_length_mm(
+        (r, 0.0),
+        (r * (PI / 8.0).cos(), r * (PI / 8.0).sin()),
+        (0.0, r),
+    );
+    assert!(
+        (quarter - PI * r / 2.0).abs() < 1e-6,
+        "quarter turn is {} mm, got {quarter}",
+        PI * r / 2.0
+    );
+    // Major arc (270 degrees): summing the two half-sweeps must not wrap back to
+    // the minor arc. 3/4 of the circle is 235.62 mm.
+    let major = arc_length_mm((r, 0.0), (-r, 0.0), (0.0, -r));
+    // Looser tolerance here on purpose: the start-to-mid sub-chord is the
+    // diameter, so its half-sweep is asin(1), the worst-conditioned point of the
+    // function. ~1e-6 relative error at a 236 mm length is far inside anything
+    // the rise-time or skew limits can notice.
+    assert!(
+        (major - 1.5 * PI * r).abs() < 1e-4,
+        "270 degree arc is {} mm, got {major}",
+        1.5 * PI * r
+    );
+    // Collinear points are a degenerate arc: the chord IS the length.
+    let flat = arc_length_mm((0.0, 0.0), (5.0, 0.0), (10.0, 0.0));
+    assert!((flat - 10.0).abs() < 1e-9, "got {flat}");
+}
+
+#[test]
+fn routed_length_counts_arc_sweep() {
+    // A net routed as one semicircle of radius 50: 157.08 mm of copper, not the
+    // 100 mm chord. Under-reporting this suppresses I2C rise-time findings and
+    // corrupts USB skew.
+    let doc = root_of(
+        r#"(net 1 "SDA")
+           (arc (start 50 0) (mid 0 50) (end -50 0) (width 0.2) (layer "F.Cu") (net 1))"#,
+    );
+    let l = routed_length_mm(doc.root().unwrap(), 1);
+    assert!(
+        (l - std::f64::consts::PI * 50.0).abs() < 1e-6,
+        "expected the swept 157.08 mm, got {l}"
+    );
+}
+
+#[test]
+fn routed_length_falls_back_to_the_chord_without_a_mid_point() {
+    // An arc with no (mid ...) gives us nothing but the chord, which is a floor
+    // on the real length and never an over-estimate.
+    let doc = root_of(
+        r#"(net 1 "SDA")
+           (arc (start 0 0) (end 3 4) (width 0.2) (layer "F.Cu") (net 1))"#,
+    );
+    let l = routed_length_mm(doc.root().unwrap(), 1);
+    assert!((l - 5.0).abs() < 1e-9, "expected the 5 mm chord, got {l}");
 }
 
 #[test]
@@ -411,7 +522,7 @@ fn i2c_strong_pull_low_device_count_is_ok() {
     // 2.2k pull, 3 devices (~30 pF): t_r ~ 56 ns. Far under 1000 ns: info.
     let b = i2c_board("SDA", "2.2k", 3);
     let mut r = SiReport::default();
-    check_i2c_rise_time(&b, &mut r);
+    check_i2c_rise_time(&b, None, &mut r);
     assert_eq!(r.finding_count(), 0, "strong pull / few devices must be ok");
     assert!(r
         .of_check(SiCheck::I2cRiseTime)
@@ -424,7 +535,7 @@ fn i2c_weak_pull_heavy_bus_fires() {
     // over standard-mode 1000 ns: fires.
     let b = i2c_board("SDA", "10k", 20);
     let mut r = SiReport::default();
-    check_i2c_rise_time(&b, &mut r);
+    check_i2c_rise_time(&b, None, &mut r);
     assert_eq!(r.finding_count(), 1, "weak pull on a heavy bus must fire");
 }
 
@@ -440,7 +551,7 @@ fn i2c_no_pullup_is_not_our_finding() {
           (property "Reference" "U2") (property "Value" "S")
           (pad "1" smd rect (at 0 0) (net 1 "SDA")))"#);
     let mut r = SiReport::default();
-    check_i2c_rise_time(&b, &mut r);
+    check_i2c_rise_time(&b, None, &mut r);
     assert_eq!(
         r.findings.len(),
         0,
@@ -478,11 +589,370 @@ fn i2c_dual_pullups_combine_in_parallel_not_min() {
     }
     let b = pcb(&body);
     let mut r = SiReport::default();
-    check_i2c_rise_time(&b, &mut r);
+    check_i2c_rise_time(&b, None, &mut r);
     assert_eq!(
         r.finding_count(),
         0,
         "two 10k pull-ups are 5k in parallel: the bus is in spec, no false positive"
+    );
+}
+
+/// Full kicad_pcb text for a 10k-pulled SDA bus with `devices` sensor pins and a
+/// single routed track `track_mm` long, so the SAME text drives both extraction
+/// and geometry parsing.
+fn i2c_routed_text(devices: usize, track_mm: f64) -> String {
+    let mut body = String::from(
+        r#"(net 1 "SDA") (net 2 "+3V3")
+        (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
+          (property "Reference" "R1") (property "Value" "10k")
+          (pad "1" smd rect (at 0 0) (net 1 "SDA"))
+          (pad "2" smd rect (at 1 0) (net 2 "+3V3")))"#,
+    );
+    for i in 0..devices {
+        body.push_str(&format!(
+            r#"(footprint "Package_SO:SOIC-8" (at {} 8) (layer "F.Cu")
+              (property "Reference" "U{}") (property "Value" "SENSOR")
+              (pad "1" smd rect (at 0 0) (net 1 "SDA")))"#,
+            10 + i,
+            i + 1
+        ));
+    }
+    body.push_str(&format!(
+        r#"(segment (start 0 0) (end {track_mm} 0) (width 0.2) (layer "F.Cu") (net 1))"#
+    ));
+    format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})")
+}
+
+#[test]
+fn i2c_long_routing_pushes_a_marginal_bus_over() {
+    // 10k pull, 10 devices = 100 pF: t_r ~ 0.8473*10000*100e-3 = 847 ns, inside
+    // the 1000 ns standard-mode limit on pin capacitance ALONE. An 800 mm bus run
+    // (an I2C link across a backplane, exactly where rise time bites) adds
+    // 800*0.038 = 30.4 pF even at the LOW end of the plausible trace-capacitance
+    // range, taking C to 130 pF and t_r to ~1105 ns: over the limit on the
+    // lenient bound, which is what firing requires. Passing None for the trace
+    // length silently rates this in-spec.
+    let text = i2c_routed_text(10, 800.0);
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
+    assert_eq!(
+        r.finding_count(),
+        1,
+        "800 mm of trace capacitance must push a marginal bus over the limit"
+    );
+    assert!(
+        r.of_check(SiCheck::I2cRiseTime)
+            .any(|f| f.message.contains("800 mm routing")),
+        "the finding must name the routed length it counted"
+    );
+    // The device pins alone are inside the limit, so this verdict rests on the
+    // assumed trace capacitance. It must say so, and must not claim top severity.
+    let f = r.of_check(SiCheck::I2cRiseTime).next().unwrap();
+    assert_eq!(
+        f.severity,
+        SiSeverity::Medium,
+        "a trace-dependent shortfall is capped at Medium: {}",
+        f.message
+    );
+    assert!(
+        f.message
+            .contains("depends on the ASSUMED trace capacitance"),
+        "must disclose what the verdict rests on: {}",
+        f.message
+    );
+}
+
+#[test]
+fn a_pin_only_overrun_is_full_severity_and_routing_independent() {
+    // 10k pull with 25 device pins is 250 pF of pin capacitance alone: 2118 ns,
+    // over standard mode without counting a single millimetre of copper. That
+    // verdict does not rest on the routing, so it keeps full severity, while
+    // still naming the per-pin figure it does rest on.
+    let text = i2c_routed_text(25, 5.0);
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
+    let f = r
+        .of_check(SiCheck::I2cRiseTime)
+        .find(|f| f.severity.is_finding())
+        .expect("a pin-only overrun must fire");
+    assert_eq!(f.severity, SiSeverity::High, "{}", f.message);
+    assert!(
+        f.message
+            .contains("does not rest on any routing assumption"),
+        "must say the verdict is routing-independent: {}",
+        f.message
+    );
+    assert!(
+        f.message.contains("10 pF per I2C pin"),
+        "and must still name the pin-capacitance figure it DOES rest on: {}",
+        f.message
+    );
+}
+
+#[test]
+fn i2c_short_routing_leaves_the_same_bus_silent() {
+    // The identical bus routed compactly (10 mm) is 101.5 pF / ~860 ns even at the
+    // high end of the range: in spec. Counting trace copper must not turn every
+    // marginal bus into a finding.
+    let text = i2c_routed_text(10, 10.0);
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
+    assert_eq!(
+        r.finding_count(),
+        0,
+        "a short-routed bus of the same devices stays in spec"
+    );
+}
+
+#[test]
+fn a_declared_stackup_computes_the_trace_capacitance_instead_of_assuming_it() {
+    // The honest answer to "your low bound is not a bound" is to stop guessing
+    // where the board says enough to compute. With a stackup and a track width,
+    // C' = sqrt(Er_eff)/(c0*Z0) collapses the range to one number, and the note
+    // says it was computed rather than assumed.
+    let body = r#"
+      (setup (stackup
+        (layer "F.Cu" (type "copper") (thickness 0.035))
+        (layer "dielectric 1" (type "core") (thickness 1.51) (epsilon_r 4.5))
+        (layer "B.Cu" (type "copper") (thickness 0.035))
+      ))
+      (net 1 "SDA") (net 2 "+3V3")
+      (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
+        (property "Reference" "R1") (property "Value" "2.2k")
+        (pad "1" smd rect (at 0 0) (net 1 "SDA"))
+        (pad "2" smd rect (at 1 0) (net 2 "+3V3")))
+      (footprint "Package_SO:SOIC-8" (at 10 8) (layer "F.Cu")
+        (property "Reference" "U1") (property "Value" "SENSOR")
+        (pad "1" smd rect (at 0 0) (net 1 "SDA")))
+      (segment (start 0 0) (end 60 0) (width 0.25) (layer "F.Cu") (net 1))
+      (zone (net 3) (net_name "GND") (layer "B.Cu")
+        (filled_polygon (layer "B.Cu")
+          (pts (xy -5 -5) (xy 70 -5) (xy 70 20) (xy -5 20))))
+    "#;
+    let text = format!("(kicad_pcb (version 20240101) (net 0 \"\") (net 3 \"GND\") {body})");
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
+    let f = r.of_check(SiCheck::I2cRiseTime).next().expect("a note");
+    assert!(
+        f.message.contains("computed from the board stackup"),
+        "a declared stackup must be used, not assumed around: {}",
+        f.message
+    );
+    assert!(
+        !f.message.contains("ASSUMED"),
+        "and must not also claim to have assumed: {}",
+        f.message
+    );
+    // A single computed figure, so the reported range collapses to one number:
+    // a 0.25 mm trace on 1.51 mm FR4 works out at 0.044 pF/mm, near the low end
+    // of the assumed range, which is exactly the sort of thing worth not guessing.
+    assert!(
+        f.message.contains("0.044 pF/mm"),
+        "the computed figure must be reported: {}",
+        f.message
+    );
+}
+
+#[test]
+fn without_a_plane_below_the_capacitance_is_not_called_computed() {
+    // A microstrip needs a reference PLANE, and a stackup lists dielectric
+    // thicknesses rather than which copper is poured solid. On a 2-layer board
+    // whose bottom is sparse routing there is no plane under the trace, its real
+    // capacitance is lower, and computing a microstrip figure would over-report
+    // the rise time. Same board as the computed test, minus the pour.
+    let body = r#"
+      (setup (stackup
+        (layer "F.Cu" (type "copper") (thickness 0.035))
+        (layer "dielectric 1" (type "core") (thickness 1.51) (epsilon_r 4.5))
+        (layer "B.Cu" (type "copper") (thickness 0.035))
+      ))
+      (net 1 "SDA") (net 2 "+3V3")
+      (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
+        (property "Reference" "R1") (property "Value" "2.2k")
+        (pad "1" smd rect (at 0 0) (net 1 "SDA"))
+        (pad "2" smd rect (at 1 0) (net 2 "+3V3")))
+      (footprint "Package_SO:SOIC-8" (at 10 8) (layer "F.Cu")
+        (property "Reference" "U1") (property "Value" "SENSOR")
+        (pad "1" smd rect (at 0 0) (net 1 "SDA")))
+      (segment (start 0 0) (end 60 0) (width 0.25) (layer "F.Cu") (net 1))
+    "#;
+    let text = format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})");
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
+    let f = r.of_check(SiCheck::I2cRiseTime).next().expect("a note");
+    assert!(
+        f.message.contains("ASSUMED"),
+        "with no plane below, the range is still all there is: {}",
+        f.message
+    );
+    assert!(
+        !f.message.contains("computed from the board stackup"),
+        "and it must not claim otherwise: {}",
+        f.message
+    );
+}
+
+#[test]
+fn a_computed_capacitance_finding_uses_no_range_language() {
+    // With the geometry computed there is no low and high end, so the failing
+    // message must not invent them (it previously printed "at the LOW end ... up
+    // to N ns at the high end" with the same number twice). A 25-device bus on a
+    // planed, stackup-declaring board fires and must read as a single figure.
+    let mut body = String::from(
+        r#"
+      (setup (stackup
+        (layer "F.Cu" (type "copper") (thickness 0.035))
+        (layer "dielectric 1" (type "core") (thickness 1.51) (epsilon_r 4.5))
+        (layer "B.Cu" (type "copper") (thickness 0.035))
+      ))
+      (net 1 "SDA") (net 2 "+3V3") (net 3 "GND")
+      (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
+        (property "Reference" "R1") (property "Value" "10k")
+        (pad "1" smd rect (at 0 0) (net 1 "SDA"))
+        (pad "2" smd rect (at 1 0) (net 2 "+3V3")))
+      (segment (start 0 0) (end 60 0) (width 0.25) (layer "F.Cu") (net 1))
+      (zone (net 3) (net_name "GND") (layer "B.Cu")
+        (filled_polygon (layer "B.Cu")
+          (pts (xy -5 -5) (xy 70 -5) (xy 70 20) (xy -5 20))))
+    "#,
+    );
+    for i in 0..25 {
+        body.push_str(&format!(
+            r#"(footprint "Package_SO:SOIC-8" (at {} 8) (layer "F.Cu")
+              (property "Reference" "U{}") (property "Value" "SENSOR")
+              (pad "1" smd rect (at 0 0) (net 1 "SDA")))"#,
+            10 + i,
+            i + 1
+        ));
+    }
+    let text = format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})");
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
+    let f = r
+        .of_check(SiCheck::I2cRiseTime)
+        .find(|f| f.severity.is_finding())
+        .expect("25 device pins on a 10k pull must fire");
+    assert!(
+        f.message.contains("computed from the board stackup"),
+        "this board declares the geometry: {}",
+        f.message
+    );
+    assert!(
+        !f.message.contains("LOW end") && !f.message.contains("high end"),
+        "a computed figure has no range to report: {}",
+        f.message
+    );
+}
+
+#[test]
+fn a_remote_pour_is_not_this_bus_reference_plane() {
+    // The board-wide question "is there a pour anywhere" is not evidence about
+    // THIS net. A small polygon in a far corner must not turn an unreferenced
+    // route into a supposedly geometry-computed microstrip.
+    let body = r#"
+      (setup (stackup
+        (layer "F.Cu" (type "copper") (thickness 0.035))
+        (layer "dielectric 1" (type "prepreg") (thickness 0.1) (epsilon_r 4.5))
+        (layer "B.Cu" (type "copper") (thickness 0.035))
+      ))
+      (net 1 "SDA") (net 2 "+3V3") (net 3 "GND")
+      (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
+        (property "Reference" "R1") (property "Value" "2.2k")
+        (pad "1" smd rect (at 0 0) (net 1 "SDA"))
+        (pad "2" smd rect (at 1 0) (net 2 "+3V3")))
+      (footprint "Package_SO:SOIC-8" (at 10 8) (layer "F.Cu")
+        (property "Reference" "U1") (property "Value" "SENSOR")
+        (pad "1" smd rect (at 0 0) (net 1 "SDA")))
+      (segment (start 0 0) (end 60 0) (width 0.25) (layer "F.Cu") (net 1))
+      (zone (net 3) (net_name "GND") (layer "B.Cu")
+        (filled_polygon (layer "B.Cu")
+          (pts (xy 200 200) (xy 210 200) (xy 210 210) (xy 200 210))))
+    "#;
+    let text = format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})");
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
+    let f = r.of_check(SiCheck::I2cRiseTime).next().expect("a note");
+    assert!(
+        f.message.contains("ASSUMED"),
+        "a pour the bus does not run over is not its reference plane: {}",
+        f.message
+    );
+    assert!(
+        !f.message.contains("computed from the board stackup"),
+        "and must not be called computed: {}",
+        f.message
+    );
+}
+
+#[test]
+fn a_bus_leaving_the_top_layer_is_not_called_computed() {
+    // read_stackup describes F.Cu and the dielectric below it, and nothing else.
+    // A net that routes on B.Cu or an inner layer is outside what those numbers
+    // can honestly be applied to, so it must fall back to the assumed range rather
+    // than compute a figure for geometry the board never stated.
+    let body = r#"
+      (setup (stackup
+        (layer "F.Cu" (type "copper") (thickness 0.035))
+        (layer "dielectric 1" (type "prepreg") (thickness 0.1) (epsilon_r 4.5))
+        (layer "In1.Cu" (type "copper") (thickness 0.0175))
+        (layer "dielectric 2" (type "core") (thickness 1.2) (epsilon_r 4.5))
+        (layer "B.Cu" (type "copper") (thickness 0.035))
+      ))
+      (net 1 "SDA") (net 2 "+3V3")
+      (footprint "Resistor_SMD:R_0402" (at 5 5) (layer "F.Cu")
+        (property "Reference" "R1") (property "Value" "2.2k")
+        (pad "1" smd rect (at 0 0) (net 1 "SDA"))
+        (pad "2" smd rect (at 1 0) (net 2 "+3V3")))
+      (footprint "Package_SO:SOIC-8" (at 10 8) (layer "F.Cu")
+        (property "Reference" "U1") (property "Value" "SENSOR")
+        (pad "1" smd rect (at 0 0) (net 1 "SDA")))
+      (segment (start 0 0) (end 30 0) (width 0.25) (layer "F.Cu") (net 1))
+      (segment (start 30 0) (end 60 0) (width 0.25) (layer "B.Cu") (net 1))
+    "#;
+    let text = format!("(kicad_pcb (version 20240101) (net 0 \"\") {body})");
+    let b = ExtractedBoard::from_kicad_pcb(&text).unwrap();
+    let doc = forge_sexpr::parse(&text).unwrap();
+    let mut r = SiReport::default();
+    check_i2c_rise_time(&b, Some(doc.root().unwrap()), &mut r);
+    let f = r.of_check(SiCheck::I2cRiseTime).next().expect("a note");
+    assert!(
+        f.message.contains("ASSUMED"),
+        "a bus off F.Cu must keep the assumed range: {}",
+        f.message
+    );
+    assert!(
+        !f.message.contains("computed from the board stackup"),
+        "and must not claim to have computed it: {}",
+        f.message
+    );
+}
+
+#[test]
+fn i2c_without_layout_says_routing_was_not_counted() {
+    // No layout: the pin-count model is a floor, not an answer, and the note must
+    // name the upload that would complete it rather than implying completeness.
+    let b = i2c_board("SDA", "2.2k", 3);
+    let mut r = SiReport::default();
+    check_i2c_rise_time(&b, None, &mut r);
+    assert!(
+        r.of_check(SiCheck::I2cRiseTime)
+            .any(|f| f.message.contains("routing capacitance NOT counted")
+                && f.message.contains(".kicad_pcb")),
+        "a layout-less run must disclose the missing routing term and the upload"
     );
 }
 
@@ -1061,9 +1531,9 @@ fn bus_capacitance_dedups_a_double_listed_pad() {
     // pin capacitance (2 devices instead of 1), inflating the I2C rise time enough
     // to fire a spurious fast-mode finding. Dedup by (ref, pad number).
     let board = double_listed_board("U1", "SENSOR", 2);
-    let (_pf, devices) = super::bus_capacitance_pf(&board, 1, None);
+    let c = super::bus_capacitance_pf(&board, 1, None, None);
     assert_eq!(
-        devices, 1,
+        c.devices, 1,
         "a doubly-listed pad must count as one device, not two"
     );
 }

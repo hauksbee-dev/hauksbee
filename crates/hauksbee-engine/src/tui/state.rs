@@ -563,11 +563,31 @@ impl AppState {
         drc: &DrcStructured,
         si: &[JsonFinding],
         lint: &[JsonFinding],
+        // Coverage holes from the binder and stress monitor: parts bound to a
+        // generic estimated-fallback model, and resistors whose overpower check
+        // could not run. Rendered here because the TUI is the default surface, and
+        // a hole visible only in --json is invisible to most users.
+        coverage_notes: &[String],
         nets: Vec<Net>,
         part_nets: HashMap<String, Vec<String>>,
         net_parts: HashMap<String, Vec<String>>,
     ) -> AppState {
         let mut findings = Vec::new();
+        for note in coverage_notes {
+            findings.push(Finding {
+                severity: Severity::Info,
+                check: "coverage".to_string(),
+                kind: "not_checked".to_string(),
+                headline: "A check did not run, or ran on invented numbers".to_string(),
+                plain: note.clone(),
+                nets: Vec::new(),
+                refs: Vec::new(),
+                location_mm: None,
+                layer: None,
+                actionable: true,
+                fix: None,
+            });
+        }
         // On an unvalidated KiCad-10 board the shorts may be phantom; surface the
         // caveat as an info finding so the (downgraded) shorts are not read as real.
         if let Some(w) = &drc.version_warning {
@@ -585,6 +605,30 @@ impl AppState {
                 fix: Some(
                     "Cross-check the copper with KiCad's own DRC; hauksbee does not yet read this \
                      KiCad version's zone fills."
+                        .to_string(),
+                ),
+            });
+        }
+        // A finding class the run declined to evaluate has to appear here too. The
+        // TUI is the default surface, so a suppression visible only in --plain /
+        // --json would let a bare `hauksbee run` show a clean copper pane over a
+        // whole category nobody looked at.
+        if let Some(n) = &drc.suppression_note {
+            findings.push(Finding {
+                severity: Severity::Info,
+                check: "drc".to_string(),
+                kind: "class_not_checked".to_string(),
+                headline: "A copper finding class was suppressed, not checked".to_string(),
+                plain: n.clone(),
+                nets: Vec::new(),
+                refs: Vec::new(),
+                location_mm: None,
+                layer: None,
+                actionable: true,
+                fix: Some(
+                    "Pour incursions by a track, via or arc are still reported. To audit the \
+                     suppressed zone-versus-pad class, run KiCad's own DRC (Inspect -> Design \
+                     Rules Checker)."
                         .to_string(),
                 ),
             });
@@ -1089,6 +1133,51 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_tui_shows_a_suppressed_drc_class_and_coverage_holes() {
+        // The TUI is the default surface. A suppression or coverage hole visible
+        // only in --plain / --json would let a bare `hauksbee run` present a clean
+        // pane over a whole category nobody examined.
+        let report = BindReport::default();
+        let summary = BindSummary::from_report(&report);
+        let mut drc = empty_drc();
+        drc.suppression_note = Some(
+            "drc: 12 zone-versus-pad primitive pair(s) were \
+                                     suppressed, not evaluated as shorts."
+                .to_string(),
+        );
+        let st = AppState::new(
+            "Demo".into(),
+            &report,
+            &summary,
+            &drc,
+            &[],
+            &[],
+            &[
+                "models: Q3 (NMOS) bound to the generic fallback model \
+                 'generic_nmos_power_pkg'"
+                    .to_string(),
+                "stress: R7 has no power rating and no readable package".to_string(),
+            ],
+            vec![],
+            HashMap::new(),
+            HashMap::new(),
+        );
+        let plains: Vec<&str> = st.findings.iter().map(|f| f.plain.as_str()).collect();
+        assert!(
+            plains.iter().any(|p| p.contains("suppressed")),
+            "the suppressed DRC class must reach the TUI: {plains:?}"
+        );
+        assert!(
+            plains.iter().any(|p| p.contains("generic_nmos_power_pkg")),
+            "an estimated-fallback binding must reach the TUI: {plains:?}"
+        );
+        assert!(
+            plains.iter().any(|p| p.contains("R7")),
+            "an unrun overpower check must reach the TUI: {plains:?}"
+        );
+    }
+
     fn empty_drc() -> DrcStructured {
         DrcStructured {
             clearance_rule_mm: 0.2,
@@ -1097,6 +1186,7 @@ mod tests {
             violations: Vec::new(),
             at_limit: Vec::new(),
             version_warning: None,
+            suppression_note: None,
         }
     }
 
@@ -1210,6 +1300,7 @@ mod tests {
             &empty_drc(),
             &si,
             &lint,
+            &[],
             nets,
             part_nets,
             net_parts,
@@ -1431,6 +1522,7 @@ mod tests {
             &empty_drc(),
             &[],
             &[],
+            &[],
             vec![],
             HashMap::new(),
             HashMap::new(),
@@ -1588,6 +1680,7 @@ mod tests {
             &empty_drc(),
             &[],
             &[],
+            &[],
             vec![],
             HashMap::new(),
             HashMap::new(),
@@ -1613,6 +1706,7 @@ mod tests {
             &report,
             &summary,
             &empty_drc(),
+            &[],
             &[],
             &[],
             vec![],

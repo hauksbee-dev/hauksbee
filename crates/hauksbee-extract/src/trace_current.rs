@@ -5,8 +5,9 @@
 //! question: **can the copper actually carry the current the design pushes
 //! through it?** For each net it finds the *narrowest* routed track segment
 //! (the bottleneck of a series conductor) and converts that width into a
-//! current rating with the IPC-2221 external-layer formula, so a net carrying a
-//! cited load current beyond its rating can be flagged.
+//! current rating with the IPC-2221 formula, at the copper weight and layer side
+//! that segment is actually built in, so a net carrying a cited load current
+//! beyond its rating can be flagged.
 //!
 //! ## The honest reach of this check (read before trusting a result)
 //!
@@ -34,6 +35,22 @@
 //!    bottleneck of a series trace is its narrowest segment, which is what this
 //!    reports.
 //!
+//! 4. **One current per net, not per branch.** A cited current is attributed to a
+//!    NET, and the rating is compared against that whole current at the net's
+//!    weakest point. Real nets branch: a sense spur off a motor rail carries
+//!    almost none of the rail's current, but it is part of the same net and its
+//!    thin copper can be the weakest point. Splitting current across branches
+//!    needs source/sink topology this module does not have, so a branched net's
+//!    verdict is an upper bound on stress at its thinnest copper, not a claim
+//!    about the current actually flowing there.
+//!
+//! 5. **Copper weight.** Weight and layer side come from the board's declared
+//!    stackup, per copper layer, because inner copper is both thinner and
+//!    derated (`k` 0.024 against 0.048) and rating it as 1 oz outer over-states
+//!    its capacity by roughly 3x. A board that declares no stackup keeps the
+//!    1 oz external default, and every message built on that default is marked
+//!    ASSUMED and names the upload that would replace it.
+//!
 //! The result is a check that *discriminates*: it fires on a genuinely
 //! under-width discrete trace carrying a cited current, and it stays silent
 //! (with an explicit `Poured` / `NoCurrentCited` reason) everywhere it cannot
@@ -54,6 +71,134 @@ const K_INTERNAL: f64 = 0.024;
 const MIL_PER_OZ: f64 = 1.378;
 /// mm per mil.
 const MM_PER_MIL: f64 = 0.0254;
+/// Finished thickness of 1 oz copper in mm (`MIL_PER_OZ * MM_PER_MIL`), used to
+/// convert a stackup's declared per-layer thickness back into copper weight.
+const MM_PER_OZ: f64 = MIL_PER_OZ * MM_PER_MIL;
+
+/// Where a net's copper weight and layer side came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CopperSource {
+    /// Read from the board's own `(setup (stackup ...))` copper layers.
+    Stackup,
+    /// The layout declares no stackup at all: the stated 1 oz external default.
+    AssumedNoStackup,
+    /// A stackup IS declared, but not for this layer (absent, or zero
+    /// thickness): the same default, but the disclosure must not claim the board
+    /// has no stackup when it does.
+    AssumedLayerMissing,
+}
+
+impl CopperSource {
+    /// Whether the numbers behind this rating were assumed rather than read off
+    /// the board.
+    pub fn is_assumed(self) -> bool {
+        !matches!(self, CopperSource::Stackup)
+    }
+}
+
+/// Per-copper-layer finished weight and side, read from a board's declared
+/// stackup.
+///
+/// Ampacity is not a per-board constant. IPC-2221 halves `k` (0.048 -> 0.024) for
+/// internal copper, and inner layers are routinely half the weight of the outer
+/// ones (0.5 oz inner against 1 oz outer is the common 4-layer build), so a
+/// 0.5 oz inner trace rates at roughly 30% of the 1 oz external figure for the
+/// same width. Rating every net as 1 oz external therefore over-states inner-layer
+/// capacity by about 3x and lets genuinely undersized inner traces pass.
+#[derive(Debug, Clone, Default)]
+pub struct CopperWeights {
+    /// Copper layer name (`F.Cu`, `In1.Cu`, ...) -> (weight in oz, is external).
+    by_layer: HashMap<String, (f64, bool)>,
+    /// Whether the layout carried a `(setup (stackup ...))` block at all.
+    ///
+    /// Distinct from `by_layer` being empty: a stackup whose copper entries all
+    /// omit `thickness` declares a stackup and yields no weights, and telling the
+    /// user that board "declares no stackup" would be false.
+    declared: bool,
+}
+
+impl CopperWeights {
+    /// Read the per-layer copper weights from a KiCad `(setup (stackup ...))`
+    /// block. Returns an empty table when the board declares no stackup, which is
+    /// how a caller distinguishes "measured" from "assumed".
+    ///
+    /// The outer layers are identified **by name** (`F.Cu` / `B.Cu`, the only
+    /// names KiCad gives outer copper) rather than by position, because position
+    /// lies on a truncated declaration: a stackup listing only `F.Cu` and
+    /// `In1.Cu` would make `In1.Cu` the last copper entry and rate inner copper
+    /// with the external constant, doubling its apparent capacity. Positional
+    /// first/last is used only as a fallback for a stackup that names no
+    /// `F.Cu`/`B.Cu` at all (a non-KiCad producer), where it is the only signal
+    /// available.
+    ///
+    /// A stackup that declares a copper layer without a thickness contributes
+    /// nothing, so that layer falls back to the assumed default rather than to a
+    /// zero rating.
+    pub fn from_root(root: &List) -> Self {
+        let mut declared: Vec<(String, f64)> = Vec::new();
+        let mut has_stackup = false;
+        if let Some(stackup) = root.find("setup").and_then(|s| s.find("stackup")) {
+            has_stackup = true;
+            for layer in stackup.find_all("layer") {
+                let ty = layer.find_value("type").unwrap_or_default();
+                if !ty.eq_ignore_ascii_case("copper") {
+                    continue;
+                }
+                let Some(name) = layer.arg_value(0) else {
+                    continue;
+                };
+                let thickness = layer.find_f64("thickness").unwrap_or(0.0);
+                declared.push((name, thickness));
+            }
+        }
+        let last = declared.len().saturating_sub(1);
+        let mut by_layer = HashMap::new();
+        for (i, (name, thickness)) in declared.iter().enumerate() {
+            if *thickness <= 0.0 {
+                continue;
+            }
+            // Three signals, in order of how much they actually tell us:
+            //
+            //   1. A canonical outer name (F.Cu / B.Cu) IS the answer.
+            //   2. A canonical inner name (In<N>.Cu) is likewise decisive, and it
+            //      has to outrank position: a stackup that lists F.Cu and In1.Cu
+            //      but forgets B.Cu makes In1.Cu the LAST entry, and reading that
+            //      positionally would rate inner copper with the external constant
+            //      and double its apparent capacity.
+            //   3. Otherwise position is all there is. A producer mixing
+            //      conventions (F.Cu plus L2.Cu on a 2-layer board) must not have
+            //      its physical bottom layer derated as internal just because the
+            //      name is unfamiliar: that halves k and can fire a false verdict.
+            let external = if is_outer_layer_name(name) {
+                true
+            } else if is_inner_layer_name(name) {
+                false
+            } else {
+                i == 0 || i == last
+            };
+            by_layer.insert(name.clone(), (thickness / MM_PER_OZ, external));
+        }
+        CopperWeights {
+            by_layer,
+            declared: has_stackup,
+        }
+    }
+
+    /// Whether any per-layer copper weight was declared.
+    pub fn is_empty(&self) -> bool {
+        self.by_layer.is_empty()
+    }
+
+    /// Whether the layout carried a stackup block, whatever it yielded.
+    pub fn is_declared(&self) -> bool {
+        self.declared
+    }
+
+    /// The weight (oz) and side for a copper layer, when the stackup declares it.
+    pub fn get(&self, layer: &str) -> Option<(f64, bool)> {
+        self.by_layer.get(layer).copied()
+    }
+}
 
 /// IPC-2221 current capacity (amps) of a trace of the given finished width
 /// (mm) and copper weight (oz) for a target temperature rise `dt` (degrees C).
@@ -107,6 +252,17 @@ pub struct NetCopper {
     pub kind: CopperKind,
     /// Narrowest discrete track segment on the net (mm), if any tracks exist.
     pub min_trace_width_mm: Option<f64>,
+    /// Copper layer the narrowest segment sits on.
+    pub min_trace_layer: Option<String>,
+    /// The narrowest segment on each copper layer this net is routed on, as
+    /// `(layer, width_mm)` sorted by layer.
+    ///
+    /// The ampacity bottleneck is the layer-and-width pair with the lowest
+    /// RATING, which is not the narrowest segment once copper weight and the
+    /// internal/external constant differ per layer: 0.3 mm of 1 oz outer copper
+    /// carries ~1.0 A while 0.5 mm of 0.5 oz inner copper carries only ~0.44 A.
+    /// Rating only the narrowest segment would pass that net.
+    pub min_width_by_layer: Vec<(String, f64)>,
     /// Widest discrete track segment on the net (mm).
     pub max_trace_width_mm: Option<f64>,
     /// Number of discrete track segments on the net.
@@ -159,11 +315,8 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
         }
     }
 
-    let mut min_w: HashMap<i64, f64> = HashMap::new();
-    let mut max_w: HashMap<i64, f64> = HashMap::new();
-    let mut seg_count: HashMap<i64, usize> = HashMap::new();
+    let mut tally = WidthTally::default();
     let mut zone_count: HashMap<i64, usize> = HashMap::new();
-    let mut seen: HashSet<i64> = HashSet::new();
 
     // Track segments (straight).
     for seg in root.find_all("segment") {
@@ -178,7 +331,7 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
         if w <= 0.0 {
             continue;
         }
-        accumulate(&mut min_w, &mut max_w, &mut seg_count, &mut seen, id, w);
+        tally.accumulate(id, w, &layer);
     }
     // Arc tracks carry a width too.
     for arc in root.find_all("arc") {
@@ -193,7 +346,7 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
         if w <= 0.0 {
             continue;
         }
-        accumulate(&mut min_w, &mut max_w, &mut seg_count, &mut seen, id, w);
+        tally.accumulate(id, w, &layer);
     }
     // Zones: a net that carries a filled pour has its real cross-section in the
     // pour, not the segments. Record the zone count so the net is marked Poured.
@@ -218,13 +371,14 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
             continue;
         }
         *zone_count.entry(id).or_default() += 1;
-        seen.insert(id);
+        tally.seen.insert(id);
     }
 
     let mut out = Vec::new();
-    for id in seen {
+    for id in &tally.seen {
+        let id = *id;
         let zc = zone_count.get(&id).copied().unwrap_or(0);
-        let sc = seg_count.get(&id).copied().unwrap_or(0);
+        let sc = tally.seg_count.get(&id).copied().unwrap_or(0);
         let kind = if zc > 0 {
             CopperKind::Poured
         } else if sc > 0 {
@@ -236,8 +390,19 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
             net_id: id,
             name: names.get(&id).cloned().unwrap_or_default(),
             kind,
-            min_trace_width_mm: min_w.get(&id).copied(),
-            max_trace_width_mm: max_w.get(&id).copied(),
+            min_trace_width_mm: tally.min_w.get(&id).copied(),
+            min_trace_layer: tally.min_layer.get(&id).cloned(),
+            min_width_by_layer: {
+                let mut v: Vec<(String, f64)> = tally
+                    .min_w_by_layer
+                    .iter()
+                    .filter(|((nid, _), _)| *nid == id)
+                    .map(|((_, l), w)| (l.clone(), *w))
+                    .collect();
+                v.sort_by(|a, b| a.0.cmp(&b.0));
+                v
+            },
+            max_trace_width_mm: tally.max_w.get(&id).copied(),
             segment_count: sc,
             zone_count: zc,
         });
@@ -246,18 +411,42 @@ pub fn net_copper_from_root(root: &List) -> Vec<NetCopper> {
     out
 }
 
-fn accumulate(
-    min_w: &mut HashMap<i64, f64>,
-    max_w: &mut HashMap<i64, f64>,
-    seg_count: &mut HashMap<i64, usize>,
-    seen: &mut HashSet<i64>,
-    id: i64,
-    w: f64,
-) {
-    seen.insert(id);
-    *seg_count.entry(id).or_default() += 1;
-    min_w.entry(id).and_modify(|m| *m = m.min(w)).or_insert(w);
-    max_w.entry(id).and_modify(|m| *m = m.max(w)).or_insert(w);
+#[derive(Default)]
+struct WidthTally {
+    min_w: HashMap<i64, f64>,
+    max_w: HashMap<i64, f64>,
+    /// Layer of the narrowest segment seen so far, kept in step with `min_w`.
+    min_layer: HashMap<i64, String>,
+    /// Narrowest segment PER LAYER, keyed (net, layer). Once copper weight and
+    /// the internal/external constant vary by layer, the narrowest segment is no
+    /// longer necessarily the lowest-ampacity one, so the audit needs every
+    /// layer's own bottleneck to find the real one.
+    min_w_by_layer: HashMap<(i64, String), f64>,
+    seg_count: HashMap<i64, usize>,
+    seen: HashSet<i64>,
+}
+
+impl WidthTally {
+    fn accumulate(&mut self, id: i64, w: f64, layer: &str) {
+        self.seen.insert(id);
+        *self.seg_count.entry(id).or_default() += 1;
+        let is_new_min = self.min_w.get(&id).is_none_or(|m| w < *m);
+        self.min_w
+            .entry(id)
+            .and_modify(|m| *m = m.min(w))
+            .or_insert(w);
+        self.max_w
+            .entry(id)
+            .and_modify(|m| *m = m.max(w))
+            .or_insert(w);
+        if is_new_min {
+            self.min_layer.insert(id, layer.to_string());
+        }
+        self.min_w_by_layer
+            .entry((id, layer.to_string()))
+            .and_modify(|m| *m = m.min(w))
+            .or_insert(w);
+    }
 }
 
 /// Resolve a primitive's `(net ...)` child to a net id. Handles the numeric
@@ -284,8 +473,10 @@ fn net_id_of(list: &List, by_name: &HashMap<String, i64>) -> Option<i64> {
 pub struct TraceCurrentFinding {
     pub net_id: i64,
     pub net: String,
-    /// The narrowest segment width found (mm) - the bottleneck.
-    pub min_width_mm: f64,
+    /// Width (mm) of the segment that set the limit: the RATED bottleneck, which
+    /// is not necessarily the net's narrowest segment. A wider inner-layer trace
+    /// out-limits a narrower outer one, and this field is that trace's width.
+    pub bottleneck_width_mm: f64,
     /// IPC-2221 ampacity of that width at the audit's temperature rise.
     pub ampacity_a: f64,
     /// The cited load current the caller attributed to the net (A).
@@ -294,6 +485,52 @@ pub struct TraceCurrentFinding {
     pub required_width_mm: f64,
     /// Free-text citation for the attributed current (datasheet / connector).
     pub citation: String,
+    /// Copper layer the bottleneck sits on, when the layout named one.
+    pub layer: Option<String>,
+    /// Copper weight (oz) the rating used.
+    pub oz: f64,
+    /// Whether the rating used the external (0.048) or internal (0.024) constant.
+    pub external: bool,
+    /// Whether `oz` / `external` were declared by the board or assumed.
+    pub copper_source: CopperSource,
+    /// The lowest-rated segment whose copper weight the board **declared**, when
+    /// that segment independently cannot carry the cited current.
+    ///
+    /// This is what makes a shortfall a verdict rather than a consequence of an
+    /// assumed weight, and it is kept separate from the reported bottleneck above
+    /// so that neither has to stand in for the other: the bottleneck names the
+    /// width that must change, this names the evidence the conclusion rests on.
+    pub declared_shortfall: Option<Bottleneck>,
+}
+
+impl TraceCurrentFinding {
+    /// The copper basis in words, marked ASSUMED (and naming the upload that
+    /// would settle it) whenever the board did not declare the layer.
+    pub fn describe_copper(&self) -> String {
+        let side = if self.external {
+            "external"
+        } else {
+            "internal"
+        };
+        match self.copper_source {
+            CopperSource::Stackup => match &self.layer {
+                Some(l) => format!("{} {side} {l}, per the board stackup", describe_oz(self.oz)),
+                None => format!("{} {side}, per the board stackup", describe_oz(self.oz)),
+            },
+            CopperSource::AssumedNoStackup => format!(
+                "ASSUMED {} {side} - the layout declares no stackup, so upload a stackup \
+                 declaration or fab drawing to rate the real copper",
+                describe_oz(self.oz),
+            ),
+            CopperSource::AssumedLayerMissing => format!(
+                "ASSUMED {} {side} - the layout declares a stackup but no copper weight for \
+                 {}, so upload a stackup declaration or fab drawing that covers every layer \
+                 to rate the real copper",
+                describe_oz(self.oz),
+                self.layer.as_deref().unwrap_or("this layer"),
+            ),
+        }
+    }
 }
 
 /// Capacity-only row for a power-looking net when no current attribution exists.
@@ -302,20 +539,38 @@ pub struct TraceCapacityRow {
     pub net_id: i64,
     pub net: String,
     pub kind: CopperKind,
+    /// Width (mm) of the RATED bottleneck, the width `capacity_*_a` is computed
+    /// from. Not necessarily the net's narrowest segment (see
+    /// [`TraceAudit::bottleneck`]); showing the geometric minimum beside a
+    /// capacity derived from a different segment would not add up.
     pub min_width_mm: Option<f64>,
     pub segment_count: usize,
     pub zone_count: usize,
     pub capacity_10c_a: f64,
     pub capacity_20c_a: f64,
+    /// Copper weight (oz) the capacities were computed at.
+    pub oz: f64,
+    /// Whether the internal (0.024) or external (0.048) constant was used.
+    pub external: bool,
+    /// Whether `oz` / `external` came from the board or were assumed.
+    pub copper_source: CopperSource,
 }
 
-/// Audit parameters (copper weight, target rise, layer side). Defaults are the
-/// defensible external-1oz-10C ballpark; callers can tighten them.
-#[derive(Debug, Clone, Copy)]
+/// Audit parameters (copper weight, target rise). `oz` is only the **fallback**
+/// weight for a layer the board declares nothing about; when `copper` holds a
+/// declared per-layer table, each net is rated at its own bottleneck's weight.
+///
+/// There is deliberately no `external` field: which IPC-2221 constant applies is
+/// a property of the LAYER, taken from the stackup or inferred from the layer's
+/// name, never a per-audit choice.
+#[derive(Debug, Clone)]
 pub struct TraceAudit {
+    /// Fallback copper weight (oz) when the layer is not in the declared stackup.
     pub oz: f64,
     pub dt_c: f64,
-    pub external: bool,
+    /// Per-layer copper weights read from the board. Empty means undeclared, and
+    /// every rating built from the fallback is then marked ASSUMED.
+    pub copper: CopperWeights,
     /// A net must miss its rating by more than this factor before it is flagged,
     /// to keep rounding-level near-misses out (1.0 = flag any shortfall).
     pub margin: f64,
@@ -324,11 +579,185 @@ pub struct TraceAudit {
 impl Default for TraceAudit {
     fn default() -> Self {
         TraceAudit {
-            oz: 1.0,
+            oz: OZ_1,
             dt_c: 10.0,
-            external: true,
+            copper: CopperWeights::default(),
             margin: 1.0,
         }
+    }
+}
+
+impl TraceAudit {
+    /// The default audit, with per-layer copper weights read from `root`.
+    pub fn from_root(root: &List) -> Self {
+        TraceAudit {
+            copper: CopperWeights::from_root(root),
+            ..Default::default()
+        }
+    }
+
+    /// The default audit, with per-layer copper weights read from raw
+    /// `.kicad_pcb` text. Non-KiCad or unparseable text yields the plain default,
+    /// whose ratings are then marked ASSUMED.
+    pub fn from_pcb_text(text: &str) -> Self {
+        if !text.contains("(kicad_pcb") {
+            return Self::default();
+        }
+        match forge_sexpr::parse(text)
+            .ok()
+            .and_then(|d| d.root().map(CopperWeights::from_root))
+        {
+            Some(copper) => TraceAudit {
+                copper,
+                ..Default::default()
+            },
+            None => Self::default(),
+        }
+    }
+
+    /// The copper weight and side to rate a trace on `layer` against, plus where
+    /// those numbers came from. An undeclared layer falls back to the stated
+    /// default rather than refusing to rate the net, but the source records that
+    /// so the message can say ASSUMED.
+    pub fn copper_for(&self, layer: Option<&str>) -> (f64, bool, CopperSource) {
+        if let Some(found) = layer.and_then(|l| self.copper.get(l)) {
+            return (found.0, found.1, CopperSource::Stackup);
+        }
+        // No declared weight for this layer. The weight falls back to the audit
+        // default, but the SIDE is inferred from the layer's name rather than
+        // defaulting to external: assuming external for a trace on `In1.Cu`
+        // doubles its apparent capacity (k 0.048 against 0.024) and would suppress
+        // the very findings per-layer rating exists to recover. An unrecognised
+        // name is treated as internal, the conservative direction.
+        let external = assumed_external_for(layer);
+        let source = if self.copper.is_declared() {
+            CopperSource::AssumedLayerMissing
+        } else {
+            CopperSource::AssumedNoStackup
+        };
+        (self.oz, external, source)
+    }
+
+    /// The **ampacity** bottleneck of a net: the (layer, width) pair with the
+    /// lowest IPC-2221 rating, with the copper basis that produced it.
+    ///
+    /// Not the narrowest segment. Once weight and the internal/external constant
+    /// vary per layer, 0.5 mm of 0.5 oz inner copper (~0.44 A) is a harder limit
+    /// than 0.3 mm of 1 oz outer copper (~1.0 A), so ranking by width would rate
+    /// the wrong segment and pass a net whose real choke is elsewhere. Ties
+    /// resolve to the lower-ampacity, then internal, then lighter, then
+    /// alphabetically-first layer so the choice is deterministic.
+    ///
+    /// Falls back to `min_trace_width_mm` / `min_trace_layer` for a `NetCopper`
+    /// built before per-layer widths were recorded.
+    pub fn bottleneck(&self, nc: &NetCopper) -> Option<Bottleneck> {
+        self.rated_candidates(nc)
+            .into_iter()
+            .min_by(rank_bottleneck)
+    }
+
+    /// The lowest-rated candidate whose copper weight was **declared** by the
+    /// board, if the net has any such layer.
+    ///
+    /// Needed because severity depends on the selected candidate's evidence: if a
+    /// single global minimum were used, an assumed-weight layer that ties or
+    /// undercuts a declared one would carry its `Assumed` source into the result
+    /// and silently demote a decision-grade failure on declared copper to a note.
+    /// The declared candidates are therefore judged on their own.
+    pub fn declared_bottleneck(&self, nc: &NetCopper) -> Option<Bottleneck> {
+        self.rated_candidates(nc)
+            .into_iter()
+            .filter(|b| !b.copper_source.is_assumed())
+            .min_by(rank_bottleneck)
+    }
+
+    /// Every (layer, narrowest width) pair on the net, rated.
+    fn rated_candidates(&self, nc: &NetCopper) -> Vec<Bottleneck> {
+        let rate = |layer: Option<&str>, w: f64| {
+            let (oz, external, source) = self.copper_for(layer);
+            Bottleneck {
+                layer: layer.map(|l| l.to_string()),
+                width_mm: w,
+                ampacity_a: ipc2221_ampacity(w, oz, self.dt_c, external),
+                oz,
+                external,
+                copper_source: source,
+            }
+        };
+        if nc.min_width_by_layer.is_empty() {
+            return nc
+                .min_trace_width_mm
+                .map(|w| vec![rate(nc.min_trace_layer.as_deref(), w)])
+                .unwrap_or_default();
+        }
+        nc.min_width_by_layer
+            .iter()
+            .map(|(layer, w)| rate(Some(layer), *w))
+            .collect()
+    }
+}
+
+/// Order two rated candidates worst-first: lowest ampacity, then declared copper
+/// ahead of assumed (so a tie never hands the result an assumed basis it did not
+/// need), then internal, then lighter, then layer name for determinism.
+fn rank_bottleneck(a: &Bottleneck, b: &Bottleneck) -> std::cmp::Ordering {
+    a.ampacity_a
+        .total_cmp(&b.ampacity_a)
+        .then(
+            a.copper_source
+                .is_assumed()
+                .cmp(&b.copper_source.is_assumed()),
+        )
+        .then(a.external.cmp(&b.external))
+        .then(a.oz.total_cmp(&b.oz))
+        .then(a.layer.cmp(&b.layer))
+}
+
+/// The rated bottleneck of a net: which layer and width set its limit, and the
+/// copper basis behind that rating.
+#[derive(Debug, Clone)]
+pub struct Bottleneck {
+    pub layer: Option<String>,
+    pub width_mm: f64,
+    pub ampacity_a: f64,
+    pub oz: f64,
+    pub external: bool,
+    pub copper_source: CopperSource,
+}
+
+/// Whether a layer name is one KiCad gives OUTER copper.
+fn is_outer_layer_name(n: &str) -> bool {
+    n.eq_ignore_ascii_case("F.Cu") || n.eq_ignore_ascii_case("B.Cu")
+}
+
+/// Whether a layer name is one KiCad gives INNER copper (`In1.Cu`, `In2.Cu`, ...).
+fn is_inner_layer_name(n: &str) -> bool {
+    let upper = n.to_ascii_uppercase();
+    let Some(body) = upper.strip_suffix(".CU") else {
+        return false;
+    };
+    let Some(digits) = body.strip_prefix("IN") else {
+        return false;
+    };
+    !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit())
+}
+
+/// Whether an undeclared layer should be rated as external copper, from its name.
+///
+/// `F.Cu` / `B.Cu` are the outer layers. An `In<N>.Cu` name is inner. Anything
+/// unrecognised, including a net with no layer recorded at all, is treated as
+/// internal: that is the lower rating, so an unknown layer cannot inflate a
+/// net's apparent capacity.
+fn assumed_external_for(layer: Option<&str>) -> bool {
+    layer.is_some_and(is_outer_layer_name)
+}
+
+/// Render a copper weight the way a fab drawing does: `1 oz`, `0.5 oz`.
+pub fn describe_oz(oz: f64) -> String {
+    if (oz - oz.round()).abs() < 0.01 {
+        format!("{:.0} oz", oz.round())
+    } else {
+        format!("{oz:.2} oz")
     }
 }
 
@@ -351,27 +780,42 @@ pub fn audit_trace_currents(
         if nc.kind != CopperKind::Traces {
             continue;
         }
-        let Some(min_w) = nc.min_trace_width_mm else {
+        // Rate the AMPACITY bottleneck, on the copper it is actually built in.
+        // An inner 0.5 oz trace carries roughly a third of what the same width
+        // carries as 1 oz outer copper, so the lowest-rated layer sets the limit
+        // even when a different layer holds the narrowest segment.
+        // The REPORTED bottleneck is always the net's true worst point, so the
+        // width and the "needs >= X mm" fix actually settle the net. Substituting
+        // a declared-but-higher-rated segment here would name a width that still
+        // leaves the real choke undersized.
+        let Some(b) = audit.bottleneck(nc) else {
             continue;
         };
-        let ampacity = ipc2221_ampacity(min_w, audit.oz, audit.dt_c, audit.external);
-        if ampacity <= 0.0 {
+        if b.ampacity_a <= 0.0 {
             continue;
         }
-        if *current > ampacity * audit.margin {
+        // Separately: does a segment whose copper weight the board DECLARED fail
+        // on its own? That is what decides whether this is a verdict, and it must
+        // not be masked by an assumed-weight layer that happens to rate lower.
+        // A declared candidate's rating is never below the overall bottleneck's,
+        // so this can only ever be true when the overall test below is.
+        let declared_shortfall = audit
+            .declared_bottleneck(nc)
+            .filter(|d| d.ampacity_a > 0.0 && *current > d.ampacity_a * audit.margin);
+        if *current > b.ampacity_a * audit.margin {
             findings.push(TraceCurrentFinding {
                 net_id: nc.net_id,
                 net: nc.name.clone(),
-                min_width_mm: min_w,
-                ampacity_a: ampacity,
+                bottleneck_width_mm: b.width_mm,
+                ampacity_a: b.ampacity_a,
                 cited_current_a: *current,
-                required_width_mm: ipc2221_min_width_mm(
-                    *current,
-                    audit.oz,
-                    audit.dt_c,
-                    audit.external,
-                ),
+                required_width_mm: ipc2221_min_width_mm(*current, b.oz, audit.dt_c, b.external),
                 citation: citation.clone(),
+                layer: b.layer.clone(),
+                oz: b.oz,
+                external: b.external,
+                copper_source: b.copper_source,
+                declared_shortfall: declared_shortfall.clone(),
             });
         }
     }
@@ -388,15 +832,20 @@ pub fn trace_capacity_report(copper: &[NetCopper], audit: &TraceAudit) -> Vec<Tr
         if !power_like_net(&nc.name) {
             continue;
         }
+        // Report the capacity of the rated bottleneck, same rule as the audit.
+        let b = audit.bottleneck(nc);
+        let (oz, external, copper_source) = match &b {
+            Some(b) => (b.oz, b.external, b.copper_source),
+            None => audit.copper_for(nc.min_trace_layer.as_deref()),
+        };
         let (capacity_10c_a, capacity_20c_a) = if nc.kind == CopperKind::Traces {
-            (
-                nc.min_trace_width_mm
-                    .map(|w| ipc2221_ampacity(w, audit.oz, 10.0, audit.external))
-                    .unwrap_or(f64::NAN),
-                nc.min_trace_width_mm
-                    .map(|w| ipc2221_ampacity(w, audit.oz, 20.0, audit.external))
-                    .unwrap_or(f64::NAN),
-            )
+            match &b {
+                Some(b) => (
+                    ipc2221_ampacity(b.width_mm, oz, 10.0, external),
+                    ipc2221_ampacity(b.width_mm, oz, 20.0, external),
+                ),
+                None => (f64::NAN, f64::NAN),
+            }
         } else {
             (f64::NAN, f64::NAN)
         };
@@ -404,11 +853,17 @@ pub fn trace_capacity_report(copper: &[NetCopper], audit: &TraceAudit) -> Vec<Tr
             net_id: nc.net_id,
             net: nc.name.clone(),
             kind: nc.kind,
-            min_width_mm: nc.min_trace_width_mm,
+            min_width_mm: match (&b, nc.kind) {
+                (Some(b), CopperKind::Traces) => Some(b.width_mm),
+                _ => nc.min_trace_width_mm,
+            },
             segment_count: nc.segment_count,
             zone_count: nc.zone_count,
             capacity_10c_a,
             capacity_20c_a,
+            oz,
+            external,
+            copper_source,
         });
     }
     rows.sort_by(|a, b| a.net_id.cmp(&b.net_id).then(a.net.cmp(&b.net)));
@@ -448,12 +903,47 @@ fn power_like_net(name: &str) -> bool {
         || n.contains("PWR")
 }
 
+/// The copper basis of a capacity row in table-width form: `0.5 oz int`,
+/// `1 oz ext (assumed)`.
+fn compact_copper(r: &TraceCapacityRow) -> String {
+    let side = if r.external { "ext" } else { "int" };
+    let assumed = if r.copper_source.is_assumed() {
+        " (assumed)"
+    } else {
+        ""
+    };
+    format!("{} {side}{assumed}", describe_oz(r.oz))
+}
+
 pub fn render_trace_capacity_report(rows: &[TraceCapacityRow]) -> String {
     let mut out = String::new();
     out.push_str("ampacity: IPC-2221 capacity only; supply a current for pass/fail.\n");
     if rows.is_empty() {
         out.push_str("no power-like routed nets found.\n");
         return out;
+    }
+    // The copper basis decides every number in the table, so it is stated above
+    // it rather than left for the reader to assume.
+    let no_stackup = rows
+        .iter()
+        .any(|r| r.copper_source == CopperSource::AssumedNoStackup);
+    let layer_missing = rows
+        .iter()
+        .any(|r| r.copper_source == CopperSource::AssumedLayerMissing);
+    if no_stackup {
+        out.push_str(
+            "copper WEIGHT ASSUMED 1 oz (the layout declares no stackup); each row's layer side \
+             is inferred from its layer name, shown per row as ext/int. Upload a stackup \
+             declaration or fab drawing to rate the real copper.\n",
+        );
+    } else if layer_missing {
+        out.push_str(
+            "copper weight read from the board stackup, EXCEPT the rows marked (assumed), whose \
+             layer the stackup gives no thickness for: those fall back to 1 oz at the layer side \
+             their name implies, shown per row as ext/int.\n",
+        );
+    } else {
+        out.push_str("copper weight and layer side read from the board stackup.\n");
     }
     // Column widths follow the content (with sane caps), so headers stay
     // aligned and cells are never chopped mid-word to fit a fixed grid.
@@ -471,7 +961,7 @@ pub fn render_trace_capacity_report(rows: &[TraceCapacityRow]) -> String {
                         "-".to_string()
                     },
                     if r.capacity_20c_a.is_finite() {
-                        format!("20C {:.2} A", r.capacity_20c_a)
+                        format!("20C {:.2} A, {}", r.capacity_20c_a, compact_copper(r))
                     } else {
                         "-".to_string()
                     },
@@ -645,6 +1135,9 @@ mod tests {
             zone_count: 0,
             capacity_10c_a: f64::NAN,
             capacity_20c_a: f64::NAN,
+            oz: OZ_1,
+            external: true,
+            copper_source: CopperSource::AssumedNoStackup,
         };
         let out = render_trace_capacity_report(&[row]);
         assert!(
@@ -657,6 +1150,417 @@ mod tests {
         let text = format!("(kicad_pcb (net 0 \"\") {body})");
         let doc = forge_sexpr::parse(&text).unwrap();
         net_copper_from_root(doc.root().unwrap())
+    }
+
+    /// A 4-layer stackup: 1 oz outer copper (0.035 mm), 0.5 oz inner (0.0175 mm).
+    /// The common commercial build, and the one that makes the blanket-1 oz
+    /// assumption wrong by ~3x on inner copper.
+    const STACKUP_4L: &str = r#"
+      (setup (stackup
+        (layer "F.Cu" (type "copper") (thickness 0.035))
+        (layer "dielectric 1" (type "prepreg") (thickness 0.1) (epsilon_r 4.5))
+        (layer "In1.Cu" (type "copper") (thickness 0.0175))
+        (layer "dielectric 2" (type "core") (thickness 1.2) (epsilon_r 4.5))
+        (layer "In2.Cu" (type "copper") (thickness 0.0175))
+        (layer "dielectric 3" (type "prepreg") (thickness 0.1) (epsilon_r 4.5))
+        (layer "B.Cu" (type "copper") (thickness 0.035))
+      ))
+    "#;
+
+    /// Copper geometry plus a stackup-derived audit from the SAME text, so the
+    /// per-layer weights and the segments cannot drift apart.
+    fn pcb_audited(body: &str) -> (Vec<NetCopper>, TraceAudit) {
+        let text = format!("(kicad_pcb (net 0 \"\") {body})");
+        let doc = forge_sexpr::parse(&text).unwrap();
+        let root = doc.root().unwrap();
+        (net_copper_from_root(root), TraceAudit::from_root(root))
+    }
+
+    /// One 0.5 mm trace on `layer` carrying a cited 1.0 A.
+    fn one_amp_on(layer: &str) -> (Vec<NetCopper>, TraceAudit, HashMap<String, (f64, String)>) {
+        let body = format!(
+            r#"{STACKUP_4L}
+               (net 1 "VMOT")
+               (segment (start 0 0) (end 10 0) (width 0.5) (layer "{layer}") (net 1))"#
+        );
+        let (copper, audit) = pcb_audited(&body);
+        let mut cited = HashMap::new();
+        cited.insert("VMOT".to_string(), (1.0, "driver 1.0 A".to_string()));
+        (copper, audit, cited)
+    }
+
+    #[test]
+    fn stackup_copper_weights_split_outer_from_inner() {
+        let (_, audit) = pcb_audited(STACKUP_4L);
+        assert!(!audit.copper.is_empty(), "stackup must be read");
+        let (oz_f, ext_f) = audit.copper.get("F.Cu").expect("F.Cu declared");
+        assert!((oz_f - 1.0).abs() < 0.01, "F.Cu is 1 oz, got {oz_f}");
+        assert!(ext_f, "F.Cu is an external layer");
+        let (oz_in, ext_in) = audit.copper.get("In1.Cu").expect("In1.Cu declared");
+        assert!((oz_in - 0.5).abs() < 0.01, "In1.Cu is 0.5 oz, got {oz_in}");
+        assert!(!ext_in, "In1.Cu is an internal layer");
+        let (_, ext_b) = audit.copper.get("B.Cu").expect("B.Cu declared");
+        assert!(ext_b, "B.Cu is the other external layer");
+    }
+
+    #[test]
+    fn inner_layer_trace_fires_under_the_internal_chart() {
+        // 0.5 mm of 0.5 oz internal copper rates ~0.44 A: a cited 1.0 A is over.
+        let (copper, audit, cited) = one_amp_on("In1.Cu");
+        let f = audit_trace_currents(&copper, &cited, &audit);
+        assert_eq!(f.len(), 1, "an inner 0.5 oz trace at 1.0 A must fire");
+        let fd = &f[0];
+        assert!(!fd.external, "In1.Cu must be rated as internal copper");
+        assert!((fd.oz - 0.5).abs() < 0.01, "0.5 oz inner, got {}", fd.oz);
+        assert_eq!(fd.copper_source, CopperSource::Stackup);
+        // Pin the value, not just "smaller": I = 0.024*10^0.44*A^0.725 with
+        // A = (0.5/0.0254)*(1.378*0.5) mil^2 gives 0.438 A. A merely-derated
+        // wrong formula must not pass this.
+        assert!(
+            (fd.ampacity_a - 0.438).abs() < 0.01,
+            "0.5 mm of 0.5 oz internal copper rates 0.438 A, got {}",
+            fd.ampacity_a
+        );
+        let d = fd.describe_copper();
+        assert!(
+            d.contains("0.50 oz") && d.contains("internal") && !d.contains("ASSUMED"),
+            "a declared stackup must not be marked ASSUMED: {d}"
+        );
+    }
+
+    #[test]
+    fn same_trace_on_an_outer_layer_passes() {
+        // The identical width and current on 1 oz external copper rates ~1.45 A:
+        // in spec. Per-layer rating must discriminate, not just flag everything.
+        let (copper, audit, cited) = one_amp_on("F.Cu");
+        let f = audit_trace_currents(&copper, &cited, &audit);
+        assert!(
+            f.is_empty(),
+            "the same trace as 1 oz external copper is in spec: {f:?}"
+        );
+        // And the rating it passed on is the external figure, exactly.
+        let nc = copper.iter().find(|n| n.net_id == 1).unwrap();
+        let b = audit.bottleneck(nc).expect("a rated bottleneck");
+        assert!(
+            (b.ampacity_a - 1.447).abs() < 0.01,
+            "0.5 mm of 1 oz external copper rates 1.447 A, got {}",
+            b.ampacity_a
+        );
+    }
+
+    #[test]
+    fn stackupless_board_keeps_1oz_but_says_assumed() {
+        // No stackup declared: the 1 oz external default stands (the verdict is
+        // unchanged), but the message must mark it ASSUMED and name the upload
+        // that would settle it, rather than printing "1 oz" as a board fact.
+        let body = r#"
+          (net 1 "MOTOR")
+          (segment (start 0 0) (end 10 0) (width 0.25) (layer "F.Cu") (net 1))
+        "#;
+        let (copper, audit) = pcb_audited(body);
+        assert!(audit.copper.is_empty(), "no stackup to read");
+        let mut cited = HashMap::new();
+        cited.insert("MOTOR".to_string(), (2.0, "coil".to_string()));
+        let f = audit_trace_currents(&copper, &cited, &audit);
+        assert_eq!(f.len(), 1, "the undersized trace still fires");
+        let fd = &f[0];
+        assert!((fd.oz - 1.0).abs() < 1e-9, "default is still 1 oz");
+        assert!(fd.external, "default is still external");
+        assert_eq!(fd.copper_source, CopperSource::AssumedNoStackup);
+        let d = fd.describe_copper();
+        assert!(d.contains("ASSUMED"), "must be marked ASSUMED: {d}");
+        assert!(
+            d.contains("declares no stackup"),
+            "a board with no stackup must be told so: {d}"
+        );
+        assert!(
+            d.contains("stackup declaration") && d.contains("fab drawing"),
+            "must name the unlocking upload: {d}"
+        );
+    }
+
+    #[test]
+    fn a_layer_missing_from_a_real_stackup_is_not_called_a_missing_stackup() {
+        // The board DOES declare a stackup; it just gives no thickness for the
+        // layer this net's bottleneck sits on. Saying "declares no stackup" here
+        // would be a false statement about the board, on exactly the axis this
+        // disclosure exists to be honest about.
+        let body = format!(
+            r#"{STACKUP_4L}
+               (net 1 "MOTOR")
+               (segment (start 0 0) (end 10 0) (width 0.25) (layer "In9.Cu") (net 1))"#
+        );
+        let (copper, audit) = pcb_audited(&body);
+        assert!(!audit.copper.is_empty(), "the stackup IS declared");
+        let mut cited = HashMap::new();
+        cited.insert("MOTOR".to_string(), (2.0, "coil".to_string()));
+        let f = audit_trace_currents(&copper, &cited, &audit);
+        assert_eq!(f.len(), 1);
+        assert_eq!(f[0].copper_source, CopperSource::AssumedLayerMissing);
+        let d = f[0].describe_copper();
+        assert!(d.contains("ASSUMED"), "{d}");
+        assert!(
+            !d.contains("declares no stackup"),
+            "must not claim the board has no stackup when it has one: {d}"
+        );
+        assert!(d.contains("In9.Cu"), "names the uncovered layer: {d}");
+    }
+
+    #[test]
+    fn a_truncated_stackup_does_not_promote_inner_copper_to_external() {
+        // A stackup that lists F.Cu and In1.Cu but forgets B.Cu makes In1.Cu the
+        // LAST copper entry. Reading outer-ness from position would rate inner
+        // copper with k=0.048 and double its apparent capacity.
+        let truncated = r#"
+          (setup (stackup
+            (layer "F.Cu" (type "copper") (thickness 0.035))
+            (layer "dielectric 1" (type "prepreg") (thickness 0.1) (epsilon_r 4.5))
+            (layer "In1.Cu" (type "copper") (thickness 0.0175))
+          ))
+        "#;
+        let (_, audit) = pcb_audited(truncated);
+        let (_, ext_f) = audit.copper.get("F.Cu").expect("F.Cu declared");
+        assert!(ext_f, "F.Cu is external by name");
+        let (_, ext_in) = audit.copper.get("In1.Cu").expect("In1.Cu declared");
+        assert!(
+            !ext_in,
+            "In1.Cu is internal even as the last declared copper layer"
+        );
+    }
+
+    #[test]
+    fn a_mixed_naming_convention_does_not_derate_the_physical_bottom_layer() {
+        // A 2-layer producer writing "F.Cu" and "L2.Cu". L2.Cu is physically the
+        // bottom, so it is external. Classifying every unfamiliar name as internal
+        // halves k and can fire a false verdict on perfectly good outer copper.
+        let mixed = r#"
+          (setup (stackup
+            (layer "F.Cu" (type "copper") (thickness 0.035))
+            (layer "dielectric 1" (type "core") (thickness 1.51) (epsilon_r 4.5))
+            (layer "L2.Cu" (type "copper") (thickness 0.035))
+          ))
+        "#;
+        let (_, audit) = pcb_audited(mixed);
+        assert!(audit.copper.get("F.Cu").expect("F.Cu").1, "canonical outer");
+        assert!(
+            audit.copper.get("L2.Cu").expect("L2.Cu").1,
+            "the physical bottom layer is external even under an unfamiliar name"
+        );
+
+        // And the truncated-declaration case must still hold: a canonical INNER
+        // name outranks position, so an In1.Cu that happens to be last stays
+        // internal rather than being promoted to external.
+        let truncated = r#"
+          (setup (stackup
+            (layer "F.Cu" (type "copper") (thickness 0.035))
+            (layer "dielectric 1" (type "prepreg") (thickness 0.1) (epsilon_r 4.5))
+            (layer "In1.Cu" (type "copper") (thickness 0.0175))
+          ))
+        "#;
+        let (_, audit) = pcb_audited(truncated);
+        assert!(
+            !audit.copper.get("In1.Cu").expect("In1.Cu").1,
+            "a canonical inner name stays internal even as the last entry"
+        );
+    }
+
+    #[test]
+    fn a_stackup_naming_no_outer_layers_falls_back_to_position() {
+        // A producer that does not use KiCad's F.Cu / B.Cu names has only position
+        // to go on, and using it beats rating everything internal.
+        //
+        // The layer names still end in `.Cu`, deliberately: copper extraction only
+        // collects segments on a `*.Cu` layer, so a stackup naming its copper
+        // "TOP"/"BOT" could never have a rated trace to apply this to. Testing it
+        // with names that cannot carry copper would assert a path no board reaches.
+        let odd = r#"
+          (setup (stackup
+            (layer "L1.Cu" (type "copper") (thickness 0.035))
+            (layer "d1" (type "prepreg") (thickness 0.1) (epsilon_r 4.5))
+            (layer "L2.Cu" (type "copper") (thickness 0.0175))
+            (layer "d2" (type "core") (thickness 1.2) (epsilon_r 4.5))
+            (layer "L3.Cu" (type "copper") (thickness 0.035))
+          ))
+          (net 1 "VMOT")
+          (segment (start 0 0) (end 10 0) (width 0.5) (layer "L2.Cu") (net 1))
+        "#;
+        let (copper, audit) = pcb_audited(odd);
+        assert!(
+            audit.copper.get("L1.Cu").expect("L1").1,
+            "first is external"
+        );
+        assert!(audit.copper.get("L3.Cu").expect("L3").1, "last is external");
+        assert!(
+            !audit.copper.get("L2.Cu").expect("L2").1,
+            "middle is internal"
+        );
+        // And the positional reading really reaches a rating: the inner segment is
+        // rated as 0.5 oz internal copper, not as an outer layer.
+        let nc = copper.iter().find(|n| n.net_id == 1).unwrap();
+        let b = audit.bottleneck(nc).expect("a rated bottleneck");
+        assert_eq!(b.copper_source, CopperSource::Stackup);
+        assert!(!b.external, "L2.Cu is internal by position");
+        assert!((b.ampacity_a - 0.438).abs() < 0.01, "{}", b.ampacity_a);
+    }
+
+    #[test]
+    fn the_bottleneck_is_the_lowest_rated_layer_not_the_narrowest_segment() {
+        // The defect per-layer weights introduce. This net's NARROWEST segment is
+        // 0.3 mm on 1 oz outer copper, which rates 0.999 A. Its widest segment,
+        // 0.5 mm, is on 0.5 oz INNER copper and rates only 0.438 A. Ranking by
+        // width rates the 0.3 mm outer segment and passes a cited 0.8 A, while the
+        // inner segment is the real choke. Ranking by ampacity fires.
+        let body = format!(
+            r#"{STACKUP_4L}
+               (net 1 "VMOT")
+               (segment (start 0 0) (end 10 0) (width 0.3) (layer "F.Cu") (net 1))
+               (segment (start 10 0) (end 20 0) (width 0.5) (layer "In1.Cu") (net 1))"#
+        );
+        let (copper, audit) = pcb_audited(&body);
+        let nc = copper.iter().find(|n| n.net_id == 1).unwrap();
+        // The geometric minimum really is the outer segment, so this test would
+        // pass vacuously if it only checked widths.
+        assert_eq!(nc.min_trace_width_mm, Some(0.3));
+        assert_eq!(nc.min_trace_layer.as_deref(), Some("F.Cu"));
+
+        let b = audit.bottleneck(nc).expect("a rated bottleneck");
+        assert_eq!(
+            b.layer.as_deref(),
+            Some("In1.Cu"),
+            "the rated bottleneck is the inner layer, not the narrowest segment"
+        );
+        assert!(
+            (b.ampacity_a - 0.438).abs() < 0.01,
+            "the limit is the inner segment's 0.438 A, got {}",
+            b.ampacity_a
+        );
+
+        let mut cited = HashMap::new();
+        cited.insert("VMOT".to_string(), (0.8, "driver 0.8 A".to_string()));
+        let f = audit_trace_currents(&copper, &cited, &audit);
+        assert_eq!(f.len(), 1, "0.8 A over a 0.438 A inner choke must fire");
+        assert_eq!(f[0].layer.as_deref(), Some("In1.Cu"));
+    }
+
+    #[test]
+    fn a_declared_failure_is_not_masked_by_an_assumed_layer() {
+        // The hole a single global minimum leaves. This stackup declares only
+        // F.Cu, and the net has equal 0.5 mm segments on F.Cu (declared 1 oz) and
+        // B.Cu (undeclared, so assumed 1 oz external). Both rate 1.447 A, so a tie
+        // resolved by layer name alone hands the result B.Cu's ASSUMED basis and
+        // demotes a real 2 A shortfall on declared copper to a non-verdict.
+        let partial = r#"
+          (setup (stackup
+            (layer "F.Cu" (type "copper") (thickness 0.035))
+            (layer "dielectric 1" (type "core") (thickness 1.51) (epsilon_r 4.5))
+          ))
+          (net 1 "VMOT")
+          (segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1))
+          (segment (start 10 0) (end 20 0) (width 0.5) (layer "B.Cu") (net 1))
+        "#;
+        let (copper, audit) = pcb_audited(partial);
+        let nc = copper.iter().find(|n| n.net_id == 1).unwrap();
+        // Both candidates really do tie on rating, so this is the live case.
+        let all = audit.declared_bottleneck(nc).expect("F.Cu is declared");
+        assert_eq!(all.layer.as_deref(), Some("F.Cu"));
+        assert!((all.ampacity_a - 1.447).abs() < 0.01, "{}", all.ampacity_a);
+
+        let mut cited = HashMap::new();
+        cited.insert("VMOT".to_string(), (2.0, "driver 2 A".to_string()));
+        let f = audit_trace_currents(&copper, &cited, &audit);
+        assert_eq!(f.len(), 1);
+        let d = f[0]
+            .declared_shortfall
+            .as_ref()
+            .expect("the declared segment fails on its own, so this is a verdict");
+        assert_eq!(d.layer.as_deref(), Some("F.Cu"));
+        assert_eq!(d.copper_source, CopperSource::Stackup);
+    }
+
+    #[test]
+    fn the_reported_bottleneck_stays_the_real_one_even_when_a_declared_layer_convicts() {
+        // Both halves must be true at once. The stackup declares only F.Cu, whose
+        // 0.5 mm segment rates 1.447 A and independently fails a cited 2 A: that is
+        // the verdict's evidence. But the net's true worst point is the undeclared
+        // 1.0 mm In1.Cu segment at ~1.196 A (assumed 1 oz, internal by name).
+        // Reporting F.Cu's width as the bottleneck would name a "needs >= X mm"
+        // that still leaves the inner segment undersized.
+        let partial = r#"
+          (setup (stackup
+            (layer "F.Cu" (type "copper") (thickness 0.035))
+            (layer "dielectric 1" (type "core") (thickness 1.51) (epsilon_r 4.5))
+          ))
+          (net 1 "VMOT")
+          (segment (start 0 0) (end 10 0) (width 0.5) (layer "F.Cu") (net 1))
+          (segment (start 10 0) (end 20 0) (width 1.0) (layer "In1.Cu") (net 1))
+        "#;
+        let (copper, audit) = pcb_audited(partial);
+        let nc = copper.iter().find(|n| n.net_id == 1).unwrap();
+        let overall = audit.bottleneck(nc).unwrap();
+        assert_eq!(overall.layer.as_deref(), Some("In1.Cu"));
+        assert!(
+            overall.ampacity_a < 1.3,
+            "the inner segment is the real choke: {}",
+            overall.ampacity_a
+        );
+
+        let mut cited = HashMap::new();
+        cited.insert("VMOT".to_string(), (2.0, "driver 2 A".to_string()));
+        let f = audit_trace_currents(&copper, &cited, &audit);
+        assert_eq!(f.len(), 1);
+        // Reported numbers describe the real bottleneck...
+        assert_eq!(f[0].layer.as_deref(), Some("In1.Cu"));
+        assert!((f[0].ampacity_a - overall.ampacity_a).abs() < 1e-9);
+        assert!(
+            f[0].required_width_mm > 1.0,
+            "the fix must widen past the real choke, got {}",
+            f[0].required_width_mm
+        );
+        // ...while the verdict's evidence is the declared F.Cu segment.
+        let d = f[0].declared_shortfall.as_ref().expect("a verdict");
+        assert_eq!(d.layer.as_deref(), Some("F.Cu"));
+    }
+
+    #[test]
+    fn the_same_geometry_entirely_on_outer_copper_passes() {
+        // The identical widths and current, both segments on 1 oz outer copper:
+        // the limit is 0.999 A and a cited 0.8 A is in spec. Ranking by ampacity
+        // must not simply flag more.
+        let body = format!(
+            r#"{STACKUP_4L}
+               (net 1 "VMOT")
+               (segment (start 0 0) (end 10 0) (width 0.3) (layer "F.Cu") (net 1))
+               (segment (start 10 0) (end 20 0) (width 0.5) (layer "F.Cu") (net 1))"#
+        );
+        let (copper, audit) = pcb_audited(&body);
+        let nc = copper.iter().find(|n| n.net_id == 1).unwrap();
+        let b = audit.bottleneck(nc).expect("a rated bottleneck");
+        assert_eq!(b.layer.as_deref(), Some("F.Cu"));
+        assert!(
+            (b.ampacity_a - 0.999).abs() < 0.01,
+            "0.3 mm of 1 oz external copper rates 0.999 A, got {}",
+            b.ampacity_a
+        );
+        let mut cited = HashMap::new();
+        cited.insert("VMOT".to_string(), (0.8, "driver 0.8 A".to_string()));
+        assert!(
+            audit_trace_currents(&copper, &cited, &audit).is_empty(),
+            "0.8 A under a 0.999 A outer choke is in spec"
+        );
+    }
+
+    #[test]
+    fn bottleneck_layer_is_the_narrowest_segments_layer() {
+        // A net routed across layers: the rating must follow the choke's layer,
+        // not the first or widest segment's.
+        let body = r#"
+          (net 1 "VMOT")
+          (segment (start 0 0) (end 10 0) (width 2.0) (layer "F.Cu") (net 1))
+          (segment (start 10 0) (end 11 0) (width 0.3) (layer "In1.Cu") (net 1))
+        "#;
+        let (copper, _) = pcb_audited(body);
+        let m = copper.iter().find(|n| n.net_id == 1).unwrap();
+        assert_eq!(m.min_trace_layer.as_deref(), Some("In1.Cu"));
     }
 
     #[test]
@@ -693,7 +1597,7 @@ mod tests {
         assert_eq!(f.len(), 1, "the undersized motor trace must fire");
         let fd = &f[0];
         assert_eq!(fd.net, "MOTOR");
-        assert!((fd.min_width_mm - 0.25).abs() < 1e-9);
+        assert!((fd.bottleneck_width_mm - 0.25).abs() < 1e-9);
         assert!(
             fd.ampacity_a < 1.0,
             "0.25mm ampacity {} should be <1A",
