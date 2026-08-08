@@ -28,6 +28,17 @@ const fn uart_getirq(name: u8) -> u32 {
     avr_ioctl_def(b'u', b'a', b'r', name)
 }
 
+/// `AVR_IOCTL_UART_GET_FLAGS(name)` / `AVR_IOCTL_UART_SET_FLAGS(name)`.
+const fn uart_get_flags(name: u8) -> u32 {
+    avr_ioctl_def(b'u', b'a', b'g', name)
+}
+const fn uart_set_flags(name: u8) -> u32 {
+    avr_ioctl_def(b'u', b'a', b's', name)
+}
+
+/// `AVR_UART_FLAG_STDIO`: echo firmware TX lines to simavr's own console log.
+const AVR_UART_FLAG_STDIO: u32 = 1 << 1;
+
 const fn ioport_getirq(name: u8) -> u32 {
     avr_ioctl_def(b'i', b'o', b'g', name)
 }
@@ -850,6 +861,43 @@ impl AvrMcu {
 
         let leaked = Box::into_raw(Box::new(state.clone()));
         let callback_ptr = leaked as *mut std::os::raw::c_void;
+
+        // Disable simavr's UART "stdio echo" (on by default). Besides being
+        // redundant here (every TX byte reaches the engine through `on_uart`),
+        // v1.8's echo has a heap buffer overflow this backend kept tripping:
+        // `avr_uart_udr_write` accumulates TX bytes into a 256-byte
+        // `stdio_out` line buffer and NUL-terminates at `stdio_out[stdio_len]`
+        // AFTER incrementing `stdio_len`, so the 256th byte of a stream with
+        // no '\n' writes `stdio_out[256]`, one byte past the malloc. Firmware
+        // that streams >255 bytes of newline-less binary (an EEPROM dump, a
+        // block protocol) plants a stray zero byte in whatever heap chunk
+        // follows, which surfaced as intermittent SIGTRAPs at unrelated
+        // allocation sites, most often during exactly those streams (verified
+        // with an ASan-instrumented libsimavr: WRITE of size 1 at 0 bytes
+        // after a 256-byte region, allocated and overflowed in
+        // `avr_uart_udr_write`). simavr is linked from the system by license
+        // choice, so the minimal correct fix on our side is to switch the
+        // whole feature off before any firmware byte can be transmitted.
+        // Every UART the part actually has (the ioctl simply misses on absent
+        // ones): a mega2560 streaming binary on USART1 has the same overflow.
+        for uart in [b'0', b'1', b'2', b'3'] {
+            unsafe {
+                let mut flags: u32 = 0;
+                if ffi::avr_ioctl(
+                    avr,
+                    uart_get_flags(uart),
+                    &mut flags as *mut u32 as *mut std::os::raw::c_void,
+                ) == 0
+                {
+                    flags &= !AVR_UART_FLAG_STDIO;
+                    let _ = ffi::avr_ioctl(
+                        avr,
+                        uart_set_flags(uart),
+                        &mut flags as *mut u32 as *mut std::os::raw::c_void,
+                    );
+                }
+            }
+        }
 
         // Register UART output hook immediately (it's always wanted), plus the
         // XON/XOFF flow-control hooks that meter host RX bytes into the 64-byte

@@ -20,8 +20,50 @@
 //! a script with `time.sleep` is on the other end: the run would be over before
 //! the peer's first write, and a firmware timeout measured in emulated
 //! milliseconds would fire in wall microseconds. Pacing makes the emulated board
-//! behave at the speed the host tool expects. `--serial-no-pace` restores
-//! free-running speed for a script that does not care.
+//! behave at the speed the host tool expects. `--serial-no-pace` free-runs only
+//! while nobody is attached; see below for why it cannot free-run against a peer.
+//!
+//! **Host bytes land at load-independent simulated instants.** The peer is a
+//! real process on the real clock, so the session has to define a mapping from
+//! its wall-clock actions onto the sim clock, and the mapping must not depend
+//! on how fast this machine happens to be running the sim. The earlier design
+//! injected bytes at whatever sim time the loop had reached when `read`
+//! returned, which made every arrival instant a function of how fast the loop
+//! was spinning, i.e. of machine load: on an idle machine a host command
+//! round-trip (a few wall milliseconds) landed simulated *seconds* apart,
+//! under heavy load simulated *microseconds* apart, and timing-sensitive
+//! verdicts (the NEP EEPROM gate) inverted with load.
+//!
+//! The mapping [`PacedInbox`] implements is *scaled reaction time*: an anchor
+//! `(sim, wall)` is planted at each attach/detach transition and at every
+//! firmware->host emission, and an inbound chunk observed at wall time `w` is
+//! due at `anchor_sim + scale * (w - anchor_wall)` — the host's own reaction
+//! gap, measured on its clock (which load does not stretch), scaled into sim
+//! time. The chunk is delivered only when the sim clock reaches that instant,
+//! and the sim is held at-or-behind the anchor's scaled schedule so an
+//! arrival is never already in the past. Together: the same firmware and host
+//! produce the same simulated byte-arrival schedule, up to observation
+//! granularity, whether the sim is keeping up or starved tenfold; a starved
+//! run just takes longer in wall time to play the schedule out. The
+//! granularity caveat is honest, not decorative: stamps carry the wall time a
+//! chunk was OBSERVED, the endpoint is polled between 5 ms throttle naps, and
+//! a chunk arriving while `engine.step` is executing is stamped when the step
+//! returns — so a slow step under load can late-stamp an arrival by
+//! `scale * step_wall`. That residual is millisecond-scale where the old
+//! free-running injection was unbounded.
+//!
+//! `scale` is 1 for paced sessions (a human at a terminal gets a real-time
+//! board). Unpaced sessions use [`SerialSessionConfig::unpaced_wall_scale`]
+//! (default 1/20): a deliberate compression chosen because a co-sim that runs
+//! slower than real time — this analog+MCU stack sustains roughly 0.3x — can
+//! never keep a 1:1 schedule against a host whose serial timeouts are wall
+//! seconds; at 1/20 the sim only has to sustain ~2% of real time before the
+//! host notices anything, and the mapped gaps (a 2 s port-settle sleep
+//! becomes 100 ms of sim) stay far above the millisecond-scale timing a
+//! firmware or part model actually keys on. When the sim is starved below
+//! even that, the failure is a loud host-side timeout, never a silently
+//! shifted verdict. `--serial-no-pace` still free-runs while nobody is
+//! attached, and a pure-firmware run (no session, no peer) is untouched.
 //!
 //! **Nothing is faked when no peer shows up.** `--serial-wait` fails loudly on
 //! timeout rather than running a session with nobody on the far end, and the
@@ -46,8 +88,31 @@ pub struct SerialSessionConfig {
     /// Hold the co-sim at t=0 until a peer attaches, for at most this many
     /// seconds. `None` starts immediately.
     pub wait_secs: Option<f64>,
-    /// Hold sim time to wall-clock time (default true).
+    /// Hold sim time to wall-clock time from t=0 (default true). `false`
+    /// free-runs only until the first peer attaches: from that point host
+    /// bytes are delivered on the scaled load-independent schedule the module
+    /// doc describes, because a co-sim free-running against a real process
+    /// has no defined mapping between the peer's wall clock and sim time, and
+    /// byte-arrival instants (hence timing verdicts) would vary with machine
+    /// load.
     pub pace: bool,
+    /// How a host's wall-clock reaction gaps map into sim time for an unpaced
+    /// session (paced sessions are always 1:1). See the module doc for why
+    /// the default compresses: a sub-real-time sim cannot honour a 1:1
+    /// schedule against wall-second serial timeouts, and the scaled gaps stay
+    /// far above the timing any firmware or part model keys on. Must be in
+    /// (0, 1].
+    pub unpaced_wall_scale: f64,
+    /// End the session early once at least one peer has attached, every peer
+    /// has detached, the session's own inbox holds no undelivered chunks, and
+    /// this many WALL seconds have passed with nobody re-attaching. Bytes
+    /// already handed to the backend may still sit in its metered UART queue:
+    /// the idle window is what gives the firmware time to drain them, so set
+    /// it comfortably above the firmware's worst-case response time (the sim
+    /// free-runs during it). Scripted sessions (the NEP acceptance pair) use
+    /// this so they don't grind out the whole sim budget after the host is
+    /// done. `None` (default) runs the full budget.
+    pub end_after_idle_wall: Option<f64>,
     /// Which MCU's UART to bridge. `None`/empty means every MCU on the board,
     /// which is the right default for the single-MCU case and honest for the
     /// multi-MCU one (the summary says which references exist).
@@ -63,8 +128,137 @@ impl Default for SerialSessionConfig {
             transport: HostSerialTransport::Pty,
             wait_secs: None,
             pace: true,
+            unpaced_wall_scale: DEFAULT_UNPACED_WALL_SCALE,
+            end_after_idle_wall: None,
             mcu: None,
             chunk_us: None,
+        }
+    }
+}
+
+/// Default [`SerialSessionConfig::unpaced_wall_scale`]: see the module doc's
+/// third design note for the reasoning behind 1/20.
+pub const DEFAULT_UNPACED_WALL_SCALE: f64 = 0.05;
+
+/// Load-independent delivery schedule for inbound host bytes.
+///
+/// This is the whole determinism story of a serial session, so it is one small
+/// object with three rules rather than logic spread through the loop:
+///
+/// 1. **Anchoring.** An anchor `(sim, wall)` is (re)planted at every
+///    attach/detach transition and at every firmware->host emission, via
+///    [`Self::re_anchor`]. Emissions matter because a request-response host
+///    reacts to the last thing the firmware said: measuring its next bytes
+///    from that emission makes the measured gap a property of the *host*
+///    (which machine load does not stretch), not of how long the starved sim
+///    took to produce the emission.
+/// 2. **Stamping.** An inbound chunk observed at wall `w` is due at
+///    `anchor_sim + scale * (w - anchor_wall)`, and [`Self::take_due`]
+///    releases it only when the sim clock reaches that instant. A starved sim
+///    delivers the same bytes at the same simulated instants as a fast one;
+///    it just takes longer in wall time to get there.
+/// 3. **Ceiling.** [`Self::sim_ceiling`] gives the sim time the loop may run
+///    up to right now. Ahead of it, a byte arriving "now" would map to a sim
+///    instant already in the past, which is rule 2's one failure mode, so the
+///    loop sleeps the difference off instead of stepping.
+///
+/// Before engagement (no peer yet, `pace: false`) all rules are off: bytes
+/// pass through at the current sim time and the ceiling is infinite, which is
+/// the free-running pre-attach fast path.
+///
+/// Wall time is a caller-supplied `f64` of seconds rather than an owned
+/// `Instant` so tests can drive an arbitrary wall/sim schedule and assert the
+/// delivery instants exactly.
+struct PacedInbox {
+    /// Host wall gap -> sim gap factor (1 for paced sessions; see
+    /// [`SerialSessionConfig::unpaced_wall_scale`]).
+    scale: f64,
+    /// `Some((sim_anchor, wall_anchor))` once engaged.
+    anchor: Option<(f64, f64)>,
+    /// Chunks not yet released: (target sim instant, bytes), FIFO.
+    queue: std::collections::VecDeque<(f64, Vec<u8>)>,
+}
+
+impl PacedInbox {
+    fn new(scale: f64) -> Self {
+        Self {
+            scale,
+            anchor: None,
+            queue: std::collections::VecDeque::new(),
+        }
+    }
+
+    fn engaged(&self) -> bool {
+        self.anchor.is_some()
+    }
+
+    /// Plant the first anchor: sim instant `sim_now` corresponds to wall
+    /// instant `wall_now`. No-op once engaged (use [`Self::re_anchor`] for the
+    /// per-event moves).
+    fn engage(&mut self, sim_now: f64, wall_now: f64) {
+        if self.anchor.is_none() {
+            self.anchor = Some((sim_now, wall_now));
+        }
+    }
+
+    /// Move the anchor to the present (attach/detach transition, or a
+    /// firmware->host emission the peer will react to). Every caller passes
+    /// the current sim time, which only grows, so the anchor's sim component
+    /// never rewinds; the schedule ahead of it re-bases (the ceiling restarts
+    /// from `sim_now`), and targets stamped under the OLD anchor keep their
+    /// instants because [`Self::push`] clamps each new target to be no
+    /// earlier than the queue's tail.
+    fn re_anchor(&mut self, sim_now: f64, wall_now: f64) {
+        if self.anchor.is_some() {
+            self.anchor = Some((sim_now, wall_now));
+        }
+    }
+
+    /// The sim instant a chunk observed at `wall_now` is due.
+    fn target_for(&self, sim_now: f64, wall_now: f64) -> f64 {
+        match self.anchor {
+            Some((sim_anchor, wall_anchor)) => {
+                sim_anchor + self.scale * (wall_now - wall_anchor).max(0.0)
+            }
+            None => sim_now,
+        }
+    }
+
+    /// Queue an inbound chunk observed at `wall_now`. Unengaged, it is due
+    /// immediately at `sim_now`.
+    fn push(&mut self, sim_now: f64, wall_now: f64, bytes: Vec<u8>) {
+        let target = self.target_for(sim_now, wall_now);
+        // Monotonic by construction (anchors and wall time only grow), but
+        // never trust float arithmetic to keep FIFO release order on its own.
+        let floor = self.queue.back().map(|(t, _)| *t).unwrap_or(f64::MIN);
+        self.queue.push_back((target.max(floor), bytes));
+    }
+
+    /// Whether any chunk is still waiting for its instant.
+    fn pending(&self) -> bool {
+        !self.queue.is_empty()
+    }
+
+    /// Every queued chunk whose simulated arrival instant has been reached,
+    /// concatenated in arrival order.
+    fn take_due(&mut self, sim_now: f64) -> Vec<u8> {
+        let mut out = Vec::new();
+        while let Some((target, _)) = self.queue.front() {
+            if *target > sim_now {
+                break;
+            }
+            let (_, bytes) = self.queue.pop_front().expect("front checked above");
+            out.extend(bytes);
+        }
+        out
+    }
+
+    /// The sim time the loop may advance to as of `wall_now`. Infinite while
+    /// unengaged (free-run).
+    fn sim_ceiling(&self, wall_now: f64) -> f64 {
+        match self.anchor {
+            Some(_) => self.target_for(f64::INFINITY, wall_now),
+            None => f64::INFINITY,
         }
     }
 }
@@ -182,7 +376,9 @@ pub fn run_session(
         if cfg.pace {
             ", and sim time is paced to wall-clock time"
         } else {
-            ", and the co-sim free-runs (--serial-no-pace)"
+            ", and the co-sim free-runs until a peer attaches (--serial-no-pace), \
+             then delivers host bytes on a compressed schedule (wall gaps scaled \
+             into sim time by a fixed factor) so byte timing is load-independent"
         }
     ));
 
@@ -211,18 +407,108 @@ pub fn run_session(
         }
     }
 
+    anyhow::ensure!(
+        cfg.unpaced_wall_scale > 0.0 && cfg.unpaced_wall_scale <= 1.0,
+        "unpaced_wall_scale must be in (0, 1], got {}",
+        cfg.unpaced_wall_scale
+    );
+    let scale = if cfg.pace {
+        1.0
+    } else {
+        cfg.unpaced_wall_scale
+    };
+
     let run_started = std::time::Instant::now();
+    let mut inbox = PacedInbox::new(scale);
+    if cfg.pace {
+        // Paced sessions are anchored from t=0; unpaced ones free-run until
+        // the first attach plants the anchor inside the loop.
+        inbox.engage(0.0, 0.0);
+    }
     let mut t = 0.0f64;
+    let mut was_attached = endpoint.peer_attached();
+    // Wall instant of the last observable host activity, for
+    // `end_after_idle_wall`.
+    let mut last_activity_wall = 0.0f64;
     while t < seconds {
         report_events(&mut endpoint, &mut summary, announce);
 
-        // Host -> firmware. `uart_write` queues and meters, so a host record far
-        // longer than the emulated RX fifo is delivered whole; that was the
-        // fifo-truncation defect and this path must not reintroduce it by
-        // chunking or dropping here.
+        let wall = run_started.elapsed().as_secs_f64();
+        let attached = endpoint.peer_attached();
+        if !inbox.engaged() && endpoint.stats().attach_count > 0 {
+            // "Has ever attached", not "is attached": a peer that attached and
+            // detached within one frame still turns the timing discipline on,
+            // and its bytes (readable after the hangup) get honest stamps.
+            inbox.engage(t, wall);
+        }
+        if attached != was_attached {
+            // A fresh peer's first gap is measured from its own attach, and a
+            // detach closes the old peer's schedule, so both transitions move
+            // the anchor.
+            inbox.re_anchor(t, wall);
+            was_attached = attached;
+            last_activity_wall = wall;
+        }
+
+        // Host -> firmware, through the inbox so each byte lands at the sim
+        // instant its scaled reaction gap maps to (see PacedInbox).
+        // `uart_write` queues and meters, so a host record far longer than the
+        // emulated RX fifo is delivered whole; that was the fifo-truncation
+        // defect and this path must not reintroduce it by chunking or
+        // dropping here.
         let inbound = endpoint.read_from_peer();
         if !inbound.is_empty() {
-            engine.scheduler_mut().serial(&mcu_ref, &inbound);
+            inbox.push(t, wall, inbound);
+            last_activity_wall = wall;
+        }
+        let due = inbox.take_due(t);
+        if !due.is_empty() {
+            engine.scheduler_mut().serial(&mcu_ref, &due);
+        }
+
+        // Hold the sim at-or-behind the anchored schedule (a byte arriving now
+        // must not map to a sim instant already passed). Only needed while
+        // bytes can still arrive against the current anchor: paced sessions
+        // always, unpaced ones while a peer is attached or stamped bytes are
+        // still queued — an unpaced session whose peer is gone free-runs.
+        //
+        // The endpoint is polled BETWEEN naps, with the naps kept short. A
+        // scaled schedule can spend tens of wall milliseconds per frame
+        // sleeping, and a multi-process host's close-then-reopen gap (NEP's
+        // is 50 ms) fits inside one long nap: the session then never observes
+        // the detach/attach pair, undercounting attaches and mis-anchoring
+        // the new peer. Polling here also stamps bytes closer to their true
+        // arrival than a once-per-frame read would.
+        //
+        // The naps READ and STAMP but never DELIVER: `take_due` runs at the
+        // loop top only, so a chunk stamped mid-nap reaches the firmware at
+        // the next frame boundary. That is not a load-dependent skew — on a
+        // busy machine the same chunk is read at the next loop top and lands
+        // on the same boundary; delivery is frame-quantized identically
+        // either way. Draining inside this loop (a second delivery point
+        // whose firing depends on how much the frame napped, i.e. on wall
+        // behavior) was tried and measurably destabilised the NEP positive
+        // control: keep exactly one delivery point per frame.
+        if cfg.pace || attached || inbox.pending() {
+            loop {
+                let ahead = (t + frame_dt) - inbox.sim_ceiling(run_started.elapsed().as_secs_f64());
+                if ahead <= 0.0 {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_secs_f64(ahead.min(0.005)));
+                report_events(&mut endpoint, &mut summary, announce);
+                let wall_nap = run_started.elapsed().as_secs_f64();
+                if endpoint.peer_attached() != was_attached {
+                    inbox.re_anchor(t, wall_nap);
+                    was_attached = endpoint.peer_attached();
+                    last_activity_wall = wall_nap;
+                }
+                let inbound = endpoint.read_from_peer();
+                if !inbound.is_empty() {
+                    inbox.push(t, wall_nap, inbound);
+                    last_activity_wall = wall_nap;
+                }
+            }
         }
 
         let frame = engine.step(frame_dt);
@@ -232,19 +518,40 @@ pub fn run_session(
         // merged stream is deterministic run to run.
         let mut entries: Vec<_> = frame.uart.iter().collect();
         entries.sort_by(|a, b| a.0.cmp(b.0));
+        let mut emitted = false;
         for (_, bytes) in entries {
             if !bytes.is_empty() {
                 endpoint.write_to_peer(bytes);
+                emitted = true;
             }
         }
+        if emitted && was_attached {
+            // The peer reacts to what it just heard: measuring its next bytes
+            // from this emission keeps the measured gap a host property
+            // rather than a sim-starvation artifact (PacedInbox rule 1).
+            // `was_attached` and not the loop-top `attached`: the nap loop
+            // above may have observed a transition since.
+            let wall_after = run_started.elapsed().as_secs_f64();
+            inbox.re_anchor(t, wall_after);
+            last_activity_wall = wall_after;
+        }
 
-        if cfg.pace {
-            let target = std::time::Duration::from_secs_f64(t);
-            let elapsed = run_started.elapsed();
-            if let Some(slack) = target.checked_sub(elapsed) {
-                // Cap a single sleep so a peer attaching or detaching is still
-                // noticed promptly on a wide frame.
-                std::thread::sleep(slack.min(std::time::Duration::from_millis(50)));
+        // Optional early end: the host came, spoke, and left. Termination
+        // only — no delivered byte behaves differently — so a scripted
+        // session doesn't grind out a large sim budget after its host exits.
+        if let Some(idle_limit) = cfg.end_after_idle_wall {
+            let wall_now = run_started.elapsed().as_secs_f64();
+            if endpoint.stats().attach_count > 0
+                && !endpoint.peer_attached()
+                && !inbox.pending()
+                && wall_now - last_activity_wall >= idle_limit
+            {
+                announce(&format!(
+                    "host serial: every peer detached and {idle_limit:.1}s wall passed with \
+                     no re-attach; ending the session early at t={t:.3}s of the {seconds:.1}s \
+                     budget"
+                ));
+                break;
             }
         }
     }
@@ -333,6 +640,199 @@ pub fn summary_lines(s: &SerialSessionSummary) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The determinism invariant itself: the same wall-clock arrival schedule
+    /// must produce byte-for-byte identical simulated delivery instants no
+    /// matter how fast the sim is able to step. One "run" steps the sim 1 ms
+    /// per wall ms (keeping up); the other is starved fivefold (a loaded
+    /// machine). This is the two-sided guard on the NEP verdict-inversion
+    /// defect: any change that lets wall speed leak back into arrival instants
+    /// shifts the starved run's deliveries and fails here.
+    #[test]
+    fn delivery_instants_are_identical_regardless_of_sim_rate() {
+        // (wall_arrival_s, payload): a command byte, a burst, a late chunk.
+        let arrivals: [(f64, &[u8]); 3] = [(0.0031, b"W"), (0.0102, b"abc"), (0.0507, b"zz")];
+        let mut runs = Vec::new();
+        for wall_per_sim_frame in [0.001, 0.005] {
+            let mut inbox = PacedInbox::new(1.0);
+            inbox.engage(0.0, 0.0);
+            let mut delivered = Vec::new();
+            let mut next = 0;
+            let mut t = 0.0f64;
+            for frame in 0..200 {
+                let wall = frame as f64 * wall_per_sim_frame;
+                while next < arrivals.len() && arrivals[next].0 <= wall {
+                    inbox.push(t, arrivals[next].0, arrivals[next].1.to_vec());
+                    next += 1;
+                }
+                let due = inbox.take_due(t);
+                if !due.is_empty() {
+                    delivered.push((format!("{t:.6}"), due));
+                }
+                // The ceiling only permits stepping once the wall clock has
+                // caught up, exactly as the session loop enforces by sleeping.
+                if t + 0.001 <= inbox.sim_ceiling(wall) {
+                    t += 0.001;
+                }
+            }
+            assert_eq!(next, arrivals.len(), "every chunk was offered");
+            runs.push(delivered);
+        }
+        assert!(
+            !runs[0].is_empty(),
+            "the schedule must actually deliver something"
+        );
+        assert_eq!(
+            runs[0], runs[1],
+            "a starved sim must deliver every host byte at the same simulated \
+             instant as one that keeps up"
+        );
+    }
+
+    /// A chunk arriving while the sim is behind its wall-mapped instant is
+    /// held, not injected early; it is released the moment the sim clock
+    /// reaches the instant.
+    #[test]
+    fn starved_sim_never_receives_bytes_early() {
+        let mut inbox = PacedInbox::new(1.0);
+        inbox.engage(0.0, 0.0);
+        // Wall is at 0.5 s but the sim has only reached 0.1 s.
+        inbox.push(0.1, 0.5, b"late".to_vec());
+        assert!(inbox.take_due(0.1).is_empty());
+        assert!(inbox.take_due(0.4999).is_empty());
+        assert_eq!(inbox.take_due(0.5), b"late");
+        assert!(inbox.take_due(10.0).is_empty(), "delivered exactly once");
+    }
+
+    /// Before a peer engages the inbox, bytes pass through at the current sim
+    /// time and the ceiling is infinite: the free-running pre-attach path.
+    #[test]
+    fn unengaged_inbox_is_free_running_passthrough() {
+        let mut inbox = PacedInbox::new(1.0);
+        assert_eq!(inbox.sim_ceiling(0.0), f64::INFINITY);
+        inbox.push(42.0, 3.0, b"x".to_vec());
+        assert_eq!(inbox.take_due(42.0), b"x");
+    }
+
+    /// Engagement mid-run maps wall gaps onto sim gaps from the anchor, and a
+    /// second engage must not move the anchor (only `re_anchor` may).
+    #[test]
+    fn anchor_is_planted_once_and_maps_wall_gaps_one_to_one() {
+        let mut inbox = PacedInbox::new(1.0);
+        // Free-ran to sim 5.0 by wall 0.25, then a peer attached.
+        inbox.engage(5.0, 0.25);
+        inbox.engage(99.0, 99.0); // must be ignored
+        inbox.push(5.0, 0.35, b"a".to_vec()); // 100 ms after attach
+        assert!(inbox.take_due(5.099).is_empty());
+        assert_eq!(inbox.take_due(5.1), b"a");
+        assert!((inbox.sim_ceiling(1.25) - 6.0).abs() < 1e-12);
+    }
+
+    /// The unpaced scale compresses a host's wall gaps into sim time by a
+    /// fixed factor, so a sub-real-time sim can honour the schedule: a 2 s
+    /// port-settle sleep at scale 1/20 becomes 100 ms of sim, and the ceiling
+    /// grows at the same compressed rate.
+    #[test]
+    fn scaled_inbox_compresses_host_gaps_by_a_fixed_factor() {
+        let mut inbox = PacedInbox::new(0.05);
+        inbox.engage(1.0, 10.0);
+        inbox.push(1.0, 12.0, b"s".to_vec()); // 2 s of host wall gap
+        assert!(inbox.take_due(1.0999).is_empty());
+        assert_eq!(inbox.take_due(1.1), b"s", "2 s * 0.05 = 100 ms of sim");
+        assert!((inbox.sim_ceiling(14.0) - 1.2).abs() < 1e-12);
+    }
+
+    /// Re-anchoring at a firmware emission measures the host's next gap from
+    /// that emission, so a starved sim's slow production of the emission does
+    /// not stretch the measured gap; and a chunk stamped BEFORE the re-anchor
+    /// keeps its instant and its place in line (push clamps every later
+    /// target to the queue's tail, so the schedule never rewinds).
+    #[test]
+    fn re_anchor_measures_reaction_gaps_from_the_emission() {
+        let mut inbox = PacedInbox::new(0.05);
+        inbox.engage(0.0, 0.0);
+        // Stamped under the FIRST anchor: 4 s of host wall gap -> due at 0.2.
+        inbox.push(0.0, 4.0, b"old".to_vec());
+        // The sim took 8 wall seconds to reach sim 0.4 (badly starved), where
+        // the firmware emitted its response; the host replies 1 s later.
+        inbox.re_anchor(0.4, 8.0);
+        inbox.push(0.4, 9.0, b"r".to_vec());
+        assert!(inbox.take_due(0.1999).is_empty());
+        assert_eq!(
+            inbox.take_due(0.2),
+            b"old",
+            "a target stamped before the re-anchor keeps its instant"
+        );
+        assert!(inbox.take_due(0.4499).is_empty());
+        assert_eq!(
+            inbox.take_due(0.45),
+            b"r",
+            "the reply lands 1 s * 0.05 = 50 ms of sim after the emission, \
+             independent of the 8 wall seconds the sim needed to get there"
+        );
+    }
+
+    /// The two-rate determinism check again, now with the anchor moving the
+    /// way a live session moves it: the firmware emits at fixed SIM instants,
+    /// each emission re-anchors at whatever WALL time that run's sim rate
+    /// reached the instant, and the host replies a fixed wall gap after each
+    /// emission. The delivery schedule must not depend on the sim rate even
+    /// though the anchors' wall components differ between the runs.
+    #[test]
+    fn re_anchored_delivery_is_identical_regardless_of_sim_rate() {
+        // Emissions at these sim instants; the host replies 0.040 s (wall)
+        // after hearing each one.
+        let emissions = [0.003, 0.011];
+        let reaction_wall = 0.040;
+        let scale = 0.05;
+        let mut runs = Vec::new();
+        // 0.001 wall/frame: the sim outpaces the scaled schedule and rides the
+        // ceiling. 0.05 wall/frame: 1 ms of sim costs 50 ms of wall (rate
+        // 0.02, below the 0.05 scale), a genuinely starved sim whose
+        // emissions therefore happen at very different wall times.
+        for wall_per_sim_frame in [0.001, 0.05] {
+            let mut inbox = PacedInbox::new(scale);
+            inbox.engage(0.0, 0.0);
+            let mut delivered = Vec::new();
+            let mut pending_reply: Option<(f64, Vec<u8>)> = None; // (wall due, bytes)
+            let mut next_emit = 0;
+            let mut t = 0.0f64;
+            for frame in 0..400 {
+                let wall = frame as f64 * wall_per_sim_frame;
+                if let Some((reply_wall, bytes)) = pending_reply.take() {
+                    if reply_wall <= wall {
+                        inbox.push(t, reply_wall, bytes);
+                    } else {
+                        pending_reply = Some((reply_wall, bytes));
+                    }
+                }
+                let due = inbox.take_due(t);
+                if !due.is_empty() {
+                    delivered.push((format!("{t:.6}"), due));
+                }
+                if t + 0.001 <= inbox.sim_ceiling(wall) {
+                    t += 0.001;
+                    if next_emit < emissions.len() && t >= emissions[next_emit] {
+                        // The firmware speaks at sim `t`; this run's wall
+                        // clock happens to read `wall` here, and the host's
+                        // reply lands a fixed wall gap later.
+                        inbox.re_anchor(t, wall);
+                        pending_reply = Some((wall + reaction_wall, vec![b'0' + next_emit as u8]));
+                        next_emit += 1;
+                    }
+                }
+            }
+            assert_eq!(next_emit, emissions.len(), "every emission happened");
+            assert!(pending_reply.is_none(), "every reply was offered");
+            runs.push(delivered);
+        }
+        assert!(!runs[0].is_empty(), "the schedule must deliver something");
+        assert_eq!(
+            runs[0], runs[1],
+            "emission-relative stamping must make the delivery schedule \
+             independent of the sim rate"
+        );
+    }
 
     /// A session nobody attached to must SAY so. Silence here is the failure
     /// mode that makes a user debug their firmware instead of their command line.

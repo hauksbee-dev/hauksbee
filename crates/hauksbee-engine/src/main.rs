@@ -949,9 +949,12 @@ struct RunArgs {
     #[arg(long, value_name = "SECS", help_heading = "Host serial")]
     serial_wait: Option<f64>,
 
-    /// Let the co-sim run as fast as it can under --serial-attach instead of
-    /// pacing it to wall-clock time. Faster, but a host tool's timeouts and
-    /// sleeps no longer line up with the emulated board's sense of time.
+    /// Let the co-sim run as fast as it can under --serial-attach until your
+    /// software opens the port. While a peer is attached, its bytes are
+    /// delivered on a fixed compressed schedule (its own wall-clock gaps,
+    /// scaled into sim time) rather than free-running: byte-arrival timing
+    /// against a real process must not depend on machine load, or timing
+    /// verdicts change with load.
     #[arg(long, help_heading = "Host serial")]
     serial_no_pace: bool,
 

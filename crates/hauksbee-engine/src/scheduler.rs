@@ -2659,6 +2659,7 @@ impl Scheduler {
             // pin never driven keeps its driver disabled and stays a pure ADC
             // input.
             let m = &mut self.mcus[mi];
+            let edge_pins: std::collections::HashSet<(char, u8)> = edges.keys().copied().collect();
             for ((port, bit), level) in edges {
                 m.last_levels.insert((port, bit), level);
                 if let Some(drv) = m.binding.gpio_drivers.get_mut(&(port, bit)) {
@@ -2669,16 +2670,17 @@ impl Scheduler {
             }
             // 2b. Promotion AND release from the configured pin direction
             // (`pins_configured_output`); see `sync_configured_outputs`.
-            // Backends that cannot report direction return an empty set,
-            // making both halves a no-op there; the edge-driven enable above
-            // remains the primary path.
+            // On a direction-blind backend the set is empty and the
+            // edge-evidence release arm is gated off, so nothing is promoted
+            // or torn down there; the edge-driven enable above remains the
+            // primary path.
             let configured: std::collections::HashSet<(char, u8)> = m
                 .core
                 .pins_configured_output()
                 .into_iter()
                 .map(|p| (p.port, p.bit))
                 .collect();
-            self.sync_configured_outputs(mi, configured);
+            self.sync_configured_outputs(mi, configured, &edge_pins);
         }
 
         // 1c. Sub-chunk pulse honesty (friction 1.16): a GPIO pulse that rose
@@ -4093,17 +4095,20 @@ impl Scheduler {
     ///   the edge loop never enables its driver and the net would float.
     ///   Enable such drivers at the pin's last known level (default low, the
     ///   AVR reset PORT state).
-    /// * **Release**, a pin that dropped OUT of the set (DDR output→input,
-    ///   e.g. an open-drain bus hand-off) gets its driver DISABLED again, so
-    ///   the net is genuinely let go instead of staying clamped at its stale
-    ///   driven level (the latched-bus failure). Only pins the core itself
-    ///   previously reported as outputs are released: an edge-enabled driver
-    ///   on a direction-blind backend (empty set both chunks) is never torn
-    ///   down.
+    /// * **Release**, a pin the report does not list as an output gets its
+    ///   driver DISABLED again, so the net is genuinely let go instead of
+    ///   staying clamped at its stale driven level (the latched-bus failure).
+    ///   Released pins are those the report contradicts with fresh evidence:
+    ///   in last chunk's set, or carrying PORT edges from this chunk (a pin
+    ///   that flipped OUTPUT, wrote, and flipped back to INPUT inside one
+    ///   chunk appears in neither chunk-end set; see the inline comment). An
+    ///   externally promoted driver with neither is left alone, and a
+    ///   direction-blind backend never releases anything.
     fn sync_configured_outputs(
         &mut self,
         mi: usize,
         configured: std::collections::HashSet<(char, u8)>,
+        edge_pins: &std::collections::HashSet<(char, u8)>,
     ) {
         let m = &mut self.mcus[mi];
         for &(port, bit) in &configured {
@@ -4116,7 +4121,39 @@ impl Scheduler {
                 }
             }
         }
-        for &(port, bit) in m.configured_outputs.difference(&configured) {
+        // Release: a pin is torn down when the direction report contradicts
+        // its enabled driver AND there is fresh evidence the report covers it:
+        // either it was in the PREVIOUS chunk's set (the ordinary
+        // output->input hand-off), or it produced PORT edges THIS chunk (the
+        // step-2 enable ran against a chunk-end direction of INPUT). The
+        // second clause closes the within-one-chunk OUTPUT->write->INPUT
+        // window the difference rule alone misses: the NEP EEPROM data bus
+        // does an 87 us write-then-/OE-poll cycle inside a 1 ms chunk, its
+        // pins appear in NEITHER chunk-end set, and the stale edge-enabled
+        // driver then fought the EEPROM's legitimate read drive whenever a
+        // boundary landed in a poll's /OE-low window (the driver-contention
+        // monitor correctly refused those runs). A driver enabled by neither
+        // path (external promotion through the binding, e.g. a test or a
+        // future set-pin API) is deliberately left alone, and a
+        // direction-blind backend (empty set every chunk, no DDR hook) never
+        // reaches either clause with a live pin, so its edge-enabled drivers
+        // are never torn down.
+        let mut release: Vec<(char, u8)> = m
+            .configured_outputs
+            .difference(&configured)
+            .copied()
+            .collect();
+        if m.core.drive_direction_observable() {
+            // The edge-evidence arm needs a trustworthy direction report: on
+            // a direction-blind (or partially covered) backend, "edged but
+            // not in the set" describes every driven pin, and releasing them
+            // would tear down the edge-driven enables that are those
+            // backends' only signal. The dropped-from-last-chunk arm above
+            // stays unconditional: it only ever names pins the core itself
+            // previously reported as outputs, which is exactly the old rule.
+            release.extend(edge_pins.difference(&configured).copied());
+        }
+        for (port, bit) in release {
             if let Some(drv) = m.binding.gpio_drivers.get_mut(&(port, bit)) {
                 if drv.enabled {
                     drv.set_enabled(&mut self.circuit, false);
@@ -6034,9 +6071,10 @@ mod tests {
         // HIGH (the DDR-write-no-toggle promotion path). The driver enables
         // and the BUS net is clamped high through the 10k pull-down.
         sched.mcus[0].last_levels.insert(('C', 2), true);
+        let no_edges = std::collections::HashSet::new();
         let mut configured = std::collections::HashSet::new();
         configured.insert(('C', 2u8));
-        sched.sync_configured_outputs(0, configured);
+        sched.sync_configured_outputs(0, configured, &no_edges);
         assert!(
             sched.mcus[0].binding.gpio_drivers[&('C', 2)].enabled,
             "a configured-output pin must have its driver enabled"
@@ -6051,7 +6089,7 @@ mod tests {
         // Chunk 2: the pin drops out of the configured set (DDR back to
         // input, no PORT edge). The driver must be DISABLED and the pull-down
         // must win; leaving the driver enabled latches the net at 5 V.
-        sched.sync_configured_outputs(0, std::collections::HashSet::new());
+        sched.sync_configured_outputs(0, std::collections::HashSet::new(), &no_edges);
         assert!(
             !sched.mcus[0].binding.gpio_drivers[&('C', 2)].enabled,
             "a pin released back to input must have its driver disabled"
@@ -6061,6 +6099,28 @@ mod tests {
         assert!(
             released < 0.5,
             "released BUS must fall through its pull-down, got {released:.2} V (latched bus)"
+        );
+
+        // Chunk 3: the within-one-chunk OUTPUT->write->INPUT window (the NEP
+        // EEPROM data-bus polling shape). The pin's PORT edges re-enabled the
+        // driver mid-chunk, but the chunk-end direction report says INPUT and
+        // the pin was not in the previous chunk's set either: the fresh edge
+        // evidence must still release it, or the stale driver fights whatever
+        // legitimately drives the shared bus at the boundary.
+        {
+            let drv = sched.mcus[0]
+                .binding
+                .gpio_drivers
+                .get_mut(&('C', 2))
+                .expect("driver");
+            drv.set_enabled(&mut sched.circuit, true);
+        }
+        let mut edge_pins = std::collections::HashSet::new();
+        edge_pins.insert(('C', 2u8));
+        sched.sync_configured_outputs(0, std::collections::HashSet::new(), &edge_pins);
+        assert!(
+            !sched.mcus[0].binding.gpio_drivers[&('C', 2)].enabled,
+            "a pin that edged this chunk but reads INPUT at the chunk end must be released"
         );
     }
 
