@@ -494,6 +494,18 @@ pub struct DrcReport {
     /// results. `None` on a validated version (no behaviour change).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub version_warning: Option<String>,
+    /// How many Zone-versus-Pad overlaps were suppressed as antipad carves
+    /// rather than reported as shorts. The suppression is deliberate and
+    /// well-founded (see the note at the suppression site), but it silences a
+    /// whole finding class, and a silenced class the user cannot see is
+    /// indistinguishable from a clean board. Surfaces disclose this via
+    /// [`DrcReport::suppression_note`].
+    #[serde(default, skip_serializing_if = "is_zero_usize")]
+    pub zone_pad_overlaps_suppressed: usize,
+}
+
+fn is_zero_usize(n: &usize) -> bool {
+    *n == 0
 }
 
 /// The newest `.kicad_pcb` format version hauksbee's copper extraction is
@@ -550,6 +562,29 @@ impl DrcReport {
 
     pub fn is_clean(&self) -> bool {
         self.short_count() == 0
+    }
+
+    /// Disclosure for the Zone-versus-Pad overlap class, when this run
+    /// suppressed any. `None` when nothing was suppressed, so a clean board
+    /// gains no noise.
+    ///
+    /// "No shorts found" and "no shorts found, having declined to look at a
+    /// whole category" are different claims. The suppression itself is correct
+    /// (KiCad always carves a pad out of a different-net pour, and KiCad-10
+    /// keyhole fills make those carves read as negative gaps), but a reader
+    /// cannot audit a rule they were never told was applied.
+    pub fn suppression_note(&self) -> Option<String> {
+        (self.zone_pad_overlaps_suppressed > 0).then(|| {
+            format!(
+                "drc: {} zone-versus-pad overlap(s) were suppressed, not evaluated as shorts. \
+                 A pad overlapping a different-net pour is nearly always the antipad carve \
+                 (KiCad-10 keyhole fills draw that carve with slits running through the pad \
+                 interior), so this class is dropped wholesale to avoid a false-positive \
+                 epidemic. Real pour incursions by a track, via or arc are still reported. To \
+                 audit the suppressed class, run KiCad's own DRC on the board.",
+                self.zone_pad_overlaps_suppressed
+            )
+        })
     }
 
     /// Distinct unordered net pairs that are shorted together, as (id, id) with
@@ -2077,6 +2112,7 @@ fn sweep_buckets(
         findings: Vec::new(),
         primitive_count: buckets.by_layer.values().map(Vec::len).sum(),
         version_warning: None,
+        zone_pad_overlaps_suppressed: 0,
     };
 
     // De-dup findings on the same net pair + layer + rounded location, so a
@@ -2084,6 +2120,10 @@ fn sweep_buckets(
     // rows.
     let mut seen: std::collections::HashSet<(i64, i64, String, i64, i64)> =
         std::collections::HashSet::new();
+
+    // Zone<->Pad overlaps dropped as antipad carves, counted so the run can
+    // disclose that the class was suppressed rather than found clean.
+    let mut zone_pad_suppressed = 0usize;
 
     // Record one finding, de-duplicating on net pair + layer + ~0.25 mm cell so
     // a pour running alongside a long track does not emit thousands of rows.
@@ -2191,6 +2231,7 @@ fn sweep_buckets(
                 let zone_pad = (p.kind == ItemKind::Zone && q.kind == ItemKind::Pad)
                     || (p.kind == ItemKind::Pad && q.kind == ItemKind::Zone);
                 if zone_pad && is_touching(gap) {
+                    zone_pad_suppressed += 1;
                     continue;
                 }
                 // Copper in contact is always a short; see SHORT_TOUCH_EPS_MM for
@@ -2278,6 +2319,7 @@ fn sweep_buckets(
             .then(a.net_b.cmp(&b.net_b))
             .then(a.layer.cmp(&b.layer))
     });
+    report.zone_pad_overlaps_suppressed = zone_pad_suppressed;
     report
 }
 

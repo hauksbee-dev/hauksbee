@@ -20,6 +20,7 @@ fn empty_drc() -> DrcStructured {
         violations: Vec::new(),
         at_limit: Vec::new(),
         version_warning: None,
+        suppression_note: None,
     }
 }
 

@@ -511,6 +511,66 @@ fn kicad_10_keyhole_antipad_keeps_the_isolated_pad_silent() {
 }
 
 #[test]
+fn a_suppressed_zone_pad_class_is_disclosed_not_silently_dropped() {
+    // The keyhole board is exactly the case the suppression exists for. Dropping
+    // the class is correct, but the run must say it dropped it: "no shorts" and
+    // "no shorts, having declined to look at a whole category" are different
+    // claims, and a reader cannot audit a rule nobody told them was applied.
+    // A pad straddling a different-net pour boundary: the body crosses the edge
+    // (negative gap) while its centre sits outside the fill, so this lands on
+    // the Zone<->Pad overlap rule rather than the containment path.
+    let items = r#"
+  (footprint "lib:fp" (layer "F.Cu") (at 10.4 5)
+    (property "Reference" "U1" (at 0 0))
+    (pad "1" smd rect (at 0 0) (size 1 1) (layers "F.Cu") (net 1))
+  )
+  (zone (net 3) (net_name "GND") (layer "F.Cu")
+    (polygon (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10)))
+    (filled_polygon (layer "F.Cu")
+      (pts (xy 0 0) (xy 10 0) (xy 10 10) (xy 0 10))
+    )
+  )
+"#;
+    let report = drc(items);
+    assert!(
+        report.zone_pad_overlaps_suppressed > 0,
+        "this fixture is meant to exercise the antipad suppression"
+    );
+    assert!(
+        report.shorts().all(|f| {
+            let n = [f.net_a_name.as_str(), f.net_b_name.as_str()];
+            !(n.contains(&"A") && n.contains(&"GND"))
+        }),
+        "the overlap itself stays suppressed: {:?}",
+        report.findings
+    );
+    let note = report
+        .suppression_note()
+        .expect("a suppressing run must disclose it");
+    assert!(note.contains("suppressed"), "{note}");
+    assert!(
+        note.contains("antipad") && note.contains("KiCad"),
+        "the note must say why: {note}"
+    );
+    assert!(
+        note.contains("track, via or arc"),
+        "the note must bound what IS still checked: {note}"
+    );
+}
+
+#[test]
+fn a_board_with_no_suppression_gains_no_note() {
+    // The disclosure must not appear on boards where nothing was dropped, or it
+    // becomes boilerplate everyone learns to skip.
+    let items = r#"
+  (via (at 50 50) (size 0.8) (drill 0.4) (layers "F.Cu" "B.Cu") (net 1))
+"#;
+    let report = ExtractedBoard::drc(&board(items)).expect("drc runs");
+    assert_eq!(report.zone_pad_overlaps_suppressed, 0);
+    assert!(report.suppression_note().is_none());
+}
+
+#[test]
 fn kicad_10_solid_fill_over_a_pad_remains_reportable() {
     let report = ExtractedBoard::drc(KICAD_10_KEYHOLE_ANTIPAD_BOARD).expect("drc runs");
 
