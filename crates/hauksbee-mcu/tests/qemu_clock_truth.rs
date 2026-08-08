@@ -86,7 +86,10 @@ fn esp32_credited_time_tracks_the_guests_delays() {
             break;
         }
     }
-    assert!(mcu.boot_complete(), "firmware never raised the mailbox MAGIC");
+    assert!(
+        mcu.boot_complete(),
+        "firmware never raised the mailbox MAGIC"
+    );
 
     // Discard edges seen during boot: boot chunks are floored/capped, so they
     // measure the boot regime, not the steady-state crediting under test.
