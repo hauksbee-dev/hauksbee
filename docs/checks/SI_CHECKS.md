@@ -607,11 +607,17 @@ passes a cited 0.8 A while the wider inner segment is the real choke. Ties
 resolve to the lower-ampacity, then internal, then lighter, then
 alphabetically-first layer, so the choice is deterministic.
 
-Outer layers are identified by **name** (`F.Cu` / `B.Cu`), not by position in the
-stackup, because position lies on a truncated declaration: a stackup listing only
-`F.Cu` and `In1.Cu` would make `In1.Cu` the last copper entry and rate inner
-copper with the external constant, doubling its apparent capacity. Positional
-first/last is the fallback only for a stackup that names no `F.Cu`/`B.Cu` at all.
+Which layers count as outer is decided from three signals in order:
+
+1. A canonical outer name (`F.Cu` / `B.Cu`) is the answer.
+2. A canonical inner name (`In<N>.Cu`) is likewise decisive, and outranks
+   position: a stackup listing only `F.Cu` and `In1.Cu` makes `In1.Cu` the last
+   copper entry, and reading that positionally would rate inner copper with the
+   external constant and double its apparent capacity.
+3. Otherwise position (first or last copper entry) is all there is. A producer
+   mixing conventions, `F.Cu` beside `L2.Cu` on a 2-layer board, must not have its
+   physical bottom layer derated as internal for having an unfamiliar name: that
+   halves `k` and can fire a verdict on sound outer copper.
 
 This matters by about 3x. On the common 4-layer build (1 oz outer, 0.5 oz inner),
 a 0.5 mm trace rates **~1.45 A as 1 oz external** copper and **~0.44 A as 0.5 oz
